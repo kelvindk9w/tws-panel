@@ -1,0 +1,38 @@
+# Dev local do painel (server + web com hot reload).
+# Uso: SETUP_TOKEN=dev-token docker compose up
+# (Linux: o bind mount compartilha node_modules com o host sem problemas,
+#  pois host e container usam a mesma plataforma.)
+services:
+  server:
+    image: node:22-bookworm
+    working_dir: /app
+    command: >
+      sh -c "corepack enable &&
+             pnpm install &&
+             pnpm --filter @paas/server dev"
+    environment:
+      PORT: "9000"
+      SETUP_TOKEN: ${SETUP_TOKEN:-dev-token}
+      PAAS_DATA_DIR: /app/data
+      ALLOWED_ORIGINS: http://localhost:5173
+      LOG_LEVEL: debug
+    ports:
+      - "9000:9000"
+    volumes:
+      - .:/app
+
+  web:
+    image: node:22-bookworm
+    working_dir: /app
+    command: >
+      sh -c "corepack enable &&
+             pnpm install &&
+             pnpm --filter @paas/web dev -- --host 0.0.0.0"
+    environment:
+      API_PROXY_TARGET: http://server:9000
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+    depends_on:
+      - server

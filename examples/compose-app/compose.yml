@@ -1,0 +1,17 @@
+# Exemplo de compose ADOTADO pelo painel (simula o perfil 'trader': o painel não
+# reescreve este arquivo; apenas anexa um override com a rede paas-net).
+#
+# ATENÇÃO: a porta do Redis publicada no host é PROPOSITAL — o guardrail
+# "compose.db-port-exposed" do painel deve alertar na detecção.
+services:
+  api:
+    build: ./api
+    expose:
+      - "3000"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6391:6379" # ⚠️ proposital: banco publicado no host (guardrail deve alertar)

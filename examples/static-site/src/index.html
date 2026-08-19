@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>static-site · exemplo PaaS</title>
+    <style>
+      body { font-family: system-ui; background: #0b0f14; color: #e6edf3; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+      main { text-align: center; }
+      code { background: #1c2530; padding: 0.2em 0.5em; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>static-site</h1>
+      <p>Site estático de exemplo servido pelo painel PaaS via <code>Caddy central</code>.</p>
+      <p>Pipeline: build Node → <code>dist/</code> → nginx na rede <code>paas-net</code>.</p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "paas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:server": "pnpm --filter @paas/server run dev",
+    "dev:web": "pnpm --filter @paas/web run dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "start": "pnpm --filter @paas/server run start",
+    "test:mail": "tsx scripts/test-mail.mts",
+    "test:fase4": "tsx scripts/test-fase4.mts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "imapflow": "^1.0.164",
+    "nodemailer": "^6.9.16",
+    "tsx": "^4.19.2"
+  }
+}
