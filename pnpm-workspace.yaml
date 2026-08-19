@@ -1,3 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+# pnpm 10+ bloqueia postinstall por padrão; o esbuild (Vite/tsx) precisa do
+# script de build para instalar o binário nativo.
+onlyBuiltDependencies:
+  - esbuild

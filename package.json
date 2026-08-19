@@ -6,6 +6,7 @@
   "author": "Kelvin — CEO & Founder @ TWS",
   "license": "MIT",
   "type": "module",
+  "packageManager": "pnpm@10.31.0",
   "engines": {
     "node": ">=22"
   },
