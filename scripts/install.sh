@@ -1,36 +1,41 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Painel PaaS — instalador one-shot
+# TWS Panel — instalador one-shot (100% Docker)
 #
-# Uso (como root em uma VPS Ubuntu 22.04/24.04):
-#   git clone <repo> /opt/paas && cd /opt/paas && ./scripts/install.sh
+# Uso (como root em uma VPS Ubuntu 22.04/24.04 limpa):
+#   apt update && apt install -y git
+#   git clone <repo> /opt/tws-panel && cd /opt/tws-panel
+#   ./scripts/install.sh
+#
+# Pré-requisito: Ubuntu com git. Não precisa instalar Docker, Node ou mais
+# nada manualmente — este script cuida de tudo.
 #
 # O que faz:
 #   1. Verifica o SO (Ubuntu 22.04/24.04; avisa em outros)
-#   2. Instala dependências ausentes: Node 22 (NodeSource), pnpm (corepack), git
-#   3. Instala Docker se ausente (get.docker.com)
-#   4. pnpm install + build do monorepo
-#   5. Gera SETUP_TOKEN aleatório e salva em /etc/paas/setup-token (chmod 600)
-#   6. Cria/habilita o systemd unit paas-setup.service (porta 9000)
+#   2. Instala git se ausente
+#   3. Instala Docker se ausente (get.docker.com) + plugin compose
+#   4. Define o diretório alvo (default /opt/tws-panel; personalize com
+#      PAAS_DIR=<dir> ou ./scripts/install.sh <dir>) e clona o repo se ele
+#      não existir (ou usa o diretório atual se já for o repo)
+#   5. Gera SETUP_TOKEN aleatório (persistido no volume paas_data)
+#   6. docker compose up -d --build (build da imagem + sobe o painel na 9000)
 #   7. Imprime a URL do wizard + o token
 #
 # Idempotente: pode ser executado mais de uma vez sem quebrar.
 # =============================================================================
 set -euo pipefail
 
-APP_DIR="${PAAS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-TOKEN_DIR="/etc/paas"
-TOKEN_FILE="$TOKEN_DIR/setup-token"
-SERVICE_NAME="paas-setup.service"
+REPO_URL="${TWS_REPO_URL:-https://github.com/<org>/tws-panel.git}"
+TARGET_DIR="${1:-${PAAS_DIR:-/opt/tws-panel}}"
 PORT="${PAAS_PORT:-9000}"
+COMPOSE_FILE="docker-compose.yml"
 
-log()  { printf '\033[1;34m[paas]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[paas][aviso]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[paas][erro]\033[0m %s\n' "$*" >&2; exit 1; }
+log()  { printf '\033[1;34m[tws-panel]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[tws-panel][aviso]\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- 0. Pré-requisitos básicos ----------------------------------------------
 [ "$(id -u)" -eq 0 ] || die "Execute como root (ou via sudo)."
-command -v curl >/dev/null 2>&1 || apt-get update -qq && apt-get install -y -qq curl ca-certificates gnupg
 
 # --- 1. Verificação do SO -----------------------------------------------------
 . /etc/os-release
@@ -39,102 +44,98 @@ if [ "${ID:-}" != "ubuntu" ] || { [ "${VERSION_ID:-}" != "22.04" ] && [ "${VERSI
   warn "Este instalador foi testado em Ubuntu 22.04/24.04. Prosseguindo por sua conta e risco."
 fi
 
-# --- 2. Node 22 / pnpm / git ---------------------------------------------------
-if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 22 ]; then
-  log "Instalando Node.js 22 (NodeSource)…"
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y -qq nodejs
-else
-  log "Node.js já instalado: $(node -v)"
-fi
-
-if ! command -v pnpm >/dev/null 2>&1; then
-  log "Habilitando pnpm via corepack…"
-  corepack enable
-  corepack prepare pnpm@latest --activate
-else
-  log "pnpm já instalado: $(pnpm -v)"
-fi
-
+# --- 2. git --------------------------------------------------------------------
 if ! command -v git >/dev/null 2>&1; then
   log "Instalando git…"
+  apt-get update -qq
   apt-get install -y -qq git
+else
+  log "git já instalado: $(git --version)"
 fi
 
-# --- 3. Docker ------------------------------------------------------------------
+# --- 3. Docker -------------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
   log "Instalando Docker (get.docker.com)…"
+  command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl ca-certificates; }
   curl -fsSL https://get.docker.com | sh
   systemctl enable --now docker
 else
   log "Docker já instalado: $(docker --version)"
 fi
 
-# --- 4. Build do monorepo ---------------------------------------------------------
-log "Instalando dependências e buildando (em $APP_DIR)…"
-cd "$APP_DIR"
-pnpm install --frozen-lockfile=false
-pnpm build
+docker compose version >/dev/null 2>&1 || die "Plugin 'docker compose' não encontrado. Reinstale o Docker por https://get.docker.com"
 
-# --- 5. Setup token ---------------------------------------------------------------
-mkdir -p "$TOKEN_DIR"
-if [ -s "$TOKEN_FILE" ]; then
-  log "Setup token já existe em $TOKEN_FILE — reutilizando."
+# --- 4. Diretório alvo / clone do repo --------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "$SCRIPT_DIR/../$COMPOSE_FILE" ] && [ -f "$SCRIPT_DIR/../Dockerfile" ]; then
+  # Script rodando de dentro do repo clonado — usa o próprio diretório.
+  APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  log "Repo detectado em $APP_DIR — usando o diretório atual."
 else
-  openssl rand -hex 24 > "$TOKEN_FILE"
-  chmod 600 "$TOKEN_FILE"
-  log "Setup token gerado em $TOKEN_FILE (permissão 600)."
+  APP_DIR="$TARGET_DIR"
+  if [ -d "$APP_DIR/.git" ]; then
+    log "Repo já existe em $APP_DIR — atualizando (git pull)…"
+    git -C "$APP_DIR" pull --ff-only || warn "git pull falhou; seguindo com a versão local."
+  else
+    log "Clonando $REPO_URL em $APP_DIR…"
+    git clone "$REPO_URL" "$APP_DIR"
+  fi
 fi
-SETUP_TOKEN="$(cat "$TOKEN_FILE")"
+cd "$APP_DIR"
 
-# --- 6. systemd unit ----------------------------------------------------------------
-cat > "/etc/systemd/system/$SERVICE_NAME" <<EOF
-[Unit]
-Description=Painel PaaS — assistente de setup (porta $PORT)
-After=network.target docker.service
-Wants=docker.service
+# --- 5. Setup token ------------------------------------------------------------------
+# O token fica no volume paas_data (/data/setup-token dentro do container).
+# Antes do primeiro boot, gravamos via container auxiliar para não depender
+# de Node no host.
+# Nome fixo definido no docker-compose.yml.
+VOLUME_NAME="paas_data"
+docker volume inspect "$VOLUME_NAME" >/dev/null 2>&1 || docker volume create "$VOLUME_NAME" >/dev/null
 
-[Service]
-Type=simple
-WorkingDirectory=$APP_DIR/apps/server
-Environment=NODE_ENV=production
-Environment=PORT=$PORT
-Environment=SETUP_TOKEN_FILE=$TOKEN_FILE
-Environment=PAAS_DATA_DIR=$APP_DIR/data
-ExecStart=$(command -v pnpm) start
-Restart=on-failure
-RestartSec=3
+EXISTING_TOKEN="$(docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c 'cat /data/setup-token 2>/dev/null || true' 2>/dev/null || true)"
+if [ -n "${SETUP_TOKEN:-}" ]; then
+  log "Usando SETUP_TOKEN fornecido via ambiente."
+elif [ -n "$EXISTING_TOKEN" ]; then
+  SETUP_TOKEN="$EXISTING_TOKEN"
+  log "Setup token já existe no volume $VOLUME_NAME — reutilizando."
+else
+  if command -v openssl >/dev/null 2>&1; then
+    SETUP_TOKEN="$(openssl rand -hex 24)"
+  else
+    SETUP_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  fi
+fi
 
-[Install]
-WantedBy=multi-user.target
-EOF
+# --- 6. Build + subida ------------------------------------------------------------------
+log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
+SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build
 
-systemctl daemon-reload
-systemctl enable --now "$SERVICE_NAME"
-systemctl restart "$SERVICE_NAME"
-log "Serviço $SERVICE_NAME ativo."
+# Garante o token também em arquivo no volume (fallback caso SETUP_TOKEN não
+# seja passado nas próximas subidas — ex.: restart da máquina).
+docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
+  "printf '%s' '$SETUP_TOKEN' > /data/setup-token && chmod 600 /data/setup-token"
 
-# --- 7. Resumo ------------------------------------------------------------------------
+# --- 7. Resumo ---------------------------------------------------------------------------
 PUBLIC_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
 cat <<EOF
 
 ================================================================================
-  ✅ Instalação concluída!
+  ✅ TWS Panel instalado e rodando!
 
   Abra no navegador:
 
       http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN
 
-  Setup token (também em $TOKEN_FILE):
+  Setup token:
 
       $SETUP_TOKEN
 
   O assistente vai diagnosticar o servidor e guiar o setup.
-  A porta $PORT será fechada automaticamente ao final do setup.
 
-  Comandos úteis:
-    systemctl status $SERVICE_NAME    # status do serviço
-    journalctl -u $SERVICE_NAME -f    # logs em tempo real
+  Comandos úteis (em $APP_DIR):
+    docker compose ps              # status do painel
+    docker compose logs -f panel   # logs em tempo real
+    docker compose up -d --build   # rebuild/restart (ex.: após git pull)
 ================================================================================
 EOF

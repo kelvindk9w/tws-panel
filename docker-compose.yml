@@ -1,38 +1,36 @@
-# Dev local do painel (server + web com hot reload).
-# Uso: SETUP_TOKEN=dev-token docker compose up
-# (Linux: o bind mount compartilha node_modules com o host sem problemas,
-#  pois host e container usam a mesma plataforma.)
+# TWS Panel — PRODUÇÃO.
+#
+# Sobe o painel (API + SPA) na porta 9000, 100% em Docker:
+#   docker compose up -d --build
+#
+# O container monta o socket do Docker do host (para gerenciar Caddy,
+# Stalwart e os projetos implantados) e persiste todo o estado no volume
+# paas_data (/data: setup-state, SQLite/JSONs).
+#
+# O SETUP_TOKEN pode ser passado via ambiente; se ausente, o painel lê o
+# arquivo gerado pelo install.sh dentro do volume (veja scripts/install.sh).
 services:
-  server:
-    image: node:22-bookworm
-    working_dir: /app
-    command: >
-      sh -c "corepack enable &&
-             pnpm install &&
-             pnpm --filter @paas/server dev"
+  panel:
+    build: .
+    image: tws-panel:latest
+    container_name: tws-panel
+    restart: unless-stopped
+    ports:
+      - "${PAAS_PORT:-9000}:9000"
     environment:
+      NODE_ENV: production
       PORT: "9000"
-      SETUP_TOKEN: ${SETUP_TOKEN:-dev-token}
-      PAAS_DATA_DIR: /app/data
-      ALLOWED_ORIGINS: http://localhost:5173
-      LOG_LEVEL: debug
-    ports:
-      - "9000:9000"
+      PAAS_DATA_DIR: /data
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      SETUP_TOKEN_FILE: /data/setup-token
+      PAAS_TARGET: ${PAAS_TARGET:-host}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
-      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - paas_data:/data
 
-  web:
-    image: node:22-bookworm
-    working_dir: /app
-    command: >
-      sh -c "corepack enable &&
-             pnpm install &&
-             pnpm --filter @paas/web dev -- --host 0.0.0.0"
-    environment:
-      API_PROXY_TARGET: http://server:9000
-    ports:
-      - "5173:5173"
-    volumes:
-      - .:/app
-    depends_on:
-      - server
+volumes:
+  paas_data:
+    # Nome fixo (independe do diretório do projeto) — facilita backup e o
+    # install.sh, que lê/grava o setup token diretamente neste volume.
+    name: paas_data
