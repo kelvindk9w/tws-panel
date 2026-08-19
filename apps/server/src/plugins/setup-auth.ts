@@ -19,13 +19,14 @@ function extractToken(request: FastifyRequest): string | null {
 }
 
 /**
- * Auth de setup: todo endpoint /api/* (exceto /api/setup/verify-token)
- * exige o setup token até o setup ser concluído.
+ * Auth de setup: todo endpoint /api/* (exceto /api/setup/verify-token e o
+ * liveness público /api/healthz) exige o setup token até o setup ser concluído.
  */
 const setupAuthPlugin: FastifyPluginAsync = async (app) => {
   app.addHook("onRequest", async (request, reply) => {
     if (!request.url.startsWith("/api/")) return;
     if (request.url.startsWith("/api/setup/verify-token")) return;
+    if (request.url === "/api/healthz") return;
 
     if (!app.setupToken) {
       return reply.code(503).send({
