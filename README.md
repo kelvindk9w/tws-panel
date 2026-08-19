@@ -1,9 +1,10 @@
-# paas
+# TWS Panel
 
 > **Transforme qualquer VPS Ubuntu em sua própria plataforma de hospedagem — segura, com e-mail profissional e zero mensalidade de painel.**
 
 [![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green.svg)](LICENSE)
 [![Node.js 22](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![pnpm](https://img.shields.io/badge/pnpm-monorepo-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](#roadmap)
 
@@ -11,11 +12,11 @@
 
 ## Por que este projeto existe?
 
-Eu sou desenvolvedor freelancer e pagava **R$50/mês** em um plano de hospedagem praticamente só
-para ter e-mail profissional para **1 cliente**. Tentei painéis pesados que assumiam o controle de
-toda a máquina (e quebravam stacks que já funcionavam) e hospedagens que me deixavam na mão. Então
-decidi construir o painel que eu queria ter encontrado: **leve, não-invasivo e seguro desde o
-primeiro boot** — e liberar para a comunidade sob licença MIT.
+A TWS pagava **R$50/mês** em um plano de hospedagem praticamente só para ter e-mail
+profissional para **1 cliente**. Testamos painéis pesados que assumiam o controle de toda a
+máquina (e quebravam stacks que já funcionavam) e hospedagens que nos deixavam na mão. Então
+decidimos construir o painel que queríamos ter encontrado: **leve, não-invasivo e seguro desde
+o primeiro boot** — e liberar para a comunidade sob licença MIT.
 
 ## O que é
 
@@ -41,17 +42,38 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 | **🚧 Guardrails** | **6 regras** de segurança de deploy em 3 níveis (`block`, `warn`, `info`): porta de banco exposta no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado no código, tag `:latest`. Blocks exigem **override explícito e auditado**, com evidência e sugestão de correção. |
 | **📊 Monitoramento** | **Baseline** pós-hardening (pacotes, portas, hashes de arquivos críticos) + scans recorrentes com **diff** (o que mudou vira alerta), verificação de **blacklist de e-mail** (Spamhaus ZEN, SpamCop, Barracuda, Spamhaus DBL), central de alertas e **log de auditoria** de todas as ações sensíveis. |
 
-## Quickstart (VPS Ubuntu 22.04/24.04)
+## Instalação — VPS limpa do zero
 
-```bash
-git clone <este-repo> /opt/paas
-cd /opt/paas
-sudo ./scripts/install.sh
-```
+**Não precisa instalar Docker, Node ou mais nada manualmente — só Ubuntu e git.**
 
-O instalador é idempotente e faz tudo: verifica o SO, instala o que faltar (Node 22, pnpm, git,
-Docker), builda o monorepo, gera um **setup token** aleatório e sobe o assistente na porta 9000.
-No final ele imprime a URL — abra no navegador e siga o wizard:
+1. **Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
+
+2. **Acesse via SSH:**
+
+   ```bash
+   ssh root@SEU_IP
+   ```
+
+3. **Instale o git** (se ainda não tiver):
+
+   ```bash
+   apt update && apt install -y git
+   ```
+
+4. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`):
+
+   ```bash
+   git clone https://github.com/<org>/tws-panel.git /opt/tws-panel
+   cd /opt/tws-panel
+   ```
+
+5. **Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
+
+   ```bash
+   ./scripts/install.sh
+   ```
+
+6. **Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -65,8 +87,20 @@ No final ele imprime a URL — abra no navegador e siga o wizard:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+O instalador é **idempotente**: pode ser executado de novo sem quebrar nada (rebuild + restart).
+O painel roda 100% em Docker (`docker compose up -d`), com o estado persistido no volume
+`paas_data` e acesso ao socket do Docker para gerenciar Caddy, Stalwart e seus projetos.
+
 Depois do wizard: cadastre um projeto, aponte o DNS, e o painel cuida do build, do proxy e do
 SSL. Guia completo de produção em [docs/production.md](docs/production.md).
+
+### Comandos úteis (produção)
+
+```bash
+docker compose ps            # status do painel
+docker compose logs -f panel # logs em tempo real
+docker compose up -d --build # atualizar para uma nova versão (git pull antes)
+```
 
 ### Modo dev local
 
@@ -74,7 +108,7 @@ SSL. Guia completo de produção em [docs/production.md](docs/production.md).
 pnpm install
 SETUP_TOKEN=dev-token pnpm dev
 # ou, com Docker:
-SETUP_TOKEN=dev-token docker compose up
+SETUP_TOKEN=dev-token docker compose -f docker-compose.dev.yml up
 ```
 
 - Painel (build de produção servido pela API): `http://localhost:9000`
@@ -89,7 +123,7 @@ Exemplos prontos para deploy em [`examples/`](examples/README.md) ⚠️ *(apena
 Monorepo pnpm com TypeScript estrito de ponta a ponta:
 
 ```
-paas/
+tws-panel/
 ├── apps/
 │   ├── server/                  # API Fastify: wizard, projetos, domínios,
 │   │                            # e-mail, segurança, alertas e auditoria
@@ -101,12 +135,14 @@ paas/
 │   ├── deploy/                  # detecção, ingestão, guardrails, Caddy, pipelines
 │   └── mailer/                  # Stalwart, DKIM, checklist DNS, blacklist
 ├── scripts/
-│   ├── install.sh               # instalador one-shot (idempotente)
+│   ├── install.sh               # instalador one-shot (idempotente, 100% Docker)
 │   ├── hardening/               # scripts shell idempotentes por fase (00–06)
 │   └── test-*.mts               # suítes de verificação (Fases 3 e 4)
 ├── examples/                    # apps de exemplo para deploy (apenas testes)
 ├── docs/                        # specs, guias de produção e troubleshooting
-└── docker-compose.yml           # dev local do painel
+├── Dockerfile                   # build multi-stage do painel (produção)
+├── docker-compose.yml           # produção: painel na porta 9000
+└── docker-compose.dev.yml       # dev local com hot reload
 ```
 
 Como os módulos se relacionam:
@@ -129,7 +165,8 @@ Como os módulos se relacionam:
                        │              ┌───────────────┐
                        └─────────────►│   @paas/core  │ (tipos compartilhados)
                                       └───────────────┘
-        Estado persistido em data/ (JSON/SQLite, modo 0600) — sem serviços externos.
+        Estado persistido no volume paas_data (/data, JSON/SQLite, modo 0600)
+        — sem serviços externos.
 ```
 
 ## Roadmap
@@ -167,6 +204,23 @@ auditoria de todas as ações sensíveis.
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Código de conduta |
 | [SECURITY.md](SECURITY.md) | Política de segurança e reporte de vulnerabilidades |
 
+## Sobre a TWS
+
+O **TWS Panel** é um projeto open source mantido pela **TWS**, software house fundada e liderada
+pelo CEO **Kelvin**. A TWS desenvolve soluções web, sistemas e automações sob medida para
+clientes — e este projeto nasceu de uma dor real da própria empresa: pagar hospedagem cara
+praticamente só para ter e-mail profissional. Em vez de ficar só no uso interno, decidimos
+liberar o painel para a comunidade, sob licença MIT.
+
+Quer conversar sobre parcerias, projetos ou contribuições?
+
+- 🌐 Site: [https://tws.dev.br](https://tws.dev.br) *(placeholder — edite)*
+- ✉️ E-mail: [contato@tws.dev.br](mailto:contato@tws.dev.br) *(placeholder — edite)*
+- 💬 WhatsApp: [+55 (00) 90000-0000](https://wa.me/5500900000000) *(placeholder — edite)*
+- 💼 LinkedIn: [linkedin.com/company/tws](https://linkedin.com/company/tws) *(placeholder — edite)*
+
+**Autor:** Kelvin — CEO & Founder @ TWS
+
 ## Licença
 
-[MIT](LICENSE) © 2026 Kelvin
+[MIT](LICENSE) © 2026 TWS — Kelvin

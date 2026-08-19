@@ -1,8 +1,9 @@
 {
-  "name": "paas",
+  "name": "tws-panel",
   "version": "0.1.0",
   "private": true,
-  "description": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal.",
+  "description": "TWS Panel — painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal.",
+  "author": "Kelvin — CEO & Founder @ TWS",
   "license": "MIT",
   "type": "module",
   "engines": {
