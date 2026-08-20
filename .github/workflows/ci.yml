@@ -1,0 +1,54 @@
+# CI — install → typecheck → build → testes unitários.
+#
+# Segurança (docs/github-security.md §4):
+#  - permissões mínimas explícitas (contents: read);
+#  - TODAS as actions pinadas por SHA completo (com a versão em comentário);
+#  - sem secrets: PRs de fork rodam este workflow sem acesso a nada sensível.
+#
+# Os E2E (pnpm test:e2e) ficam fora do CI por exigirem Docker com containers
+# privilegiados — rodam localmente antes do merge de mudanças de infra.
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # versão do pnpm vem do campo packageManager do package.json
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+
+      - name: Setup Node 22 (cache do pnpm)
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Unit tests
+        run: pnpm test:unit
