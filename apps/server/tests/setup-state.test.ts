@@ -66,6 +66,14 @@ describe("SetupStateStore", () => {
     expect(state.currentStep).toBe(5);
     expect(state.completed).toBe(false);
   });
+
+  it("JSON sem currentStep volta para o passo 0", async () => {
+    await writeFile(path.join(dir, "setup-state.json"), JSON.stringify({ completed: true }));
+    const state = await new SetupStateStore(dir).load();
+    expect(state.currentStep).toBe(0);
+    expect(state.completed).toBe(true);
+    expect(state.updatedAt).toBeTruthy();
+  });
 });
 
 describe("SETUP_STEPS", () => {

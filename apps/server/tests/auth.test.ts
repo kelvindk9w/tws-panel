@@ -125,6 +125,41 @@ describe("POST /api/setup/admin", () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  it("admin já existe (criado direto no store) mas setup incompleto → 409 admin_exists", async () => {
+    // simula crash entre a criação do usuário e a conclusão do setup:
+    // a conta existe, mas setup-state.completed ainda é false
+    await ctx.userStore.create("admin", "$argon2id$hash-qualquer");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/setup/admin",
+      headers: auth,
+      payload: { username: "outro", password: "OutraSenha123" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("admin_exists");
+    // e o setup continua incompleto (nada foi concluído por engano)
+    expect((await ctx.setupState.load()).completed).toBe(false);
+  });
+
+  it("sem corpo → 400 invalid_username; senha ausente → 400 invalid_payload", async () => {
+    const semCorpo = await app.inject({
+      method: "POST",
+      url: "/api/setup/admin",
+      headers: auth,
+    });
+    expect(semCorpo.statusCode).toBe(400);
+    expect(semCorpo.json().error).toBe("invalid_username");
+
+    const semSenha = await app.inject({
+      method: "POST",
+      url: "/api/setup/admin",
+      headers: auth,
+      payload: { username: "admin" },
+    });
+    expect(semSenha.statusCode).toBe(400);
+    expect(semSenha.json().error).toBe("invalid_payload");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -177,7 +212,9 @@ describe("middleware de auth (setup concluído)", () => {
   it("cookie adulterado → 401 (assinatura HMAC rejeitada)", async () => {
     const loginRes = await login();
     const cookie = sessionCookieOf(loginRes);
-    const tampered = cookie.replace(/[a-f0-9](?=[^a-f0-9]*$)/, "0");
+    // troca o último caractere hex por um DIFERENTE (determinístico)
+    const last = cookie[cookie.length - 1];
+    const tampered = cookie.slice(0, -1) + (last === "0" ? "1" : "0");
     const res = await app.inject({
       method: "GET",
       url: "/api/protegida",
@@ -189,6 +226,17 @@ describe("middleware de auth (setup concluído)", () => {
   it("/api/auth/me sem sessão → 401; /api/healthz continua público", async () => {
     expect((await app.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/api/healthz" })).statusCode).toBe(200);
+  });
+
+  it("/api/auth/me ANTES de concluir o setup → 401 setup_incomplete (orienta o guard do front)", async () => {
+    await closeAuthTestApp(ctx);
+    ctx = await buildAuthTestApp(TOKEN);
+    app = ctx.app;
+    await app.register(authRoutes);
+
+    const res = await app.inject({ method: "GET", url: "/api/auth/me" });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe("setup_incomplete");
   });
 });
 
@@ -370,5 +418,130 @@ describe("POST /api/auth/change-password", () => {
       payload: { currentPassword: PASSWORD, newPassword: "NovaSenha456" },
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Casos de borda das rotas de auth
+// ---------------------------------------------------------------------------
+
+describe("POST /api/auth/login — casos de borda", () => {
+  beforeEach(async () => {
+    await createAdmin();
+  });
+
+  it("sem corpo algum → 400 invalid_payload", async () => {
+    const res = await app.inject({ method: "POST", url: "/api/auth/login" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_payload");
+  });
+
+  it("user-agent é registrado na sessão criada", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "user-agent": "Mozilla/5.0 Teste" },
+      payload: { username: "admin", password: PASSWORD },
+    });
+    expect(res.statusCode).toBe(200);
+    const cookie = sessionCookieOf(res);
+    const sessionId = cookie.split("=")[1]!.split(".")[0]!;
+    const session = await ctx.sessionStore.resolve(cookie.split("=")[1]);
+    expect(session?.userAgent).toBe("Mozilla/5.0 Teste");
+    expect(session?.id).toBe(sessionId);
+  });
+});
+
+describe("GET /api/auth/me — casos de borda", () => {
+  it("sessão de usuário que não existe mais → 401 e sessão destruída", async () => {
+    await createAdmin();
+    // sessão "fantasma": criada direto no store para um userId inexistente
+    const ghost = await ctx.sessionStore.create({ id: "fantasma", username: "fantasma" });
+    const me = await app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+      headers: { cookie: `${SESSION_COOKIE}=${ghost.cookieValue}` },
+    });
+    expect(me.statusCode).toBe(401);
+    expect(me.json().error).toBe("unauthorized");
+    // a sessão foi revogada de verdade: nem o store a reconhece mais
+    expect(await ctx.sessionStore.resolve(ghost.cookieValue)).toBeNull();
+  });
+});
+
+describe("POST /api/auth/change-password — casos de borda", () => {
+  it("payload inválido → 400 invalid_payload", async () => {
+    await createAdmin();
+    const cookie = sessionCookieOf(await login());
+    for (const payload of [{}, { currentPassword: PASSWORD }, null]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/change-password",
+        headers: { cookie },
+        payload: payload as unknown as Record<string, unknown>,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json().error).toBe("invalid_payload");
+    }
+  });
+
+  it("sessão de usuário inexistente → 401 (sem tocar na senha)", async () => {
+    await createAdmin();
+    const ghost = await ctx.sessionStore.create({ id: "fantasma", username: "fantasma" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/change-password",
+      headers: { cookie: `${SESSION_COOKIE}=${ghost.cookieValue}` },
+      payload: { currentPassword: PASSWORD, newPassword: "NovaSenha456" },
+    });
+    expect(res.statusCode).toBe(401);
+    // a senha do admin de verdade não mudou
+    expect((await login()).statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Middleware: servidor sem setup token e rota fora de /api
+// ---------------------------------------------------------------------------
+
+describe("middleware de auth (casos extremos)", () => {
+  it("rota fora de /api passa direto pelo guard (não é da API)", async () => {
+    app.get("/publica", async () => ({ ok: true }));
+    const res = await app.inject({ method: "GET", url: "/publica" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+  });
+
+  it("servidor SEM setup token: rotas protegidas → 503 setup_token_missing", async () => {
+    await closeAuthTestApp(ctx);
+    ctx = await buildAuthTestApp(null);
+    app = ctx.app;
+    app.get("/api/protegida", async () => ({ ok: true }));
+
+    const res = await app.inject({ method: "GET", url: "/api/protegida" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("setup_token_missing");
+    // mesmo com header de token — não há token configurado para conferir
+    const comHeader = await app.inject({
+      method: "GET",
+      url: "/api/protegida",
+      headers: { [SETUP_TOKEN_HEADER]: "qualquer" },
+    });
+    expect(comHeader.statusCode).toBe(503);
+  });
+
+  it("POST /api/setup/admin sem servidor token → 503", async () => {
+    await closeAuthTestApp(ctx);
+    ctx = await buildAuthTestApp(null);
+    app = ctx.app;
+    await app.register(setupRoutes);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/setup/admin",
+      payload: { username: "admin", password: PASSWORD },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("setup_token_missing");
   });
 });

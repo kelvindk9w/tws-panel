@@ -1,26 +1,43 @@
 import { defineConfig } from "vitest/config";
 
-// Cobertura medida sobre as rotas/serviços exercitados pelos testes
-// (setup + projects); os demais serviços dependem de Docker/Stalwart.
+// Escopo de cobertura unitária: rotas, plugins e serviços com lógica de
+// negócio testável sem Docker (auth, setup, projetos, alertas, auditoria,
+// config, saúde da máquina — lida de verdade do host de teste).
+//
+// FORA do escopo unitário — cobertos pelos E2E (pnpm test:e2e), pois só
+// falam com Docker/Stalwart/OS e mocká-los seria artificial:
+//  - src/app.ts, src/index.ts (bootstrap/registro de plugins)
+//  - src/routes/{docker,mail,monitoring,security}.ts (delegam aos serviços)
+//  - src/services/{docker-service,deploy-service,mail-service,
+//    monitor-service,security-service}.ts (engine/exec/runner de containers)
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     coverage: {
       provider: "v8",
       include: [
-        "src/routes/setup.ts",
+        "src/config.ts",
+        "src/plugins/auth.ts",
         "src/routes/auth.ts",
+        "src/routes/domains.ts",
+        "src/routes/health.ts",
         "src/routes/projects.ts",
+        "src/routes/setup.ts",
+        "src/services/alerts-service.ts",
+        "src/services/audit-service.ts",
+        "src/services/login-limiter.ts",
+        "src/services/password.ts",
+        "src/services/session-store.ts",
         "src/services/setup-state.ts",
         "src/services/setup-token.ts",
-        "src/services/password.ts",
+        "src/services/system-info.ts",
         "src/services/user-store.ts",
-        "src/services/session-store.ts",
-        "src/services/login-limiter.ts",
-        "src/plugins/auth.ts",
       ],
       reporter: ["text", "html"],
-      thresholds: { lines: 70, functions: 90, branches: 75, statements: 70 },
+      // atingido: ~97% linhas no escopo; residual = system-info (ramos que
+      // dependem do hardware/SO do host) e defesas inalcançáveis pela API
+      // pública (corrida admin_exists, sign antes de init)
+      thresholds: { lines: 94, functions: 98, branches: 91, statements: 94 },
     },
   },
 });

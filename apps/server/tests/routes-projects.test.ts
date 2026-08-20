@@ -143,6 +143,30 @@ describe("POST /api/projects", () => {
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe("internal_error");
   });
+
+  it("sem corpo → createProject recebe {} (rota não quebra)", async () => {
+    await build();
+    const res = await app.inject({ method: "POST", url: "/api/projects", headers: auth });
+    expect(res.statusCode).toBe(201);
+    expect(service.createProject).toHaveBeenCalledWith({});
+  });
+
+  it("erro não-Error (throw de string) → 500 com mensagem genérica", async () => {
+    await build({
+      createProject: vi.fn(async () => {
+        // eslint-disable-next-line no-throw-literal -- exercita o fallback do sendError
+        throw "falha crua";
+      }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: auth,
+      payload: { name: "Loja", ingestMode: "upload", source: "/tmp/loja", domain: "loja.localhost" },
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: "internal_error", message: "Erro interno." });
+  });
 });
 
 describe("GET /api/projects/:id", () => {
@@ -238,5 +262,144 @@ describe("jobs e ciclo de vida", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(service.deleteProject).toHaveBeenCalledWith("p1", true, expect.any(Function));
+  });
+});
+
+describe("PATCH /api/projects/:id", () => {
+  it("atualiza e retorna o projeto com status recalculado", async () => {
+    await build();
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/projects/p1",
+      headers: auth,
+      payload: { domain: "shop.localhost" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: "running", project: { id: "p1" } });
+    expect(service.updateProject).toHaveBeenCalledWith("p1", { domain: "shop.localhost" });
+  });
+
+  it("sem corpo → atualiza com objeto vazio (não quebra)", async () => {
+    await build();
+    const res = await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(service.updateProject).toHaveBeenCalledWith("p1", {});
+  });
+
+  it("projeto inexistente → 404 mapeado do erro de domínio", async () => {
+    await build({
+      updateProject: vi.fn(async () => {
+        throw httpError(404, "project_not_found", "Projeto não encontrado.");
+      }),
+    });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/projects/xyz",
+      headers: auth,
+      payload: { domain: "x.localhost" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("project_not_found");
+  });
+});
+
+describe("POST /api/projects/:id/detect e GET /:id/guardrails", () => {
+  it("detect retorna a detecção do serviço", async () => {
+    await build();
+    const res = await app.inject({ method: "POST", url: "/api/projects/p1/detect", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().detection).toEqual({ type: "compose" });
+  });
+
+  it("detect em projeto inexistente → 404 mapeado", async () => {
+    await build({
+      detect: vi.fn(async () => {
+        throw httpError(404, "project_not_found", "Projeto não encontrado.");
+      }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/projects/xyz/detect", headers: auth });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("project_not_found");
+  });
+
+  it("guardrails retorna relatório e nota", async () => {
+    await build();
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/guardrails", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ report: null, note: "sem código" });
+  });
+
+  it("guardrails com erro inesperado → 500 sem vazar detalhes", async () => {
+    await build({
+      guardrailsForProject: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/guardrails", headers: auth });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe("internal_error");
+  });
+});
+
+describe("jobs e ciclo de vida (complementos)", () => {
+  it("GET /jobs/:jobId retorna o job quando existe", async () => {
+    await build({
+      getJob: vi.fn(async () => ({ id: "job-9", projectId: "p1", status: "success" })),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/jobs/job-9", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().job).toMatchObject({ id: "job-9", status: "success" });
+  });
+
+  it("GET /jobs lista o histórico de deploys", async () => {
+    await build({
+      listJobs: vi.fn(async () => [{ id: "job-1" }, { id: "job-2" }]),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/jobs", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().jobs).toHaveLength(2);
+  });
+
+  it("POST /:id/stop com erro → status do erro de domínio e log parcial", async () => {
+    await build({
+      stop: vi.fn(async (_id: string, onLog: (chunk: string) => void) => {
+        onLog("parando…\n");
+        throw httpError(409, "deploy_in_progress", "Há um deploy em andamento.");
+      }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/projects/p1/stop", headers: auth });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("deploy_in_progress");
+  });
+
+  it("POST /:id/start agrega o log; erro → mapeado", async () => {
+    await build({
+      start: vi.fn(async (_id: string, onLog: (chunk: string) => void) => {
+        onLog("subindo…\n");
+      }),
+    });
+    const okRes = await app.inject({ method: "POST", url: "/api/projects/p1/start", headers: auth });
+    expect(okRes.statusCode).toBe(200);
+    expect(okRes.json()).toEqual({ ok: true, log: "subindo…\n" });
+
+    await closeAuthTestApp(ctx);
+    await build({
+      start: vi.fn(async () => {
+        throw httpError(404, "project_not_found", "Projeto não encontrado.");
+      }),
+    });
+    const notFound = await app.inject({ method: "POST", url: "/api/projects/xyz/start", headers: auth });
+    expect(notFound.statusCode).toBe(404);
+  });
+
+  it("DELETE /:id com erro → mapeado; sem query → deleteSource=false", async () => {
+    await build({
+      deleteProject: vi.fn(async () => {
+        throw httpError(409, "deploy_in_progress", "Há um deploy em andamento.");
+      }),
+    });
+    const res = await app.inject({ method: "DELETE", url: "/api/projects/p1", headers: auth });
+    expect(res.statusCode).toBe(409);
+    expect(service.deleteProject).toHaveBeenCalledWith("p1", false, expect.any(Function));
   });
 });
