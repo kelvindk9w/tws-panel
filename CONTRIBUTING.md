@@ -42,13 +42,26 @@ NÃO dispara e pelo menos um edge case. Resolvers de DNS, runners e serviços de
 injetáveis justamente para permitir mocks determinísticos.
 
 A cobertura (`pnpm test:coverage`) foca na lógica pura — engine/exec/runner falam com
-Docker e são cobertos pelos E2E. Os thresholds estão nos `vitest.config.ts` de cada
-package; ao adicionar lógica nova, mantenha-os verdes.
+Docker e são cobertos pelos E2E (a lista exata de arquivos fora do escopo unitário,
+com o motivo, está no comentário do `vitest.config.ts` de cada package/app). Metas de
+cobertura por package (thresholds no `vitest.config.ts` — o CI falha se regredir):
+
+| Package/App        | Linhas | Branches | Funções |
+| ------------------ | ------ | -------- | ------- |
+| `packages/core`    | ≥ 98%  | ≥ 98%    | ≥ 98%   |
+| `packages/security`| ≥ 98%  | ≥ 96%    | ≥ 98%   |
+| `packages/mailer`  | ≥ 98%  | ≥ 98%    | ≥ 98%   |
+| `packages/deploy`  | ≥ 97%  | ≥ 95%    | ≥ 98%   |
+| `apps/server`      | ≥ 94%  | ≥ 91%    | ≥ 98%   |
+
+Os resíduos conhecidos (branches defensivas inalcançáveis, catches de TOCTOU em scans
+de disco, ramos de `system-info` dependentes do hardware do host) estão documentados
+nos próprios configs; ao adicionar lógica nova, mantenha os thresholds verdes.
 
 **Convenção: todo PR precisa de testes** cobrindo a mudança (unitário para lógica pura,
 componente para UI, E2E para fluxos de infra) e **CI verde é obrigatório** — o workflow
-`.github/workflows/ci.yml` roda install → typecheck → build → testes unitários em pushes
-e PRs nas branches `main` e `dev`.
+`.github/workflows/ci.yml` roda install → typecheck → build → testes unitários com cobertura
+(thresholds) em pushes e PRs nas branches `main` e `dev`.
 
 ## Padrões do projeto
 
