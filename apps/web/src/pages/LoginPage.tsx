@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 import type { LoginResponse } from "@paas/core";
 import { apiFetch, ApiRequestError, clearSetupToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";

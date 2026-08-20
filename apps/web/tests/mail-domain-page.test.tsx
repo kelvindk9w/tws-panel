@@ -5,7 +5,7 @@
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DnsChecklistResponse } from "@paas/core";
 import { MailDomainPage } from "../src/pages/MailDomainPage";

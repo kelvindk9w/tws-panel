@@ -3,7 +3,7 @@
  * 401 unauthorized → /login; 401 setup_incomplete → /setup.
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequireAuth } from "../src/components/RequireAuth";
 

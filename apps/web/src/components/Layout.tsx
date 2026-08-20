@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router";
 import type { AlertListResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";

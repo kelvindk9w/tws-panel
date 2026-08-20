@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate, useLocation } from "react-router";
 import type { AdminUser, AuthMeResponse } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { AuthContext } from "@/lib/auth";
