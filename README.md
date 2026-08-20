@@ -193,6 +193,14 @@ nenhum shell arbitrário vindo da UI (apenas ações pré-definidas e auditadas)
 exposto via TCP, CORS same-origin por padrão, rate limiting, logs com redação de segredos e
 auditoria de todas as ações sensíveis.
 
+**Autenticação:** o painel nasce protegido pelo setup token gerado na instalação; no Passo 4 do
+wizard você cria a conta de administrador (senha com hash argon2id, mínimo de 12 caracteres com
+maiúsculas, minúsculas e números), o que conclui o setup e invalida o token para sempre. Daí em
+diante todo acesso exige login (`/login`): as sessões são revogáveis, persistidas no servidor
+(cookie httpOnly, SameSite=Lax, expiração de 12h — nada de JWT stateless), o login tem rate limit
+de 5 tentativas/minuto por IP com lockout progressivo, e trocar a senha invalida as demais sessões.
+Login, logout, falhas e criação da conta admin ficam registrados no log de auditoria.
+
 ## Documentação
 
 | Doc | Conteúdo |
