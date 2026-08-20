@@ -189,7 +189,7 @@ function ProjectEmailCard({ projectId }: { projectId: string }) {
  * Modal de bloqueio de guardrails (Fase 4): exibido quando o deploy tem
  * findings "block". Exige checkbox explícito para override (auditado na API).
  */
-function GuardrailOverrideModal({
+export function GuardrailOverrideModal({
   report,
   busy,
   onCancel,

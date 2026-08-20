@@ -8,6 +8,9 @@ build/
 apps/web/dist/
 *.tsbuildinfo
 
+# Cobertura de testes (Vitest)
+coverage/
+
 # Dados de runtime (setup-state, banco SQLite futuro, etc.)
 data/
 
