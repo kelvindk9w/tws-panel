@@ -29,6 +29,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@fastify/cookie':
+        specifier: ^11.1.2
+        version: 11.1.2
       '@fastify/cors':
         specifier: ^10.0.1
         version: 10.1.0
@@ -41,6 +44,9 @@ importers:
       '@fastify/static':
         specifier: ^8.0.3
         version: 8.3.0
+      '@node-rs/argon2':
+        specifier: ^2.1.0
+        version: 2.1.0
       '@paas/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -658,6 +664,9 @@ packages:
   '@fastify/ajv-compiler@4.0.6':
     resolution: {integrity: sha512-NtuzM0SfaMJbGlnjr9LWQUN5LzgSrbB8tf/wRZNas+4E1O/Nmzl53e7ruT61HDZyRCJGC6FxIogmNZO1c5ETBA==}
 
+  '@fastify/cookie@11.1.2':
+    resolution: {integrity: sha512-Dtrpk/YOGUsbRMvP/8ZqPpwnMRv0qSqodFdoQ2B589Obc7jw4s4Qla+cV72Bsm7WsZJnqlYFX/i7uSBq0xzg6g==}
+
   '@fastify/cors@10.1.0':
     resolution: {integrity: sha512-MZyBCBJtII60CU9Xme/iE4aEy8G7QpzGR8zkdXZkDFt7ElEMachbE61tfhAG/bvSaULlqlf0huMT12T7iqEmdQ==}
 
@@ -726,6 +735,92 @@ packages:
     cpu: [x64]
     os: [linux]
     libc: [glibc]
+
+  '@node-rs/argon2-android-arm-eabi@2.1.0':
+    resolution: {integrity: sha512-hdWo5kb4eFRbHjdu4O6dVlRPI/CR1vbkJpe3Z9kF2s0Kp42428wg8AxI+8Cv4mygdW309BpUBf3sZaqXBNpdpw==}
+    engines: {node: '>= 10'}
+    cpu: [arm]
+    os: [android]
+
+  '@node-rs/argon2-android-arm64@2.1.0':
+    resolution: {integrity: sha512-MHby1n9UzlVma3GiEYWNNqRhn2Z/90QwF2PFckGwucdz0HfdVX+lSKEcyfwcbvS5sJ9GAzhop3hXlUPxUYe72Q==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [android]
+
+  '@node-rs/argon2-darwin-arm64@2.1.0':
+    resolution: {integrity: sha512-5nayvL9wepOvTO5JmdaiDZ6bgHEsI/vksnXphM3UTy/cflARr9MoD1pBrMPs921hx2otURJhG0avg9hN0Q0KPw==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@node-rs/argon2-darwin-x64@2.1.0':
+    resolution: {integrity: sha512-7bFf3qH/PLQ5kU5GkxMF+dMz/tiT+0yFXILpOx4fgSFjw3wdXpGZt3wH4i6dHMURDcwYlNap0hJaX4h2E3JGng==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@node-rs/argon2-freebsd-x64@2.1.0':
+    resolution: {integrity: sha512-01mVdl+7bjSW0to5xcEzueq7BuYbz3476/dmLMXziJf8fhykzr723YRNcGjOcHSU5fxNrElY9uVeUoow16vBrQ==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [freebsd]
+
+  '@node-rs/argon2-linux-arm-gnueabihf@2.1.0':
+    resolution: {integrity: sha512-NxZILF+Hqav6yzJTUFuZXTUC1VagTO4Vfd2HSlzkwankUa1B7goo0NLY2tUPw6MdqtLojkqVG5MZ26AaF49tHw==}
+    engines: {node: '>= 10'}
+    cpu: [arm]
+    os: [linux]
+
+  '@node-rs/argon2-linux-arm64-gnu@2.1.0':
+    resolution: {integrity: sha512-jpx2VwJLyAF/cM64HRigFBk67GwtQBcssYyVhvHqfmCEZz/CP//SV9bxE+uJOGIPKJo7wDg/5f2k3JY0PNMROg==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@node-rs/argon2-linux-arm64-musl@2.1.0':
+    resolution: {integrity: sha512-xXAaPUlnPx/44qwaSekTG/g6/h5QCyrTayPLmvewJNyYz17vyBRmFKWLgv9Q3+NJwSvV88nVnCu/xkQbEPQaog==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  '@node-rs/argon2-linux-x64-gnu@2.1.0':
+    resolution: {integrity: sha512-ICnfyFaxZzr8OdAEwTPsAjx6gpNla1sI3miZJWAVCtZlw98Wo3Wd4H7tvW6S2NRJ1BIOf4l8Z7aX7h3fimXn5w==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@node-rs/argon2-linux-x64-musl@2.1.0':
+    resolution: {integrity: sha512-f56jehb/IPTGBWWrvMjDGZWlQm/hKkH2VK/MxJ9u3kUR9PCacdtLFZmX4sL+qKeo4wsyhlD1EvlZF6nV1FSi3Q==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
+  '@node-rs/argon2-win32-arm64-msvc@2.1.0':
+    resolution: {integrity: sha512-KH8lBdjoZLUiVG1GjJQIQPKhmddJmEbJbL+e3S7BKVq1wKl1mx+ClmhGtMtYp8ZtEIw8/BYIFUIjL3sBuWGEuQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@node-rs/argon2-win32-ia32-msvc@2.1.0':
+    resolution: {integrity: sha512-zZ7NDHoKTgrjoUehNN7xvP+dA/M9krOp42l0MKns6TnMkwrp5nes9agEZsUy+0t0JoR8OQ8D7EUCNLh5BEn++w==}
+    engines: {node: '>= 10'}
+    cpu: [ia32]
+    os: [win32]
+
+  '@node-rs/argon2-win32-x64-msvc@2.1.0':
+    resolution: {integrity: sha512-JN/yNiX7u8Cw9XXTbRrjnlgzFjCiEQe6x97wJnMIsJ3vty89q0SAg504Otd9qy2ofQS2F5CCWvrOXhm/oyHaAQ==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [win32]
+
+  '@node-rs/argon2@2.1.0':
+    resolution: {integrity: sha512-VBOWfM2u58/to3DFqTGJ2U5cJKQwmjN2zxzsQNZ5a2o8Z6aUrhvqQh8NdgotIF1Y0tMsBNtzOBDBdfvvkwJDSQ==}
+    engines: {node: '>= 10'}
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -1222,6 +1317,10 @@ packages:
   cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
     engines: {node: '>=18'}
+
+  cookie@2.0.1:
+    resolution: {integrity: sha512-yuToqVvRrj6pfDXREyQAAv8SkAEk/8GS3jQRTiUMm66TVtBYmqQeoEjL2Lmq8Rpo6271vH76InTChTitEAm65w==}
+    engines: {node: '>=22'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -2557,6 +2656,11 @@ snapshots:
       ajv-formats: 3.0.1(ajv@8.20.0)
       fast-uri: 4.1.2
 
+  '@fastify/cookie@11.1.2':
+    dependencies:
+      cookie: 2.0.1
+      fastify-plugin: 6.0.0
+
   '@fastify/cors@10.1.0':
     dependencies:
       fastify-plugin: 5.1.0
@@ -2643,6 +2747,61 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
+
+  '@node-rs/argon2-android-arm-eabi@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-android-arm64@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-darwin-arm64@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-darwin-x64@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-freebsd-x64@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-linux-arm-gnueabihf@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-linux-arm64-gnu@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-linux-arm64-musl@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-linux-x64-gnu@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-linux-x64-musl@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-win32-arm64-msvc@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-win32-ia32-msvc@2.1.0':
+    optional: true
+
+  '@node-rs/argon2-win32-x64-msvc@2.1.0':
+    optional: true
+
+  '@node-rs/argon2@2.1.0':
+    optionalDependencies:
+      '@node-rs/argon2-android-arm-eabi': 2.1.0
+      '@node-rs/argon2-android-arm64': 2.1.0
+      '@node-rs/argon2-darwin-arm64': 2.1.0
+      '@node-rs/argon2-darwin-x64': 2.1.0
+      '@node-rs/argon2-freebsd-x64': 2.1.0
+      '@node-rs/argon2-linux-arm-gnueabihf': 2.1.0
+      '@node-rs/argon2-linux-arm64-gnu': 2.1.0
+      '@node-rs/argon2-linux-arm64-musl': 2.1.0
+      '@node-rs/argon2-linux-x64-gnu': 2.1.0
+      '@node-rs/argon2-linux-x64-musl': 2.1.0
+      '@node-rs/argon2-win32-arm64-msvc': 2.1.0
+      '@node-rs/argon2-win32-ia32-msvc': 2.1.0
+      '@node-rs/argon2-win32-x64-msvc': 2.1.0
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
@@ -3086,6 +3245,8 @@ snapshots:
   convert-source-map@2.0.0: {}
 
   cookie@1.1.1: {}
+
+  cookie@2.0.1: {}
 
   cross-spawn@7.0.6:
     dependencies:
