@@ -1,4 +1,4 @@
-# Contribuindo com o paas
+# Contribuindo com o TWS Panel
 
 Obrigado por considerar contribuir! Este projeto existe porque hospedar a própria infra não
 deveria exigir um painel pesado nem uma mensalidade — toda ajuda para mantê-lo leve, seguro e
@@ -11,7 +11,7 @@ Antes de começar, leia o [Código de Conduta](CODE_OF_CONDUCT.md).
 Requisitos: **Node ≥ 22**, **pnpm** (via `corepack enable`) e **Docker**.
 
 ```bash
-git clone <repo> && cd paas
+git clone https://github.com/kelvindk9w/tws-panel.git && cd tws-panel
 pnpm install
 SETUP_TOKEN=dev-token pnpm dev
 ```
@@ -19,6 +19,31 @@ SETUP_TOKEN=dev-token pnpm dev
 - API em `http://localhost:9000`, frontend com hot reload em `http://localhost:5173`
 - Wizard: `http://localhost:5173/setup` (token `dev-token`)
 - Comandos úteis: `pnpm build`, `pnpm typecheck`
+
+## Hooks de validação locais (pre-commit / pre-push)
+
+O repositório versiona hooks git em `scripts/hooks/` (bash puro, **sem husky nem
+dependências novas**). Eles são **ativados automaticamente** pelo `pnpm install`
+(o script `prepare` da raiz aponta `core.hooksPath` para `scripts/hooks`) — não
+é preciso fazer nada. Filosofia: os hooks dão feedback rápido na sua máquina;
+**o CI continua sendo o portão final**.
+
+- **`pre-commit`** (rápido, meta < 30s) — roda só sobre o que está staged:
+  1. bloqueia arquivos proibidos (`.env`, `data/`, `*.pem`, `id_rsa`, etc.);
+  2. scan leve de segredos nos arquivos staged (`scripts/hooks/scan-secrets.mjs`:
+     chaves AWS, blocos `PRIVATE KEY`, tokens Slack/GitHub, senhas atribuídas em
+     strings) com indicação de `arquivo:linha`;
+  3. typecheck incremental (`tsc --noEmit`) apenas nos workspaces tocados.
+- **`pre-push`** (completo) — `pnpm test` + `pnpm test:coverage` (thresholds) +
+  `pnpm build`. Se qualquer etapa falha, o push é abortado com o resumo do erro.
+
+**Emergências:** `git commit --no-verify` pula o pre-commit e
+`PAAS_SKIP_PREPUSH=1 git push` pula o pre-push — use com parcimônia, porque
+**o CI vai pegar** qualquer coisa que passar.
+
+O scanner de segredos é intencionalmente leve para não exigir dependência de
+sistema. Para uma varredura mais profunda, recomendamos instalar o
+[gitleaks](https://github.com/gitleaks/gitleaks) localmente (opcional).
 
 ## Testes
 
@@ -105,7 +130,7 @@ pelos guardrails como qualquer deploy. Use os exemplos em `examples/` como refer
 
 1. Abra uma **issue** antes de mudanças grandes (ou comente em uma existente) para alinhar o
    desenho — evita retrabalho.
-2. Faça fork, crie um branch a partir de `main` (`feat/minha-melhoria`).
+2. Faça fork, crie um branch a partir de `dev` (`feat/minha-melhoria`).
 3. Garanta `pnpm build` e `pnpm typecheck` limpos e **`pnpm test` verde** (mais
    `pnpm test:e2e` se a mudança tocar fluxos de infra). Todo PR precisa incluir testes
    para a mudança — o CI bloqueia o merge sem eles.

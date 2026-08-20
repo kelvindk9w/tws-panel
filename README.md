@@ -73,6 +73,15 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
    ./scripts/install.sh
    ```
 
+   > **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz
+   > verificações **somente-leitura** (SO, RAM/disco, Docker e containers em
+   > execução, portas 80/443/9000/25/587/993 e serviços como nginx, apache,
+   > caddy, postfix, mysql e postgres) e exibe um relatório. Se a VPS já estiver
+   > em uso, ele avisa que o painel foi feito para uma VPS limpa e pede
+   > confirmação explícita (digite `continuar`) — ou use
+   > `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele **nunca
+   > remove nem para** nada que já exista na máquina.
+
 6. **Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
@@ -117,6 +126,11 @@ SETUP_TOKEN=dev-token docker compose -f docker-compose.dev.yml up
 - Domínios de projeto: use `*.localhost` (servidos em HTTP puro pelo Caddy, sem SSL)
 
 Exemplos prontos para deploy em [`examples/`](examples/README.md) ⚠️ *(apenas para testes)*.
+
+> 🔒 **Validação automática:** o `pnpm install` ativa hooks locais de pre-commit
+> (arquivos proibidos + scan de segredos + typecheck incremental) e pre-push
+> (testes + cobertura + build). O CI no GitHub Actions é o portão final —
+> detalhes no [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Arquitetura
 
