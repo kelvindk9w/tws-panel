@@ -54,7 +54,7 @@ atuação como representante designado em um evento online ou presencial.
 Casos de comportamento abusivo, de assédio ou de outra forma inaceitável podem ser reportados aos
 líderes da comunidade responsáveis pela aplicação pelo e-mail:
 
-**<conduct@example.com>** *(substitua pelo e-mail de contato do mantenedor)*
+**[contato@tws.tec.br](mailto:contato@tws.tec.br)**
 
 Todas as reclamações serão analisadas e investigadas com rapidez e imparcialidade.
 

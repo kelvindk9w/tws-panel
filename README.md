@@ -63,7 +63,7 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 4. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`):
 
    ```bash
-   git clone https://github.com/<org>/tws-panel.git /opt/tws-panel
+   git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
    cd /opt/tws-panel
    ```
 
@@ -214,10 +214,9 @@ liberar o painel para a comunidade, sob licença MIT.
 
 Quer conversar sobre parcerias, projetos ou contribuições?
 
-- 🌐 Site: [https://tws.dev.br](https://tws.dev.br) *(placeholder — edite)*
-- ✉️ E-mail: [contato@tws.dev.br](mailto:contato@tws.dev.br) *(placeholder — edite)*
-- 💬 WhatsApp: [+55 (00) 90000-0000](https://wa.me/5500900000000) *(placeholder — edite)*
-- 💼 LinkedIn: [linkedin.com/company/tws](https://linkedin.com/company/tws) *(placeholder — edite)*
+- 🌐 Site: [tws.tec.br](https://tws.tec.br/)
+- ✉️ E-mail: [contato@tws.tec.br](mailto:contato@tws.tec.br)
+- 💼 LinkedIn: [Kelvin Medeiros](https://www.linkedin.com/in/kelvin-medeiros-37920487)
 
 **Autor:** Kelvin — CEO & Founder @ TWS
 

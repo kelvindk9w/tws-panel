@@ -9,7 +9,7 @@ Se você encontrou uma vulnerabilidade, agradecemos o reporte responsável.
 
 Envie um e-mail para:
 
-**<security@example.com>** *(substitua pelo e-mail de contato do mantenedor)*
+**[contato@tws.tec.br](mailto:contato@tws.tec.br)**
 
 Inclua, se possível:
 

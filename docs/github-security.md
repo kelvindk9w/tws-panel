@@ -66,7 +66,7 @@ cat > /tmp/ruleset-main.json <<'EOF'
 }
 EOF
 
-gh api repos/SEU_USER/tws-panel/rulesets --method POST --input /tmp/ruleset-main.json
+gh api repos/kelvindk9w/tws-panel/rulesets --method POST --input /tmp/ruleset-main.json
 
 # Repetir para dev (troque "include" para ["refs/heads/dev"])
 # Verificar o que se aplica a uma branch:
@@ -83,25 +83,25 @@ Crie `.github/CODEOWNERS` (local preferido). Regras: **última linha que casa ve
 
 ```text
 # Dono padrão de tudo
-*                              @SEU_USER
+*                              @kelvindk9w
 
 # Áreas críticas — só o dono aprova
-/scripts/                      @SEU_USER
-/scripts/install.sh            @SEU_USER
-/scripts/hardening*            @SEU_USER
-Dockerfile                     @SEU_USER
-.dockerignore                  @SEU_USER
-docker-compose.yml             @SEU_USER
-docker-compose.dev.yml         @SEU_USER
+/scripts/                      @kelvindk9w
+/scripts/install.sh            @kelvindk9w
+/scripts/hardening*            @kelvindk9w
+Dockerfile                     @kelvindk9w
+.dockerignore                  @kelvindk9w
+docker-compose.yml             @kelvindk9w
+docker-compose.dev.yml         @kelvindk9w
 
 # Autenticação / painel
-**/auth*                       @SEU_USER
+**/auth*                       @kelvindk9w
 
 # CI/CD — protege os próprios workflows (crítico!)
-/.github/                      @SEU_USER
+/.github/                      @kelvindk9w
 ```
 
-⚠️ **Proteja o próprio CODEOWNERS**: a linha `/.github/ @SEU_USER` garante que ninguém altere CODEOWNERS ou workflows sem sua aprovação. Valide o arquivo com `npx codeowners-audit` ou o action `step-security/codeowners-validator` (erros de sintaxe falham **silenciosamente**).
+⚠️ **Proteja o próprio CODEOWNERS**: a linha `/.github/ @kelvindk9w` garante que ninguém altere CODEOWNERS ou workflows sem sua aprovação. Valide o arquivo com `npx codeowners-audit` ou o action `step-security/codeowners-validator` (erros de sintaxe falham **silenciosamente**).
 
 ---
 
@@ -130,11 +130,11 @@ docker-compose.dev.yml         @SEU_USER
 
 ```bash
 # Default read-only + sem aprovação de PR por Actions
-gh api -X PUT repos/SEU_USER/tws-panel/actions/permissions/workflow \
+gh api -X PUT repos/kelvindk9w/tws-panel/actions/permissions/workflow \
   -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
 
 # Aprovação obrigatória para TODOS os colaboradores externos (fork PRs)
-gh api -X PUT repos/SEU_USER/tws-panel/actions/permissions/fork-pr-contributor-approval \
+gh api -X PUT repos/kelvindk9w/tws-panel/actions/permissions/fork-pr-contributor-approval \
   -f approval_policy=all_external_collaborators
 ```
 
@@ -171,11 +171,11 @@ Em repos **públicos**: secret scanning e push protection são **gratuitos e aut
 
 ```bash
 # Dependabot alerts + security updates
-gh api -X PUT repos/SEU_USER/tws-panel/vulnerability-alerts
-gh api -X PUT repos/SEU_USER/tws-panel/automated-security-fixes
+gh api -X PUT repos/kelvindk9w/tws-panel/vulnerability-alerts
+gh api -X PUT repos/kelvindk9w/tws-panel/automated-security-fixes
 
 # Conferir estado de tudo:
-gh api repos/SEU_USER/tws-panel --jq '.security_and_analysis'
+gh api repos/kelvindk9w/tws-panel --jq '.security_and_analysis'
 ```
 
 Adicione também `.github/dependabot.yml` cobrindo o ecossistema do projeto **e** `github-actions` (atualiza actions pinadas por SHA):
@@ -243,7 +243,7 @@ A conta é o ponto único de falha — se cair, todas as proteções de repo cae
   - ✅ Security configurations centralizadas (aplicar secret scanning etc. em todos os repos).
   - ⚠️ Crie a org com conta de e-mail dedicada; tenha **2 owners** (um pode ser conta de backup sua, também com 2FA) para não se trancar fora — mas poucos owners (OpenSSF recomenda < 3).
 - Se ficar na conta pessoal: nunca adicione colaboradores com mais que **Write**, e mesmo Write só para quem tem confiança longa (ver seção 9).
-- Ative **private vulnerability reporting** (`gh api -X PUT repos/SEU_USER/tws-panel/private-vulnerability-reporting`) + `SECURITY.md` para reports de vulnerabilidade não virarem issue pública.
+- Ative **private vulnerability reporting** (`gh api -X PUT repos/kelvindk9w/tws-panel/private-vulnerability-reporting`) + `SECURITY.md` para reports de vulnerabilidade não virarem issue pública.
 
 ---
 

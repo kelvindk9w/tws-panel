@@ -18,12 +18,18 @@
     "typecheck": "pnpm -r run typecheck",
     "start": "pnpm --filter @paas/server run start",
     "test:mail": "tsx scripts/test-mail.mts",
-    "test:fase4": "tsx scripts/test-fase4.mts"
+    "test:fase4": "tsx scripts/test-fase4.mts",
+    "test": "pnpm run test:unit",
+    "test:unit": "pnpm -r --if-present run test",
+    "test:e2e": "pnpm run test:fase4 && pnpm run test:mail",
+    "test:coverage": "pnpm -r --if-present run test:coverage"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "imapflow": "^1.0.164",
     "nodemailer": "^6.9.16",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "vitest": "^3.2.7"
   }
 }
