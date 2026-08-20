@@ -1,4 +1,4 @@
-# Contribuindo com o paas
+# Contribuindo com o TWS Panel
 
 Obrigado por considerar contribuir! Este projeto existe porque hospedar a própria infra não
 deveria exigir um painel pesado nem uma mensalidade — toda ajuda para mantê-lo leve, seguro e
@@ -11,7 +11,7 @@ Antes de começar, leia o [Código de Conduta](CODE_OF_CONDUCT.md).
 Requisitos: **Node ≥ 22**, **pnpm** (via `corepack enable`) e **Docker**.
 
 ```bash
-git clone <repo> && cd paas
+git clone https://github.com/kelvindk9w/tws-panel.git && cd tws-panel
 pnpm install
 SETUP_TOKEN=dev-token pnpm dev
 ```
@@ -105,7 +105,7 @@ pelos guardrails como qualquer deploy. Use os exemplos em `examples/` como refer
 
 1. Abra uma **issue** antes de mudanças grandes (ou comente em uma existente) para alinhar o
    desenho — evita retrabalho.
-2. Faça fork, crie um branch a partir de `main` (`feat/minha-melhoria`).
+2. Faça fork, crie um branch a partir de `dev` (`feat/minha-melhoria`).
 3. Garanta `pnpm build` e `pnpm typecheck` limpos e **`pnpm test` verde** (mais
    `pnpm test:e2e` se a mudança tocar fluxos de infra). Todo PR precisa incluir testes
    para a mudança — o CI bloqueia o merge sem eles.
