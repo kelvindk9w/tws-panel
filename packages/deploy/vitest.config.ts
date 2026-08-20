@@ -10,7 +10,9 @@ export default defineConfig({
       include: ["src/**"],
       exclude: ["src/index.ts", "src/engine.ts", "src/caddy.ts", "src/exec.ts", "src/ingest.ts"],
       reporter: ["text", "html"],
-      thresholds: { lines: 90, functions: 90, branches: 75, statements: 90 },
+      // atingido: ~99,5% linhas; o residual são catches defensivos de TOCTOU
+      // (stat/readFile falhando entre readdir e leitura) e branches mortas
+      thresholds: { lines: 97, functions: 98, branches: 95, statements: 97 },
     },
   },
 });

@@ -41,6 +41,17 @@ describe("db-port-exposed (block)", () => {
     expect(report.findings.filter((f) => f.rule === "db-port-exposed")).toHaveLength(0);
     expect(report.blockers).toBe(0);
   });
+
+  it("detecta a forma longa de ports (target/published) e ignora entradas malformadas", async () => {
+    await writeCompose(
+      "  db:\n    image: postgres:16\n    ports:\n      - target: 5432\n        published: 15432\n" +
+        '  app:\n    image: app:1\n    ports: ["8080", "abc:def:ghi"]',
+    );
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(hit).toBeDefined();
+    expect(hit?.evidence).toContain("15432:5432");
+  });
 });
 
 describe("weak-credentials (block)", () => {
@@ -48,6 +59,36 @@ describe("weak-credentials (block)", () => {
     await writeCompose("  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: password");
     const report = await runGuardrails(dir);
     expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("suporta environment em lista (com e sem '=')", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    environment: ["POSTGRES_PASSWORD=password", "PGDATA"]',
+    );
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "weak-credentials");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("POSTGRES_PASSWORD");
+  });
+
+  it("bloqueia segredo curto (< 6 chars) mesmo fora da lista de triviais", async () => {
+    await writeCompose("  app:\n    image: app:1\n    environment:\n      API_SECRET: abc12");
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("bloqueia par 'usuario:senha' iguais num único valor (cacheta:cacheta)", async () => {
+    await writeCompose("  app:\n    image: app:1\n    environment:\n      API_TOKEN: \"cacheta:cacheta\"");
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("chave sensível sem valor (null) e serviço sem image não disparam", async () => {
+    await writeCompose(
+      '  app:\n    image: app:1\n    environment: ["DB_PASSWORD"]\n  mapa:\n    image: app:1\n    environment:\n      API_TOKEN:\n  semimagem:\n    ports: ["8080:8080"]',
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "weak-credentials")).toHaveLength(0);
   });
 
   it("bloqueia usuário == senha em variáveis separadas (POSTGRES_USER == POSTGRES_PASSWORD)", async () => {
@@ -93,6 +134,14 @@ describe("privileged-container (block)", () => {
     const report = await runGuardrails(dir);
     expect(report.findings.filter((f) => f.rule === "privileged-container")).toHaveLength(0);
   });
+
+  it("ignora entradas de volume fora das formas conhecidas (número, objeto sem source)", async () => {
+    await writeCompose(
+      "  app:\n    image: app:1\n    volumes:\n      - 42\n      - type: volume\n        target: /data\n      - type: bind\n        source: /etc\n        target: /etc-host",
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "privileged-container")).toHaveLength(0);
+  });
 });
 
 describe("dev-service-in-prod (warn)", () => {
@@ -128,6 +177,14 @@ describe("latest-tag (info)", () => {
     const report = await runGuardrails(dir);
     expect(report.findings.filter((f) => f.rule === "latest-tag")).toHaveLength(0);
   });
+
+  it("edge: tag vazia (imagem terminando em ':') não é reportada como latest", async () => {
+    // comportamento efetivo: a condição exige ':latest' explícito ou ausência
+    // total de ':' — 'redis:' passa despercebida (YAML inválido na prática)
+    await writeCompose('  a:\n    image: "redis:"');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "latest-tag")).toHaveLength(0);
+  });
 });
 
 describe("secret-in-code (warn)", () => {
@@ -160,6 +217,25 @@ describe("secret-in-code (warn)", () => {
     expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
   });
 
+  it("NÃO acusa valor repetitivo com cara de alta entropia (aB1_aB1_…)", async () => {
+    // 3+ classes de caracteres, mas repetição exata → placeholder, não segredo
+    await writeFile(path.join(dir, ".env"), 'APP_SECRET="aB1_aB1_aB1_aB1_aB1_aB1_"\n');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+  });
+
+  it("respeita o cap de arquivos varridos (proteção contra árvores gigantes)", async () => {
+    // 2001 arquivos: o 2001º é pulado pelo cap — o scan termina sem erro
+    await mkdir(path.join(dir, "massa"), { recursive: true });
+    await Promise.all(
+      Array.from({ length: 2001 }, (_, i) =>
+        writeFile(path.join(dir, "massa", `f${String(i).padStart(4, "0")}.txt`), `conteudo ${i}\n`),
+      ),
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+  }, 30_000);
+
   it("ignora node_modules e arquivos sem extensão de texto", async () => {
     await mkdir(path.join(dir, "node_modules", "lib"), { recursive: true });
     await writeFile(path.join(dir, "node_modules", "lib", "leak.js"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
@@ -175,6 +251,30 @@ describe("secret-in-code (warn)", () => {
     );
     const report = await runGuardrails(dir);
     expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(1);
+  });
+
+  it("varre subdiretórios recursivamente (evidência com o caminho relativo)", async () => {
+    await mkdir(path.join(dir, "src", "lib"), { recursive: true });
+    await writeFile(path.join(dir, "src", "lib", "keys.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "secret-in-code");
+    expect(hit?.evidence).toContain("src/lib/keys.ts:1");
+  });
+
+  it("subdiretório ilegível não derruba o scan (best-effort)", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await mkdir(path.join(dir, "trancado"), { recursive: true });
+    await writeFile(path.join(dir, "trancado", "keys.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await writeFile(path.join(dir, "visivel.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    const { chmod } = await import("node:fs/promises");
+    await chmod(path.join(dir, "trancado"), 0o000);
+    try {
+      const report = await runGuardrails(dir);
+      // o arquivo visível ainda é encontrado; o ilegível é pulado sem erro
+      expect(report.findings.some((f) => f.evidence.startsWith("visivel.ts"))).toBe(true);
+    } finally {
+      await chmod(path.join(dir, "trancado"), 0o755);
+    }
   });
 });
 
@@ -204,6 +304,12 @@ describe("relatório agregado", () => {
     expect(report.warnings).toBeGreaterThanOrEqual(1);
     expect(report.infos).toBeGreaterThanOrEqual(1);
     expect(report.dir).toBe(dir);
+  });
+
+  it("compose válido sem a chave services não gera findings de compose", async () => {
+    await writeFile(path.join(dir, "compose.yml"), "name: projeto-sem-services\n");
+    const report = await runGuardrails(dir);
+    expect(report.findings).toHaveLength(0);
   });
 
   it("diretório limpo (sem compose nem secrets) → relatório vazio", async () => {

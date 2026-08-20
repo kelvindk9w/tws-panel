@@ -86,6 +86,41 @@ describe("static-node", () => {
     expect(result.packageManager).toBe("npm");
     expect(result.buildCommand).toBe("npm run build");
   });
+
+  it("respeita o packageManager declarado (yarn e npm)", async () => {
+    await writeJson("package.json", {
+      scripts: { build: "vite build" },
+      devDependencies: { vite: "^5" },
+      packageManager: "yarn@4.5.0",
+    });
+    const yarn = await detectProject(dir);
+    expect(yarn.packageManager).toBe("yarn");
+    expect(yarn.buildCommand).toBe("yarn build");
+
+    await writeJson("package.json", {
+      scripts: { build: "vite build" },
+      devDependencies: { vite: "^5" },
+      packageManager: "npm@10.9.0",
+    });
+    const npm = await detectProject(dir);
+    expect(npm.packageManager).toBe("npm");
+    expect(npm.buildCommand).toBe("npm run build");
+  });
+
+  it("lockfile pnpm-lock.yaml também identifica o gerenciador", async () => {
+    await writeJson("package.json", { scripts: { build: "vite build" }, devDependencies: { vite: "^5" } });
+    await writeFile(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    const result = await detectProject(dir);
+    expect(result.packageManager).toBe("pnpm");
+    expect(result.buildCommand).toBe("pnpm build");
+  });
+
+  it("package.json sem a chave scripts → unknown (não quebra no parse)", async () => {
+    await writeJson("package.json", { name: "sem-scripts", version: "1.0.0" });
+    const result = await detectProject(dir);
+    expect(result.type).toBe("unknown");
+    expect(result.details.join(" ")).toContain("sem script de build");
+  });
 });
 
 describe("compose", () => {

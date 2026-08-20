@@ -182,11 +182,34 @@ describe("analyzeCompose — compose.weak-credentials", () => {
     expect(asMap.some((w) => w.id === "compose.weak-credentials")).toBe(true);
     expect(asList.some((w) => w.id === "compose.weak-credentials")).toBe(true);
   });
+
+  it("edge: valor null explícito no mapa de environment não dispara", () => {
+    const warnings = analyzeCompose(
+      compose("  a:\n    image: x\n    environment:\n      DB_PASSWORD:"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.weak-credentials")).toHaveLength(0);
+  });
+
+  it("edge: serviço sem image é analisado normalmente (sem dev-service)", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    ports: ["8080:8080"]'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.dev-service")).toHaveLength(0);
+  });
 });
 
 describe("analyzeCompose — casos gerais", () => {
   it("compose sem serviços gera info compose.no-services", () => {
     const warnings = analyzeCompose("services: {}\n", "compose.yml");
+    expect(warnings).toEqual([
+      expect.objectContaining({ id: "compose.no-services", severity: "info" }),
+    ]);
+  });
+
+  it("arquivo sem a chave services também gera compose.no-services", () => {
+    const warnings = analyzeCompose("name: projeto-sem-services\n", "compose.yml");
     expect(warnings).toEqual([
       expect.objectContaining({ id: "compose.no-services", severity: "info" }),
     ]);
@@ -245,6 +268,44 @@ describe("guessProxyTarget", () => {
     const target = guessProxyTarget("services: {}\n");
     expect(target).toEqual({ service: null, port: null, notes: [] });
   });
+
+  it("edge: sem a chave services retorna nulos", () => {
+    const target = guessProxyTarget("name: vazio\n");
+    expect(target).toEqual({ service: null, port: null, notes: [] });
+  });
+
+  it("proxy nomeado sem ports: assume porta 80 com nota explicativa", () => {
+    const target = guessProxyTarget(compose("  caddy:\n    image: caddy:2"));
+    expect(target.service).toBe("caddy");
+    expect(target.port).toBe(80);
+    expect(target.notes.join(" ")).toContain("entrada web");
+  });
+
+  it("proxy nomeado com porta não-web publicada: usa a primeira porta", () => {
+    const target = guessProxyTarget(
+      compose('  caddy:\n    image: caddy:2\n    ports: ["2019:2019"]'),
+    );
+    expect(target.service).toBe("caddy");
+    expect(target.port).toBe(2019);
+  });
+
+  it("serviço nulo (chave sem corpo) é ignorado na busca pela porta web", () => {
+    const target = guessProxyTarget(
+      compose('  legado:\n  api:\n    image: app\n    ports: ["3000:3000"]'),
+    );
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(3000);
+  });
+
+  it("serviço sem image não é confundido com proxy na prioridade 1", () => {
+    const target = guessProxyTarget(
+      compose('  entrada:\n    ports: ["9000:9000"]\n  worker:\n    image: app'),
+    );
+    // "entrada" não é nome de proxy e não tem image → regra 1 não casa; 9000 não
+    // é porta web (regra 2) e não há expose (regra 3) → fallback manual
+    expect(target.service).toBe("entrada");
+    expect(target.port).toBeNull();
+  });
 });
 
 describe("servicesWithCustomNetworks", () => {
@@ -257,5 +318,15 @@ describe("servicesWithCustomNetworks", () => {
 
   it("YAML inválido → lista vazia sem lançar", () => {
     expect(servicesWithCustomNetworks("services: [unclosed\n")).toEqual([]);
+  });
+
+  it("sem a chave services → lista vazia", () => {
+    expect(servicesWithCustomNetworks("name: vazio\n")).toEqual([]);
+  });
+
+  it("serviço nulo (chave sem corpo) é ignorado", () => {
+    expect(
+      servicesWithCustomNetworks(compose("  legado:\n  app:\n    image: x\n    networks: [front]")),
+    ).toEqual(["app"]);
   });
 });
