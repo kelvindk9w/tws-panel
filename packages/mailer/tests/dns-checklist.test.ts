@@ -8,6 +8,7 @@ import {
   buildDnsChecklist,
   dmarcValue,
   ptrTicketText,
+  publicResolver,
   spfValue,
   stageSuggestion,
   verifyDnsRecords,
@@ -87,6 +88,16 @@ describe("geração dos registros esperados", () => {
     // todos começam pendentes até a primeira verificação
     expect(checklist.records.every((r) => r.status === "pending")).toBe(true);
     expect(checklist.ptr).toMatchObject({ ip: "203.0.113.10", expected: "mail.exemplo.com.br", status: "pending" });
+  });
+});
+
+describe("publicResolver", () => {
+  it("fixa servidores públicos (1.1.1.1/8.8.8.8) independentes do resolver da VPS", () => {
+    const resolver = publicResolver();
+    // a tipagem pública não expõe getServers; o objeto real é um dns.Resolver
+    expect(typeof resolver.resolve4).toBe("function");
+    expect(typeof resolver.resolveTxt).toBe("function");
+    expect((resolver as { getServers?: () => string[] }).getServers?.()).toContain("1.1.1.1");
   });
 });
 
@@ -172,6 +183,21 @@ describe("verificação contra o DNS real (resolver mockado)", () => {
     expect(result.ptr.status).toBe("mismatch");
     expect(result.ptr.ticketText).toContain("host.generico.provedor.com");
     expect(result.ptr.ticketText).toContain("mail.exemplo.com.br");
+  });
+
+  it("com IPv6: registro AAAA é verificado via resolve6 (found e missing)", async () => {
+    const checklistV6 = buildDnsChecklist({ ...BASE_INPUT, serverIpv6: "2001:db8::10" });
+    const aaaa = checklistV6.records.find((r) => r.type === "AAAA");
+    expect(aaaa?.expected).toBe("2001:db8::10");
+
+    const found = await verifyDnsRecords(
+      checklistV6,
+      mockResolver({ resolve6: async () => ["2001:db8::10"] }),
+    );
+    expect(found.records.find((r) => r.type === "AAAA")?.status).toBe("found");
+
+    const missing = await verifyDnsRecords(checklistV6, mockResolver());
+    expect(missing.records.find((r) => r.type === "AAAA")?.status).toBe("missing");
   });
 });
 

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkDomainBlacklists,
   checkIpBlacklists,
+  defaultBlacklistResolver,
   DOMAIN_DNSBLS,
   IP_DNSBLS,
   reversedIpv4,
@@ -22,6 +23,14 @@ function resolverFailing(code: string): BlacklistResolverLike {
     resolve4: () => Promise.reject(Object.assign(new Error(code), { code })),
   };
 }
+
+describe("defaultBlacklistResolver", () => {
+  it("usa o resolver do sistema (sem fixar servidores públicos)", () => {
+    // DNSBLs sérias recusam resolvedores abertos — o padrão é o do sistema
+    const resolver = defaultBlacklistResolver();
+    expect(typeof resolver.resolve4).toBe("function");
+  });
+});
 
 describe("reversedIpv4", () => {
   it("inverte os octetos para a consulta DNSBL", () => {
@@ -84,6 +93,15 @@ describe("checkIpBlacklists", () => {
     const results = await checkIpBlacklists("203.0.113.10", resolverFailing("ETIMEDOUT"));
     expect(results.every((r) => r.status === "unknown")).toBe(true);
     expect(results.every((r) => r.detail?.includes("ETIMEDOUT"))).toBe(true);
+  });
+
+  it("erro sem código (falha genérica) → unknown com 'erro desconhecido'", async () => {
+    const resolver: BlacklistResolverLike = {
+      resolve4: () => Promise.reject(new Error("boom")),
+    };
+    const results = await checkIpBlacklists("203.0.113.10", resolver);
+    expect(results.every((r) => r.status === "unknown")).toBe(true);
+    expect(results.every((r) => r.detail?.includes("erro desconhecido"))).toBe(true);
   });
 
   it("IP inválido → lista vazia sem consultar o resolver", async () => {
