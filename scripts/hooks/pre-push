@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# pre-push — full local validation before anything leaves the machine:
+#   1. pnpm test           (unit tests, all workspaces)
+#   2. pnpm test:coverage  (coverage thresholds — the CI enforces them)
+#   3. pnpm build          (full monorepo build)
+# Escape hatch: PAAS_SKIP_PREPUSH=1 git push (the CI is still the final gate).
+set -euo pipefail
+
+if [[ -t 1 ]]; then
+  RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BLUE=$'\033[34m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+else
+  RED=''; GREEN=''; YELLOW=''; BLUE=''; BOLD=''; RESET=''
+fi
+
+if [[ "${PAAS_SKIP_PREPUSH:-}" == "1" ]]; then
+  echo "${YELLOW}${BOLD}⚠ pre-push SKIPPED (PAAS_SKIP_PREPUSH=1) — the CI will still validate this push.${RESET}"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+CURRENT_STEP=""
+run_step() {
+  CURRENT_STEP="$1"; shift
+  echo "${BLUE}${BOLD}▶ pre-push: ${CURRENT_STEP}…${RESET}"
+  local log
+  log="$(mktemp)"
+  if "$@" >"$log" 2>&1; then
+    rm -f "$log"
+    echo "${GREEN}  ✔ ${CURRENT_STEP}${RESET}"
+  else
+    echo "${RED}${BOLD}✖ pre-push FAILED at: ${CURRENT_STEP}${RESET}" >&2
+    echo "${RED}  ── last output ──────────────────────────────${RESET}" >&2
+    tail -n 40 "$log" >&2
+    rm -f "$log"
+    echo "${RED}  ─────────────────────────────────────────────${RESET}" >&2
+    echo "${YELLOW}  Fix the failure above and push again.${RESET}" >&2
+    echo "${YELLOW}  Escape hatch: PAAS_SKIP_PREPUSH=1 git push (the CI still gates).${RESET}" >&2
+    exit 1
+  fi
+}
+
+run_step "unit tests (pnpm test)" pnpm test
+run_step "coverage thresholds (pnpm test:coverage)" pnpm run test:coverage
+run_step "build (pnpm build)" pnpm run build
+
+echo "${GREEN}${BOLD}✔ pre-push OK — tests, coverage and build all green. Pushing.${RESET}"

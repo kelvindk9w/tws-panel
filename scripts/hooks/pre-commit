@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# pre-commit — fast local validation (< 30s target):
+#   1. forbidden files (.env, data/, *.pem, private keys, …)
+#   2. lightweight secret scan on staged files (scripts/hooks/scan-secrets.mjs)
+#   3. incremental typecheck on the workspaces touched by staged files
+# Skip in a real emergency with: git commit --no-verify (the CI still gates).
+set -euo pipefail
+
+if [[ -t 1 ]]; then
+  RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BLUE=$'\033[34m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+else
+  RED=''; GREEN=''; YELLOW=''; BLUE=''; BOLD=''; RESET=''
+fi
+
+fail() {
+  echo "${RED}${BOLD}✖ pre-commit FAILED:${RESET} $1" >&2
+  echo "${YELLOW}  Emergency bypass: git commit --no-verify (the CI will still catch it).${RESET}" >&2
+  exit 1
+}
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR)"
+if [[ -z "$STAGED" ]]; then
+  echo "${GREEN}✔ pre-commit: nothing staged, skipping.${RESET}"
+  exit 0
+fi
+
+echo "${BLUE}${BOLD}▶ pre-commit: validating staged changes…${RESET}"
+
+# ── 1. Forbidden files ────────────────────────────────────────────────────────
+FORBIDDEN_RE='(^|/)\.env($|\.)|(^|/)data/|\.pem$|\.key$|\.p12$|\.pfx$|(^|/)id_rsa|(^|/)id_ed25519'
+# .env.example is explicitly allowed
+FORBIDDEN_HITS="$(grep -E "$FORBIDDEN_RE" <<<"$STAGED" | grep -Ev '\.env\.example$' || true)"
+if [[ -n "$FORBIDDEN_HITS" ]]; then
+  echo "${RED}  Forbidden files staged (never commit these):${RESET}" >&2
+  sed 's/^/    /' <<<"$FORBIDDEN_HITS" >&2
+  fail "forbidden file(s) staged."
+fi
+echo "${GREEN}  ✔ no forbidden files staged${RESET}"
+
+# ── 2. Secret scan ────────────────────────────────────────────────────────────
+if ! git diff --cached --name-only --diff-filter=ACMR -z | xargs -0 node scripts/hooks/scan-secrets.mjs; then
+  fail "potential secret(s) found in staged files (see file:line above)."
+fi
+echo "${GREEN}  ✔ no secrets detected in staged files${RESET}"
+
+# ── 3. Incremental typecheck (only workspaces touched by staged files) ────────
+WORKSPACES="$(grep -E '^(packages|apps)/[^/]+/' <<<"$STAGED" | cut -d/ -f1-2 | sort -u || true)"
+if [[ -n "$WORKSPACES" ]]; then
+  while IFS= read -r ws; do
+    echo "${BLUE}  … typecheck ${ws}${RESET}"
+    if ! pnpm --dir "$ws" run typecheck >/dev/null 2>&1; then
+      pnpm --dir "$ws" run typecheck >&2 || true
+      fail "typecheck failed in ${ws}."
+    fi
+  done <<<"$WORKSPACES"
+  echo "${GREEN}  ✔ typecheck passed ($(wc -l <<<"$WORKSPACES" | tr -d ' ') workspace(s))${RESET}"
+else
+  echo "${GREEN}  ✔ no workspace code staged, typecheck skipped${RESET}"
+fi
+
+echo "${GREEN}${BOLD}✔ pre-commit OK${RESET}"

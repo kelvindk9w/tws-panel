@@ -20,6 +20,31 @@ SETUP_TOKEN=dev-token pnpm dev
 - Wizard: `http://localhost:5173/setup` (token `dev-token`)
 - Comandos úteis: `pnpm build`, `pnpm typecheck`
 
+## Hooks de validação locais (pre-commit / pre-push)
+
+O repositório versiona hooks git em `scripts/hooks/` (bash puro, **sem husky nem
+dependências novas**). Eles são **ativados automaticamente** pelo `pnpm install`
+(o script `prepare` da raiz aponta `core.hooksPath` para `scripts/hooks`) — não
+é preciso fazer nada. Filosofia: os hooks dão feedback rápido na sua máquina;
+**o CI continua sendo o portão final**.
+
+- **`pre-commit`** (rápido, meta < 30s) — roda só sobre o que está staged:
+  1. bloqueia arquivos proibidos (`.env`, `data/`, `*.pem`, `id_rsa`, etc.);
+  2. scan leve de segredos nos arquivos staged (`scripts/hooks/scan-secrets.mjs`:
+     chaves AWS, blocos `PRIVATE KEY`, tokens Slack/GitHub, senhas atribuídas em
+     strings) com indicação de `arquivo:linha`;
+  3. typecheck incremental (`tsc --noEmit`) apenas nos workspaces tocados.
+- **`pre-push`** (completo) — `pnpm test` + `pnpm test:coverage` (thresholds) +
+  `pnpm build`. Se qualquer etapa falha, o push é abortado com o resumo do erro.
+
+**Emergências:** `git commit --no-verify` pula o pre-commit e
+`PAAS_SKIP_PREPUSH=1 git push` pula o pre-push — use com parcimônia, porque
+**o CI vai pegar** qualquer coisa que passar.
+
+O scanner de segredos é intencionalmente leve para não exigir dependência de
+sistema. Para uma varredura mais profunda, recomendamos instalar o
+[gitleaks](https://github.com/gitleaks/gitleaks) localmente (opcional).
+
 ## Testes
 
 O projeto usa **Vitest** para testes unitários (packages, servidor e frontend) e scripts

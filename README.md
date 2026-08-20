@@ -127,6 +127,11 @@ SETUP_TOKEN=dev-token docker compose -f docker-compose.dev.yml up
 
 Exemplos prontos para deploy em [`examples/`](examples/README.md) ⚠️ *(apenas para testes)*.
 
+> 🔒 **Validação automática:** o `pnpm install` ativa hooks locais de pre-commit
+> (arquivos proibidos + scan de segredos + typecheck incremental) e pre-push
+> (testes + cobertura + build). O CI no GitHub Actions é o portão final —
+> detalhes no [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Arquitetura
 
 Monorepo pnpm com TypeScript estrito de ponta a ponta:
