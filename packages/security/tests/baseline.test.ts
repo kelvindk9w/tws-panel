@@ -99,12 +99,49 @@ describe("collectBaseline — parsing das saídas brutas", () => {
     expect(semSshd.files["/etc/ssh/sshd_config"]).toBeNull();
   });
 
+  it("portas: ignora protocolos desconhecidos, portas inválidas e duplicadas (ss)", async () => {
+    const suja = [
+      "tcp   LISTEN 0      4096         0.0.0.0:22        0.0.0.0:*    users:((\"sshd\",pid=1,fd=3))",
+      // mesmo proto/porta de novo: o primeiro processo vence (dedup pela chave)
+      "tcp   LISTEN 0      4096         0.0.0.0:22        0.0.0.0:*    users:((\"outro\",pid=2,fd=4))",
+      "icmp  UNCONN 0      0          0.0.0.0:7          0.0.0.0:*", // proto não-tcp/udp
+      "tcp   LISTEN 0      4096         0.0.0.0:abc       0.0.0.0:*", // porta não numérica
+      "tcp   LISTEN 0      4096         0.0.0.0:0         0.0.0.0:*", // porta 0
+      "tcp   LISTEN 0      4096         0.0.0.0:443       0.0.0.0:*", // sem users: → processo null
+      "", // linha vazia
+    ].join("\n");
+    const baseline = await collectBaseline(mockRunner({ ports: ok(suja) }));
+    expect(baseline.ports).toEqual([
+      { proto: "tcp", port: 22, process: "sshd" },
+      { proto: "tcp", port: 443, process: null },
+    ]);
+  });
+
+  it("portas: /proc ignora estados não-LISTEN e endereços malformados", async () => {
+    const proc = [
+      "== tcp",
+      "  sl  local_address rem_address   st",
+      "   0: 0100007F:0035 00000000:0000 01 00000000:00000000 00:00000000 00000000", // st 01 = SYN_SENT
+      "   1: SEMDOISPONTOS 00000000:0000 0A 00000000:00000000 00:00000000 00000000", // sem "<hex>:<porta>"
+      "   2: 0100007F:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000", // 0x50 = 80 LISTEN
+    ].join("\n");
+    const baseline = await collectBaseline(mockRunner({ ports: ok(proc) }));
+    expect(baseline.ports).toEqual([{ proto: "tcp", port: 80, process: null }]);
+  });
+
   it("comando falho (exit != 0) degrada para lista vazia sem lançar", async () => {
     const baseline = await collectBaseline(
       mockRunner({ packages: { code: 1, stdout: "erro", stderr: "erro" } }),
     );
     expect(baseline.packages).toEqual([]);
     expect(baseline.target).toBe("container:teste");
+  });
+
+  it("ss indisponível (exit != 0) → portas vazias, mesmo com saída parcial", async () => {
+    const baseline = await collectBaseline(
+      mockRunner({ ports: { code: 1, stdout: SS_OUTPUT, stderr: "ss: command not found" } }),
+    );
+    expect(baseline.ports).toEqual([]);
   });
 });
 

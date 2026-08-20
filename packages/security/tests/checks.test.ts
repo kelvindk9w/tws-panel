@@ -119,6 +119,8 @@ describe("ss -tuln (fase 03)", () => {
     const result = check("net.listening-inventory").evaluate(exec("0.0.0.0:22 0.0.0.0:80 "));
     expect(result.status).toBe("pass");
     expect(result.detail).toContain("0.0.0.0:22");
+    // saída vazia → detalhe explicativo (nunca vazio)
+    expect(check("net.listening-inventory").evaluate(exec("")).detail).toBe("nenhuma porta em escuta");
   });
 
   it("net.sysctl-hardening: exige syncookies=1 E drop-in presente", () => {
@@ -167,6 +169,22 @@ describe("atualizações (fase 00)", () => {
     const c = check("update.unattended-upgrades");
     expect(c.evaluate(exec("", 0)).status).toBe("pass");
     expect(c.evaluate(exec("", 1)).status).toBe("fail");
+  });
+
+  it("supplychain.third-party-repos: sempre pass, listando os arquivos quando existem", () => {
+    const c = check("supplychain.third-party-repos");
+    const nenhum = c.evaluate(exec("0\n"));
+    expect(nenhum.status).toBe("pass");
+    expect(nenhum.detail).toContain("nenhum");
+
+    const comRepos = c.evaluate(exec("2\ndocker.list\nnodesource.list\n"));
+    expect(comRepos.status).toBe("pass");
+    expect(comRepos.detail).toContain("2 arquivo(s)");
+    expect(comRepos.detail).toContain("docker.list");
+    expect(comRepos.detail).toContain("nodesource.list");
+
+    // saída vazia (ls falhou) → conta como 0, sem lançar
+    expect(c.evaluate(exec("")).detail).toContain("nenhum");
   });
 });
 

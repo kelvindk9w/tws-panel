@@ -10,7 +10,9 @@ export default defineConfig({
       include: ["src/**"],
       exclude: ["src/index.ts", "src/executor.ts", "src/monitor.ts", "src/runner.ts", "src/scanner.ts"],
       reporter: ["text", "html"],
-      thresholds: { lines: 90, functions: 90, branches: 85, statements: 90 },
+      // atingido: 100% linhas/funções; branches residuais são defesas mortas
+      // (ex.: `?? ""` após índice sempre definido, braço inalcançável de cond)
+      thresholds: { lines: 98, functions: 98, branches: 96, statements: 98 },
     },
   },
 });
