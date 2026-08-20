@@ -197,22 +197,13 @@ export async function detectProject(dir: string): Promise<DetectResult> {
         result.proxyPort = expose;
         return result;
       }
-      details.push(
-        "package.json tem script de build, mas nenhuma pasta estática conhecida (out/, dist/, build/) foi identificada. Configure a saída manualmente.",
-      );
-      return result;
     }
     details.push("package.json sem script de build.");
     return result;
   }
 
-  if (hasDockerfile) {
-    result.type = "dockerfile";
-    const expose = await readDockerfilePort(dir);
-    result.proxyPort = expose;
-    return result;
-  }
-
+  // package.json ausente: Dockerfile sozinho já retornou acima — resta o caso
+  // em que nada foi encontrado.
   details.push("Nenhum compose, package.json ou Dockerfile encontrado — configuração manual necessária.");
   return result;
 }
