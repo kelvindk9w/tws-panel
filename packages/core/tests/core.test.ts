@@ -31,6 +31,16 @@ import {
   SETUP_TOKEN_HEADER,
   SETUP_TOKEN_QUERY,
   SMTP_ENV_KEYS,
+  LOGIN_MAX_ATTEMPTS,
+  LOGIN_WINDOW_MS,
+  PASSWORD_MIN_LENGTH,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  USERNAME_MAX_LENGTH,
+  USERNAME_MIN_LENGTH,
+  passwordStrengthErrors,
+  validatePasswordStrength,
+  validateUsername,
 } from "../src/index.js";
 
 describe("setup contract", () => {
@@ -129,6 +139,67 @@ describe("mail contract", () => {
 
   it("env vars SMTP injetadas nos projetos são exatamente as 5 documentadas", () => {
     expect([...SMTP_ENV_KEYS]).toEqual(["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM"]);
+  });
+});
+
+describe("auth contract", () => {
+  it("cookie de sessão, TTL de 12h e limites de login são os valores efetivos", () => {
+    expect(SESSION_COOKIE).toBe("paas_session");
+    expect(SESSION_TTL_MS).toBe(12 * 60 * 60 * 1000);
+    expect(LOGIN_MAX_ATTEMPTS).toBe(5);
+    expect(LOGIN_WINDOW_MS).toBe(60 * 1000);
+  });
+
+  it("senha forte válida passa em todas as checagens", () => {
+    const result = validatePasswordStrength("MinhaSenha123");
+    expect(result.valid).toBe(true);
+    expect(result.checks).toEqual({ minLength: true, hasUpper: true, hasLower: true, hasNumber: true });
+    expect(passwordStrengthErrors("MinhaSenha123")).toEqual([]);
+  });
+
+  it("cada regra violada aparece individualmente nas checagens e nas mensagens", () => {
+    // curta (demais regras ok)
+    const curta = validatePasswordStrength("Abc123");
+    expect(curta.valid).toBe(false);
+    expect(curta.checks).toEqual({ minLength: false, hasUpper: true, hasLower: true, hasNumber: true });
+    expect(passwordStrengthErrors("Abc123")).toEqual([`mínimo de ${PASSWORD_MIN_LENGTH} caracteres`]);
+
+    // sem maiúscula, sem minúscula, sem número — uma violação por vez
+    expect(validatePasswordStrength("senhafraca123").checks.hasUpper).toBe(false);
+    expect(passwordStrengthErrors("senhafraca123")).toContain("ao menos uma letra maiúscula");
+
+    expect(validatePasswordStrength("SENHAFORTE123").checks.hasLower).toBe(false);
+    expect(passwordStrengthErrors("SENHAFORTE123")).toContain("ao menos uma letra minúscula");
+
+    expect(validatePasswordStrength("SenhaSemNumero").checks.hasNumber).toBe(false);
+    expect(passwordStrengthErrors("SenhaSemNumero")).toContain("ao menos um número");
+  });
+
+  it("senha vazia acumula as 4 violações na ordem documentada", () => {
+    expect(passwordStrengthErrors("")).toEqual([
+      `mínimo de ${PASSWORD_MIN_LENGTH} caracteres`,
+      "ao menos uma letra maiúscula",
+      "ao menos uma letra minúscula",
+      "ao menos um número",
+    ]);
+  });
+
+  it("usuário: limites de tamanho e caracteres permitidos", () => {
+    expect(USERNAME_MIN_LENGTH).toBe(3);
+    expect(USERNAME_MAX_LENGTH).toBe(32);
+    // válidos: limites exatos e charset completo
+    expect(validateUsername("abc")).toBe(true);
+    expect(validateUsername("a".repeat(32))).toBe(true);
+    expect(validateUsername("kelvin.souza_01-x")).toBe(true);
+    // inválidos: curto, longo, começa com símbolo, contém caractere proibido
+    expect(validateUsername("ab")).toBe(false);
+    expect(validateUsername("a".repeat(33))).toBe(false);
+    expect(validateUsername(".admin")).toBe(false);
+    expect(validateUsername("-admin")).toBe(false);
+    expect(validateUsername("_admin")).toBe(false);
+    expect(validateUsername("a b")).toBe(false);
+    expect(validateUsername("admin!")).toBe(false);
+    expect(validateUsername("")).toBe(false);
   });
 });
 
