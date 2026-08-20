@@ -3,6 +3,7 @@ import { Link, NavLink } from "react-router-dom";
 import type { AlertListResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { UserMenu } from "@/components/UserMenu";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", end: true },
@@ -72,6 +73,7 @@ export function Layout({ children }: { children: ReactNode }) {
               </NavLink>
             ))}
           </nav>
+          <UserMenu />
         </div>
       </header>
 

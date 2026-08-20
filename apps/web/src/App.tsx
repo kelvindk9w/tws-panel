@@ -1,5 +1,6 @@
 import { createBrowserRouter, Outlet, RouterProvider } from "react-router-dom";
 import { Layout } from "@/components/Layout";
+import { RequireAuth } from "@/components/RequireAuth";
 import { AlertsPage } from "@/pages/AlertsPage";
 import { AuditPage } from "@/pages/AuditPage";
 import { DashboardPage } from "@/pages/DashboardPage";
@@ -9,13 +10,16 @@ import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { SecurityPage } from "@/pages/SecurityPage";
 import { SetupPage } from "@/pages/SetupPage";
+import { LoginPage } from "@/pages/LoginPage";
 
 const router = createBrowserRouter([
   {
     element: (
-      <Layout>
-        <Outlet />
-      </Layout>
+      <RequireAuth>
+        <Layout>
+          <Outlet />
+        </Layout>
+      </RequireAuth>
     ),
     children: [
       { path: "/", element: <DashboardPage /> },
@@ -28,9 +32,17 @@ const router = createBrowserRouter([
       { path: "/audit", element: <AuditPage /> },
     ],
   },
-  // wizard de setup continua intacto, fora do layout do dashboard
+  // wizard de setup e login ficam fora do layout/guard do dashboard
   { path: "/setup", element: <SetupPage /> },
-  { path: "*", element: <DashboardPage /> },
+  { path: "/login", element: <LoginPage /> },
+  {
+    path: "*",
+    element: (
+      <RequireAuth>
+        <DashboardPage />
+      </RequireAuth>
+    ),
+  },
 ]);
 
 export function App() {

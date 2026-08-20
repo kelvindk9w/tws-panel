@@ -12,7 +12,7 @@ const FALLBACK_STEPS: SetupStatusResponse["steps"] = [
   { id: 0, key: "welcome", title: "Boas-vindas e token", available: true },
   { id: 1, key: "health", title: "Saúde da máquina", available: true },
   { id: 2, key: "security", title: "Segurança", available: true },
-  { id: 3, key: "admin", title: "Conta de administrador", available: false },
+  { id: 3, key: "admin", title: "Conta de administrador", available: true },
 ];
 
 export function SetupPage() {
