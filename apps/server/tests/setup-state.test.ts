@@ -69,9 +69,9 @@ describe("SetupStateStore", () => {
 });
 
 describe("SETUP_STEPS", () => {
-  it("wizard tem 4 passos começando pelo token; admin ainda indisponível", () => {
+  it("wizard tem 4 passos começando pelo token; todos disponíveis", () => {
     expect(SETUP_STEPS.map((s) => s.key)).toEqual(["welcome", "health", "security", "admin"]);
     expect(SETUP_STEPS[0]).toMatchObject({ id: 0, available: true });
-    expect(SETUP_STEPS.find((s) => s.key === "admin")?.available).toBe(false);
+    expect(SETUP_STEPS.find((s) => s.key === "admin")?.available).toBe(true);
   });
 });

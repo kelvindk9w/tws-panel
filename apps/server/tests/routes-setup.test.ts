@@ -3,35 +3,28 @@
  * (inject, sem rede): verificação de token, auth do wizard e persistência do
  * avanço de passo — sempre verificando o ESTADO resultante, não só o status.
  */
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import Fastify, { type FastifyInstance } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
-import setupAuthPlugin from "../src/plugins/setup-auth.js";
 import setupRoutes from "../src/routes/setup.js";
 import { SETUP_STEPS, SetupStateStore } from "../src/services/setup-state.js";
+import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
 
 const TOKEN = "token-de-teste";
 
+let ctx: AuthTestContext;
 let app: FastifyInstance;
 let store: SetupStateStore;
-let dir: string;
 
 async function buildTestApp(setupToken: string | null = TOKEN): Promise<void> {
-  dir = await mkdtemp(path.join(tmpdir(), "paas-routes-setup-"));
-  store = new SetupStateStore(dir);
-  app = Fastify({ logger: false });
-  app.decorate("setupToken", setupToken);
-  app.decorate("setupState", store);
-  await app.register(setupAuthPlugin);
+  ctx = await buildAuthTestApp(setupToken);
+  app = ctx.app;
+  store = ctx.setupState;
   await app.register(setupRoutes);
 }
 
 afterEach(async () => {
-  await app.close();
-  await rm(dir, { recursive: true, force: true });
+  await closeAuthTestApp(ctx);
 });
 
 describe("POST /api/setup/verify-token", () => {
@@ -56,8 +49,7 @@ describe("POST /api/setup/verify-token", () => {
   });
 
   it("servidor sem token configurado → 503 setup_token_missing", async () => {
-    await app.close();
-    await rm(dir, { recursive: true, force: true });
+    await closeAuthTestApp(ctx);
     await buildTestApp(null);
     const res = await app.inject({
       method: "POST",

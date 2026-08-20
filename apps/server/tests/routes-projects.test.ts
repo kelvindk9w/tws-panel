@@ -3,12 +3,12 @@
  * auth obrigatória, mapeamento de erros de domínio (400/404/409/500) e o
  * fluxo de bloqueio por guardrails com o relatório no corpo do 409.
  */
-import Fastify, { type FastifyInstance } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SETUP_TOKEN_HEADER, type Project } from "@paas/core";
-import setupAuthPlugin from "../src/plugins/setup-auth.js";
 import projectsRoutes from "../src/routes/projects.js";
 import { httpError, type DeployService } from "../src/services/deploy-service.js";
+import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
 
 const TOKEN = "token-de-teste";
 
@@ -52,20 +52,20 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
   };
 }
 
+let ctx: AuthTestContext;
 let app: FastifyInstance;
 let service: ReturnType<typeof makeServiceStub>;
 
 async function build(overrides: Record<string, unknown> = {}): Promise<void> {
   service = makeServiceStub(overrides);
-  app = Fastify({ logger: false });
-  app.decorate("setupToken", TOKEN);
+  ctx = await buildAuthTestApp(TOKEN);
+  app = ctx.app;
   app.decorate("deployService", service);
-  await app.register(setupAuthPlugin);
   await app.register(projectsRoutes);
 }
 
 afterEach(async () => {
-  await app.close();
+  await closeAuthTestApp(ctx);
 });
 
 const auth = { [SETUP_TOKEN_HEADER]: TOKEN };
@@ -218,7 +218,7 @@ describe("jobs e ciclo de vida", () => {
   });
 
   it("POST /:id/stop agrega o log do serviço na resposta", async () => {
-    await app.close();
+    await closeAuthTestApp(ctx);
     await build({
       stop: vi.fn(async (_id: string, onLog: (chunk: string) => void) => {
         onLog("parando containers…\n");
