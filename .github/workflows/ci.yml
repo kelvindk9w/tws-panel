@@ -1,4 +1,6 @@
-# CI — install → typecheck → build → testes unitários.
+# CI — install → typecheck → build → testes unitários com cobertura.
+# Os thresholds de cobertura (vitest.config.ts de cada package) fazem o CI
+# falhar se a cobertura regredir.
 #
 # Segurança (docs/github-security.md §4):
 #  - permissões mínimas explícitas (contents: read);
@@ -50,5 +52,5 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Unit tests
-        run: pnpm test:unit
+      - name: Unit tests (com cobertura e thresholds)
+        run: pnpm test:coverage
