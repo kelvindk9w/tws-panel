@@ -4,7 +4,7 @@ const app = await buildApp();
 
 try {
   await app.listen({ port: app.config.port, host: app.config.host });
-  app.log.info(`Painel PaaS (setup) ouvindo em http://${app.config.host}:${app.config.port}`);
+  app.log.info(`TWS Panel (setup) ouvindo em http://${app.config.host}:${app.config.port}`);
 } catch (err) {
   app.log.error(err);
   process.exit(1);

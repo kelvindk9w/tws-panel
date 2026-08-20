@@ -19,8 +19,49 @@ SETUP_TOKEN=dev-token pnpm dev
 - API em `http://localhost:9000`, frontend com hot reload em `http://localhost:5173`
 - Wizard: `http://localhost:5173/setup` (token `dev-token`)
 - Comandos úteis: `pnpm build`, `pnpm typecheck`
-- Suítes de verificação (sobem containers descartáveis — requerem Docker):
-  `pnpm test:mail` (Fase 3) e `pnpm test:fase4` (Fase 4)
+
+## Testes
+
+O projeto usa **Vitest** para testes unitários (packages, servidor e frontend) e scripts
+E2E próprios (`node:assert`) para os fluxos que dependem de Docker.
+
+```bash
+pnpm test            # unitários de todos os packages + apps (Vitest)
+pnpm test:unit       # o mesmo, explicitamente
+pnpm test:coverage   # unitários com cobertura v8 (thresholds por package)
+pnpm test:e2e        # E2E completos: test:fase4 + test:mail (REQUER Docker)
+pnpm test:fase4      # só o E2E da Fase 4 (guardrails + monitoramento)
+pnpm test:mail       # só o E2E da Fase 3 (e-mail)
+```
+
+Os testes unitários ficam em `tests/` dentro de cada package/app
+(ex.: `packages/deploy/tests/detect.test.ts`). Filosofia obrigatória: **testes verificam
+o RESULTADO das ações** (estado correto, dados corretos, findings gerados) — nunca apenas
+status HTTP 200. Cada regra de guardrail/check deve ter: o caso que dispara, o caso que
+NÃO dispara e pelo menos um edge case. Resolvers de DNS, runners e serviços de Docker são
+injetáveis justamente para permitir mocks determinísticos.
+
+A cobertura (`pnpm test:coverage`) foca na lógica pura — engine/exec/runner falam com
+Docker e são cobertos pelos E2E (a lista exata de arquivos fora do escopo unitário,
+com o motivo, está no comentário do `vitest.config.ts` de cada package/app). Metas de
+cobertura por package (thresholds no `vitest.config.ts` — o CI falha se regredir):
+
+| Package/App        | Linhas | Branches | Funções |
+| ------------------ | ------ | -------- | ------- |
+| `packages/core`    | ≥ 98%  | ≥ 98%    | ≥ 98%   |
+| `packages/security`| ≥ 98%  | ≥ 96%    | ≥ 98%   |
+| `packages/mailer`  | ≥ 98%  | ≥ 98%    | ≥ 98%   |
+| `packages/deploy`  | ≥ 97%  | ≥ 95%    | ≥ 98%   |
+| `apps/server`      | ≥ 94%  | ≥ 91%    | ≥ 98%   |
+
+Os resíduos conhecidos (branches defensivas inalcançáveis, catches de TOCTOU em scans
+de disco, ramos de `system-info` dependentes do hardware do host) estão documentados
+nos próprios configs; ao adicionar lógica nova, mantenha os thresholds verdes.
+
+**Convenção: todo PR precisa de testes** cobrindo a mudança (unitário para lógica pura,
+componente para UI, E2E para fluxos de infra) e **CI verde é obrigatório** — o workflow
+`.github/workflows/ci.yml` roda install → typecheck → build → testes unitários com cobertura
+(thresholds) em pushes e PRs nas branches `main` e `dev`.
 
 ## Padrões do projeto
 
@@ -49,7 +90,9 @@ vale a pena checar e por quê.
 As regras ficam em `packages/deploy/src/rules.ts`. Cada regra recebe o código-fonte do
 projeto (compose, env, arquivos) e retorna achados com **nível** (`block` | `warn` | `info`),
 **evidência** (arquivo:serviço ou arquivo:linha) e **sugestão de correção**. Prefira regexes
-conservadoras (falso positivo em `block` é o pior cenário). Teste com `pnpm test:fase4`.
+conservadoras (falso positivo em `block` é o pior cenário). Cubra a regra com testes unitários em
+`packages/deploy/tests/` (caso que dispara + caso que não dispara + edge case) e valide o fluxo
+completo com `pnpm test:fase4`.
 
 ### Adicionar um pipeline de deploy
 
@@ -63,7 +106,9 @@ pelos guardrails como qualquer deploy. Use os exemplos em `examples/` como refer
 1. Abra uma **issue** antes de mudanças grandes (ou comente em uma existente) para alinhar o
    desenho — evita retrabalho.
 2. Faça fork, crie um branch a partir de `main` (`feat/minha-melhoria`).
-3. Garanta `pnpm build` e `pnpm typecheck` limpos; rode as suítes de teste relevantes.
+3. Garanta `pnpm build` e `pnpm typecheck` limpos e **`pnpm test` verde** (mais
+   `pnpm test:e2e` se a mudança tocar fluxos de infra). Todo PR precisa incluir testes
+   para a mudança — o CI bloqueia o merge sem eles.
 4. Abra o PR preenchendo o template: o que muda, por quê, como testar.
 5. Responda à revisão — PRs pequenos e focados são aceitos muito mais rápido.
 

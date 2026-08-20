@@ -12,7 +12,7 @@ const FALLBACK_STEPS: SetupStatusResponse["steps"] = [
   { id: 0, key: "welcome", title: "Boas-vindas e token", available: true },
   { id: 1, key: "health", title: "Saúde da máquina", available: true },
   { id: 2, key: "security", title: "Segurança", available: true },
-  { id: 3, key: "admin", title: "Conta de administrador", available: false },
+  { id: 3, key: "admin", title: "Conta de administrador", available: true },
 ];
 
 export function SetupPage() {
@@ -53,7 +53,7 @@ export function SetupPage() {
       <header className="border-b">
         <div className="container flex h-14 items-center justify-between">
           <span className="font-semibold tracking-tight">
-            Painel <span className="text-muted-foreground">PaaS</span>
+            TWS <span className="text-muted-foreground">Panel</span>
           </span>
           <span className="text-xs text-muted-foreground">Assistente de configuração</span>
         </div>
@@ -79,7 +79,7 @@ export function SetupPage() {
 
       <footer className="border-t py-6">
         <p className="text-center text-xs text-muted-foreground">
-          Painel PaaS · open-source (MIT) · Fase 1 — Hardening
+          Powered by TWS · open-source (MIT)
         </p>
       </footer>
     </div>

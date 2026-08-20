@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router";
 import type { AlertListResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { UserMenu } from "@/components/UserMenu";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", end: true },
@@ -50,7 +51,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <header className="border-b">
         <div className="container flex h-14 items-center gap-6">
           <Link to="/" className="font-semibold tracking-tight">
-            Painel <span className="text-muted-foreground">PaaS</span>
+            TWS <span className="text-muted-foreground">Panel</span>
           </Link>
           <nav className="flex items-center gap-1 text-sm">
             {NAV_ITEMS.map((item) => (
@@ -72,6 +73,7 @@ export function Layout({ children }: { children: ReactNode }) {
               </NavLink>
             ))}
           </nav>
+          <UserMenu />
         </div>
       </header>
 
@@ -79,7 +81,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
       <footer className="border-t py-6">
         <p className="text-center text-xs text-muted-foreground">
-          Painel PaaS · open-source (MIT) · Fase 4 — Guardrails + Monitoramento
+          Powered by <span className="font-medium">TWS</span> · open-source (MIT)
         </p>
       </footer>
     </div>

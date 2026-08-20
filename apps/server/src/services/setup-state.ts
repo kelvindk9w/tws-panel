@@ -7,7 +7,7 @@ export const SETUP_STEPS: SetupStepInfo[] = [
   { id: 0, key: "welcome", title: "Boas-vindas e token", available: true },
   { id: 1, key: "health", title: "Saúde da máquina", available: true },
   { id: 2, key: "security", title: "Segurança", available: true },
-  { id: 3, key: "admin", title: "Conta de administrador", available: false },
+  { id: 3, key: "admin", title: "Conta de administrador", available: true },
 ];
 
 const DEFAULT_STATE: SetupState = {
@@ -50,6 +50,14 @@ export class SetupStateStore {
   async setStep(step: number): Promise<SetupState> {
     const state = await this.load();
     const next: SetupState = { ...state, currentStep: step };
+    await this.save(next);
+    return next;
+  }
+
+  /** Marca o setup como concluído (chamado ao criar a conta admin). */
+  async complete(): Promise<SetupState> {
+    const state = await this.load();
+    const next: SetupState = { ...state, completed: true };
     await this.save(next);
     return next;
   }

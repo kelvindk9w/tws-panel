@@ -8,10 +8,13 @@ import fastifyStatic from "@fastify/static";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { loadSetupToken } from "./services/setup-token.js";
 import { SetupStateStore } from "./services/setup-state.js";
+import { UserStore } from "./services/user-store.js";
+import { SessionStore } from "./services/session-store.js";
 import { DeployService } from "./services/deploy-service.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
-import setupAuthPlugin from "./plugins/setup-auth.js";
+import authPlugin from "./plugins/auth.js";
+import authRoutes from "./routes/auth.js";
 import setupRoutes from "./routes/setup.js";
 import healthRoutes from "./routes/health.js";
 import securityRoutes from "./routes/security.js";
@@ -24,7 +27,6 @@ import monitoringRoutes from "./routes/monitoring.js";
 declare module "fastify" {
   interface FastifyInstance {
     config: ServerConfig;
-    setupState: SetupStateStore;
     deployService: DeployService;
     auditService: AuditService;
     alertsService: AlertsService;
@@ -39,7 +41,12 @@ export async function buildApp(): Promise<FastifyInstance> {
       level: process.env.LOG_LEVEL ?? "info",
       // logs estruturados (pino) — nunca logar tokens
       redact: {
-        paths: ["req.headers.authorization", `req.headers["x-setup-token"]`, "req.query.token"],
+        paths: [
+          "req.headers.authorization",
+          `req.headers["x-setup-token"]`,
+          "req.headers.cookie",
+          "req.query.token",
+        ],
         censor: "[redacted]",
       },
     },
@@ -48,6 +55,10 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.decorate("config", config);
   app.decorate("setupState", new SetupStateStore(config.dataDir));
+  app.decorate("userStore", new UserStore(config.dataDir));
+  const sessionStore = new SessionStore(config.dataDir);
+  await sessionStore.init();
+  app.decorate("sessionStore", sessionStore);
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
   app.decorate("alertsService", new AlertsService(config.dataDir));
@@ -95,8 +106,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     timeWindow: "1 minute",
   });
 
-  // Auth de setup + rotas da API
-  await app.register(setupAuthPlugin);
+  // Auth (setup token enquanto setup pendente; sessão depois) + rotas da API
+  await app.register(authPlugin);
+  await app.register(authRoutes);
   await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(securityRoutes);

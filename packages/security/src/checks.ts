@@ -226,7 +226,8 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     evaluate: (r) => {
       const v = firstLine(r.stdout).toLowerCase();
       if (v === "") return { status: "unknown", detail: "ufw não instalado" };
-      return v.includes("active")
+      // cuidado: "inactive" contém "active" — comparação por palavra inteira
+      return /\bactive\b/.test(v) && !/\binactive\b/.test(v)
         ? { status: "pass", detail: "UFW ativo" }
         : { status: "fail", detail: `UFW ${v.replace("status: ", "")}` };
     },

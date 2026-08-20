@@ -314,7 +314,23 @@ try {
   });
   const project = created.project;
   await api("POST", `/api/projects/${project.id}/detect`);
-  const dep1 = await api<{ job: { id: string } }>("POST", `/api/projects/${project.id}/deploy`);
+  // O exemplo publica o Redis no host PROPOSITALMENTE (ver compose.yml) — o
+  // guardrail db-port-exposed (block) deve exigir override explícito.
+  {
+    const res = await fetch(`http://127.0.0.1:${API_PORT}/api/projects/${project.id}/deploy`, {
+      method: "POST",
+      headers: { "x-setup-token": TOKEN, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 409, "deploy sem override deveria ser bloqueado");
+    const body = (await res.json()) as { error: string; report: { blockers: number; findings: Array<{ rule: string }> } };
+    assert.equal(body.error, "guardrail_blocked");
+    assert.ok(body.report.findings.some((f) => f.rule === "db-port-exposed"), "bloqueio pela porta do Redis");
+    ok("guardrail bloqueou o deploy sem override (porta do Redis exposta — proposital no exemplo)");
+  }
+  const dep1 = await api<{ job: { id: string } }>("POST", `/api/projects/${project.id}/deploy`, {
+    guardrailOverride: true,
+  });
   const job1 = await waitJob(project.id, dep1.job.id);
   assert.equal(job1.status, "success", `primeiro deploy falhou:\n${job1.log.slice(-1500)}`);
   ok("projeto de exemplo (compose-app) deployado");
@@ -330,7 +346,9 @@ try {
   assert.equal(emailCfg.email.env.SMTP_HOST, "paas-stalwart");
   ok(`caixa técnica ${emailCfg.email.mailbox} criada; env vars retornadas mascaradas`);
 
-  const dep2 = await api<{ job: { id: string } }>("POST", `/api/projects/${project.id}/deploy`);
+  const dep2 = await api<{ job: { id: string } }>("POST", `/api/projects/${project.id}/deploy`, {
+    guardrailOverride: true,
+  });
   const job2 = await waitJob(project.id, dep2.job.id);
   assert.equal(job2.status, "success", `redeploy falhou:\n${job2.log.slice(-1500)}`);
   assert.match(job2.log, /Injetando 5 variável\(is\)/, "log deveria mencionar a injeção");

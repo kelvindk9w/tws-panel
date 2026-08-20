@@ -128,6 +128,7 @@ export interface ApiError {
   message: string;
 }
 
+export * from "./auth";
 export * from "./security";
 export * from "./deploy";
 export * from "./mail";

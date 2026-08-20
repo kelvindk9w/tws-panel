@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router";
 import type {
   DeployJob,
   DeployJobListResponse,
@@ -189,7 +189,7 @@ function ProjectEmailCard({ projectId }: { projectId: string }) {
  * Modal de bloqueio de guardrails (Fase 4): exibido quando o deploy tem
  * findings "block". Exige checkbox explícito para override (auditado na API).
  */
-function GuardrailOverrideModal({
+export function GuardrailOverrideModal({
   report,
   busy,
   onCancel,
