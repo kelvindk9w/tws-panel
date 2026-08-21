@@ -4,6 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { SecurityCheckResult, SecurityScanReport, SecurityScanSummary } from "@paas/core";
+import { stripAnsi } from "./ansi.js";
 import { SECURITY_CHECKS } from "./checks.js";
 import { LYNIS_CHECK_CMD, LYNIS_REPORT_CMD, LYNIS_RUN_CMD } from "./host-bridge.js";
 import { partitionChecksForProfile, profileNote } from "./profiles.js";
@@ -72,7 +73,10 @@ export async function runSecurityScan(
     let result: SecurityCheckResult;
     try {
       const r = await runner.exec(def.command, { timeoutMs: 60_000 });
-      const evaluation = def.evaluate(r);
+      // Sanitização central: a saída vem de um PTY (visão dupla no terminal
+      // web), então grep & cia. colorizam (--color=auto). Sem o strip, os
+      // códigos ANSI vazam para o `detail` exibido como texto na UI.
+      const evaluation = def.evaluate({ code: r.code, stdout: stripAnsi(r.stdout), stderr: stripAnsi(r.stderr) });
       result = {
         id: def.id,
         phase: def.phase,
