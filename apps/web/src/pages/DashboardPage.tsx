@@ -6,7 +6,7 @@ import type {
   ProjectResponse,
   ProjectStatus,
 } from "@paas/core";
-import { apiFetch, getSetupToken } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -134,15 +134,6 @@ export function DashboardPage() {
           </Button>
         </div>
       </div>
-
-      {!getSetupToken() && (
-        <Card className="border-amber-500/40">
-          <CardContent className="py-4 text-sm text-amber-400">
-            Sessão sem setup token — abra o <Link to="/setup" className="underline">setup</Link> com
-            o link fornecido pelo instalador para autenticar.
-          </CardContent>
-        </Card>
-      )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {loading && (
