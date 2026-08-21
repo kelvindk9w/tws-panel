@@ -214,6 +214,48 @@ async function openHostPty(socketPath: string, image: string): Promise<RemotePty
 }
 
 // ---------------------------------------------------------------------------
+// Reaper de helpers órfãos (boot)
+// ---------------------------------------------------------------------------
+
+/** Nome exato dos helpers do terminal: paas-terminal-<8 hex> (ver openHostPty). */
+const TERMINAL_HELPER_NAME_RE = /^paas-terminal-[0-9a-f]{8}$/;
+
+/**
+ * Remove containers paas-terminal-* órfãos deixados por um processo anterior
+ * do painel. Por que sobram órfãos: o AutoRemove do helper só dispara quando
+ * o processo principal (nsenter→bash) SAI — com o painel morto (restart/
+ * deploy), ninguém fecha o stream e o bash interativo segue vivo para sempre.
+ *
+ * O helper não tem label próprio, então o filtro é pelo padrão EXATO de nome
+ * (prefixo + 8 hex) — nunca toca em containers do usuário com nomes
+ * parecidos (ex.: "paas-terminal-custom"). Best-effort: falhas individuais
+ * são ignoradas; falha ao LISTAR propaga para o caller logar (não fatal).
+ * Retorna os nomes removidos (para log).
+ */
+export async function removeOrphanTerminalHelpers(socketPath: string): Promise<string[]> {
+  const list = await request(socketPath, "GET", "/containers/json?all=1");
+  if (list.status !== 200) {
+    throw new DockerSocketError(
+      `falha ao listar containers para o reaper (${list.status}): ${errorMessage(list.body)}`,
+      list.status,
+    );
+  }
+  const containers = JSON.parse(list.body.toString("utf8")) as Array<{ Id: string; Names: string[] }>;
+  const removed: string[] = [];
+  for (const c of containers) {
+    // Names vêm com "/" inicial na API do Docker.
+    const name = c.Names.map((n) => n.replace(/^\//, "")).find((n) => TERMINAL_HELPER_NAME_RE.test(n));
+    if (name === undefined) continue;
+    const del = await request(socketPath, "DELETE", `/containers/${c.Id}?force=true`).catch(() => null);
+    // 204 = removido; 404 = já sumiu (AutoRemove disparou entre listar e remover)
+    if (del !== null && (del.status === 204 || del.status === 404)) {
+      removed.push(name);
+    }
+  }
+  return removed;
+}
+
+// ---------------------------------------------------------------------------
 // PTY no container alvo de dev (docker exec com TTY)
 // ---------------------------------------------------------------------------
 

@@ -14,7 +14,11 @@ import { DeployService } from "./services/deploy-service.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
-import { createDockerPtyFactory, type PtyFactory } from "./services/docker-socket.js";
+import {
+  createDockerPtyFactory,
+  removeOrphanTerminalHelpers,
+  type PtyFactory,
+} from "./services/docker-socket.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
 import setupRoutes from "./routes/setup.js";
@@ -87,6 +91,22 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     },
   });
   app.decorate("terminalService", terminalService);
+
+  // Reaper de boot (uma vez, não fatal): remove containers paas-terminal-*
+  // órfãos de um processo anterior do painel — a sessão morre com o processo
+  // e o helper (AutoRemove só dispara na saída do bash) ficaria para trás.
+  void removeOrphanTerminalHelpers(config.dockerSocketPath)
+    .then((removed) => {
+      for (const name of removed) {
+        app.log.info("helper de terminal órfão removido no boot: %s", name);
+      }
+    })
+    .catch((err: unknown) => {
+      app.log.warn(
+        "reaper de helpers de terminal falhou (não fatal): %s",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
 
   const token = await loadSetupToken(config.setupTokenFile);
   app.decorate("setupToken", token);
