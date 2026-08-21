@@ -11,7 +11,7 @@ import { apiFetch, ApiRequestError, clearSetupToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowRight, CheckCircle2, Circle, Loader2, PartyPopper, UserRound } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Circle, Loader2, PartyPopper, UserRound } from "lucide-react";
 
 /** Checklist ao vivo das regras de senha (mesma validação do backend). */
 function PasswordRules({ password }: { password: string }) {
@@ -52,7 +52,7 @@ function ScoreGauge({ value, source }: { value: number | null; source: string })
   );
 }
 
-export function AdminStep() {
+export function AdminStep({ onBack }: { onBack?: () => void }) {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -131,6 +131,11 @@ export function AdminStep() {
   return (
     <div className="flex animate-fade-in flex-col gap-6">
       <div>
+        {onBack && (
+          <Button variant="ghost" size="sm" onClick={onBack} className="-ml-2 mb-1">
+            <ArrowLeft className="h-4 w-4" /> Voltar para Segurança
+          </Button>
+        )}
         <h2 className="text-xl font-semibold">Conta de administrador</h2>
         <p className="text-sm text-muted-foreground">
           Último passo: crie o acesso ao painel. Ao concluir, o modo de setup é encerrado e todo

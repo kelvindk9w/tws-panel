@@ -1,24 +1,32 @@
 /**
  * TerminalPanel — terminal web embutido (visão dupla do wizard).
  *
- * Fixo no rodapé de TODOS os 4 passos do wizard: em cima a UI formatada
- * (cards/fases), embaixo o terminal real ao vivo do servidor (xterm.js +
- * WebSocket + PTY no alvo). Leigos acompanham o formatado; técnicos veem os
- * comandos rodando de verdade — e quando algo pede senha/confirmação, a
- * resposta é digitada DIRETO aqui (o input segue pelo PTY; o painel nunca
- * lê/armazena o que é digitado).
+ * Janela contida DENTRO da área de conteúdo do wizard (estilo IDE: borda
+ * arredondada, sombra, barra de título), em todos os 4 passos: em cima a UI
+ * formatada (cards/fases), embaixo o terminal real ao vivo do servidor
+ * (xterm.js + WebSocket + PTY no alvo). Leigos acompanham o formatado;
+ * técnicos veem os comandos rodando de verdade — e quando algo pede
+ * senha/confirmação, a resposta é digitada DIRETO aqui (o input segue pelo
+ * PTY; o painel nunca lê/armazena o que é digitado).
  *
- * - altura colapsável/expansível, estado persistido em sessionStorage;
- * - alerta pulsante (evento "paas:terminal-attention") quando uma fase
- *   precisa de ação no terminal — o painel se expande sozinho;
- * - reconexão automática com backoff; resize do PTY sincronizado.
+ * REGRAS DE UX/SEGURANÇA (feedback de campo):
+ *  - BLOQUEADO até o setup token ser validado: sem token válido o painel
+ *    renderiza apenas um placeholder informativo — NENHUM WebSocket é aberto
+ *    e nenhum input é aceito;
+ *  - ao validar o token (prop `enabled` → true), o WS conecta IMEDIATAMENTE;
+ *  - começa RECOLHIDO, com a orientação fixa no cabeçalho ("apenas observe;
+ *    aja SOMENTE quando for solicitado");
+ *  - altura colapsável/expansível, estado persistido em sessionStorage;
+ *  - alerta pulsante (evento "paas:terminal-attention") quando uma fase
+ *    precisa de ação no terminal — o painel se expande sozinho;
+ *  - reconexão automática com backoff; resize do PTY sincronizado.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { getSetupToken } from "@/lib/api";
-import { ChevronDown, ChevronUp, TerminalSquare } from "lucide-react";
+import { ChevronDown, ChevronUp, Lock, TerminalSquare } from "lucide-react";
 
 /** Evento disparado pela UI (ex.: fase aguardando confirmação) para acender
  * o alerta pulsante do terminal ("olhe o terminal"). */
@@ -60,8 +68,15 @@ function terminalWsUrl(): string {
   return `${proto}://${window.location.host}/api/terminal/ws${query}`;
 }
 
-export function TerminalPanel() {
-  const [open, setOpen] = useState(() => sessionStorage.getItem(STORAGE_KEY) !== "0");
+interface TerminalPanelProps {
+  /** true somente DEPOIS de o setup token ter sido validado pelo wizard.
+   * Antes disso o terminal nem tenta conectar (placeholder bloqueado). */
+  enabled: boolean;
+}
+
+export function TerminalPanel({ enabled }: TerminalPanelProps) {
+  // Começa RECOLHIDO por padrão (o usuário expande se quiser acompanhar).
+  const [open, setOpen] = useState(() => sessionStorage.getItem(STORAGE_KEY) === "1");
   const [attention, setAttention] = useState(false);
   const [status, setStatus] = useState<WsStatus>("connecting");
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -72,7 +87,10 @@ export function TerminalPanel() {
   const attemptsRef = useRef(0);
 
   // -------------------------------------------------------------- WS + xterm
+  // Só roda quando `enabled` vira true (token validado): conecta NA HORA.
   useEffect(() => {
+    if (!enabled) return;
+
     const term = new Terminal({
       theme: XTERM_THEME,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -95,6 +113,8 @@ export function TerminalPanel() {
     let disposed = false;
     const connect = () => {
       if (disposed) return;
+      // NUNCA conectar sem token: o servidor recusaria o upgrade (401).
+      if (!getSetupToken()) return;
       setStatus("connecting");
       const ws = new WebSocket(terminalWsUrl());
       wsRef.current = ws;
@@ -134,12 +154,11 @@ export function TerminalPanel() {
       termRef.current = null;
       fitRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [enabled]);
 
   // ------------------------------------------------------ resize sincronizado
   useEffect(() => {
-    if (!open) return;
+    if (!enabled || !open) return;
     const term = termRef.current;
     const fit = fitRef.current;
     const el = containerRef.current;
@@ -158,7 +177,7 @@ export function TerminalPanel() {
     const observer = new ResizeObserver(sync);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [open]);
+  }, [enabled, open]);
 
   // ------------------------------------------------- alerta "olhe o terminal"
   useEffect(() => {
@@ -186,6 +205,25 @@ export function TerminalPanel() {
     });
   }, []);
 
+  // ------------------------------------------------------ bloqueado (sem token)
+  if (!enabled) {
+    return (
+      <section
+        aria-label="Terminal do servidor"
+        data-testid="terminal-locked"
+        className="overflow-hidden rounded-xl border border-dashed border-border bg-muted/20"
+      >
+        <div className="flex items-center gap-3 px-4 py-3 text-xs text-muted-foreground">
+          <Lock className="h-4 w-4 shrink-0" />
+          <p>
+            🖥️ <strong>Terminal ao vivo do servidor</strong> — bloqueado por segurança. Informe o{" "}
+            <strong>setup token</strong> na etapa de boas-vindas para liberá-lo.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   const statusLabel =
     status === "online" ? "conectado" : status === "connecting" ? "conectando…" : "reconectando…";
   const statusColor =
@@ -194,16 +232,22 @@ export function TerminalPanel() {
   return (
     <section
       aria-label="Terminal do servidor"
-      className="sticky bottom-0 z-40 border-t border-border bg-[#0b0f0d] shadow-[0_-8px_30px_rgba(0,0,0,0.45)]"
+      className="overflow-hidden rounded-xl border border-[#22302a] bg-[#0b0f0d] shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
     >
+      {/* Barra de título estilo IDE (janela contida) */}
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={`flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium text-emerald-100/90 hover:bg-white/5 ${
+        className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-xs font-medium text-emerald-100/90 hover:bg-white/5 ${
           attention ? "animate-pulse bg-amber-500/20 text-amber-300" : ""
         }`}
       >
+        <span className="flex items-center gap-1.5" aria-hidden>
+          <span className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
+          <span className="h-2.5 w-2.5 rounded-full bg-amber-500/80" />
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80" />
+        </span>
         <TerminalSquare className="h-4 w-4" />
         <span>Terminal do servidor — ao vivo</span>
         <span className="flex items-center gap-1.5 text-[10px] font-normal text-muted-foreground">
@@ -215,10 +259,20 @@ export function TerminalPanel() {
             ⚠️ AÇÃO NECESSÁRIA — OLHE O TERMINAL
           </span>
         )}
-        <span className="ml-auto text-muted-foreground">
+        <span className="ml-auto flex items-center gap-1 text-muted-foreground">
+          <span className="text-[10px]">{open ? "recolher" : "expandir"}</span>
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </span>
       </button>
+
+      {/* Orientação fixa — visível mesmo recolhido */}
+      <p className="border-t border-white/5 px-4 py-2 text-[11px] leading-relaxed text-emerald-100/60">
+        🖥️ Terminal ao vivo do servidor — ativo e funcional. Você pode expandir para acompanhar.{" "}
+        <strong className="text-emerald-100/80">Recomendação: apenas observe; aja SOMENTE quando for
+        solicitado.</strong>{" "}
+        Interferir por conta própria pode interromper ou quebrar o processo.
+      </p>
+
       <div
         ref={containerRef}
         data-testid="terminal-container"

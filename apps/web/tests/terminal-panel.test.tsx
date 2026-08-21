@@ -1,6 +1,8 @@
 /**
  * terminal-panel.test.tsx — TerminalPanel (visão dupla do wizard):
- *  - renderiza fixo no rodapé e conecta o WS com o setup token;
+ *  - BLOQUEADO antes da validação do token: placeholder, SEM WebSocket e SEM xterm;
+ *  - ao ser habilitado (token validado), conecta o WS IMEDIATAMENTE com o token;
+ *  - começa recolhido por padrão, com a orientação fixa visível no cabeçalho;
  *  - expande/colapsa com estado persistido em sessionStorage;
  *  - alerta pulsante ("olhe o terminal") aparece quando uma fase pede ação;
  *  - input do xterm vai direto ao WS (relay puro) e saída do WS vai ao xterm;
@@ -120,39 +122,66 @@ afterEach(() => {
   cleanup();
 });
 
-describe("TerminalPanel", () => {
-  it("renderiza a barra do terminal e conecta o WS autenticado com o setup token", async () => {
-    render(<TerminalPanel />);
+describe("TerminalPanel — bloqueio antes do token", () => {
+  it("desabilitado: mostra placeholder e NÃO abre WebSocket nem cria xterm", () => {
+    render(<TerminalPanel enabled={false} />);
+    expect(screen.getByTestId("terminal-locked")).toBeInTheDocument();
+    expect(screen.getByText(/bloqueado por segurança/)).toBeInTheDocument();
+    expect(screen.getByText(/setup token/)).toBeInTheDocument();
+    expect(MockWebSocket.instances).toHaveLength(0); // NUNCA conecta sem token
+    expect(terms).toHaveLength(0);
+    expect(screen.queryByTestId("terminal-container")).not.toBeInTheDocument();
+  });
+
+  it("conecta IMEDIATAMENTE quando habilitado (token validado)", async () => {
+    const { rerender } = render(<TerminalPanel enabled={false} />);
+    expect(MockWebSocket.instances).toHaveLength(0);
+
+    rerender(<TerminalPanel enabled={true} />);
+    await waitFor(() => expect(lastWs().url).toContain("/api/terminal/ws?token=token-de-teste"));
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+  });
+});
+
+describe("TerminalPanel — habilitado", () => {
+  it("renderiza a janela contida e conecta o WS autenticado com o setup token", async () => {
+    render(<TerminalPanel enabled={true} />);
     expect(screen.getByLabelText("Terminal do servidor")).toBeInTheDocument();
     expect(screen.getByText(/Terminal do servidor/)).toBeInTheDocument();
     await waitFor(() => expect(lastWs().url).toContain("/api/terminal/ws?token=token-de-teste"));
     await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
   });
 
+  it("começa RECOLHIDO por padrão, com a orientação fixa visível", () => {
+    render(<TerminalPanel enabled={true} />);
+    expect(screen.getByTestId("terminal-container")).not.toBeVisible();
+    expect(screen.getByText(/apenas observe; aja SOMENTE quando for solicitado/i)).toBeInTheDocument();
+    expect(screen.getByText(/Interferir por conta própria pode interromper/)).toBeInTheDocument();
+  });
+
   it("colapsa/expande e persiste o estado em sessionStorage", async () => {
-    render(<TerminalPanel />);
+    render(<TerminalPanel enabled={true} />);
     const toggle = screen.getByRole("button", { name: /Terminal do servidor/ });
     const container = screen.getByTestId("terminal-container");
-    expect(container).toBeVisible();
-
-    fireEvent.click(toggle);
-    expect(container).not.toBeVisible();
-    expect(sessionStorage.getItem("paas.terminal.open")).toBe("0");
+    expect(container).not.toBeVisible(); // recolhido por padrão
 
     fireEvent.click(toggle);
     expect(container).toBeVisible();
     expect(sessionStorage.getItem("paas.terminal.open")).toBe("1");
+
+    fireEvent.click(toggle);
+    expect(container).not.toBeVisible();
+    expect(sessionStorage.getItem("paas.terminal.open")).toBe("0");
   });
 
-  it("estado colapsado persiste entre montagens", () => {
-    sessionStorage.setItem("paas.terminal.open", "0");
-    render(<TerminalPanel />);
-    expect(screen.getByTestId("terminal-container")).not.toBeVisible();
+  it("estado expandido persiste entre montagens", () => {
+    sessionStorage.setItem("paas.terminal.open", "1");
+    render(<TerminalPanel enabled={true} />);
+    expect(screen.getByTestId("terminal-container")).toBeVisible();
   });
 
   it("alerta pulsante aparece quando uma fase precisa de ação e abre o painel", async () => {
-    sessionStorage.setItem("paas.terminal.open", "0");
-    render(<TerminalPanel />);
+    render(<TerminalPanel enabled={true} />);
     const toggle = screen.getByRole("button", { name: /Terminal do servidor/ });
     expect(toggle.className).not.toContain("animate-pulse");
 
@@ -167,7 +196,7 @@ describe("TerminalPanel", () => {
   });
 
   it("input do xterm vai direto ao WS (relay puro); saída do WS vai ao xterm", async () => {
-    render(<TerminalPanel />);
+    render(<TerminalPanel enabled={true} />);
     await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
 
     lastTerm().fireData("senha-secreta\n");
@@ -178,7 +207,7 @@ describe("TerminalPanel", () => {
   });
 
   it("sincroniza o resize do PTY ao conectar (frame de controle JSON)", async () => {
-    render(<TerminalPanel />);
+    render(<TerminalPanel enabled={true} />);
     await waitFor(() =>
       expect(lastWs().sent.some((m) => m.includes('"type":"resize"'))).toBe(true),
     );
