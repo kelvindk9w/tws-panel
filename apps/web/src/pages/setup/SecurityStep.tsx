@@ -12,6 +12,9 @@ import {
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
+import { CopyButton } from "@/components/CopyButton";
+import { ManualPhaseModal } from "@/components/setup/ManualPhaseModal";
+import { SshKeyGuide } from "@/components/setup/SshKeyGuide";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,14 +22,13 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   AlertTriangle,
+  ArrowLeft,
   ArrowRight,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleHelp,
   Clock,
-  Copy,
   Eye,
   Hourglass,
   KeyRound,
@@ -42,6 +44,8 @@ import {
 
 interface SecurityStepProps {
   onNext: () => void;
+  /** Navegação de volta no wizard (ex.: voltar à Saúde da máquina). */
+  onBack?: () => void;
 }
 
 type Stage = "scan" | "plan" | "run" | "done";
@@ -149,27 +153,6 @@ function Countdown({ deadline }: { deadline: string }) {
   );
 }
 
-/** Botão copiar com feedback. */
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-7 px-2"
-      onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-    >
-      {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-      {copied ? "Copiado" : "Copiar"}
-    </Button>
-  );
-}
-
 /** Lista de passos de uma fase (:::PAAS_STEP parseados pelo executor). */
 function StepList({ steps }: { steps: SecurityJobStep[] }) {
   if (steps.length === 0) return null;
@@ -192,7 +175,7 @@ function StepList({ steps }: { steps: SecurityJobStep[] }) {
 // Componente principal
 // ---------------------------------------------------------------------------
 
-export function SecurityStep({ onNext }: SecurityStepProps) {
+export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
 
@@ -207,12 +190,13 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
   // alternativa (o operador executa por conta própria e o painel valida).
   const [plan, setPlan] = useState<SecurityPlan | null>(null);
 
-  // fase 01 — chave SSH do operador
-  const [sshUser, setSshUser] = useState("deploy");
+  // fase 01 — chave SSH do operador (o usuário não-root já foi criado no
+  // início da instalação, seguindo o README — aqui ele é VALIDADO)
+  const [sshUser, setSshUser] = useState("");
   const [sshPublicKey, setSshPublicKey] = useState("");
 
-  // modo manual por fase
-  const [manualPhases, setManualPhases] = useState<Set<SecurityPhaseId>>(new Set());
+  // modo manual por fase — modal com passo a passo copiável + revarredura
+  const [manualModal, setManualModal] = useState<SecurityPhaseId | null>(null);
   const [manualData, setManualData] = useState<Partial<Record<SecurityPhaseId, SecurityManualCommandsResponse>>>({});
   const [manualVerifying, setManualVerifying] = useState(false);
 
@@ -275,16 +259,9 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
   }
 
   // -------------------------------------------------------------- modo manual
-  async function toggleManual(phase: SecurityPhaseId) {
-    if (manualPhases.has(phase)) {
-      setManualPhases((prev) => {
-        const next = new Set(prev);
-        next.delete(phase);
-        return next;
-      });
-      return;
-    }
-    setManualPhases((prev) => new Set(prev).add(phase));
+  /** Abre o modal "Fazer manualmente" e carrega o passo a passo da fase. */
+  async function openManual(phase: SecurityPhaseId) {
+    setManualModal(phase);
     if (!manualData[phase]) {
       try {
         const data = await apiFetch<SecurityManualCommandsResponse>(`/api/security/phases/${phase}/manual`);
@@ -374,25 +351,21 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
     return true;
   }
 
-  async function startExecution() {
-    // todas as fases com pendência, na ordem 00→06, exceto as manuais
-    const phases = pendingPhases().filter((id) => !manualPhases.has(id));
-    if (phases.length === 0) {
-      setError(
-        manualPhases.size > 0
-          ? "Todas as fases pendentes estão em modo manual — execute os comandos no servidor e clique em \"Já executei — revarrer\"."
-          : "Nenhuma fase com pendência — o servidor já está endurecido.",
-      );
+  async function startExecution(phases?: SecurityPhaseId[]) {
+    // padrão: todas as fases com pendência, na ordem 00→06; ou uma fase só
+    // (ação principal por fase: "Executar apenas esta fase")
+    const queue = phases ?? pendingPhases();
+    if (queue.length === 0) {
+      setError("Nenhuma fase com pendência — o servidor já está endurecido.");
       return;
     }
-    // estado inicial da lista ao vivo: fila pendente, manuais puladas
+    // estado inicial da lista ao vivo: fila pendente
     const initial: Partial<Record<SecurityPhaseId, PhaseUiState>> = {};
-    for (const id of phases) initial[id] = { ...INITIAL_PHASE_UI };
-    for (const id of manualPhases) initial[id] = { ...INITIAL_PHASE_UI, status: "skipped" };
+    for (const id of queue) initial[id] = { ...INITIAL_PHASE_UI };
     setPhaseUi(initial);
     setStage("run");
-    // 1) dry-run de todas as fases selecionadas
-    const dryOk = await runPhases(phases, true);
+    // 1) dry-run das fases selecionadas
+    const dryOk = await runPhases(queue, true);
     if (!dryOk) return;
     // 2) aplicação real exige confirmação explícita do operador
     setJob(null);
@@ -433,7 +406,7 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
 
   // -------------------------------------------------------------- render
   const phaseTitle = (id: string) => SECURITY_PHASES.find((p) => p.id === id)?.title ?? id;
-  const phase01Selected = pendingPhases().includes("01") && !manualPhases.has("01");
+  const phase01Selected = pendingPhases().includes("01");
   const sshUserOk = isValidSshUsername(sshUser.trim());
   const sshKeyOk = isValidSshPublicKey(sshPublicKey);
   const sshFormValid = !phase01Selected || (sshUserOk && sshKeyOk);
@@ -441,6 +414,11 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
   return (
     <div className="flex animate-fade-in flex-col gap-6">
       <div>
+        {onBack && (
+          <Button variant="ghost" size="sm" onClick={onBack} className="-ml-2 mb-1">
+            <ArrowLeft className="h-4 w-4" /> Voltar para Saúde da máquina
+          </Button>
+        )}
         <h2 className="text-xl font-semibold">Segurança</h2>
         <p className="text-sm text-muted-foreground">
           Varredura somente-leitura, plano de correção e hardening em fases — com dry-run, backups e
@@ -618,14 +596,14 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
               </CardTitle>
               <CardDescription>
                 {plan.actions.filter((a) => !a.alreadySatisfied).length} fase(s) com pendências.
-                TODAS as fases pendentes serão executadas em ordem (00→06) — se uma falhar, a
-                execução para e o rollback é aplicado. Tudo roda primeiro em dry-run.
+                Execute <strong>uma fase por vez</strong> (botão em cada fase) ou todas em sequência
+                (botão abaixo) — tudo roda primeiro em dry-run; se uma falhar, a execução para e o
+                rollback é aplicado. Prefere rodar por conta própria? Use{" "}
+                <strong>Fazer manualmente</strong> para ver o passo a passo copiável.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               {plan.actions.map((a) => {
-                const isManual = manualPhases.has(a.phase);
-                const manual = manualData[a.phase];
                 return (
                   <div key={a.id} className="rounded-md border">
                     <div className="flex items-start gap-3 p-3">
@@ -637,7 +615,6 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
                             <Badge variant="warning">{a.fixesCheckIds.length} correção(ões)</Badge>
                           )}
                           {a.hasRollback && <Badge variant="secondary">com rollback</Badge>}
-                          {isManual && <Badge variant="warning">modo manual</Badge>}
                         </p>
                         <p className="text-muted-foreground">{a.description}</p>
                         {a.impact && (
@@ -647,74 +624,33 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
                         )}
                       </div>
                     </div>
-                    {/* Toggle de modo manual por fase */}
-                    <div className="flex items-center justify-between border-t px-3 py-2">
-                      <span className="text-xs text-muted-foreground">
-                        {isManual
-                          ? "Você executa esta fase no servidor (ou no terminal abaixo); o painel só valida depois."
-                          : "O painel executa esta fase automaticamente no terminal abaixo."}
-                      </span>
-                      <Button variant="ghost" size="sm" className="h-7" onClick={() => void toggleManual(a.phase)}>
-                        <TerminalSquare className="h-3.5 w-3.5" />
-                        {isManual ? "Voltar ao modo automático" : "Executar manualmente"}
-                      </Button>
-                    </div>
-                    {isManual && (
-                      <div className="flex flex-col gap-2 border-t bg-secondary/20 p-3">
-                        {!manual ? (
-                          <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Carregando comandos…
-                          </p>
-                        ) : (
-                          <>
-                            <p className="text-xs font-medium text-muted-foreground">
-                              Comandos exatos (rode no servidor, na ordem):
-                            </p>
-                            {manual.commands.map((cmd) => (
-                              <div
-                                key={cmd}
-                                className="flex items-center justify-between gap-2 rounded bg-black/60 px-2 py-1.5"
-                              >
-                                <code className="break-all font-mono text-xs text-emerald-100/90">{cmd}</code>
-                                <CopyButton text={cmd} />
-                              </div>
-                            ))}
-                            {manual.notes.map((n) => (
-                              <p key={n} className="text-xs text-amber-300/90">ℹ️ {n}</p>
-                            ))}
-                            <details className="text-xs">
-                              <summary className="cursor-pointer text-muted-foreground">
-                                Ver o script completo da fase ({manual.script})
-                              </summary>
-                              <div className="relative mt-1">
-                                <div className="absolute right-1 top-1">
-                                  <CopyButton text={manual.scriptContent} />
-                                </div>
-                                <pre className="max-h-64 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] text-emerald-100/70">
-                                  {manual.scriptContent}
-                                </pre>
-                              </div>
-                            </details>
-                            <div className="flex items-center gap-2 pt-1">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={manualVerifying}
-                                onClick={() => void rescanAfterManual()}
-                              >
-                                {manualVerifying ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <RefreshCw className="h-4 w-4" />
-                                )}
-                                Já executei — revarrer
-                              </Button>
-                              {a.alreadySatisfied && (
-                                <Badge variant="success">✅ verificado no último scan</Badge>
-                              )}
-                            </div>
-                          </>
-                        )}
+                    {/* Ações da fase: principal = executar só ela; secundária = manual */}
+                    {!a.alreadySatisfied && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
+                        <span className="text-xs text-muted-foreground">
+                          O painel executa no terminal abaixo — primeiro em dry-run (simulação), só
+                          depois de verdade, com a sua confirmação.
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7"
+                            onClick={() => void openManual(a.phase)}
+                          >
+                            <TerminalSquare className="h-3.5 w-3.5" />
+                            Fazer manualmente
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-7"
+                            disabled={a.phase === "01" && !sshFormValid}
+                            onClick={() => void startExecution([a.phase])}
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            Executar apenas esta fase
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -723,33 +659,45 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
             </CardContent>
           </Card>
 
-          {/* Fase 01 — chave pública SSH do operador (obrigatória para travar o root) */}
+          {/* Fase 01 — VALIDAÇÃO do usuário não-root (criado no início da
+              instalação, seguindo o README) + chave pública SSH do operador */}
           {phase01Selected && (
             <Card className="border-amber-500/40">
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <KeyRound className="h-4 w-4 text-amber-400" /> Fase 01 — sua chave pública SSH
+                  <KeyRound className="h-4 w-4 text-amber-400" /> Fase 01 — confirmar usuário e
+                  instalar sua chave SSH
                 </CardTitle>
                 <CardDescription>
-                  Cole a chave pública da SUA máquina (ex.: <code>~/.ssh/id_ed25519.pub</code>). Ela será
-                  instalada no novo usuário — a senha do root <strong>só é travada com a chave presente</strong>{" "}
-                  (proteção anti-lockout).
+                  Você já criou o <strong>usuário não-root</strong> no início da instalação (passo do
+                  README: <code>adduser</code> + <code>usermod -aG sudo</code>). Esta fase{" "}
+                  <strong>confirma que ele existe</strong>, instala a <strong>sua chave pública SSH</strong>{" "}
+                  nele e só então trava a senha do root (o login root via SSH é bloqueado na Fase
+                  02). A senha do root <strong>só é travada com a chave presente</strong> (proteção
+                  anti-lockout).
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col gap-3">
+              <CardContent className="flex flex-col gap-4">
+                <SshKeyGuide />
                 <div className="flex flex-col gap-1">
                   <label className="text-xs text-muted-foreground" htmlFor="ssh-user">
-                    Usuário não-root a criar
+                    Usuário não-root criado na instalação
                   </label>
                   <Input
                     id="ssh-user"
                     value={sshUser}
                     onChange={(e) => setSshUser(e.target.value)}
-                    className="h-8 w-48 font-mono"
-                    placeholder="deploy"
+                    className="h-8 w-64 font-mono"
+                    placeholder="o nome que você criou (ex.: deploy)"
                   />
-                  {!sshUserOk && (
+                  {sshUser.trim() !== "" && !sshUserOk && (
                     <p className="text-xs text-red-400">Nome inválido (minúsculas, sem espaços, nunca root).</p>
+                  )}
+                  {sshUserOk && (
+                    <p className="text-xs text-emerald-400">
+                      ✅ Vamos validar <strong className="font-mono">{sshUser.trim()}</strong> no
+                      servidor — se ele ainda não existir, a fase o cria com as mesmas permissões.
+                    </p>
                   )}
                 </div>
                 <div className="flex flex-col gap-1">
@@ -771,7 +719,7 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
                       começando com ssh-ed25519 ou ssh-rsa).
                     </p>
                   )}
-                  {sshKeyOk && <p className="text-xs text-emerald-400">✅ Chave válida.</p>}
+                  {sshKeyOk && <p className="text-xs text-emerald-400">Sua chave parece válida ✅</p>}
                 </div>
               </CardContent>
             </Card>
@@ -787,7 +735,8 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
           </div>
           {!sshFormValid && (
             <p className="text-right text-xs text-amber-400">
-              Cole uma chave pública SSH válida para executar a Fase 01 (ou marque-a como manual).
+              Informe o usuário criado na instalação e cole uma chave pública SSH válida para
+              executar a Fase 01 (ou use "Fazer manualmente" na fase).
             </p>
           )}
         </>
@@ -853,7 +802,7 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
 
               {/* Lista de fases ao vivo com ícone de estado + detalhe expansível */}
               <ul className="flex flex-col gap-1">
-                {SECURITY_PHASES.filter((p) => runQueue.includes(p.id) || manualPhases.has(p.id)).map((p) => {
+                {SECURITY_PHASES.filter((p) => runQueue.includes(p.id)).map((p) => {
                   const ui = phaseUi[p.id] ?? INITIAL_PHASE_UI;
                   const expanded = expandedRunPhases.has(p.id);
                   const hasDetail = ui.steps.length > 0 || ui.log !== "";
@@ -991,6 +940,20 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
             </Button>
           </div>
         </>
+      )}
+
+      {/* ---------------------------------------------------------- MODAL MANUAL */}
+      {manualModal !== null && (
+        <ManualPhaseModal
+          title={`Fase ${manualModal} — ${phaseTitle(manualModal)}`}
+          data={manualData[manualModal] ?? null}
+          verifying={manualVerifying}
+          satisfied={
+            plan?.actions.find((a) => a.phase === manualModal)?.alreadySatisfied ?? false
+          }
+          onRescan={() => void rescanAfterManual()}
+          onClose={() => setManualModal(null)}
+        />
       )}
     </div>
   );
