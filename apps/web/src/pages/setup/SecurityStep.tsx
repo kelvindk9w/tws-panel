@@ -11,6 +11,7 @@ import {
   type SecurityScanReport,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -201,9 +202,10 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(new Set());
   const [skippedOpen, setSkippedOpen] = useState(false);
 
-  // plano
+  // plano — FASES OBRIGATÓRIAS: toda fase com pendência executa (00→06);
+  // não há exclusão por checkbox. O modo manual por fase é a única
+  // alternativa (o operador executa por conta própria e o painel valida).
   const [plan, setPlan] = useState<SecurityPlan | null>(null);
-  const [selected, setSelected] = useState<Set<SecurityPhaseId>>(new Set());
 
   // fase 01 — chave SSH do operador
   const [sshUser, setSshUser] = useState("deploy");
@@ -259,20 +261,17 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
     try {
       const p = await apiFetch<SecurityPlan>("/api/security/plan", { method: "POST", body: "{}" });
       setPlan(p);
-      setSelected(new Set(p.actions.filter((a) => a.preselected).map((a) => a.phase)));
       setStage("plan");
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "Falha ao gerar o plano.");
     }
   }
 
-  function togglePhase(phase: SecurityPhaseId) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(phase)) next.delete(phase);
-      else next.add(phase);
-      return next;
-    });
+  /** Fases com pendência no plano atual, na ordem 00→06 (execução obrigatória). */
+  function pendingPhases(): SecurityPhaseId[] {
+    if (!plan) return [];
+    const pending = new Set(plan.actions.filter((a) => !a.alreadySatisfied).map((a) => a.phase));
+    return SECURITY_PHASES.map((p) => p.id).filter((id) => pending.has(id));
   }
 
   // -------------------------------------------------------------- modo manual
@@ -286,12 +285,6 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
       return;
     }
     setManualPhases((prev) => new Set(prev).add(phase));
-    // fase manual sai da fila de execução automática
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.delete(phase);
-      return next;
-    });
     if (!manualData[phase]) {
       try {
         const data = await apiFetch<SecurityManualCommandsResponse>(`/api/security/phases/${phase}/manual`);
@@ -326,7 +319,9 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
       setJob(res.job);
       updatePhaseUi(phase, { steps: res.job.steps, log: res.job.log, jobStatus: res.job.status });
       if (res.job.status === "awaiting_confirmation") {
-        // ALERTA DE AÇÃO DO USUÁRIO — bloqueia a continuação até o operador agir
+        // ALERTA DE AÇÃO DO USUÁRIO — bloqueia a continuação até o operador
+        // agir; o terminal embutido acende o alerta pulsante "olhe o terminal".
+        window.dispatchEvent(new CustomEvent(TERMINAL_ATTENTION_EVENT, { detail: { phase } }));
         const confirmed = await new Promise<boolean>((resolve) => {
           confirmResolver.current = resolve;
         });
@@ -380,12 +375,13 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
   }
 
   async function startExecution() {
-    const phases = SECURITY_PHASES.map((p) => p.id).filter((id) => selected.has(id) && !manualPhases.has(id));
+    // todas as fases com pendência, na ordem 00→06, exceto as manuais
+    const phases = pendingPhases().filter((id) => !manualPhases.has(id));
     if (phases.length === 0) {
       setError(
         manualPhases.size > 0
-          ? "Todas as fases escolhidas estão em modo manual — execute os comandos no servidor e clique em \"Já executei — revarrer\"."
-          : "Selecione ao menos uma fase para aplicar.",
+          ? "Todas as fases pendentes estão em modo manual — execute os comandos no servidor e clique em \"Já executei — revarrer\"."
+          : "Nenhuma fase com pendência — o servidor já está endurecido.",
       );
       return;
     }
@@ -437,7 +433,7 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
 
   // -------------------------------------------------------------- render
   const phaseTitle = (id: string) => SECURITY_PHASES.find((p) => p.id === id)?.title ?? id;
-  const phase01Selected = selected.has("01") && !manualPhases.has("01");
+  const phase01Selected = pendingPhases().includes("01") && !manualPhases.has("01");
   const sshUserOk = isValidSshUsername(sshUser.trim());
   const sshKeyOk = isValidSshPublicKey(sshPublicKey);
   const sshFormValid = !phase01Selected || (sshUserOk && sshKeyOk);
@@ -622,7 +618,8 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
               </CardTitle>
               <CardDescription>
                 {plan.actions.filter((a) => !a.alreadySatisfied).length} fase(s) com pendências.
-                Fases com findings críticos estão pré-marcadas. Tudo roda primeiro em dry-run.
+                TODAS as fases pendentes serão executadas em ordem (00→06) — se uma falhar, a
+                execução para e o rollback é aplicado. Tudo roda primeiro em dry-run.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -631,14 +628,7 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
                 const manual = manualData[a.phase];
                 return (
                   <div key={a.id} className="rounded-md border">
-                    <label className="flex cursor-pointer items-start gap-3 p-3 hover:bg-secondary/40">
-                      <input
-                        type="checkbox"
-                        className="mt-1 h-4 w-4 accent-emerald-500"
-                        checked={selected.has(a.phase)}
-                        disabled={isManual}
-                        onChange={() => togglePhase(a.phase)}
-                      />
+                    <div className="flex items-start gap-3 p-3">
                       <div className="flex-1 text-sm">
                         <p className="flex flex-wrap items-center gap-2 font-medium">
                           Fase {a.phase} — {a.title}
@@ -656,13 +646,13 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
                           </p>
                         )}
                       </div>
-                    </label>
+                    </div>
                     {/* Toggle de modo manual por fase */}
                     <div className="flex items-center justify-between border-t px-3 py-2">
                       <span className="text-xs text-muted-foreground">
                         {isManual
-                          ? "Você executa esta fase no servidor; o painel só valida depois."
-                          : "O painel executa esta fase automaticamente."}
+                          ? "Você executa esta fase no servidor (ou no terminal abaixo); o painel só valida depois."
+                          : "O painel executa esta fase automaticamente no terminal abaixo."}
                       </span>
                       <Button variant="ghost" size="sm" className="h-7" onClick={() => void toggleManual(a.phase)}>
                         <TerminalSquare className="h-3.5 w-3.5" />
@@ -792,7 +782,7 @@ export function SecurityStep({ onNext }: SecurityStepProps) {
               Voltar ao relatório
             </Button>
             <Button onClick={() => void startExecution()} disabled={!sshFormValid}>
-              <Eye className="h-4 w-4" /> Executar dry-run das fases selecionadas
+              <Eye className="h-4 w-4" /> Executar dry-run de todas as fases pendentes
             </Button>
           </div>
           {!sshFormValid && (

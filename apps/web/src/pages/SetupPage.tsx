@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { SetupStatusResponse } from "@paas/core";
 import { apiFetch, getSetupToken, initSetupToken, ApiRequestError } from "@/lib/api";
 import { Stepper } from "@/components/Stepper";
+import { TerminalPanel } from "@/components/TerminalPanel";
 import { WelcomeStep } from "@/pages/setup/WelcomeStep";
 import { HealthStep } from "@/pages/setup/HealthStep";
 import { SecurityStep } from "@/pages/setup/SecurityStep";
@@ -49,7 +50,7 @@ export function SetupPage() {
   const progress = (step / maxStep) * 100;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="flex min-h-screen flex-col bg-background">
       <header className="border-b">
         <div className="container flex h-14 items-center justify-between">
           <span className="font-semibold tracking-tight">
@@ -59,7 +60,7 @@ export function SetupPage() {
         </div>
       </header>
 
-      <main className="container flex max-w-4xl flex-col gap-8 py-10">
+      <main className="container flex w-full max-w-4xl flex-1 flex-col gap-8 py-10">
         <div className="flex flex-col gap-3">
           <Stepper steps={steps} currentStep={step} />
           <Progress value={progress} className="h-1" />
@@ -82,6 +83,9 @@ export function SetupPage() {
           Powered by TWS · open-source (MIT)
         </p>
       </footer>
+
+      {/* Visão dupla: terminal real do servidor ao vivo em TODOS os passos */}
+      <TerminalPanel />
     </div>
   );
 }
