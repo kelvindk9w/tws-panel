@@ -39,15 +39,17 @@ class FakePty implements RemotePty {
   }
 }
 
-/** Runner base falso: execStream direto retorna 7 (prova de qual caminho foi usado). */
+/** Runner base falso: exec/execStream diretos retornam valores-prova de caminho. */
 class FakeBaseRunner implements TargetRunner {
   readonly label = "fake";
-  readonly profile: SecurityTargetProfile = "container";
+  profile: SecurityTargetProfile = "container";
   streamCalls: string[] = [];
+  execCalls: string[] = [];
   uploaded = false;
   async ensureReady(): Promise<void> {}
-  async exec(): Promise<ExecResult> {
-    return { code: 0, stdout: "", stderr: "" };
+  async exec(cmd: string): Promise<ExecResult> {
+    this.execCalls.push(cmd);
+    return { code: 9, stdout: "[base] direto", stderr: "" };
   }
   async uploadDir(): Promise<void> {
     this.uploaded = true;
@@ -63,7 +65,7 @@ function flush(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
 }
 
-function setup(opts?: { failOpen?: boolean }) {
+function setup(opts?: { failOpen?: boolean; audit?: (detail: string) => void }) {
   const ptys: FakePty[] = [];
   const terminal = new TerminalService({
     openPty: () => {
@@ -74,8 +76,16 @@ function setup(opts?: { failOpen?: boolean }) {
     },
   });
   const base = new FakeBaseRunner();
-  const runner = new TerminalRelayRunner(base, terminal);
+  const runner = new TerminalRelayRunner(base, terminal, {
+    ...(opts?.audit ? { onAudit: opts.audit } : {}),
+  });
   return { terminal, base, runner, ptys };
+}
+
+function nonceOf(inputs: string[], kind: "BEGIN" | "EXIT"): string {
+  const m = new RegExp(`:::PAAS_${kind}_([0-9a-f]+)`).exec(inputs.join(""));
+  if (!m?.[1]) throw new Error(`marcador ${kind} não encontrado`);
+  return m[1];
 }
 
 describe("TerminalRelayRunner — fases dentro do terminal", () => {
@@ -142,5 +152,70 @@ describe("TerminalRelayRunner — fases dentro do terminal", () => {
     // a MESMA saída apareceu no stream do terminal (visão dupla)
     expect(terminalView.join("")).toContain("[dry-run] apt-get upgrade");
     await terminal.dispose();
+  });
+});
+
+describe("TerminalRelayRunner — exec (checks somente-leitura) dentro do terminal", () => {
+  it("exec roda no PTY com captura limpa (sem eco) e NÃO toca o base runner", async () => {
+    const audits: string[] = [];
+    const { runner, base, ptys } = setup({ audit: (d) => audits.push(d) });
+    const promise = runner.exec("hostname");
+    await flush();
+    const pty = ptys[0]!;
+    const begin = nonceOf(pty.inputs, "BEGIN");
+    const exit = nonceOf(pty.inputs, "EXIT");
+    expect(begin).toBe(exit);
+    // eco do comando digitado (como num SSH real) + saída + marcadores
+    pty.emit(`echo ":::PAAS_BEGIN_${begin}"; hostname; echo ":::PAAS_EXIT_${exit}:$?"\r\n`);
+    pty.emit(`:::PAAS_BEGIN_${begin}\r\n`);
+    pty.emit("minha-vps\r\n");
+    pty.emit(`:::PAAS_EXIT_${exit}:0\r\n`);
+
+    const result = await promise;
+    expect(result).toEqual({ code: 0, stdout: "minha-vps\n", stderr: "" });
+    expect(base.execCalls).toHaveLength(0);
+    expect(audits.some((d) => d.includes("hostname"))).toBe(true);
+  });
+
+  it("terminal indisponível ANTES do exec → fallback ao runner direto", async () => {
+    const { runner, base } = setup({ failOpen: true });
+    const result = await runner.exec("cat /etc/os-release");
+    expect(result.code).toBe(9); // prova de que o base respondeu
+    expect(base.execCalls).toEqual(["cat /etc/os-release"]);
+  });
+
+  it("sessão morre NO MEIO do exec → erro, SEM fallback (nunca re-executa)", async () => {
+    const { runner, base, ptys } = setup();
+    const promise = runner.exec("hostname");
+    await flush();
+    ptys[0]!.end();
+    await expect(promise).rejects.toThrow(/terminal foi encerrado/);
+    expect(base.execCalls).toHaveLength(0);
+  });
+
+  it("perfil host: comando FORA da allowlist não sobe pelo terminal (vai ao base, fail-closed)", async () => {
+    const { runner, base, ptys } = setup();
+    base.profile = "host";
+    const result = await runner.exec("rm -rf /; cat /etc/shadow");
+    expect(base.execCalls).toEqual(["rm -rf /; cat /etc/shadow"]);
+    expect(ptys).toHaveLength(0); // terminal nem foi aberto
+    expect(result.code).toBe(9);
+  });
+
+  it("perfil host: check da allowlist sobe pelo terminal normalmente", async () => {
+    const { runner, base, ptys } = setup();
+    base.profile = "host";
+    // comando real de um check do scanner (fixo em packages/security/src/checks.ts)
+    const checkCmd = "awk -F: '$3 == 0 {print $1}' /etc/passwd";
+    const promise = runner.exec(checkCmd);
+    await flush();
+    const pty = ptys[0]!;
+    const nonce = nonceOf(pty.inputs, "BEGIN");
+    pty.emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    pty.emit("root\r\n");
+    pty.emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.stdout).toBe("root\n");
+    expect(base.execCalls).toHaveLength(0);
   });
 });

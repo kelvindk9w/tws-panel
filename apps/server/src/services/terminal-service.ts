@@ -40,17 +40,34 @@ export interface TerminalServiceOptions {
 
 interface CommandWaiter {
   marker: string;
+  /**
+   * Modo captura: um marcador :::PAAS_BEGIN_<nonce> é impresso ANTES do
+   * comando; só a saída entre BEGIN e EXIT é entregue ao caller (o eco do
+   * comando digitado e o prompt não poluem o stdout capturado). Tudo continua
+   * visível ao vivo no terminal do usuário (broadcast).
+   */
+  capture: boolean;
+  capturing: boolean;
+  captured: string;
   onData: (chunk: string) => void;
-  resolve: (code: number) => void;
+  resolve: (result: CommandResult) => void;
   reject: (err: Error) => void;
   /** Resto parcial de linha aguardando o próximo chunk (parse do marcador). */
   pending: string;
   timer: NodeJS.Timeout;
 }
 
+/** Resultado de um comando executado dentro do terminal. */
+export interface CommandResult {
+  code: number;
+  /** Saída entre os marcadores BEGIN/EXIT (vazia fora do modo captura). */
+  output: string;
+}
+
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_SCROLLBACK_CHARS = 64_000;
 const EXIT_MARKER_RE = (nonce: string) => new RegExp(`^:::PAAS_EXIT_${nonce}:(\\d+)\\r?$`);
+const BEGIN_MARKER_RE = (nonce: string) => new RegExp(`^:::PAAS_BEGIN_${nonce}\\r?$`);
 
 export class TerminalService {
   private readonly openPty: PtyFactory;
@@ -218,13 +235,21 @@ export class TerminalService {
     }
     const { visible, done, exitCode } = this.consumeForWaiter(waiter, chunk);
     if (visible.length > 0) {
-      waiter.onData(visible);
+      // Modo captura: só o trecho entre os marcadores BEGIN/EXIT vai ao
+      // caller, com CRLF normalizado para \n (o stdout é parseado pelos
+      // checks do scanner). O BROADCAST segue cru (\r\n) para o xterm
+      // renderizar certinho — sem efeito escada na tela do usuário.
+      if (!waiter.capture || waiter.capturing) {
+        const forCaller = waiter.capture ? visible.replace(/\r\n/g, "\n") : visible;
+        waiter.onData(forCaller);
+        waiter.captured += forCaller;
+      }
       this.broadcast(visible);
     }
     if (done) {
       clearTimeout(waiter.timer);
       this.waiter = null;
-      waiter.resolve(exitCode ?? 1);
+      waiter.resolve({ code: exitCode ?? 1, output: waiter.captured });
     }
   }
 
@@ -237,6 +262,7 @@ export class TerminalService {
     chunk: string,
   ): { visible: string; done: boolean; exitCode: number | null } {
     const re = EXIT_MARKER_RE(waiter.marker);
+    const beginRe = BEGIN_MARKER_RE(waiter.marker);
     let buf = waiter.pending + chunk;
     let visible = "";
     let exitCode: number | null = null;
@@ -245,6 +271,12 @@ export class TerminalService {
       if (nl === -1) break;
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
+      if (waiter.capture && !waiter.capturing && beginRe.exec(line)) {
+        // Marcador de início: não é exibido nem capturado — a partir da
+        // próxima linha a saída é do comando de fato.
+        waiter.capturing = true;
+        continue;
+      }
       const m = re.exec(line);
       if (m) {
         exitCode = Number(m[1]);
@@ -255,9 +287,11 @@ export class TerminalService {
     // Segura o resto parcial SOMENTE se ele puder ser (o início de) uma linha
     // de marcador — prompts sem newline (ex.: "New password:") são exibidos
     // na hora, essencial para a interatividade.
-    const full = `:::PAAS_EXIT_${waiter.marker}:`;
+    const exitFull = `:::PAAS_EXIT_${waiter.marker}:`;
+    const beginFull = `:::PAAS_BEGIN_${waiter.marker}`;
     const candidate = buf.endsWith("\r") ? buf.slice(0, -1) : buf;
-    if (full.startsWith(candidate) || candidate.startsWith(full)) {
+    const couldBeMarker = (full: string) => full.startsWith(candidate) || candidate.startsWith(full);
+    if (couldBeMarker(exitFull) || (waiter.capture && couldBeMarker(beginFull))) {
       waiter.pending = buf;
     } else {
       visible += buf;
@@ -286,6 +320,28 @@ export class TerminalService {
     onData: (chunk: string) => void,
     opts?: { timeoutMs?: number },
   ): Promise<number> {
+    return this.enqueue(cmd, onData, { ...opts, capture: false }).then((r) => r.code);
+  }
+
+  /**
+   * Variante com CAPTURA de stdout: imprime um marcador :::PAAS_BEGIN antes do
+   * comando e retorna { code, output } com apenas a saída real (sem o eco do
+   * comando digitado nem o prompt). Usada pelos checks somente-leitura do
+   * scanner, que precisam parsear o stdout — enquanto o usuário continua
+   * vendo cada comando rodar ao vivo no terminal.
+   */
+  runCommandCaptured(
+    cmd: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<CommandResult> {
+    return this.enqueue(cmd, () => undefined, { ...opts, capture: true });
+  }
+
+  private enqueue(
+    cmd: string,
+    onData: (chunk: string) => void,
+    opts?: { timeoutMs?: number; capture?: boolean },
+  ): Promise<CommandResult> {
     if (cmd.includes("\n") || cmd.includes("\r")) {
       return Promise.reject(new Error("runCommand aceita apenas comandos de uma linha"));
     }
@@ -298,11 +354,12 @@ export class TerminalService {
   private async runCommandNow(
     cmd: string,
     onData: (chunk: string) => void,
-    opts?: { timeoutMs?: number },
-  ): Promise<number> {
+    opts?: { timeoutMs?: number; capture?: boolean },
+  ): Promise<CommandResult> {
     await this.ensureSession(); // TerminalUnavailableError aqui = antes de começar
     const nonce = randomBytes(4).toString("hex");
-    return new Promise<number>((resolve, reject) => {
+    const capture = opts?.capture ?? false;
+    return new Promise<CommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         // timeout: tenta Ctrl-C; se o marcador não vier, derruba a sessão
         this.write("\x03");
@@ -315,10 +372,21 @@ export class TerminalService {
         }, 5_000).unref();
       }, opts?.timeoutMs ?? 30 * 60_000);
       timer.unref();
-      this.waiter = { marker: nonce, onData, resolve, reject, pending: "", timer };
-      // O comando digitado inclui o eco do exit code em marcador único —
-      // honesto e visível para o usuário, como num SSH real.
-      this.write(`${cmd}; echo ":::PAAS_EXIT_${nonce}:$?"\n`);
+      this.waiter = {
+        marker: nonce,
+        capture,
+        capturing: false,
+        captured: "",
+        onData,
+        resolve,
+        reject,
+        pending: "",
+        timer,
+      };
+      // O comando digitado inclui os marcadores de início/fim — honesto e
+      // visível para o usuário, como num SSH real.
+      const prelude = capture ? `echo ":::PAAS_BEGIN_${nonce}"; ` : "";
+      this.write(`${prelude}${cmd}; echo ":::PAAS_EXIT_${nonce}:$?"\n`);
     });
   }
 }

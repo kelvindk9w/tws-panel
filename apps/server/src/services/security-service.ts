@@ -57,11 +57,18 @@ export class SecurityService {
             onAudit: (detail) => opts?.audit?.("hardening.host-exec", detail),
           })
         : new ContainerRunner({ name: config.securityTargetContainer });
-    // Visão dupla: os scripts de fase (execStream) rodam DENTRO do terminal
-    // web embutido — saída ao vivo no xterm + prompts interativos respondidos
-    // pelo usuário direto no terminal. Fallback ao runner direto se o PTY
-    // estiver indisponível. exec() pontual (checks do scanner) segue direto.
-    this.runner = opts?.terminal ? new TerminalRelayRunner(baseRunner, opts.terminal) : baseRunner;
+    // Visão dupla: os scripts de fase (execStream) e os checks somente-leitura
+    // do scanner (exec) rodam DENTRO do terminal web embutido — saída ao vivo
+    // no xterm + prompts interativos respondidos pelo usuário direto no
+    // terminal. Fallback ao runner direto se o PTY estiver indisponível.
+    this.runner = opts?.terminal
+      ? new TerminalRelayRunner(baseRunner, opts.terminal, {
+          onAudit:
+            config.securityTarget === "host"
+              ? (detail) => opts?.audit?.("hardening.host-exec", detail)
+              : undefined,
+        })
+      : baseRunner;
     // O PTY do modo dev (container alvo) precisa do container de pé.
     opts?.terminal?.setEnsureTarget(() => baseRunner.ensureReady());
     this.historyFile = path.join(config.dataDir, "security-history.json");

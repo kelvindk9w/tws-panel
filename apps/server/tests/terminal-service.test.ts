@@ -281,3 +281,66 @@ describe("TerminalService — runCommand (fases dentro do terminal)", () => {
     }
   });
 });
+
+describe("TerminalService — runCommandCaptured (checks do scanner no terminal)", () => {
+  function nonceOf(ptyInputs: string[], kind: "BEGIN" | "EXIT"): string {
+    const m = new RegExp(`:::PAAS_${kind}_([0-9a-f]+)`).exec(ptyInputs.join(""));
+    if (!m?.[1]) throw new Error(`marcador ${kind} não encontrado no input do PTY`);
+    return m[1];
+  }
+
+  it("captura só a saída real (sem eco do comando nem marcadores) + exit code", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("cat /etc/os-release");
+    await flush();
+    const pty = next();
+    const nonce = nonceOf(pty.inputs, "BEGIN");
+    // o comando digitado inclui os DOIS marcadores (visível/honesto no terminal)
+    expect(pty.inputs.join("")).toContain(`echo ":::PAAS_BEGIN_${nonce}"; cat /etc/os-release; echo ":::PAAS_EXIT_${nonce}:$?"`);
+
+    // o shell ecoa o comando digitado (uma linha) e depois vem a saída real
+    pty.emit(`echo ":::PAAS_BEGIN_${nonce}"; cat /etc/os-release; echo ":::PAAS_EXIT_${nonce}:$?"\r\n`);
+    pty.emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    pty.emit('PRETTY_NAME="Ubuntu 24.04 LTS"\r\n');
+    pty.emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe('PRETTY_NAME="Ubuntu 24.04 LTS"\n');
+    expect(result.output).not.toContain("PAAS_BEGIN");
+    expect(result.output).not.toContain("os-release; echo");
+  });
+
+  it("a saída capturada TAMBÉM aparece ao vivo para os clientes do terminal", async () => {
+    const { service, next } = makeService();
+    const view: string[] = [];
+    service.onOutput((c) => view.push(c));
+    const promise = service.runCommandCaptured("hostname");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit("minha-vps\r\n");
+    next().emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+    await promise;
+    expect(view.join("")).toContain("minha-vps");
+    expect(view.join("")).not.toContain("PAAS_BEGIN");
+  });
+
+  it("exit code não-zero é propagado com a saída parcial", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("grep algo /inexistente");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit("grep: /inexistente: No such file or directory\r\n");
+    next().emit(`:::PAAS_EXIT_${nonce}:2\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(2);
+    expect(result.output).toContain("No such file or directory");
+  });
+
+  it("rejeita comandos com quebra de linha (uma linha apenas)", async () => {
+    const { service } = makeService();
+    await expect(service.runCommandCaptured("echo a\necho b")).rejects.toThrow(/uma linha/);
+  });
+});
