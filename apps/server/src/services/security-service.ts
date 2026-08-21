@@ -5,22 +5,28 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  SECURITY_PHASES,
   SECURITY_SCAN_CACHE_MS,
   type SecurityHistoryEntry,
   type SecurityJob,
+  type SecurityManualCommandsResponse,
   type SecurityPhaseId,
   type SecurityPlan,
   type SecurityScanReport,
 } from "@paas/core";
 import {
   ContainerRunner,
-  HostRunner,
+  NsenterHostRunner,
   SecurityExecutor,
   buildSecurityPlan,
   runSecurityScan,
+  type PhaseParams,
   type TargetRunner,
 } from "@paas/security";
 import type { ServerConfig } from "../config.js";
+
+/** Callback de auditoria para comandos executados no host real. */
+export type SecurityAuditHook = (action: string, detail: string) => void;
 
 const MAX_HISTORY_ENTRIES = 200;
 
@@ -29,6 +35,7 @@ interface HistoryFile {
 }
 
 export class SecurityService {
+  private readonly config: ServerConfig;
   private readonly runner: TargetRunner;
   private readonly executor: SecurityExecutor;
   private readonly historyFile: string;
@@ -36,10 +43,17 @@ export class SecurityService {
   private lastScanAt = 0;
   private runningScan: Promise<SecurityScanReport> | null = null;
 
-  constructor(config: ServerConfig) {
+  constructor(config: ServerConfig, opts?: { audit?: SecurityAuditHook }) {
+    this.config = config;
+    // Alvo "host": host bridge (nsenter via helper privilegiado descartável) —
+    // os comandos rodam na VPS real, NÃO no container do painel. Cada comando
+    // passa pela allowlist e é registrado em auditoria.
     this.runner =
       config.securityTarget === "host"
-        ? new HostRunner()
+        ? new NsenterHostRunner({
+            image: config.hostHelperImage,
+            onAudit: (detail) => opts?.audit?.("hardening.host-exec", detail),
+          })
         : new ContainerRunner({ name: config.securityTargetContainer });
     this.historyFile = path.join(config.dataDir, "security-history.json");
     this.executor = new SecurityExecutor({
@@ -85,12 +99,61 @@ export class SecurityService {
   }
 
   /** Inicia job de aplicação de uma fase (assíncrono). */
-  async apply(phase: SecurityPhaseId, dryRun: boolean): Promise<SecurityJob> {
-    return this.executor.startJob(phase, dryRun);
+  async apply(phase: SecurityPhaseId, dryRun: boolean, params?: PhaseParams): Promise<SecurityJob> {
+    return this.executor.startJob(phase, dryRun, params);
   }
 
   getJob(id: string): SecurityJob | null {
     return this.executor.getJob(id);
+  }
+
+  /**
+   * Modo manual: comandos exatos (copiáveis) para o operador executar a fase
+   * por conta própria no alvo + o conteúdo do script para conferência.
+   */
+  async manualCommands(phase: SecurityPhaseId): Promise<SecurityManualCommandsResponse> {
+    const phaseDef = SECURITY_PHASES.find((p) => p.id === phase);
+    if (!phaseDef) throw new Error(`fase desconhecida: ${phase}`);
+    const scriptContent = await readFile(path.join(this.config.hardeningScriptsDir, phaseDef.script), "utf8");
+
+    const notes: string[] = [
+      "Adicione --dry-run para simular sem alterar nada e --rollback para desfazer.",
+    ];
+    let commands: string[];
+    if (this.config.securityTarget === "host") {
+      const scriptPath = `${this.config.hostRepoDir}/scripts/hardening/${phaseDef.script}`;
+      commands = [`sudo bash ${scriptPath}`];
+      notes.push(`Os scripts ficam no checkout do repo no host (${this.config.hostRepoDir}).`);
+      if (phase === "01") {
+        commands = [
+          `sudo bash ${scriptPath} --user SEU_USUARIO --pubkey 'ssh-ed25519 AAAA... seu-comentario'`,
+        ];
+        notes.push("Sem chave SSH instalada, o script NÃO trava o root (proteção anti-lockout).");
+      }
+      if (phase === "01" || phase === "02" || phase === "03") {
+        commands.push(`sudo bash ${scriptPath} --confirm`);
+        notes.push(
+          "Esta fase agenda rollback automático de 5 min: teste o acesso e rode --confirm para manter a configuração.",
+        );
+      }
+    } else {
+      const target = this.config.securityTargetContainer;
+      commands = [`docker exec ${target} bash /opt/paas-hardening/${phaseDef.script}`];
+      notes.push(
+        `Alvo de dev (container ${target}): os scripts são enviados a /opt/paas-hardening quando um job roda; ` +
+          `para enviar manualmente: docker cp <repo>/scripts/hardening/. ${target}:/opt/paas-hardening/`,
+      );
+    }
+
+    return {
+      phase: phaseDef.id,
+      phaseKey: phaseDef.key,
+      title: phaseDef.title,
+      script: phaseDef.script,
+      commands,
+      scriptContent,
+      notes,
+    };
   }
 
   async confirmAccess(jobId: string): Promise<SecurityJob> {

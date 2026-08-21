@@ -1,11 +1,14 @@
 import type { FastifyPluginAsync } from "fastify";
 import {
   SECURITY_PHASES,
+  isValidSshPublicKey,
+  isValidSshUsername,
   type SecurityApplyRequest,
   type SecurityApplyResponse,
   type SecurityConfirmAccessResponse,
   type SecurityHistoryResponse,
   type SecurityJobResponse,
+  type SecurityManualCommandsResponse,
   type SecurityPhaseId,
   type SecurityPlan,
   type SecurityScanResponse,
@@ -25,7 +28,11 @@ function isValidPhase(value: unknown): value is SecurityPhaseId {
 }
 
 const securityRoutes: FastifyPluginAsync = async (app) => {
-  const service = new SecurityService(app.config);
+  const service = new SecurityService(app.config, {
+    audit: (action, detail) => {
+      void app.auditService.record({ action, detail });
+    },
+  });
   app.decorate("securityService", service);
 
   if (app.config.securityTarget !== "host") {
@@ -51,7 +58,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
 
   // Aplica uma fase de hardening (job assíncrono). Ações pré-definidas apenas.
   app.post<{ Body: SecurityApplyRequest }>("/api/security/apply", async (request, reply) => {
-    const { phase, dryRun } = request.body ?? {};
+    const { phase, dryRun, sshUser, sshPublicKey } = request.body ?? {};
     if (!isValidPhase(phase)) {
       return reply.code(400).send({
         error: "invalid_phase",
@@ -64,12 +71,37 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
         message: "Informe dryRun como boolean.",
       });
     }
+    // Parâmetros da Fase 01 (usuário não-root + chave pública do operador).
+    if ((sshUser !== undefined || sshPublicKey !== undefined) && phase !== "01") {
+      return reply.code(400).send({
+        error: "invalid_params",
+        message: "sshUser/sshPublicKey só se aplicam à fase 01.",
+      });
+    }
+    if (sshUser !== undefined && !isValidSshUsername(sshUser)) {
+      return reply.code(400).send({
+        error: "invalid_ssh_user",
+        message: "Nome de usuário inválido (minúsculas, sem espaços, nunca root).",
+      });
+    }
+    if (sshPublicKey !== undefined && !isValidSshPublicKey(sshPublicKey)) {
+      return reply.code(400).send({
+        error: "invalid_ssh_key",
+        message: "Chave pública inválida. Cole uma chave ssh-ed25519 ou ssh-rsa (conteúdo do .pub).",
+      });
+    }
     try {
-      const job = await service.apply(phase, dryRun);
+      const params = {
+        ...(sshUser !== undefined ? { sshUser } : {}),
+        ...(sshPublicKey !== undefined ? { sshPublicKey: sshPublicKey.trim() } : {}),
+      };
+      const job = await service.apply(phase, dryRun, params);
       await app.auditService.record({
         action: "hardening.apply",
         target: phase,
-        detail: `Fase de hardening "${job.title}" iniciada (dryRun=${dryRun}).`,
+        detail:
+          `Fase de hardening "${job.title}" iniciada (dryRun=${dryRun}).` +
+          (sshPublicKey !== undefined ? ` Chave SSH do operador instalada para "${sshUser ?? "deploy"}".` : ""),
       });
       const response: SecurityApplyResponse = { job };
       return reply.code(202).send(response);
@@ -109,6 +141,19 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
         message,
       });
     }
+  });
+
+  // Modo manual: comandos exatos da fase + conteúdo do script (copiáveis).
+  app.get<{ Params: { phase: string } }>("/api/security/phases/:phase/manual", async (request, reply) => {
+    const { phase } = request.params;
+    if (!isValidPhase(phase)) {
+      return reply.code(400).send({
+        error: "invalid_phase",
+        message: `Fase inválida. Valores aceitos: ${[...VALID_PHASES].join(", ")}.`,
+      });
+    }
+    const response: SecurityManualCommandsResponse = await service.manualCommands(phase);
+    return reply.send(response);
   });
 
   // Histórico de scans/jobs + índice antes/depois.
