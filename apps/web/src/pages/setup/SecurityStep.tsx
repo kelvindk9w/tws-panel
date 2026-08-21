@@ -3,6 +3,7 @@ import {
   SECURITY_PHASES,
   isValidSshPublicKey,
   isValidSshUsername,
+  type SecurityHistoryResponse,
   type SecurityJob,
   type SecurityJobStep,
   type SecurityManualCommandsResponse,
@@ -55,6 +56,12 @@ const TERMINAL: SecurityJob["status"][] = ["success", "failed", "rolled_back"];
 /** Apaga o alerta pulsante "olhe o terminal" (a espera por ação terminou). */
 function clearTerminalAttention() {
   window.dispatchEvent(new CustomEvent(TERMINAL_ATTENTION_CLEAR_EVENT));
+}
+
+/** Índice exibido num gauge (antes/depois) — valor + fonte (lynis/interno). */
+interface IndexSnapshot {
+  index: number | null;
+  source: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +224,38 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
   // resultado
   const [afterReport, setAfterReport] = useState<SecurityScanReport | null>(null);
 
+  // "Antes" CONGELADO no momento em que a execução começa (bug: o scan final
+  // sobrescrevia `report` e o Antes mudava na tela de resultado — 39 → 49).
+  const [beforeSnapshot, setBeforeSnapshot] = useState<IndexSnapshot | null>(null);
+  // Retomada após restart do painel: o estado "aplicado" vem do HISTÓRICO
+  // persistido no servidor, não de um novo scan/plano/apply.
+  const [resumed, setResumed] = useState(false);
+  const [resumedAfter, setResumedAfter] = useState<IndexSnapshot | null>(null);
+
+  // Ao montar: se o histórico server-side mostra um hardening já aplicado
+  // com sucesso (último apply real = success), restaura direto a tela
+  // "Hardening aplicado" (antes/depois congelados) com o botão Continuar —
+  // sem exigir re-rodar plano/dry-run/apply de fases já satisfeitas.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<SecurityHistoryResponse>("/api/security/history")
+      .then((h) => {
+        if (cancelled || !h.applied) return;
+        if (h.applied.beforeIndex !== null) {
+          setBeforeSnapshot({ index: h.applied.beforeIndex, source: h.applied.beforeIndexSource ?? "internal" });
+        }
+        if (h.applied.afterIndex !== null) {
+          setResumedAfter({ index: h.applied.afterIndex, source: h.applied.afterIndexSource ?? "internal" });
+        }
+        setResumed(true);
+        setStage("done");
+      })
+      .catch(() => undefined); // sem histórico acessível — fluxo normal
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const logRef = useRef<HTMLPreElement | null>(null);
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -371,6 +410,11 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
       setError("Nenhuma fase com pendência — o servidor já está endurecido.");
       return;
     }
+    // Congela o "Antes" AGORA: o scan final (pós-apply) vai sobrescrever
+    // `report`, e o índice pré-hardening não pode mudar depois disso.
+    setBeforeSnapshot(
+      report ? { index: report.hardeningIndex, source: report.hardeningIndexSource } : null,
+    );
     // estado inicial da lista ao vivo: fila pendente
     const initial: Partial<Record<SecurityPhaseId, PhaseUiState>> = {};
     for (const id of queue) initial[id] = { ...INITIAL_PHASE_UI };
@@ -423,6 +467,11 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
   const sshUserOk = isValidSshUsername(sshUser.trim());
   const sshKeyOk = isValidSshPublicKey(sshPublicKey);
   const sshFormValid = !phase01Selected || (sshUserOk && sshKeyOk);
+  // "Antes" da tela de resultado: SEMPRE o snapshot congelado (no início da
+  // execução ou restaurado do histórico após restart); `report` é só fallback.
+  const beforeView: IndexSnapshot | null =
+    beforeSnapshot ??
+    (report ? { index: report.hardeningIndex, source: report.hardeningIndexSource } : null);
 
   return (
     <div className="flex animate-fade-in flex-col gap-6">
@@ -918,18 +967,21 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
               <CardTitle>Hardening aplicado</CardTitle>
               <CardDescription>
                 Comparação do índice de segurança antes e depois das correções.
+                {resumed && " (Estado restaurado do histórico do servidor após a reinicialização do painel.)"}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center sm:gap-12">
               <div className="flex flex-col items-center gap-2">
                 <span className="text-xs uppercase text-muted-foreground">Antes</span>
-                <IndexGauge value={report?.hardeningIndex ?? null} source={report?.hardeningIndexSource ?? "internal"} />
+                <IndexGauge value={beforeView?.index ?? null} source={beforeView?.source ?? "internal"} />
               </div>
               <ArrowRight className="hidden h-6 w-6 text-muted-foreground sm:block" />
               <div className="flex flex-col items-center gap-2">
                 <span className="text-xs uppercase text-muted-foreground">Depois</span>
                 {afterReport ? (
                   <IndexGauge value={afterReport.hardeningIndex} source={afterReport.hardeningIndexSource} />
+                ) : resumed ? (
+                  <IndexGauge value={resumedAfter?.index ?? null} source={resumedAfter?.source ?? "internal"} />
                 ) : (
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                 )}

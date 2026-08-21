@@ -29,6 +29,13 @@ const SCAN_REPORT: SecurityScanReport = {
   profileNote: null,
 };
 
+const HISTORY_EMPTY = {
+  entries: [],
+  firstIndex: null,
+  latestIndex: null,
+  applied: null,
+};
+
 const PLAN: SecurityPlan = {
   id: "plan-1",
   createdAt: new Date().toISOString(),
@@ -67,6 +74,7 @@ const PLAN: SecurityPlan = {
 };
 
 const apiFetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+  if (path === "/api/security/history") return HISTORY_EMPTY;
   if (path.startsWith("/api/security/scan")) return { report: SCAN_REPORT, cached: false };
   if (path === "/api/security/plan") return PLAN;
   if (path === "/api/security/phases/00/manual") {
@@ -132,6 +140,52 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("SecurityStep — retomada após restart do painel", () => {
+  it("histórico com hardening aplicado → monta em 'Hardening aplicado' com Continuar", async () => {
+    // Estado persistido no servidor: apply real concluído (restart simulado —
+    // o componente monta do zero e consulta o histórico server-side).
+    apiFetchMock.mockImplementationOnce(async (path: string) => {
+      if (path === "/api/security/history") {
+        return {
+          entries: [],
+          firstIndex: 39,
+          latestIndex: 75,
+          applied: {
+            appliedAt: "2026-08-21T10:20:00Z",
+            beforeIndex: 39,
+            beforeIndexSource: "lynis",
+            afterIndex: 75,
+            afterIndexSource: "lynis",
+          },
+        };
+      }
+      throw new Error(`chamada inesperada: GET ${path}`);
+    });
+    const onNext = vi.fn();
+    render(<SecurityStep onNext={onNext} onBack={() => undefined} />);
+
+    // restaura a visão "Hardening aplicado" — NÃO a tela "Iniciar varredura"
+    expect(await screen.findByText("Hardening aplicado")).toBeInTheDocument();
+    expect(screen.queryByText("Iniciar varredura")).not.toBeInTheDocument();
+
+    // Antes/Depois estáveis, vindos do snapshot persistido
+    expect(screen.getByText("Antes")).toBeInTheDocument();
+    expect(screen.getByText("39")).toBeInTheDocument();
+    expect(screen.getByText("Depois")).toBeInTheDocument();
+    expect(screen.getByText("75")).toBeInTheDocument();
+
+    // caminho para avançar ao passo 4 sem re-rodar plano/dry-run/apply
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("histórico sem apply → fluxo normal ('Iniciar varredura')", async () => {
+    render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
+    expect(await screen.findByText("Iniciar varredura")).toBeInTheDocument();
+    expect(screen.queryByText("Hardening aplicado")).not.toBeInTheDocument();
+  });
 });
 
 describe("SecurityStep — plano de correção", () => {

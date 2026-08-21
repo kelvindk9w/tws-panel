@@ -245,15 +245,37 @@ export interface SecurityHistoryEntry {
   kind: "scan" | "job";
   /** Para scans: índice; para jobs: fase + status. */
   hardeningIndex?: number | null;
+  /** Para scans: fonte do índice (persistida para o antes/depois sobreviver a restart). */
+  hardeningIndexSource?: "lynis" | "internal";
   phase?: SecurityPhaseId;
   dryRun?: boolean;
   status?: SecurityJobStatus;
+}
+
+/**
+ * Resumo do hardening já aplicado — derivado do histórico persistido em
+ * disco. É o que permite ao wizard RESTAURAR a tela "Hardening aplicado"
+ * após um restart do painel (sem re-rodar plano/dry-run/apply de fases já
+ * satisfeitas) e manter o "Antes" congelado (o índice pré-hardening é o do
+ * último scan anterior ao primeiro apply real — nunca recalculado).
+ */
+export interface SecurityAppliedSummary {
+  /** Data do último apply real (não dry-run) bem-sucedido. */
+  appliedAt: string;
+  /** Índice CONGELADO do último scan antes do primeiro apply real. */
+  beforeIndex: number | null;
+  beforeIndexSource: "lynis" | "internal" | null;
+  /** Índice do scan mais recente após o apply. */
+  afterIndex: number | null;
+  afterIndexSource: "lynis" | "internal" | null;
 }
 
 export interface SecurityHistoryResponse {
   entries: SecurityHistoryEntry[];
   firstIndex: number | null;
   latestIndex: number | null;
+  /** Não-null quando o último apply real terminou com sucesso. */
+  applied: SecurityAppliedSummary | null;
 }
 
 /** Tempo de cache do scan (ms). */

@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   SECURITY_PHASES,
   SECURITY_SCAN_CACHE_MS,
+  type SecurityAppliedSummary,
   type SecurityHistoryEntry,
   type SecurityJob,
   type SecurityManualCommandsResponse,
@@ -34,6 +35,35 @@ const MAX_HISTORY_ENTRIES = 200;
 
 interface HistoryFile {
   entries: SecurityHistoryEntry[];
+}
+
+/**
+ * Deriva o resumo "hardening aplicado" do histórico persistido. Regras:
+ *  - só considera applies REAIS (dryRun=false); dry-runs não mudam o servidor;
+ *  - o hardening conta como aplicado quando o ÚLTIMO apply real terminou em
+ *    sucesso (se a última tentativa falhou/reverteu, o fluxo normal de
+ *    scan → plano é o caminho seguro);
+ *  - o "Antes" é o índice do último scan ANTERIOR ao primeiro apply real —
+ *    congelado pelo histórico append-only, nunca recalculado (bug: o valor
+ *    mudava entre renders porque o scan final sobrescrevia o relatório);
+ *  - o "Depois" é o scan mais recente após o apply.
+ */
+export function buildAppliedSummary(entries: SecurityHistoryEntry[]): SecurityAppliedSummary | null {
+  const isRealApply = (e: SecurityHistoryEntry) => e.kind === "job" && e.dryRun === false;
+  const lastApply = entries.filter(isRealApply).at(-1);
+  if (!lastApply || lastApply.status !== "success") return null;
+  const firstApplyPos = entries.findIndex(isRealApply);
+  const scansWithIndex = (list: SecurityHistoryEntry[]) =>
+    list.filter((e) => e.kind === "scan" && typeof e.hardeningIndex === "number");
+  const before = scansWithIndex(entries.slice(0, firstApplyPos)).at(-1);
+  const after = scansWithIndex(entries.slice(firstApplyPos + 1)).at(-1);
+  return {
+    appliedAt: lastApply.at,
+    beforeIndex: before?.hardeningIndex ?? null,
+    beforeIndexSource: before?.hardeningIndexSource ?? null,
+    afterIndex: after?.hardeningIndex ?? null,
+    afterIndexSource: after?.hardeningIndexSource ?? null,
+  };
 }
 
 export class SecurityService {
@@ -188,11 +218,12 @@ export class SecurityService {
     return this.executor.confirmAccess(jobId);
   }
 
-  /** Histórico + comparação de índice antes/depois. */
+  /** Histórico + comparação de índice antes/depois + resumo "aplicado". */
   async history(): Promise<{
     entries: SecurityHistoryEntry[];
     firstIndex: number | null;
     latestIndex: number | null;
+    applied: SecurityAppliedSummary | null;
   }> {
     const entries = await this.loadHistory();
     const scanIndexes = entries
@@ -202,6 +233,7 @@ export class SecurityService {
       entries,
       firstIndex: scanIndexes.length > 0 ? (scanIndexes[0] ?? null) : null,
       latestIndex: scanIndexes.length > 0 ? (scanIndexes[scanIndexes.length - 1] ?? null) : null,
+      applied: buildAppliedSummary(entries),
     };
   }
 
@@ -238,6 +270,7 @@ export class SecurityService {
       at: report.scannedAt,
       kind: "scan",
       hardeningIndex: report.hardeningIndex,
+      hardeningIndexSource: report.hardeningIndexSource,
     });
   }
 
