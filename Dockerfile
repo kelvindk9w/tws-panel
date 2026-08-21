@@ -25,6 +25,8 @@ COPY packages/core/package.json packages/core/package.json
 COPY packages/security/package.json packages/security/package.json
 COPY packages/deploy/package.json packages/deploy/package.json
 COPY packages/mailer/package.json packages/mailer/package.json
+# Hook de ativação dos git hooks roda no `prepare` do install (não-op sem .git).
+COPY scripts/setup-hooks.mjs scripts/setup-hooks.mjs
 
 RUN pnpm install --frozen-lockfile
 
