@@ -275,6 +275,13 @@ SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build
 docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
   "printf '%s' '$SETUP_TOKEN' > /data/setup-token && chmod 600 /data/setup-token"
 
+# Garante que o usuário não-root do painel (tws, UID/GID fixo 10001) seja
+# dono de TODO o volume — volumes criados por versões antigas (root ou UIDs
+# variáveis de builds anteriores) causariam EACCES no boot do painel.
+log "Ajustando dono do volume $VOLUME_NAME para tws (10001:10001)…"
+docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
+  'chown -R 10001:10001 /data'
+
 # --- 7. Resumo ---------------------------------------------------------------------------
 PUBLIC_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 

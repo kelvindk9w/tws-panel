@@ -79,7 +79,7 @@ RUN echo "${DOCKER_CLI_SHA256}  /tmp/docker.tgz" | sha256sum -c - \
 RUN corepack enable \
     && corepack prepare pnpm@10.31.0 --activate \
     && chmod -R a+rX /opt/corepack \
-    && groupadd --system tws && useradd --system --gid tws --home /app tws \
+    && groupadd --system --gid 10001 tws && useradd --system --uid 10001 --gid tws --home /app tws \
     && mkdir -p /data && chown -R tws:tws /data
 
 # Copia o workspace inteiro já instalado e buildado do stage de build.
