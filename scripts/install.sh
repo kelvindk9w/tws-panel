@@ -2,10 +2,16 @@
 # =============================================================================
 # TWS Panel — instalador one-shot (100% Docker)
 #
-# Uso (como root em uma VPS Ubuntu 22.04/24.04 limpa):
-#   apt update && apt install -y git
-#   git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+# Uso (VPS Ubuntu 22.04/24.04 limpa — com o usuário não-root criado no README):
+#   sudo apt update && sudo apt install -y git
+#   sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+#   sudo chown -R $USER:$USER /opt/tws-panel
 #   cd /opt/tws-panel && ./scripts/install.sh
+#
+# O script PRECISA de privilégios de root: se for executado por um usuário
+# comum, ele se reexecuta automaticamente via `sudo` (preservando as
+# variáveis PAAS_* / SETUP_TOKEN). Chamar com `sudo ./scripts/install.sh`
+# também funciona — os dois caminhos são equivalentes.
 #
 # Pré-requisito: Ubuntu com git. Não precisa instalar Docker, Node ou mais
 # nada manualmente — este script cuida de tudo.
@@ -70,7 +76,16 @@ done
 TARGET_DIR="${TARGET_ARG:-${PAAS_DIR:-/opt/tws-panel}}"
 
 # --- 0. Pré-requisitos básicos ----------------------------------------------
-[ "$(id -u)" -eq 0 ] || die "Execute como root (ou via sudo)."
+# Precisamos de root (apt, docker, volumes). Se o operador rodou o script com
+# o usuário comum, reexecutamos via sudo preservando as variáveis de ambiente
+# relevantes — assim tanto `./scripts/install.sh` quanto
+# `sudo ./scripts/install.sh` funcionam (o README recomenda o primeiro).
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 || die "Este script precisa de root. Rode como root ou instale o sudo (apt install sudo)."
+  log "Privilégios de administrador necessários — reexecutando via sudo…"
+  exec sudo --preserve-env=PAAS_FORCE,PAAS_DIR,PAAS_PORT,TWS_REPO_URL,SETUP_TOKEN \
+    bash "$(readlink -f "$0")" "$@"
+fi
 
 # --- 1. Pré-flight check (SOMENTE LEITURA) -------------------------------------
 # Roda ANTES de instalar qualquer coisa. Nada aqui altera o sistema: apenas
@@ -207,9 +222,27 @@ if ! command -v docker >/dev/null 2>&1; then
   log "Instalando Docker (get.docker.com)…"
   command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl ca-certificates; }
   curl -fsSL https://get.docker.com | sh
-  systemctl enable --now docker
+  # Em VPS há systemd; em containers de teste (sem systemd) o dockerd precisa
+  # ser iniciado manualmente — não é erro, apenas não há o que habilitar.
+  if [ -d /run/systemd/system ]; then
+    systemctl enable --now docker
+  else
+    warn "systemd ausente (container?) — inicie o dockerd manualmente antes de continuar."
+  fi
 else
   log "Docker já instalado: $(docker --version)"
+fi
+
+# Conveniência: quem chamou o instalador via sudo entra no grupo docker —
+# assim os comandos do dia a dia (docker compose ps, logs…) não precisam de
+# sudo depois de um novo login. Não é requisito: tudo funciona com sudo.
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  if id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx docker; then
+    info "Usuário $SUDO_USER já está no grupo docker."
+  else
+    usermod -aG docker "$SUDO_USER" && \
+      log "Usuário $SUDO_USER adicionado ao grupo docker (vale a partir do próximo login)."
+  fi
 fi
 
 docker compose version >/dev/null 2>&1 || die "Plugin 'docker compose' não encontrado. Reinstale o Docker por https://get.docker.com"
@@ -263,6 +296,11 @@ if [ -f .env ] && grep -q '^DOCKER_GID=' .env; then
   sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/" .env
 else
   printf 'DOCKER_GID=%s\n' "$DOCKER_GID" >> .env
+fi
+# O .env é lido por `docker compose` rodado pelo USUÁRIO depois — devolve a
+# propriedade a quem invocou o sudo (o repo foi chown'ed para ele no README).
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
 fi
 log "Grupo do docker.sock no host: GID $DOCKER_GID (gravado em .env)"
 
