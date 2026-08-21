@@ -300,18 +300,46 @@ describe("TerminalService — runCommand (fases dentro do terminal)", () => {
     await expect(promise).rejects.toThrow(/terminal foi encerrado/);
   });
 
-  it("timeout do comando encerra a sessão e rejeita", async () => {
+  it("timeout do comando rejeita APENAS o comando — a sessão NÃO é derrubada e a fila segue", async () => {
     vi.useFakeTimers();
     try {
       const { service, next } = makeService();
-      const promise = service.runCommand("sleep 9999", () => undefined, { timeoutMs: 1_000 });
-      const assertion = expect(promise).rejects.toThrow(/tempo limite/); // handler anexado já
+      // PTY que nunca responde ao 1º comando (travou) mas responde ao 2º
+      const stuck = service.runCommand("sleep 9999", () => undefined, { timeoutMs: 1_000 });
+      const stuckAssertion = expect(stuck).rejects.toThrow(/tempo limite/); // handler anexado já
+      const queued = service.runCommand("echo depois-do-timeout", () => undefined);
       await vi.advanceTimersByTimeAsync(1_000);
       // Ctrl-C enviado ao PTY
       expect(next().inputs.join("")).toContain("\x03");
       await vi.advanceTimersByTimeAsync(5_000);
-      await assertion;
-      expect(service.sessionActive).toBe(false);
+      await stuckAssertion;
+      // a sessão sobrevive: nada de dispose/kill por causa de UM comando lento
+      expect(service.sessionActive).toBe(true);
+      expect(next().killed).toBe(false);
+      // e o próximo comando da fila roda no MESMO shell (prompt voltou com o Ctrl-C)
+      await vi.advanceTimersByTimeAsync(0);
+      const nonces = [...next().inputs.join("").matchAll(/PAAS_EXIT_([0-9a-f]+):/g)].map((m) => m[1]);
+      expect(nonces).toHaveLength(2);
+      expect(next().inputs.join("")).toContain("echo depois-do-timeout");
+      next().emit(`:::PAAS_EXIT_${nonces[1]}:0\r\n`);
+      await expect(queued).resolves.toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("timeout seguido de marcador tardio do Ctrl-C resolve normal (sem rejeitar)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, next } = makeService();
+      const promise = service.runCommand("sleep 9999", () => undefined, { timeoutMs: 1_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const nonce = /PAAS_EXIT_([0-9a-f]+):/.exec(next().inputs.join(""))?.[1];
+      // o Ctrl-C funcionou: o shell imprime o marcador dentro do grace de 5s
+      next().emit(`:::PAAS_EXIT_${nonce}:130\r\n`);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(promise).resolves.toBe(130); // SIGINT — comando interrompido, sessão íntegra
+      expect(service.sessionActive).toBe(true);
     } finally {
       vi.useRealTimers();
     }

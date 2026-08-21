@@ -367,14 +367,22 @@ export class TerminalService {
     const capture = opts?.capture ?? false;
     return new Promise<CommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
-        // timeout: tenta Ctrl-C; se o marcador não vier, derruba a sessão
+        // Timeout: interrompe com Ctrl-C e dá um grace curto pelo marcador.
         this.write("\x03");
         setTimeout(() => {
-          if (this.waiter?.marker === nonce) {
-            this.waiter = null;
-            void this.dispose();
-            reject(new Error(`comando excedeu o tempo limite no terminal (${opts?.timeoutMs ?? 0}ms)`));
-          }
+          const w = this.waiter;
+          if (w?.marker !== nonce) return; // marcador chegou — resolveu normal
+          this.waiter = null;
+          // REGRA: o timeout de UM comando NUNCA derruba a sessão. Um check
+          // lento não pode destruir o terminal que o usuário está vendo
+          // (nem o container paas-terminal-*): o Ctrl-C devolve o prompt e
+          // a fila segue no mesmo shell. Sessão comprovadamente morta é
+          // tratada pelos eventos do stream (end/close/error →
+          // handleSessionEnd), nunca por timeout de comando.
+          this.broadcast(
+            "\r\n\x1b[33m[terminal] comando interrompido por tempo limite — a sessão continua ativa\x1b[0m\r\n",
+          );
+          w.reject(new Error(`comando excedeu o tempo limite no terminal (${opts?.timeoutMs ?? 0}ms)`));
         }, 5_000).unref();
       }, opts?.timeoutMs ?? 30 * 60_000);
       timer.unref();
