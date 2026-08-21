@@ -3,9 +3,29 @@
 Este guia cobre tudo o que muda entre rodar o paas localmente (`pnpm dev`, domínios
 `.localhost`, portas altas) e rodar em uma VPS Ubuntu 22.04/24.04 exposta na internet.
 
-> Leia também: [troubleshooting.md](troubleshooting.md) para os problemas mais comuns.
+> Leia também: [troubleshooting.md](troubleshooting.md) para os problemas mais comuns e
+> [host-bridge.md](host-bridge.md) para entender como o scan/hardening roda na VPS real
+> (e por que o container do painel é endurecido daquele jeito).
 
 ---
+
+## 0. Requisitos do host criados pelo install.sh
+
+O `scripts/install.sh` deixa tudo pronto; se você instala/atualiza manualmente, garanta:
+
+- **DOCKER_GID no `.env`**: o painel roda como usuário não-root (`tws`) e acessa o
+  `/var/run/docker.sock` via `group_add`. Sem o GID certo o socket nega acesso:
+  ```bash
+  echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> .env
+  docker compose up -d --build
+  ```
+- **Imagem do host bridge**: na primeira execução do scan/hardening com
+  `PAAS_TARGET=host` o painel baixa `alpine:3` (helper descartável do nsenter).
+  VPS sem saída para a internet? Faça `docker pull alpine:3` antes (ou defina
+  `PAAS_HOST_HELPER_IMAGE` para uma imagem local com `nsenter`/`tar`/`sh`).
+- O container do painel sobe com `cap_drop ALL`, `no-new-privileges` e rootfs
+  read-only — só `/data` (volume) e `/tmp` (tmpfs) são graváveis. Não remova
+  essas flags: o host bridge NÃO depende de capabilities do container.
 
 ## 1. O que muda em produção
 
@@ -82,8 +102,12 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
 
 ```
 1. HARDENING          → rode o wizard e conclua o scan + hardening primeiro.
-                        Nada sobe na internet antes disso. Confirme o acesso SSH
-                        para cancelar o rollback automático.
+                        O scan/hardening roda NA VPS REAL via host bridge
+                        (nsenter — docs/host-bridge.md), não no container do painel.
+                        Na Fase 01 cole sua CHAVE PÚBLICA SSH: o root só é travado
+                        com a chave instalada, e o alerta pulsante pede para testar
+                        o login em OUTRA janela SSH antes de confirmar (rollback
+                        automático em 5 min se você não confirmar).
 2. PAINEL             → conclua o wizard (conta admin) e garanta que o painel
                         responde na porta 9000.
 3. DOMÍNIO DO PAINEL  → aponte painel.seudominio.com para a VPS e acesse o painel
