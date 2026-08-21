@@ -68,12 +68,18 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
    apt update && apt install -y git
    ```
 
-5. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`):
+5. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`) **e mude para a branch estável**:
 
    ```bash
    git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
    cd /opt/tws-panel
+   git checkout main
    ```
+
+   > O clone começa na branch `dev` (default do repositório, usada pelos
+   > contribuidores). Para **uso real**, sempre use a `main` — ela só recebe
+   > código validado e testado. Se quiser ajudar no desenvolvimento, fique na
+   > `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 6. **Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
 
