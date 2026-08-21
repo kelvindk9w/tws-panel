@@ -91,11 +91,12 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     try {
+      const hasParams = sshUser !== undefined || sshPublicKey !== undefined;
       const params = {
         ...(sshUser !== undefined ? { sshUser } : {}),
         ...(sshPublicKey !== undefined ? { sshPublicKey: sshPublicKey.trim() } : {}),
       };
-      const job = await service.apply(phase, dryRun, params);
+      const job = await service.apply(phase, dryRun, hasParams ? params : undefined);
       await app.auditService.record({
         action: "hardening.apply",
         target: phase,
