@@ -32,7 +32,10 @@ export function SetupPage() {
     apiFetch<SetupStatusResponse>("/api/setup/status")
       .then((status) => {
         setSteps(status.steps);
-        setStep(status.state.currentStep);
+        // NUNCA regride o passo: o auto-verify do WelcomeStep pode ter
+        // avançado (advance(1)) ANTES deste fetch resolver — um currentStep
+        // stale (0) não pode derrubar o usuário de volta ao passo 1.
+        setStep((prev) => Math.max(prev, status.state.currentStep));
         setMaxReached((m) => Math.max(m, status.state.currentStep));
         // token da sessão é válido (o status respondeu 200): libera o terminal
         setTerminalEnabled(true);

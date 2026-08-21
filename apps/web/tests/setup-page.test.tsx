@@ -13,19 +13,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // ---------------------------------------------------------------------------
 
 let tokenFromUrl: string | null = null;
+/** Quando definido, o fetch de /api/setup/status retorna ESTA promessa
+ * (permite controlar a ordem de resolução em testes de corrida). */
+let statusOverride: Promise<unknown> | null = null;
+
+const DEFAULT_STATUS = {
+  state: { currentStep: 0, completed: false, updatedAt: "" },
+  steps: [
+    { id: 0, key: "welcome", title: "Boas-vindas e token", available: true },
+    { id: 1, key: "health", title: "Saúde da máquina", available: true },
+    { id: 2, key: "security", title: "Segurança", available: true },
+    { id: 3, key: "admin", title: "Conta de administrador", available: true },
+  ],
+};
 
 vi.mock("@/lib/api", () => ({
   apiFetch: vi.fn(async (path: string) => {
     if (path === "/api/setup/status") {
-      return {
-        state: { currentStep: 0, completed: false, updatedAt: "" },
-        steps: [
-          { id: 0, key: "welcome", title: "Boas-vindas e token", available: true },
-          { id: 1, key: "health", title: "Saúde da máquina", available: true },
-          { id: 2, key: "security", title: "Segurança", available: true },
-          { id: 3, key: "admin", title: "Conta de administrador", available: true },
-        ],
-      };
+      if (statusOverride) return statusOverride;
+      return DEFAULT_STATUS;
     }
     return {};
   }),
@@ -93,6 +99,7 @@ function wrapperOf(testId: string): HTMLElement {
 beforeEach(() => {
   sessionStorage.clear();
   tokenFromUrl = null;
+  statusOverride = null;
 });
 
 afterEach(() => {
@@ -143,6 +150,30 @@ describe("SetupPage", () => {
     // e dá para ir adiante de novo pelo stepper
     fireEvent.click(screen.getByRole("button", { name: "Voltar para Segurança" }));
     expect(wrapperOf("step-security")).not.toHaveClass("hidden");
+  });
+
+  it("status stale (currentStep=0) resolvendo DEPOIS do verify não regride o passo", async () => {
+    // Corrida observada em VPS: o auto-verify do WelcomeStep avança para o
+    // passo 1 ANTES de o fetch inicial de /api/setup/status resolver — o
+    // status (currentStep=0, stale) não pode derrubar o usuário de volta.
+    tokenFromUrl = "token-da-url";
+    let resolveStatus!: (value: unknown) => void;
+    statusOverride = new Promise((r) => {
+      resolveStatus = r;
+    });
+    render(<SetupPage />);
+
+    // verify resolve PRIMEIRO: usuário avança para o passo de saúde
+    fireEvent.click(await screen.findByText("validar-token"));
+    await screen.findByTestId("step-health");
+
+    // agora o status stale resolve com currentStep=0
+    resolveStatus(DEFAULT_STATUS);
+    await waitFor(() => expect(screen.getByTestId("terminal-mock")).toHaveTextContent("terminal:liberado"));
+
+    // o passo NÃO regride: saúde continua visível e boas-vindas oculta
+    expect(wrapperOf("step-health")).not.toHaveClass("hidden");
+    expect(wrapperOf("step-welcome")).toHaveClass("hidden");
   });
 
   it("passos futuros NÃO são clicáveis no stepper", async () => {
