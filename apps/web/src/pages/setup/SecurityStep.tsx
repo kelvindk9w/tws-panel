@@ -14,6 +14,7 @@ import {
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { CopyButton } from "@/components/CopyButton";
+import { IndexGauge } from "@/components/IndexGauge";
 import { ManualPhaseModal } from "@/components/setup/ManualPhaseModal";
 import { SshKeyGuide } from "@/components/setup/SshKeyGuide";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,9 @@ import {
   ShieldAlert,
   SkipForward,
   TerminalSquare,
+  TrendingDown,
+  TrendingUp,
+  Minus,
   XCircle,
 } from "lucide-react";
 
@@ -97,21 +101,6 @@ function PhaseStatusIcon({ status }: { status: PhaseRunStatus }) {
 // ---------------------------------------------------------------------------
 // Sub-componentes visuais
 // ---------------------------------------------------------------------------
-
-function IndexGauge({ value, source }: { value: number | null; source: string }) {
-  const v = value ?? 0;
-  const color = v >= 75 ? "text-emerald-400" : v >= 50 ? "text-amber-400" : "text-red-400";
-  const ring =
-    v >= 75 ? "border-emerald-500/50" : v >= 50 ? "border-amber-500/50" : "border-red-500/50";
-  return (
-    <div className={`flex h-28 w-28 flex-col items-center justify-center rounded-full border-4 ${ring}`}>
-      <span className={`text-3xl font-bold ${color}`}>{value ?? "—"}</span>
-      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {source === "lynis" ? "Lynis Index" : "Índice interno"}
-      </span>
-    </div>
-  );
-}
 
 function StatusIcon({ status, severity }: { status: string; severity: string }) {
   if (status === "pass") return <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />;
@@ -472,6 +461,13 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
   const beforeView: IndexSnapshot | null =
     beforeSnapshot ??
     (report ? { index: report.hardeningIndex, source: report.hardeningIndexSource } : null);
+  // Delta antes→depois da tela de resultado (celebra o ganho; null enquanto o
+  // scan final não chegou ou o "antes" é desconhecido).
+  const doneAfterIndex = afterReport?.hardeningIndex ?? resumedAfter?.index ?? null;
+  const doneDelta =
+    stage === "done" && beforeView?.index != null && doneAfterIndex != null
+      ? doneAfterIndex - beforeView.index
+      : null;
 
   return (
     <div className="flex animate-fade-in flex-col gap-6">
@@ -481,7 +477,7 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
             <ArrowLeft className="h-4 w-4" /> Voltar para Saúde da máquina
           </Button>
         )}
-        <h2 className="text-xl font-semibold">Segurança</h2>
+        <h2 className="text-xl font-semibold tracking-tight">Segurança</h2>
         <p className="text-sm text-muted-foreground">
           Varredura somente-leitura, plano de correção e hardening em fases — com dry-run, backups e
           rollback automático.
@@ -961,32 +957,59 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
       {/* ---------------------------------------------------------- RESULTADO */}
       {stage === "done" && (
         <>
-          <Card>
+          <Card className="border-emerald-500/25 bg-[radial-gradient(ellipse_at_top,rgba(52,211,153,0.06),transparent_65%)]">
             <CardHeader className="items-center text-center">
-              <ShieldCheck className="mb-2 h-10 w-10 text-emerald-400" />
-              <CardTitle>Hardening aplicado</CardTitle>
+              <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 shadow-[0_0_32px_rgba(52,211,153,0.18)] ring-1 ring-emerald-500/30 motion-safe:animate-scale-in">
+                <ShieldCheck className="h-7 w-7 text-emerald-400" />
+              </div>
+              <CardTitle className="text-2xl tracking-tight">Hardening aplicado</CardTitle>
               <CardDescription>
                 Comparação do índice de segurança antes e depois das correções.
                 {resumed && " (Estado restaurado do histórico do servidor após a reinicialização do painel.)"}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center sm:gap-12">
-              <div className="flex flex-col items-center gap-2">
-                <span className="text-xs uppercase text-muted-foreground">Antes</span>
-                <IndexGauge value={beforeView?.index ?? null} source={beforeView?.source ?? "internal"} />
+              <div className="flex flex-col items-center gap-2.5">
+                <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
+                  Antes
+                </span>
+                <div className="opacity-75">
+                  <IndexGauge value={beforeView?.index ?? null} source={beforeView?.source ?? "internal"} />
+                </div>
               </div>
               <ArrowRight className="hidden h-6 w-6 text-muted-foreground sm:block" />
-              <div className="flex flex-col items-center gap-2">
-                <span className="text-xs uppercase text-muted-foreground">Depois</span>
+              <div className="flex flex-col items-center gap-2.5">
+                <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
+                  Depois
+                </span>
                 {afterReport ? (
                   <IndexGauge value={afterReport.hardeningIndex} source={afterReport.hardeningIndexSource} />
                 ) : resumed ? (
                   <IndexGauge value={resumedAfter?.index ?? null} source={resumedAfter?.source ?? "internal"} />
                 ) : (
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  <div className="flex h-28 w-28 items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
                 )}
               </div>
             </CardContent>
+            {doneDelta !== null && (
+              <div className="flex justify-center pb-6">
+                {doneDelta > 0 ? (
+                  <Badge variant="success" className="px-3 py-1 text-xs">
+                    <TrendingUp className="h-3.5 w-3.5" /> +{doneDelta} pontos no índice
+                  </Badge>
+                ) : doneDelta === 0 ? (
+                  <Badge variant="secondary" className="px-3 py-1 text-xs">
+                    <Minus className="h-3.5 w-3.5" /> índice mantido — correções aplicadas
+                  </Badge>
+                ) : (
+                  <Badge variant="warning" className="px-3 py-1 text-xs">
+                    <TrendingDown className="h-3.5 w-3.5" /> {doneDelta} pontos — revise o relatório
+                  </Badge>
+                )}
+              </div>
+            )}
           </Card>
 
           {afterReport && afterReport.summary.critical > 0 && (

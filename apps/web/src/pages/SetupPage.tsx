@@ -89,22 +89,24 @@ export function SetupPage() {
           <Progress value={progress} className="h-1" />
         </div>
 
-        {/* Passos já alcançados ficam MONTADOS (ocultos) — voltar não perde estado */}
-        <div className={step === 0 ? "" : "hidden"}>
+        {/* Passos já alcançados ficam MONTADOS (ocultos) — voltar não perde estado.
+            Ao ficar visível, o wrapper ganha um fade+rise curto (CSS puro) — ao
+            ocultar, `hidden` remove do fluxo e a animação re-dispara na volta. */}
+        <div className={step === 0 ? "animate-fade-in" : "hidden"}>
           <WelcomeStep onVerified={handleVerified} />
         </div>
         {maxReached >= 1 && (
-          <div className={step === 1 ? "" : "hidden"}>
+          <div className={step === 1 ? "animate-fade-in" : "hidden"}>
             <HealthStep onNext={() => advance(2)} onBack={() => goTo(0)} />
           </div>
         )}
         {maxReached >= 2 && (
-          <div className={step === 2 ? "" : "hidden"}>
+          <div className={step === 2 ? "animate-fade-in" : "hidden"}>
             <SecurityStep onNext={() => advance(3)} onBack={() => goTo(1)} />
           </div>
         )}
         {maxReached >= 3 && (
-          <div className={step === 3 ? "" : "hidden"}>
+          <div className={step === 3 ? "animate-fade-in" : "hidden"}>
             <AdminStep onBack={() => goTo(2)} />
           </div>
         )}

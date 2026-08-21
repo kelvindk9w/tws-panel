@@ -288,14 +288,14 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
   return (
     <section
       aria-label="Terminal do servidor"
-      className="overflow-hidden rounded-xl border border-[#22302a] bg-[#0b0f0d] shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
+      className="overflow-hidden rounded-xl border border-[#22302a] bg-[#0b0f0d] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_12px_40px_rgba(0,0,0,0.5)]"
     >
       {/* Barra de título estilo IDE (janela contida) */}
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-xs font-medium text-emerald-100/90 hover:bg-white/5 ${
+        className={`flex w-full items-center gap-3 bg-gradient-to-b from-white/[0.05] to-transparent px-4 py-2.5 text-left text-xs font-medium text-emerald-100/90 transition-colors duration-200 hover:bg-white/5 ${
           attention ? "animate-pulse bg-amber-500/20 text-amber-300" : ""
         }`}
       >
@@ -307,7 +307,11 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
         <TerminalSquare className="h-4 w-4" />
         <span>Terminal do servidor — ao vivo</span>
         <span className="flex items-center gap-1.5 text-[10px] font-normal text-muted-foreground">
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusColor}`} />
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full transition-all duration-300 ${statusColor} ${
+              status === "online" ? "shadow-[0_0_6px_rgba(52,211,153,0.9)]" : "animate-pulse"
+            }`}
+          />
           {statusLabel}
         </span>
         {attention && (

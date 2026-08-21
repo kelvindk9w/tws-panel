@@ -48,9 +48,9 @@ function OpenAlertsBadge() {
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
+      <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md">
         <div className="container flex h-14 items-center gap-6">
-          <Link to="/" className="font-semibold tracking-tight">
+          <Link to="/" className="font-semibold tracking-tight transition-opacity hover:opacity-80">
             TWS <span className="text-muted-foreground">Panel</span>
           </Link>
           <nav className="flex items-center gap-1 text-sm">

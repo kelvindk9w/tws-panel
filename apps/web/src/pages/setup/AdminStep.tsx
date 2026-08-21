@@ -8,6 +8,7 @@ import {
   type SecurityScanReport,
 } from "@paas/core";
 import { apiFetch, ApiRequestError, clearSetupToken } from "@/lib/api";
+import { IndexGauge } from "@/components/IndexGauge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -37,20 +38,7 @@ function PasswordRules({ password }: { password: string }) {
   );
 }
 
-function ScoreGauge({ value, source }: { value: number | null; source: string }) {
-  if (value === null) return null;
-  const color = value >= 75 ? "text-emerald-400" : value >= 50 ? "text-amber-400" : "text-red-400";
-  const ring =
-    value >= 75 ? "border-emerald-500/50" : value >= 50 ? "border-amber-500/50" : "border-red-500/50";
-  return (
-    <div className={`flex h-24 w-24 flex-col items-center justify-center rounded-full border-4 ${ring}`}>
-      <span className={`text-2xl font-bold ${color}`}>{value}</span>
-      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {source === "lynis" ? "Lynis Index" : "Índice interno"}
-      </span>
-    </div>
-  );
-}
+
 
 export function AdminStep({ onBack }: { onBack?: () => void }) {
   const navigate = useNavigate();
@@ -100,12 +88,12 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
   if (done) {
     return (
       <div className="flex animate-fade-in flex-col gap-6">
-        <Card>
+        <Card className="border-emerald-500/25 bg-[radial-gradient(ellipse_at_top,rgba(52,211,153,0.06),transparent_65%)]">
           <CardHeader className="items-center text-center">
-            <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15">
-              <PartyPopper className="h-6 w-6 text-emerald-400" />
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 shadow-[0_0_32px_rgba(52,211,153,0.18)] ring-1 ring-emerald-500/30 motion-safe:animate-scale-in">
+              <PartyPopper className="h-7 w-7 text-emerald-400" />
             </div>
-            <CardTitle>Setup concluído!</CardTitle>
+            <CardTitle className="text-2xl tracking-tight">Setup concluído!</CardTitle>
             <CardDescription className="max-w-md">
               A conta de administrador foi criada e o modo de setup foi encerrado — o setup token
               não funciona mais. A partir de agora, o acesso ao painel exige login.
@@ -113,9 +101,11 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-6">
             {score && (
-              <div className="flex flex-col items-center gap-2">
-                <span className="text-xs uppercase text-muted-foreground">Score de segurança</span>
-                <ScoreGauge value={score.value} source={score.source} />
+              <div className="flex flex-col items-center gap-2.5">
+                <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
+                  Score de segurança
+                </span>
+                <IndexGauge value={score.value} source={score.source} size="sm" />
               </div>
             )}
             <Button onClick={() => navigate("/login")}>
@@ -136,7 +126,7 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
             <ArrowLeft className="h-4 w-4" /> Voltar para Segurança
           </Button>
         )}
-        <h2 className="text-xl font-semibold">Conta de administrador</h2>
+        <h2 className="text-xl font-semibold tracking-tight">Conta de administrador</h2>
         <p className="text-sm text-muted-foreground">
           Último passo: crie o acesso ao painel. Ao concluir, o modo de setup é encerrado e todo
           acesso passa a exigir login.

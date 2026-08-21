@@ -49,7 +49,7 @@ describe("DashboardPage — banner de setup token", () => {
     renderDashboard();
 
     // dashboard carrega normalmente…
-    expect(await screen.findByText("Nenhum projeto ainda. Crie o primeiro para fazer deploy com domínio automático.")).toBeInTheDocument();
+    expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
     // …e o banner amarelo nunca aparece
     expect(screen.queryByText(/Sessão sem setup token/i)).not.toBeInTheDocument();
   });
@@ -59,7 +59,7 @@ describe("DashboardPage — banner de setup token", () => {
     mockDashboardFetch();
     renderDashboard();
 
-    expect(await screen.findByText("Nenhum projeto ainda. Crie o primeiro para fazer deploy com domínio automático.")).toBeInTheDocument();
+    expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
     expect(screen.queryByText(/Sessão sem setup token/i)).not.toBeInTheDocument();
   });
 });

@@ -53,4 +53,49 @@
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+
+  /* Seleção com a cor de "sucesso/ao vivo" do produto — detalhe que denuncia cuidado */
+  ::selection {
+    background-color: rgb(52 211 153 / 0.25);
+  }
+
+  /* Scrollbar discreta, combinando com o tema escuro */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(240 4% 22%) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(240 4% 22%);
+    border-radius: 999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(240 4% 30%);
+  }
+  *::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+
+  /* Acessibilidade: movimento reduzido vira cross-fade quase instantâneo,
+     nunca slide/spring/pulso longo */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Números de métricas/gauges alinhados (sem "dança" ao atualizar) */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
 }

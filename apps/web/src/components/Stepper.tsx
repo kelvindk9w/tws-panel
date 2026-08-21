@@ -21,10 +21,12 @@ export function Stepper({ steps, currentStep, maxSelectable, onSelect }: Stepper
         const clickable = !active && index <= selectable && onSelect !== undefined;
         const marker = (
           <span
+            aria-current={active ? "step" : undefined}
             className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors",
-              done && "border-emerald-500 bg-emerald-500/20 text-emerald-400",
-              active && "border-primary bg-primary text-primary-foreground",
+              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold tabular transition-all duration-300",
+              done && "border-emerald-500/60 bg-emerald-500/15 text-emerald-400",
+              active &&
+                "border-primary bg-primary text-primary-foreground shadow-[0_0_0_4px_rgba(255,255,255,0.08)]",
               !done && !active && "border-border text-muted-foreground",
               clickable && "cursor-pointer hover:border-emerald-400 hover:text-emerald-300",
             )}
@@ -35,7 +37,7 @@ export function Stepper({ steps, currentStep, maxSelectable, onSelect }: Stepper
         const title = (
           <span
             className={cn(
-              "hidden text-sm md:block",
+              "hidden text-sm tracking-tight transition-colors duration-300 md:block",
               active ? "font-medium text-foreground" : "text-muted-foreground",
               clickable && "hover:text-foreground",
             )}
@@ -62,7 +64,12 @@ export function Stepper({ steps, currentStep, maxSelectable, onSelect }: Stepper
               </div>
             )}
             {index < steps.length - 1 && (
-              <div className={cn("h-px flex-1", done ? "bg-emerald-500/50" : "bg-border")} />
+              <div
+                className={cn(
+                  "h-px flex-1 transition-colors duration-500",
+                  done ? "bg-emerald-500/40" : "bg-border",
+                )}
+              />
             )}
           </li>
         );

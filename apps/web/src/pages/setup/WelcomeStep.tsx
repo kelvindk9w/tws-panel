@@ -59,7 +59,7 @@ export function WelcomeStep({ onVerified }: WelcomeStepProps) {
         <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
           <Server className="h-6 w-6" />
         </div>
-        <CardTitle className="text-2xl">Bem-vindo ao TWS Panel</CardTitle>
+        <CardTitle className="text-2xl tracking-tight">Bem-vindo ao TWS Panel</CardTitle>
         <CardDescription>
           Este assistente vai preparar o seu servidor: diagnóstico da máquina, segurança e acesso ao
           painel. Para começar, informe o <strong>setup token</strong> exibido pelo instalador no

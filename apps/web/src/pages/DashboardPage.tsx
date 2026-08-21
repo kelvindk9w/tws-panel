@@ -45,7 +45,7 @@ export const TYPE_LABELS: Record<string, string> = {
 function ProjectCard({ item }: { item: ProjectResponse }) {
   const { project, status, containers, url } = item;
   return (
-    <Card>
+    <Card className="hover:bg-accent/30">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-lg">
@@ -143,12 +143,17 @@ export function DashboardPage() {
       )}
 
       {data && data.projects.length === 0 && !loading && (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-            <Server className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              Nenhum projeto ainda. Crie o primeiro para fazer deploy com domínio automático.
-            </p>
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-secondary ring-1 ring-border">
+              <Server className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="font-medium">Nenhum projeto ainda</p>
+              <p className="text-sm text-muted-foreground">
+                Crie o primeiro para fazer deploy com domínio automático.
+              </p>
+            </div>
             <Button size="sm" asChild>
               <Link to="/projects/new">
                 <Plus className="h-4 w-4" /> Criar projeto
@@ -178,22 +183,22 @@ export function DashboardPage() {
             ) : (
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="px-4 py-2 font-medium">Nome</th>
-                    <th className="px-4 py-2 font-medium">Imagem</th>
-                    <th className="px-4 py-2 font-medium">Stack</th>
-                    <th className="px-4 py-2 font-medium">Status</th>
+                  <tr className="border-b text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-2.5 font-medium">Nome</th>
+                    <th className="px-4 py-2.5 font-medium">Imagem</th>
+                    <th className="px-4 py-2.5 font-medium">Stack</th>
+                    <th className="px-4 py-2.5 font-medium">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {external.map((c) => (
-                    <tr key={c.id} className="border-b last:border-0">
-                      <td className="px-4 py-2 font-mono text-xs">{c.name}</td>
-                      <td className="px-4 py-2 font-mono text-xs">{c.image}</td>
-                      <td className="px-4 py-2 text-xs text-muted-foreground">
+                    <tr key={c.id} className="border-b transition-colors last:border-0 hover:bg-accent/40">
+                      <td className="px-4 py-2.5 font-mono text-xs">{c.name}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs">{c.image}</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
                         {c.composeProject ?? "—"}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="px-4 py-2.5">
                         {c.state === "running" ? (
                           <Badge variant="success">{c.status}</Badge>
                         ) : (

@@ -67,7 +67,7 @@ export function HealthStep({ onNext, onBack }: HealthStepProps) {
     <div className="flex animate-fade-in flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold">Saúde da máquina</h2>
+          <h2 className="text-xl font-semibold tracking-tight">Saúde da máquina</h2>
           <p className="text-sm text-muted-foreground">
             Diagnóstico do servidor antes da instalação. Nada é alterado — esta etapa é somente
             leitura.
