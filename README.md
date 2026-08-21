@@ -48,26 +48,34 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 
 1. **Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
 
-2. **Acesse via SSH:**
+2. **Confirme a versão do SO** (deve ser Ubuntu 22.04 ou 24.04 LTS):
+
+   ```bash
+   cat /etc/os-release
+   ```
+
+   Esperado na saída: `PRETTY_NAME="Ubuntu 24.04.x LTS"`. Se for outro SO/versão, o pré-flight do instalador (passo 6) também vai te avisar.
+
+3. **Acesse via SSH:**
 
    ```bash
    ssh root@SEU_IP
    ```
 
-3. **Instale o git** (se ainda não tiver):
+4. **Instale o git** (se ainda não tiver):
 
    ```bash
    apt update && apt install -y git
    ```
 
-4. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`):
+5. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`):
 
    ```bash
    git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
    cd /opt/tws-panel
    ```
 
-5. **Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
+6. **Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
 
    ```bash
    ./scripts/install.sh
@@ -82,7 +90,7 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
    > `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele **nunca
    > remove nem para** nada que já exista na máquina.
 
-6. **Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
+7. **Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
