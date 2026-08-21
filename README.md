@@ -57,6 +57,35 @@ ssh root@SEU_IP
 cat /etc/os-release   # esperado: PRETTY_NAME="Ubuntu 24.04.x LTS" (ou 22.04)
 ```
 
+<details>
+<summary>🔐 <strong>Primeira vez conectando via SSH? O que aparece e o que responder</strong></summary>
+
+Na **primeira conexão** com qualquer servidor novo, o SSH mostra este aviso:
+
+```text
+The authenticity of host '203.0.113.10 (203.0.113.10)' can't be established.
+ED25519 key fingerprint is SHA256:Xk9vN2mQpL7dR4wT8yB3cF6hJ1uA5sE0gH9zK2xW4vM.
+This key is not known by any other names.
+Are you sure you want to continue connecting (yes/no/[fingerprint])?
+```
+
+**O que responder:** digite `yes` e pressione Enter.
+
+**O que é isso?** O *fingerprint* é a "digital" do servidor — é assim que o seu computador
+reconhece a VPS nas próximas conexões. O aviso aparece **só na primeira vez**; depois o
+fingerprint fica salvo e a conexão é direta.
+
+**Erros comuns:**
+
+- **"Digito a senha e nada aparece"** — é normal! O terminal **não mostra nenhum caractere**
+  (nem `*`) enquanto você digita senhas. Digite com calma e pressione Enter.
+- **`Permission denied (publickey,password)`** — senha errada ou o provedor da VPS exige
+  chave SSH. Confira a senha no painel do provedor e tente de novo.
+- **O aviso de fingerprint aparece de novo depois de reinstalar a VPS** — normal, a máquina
+  mudou. Remova a entrada antiga com `ssh-keygen -R SEU_IP` e conecte novamente.
+
+</details>
+
 **3. Crie o seu usuário não-root** — é ele quem vai operar a VPS daqui em diante:
 
 ```bash
@@ -64,6 +93,51 @@ adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a
 usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
 su - kelvin              # entra na conta dele — todos os próximos passos são feitos como ele
 ```
+
+<details>
+<summary>👤 <strong>Travou no <code>adduser</code>? O que aparece e o que preencher</strong></summary>
+
+Ao rodar `adduser kelvin`, o sistema faz uma série de perguntas. É assim que aparece:
+
+```text
+Adding user `kelvin' ...
+Adding new group `kelvin' (1000) ...
+Adding new user `kelvin' (1000) with group `kelvin' ...
+Creating home directory `/home/kelvin' ...
+Copying files from `/etc/skel' ...
+New password:
+Retype new password:
+passwd: password updated successfully
+Changing the user information for kelvin
+Enter the new value, or press ENTER for the default
+        Full Name []:
+        Room Number []:
+        Work Phone []:
+        Home Phone []:
+        Other []:
+Is the information correct? [Y/n]
+```
+
+**O que preencher, passo a passo:**
+
+1. **`New password:`** — crie uma senha forte **que você vai lembrar** (é a senha do seu
+   usuário, usada no SSH e no `sudo`). Atenção: **nada aparece enquanto você digita** —
+   nem `*`. É normal, a senha está sendo registrada. Digite e pressione Enter.
+2. **`Retype new password:`** — repita a mesma senha.
+3. **`Full Name`, `Room Number`, `Work Phone`, `Home Phone`, `Other`** — dados opcionais.
+   Pode deixar tudo em branco: basta pressionar **Enter** em cada um.
+4. **`Is the information correct? [Y/n]`** — digite `Y` (ou só Enter) para confirmar.
+
+**Erros comuns:**
+
+- **`Sorry, passwords do not match`** — as duas senhas digitadas foram diferentes. O sistema
+  repete o pedido; digite as duas iguais, com calma.
+- **`BAD PASSWORD: ...`** — aviso de senha fraca. O sistema aceita, mas prefira uma senha
+  longa (frase com palavras + números, ex.: `cavalo-bateria-42-janela`).
+- **"Acho que digitei errado porque não vi nada"** — sem problemas: se errou, o `adduser`
+  reclama (`Sorry, try again.`) e pede de novo.
+
+</details>
 
 > [!IMPORTANT]
 > **Por que antes de tudo?** Operar como root é um anti-padrão de segurança. Criando o usuário agora,
@@ -76,6 +150,40 @@ su - kelvin              # entra na conta dele — todos os próximos passos sã
 ```bash
 sudo apt update && sudo apt install -y git
 ```
+
+<details>
+<summary>🔑 <strong>Primeiro <code>sudo</code>: o aviso gigante e a senha que não aparece</strong></summary>
+
+Na **primeira vez** que você usa `sudo` com um usuário novo, aparece um aviso clássico:
+
+```text
+We trust you have received the usual lecture from the local System
+Administrator. It usually boils down to these three things:
+
+    #1) Respect the privacy of others.
+    #2) Think before you type.
+    #3) With great power comes great responsibility.
+
+[sudo] password for kelvin:
+```
+
+**O que fazer:**
+
+1. O aviso é só cerimônia de boas-vindas (uma tradição do Linux) — não exige resposta.
+2. Em **`[sudo] password for kelvin:`**, digite **a senha do SEU usuário** (a que você criou
+   no `adduser`), **não** a senha de root.
+3. Lembre-se: **nada aparece na tela enquanto você digita** — nem `*`. Digite e Enter.
+
+Esse aviso longo só aparece uma vez. Depois disso o `sudo` pede a senha direto — e, por
+alguns minutos, nem isso (ele "lembra" que você se autenticou).
+
+**Erros comuns:**
+
+- **`Sorry, try again.`** — senha errada. Você tem 3 tentativas antes de o comando falhar.
+- **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador.
+  Volte para a sessão de root e rode `usermod -aG sudo kelvin` (passo 3).
+
+</details>
 
 **5. Clone o repositório em `/opt` e dê a propriedade da pasta ao seu usuário:**
 
@@ -109,6 +217,65 @@ do dia a dia não precisarem de sudo (vale a partir do próximo login).
 > (digite `continuar`) — ou use `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele
 > **nunca remove nem para** nada que já exista na máquina.
 
+<details>
+<summary>🩺 <strong>Pré-flight: o que aparece na tela e o que fazer em cada cenário</strong></summary>
+
+**Cenário 1 — VPS limpa (o esperado):** o relatório sai todo verde e a instalação segue
+sozinha, sem pedir nada:
+
+```text
+[tws-panel] Pré-flight: inspecionando a máquina (nada será alterado nesta etapa)…
+  ✓ SO: Ubuntu 24.04.2 LTS (suportado)
+  ✓ RAM: 1984 MB
+  ✓ Disco livre em /: 23 GB
+  ✓ Docker: ausente (será instalado por este script)
+  ✓ Nenhum container Docker em execução
+  ✓ Portas 80/443/9000/25/587/993 livres
+[tws-panel] Máquina limpa detectada ✓ — prosseguindo com a instalação.
+```
+
+Não precisa fazer nada — só aguardar o build (leva alguns minutos na primeira vez).
+
+**Cenário 2 — VPS já em uso:** o relatório mostra itens com `⚠` e o instalador **para e
+espera sua decisão**:
+
+```text
+  ⚠ Portas em uso: 80 443
+  ⚠ Serviço ativo: nginx
+
+================================================================================
+  ⚠️  ATENÇÃO: esta VPS NÃO parece estar limpa (2 ponto(s) acima).
+
+  O TWS Panel foi feito para uma VPS Ubuntu LIMPA. Continuar pode causar
+  conflitos (portas, serviços, recursos) com o que já existe na máquina.
+  Este instalador NUNCA remove ou para nada que já exista — mas os
+  serviços do painel podem falhar ao subir se as portas estiverem ocupadas.
+
+  Para prosseguir mesmo assim, digite "continuar" — ou rode com
+  --force (PAAS_FORCE=1) em automações.
+================================================================================
+
+Digite "continuar" para prosseguir:
+```
+
+**O que fazer:**
+
+- **Recomendado:** pressione **Ctrl+C** (ou simplesmente não digite nada e feche) para
+  abortar — nada foi instalado nem alterado. Resolva os conflitos (ex.: desative o nginx se
+  ele não é mais usado, ou contrate uma VPS limpa) e rode o instalador de novo.
+- **Se você sabe o que está fazendo** (ex.: o serviço listado não usa as portas do painel):
+  digite `continuar` e pressione Enter. Ao digitar, você confirma que **leu o relatório e
+  aceita o risco** de conflitos.
+
+**Erros comuns:**
+
+- **Digitou errado (`continua`, `Continuar`)** — o instalador aborta com
+  `Instalação abortada. Nada foi instalado ou alterado.` É só rodar de novo.
+- **Não use `--force` no seu primeiro contato** — ele pula exatamente a reflexão que este
+  aviso quer provocar. O `--force` existe para automação, não para pressa.
+
+</details>
+
 **7. Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
@@ -132,6 +299,54 @@ O painel roda 100% em Docker (`docker compose up -d`), com o estado persistido n
 > [!TIP]
 > **Perdeu o setup token?** Recupere a qualquer momento com `./scripts/show-token.sh` ou
 > `docker exec tws-panel cat /data/setup-token`.
+
+<details>
+<summary>🎫 <strong>Banner final do instalador — e como recuperar o token depois</strong></summary>
+
+Quando a instalação termina, o terminal toca um "bip" e mostra um banner assim:
+
+```text
+██████████████████████████████████████████████████████████████████████████████
+██                                                                          ██
+██               ✅  TWS PANEL INSTALADO E RODANDO COM SUCESSO!               ██
+██                                                                          ██
+██████████████████████████████████████████████████████████████████████████████
+
+👉  PASSO ÚNICO AGORA: abra este link no seu navegador
+
+      http://203.0.113.10:9000/?token=<seu-token-de-48-caracteres>
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                            ⚑  SETUP TOKEN  ⚑                              │
+│                                                                          │
+│   <seu-token-de-48-caracteres>                                            │
+│                                                                          │
+│   ⚠  Ele aparece SÓ AGORA em destaque. Guarde-o até concluir o wizard.   │
+│   ⚠  Após criar sua conta admin (passo 4 do wizard), ele é invalidado.   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**O que fazer:** copie o **link completo** (`http://SEU-IP:9000/?token=...`) e cole no
+navegador. O link já leva o token embutido — não precisa digitar nada.
+
+**Fechou o terminal e perdeu o banner?** Sem pânico. Na VPS, rode qualquer um dos dois:
+
+```bash
+./scripts/show-token.sh                       # reexibe o link completo + token
+docker exec tws-panel cat /data/setup-token   # mostra só o token
+```
+
+**Erros comuns:**
+
+- **`permission denied while trying to connect to the Docker daemon socket`** — faça
+  logout/login uma vez (o instalador te adicionou ao grupo docker) ou rode com `sudo`.
+- **`setup token não encontrado... O painel está instalado?`** — o `show-token.sh` foi rodado
+  numa máquina sem o painel instalado. Rode-o na VPS certa, de dentro de `/opt/tws-panel`.
+- **O token não funciona mais no navegador** — depois que você cria a conta admin (passo 4
+  do wizard), o token é **invalidado para sempre**. A partir daí o acesso é pela tela de
+  login, com seu usuário e senha do painel.
+
+</details>
 
 Depois do wizard: cadastre um projeto, aponte o DNS, e o painel cuida do build, do proxy e do
 SSL. Guia completo de produção em [docs/production.md](docs/production.md).
