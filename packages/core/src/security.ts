@@ -168,8 +168,10 @@ export interface SecurityJob {
 
 export interface SecurityScanResponse {
   report: SecurityScanReport;
-  /** true se veio do cache de 60s. */
+  /** true se o relatório é o último conhecido (nenhuma varredura nova foi executada). */
   cached: boolean;
+  /** true quando um scan fresco (?fresh=1/agendador) está em andamento em background. */
+  refreshing: boolean;
 }
 
 export interface SecurityPlanRequest {
@@ -278,7 +280,11 @@ export interface SecurityHistoryResponse {
   applied: SecurityAppliedSummary | null;
 }
 
-/** Tempo de cache do scan (ms). */
+/**
+ * Tempo de cache do scan (ms). LEGADO: o GET sem `fresh` não dispara mais
+ * varredura nova — sempre devolve o último relatório conhecido. Mantido para
+ * compatibilidade de API.
+ */
 export const SECURITY_SCAN_CACHE_MS = 60_000;
 
 /** Janela de rollback automático agendado (ms) — alinhado a `at now +5 minutes`. */

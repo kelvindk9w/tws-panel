@@ -53,6 +53,11 @@ function HardeningCard() {
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <Gauge className="h-4 w-4" /> Hardening Index
+          {scan?.refreshing && (
+            <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> atualizando…
+            </span>
+          )}
         </CardTitle>
         <CardDescription>Índice atual do alvo ({scan?.report.target ?? "…"}) e evolução.</CardDescription>
       </CardHeader>

@@ -47,11 +47,12 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
     );
   }
 
-  // Scan completo (cache de 60s). Query ?fresh=1 força re-execução.
+  // Último relatório conhecido (imediato, nunca dispara scan novo).
+  // Query ?fresh=1 força re-execução; refreshing sinaliza scan em andamento.
   app.get<{ Querystring: { fresh?: string } }>("/api/security/scan", async (request, reply) => {
     const force = request.query.fresh === "1";
-    const { report, cached } = await service.scan(force);
-    const response: SecurityScanResponse = { report, cached };
+    const { report, cached, refreshing } = await service.scan(force);
+    const response: SecurityScanResponse = { report, cached, refreshing };
     return reply.send(response);
   });
 

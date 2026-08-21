@@ -6,7 +6,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   SECURITY_PHASES,
-  SECURITY_SCAN_CACHE_MS,
   type SecurityAppliedSummary,
   type SecurityHistoryEntry,
   type SecurityJob,
@@ -72,8 +71,8 @@ export class SecurityService {
   private readonly executor: SecurityExecutor;
   private readonly historyFile: string;
   private readonly log?: ((msg: string) => void) | undefined;
+  private readonly lastReportFile: string;
   private lastScan: SecurityScanReport | null = null;
-  private lastScanAt = 0;
   private runningScan: Promise<SecurityScanReport> | null = null;
 
   constructor(
@@ -107,6 +106,7 @@ export class SecurityService {
     // O PTY do modo dev (container alvo) precisa do container de pé.
     opts?.terminal?.setEnsureTarget(() => baseRunner.ensureReady());
     this.historyFile = path.join(config.dataDir, "security-history.json");
+    this.lastReportFile = path.join(config.dataDir, "security-last-scan.json");
     this.executor = new SecurityExecutor({
       runner: this.runner,
       scriptsDir: config.hardeningScriptsDir,
@@ -123,11 +123,26 @@ export class SecurityService {
     return this.runner.label;
   }
 
-  /** Scan com cache de 60s (refresh da UI não re-executa tudo). */
-  async scan(force = false): Promise<{ report: SecurityScanReport; cached: boolean }> {
-    const now = Date.now();
-    if (!force && this.lastScan && now - this.lastScanAt < SECURITY_SCAN_CACHE_MS) {
-      return { report: this.lastScan, cached: true };
+  /**
+   * Scan de segurança.
+   *
+   * Sem `force` NUNCA executa varredura nova: devolve imediatamente o último
+   * relatório conhecido (memória → disco). Antes desta correção, um cache de
+   * 60s fazia o GET sem `fresh` disparar um scan completo (~2 min com Lynis)
+   * sempre que o cache expirava — a página Segurança ficava "Carregando…".
+   * Scan fresco só com `force` (?fresh=1) ou pelo agendador; se um scan já
+   * estiver em andamento, a resposta traz o último relatório + refreshing.
+   */
+  async scan(
+    force = false,
+  ): Promise<{ report: SecurityScanReport; cached: boolean; refreshing: boolean }> {
+    if (!force) {
+      const known = this.lastScan ?? (await this.loadLastReport());
+      if (known) {
+        return { report: known, cached: true, refreshing: this.runningScan !== null };
+      }
+      // Sem relatório nenhum (primeiro uso): executa o scan — a UI mostra
+      // o estado de carregamento só neste caso.
     }
     // evita scans concorrentes (dois refreshes simultâneos)
     this.runningScan ??= runSecurityScan(this.runner, {
@@ -138,16 +153,18 @@ export class SecurityService {
         this.log?.(`scan de segurança: check ${checkId} concluído em ${durationMs}ms`);
       },
     })
-      .then((report) => {
+      .then(async (report) => {
         this.lastScan = report;
-        this.lastScanAt = Date.now();
-        void this.recordScan(report);
+        // persistidos ANTES de resolver: um restart logo após o scan ainda
+        // encontra o relatório (o GET sem fresh nunca bloqueia).
+        await this.recordScan(report);
+        await this.persistLastReport(report);
         return report;
       })
       .finally(() => {
         this.runningScan = null;
       });
-    return { report: await this.runningScan, cached: false };
+    return { report: await this.runningScan, cached: false, refreshing: false };
   }
 
   /** Plano de correção baseado no último scan (faz um scan se não houver). */
@@ -272,6 +289,32 @@ export class SecurityService {
       hardeningIndex: report.hardeningIndex,
       hardeningIndexSource: report.hardeningIndexSource,
     });
+  }
+
+  /** Persiste o relatório completo (sobrevive a restart do painel). Best-effort. */
+  private async persistLastReport(report: SecurityScanReport): Promise<void> {
+    try {
+      await mkdir(path.dirname(this.lastReportFile), { recursive: true });
+      await writeFile(this.lastReportFile, JSON.stringify(report, null, 2) + "\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    } catch {
+      // cache em disco é best-effort; nunca derruba a requisição
+    }
+  }
+
+  /** Carrega o último relatório persistido (primeiro acesso após restart). */
+  private async loadLastReport(): Promise<SecurityScanReport | null> {
+    try {
+      const raw = await readFile(this.lastReportFile, "utf8");
+      const parsed = JSON.parse(raw) as Partial<SecurityScanReport>;
+      if (typeof parsed.id !== "string" || typeof parsed.scannedAt !== "string") return null;
+      this.lastScan = parsed as SecurityScanReport;
+      return this.lastScan;
+    } catch {
+      return null;
+    }
   }
 
   private async recordJob(job: SecurityJob): Promise<void> {
