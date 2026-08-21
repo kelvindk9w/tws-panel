@@ -26,20 +26,33 @@ function parseOsRelease(content: string): Record<string, string> {
   return out;
 }
 
+async function readFirst(paths: string[]): Promise<string | null> {
+  for (const p of paths) {
+    try {
+      return await readFile(p, "utf8");
+    } catch {
+      // tenta o próximo caminho
+    }
+  }
+  return null;
+}
+
 async function readOsInfo(): Promise<OsInfo> {
   let osRelease: Record<string, string> = {};
-  try {
-    osRelease = parseOsRelease(await readFile("/etc/os-release", "utf8"));
-  } catch {
-    // sistema não-Linux ou arquivo ausente; campos ficam "unknown"
+  // Em container, /host/etc/os-release (montado via compose) reflete a VPS
+  // real; /etc/os-release local é o da imagem (Debian) — fica como fallback.
+  const osReleaseRaw = await readFirst(["/host/etc/os-release", "/etc/os-release"]);
+  if (osReleaseRaw !== null) {
+    osRelease = parseOsRelease(osReleaseRaw);
   }
+  const hostName = (await readFirst(["/host/etc/hostname"]))?.trim();
   return {
     prettyName: osRelease["PRETTY_NAME"] ?? os.platform(),
     id: osRelease["ID"] ?? "unknown",
     versionId: osRelease["VERSION_ID"] ?? "unknown",
     kernel: os.release(),
     arch: os.arch(),
-    hostname: os.hostname(),
+    hostname: hostName ?? os.hostname(),
   };
 }
 
