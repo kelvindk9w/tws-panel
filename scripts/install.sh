@@ -267,24 +267,48 @@ docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
 # --- 7. Resumo ---------------------------------------------------------------------------
 PUBLIC_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
+# Cores/ênfase (só se o terminal suportar).
+if [ -t 1 ]; then
+  BOLD="$(tput bold 2>/dev/null || true)"; RESET="$(tput sgr0 2>/dev/null || true)"
+  GREEN="$(tput setaf 2 2>/dev/null || true)"; YELLOW="$(tput setaf 3 2>/dev/null || true)"
+  CYAN="$(tput setaf 6 2>/dev/null || true)"; BG_GREEN="$(tput setab 2 2>/dev/null || true)"
+else
+  BOLD=""; RESET=""; GREEN=""; YELLOW=""; CYAN=""; BG_GREEN=""
+fi
+
+# Toca o "bell" do terminal para chamar atenção ao fim da instalação.
+printf '\a'
+
 cat <<EOF
 
-================================================================================
-  ✅ TWS Panel instalado e rodando!
+${GREEN}${BOLD}██████████████████████████████████████████████████████████████████████████████
+██                                                                          ██
+██               ✅  TWS PANEL INSTALADO E RODANDO COM SUCESSO!               ██
+██                                                                          ██
+██████████████████████████████████████████████████████████████████████████████${RESET}
 
-  Abra no navegador:
+${BOLD}👉  PASSO ÚNICO AGORA: abra este link no seu navegador${RESET}
 
-      http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN
+${CYAN}${BOLD}      http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN${RESET}
 
-  Setup token:
+${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
+│                            ⚑  SETUP TOKEN  ⚑                              │
+│                                                                          │
+│   $SETUP_TOKEN                       │
+│                                                                          │
+│   ⚠  Ele aparece SÓ AGORA em destaque. Guarde-o até concluir o wizard.   │
+│   ⚠  Após criar sua conta admin (passo 4 do wizard), ele é invalidado.   │
+└──────────────────────────────────────────────────────────────────────────┘${RESET}
 
-      $SETUP_TOKEN
+${BOLD}Perdeu o token? Recupere a qualquer momento com:${RESET}
 
-  O assistente vai diagnosticar o servidor e guiar o setup.
+      docker exec tws-panel cat /data/setup-token
 
-  Comandos úteis (em $APP_DIR):
+O assistente vai diagnosticar o servidor e guiar o setup.
+
+Comandos úteis (em $APP_DIR):
     docker compose ps              # status do painel
     docker compose logs -f panel   # logs em tempo real
     docker compose up -d --build   # rebuild/restart (ex.: após git pull)
-================================================================================
+
 EOF
