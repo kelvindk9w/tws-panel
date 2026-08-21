@@ -47,7 +47,18 @@ async function lynisIndex(runner: TargetRunner): Promise<number | null> {
   return match?.[1] !== undefined ? Number.parseInt(match[1], 10) : null;
 }
 
-export async function runSecurityScan(runner: TargetRunner): Promise<SecurityScanReport> {
+export interface SecurityScanOptions {
+  /**
+   * Telemetria de timing por check (id + duração em ms). NUNCA recebe saída
+   * ou conteúdo do comando — só identificação e quanto tempo levou.
+   */
+  onCheckTiming?: (checkId: string, durationMs: number) => void;
+}
+
+export async function runSecurityScan(
+  runner: TargetRunner,
+  opts?: SecurityScanOptions,
+): Promise<SecurityScanReport> {
   const startedAt = Date.now();
   await runner.ensureReady();
 
@@ -57,6 +68,7 @@ export async function runSecurityScan(runner: TargetRunner): Promise<SecuritySca
 
   const checks: SecurityCheckResult[] = [];
   for (const def of applicableChecks) {
+    const checkStart = Date.now();
     let result: SecurityCheckResult;
     try {
       const r = await runner.exec(def.command, { timeoutMs: 60_000 });
@@ -83,6 +95,10 @@ export async function runSecurityScan(runner: TargetRunner): Promise<SecuritySca
         detail: `erro ao executar check: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
+    // Timing por check: introduzido na investigação da regressão de scan em
+    // VPS (2.1s → 133.4s com um check travado ~120s) — permite identificar
+    // na auditoria/log qual check segurou o scan.
+    opts?.onCheckTiming?.(def.id, Date.now() - checkStart);
     checks.push(result);
   }
 

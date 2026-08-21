@@ -480,6 +480,12 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
   },
 
   // ------------------------------------------------------- Docker (manual)
+  // Os dois checks abaixo dependem do daemon Docker: se o dockerd estiver
+  // ocupado (ex.: remoção forçada de helpers paas-* concorrente ao scan), o
+  // CLI `docker ps/inspect` BLOQUEIA sem timeout próprio e segura o check até
+  // o limite do runner (suspeito nº 1 do scan de 133.4s observado em VPS — o
+  // normal é ~2s). O `timeout 25` degrada para "unknown" (no-docker) em vez
+  // de travar o scan inteiro num daemon lento.
   {
     id: "docker.privileged-containers",
     phase: "06",
@@ -489,7 +495,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     remediation: "Ação manual: recriar o container sem --privileged e com capabilities mínimas.",
     fixable: false,
     command:
-      "command -v docker >/dev/null 2>&1 && docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.Name}} {{.HostConfig.Privileged}}' 2>/dev/null || echo no-docker",
+      "command -v docker >/dev/null 2>&1 && timeout 25 docker ps -q 2>/dev/null | xargs -r timeout 25 docker inspect -f '{{.Name}} {{.HostConfig.Privileged}}' 2>/dev/null || echo no-docker",
     evaluate: (r) => {
       const out = r.stdout.trim();
       if (out === "no-docker" || out === "") return { status: "unknown", detail: "Docker ausente ou sem containers" };
@@ -508,7 +514,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     remediation: "Ação manual: remover o mount do socket ou restringir a containers de administração.",
     fixable: false,
     command:
-      "command -v docker >/dev/null 2>&1 && docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' 2>/dev/null | grep docker.sock || echo no-docker",
+      "command -v docker >/dev/null 2>&1 && timeout 25 docker ps -q 2>/dev/null | xargs -r timeout 25 docker inspect -f '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' 2>/dev/null | grep docker.sock || echo no-docker",
     evaluate: (r) => {
       const out = r.stdout.trim();
       if (out === "no-docker" || out === "") return { status: "unknown", detail: "Docker ausente ou sem mounts de socket" };

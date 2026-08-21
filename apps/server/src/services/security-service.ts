@@ -41,12 +41,17 @@ export class SecurityService {
   private readonly runner: TargetRunner;
   private readonly executor: SecurityExecutor;
   private readonly historyFile: string;
+  private readonly log?: ((msg: string) => void) | undefined;
   private lastScan: SecurityScanReport | null = null;
   private lastScanAt = 0;
   private runningScan: Promise<SecurityScanReport> | null = null;
 
-  constructor(config: ServerConfig, opts?: { audit?: SecurityAuditHook; terminal?: TerminalService }) {
+  constructor(
+    config: ServerConfig,
+    opts?: { audit?: SecurityAuditHook; terminal?: TerminalService; log?: (msg: string) => void },
+  ) {
     this.config = config;
+    this.log = opts?.log;
     // Alvo "host": host bridge (nsenter via helper privilegiado descartável) —
     // os comandos rodam na VPS real, NÃO no container do painel. Cada comando
     // passa pela allowlist e é registrado em auditoria.
@@ -95,7 +100,14 @@ export class SecurityService {
       return { report: this.lastScan, cached: true };
     }
     // evita scans concorrentes (dois refreshes simultâneos)
-    this.runningScan ??= runSecurityScan(this.runner)
+    this.runningScan ??= runSecurityScan(this.runner, {
+      // Log de timing por check (nível info, NUNCA conteúdo/saída) —
+      // introduzido na investigação da regressão de scan em VPS (2.1s →
+      // 133.4s): mostra qual check segurou o scan e por quanto tempo.
+      onCheckTiming: (checkId, durationMs) => {
+        this.log?.(`scan de segurança: check ${checkId} concluído em ${durationMs}ms`);
+      },
+    })
       .then((report) => {
         this.lastScan = report;
         this.lastScanAt = Date.now();

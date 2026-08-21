@@ -33,6 +33,10 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
       void app.auditService.record({ action, detail });
     },
     terminal: app.terminalService,
+    // Timing por check do scanner no log do servidor (sem conteúdo).
+    log: (msg) => {
+      app.log.info(msg);
+    },
   });
   app.decorate("securityService", service);
 
