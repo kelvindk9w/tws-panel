@@ -36,7 +36,7 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 
 | Módulo | O que faz |
 |---|---|
-| **🖥️ Terminal web embutido** | **Visão dupla** nos 4 passos do wizard: em cima a UI formatada (cards/fases), embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), expansível/ocultável. As fases de hardening rodam DENTRO dele — você vê os comandos de verdade, como no SSH. Prompts de senha/confirmação são digitados direto no terminal: o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita (audita só conexão/desconexão). |
+| **🖥️ Terminal web embutido** | **Visão dupla** nos 4 passos do wizard: em cima a UI formatada (cards/fases), embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), numa janela contida estilo IDE — **bloqueado até o setup token ser validado** e recolhido por padrão. As varreduras e as fases de hardening rodam DENTRO dele — você vê os comandos de verdade (`cat /etc/os-release`, checks do Lynis, scripts de fase), como no SSH. Prompts de senha/confirmação são digitados direto no terminal: o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita (audita só conexão/desconexão). |
 | **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. |
 | **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. |
 | **📧 E-mail** | Servidor **Stalwart** (SMTP + IMAP + DKIM em um container), par **DKIM RSA 2048** gerado por domínio, **checklist DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) com valores prontos para colar no provedor, texto pronto para abrir chamado de PTR, criação de caixas com **credenciais prontas para Outlook/Gmail/Thunderbird**, e injeção automática de variáveis SMTP nos seus projetos. |
@@ -45,66 +45,80 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 
 ## Instalação — VPS limpa do zero
 
-**Não precisa instalar Docker, Node ou mais nada manualmente — só Ubuntu e git.**
+> [!NOTE]
+> **Único pré-requisito:** uma VPS com Ubuntu 22.04 ou 24.04 LTS limpa. Docker, Node e todo o resto são instalados automaticamente — basta seguir os passos abaixo, na ordem.
 
-1. **Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
+**1. Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
 
-2. **Confirme a versão do SO** (deve ser Ubuntu 22.04 ou 24.04 LTS):
+**2. Acesse como root via SSH** e confirme a versão do SO:
 
-   ```bash
-   cat /etc/os-release
-   ```
+```bash
+ssh root@SEU_IP
+cat /etc/os-release   # esperado: PRETTY_NAME="Ubuntu 24.04.x LTS" (ou 22.04)
+```
 
-   Esperado na saída: `PRETTY_NAME="Ubuntu 24.04.x LTS"`. Se for outro SO/versão, o pré-flight do instalador (passo 6) também vai te avisar.
+**3. Crie o seu usuário não-root** — é ele quem vai operar a VPS daqui em diante:
 
-3. **Acesse via SSH:**
+```bash
+adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a senha na hora
+usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
+su - kelvin              # entra na conta dele — todos os próximos passos são feitos como ele
+```
 
-   ```bash
-   ssh root@SEU_IP
-   ```
+> [!IMPORTANT]
+> **Por que antes de tudo?** Operar como root é um anti-padrão de segurança. Criando o usuário agora,
+> o wizard só precisa **validar** que ele existe (Fase 01 de segurança) em vez de criá-lo — e o
+> acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
+> novo no passo de Segurança do wizard.
 
-4. **Instale o git** (se ainda não tiver):
+**4. Instale o git:**
 
-   ```bash
-   apt update && apt install -y git
-   ```
+```bash
+sudo apt update && sudo apt install -y git
+```
 
-5. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`) **e mude para a branch estável**:
+**5. Clone o repositório em `/opt` e dê a propriedade da pasta ao seu usuário:**
 
-   ```bash
-   git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
-   cd /opt/tws-panel
-   git checkout main
-   ```
+```bash
+sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo chown -R $USER:$USER /opt/tws-panel
+cd /opt/tws-panel && git checkout main
+```
 
-   > O clone começa na branch `dev` (default do repositório, usada pelos
-   > contribuidores). Para **uso real**, sempre use a `main` — ela só recebe
-   > código validado e testado. Se quiser ajudar no desenvolvimento, fique na
-   > `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
+> [!TIP]
+> O clone começa na branch `dev` (default do repositório, usada pelos contribuidores). Para
+> **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
+> desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-6. **Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
+**6. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
 
-   ```bash
-   ./scripts/install.sh
-   ```
+```bash
+./scripts/install.sh
+```
 
-   > **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz
-   > verificações **somente-leitura** (SO, RAM/disco, Docker e containers em
-   > execução, portas 80/443/9000/25/587/993 e serviços como nginx, apache,
-   > caddy, postfix, mysql e postgres) e exibe um relatório. Se a VPS já estiver
-   > em uso, ele avisa que o painel foi feito para uma VPS limpa e pede
-   > confirmação explícita (digite `continuar`) — ou use
-   > `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele **nunca
-   > remove nem para** nada que já exista na máquina.
+Não precisa de `sudo` na frente: ao detectar que está rodando como usuário comum, o script **se
+reexecuta via sudo automaticamente** (chamar `sudo ./scripts/install.sh` também funciona — os dois
+caminhos são equivalentes). No final, ele ainda te adiciona ao **grupo docker**, para os comandos
+do dia a dia não precisarem de sudo (vale a partir do próximo login).
 
-7. **Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
+> [!NOTE]
+> **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz verificações
+> **somente-leitura** (SO, RAM/disco, Docker e containers em execução, portas 80/443/9000/25/587/993
+> e serviços como nginx, apache, caddy, postfix, mysql e postgres) e exibe um relatório. Se a VPS já
+> estiver em uso, ele avisa que o painel foi feito para uma VPS limpa e pede confirmação explícita
+> (digite `continuar`) — ou use `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele
+> **nunca remove nem para** nada que já exista na máquina.
+
+**7. Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Assistente de configuração — http://SEU-IP:9000/?token=…   │
 ├─────────────────────────────────────────────────────────────┤
-│  1. Boas-vindas      → valida o setup token                 │
-│  2. Saúde da máquina → CPU, RAM, disco, rede, virtualização │
+│  1. Boas-vindas      → valida o setup token e libera o      │
+│                        terminal ao vivo do servidor         │
+│  2. Saúde da máquina → CPU, RAM, disco, rede — os checks    │
+│                        rodam AO VIVO no terminal embutido   │
 │  3. Segurança        → scan Lynis → plano → hardening       │
 │                        (com rollback automático em 5 min)   │
 │  4. Conta admin      → usuário + senha forte do painel      │
@@ -114,6 +128,10 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 O instalador é **idempotente**: pode ser executado de novo sem quebrar nada (rebuild + restart).
 O painel roda 100% em Docker (`docker compose up -d`), com o estado persistido no volume
 `paas_data` e acesso ao socket do Docker para gerenciar Caddy, Stalwart e seus projetos.
+
+> [!TIP]
+> **Perdeu o setup token?** Recupere a qualquer momento com `./scripts/show-token.sh` ou
+> `docker exec tws-panel cat /data/setup-token`.
 
 Depois do wizard: cadastre um projeto, aponte o DNS, e o painel cuida do build, do proxy e do
 SSL. Guia completo de produção em [docs/production.md](docs/production.md).
@@ -129,6 +147,10 @@ docker compose up -d --build # atualizar para uma nova versão (git pull antes)
 ./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)
 ```
 
+> [!NOTE]
+> Se `docker compose ps` reclamar de permissão, faça logout/login uma vez (o instalador te
+> adicionou ao grupo docker) — ou rode os comandos com `sudo`.
+
 ### Modo dev local
 
 ```bash
@@ -143,8 +165,12 @@ SETUP_TOKEN=dev-token docker compose -f docker-compose.dev.yml up
 - Wizard: `http://localhost:5173/setup` com o token `dev-token`
 - Domínios de projeto: use `*.localhost` (servidos em HTTP puro pelo Caddy, sem SSL)
 
-Exemplos prontos para deploy em [`examples/`](examples/README.md) ⚠️ *(apenas para testes)*.
+Exemplos prontos para deploy em [`examples/`](examples/README.md).
 
+> [!WARNING]
+> Os exemplos são **apenas para testes** — não os use como base de produção sem revisão.
+
+> [!IMPORTANT]
 > 🔒 **Validação automática:** o `pnpm install` ativa hooks locais de pre-commit
 > (arquivos proibidos + scan de segredos + typecheck incremental) e pre-push
 > (testes + cobertura + build). O CI no GitHub Actions é o portão final —
