@@ -37,6 +37,10 @@ import { ChevronDown, ChevronUp, Lock, TerminalSquare } from "lucide-react";
  * o alerta pulsante do terminal ("olhe o terminal"). */
 export const TERMINAL_ATTENTION_EVENT = "paas:terminal-attention";
 
+/** Evento disparado quando a espera por ação TERMINA (job concluído/abortado
+ * ou acesso confirmado) — apaga o alerta pulsante. */
+export const TERMINAL_ATTENTION_CLEAR_EVENT = "paas:terminal-attention-clear";
+
 const STORAGE_KEY = "paas.terminal.open";
 const PANEL_HEIGHT_PX = 320;
 
@@ -222,8 +226,13 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
       setAttention(true);
       setOpen(true);
     };
+    const onClear = () => setAttention(false);
     window.addEventListener(TERMINAL_ATTENTION_EVENT, onAttention);
-    return () => window.removeEventListener(TERMINAL_ATTENTION_EVENT, onAttention);
+    window.addEventListener(TERMINAL_ATTENTION_CLEAR_EVENT, onClear);
+    return () => {
+      window.removeEventListener(TERMINAL_ATTENTION_EVENT, onAttention);
+      window.removeEventListener(TERMINAL_ATTENTION_CLEAR_EVENT, onClear);
+    };
   }, []);
 
   // o alerta some quando o usuário interage com o terminal

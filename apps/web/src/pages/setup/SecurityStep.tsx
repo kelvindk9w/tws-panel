@@ -11,7 +11,7 @@ import {
   type SecurityScanReport,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
-import { TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
+import { TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { CopyButton } from "@/components/CopyButton";
 import { ManualPhaseModal } from "@/components/setup/ManualPhaseModal";
 import { SshKeyGuide } from "@/components/setup/SshKeyGuide";
@@ -51,6 +51,11 @@ interface SecurityStepProps {
 type Stage = "scan" | "plan" | "run" | "done";
 
 const TERMINAL: SecurityJob["status"][] = ["success", "failed", "rolled_back"];
+
+/** Apaga o alerta pulsante "olhe o terminal" (a espera por ação terminou). */
+function clearTerminalAttention() {
+  window.dispatchEvent(new CustomEvent(TERMINAL_ATTENTION_CLEAR_EVENT));
+}
 
 // ---------------------------------------------------------------------------
 // Estado visual por fase durante a execução
@@ -303,10 +308,17 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
           confirmResolver.current = resolve;
         });
         confirmResolver.current = null;
+        // a espera terminou (confirmou ou pediu para parar): apaga o alerta
+        clearTerminalAttention();
         if (!confirmed) return res.job; // usuário pediu para parar
         continue; // re-poll após confirmação
       }
-      if (TERMINAL.includes(res.job.status)) return res.job;
+      if (TERMINAL.includes(res.job.status)) {
+        // fim da execução (sucesso/falha/rollback): o alerta não pode ficar
+        // preso se a janela de confirmação expirou sem ação do operador
+        clearTerminalAttention();
+        return res.job;
+      }
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
@@ -401,6 +413,7 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
   }
 
   function abortExecution() {
+    clearTerminalAttention();
     confirmResolver.current?.(false);
   }
 

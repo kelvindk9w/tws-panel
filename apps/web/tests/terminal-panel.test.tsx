@@ -106,7 +106,7 @@ vi.stubGlobal(
 
 // ---------------------------------------------------------------------------
 
-import { TerminalPanel, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
+import { TerminalPanel, TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { setSetupToken } from "@/lib/api";
 
 function lastWs(): MockWebSocket {
@@ -206,6 +206,19 @@ describe("TerminalPanel — habilitado", () => {
     // o alerta some quando o usuário digita no terminal
     lastTerm().fireData("x");
     await waitFor(() => expect(toggle.className).not.toContain("animate-pulse"));
+  });
+
+  it("o alerta some quando a execução termina (evento de clear) — não fica preso", async () => {
+    render(<TerminalPanel enabled={true} />);
+    const toggle = screen.getByRole("button", { name: /Terminal do servidor/ });
+
+    fireEvent(window, new CustomEvent(TERMINAL_ATTENTION_EVENT, { detail: { phase: "02" } }));
+    await waitFor(() => expect(screen.getByText(/OLHE O TERMINAL/)).toBeInTheDocument());
+
+    // fim da execução (sucesso/falha/abort): o badge NÃO pode continuar pulsando
+    fireEvent(window, new CustomEvent(TERMINAL_ATTENTION_CLEAR_EVENT));
+    await waitFor(() => expect(screen.queryByText(/OLHE O TERMINAL/)).not.toBeInTheDocument());
+    expect(toggle.className).not.toContain("animate-pulse");
   });
 
   it("input do xterm vai direto ao WS (relay puro); saída do WS vai ao xterm", async () => {
