@@ -9,6 +9,7 @@ import { Duplex } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { TerminalService, TerminalUnavailableError } from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
+import { SECURITY_CHECKS } from "@paas/security";
 
 /** PTY falso: captura input, emite saída programada, registra resize/kill. */
 class FakePty implements RemotePty {
@@ -406,5 +407,80 @@ describe("TerminalService — runCommandCaptured (checks do scanner no terminal)
   it("rejeita comandos com quebra de linha (uma linha apenas)", async () => {
     const { service } = makeService();
     await expect(service.runCommandCaptured("echo a\necho b")).rejects.toThrow(/uma linha/);
+  });
+
+  it("marcador COLADO após saída sem newline final (caso real: tr '\\n' ' ') resolve e preserva a saída", async () => {
+    const { service, next } = makeService();
+    const broadcasted: string[] = [];
+    service.onOutput((c) => broadcasted.push(c));
+    const promise = service.runCommandCaptured("ss -tuln | tail -n +2 | awk '{print $5}' | sort -u | tr '\\n' ' '");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    // a saída NÃO termina com \n — o echo do marcador imprime na MESMA linha
+    next().emit(`0.0.0.0:22 0.0.0.0:9000 :::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    // saída preservada byte a byte (sem o marcador, sem newline sintético)
+    expect(result.output).toBe("0.0.0.0:22 0.0.0.0:9000 ");
+    expect(result.output).not.toContain("PAAS_EXIT");
+    // e o usuário vê as portas ao vivo, sem o marcador
+    expect(broadcasted.join("")).toContain("0.0.0.0:22 0.0.0.0:9000 ");
+    expect(broadcasted.join("")).not.toContain(`PAAS_EXIT_${nonce}`);
+    await service.dispose();
+  });
+
+  it("marcador colado após sequência ANSI também resolve", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("echo -e '\\033[32mOK\\033[0m'");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit(`\x1b[32mOK\x1b[0m :::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("\x1b[32mOK\x1b[0m ");
+    await service.dispose();
+  });
+
+  it("marcador colado no meio da linha E dividido entre chunks resolve sem vazar", async () => {
+    const { service, next } = makeService();
+    const broadcasted: string[] = [];
+    service.onOutput((c) => broadcasted.push(c));
+    const promise = service.runCommandCaptured("printf 'porta1 porta2 '");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    // chunk quebra DENTRO do marcador, que já está colado na saída sem \n
+    next().emit("porta1 porta2 :::PAAS_EX");
+    next().emit(`IT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("porta1 porta2 ");
+    expect(broadcasted.join("")).not.toContain("PAAS_EX");
+    await service.dispose();
+  });
+
+  it("end-to-end: comando real do check net.listening-inventory resolve sem timeout e alimenta o evaluate", async () => {
+    const def = SECURITY_CHECKS.find((c) => c.id === "net.listening-inventory");
+    if (!def) throw new Error("check net.listening-inventory não encontrado");
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured(def.command, { timeoutMs: 5_000 });
+    await flush();
+    const pty = next();
+    // o comando digitado no terminal é exatamente o do catálogo
+    expect(pty.inputs.join("")).toContain(def.command);
+    const nonce = nonceOf(pty.inputs, "BEGIN");
+    pty.emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    // saída real do pipeline `ss ... | tr '\n' ' '`: sem newline final,
+    // marcador colado — antes do fix isso estourava o timeout de 65s
+    pty.emit(`0.0.0.0:22 0.0.0.0:9000 :::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("0.0.0.0:22 0.0.0.0:9000 ");
+    const evaluation = def.evaluate({ code: result.code, stdout: result.output, stderr: "" });
+    expect(evaluation.status).toBe("pass");
+    expect(evaluation.detail).toBe("0.0.0.0:22 0.0.0.0:9000");
+    await service.dispose();
   });
 });

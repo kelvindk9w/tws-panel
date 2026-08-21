@@ -66,7 +66,11 @@ export interface CommandResult {
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_SCROLLBACK_CHARS = 64_000;
-const EXIT_MARKER_RE = (nonce: string) => new RegExp(`^:::PAAS_EXIT_${nonce}:(\\d+)\\r?$`);
+// SEM âncora de início: comandos cuja saída NÃO termina com newline (ex.:
+// `... | tr '\\n' ' '`) fazem o echo do marcador imprimir COLADO na mesma
+// linha da saída (`porta1 porta2 :::PAAS_EXIT_<n>:0`). O marcador só precisa
+// terminar a linha — o trecho anterior continua sendo saída visível.
+const EXIT_MARKER_RE = (nonce: string) => new RegExp(`:::PAAS_EXIT_${nonce}:(\\d+)\\r?$`);
 const BEGIN_MARKER_RE = (nonce: string) => new RegExp(`^:::PAAS_BEGIN_${nonce}\\r?$`);
 
 export class TerminalService {
@@ -285,6 +289,11 @@ export class TerminalService {
       }
       const m = re.exec(line);
       if (m) {
+        // Marcador colado após saída sem newline: o trecho ANTES do marcador
+        // é saída real do comando e NÃO pode sumir (nem poluir o parse do
+        // scanner). Sem "\n" sintético: o newline da linha era do echo do
+        // marcador, não da saída — o captured fica byte a byte fiel.
+        visible += line.slice(0, m.index);
         exitCode = Number(m[1]);
       } else {
         visible += line + "\n";
@@ -300,8 +309,22 @@ export class TerminalService {
     if (couldBeMarker(exitFull) || (waiter.capture && couldBeMarker(beginFull))) {
       waiter.pending = buf;
     } else {
-      visible += buf;
-      waiter.pending = "";
+      // Marcador colado NO MEIO da linha E dividido entre chunks (ex.: chunk
+      // termina com "porta1 :::PAAS_EX"): segura a partir do último "::" cuja
+      // continuação possa ser o marcador; o trecho anterior é exibido na hora.
+      // Requer "::" no início do sufixo para NÃO prender prompts interativos
+      // ("New password:" termina com ":" simples e aparece imediatamente).
+      let glue = -1;
+      for (let i = candidate.indexOf(":"); i !== -1; i = candidate.indexOf(":", i + 1)) {
+        if (candidate.startsWith("::", i) && exitFull.startsWith(candidate.slice(i))) glue = i;
+      }
+      if (glue !== -1) {
+        visible += buf.slice(0, glue);
+        waiter.pending = buf.slice(glue);
+      } else {
+        visible += buf;
+        waiter.pending = "";
+      }
     }
     return { visible, done: exitCode !== null, exitCode };
   }
