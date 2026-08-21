@@ -51,6 +51,10 @@ export interface ServerConfig {
   publicIpv6: string | null;
   /** Intervalo inicial do scan recorrente de segurança (ms). Persistido depois. */
   monitorIntervalMs: number;
+  /** Caminho do unix socket do Docker (terminal web, host bridge, deploys). */
+  dockerSocketPath: string;
+  /** Timeout de inatividade da sessão do terminal web (ms). Default 30 min. */
+  terminalIdleTimeoutMs: number;
 }
 
 export function loadConfig(): ServerConfig {
@@ -83,5 +87,7 @@ export function loadConfig(): ServerConfig {
     publicIp: process.env.PAAS_PUBLIC_IP?.trim() || null,
     publicIpv6: process.env.PAAS_PUBLIC_IPV6?.trim() || null,
     monitorIntervalMs: Number(process.env.PAAS_MONITOR_INTERVAL_MS ?? MONITOR_DEFAULT_INTERVAL_MS),
+    dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
+    terminalIdleTimeoutMs: Number(process.env.PAAS_TERMINAL_IDLE_TIMEOUT_MS ?? 30 * 60_000),
   };
 }

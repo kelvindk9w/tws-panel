@@ -10,6 +10,11 @@ import { defineConfig } from "vitest/config";
 //  - src/routes/{docker,mail,monitoring,security}.ts (delegam aos serviços)
 //  - src/services/{docker-service,deploy-service,mail-service,
 //    monitor-service,security-service}.ts (engine/exec/runner de containers)
+//  - src/services/docker-socket.ts (I/O crua com o docker.sock — validada por
+//    smoke/E2E com Docker real) e src/services/terminal-runner.ts (wrapper
+//    fino exercitado via terminal-service nos testes de rotas)
+// terminal-service.ts ENTRA no escopo: a REGRA DE OURO (input nunca logado),
+// o parse do marcador de exit e a fila de comandos são lógica pura testável.
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
@@ -31,6 +36,7 @@ export default defineConfig({
         "src/services/setup-state.ts",
         "src/services/setup-token.ts",
         "src/services/system-info.ts",
+        "src/services/terminal-service.ts",
         "src/services/user-store.ts",
       ],
       reporter: ["text", "html"],

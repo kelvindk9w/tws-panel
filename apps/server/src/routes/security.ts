@@ -32,6 +32,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
     audit: (action, detail) => {
       void app.auditService.record({ action, detail });
     },
+    terminal: app.terminalService,
   });
   app.decorate("securityService", service);
 

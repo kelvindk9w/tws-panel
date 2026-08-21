@@ -13,6 +13,8 @@ import { SessionStore } from "./services/session-store.js";
 import { DeployService } from "./services/deploy-service.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
+import { TerminalService } from "./services/terminal-service.js";
+import { createDockerPtyFactory, type PtyFactory } from "./services/docker-socket.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
 import setupRoutes from "./routes/setup.js";
@@ -23,6 +25,7 @@ import dockerRoutes from "./routes/docker.js";
 import domainsRoutes from "./routes/domains.js";
 import mailRoutes from "./routes/mail.js";
 import monitoringRoutes from "./routes/monitoring.js";
+import terminalRoutes from "./routes/terminal.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -33,7 +36,12 @@ declare module "fastify" {
   }
 }
 
-export async function buildApp(): Promise<FastifyInstance> {
+export interface BuildAppOptions {
+  /** Fábrica de PTY do terminal web (testes injetam um fake sem Docker). */
+  terminalPtyFactory?: PtyFactory;
+}
+
+export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstance> {
   const config = loadConfig();
 
   const app = Fastify({
@@ -68,6 +76,17 @@ export async function buildApp(): Promise<FastifyInstance> {
     "deployService",
     new DeployService(config, { audit: app.auditService, alerts: app.alertsService }),
   );
+  // Terminal web embutido: uma sessão de PTY no alvo (host via host bridge ou
+  // container de dev), compartilhada entre o WS do painel e o executor de
+  // hardening. Relay puro — input do usuário nunca é logado/auditado.
+  const terminalService = new TerminalService({
+    openPty: options?.terminalPtyFactory ?? createDockerPtyFactory(config),
+    idleTimeoutMs: config.terminalIdleTimeoutMs,
+    audit: (action, detail) => {
+      void app.auditService.record({ action, detail });
+    },
+  });
+  app.decorate("terminalService", terminalService);
 
   const token = await loadSetupToken(config.setupTokenFile);
   app.decorate("setupToken", token);
@@ -118,6 +137,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(mailRoutes);
   // Fase 4 — por último: consome mailService (hook de blacklist no scan).
   await app.register(monitoringRoutes);
+  await app.register(terminalRoutes);
+
+  app.addHook("onClose", async () => {
+    await terminalService.dispose();
+  });
 
   // Frontend estático (build do Vite) com fallback SPA
   if (existsSync(path.join(config.webDist, "index.html"))) {

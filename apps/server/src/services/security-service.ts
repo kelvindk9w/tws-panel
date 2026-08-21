@@ -24,6 +24,8 @@ import {
   type TargetRunner,
 } from "@paas/security";
 import type { ServerConfig } from "../config.js";
+import { TerminalRelayRunner } from "./terminal-runner.js";
+import type { TerminalService } from "./terminal-service.js";
 
 /** Callback de auditoria para comandos executados no host real. */
 export type SecurityAuditHook = (action: string, detail: string) => void;
@@ -43,18 +45,25 @@ export class SecurityService {
   private lastScanAt = 0;
   private runningScan: Promise<SecurityScanReport> | null = null;
 
-  constructor(config: ServerConfig, opts?: { audit?: SecurityAuditHook }) {
+  constructor(config: ServerConfig, opts?: { audit?: SecurityAuditHook; terminal?: TerminalService }) {
     this.config = config;
     // Alvo "host": host bridge (nsenter via helper privilegiado descartável) —
     // os comandos rodam na VPS real, NÃO no container do painel. Cada comando
     // passa pela allowlist e é registrado em auditoria.
-    this.runner =
+    const baseRunner: TargetRunner =
       config.securityTarget === "host"
         ? new NsenterHostRunner({
             image: config.hostHelperImage,
             onAudit: (detail) => opts?.audit?.("hardening.host-exec", detail),
           })
         : new ContainerRunner({ name: config.securityTargetContainer });
+    // Visão dupla: os scripts de fase (execStream) rodam DENTRO do terminal
+    // web embutido — saída ao vivo no xterm + prompts interativos respondidos
+    // pelo usuário direto no terminal. Fallback ao runner direto se o PTY
+    // estiver indisponível. exec() pontual (checks do scanner) segue direto.
+    this.runner = opts?.terminal ? new TerminalRelayRunner(baseRunner, opts.terminal) : baseRunner;
+    // O PTY do modo dev (container alvo) precisa do container de pé.
+    opts?.terminal?.setEnsureTarget(() => baseRunner.ensureReady());
     this.historyFile = path.join(config.dataDir, "security-history.json");
     this.executor = new SecurityExecutor({
       runner: this.runner,

@@ -17,6 +17,7 @@
     "@fastify/helmet": "^13.0.1",
     "@fastify/rate-limit": "^10.2.2",
     "@fastify/static": "^10.1.2",
+    "@fastify/websocket": "^11.3.0",
     "@node-rs/argon2": "^2.1.0",
     "@paas/core": "workspace:*",
     "@paas/deploy": "workspace:*",
