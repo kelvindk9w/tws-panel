@@ -23,7 +23,12 @@ set -euo pipefail
 
 VOLUME_NAME="${PAAS_VOLUME:-paas_data}"
 
-BOLD='\033[1m'; RESET='\033[0m'; RED='\033[1;31m'; YELLOW='\033[1;33m'
+if [ -t 1 ]; then
+  BOLD="$(tput bold 2>/dev/null || true)"; RESET="$(tput sgr0 2>/dev/null || true)"
+  RED="$(tput setaf 1 2>/dev/null || true)"; YELLOW="$(tput setaf 3 2>/dev/null || true)"
+else
+  BOLD=""; RESET=""; RED=""; YELLOW=""
+fi
 log()  { printf '\033[1;34m[tws-panel]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
