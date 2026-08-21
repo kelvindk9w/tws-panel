@@ -37,6 +37,8 @@ step "Removendo snapd"
 if pkg_installed snapd; then
   if command -v snap >/dev/null 2>&1 && [ "$PAAS_DRY_RUN" != "1" ]; then
     # Remove snaps na ordem correta (spec §5.3): primeiro os comuns, por último base/core.
+    # O `|| true` no fim é obrigatório: com 0 snaps o grep sai 1 e, sob
+    # pipefail, o pipeline inteiro falharia — derrubando o script (set -e).
     snap list 2>/dev/null | awk 'NR>1 {print $1}' | grep -vE '^(core|core[0-9]+|snapd|bare)$' | \
       while read -r s; do snap remove --purge "$s" || warn "falha ao remover snap $s"; done || true
     snap list 2>/dev/null | awk 'NR>1 {print $1}' | grep -E '^(core|core[0-9]+|snapd|bare)$' | \
@@ -71,7 +73,10 @@ ok "Pacotes de desktop/remoção concluída"
 step "Limpando dependências órfãs e resíduos"
 if [ "$PAAS_DRY_RUN" = "1" ]; then
   echo "[dry-run] apt-get autoremove --purge / purge '?config-files' / clean"
-  apt-get -s autoremove --purge 2>/dev/null | grep -cE '^(Remv|Purg)' | xargs -I{} echo "[dry-run] {} pacote(s) órfãos seriam removidos"
+  # grep -c sai 1 quando não há matches (0 órfãos) — sem `|| true` o pipefail
+  # mataria o dry-run num sistema já limpo (mesmo padrão do 00-update.sh).
+  COUNT="$(apt-get -s autoremove --purge 2>/dev/null | grep -cE '^(Remv|Purg)' || true)"
+  echo "[dry-run] $COUNT pacote(s) órfãos seriam removidos"
 else
   env DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y
   # Resíduos de configuração de pacotes removidos
