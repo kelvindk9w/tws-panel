@@ -9,6 +9,23 @@
 #
 # O SETUP_TOKEN pode ser passado via ambiente; se ausente, o painel lê o
 # arquivo gerado pelo install.sh dentro do volume (veja scripts/install.sh).
+#
+# ── HOST BRIDGE (scan/hardening da VPS real) ──────────────────────────────
+# Com PAAS_TARGET=host (padrão), o módulo de segurança NÃO executa nada no
+# namespace deste container: ele sobe um helper DESCARTÁVEL privilegiado
+# (`docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -i -n -p`)
+# que entra nos namespaces do PID 1 do host — padrão Coolify/Portainer.
+# Somente comandos da allowlist (checks do scanner + scripts de
+# scripts/hardening/*) são executados, tudo auditado. docs/host-bridge.md.
+#
+# ── HARDENING DESTE CONTAINER (o painel é o exemplo) ─────────────────────
+#  - usuário não-root (tws, ver Dockerfile) + group_add do GID do docker.sock;
+#  - no-new-privileges: nenhum processo do container escala privilégio;
+#  - cap_drop ALL sem cap_add: o cliente Docker NÃO precisa de capabilities —
+#    ele apenas fala com o socket; quem confere --privileged ao helper é o
+#    daemon do host (que já é alcançável pelo socket de qualquer forma);
+#  - read_only: rootfs imutável; os únicos diretórios graváveis são /data
+#    (volume de estado) e /tmp (tmpfs volátil).
 services:
   panel:
     build: .
@@ -25,6 +42,17 @@ services:
       SETUP_TOKEN_FILE: /data/setup-token
       PAAS_TARGET: ${PAAS_TARGET:-host}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    # GID do grupo dono do /var/run/docker.sock no host (o install.sh grava
+    # no .env automaticamente; manual: DOCKER_GID=$(stat -c %g /var/run/docker.sock))
+    group_add:
+      - "${DOCKER_GID:-999}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Metadados do HOST (somente leitura): o container roda Debian (imagem

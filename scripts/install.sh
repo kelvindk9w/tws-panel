@@ -255,6 +255,17 @@ else
   fi
 fi
 
+# --- 5b. GID do grupo do docker.sock ------------------------------------------------------
+# O painel roda como usuário não-root (tws) e acessa o socket via group_add.
+# Persistimos o GID no .env para sobreviver a restarts/rebuilds futuros.
+DOCKER_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 999)"
+if [ -f .env ] && grep -q '^DOCKER_GID=' .env; then
+  sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/" .env
+else
+  printf 'DOCKER_GID=%s\n' "$DOCKER_GID" >> .env
+fi
+log "Grupo do docker.sock no host: GID $DOCKER_GID (gravado em .env)"
+
 # --- 6. Build + subida ------------------------------------------------------------------
 log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
 SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build

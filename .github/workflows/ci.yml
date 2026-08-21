@@ -54,3 +54,28 @@ jobs:
 
       - name: Unit tests (com cobertura e thresholds)
         run: pnpm test:coverage
+
+  # Scan de vulnerabilidades da imagem de produção (Trivy).
+  # Política atual: REPORT-ONLY (exit-code 0) para severidades HIGH/CRITICAL
+  # com fix disponível — o relatório fica no log do job. Decisão documentada:
+  # falharemos o CI em CRITICAL assim que o baseline da imagem estiver limpo
+  # (hoje o Debian slim traz findings residuais sem fix upstream).
+  image-scan:
+    name: image-scan (trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build da imagem de produção
+        run: docker build -t tws-panel:ci .
+
+      - name: Trivy — HIGH/CRITICAL da imagem (report-only)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: tws-panel:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+          format: table
