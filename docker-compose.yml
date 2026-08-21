@@ -27,6 +27,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Metadados do HOST (somente leitura): o container roda Debian (imagem
+      # node:*-slim), então /etc/os-release local NÃO reflete a VPS real.
+      - /etc/os-release:/host/etc/os-release:ro
+      - /etc/hostname:/host/etc/hostname:ro
       - paas_data:/data
 
 volumes:
