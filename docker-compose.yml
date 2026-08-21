@@ -63,6 +63,7 @@ services:
 
 volumes:
   paas_data:
-    # Nome fixo (independe do diretório do projeto) — facilita backup e o
-    # install.sh, que lê/grava o setup token diretamente neste volume.
+    # Criado pelo install.sh antes da primeira subida (para gravar o setup
+    # token). external: true evita o aviso de "volume não criado pelo compose".
     name: paas_data
+    external: true

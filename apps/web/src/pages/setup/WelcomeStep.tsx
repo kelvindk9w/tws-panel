@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { VerifyTokenResponse } from "@paas/core";
-import { apiFetch, setSetupToken, ApiRequestError } from "@/lib/api";
+import { apiFetch, getSetupToken, setSetupToken, ApiRequestError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,21 +11,23 @@ interface WelcomeStepProps {
 }
 
 export function WelcomeStep({ onVerified }: WelcomeStepProps) {
-  const [token, setToken] = useState("");
+  // Se o token veio pela URL (?token=...), ele já está na sessão — pré-preenche
+  // e valida automaticamente, sem obrigar o usuário a colar de novo.
+  const [token, setToken] = useState(() => getSetupToken() ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const autoVerified = useRef(false);
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  async function verify(value: string) {
     setError(null);
     setLoading(true);
     try {
       const result = await apiFetch<VerifyTokenResponse>("/api/setup/verify-token", {
         method: "POST",
-        body: JSON.stringify({ token: token.trim() }),
+        body: JSON.stringify({ token: value }),
       });
       if (result.valid) {
-        setSetupToken(token.trim());
+        setSetupToken(value);
         onVerified();
       } else {
         setError("Token inválido. Confira o valor exibido pelo instalador no terminal.");
@@ -35,6 +37,20 @@ export function WelcomeStep({ onVerified }: WelcomeStepProps) {
     } finally {
       setLoading(false);
     }
+  }
+
+  useEffect(() => {
+    const stored = getSetupToken();
+    if (!autoVerified.current && stored) {
+      autoVerified.current = true;
+      void verify(stored.trim());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    await verify(token.trim());
   }
 
   return (
