@@ -108,3 +108,37 @@ docker run --rm --privileged --pid=host alpine:3 \
 # 3) E2E continuam no perfil container (ContainerRunner):
 pnpm test:e2e
 ```
+
+## 7. Terminal web embutido (PTY sem node-pty)
+
+O terminal ao vivo do wizard (visão dupla) usa o MESMO padrão do host bridge —
+a decisão foi **Docker Engine API via `/var/run/docker.sock`, NÃO node-pty**:
+
+- **node-pty** compila nativo (node-gyp → python3/make/g++ na imagem) e, pior,
+  daria um shell DENTRO do container do painel — o alvo correto é o HOST;
+- o daemon Docker JÁ aloca PTYs de graça: o painel cria um container helper
+  descartável (`Tty: true`, `--privileged`, `pid: host`, `AutoRemove`) rodando
+  `nsenter -t 1 -m -u -i -n -p -- bash -l` e faz **hijack** do attach (HTTP 101,
+  stream cru — sem multiplex de stdout/stderr quando `Tty: true`). O resize é o
+  endpoint `POST /containers/{id}/resize` da API. No alvo de dev (container), o
+  caminho é `POST /containers/{alvo}/exec` + `/exec/{id}/start` hijacked.
+
+Implementação: `apps/server/src/services/docker-socket.ts` (transporte),
+`terminal-service.ts` (sessão única, scrollback, fila de comandos, idle
+timeout de 30 min) e `routes/terminal.ts` (WebSocket `/api/terminal/ws`,
+autenticado pela guarda global: setup token no wizard, sessão admin depois).
+
+**Fases dentro do terminal:** o `TerminalRelayRunner` desvia o `execStream` do
+executor para o shell do terminal — o comando aparece digitado no xterm, a
+saída rola ao vivo e o exit code é lido de um marcador
+`:::PAAS_EXIT_<nonce>:<code>` filtrado do stream. Prompts interativos são
+respondidos pelo usuário digitando no próprio terminal.
+
+**REGRA DE OURO:** o backend faz RELAY PURO do fluxo. O input do usuário
+(senhas inclusas) NUNCA é logado, persistido, auditado ou inspecionado — a
+auditoria registra apenas conexão/desconexão/ciclo de vida da sessão. Há um
+teste que injeta `senha-secreta` no stream e prova que ela não aparece em
+nenhum log/auditoria (`apps/server/tests/terminal-service.test.ts` e
+`routes-terminal.test.ts`). Se o PTY estiver indisponível (ex.: sem
+docker.sock), o executor cai para o caminho antigo (`execStream` direto) — a
+indisponibilidade do terminal nunca impede o hardening.

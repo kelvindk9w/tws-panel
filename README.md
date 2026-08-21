@@ -36,6 +36,7 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 
 | Módulo | O que faz |
 |---|---|
+| **🖥️ Terminal web embutido** | **Visão dupla** nos 4 passos do wizard: em cima a UI formatada (cards/fases), embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), expansível/ocultável. As fases de hardening rodam DENTRO dele — você vê os comandos de verdade, como no SSH. Prompts de senha/confirmação são digitados direto no terminal: o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita (audita só conexão/desconexão). |
 | **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. |
 | **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. |
 | **📧 E-mail** | Servidor **Stalwart** (SMTP + IMAP + DKIM em um container), par **DKIM RSA 2048** gerado por domínio, **checklist DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) com valores prontos para colar no provedor, texto pronto para abrir chamado de PTR, criação de caixas com **credenciais prontas para Outlook/Gmail/Thunderbird**, e injeção automática de variáveis SMTP nos seus projetos. |
@@ -123,6 +124,9 @@ SSL. Guia completo de produção em [docs/production.md](docs/production.md).
 docker compose ps            # status do painel
 docker compose logs -f panel # logs em tempo real
 docker compose up -d --build # atualizar para uma nova versão (git pull antes)
+
+./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
+./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)
 ```
 
 ### Modo dev local

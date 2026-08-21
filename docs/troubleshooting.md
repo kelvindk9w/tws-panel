@@ -98,8 +98,17 @@ nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/ho
 **Causa:** token errado, copiado com espaço extra, ou o servidor foi reiniciado com outro
 `SETUP_TOKEN` no ambiente.
 
-**Solução:** o valor de `SETUP_TOKEN` no ambiente tem prioridade sobre o arquivo. Confira o
-unit do systemd (`/etc/systemd/system/paas-setup.service`) e o arquivo `/etc/paas/setup-token`.
+**Solução:** o valor de `SETUP_TOKEN` no ambiente tem prioridade sobre o arquivo. Reexiba a
+URL + token a qualquer momento com `./scripts/show-token.sh` (lê o volume `paas_data`, sem
+reinstalar nada).
+
+### Perdi o token / quero recomeçar o wizard do zero
+
+- **Perdeu o token:** `./scripts/show-token.sh` — imprime o banner com a URL e o token.
+- **Recomeçar o wizard:** `./scripts/reset-setup.sh` — apaga `setup-state.json` do volume
+  (com confirmação interativa) e o wizard volta ao passo 0; a conta admin é mantida.
+  Com `--full` apaga também `users.json` e `sessions.json` (a conta admin deixa de existir
+  e todos são deslogados). Projetos, domínios, e-mail e o token NÃO são tocados.
 
 ### Perdi o acesso SSH durante o hardening
 

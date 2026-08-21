@@ -141,3 +141,37 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
 - [ ] Baseline de segurança criado + monitoramento recorrente ativo
 - [ ] Blacklist verificada em **E-mail → Blacklist** (tudo clean)
 - [ ] Nenhum alerta crítico aberto em **Alertas**
+
+---
+
+## 4. Operação: token e reset do wizard
+
+### Recuperar o setup token
+
+O token é impresso UMA vez no fim do `install.sh`, mas fica persistido no volume
+`paas_data` (`/data/setup-token` dentro do container). Para reexibi-lo a qualquer
+momento — sem reinstalar nada:
+
+```bash
+./scripts/show-token.sh
+```
+
+O script lê o volume (fallback: `SETUP_TOKEN` do container em execução), detecta o IP
+público (best-effort; use `PAAS_PUBLIC_IP=<ip>` para fixar) e imprime o banner com a
+URL completa `http://IP:9000/?token=...`.
+
+> Lembrete: depois que a conta admin é criada (passo 4 do wizard), o setup token é
+> invalidado de propósito — a partir daí o acesso é pelo login normal.
+
+### Resetar o setup (recomeçar o wizard do zero)
+
+```bash
+./scripts/reset-setup.sh           # volta o wizard ao passo 0 (conta admin mantida)
+./scripts/reset-setup.sh --full    # + apaga usuários admin e sessões ativas
+```
+
+Ambos pedem confirmação interativa (digitar `resetar`) e reiniciam o painel ao final.
+O que é apagado fica restrito ao volume `paas_data`: `setup-state.json` (sempre) e, no
+modo `--full`, também `users.json` e `sessions.json`. **Projetos, domínios, e-mail,
+histórico de segurança e o setup token NÃO são tocados.** Depois do reset, use
+`./scripts/show-token.sh` para pegar o link do wizard de novo.
