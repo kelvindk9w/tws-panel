@@ -106,8 +106,35 @@ export function DashboardPage() {
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(() => void refresh(), 5_000);
-    return () => clearInterval(t);
+    // Polling de 15s PAUSADO com a aba oculta (antes: 5s ininterruptos — cada
+    // ciclo batia no dockerd mesmo com a aba em background). Ao voltar para a
+    // aba, atualiza na hora e retoma o intervalo.
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = () => {
+      if (timer === null && document.visibilityState !== "hidden") {
+        timer = setInterval(() => void refresh(), 15_000);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        stop();
+      } else {
+        void refresh();
+        start();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   const external = (containers?.containers ?? []).filter((c) => !c.managed);

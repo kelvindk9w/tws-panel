@@ -30,10 +30,33 @@ function OpenAlertsBadge() {
       }
     }
     void tick();
-    const timer = setInterval(() => void tick(), 30_000);
+    // Polling pausado com a aba oculta; retoma (e atualiza) ao voltar.
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = () => {
+      if (timer === null && document.visibilityState !== "hidden") {
+        timer = setInterval(() => void tick(), 30_000);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        stop();
+      } else {
+        void tick();
+        start();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 
