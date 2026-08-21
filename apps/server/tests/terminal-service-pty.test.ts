@@ -51,11 +51,20 @@ const config = {
 
 describe.skipIf(!HAS_DOCKER)("TerminalService — repro P0 com PTY REAL (docker exec Tty)", () => {
   beforeAll(async () => {
+    // Warm-up determinístico: garante a imagem em cache ANTES do `docker run`.
+    // Sem isso, num ambiente sem cache (runner do CI), o pull implícito do
+    // `run` despeja "Unable to find image... / Pull complete" no stderr e
+    // quebra a assertion de stream limpo abaixo. A saída do pull é descartada.
+    await execFileAsync("docker", ["image", "inspect", IMAGE], {
+      timeout: 15_000,
+    }).catch(() =>
+      execFileAsync("docker", ["pull", "--quiet", IMAGE], { timeout: 180_000 }),
+    );
     await execFileAsync("docker", ["rm", "-f", CONTAINER]).catch(() => undefined);
     const run = await execFileAsync(
       "docker",
       ["run", "-d", "--name", CONTAINER, IMAGE, "sleep", "infinity"],
-      { timeout: 180_000 }, // inclui o pull da imagem, se necessário
+      { timeout: 60_000 }, // imagem já em cache: run deve ser rápido e silencioso
     );
     expect(run.stderr).toBe("");
   }, 200_000);
