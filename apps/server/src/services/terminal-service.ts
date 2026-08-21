@@ -25,6 +25,21 @@ export class TerminalUnavailableError extends Error {
   }
 }
 
+/**
+ * Lançado quando, em modo captura, o marcador EXIT chega SEM que o BEGIN
+ * tenha sido detectado — a captura está corrompida (output seria vazio) e
+ * NÃO pode ser entregue como se fosse sucesso. O caller pode retentar UMA
+ * vez (os checks do scanner são somente-leitura); se persistir, o erro
+ * propaga e o scanner marca o check como unknown/erro — nunca um "fail"
+ * mentiroso (ex.: "fail2ban ausente" com fail2ban ativo).
+ */
+export class CaptureDesyncError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CaptureDesyncError";
+  }
+}
+
 export interface TerminalServiceOptions {
   /** Fábrica do PTY remoto (docker-socket em produção; fake nos testes). */
   openPty: PtyFactory;
@@ -71,7 +86,16 @@ const DEFAULT_SCROLLBACK_CHARS = 64_000;
 // linha da saída (`porta1 porta2 :::PAAS_EXIT_<n>:0`). O marcador só precisa
 // terminar a linha — o trecho anterior continua sendo saída visível.
 const EXIT_MARKER_RE = (nonce: string) => new RegExp(`:::PAAS_EXIT_${nonce}:(\\d+)\\r?$`);
-const BEGIN_MARKER_RE = (nonce: string) => new RegExp(`^:::PAAS_BEGIN_${nonce}\\r?$`);
+// SEM âncora de início, pelo MESMO motivo do EXIT: o caso simétrico existe —
+// provado em produção (VPS real). Quando o echo do input digitado chega
+// intercalado/atrasado em relação ao output (shell de longa vida pós-fases
+// de hardening), o marcador BEGIN sai COLADO na linha do prompt
+// (`root@host:/# :::PAAS_BEGIN_<n>`) ou de saída anterior sem newline.
+// Com a âncora ^ o BEGIN não casava: `capturing` nunca ligava, a captura
+// saía VAZIA e a linha do marcador ainda vazava para o scrollback do
+// usuário. O marcador só precisa TERMINAR a linha — o trecho anterior
+// (prompt/resto de saída) continua visível.
+const BEGIN_MARKER_RE = (nonce: string) => new RegExp(`:::PAAS_BEGIN_${nonce}\\r?$`);
 
 export class TerminalService {
   private readonly openPty: PtyFactory;
@@ -243,14 +267,18 @@ export class TerminalService {
       this.broadcast(chunk);
       return;
     }
-    const { visible, done, exitCode } = this.consumeForWaiter(waiter, chunk);
+    const { visible, capturable, done, exitCode } = this.consumeForWaiter(waiter, chunk);
     if (visible.length > 0) {
-      // Modo captura: só o trecho entre os marcadores BEGIN/EXIT vai ao
-      // caller, com CRLF normalizado para \n (o stdout é parseado pelos
-      // checks do scanner). O BROADCAST segue cru (\r\n) para o xterm
-      // renderizar certinho — sem efeito escada na tela do usuário.
-      if (!waiter.capture || waiter.capturing) {
-        const forCaller = waiter.capture ? visible.replace(/\r\n/g, "\n") : visible;
+      // Modo captura: só o trecho DEPOIS do marcador BEGIN vai ao caller,
+      // com CRLF normalizado para \n (o stdout é parseado pelos checks do
+      // scanner) — o prompt/saída anterior colado ANTES do BEGIN fica fora.
+      // O BROADCAST segue cru (\r\n) para o xterm renderizar certinho — sem
+      // efeito escada na tela do usuário.
+      if (!waiter.capture) {
+        waiter.onData(visible);
+        waiter.captured += visible;
+      } else if (capturable.length > 0) {
+        const forCaller = capturable.replace(/\r\n/g, "\n");
         waiter.onData(forCaller);
         waiter.captured += forCaller;
       }
@@ -259,33 +287,65 @@ export class TerminalService {
     if (done) {
       clearTimeout(waiter.timer);
       this.waiter = null;
-      waiter.resolve({ code: exitCode ?? 1, output: waiter.captured });
+      if (waiter.capture && !waiter.capturing) {
+        // GUARDA DE INTEGRIDADE: o EXIT chegou sem que o BEGIN tivesse sido
+        // detectado — a captura está vazia/corrompida. Entregar "" como
+        // sucesso faria o scanner avaliar lixo (todos os checks "ausente").
+        waiter.reject(
+          new CaptureDesyncError(
+            "captura dessincronizada: marcador BEGIN não detectado no fluxo do terminal (resultado descartado)",
+          ),
+        );
+      } else {
+        waiter.resolve({ code: exitCode ?? 1, output: waiter.captured });
+      }
     }
   }
 
   /**
-   * Parse linha a linha atrás do marcador :::PAAS_EXIT_<nonce>:<code>.
-   * O marcador NÃO é exibido no terminal do usuário nem vai ao scrollback.
+   * Parse linha a linha atrás dos marcadores :::PAAS_BEGIN_<nonce> (início
+   * da captura) e :::PAAS_EXIT_<nonce>:<code> (fim + exit code). Ambos são
+   * tolerantes a colagem (podem vir no meio da linha): o trecho anterior é
+   * conteúdo real e segue visível. Os marcadores NÃO são exibidos no
+   * terminal do usuário nem vão ao scrollback.
    */
   private consumeForWaiter(
     waiter: CommandWaiter,
     chunk: string,
-  ): { visible: string; done: boolean; exitCode: number | null } {
+  ): { visible: string; capturable: string; done: boolean; exitCode: number | null } {
     const re = EXIT_MARKER_RE(waiter.marker);
     const beginRe = BEGIN_MARKER_RE(waiter.marker);
     let buf = waiter.pending + chunk;
     let visible = "";
+    // Trecho de `visible` produzido com a captura LIGADA (depois do BEGIN):
+    // é o único que vai ao caller em modo captura. O prefixo colado antes do
+    // BEGIN (prompt/resto de saída anterior) é exibido mas NÃO capturado.
+    let capturable = "";
     let exitCode: number | null = null;
+    const push = (s: string) => {
+      visible += s;
+      // Capturável = captura ligada E marcador EXIT ainda não visto: bytes
+      // POSTERIORES ao EXIT no mesmo chunk (ex.: o próximo prompt, que chega
+      // colado à linha do marcador numa única leitura do socket) são
+      // exibidos ao usuário mas NUNCA poluem o stdout entregue ao scanner.
+      if (waiter.capturing && exitCode === null) capturable += s;
+    };
     for (;;) {
       const nl = buf.indexOf("\n");
       if (nl === -1) break;
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
-      if (waiter.capture && !waiter.capturing && beginRe.exec(line)) {
-        // Marcador de início: não é exibido nem capturado — a partir da
-        // próxima linha a saída é do comando de fato.
-        waiter.capturing = true;
-        continue;
+      if (waiter.capture && !waiter.capturing) {
+        const b = beginRe.exec(line);
+        if (b) {
+          // Marcador de início: não é exibido nem capturado — a partir da
+          // próxima linha a saída é do comando de fato. O trecho ANTES dele
+          // na mesma linha (prompt sem newline/resto de saída anterior ao
+          // qual o BEGIN colou) é conteúdo real: exibido, mas não capturado.
+          push(line.slice(0, b.index));
+          waiter.capturing = true;
+          continue;
+        }
       }
       const m = re.exec(line);
       if (m) {
@@ -293,10 +353,10 @@ export class TerminalService {
         // é saída real do comando e NÃO pode sumir (nem poluir o parse do
         // scanner). Sem "\n" sintético: o newline da linha era do echo do
         // marcador, não da saída — o captured fica byte a byte fiel.
-        visible += line.slice(0, m.index);
+        push(line.slice(0, m.index));
         exitCode = Number(m[1]);
       } else {
-        visible += line + "\n";
+        push(line + "\n");
       }
     }
     // Segura o resto parcial SOMENTE se ele puder ser (o início de) uma linha
@@ -316,17 +376,27 @@ export class TerminalService {
       // ("New password:" termina com ":" simples e aparece imediatamente).
       let glue = -1;
       for (let i = candidate.indexOf(":"); i !== -1; i = candidate.indexOf(":", i + 1)) {
-        if (candidate.startsWith("::", i) && exitFull.startsWith(candidate.slice(i))) glue = i;
+        if (!candidate.startsWith("::", i)) continue;
+        const suffix = candidate.slice(i);
+        // O sufixo pode ser o início do EXIT (sempre) ou do BEGIN (enquanto
+        // a captura não ligou — BEGIN colado ao prompt E dividido entre
+        // chunks, ex.: `root@host:/# :::PAAS_BE` | `GIN_<n>`).
+        if (
+          exitFull.startsWith(suffix) ||
+          (waiter.capture && !waiter.capturing && beginFull.startsWith(suffix))
+        ) {
+          glue = i;
+        }
       }
       if (glue !== -1) {
-        visible += buf.slice(0, glue);
+        push(buf.slice(0, glue));
         waiter.pending = buf.slice(glue);
       } else {
-        visible += buf;
+        push(buf);
         waiter.pending = "";
       }
     }
-    return { visible, done: exitCode !== null, exitCode };
+    return { visible, capturable, done: exitCode !== null, exitCode };
   }
 
   // -------------------------------------------------------------------------
@@ -363,7 +433,16 @@ export class TerminalService {
     cmd: string,
     opts?: { timeoutMs?: number },
   ): Promise<CommandResult> {
-    return this.enqueue(cmd, () => undefined, { ...opts, capture: true });
+    const attempt = () => this.enqueue(cmd, () => undefined, { ...opts, capture: true });
+    return attempt().catch((err: unknown) => {
+      // Dessincronia de captura (BEGIN perdido no byte stream): os comandos
+      // desta variante são os checks SOMENTE-LEITURA do scanner — UMA
+      // retentativa automática é segura. Se a segunda também dessincronizar,
+      // o CaptureDesyncError propaga e o scanner marca o check como
+      // unknown/erro em vez de avaliar uma saída vazia como "ausente".
+      if (!(err instanceof CaptureDesyncError)) throw err;
+      return attempt();
+    });
   }
 
   private enqueue(

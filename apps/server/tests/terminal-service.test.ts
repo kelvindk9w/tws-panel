@@ -7,7 +7,11 @@
  */
 import { Duplex } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { TerminalService, TerminalUnavailableError } from "../src/services/terminal-service.js";
+import {
+  CaptureDesyncError,
+  TerminalService,
+  TerminalUnavailableError,
+} from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
 import { SECURITY_CHECKS } from "@paas/security";
 
@@ -458,6 +462,106 @@ describe("TerminalService — runCommandCaptured (checks do scanner no terminal)
     expect(result.code).toBe(0);
     expect(result.output).toBe("porta1 porta2 ");
     expect(broadcasted.join("")).not.toContain("PAAS_EX");
+    await service.dispose();
+  });
+
+  it("marcador BEGIN COLADO ao prompt (sem newline) liga a captura e o prompt segue visível", async () => {
+    const { service, next } = makeService();
+    const broadcasted: string[] = [];
+    service.onOutput((c) => broadcasted.push(c));
+    const promise = service.runCommandCaptured("hostname");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    // Caso real da VPS: o echo do input chega atrasado/intercalado e o echo
+    // do BEGIN sai NA MESMA LINHA do prompt (que não termina com newline).
+    // Com a âncora ^ isso NUNCA casava: captura vazia + marcador visível.
+    next().emit(`root@vps:~# :::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit("minha-vps\r\n");
+    next().emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("minha-vps\n");
+    // o trecho antes do marcador (prompt) é conteúdo real: segue visível
+    expect(broadcasted.join("")).toContain("root@vps:~# ");
+    expect(broadcasted.join("")).not.toContain(`PAAS_BEGIN_${nonce}`);
+    await service.dispose();
+  });
+
+  it("marcador BEGIN colado ao prompt E dividido entre chunks liga a captura", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("hostname");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    // chunk quebra DENTRO do BEGIN, já colado ao prompt sem newline
+    next().emit("root@vps:~# :::PAAS_BE");
+    next().emit(`GIN_${nonce}\r\n`);
+    next().emit("minha-vps\r\n");
+    next().emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("minha-vps\n");
+    await service.dispose();
+  });
+
+  it("texto parecido com marcador na saída real NÃO é segurado nem liga captura duas vezes", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("cat /var/log/app.log");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    // saída real contém um sufixo tipo-marcador no fim do chunk: com a
+    // captura JÁ ligada, não pode ficar preso no buffer de marcador
+    next().emit("linha de log :::PAAS_BE");
+    next().emit("qualquer\r\n");
+    next().emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("linha de log :::PAAS_BEqualquer\n");
+    await service.dispose();
+  });
+
+  it("EXIT sem BEGIN (captura dessincronizada) NÃO entrega vazio: retenta UMA vez e captura", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("hostname");
+    await flush();
+    const pty = next();
+    const nonce1 = nonceOf(pty.inputs, "BEGIN");
+    // o BEGIN da 1ª tentativa se perdeu no byte stream; o EXIT chega mesmo assim
+    pty.emit(`:::PAAS_EXIT_${nonce1}:0\r\n`);
+    await flush();
+    await flush();
+    // retentativa automática: o comando foi digitado de novo, com NOVO nonce
+    const nonces = [...pty.inputs.join("").matchAll(/:::PAAS_BEGIN_([0-9a-f]+)/g)].map((m) => m[1]);
+    expect(nonces).toHaveLength(2);
+    const nonce2 = nonces[1]!;
+    expect(nonce2).not.toBe(nonce1);
+    pty.emit(`:::PAAS_BEGIN_${nonce2}\r\n`);
+    pty.emit("minha-vps\r\n");
+    pty.emit(`:::PAAS_EXIT_${nonce2}:0\r\n`);
+    const result = await promise;
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("minha-vps\n");
+    await service.dispose();
+  });
+
+  it("dessincronia também na retentativa → CaptureDesyncError propaga (scanner marca unknown, nunca fail)", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("hostname");
+    const assertion = expect(promise).rejects.toBeInstanceOf(CaptureDesyncError);
+    await flush();
+    const pty = next();
+    const nonce1 = nonceOf(pty.inputs, "BEGIN");
+    pty.emit(`:::PAAS_EXIT_${nonce1}:0\r\n`); // sem BEGIN — dessincronizado
+    await flush();
+    await flush();
+    const nonces = [...pty.inputs.join("").matchAll(/:::PAAS_BEGIN_([0-9a-f]+)/g)].map((m) => m[1]);
+    expect(nonces).toHaveLength(2); // exatamente UMA retentativa
+    pty.emit(`:::PAAS_EXIT_${nonces[1]}:0\r\n`); // de novo sem BEGIN
+    await assertion;
+    await flush();
+    // NÃO há terceira tentativa
+    const final = [...pty.inputs.join("").matchAll(/:::PAAS_BEGIN_([0-9a-f]+)/g)].map((m) => m[1]);
+    expect(final).toHaveLength(2);
     await service.dispose();
   });
 

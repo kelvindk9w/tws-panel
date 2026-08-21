@@ -45,6 +45,16 @@ function firstLine(s: string): string {
   return s.split("\n")[0]?.trim() ?? "";
 }
 
+/**
+ * "<pkg> está instalado DE FATO" em shell. `dpkg -s` retorna 0 até para
+ * pacote em estado "rc" (removido, só restam configs) — falso-positivo de
+ * "instalado" (bug real: minimal.snapd-absent reportava "snapd instalado"
+ * após o purge da fase 05). O gate correto é o Status-Abbrev do dpkg-query:
+ * só "ii " = instalado; "rc "/"un " = ausente para efeito de check.
+ */
+const DPKG_INSTALLED = (pkg: string) =>
+  `dpkg-query -W -f='\${db:Status-Abbrev}' ${pkg} 2>/dev/null | grep -q '^ii '`;
+
 export const SECURITY_CHECKS: CheckDefinition[] = [
   // ------------------------------------------------------------------ Fase 00
   {
@@ -74,8 +84,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     remediation: "Aplicar a fase 00 (instala e ativa unattended-upgrades).",
     fixable: true,
     hostOnly: true,
-    command:
-      "dpkg -s unattended-upgrades >/dev/null 2>&1 && grep -q 'Unattended-Upgrade \"1\"' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null",
+    command: `${DPKG_INSTALLED("unattended-upgrades")} && grep -q 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null`,
     evaluate: byExitCode("unattended-upgrades instalado e ativado"),
   },
   {
@@ -336,8 +345,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     remediation: "Aplicar a fase 04 (fail2ban com jail.local da spec).",
     fixable: true,
     hostOnly: true,
-    command:
-      "fail2ban-client ping 2>/dev/null || (dpkg -s fail2ban >/dev/null 2>&1 && echo installed-not-running) || echo absent",
+    command: `fail2ban-client ping 2>/dev/null || (${DPKG_INSTALLED("fail2ban")} && echo installed-not-running) || echo absent`,
     evaluate: (r) => {
       const v = firstLine(r.stdout);
       if (v.includes("pong")) return { status: "pass", detail: "fail2ban rodando" };
@@ -374,7 +382,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     remediation: "Aplicar a fase 05 (purge do snapd na ordem correta + apt-mark hold).",
     fixable: true,
     hostOnly: true,
-    command: "dpkg -s snapd >/dev/null 2>&1 && echo installed || echo absent",
+    command: `${DPKG_INSTALLED("snapd")} && echo installed || echo absent`,
     evaluate: (r) =>
       firstLine(r.stdout) === "absent"
         ? { status: "pass", detail: "snapd não instalado" }
@@ -406,8 +414,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "telnet/rsh/ftp/tftp/talk/nis são protocolos em texto claro sem lugar em servidor moderno.",
     remediation: "Aplicar a fase 05 (purge dos clientes legados).",
     fixable: true,
-    command:
-      "for p in telnet rsh-client rsh-redone-client ftp tftp-hpa tftp talk nis; do dpkg -s \"$p\" >/dev/null 2>&1 && echo \"$p\"; done; true",
+    command: `for p in telnet rsh-client rsh-redone-client ftp tftp-hpa tftp talk nis; do ${DPKG_INSTALLED('"$p"')} && echo "$p"; done; true`,
     evaluate: (r) => {
       const pkgs = r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
       return pkgs.length === 0
@@ -426,8 +433,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     remediation: "Aplicar a fase 06 (auditd + regras essenciais da spec).",
     fixable: true,
     hostOnly: true,
-    command:
-      "dpkg -s auditd >/dev/null 2>&1 && echo installed || echo absent",
+    command: `${DPKG_INSTALLED("auditd")} && echo installed || echo absent`,
     evaluate: (r) =>
       firstLine(r.stdout) === "installed"
         ? { status: "pass", detail: "auditd instalado" }
