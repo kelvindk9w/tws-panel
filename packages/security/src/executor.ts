@@ -19,8 +19,15 @@ import {
   type SecurityPhaseId,
 } from "@paas/core";
 import type { TargetRunner } from "./runner.js";
+import { buildPhaseScriptCommand } from "./host-bridge.js";
 
 const MAX_LOG_CHARS = 500_000;
+
+/** Parâmetros opcionais de uma fase (Fase 01: usuário/chave SSH do operador). */
+export interface PhaseParams {
+  sshUser?: string;
+  sshPublicKey?: string;
+}
 
 export interface ExecutorOptions {
   runner: TargetRunner;
@@ -65,10 +72,13 @@ export class SecurityExecutor {
   }
 
   /** Inicia a execução assíncrona de uma fase. */
-  async startJob(phase: SecurityPhaseId, dryRun: boolean): Promise<SecurityJob> {
+  async startJob(phase: SecurityPhaseId, dryRun: boolean, params?: PhaseParams): Promise<SecurityJob> {
     const phaseDef = SECURITY_PHASES.find((p) => p.id === phase);
     if (!phaseDef) throw new Error(`fase desconhecida: ${phase}`);
     if (this.busy) throw new Error("já existe um job de hardening em andamento");
+    if (params && phase !== "01") {
+      throw new Error("parâmetros de fase (usuário/chave SSH) só se aplicam à fase 01");
+    }
 
     const job: SecurityJob = {
       id: randomUUID(),
@@ -85,11 +95,12 @@ export class SecurityExecutor {
       rollbackScheduled: false,
       rollbackDeadline: null,
       error: null,
+      ...(params?.sshUser !== undefined ? { sshUser: params.sshUser } : {}),
     };
     this.jobs.set(job.id, job);
     this.busy = true;
     // execução assíncrona — o endpoint retorna o job imediatamente
-    void this.run(job, phaseDef.script).finally(() => {
+    void this.run(job, phaseDef.script, params).finally(() => {
       this.busy = false;
     });
     return job;
@@ -107,7 +118,7 @@ export class SecurityExecutor {
 
     this.appendLog(job, `\n[executor] operador confirmou acesso — cancelando rollback agendado\n`);
     const code = await this.runner.execStream(
-      `bash '${this.remoteDir}/${phaseDef.script}' --confirm`,
+      buildPhaseScriptCommand({ remoteDir: this.remoteDir, script: phaseDef.script, confirm: true }),
       (chunk) => this.appendLog(job, chunk),
     );
     if (code !== 0) {
@@ -126,7 +137,7 @@ export class SecurityExecutor {
 
   // -------------------------------------------------------------------------
 
-  private async run(job: SecurityJob, script: string): Promise<void> {
+  private async run(job: SecurityJob, script: string, params?: PhaseParams): Promise<void> {
     job.status = "running";
     job.startedAt = new Date().toISOString();
     this.notify(job);
@@ -135,17 +146,21 @@ export class SecurityExecutor {
       await this.runner.ensureReady();
       await this.runner.uploadDir(this.scriptsDir, this.remoteDir);
 
-      const args = job.dryRun ? " --dry-run" : "";
       // Propaga a janela de rollback para o script (default 300s = at now +5 minutes).
       const delaySec = Math.round(this.rollbackWindowMs / 1000);
+      const command = buildPhaseScriptCommand({
+        remoteDir: this.remoteDir,
+        script,
+        dryRun: job.dryRun,
+        rollbackDelaySec: delaySec,
+        ...(params?.sshUser !== undefined ? { sshUser: params.sshUser } : {}),
+        ...(params?.sshPublicKey !== undefined ? { sshPublicKey: params.sshPublicKey } : {}),
+      });
       this.appendLog(
         job,
         `[executor] alvo=${this.runner.label} fase=${job.phase} script=${script} dryRun=${job.dryRun} rollbackDelay=${delaySec}s\n`,
       );
-      const code = await this.runner.execStream(
-        `PAAS_ROLLBACK_DELAY=${delaySec} bash '${this.remoteDir}/${script}'${args}`,
-        (chunk) => this.processChunk(job, chunk),
-      );
+      const code = await this.runner.execStream(command, (chunk) => this.processChunk(job, chunk));
       this.finishCurrentStep(job, code === 0 ? "done" : "failed");
 
       if (code !== 0) {
@@ -153,7 +168,7 @@ export class SecurityExecutor {
         if (!job.dryRun) {
           this.appendLog(job, `\n[executor] FALHA — executando rollback imediato (--rollback)\n`);
           const rbCode = await this.runner.execStream(
-            `bash '${this.remoteDir}/${script}' --rollback`,
+            buildPhaseScriptCommand({ remoteDir: this.remoteDir, script, rollback: true }),
             (chunk) => this.appendLog(job, chunk),
           );
           this.appendLog(
@@ -169,7 +184,11 @@ export class SecurityExecutor {
         return;
       }
 
-      if (!job.dryRun && RISKY_PHASES.includes(job.phase)) {
+      // Fases de risco (SSH/firewall) + Fase 01 COM chave (root é travado).
+      const needsConfirmation =
+        RISKY_PHASES.includes(job.phase) ||
+        (job.phase === "01" && typeof params?.sshPublicKey === "string" && params.sshPublicKey.length > 0);
+      if (!job.dryRun && needsConfirmation) {
         // O script já agendou a reversão NO ALVO (at/timer de 5 min).
         job.status = "awaiting_confirmation";
         job.rollbackScheduled = true;

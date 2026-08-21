@@ -5,6 +5,8 @@
 import { randomUUID } from "node:crypto";
 import type { SecurityCheckResult, SecurityScanReport, SecurityScanSummary } from "@paas/core";
 import { SECURITY_CHECKS } from "./checks.js";
+import { LYNIS_CHECK_CMD, LYNIS_REPORT_CMD, LYNIS_RUN_CMD } from "./host-bridge.js";
+import { partitionChecksForProfile, profileNote } from "./profiles.js";
 import type { TargetRunner } from "./runner.js";
 
 const SEVERITY_WEIGHT = { critical: 3, warning: 2, info: 1 } as const;
@@ -36,13 +38,11 @@ function summarize(checks: SecurityCheckResult[]): SecurityScanSummary {
 
 /** Roda `lynis audit system --quick` e extrai o Hardening Index do relatório. */
 async function lynisIndex(runner: TargetRunner): Promise<number | null> {
-  const available = await runner.exec("command -v lynis >/dev/null 2>&1");
+  const available = await runner.exec(LYNIS_CHECK_CMD);
   if (available.code !== 0) return null;
   // --quick: sem prompts. Tolerante a falhas — o scan próprio já está pronto.
-  await runner.exec("lynis audit system --quick >/dev/null 2>&1 || true", { timeoutMs: 300_000 });
-  const report = await runner.exec(
-    "grep -E '^hardening_index=' /var/log/lynis-report.dat 2>/dev/null | tail -1",
-  );
+  await runner.exec(LYNIS_RUN_CMD, { timeoutMs: 300_000 });
+  const report = await runner.exec(LYNIS_REPORT_CMD);
   const match = /hardening_index=(\d+)/.exec(report.stdout);
   return match?.[1] !== undefined ? Number.parseInt(match[1], 10) : null;
 }
@@ -51,8 +51,12 @@ export async function runSecurityScan(runner: TargetRunner): Promise<SecuritySca
   const startedAt = Date.now();
   await runner.ensureReady();
 
+  // Perfil do alvo: no perfil "container" os checks de host são pulados e
+  // documentados no relatório (falsos-positivos de contexto, não achados).
+  const { run: applicableChecks, skipped } = partitionChecksForProfile(SECURITY_CHECKS, runner.profile);
+
   const checks: SecurityCheckResult[] = [];
-  for (const def of SECURITY_CHECKS) {
+  for (const def of applicableChecks) {
     let result: SecurityCheckResult;
     try {
       const r = await runner.exec(def.command, { timeoutMs: 60_000 });
@@ -94,5 +98,8 @@ export async function runSecurityScan(runner: TargetRunner): Promise<SecuritySca
     lynisAvailable: lynis !== null,
     checks,
     summary: summarize(checks),
+    profile: runner.profile,
+    skippedChecks: skipped,
+    profileNote: profileNote(runner.profile),
   };
 }

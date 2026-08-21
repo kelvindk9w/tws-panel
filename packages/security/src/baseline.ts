@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { BaselineDiff, BaselinePort, SecurityBaseline } from "@paas/core";
 import type { TargetRunner } from "./runner.js";
 
-// Comandos FIXOS executados no alvo.
+// Comandos FIXOS executados no alvo (exportados para a allowlist do host bridge).
 const CMD_PACKAGES =
   "dpkg-query -W -f='${binary:Package}=${Version}\\n' 2>/dev/null | sort -u";
 const CMD_PORTS =
@@ -18,6 +18,9 @@ const CMD_PORTS =
   'else for f in tcp tcp6 udp udp6; do echo "== $f"; cat /proc/net/$f 2>/dev/null; done; fi';
 const CMD_FILES =
   "find /etc/ssh/sshd_config /etc/ssh/sshd_config.d /etc/ufw /etc/fail2ban -maxdepth 2 -type f 2>/dev/null | sort | xargs -r sha256sum 2>/dev/null";
+
+/** Todos os comandos fixos do baseline (allowlist do host bridge). */
+export const BASELINE_COMMANDS: readonly string[] = [CMD_PACKAGES, CMD_PORTS, CMD_FILES];
 
 /** Arquivos críticos rastreados mesmo quando ausentes (para detectar remoção/criação). */
 const TRACKED_FILES = ["/etc/ssh/sshd_config"];

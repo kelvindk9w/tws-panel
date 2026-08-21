@@ -6,7 +6,10 @@
 #  - `passwd -l root` só acontece se o novo usuário tiver AO MENOS uma chave SSH
 #    instalada e testável (~/.ssh/authorized_keys não-vazio).
 #
-# Uso: ./01-user.sh [--user deploy] [--pubkey "ssh-ed25519 AAAA..."] [--dry-run] [--rollback]
+# Uso: ./01-user.sh [--user deploy] [--pubkey "ssh-ed25519 AAAA..."] [--dry-run] [--rollback] [--confirm]
+#
+# --confirm: cancela o rollback automático agendado quando o root é travado
+# (o operador comprovou que consegue logar com o novo usuário em outra janela).
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "$(readlink -f "$0")")/lib.sh"
@@ -20,8 +23,9 @@ while [ $# -gt 0 ]; do
     --pubkey)   PUBKEY="${2:?--pubkey exige uma chave}"; shift ;;
     --dry-run)  PAAS_DRY_RUN=1 ;;
     --rollback) MODE="rollback" ;;
+    --confirm)  MODE="confirm" ;;
     -h|--help)
-      echo "Uso: $0 [--user NOME] [--pubkey CHAVE] [--dry-run] [--rollback]"
+      echo "Uso: $0 [--user NOME] [--pubkey CHAVE] [--dry-run] [--rollback] [--confirm]"
       paas_usage_common; exit 0 ;;
     *) die "opção desconhecida: $1" ;;
   esac
@@ -34,6 +38,15 @@ case "$SSH_USER" in
 esac
 
 CREATED_MARKER="${PAAS_STATE_DIR}/created-user"
+REVERT_SCRIPT="${PAAS_STATE_DIR}/revert-01-user.sh"
+
+if [ "$MODE" = "confirm" ]; then
+  step "Confirmando acesso do operador com o novo usuário"
+  confirm_rollback "user"
+  run rm -f "$REVERT_SCRIPT"
+  ok "Acesso confirmado — senha do root permanece travada definitivamente"
+  exit 0
+fi
 
 if [ "$MODE" = "rollback" ]; then
   step "Destrancando root"
@@ -119,6 +132,19 @@ step "Travando senha do root (passwd -l root)"
 if [ "$HAS_KEY" = "1" ]; then
   run passwd -l root
   ok "Senha do root travada (acesso root direto desabilitado)"
+  # Anti-lockout: agenda reversão automática (at/timer) que destranca o root
+  # caso o operador NÃO confirme que consegue logar com o novo usuário.
+  if [ "$PAAS_DRY_RUN" != "1" ]; then
+    mkdir -p "$PAAS_STATE_DIR"
+    cat > "$REVERT_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+# Reversão automática da fase 01: operador não confirmou acesso a tempo.
+echo "[paas-rollback] operador não confirmou acesso — destrancando a senha do root"
+passwd -u root 2>/dev/null || true
+EOF
+    chmod 700 "$REVERT_SCRIPT"
+    schedule_rollback "user" "$REVERT_SCRIPT"
+  fi
 else
   skip "Travamento do root adiado até existir chave SSH para $SSH_USER"
 fi

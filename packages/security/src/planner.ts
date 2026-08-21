@@ -25,6 +25,7 @@ const PHASE_DESCRIPTIONS: Record<SecurityPhaseId, string> = {
 };
 
 const PHASE_IMPACTS: Partial<Record<SecurityPhaseId, string>> = {
+  "01": "Trava a senha do root após instalar sua chave SSH no novo usuário. Teste o login em outra janela antes de confirmar — rollback automático em 5 min.",
   "02": "Pode afetar seu acesso SSH: senha e root são desabilitados. Rollback automático em 5 min se você não confirmar.",
   "03": "Pode afetar sua conectividade: firewall default-deny é ativado. Rollback automático em 5 min se você não confirmar.",
 };

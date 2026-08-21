@@ -22,6 +22,12 @@ export interface CheckDefinition {
   remediation: string;
   /** false = o check não é corrigido por nenhum script de fase (ação manual). */
   fixable: boolean;
+  /**
+   * true = só se aplica ao host real (VPS/bare-metal). No perfil "container"
+   * o check é pulado (falso-positivo de contexto: avaliaria o namespace do
+   * container, não a máquina real).
+   */
+  hostOnly?: boolean;
   /** Comando shell FIXO, somente-leitura. Deve retornar exit 0 em qualquer cenário. */
   command: string;
   evaluate: (r: ExecResult) => CheckEvaluation;
@@ -67,6 +73,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Verifica se unattended-upgrades está instalado e ativado (APT::Periodic::Unattended-Upgrade).",
     remediation: "Aplicar a fase 00 (instala e ativa unattended-upgrades).",
     fixable: true,
+    hostOnly: true,
     command:
       "dpkg -s unattended-upgrades >/dev/null 2>&1 && grep -q 'Unattended-Upgrade \"1\"' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null",
     evaluate: byExitCode("unattended-upgrades instalado e ativado"),
@@ -152,6 +159,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Configuração efetiva do sshd (sshd -T): PermitRootLogin deve ser no/prohibit-password.",
     remediation: "Aplicar a fase 02 (drop-in de hardening SSH).",
     fixable: true,
+    hostOnly: true,
     command: "sshd -T 2>/dev/null | grep -i '^permitrootlogin ' | awk '{print $2}'",
     evaluate: (r) => {
       const v = firstLine(r.stdout).toLowerCase();
@@ -170,6 +178,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "PasswordAuthentication deve ser no — ~89% dos ataques a Linux são brute force contra SSH com senha.",
     remediation: "Aplicar a fase 02 (PasswordAuthentication no + KbdInteractiveAuthentication no).",
     fixable: true,
+    hostOnly: true,
     command: "sshd -T 2>/dev/null | grep -i '^passwordauthentication ' | awk '{print $2}'",
     evaluate: (r) => {
       const v = firstLine(r.stdout).toLowerCase();
@@ -187,6 +196,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "MaxAuthTries ≤ 3 reduz a janela de brute force por conexão.",
     remediation: "Aplicar a fase 02 (MaxAuthTries 3).",
     fixable: true,
+    hostOnly: true,
     command: "sshd -T 2>/dev/null | grep -i '^maxauthtries ' | awk '{print $2}'",
     evaluate: (r) => {
       const v = Number.parseInt(firstLine(r.stdout), 10);
@@ -202,6 +212,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "X11/agent/TCP forwarding ligados ampliam a superfície de movimento lateral.",
     remediation: "Aplicar a fase 02 (X11Forwarding/AllowAgentForwarding/AllowTcpForwarding no).",
     fixable: true,
+    hostOnly: true,
     command:
       "sshd -T 2>/dev/null | grep -iE '^(x11forwarding|allowagentforwarding|allowtcpforwarding) ' | awk '{print $1\"=\"$2}' | tr '\\n' ' '",
     evaluate: (r) => {
@@ -222,6 +233,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Sem firewall default-deny, todo serviço instalado por engano fica exposto à internet.",
     remediation: "Aplicar a fase 03 (UFW default deny incoming + allow SSH/80/443).",
     fixable: true,
+    hostOnly: true,
     command: "ufw status 2>/dev/null | head -1",
     evaluate: (r) => {
       const v = firstLine(r.stdout).toLowerCase();
@@ -240,6 +252,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Verifica a política padrão de entrada do UFW (ufw status verbose).",
     remediation: "Aplicar a fase 03 (ufw default deny incoming).",
     fixable: true,
+    hostOnly: true,
     command: "ufw status verbose 2>/dev/null | grep -i '^Default:'",
     evaluate: (r) => {
       const v = firstLine(r.stdout);
@@ -291,6 +304,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Verifica syncookies e o drop-in /etc/sysctl.d/99-paas-hardening.conf (anti-spoofing, redirects, etc.).",
     remediation: "Aplicar a fase 03 (sysctl hardening).",
     fixable: true,
+    hostOnly: true,
     command:
       "echo \"syncookies=$(cat /proc/sys/net/ipv4/tcp_syncookies 2>/dev/null || echo '?')\"; test -f /etc/sysctl.d/99-paas-hardening.conf && echo dropin=present || echo dropin=absent",
     evaluate: (r) => {
@@ -321,6 +335,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Bane IPs após N falhas de autenticação (SSH, nginx, e-mail) — defesa ativa contra brute force.",
     remediation: "Aplicar a fase 04 (fail2ban com jail.local da spec).",
     fixable: true,
+    hostOnly: true,
     command:
       "fail2ban-client ping 2>/dev/null || (dpkg -s fail2ban >/dev/null 2>&1 && echo installed-not-running) || echo absent",
     evaluate: (r) => {
@@ -338,6 +353,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "MAC obrigatório do Ubuntu: confina processos mesmo se comprometidos.",
     remediation: "Aplicar a fase 04 (apparmor-utils + enforce nos perfis).",
     fixable: true,
+    hostOnly: true,
     command:
       "cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo unavailable",
     evaluate: (r) => {
@@ -357,6 +373,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Servidor sem snaps não precisa do snapd — é superfície de ataque e consumo de recursos.",
     remediation: "Aplicar a fase 05 (purge do snapd na ordem correta + apt-mark hold).",
     fixable: true,
+    hostOnly: true,
     command: "dpkg -s snapd >/dev/null 2>&1 && echo installed || echo absent",
     evaluate: (r) =>
       firstLine(r.stdout) === "absent"
@@ -371,6 +388,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "avahi/cups/bluetooth/ModemManager/rpcbind/whoopsie rodando em servidor = superfície desnecessária.",
     remediation: "Aplicar a fase 05 (disable + mask).",
     fixable: true,
+    hostOnly: true,
     command:
       "if [ -d /run/systemd/system ]; then systemctl list-units --type=service --state=running --no-legend 2>/dev/null | grep -E 'avahi-daemon|cups|bluetooth|ModemManager|rpcbind|whoopsie|apport' || true; else ps -eo comm 2>/dev/null | grep -E '^(avahi-daemon|cupsd|bluetoothd|ModemManager|rpcbind|whoopsie|apport)$' || true; fi",
     evaluate: (r) => {
@@ -407,6 +425,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Auditoria de syscalls/arquivos sensíveis (passwd, sudoers, cron) — detecção pós-invasão.",
     remediation: "Aplicar a fase 06 (auditd + regras essenciais da spec).",
     fixable: true,
+    hostOnly: true,
     command:
       "dpkg -s auditd >/dev/null 2>&1 && echo installed || echo absent",
     evaluate: (r) =>
@@ -422,6 +441,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "AIDE detecta alterações não autorizadas em binários/configs — baseline deve existir desde o sistema limpo.",
     remediation: "Aplicar a fase 06 (aideinit no sistema limpo + cópia externa do aide.db).",
     fixable: true,
+    hostOnly: true,
     command: "test -f /var/lib/aide/aide.db && echo present || echo absent",
     evaluate: (r) =>
       firstLine(r.stdout) === "present"
@@ -436,6 +456,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "rkhunter/chkrootkit com baseline (propupd) feito em sistema limpo.",
     remediation: "Aplicar a fase 06 (rkhunter --update --propupd + cron diário).",
     fixable: true,
+    hostOnly: true,
     command: "command -v rkhunter >/dev/null 2>&1 && echo present || echo absent",
     evaluate: (r) =>
       firstLine(r.stdout) === "present"
@@ -450,6 +471,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Cron com Lynis semanal + AIDE diário + rkhunter diário (/etc/cron.d/paas-security-scan).",
     remediation: "Aplicar a fase 06 (cron de varreduras recorrentes).",
     fixable: true,
+    hostOnly: true,
     command: "test -f /etc/cron.d/paas-security-scan && echo present || echo absent",
     evaluate: (r) =>
       firstLine(r.stdout) === "present"

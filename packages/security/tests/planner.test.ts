@@ -63,6 +63,11 @@ describe("buildSecurityPlan", () => {
       if (action.phase === "02" || action.phase === "03") {
         expect(action.requiresConfirmation).toBe(true);
         expect(action.impact).toContain("Rollback automático");
+      } else if (action.phase === "01") {
+        // fase 01 avisa o impacto (trava o root) mas a confirmação é dinâmica
+        // (só quando uma chave SSH é fornecida — decidido no executor)
+        expect(action.requiresConfirmation).toBe(false);
+        expect(action.impact).toContain("root");
       } else {
         expect(action.requiresConfirmation).toBe(false);
         expect(action.impact).toBeNull();
