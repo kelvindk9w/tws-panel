@@ -145,13 +145,19 @@ export class TerminalService {
   }
 
   private handleSessionEnd(reason: string): void {
-    if (!this.pty) return;
+    const pty = this.pty;
+    if (!pty) return;
     this.pty = null;
     const waiter = this.waiter;
     this.waiter = null;
     if (waiter) clearTimeout(waiter.timer);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
+    // Limpa o alvo (container paas-terminal-* / exec): sem isso, uma sessão
+    // morta por erro de stream VAZAVA o helper — o AutoRemove do Docker só
+    // dispara se o processo principal sair — e o próximo connect() abria um
+    // SEGUNDO container por cima do primeiro.
+    void pty.kill().catch(() => undefined);
     this.audit?.("terminal.session-end", `Sessão de terminal encerrada (${reason}).`);
     waiter?.reject(new Error(`o terminal foi encerrado durante a execução (${reason})`));
     this.broadcast(`\r\n\x1b[33m[terminal] sessão encerrada — reconecte para abrir outra\x1b[0m\r\n`);

@@ -3,14 +3,16 @@
  *  - auth: sem setup token → 401 no handshake; com token → conecta;
  *  - relay puro: input do usuário chega ao PTY e NUNCA à auditoria/logs;
  *  - frame de controle {"type":"resize"} redimensiona o PTY;
- *  - sessão única: novo cliente derruba o anterior (close 4000);
+ *  - sessão destacável: o PTY vive no servidor entre conexões (reattach);
+ *  - anti-ping-pong: mesmo clientId reanexa (4000 na conexão antiga);
+ *    clientId diferente é recusado com 4009 SEM derrubar o dono;
  *  - integração: saída produzida no alvo aparece no stream do cliente.
  */
 import { Duplex } from "node:stream";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import terminalRoutes, { WS_CLOSE_REPLACED } from "../src/routes/terminal.js";
+import terminalRoutes, { WS_CLOSE_BUSY, WS_CLOSE_REPLACED } from "../src/routes/terminal.js";
 import { TerminalService } from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
@@ -89,9 +91,9 @@ function nextMessage(ws: WebSocket): Promise<string> {
   });
 }
 
-function wsClosed(ws: WebSocket): Promise<{ code: number }> {
+function wsClosed(ws: WebSocket): Promise<{ code: number; reason: string }> {
   return new Promise((resolve) => {
-    ws.addEventListener("close", (ev) => resolve({ code: ev.code }), { once: true });
+    ws.addEventListener("close", (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
   });
 }
 
@@ -165,7 +167,7 @@ describe("WS /api/terminal/ws — relay puro e REGRA DE OURO", () => {
     ws.close();
   });
 
-  it("sessão única: novo cliente assume e o anterior é desconectado (4000)", async () => {
+  it("clientes legados (sem clientId): novo assume e o anterior sai (4000)", async () => {
     ctx = await buildTerminalTestApp();
     const first = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
     const closed = wsClosed(first);
@@ -179,5 +181,66 @@ describe("WS /api/terminal/ws — relay puro e REGRA DE OURO", () => {
     const secondClosed = wsClosed(second);
     second.close();
     await secondClosed;
+  });
+});
+
+describe("WS /api/terminal/ws — sessão destacável e anti-ping-pong (clientId)", () => {
+  it("segundo clientId recebe 4009 e NÃO derruba o dono (fim do ping-pong)", async () => {
+    ctx = await buildTerminalTestApp();
+    const ownerWs = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+
+    // a segunda aba conecta, mas é RECUSADA com 4009 — sem tocar no dono
+    const intruder = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-2`);
+    const intruderClosed = await wsClosed(intruder);
+    expect(intruderClosed.code).toBe(WS_CLOSE_BUSY);
+    expect(intruderClosed.reason).toContain("em uso");
+
+    // o dono segue conectado e recebendo o stream normalmente
+    const msg = nextMessage(ownerWs);
+    ctx.ptys[0]?.emit("saida-para-o-dono\n");
+    expect(await msg).toContain("saida-para-o-dono");
+    expect(ctx.ptys).toHaveLength(1); // nenhum PTY extra foi aberto
+    ownerWs.close();
+  });
+
+  it("mesmo clientId REANEXA: conexão antiga sai (4000), PTY e sessão preservados", async () => {
+    ctx = await buildTerminalTestApp();
+    const stale = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    const staleClosed = wsClosed(stale);
+    const reattached = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    expect((await staleClosed).code).toBe(WS_CLOSE_REPLACED);
+    expect(ctx.ptys).toHaveLength(1); // reattach não duplica o PTY
+    const msg = nextMessage(reattached);
+    ctx.ptys[0]?.emit("reattach-ok\n");
+    expect(await msg).toContain("reattach-ok");
+    reattached.close();
+  });
+
+  it("dono desconectado: sessão órfã pode ser assumida por outro clientId (reattach com scrollback)", async () => {
+    ctx = await buildTerminalTestApp();
+    const ownerWs = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    ctx.ptys[0]?.emit("trabalho-em-andamento\n");
+    await tick();
+    ownerWs.close();
+    await tick();
+
+    // outra aba assume a sessão órfã e recebe o replay do que já rolou
+    const successor = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-2`);
+    const replay = await nextMessage(successor);
+    expect(replay).toContain("trabalho-em-andamento");
+    expect(ctx.ptys).toHaveLength(1); // mesma sessão no servidor
+    successor.close();
+  });
+
+  it("conexão recusada (4009) não abre PTY nem gera auditoria de connect", async () => {
+    ctx = await buildTerminalTestApp();
+    const ownerWs = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    const intruder = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-2`);
+    expect((await wsClosed(intruder)).code).toBe(WS_CLOSE_BUSY);
+    await tick();
+    expect(ctx.ptys).toHaveLength(1); // só o PTY do dono
+    const auditRaw = await readFile(path.join(ctx.dir, "audit.json"), "utf8");
+    expect(auditRaw.match(/terminal\.connect/g)).toHaveLength(1); // só o dono auditado
+    ownerWs.close();
   });
 });

@@ -124,9 +124,14 @@ a decisão foi **Docker Engine API via `/var/run/docker.sock`, NÃO node-pty**:
   caminho é `POST /containers/{alvo}/exec` + `/exec/{id}/start` hijacked.
 
 Implementação: `apps/server/src/services/docker-socket.ts` (transporte),
-`terminal-service.ts` (sessão única, scrollback, fila de comandos, idle
-timeout de 30 min) e `routes/terminal.ts` (WebSocket `/api/terminal/ws`,
-autenticado pela guarda global: setup token no wizard, sessão admin depois).
+`terminal-service.ts` (sessão única DESTACÁVEL — vive no servidor entre
+reconexões de WS —, scrollback, fila de comandos, idle timeout de 30 min,
+cleanup do container ao encerrar) e `routes/terminal.ts` (WebSocket
+`/api/terminal/ws`, autenticado pela guarda global: setup token no wizard,
+sessão admin depois). Posse da sessão por `clientId` (anti-ping-pong): o
+mesmo clientId reanexa; um clientId diferente é recusado com close 4009
+("terminal em uso") sem derrubar o dono; sessão órfã (dono desconectado)
+pode ser assumida por qualquer cliente.
 
 **Fases dentro do terminal:** o `TerminalRelayRunner` desvia o `execStream` do
 executor para o shell do terminal — o comando aparece digitado no xterm, a

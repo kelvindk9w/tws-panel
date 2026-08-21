@@ -256,6 +256,42 @@ describe("TerminalService — runCommand (fases dentro do terminal)", () => {
     await service.dispose();
   });
 
+  it("sessão DESTACÁVEL: marcador de exit é lido do stream do PTY mesmo com o subscriber (browser) desconectado no meio da execução", async () => {
+    const { service, next } = makeService();
+    const view: string[] = [];
+    const off = service.onOutput((c) => view.push(c)); // o WS do browser
+    const promise = service.runCommand("bash /opt/paas-hardening/05.sh --dry-run", () => undefined);
+    await flush();
+    const nonce = /PAAS_EXIT_([0-9a-f]+):/.exec(next().inputs.join(""))?.[1];
+    next().emit(":::PAAS_STEP Atualizando pacotes\r\n");
+    await flush();
+    expect(view.join("")).toContain(":::PAAS_STEP");
+
+    off(); // o browser CAIU no meio da fase (WS desconectado)
+    next().emit(":::PAAS_OK pacotes atualizados\r\n");
+    next().emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+
+    // o exit code AINDA é capturado (parse server-side) — a fase NÃO falha
+    await expect(promise).resolves.toBe(0);
+    // e a saída posterior ao disconnect ficou no scrollback para o reattach
+    const { replay } = await service.connect();
+    expect(replay).toContain(":::PAAS_OK pacotes atualizados");
+    await service.dispose();
+  });
+
+  it("sessão morta pelo alvo REMOVE o container (kill no PTY) — sem leak de paas-terminal-*", async () => {
+    const { service, ptys, next } = makeService();
+    await service.connect();
+    const first = next();
+    first.end(); // stream morreu (erro/fim) com o container ainda de pé
+    await flush();
+    expect(first.killed).toBe(true); // cleanup do alvo ao encerrar a sessão
+    // a próxima conexão abre um PTY NOVO (o antigo foi removido, não vazou)
+    await service.connect();
+    expect(ptys).toHaveLength(2);
+    await service.dispose();
+  });
+
   it("sessão morta no meio do comando rejeita (sem fallback — nunca re-executa)", async () => {
     const { service, next } = makeService();
     const promise = service.runCommand("bash /opt/fase.sh", () => undefined);

@@ -19,7 +19,12 @@
  *  - altura colapsável/expansível, estado persistido em sessionStorage;
  *  - alerta pulsante (evento "paas:terminal-attention") quando uma fase
  *    precisa de ação no terminal — o painel se expande sozinho;
- *  - reconexão automática com backoff; resize do PTY sincronizado.
+ *  - reconexão automática com backoff exponencial + jitter (teto 30s) e
+ *    reattach por clientId: a sessão vive no SERVIDOR, então quedas de WS
+ *    não interrompem fases — ao reconectar, o scrollback é retransmitido;
+ *  - se o servidor recusar com 4009 (terminal em uso em OUTRA aba/janela),
+ *    NÃO reconecta: sem isso duas abas disputavam a sessão em ping-pong
+ *    infinito (~1 conexão/1.5s) e derrubavam execuções em andamento.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
@@ -59,13 +64,36 @@ const XTERM_THEME = {
   brightWhite: "#f8fafc",
 };
 
-type WsStatus = "connecting" | "online" | "offline";
+type WsStatus = "connecting" | "online" | "offline" | "busy";
+
+/** Códigos de close definidos pelo servidor (apps/server/src/routes/terminal.ts). */
+const WS_CLOSE_REPLACED = 4000; // o MESMO clientId reanexou por outra conexão
+const WS_CLOSE_BUSY = 4009; // sessão tem dono (outro clientId): NÃO reconectar
+
+const CLIENT_ID_KEY = "paas.terminal.client-id";
+
+/**
+ * Identidade estável DESTA aba para o reattach anti-ping-pong: o servidor só
+ * deixa o dono (mesmo clientId) reanexar; outro clientId é recusado (4009).
+ */
+function terminalClientId(): string {
+  let id = sessionStorage.getItem(CLIENT_ID_KEY);
+  if (!id) {
+    id =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `c-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    sessionStorage.setItem(CLIENT_ID_KEY, id);
+  }
+  return id;
+}
 
 function terminalWsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const token = getSetupToken();
-  const query = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `${proto}://${window.location.host}/api/terminal/ws${query}`;
+  const params = new URLSearchParams({ clientId: terminalClientId() });
+  if (token) params.set("token", token);
+  return `${proto}://${window.location.host}/api/terminal/ws?${params.toString()}`;
 }
 
 interface TerminalPanelProps {
@@ -133,13 +161,22 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
         if (typeof ev.data === "string") term.write(ev.data);
         else if (ev.data instanceof Blob) void ev.data.arrayBuffer().then((b) => term.write(new Uint8Array(b)));
       };
-      ws.onclose = () => {
+      ws.onclose = (ev: CloseEvent) => {
         if (disposed) return;
-        setStatus("offline");
         wsRef.current = null;
-        const delay = Math.min(1_000 * 2 ** attemptsRef.current, 15_000);
+        if (ev.code === WS_CLOSE_BUSY || ev.code === WS_CLOSE_REPLACED) {
+          // Sessão em uso por OUTRA aba/janela (ou esta aba reanexou por outra
+          // conexão): NÃO reconectar — reconectar aqui é o que gerava o
+          // ping-pong infinito derrubando a sessão do dono.
+          setStatus("busy");
+          return;
+        }
+        setStatus("offline");
+        // Backoff exponencial com jitter: 1s → 2s → 4s → … (teto 30s).
+        // Reseta ao conectar com sucesso (ws.onopen).
+        const backoff = Math.min(1_000 * 2 ** attemptsRef.current, 30_000);
         attemptsRef.current += 1;
-        reconnectRef.current = setTimeout(connect, delay);
+        reconnectRef.current = setTimeout(connect, backoff + Math.random() * 1_000);
       };
       ws.onerror = () => ws.close();
     };
@@ -225,9 +262,19 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
   }
 
   const statusLabel =
-    status === "online" ? "conectado" : status === "connecting" ? "conectando…" : "reconectando…";
+    status === "online"
+      ? "conectado"
+      : status === "connecting"
+        ? "conectando…"
+        : status === "busy"
+          ? "em uso em outra aba"
+          : "reconectando…";
   const statusColor =
-    status === "online" ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400";
+    status === "online"
+      ? "bg-emerald-400"
+      : status === "connecting"
+        ? "bg-amber-400"
+        : "bg-red-400";
 
   return (
     <section
@@ -264,6 +311,13 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </span>
       </button>
+
+      {status === "busy" && (
+        <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
+          ⚠️ <strong>Terminal em uso em outra aba/janela.</strong> Feche a outra aba e recarregue
+          esta página para retomar o controle. A sessão no servidor NÃO foi interrompida.
+        </p>
+      )}
 
       {/* Orientação fixa — visível mesmo recolhido */}
       <p className="border-t border-white/5 px-4 py-2 text-[11px] leading-relaxed text-emerald-100/60">
