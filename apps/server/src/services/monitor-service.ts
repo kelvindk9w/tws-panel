@@ -38,6 +38,22 @@ interface MonitorFile {
 /** Descrições de listagens em blacklist (vazio = tudo limpo / módulo inativo). */
 export type MailBlacklistHook = () => Promise<string[]>;
 
+/**
+ * Piso efetivo para o intervalo do scan recorrente. `MONITOR_MIN_INTERVAL_MS`
+ * (10s), em @paas/core, é menor que a duração real observada de um scan
+ * completo (baseline + diff, possivelmente Lynis — de dezenas de segundos a
+ * ~133s em VPS real): com um intervalo tão baixo o agendador ficava pulando
+ * ciclos em sequência (o scan anterior nunca termina a tempo do próximo
+ * tick). A constante em @paas/core está fora do escopo desta correção
+ * (arquivo de outro pacote); este serviço aplica aqui um piso mais realista,
+ * elevando qualquer intervalo configurado/persistido abaixo dele.
+ */
+const EFFECTIVE_MIN_INTERVAL_MS = 60_000;
+
+function clampInterval(intervalMs: number): number {
+  return Math.max(intervalMs, EFFECTIVE_MIN_INTERVAL_MS);
+}
+
 export class MonitorService {
   private readonly runner: TargetRunner;
   private readonly alerts: AlertsService;
@@ -45,22 +61,26 @@ export class MonitorService {
   private readonly baselineFile: string;
   private readonly monitorFile: string;
   private readonly scheduler: MonitorScheduler;
+  private readonly log: (msg: string) => void;
   private mailHook: MailBlacklistHook | null = null;
   private state: MonitorFile;
   private stateLoaded = false;
   private writing: Promise<void> = Promise.resolve();
 
-  constructor(config: ServerConfig, alerts: AlertsService) {
+  constructor(config: ServerConfig, alerts: AlertsService, log?: (msg: string) => void) {
     this.runner =
       config.securityTarget === "host"
         ? new HostRunner()
         : new ContainerRunner({ name: config.securityTargetContainer });
     this.alerts = alerts;
+    this.log = log ?? ((msg) => console.warn(msg));
     this.securityDir = path.join(config.dataDir, "security");
     this.baselineFile = path.join(this.securityDir, "baseline.json");
     this.monitorFile = path.join(this.securityDir, "monitor.json");
     this.state = {
-      intervalMs: config.monitorIntervalMs > 0 ? config.monitorIntervalMs : MONITOR_DEFAULT_INTERVAL_MS,
+      intervalMs: clampInterval(
+        config.monitorIntervalMs > 0 ? config.monitorIntervalMs : MONITOR_DEFAULT_INTERVAL_MS,
+      ),
       lastRunAt: null,
       lastResult: null,
     };
@@ -72,6 +92,13 @@ export class MonitorService {
       onTick: ({ ranAt }) => {
         this.state.lastRunAt = ranAt;
         void this.saveState();
+      },
+      onSkip: () => {
+        // Antes desta correção um ciclo pulado por scan ainda em andamento
+        // era silencioso — nem log, nem qualquer sinal para o operador.
+        this.log(
+          "Monitoramento: ciclo agendado pulado — o scan anterior (automático ou manual) ainda está em andamento.",
+        );
       },
     });
   }
@@ -119,12 +146,25 @@ export class MonitorService {
   // Scan recorrente
   // -------------------------------------------------------------------------
 
-  /** Executa um scan agora (endpoint "rodar agora"). */
+  /**
+   * Executa um scan agora (endpoint "rodar agora").
+   *
+   * Passa pelo MESMO MonitorScheduler usado pelo tick automático (em vez de
+   * chamar executeScan() direto) para herdar o lock `inFlight` — antes desta
+   * correção um POST manual podia rodar em paralelo com um tick automático,
+   * dois scans concorrentes disputando os mesmos recursos do alvo. Se já
+   * houver um scan em andamento, scheduler.runNow() lança (ver monitor.ts
+   * para a justificativa de recusar em vez de esperar).
+   */
   async runNow(): Promise<MonitorScanResult> {
-    const result = await this.executeScan();
-    this.state.lastRunAt = new Date().toISOString();
-    await this.saveState();
-    return result;
+    await this.ensureStateLoaded();
+    await this.scheduler.runNow();
+    if (!this.state.lastResult) {
+      // não deveria acontecer: executeScan() sempre popula lastResult antes
+      // de scheduler.runNow() resolver com sucesso.
+      throw new Error("scan concluído mas nenhum resultado ficou disponível");
+    }
+    return this.state.lastResult;
   }
 
   async getState(): Promise<MonitorStateResponse> {
@@ -143,8 +183,9 @@ export class MonitorService {
 
   async setIntervalMs(intervalMs: number): Promise<void> {
     await this.ensureStateLoaded();
-    this.state.intervalMs = intervalMs;
-    this.scheduler.setIntervalMs(intervalMs);
+    const clamped = clampInterval(intervalMs);
+    this.state.intervalMs = clamped;
+    this.scheduler.setIntervalMs(clamped);
     await this.saveState();
   }
 
@@ -257,10 +298,9 @@ export class MonitorService {
     try {
       const raw = JSON.parse(await readFile(this.monitorFile, "utf8")) as Partial<MonitorFile>;
       this.state = {
-        intervalMs:
-          typeof raw.intervalMs === "number" && raw.intervalMs > 0
-            ? raw.intervalMs
-            : this.state.intervalMs,
+        intervalMs: clampInterval(
+          typeof raw.intervalMs === "number" && raw.intervalMs > 0 ? raw.intervalMs : this.state.intervalMs,
+        ),
         lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
         lastResult: raw.lastResult ?? null,
       };

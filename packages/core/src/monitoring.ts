@@ -52,6 +52,15 @@ export interface DeployRequest {
 // ---------------------------------------------------------------------------
 
 export type AlertSeverity = "critical" | "warning" | "info";
+/**
+ * "system" nunca é usado por nenhum `AlertsService.create()` hoje (só
+ * "guardrail"/"scan"/"blacklist" aparecem em código de produção) — seria
+ * removível. NÃO foi removido nesta rodada porque apps/web/src/pages/
+ * AlertsPage.tsx (SOURCE_LABELS + <option> do filtro) referencia "system"
+ * como origem selecionável, e tirá-la do tipo quebra o typecheck desse
+ * arquivo — fora do escopo desta mudança. Pendência: remover "system" aqui
+ * E o option/label correspondente em AlertsPage.tsx juntos, na mesma PR.
+ */
 export type AlertSource = "guardrail" | "scan" | "blacklist" | "system";
 export type AlertStatus = "open" | "acknowledged" | "resolved";
 

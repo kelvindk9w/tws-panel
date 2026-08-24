@@ -31,9 +31,16 @@ import type { TerminalService } from "./terminal-service.js";
 export type SecurityAuditHook = (action: string, detail: string) => void;
 
 const MAX_HISTORY_ENTRIES = 200;
+/** Teto de jobs persistidos em disco (data/security-jobs.json). */
+const MAX_PERSISTED_JOBS = 100;
+const TERMINAL_JOB_STATUSES = new Set(["success", "failed", "rolled_back"]);
 
 interface HistoryFile {
   entries: SecurityHistoryEntry[];
+}
+
+interface JobsFile {
+  jobs: SecurityJob[];
 }
 
 /**
@@ -65,6 +72,43 @@ export function buildAppliedSummary(entries: SecurityHistoryEntry[]): SecurityAp
   };
 }
 
+/**
+ * Corta o histórico ao teto de retenção (MAX_HISTORY_ENTRIES) preservando o
+ * scan "Antes" congelado e o job de apply referenciados por um resumo
+ * `applied` ativo (mesmo cálculo de buildAppliedSummary). Sem isso, um
+ * histórico movimentado (scans do agendador de monitoramento se acumulando)
+ * podia empurrar esse scan para fora da janela — a UI perdia o índice
+ * "Antes" comparado no card de hardening mesmo com o resumo `applied` ainda
+ * válido. Quando não há resumo `applied` ativo, o corte é o slice simples
+ * de sempre (nada a proteger).
+ */
+export function trimHistoryPreservingBefore(
+  entries: SecurityHistoryEntry[],
+  maxEntries = MAX_HISTORY_ENTRIES,
+): SecurityHistoryEntry[] {
+  if (entries.length <= maxEntries) return entries;
+
+  const isRealApply = (e: SecurityHistoryEntry) => e.kind === "job" && e.dryRun === false;
+  const lastApply = entries.filter(isRealApply).at(-1);
+  if (!lastApply || lastApply.status !== "success") return entries.slice(-maxEntries);
+
+  const firstApplyPos = entries.findIndex(isRealApply);
+  const frozenBefore = entries
+    .slice(0, firstApplyPos)
+    .filter((e) => e.kind === "scan" && typeof e.hardeningIndex === "number")
+    .at(-1);
+  if (!frozenBefore) return entries.slice(-maxEntries);
+
+  // Pina o scan "Antes" E o próprio job de apply (sem ele buildAppliedSummary
+  // não encontra mais o "último apply real" e o resumo inteiro some).
+  const pinnedIds = new Set([frozenBefore.id, lastApply.id]);
+  const pinned = entries.filter((e) => pinnedIds.has(e.id));
+  const tailBudget = Math.max(0, maxEntries - pinned.length);
+  const tail = entries.filter((e) => !pinnedIds.has(e.id)).slice(-tailBudget);
+  // Reordena por `at` — o histórico é sempre cronológico (append-only).
+  return [...pinned, ...tail].sort((a, b) => a.at.localeCompare(b.at));
+}
+
 export class SecurityService {
   private readonly config: ServerConfig;
   private readonly runner: TargetRunner;
@@ -72,6 +116,7 @@ export class SecurityService {
   private readonly historyFile: string;
   private readonly log?: ((msg: string) => void) | undefined;
   private readonly lastReportFile: string;
+  private readonly jobsFile: string;
   private lastScan: SecurityScanReport | null = null;
   private runningScan: Promise<SecurityScanReport> | null = null;
 
@@ -107,16 +152,41 @@ export class SecurityService {
     opts?.terminal?.setEnsureTarget(() => baseRunner.ensureReady());
     this.historyFile = path.join(config.dataDir, "security-history.json");
     this.lastReportFile = path.join(config.dataDir, "security-last-scan.json");
+    this.jobsFile = path.join(config.dataDir, "security-jobs.json");
     this.executor = new SecurityExecutor({
       runner: this.runner,
       scriptsDir: config.hardeningScriptsDir,
       onChange: (job) => {
-        // persiste ao finalizar (qualquer status terminal)
-        if (["success", "failed", "rolled_back"].includes(job.status)) {
+        // histórico append-only: só ao finalizar (qualquer status terminal)
+        if (TERMINAL_JOB_STATUSES.has(job.status)) {
           void this.recordJob(job);
         }
+        // snapshot em disco a CADA mudança (inclusive "awaiting_confirmation")
+        // — é isso que sobrevive a um restart do painel; ver restoreJobsFromDisk.
+        void this.persistJobs();
       },
     });
+  }
+
+  /**
+   * Restaura jobs persistidos de uma execução anterior do painel — chamado
+   * uma vez no boot da rota de segurança, antes de aceitar tráfego. Sem
+   * isso, um restart durante "awaiting_confirmation" fazia
+   * GET /api/security/jobs/:id responder 404 enquanto o rollback agendado
+   * NO ALVO continuava correndo de forma independente: o operador perdia
+   * visibilidade exatamente no momento em que precisa confirmar acesso.
+   * Best-effort: falha ao ler o arquivo nunca impede o servidor de subir.
+   */
+  async restoreJobsFromDisk(): Promise<void> {
+    try {
+      const raw = await readFile(this.jobsFile, "utf8");
+      const parsed = JSON.parse(raw) as Partial<JobsFile>;
+      if (Array.isArray(parsed.jobs) && parsed.jobs.length > 0) {
+        this.executor.restoreJobs(parsed.jobs);
+      }
+    } catch {
+      // primeira execução ou arquivo ausente/corrompido — nada a restaurar
+    }
   }
 
   get targetLabel(): string {
@@ -270,7 +340,7 @@ export class SecurityService {
     try {
       const entries = await this.loadHistory();
       entries.push(entry);
-      const trimmed = entries.slice(-MAX_HISTORY_ENTRIES);
+      const trimmed = trimHistoryPreservingBefore(entries);
       await mkdir(path.dirname(this.historyFile), { recursive: true });
       await writeFile(this.historyFile, JSON.stringify({ entries: trimmed }, null, 2) + "\n", {
         encoding: "utf8",
@@ -326,5 +396,31 @@ export class SecurityService {
       dryRun: job.dryRun,
       status: job.status,
     });
+  }
+
+  /**
+   * Persiste o snapshot atual dos jobs (data/security-jobs.json) — best-effort,
+   * como o histórico e o último scan. Jobs NÃO-terminais (queued/running/
+   * awaiting_confirmation) nunca são descartados pelo teto de retenção — são
+   * exatamente os que precisam sobreviver a um restart; o teto só afeta jobs
+   * terminais antigos, priorizando os mais recentes.
+   */
+  private async persistJobs(): Promise<void> {
+    try {
+      const jobs = this.executor.listJobs();
+      const nonTerminal = jobs.filter((j) => !TERMINAL_JOB_STATUSES.has(j.status));
+      const terminal = jobs
+        .filter((j) => TERMINAL_JOB_STATUSES.has(j.status))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, Math.max(0, MAX_PERSISTED_JOBS - nonTerminal.length));
+      const toSave: JobsFile = { jobs: [...nonTerminal, ...terminal] };
+      await mkdir(path.dirname(this.jobsFile), { recursive: true });
+      await writeFile(this.jobsFile, JSON.stringify(toSave, null, 2) + "\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    } catch {
+      // jobs persistidos são best-effort; nunca derruba a requisição
+    }
   }
 }

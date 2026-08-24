@@ -278,7 +278,10 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     severity: "critical",
     description: "MySQL/PostgreSQL/Redis/MongoDB (3306/5432/6379/27017) escutando em 0.0.0.0 = acesso público direto ao banco.",
     remediation: "Fazer bind dos bancos em 127.0.0.1 e/ou bloquear no firewall (fase 03).",
-    fixable: true,
+    // scripts/hardening/03-firewall.sh não tem lógica para portas de banco
+    // (só UFW default-deny + allow SSH/80/443 + sysctl) — não é reparado por
+    // nenhum script de fase, é ação manual mesmo (ver remediation acima).
+    fixable: false,
     command:
       "ss -tuln 2>/dev/null | grep -E '(0\\.0\\.0\\.0|\\*|\\[::\\]|::):(3306|5432|6379|27017)\\b' || true",
     evaluate: (r) => {

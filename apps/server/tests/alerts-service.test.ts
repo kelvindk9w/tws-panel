@@ -130,6 +130,38 @@ describe("setStatus — transições", () => {
   });
 });
 
+describe("teto de retenção — preserva alertas abertos", () => {
+  it("ao atingir o teto, descarta primeiro os RESOLVIDOS/RECONHECIDOS mais antigos", async () => {
+    const small = new AlertsService(dir, { maxAlerts: 3 });
+    const a = await small.create({ ...INPUT, title: "alerta A (vai ser resolvido)" });
+    await small.setStatus(a.alert.id, "resolved"); // mais antigo E fechado — primeiro candidato a sair
+    await small.create({ ...INPUT, title: "alerta B (fica aberto)" });
+    await small.create({ ...INPUT, title: "alerta C (fica aberto)" });
+    // 4º alerta estoura o teto de 3 — deve expulsar "A" (resolvido), não "B" (aberto)
+    await small.create({ ...INPUT, title: "alerta D (fica aberto)" });
+
+    const { alerts, total } = await small.list();
+    expect(total).toBe(3);
+    expect(alerts.map((x) => x.title).sort()).toEqual(
+      ["alerta B (fica aberto)", "alerta C (fica aberto)", "alerta D (fica aberto)"].sort(),
+    );
+  });
+
+  it("teto atingido só com alertas ABERTOS → nenhum é descartado, apenas loga um aviso", async () => {
+    const warnings: string[] = [];
+    const small = new AlertsService(dir, { maxAlerts: 2, log: (msg) => warnings.push(msg) });
+    await small.create({ ...INPUT, title: "aberto 1" });
+    await small.create({ ...INPUT, title: "aberto 2" });
+    // 3º alerta aberto estoura o teto, mas não há nenhum resolvido/reconhecido para expulsar
+    await small.create({ ...INPUT, title: "aberto 3" });
+
+    const { alerts, total } = await small.list();
+    expect(total).toBe(3); // nenhum alerta aberto foi descartado, mesmo acima do teto
+    expect(alerts.map((x) => x.title).sort()).toEqual(["aberto 1", "aberto 2", "aberto 3"].sort());
+    expect(warnings.some((w) => w.includes("teto") && w.includes("aberto"))).toBe(true);
+  });
+});
+
 describe("tolerância a falhas", () => {
   it("alerts.json corrompido → lista vazia sem lançar", async () => {
     await writeFile(path.join(dir, "alerts.json"), "{quebrado", "utf8");

@@ -13,7 +13,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SecurityHistoryEntry } from "@paas/core";
-import { SecurityService, buildAppliedSummary } from "../src/services/security-service.js";
+import {
+  SecurityService,
+  buildAppliedSummary,
+  trimHistoryPreservingBefore,
+} from "../src/services/security-service.js";
 import type { ServerConfig } from "../src/config.js";
 
 const SCAN = (at: string, hardeningIndex: number, source: "lynis" | "internal" = "lynis"): SecurityHistoryEntry => ({
@@ -92,6 +96,61 @@ describe("buildAppliedSummary", () => {
     expect(applied?.beforeIndex).toBe(39);
     expect(applied?.beforeIndexSource).toBeNull();
     expect(applied?.afterIndex).toBeNull();
+  });
+});
+
+describe("trimHistoryPreservingBefore — teto de retenção sem perder o Antes congelado", () => {
+  it("abaixo do teto → devolve tudo sem cortar", () => {
+    const entries = [SCAN("2026-08-20T10:00:00Z", 39)];
+    expect(trimHistoryPreservingBefore(entries, 5)).toEqual(entries);
+  });
+
+  it("sem resumo `applied` ativo (nenhum apply real bem-sucedido) → corte simples de sempre", () => {
+    const entries = [
+      SCAN("2026-08-20T10:00:00Z", 10),
+      SCAN("2026-08-20T10:01:00Z", 20),
+      SCAN("2026-08-20T10:02:00Z", 30),
+      SCAN("2026-08-20T10:03:00Z", 40),
+    ];
+    expect(trimHistoryPreservingBefore(entries, 2)).toEqual(entries.slice(-2));
+  });
+
+  it("com resumo `applied` ativo, PRESERVA o scan Antes mesmo fora da janela ingênua", () => {
+    const before = SCAN("2026-08-20T09:00:00Z", 10); // seria descartado por um slice(-3) ingênuo
+    const apply = JOB("2026-08-20T09:05:00Z", "00", false, "success");
+    const entries: SecurityHistoryEntry[] = [
+      before,
+      apply,
+      SCAN("2026-08-20T10:00:00Z", 50),
+      SCAN("2026-08-20T10:01:00Z", 55),
+      SCAN("2026-08-20T10:02:00Z", 60), // "Depois" — o mais recente
+    ];
+
+    const naiveSlice = entries.slice(-3);
+    expect(naiveSlice.some((e) => e.id === before.id)).toBe(false); // confirma que o slice ingênuo perderia o Antes
+
+    const trimmed = trimHistoryPreservingBefore(entries, 3);
+    expect(trimmed.some((e) => e.id === before.id)).toBe(true);
+    expect(trimmed.some((e) => e.id === apply.id)).toBe(true); // sem o job, buildAppliedSummary não acha mais o apply
+    expect(trimmed.length).toBeLessThanOrEqual(3);
+
+    // o resumo derivado do histórico cortado é IDÊNTICO ao do histórico completo
+    expect(buildAppliedSummary(trimmed)).toEqual(buildAppliedSummary(entries));
+  });
+
+  it("resultado permanece ordenado cronologicamente (append-only)", () => {
+    const before = SCAN("2026-08-20T09:00:00Z", 10);
+    const apply = JOB("2026-08-20T09:05:00Z", "00", false, "success");
+    const entries: SecurityHistoryEntry[] = [
+      before,
+      apply,
+      SCAN("2026-08-20T10:00:00Z", 50),
+      SCAN("2026-08-20T10:01:00Z", 55),
+      SCAN("2026-08-20T10:02:00Z", 60),
+    ];
+    const trimmed = trimHistoryPreservingBefore(entries, 3);
+    const timestamps = trimmed.map((e) => e.at);
+    expect([...timestamps].sort()).toEqual(timestamps);
   });
 });
 

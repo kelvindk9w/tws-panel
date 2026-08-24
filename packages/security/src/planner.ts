@@ -62,7 +62,13 @@ export function buildSecurityPlan(report: SecurityScanReport): SecurityPlan {
       script: phase.script,
       description: PHASE_DESCRIPTIONS[phase.id],
       fixesCheckIds: fixes,
-      requiresConfirmation: RISKY_PHASES.includes(phase.id),
+      // Fases 02/03 SEMPRE exigem confirmação. A fase 01 exige em runtime
+      // (executor.ts) somente quando o operador fornece uma chave SSH — mas
+      // o plano não sabe disso de antemão (é gerado a partir do scan, não do
+      // apply). Marcar aqui como true evita que o plano prometa um fluxo
+      // sem confirmação e o operador seja surpreendido pelo awaiting_confirmation
+      // que o executor pode disparar de qualquer forma.
+      requiresConfirmation: RISKY_PHASES.includes(phase.id) || phase.id === "01",
       hasRollback: true,
       impact: PHASE_IMPACTS[phase.id] ?? null,
       preselected: hasCriticalFail,

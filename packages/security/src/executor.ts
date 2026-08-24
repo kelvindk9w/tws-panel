@@ -208,8 +208,13 @@ export class SecurityExecutor {
     }
   }
 
-  /** Reflete o rollback agendado no alvo quando a janela expira sem confirmação. */
-  private scheduleStatusFlip(job: SecurityJob): void {
+  /**
+   * Reflete o rollback agendado no alvo quando a janela expira sem
+   * confirmação. `delayMs` é configurável para restoreJobs() reagendar com o
+   * tempo RESTANTE de uma janela que já estava correndo antes de um restart
+   * do painel (o timer original morre com o processo).
+   */
+  private scheduleStatusFlip(job: SecurityJob, delayMs = this.rollbackWindowMs + 15_000): void {
     const timer = setTimeout(() => {
       this.timers.delete(job.id);
       if (job.status === "awaiting_confirmation") {
@@ -222,9 +227,65 @@ export class SecurityExecutor {
         );
         this.notify(job);
       }
-    }, this.rollbackWindowMs + 15_000);
+    }, delayMs);
     timer.unref();
     this.timers.set(job.id, timer);
+  }
+
+  /**
+   * Restaura jobs persistidos (ex.: após restart do painel) — sem isso,
+   * GET /api/security/jobs/:id respondia 404 para um job em
+   * "awaiting_confirmation" logo após um restart, mesmo com o rollback
+   * agendado NO ALVO (at/timer) continuando a correr de forma independente.
+   * O operador perdia visibilidade justo no momento em que precisa confirmar
+   * que ainda tem acesso.
+   *
+   * Regras:
+   *  - "queued"/"running": o processo do script morreu junto com o painel —
+   *    não há como saber o resultado real, então o job é marcado "failed"
+   *    com uma nota explicando o motivo (nunca fica preso em execução).
+   *  - "awaiting_confirmation": se a janela (rollbackDeadline) já expirou
+   *    enquanto o painel estava fora do ar, assume-se que o rollback
+   *    agendado NO ALVO já reverteu — marca "rolled_back" imediatamente. Se
+   *    ainda há tempo, reagenda o flip (scheduleStatusFlip) com o tempo
+   *    RESTANTE, preservando o comportamento normal; confirmAccess() ainda
+   *    funciona normalmente sobre o job restaurado.
+   *  - qualquer outro status (terminal: success/failed/rolled_back): restaura
+   *    como está, sem efeitos colaterais.
+   */
+  restoreJobs(jobs: readonly SecurityJob[]): void {
+    for (const job of jobs) {
+      if (job.status === "queued" || job.status === "running") {
+        job.status = "failed";
+        job.error = "processo do painel reiniciado durante a execução — status real não pôde ser confirmado";
+        job.finishedAt = job.finishedAt ?? new Date().toISOString();
+        this.appendLog(
+          job,
+          "\n[executor] painel reiniciado com este job em execução — marcado como falho (verifique o alvo manualmente)\n",
+        );
+        this.jobs.set(job.id, job);
+        this.notify(job);
+        continue;
+      }
+
+      this.jobs.set(job.id, job);
+
+      if (job.status === "awaiting_confirmation" && job.rollbackDeadline) {
+        const remainingMs = new Date(job.rollbackDeadline).getTime() - Date.now() + 15_000;
+        if (remainingMs <= 0) {
+          job.status = "rolled_back";
+          job.rollbackScheduled = false;
+          job.finishedAt = new Date().toISOString();
+          this.appendLog(
+            job,
+            "\n[executor] painel reiniciado após a janela de confirmação — assumindo que o rollback agendado no alvo reverteu a configuração\n",
+          );
+          this.notify(job);
+        } else {
+          this.scheduleStatusFlip(job, remainingMs);
+        }
+      }
+    }
   }
 
   private processChunk(job: SecurityJob, chunk: string): void {
