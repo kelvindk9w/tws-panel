@@ -172,6 +172,17 @@ async function ensureImage(socketPath: string, image: string): Promise<void> {
 // PTY no HOST via helper descartável nsenter (mesmo padrão do host bridge)
 // ---------------------------------------------------------------------------
 
+/**
+ * Nomes de helpers com sessão ABERTA por ESTE processo agora — populado ao
+ * criar (openHostPty) e liberado em kill()/falha antes da sessão emplacar.
+ * Único propósito: o reaper periódico (ver scheduleOrphanTerminalHelperReap)
+ * NUNCA pode remover o helper de uma sessão ativa só porque ele bate o
+ * mesmo padrão de nome dos órfãos. No boot este set está sempre vazio (é
+ * memória de um processo novo), então a varredura de boot continua
+ * removendo tudo que achar — comportamento inalterado ali.
+ */
+const activeHelperNames = new Set<string>();
+
 async function openHostPty(socketPath: string, image: string): Promise<RemotePty> {
   await ensureImage(socketPath, image);
   const name = `paas-terminal-${randomBytes(4).toString("hex")}`;
@@ -191,30 +202,46 @@ async function openHostPty(socketPath: string, image: string): Promise<RemotePty
     throw new DockerSocketError(`falha ao criar o helper do terminal: ${errorMessage(create.body)}`, create.status);
   }
   const id = (JSON.parse(create.body.toString("utf8")) as { Id: string }).Id;
-
-  const start = await request(socketPath, "POST", `/containers/${id}/start`);
-  if (start.status !== 204 && start.status !== 304) {
-    throw new DockerSocketError(`falha ao iniciar o helper do terminal: ${errorMessage(start.body)}`, start.status);
+  // A partir daqui o container EXISTE no daemon: protege do reaper periódico
+  // já a partir daqui (não só depois do start/hijack) — se algo abaixo falhar,
+  // o catch libera a proteção E limpa o container, para não vazar um helper
+  // "fantasma" que o reaper nunca mais poderia tocar.
+  activeHelperNames.add(name);
+  try {
+    const start = await request(socketPath, "POST", `/containers/${id}/start`);
+    if (start.status !== 204 && start.status !== 304) {
+      throw new DockerSocketError(`falha ao iniciar o helper do terminal: ${errorMessage(start.body)}`, start.status);
+    }
+    const stream = await hijack(
+      socketPath,
+      `/containers/${id}/attach?stream=1&stdin=1&stdout=1&stderr=1`,
+      {},
+    );
+    return {
+      stream,
+      resize(cols, rows) {
+        void request(socketPath, "POST", `/containers/${id}/resize?h=${rows}&w=${cols}`).catch(() => undefined);
+      },
+      async kill() {
+        stream.destroy();
+        // Libera a proteção JÁ (não só depois do DELETE resolver): a sessão
+        // está encerrando por decisão do caller, então o reaper pode pegar
+        // este helper a partir de agora — inclusive se o DELETE abaixo
+        // falhar, que é exatamente o "caminho de erro não coberto" que
+        // deixava helpers vazando até o próximo restart.
+        activeHelperNames.delete(name);
+        await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
+      },
+    };
+  } catch (err) {
+    activeHelperNames.delete(name);
+    await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
+    throw err;
   }
-  const stream = await hijack(
-    socketPath,
-    `/containers/${id}/attach?stream=1&stdin=1&stdout=1&stderr=1`,
-    {},
-  );
-  return {
-    stream,
-    resize(cols, rows) {
-      void request(socketPath, "POST", `/containers/${id}/resize?h=${rows}&w=${cols}`).catch(() => undefined);
-    },
-    async kill() {
-      stream.destroy();
-      await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------
-// Reaper de helpers órfãos (boot)
+// Reaper de helpers órfãos (boot + periódico)
 // ---------------------------------------------------------------------------
 
 /** Nome exato dos helpers do terminal: paas-terminal-<8 hex> (ver openHostPty). */
@@ -222,15 +249,19 @@ const TERMINAL_HELPER_NAME_RE = /^paas-terminal-[0-9a-f]{8}$/;
 
 /**
  * Remove containers paas-terminal-* órfãos deixados por um processo anterior
- * do painel. Por que sobram órfãos: o AutoRemove do helper só dispara quando
- * o processo principal (nsenter→bash) SAI — com o painel morto (restart/
- * deploy), ninguém fecha o stream e o bash interativo segue vivo para sempre.
+ * do painel (ou por um caminho de erro não coberto deste mesmo processo).
+ * Por que sobram órfãos: o AutoRemove do helper só dispara quando o processo
+ * principal (nsenter→bash) SAI — com o painel morto (restart/deploy) ou uma
+ * falha entre criar e limpar, ninguém fecha o stream e o bash interativo
+ * segue vivo para sempre.
  *
  * O helper não tem label próprio, então o filtro é pelo padrão EXATO de nome
  * (prefixo + 8 hex) — nunca toca em containers do usuário com nomes
- * parecidos (ex.: "paas-terminal-custom"). Best-effort: falhas individuais
- * são ignoradas; falha ao LISTAR propaga para o caller logar (não fatal).
- * Retorna os nomes removidos (para log).
+ * parecidos (ex.: "paas-terminal-custom"). NUNCA remove um helper com sessão
+ * ativa NESTE processo (activeHelperNames) — essencial para poder chamar
+ * esta função periodicamente (ver scheduleOrphanTerminalHelperReap), não só
+ * no boot. Best-effort: falhas individuais são ignoradas; falha ao LISTAR
+ * propaga para o caller logar (não fatal). Retorna os nomes removidos.
  */
 export async function removeOrphanTerminalHelpers(socketPath: string): Promise<string[]> {
   const list = await request(socketPath, "GET", "/containers/json?all=1");
@@ -246,6 +277,7 @@ export async function removeOrphanTerminalHelpers(socketPath: string): Promise<s
     // Names vêm com "/" inicial na API do Docker.
     const name = c.Names.map((n) => n.replace(/^\//, "")).find((n) => TERMINAL_HELPER_NAME_RE.test(n));
     if (name === undefined) continue;
+    if (activeHelperNames.has(name)) continue; // sessão ativa deste processo — nunca remover
     const del = await request(socketPath, "DELETE", `/containers/${c.Id}?force=true`).catch(() => null);
     // 204 = removido; 404 = já sumiu (AutoRemove disparou entre listar e remover)
     if (del !== null && (del.status === 204 || del.status === 404)) {
@@ -253,6 +285,30 @@ export async function removeOrphanTerminalHelpers(socketPath: string): Promise<s
     }
   }
   return removed;
+}
+
+/** Intervalo padrão da varredura periódica (generoso: helpers órfãos não são
+ * urgentes, e cada tick é uma chamada real à Docker API). */
+const DEFAULT_ORPHAN_REAP_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * Arma a verificação PERIÓDICA de helpers órfãos — antes só rodava no boot,
+ * então um leak causado por um caminho de erro não coberto por
+ * handleSessionEnd (terminal-service.ts) só era limpo no próximo restart do
+ * painel. `intervalMs` é exposto para testes (produção usa o default de
+ * 30min). O timer é unref()'d: nunca mantém o processo vivo sozinho.
+ * Falhas de UM ciclo (ex.: Docker momentaneamente indisponível) não impedem
+ * o próximo — cada tick chama removeOrphanTerminalHelpers() do zero.
+ */
+export function scheduleOrphanTerminalHelperReap(
+  socketPath: string,
+  intervalMs: number = DEFAULT_ORPHAN_REAP_INTERVAL_MS,
+): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    void removeOrphanTerminalHelpers(socketPath).catch(() => undefined);
+  }, intervalMs);
+  timer.unref();
+  return timer;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,15 +352,28 @@ async function openContainerExecPty(socketPath: string, target: string): Promise
 
 export type PtyFactory = () => Promise<RemotePty>;
 
+/** Garante um único timer armado por processo mesmo se createDockerPtyFactory
+ * for chamada mais de uma vez (não deveria, mas evita empilhar intervals). */
+let periodicReaperArmed = false;
+
 /**
  * Monta a fábrica de PTY conforme o alvo de segurança configurado:
  *  - PAAS_TARGET=host → shell interativo no HOST (helper nsenter descartável);
  *  - alvo container (dev) → bash interativo no container alvo.
+ *
+ * Também arma o reaper PERIÓDICO de helpers órfãos (só no alvo "host", onde
+ * paas-terminal-* é criado) — app.ts já chama removeOrphanTerminalHelpers()
+ * uma vez no boot; isto garante que a MESMA varredura se repita ao longo da
+ * vida do processo, sem precisar de um novo ponto de wiring em app.ts.
  */
 export function createDockerPtyFactory(config: ServerConfig): PtyFactory {
   const socketPath = config.dockerSocketPath;
   if (config.securityTarget === "host") {
     const image = config.hostHelperImage;
+    if (!periodicReaperArmed) {
+      periodicReaperArmed = true;
+      scheduleOrphanTerminalHelperReap(socketPath);
+    }
     return () => openHostPty(socketPath, image);
   }
   const target = config.securityTargetContainer;

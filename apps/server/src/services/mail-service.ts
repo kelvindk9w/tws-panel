@@ -67,15 +67,51 @@ const EMPTY_FILE: MailFile = {
   projects: {},
 };
 
+/** Sink de auditoria mínimo — compatível com AuditService.record sem acoplar
+ * mail-service.ts à classe concreta (só a forma usada aqui). */
+export interface MailAuditSink {
+  record(input: { actor?: string; action: string; target?: string | null; detail: string }): Promise<unknown>;
+}
+
+export interface MailServiceOptions {
+  /**
+   * Auditoria de ações sensíveis. Mesmo sink usado hoje pelas rotas para
+   * criar domínio/caixa (routes/mail.ts, fora do escopo desta correção) —
+   * quando fornecido, deleteMailbox passa a registrar a remoção da mesma
+   * forma. Opcional: sem ele, o comportamento é o de hoje (sem auditoria).
+   */
+  audit?: MailAuditSink;
+  /**
+   * Log estruturado de falhas não fatais (ex.: deleteMailbox individual
+   * falhando dentro de removeDomain — antes silenciada com
+   * `.catch(() => undefined)`, podendo deixar caixa órfã viva no Stalwart
+   * sem registro local). Default: console.warn.
+   */
+  log?: (message: string, meta?: Record<string, unknown>) => void;
+}
+
+/** Resultado de removeDomain: caixas cuja remoção REMOTA falhou (a remoção
+ * do domínio prossegue mesmo assim — ver removeDomain). */
+export interface RemoveDomainResult {
+  mailboxDeleteFailures: string[];
+}
+
 export class MailService {
   private readonly mailDir: string;
   private readonly mailFile: string;
+  private readonly audit: MailAuditSink | undefined;
+  private readonly log: (message: string, meta?: Record<string, unknown>) => void;
   private data: MailFile = structuredClone(EMPTY_FILE);
   private loaded = false;
 
-  constructor(private readonly config: ServerConfig) {
+  constructor(
+    private readonly config: ServerConfig,
+    opts: MailServiceOptions = {},
+  ) {
     this.mailDir = path.join(config.dataDir, "mail");
     this.mailFile = path.join(this.mailDir, "mail.json");
+    this.audit = opts.audit;
+    this.log = opts.log ?? ((message, meta) => console.warn(message, meta ?? {}));
   }
 
   // -------------------------------------------------------------------------
@@ -271,7 +307,7 @@ export class MailService {
     return this.summaryOf(stored);
   }
 
-  async removeDomain(name: string): Promise<void> {
+  async removeDomain(name: string): Promise<RemoveDomainResult> {
     await this.ensureLoaded();
     const domain = normalizeMailDomain(name);
     if (!this.data.domains[domain]) {
@@ -287,13 +323,29 @@ export class MailService {
     await this.requireRunning();
 
     const client = this.client();
+    const mailboxDeleteFailures: string[] = [];
     for (const mailbox of Object.values(this.data.mailboxes).filter((m) => m.domain === domain)) {
-      await client.deleteMailbox(mailbox.id).catch(() => undefined);
+      try {
+        await client.deleteMailbox(mailbox.id);
+      } catch (err) {
+        // Observável, NUNCA silenciosa: a caixa pode ter ficado viva no
+        // Stalwart mesmo com o registro local removido logo abaixo — quem
+        // opera o painel precisa saber disso, não só ver "domínio removido
+        // com sucesso". Não interrompe o loop nem a remoção do domínio: uma
+        // caixa presa não pode travar a limpeza das demais.
+        mailboxDeleteFailures.push(mailbox.id);
+        this.log(`falha ao remover a caixa ${mailbox.id} no Stalwart (domínio ${domain})`, {
+          domain,
+          mailbox: mailbox.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       delete this.data.mailboxes[mailbox.id];
     }
     await client.deleteDomain(domain);
     delete this.data.domains[domain];
     await this.save();
+    return { mailboxDeleteFailures };
   }
 
   async dnsChecklist(name: string): Promise<DnsChecklistResponse> {
@@ -394,6 +446,13 @@ export class MailService {
     await this.client().deleteMailbox(email);
     delete this.data.mailboxes[email];
     await this.save();
+    // Mesmo padrão de criar domínio/caixa (routes/mail.ts): a remoção também
+    // é uma ação sensível e precisa ficar na trilha de auditoria.
+    await this.audit?.record({
+      action: "mail.mailbox.delete",
+      target: email,
+      detail: `Caixa de e-mail ${email} removida.`,
+    });
   }
 
   async mailboxCredentials(id: string): Promise<MailboxCredentials> {
