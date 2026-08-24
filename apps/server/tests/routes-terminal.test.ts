@@ -101,6 +101,30 @@ function tick(): Promise<void> {
   return new Promise((r) => setTimeout(r, 20));
 }
 
+/**
+ * Espera a auditoria (escrita fire-and-forget em disco, mkdir+writeFile
+ * assíncronos) conter `needle`, em vez de apostar num tempo fixo: sob a
+ * suíte completa rodando em paralelo, o I/O real pode levar mais que um
+ * `tick()` de 20ms para terminar, e um sleep fixo produz falso negativo
+ * intermitente sem indicar nada de errado com o comportamento auditado.
+ * Faz polling por condição, com teto generoso; se estourar, devolve o
+ * último conteúdo lido para a asserção do chamador falhar com a causa real.
+ */
+async function waitForAuditContains(dir: string, needle: string, timeoutMs = 2000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  do {
+    try {
+      last = await readFile(path.join(dir, "audit.json"), "utf8");
+      if (last.includes(needle)) return last;
+    } catch {
+      // arquivo ainda não existe: tenta de novo
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  } while (Date.now() < deadline);
+  return last;
+}
+
 let ctx: TerminalTestContext | null = null;
 
 afterEach(async () => {
@@ -148,10 +172,9 @@ describe("WS /api/terminal/ws — relay puro e REGRA DE OURO", () => {
     expect(Buffer.concat(pty!.inputs).toString("utf8")).toContain("senha-secreta");
 
     ws.close();
-    await tick();
 
     // prova: a auditoria tem connect/disconnect, mas NUNCA o que foi digitado
-    const auditRaw = await readFile(path.join(ctx.dir, "audit.json"), "utf8");
+    const auditRaw = await waitForAuditContains(ctx.dir, "terminal.connect");
     expect(auditRaw).toContain("terminal.connect");
     expect(auditRaw).not.toContain("senha-secreta");
   });
