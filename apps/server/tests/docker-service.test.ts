@@ -13,12 +13,16 @@ import { describe, expect, it } from "vitest";
 import { DockerUnavailableError, listContainers } from "../src/services/docker-service.js";
 
 describe("listContainers", () => {
-  it("socket padrão (Docker real da máquina) → lista containers sem lançar", async () => {
+  // Estes dois casos falam com o Docker REAL da máquina: levam ~1,5s sozinhos e
+  // mais quando os 6 workspaces rodam em paralelo. O limite padrão de 5s do
+  // vitest gera falso negativo sob carga — o teto maior não deixa o caso feliz
+  // mais lento, apenas evita que a máquina ocupada reprove código correto.
+  it("socket padrão (Docker real da máquina) → lista containers sem lançar", { timeout: 20_000 }, async () => {
     const containers = await listContainers();
     expect(Array.isArray(containers)).toBe(true);
   });
 
-  it("socket configurado explicitamente (mesmo válido) → também funciona (parâmetro é respeitado)", async () => {
+  it("socket configurado explicitamente (mesmo válido) → também funciona (parâmetro é respeitado)", { timeout: 20_000 }, async () => {
     const containers = await listContainers("/var/run/docker.sock");
     expect(Array.isArray(containers)).toBe(true);
   });

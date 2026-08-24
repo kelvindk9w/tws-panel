@@ -110,7 +110,7 @@ function tick(): Promise<void> {
  * Faz polling por condição, com teto generoso; se estourar, devolve o
  * último conteúdo lido para a asserção do chamador falhar com a causa real.
  */
-async function waitForAuditContains(dir: string, needle: string, timeoutMs = 2000): Promise<string> {
+async function waitForAuditContains(dir: string, needle: string, timeoutMs = 15_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let last = "";
   do {
