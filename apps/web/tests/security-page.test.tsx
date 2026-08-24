@@ -7,6 +7,7 @@
  * "atualizando…" em vez de bloquear a tela.
  */
 import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SecurityPage } from "../src/pages/SecurityPage";
 
@@ -64,7 +65,11 @@ afterEach(() => {
 describe("SecurityPage — Hardening Index com refresh em andamento", () => {
   it("refreshing=true → mostra o índice cacheado + indicador \"atualizando…\" (sem bloquear)", async () => {
     mockSecurityFetch({ report: REPORT, cached: true, refreshing: true });
-    render(<SecurityPage />);
+    render(
+      <MemoryRouter>
+        <SecurityPage />
+      </MemoryRouter>,
+    );
 
     // índice do último relatório aparece imediatamente…
     expect(await screen.findByText("75")).toBeInTheDocument();
@@ -74,7 +79,11 @@ describe("SecurityPage — Hardening Index com refresh em andamento", () => {
 
   it("refreshing=false → índice sem o indicador de atualização", async () => {
     mockSecurityFetch({ report: REPORT, cached: true, refreshing: false });
-    render(<SecurityPage />);
+    render(
+      <MemoryRouter>
+        <SecurityPage />
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByText("75")).toBeInTheDocument();
     expect(screen.queryByText(/atualizando/)).not.toBeInTheDocument();

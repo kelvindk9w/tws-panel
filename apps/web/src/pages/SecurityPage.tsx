@@ -10,6 +10,7 @@ import type {
 import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Link } from "react-router";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -45,7 +46,7 @@ function HardeningCard() {
       .catch((err) => setError(err instanceof Error ? err.message : "Falha ao carregar."));
   }, []);
 
-  const index = scan?.report.hardeningIndex ?? null;
+  const index = scan?.report?.hardeningIndex ?? null;
   const scans = history?.entries.filter((e) => e.kind === "scan") ?? [];
 
   return (
@@ -103,6 +104,9 @@ function HardeningCard() {
             )}
           </>
         )}
+        <Button size="sm" variant="outline" className="mt-1 self-start" asChild>
+          <Link to="/security/hardening">Revisar e aplicar hardening</Link>
+        </Button>
       </CardContent>
     </Card>
   );
