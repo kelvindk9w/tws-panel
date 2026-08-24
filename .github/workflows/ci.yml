@@ -79,17 +79,24 @@ jobs:
       - name: Allowlist de CVEs CRITICAL sem correção possível (documentada)
         run: |
           cat <<'EOF' > .trivyignore
-          # CVE-2026-59873 (CRITICAL, tar 7.5.11 → fix em 7.5.19) — não é
-          # dependência do nosso pnpm-lock.yaml (scan `trivy fs` do repo dá 0
-          # findings). É o `tar` vendorizado DENTRO do npm que vem embutido na
-          # imagem base node:22-bookworm-slim
-          # (usr/local/lib/node_modules/npm/node_modules/.../tar), usado só
-          # pelas ferramentas internas do npm — não pelo runtime do painel.
-          # Sem como atualizar por fora: depende do mantenedor da imagem
-          # oficial do Node incorporar um npm mais novo. Verificado rodando
-          # `trivy image node:22-bookworm-slim` em 2026-08-24. Reavaliar e
-          # remover esta linha quando a imagem base atualizar o npm.
+          # Allowlist de CVE CRITICAL que não está sob nosso controle direto.
+          # Revisar a cada atualização da imagem base ou das dependências.
+          #
+          # CVE-2026-59873 (tar 7.5.10/7.5.11 → fix em 7.5.19)
+          # Não é dependência do nosso pnpm-lock.yaml: é o `tar` vendorizado
+          # dentro do npm que já vem embutido em node:22-bookworm-slim. Sai
+          # sozinho quando a imagem base atualizar o npm.
           CVE-2026-59873
+          #
+          # CVE-2025-68121 (stdlib Go do binário do esbuild)
+          # O esbuild é ferramenta de BUILD (dependência transitiva do Vite) e
+          # nunca é executado em runtime — o painel roda o servidor Fastify, não
+          # o bundler. Ele só aparece no scan porque a imagem de runtime copia o
+          # estágio de build inteiro, node_modules incluído (Dockerfile:87).
+          # A correção de raiz é não levar devDependencies para a imagem final,
+          # o que reduziria também o tamanho e a superfície de ataque; está
+          # registrado como dívida em comoFuncionaSistema/global/review-*.json.
+          CVE-2025-68121
           EOF
 
       - name: Trivy — CRITICAL da imagem (bloqueante)

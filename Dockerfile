@@ -62,10 +62,10 @@ ENV NODE_ENV=production \
 # Por quê: o painel fala com o daemon do host via /var/run/docker.sock
 # (deploys, Caddy, Stalwart) e o HOST BRIDGE (packages/security) executa o
 # scan/hardening na VPS real via helper descartável `docker run ... nsenter`.
-ARG DOCKER_CLI_VERSION=27.5.1
-ARG DOCKER_CLI_SHA256=4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640
-ARG COMPOSE_VERSION=2.32.4
-ARG COMPOSE_SHA256=ed1917fb54db184192ea9d0717bcd59e3662ea79db48bff36d3475516c480a6b
+ARG DOCKER_CLI_VERSION=29.7.2
+ARG DOCKER_CLI_SHA256=803d433f226db4776e1768fd319fc6c6e4935a456acf84fcc0080818b854bc8f
+ARG COMPOSE_VERSION=5.5.0
+ARG COMPOSE_SHA256=c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
 ADD https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz /tmp/docker.tgz
 ADD https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64 \
     /usr/local/libexec/docker/cli-plugins/docker-compose
