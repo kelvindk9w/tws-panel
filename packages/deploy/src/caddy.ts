@@ -150,8 +150,22 @@ function siteAddress(domain: string): string {
   return domain.endsWith(".localhost") || domain === "localhost" ? `http://${domain}` : domain;
 }
 
+/**
+ * Defesa em profundidade: o domínio já é validado ao criar/atualizar o projeto,
+ * mas o Caddyfile também é montado a partir de projetos gravados antes dessa
+ * validação existir. Um valor com `{`, `}` ou quebra de linha viraria diretiva
+ * de configuração, então alvos fora do formato são descartados.
+ */
+const SAFE_DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
+const SAFE_UPSTREAM_RE = /^[A-Za-z0-9._-]+:[0-9]{1,5}$/;
+
+export function isSafeCaddyTarget(target: CaddyTarget): boolean {
+  return SAFE_DOMAIN_RE.test(target.domain) && SAFE_UPSTREAM_RE.test(target.upstream);
+}
+
 /** Renderiza o Caddyfile completo (um bloco por alvo). */
-export function renderCaddyfile(targets: CaddyTarget[]): string {
+export function renderCaddyfile(allTargets: CaddyTarget[]): string {
+  const targets = allTargets.filter(isSafeCaddyTarget);
   const lines: string[] = [
     "# Gerado pelo painel PaaS — não editar manualmente.",
     `# Atualizado em ${new Date().toISOString()}`,

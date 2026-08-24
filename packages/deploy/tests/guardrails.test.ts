@@ -200,6 +200,53 @@ describe("analyzeCompose — compose.weak-credentials", () => {
   });
 });
 
+describe("analyzeCompose — compose.privileged-container (convergência com rules.ts)", () => {
+  // Bug: guardrails.ts (preview do wizard/detecção) não tinha a regra de
+  // container privilegiado que rules.ts (bloqueio real do deploy) já tem.
+  // Resultado: um compose com `privileged: true` passava limpo na tela de
+  // detecção e só era barrado depois, no deploy — surpresa desagradável.
+  // A regra deve vir da MESMA lógica de rules.ts (sem duplicar), reutilizada
+  // aqui como um aviso "critical" no preview.
+  it("dispara quando um serviço define privileged: true", () => {
+    const warnings = analyzeCompose(
+      compose("  app:\n    image: app\n    privileged: true"),
+      "compose.yml",
+    );
+    const hit = warnings.find((w) => w.id === "compose.privileged-container");
+    expect(hit).toBeDefined();
+    expect(hit?.severity).toBe("critical");
+    expect(hit?.service).toBe("app");
+  });
+
+  it("dispara quando um serviço monta /var/run/docker.sock", () => {
+    const warnings = analyzeCompose(
+      compose(
+        '  app:\n    image: app\n    volumes:\n      - "/var/run/docker.sock:/var/run/docker.sock"',
+      ),
+      "compose.yml",
+    );
+    const hit = warnings.find((w) => w.id === "compose.privileged-container");
+    expect(hit).toBeDefined();
+    expect(hit?.severity).toBe("critical");
+  });
+
+  it("NÃO dispara para um serviço comum, sem privileged nem docker.sock", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    image: app\n    volumes:\n      - "app-data:/data"'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.privileged-container")).toHaveLength(0);
+  });
+
+  it("edge: privileged: false não dispara", () => {
+    const warnings = analyzeCompose(
+      compose("  app:\n    image: app\n    privileged: false"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.privileged-container")).toHaveLength(0);
+  });
+});
+
 describe("analyzeCompose — casos gerais", () => {
   it("compose sem serviços gera info compose.no-services", () => {
     const warnings = analyzeCompose("services: {}\n", "compose.yml");

@@ -9,6 +9,7 @@
  */
 import { parse } from "yaml";
 import type { GuardrailWarning } from "@paas/core";
+import { mountsDockerSock } from "./rules.js";
 
 /** Portas de container conhecidas de bancos de dados. */
 const DATABASE_PORTS = new Map<number, string>([
@@ -58,6 +59,8 @@ interface ComposeService {
   ports?: unknown;
   environment?: unknown;
   networks?: unknown;
+  privileged?: unknown;
+  volumes?: unknown;
   [key: string]: unknown;
 }
 
@@ -175,6 +178,29 @@ export function analyzeCompose(content: string, fileName: string): GuardrailWarn
           message: `Serviço "${name}" define ${key} com valor fraco ou previsível. Gere uma credencial forte e gerencie como secret.`,
         });
       }
+    }
+
+    // 4) container privilegiado ou com o socket do Docker montado — mesma
+    // regra "privileged-container" (block) de rules.ts, o que realmente
+    // barra o deploy. Antes desta checagem, um projeto passava limpo aqui
+    // (preview do wizard/detecção) e só era barrado depois, no deploy —
+    // reutilizamos mountsDockerSock() de rules.ts em vez de duplicar a
+    // lógica para os dois pararem de divergir.
+    if (service.privileged === true) {
+      warnings.push({
+        id: "compose.privileged-container",
+        severity: "critical",
+        service: name,
+        message: `Serviço "${name}" define privileged: true — equivale a root no host e vai BLOQUEAR o deploy até ser corrigido.`,
+      });
+    }
+    if (mountsDockerSock(service.volumes)) {
+      warnings.push({
+        id: "compose.privileged-container",
+        severity: "critical",
+        service: name,
+        message: `Serviço "${name}" monta /var/run/docker.sock — equivale a root no host e vai BLOQUEAR o deploy até ser corrigido.`,
+      });
     }
   }
 

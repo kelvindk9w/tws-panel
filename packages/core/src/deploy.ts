@@ -77,6 +77,15 @@ export interface Project {
   updatedAt: string;
   lastDeployAt: string | null;
   lastDeployStatus: "success" | "failed" | null;
+  /**
+   * Branch e fonte que o último deploy bem-sucedido efetivamente publicou.
+   * Guardamos o FATO do que está no ar, não uma intenção de mudança: é isso
+   * que permite à tela mostrar "configurado X, no ar Y" e sobrevive a
+   * reinício, edição concorrente e falha no meio do fluxo.
+   * null = nada publicado ainda.
+   */
+  deployedBranch: string | null;
+  deployedSource: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +164,12 @@ export interface CreateProjectRequest {
 }
 
 export interface UpdateProjectRequest {
+  /** Nome de exibição. Editável e livre — nunca altera o slug. */
+  name?: string;
+  /** URL do repositório (modo git). Trocar exige re-clone no próximo deploy. */
+  source?: string;
+  /** Branch a publicar. Trocar exige re-clone no próximo deploy. */
+  branch?: string;
   domain?: string;
   websocket?: boolean;
   proxyService?: string | null;

@@ -273,8 +273,13 @@ function isWeakSecret(value: string | null): boolean {
   return v.length > 0 && v.length < 6;
 }
 
-/** Volume que monta o socket do Docker (acesso total ao host). */
-function mountsDockerSock(volumes: unknown): boolean {
+/**
+ * Volume que monta o socket do Docker (acesso total ao host).
+ * Exportada para guardrails.ts (preview do wizard/detecção) reutilizar a
+ * MESMA lógica da regra "privileged-container" que bloqueia o deploy, em vez
+ * de duplicá-la — ver comentário em analyzeCompose (guardrails.ts).
+ */
+export function mountsDockerSock(volumes: unknown): boolean {
   if (!Array.isArray(volumes)) return false;
   return volumes.some((entry) => {
     if (typeof entry === "string") return entry.includes("/var/run/docker.sock");
