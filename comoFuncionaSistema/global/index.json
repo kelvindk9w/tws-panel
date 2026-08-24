@@ -66,7 +66,7 @@
     {
       "id": "testes",
       "titulo": "Estratégia de testes",
-      "resumo": "Vitest por workspace (59 arquivos, thresholds de cobertura), os dois scripts E2E reais (e-mail e guardrails/monitoramento) e lacunas de cobertura conhecidas.",
+      "resumo": "Vitest por workspace (70 arquivos, 763 testes, thresholds de cobertura), os dois scripts E2E reais (e-mail e guardrails/monitoramento) e lacunas de cobertura conhecidas.",
       "arquivo": "global/testes.json"
     },
     {

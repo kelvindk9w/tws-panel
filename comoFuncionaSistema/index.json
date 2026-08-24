@@ -21,8 +21,8 @@
     "frontend": "React 18 + React Router 7 (data router) + Vite 6 + Tailwind 3, design system estilo shadcn/ui (Radix + CVA)",
     "entregaDoFrontend": "build estático servido pelo próprio Fastify, com fallback SPA",
     "orquestracao": "Docker (socket montado no container do painel) + Caddy como proxy reverso com TLS automático",
-    "testes": "Vitest por workspace (59 arquivos, 661 testes) + 2 scripts E2E com Docker real",
-    "infra": "Dockerfile multi-stage não-root, docker-compose, GitHub Actions (typecheck/build/testes + Trivy report-only)"
+    "testes": "Vitest por workspace (70 arquivos, 763 testes) + 2 scripts E2E com Docker real",
+    "infra": "Dockerfile multi-stage não-root, docker-compose, GitHub Actions (typecheck de src+tests/build/testes + Trivy: CRITICAL bloqueia o merge, HIGH continua report-only)"
   },
   "estruturaRepositorio": [
     {

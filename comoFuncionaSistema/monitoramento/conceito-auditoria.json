@@ -78,6 +78,12 @@
       "arquivoFonte": "apps/server/src/routes/mail.ts:177-181"
     },
     {
+      "action": "mail.mailbox.delete",
+      "endpoint": "DELETE /api/mail/domains/:domain/mailboxes/:id",
+      "quando": "Caixa de e-mail removida. CORRIGIDO nesta rodada: MailService.deleteMailbox já tinha o record() de auditoria implementado, mas routes/mail.ts construía o MailService SEM injetar o AuditService (new MailService(app.config), sem opts) — a chamada era um no-op silencioso (audit?.record, optional chaining sobre undefined) e a remoção nunca deixava rastro na prática, ao contrário de criar domínio/caixa. Agora o sink é injetado (new MailService(app.config, { audit: app.auditService })).",
+      "arquivoFonte": "apps/server/src/routes/mail.ts, apps/server/src/services/mail-service.ts:451-455"
+    },
+    {
       "action": "terminal.connect",
       "endpoint": "WS /api/terminal (conexão)",
       "quando": "Cliente WebSocket conecta ao terminal web e assume o papel de 'owner' da sessão de PTY.",
@@ -136,6 +142,7 @@
     "actor default é 'operador' (painel mono-usuário); auth.login_failed usa 'anon' explicitamente (ainda não há usuário autenticado); as rotas de auth/setup passam o username do usuário quando disponível.",
     "AuditService.record é best-effort: falha de escrita em disco é engolida (não derruba a ação de negócio que originou o registro) — ver apps/server/src/services/audit-service.ts:38 e o comentário 'NUNCA registrar segredos no detalhe' no topo do arquivo.",
     "Nenhuma ação de leitura (GET) é auditada — só mutações/ações sensíveis.",
-    "Não foi encontrada nenhuma ação de auditoria para a criação/atualização de projetos (POST/PUT /api/projects) fora de delete/deploy — só project.delete, deploy.blocked, guardrail.override e deploy.start existem hoje no fluxo de projetos."
+    "Não foi encontrada nenhuma ação de auditoria para a criação/atualização de projetos (POST/PUT /api/projects) fora de delete/deploy — só project.delete, deploy.blocked, guardrail.override e deploy.start existem hoje no fluxo de projetos.",
+    "CORRIGIDO nesta rodada: ao estourar o teto de 2.000 entradas do arquivo ativo, as entradas excedentes são movidas para data/audit.1.json em vez de descartadas — arquivamento best-effort, acumulando entre rotações. Ver global/persistencia.json e monitoramento/auditoria.json."
   ]
 }

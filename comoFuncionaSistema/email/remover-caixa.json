@@ -37,17 +37,18 @@
     "4. 409 mailbox_in_use se algum projeto usa esta caixa (mailbox técnica de projeto — ver habilitar-email-projeto.json).",
     "5. requireRunning().",
     "6. client().deleteMailbox(email): DELETE /api/principal/{email}.",
-    "7. Remove de data.mailboxes e save(); responde { ok: true } (sem auditoria específica para este endpoint no código lido)."
+    "7. Remove de data.mailboxes e save().",
+    "8. audit?.record({ action: 'mail.mailbox.delete', target: email, detail: 'Caixa de e-mail <email> removida.' }) — CORRIGIDO nesta rodada, ver observações. Responde { ok: true }."
   ],
   "dependencias": [
     { "tipo": "servico", "nome": "MailService.deleteMailbox", "arquivo": "apps/server/src/services/mail-service.ts:379", "papel": "Valida proteções (system/em uso) e remove do Stalwart + local." },
     { "tipo": "pacote", "nome": "StalwartClient.deleteMailbox", "arquivo": "packages/mailer/src/client.ts:130", "papel": "DELETE /api/principal/{email}." }
   ],
-  "efeitosColaterais": ["Apaga a caixa e suas mensagens no Stalwart (volume paas_stalwart_data). Grava data/mail/mail.json."],
+  "efeitosColaterais": ["Apaga a caixa e suas mensagens no Stalwart (volume paas_stalwart_data). Grava data/mail/mail.json.", "auditoria: mail.mailbox.delete (CORRIGIDO nesta rodada)"],
   "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:271"],
-  "testes": ["scripts/test-mail.mts"],
+  "testes": ["scripts/test-mail.mts", "apps/server/tests/mail-service.test.ts"],
   "observacoes": [
-    "Ao contrário de criar-dominio/remover-dominio/criar-caixa, este endpoint NÃO grava entrada em AuditService — sem trilha de auditoria para remoção individual de caixa (mail.mailbox.create existe, mas não há mail.mailbox.remove em mail.ts).",
+    "CORRIGIDO nesta rodada: este endpoint agora grava mail.mailbox.delete em AuditService, igual a criar-dominio/remover-dominio/criar-caixa. MailService.deleteMailbox já continha o record() de auditoria antes desta rodada, mas routes/mail.ts construía o MailService sem injetar o sink (new MailService(app.config), sem opts) — audit?.record era um no-op silencioso (optional chaining sobre undefined). A correção foi só na injeção: new MailService(app.config, { audit: app.auditService }).",
     "id (endereço completo da caixa) não tem pattern no schema — só limite de tamanho (90 chars) — porque o valor é decodeURIComponent()'d e comparado em lowercase no handler; validar formato de e-mail na borda arriscaria recusar um endereço legítimo com encoding incomum."
   ]
 }

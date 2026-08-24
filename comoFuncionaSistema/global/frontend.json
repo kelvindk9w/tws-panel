@@ -14,7 +14,7 @@
     { "simbolo": "formatBytes / formatUptime", "assinatura": "apps/web/src/lib/utils.ts:8-27", "descricao": "Formatação humana de bytes (B/KiB/MiB/GiB/TiB) e uptime (d/h/min) usados nas telas de saúde/segurança." }
   ],
   "comportamento": [
-    "Rotas (apps/web/src/App.tsx, createBrowserRouter): protegidas por RequireAuth+Layout — '/' DashboardPage, '/projects/new' NewProjectPage, '/projects/:id' ProjectDetailPage, '/mail' MailPage, '/mail/:domain' MailDomainPage, '/security' SecurityPage, '/alerts' AlertsPage, '/audit' AuditPage. Fora do layout/guard: '/setup' SetupPage (wizard) e '/login' LoginPage. Wildcard '*' cai em RequireAuth+DashboardPage (sem Layout).",
+    "Rotas (apps/web/src/App.tsx, createBrowserRouter): protegidas por RequireAuth+Layout — '/' DashboardPage, '/projects/new' NewProjectPage, '/projects/:id' ProjectDetailPage, '/mail' MailPage, '/mail/:domain' MailDomainPage, '/security' SecurityPage, '/security/hardening' HardeningPage (NOVA nesta rodada — reaproveita SecurityStep do wizard fora do setup, ver seguranca/index.json), '/alerts' AlertsPage, '/audit' AuditPage. Fora do layout/guard: '/setup' SetupPage (wizard) e '/login' LoginPage. Wildcard '*' cai em RequireAuth+DashboardPage (sem Layout).",
     "O wizard de setup (SetupPage, apps/web/src/pages/setup/{WelcomeStep,HealthStep,SecurityStep,AdminStep}.tsx) não usa RequireAuth nem Layout — ele é anterior à existência de uma sessão, protegido pelo próprio backend via setup token.",
     "Design system: components/ui/ tem badge.tsx (variantes default/secondary/destructive/outline/success/warning via CVA), button.tsx (variantes + Radix Slot para asChild), card.tsx, input.tsx, progress.tsx (Radix Progress). Todos usam cn() e seguem a convenção shadcn/ui (componentes 'copiados' para o repo, não uma lib externa de UI).",
     "Componentes de produto reutilizáveis fora de ui/: Layout.tsx (header/nav/footer + badge de alertas abertos), RequireAuth.tsx (guard), UserMenu.tsx (menu do usuário logado, troca de senha, logout), Stepper.tsx (indicador de passos do wizard), IndexGauge.tsx (anel SVG do índice de hardening, animado via stroke-dashoffset), CopyButton.tsx (botão copiar com feedback), TerminalPanel.tsx (terminal web embutido via @xterm/xterm + WebSocket, usado em todos os passos do wizard e em telas de segurança), ProjectConfigCard.tsx (card 'Configuração' na tela do projeto: edita nome/repositório/branch/domínio via PATCH /api/projects/:id; slug exibido mas fixo/não editável; compara project.branch/source configurados com project.deployedBranch/deployedSource publicados e mostra um aviso de divergência quando diferem; botões 'Salvar' (só PATCH) e 'Salvar e publicar' (PATCH + POST .../deploy) — usado em ProjectDetailPage.tsx, ver projetos/index.json e projetos/atualizar.json).",
@@ -39,7 +39,8 @@
     "apps/web/tests/health-step.test.tsx",
     "apps/web/tests/security-step.test.tsx",
     "apps/web/tests/admin-step.test.tsx",
-    "apps/web/tests/project-config-card.test.tsx"
+    "apps/web/tests/project-config-card.test.tsx",
+    "apps/web/tests/hardening-page.test.tsx"
   ],
   "observacoes": [
     "vitest.config.ts de apps/web roda em environment: jsdom com @testing-library/react e cobre só os componentes efetivamente exercitados pelos testes (wizard, MailDomainPage, ProjectDetailPage, TerminalPanel, lib/**) — não há thresholds numéricos de cobertura definidos para este workspace, ao contrário dos demais.",

@@ -23,13 +23,14 @@
   ],
   "erros": [
     { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe", "mensagem": "Projeto não encontrado." },
-    { "status": 500, "codigo": "internal_error", "quando": "zero containers do projeto encontrados (Error genérico 'Nenhum container do projeto encontrado — faça um deploy primeiro.') OU docker start retornou código ≠ 0", "mensagem": "Erro interno (mensagem de domínio não chega ao cliente — ver observações)." }
+    { "status": 409, "codigo": "no_containers", "quando": "zero containers do projeto encontrados (engineError de domínio, packages/deploy/src/engine.ts)", "mensagem": "Nenhum container encontrado para \"<nome>\" — faça um deploy primeiro." },
+    { "status": 502, "codigo": "docker_start_failed", "quando": "docker start retornou código ≠ 0", "mensagem": "Falha ao iniciar containers: <stderr>." }
   ],
   "fluxo": [
     "1. requireProject(id) — 404 se não existir.",
     "2. engine.projectContainers(project) — mesma resolução de start.json (label paas.project ou compose project).",
-    "3. Se zero containers → throw new Error(...) (500, não HttpError).",
-    "4. docker start <ids...> (timeout 120s); código≠0 → throw new Error (500).",
+    "3. Se zero containers → engineError(409, 'no_containers', ...) — erro de domínio com statusCode/code, não mais um Error genérico (CORRIGIDO nesta rodada: antes virava 500 internal_error opaco, ver observações).",
+    "4. docker start <ids...> (timeout 120s); código≠0 → engineError(502, 'docker_start_failed', ...).",
     "5. Log agregado retornado em { ok: true, log }."
   ],
   "dependencias": [
@@ -38,9 +39,9 @@
   ],
   "efeitosColaterais": ["docker start nos containers do projeto"],
   "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('start'), botão 'Iniciar' — desabilitado quando status já é 'running', 'deploying' ou 'created')"],
-  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "packages/deploy/tests/engine-lifecycle.test.ts"],
   "observacoes": [
-    "BUG/RISCO: a mensagem 'Nenhum container do projeto encontrado — faça um deploy primeiro.' é lançada como Error comum (não httpError), então sendError() mapeia para 500 internal_error com a mensagem genérica 'Erro interno.' — o operador nunca vê a orientação real de que precisa fazer o primeiro deploy. O botão 'Iniciar' já fica desabilitado quando status==='created' no frontend, então esse caminho só é alcançável via chamada direta à API ou corrida de estado (status desatualizado no polling).",
-    "Mesmo padrão de erro genérico afeta stop/remove quando o motivo é 'de negócio' e não um httpError explícito — só startDeploy/createProject/updateProject/detect/guardrailsForProject/deleteProject (quando via requireProject) usam httpError com código semântico."
+    "CORRIGIDO nesta rodada: a falta de containers agora lança um erro de domínio (engineError, packages/deploy/src/engine.ts) com statusCode=409/code='no_containers', em vez de um Error comum mapeado para 500 internal_error — a mensagem 'faça um deploy primeiro' agora chega de fato ao cliente. O botão 'Iniciar' já fica desabilitado quando status==='created' no frontend, então esse caminho só é alcançável via chamada direta à API ou corrida de estado (status desatualizado no polling).",
+    "Mesmo padrão de erro de domínio agora vale para stop (ver parar.json). remove ainda pode cair em Error genérico em caminhos não cobertos por httpError explícito."
   ]
 }

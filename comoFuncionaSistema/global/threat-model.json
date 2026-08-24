@@ -151,7 +151,7 @@
       "id": "supply-chain",
       "naoProtegemosContra": "Comprometimento de dependências npm ou de imagens Docker de base",
       "porQue": "Mitigado parcialmente por lockfile e scan de imagem, mas sem SBOM, assinatura de release ou pinning de digest no momento.",
-      "situacaoAtual": "Scan Trivy roda no CI em modo relatório e não bloqueia merge. O Dependabot está ATIVO (há branches dependabot/* no remoto: fastify/static, nodemailer, vite), mas habilitado pela interface do GitHub — não existe .github/dependabot.yml versionado, então a configuração não é revisável nem reproduzível a partir do repositório. Não há SBOM, assinatura de release nem pinning por digest."
+      "situacaoAtual": "CORRIGIDO PARCIALMENTE nesta rodada: o scan Trivy no CI agora bloqueia o merge para CVEs CRITICAL com fix disponível (exit-code 1, com allowlist documentada para o único CRITICAL fora do controle do projeto); HIGH continua em modo relatório, por decisão deliberada. O Dependabot está ATIVO (há branches dependabot/* no remoto: fastify/static, nodemailer, vite), mas habilitado pela interface do GitHub — não existe .github/dependabot.yml versionado, então a configuração não é revisável nem reproduzível a partir do repositório. Não há SBOM, assinatura de release nem pinning por digest."
     }
   ],
   "dividaDeSegurancaConhecida": [
@@ -194,7 +194,7 @@
     "Não exponha o painel à internet sem necessidade — prefira acesso por VPN ou restrição de IP.",
     "Trate a senha do painel com o mesmo cuidado da senha de root da VPS, porque elas são equivalentes na prática.",
     "Faça backup do diretório de dados sabendo que ele contém segredos em texto plano.",
-    "Aplique o hardening oferecido pelo wizard antes de hospedar qualquer projeto.",
+    "Aplique o hardening oferecido pelo wizard antes de hospedar qualquer projeto (e revise/reaplique quando quiser depois, em /security/hardening).",
     "Mantenha o painel atualizado: correções de segurança são publicadas nas releases."
   ]
 }

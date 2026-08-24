@@ -20,7 +20,7 @@
   "respostas": [
     {
       "status": 200,
-      "quando": "Job encontrado (existe em memória — executor.jobs, um Map; não há persistência de jobs em andamento além do histórico de finalizados).",
+      "quando": "Job encontrado (executor.jobs, um Map em memória — CORRIGIDO nesta rodada: agora também persistido em data/security-jobs.json e restaurado no boot, ver observações).",
       "corpo": { "job": "SecurityJob" },
       "exemplo": {
         "job": {
@@ -47,21 +47,24 @@
   ],
   "erros": [
     { "status": 400, "codigo": "invalid_request", "quando": "id maior que 64 chars — reprovado pelo schema Fastify (jobParamsSchema) ANTES do handler.", "mensagem": "Campo inválido: id." },
-    { "status": 404, "codigo": "job_not_found", "quando": "Nenhum job com esse id (nunca existiu, ou o processo do servidor foi reiniciado — jobs em andamento não são persistidos, só o resultado final no histórico).", "mensagem": "Job não encontrado." }
+    { "status": 404, "codigo": "job_not_found", "quando": "Nenhum job com esse id (nunca existiu, ou existiu mas não foi possível restaurá-lo — ex.: id não está entre os até MAX_PERSISTED_JOBS=100 jobs terminais mais recentes salvos em disco).", "mensagem": "Job não encontrado." }
   ],
   "fluxo": [
     "1. service.getJob(id) → executor.getJob(id) → this.jobs.get(id) (Map em memória).",
     "2. 404 job_not_found se ausente; senão devolve { job } com o snapshot atual (mutado in-place pelo executor conforme o script roda)."
   ],
   "dependencias": [
-    { "tipo": "pacote", "nome": "SecurityExecutor.getJob", "arquivo": "packages/security/src/executor.ts:62", "papel": "Consulta o Map de jobs em memória." }
+    { "tipo": "pacote", "nome": "SecurityExecutor.getJob", "arquivo": "packages/security/src/executor.ts:62", "papel": "Consulta o Map de jobs em memória." },
+    { "tipo": "servico", "nome": "SecurityService.persistJobs/restoreJobsFromDisk", "arquivo": "apps/server/src/services/security-service.ts", "papel": "Espelha o Map em data/security-jobs.json a cada mudança e restaura no boot." }
   ],
   "efeitosColaterais": ["Nenhum (somente leitura)."],
   "chamadoPor": ["apps/web/src/pages/setup/SecurityStep.tsx:328 (pollJob)"],
-  "testes": [],
+  "testes": ["apps/server/tests/security-jobs-persistence.test.ts", "packages/security/tests/executor.test.ts"],
   "observacoes": [
     "Estados possíveis de SecurityJobStatus: 'queued' (criado, ainda não começou a rodar) → 'running' (script em execução) → um de: 'awaiting_confirmation' (fase de risco aplicada com sucesso, aguardando o operador confirmar acesso antes do rollback agendado expirar), 'success' (concluído sem necessidade de confirmação, ou confirmação já dada), 'failed' (script saiu com erro; rollback imediato já executado se não era dry-run), 'rolled_back' (janela de confirmação expirou sem resposta — o script agendado no ALVO já reverteu sozinho).",
     "Acompanhamento pelo frontend: POLLING simples via setTimeout, SEM WebSocket — a cada 1500ms (apps/web/src/pages/setup/SecurityStep.tsx:350) enquanto o status não é terminal (success/failed/rolled_back). Ao ver status='awaiting_confirmation', o polling FICA PARADO aguardando uma Promise resolvida pelo usuário (clique em 'confirmar' ou 'interromper') antes de continuar; ele não some da tela sozinho.",
-    "Jobs vivem só em memória (Map do SecurityExecutor) — um restart do painel no meio de um job faz este endpoint responder 404 job_not_found para o job que estava em andamento, mesmo que o script continue rodando/revertendo no alvo de forma independente."
+    "CORRIGIDO nesta rodada: jobs agora são persistidos em data/security-jobs.json (SecurityService.persistJobs, chmod 0600) a CADA mudança de status — não só ao finalizar — e restaurados no boot (SecurityService.restoreJobsFromDisk, chamado por routes/security.ts antes de aceitar tráfego). Isso resolve exatamente o cenário anterior: antes, um restart do painel durante 'awaiting_confirmation' fazia este endpoint responder 404 job_not_found para um job cujo rollback agendado NO ALVO continuava correndo de forma independente — o operador perdia visibilidade justo quando precisava confirmar acesso.",
+    "Regras de restauração (SecurityExecutor.restoreJobs, packages/security/src/executor.ts): jobs 'queued'/'running' viram 'failed' com uma nota explicando que o processo do painel reiniciou durante a execução (não há como saber o resultado real, então nunca ficam presos 'em execução' para sempre). Jobs 'awaiting_confirmation' são reagendados com o tempo RESTANTE da janela (rollbackDeadline - agora + 15s de folga) se ainda houver tempo, ou marcados 'rolled_back' imediatamente se a janela já expirou enquanto o painel estava fora do ar (assume-se que o rollback agendado no alvo já reverteu). Jobs terminais (success/failed/rolled_back) são restaurados como estão.",
+    "Retenção em disco: jobs NÃO-terminais (queued/running/awaiting_confirmation) nunca são descartados pelo teto; o teto de MAX_PERSISTED_JOBS=100 (security-service.ts) só afeta jobs terminais antigos, priorizando os mais recentes por createdAt."
   ]
 }

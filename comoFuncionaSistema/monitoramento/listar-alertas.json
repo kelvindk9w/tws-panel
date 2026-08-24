@@ -3,7 +3,7 @@
   "modulo": "monitoramento",
   "metodo": "GET",
   "url": "/api/alerts",
-  "resumo": "Lista alertas (guardrail/scan/blacklist/system) com filtros opcionais de status, severidade e origem, paginados, mais recentes primeiro.",
+  "resumo": "Lista alertas (guardrail/scan/blacklist) com filtros opcionais de status, severidade e origem, paginados, mais recentes primeiro.",
   "arquivoFonte": "apps/server/src/routes/monitoring.ts:67",
   "autenticacao": {
     "exigida": true,
@@ -16,7 +16,7 @@
     "query": [
       { "nome": "status", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify (alertsQuerySchema, monitoring.ts): enum ALERT_STATUSES (open, acknowledged, resolved). A checagem manual no handler foi REMOVIDA.", "descricao": "Filtra por status do alerta." },
       { "nome": "severity", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: enum ALERT_SEVERITIES (critical, warning, info). A checagem manual foi REMOVIDA.", "descricao": "Filtra por severidade." },
-      { "nome": "source", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: enum ALERT_SOURCES (guardrail, scan, blacklist, system). A checagem manual foi REMOVIDA.", "descricao": "Filtra por origem do alerta." },
+      { "nome": "source", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: enum ALERT_SOURCES (guardrail, scan, blacklist — 'system' foi REMOVIDO do tipo nesta rodada, ver observações). A checagem manual foi REMOVIDA.", "descricao": "Filtra por origem do alerta." },
       { "nome": "page", "tipo": "string (querystring; convertido com Number() no handler)", "obrigatorio": false, "regras": "schema Fastify: pattern ^[1-9][0-9]{0,5}$ (só dígitos, sem zero à esquerda, até 6 dígitos) — NOVO: uma string não numérica (ex.: 'abc') agora é recusada na borda, o que elimina o antigo bug de NaN chegando a AlertsService.list(). Depois, clamp mínimo 1 no service.", "descricao": "Página (1-based)." },
       { "nome": "perPage", "tipo": "string (querystring; convertido com Number() no handler)", "obrigatorio": false, "regras": "schema Fastify: pattern ^[1-9][0-9]{0,2}$ (só dígitos, até 3 dígitos — máx 999 na borda). Depois, clamp entre 1 e 200 no service; default 50.", "descricao": "Itens por página." }
     ],
@@ -66,6 +66,7 @@
   "testes": ["apps/server/tests/alerts-service.test.ts (lógica de list(), não a rota HTTP)"],
   "observacoes": [
     "Há agora teste HTTP direto: apps/server/tests/routes-monitoring-schema.test.ts cobre o schema desta e das demais rotas de monitoramento.",
-    "CORRIGIDO pela introdução do schema: o antigo bug de page/perPage='abc' virando NaN em Number('abc') e propagando para AlertsService.list() (Math.max(NaN,1)===NaN, slice(NaN,...) devolvendo array vazio) não é mais alcançável — o schema (pattern só-dígitos) recusa qualquer page/perPage não numérico com 400 invalid_request antes do handler converter a string."
+    "CORRIGIDO pela introdução do schema: o antigo bug de page/perPage='abc' virando NaN em Number('abc') e propagando para AlertsService.list() (Math.max(NaN,1)===NaN, slice(NaN,...) devolvendo array vazio) não é mais alcançável — o schema (pattern só-dígitos) recusa qualquer page/perPage não numérico com 400 invalid_request antes do handler converter a string.",
+    "CORRIGIDO nesta rodada: a origem 'system' foi removida de AlertSource/ALERT_SOURCES (packages/core/src/monitoring.ts) — nenhum código jamais criou um alerta com essa origem, então ?source=system agora é 400 invalid_request em vez de um filtro que sempre devolvia lista vazia. Ver monitoramento/conceito-alertas.json."
   ]
 }

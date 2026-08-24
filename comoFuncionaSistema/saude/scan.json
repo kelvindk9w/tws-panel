@@ -59,19 +59,19 @@
       "id": "os",
       "oQueVerifica": "Se osInfo.id (campo ID de /etc/os-release, ex.: 'ubuntu') está em HEALTH_LIMITS.supportedDistroIds = ['ubuntu'] E osInfo.versionId (campo VERSION_ID, ex.: '24.04') está em HEALTH_LIMITS.supportedVersionIds = ['22.04','24.04'].",
       "ok": "Ambos batem → level:'ok', mensagem '<prettyName> é suportado.'",
-      "falha": "Qualquer um não bate → level:'warning' (NUNCA 'critical'), mensagem '<prettyName> não é um SO oficialmente suportado (esperado Ubuntu 22.04/24.04).'"
+      "falha": "Qualquer um não bate → level:'warning' (nunca 'critical' — não há noção de SO 'crítico', só suportado/não suportado), mensagem '<prettyName> não é um SO oficialmente suportado (esperado Ubuntu 22.04/24.04).'"
     },
     {
       "id": "memory",
-      "oQueVerifica": "Se os.totalmem() >= HEALTH_LIMITS.minRamBytes (1 GiB = 1024^3 bytes).",
-      "ok": "level:'ok', mensagem 'Memória suficiente (mínimo: 1 GiB).'",
-      "falha": "level:'warning', mensagem 'Menos de 1 GiB de RAM — recomendado ampliar antes de hospedar projetos.'"
+      "oQueVerifica": "Três faixas por os.totalmem(): >= HEALTH_LIMITS.minRamBytes (1 GiB); entre CRITICAL_MIN_RAM_BYTES (512 MiB) e 1 GiB; < 512 MiB. CORRIGIDO nesta rodada: a faixa crítica (< 512 MiB) agora existe e é alcançável — antes só havia a checagem binária ok/warning.",
+      "ok": ">= 1 GiB → level:'ok', mensagem 'Memória suficiente (mínimo: 1 GiB).'",
+      "falha": "< 1 GiB e >= 512 MiB → level:'warning', mensagem 'Menos de 1 GiB de RAM — recomendado ampliar antes de hospedar projetos.'; < 512 MiB → level:'critical' (NOVO), mensagem 'Menos de 512 MiB de RAM — insuficiente para rodar o Docker e hospedar projetos.'"
     },
     {
       "id": "disk",
-      "oQueVerifica": "Se disk.freeBytes (bavail*bsize de statfs('/')) >= HEALTH_LIMITS.minFreeDiskBytes (10 GiB = 10*1024^3 bytes).",
-      "ok": "level:'ok', mensagem 'Espaço livre suficiente (mínimo: 10 GiB).'",
-      "falha": "level:'warning', mensagem 'Menos de 10 GiB livres no disco raiz — imagens Docker consomem espaço rápido.'"
+      "oQueVerifica": "Três faixas por disk.freeBytes (bavail*bsize de statfs('/')): >= HEALTH_LIMITS.minFreeDiskBytes (10 GiB); entre CRITICAL_MIN_FREE_DISK_BYTES (1 GiB) e 10 GiB; < 1 GiB. CORRIGIDO nesta rodada: a faixa crítica (< 1 GiB livre) agora existe e é alcançável.",
+      "ok": ">= 10 GiB livres → level:'ok', mensagem 'Espaço livre suficiente (mínimo: 10 GiB).'",
+      "falha": "< 10 GiB e >= 1 GiB → level:'warning', mensagem 'Menos de 10 GiB livres no disco raiz — imagens Docker consomem espaço rápido.'; < 1 GiB → level:'critical' (NOVO), mensagem 'Menos de 1 GiB livre no disco raiz — builds e pulls de imagem vão falhar.'"
     }
   ],
   "metricasColetadas": [
@@ -104,7 +104,7 @@
   "chamadoPor": ["apps/web/src/pages/setup/HealthStep.tsx:50 (runScan, ao montar o passo e no botão 'Revarrer')"],
   "testes": ["apps/server/tests/routes-health.test.ts"],
   "observacoes": [
-    "O nível 'critical' de HealthLevel nunca é produzido por este código — só 'ok' ou 'warning', mesmo em cenários extremos (ex.: 0 bytes livres em disco).",
+    "CORRIGIDO nesta rodada: o nível 'critical' de HealthLevel agora é produzido de verdade pelos checks memory/disk (buildChecks, system-info.ts) — RAM < 512 MiB (CRITICAL_MIN_RAM_BYTES) ou disco livre < 1 GiB (CRITICAL_MIN_FREE_DISK_BYTES). Os limiares críticos ficam bem abaixo dos limiares de warning (1 GiB RAM / 10 GiB disco) de propósito: 'critical' significa 'hospedar já é inviável na prática' (Docker cai por falta de RAM, docker pull/build falha por disco cheio), não 'apertado'. O check 'os' continua só ok/warning (não há noção de SO crítico).",
     "scanSystemHealth() não tem try/catch: uma falha inesperada em statfs('/') ou nas leituras de /proc,/sys,/etc propaga como exceção não tratada e a rota responde com o erro genérico padrão do Fastify (sem código de erro específico documentado).",
     "O espelho no terminal (HEALTH_MIRROR_COMMANDS) é só cosmético/feedback ao vivo — os dados mostrados nos cards do HealthStep vêm inteiramente do JSON desta resposta, nunca da saída desses comandos de terminal.",
     "fetchPublicIp() depende de dois serviços de terceiros (api.ipify.org, ifconfig.me); se ambos estiverem fora do ar, cada chamada ao scan pode demorar ~6s a mais só nessa etapa antes de cair em publicIp:null.",

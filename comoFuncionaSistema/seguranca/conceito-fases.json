@@ -32,7 +32,7 @@
       "manualOuAutomatica": "ambas",
       "reversivel": "sim — --rollback destrava o root e remove o usuário criado pelo script (se foi ele quem criou).",
       "arriscada": "condicional — só quando --pubkey é fornecida (trava a senha do root). Sem chave, a fase só cria o usuário/sudo e não é arriscada.",
-      "exigeConfirmacao": "condicional — o executor (packages/security/src/executor.ts, needsConfirmation) trata esta fase como exigindo confirmação SÓ quando sshPublicKey foi informada; nesse caso agenda rollback automático de 5 min via schedule_rollback/--confirm, igual às fases 02/03. O plano (planner.ts) NÃO marca requiresConfirmation=true para a fase 01 (só RISKY_PHASES=['02','03']) — ver pontosDeAtencao do módulo."
+      "exigeConfirmacao": "condicional em runtime — o executor (packages/security/src/executor.ts, needsConfirmation) trata esta fase como exigindo confirmação SÓ quando sshPublicKey foi informada; nesse caso agenda rollback automático de 5 min via schedule_rollback/--confirm, igual às fases 02/03. CORRIGIDO nesta rodada: o plano (planner.ts) agora marca requiresConfirmation=true para a fase 01 SEMPRE (RISKY_PHASES=['02','03'] || phase.id==='01'), mesmo antes de saber se uma chave será fornecida — decisão deliberada para o plano nunca prometer um fluxo sem confirmação que o executor pode contradizer em runtime; o operador não é mais surpreendido pela fase 01 entrando em awaiting_confirmation sem aviso prévio."
     },
     {
       "id": "02",
@@ -98,7 +98,7 @@
   "checksSemFaseAutomatica": [
     "supplychain.third-party-repos (fase 00, fixable=false)",
     "user.only-root-uid0 (fase 01, fixable=false)",
-    "net.db-ports-exposed (fase 03, fixable=true mas sem ação automática mapeada — corrige-se ajustando bind do serviço de banco, fora dos scripts)",
+    "net.db-ports-exposed (fase 03, fixable=false — CORRIGIDO nesta rodada, era true; corrige-se ajustando bind do serviço de banco, fora dos scripts)",
     "net.docker-api-exposed (fase 03, fixable=false)",
     "net.listening-inventory (fase 03, fixable=false)",
     "docker.privileged-containers (fase 06, fixable=false)",
@@ -106,6 +106,6 @@
   ],
   "observacoes": [
     "A ordem de execução 00→06 é a ordem 'segura' documentada no planner (atualizar → usuário → SSH → firewall → intrusão → minimização → auditoria) — o wizard sempre enfileira as fases pendentes nessa ordem fixa (pendingPhases() em SecurityStep.tsx filtra SECURITY_PHASES na ordem declarada).",
-    "net.db-ports-exposed está marcado fixable=true em checks.ts mas nenhum dos 7 scripts de fase contém lógica para fazer bind de bancos de dados em 127.0.0.1 — a remediação sugerida no check ('Fazer bind dos bancos em 127.0.0.1 e/ou bloquear no firewall') é word-for-word uma instrução manual, não uma ação que o botão 'Executar esta fase' realiza; é um caso onde fixable=true não implica em cobertura real por script."
+    "CORRIGIDO nesta rodada: net.db-ports-exposed passou a fixable=false em checks.ts (era true) — nenhum dos 7 scripts de fase contém lógica para fazer bind de bancos de dados em 127.0.0.1, então o valor anterior prometia uma cobertura automática que nunca existiu (a remediação sugerida no check sempre foi uma instrução manual, word-for-word). Com fixable=false, este check nunca mais aparece em fixesCheckIds de nenhuma SecurityPlanAction, refletindo a realidade."
   ]
 }

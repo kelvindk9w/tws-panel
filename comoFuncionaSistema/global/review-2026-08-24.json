@@ -44,12 +44,13 @@
     },
     {
       "id": "guardrails-duplicados",
-      "severidade": "media",
+      "severidade": "baixa",
       "categoria": "correcao",
-      "titulo": "Dois sistemas de guardrails distintos e não sincronizados",
-      "descricao": "`guardrails.ts` é usado no wizard e na detecção, mas não tem scan de secrets nem regra de container privilegiado. `rules.ts` é o que efetivamente bloqueia o deploy. Os dois conjuntos divergem.",
+      "titulo": "guardrails.ts (detecção de stack) e rules.ts (bloqueio de deploy) têm catálogos de regra parcialmente diferentes",
+      "descricao": "CORREÇÃO DE UM ACHADO ANTERIOR ERRADO: a formulação original deste achado ('guardrails.ts é usado no wizard e não tem scan de secrets nem regra de container privilegiado; rules.ts é o que efetivamente bloqueia o deploy') confundia dois módulos com propósitos diferentes, como se fossem a mesma coisa em dessincronia. Verificado no código: GET /api/projects/:id/guardrails (deploy-service.ts:guardrailsForProject) e o pré-check de POST /api/projects/:id/deploy SEMPRE chamaram runGuardrails() de rules.ts — que JÁ inclui o scan de secrets (scanSecrets) desde sempre. O preview de guardrails do operador NUNCA foi o sistema 'incompleto'; não houve, e não há, um caminho em que o preview aprova algo que rules.ts bloqueia. packages/deploy/src/guardrails.ts (analyzeCompose/guessProxyTarget/servicesWithCustomNetworks) tem um propósito DIFERENTE: analisa o docker-compose durante a DETECÇÃO DE STACK (POST /api/projects/:id/detect) e produz GuardrailWarning — avisos informativos na tela de detecção, não GuardrailFinding (o que bloqueia o deploy). O achado real, mais estreito que a formulação original: os dois catálogos de regra (rules.ts vs guardrails.ts) continuam parcialmente diferentes — listas de porta de banco ligeiramente distintas, e guardrails.ts não faz scan de secrets no restante da árvore de arquivos (só analisa o compose) — então um projeto pode aparecer 'limpo' na tela de DETECÇÃO quanto a secret-in-code e mesmo assim ser bloqueado no deploy por essa regra. Isso nunca foi verdade para container privilegiado: essa parte foi alinhada nesta rodada (ver abaixo).",
       "onde": "packages/deploy/src/guardrails.ts, packages/deploy/src/rules.ts",
-      "impacto": "Um projeto aprovado na tela de detecção pode ser bloqueado no deploy sem aviso prévio, o que quebra a expectativa do usuário e parece um bug.",
+      "impacto": "Baixo e específico: a tela de detecção pode mostrar 'sem avisos' quanto a container privilegiado/docker.sock (antes desta rodada) ou quanto a secret-in-code (ainda hoje) e o deploy real ser bloqueado depois por uma dessas regras — não um problema de todo o preview de guardrails, que sempre foi completo.",
+      "statusEm20260824": "PARCIALMENTE ALINHADO nesta rodada — guardrails.ts passou a reaproveitar mountsDockerSock() de rules.ts e replicar a regra de container privilegiado (antes só rules.ts detectava isso), reduzindo a divergência real que existia. O scan de secrets continua exclusivo de rules.ts (por design: analisar arquivos fora do compose não faz sentido no contexto de detecção de stack, que só lê o compose) — a divergência de listas de porta de banco também não foi tocada.",
       "doc": "projetos/conceito-guardrails.json"
     },
     {
@@ -59,7 +60,8 @@
       "titulo": "Imagem do Stalwart usada é de linha descontinuada",
       "descricao": "O sistema fixa `stalwartlabs/mail-server:v0.11.8`. A linha nova do Stalwart removeu a API REST usada por todo o `client.ts`.",
       "onde": "packages/mailer/src/server.ts, packages/mailer/src/client.ts",
-      "impacto": "Atualizar o servidor de e-mail exigirá reescrever a camada de cliente inteira. Enquanto isso, o sistema fica preso a uma versão sem atualizações de segurança.",
+      "impacto": "Atualizar o servidor de e-mail exigirá reescrever a camada de cliente inteira. Enquanto isso, o sistema fica preso a uma versão sem atualizações de segurança — dado novo nesta rodada: CVE-2025-61600, uma DoS não autenticada no parser IMAP do Stalwart, foi corrigida só na 0.13.4, SEM backport para a linha 0.11.x em que o painel está fixado. Ou seja, a versão usada (v0.11.8) é vulnerável e não vai receber correção — atualizar exigiria migrar para a linha nova (que quebra a API REST usada pelo client.ts), não apenas trocar a tag da imagem.",
+      "statusEm20260824": "aberto — não corrigido nesta rodada; permanece dívida técnica conhecida.",
       "doc": "email/index.json"
     },
     {
@@ -70,6 +72,7 @@
       "descricao": "O `AlertsService` corta a lista pelos mais antigos independentemente de estarem abertos ou resolvidos.",
       "onde": "apps/server/src/services/alerts-service.ts",
       "impacto": "Um alerta ainda `open`, nunca reconhecido, pode desaparecer silenciosamente — exatamente o alerta que mais importa.",
+      "statusEm20260824": "CORRIGIDO — enforceCap() agora descarta primeiro os resolvidos/reconhecidos mais antigos; se o teto for atingido só com alertas 'open', todos são mantidos e um aviso é logado (console.warn) em vez de um alerta aberto ser descartado silenciosamente. Testes em apps/server/tests/alerts-service.test.ts.",
       "doc": "monitoramento/conceito-alertas.json"
     },
     {
@@ -80,6 +83,7 @@
       "descricao": "`runStream` não impõe limite de tempo. Um `docker build` ou `compose up --build` travado bloqueia o job indefinidamente.",
       "onde": "packages/deploy/src/exec.ts",
       "impacto": "Job pendurado sem recuperação automática; o usuário não tem como saber se está lento ou morto.",
+      "statusEm20260824": "CORRIGIDO — runStream agora tem timeout padrão de 30 minutos (DEFAULT_STREAM_TIMEOUT_MS), generoso mas finito: o processo é morto de verdade (não só a promise rejeitada) e o job termina em 'failed' com mensagem clara. Testes em packages/deploy/tests/exec.test.ts.",
       "doc": "projetos/deploy.json"
     },
     {
@@ -90,6 +94,7 @@
       "descricao": "`POST /:id/start` lança `Error` em vez de `httpError` quando não há containers. A mensagem real ('faça um deploy primeiro') vira um `500 internal_error` opaco. Mesmo padrão em `stop`.",
       "onde": "apps/server/src/routes/projects.ts",
       "impacto": "O usuário recebe erro de servidor onde deveria receber orientação acionável.",
+      "statusEm20260824": "CORRIGIDO — DeployEngine.start/stop (packages/deploy/src/engine.ts) agora lançam engineError com statusCode=409/code='no_containers' (erro de domínio duck-typed, mesmo formato de httpError). stop também passou a EXIGIR containers (antes zero containers era um 200 silencioso); falhas de docker start/stop viram 502 docker_start_failed/docker_stop_failed. Testes em packages/deploy/tests/engine-lifecycle.test.ts.",
       "doc": "projetos/iniciar.json"
     },
     {
@@ -100,6 +105,7 @@
       "descricao": "A peça mais crítica do módulo de segurança (mutex, parsing de steps, rollback agendado, fluxo de confirmação) tem cobertura apenas indireta.",
       "onde": "packages/security/src/executor.ts",
       "impacto": "Regressões no rollback ou no fluxo de confirmação podem passar despercebidas — e o custo de uma regressão aqui é perder o acesso SSH à VPS.",
+      "statusEm20260824": "CORRIGIDO — packages/security/tests/executor.test.ts (305 linhas, NOVO) cobre mutex, parsing de steps, rollback agendado e o fluxo de confirmação diretamente, incluindo restoreJobs().",
       "doc": "seguranca/index.json"
     },
     {
@@ -110,6 +116,7 @@
       "descricao": "Um restart do painel durante `awaiting_confirmation` faz `GET /api/security/jobs/:id` responder 404, embora o rollback agendado no alvo continue rodando de forma independente.",
       "onde": "apps/server/src/services/security-service.ts",
       "impacto": "O operador perde a visibilidade do job exatamente no momento em que precisa confirmar que ainda tem acesso.",
+      "statusEm20260824": "CORRIGIDO — jobs agora são persistidos em data/security-jobs.json (SecurityService.persistJobs, a cada mudança de status) e restaurados no boot (restoreJobsFromDisk, antes de aceitar tráfego). queued/running viram 'failed' explicado; awaiting_confirmation reagenda o rollback com o tempo restante. Testes em apps/server/tests/security-jobs-persistence.test.ts.",
       "doc": "seguranca/job.json"
     },
     {
@@ -120,6 +127,7 @@
       "descricao": "`MonitorService.runNow()` chama `executeScan()` diretamente, sem passar pelo lock. O POST manual pode rodar em paralelo com um tick automático. Somado a isso, `MONITOR_MIN_INTERVAL_MS` é de apenas 10s, menor que a duração real de um scan.",
       "onde": "apps/server/src/services/monitor-service.ts",
       "impacto": "Scans concorrentes disputando os mesmos recursos, e ciclos silenciosamente pulados.",
+      "statusEm20260824": "CORRIGIDO — runNow() agora passa por scheduler.runNow(), que compartilha o mesmo lock inFlight do tick automático; uma chamada concorrente recusa com 409 scan_in_progress em vez de rodar em paralelo. Ciclos automáticos pulados agora são logados (onSkip). O piso do schema de validação (MONITOR_MIN_INTERVAL_MS) continua 10s, mas MonitorService aplica um clamp efetivo de 60s (EFFECTIVE_MIN_INTERVAL_MS) por cima disso. Testes em apps/server/tests/monitor-service.test.ts e packages/security/tests/monitor.test.ts.",
       "doc": "monitoramento/rodar-monitor.json"
     },
     {
@@ -128,8 +136,9 @@
       "categoria": "robustez",
       "titulo": "Falhas engolidas sem sinalização em três caminhos",
       "descricao": "1) `listContainers()` retorna `[]` quando o Docker está ausente ou inacessível — 200 indistinguível de 'sem containers'. 2) O hook de blacklist do scan recorrente tem try/catch vazio. 3) `removeDomain` silencia falhas individuais de `deleteMailbox`.",
-      "onde": "apps/server/src/services/docker-service.ts, apps/server/src/services/monitor-service.ts, packages/mailer/src/mailboxes.ts",
+      "onde": "apps/server/src/services/docker-service.ts, apps/server/src/services/monitor-service.ts, apps/server/src/services/mail-service.ts",
       "impacto": "Falso senso de segurança: o painel reporta sucesso onde houve falha, e caixas órfãs podem ficar vivas no Stalwart sem registro local.",
+      "statusEm20260824": "PARCIALMENTE CORRIGIDO — dos 3 caminhos, 2 foram corrigidos: (1) listContainers() agora lança DockerUnavailableError e a rota responde 503 docker_unavailable em vez de 200 com []; (3) removeDomain agora loga e reporta de volta (RemoveDomainResult.mailboxDeleteFailures) as falhas individuais de deleteMailbox, sem parar a remoção do resto. (2) o hook de blacklist do scan recorrente (monitor-service.ts) NÃO foi alterado nesta rodada — o try/catch continua engolindo qualquer erro sem logar/alertar; verificado diretamente no código.",
       "doc": "docker/listar-containers.json"
     },
     {
@@ -140,16 +149,18 @@
       "descricao": "O scan roda com `exit-code 0`, então CVEs HIGH e CRITICAL passam sem barrar o pipeline.",
       "onde": ".github/workflows/",
       "impacto": "Vulnerabilidades conhecidas podem entrar na main sem revisão explícita.",
+      "statusEm20260824": "PARCIALMENTE CORRIGIDO, permanece aberto para HIGH — o job image-scan do CI agora roda dois steps Trivy separados: um só para CRITICAL com exit-code 1 (bloqueia merge; ignore-unfixed:true; allowlist documentada em .trivyignore gerado no job para o único CRITICAL sem fix possível, CVE-2026-59873, vendorizado dentro do npm da imagem base node:22-bookworm-slim) e outro só para HIGH com exit-code 0 (continua report-only, não bloqueia). Este achado deliberadamente permanece na lista de abertos — é uma escolha de política, não uma lacuna esquecida.",
       "doc": "global/infraestrutura.json"
     },
     {
       "id": "hardening-inacessivel-pos-setup",
       "severidade": "media",
       "categoria": "produto",
-      "titulo": "Fluxo de hardening só existe dentro do wizard de setup",
-      "descricao": "Todo o fluxo scan→plano→aplicar→confirmar vive em `SecurityStep.tsx`, alcançável apenas pelo wizard. A página `/security` mostra somente o índice.",
+      "titulo": "Fluxo de hardening só existia dentro do wizard de setup",
+      "descricao": "Todo o fluxo scan→plano→aplicar→confirmar vivia em `SecurityStep.tsx`, alcançável apenas pelo wizard. A página `/security` mostrava somente o índice.",
       "onde": "apps/web/src/pages/SecurityPage.tsx, apps/web/src/pages/setup/SecurityStep.tsx",
-      "impacto": "Depois do setup concluído não há caminho para reaplicar ou revisar o hardening pela interface — funcionalidade central fica órfã.",
+      "impacto": "Depois do setup concluído não havia caminho para reaplicar ou revisar o hardening pela interface — funcionalidade central ficava órfã.",
+      "statusEm20260824": "CORRIGIDO — nova rota /security/hardening (apps/web/src/pages/HardeningPage.tsx) reaproveita SecurityStep.tsx inteiro fora do wizard (o componente não dependia de nada específico do setup — só recebe callbacks de navegação, nunca chama /api/setup/*), com os dois callbacks voltando para /security. Um botão em SecurityPage ('Revisar e aplicar hardening') leva à nova rota. De brinde, o card de índice em SecurityPage passou a ler o relatório defensivamente (um report null antes quebrava a página inteira). Testes em apps/web/tests/hardening-page.test.tsx.",
       "doc": "seguranca/index.json"
     },
     {
@@ -186,10 +197,11 @@
       "id": "contrato-jobs-inconsistente",
       "severidade": "baixa",
       "categoria": "correcao",
-      "titulo": "GET /:id/jobs devolve 200 vazio para projeto inexistente",
+      "titulo": "GET /:id/jobs devolvia 200 vazio para projeto inexistente",
       "descricao": "Quase todas as outras rotas com `:id` retornam 404 nesse caso.",
       "onde": "apps/server/src/routes/projects.ts",
-      "impacto": "Inconsistência de contrato que dificulta o tratamento de erro no cliente.",
+      "impacto": "Inconsistência de contrato que dificultava o tratamento de erro no cliente.",
+      "statusEm20260824": "CORRIGIDO — a rota agora checa service.getProject(id) explicitamente e responde 404 project_not_found antes de chamar listJobs, no mesmo padrão das demais rotas :id.",
       "doc": "projetos/listar-jobs.json"
     },
     {
@@ -210,46 +222,51 @@
       "descricao": "Preview, validação antes do job e revalidação pós-ingestão no engine — sem cache entre elas.",
       "onde": "packages/deploy/src/engine.ts",
       "impacto": "Custo desnecessário em repositórios grandes.",
+      "statusEm20260824": "PARCIALMENTE CORRIGIDO — no modo ingestMode='existing' (diretório local, sem cópia/pull entre as duas checagens), deploy-service.ts agora passa o relatório do pré-check como opts.precomputedGuardrailReport e o engine reaproveita em vez de re-escanear (packages/deploy/src/engine.ts:121; teste em packages/deploy/tests/engine-guardrail-reuse.test.ts). Nos modos 'git' e 'upload' o conteúdo pode mudar entre as checagens (fetch+pull, recópia), então o engine continua sempre re-executando — para esses dois modos o achado permanece válido (até 3x: GET /guardrails sob demanda + pré-check do startDeploy + revalidação do engine).",
       "doc": "projetos/deploy.json"
     },
     {
       "id": "valores-mortos",
       "severidade": "baixa",
       "categoria": "dividaTecnica",
-      "titulo": "Valores declarados que o código nunca produz",
-      "descricao": "`source: \"system\"` existe em `AlertSource` mas nenhum código cria alerta com essa origem. `critical` existe em `HealthLevel` mas o scan só produz `ok`/`warning`. `net.db-ports-exposed` está marcado `fixable: true` mas `03-firewall.sh` não tem lógica para portas de banco.",
+      "titulo": "Valores declarados que o código nunca produzia",
+      "descricao": "`source: \"system\"` existia em `AlertSource` mas nenhum código criava alerta com essa origem. `critical` existia em `HealthLevel` mas o scan só produzia `ok`/`warning`. `net.db-ports-exposed` estava marcado `fixable: true` mas `03-firewall.sh` não tem lógica para portas de banco.",
       "onde": "packages/core/src/monitoring.ts, apps/server/src/services/system-info.ts, packages/security/src/checks.ts",
-      "impacto": "Tipos prometem estados que não acontecem; a UI pode ter ramos inalcançáveis.",
+      "impacto": "Tipos prometiam estados que não aconteciam; a UI podia ter ramos inalcançáveis.",
+      "statusEm20260824": "CORRIGIDO — os três valores mortos foram resolvidos, cada um de um jeito diferente: 'system' foi REMOVIDO do tipo AlertSource/ALERT_SOURCES (não fazia sentido produzi-lo, nada o motivava); 'critical' de HealthLevel passou a ser PRODUZIDO de verdade (RAM<512MiB / disco livre<1GiB); net.db-ports-exposed passou a fixable=false (não fazia sentido prometer automação que não existe). Ver monitoramento/conceito-alertas.json, saude/scan.json, seguranca/conceito-checagens.json.",
       "doc": "monitoramento/conceito-alertas.json"
     },
     {
       "id": "config-nao-aplicada",
       "severidade": "baixa",
       "categoria": "correcao",
-      "titulo": "DOCKER_SOCKET_PATH não afeta a listagem de containers",
-      "descricao": "`docker-service.ts` sempre usa o binário `docker` via subprocesso. A configuração só influencia `docker-socket.ts`, usado pelo terminal.",
+      "titulo": "DOCKER_SOCKET_PATH não afetava a listagem de containers",
+      "descricao": "`docker-service.ts` sempre usava o binário `docker` via subprocesso. A configuração só influenciava `docker-socket.ts`, usado pelo terminal.",
       "onde": "apps/server/src/services/docker-service.ts",
-      "impacto": "Configurar um socket alternativo funciona para o terminal e silenciosamente não funciona para o dashboard.",
+      "impacto": "Configurar um socket alternativo funcionava para o terminal e silenciosamente não funcionava para o dashboard.",
+      "statusEm20260824": "CORRIGIDO — listContainers() agora roda `docker` com DOCKER_HOST derivado de DOCKER_SOCKET_PATH (mesmo padrão já usado pelo terminal), via um runDocker() próprio em vez do run() de packages/deploy/src/exec.ts (que não aceita env override). Testes em apps/server/tests/docker-service.test.ts.",
       "doc": "global/configuracao.json"
     },
     {
       "id": "reaper-so-no-boot",
       "severidade": "baixa",
       "categoria": "robustez",
-      "titulo": "Limpeza de containers de terminal órfãos roda só no boot",
-      "descricao": "Não há verificação periódica. Um leak causado por caminho de erro não coberto por `handleSessionEnd` só é limpo no próximo restart.",
+      "titulo": "Limpeza de containers de terminal órfãos rodava só no boot",
+      "descricao": "Não havia verificação periódica. Um leak causado por caminho de erro não coberto por `handleSessionEnd` só era limpo no próximo restart.",
       "onde": "apps/server/src/services/docker-socket.ts",
       "impacto": "Acúmulo de containers privilegiados órfãos em instalações que raramente reiniciam.",
+      "statusEm20260824": "CORRIGIDO — scheduleOrphanTerminalHelperReap arma um setInterval (unref, 30 min) que roda removeOrphanTerminalHelpers periodicamente além do boot, armado dentro de createDockerPtyFactory só no perfil 'host'. De brinde, o container helper passou a ficar protegido do reaper (activeHelperNames) desde a CRIAÇÃO, não só depois do start+hijack — evita um helper 'fantasma' se algo falhar nesse meio-tempo.",
       "doc": "terminal/conceito-pty.json"
     },
     {
       "id": "confirmacao-fase-01",
       "severidade": "baixa",
       "categoria": "produto",
-      "titulo": "Plano não avisa que a fase 01 pode exigir confirmação",
-      "descricao": "`requiresConfirmation` marca apenas as fases 02/03, mas a fase 01 também dispara `awaiting_confirmation` em runtime quando uma chave SSH é fornecida (trava o root).",
+      "titulo": "Plano não avisava que a fase 01 pode exigir confirmação",
+      "descricao": "`requiresConfirmation` marcava apenas as fases 02/03, mas a fase 01 também dispara `awaiting_confirmation` em runtime quando uma chave SSH é fornecida (trava o root).",
       "onde": "packages/security/src/planner.ts",
-      "impacto": "O operador é surpreendido por um passo de confirmação que o plano não anunciou.",
+      "impacto": "O operador era surpreendido por um passo de confirmação que o plano não anunciava.",
+      "statusEm20260824": "CORRIGIDO — requiresConfirmation agora é RISKY_PHASES.includes(fase) || fase==='01', então o plano sempre sinaliza a fase 01 como podendo exigir confirmação (mesmo antes de saber se uma chave SSH será de fato fornecida — falso positivo aceito, considerado melhor que o falso negativo anterior).",
       "doc": "seguranca/conceito-fases.json"
     },
     {
@@ -260,6 +277,7 @@
       "descricao": "Histórico de segurança limitado a 200 entradas (pode expulsar o scan 'Antes' congelado do resumo `applied`); auditoria limitada a 2000 entradas sem arquivamento.",
       "onde": "apps/server/src/services/security-service.ts, audit-service.ts",
       "impacto": "Perda de rastreabilidade histórica em instalações movimentadas.",
+      "statusEm20260824": "CORRIGIDO — auditoria: ao estourar o teto de 2000, as entradas mais antigas são movidas para data/audit.1.json em vez de descartadas (AuditService.archive, best-effort). Histórico de segurança: trimHistoryPreservingBefore() agora PINA o scan 'Antes' congelado e o job de apply referenciados por um resumo `applied` ativo antes de aplicar o corte de 200 entradas, então o teto não pode mais quebrar o resumo. Nenhum dos dois arquivos ganhou um endpoint de consulta ao arquivo/histórico completo — só o arquivo ativo é servido pelas rotas.",
       "doc": "monitoramento/conceito-auditoria.json"
     },
     {
@@ -267,9 +285,10 @@
       "severidade": "baixa",
       "categoria": "diversos",
       "titulo": "Lacunas menores agrupadas",
-      "descricao": "README menciona 'JSON/SQLite' mas não há SQLite no código. `apps/web` é o único workspace sem thresholds numéricos de cobertura. `GET /api/docker/containers` não tem teste de rota. `scanSystemHealth()` não tem try/catch. A verificação de domínio só consulta registros A (IPv4). `DELETE .../mailboxes/:id` não grava auditoria. Certificado TLS do Stalwart é autoassinado. Setup token não expira. `DELETE /api/projects/:id` não verifica deploy em andamento. Logout no frontend é best-effort e navega mesmo se falhar.",
+      "descricao": "`apps/web` é o único workspace sem thresholds numéricos de cobertura. `scanSystemHealth()` não tem try/catch. A verificação de domínio só consulta registros A (IPv4). Certificado TLS do Stalwart é autoassinado. Setup token não expira. `DELETE /api/projects/:id` não verifica deploy em andamento. Logout no frontend é best-effort e navega mesmo se falhar.",
       "onde": "diversos",
       "impacto": "Individualmente baixo; em conjunto indicam onde o polimento ainda não chegou.",
+      "statusEm20260824": "PARCIALMENTE CORRIGIDO — três dos itens originalmente agrupados aqui saíram desta lista por terem sido resolvidos: '`DELETE .../mailboxes/:id` não grava auditoria' (ver email/remover-caixa.json), '`GET /api/docker/containers` não tem teste de rota' (apps/server/tests/routes-docker.test.ts, NOVO) e 'README menciona JSON/SQLite' (removido do README num commit de docs subsequente a esta rodada, 0973a7e). Os demais itens do agrupado permanecem abertos, sem alteração verificada no código.",
       "doc": null
     },
     {
@@ -298,36 +317,44 @@
       "id": "teste-terminal-intermitente",
       "severidade": "baixa",
       "categoria": "testes",
-      "titulo": "Teste de WebSocket do terminal é intermitente",
-      "descricao": "O teste da regra de ouro (input do usuário nunca na auditoria) em apps/server/tests/routes-terminal.test.ts falhou uma vez numa execução da suíte completa e passou em 3 execuções isoladas e 2 suítes completas subsequentes. Depende de timing real de WebSocket.",
+      "titulo": "Teste de WebSocket do terminal era intermitente",
+      "descricao": "O teste da regra de ouro (input do usuário nunca na auditoria) em apps/server/tests/routes-terminal.test.ts falhou uma vez numa execução da suíte completa e passou em 3 execuções isoladas e 2 suítes completas subsequentes. Dependia de timing real de WebSocket.",
       "onde": "apps/server/tests/routes-terminal.test.ts",
-      "impacto": "Falso negativo ocasional no CI, que erode a confiança na suíte. O comportamento testado está correto.",
-      "statusEm20260824": "conhecido, não corrigido",
+      "impacto": "Falso negativo ocasional no CI, que erodia a confiança na suíte. O comportamento testado sempre esteve correto.",
+      "statusEm20260824": "CORRIGIDO — causa raiz identificada: a auditoria da conexão é fire-and-forget, e o teste esperava um tempo FIXO de 20ms antes de ler audit.json, insuficiente sob I/O real concorrente. O teste agora faz POLLING pela condição real em vez de dormir um tempo fixo — sem timeout elevado, sem retry, sem skip; continua provando que o input do usuário nunca chega à auditoria.",
       "doc": "terminal/websocket.json"
     },
     {
       "id": "testes-fora-do-typecheck-server",
       "severidade": "baixa",
       "categoria": "testes",
-      "titulo": "tsconfig.json de apps/server exclui os testes do typecheck",
-      "descricao": "`apps/server/tsconfig.json` declara `\"include\": [\"src\"]` — só o código de produção entra no typecheck do workspace; os arquivos em apps/server/tests/ ficam de fora. Um fixture de teste que fica desatualizado em relação a um tipo real (ex.: um objeto Project construído manualmente num teste, sem os campos novos de uma interface) não é pego pelo typecheck: só quebraria se, e quando, algum código de produção referenciasse esse mesmo tipo de um jeito que o tsc alcançasse — o que não é o caso de um literal de objeto dentro de um arquivo de teste.",
+      "titulo": "tsconfig.json de apps/server excluía os testes do typecheck",
+      "descricao": "`apps/server/tsconfig.json` declarava `\"include\": [\"src\"]` — só o código de produção entrava no typecheck do workspace; os arquivos em apps/server/tests/ ficavam de fora. Um fixture de teste que ficasse desatualizado em relação a um tipo real (ex.: um objeto Project construído manualmente num teste, sem os campos novos de uma interface) não era pego pelo typecheck.",
       "onde": "apps/server/tsconfig.json",
-      "impacto": "A cobertura de tipos dos testes deste workspace não é verificada por `tsc`/CI. Foi o caso concreto dos fixtures `Project` usados em apps/server/tests/ após a adição de `deployedBranch`/`deployedSource` à interface (packages/core/src/deploy.ts) — os fixtures desatualizados não geraram nenhum erro de typecheck e precisaram ser corrigidos manualmente.",
+      "impacto": "A cobertura de tipos dos testes deste workspace não era verificada por `tsc`/CI. Foi o caso concreto dos fixtures `Project` usados em apps/server/tests/ após a adição de `deployedBranch`/`deployedSource` à interface (packages/core/src/deploy.ts) — os fixtures desatualizados não geravam nenhum erro de typecheck e precisaram ser corrigidos manualmente.",
       "doc": "global/testes.json",
-      "statusEm20260824": "conhecido, não corrigido"
+      "statusEm20260824": "CORRIGIDO — apps/server/tsconfig.json agora declara \"include\": [\"src\", \"tests\"]; os erros de tipo que isso revelou (fixtures Project desatualizados) foram corrigidos sem afrouxar nenhuma opção do compilador."
     }
   ],
   "resumoPorSeveridade": {
     "alta": 4,
-    "media": 14,
-    "baixa": 13,
-    "total": 30
+    "media": 12,
+    "baixa": 14,
+    "total": 30,
+    "porStatusEm20260824": {
+      "corrigido": 17,
+      "parcialmenteCorrigido": 5,
+      "aceitoComoCustoArquitetural": 3,
+      "aberto": 5
+    }
   },
   "observacoes": [
     "Não há nenhum marcador TODO, FIXME, XXX ou HACK em todo o código — a dívida técnica está registrada em prosa e em comentários explicativos, não em marcadores inline.",
     "Os comentários do código são densos e explicam o porquê das decisões, não o que o código faz. Isso é incomum e facilita muito a manutenção.",
     "Os três achados de severidade alta são consequências diretas da proposta do produto (um PaaS precisa de acesso privilegiado ao host). Não são descuidos, são o custo arquitetural do que o sistema se propõe a fazer — mas definem o modelo de ameaça que a documentação de segurança deveria declarar explicitamente.",
     "Atualizado em 2026-08-24 após a rodada de correções: o RCE do git clone e a ausência de validação de schema foram corrigidos com testes de regressão. Os três achados de severidade alta originais permanecem, agora declarados explicitamente em global/threat-model.json como custo arquitetural assumido, com mitigações e dívida conhecida documentadas.",
-    "A documentação foi auditada por um agente com acesso restrito apenas a comoFuncionaSistema/ (sem ler o código): 9 de 10 perguntas sobre o sistema foram respondidas de forma completa, a navegação index→módulo→arquivo funcionou sem links quebrados, e duas contradições internas foram encontradas e corrigidas (contagem de arquivos de teste e situação do Dependabot)."
+    "A documentação foi auditada por um agente com acesso restrito apenas a comoFuncionaSistema/ (sem ler o código): 9 de 10 perguntas sobre o sistema foram respondidas de forma completa, a navegação index→módulo→arquivo funcionou sem links quebrados, e duas contradições internas foram encontradas e corrigidas (contagem de arquivos de teste e situação do Dependabot).",
+    "Atualizado em 2026-08-24 após uma segunda rodada de correções (commits 0c572db..87b70be): 17 achados corrigidos, 5 parcialmente corrigidos, 3 permanecem aceitos como custo arquitetural, e 5 permanecem abertos (stalwart-descontinuado, trivy-report-only para HIGH, e os 3 achados sessao-orfa-inconsistente/setup-advance-retrocede/sessao-sem-refresh/dmarc-estagio-morto — nenhum destes quatro últimos foi tocado nesta rodada; ver cada achado para o detalhe). O campo resumoPorSeveridade.media estava incorreto em 1 unidade na versão anterior deste arquivo (dizia 14, a soma real dos achados 'media' listados era 13) — corrigido nesta rodada, junto com a mudança de severidade de guardrails-duplicados (media→baixa, ver observação abaixo).",
+    "CORREÇÃO IMPORTANTE de formulação: o achado 'guardrails-duplicados' na versão anterior deste arquivo confundia dois módulos de propósitos diferentes — packages/deploy/src/rules.ts (runGuardrails, o que efetivamente bloqueia o deploy, usado tanto no preview GET /api/projects/:id/guardrails quanto no pré-check do deploy — SEMPRE incluiu o scan de secrets) e packages/deploy/src/guardrails.ts (analyzeCompose, usado só na DETECÇÃO de stack para produzir avisos informativos, propósito diferente de bloquear deploy). A formulação original dava a entender que o preview de guardrails do operador podia aprovar algo que o deploy real bloqueava — isso NUNCA foi verdade. Reescrito com a descrição correta e severidade ajustada (media→baixa, pois o escopo real do achado é mais estreito que o descrito originalmente); o que de fato mudou nesta rodada foi o alinhamento da regra de container privilegiado entre os dois módulos. Registrado aqui para que a próxima sessão não gaste tempo perseguindo um bug de 'guardrails incompletos no preview' que não existe."
   ]
 }

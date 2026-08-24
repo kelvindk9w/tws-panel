@@ -47,12 +47,12 @@
     {
       "arquivo": "data/alerts.json",
       "formato": "json",
-      "conteudo": "{ alerts: Alert[] } — até 500 alertas (mais antigos são descartados silenciosamente ao ultrapassar o teto, independente de status). Arquivo criado com chmod 600."
+      "conteudo": "{ alerts: Alert[] } — até 500 alertas. CORRIGIDO nesta rodada: ao ultrapassar o teto, os RESOLVIDOS/RECONHECIDOS mais antigos são descartados primeiro; se o teto for atingido só com alertas 'open', todos são mantidos (log de aviso em vez de descarte silencioso). Arquivo criado com chmod 600."
     },
     {
       "arquivo": "data/audit.json",
       "formato": "json",
-      "conteudo": "{ entries: AuditEntry[] } — até 2000 entradas de auditoria (mais antigas descartadas silenciosamente). Arquivo criado com chmod 600."
+      "conteudo": "{ entries: AuditEntry[] } — até 2000 entradas de auditoria. CORRIGIDO nesta rodada: ao ultrapassar o teto, as entradas mais antigas não são mais descartadas — são movidas para data/audit.1.json (ver global/persistencia.json e conceito-auditoria.json). Arquivo criado com chmod 600."
     }
   ],
   "endpoints": [
@@ -68,10 +68,10 @@
   ],
   "dependenciasGlobais": ["global/auth-plugin.json"],
   "pontosDeAtencao": [
-    "Teto de 500 alertas (apps/server/src/services/alerts-service.ts:12,80) descarta os MAIS ANTIGOS ao ultrapassar o limite, sem olhar o status — em tese um alerta 'open' nunca reconhecido pode ser silenciosamente descartado do arquivo se 500 alertas mais novos (inclusive já resolvidos) forem criados depois dele. Não há alerta/log avisando que isso aconteceu.",
-    "A origem 'system' existe no tipo AlertSource (packages/core/src/monitoring.ts:55) e aparece nos filtros da API e da UI (AlertsPage), mas NENHUM ponto do código atual cria um alerta com source:'system' — é um valor reservado/morto na prática hoje.",
-    "O hook de blacklist dentro do scan (monitor-service.ts:172-186) roda em try/catch que engole qualquer erro sem logar nem criar alerta — se o serviço de e-mail ou a resolução DNS falhar, o scan simplesmente não reporta blacklist naquele ciclo, sem qualquer sinal de que a checagem falhou (silencioso por design, mas não distinguível de 'nada listado').",
-    "MonitorScheduler.tick() (packages/security/src/monitor.ts:64-76) pula o ciclo inteiro se o scan anterior ainda estiver em voo (inFlight) — com MONITOR_MIN_INTERVAL_MS de apenas 10s (packages/core/src/monitoring.ts:190) é fácil configurar um intervalo menor que a duração real de um scan (dpkg+ss+sha256 no alvo), fazendo o monitor rodar bem mais raro que o configurado, sem nenhum aviso.",
+    "CORRIGIDO nesta rodada: o teto de 500 alertas (apps/server/src/services/alerts-service.ts) não descarta mais alertas 'open' — descarta primeiro os resolvidos/reconhecidos mais antigos; se o teto for atingido só com abertos, todos são mantidos e um aviso é logado. Ver monitoramento/conceito-alertas.json.",
+    "CORRIGIDO nesta rodada: a origem 'system' foi REMOVIDA do tipo AlertSource (packages/core/src/monitoring.ts) — não existia nenhum ponto do código que criasse alerta com essa origem.",
+    "O hook de blacklist dentro do scan (monitor-service.ts) continua rodando em try/catch que engole qualquer erro sem logar nem criar alerta — se o serviço de e-mail ou a resolução DNS falhar, o scan simplesmente não reporta blacklist naquele ciclo, sem qualquer sinal de que a checagem falhou (silencioso por design, mas não distinguível de 'nada listado'; não alterado nesta rodada).",
+    "CORRIGIDO nesta rodada: POST /api/security/monitor/run agora compartilha o MESMO lock inFlight do tick automático — dois scans não rodam mais em paralelo; se já houver um em andamento, a chamada recusa com 409 scan_in_progress em vez de rodar concorrentemente. O piso efetivo do intervalo também subiu de facto: MONITOR_MIN_INTERVAL_MS continua 10s no schema/validação de entrada (packages/core/src/monitoring.ts), mas MonitorService agora aplica um clamp para 60s (EFFECTIVE_MIN_INTERVAL_MS, apps/server/src/services/monitor-service.ts) em qualquer intervalo configurado/persistido/default — um scan completo raramente termina em 10s. Ver monitoramento/rodar-monitor.json e configurar-monitor.json.",
     "setStatus('acknowledged') só tem efeito se o alerta ainda estiver 'open' (alerts-service.ts:110-114); chamar POST /api/alerts/:id/ack em um alerta já 'resolved' retorna 200 com o alerta inalterado (ainda 'resolved'), sem erro — pode confundir quem espera uma transição.",
     "alertDiff agrupa TODAS as mudanças de uma categoria em um único alerta (ex.: todos os pacotes novos+removidos em 'Monitoramento: pacotes instalados/removidos'); como o dedup é por (origem,título), um novo diff da mesma categoria SOBRESCREVE o detail anterior — o histórico de qual pacote apareceu em qual scan não fica registrado em lugar nenhum, só o estado mais recente do alerta aberto.",
     "Não existe endpoint para apagar/resetar o baseline nem para consultar baselines anteriores — POST /api/security/baseline sempre sobrescreve data/security/baseline.json por completo.",

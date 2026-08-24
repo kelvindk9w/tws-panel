@@ -10,7 +10,7 @@
     "tipo": "sessao",
     "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
   },
-  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota. Não há proteção contra chamadas concorrentes vindas da própria API (o lock 'inFlight' só protege contra sobreposição com o TICK do scheduler, ver observações).",
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota. CORRIGIDO nesta rodada: chamadas concorrentes a esta rota (ou coincidindo com um tick automático) agora são recusadas com 409 scan_in_progress em vez de rodar em paralelo — ver observações.",
   "parametros": { "path": [], "query": [], "body": [], "headers": [] },
   "respostas": [
     {
@@ -41,10 +41,11 @@
     }
   ],
   "erros": [
-    { "status": 500, "codigo": "monitor_run_failed", "quando": "collectBaseline() ou a geração de alertas lançam de forma não capturada", "mensagem": "Mensagem do erro original, ou 'Falha ao executar o scan.' como fallback." }
+    { "status": 409, "codigo": "scan_in_progress", "quando": "Já existe um scan em andamento (automático ou manual) — MonitorScheduler.runNow() checa o mesmo lock 'inFlight' do tick automático e recusa em vez de enfileirar/esperar.", "mensagem": "já existe um scan de monitoramento em andamento — tente novamente em instantes" },
+    { "status": 500, "codigo": "monitor_run_failed", "quando": "collectBaseline() ou a geração de alertas lançam de forma não capturada (erro diferente de 'já existe um scan')", "mensagem": "Mensagem do erro original, ou 'Falha ao executar o scan.' como fallback." }
   ],
   "fluxo": [
-    "1. MonitorService.runNow() chama executeScan() diretamente (NÃO passa pelo MonitorScheduler — o scheduler tem seu próprio lock 'inFlight' que só protege ticks automáticos entre si).",
+    "1. MonitorService.runNow() chama scheduler.runNow() (CORRIGIDO nesta rodada: antes chamava executeScan() diretamente, ignorando o lock do MonitorScheduler — agora compartilha o MESMO lock 'inFlight' do tick automático). Se já houver um scan em andamento, scheduler.runNow() lança e a rota devolve 409 scan_in_progress.",
     "2. executeScan(): lê o baseline salvo, coleta um snapshot atual (collectBaseline) e, se houver baseline, calcula diffBaseline(baseline, current).",
     "3. Se não houver baseline, diff fica null e result.note explica que é preciso criar um baseline primeiro (nenhum alerta de diff é gerado).",
     "4. alertDiff(diff): para cada categoria não-vazia (newPorts, closedPorts, packages, arquivos) cria/atualiza um alerta via AlertsService.create — dedup por (source='scan', title).",
@@ -61,8 +62,9 @@
     "pode criar/atualizar alertas em data/alerts.json (source: scan e/ou blacklist)"
   ],
   "chamadoPor": ["apps/web/src/pages/SecurityPage.tsx:216 (MonitorCard.runNow)"],
-  "testes": ["scripts/test-fase4.mts (step 5 — diff real com pacote+porta+arquivo alterados no container alvo)"],
+  "testes": ["scripts/test-fase4.mts (step 5 — diff real com pacote+porta+arquivo alterados no container alvo)", "apps/server/tests/monitor-service.test.ts", "packages/security/tests/monitor.test.ts"],
   "observacoes": [
-    "O lock 'inFlight' do MonitorScheduler NÃO cobre chamadas a este endpoint — runNow() chama executeScan() diretamente, então em teoria dois POSTs concorrentes a /api/security/monitor/run (ou um POST coincidindo com um tick automático) podem rodar collectBaseline duas vezes em paralelo contra o mesmo alvo. Não testado explicitamente nos arquivos revisados."
+    "CORRIGIDO nesta rodada: o lock 'inFlight' do MonitorScheduler agora cobre este endpoint — runNow() (monitor-service.ts) passa pelo scheduler.runNow() em vez de chamar executeScan() direto, então dois POSTs concorrentes (ou um POST coincidindo com um tick automático) não rodam mais collectBaseline em paralelo contra o mesmo alvo; o segundo é recusado com 409 scan_in_progress. Um ciclo automático pulado por essa mesma razão agora é logado (onSkip, monitor-service.ts) em vez de silencioso.",
+    "O piso efetivo do intervalo do scan recorrente subiu para 60s (EFFECTIVE_MIN_INTERVAL_MS, monitor-service.ts) nesta rodada — ver monitoramento/configurar-monitor.json."
   ]
 }

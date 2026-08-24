@@ -58,7 +58,7 @@
   "fluxo": [
     "1. { report } = service.scan() — sem forçar fresh; reaproveita o último relatório conhecido.",
     "2. Para cada check do relatório, procura a definição em SECURITY_CHECKS; ignora checks não-fixable (não corrigidos por nenhum script) e agrupa os que falharam (status='fail') por fase.",
-    "3. Para cada uma das 7 SECURITY_PHASES (na ordem fixa 00→06), monta uma SecurityPlanAction: fixesCheckIds = ids dos checks fixable que falharam nessa fase; hasCriticalFail = algum desses checks é severity='critical' → preselected=true; requiresConfirmation = RISKY_PHASES.includes(fase) (só '02' e '03'); hasRollback = true (sempre); impact = texto fixo do mapa PHASE_IMPACTS (só '01','02','03' têm texto; as demais null); alreadySatisfied = a fase tem checks fixable aplicáveis E nenhum deles falhou.",
+    "3. Para cada uma das 7 SECURITY_PHASES (na ordem fixa 00→06), monta uma SecurityPlanAction: fixesCheckIds = ids dos checks fixable que falharam nessa fase; hasCriticalFail = algum desses checks é severity='critical' → preselected=true; requiresConfirmation = RISKY_PHASES.includes(fase) || fase==='01' (CORRIGIDO nesta rodada — antes só '02'/'03'; ver observações); hasRollback = true (sempre); impact = texto fixo do mapa PHASE_IMPACTS (só '01','02','03' têm texto; as demais null); alreadySatisfied = a fase tem checks fixable aplicáveis E nenhum deles falhou.",
     "4. Retorna { id, createdAt, basedOnScanId: report.id, hardeningIndex: report.hardeningIndex, actions }."
   ],
   "dependencias": [
@@ -70,7 +70,7 @@
   "chamadoPor": ["apps/web/src/pages/setup/SecurityStep.tsx:279 (buildPlan)", "apps/web/src/pages/setup/SecurityStep.tsx:315 (rescanAfterManual)"],
   "testes": ["packages/security/tests/planner.test.ts"],
   "observacoes": [
-    "requiresConfirmation reflete só RISKY_PHASES = ['02','03']. A fase '01' pode também terminar em 'awaiting_confirmation' em runtime quando uma chave SSH do operador é fornecida (trava a senha do root), mas o plano não sinaliza isso com requiresConfirmation=true — ver pontosDeAtencao do módulo.",
+    "CORRIGIDO nesta rodada: requiresConfirmation agora é RISKY_PHASES.includes(fase) || fase==='01' — a fase '01' também termina em 'awaiting_confirmation' em runtime quando uma chave SSH do operador é fornecida (trava a senha do root), e o plano passou a sinalizar isso de antemão para o operador não ser surpreendido. Note que requiresConfirmation=true para a fase 01 é uma promessa CONSERVADORA: mesmo que o operador não forneça chave SSH (nesse caso a fase não trava o root e não pede confirmação de verdade em runtime), o plano já mostra o aviso — false positive aceitável, considerado melhor que o false negative anterior.",
     "O SecurityPlanRequest.phases (filtro de fases) é um campo de tipo existente em @paas/core mas não implementado nesta rota nem consumido pelo frontend — o plano sempre inclui as 7 fases."
   ]
 }

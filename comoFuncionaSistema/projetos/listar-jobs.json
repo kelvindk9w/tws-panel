@@ -3,7 +3,7 @@
   "modulo": "projetos",
   "metodo": "GET",
   "url": "/api/projects/:id/jobs",
-  "resumo": "Histórico dos deploys do projeto, mais recente primeiro (máximo 20 itens retornados).",
+  "resumo": "Histórico dos deploys do projeto, mais recente primeiro (máximo 20 itens retornados). CORRIGIDO nesta rodada: projeto inexistente agora é 404, igual às demais rotas :id (antes era 200 com lista vazia).",
   "arquivoFonte": "apps/server/src/routes/projects.ts:148",
   "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
   "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
@@ -16,15 +16,17 @@
   "respostas": [
     {
       "status": 200,
-      "quando": "sempre (lista vazia se o projeto não existe OU nunca teve deploy — mesma resposta para os dois casos)",
+      "quando": "projeto existe (lista vazia se nunca teve deploy)",
       "corpo": { "jobs": "DeployJob[]" },
       "exemplo": { "jobs": [{ "id": "f00dcafe1234", "projectId": "a1b2c3d4e5f6", "status": "success", "createdAt": "2026-08-24T10:00:00.000Z", "startedAt": "2026-08-24T10:00:00.000Z", "finishedAt": "2026-08-24T10:01:12.000Z", "steps": [], "log": "...", "error": null }] }
     }
   ],
-  "erros": [],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe — checado explicitamente pela rota ANTES de chamar service.listJobs (routes/projects.ts).", "mensagem": "Projeto não encontrado." }
+  ],
   "fluxo": [
-    "1. service.listJobs(projectId): resolve o projeto por id/slug — se não existir, retorna [] silenciosamente (NÃO é 404).",
-    "2. Filtra this.jobs (data/deploy-jobs.json) por projectId===project.id.",
+    "1. A rota chama service.getProject(id) e responde 404 project_not_found se o projeto não existir — CORRIGIDO nesta rodada: antes a checagem não existia e service.listJobs() para um projeto inexistente devolvia [] silenciosamente (200 vazio, indistinguível de 'projeto existe mas nunca teve deploy').",
+    "2. service.listJobs(projectId): filtra this.jobs (data/deploy-jobs.json) por projectId===project.id.",
     "3. .slice(-20).reverse() — os 20 mais recentes, do mais novo para o mais antigo."
   ],
   "dependencias": [
@@ -34,7 +36,6 @@
   "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (refresh(), carregado junto com o detalhe do projeto; alimenta a tabela 'Histórico de deploys')"],
   "testes": ["apps/server/tests/routes-projects.test.ts"],
   "observacoes": [
-    "Diferente da maioria das outras rotas de :id, esta NÃO retorna 404 para projeto inexistente — retorna lista vazia. Inconsistência a considerar se algum cliente depender de 404 para detectar id inválido.",
     "O arquivo data/deploy-jobs.json guarda até 100 jobs no total (MAX_JOBS, cross-projeto); esta rota limita a 20 por projeto na resposta, mas a fonte já pode ter perdido jobs mais antigos se o total global passar de 100."
   ]
 }

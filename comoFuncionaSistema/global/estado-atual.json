@@ -1,5 +1,5 @@
 {
-  "resumoExecutivo": "TWS Panel é um PaaS self-hosted (Fastify + React, monorepo pnpm) em estágio beta funcional: as 6 fases planejadas pelo README (Fundação, Hardening, Deploy+Domínios, E-mail, Guardrails+Monitoramento, Polish open source) estão implementadas, testadas (59 arquivos Vitest + 2 suítes E2E reais) e documentadas. O histórico recente de commits (últimos ~40) é quase inteiramente fix/perf/style/test em torno do terminal web embutido, do wizard de hardening e do host bridge — não há features grandes novas em andamento, sugerindo uma fase de estabilização/polimento pós-v1 antes do roadmap pós-v1 (2FA, multi-servidor etc.).",
+  "resumoExecutivo": "TWS Panel é um PaaS self-hosted (Fastify + React, monorepo pnpm) em estágio beta funcional: as 6 fases planejadas pelo README (Fundação, Hardening, Deploy+Domínios, E-mail, Guardrails+Monitoramento, Polish open source) estão implementadas, testadas (70 arquivos Vitest, 763 testes + 2 suítes E2E reais) e documentadas. Uma segunda rodada de correções (posterior ao commit e7d4f18, ver global/review-2026-08-24.json) endureceu vários pontos identificados na primeira revisão: alertas/auditoria não descartam mais dados abertos/antigos sem arquivamento, o scheduler de monitoramento serializa scans, jobs de hardening sobrevivem a restart, start/stop e listagem de jobs devolvem erros de domínio corretos, Docker indisponível é observável, e o fluxo de hardening ficou acessível fora do wizard. Continuam abertos: a imagem Stalwart descontinuada (agora com uma CVE conhecida sem backport, ver stalwart-descontinuado no review), o scan Trivy HIGH ainda report-only, e os 3 riscos altos aceitos como custo arquitetural do produto.",
   "faseAtual": "Pós-Fase-5 (Polish open source) — estabilização e correção de bugs do terminal web/wizard/host bridge, sem feature nova grande em desenvolvimento no momento deste review.",
   "oQueEstaPronto": [
     "Autenticação: login/logout/troca de senha com sessão revogável (cookie HMAC), rate limit de login por IP, hash argon2id.",
@@ -14,8 +14,8 @@
   ],
   "oQueEstaParcial": [
     "Cobertura de testes do frontend (apps/web) não tem thresholds numéricos — pode regredir sem quebrar o CI, ao contrário de todos os outros workspaces.",
-    "Scan de imagem Trivy é report-only (exit-code 0) — o próprio ci.yml documenta a intenção de endurecer para falhar em CRITICAL assim que o baseline do Debian slim estiver limpo, mas isso ainda não foi feito.",
-    "3 branches do Dependabot abertas (fastify/static-10.1.2, nodemailer-9.0.1, vite-6.4.3) aguardando merge — atualizações de dependência pendentes.",
+    "Scan de imagem Trivy: CRITICAL agora bloqueia o merge (CORRIGIDO nesta rodada), mas HIGH continua report-only (exit-code 0) — decisão deliberada de política, não uma lacuna esquecida.",
+    "3 branches do Dependabot abertas (fastify/static-10.1.2, nodemailer-9.0.1, vite-6.4.3) aguardando merge — atualizações de dependência pendentes (não verificado nesta rodada se ainda estão abertas).",
     "GET /api/audit não tem nenhum filtro (só paginação) — qualquer busca por ação/ator/período precisa ser feita client-side sobre a página retornada.",
     "Rate limiter de login (LoginLimiter) guarda tudo em memória (Map por IP) — reiniciar o processo zera todos os contadores/lockouts; aceitável para o painel single-node atual, mas não sobrevive a restart nem escalaria para múltiplas instâncias."
   ],
@@ -38,33 +38,33 @@
     },
     {
       "severidade": "media",
-      "descricao": "A imagem do Stalwart usada (stalwartlabs/mail-server:v0.11.8) é uma linha antiga/descontinuada — o próprio código documenta que a linha nova (stalwartlabs/stalwart v0.16+) removeu a API REST que todo o módulo de e-mail depende. Migrar de versão exigiria reescrever client.ts inteiro; ficar na linha antiga significa não receber correções de segurança futuras do Stalwart.",
-      "onde": "packages/mailer/src/server.ts:7-11."
+      "descricao": "A imagem do Stalwart usada (stalwartlabs/mail-server:v0.11.8) é uma linha antiga/descontinuada — o próprio código documenta que a linha nova (stalwartlabs/stalwart v0.16+) removeu a API REST que todo o módulo de e-mail depende. Migrar de versão exigiria reescrever client.ts inteiro; ficar na linha antiga significa não receber correções de segurança futuras do Stalwart. DADO NOVO: CVE-2025-61600 (DoS não autenticada no parser IMAP) foi corrigida só na 0.13.4, SEM backport para a linha 0.11.x — a versão usada é vulnerável e permanecerá assim enquanto não migrar.",
+      "onde": "packages/mailer/src/server.ts:7-11.",
+      "statusEm20260824": "aberto — permanece dívida técnica conhecida, não corrigido nesta rodada."
     },
     {
       "severidade": "media",
-      "descricao": "Cap de 500 entradas em data/alerts.json descarta as MAIS ANTIGAS (independente de status) quando o limite é ultrapassado — um alerta 'open' nunca reconhecido/resolvido pode ser silenciosamente perdido se alertas mais novos (mesmo já resolvidos) ultrapassarem o limite, sem nenhum log/aviso de que isso aconteceu.",
-      "onde": "apps/server/src/services/alerts-service.ts:12,80; documentado em comoFuncionaSistema/monitoramento/index.json."
+      "descricao": "Cap de 500 entradas em data/alerts.json descartava as MAIS ANTIGAS (independente de status) quando o limite era ultrapassado — um alerta 'open' nunca reconhecido/resolvido podia ser silenciosamente perdido se alertas mais novos (mesmo já resolvidos) ultrapassassem o limite, sem nenhum log/aviso de que isso aconteceu.",
+      "onde": "apps/server/src/services/alerts-service.ts; documentado em comoFuncionaSistema/monitoramento/conceito-alertas.json.",
+      "statusEm20260824": "CORRIGIDO — a eviction agora prioriza descartar resolvidos/reconhecidos mais antigos; se o teto for atingido só com alertas abertos, todos são mantidos e um aviso é logado."
     },
     {
       "severidade": "media",
       "descricao": "O hook de checagem de blacklist dentro do scan recorrente engole qualquer erro silenciosamente (try/catch vazio) — se a resolução DNS ou o serviço de e-mail falhar, o scan simplesmente não reporta blacklist naquele ciclo, indistinguível de 'nada listado'. Falso senso de segurança possível.",
-      "onde": "apps/server/src/services/monitor-service.ts:172-186."
+      "onde": "apps/server/src/services/monitor-service.ts.",
+      "statusEm20260824": "aberto — verificado no código: NÃO foi alterado nesta rodada, o try/catch continua vazio. Outros dois caminhos silenciosos relacionados (listContainers, removeDomain) foram corrigidos nesta rodada — ver achado 'falhas-silenciosas' no review."
     },
     {
       "severidade": "media",
-      "descricao": "MonitorScheduler pula o ciclo inteiro se o scan anterior ainda estiver em voo, e o intervalo mínimo aceito pela API é de apenas 10s (MONITOR_MIN_INTERVAL_MS) — é fácil configurar um intervalo menor que a duração real de um scan completo (dpkg+ss+sha256 no alvo), fazendo o monitoramento rodar bem mais raro que o configurado, sem aviso algum ao operador.",
-      "onde": "packages/security/src/monitor.ts:64-76; packages/core/src/monitoring.ts:190."
+      "descricao": "MonitorScheduler pulava o ciclo inteiro se o scan anterior ainda estivesse em voo, e o intervalo mínimo aceito pela API era de apenas 10s (MONITOR_MIN_INTERVAL_MS) — era fácil configurar um intervalo menor que a duração real de um scan completo (dpkg+ss+sha256 no alvo), fazendo o monitoramento rodar bem mais raro que o configurado, sem aviso algum ao operador. Além disso, runNow() (POST manual) não respeitava esse mesmo lock, podendo rodar em paralelo com um tick automático.",
+      "onde": "packages/security/src/monitor.ts; packages/core/src/monitoring.ts.",
+      "statusEm20260824": "CORRIGIDO — runNow() agora compartilha o lock inFlight do scheduler (recusa com 409 scan_in_progress em vez de rodar em paralelo); MonitorService aplica um piso efetivo de 60s (EFFECTIVE_MIN_INTERVAL_MS) sobre qualquer intervalo configurado, mesmo que o schema de validação de entrada continue aceitando 10s."
     },
     {
       "severidade": "baixa",
-      "descricao": "O README descreve a persistência como 'JSON/SQLite' no diagrama de arquitetura, mas não há nenhuma dependência ou uso de SQLite em todo o repositório — a persistência real é 100% arquivos JSON. Imprecisão de documentação, não de código.",
-      "onde": "README.md (seção Arquitetura); confirmado ausência de sqlite/better-sqlite3 em todo package.json e código."
-    },
-    {
-      "severidade": "baixa",
-      "descricao": "runStream (packages/deploy/src/exec.ts) não aplica timeout algum — um `docker build`/`compose up --build` travado pode travar um job de deploy indefinidamente; só o timeout de 60s do health check pós-build dá algum limite, e isso só entra em jogo depois que o build já teria travado.",
-      "onde": "packages/deploy/src/exec.ts (runStream); documentado em comoFuncionaSistema/projetos/index.json."
+      "descricao": "runStream (packages/deploy/src/exec.ts) não aplicava timeout algum — um `docker build`/`compose up --build` travado podia travar um job de deploy indefinidamente; só o timeout de 60s do health check pós-build dava algum limite, e isso só entrava em jogo depois que o build já teria travado.",
+      "onde": "packages/deploy/src/exec.ts (runStream); documentado em comoFuncionaSistema/projetos/deploy.json.",
+      "statusEm20260824": "CORRIGIDO — runStream agora tem timeout padrão de 30 minutos (DEFAULT_STREAM_TIMEOUT_MS), generoso mas finito; o processo é morto de verdade, não só a promise rejeitada."
     },
     {
       "severidade": "baixa",
@@ -83,7 +83,7 @@
     "Adicionar allowlist de comandos (ou pelo menos um modo 'somente leitura' opcional) ao terminal web quando o alvo é 'host', reduzindo a superfície de risco documentada como a maior do sistema — mesmo que isso reduza a flexibilidade do terminal, um modo restrito para operações rotineiras mitigaria o pior cenário de vazamento de sessão.",
     "Definir thresholds de cobertura numéricos para apps/web, alinhando o frontend ao rigor já aplicado aos demais workspaces.",
     "Avaliar criptografar (não só chmod 0600) os campos de segredo em data/mail/mail.json e config.toml do Stalwart, ou ao menos documentar essa limitação com mais destaque no SECURITY.md/README para operadores que fazem backup do volume paas_data.",
-    "Endurecer o job image-scan do CI para falhar em CRITICAL assim que o baseline do Debian slim permitir (já é a intenção declarada no próprio workflow).",
-    "Corrigir a menção a 'SQLite' no diagrama de arquitetura do README para refletir a persistência 100% JSON real."
+    "Avaliar se vale endurecer também o step HIGH do image-scan do CI (hoje deliberadamente report-only) — decisão de política, não uma lacuna técnica.",
+    "Planejar a migração do Stalwart para a linha nova (stalwartlabs/stalwart v0.16+, reescrevendo client.ts) — motivo mais forte agora do que na revisão anterior: a versão fixada (v0.11.8) tem uma CVE conhecida (CVE-2025-61600) sem backport."
   ]
 }

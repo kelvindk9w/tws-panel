@@ -26,7 +26,7 @@
     "PAAS_PUBLIC_IP (config.ts:87; também lido diretamente em apps/server/src/routes/domains.ts:18, fora de config.ts) — IPv4 público da máquina, usado no checklist DNS e na checagem de domínio. Default: null (detectado só pelas interfaces locais, sem IP público conhecido).",
     "PAAS_PUBLIC_IPV6 (config.ts:88) — IPv6 público opcional da máquina. Default: null.",
     "PAAS_MONITOR_INTERVAL_MS (config.ts:89) — intervalo inicial do scan recorrente de segurança. Default: MONITOR_DEFAULT_INTERVAL_MS (packages/core) = 6 horas. É só o valor INICIAL — depois persistido/ajustável via PUT /api/security/monitor/config.",
-    "DOCKER_SOCKET_PATH (config.ts:90) — caminho do unix socket do Docker usado pelo terminal web, host bridge e deploys. Default: /var/run/docker.sock.",
+    "DOCKER_SOCKET_PATH (config.ts:90) — caminho do unix socket do Docker usado pelo terminal web, host bridge e deploys. Default: /var/run/docker.sock. CORRIGIDO nesta rodada: também vale para a listagem de containers (GET /api/docker/containers, docker-service.ts lê a variável diretamente e roda `docker` com DOCKER_HOST derivado dela) — antes só o terminal (docker-socket.ts) respeitava esse valor.",
     "PAAS_TERMINAL_IDLE_TIMEOUT_MS (config.ts:91) — timeout de inatividade da sessão do terminal web embutido. Default: 30 minutos.",
     "LOG_LEVEL (apps/server/src/app.ts:53, fora de config.ts) — nível de log do pino/Fastify. Default: 'info'.",
     "RATE_LIMIT_MAX (apps/server/src/app.ts:144, fora de config.ts) — máximo de requisições por janela de 1 minuto (rate limit global do @fastify/rate-limit). Default: 200.",
