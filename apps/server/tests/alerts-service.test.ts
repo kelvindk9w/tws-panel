@@ -67,7 +67,7 @@ describe("list — filtros e paginação", () => {
   beforeEach(async () => {
     await service.create(INPUT); // critical/scan
     await service.create({ severity: "warning", source: "guardrail", title: "Senha fraca", detail: "d" });
-    await service.create({ severity: "info", source: "system", title: "Disco ok", detail: "d" });
+    await service.create({ severity: "info", source: "blacklist", title: "IP limpo", detail: "d" });
   });
 
   it("filtra por status, severidade e origem; openCount só conta abertos", async () => {
@@ -88,7 +88,7 @@ describe("list — filtros e paginação", () => {
   it("mais recentes primeiro + clamps de paginação", async () => {
     const page = await service.list({ page: -5, perPage: 2 });
     expect(page.page).toBe(1);
-    expect(page.alerts.map((a) => a.title)).toEqual(["Disco ok", "Senha fraca"]);
+    expect(page.alerts.map((a) => a.title)).toEqual(["IP limpo", "Senha fraca"]);
 
     const clamped = await service.list({ perPage: 999 });
     expect(clamped.perPage).toBe(200);
