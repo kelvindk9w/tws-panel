@@ -41,10 +41,17 @@ for (const file of process.argv.slice(2)) {
   }
   if (content.includes("\0")) continue; // skip binary files
 
+  // Arquivos de teste declaram senhas fictícias o tempo todo ("MinhaSenha123").
+  // A regra de senha é dispensada neles — mas SÓ ela: token do GitHub, chave de
+  // API e credencial de nuvem continuam sendo detectados em qualquer arquivo,
+  // porque um segredo real vazado num teste é tão grave quanto em produção.
+  const isTestFile = /(^|\/)tests?\//.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(file);
+
   const lines = content.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     for (const [name, re] of RULES) {
+      if (isTestFile && name === "password-assignment") continue;
       const match = line.match(re);
       if (!match) continue;
       if (ALLOWLIST.some((safe) => safe.test(line))) continue;

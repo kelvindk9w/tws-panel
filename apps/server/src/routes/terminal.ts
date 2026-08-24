@@ -28,6 +28,26 @@
 import type { FastifyPluginAsync } from "fastify";
 import fastifyWebsocket, { type WebSocket } from "@fastify/websocket";
 import type { TerminalService } from "../services/terminal-service.js";
+import { registerErrorHandler } from "../plugins/error-handler.js";
+
+// Querystring do handshake do WS (não um body — upgrade não tem corpo):
+//  - clientId: gerado no browser (crypto.randomUUID() ou fallback base36),
+//    usado só para a lógica de reattach/anti-ping-pong acima. Nunca chega a
+//    um comando de shell — a faixa é só para rejeitar lixo cedo.
+//  - token: setup token (SETUP_TOKEN_QUERY) já validado bit a bit por
+//    tokenMatches (plugins/auth.ts) antes de qualquer coisa aqui; o schema
+//    só limita o tamanho, sem restringir caracteres (o admin pode definir
+//    SETUP_TOKEN livremente via variável de ambiente).
+const terminalWsSchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      clientId: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" },
+      token: { type: "string", maxLength: 512 },
+    },
+  },
+} as const;
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -42,6 +62,8 @@ export const WS_CLOSE_REPLACED = 4000;
 export const WS_CLOSE_BUSY = 4009;
 
 const terminalRoutes: FastifyPluginAsync = async (app) => {
+  registerErrorHandler(app);
+
   await app.register(fastifyWebsocket, {
     options: { maxPayload: 64 * 1024 },
   });
@@ -49,7 +71,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
   /** Dono atual da sessão de terminal (uma conexão por vez). */
   let owner: { clientId: string | null; socket: WebSocket } | null = null;
 
-  app.get("/api/terminal/ws", { websocket: true }, (socket, request) => {
+  app.get("/api/terminal/ws", { websocket: true, schema: terminalWsSchema }, (socket, request) => {
     const term = app.terminalService;
     const clientId = (request.query as { clientId?: string }).clientId ?? null;
 

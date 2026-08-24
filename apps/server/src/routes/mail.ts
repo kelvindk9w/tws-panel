@@ -19,12 +19,133 @@ import type {
 } from "@paas/core";
 import { MailService } from "../services/mail-service.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
+import { registerErrorHandler } from "../plugins/error-handler.js";
 
 declare module "fastify" {
   interface FastifyInstance {
     mailService: MailService;
   }
 }
+
+// -----------------------------------------------------------------------------
+// Schemas de validação.
+//
+// Param `:domain`: o valor vira nome de diretório e argumento de comando no
+// Stalwart (ver MailService/StalwartManager) — o caso mais sensível deste
+// arquivo. O pattern abaixo espelha a MESMA regra de hostname usada em
+// normalizeMailDomain (apps/server/src/services/mail-service.ts), para que a
+// recusa aconteça já na borda HTTP e não só no service. normalizeMailDomain
+// testa o valor após trim + minúsculas; aqui aceitamos as duas caixas para
+// não restringir o conjunto de domínios aceitos além do que o service aceita.
+const MAIL_DOMAIN_PATTERN =
+  "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$";
+
+const MAIL_DOMAIN_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  maxLength: 253,
+  pattern: MAIL_DOMAIN_PATTERN,
+} as const;
+
+const domainParamSchema = {
+  params: {
+    type: "object",
+    required: ["domain"],
+    properties: { domain: MAIL_DOMAIN_SCHEMA },
+  },
+} as const;
+
+const createMailDomainSchema = {
+  body: {
+    type: "object",
+    required: ["domain"],
+    additionalProperties: false,
+    properties: { domain: MAIL_DOMAIN_SCHEMA },
+  },
+} as const;
+
+// Local-part de caixa (parte antes do @): mesmo alfabeto aceito por
+// normalizeLocalPart (mail-service.ts), nas duas caixas pelo mesmo motivo do
+// domínio acima — o service normaliza para minúsculas antes de validar.
+const MAILBOX_LOCAL_PART_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$",
+} as const;
+
+// Senha de caixa: o service (createMailbox) recusa senha com menos de 8
+// caracteres — mesmo mínimo aqui, para recusar já na borda. maxLength alto
+// (200) para não impedir senhas geradas por gerenciadores externos.
+const MAILBOX_PASSWORD_SCHEMA = {
+  type: "string",
+  minLength: 8,
+  maxLength: 200,
+} as const;
+
+// Id de caixa (endereço completo, ex.: vendas@exemplo.com, por vezes
+// URL-encoded). 90 fica abaixo do teto padrão de param do Fastify (100, que
+// responde 414 antes do schema) e é generoso para qualquer endereço real.
+const MAILBOX_ID_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  maxLength: 90,
+} as const;
+
+const createMailboxSchema = {
+  params: {
+    type: "object",
+    required: ["domain"],
+    properties: { domain: MAIL_DOMAIN_SCHEMA },
+  },
+  body: {
+    type: "object",
+    required: ["localPart"],
+    additionalProperties: false,
+    properties: {
+      localPart: MAILBOX_LOCAL_PART_SCHEMA,
+      password: MAILBOX_PASSWORD_SCHEMA,
+    },
+  },
+} as const;
+
+const mailboxParamSchema = {
+  params: {
+    type: "object",
+    required: ["domain", "id"],
+    properties: {
+      domain: MAIL_DOMAIN_SCHEMA,
+      id: MAILBOX_ID_SCHEMA,
+    },
+  },
+} as const;
+
+const mailboxIdParamSchema = {
+  params: {
+    type: "object",
+    required: ["id"],
+    properties: { id: MAILBOX_ID_SCHEMA },
+  },
+} as const;
+
+// Id de projeto: mesmo limite usado em projects.ts (updateProjectSchema).
+const projectIdParamSchema = {
+  params: {
+    type: "object",
+    required: ["id"],
+    properties: { id: { type: "string", minLength: 1, maxLength: 64 } },
+  },
+} as const;
+
+const enableProjectEmailSchema = {
+  params: projectIdParamSchema.params,
+  body: {
+    type: "object",
+    required: ["domain"],
+    additionalProperties: false,
+    properties: { domain: MAIL_DOMAIN_SCHEMA },
+  },
+} as const;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   const e = err as Partial<HttpError>;
@@ -35,6 +156,7 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
 }
 
 const mailRoutes: FastifyPluginAsync = async (app) => {
+  registerErrorHandler(app);
   const service = new MailService(app.config);
   app.decorate("mailService", service);
 
@@ -84,35 +206,43 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(response);
   });
 
-  app.post<{ Body: CreateMailDomainRequest }>("/api/mail/domains", async (request, reply) => {
-    try {
-      const name = request.body?.domain ?? "";
-      const domain = await service.addDomain(name);
-      await app.auditService.record({
-        action: "mail.domain.add",
-        target: domain.name,
-        detail: `Domínio de e-mail ${domain.name} provisionado (DKIM ${domain.dkimKeyBits}-bit).`,
-      });
-      const response: MailDomainResponse = { domain };
-      return reply.code(201).send(response);
-    } catch (err) {
-      return sendError(reply, err);
-    }
-  });
+  app.post<{ Body: CreateMailDomainRequest }>(
+    "/api/mail/domains",
+    { schema: createMailDomainSchema },
+    async (request, reply) => {
+      try {
+        const name = request.body?.domain ?? "";
+        const domain = await service.addDomain(name);
+        await app.auditService.record({
+          action: "mail.domain.add",
+          target: domain.name,
+          detail: `Domínio de e-mail ${domain.name} provisionado (DKIM ${domain.dkimKeyBits}-bit).`,
+        });
+        const response: MailDomainResponse = { domain };
+        return reply.code(201).send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
 
-  app.delete<{ Params: { domain: string } }>("/api/mail/domains/:domain", async (request, reply) => {
-    try {
-      await service.removeDomain(request.params.domain);
-      await app.auditService.record({
-        action: "mail.domain.remove",
-        target: request.params.domain,
-        detail: `Domínio de e-mail ${request.params.domain} removido.`,
-      });
-      return reply.send({ ok: true });
-    } catch (err) {
-      return sendError(reply, err);
-    }
-  });
+  app.delete<{ Params: { domain: string } }>(
+    "/api/mail/domains/:domain",
+    { schema: domainParamSchema },
+    async (request, reply) => {
+      try {
+        await service.removeDomain(request.params.domain);
+        await app.auditService.record({
+          action: "mail.domain.remove",
+          target: request.params.domain,
+          detail: `Domínio de e-mail ${request.params.domain} removido.`,
+        });
+        return reply.send({ ok: true });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
 
   // Check de blacklist (Fase 4): IP público + domínios contra as DNSBLs.
   app.get("/api/mail/blacklist", async (_request, reply) => {
@@ -126,6 +256,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { domain: string } }>(
     "/api/mail/domains/:domain/dns",
+    { schema: domainParamSchema },
     async (request, reply) => {
       try {
         const response: DnsChecklistResponse = await service.dnsChecklist(request.params.domain);
@@ -138,6 +269,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   app.post<{ Params: { domain: string } }>(
     "/api/mail/domains/:domain/verify",
+    { schema: domainParamSchema },
     async (request, reply) => {
       try {
         const response: DnsVerifyResponse = await service.verifyDomain(request.params.domain);
@@ -154,6 +286,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { domain: string } }>(
     "/api/mail/domains/:domain/mailboxes",
+    { schema: domainParamSchema },
     async (request, reply) => {
       try {
         const mailboxes = await service.listMailboxes(request.params.domain);
@@ -167,6 +300,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   app.post<{ Params: { domain: string }; Body: CreateMailboxRequest }>(
     "/api/mail/domains/:domain/mailboxes",
+    { schema: createMailboxSchema },
     async (request, reply) => {
       try {
         const { mailbox, password } = await service.createMailbox(
@@ -189,6 +323,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Params: { domain: string; id: string } }>(
     "/api/mail/domains/:domain/mailboxes/:id",
+    { schema: mailboxParamSchema },
     async (request, reply) => {
       try {
         await service.deleteMailbox(request.params.domain, request.params.id);
@@ -201,6 +336,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { id: string } }>(
     "/api/mail/mailboxes/:id/credentials",
+    { schema: mailboxIdParamSchema },
     async (request, reply) => {
       try {
         const credentials = await service.mailboxCredentials(request.params.id);
@@ -216,18 +352,23 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // E-mail de projeto (injeção SMTP)
   // -------------------------------------------------------------------------
 
-  app.get<{ Params: { id: string } }>("/api/projects/:id/email", async (request, reply) => {
-    const project = await app.deployService.getProject(request.params.id);
-    if (!project) {
-      return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
-    }
-    const email = await service.projectEmailConfig(project.id);
-    const response: ProjectEmailResponse = { email };
-    return reply.send(response);
-  });
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/email",
+    { schema: projectIdParamSchema },
+    async (request, reply) => {
+      const project = await app.deployService.getProject(request.params.id);
+      if (!project) {
+        return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+      }
+      const email = await service.projectEmailConfig(project.id);
+      const response: ProjectEmailResponse = { email };
+      return reply.send(response);
+    },
+  );
 
   app.post<{ Params: { id: string }; Body: EnableProjectEmailRequest }>(
     "/api/projects/:id/email",
+    { schema: enableProjectEmailSchema },
     async (request, reply) => {
       try {
         const project = await app.deployService.getProject(request.params.id);
@@ -243,15 +384,19 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.delete<{ Params: { id: string } }>("/api/projects/:id/email", async (request, reply) => {
-    const project = await app.deployService.getProject(request.params.id);
-    if (!project) {
-      return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
-    }
-    const email = await service.disableProjectEmail(project.id);
-    const response: ProjectEmailResponse = { email };
-    return reply.send(response);
-  });
+  app.delete<{ Params: { id: string } }>(
+    "/api/projects/:id/email",
+    { schema: projectIdParamSchema },
+    async (request, reply) => {
+      const project = await app.deployService.getProject(request.params.id);
+      if (!project) {
+        return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+      }
+      const email = await service.disableProjectEmail(project.id);
+      const response: ProjectEmailResponse = { email };
+      return reply.send(response);
+    },
+  );
 };
 
 export default mailRoutes;

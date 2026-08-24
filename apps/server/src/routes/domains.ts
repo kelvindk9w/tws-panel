@@ -6,6 +6,23 @@ import dns from "node:dns/promises";
 import os from "node:os";
 import type { FastifyPluginAsync } from "fastify";
 import type { DomainCheckResponse } from "@paas/core";
+import { registerErrorHandler } from "../plugins/error-handler.js";
+
+// Hostname RFC 1123 estrito: rótulos de 1–63 caracteres alfanuméricos/hífen
+// (sem hífen nas pontas), separados por ponto. Sem isso o valor bruto do
+// cliente iria direto para uma consulta DNS real (dns.resolve4).
+const HOSTNAME_PATTERN =
+  "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$";
+
+const checkDomainSchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      domain: { type: "string", maxLength: 253, pattern: HOSTNAME_PATTERN },
+    },
+  },
+} as const;
 
 function machineIps(): string[] {
   const ips = new Set<string>();
@@ -21,44 +38,50 @@ function machineIps(): string[] {
 }
 
 const domainsRoutes: FastifyPluginAsync = async (app) => {
-  app.get<{ Querystring: { domain?: string } }>("/api/domains/check", async (request, reply) => {
-    const domain = (request.query.domain ?? "").trim().toLowerCase();
-    if (!domain) {
-      return reply.code(400).send({ error: "invalid_domain", message: "Informe ?domain=..." });
-    }
+  registerErrorHandler(app);
 
-    const mine = machineIps();
+  app.get<{ Querystring: { domain?: string } }>(
+    "/api/domains/check",
+    { schema: checkDomainSchema },
+    async (request, reply) => {
+      const domain = (request.query.domain ?? "").trim().toLowerCase();
+      if (!domain) {
+        return reply.code(400).send({ error: "invalid_domain", message: "Informe ?domain=..." });
+      }
 
-    // Modo dev local: *.localhost é automático (resolve para 127.0.0.1/::1).
-    if (domain === "localhost" || domain.endsWith(".localhost")) {
+      const mine = machineIps();
+
+      // Modo dev local: *.localhost é automático (resolve para 127.0.0.1/::1).
+      if (domain === "localhost" || domain.endsWith(".localhost")) {
+        const response: DomainCheckResponse = {
+          domain,
+          devLocal: true,
+          ok: true,
+          resolvedIps: ["127.0.0.1", "::1"],
+          machineIps: mine,
+          message:
+            "Domínio .localhost: resolve automaticamente para esta máquina. O Caddy serve em HTTP puro (sem certificado) neste modo de desenvolvimento.",
+        };
+        return reply.send(response);
+      }
+
+      const resolved = await dns.resolve4(domain).catch(() => [] as string[]);
+      const ok = resolved.some((ip) => mine.includes(ip));
       const response: DomainCheckResponse = {
         domain,
-        devLocal: true,
-        ok: true,
-        resolvedIps: ["127.0.0.1", "::1"],
+        devLocal: false,
+        ok,
+        resolvedIps: resolved,
         machineIps: mine,
-        message:
-          "Domínio .localhost: resolve automaticamente para esta máquina. O Caddy serve em HTTP puro (sem certificado) neste modo de desenvolvimento.",
+        message: ok
+          ? "O domínio aponta para esta máquina — pronto para emissão de certificado."
+          : resolved.length === 0
+            ? "O domínio não resolveu nenhum registro A. Crie um registro A apontando para o IP desta máquina."
+            : "O domínio não aponta para esta máquina. Ajuste o registro A no provedor de DNS antes de emitir o certificado.",
       };
       return reply.send(response);
-    }
-
-    const resolved = await dns.resolve4(domain).catch(() => [] as string[]);
-    const ok = resolved.some((ip) => mine.includes(ip));
-    const response: DomainCheckResponse = {
-      domain,
-      devLocal: false,
-      ok,
-      resolvedIps: resolved,
-      machineIps: mine,
-      message: ok
-        ? "O domínio aponta para esta máquina — pronto para emissão de certificado."
-        : resolved.length === 0
-          ? "O domínio não resolveu nenhum registro A. Crie um registro A apontando para o IP desta máquina."
-          : "O domínio não aponta para esta máquina. Ajuste o registro A no provedor de DNS antes de emitir o certificado.",
-    };
-    return reply.send(response);
-  });
+    },
+  );
 };
 
 export default domainsRoutes;

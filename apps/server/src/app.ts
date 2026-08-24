@@ -6,6 +6,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { loadConfig, type ServerConfig } from "./config.js";
+import { AJV_OPTIONS } from "./ajv-options.js";
 import { loadSetupToken } from "./services/setup-token.js";
 import { SetupStateStore } from "./services/setup-state.js";
 import { UserStore } from "./services/user-store.js";
@@ -49,6 +50,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   const config = loadConfig();
 
   const app = Fastify({
+    ajv: AJV_OPTIONS,
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
       // logs estruturados (pino) — nunca logar tokens

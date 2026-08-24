@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { scanSystemHealth } from "../services/system-info.js";
 import { TerminalUnavailableError } from "../services/terminal-service.js";
+import { registerErrorHandler } from "../plugins/error-handler.js";
 
 /**
  * Espelho de transparência da varredura de saúde no terminal web embutido.
@@ -26,6 +27,10 @@ const HEALTH_MIRROR_COMMANDS: readonly string[] = [
 ];
 
 const healthRoutes: FastifyPluginAsync = async (app) => {
+  registerErrorHandler(app);
+
+  // Nenhuma das duas rotas abaixo recebe entrada do cliente — o handler
+  // acima só padroniza o formato de erro caso algo inesperado aconteça.
   // Liveness público (sem auth) — usado pelo HEALTHCHECK do Docker e por
   // balanceadores/monitoramento externos.
   app.get("/api/healthz", async () => ({ status: "ok" }));
