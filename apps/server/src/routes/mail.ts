@@ -157,7 +157,10 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
 
 const mailRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
-  const service = new MailService(app.config);
+  // O sink de auditoria precisa ser injetado aqui: sem ele, deleteMailbox
+  // remove a caixa sem deixar registro na trilha, ao contrário de criar
+  // domínio e criar caixa.
+  const service = new MailService(app.config, { audit: app.auditService });
   app.decorate("mailService", service);
 
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
