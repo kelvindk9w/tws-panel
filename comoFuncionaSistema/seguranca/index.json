@@ -1,0 +1,96 @@
+{
+  "modulo": "seguranca",
+  "titulo": "Segurança (hardening da VPS)",
+  "resumo": "Varredura somente-leitura de hardening da VPS (checks próprios + Lynis), plano de correção derivado do scan, aplicação de 7 fases de hardening como jobs assíncronos (dry-run obrigatório antes do apply real, backup de todo arquivo alterado, rollback automático agendado nas fases de risco), confirmação explícita de acesso pelo operador antes que o rollback dispare, e histórico persistido em disco que sobrevive a restart do painel.",
+  "pontoDeEntrada": { "api": "GET /api/security/scan", "web": "/security (dashboard) e /setup passo 2 (wizard)" },
+  "comoFunciona": [
+    "1. Scan (GET /api/security/scan): roda ~27 checks somente-leitura fixos (packages/security/src/checks.ts) mais, se disponível no alvo, o Lynis (lynis audit system --quick), e calcula o 'Hardening Index' 0-100 (fonte lynis se presente, senão um cálculo interno ponderado por severidade). SEM o parâmetro ?fresh=1 a rota NUNCA dispara uma varredura nova — devolve imediatamente o último relatório conhecido (memória, ou disco em data/security-last-scan.json no primeiro request após um restart do painel). Isso corrige uma regressão real: um cache de 60s fazia o GET simples disparar um scan completo (Lynis, até ~133s observado em VPS) toda vez que o cache expirava, travando a página em 'Carregando…'. Só ?fresh=1 (ou o agendador de monitoramento, módulo 'monitoramento') força um scan novo; se um já estiver em andamento, a resposta imediata traz o último relatório + refreshing=true, sem bloquear.",
+    "2. Perfil do alvo (packages/security/src/profiles.ts): o scanner detecta se o alvo é 'host' (VPS real, via host bridge) ou 'container' (ambiente de dev/teste descartável). No perfil 'container', os checks marcados hostOnly (ufw, sshd, fail2ban, snapd, unattended-upgrades, auditd, etc.) são PULADOS e listados em skippedChecks com o motivo — rodar esses checks dentro de um container geraria falsos-positivos de contexto (avaliariam o namespace do container, não a VPS).",
+    "3. Plano (POST /api/security/plan): roda um scan (usa o cache — não força fresh) e agrupa os checks 'fixable' que falharam por fase de hardening (00 a 06), na ordem seguraatualizar → usuário → SSH → firewall → intrusão → minimização → auditoria. Cada ação do plano indica se a fase já está satisfeita (alreadySatisfied), se é pré-selecionada (preselected = tem achado crítico), se exige confirmação de acesso (requiresConfirmation, hoje só fases 02/03) e um texto de impacto (impact) para as fases de risco.",
+    "4. Aplicação por fases (POST /api/security/apply → job assíncrono, packages/security/src/executor.ts): um job por vez (mutex — hardening concorrente é receita para lockout). O executor sobe/prepara o alvo, envia os scripts de scripts/hardening/*.sh para o alvo (uploadDir) e roda o script da fase via execStream, parseando marcadores ':::PAAS_STEP/:::PAAS_FAIL' emitidos pelo script para montar a lista de passos em tempo real. Todo arquivo alterado pelos scripts tem backup automático (<arquivo>.paas-backup.<timestamp>, lib.sh) e cada script suporta --dry-run (simula sem alterar nada) e --rollback (restaura o backup mais recente). O fluxo do wizard SEMPRE roda um dry-run completo da fila antes de perguntar se aplica de verdade (startExecution → runPhases(queue, dryRun=true); só com dry-run OK o botão 'Aplicar de verdade' aparece).",
+    "5. Confirmação de acesso (POST /api/security/confirm-access) — por que existe: as fases 02 (SSH) e 03 (firewall) — e a fase 01 quando uma chave SSH do operador é instalada — podem literalmente cortar o acesso do operador ao servidor (senha do root travada, PasswordAuthentication desligado, firewall default-deny). Por isso, ao terminar com sucesso uma fase de risco em modo real (não dry-run), o próprio script agenda no ALVO (via `at now +5 minutes`, ou um timer em background se `at` não existir) uma reversão automática dos arquivos alterados, e o job fica no status 'awaiting_confirmation' com um rollbackDeadline. O operador precisa abrir uma NOVA sessão SSH (sem fechar a atual) e testar o acesso; só então chama confirm-access, que roda o script com --confirm (cancela o job 'at' ou mata o timer em background) e o job vira 'success'. Se a janela (5 min, SECURITY_ROLLBACK_WINDOW_MS) expirar sem confirmação, o rollback agendado no ALVO já reverteu a configuração sozinho — o executor apenas observa isso e marca o job como 'rolled_back' após a janela + 15s de folga (o painel não é o que executa o rollback nesse caso: é o script agendado no host).",
+    "6. Modo manual por fase (GET /api/security/phases/:phase/manual): para o operador que prefere rodar por conta própria (SSH direto ou pelo terminal web embutido), devolve os comandos exatos copiáveis (ex.: sudo bash 01-user.sh --user X --pubkey 'Y') e o conteúdo do script para conferência. Depois de rodar manualmente, o botão 'Já executei — revarrer' no modal (ManualPhaseModal) dispara um scan fresh + novo plano para validar a fase.",
+    "7. Histórico (GET /api/security/history): cada scan e cada job finalizado (success/failed/rolled_back) é anexado a data/security-history.json (append-only, até 200 entradas). O endpoint deriva firstIndex/latestIndex (evolução do índice) e um resumo 'applied' (buildAppliedSummary): só considera applies REAIS (dryRun=false) e só quando o ÚLTIMO apply real terminou em sucesso; o índice 'Antes' é CONGELADO no último scan anterior ao PRIMEIRO apply real (nunca recalculado, mesmo que scans posteriores mudem o índice) e o 'Depois' é o scan mais recente após o apply. Isso é o que permite ao wizard restaurar a tela 'Hardening aplicado' após um restart do painel, sem re-rodar plano/dry-run/apply de fases já satisfeitas.",
+    "8. Host bridge (packages/security/src/host-bridge.ts + runner.ts, NsenterHostRunner) — como o painel, rodando DENTRO de um container Docker, executa comandos na VPS real: quando PAAS_TARGET=host, cada comando (checks do scanner ou script de fase) é executado por um container helper DESCARTÁVEL e privilegiado (imagem mínima alpine:3, criado via `docker run --rm --privileged --pid=host <imagem> nsenter -t 1 -m -u -i -n -p -- bash -c \"<comando>\"`), que entra nos namespaces do PID 1 do HOST (o mesmo padrão usado por Coolify/Portainer). O painel já monta o docker.sock, então nenhuma credencial nova é necessária. Segurança em várias camadas: (a) allowlist ESTRITA — isAllowedHostCommand só aceita os comandos FIXOS dos checks/baseline/Lynis ou invocações bem-formadas dos scripts de scripts/hardening/* com argumentos validados individualmente (usuário/chave SSH revalidados mesmo já validados na rota); nada vindo da API vira shell arbitrário; (b) o helper é --rm (nenhum estado privilegiado permanece) e tem nome único, então um timeout mata o cliente E remove o helper (docker rm -f) — nada fica rodando solto; (c) todo comando executado no host é registrado em auditoria (hook onAudit). Sem PAAS_TARGET=host (modo dev padrão), o alvo é um container Docker descartável (ContainerRunner) criado com --cap-add NET_ADMIN (permite testar UFW de verdade) — um bug arquitetural anterior (HostRunner com bash -c local) rodava os comandos DENTRO do próprio container do painel em vez do host real, e foi substituído pelo NsenterHostRunner.",
+    "9. Visão dupla no terminal (TerminalRelayRunner, apps/server/src/services/terminal-runner.ts, módulo 'terminal') — os comandos dos scripts de fase e dos checks do scanner são executados dentro do terminal web embutido (PTY), com saída ao vivo no xterm.js e prompts interativos respondíveis pelo próprio operador; por rodar via PTY, a saída de comandos como grep vem colorizada (--color=auto), o que exigiu o stripAnsi central no scanner para o campo 'detail' não vazar códigos ANSI para a UI."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/security.ts"],
+    "servicos": [
+      "apps/server/src/services/security-service.ts",
+      "apps/server/src/services/terminal-runner.ts"
+    ],
+    "pacotes": [
+      "packages/security/src/scanner.ts",
+      "packages/security/src/planner.ts",
+      "packages/security/src/checks.ts",
+      "packages/security/src/profiles.ts",
+      "packages/security/src/executor.ts",
+      "packages/security/src/runner.ts",
+      "packages/security/src/host-bridge.ts",
+      "packages/security/src/ansi.ts",
+      "packages/security/src/index.ts",
+      "packages/core/src/security.ts"
+    ],
+    "web": [
+      "apps/web/src/pages/setup/SecurityStep.tsx",
+      "apps/web/src/components/setup/ManualPhaseModal.tsx",
+      "apps/web/src/components/setup/SshKeyGuide.tsx",
+      "apps/web/src/pages/SecurityPage.tsx",
+      "apps/web/src/components/IndexGauge.tsx",
+      "apps/web/src/components/TerminalPanel.tsx"
+    ],
+    "testes": [
+      "apps/server/tests/security-scan.test.ts",
+      "apps/server/tests/security-history.test.ts",
+      "packages/security/tests/checks.test.ts",
+      "packages/security/tests/scanner.test.ts",
+      "packages/security/tests/planner.test.ts",
+      "packages/security/tests/profiles.test.ts",
+      "packages/security/tests/host-bridge.test.ts",
+      "packages/security/tests/ansi.test.ts",
+      "packages/security/tests/baseline.test.ts"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/security-history.json",
+      "formato": "json",
+      "conteudo": "{ entries: SecurityHistoryEntry[] } — append-only, últimas 200 entradas (scans e jobs finalizados). Cada scan grava id/at/hardeningIndex/hardeningIndexSource; cada job finalizado grava id/at/phase/dryRun/status. Best-effort: falha ao gravar nunca derruba a requisição. Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "data/security-last-scan.json",
+      "formato": "json",
+      "conteudo": "Último SecurityScanReport completo, persistido ANTES de a promise do scan resolver (um restart logo após terminar o scan ainda encontra o relatório). É o que o GET /api/security/scan sem ?fresh devolve no primeiro acesso após um restart do painel. Best-effort. Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "/etc/paas/pending-rollback-<id>.{pid,at}",
+      "formato": "texto (no ALVO, não no painel)",
+      "conteudo": "Estado do rollback agendado por fase de risco (id = 'user'/'ssh'/'firewall'): pending-rollback-<id>.at guarda o número do job do `at`; pending-rollback-<id>.pid guarda o PID do timer em background (fallback sem `at`). Removidos por confirm_rollback (lib.sh) quando o operador confirma."
+    },
+    {
+      "arquivo": "<arquivo>.paas-backup.<timestamp>",
+      "formato": "cópia do arquivo original (no ALVO)",
+      "conteudo": "Backup de todo arquivo alterado por um script de fase (backup_file em lib.sh), criado antes de qualquer escrita. Usado por --rollback (restore_latest_backup) para reverter."
+    }
+  ],
+  "endpoints": [
+    { "id": "scan", "metodo": "GET", "url": "/api/security/scan", "resumo": "Devolve o último relatório de varredura conhecido (nunca dispara scan novo, salvo ?fresh=1).", "arquivo": "scan.json" },
+    { "id": "plano", "metodo": "POST", "url": "/api/security/plan", "resumo": "Gera o plano de correção (uma ação por fase) a partir do último scan.", "arquivo": "plano.json" },
+    { "id": "aplicar", "metodo": "POST", "url": "/api/security/apply", "resumo": "Inicia (assíncrono) a aplicação de uma fase de hardening no alvo.", "arquivo": "aplicar.json" },
+    { "id": "job", "metodo": "GET", "url": "/api/security/jobs/:id", "resumo": "Status e log ao vivo de um job de aplicação.", "arquivo": "job.json" },
+    { "id": "confirmar-acesso", "metodo": "POST", "url": "/api/security/confirm-access", "resumo": "Cancela o rollback automático agendado após o operador confirmar que ainda tem acesso.", "arquivo": "confirmar-acesso.json" },
+    { "id": "fase-manual", "metodo": "GET", "url": "/api/security/phases/:phase/manual", "resumo": "Comandos exatos + conteúdo do script para o operador aplicar a fase por conta própria.", "arquivo": "fase-manual.json" },
+    { "id": "historico", "metodo": "GET", "url": "/api/security/history", "resumo": "Histórico de scans/jobs + índice antes/depois + resumo do hardening já aplicado.", "arquivo": "historico.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "GET /api/security/scan sem ?fresh serve o cache indefinidamente — não há expiração automática. A constante SECURITY_SCAN_CACHE_MS (60_000) ainda existe em packages/core/src/security.ts marcada como LEGADO ('mantida para compatibilidade de API'), mas não é mais usada para decidir se o scan é servido do cache; só um ?fresh=1 explícito (ou o agendador do módulo 'monitoramento') força uma varredura nova.",
+    "O campo requiresConfirmation do plano (SecurityPlanAction) é calculado só como RISKY_PHASES.includes(phase) — ou seja, só fases 02 e 03. A fase 01 também pode entrar em 'awaiting_confirmation' em runtime (executor.ts: needsConfirmation inclui phase==='01' quando sshPublicKey é informada, porque trava a senha do root), mas o plano NÃO sinaliza isso antecipadamente — o frontend descobre isso só quando o job muda para awaiting_confirmation.",
+    "Rollback de fases não-arriscadas (00, 04, 05, 06): os scripts suportam --rollback (restaura o backup mais recente) e o executor chama isso automaticamente se o script sair com código != 0 em modo não-dry-run; mas essas fases não têm o mecanismo de 'rollback agendado + confirmação' — o rollback só roda se a PRÓPRIA execução falhar (não há proteção contra 'a fase funcionou mas quebrou algo que só aparece depois').",
+    "A fase 00 (atualização) em modo rollback só desfaz o arquivo de configuração de atualizações automáticas — pacotes já atualizados via apt full-upgrade NÃO são revertidos (o próprio script comenta: downgrade é inseguro e impraticável).",
+    "O executor é um mutex de processo único (this.busy): dois operadores tentando aplicar fases ao mesmo tempo recebem 409 job_conflict no segundo POST /api/security/apply, mas não há fila — a segunda tentativa simplesmente falha, o operador precisa tentar de novo depois.",
+    "O relatório completo do scan (incluindo o campo `detail` de cada check, que pode conter saída de comandos) é persistido em texto puro em data/security-last-scan.json e em data/security-history.json; nenhum desses arquivos passa por sanitização adicional além do stripAnsi já aplicado na captura.",
+    "O componente SecurityPage.tsx (dashboard pós-setup, rota /security) e o SecurityStep.tsx (wizard de setup) são duas superfícies de UI distintas para o MESMO módulo: SecurityPage mostra só o card 'Hardening Index' (leitura, sem fluxo de aplicação) mais os cards de Baseline/Monitoramento/Blacklist (módulo 'monitoramento', fora deste escopo); todo o fluxo de scan→plano→aplicar→confirmar vive em SecurityStep.tsx, hoje só alcançável pelo wizard de setup — não há um botão na SecurityPage que leve de volta a esse fluxo completo caso o operador precise reaplicar/corrigir uma fase depois do setup concluído."
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "conceito-guardrails",
+  "titulo": "Guardrails de deploy",
+  "resumo": "Sistema de regras de segurança que analisa o código-fonte de um projeto antes/durante o deploy, motivado por problemas reais encontrados em projetos do usuário (porta de banco exposta, credenciais triviais tipo 'cacheta:cacheta', Mailhog em produção — ver docs/projects-analysis.md). Existem DOIS conjuntos de regras distintos no código, com propósitos diferentes.",
+  "arquivoFonte": "packages/deploy/src/rules.ts",
+  "tipo": "utilitario",
+  "api": [
+    { "simbolo": "runGuardrails", "assinatura": "(dir: string) => Promise<GuardrailReport>", "descricao": "Sistema COMPLETO (Fase 4). Roda as regras de compose + scan de secrets no código-fonte. Usado no relatório sob demanda e no bloqueio real do deploy." },
+    { "simbolo": "GUARDRAIL_RULES", "assinatura": "readonly GuardrailRuleInfo[]", "descricao": "Catálogo estático (rule, level, title) das 6 regras de rules.ts, exposto para documentação/testes." },
+    { "simbolo": "analyzeCompose", "assinatura": "(content: string, fileName: string) => GuardrailWarning[]", "descricao": "Sistema REDUZIDO (prévia da Fase 4, packages/deploy/src/guardrails.ts). Só analisa o compose (sem scan de secrets, sem privileged-container). Usado apenas dentro de detectProject() para popular DetectResult.warnings — o que aparece no wizard de criação e no card do ProjectDetailPage. Lança erro em YAML inválido (o chamador converte em warning)." },
+    { "simbolo": "guessProxyTarget", "assinatura": "(content: string) => { service, port, notes }", "descricao": "Heurística de sugestão de proxyService/proxyPort a partir do compose — não é regra de segurança, mas vive no mesmo arquivo (guardrails.ts)." }
+  ],
+  "comportamento": [
+    "NÍVEIS (rules.ts): 'block' impede o deploy sem override explícito do operador (auditado); 'warn' só alerta e deixa deployar; 'info' é puramente informativo.",
+    "REGRAS DE COMPOSE (analyzeComposeRules, roda sobre o 1º arquivo compose encontrado na mesma lista de prioridade de detect.ts):",
+    "  - db-port-exposed (block): qualquer serviço publica no host (ports: 'host:container') uma porta de container que bate com uma porta de banco conhecida — 5432 PostgreSQL, 3306 MySQL/MariaDB, 6379 Redis, 27017 MongoDB, 1433 SQL Server. (nota: a lista em guardrails.ts/analyzeCompose também inclui 1521 Oracle, 5984 CouchDB, 9200 Elasticsearch — a lista de rules.ts é mais curta.)",
+    "  - dev-service-in-prod (warn): a imagem do serviço casa com um padrão de ferramenta de dev — mailhog, mailpit, phpmyadmin, adminer, pgadmin, mongodb-compass, redisinsight, selenium, ou qualquer imagem contendo 'debug'.",
+    "  - latest-tag (info): imagem sem tag fixada (':latest' explícito ou sem ':' nenhum) e sem digest ('@').",
+    "  - privileged-container (block): serviço com 'privileged: true', OU que monta um volume cujo source/entrada contém '/var/run/docker.sock'.",
+    "  - weak-credentials (block), duas sub-checagens: (a) uma env var cuja chave bate com /PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY/i tem valor numa lista de ~24 valores triviais (password, admin, root, 123456, postgres, mysql, redis, mongo, cacheta, dev, test, etc.), OU valor com menos de 6 caracteres, OU valor no formato 'usuario:senha' com as duas partes iguais; (b) uma env var de usuário (chave termina em USER/USERNAME/LOGIN) tem o MESMO valor (case-insensitive) que uma env var de senha do mesmo serviço.",
+    "REGRA DE CÓDIGO-FONTE (scanSecrets, varre recursivamente o diretório todo, não só o compose):",
+    "  - secret-in-code (warn): varre arquivos com extensão em {.js,.jsx,.ts,.tsx,.mjs,.cjs,.json,.yml,.yaml,.env,.ini,.conf,.cfg,.toml,.py,.php,.rb,.go,.sh,.bash,.sql,.txt} (e qualquer '.env*'), ignorando diretórios node_modules/.git/.next/dist/build/out/coverage/.turbo/.cache/vendor/__pycache__ e qualquer pasta iniciando com '.git'; arquivos maiores que 512KB são pulados; para de escanear após 2000 arquivos (SECRET_SCAN_MAX_FILES). Padrões de assinatura inconfundível: chave AWS (AKIA/ASIA + 16 chars), chave privada PEM ('-----BEGIN ... PRIVATE KEY'), token GitHub (ghp_/gho_/ghu_/ghs_/ghr_/github_pat_), token Slack (xox[baprs]-), chave Google API (AIza...), chave Stripe (sk_/pk_ live|test). Também dispara em atribuições genéricas de alta entropia: variável cujo nome contém SECRET/TOKEN/API_KEY/PASSWORD com valor entre aspas de ≥20 chars, mistura de ≥3 classes de caracteres (minúscula/maiúscula/dígito/símbolo +/=_-), sem repetição óbvia de padrão curto, e sem 'placeholder hints' (example, sample, placeholder, changeme, your-, xxxx, ..., dummy, fake, redacted, <algo>). Dedup por (regra + arquivo) — no máximo 1 finding por combinação regra/arquivo mesmo com múltiplas ocorrências.",
+    "COMPOSE INVÁLIDO: se o arquivo compose encontrado não parsear como YAML, gera um finding próprio 'invalid-compose' (block) em vez de abortar a análise; o scan de secrets roda de qualquer forma.",
+    "ORDENAÇÃO: findings são ordenados block → warn → info antes de retornar no GuardrailReport.",
+    "GuardrailReport = { ranAt, dir, findings: GuardrailFinding[], blockers, warnings, infos } — cada GuardrailFinding tem { rule, level, title, evidence, fix, service? }.",
+    "GATE NO DEPLOY (DeployEngine.deploy, packages/deploy/src/engine.ts:97): após a ingestão do código, roda runGuardrails(src) de novo (o código pode ter mudado desde a checagem prévia, especialmente relevante no modo git). Se blockers>0 e !opts.guardrailOverride, lança Error com prefixo 'guardrail_blocked:' e ABORTA o deploy antes de qualquer build/subida. Se override=true, loga um aviso e prossegue mesmo com os bloqueios."
+  ],
+  "catalogoRegras": [
+    { "rule": "db-port-exposed", "level": "block", "title": "Porta de banco de dados publicada no host" },
+    { "rule": "weak-credentials", "level": "block", "title": "Credenciais triviais no compose/env" },
+    { "rule": "privileged-container", "level": "block", "title": "Container privilegiado ou docker.sock montado" },
+    { "rule": "dev-service-in-prod", "level": "warn", "title": "Serviço de desenvolvimento em produção" },
+    { "rule": "secret-in-code", "level": "warn", "title": "Possível secret comitado no código" },
+    { "rule": "latest-tag", "level": "info", "title": "Imagem com tag :latest" }
+  ],
+  "usadoPor": [
+    { "referencia": "GET /api/projects/:id/guardrails", "arquivo": "apps/server/src/services/deploy-service.ts:290", "doc": "projetos/guardrails.json" },
+    { "referencia": "POST /api/projects/:id/deploy", "arquivo": "apps/server/src/services/deploy-service.ts:343", "doc": "projetos/deploy.json", "nota": "checagem síncrona antes de criar o job, mais uma checagem dentro do engine após a ingestão" },
+    { "referencia": "POST /api/projects/:id/detect (via analyzeCompose, sistema reduzido)", "arquivo": "packages/deploy/src/detect.ts:131", "doc": "projetos/detectar.json" }
+  ],
+  "testes": ["packages/deploy/tests/rules.test.ts", "packages/deploy/tests/guardrails.test.ts", "apps/web/tests/guardrail-modal.test.tsx"],
+  "observacoes": [
+    "Os dois sistemas (rules.ts 'completo' vs guardrails.ts 'reduzido') têm listas de portas de banco LIGEIRAMENTE DIFERENTES (rules.ts não inclui Oracle/CouchDB/Elasticsearch que guardrails.ts inclui) e conjuntos de regras totalmente diferentes — isso significa que um projeto pode aparecer 'limpo' no aviso do wizard (guardrails.ts, sem checagem de secrets/privileged) e mesmo assim ser bloqueado no deploy real (rules.ts). Ver pontosDeAtencao em index.json.",
+    "O scan de secrets (scanSecrets) é custoso em projetos grandes: percorre recursivamente até 2000 arquivos de texto, lendo cada um por completo (até 512KB) e rodando ~7 regexes por linha. É reexecutado do zero em toda chamada de GET /guardrails E a cada tentativa de deploy (até 3x por deploy, ver observação em index.json) — não há cache nem incrementalidade.",
+    "A lista WEAK_VALUES é fixa em código (~24 valores) — não é configurável via UI/env; senhas fracas fora dessa lista específica (ex.: 'qwerty123', 'senha123') não são pegas a menos que também caiam na regra de comprimento < 6 ou usuário==senha."
+  ]
+}

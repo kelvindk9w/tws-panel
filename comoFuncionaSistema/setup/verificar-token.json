@@ -1,0 +1,45 @@
+{
+  "id": "verificar-token",
+  "modulo": "setup",
+  "metodo": "POST",
+  "url": "/api/setup/verify-token",
+  "resumo": "Valida se o token informado pelo usuário no passo de boas-vindas corresponde ao setup token do servidor. Endpoint público por natureza: é a única rota do wizard isenta de exigir o header/query do setup token, pois seu propósito é justamente descobrir se o token que a pessoa tem em mãos é válido.",
+  "arquivoFonte": "apps/server/src/routes/setup.ts:18",
+  "autenticacao": {
+    "exigida": false,
+    "tipo": "publica",
+    "detalhe": "Isenta explicitamente no hook onRequest de apps/server/src/plugins/auth.ts (request.url.startsWith('/api/setup/verify-token') retorna antes de requireSetupToken). Continua acessível mesmo com o setup já concluído? NÃO: se setupState.completed=true, o bloco 'if (request.url.startsWith(\"/api/setup/\"))' do auth.ts responde 403 setup_completed ANTES de chegar na isenção de verify-token — ver observação."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "token", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify (verifyTokenSchema, setup.ts): quando presente, string até maxLength 500; additionalProperties:false no corpo. Se ausente, segue o fluxo de negócio normal (valid:false). Comparado em tempo constante (timingSafeEqual) contra app.setupToken.", "descricao": "Token que o usuário colou ou que veio pré-preenchido da URL (?token=)." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "quando": "Servidor tem um setupToken configurado (não importa se o token enviado bate ou não).", "corpo": { "valid": "boolean" }, "exemplo": { "valid": true } }
+  ],
+  "erros": [
+    { "status": 503, "codigo": "setup_token_missing", "quando": "app.setupToken é null — nenhum SETUP_TOKEN em env nem arquivo legível em setupTokenFile.", "mensagem": "Servidor sem setup token configurado." },
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (verifyTokenSchema) ANTES do handler: token presente mas não-string, maior que 500 chars, ou corpo com campo desconhecido. Um token número/objeto agora vira 400 em vez de cair em 200 { valid: false } (ver observações).", "mensagem": "Campo inválido: token. / Campo desconhecido no corpo da requisição: <campo>." }
+  ],
+  "fluxo": [
+    "1. Lê request.body?.token.",
+    "2. Se app.setupToken é null, responde 503 setup_token_missing.",
+    "3. Caso contrário, calcula valid = typeof token === 'string' && tokenMatches(token, app.setupToken) (comparação em tempo constante via node:crypto timingSafeEqual, tokens de tamanhos diferentes retornam false sem lançar).",
+    "4. Responde 200 { valid } — nunca revela o token esperado nem detalha o motivo da invalidade."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "tokenMatches", "arquivo": "apps/server/src/services/setup-token.ts:22", "papel": "Comparação constante-tempo do token enviado contra o token carregado no boot." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/setup/WelcomeStep.tsx"],
+  "testes": ["apps/server/tests/routes-setup.test.ts", "apps/web/tests/welcome-step.test.tsx"],
+  "observacoes": [
+    "Depois que o setup é concluído (completed=true), o bloco do auth.ts que trata /api/setup/* responde 403 setup_completed para QUALQUER sub-rota, incluindo verify-token, antes mesmo de chegar na isenção — ou seja, na prática este endpoint só fica de fato público enquanto o setup está em andamento.",
+    "MUDANÇA DE COMPORTAMENTO: corpo AUSENTE (token omitido) continua respondendo 200 { valid: false } — regra de negócio preservada e testada em routes-setup.test.ts. Mas corpo com token de TIPO ERRADO (ex.: número) ou maior que 500 chars agora responde 400 invalid_request em vez do antigo 200 { valid: false } — verificado em apps/server/tests/routes-setup-schema.test.ts."
+  ]
+}

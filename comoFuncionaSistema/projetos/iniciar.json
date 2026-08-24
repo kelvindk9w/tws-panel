@@ -1,0 +1,46 @@
+{
+  "id": "iniciar",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/start",
+  "resumo": "Inicia (docker start) os containers já existentes do projeto — NÃO faz deploy nem recria nada; falha se nunca houve um deploy (nenhum container a iniciar).",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:166",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "containers encontrados e iniciados",
+      "corpo": { "ok": true, "log": "string" },
+      "exemplo": { "ok": true, "log": "2 container(es) iniciado(s).\n" }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe", "mensagem": "Projeto não encontrado." },
+    { "status": 500, "codigo": "internal_error", "quando": "zero containers do projeto encontrados (Error genérico 'Nenhum container do projeto encontrado — faça um deploy primeiro.') OU docker start retornou código ≠ 0", "mensagem": "Erro interno (mensagem de domínio não chega ao cliente — ver observações)." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. engine.projectContainers(project) — mesma resolução de start.json (label paas.project ou compose project).",
+    "3. Se zero containers → throw new Error(...) (500, não HttpError).",
+    "4. docker start <ids...> (timeout 120s); código≠0 → throw new Error (500).",
+    "5. Log agregado retornado em { ok: true, log }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.start", "arquivo": "apps/server/src/services/deploy-service.ts:476", "papel": "Delega a engine.start." },
+    { "tipo": "pacote", "nome": "DeployEngine.start", "arquivo": "packages/deploy/src/engine.ts:404", "papel": "Resolve containers e roda docker start." }
+  ],
+  "efeitosColaterais": ["docker start nos containers do projeto"],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('start'), botão 'Iniciar' — desabilitado quando status já é 'running', 'deploying' ou 'created')"],
+  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "observacoes": [
+    "BUG/RISCO: a mensagem 'Nenhum container do projeto encontrado — faça um deploy primeiro.' é lançada como Error comum (não httpError), então sendError() mapeia para 500 internal_error com a mensagem genérica 'Erro interno.' — o operador nunca vê a orientação real de que precisa fazer o primeiro deploy. O botão 'Iniciar' já fica desabilitado quando status==='created' no frontend, então esse caminho só é alcançável via chamada direta à API ou corrida de estado (status desatualizado no polling).",
+    "Mesmo padrão de erro genérico afeta stop/remove quando o motivo é 'de negócio' e não um httpError explícito — só startDeploy/createProject/updateProject/detect/guardrailsForProject/deleteProject (quando via requireProject) usam httpError com código semântico."
+  ]
+}

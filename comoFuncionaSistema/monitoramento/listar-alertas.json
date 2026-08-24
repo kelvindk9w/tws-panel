@@ -1,0 +1,71 @@
+{
+  "id": "listar-alertas",
+  "modulo": "monitoramento",
+  "metodo": "GET",
+  "url": "/api/alerts",
+  "resumo": "Lista alertas (guardrail/scan/blacklist/system) com filtros opcionais de status, severidade e origem, paginados, mais recentes primeiro.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:67",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts): fora do fluxo de setup, toda rota /api/* exige sessão válida. Enquanto o setup ainda não foi concluído, o mesmo guarda aceita o setup token no lugar da sessão."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão, @fastify/rate-limit) — não há limite específico desta rota.",
+  "parametros": {
+    "path": [],
+    "query": [
+      { "nome": "status", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify (alertsQuerySchema, monitoring.ts): enum ALERT_STATUSES (open, acknowledged, resolved). A checagem manual no handler foi REMOVIDA.", "descricao": "Filtra por status do alerta." },
+      { "nome": "severity", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: enum ALERT_SEVERITIES (critical, warning, info). A checagem manual foi REMOVIDA.", "descricao": "Filtra por severidade." },
+      { "nome": "source", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: enum ALERT_SOURCES (guardrail, scan, blacklist, system). A checagem manual foi REMOVIDA.", "descricao": "Filtra por origem do alerta." },
+      { "nome": "page", "tipo": "string (querystring; convertido com Number() no handler)", "obrigatorio": false, "regras": "schema Fastify: pattern ^[1-9][0-9]{0,5}$ (só dígitos, sem zero à esquerda, até 6 dígitos) — NOVO: uma string não numérica (ex.: 'abc') agora é recusada na borda, o que elimina o antigo bug de NaN chegando a AlertsService.list(). Depois, clamp mínimo 1 no service.", "descricao": "Página (1-based)." },
+      { "nome": "perPage", "tipo": "string (querystring; convertido com Number() no handler)", "obrigatorio": false, "regras": "schema Fastify: pattern ^[1-9][0-9]{0,2}$ (só dígitos, até 3 dígitos — máx 999 na borda). Depois, clamp entre 1 e 200 no service; default 50.", "descricao": "Itens por página." }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre (mesmo sem alertas)",
+      "corpo": { "alerts": "Alert[]", "total": "number", "openCount": "number (total de alertas open, ignora os filtros)", "page": "number", "perPage": "number" },
+      "exemplo": {
+        "alerts": [
+          {
+            "id": "a1b2c3d4e5f60718",
+            "severity": "critical",
+            "source": "scan",
+            "title": "Monitoramento: novas portas abertas no servidor",
+            "detail": "+ tcp/23456 (nc)",
+            "status": "open",
+            "createdAt": "2026-08-24T10:00:00.000Z",
+            "acknowledgedAt": null,
+            "resolvedAt": null
+          }
+        ],
+        "total": 1,
+        "openCount": 1,
+        "page": 1,
+        "perPage": 50
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Querystring reprovada pelo schema Fastify (alertsQuerySchema) ANTES do handler: status/severity/source fora do enum, page/perPage fora do pattern numérico, ou campo desconhecido na query (additionalProperties:false). SUBSTITUI COMPLETAMENTE os antigos invalid_status/invalid_severity/invalid_source — removidos do código, não existem mais.", "mensagem": "Campo inválido: status." }
+  ],
+  "fluxo": [
+    "0. Schema Fastify (alertsQuerySchema) valida status/severity/source (enum) e page/perPage (pattern numérico) ANTES do handler — corpo malformado nunca chega ao handler (400 invalid_request).",
+    "2. Converte page/perPage de string para number (Number(...)) — agora sempre um valor numérico válido, já que o schema só deixa passar dígitos.",
+    "3. AlertsService.list() carrega data/alerts.json (lazy, uma vez por processo), calcula openCount sobre TODOS os alertas (sem filtro), depois aplica os filtros de status/severity/source em sequência sobre a lista invertida (mais recentes primeiro).",
+    "4. Aplica clamp de perPage (1–200, default 50) e page (mínimo 1), fatia o array filtrado e retorna."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "AlertsService", "arquivo": "apps/server/src/services/alerts-service.ts", "papel": "Persistência e consulta dos alertas em data/alerts.json." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/AlertsPage.tsx:52"],
+  "testes": ["apps/server/tests/alerts-service.test.ts (lógica de list(), não a rota HTTP)"],
+  "observacoes": [
+    "Há agora teste HTTP direto: apps/server/tests/routes-monitoring-schema.test.ts cobre o schema desta e das demais rotas de monitoramento.",
+    "CORRIGIDO pela introdução do schema: o antigo bug de page/perPage='abc' virando NaN em Number('abc') e propagando para AlertsService.list() (Math.max(NaN,1)===NaN, slice(NaN,...) devolvendo array vazio) não é mais alcançável — o schema (pattern só-dígitos) recusa qualquer page/perPage não numérico com 400 invalid_request antes do handler converter a string."
+  ]
+}

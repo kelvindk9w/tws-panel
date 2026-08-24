@@ -1,0 +1,67 @@
+{
+  "id": "job",
+  "modulo": "seguranca",
+  "metodo": "GET",
+  "url": "/api/security/jobs/:id",
+  "resumo": "Status atual, passos e log ao vivo de um job de aplicação de fase. Usado via polling pelo frontend enquanto o job está em andamento.",
+  "arquivoFonte": "apps/server/src/routes/security.ts:124",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Mesmo guard global das demais rotas de segurança — sessão fora do setup, setup token durante o setup."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (jobParamsSchema, security.ts): minLength 1, maxLength 64.", "descricao": "id do SecurityJob (UUID retornado por POST /api/security/apply)." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Job encontrado (existe em memória — executor.jobs, um Map; não há persistência de jobs em andamento além do histórico de finalizados).",
+      "corpo": { "job": "SecurityJob" },
+      "exemplo": {
+        "job": {
+          "id": "8f2a...",
+          "phase": "02",
+          "phaseKey": "ssh",
+          "title": "Hardening de SSH",
+          "dryRun": false,
+          "status": "awaiting_confirmation",
+          "createdAt": "2026-08-24T10:10:00.000Z",
+          "startedAt": "2026-08-24T10:10:01.000Z",
+          "finishedAt": null,
+          "steps": [
+            { "name": "Garantindo OpenSSH server instalado", "status": "done" },
+            { "name": "Aplicando drop-in de hardening", "status": "done" }
+          ],
+          "log": "[executor] alvo=host fase=02 script=02-ssh.sh dryRun=false rollbackDelay=300s\n...",
+          "rollbackScheduled": true,
+          "rollbackDeadline": "2026-08-24T10:15:16.000Z",
+          "error": null
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "id maior que 64 chars — reprovado pelo schema Fastify (jobParamsSchema) ANTES do handler.", "mensagem": "Campo inválido: id." },
+    { "status": 404, "codigo": "job_not_found", "quando": "Nenhum job com esse id (nunca existiu, ou o processo do servidor foi reiniciado — jobs em andamento não são persistidos, só o resultado final no histórico).", "mensagem": "Job não encontrado." }
+  ],
+  "fluxo": [
+    "1. service.getJob(id) → executor.getJob(id) → this.jobs.get(id) (Map em memória).",
+    "2. 404 job_not_found se ausente; senão devolve { job } com o snapshot atual (mutado in-place pelo executor conforme o script roda)."
+  ],
+  "dependencias": [
+    { "tipo": "pacote", "nome": "SecurityExecutor.getJob", "arquivo": "packages/security/src/executor.ts:62", "papel": "Consulta o Map de jobs em memória." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura)."],
+  "chamadoPor": ["apps/web/src/pages/setup/SecurityStep.tsx:328 (pollJob)"],
+  "testes": [],
+  "observacoes": [
+    "Estados possíveis de SecurityJobStatus: 'queued' (criado, ainda não começou a rodar) → 'running' (script em execução) → um de: 'awaiting_confirmation' (fase de risco aplicada com sucesso, aguardando o operador confirmar acesso antes do rollback agendado expirar), 'success' (concluído sem necessidade de confirmação, ou confirmação já dada), 'failed' (script saiu com erro; rollback imediato já executado se não era dry-run), 'rolled_back' (janela de confirmação expirou sem resposta — o script agendado no ALVO já reverteu sozinho).",
+    "Acompanhamento pelo frontend: POLLING simples via setTimeout, SEM WebSocket — a cada 1500ms (apps/web/src/pages/setup/SecurityStep.tsx:350) enquanto o status não é terminal (success/failed/rolled_back). Ao ver status='awaiting_confirmation', o polling FICA PARADO aguardando uma Promise resolvida pelo usuário (clique em 'confirmar' ou 'interromper') antes de continuar; ele não some da tela sozinho.",
+    "Jobs vivem só em memória (Map do SecurityExecutor) — um restart do painel no meio de um job faz este endpoint responder 404 job_not_found para o job que estava em andamento, mesmo que o script continue rodando/revertendo no alvo de forma independente."
+  ]
+}

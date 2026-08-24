@@ -1,0 +1,58 @@
+{
+  "id": "detectar",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/detect",
+  "resumo": "Roda a detecção automática de stack (packages/deploy/src/detect.ts) sobre o código-fonte disponível localmente e persiste o resultado em project.detection.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:96",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "detecção concluída (mesmo se type=unknown)",
+      "corpo": { "detection": "DetectResult" },
+      "exemplo": {
+        "detection": {
+          "type": "static-node",
+          "composeFile": null,
+          "outputDir": "dist",
+          "packageManager": "npm",
+          "buildCommand": "npm run build",
+          "proxyService": null,
+          "proxyPort": null,
+          "warnings": [],
+          "details": ["Projeto Vite detectado — build gera a pasta dist/ por padrão.", "Pipeline: build em container Node (npm) → servir dist/ como site estático."]
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe", "mensagem": "Projeto não encontrado." },
+    { "status": 409, "codigo": "source_missing", "quando": "ingestMode=git e o código ainda não foi clonado (nenhum deploy realizado ainda)", "mensagem": "Código ainda não ingerido (modo git). Faça o primeiro deploy para clonar, ou use a detecção após o deploy." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. sourceDirOf(project): se data/projects/<slug>/src existe, usa esse diretório; senão, se ingestMode≠git, usa path.resolve(project.source) direto (permite detectar upload/existing ANTES do 1º deploy); se ingestMode=git e nada existe ainda → 409 source_missing.",
+    "3. detectProject(dir) (ver conceito-deteccao-stack.json) classifica o tipo e monta DetectResult.",
+    "4. project.detection = resultado; project.updatedAt atualizado; persiste em data/projects.json.",
+    "5. Retorna { detection }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.detect", "arquivo": "apps/server/src/services/deploy-service.ts:293", "papel": "Resolve o diretório fonte e delega a detectProject." },
+    { "tipo": "pacote", "nome": "detectProject", "arquivo": "packages/deploy/src/detect.ts:102", "papel": "Heurística de classificação de stack." }
+  ],
+  "efeitosColaterais": ["grava data/projects.json (project.detection, project.updatedAt)"],
+  "chamadoPor": ["apps/web/src/pages/NewProjectPage.tsx (createAndDetect(), chamado logo após POST /api/projects no passo 1→2 do wizard)"],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "packages/deploy/tests/detect.test.ts"],
+  "observacoes": [
+    "Não há endpoint separado que exponha só o DetectResult.warnings sem rodar a detecção completa — o wizard usa esses warnings (regras de guardrails.ts, diferentes das de rules.ts) para o aviso mostrado no passo 2.",
+    "A rota reexecuta a detecção do zero a cada chamada (sem cache); em projetos compose grandes isso relê e reparsa o YAML a cada clique."
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "id": "infraestrutura",
+  "titulo": "Infraestrutura: Docker, CI e git hooks",
+  "resumo": "O painel roda inteiro como um único container Docker não-root e hardened (multi-stage, cap_drop ALL, rootfs read-only), com o socket do Docker do host montado para gerenciar deploys/Caddy/Stalwart e um host bridge (nsenter) para o hardening real da VPS. CI no GitHub Actions valida typecheck/build/testes de cobertura em todo push/PR e escaneia a imagem com Trivy (report-only); hooks de git locais bloqueiam segredos e arquivos proibidos antes do commit.",
+  "arquivoFonte": "Dockerfile",
+  "tipo": "infraestrutura",
+  "api": [],
+  "comportamento": [
+    "Dockerfile stage 1 'build' (node:22-bookworm-slim): corepack enable, copia manifests + scripts/setup-hooks.mjs, pnpm install --frozen-lockfile, copia código-fonte completo, roda `pnpm build` (typecheck de todos os pacotes + build de produção da SPA em apps/web/dist).",
+    "Dockerfile stage 2 'runtime' (node:22-bookworm-slim): ENV NODE_ENV=production, PORT=9000, PAAS_DATA_DIR=/data, COREPACK_HOME=/opt/corepack. Instala Docker CLI 27.5.1 e docker-compose plugin 2.32.4 como binários estáticos oficiais com sha256 fixado em ARG (necessários para o painel falar com o daemon do host e para o host bridge subir helpers nsenter). Prepara pnpm via corepack em BUILD TIME (nada é baixado em runtime — requisito do rootfs read-only). Cria usuário não-root tws (uid/gid 10001), copia /app do stage de build com --chown=tws:tws. VOLUME [\"/data\"], EXPOSE 9000, USER tws. HEALTHCHECK via fetch a /api/healthz a cada 30s. CMD [\"pnpm\", \"--filter\", \"@paas/server\", \"start\"].",
+    "docker-compose.yml (produção): serviço único 'panel' (build: ., image tws-panel:latest), porta ${PAAS_PORT:-9000}:9000. Hardening do próprio container: security_opt no-new-privileges:true, cap_drop ALL (sem cap_add — o cliente Docker só fala com o socket, quem concede --privileged ao helper nsenter é o daemon do host), read_only:true com tmpfs em /tmp (únicos diretórios graváveis são /tmp e o volume /data). group_add com o GID do dono de /var/run/docker.sock no host (${DOCKER_GID:-999}, gravado no .env pelo install.sh) — dá acesso ao socket sem rodar como root.",
+    "Volumes de docker-compose.yml: /var/run/docker.sock:/var/run/docker.sock (acesso total ao Docker do host — gerencia Caddy, Stalwart e todos os projetos implantados), /etc/os-release:/host/etc/os-release:ro e /etc/hostname:/host/etc/hostname:ro (o container roda Debian, então os-release local não reflete a VPS real — lidos para health/detecção), paas_data:/data (volume nomeado EXTERNO, criado por scripts/install.sh antes da primeira subida, para já existir o setup token gravado).",
+    "docker-compose.dev.yml: dois serviços sem build de imagem (bind-mount do repo). 'server': node:22-bookworm, `pnpm install && pnpm --filter @paas/server dev` (tsx watch), porta 9000, PAAS_DATA_DIR=/app/data, SETUP_TOKEN default 'dev-token', ALLOWED_ORIGINS=http://localhost:5173. 'web': mesma imagem, `pnpm --filter @paas/web dev --host 0.0.0.0`, porta 5173, API_PROXY_TARGET=http://server:9000, depends_on server. Não monta docker.sock nem aplica nenhum hardening (ambiente de dev).",
+    ".github/workflows/ci.yml (workflow único 'ci'): triggers push/pull_request em main e dev; permissions: contents: read; concurrency com cancel-in-progress; todas as actions pinadas por SHA completo (comentário documenta a versão). Job 'ci' (15min): checkout, setup pnpm, setup node 22 com cache pnpm, `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm build`, `pnpm test:coverage` (os thresholds definidos em cada vitest.config.ts fazem o job falhar se a cobertura regredir). Job 'image-scan' (20min, Trivy): builda a imagem de produção e escaneia HIGH/CRITICAL com ignore-unfixed:true e exit-code:'0' (REPORT-ONLY — não falha o CI hoje; comentário do arquivo documenta a intenção de endurecer para falhar em CRITICAL assim que o baseline do Debian slim estiver limpo).",
+    "Os testes E2E (pnpm test:e2e) explicitamente NÃO rodam no CI — exigem Docker com containers privilegiados; rodam só localmente antes de merges de infraestrutura.",
+    "Git hooks (scripts/setup-hooks.mjs, disparado pelo script `prepare` do pnpm install): aponta core.hooksPath para scripts/hooks e dá chmod 755 em todo arquivo que não termina em .mjs — falha silenciosamente fora de um repo git (ex.: instalação a partir de tarball).",
+    "scripts/hooks/pre-commit (bash): (1) bloqueia arquivos proibidos staged via regex — .env, qualquer coisa em data/, .pem/.key/.p12/.pfx, id_rsa/id_ed25519 (com .env.example como exceção explícita); (2) roda scan-secrets.mjs sobre os arquivos staged; (3) typecheck incremental só nos workspaces (apps/*, packages/*) tocados pelo commit. Bypass documentado: `git commit --no-verify` (a CI ainda pega).",
+    "scripts/hooks/scan-secrets.mjs: scanner de segredos sem dependências, 6 regras regex (aws-access-key, private-key-block, slack-token, github-token, generic-api-key-assignment, password-assignment) com allowlist de falsos-positivos (placeholder, changeme, your-, xxxx, ****). Reporta arquivo:linha:regra e sai com código 1 se achar algo — usado tanto pelo pre-commit quanto standalone.",
+    "scripts/hooks/pre-push (bash): roda `pnpm test` → `pnpm test:coverage` → `pnpm build` em sequência, abortando no primeiro erro e mostrando as últimas linhas de log. Bypass: `PAAS_SKIP_PREPUSH=1 git push`."
+  ],
+  "usadoPor": [
+    { "referencia": "scripts/install.sh (instalador de produção na VPS)", "arquivo": "scripts/install.sh", "doc": null },
+    { "referencia": "todo contribuidor que roda `pnpm install` na raiz", "arquivo": "package.json:11 (script prepare)", "doc": null },
+    { "referencia": "todo push/PR para main ou dev", "arquivo": ".github/workflows/ci.yml", "doc": null }
+  ],
+  "testes": [],
+  "observacoes": [
+    "O scan de imagem (Trivy) é report-only hoje (exit-code 0) — uma vulnerabilidade HIGH/CRITICAL na imagem NÃO bloqueia o merge, só aparece no log do job.",
+    "Não há job de deploy/publish automático da imagem no workflow atual — a imagem é construída no CI só para o scan, não é publicada em nenhum registry."
+  ]
+}

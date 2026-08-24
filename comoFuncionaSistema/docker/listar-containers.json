@@ -1,0 +1,83 @@
+{
+  "id": "listar-containers",
+  "modulo": "docker",
+  "metodo": "GET",
+  "url": "/api/docker/containers",
+  "resumo": "Lista todos os containers Docker da máquina (docker ps -a), marcando quais são gerenciados pelo painel e a quais projetos pertencem. Visão não-invasiva e somente leitura.",
+  "arquivoFonte": "apps/server/src/routes/docker.ts:7",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Rota comum de /api/*: apps/server/src/plugins/auth.ts exige sessão de usuário válida quando o setup já foi concluído; enquanto o setup está pendente, aceita o setup token (header x-setup-token ou query ?token=)."
+  },
+  "rateLimit": "Nenhum específico desta rota — apenas o rate limit global da API (200 req/min por padrão, RATE_LIMIT_MAX).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre (200 mesmo sem containers ou com o Docker indisponível — nesse caso containers:[])",
+      "corpo": "DockerContainersResponse { containers: DockerContainerInfo[] } (packages/core/src/deploy.ts:110,188)",
+      "exemplo": {
+        "containers": [
+          {
+            "id": "a1b2c3d4e5f6",
+            "name": "paas-loja-web",
+            "image": "node:22-slim",
+            "state": "running",
+            "status": "Up 3 hours",
+            "managed": true,
+            "projectSlug": "loja",
+            "composeProject": "paas-loja",
+            "ports": ["0.0.0.0:0->3000/tcp"]
+          },
+          {
+            "id": "9f8e7d6c5b4a",
+            "name": "meu-container-manual",
+            "image": "nginx:latest",
+            "state": "exited",
+            "status": "Exited (0) 2 days ago",
+            "managed": false,
+            "projectSlug": null,
+            "composeProject": null,
+            "ports": []
+          }
+        ]
+      }
+    }
+  ],
+  "erros": [
+    { "status": 401, "codigo": "unauthorized", "quando": "Sem sessão válida (setup já concluído).", "mensagem": "Sessão inválida ou expirada." },
+    { "status": 401, "codigo": "unauthorized", "quando": "Setup token inválido ou ausente (setup ainda pendente).", "mensagem": "Setup token inválido ou ausente." },
+    { "status": 503, "codigo": "setup_token_missing", "quando": "Setup pendente e nenhum setup token configurado no servidor.", "mensagem": "Servidor sem setup token configurado. Defina SETUP_TOKEN ou crie o arquivo de token (veja scripts/install.sh)." }
+  ],
+  "fluxo": [
+    "1. A rota chama listContainers() (docker-service.ts) sem nenhum parâmetro.",
+    "2. listContainers roda `docker ps -a --format {{json .}}` via run() (execFile, sem shell) contra o socket do Docker montado no container do painel.",
+    "3. Se o comando falhar (code !== 0 — ex.: `docker` ausente ou socket inacessível), retorna [] silenciosamente.",
+    "4. Cada linha de stdout é parseada como JSON (PsJson); linhas que falham o parse são ignoradas (continue).",
+    "5. As labels do container (string 'k=v,k=v,...') são parseadas para um Map (parseLabels).",
+    "6. classifyContainer() decide managed/projectSlug/composeProject a partir das labels paas.managed, paas.project e com.docker.compose.project.",
+    "7. Os containers são ordenados: gerenciados primeiro (managed desc), depois por nome (localeCompare).",
+    "8. A rota responde 200 com { containers }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "listContainers / classifyContainer", "arquivo": "apps/server/src/services/docker-service.ts", "papel": "Executa `docker ps -a` e classifica cada container em gerenciado/externo." },
+    { "tipo": "pacote", "nome": "run (exec helper)", "arquivo": "packages/deploy/src/exec.ts", "papel": "Executa o binário `docker` via execFile (argumentos separados, sem shell) e nunca lança — sempre retorna { code, stdout, stderr }." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Guarda de sessão/setup token aplicada a toda /api/* antes desta rota rodar." }
+  ],
+  "efeitosColaterais": ["Nenhum — rota somente leitura; não cria, para, remove nem altera nenhum container."],
+  "chamadoPor": [
+    "apps/web/src/pages/DashboardPage.tsx:95 (polling a cada 15s, pausado com a aba do navegador oculta)",
+    "apps/server/src/services/deploy-service.ts:489,503 (DeployService.statusOf/listContainers, reaproveitado internamente pelas rotas de projetos para status agregado)"
+  ],
+  "testes": [
+    "Nenhum teste de rota ou de unidade dedicado a este endpoint, a listContainers() ou a classifyContainer().",
+    "apps/server/tests/docker-socket.test.ts existe no mesmo arquivo docker-socket.ts, mas cobre apenas removeOrphanTerminalHelpers (reaper de boot do terminal) — não relacionado a este endpoint."
+  ],
+  "observacoes": [
+    "Falha silenciosa: se `docker` não estiver no PATH ou o socket estiver inacessível, a resposta é 200 com containers:[] — indistinguível de 'não há containers na máquina' (docker-service.ts:52).",
+    "Esta rota usa a CLI `docker` (subprocesso via execFile), NÃO o cliente HTTP sobre unix socket de docker-socket.ts — embora ambos, no fim, falem com o mesmo /var/run/docker.sock montado no container do painel (docker-compose.yml:57).",
+    "Sem paginação/filtros: a resposta cresce linearmente com o número de containers na máquina.",
+    "docker.ts agora chama registerErrorHandler(app) (apps/server/src/plugins/error-handler.ts) no início do plugin, igual às demais rotas — mas esta rota não tem nenhum schema de entrada (sem path/query/body), então não há nenhum comportamento novo de validação a documentar; verificado em apps/server/tests/routes-misc-schema.test.ts ('responde normalmente — error handler padronizado registrado não interfere')."
+  ]
+}

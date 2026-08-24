@@ -1,0 +1,50 @@
+{
+  "id": "execucao-de-comandos",
+  "titulo": "Execução de comandos no host/containers",
+  "resumo": "Todo comando de sistema (docker, git, scripts de hardening, checks de segurança) roda via execFile/spawn com argumentos em array — nunca string de shell interpolada com entrada do usuário. O único ponto que monta uma string de shell (host-bridge.ts, para o bash -c executado dentro do helper nsenter) é protegido por uma allowlist estrita e validação de cada argumento antes de montar o comando.",
+  "arquivoFonte": "packages/security/src/host-bridge.ts",
+  "tipo": "utilitario",
+  "api": [
+    { "simbolo": "run", "assinatura": "(file: string, args: string[], opts?) => Promise<ExecResult>", "descricao": "packages/deploy/src/exec.ts e packages/mailer/src/exec.ts (implementações idênticas). Usa execFile via promisify — args sempre um array, timeout default 300s, maxBuffer 32MB. Nunca lança: falhas viram {code!=0, stdout, stderr}." },
+    { "simbolo": "runStream", "assinatura": "(file: string, args: string[], onData: (chunk: string) => void, opts?) => Promise<number>", "descricao": "packages/deploy/src/exec.ts apenas. Usa spawn com stdio pipe, transmite stdout+stderr em tempo real via callback, resolve com o exit code. Sem timeout próprio." },
+    { "simbolo": "fixedReadOnlyCommands", "assinatura": "() => Set<string>", "descricao": "packages/security/src/host-bridge.ts:41. Conjunto fechado de strings de comando somente-leitura (checks do scanner, baseline, Lynis) — nenhuma vem de input da API." },
+    { "simbolo": "buildPhaseScriptCommand", "assinatura": "(opts: PhaseScriptCommandOptions) => string", "descricao": "host-bridge.ts:81. Monta `bash '<remoteDir>/<script>' [flags]`. Valida script contra a allowlist de fases, remoteDir contra REMOTE_DIR_RE, sshUser/sshPublicKey contra os validadores de packages/core, e limita rollbackDelaySec a um inteiro 1-86400. Lança erro (não executa) em qualquer violação." },
+    { "simbolo": "isAllowedHostCommand", "assinatura": "(cmd: string, remoteDir: string) => boolean", "descricao": "host-bridge.ts:128. Gate final antes de qualquer execução real no host: true só se cmd for um comando fixo OU passar por parsePhaseScriptCommand. Fail-closed." },
+    { "simbolo": "parsePhaseScriptCommand", "assinatura": "(cmd: string, remoteDir: string) => { script; args } | null", "descricao": "host-bridge.ts:137. Re-parseia o comando com regex ancorada à gramática exata de script/remoteDir e tokeniza+valida cada argumento individualmente (--dry-run/--rollback/--confirm/--user <válido>/--pubkey '<válido>'); qualquer token desconhecido retorna null." },
+    { "simbolo": "buildNsenterArgv / buildNsenterUploadArgv", "assinatura": "(image, cmd, name?) => string[]", "descricao": "host-bridge.ts:188,215. Monta o argv de `docker run --rm --privileged --pid=host <image> nsenter -t 1 -m -u -i -n -p -- bash -c <cmd>` como array — cmd é UM elemento do argv passado a bash -c, não concatenado a uma string maior." },
+    { "simbolo": "stripAnsi", "assinatura": "(value: string) => string", "descricao": "packages/security/src/ansi.ts:26. Remove sequências de escape ANSI (CSI/OSC/Fe) da saída capturada via PTY antes de guardar em campos como detail — evita códigos de cor vazando para a UI como texto." }
+  ],
+  "comportamento": [
+    "Camada 1 (packages/deploy/src/exec.ts, packages/mailer/src/exec.ts): toda chamada a docker/git CLI usa execFile/spawn com args em array. Slugs de projeto, branches e nomes de container entram como elementos discretos do argv, nunca concatenados numa string de shell — sem risco de injeção nesse nível.",
+    "Camada 2 (packages/security/src/runner.ts, TargetRunner): três implementações — HostRunner e ContainerRunner (perfil dev/teste) recebem SEMPRE comandos fixos vindos de checks.ts/baseline.ts (nunca de input do usuário), executados via ['bash','-c',cmd] ou ['docker','exec',name,'bash','-c',cmd]. NsenterHostRunner (perfil host/produção) chama assertAllowed(cmd) — que usa isAllowedHostCommand — ANTES de toda execução (exec/execStream), fail-closed.",
+    "Camada 3 (host-bridge.ts): o único lugar onde uma string de shell é montada a partir de parâmetros estruturados (script de fase + flags) é buildPhaseScriptCommand — e ela é allowlisted três vezes: (1) o nome do script precisa estar no conjunto fechado de SECURITY_PHASES; (2) o remoteDir precisa casar com REMOTE_DIR_RE (sem espaços/aspas); (3) cada argumento (--user, --pubkey) é revalidado com os mesmos validadores de packages/core mesmo que já tenham sido validados na rota HTTP — defesa em profundidade explícita no comentário do arquivo.",
+    "O terminal web embutido (apps/server/src/services/docker-socket.ts) é uma exceção deliberada: abre um shell interativo completo (bash -l ou sh -l) via Docker exec/PTY para o operador digitar comandos livremente — não há allowlist aqui porque é, por design, um terminal real (visão dupla do wizard e acesso avançado). O relay é puro: o conteúdo digitado nunca é logado nem auditado (apenas conexão/desconexão).",
+    "TerminalRelayRunner (apps/server/src/services/terminal-runner.ts) reusa a MESMA allowlist do host-bridge (isAllowedHostCommand) quando o perfil é 'host', mesmo rodando os comandos dentro da sessão do terminal web — ou seja, os checks/fases de hardening que aparecem no terminal continuam restritos, só o terminal interativo aberto pelo operador é livre."
+  ],
+  "usadoPor": [
+    { "referencia": "MonitorService (baseline + diff)", "arquivo": "apps/server/src/services/monitor-service.ts", "doc": "monitoramento/index.json" },
+    { "referencia": "SecurityService (scan/plano/aplicação de hardening)", "arquivo": "apps/server/src/services/security-service.ts", "doc": "seguranca/index.json" },
+    { "referencia": "TerminalRunner (espelho dos checks/fases no terminal web)", "arquivo": "apps/server/src/services/terminal-runner.ts", "doc": "terminal/index.json" },
+    { "referencia": "docker-socket.ts (PTY interativo do terminal web)", "arquivo": "apps/server/src/services/docker-socket.ts", "doc": "terminal/index.json" },
+    { "referencia": "SecurityScanner/SecurityExecutor (checks e fases de hardening)", "arquivo": "packages/security/src/scanner.ts, packages/security/src/executor.ts", "doc": "seguranca/index.json" },
+    { "referencia": "DeployEngine (build/deploy de projetos via docker compose/git)", "arquivo": "packages/deploy/src/engine.ts", "doc": "projetos/index.json" },
+    { "referencia": "CaddyManager (reload do proxy reverso central)", "arquivo": "packages/deploy/src/caddy.ts", "doc": "dominios/index.json" },
+    { "referencia": "ingest.ts (clone git / cópia de upload)", "arquivo": "packages/deploy/src/ingest.ts", "doc": "projetos/index.json" },
+    { "referencia": "StalwartManager (provisionamento do servidor de e-mail)", "arquivo": "packages/mailer/src/server.ts", "doc": "email/index.json" }
+  ],
+  "testes": [
+    "packages/security/tests/host-bridge.test.ts",
+    "packages/security/tests/ansi.test.ts",
+    "packages/security/tests/checks.test.ts",
+    "packages/security/tests/baseline.test.ts",
+    "packages/security/tests/planner.test.ts",
+    "packages/security/tests/profiles.test.ts",
+    "apps/server/tests/terminal-runner.test.ts"
+  ],
+  "observacoes": [
+    "VERDICT DE SEGURANÇA: não foi encontrada injeção de comando na base de código. O único ponto que constrói uma string de shell (host-bridge.ts) documenta explicitamente sua própria superfície de risco e a fecha com allowlist + revalidação de cada argumento + helper descartável (--rm) + timeout + auditoria por comando.",
+    "Risco residual teórico: se isValidSshUsername/isValidSshPublicKey (packages/core/src/security.ts) tivessem um bug de validação, a allowlist de host-bridge.ts poderia ser contornada — nenhum bug desse tipo foi identificado na revisão, mas é o ponto exato a re-auditar em qualquer mudança futura nesses validadores.",
+    "O terminal web interativo (docker-socket.ts) é o maior risco estrutural do sistema quando o alvo é 'host': é um shell root completo na VPS, sem allowlist, protegido só pela camada de autenticação HTTP/WS (ver terminal/index.json, ponto de atenção 'SUPERFÍCIE MÁXIMA DE RISCO DO SISTEMA'). Isso é uma escolha de produto (o painel É um terminal), não um bug, mas eleva o impacto de qualquer vazamento de sessão/cookie a controle total do host — bem além do escopo normal de uma API comprometida.",
+    "packages/security/src/runner.ts (HostRunner, ContainerRunner) não chama a allowlist diretamente — confia que todo cmd que chega já veio de checks.ts/baseline.ts (nunca de request); só NsenterHostRunner (o runner de produção) reforça com assertAllowed. Uma mudança futura que passasse a construir cmd a partir de input externo nesses dois runners quebraria essa suposição implícita sem nenhum erro óbvio em dev."
+  ]
+}

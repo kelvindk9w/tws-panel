@@ -1,0 +1,69 @@
+{
+  "id": "atualizar",
+  "modulo": "projetos",
+  "metodo": "PATCH",
+  "url": "/api/projects/:id",
+  "resumo": "Atualiza nome, fonte (source/branch), domínio, flag de WebSocket e/ou override manual de proxyService/proxyPort de um projeto já criado. Mudanças de source/branch só têm efeito prático no próximo deploy (podem forçar um re-clone do zero, ver packages/deploy/src/ingest.ts); o slug NUNCA muda, não importa o que for editado.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:192",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (updateProjectSchema, projects.ts): minLength 1, maxLength 64.", "descricao": "id ou slug do projeto." }],
+    "query": [],
+    "body": [
+      { "nome": "name", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: minLength 1, maxLength 100. Regra de negócio: trim(); vazio após trim → 400 invalid_name.", "descricao": "Novo nome de exibição. Só o rótulo muda — NUNCA recalcula ou altera o slug (que nomeia diretório do clone, compose project, imagem, alias de rede e containers)." },
+      { "nome": "source", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: minLength 1, maxLength 500. Regra de negócio: se project.ingestMode === 'git', passa por validateGitSource() (mesma allowlist https/ssh/scp da criação) → 400 invalid_source se reprovado. Em ingestMode upload/existing, é aceito como caminho local sem essa validação (apenas trim()).", "descricao": "Nova URL do repositório git. Trocar aqui não refaz o clone na hora — o clone existente só é substituído no PRÓXIMO deploy, quando ingestGit() detecta que a origem configurada não bate mais com a do clone em disco." },
+      { "nome": "branch", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: maxLength 200. Regra de negócio: validateBranch() (mesma allowlist da criação) → 400 invalid_branch se reprovado; string vazia normaliza para null (sem branch fixada, ingestão usa 'main').", "descricao": "Nova branch a publicar. Mesmo adiamento do re-clone que 'source': só se aplica no próximo deploy." },
+      { "nome": "domain", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: minLength 1, maxLength 253. Depois, regra de negócio no service: normalizado via normalizeDomain() (agora também valida hostname); não pode ficar vazio; deve ser único entre os demais projetos.", "descricao": "Novo domínio de acesso." },
+      { "nome": "websocket", "tipo": "boolean", "obrigatorio": false, "regras": "schema Fastify: type boolean, sem coerção.", "descricao": "Liga/desliga o modo WebSocket (sem buffer) no Caddyfile do próximo deploy." },
+      { "nome": "proxyService", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: maxLength 100. Nota: o schema NÃO aceita null explícito (só string ou campo ausente) — string vazia é normalizada para null pelo service; ver observações.", "descricao": "Override manual do serviço compose alvo do proxy; string vazia é normalizada para null." },
+      { "nome": "proxyPort", "tipo": "integer", "obrigatorio": false, "regras": "schema Fastify: type integer, minimum 1, maximum 65535. Nota: o schema NÃO aceita null explícito; ver observações.", "descricao": "Override manual da porta do proxy." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "atualizado com sucesso",
+      "corpo": { "project": "Project", "status": "ProjectStatus", "containers": "DockerContainerInfo[]", "url": "string" },
+      "exemplo": { "project": { "id": "a1b2c3d4e5f6", "slug": "shop", "name": "Shop", "domain": "shop.localhost", "branch": "sandbox", "deployedBranch": "main", "websocket": true }, "status": "running", "containers": [], "url": "http://shop.localhost" }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo ou params reprovados pelo schema Fastify (updateProjectSchema) ANTES do handler: id fora de 1-64 chars, name/source/branch/domain/websocket/proxyService/proxyPort de tipo errado ou fora de limite, ou corpo com campo desconhecido (additionalProperties:false no body).", "mensagem": "Campo inválido: proxyPort. / Campo desconhecido no corpo da requisição: <campo>." },
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe (via requireProject)", "mensagem": "Projeto não encontrado." },
+    { "status": 400, "codigo": "invalid_name", "quando": "name foi enviado mas ficou vazio após trim()", "mensagem": "Informe o nome do projeto." },
+    { "status": 400, "codigo": "invalid_source", "quando": "source foi enviado, o projeto é ingestMode 'git' e o valor não bate com a allowlist de validateGitSource (esquema https/ssh/scp)", "mensagem": "Fonte de código inválida. Use uma URL https://, ssh:// ou git@host:caminho." },
+    { "status": 400, "codigo": "invalid_branch", "quando": "branch foi enviado e não bate com a allowlist de validateBranch (regex + proibição de '..')", "mensagem": "Nome de branch inválido." },
+    { "status": 400, "codigo": "invalid_domain", "quando": "domain passou pelo schema (string 1-253 chars) mas ficou vazio após normalizeDomain() — inclui reprovação pelo padrão estrito de hostname.", "mensagem": "Domínio inválido." },
+    { "status": 409, "codigo": "domain_in_use", "quando": "o novo domínio já pertence a outro projeto", "mensagem": "O domínio <domain> já está em uso." },
+    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado não tratado", "mensagem": "Erro interno." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. Se name foi enviado: trim(), valida não-vazio (senão invalid_name) → atualiza project.name. O slug NÃO é recalculado aqui — é uma garantia explícita do código (comentário em deploy-service.ts) e coberta por teste (mantém-slug-ao-renomear).",
+    "3. Se source foi enviado: se ingestMode==='git', passa por validateGitSource() (senão invalid_source); caso contrário só trim(). Atualiza project.source. O clone em disco NÃO é tocado agora — fica desatualizado até o próximo deploy.",
+    "4. Se branch foi enviado: passa por validateBranch() (senão invalid_branch) → atualiza project.branch.",
+    "5. Se domain foi enviado: normaliza, valida não-vazio, checa unicidade (excluindo o próprio projeto) → atualiza project.domain.",
+    "6. Se websocket/proxyService/proxyPort foram enviados (undefined check, não truthy — permite limpar com null), atualiza os campos correspondentes.",
+    "7. Atualiza project.updatedAt e persiste em data/projects.json.",
+    "8. Retorna o projeto atualizado com status/containers recalculados. deployedBranch/deployedSource NÃO mudam aqui — só um deploy bem-sucedido os atualiza (ver projetos/deploy.json)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.updateProject", "arquivo": "apps/server/src/services/deploy-service.ts:269", "papel": "Validação (nome/source/branch/domain) e persistência das mudanças." },
+    { "tipo": "utilitario", "nome": "validateGitSource / validateBranch", "arquivo": "apps/server/src/services/deploy-service.ts:83", "papel": "Mesma allowlist usada na criação do projeto — ver projetos/conceito-validacao-fonte.json." }
+  ],
+  "efeitosColaterais": ["grava data/projects.json"],
+  "chamadoPor": [
+    "apps/web/src/pages/NewProjectPage.tsx (finish(), passo 3 do wizard — grava domínio final + websocket + proxyService/proxyPort detectados)",
+    "apps/web/src/components/ProjectConfigCard.tsx (salvar()/salvar(true, ...) — edição pós-criação de nome/repositório/branch/domínio, opcionalmente seguida de POST .../deploy)"
+  ],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "apps/server/tests/deploy-validation.test.ts"],
+  "observacoes": [
+    "GARANTIA: o slug de um projeto nunca muda depois de criado, nem editando o nome. O slug nomeia o diretório do clone (data/projects/<slug>/src), o compose project, a imagem (paas-<slug>:latest), o alias de rede e os containers — trocá-lo seria uma migração de infraestrutura, não uma renomeação. Coberto por teste ('NUNCA altera o slug ao renomear' em deploy-validation.test.ts).",
+    "Trocar source ou branch aqui é DIFERIDO: nada acontece no disco/Docker no momento do PATCH. Na próxima vez que o projeto for deployado, ingestGit() (packages/deploy/src/ingest.ts) compara a URL/branch atuais do clone existente com o que está configurado; se qualquer um dos dois mudou, o clone inteiro é refeito do zero em vez de um fetch+checkout incremental — necessário porque o clone é --single-branch (a branch nova simplesmente não existe localmente) e porque um fetch contra um repositório trocado buscaria do repositório ANTIGO sem erro nenhum (falha silenciosa). Ver projetos/deploy.json e packages/deploy/tests/ingest-branch.test.ts.",
+    "MUDANÇA DE COMPORTAMENTO (não coberta por teste explícito, inferida do schema — sinalizado aqui para quem for ajustar o frontend): proxyService e proxyPort são declarados como `string`/`integer` no schema, sem `null` no tipo. proxyService ainda pode ser 'limpo' mandando string vazia (\"\") — o service faz `req.proxyService?.trim() || null`, então \"\" vira null como antes. proxyPort NÃO tem esse escape: o schema (`type: integer, minimum: 1`) rejeita tanto `null` quanto qualquer valor não-inteiro ou zero, então não existe mais nenhum corpo que limpe proxyPort de volta para null por este endpoint depois de setado.",
+    "Mudar o domínio aqui NÃO atualiza o Caddyfile imediatamente — o domínio antigo continua servido até o próximo deploy bem-sucedido (que chama engine.deploy → caddy.apply) ou até uma remoção (que chama syncCaddy). Não há endpoint dedicado para forçar a resincronização do Caddy fora desses dois fluxos.",
+    "Corpo ausente não quebra a rota: request.body ?? {} vira um update vazio (coberto por teste)."
+  ]
+}

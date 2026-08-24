@@ -1,0 +1,50 @@
+{
+  "id": "persistencia",
+  "titulo": "Persistência em disco (data/*)",
+  "resumo": "O painel não usa banco de dados: todo estado (usuários, sessões, projetos, jobs, alertas, auditoria, configuração de e-mail, baseline de segurança) é um arquivo JSON dentro de config.dataDir (produção: volume Docker /data), quase sempre escrito com chmod 0o600. Cada serviço é dono de um ou dois arquivos e serializa suas próprias escritas para não intercalar JSON concorrente.",
+  "arquivoFonte": "apps/server/src/config.ts",
+  "tipo": "infraestrutura",
+  "api": [
+    { "simbolo": "data/users.json", "assinatura": "UserStore (apps/server/src/services/user-store.ts:31,104)", "descricao": "Único usuário admin: username, hash argon2id da senha (nunca a senha em claro), createdAt/updatedAt. mode 0o600." },
+    { "simbolo": "data/sessions.json", "assinatura": "SessionStore (apps/server/src/services/session-store.ts:38,157)", "descricao": "Sessões ativas (id, userId, ip, userAgent, createdAt, expiresAt). Sessões expiradas são purgadas no load e no resolve(). mode 0o600." },
+    { "simbolo": "data/session-secret", "assinatura": "SessionStore (session-store.ts:39,55)", "descricao": "Segredo HMAC-SHA256 (hex, 32 bytes) gerado no primeiro boot e reaproveitado depois — assina o cookie de sessão. mode 0o600. CONTÉM SEGREDO." },
+    { "simbolo": "data/setup-state.json", "assinatura": "SetupStateStore (apps/server/src/services/setup-state.ts:23,40-48)", "descricao": "Passo atual do wizard e flag completed. mode 0o600." },
+    { "simbolo": "data/audit.json", "assinatura": "AuditService (apps/server/src/services/audit-service.ts:24,81)", "descricao": "Log de auditoria, cap de 2.000 entradas (mais antigas descartadas). Nunca deve conter segredos no campo detail (regra do próprio comentário do arquivo). mode 0o600." },
+    { "simbolo": "data/alerts.json", "assinatura": "AlertsService (apps/server/src/services/alerts-service.ts:33,132)", "descricao": "Alertas da central de monitoramento (guardrail/scan/blacklist/system), cap de 500 entradas (as MAIS ANTIGAS são descartadas, independente do status — ver monitoramento/pontosDeAtencao). mode 0o600." },
+    { "simbolo": "data/projects.json", "assinatura": "DeployService (apps/server/src/services/deploy-service.ts:85,146)", "descricao": "Metadados de todos os projetos (Project[]: slug, domínio, modo de ingestão, última detecção, status). mode 0o600." },
+    { "simbolo": "data/deploy-jobs.json", "assinatura": "DeployService (deploy-service.ts:86,155)", "descricao": "Histórico de jobs de deploy (status, steps, log bruto até DEPLOY_LOG_MAX_CHARS). mode 0o600." },
+    { "simbolo": "data/projects/<slug>/", "assinatura": "DeployService / DeployEngine (deploy-service.ts:84)", "descricao": "Diretório de checkout do código-fonte de cada projeto (git clone, upload extraído, ou compose existente adotado) — não é um único arquivo de estado, é a árvore de trabalho." },
+    { "simbolo": "data/projects/<slug>/paas.override.yml", "assinatura": "DeployEngine (packages/deploy/src/engine.ts:293-296,310)", "descricao": "Override docker-compose gerado pelo painel (rede paas-net, labels paas.managed/paas.project) mesclado ao compose do projeto. mode 0o600 — pode carregar env vars injetadas (ex.: SMTP)." },
+    { "simbolo": "data/caddy/Caddyfile", "assinatura": "CaddyManager (packages/deploy/src/caddy.ts:85-89,124-127)", "descricao": "Configuração do Caddy central (um bloco por domínio ativo), regerada a cada mudança de projeto/domínio e recarregada sem downtime. Escrita sem mode explícito (default do processo)." },
+    { "simbolo": "data/security-history.json", "assinatura": "SecurityService (apps/server/src/services/security-service.ts:108,275)", "descricao": "Histórico de scans e jobs de hardening (índice antes/depois, status). mode 0o600." },
+    { "simbolo": "data/security-last-scan.json", "assinatura": "SecurityService (security-service.ts:109,298)", "descricao": "Cache do último relatório de scan completo — servido instantaneamente por GET /api/security/scan sem ?fresh. mode 0o600." },
+    { "simbolo": "data/security/baseline.json", "assinatura": "MonitorService (apps/server/src/services/monitor-service.ts:60,111)", "descricao": "Snapshot pós-hardening (pacotes, portas, hashes sha256 de arquivos críticos) usado como referência do diff. mode 0o600." },
+    { "simbolo": "data/security/monitor.json", "assinatura": "MonitorService (monitor-service.ts:61,276)", "descricao": "Estado do agendador de scan recorrente (intervalo configurado, último resultado). mode 0o600." },
+    { "simbolo": "data/mail/mail.json", "assinatura": "MailService (apps/server/src/services/mail-service.ts:77-78,100)", "descricao": "Domínios de e-mail (DKIM), caixas (StoredMailbox com password EM TEXTO PLANO — necessária para credenciais/injeção SMTP) e o adminSecret do Stalwart. mode 0o600. CONTÉM SEGREDOS EM CLARO." },
+    { "simbolo": "data/mail/stalwart/config.toml", "assinatura": "StalwartManager (packages/mailer/src/server.ts:64-68)", "descricao": "Config TOML renderizado do servidor Stalwart, incluindo o adminSecret em claro. mode 0o600. CONTÉM SEGREDO." }
+  ],
+  "comportamento": [
+    "Todos os serviços seguem o mesmo padrão: leitura lazy (ensureLoaded, só na primeira operação), estado em memória depois disso, e escrita serializada (uma Promise encadeada por instância) para não intercalar dois JSON.stringify concorrentes no mesmo arquivo.",
+    "A grande maioria dos arquivos usa mode: 0o600 (leitura/escrita só do dono) explicitamente no writeFile — exceções conhecidas: data/caddy/Caddyfile (sem mode explícito, mas não contém segredo).",
+    "O setup token em si (config.setupTokenFile, default /etc/paas/setup-token) NÃO é escrito pelo painel — é criado por scripts/install.sh; o servidor só lê (loadSetupToken).",
+    "data/mail/mail.json e data/mail/stalwart/config.toml são os dois únicos arquivos do sistema que guardam segredos em texto plano por necessidade funcional (credenciais de caixa de e-mail para reexibir ao operador, adminSecret para autenticar na API do Stalwart) — a proteção é exclusivamente o chmod 0o600 do arquivo."
+  ],
+  "usadoPor": [
+    { "referencia": "todos os serviços de apps/server/src/services/*.ts", "arquivo": "apps/server/src/services", "doc": null },
+    { "referencia": "packages/deploy/src/engine.ts, caddy.ts", "arquivo": "packages/deploy/src", "doc": "projetos/index.json" },
+    { "referencia": "packages/mailer/src/server.ts", "arquivo": "packages/mailer/src/server.ts", "doc": "email/index.json" }
+  ],
+  "testes": [
+    "apps/server/tests/session-store.test.ts",
+    "apps/server/tests/user-store.test.ts",
+    "apps/server/tests/setup-state.test.ts",
+    "apps/server/tests/alerts-service.test.ts",
+    "apps/server/tests/audit-service.test.ts",
+    "apps/server/tests/security-history.test.ts"
+  ],
+  "observacoes": [
+    "O README descreve o volume de estado como 'JSON/SQLite' — não foi encontrada nenhuma dependência ou uso de SQLite/better-sqlite3 em todo o repositório; a persistência real é 100% JSON em arquivo. Pequena imprecisão de documentação a corrigir.",
+    "Cap de 500 alertas em data/alerts.json descarta os MAIS ANTIGOS independente do status — um alerta 'open' nunca reconhecido pode ser silenciosamente perdido do arquivo se alertas mais novos (mesmo já resolvidos) ultrapassarem o limite (ver monitoramento/index.json).",
+    "Nenhum dos arquivos JSON tem schema/versão migrável explícita — um formato incompatível após upgrade do painel dependeria de tratamento manual ou de os campos serem opcionais o bastante para não quebrar o parse."
+  ]
+}

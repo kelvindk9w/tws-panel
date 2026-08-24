@@ -1,0 +1,35 @@
+{
+  "id": "auditoria",
+  "titulo": "Serviço de auditoria (AuditService)",
+  "resumo": "Log de ações sensíveis do painel, append-only com cap de 2.000 entradas, persistido em data/audit.json. Qualquer rota ou serviço com acesso à instância registrada em app.auditService pode gravar um evento; a leitura paginada é exposta via GET /api/audit (documentado no módulo monitoramento, fora do escopo deste arquivo).",
+  "arquivoFonte": "apps/server/src/services/audit-service.ts",
+  "tipo": "servico",
+  "api": [
+    { "simbolo": "record", "assinatura": "(input: { actor?: string; action: string; target?: string | null; detail: string }) => Promise<AuditEntry>", "descricao": "Registra uma ação. actor default 'operador' (painel é mono-usuário). Gera id (16 hex via randomBytes(8)) e at (ISO). Best-effort: falha de escrita em disco é engolida (.catch) e não derruba a ação que chamou record — nunca lança." },
+    { "simbolo": "list", "assinatura": "(page = 1, perPage = 50) => Promise<{ entries; total; page; perPage }>", "descricao": "Lista paginada, mais recentes primeiro (reverse do array). perPage clamped entre 1 e 200." }
+  ],
+  "comportamento": [
+    "Persistência em data/audit.json, mode 0o600. Carga lazy (ensureLoaded) na primeira chamada de record/list; entries fica em memória depois.",
+    "Cap rígido de MAX_ENTRIES = 2.000 — a cada record(), o array é truncado com slice(-2000), descartando as entradas mais antigas silenciosamente quando o limite é ultrapassado.",
+    "Escritas são serializadas via uma Promise encadeada (this.writing = this.writing.then(...).catch(...)) para garantir que duas chamadas concorrentes a record() nunca produzam um JSON.stringify intercalado no arquivo.",
+    "REGRA DE PRODUTO explícita no cabeçalho do arquivo: o campo detail NUNCA deve conter segredos — é responsabilidade de quem chama record() garantir isso (o serviço não sanitiza/mascara nada automaticamente)."
+  ],
+  "usadoPor": [
+    { "referencia": "decorate em app.auditService, consumido por várias rotas", "arquivo": "apps/server/src/app.ts:75", "doc": "arquitetura.json" },
+    { "referencia": "login/logout/troca de senha/criação da conta admin", "arquivo": "apps/server/src/routes/auth.ts", "doc": "autenticacao/index.json" },
+    { "referencia": "conclusão/avanço do wizard de setup", "arquivo": "apps/server/src/routes/setup.ts", "doc": "setup/index.json" },
+    { "referencia": "aplicação de fases de hardening, confirmação de acesso, override de guardrail", "arquivo": "apps/server/src/routes/security.ts", "doc": "seguranca/index.json" },
+    { "referencia": "provisionamento/remoção de domínios e caixas de e-mail", "arquivo": "apps/server/src/routes/mail.ts", "doc": "email/index.json" },
+    { "referencia": "ack/resolve de alertas, execução manual de scan/baseline", "arquivo": "apps/server/src/routes/monitoring.ts", "doc": "monitoramento/index.json" },
+    { "referencia": "conexão/desconexão do terminal web (nunca o conteúdo digitado)", "arquivo": "apps/server/src/routes/terminal.ts", "doc": "terminal/index.json" },
+    { "referencia": "DeployService: início/fim de deploy, override de guardrail bloqueado", "arquivo": "apps/server/src/services/deploy-service.ts:239,354,367,381", "doc": "projetos/index.json" },
+    { "referencia": "leitura paginada — GET /api/audit", "arquivo": "apps/server/src/routes/monitoring.ts:184", "doc": "monitoramento/index.json" }
+  ],
+  "testes": [
+    "apps/server/tests/audit-service.test.ts"
+  ],
+  "observacoes": [
+    "Não há filtro por ação/ator na API de listagem — só paginação; qualquer filtragem (ex.: por tipo de evento) precisa ser feita no cliente sobre a página retornada.",
+    "O terminal web é a exceção deliberada à auditoria: por design, o conteúdo digitado nunca é passado para record() — só eventos de conexão/desconexão (ver terminal/index.json)."
+  ]
+}

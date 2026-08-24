@@ -1,0 +1,333 @@
+{
+  "id": "review-2026-08-24",
+  "titulo": "Review consolidado do sistema — 2026-08-24",
+  "resumo": "Consolidação dos achados de nove revisões independentes, uma por módulo, feitas sobre o código real em 2026-08-24 (branch dev, commit e7d4f18). Cada achado foi levantado lendo o código-fonte, não a documentação em prosa. Severidade reflete impacto potencial, não urgência de negócio.",
+  "metodo": {
+    "escopo": "apps/server, apps/web, packages/*, scripts/*, Dockerfile, docker-compose, CI",
+    "agentes": 9,
+    "criterio": "Cada agente documentou seu módulo e registrou inconsistências, riscos e pendências encontradas no caminho.",
+    "convergencia": "Os achados de severidade alta foram identificados de forma independente por mais de um agente, o que reforça sua validade."
+  },
+  "achados": [
+    {
+      "id": "terminal-privilegiado",
+      "severidade": "alta",
+      "categoria": "seguranca",
+      "titulo": "Terminal web no perfil host dá root irrestrito na VPS",
+      "descricao": "O perfil `host` cria um container helper com `privileged: true` e `PidMode: host` rodando `nsenter -t 1 ... bash -l`. Isso é controle total de root na máquina. Não existe allowlist de comandos no terminal livre — a allowlist só protege o caminho do executor de hardening. Além disso, o helper não tem limites de CPU/memória (`HostConfig` sem `Resources`).",
+      "onde": "apps/server/src/services/docker-socket.ts",
+      "impacto": "Uma sessão comprometida equivale à VPS inteira comprometida. Como o input do usuário deliberadamente não é auditado, o abuso não deixa rastro granular — só o registro de conexão e desconexão.",
+      "doc": "terminal/conceito-pty.json",
+      "statusEm20260824": "aceito como custo arquitetural — declarado em global/threat-model.json"
+    },
+    {
+      "id": "socket-docker-rw",
+      "severidade": "alta",
+      "categoria": "seguranca",
+      "titulo": "Socket do Docker montado read-write no container do painel",
+      "descricao": "Qualquer acesso ao socket equivale a root no host, independentemente do hardening aplicado ao container (non-root, cap_drop ALL, read_only). O risco está documentado no próprio docker-compose.",
+      "onde": "docker-compose.yml, apps/server/src/services/docker-service.ts",
+      "impacto": "É uma escolha arquitetural consciente e provavelmente inevitável para um PaaS, mas define o teto real de segurança do sistema: o hardening do container é cosmético diante dela.",
+      "doc": "docker/index.json",
+      "statusEm20260824": "aceito como custo arquitetural — declarado em global/threat-model.json"
+    },
+    {
+      "id": "senhas-email-texto-plano",
+      "severidade": "alta",
+      "categoria": "seguranca",
+      "titulo": "Senhas de caixas e adminSecret do Stalwart em texto plano",
+      "descricao": "As senhas das caixas de e-mail e o `adminSecret` do servidor Stalwart são gravados sem criptografia em `data/mail/mail.json` e no `config.toml`, protegidos apenas por `chmod 0600`.",
+      "onde": "data/mail/mail.json, packages/mailer/src/server.ts",
+      "impacto": "Qualquer leitura do volume de dados (backup, snapshot, escalonamento de privilégio) expõe todas as credenciais de e-mail de uma vez.",
+      "doc": "email/index.json",
+      "statusEm20260824": "aceito como custo arquitetural — declarado em global/threat-model.json"
+    },
+    {
+      "id": "guardrails-duplicados",
+      "severidade": "media",
+      "categoria": "correcao",
+      "titulo": "Dois sistemas de guardrails distintos e não sincronizados",
+      "descricao": "`guardrails.ts` é usado no wizard e na detecção, mas não tem scan de secrets nem regra de container privilegiado. `rules.ts` é o que efetivamente bloqueia o deploy. Os dois conjuntos divergem.",
+      "onde": "packages/deploy/src/guardrails.ts, packages/deploy/src/rules.ts",
+      "impacto": "Um projeto aprovado na tela de detecção pode ser bloqueado no deploy sem aviso prévio, o que quebra a expectativa do usuário e parece um bug.",
+      "doc": "projetos/conceito-guardrails.json"
+    },
+    {
+      "id": "stalwart-descontinuado",
+      "severidade": "media",
+      "categoria": "dividaTecnica",
+      "titulo": "Imagem do Stalwart usada é de linha descontinuada",
+      "descricao": "O sistema fixa `stalwartlabs/mail-server:v0.11.8`. A linha nova do Stalwart removeu a API REST usada por todo o `client.ts`.",
+      "onde": "packages/mailer/src/server.ts, packages/mailer/src/client.ts",
+      "impacto": "Atualizar o servidor de e-mail exigirá reescrever a camada de cliente inteira. Enquanto isso, o sistema fica preso a uma versão sem atualizações de segurança.",
+      "doc": "email/index.json"
+    },
+    {
+      "id": "alertas-descartados",
+      "severidade": "media",
+      "categoria": "correcao",
+      "titulo": "Teto de 500 alertas descarta os mais antigos sem olhar o status",
+      "descricao": "O `AlertsService` corta a lista pelos mais antigos independentemente de estarem abertos ou resolvidos.",
+      "onde": "apps/server/src/services/alerts-service.ts",
+      "impacto": "Um alerta ainda `open`, nunca reconhecido, pode desaparecer silenciosamente — exatamente o alerta que mais importa.",
+      "doc": "monitoramento/conceito-alertas.json"
+    },
+    {
+      "id": "runstream-sem-timeout",
+      "severidade": "media",
+      "categoria": "robustez",
+      "titulo": "Execução de comandos de deploy não tem timeout",
+      "descricao": "`runStream` não impõe limite de tempo. Um `docker build` ou `compose up --build` travado bloqueia o job indefinidamente.",
+      "onde": "packages/deploy/src/exec.ts",
+      "impacto": "Job pendurado sem recuperação automática; o usuário não tem como saber se está lento ou morto.",
+      "doc": "projetos/deploy.json"
+    },
+    {
+      "id": "erros-genericos-start-stop",
+      "severidade": "media",
+      "categoria": "correcao",
+      "titulo": "start/stop lançam Error genérico e a mensagem útil nunca chega ao cliente",
+      "descricao": "`POST /:id/start` lança `Error` em vez de `httpError` quando não há containers. A mensagem real ('faça um deploy primeiro') vira um `500 internal_error` opaco. Mesmo padrão em `stop`.",
+      "onde": "apps/server/src/routes/projects.ts",
+      "impacto": "O usuário recebe erro de servidor onde deveria receber orientação acionável.",
+      "doc": "projetos/iniciar.json"
+    },
+    {
+      "id": "executor-sem-testes",
+      "severidade": "media",
+      "categoria": "testes",
+      "titulo": "SecurityExecutor não tem teste dedicado",
+      "descricao": "A peça mais crítica do módulo de segurança (mutex, parsing de steps, rollback agendado, fluxo de confirmação) tem cobertura apenas indireta.",
+      "onde": "packages/security/src/executor.ts",
+      "impacto": "Regressões no rollback ou no fluxo de confirmação podem passar despercebidas — e o custo de uma regressão aqui é perder o acesso SSH à VPS.",
+      "doc": "seguranca/index.json"
+    },
+    {
+      "id": "jobs-seguranca-em-memoria",
+      "severidade": "media",
+      "categoria": "robustez",
+      "titulo": "Jobs de segurança vivem só em memória",
+      "descricao": "Um restart do painel durante `awaiting_confirmation` faz `GET /api/security/jobs/:id` responder 404, embora o rollback agendado no alvo continue rodando de forma independente.",
+      "onde": "apps/server/src/services/security-service.ts",
+      "impacto": "O operador perde a visibilidade do job exatamente no momento em que precisa confirmar que ainda tem acesso.",
+      "doc": "seguranca/job.json"
+    },
+    {
+      "id": "monitor-sem-lock",
+      "severidade": "media",
+      "categoria": "correcao",
+      "titulo": "runNow ignora o lock inFlight do scheduler",
+      "descricao": "`MonitorService.runNow()` chama `executeScan()` diretamente, sem passar pelo lock. O POST manual pode rodar em paralelo com um tick automático. Somado a isso, `MONITOR_MIN_INTERVAL_MS` é de apenas 10s, menor que a duração real de um scan.",
+      "onde": "apps/server/src/services/monitor-service.ts",
+      "impacto": "Scans concorrentes disputando os mesmos recursos, e ciclos silenciosamente pulados.",
+      "doc": "monitoramento/rodar-monitor.json"
+    },
+    {
+      "id": "falhas-silenciosas",
+      "severidade": "media",
+      "categoria": "robustez",
+      "titulo": "Falhas engolidas sem sinalização em três caminhos",
+      "descricao": "1) `listContainers()` retorna `[]` quando o Docker está ausente ou inacessível — 200 indistinguível de 'sem containers'. 2) O hook de blacklist do scan recorrente tem try/catch vazio. 3) `removeDomain` silencia falhas individuais de `deleteMailbox`.",
+      "onde": "apps/server/src/services/docker-service.ts, apps/server/src/services/monitor-service.ts, packages/mailer/src/mailboxes.ts",
+      "impacto": "Falso senso de segurança: o painel reporta sucesso onde houve falha, e caixas órfãs podem ficar vivas no Stalwart sem registro local.",
+      "doc": "docker/listar-containers.json"
+    },
+    {
+      "id": "trivy-report-only",
+      "severidade": "media",
+      "categoria": "infraestrutura",
+      "titulo": "Scan Trivy no CI não bloqueia merge",
+      "descricao": "O scan roda com `exit-code 0`, então CVEs HIGH e CRITICAL passam sem barrar o pipeline.",
+      "onde": ".github/workflows/",
+      "impacto": "Vulnerabilidades conhecidas podem entrar na main sem revisão explícita.",
+      "doc": "global/infraestrutura.json"
+    },
+    {
+      "id": "hardening-inacessivel-pos-setup",
+      "severidade": "media",
+      "categoria": "produto",
+      "titulo": "Fluxo de hardening só existe dentro do wizard de setup",
+      "descricao": "Todo o fluxo scan→plano→aplicar→confirmar vive em `SecurityStep.tsx`, alcançável apenas pelo wizard. A página `/security` mostra somente o índice.",
+      "onde": "apps/web/src/pages/SecurityPage.tsx, apps/web/src/pages/setup/SecurityStep.tsx",
+      "impacto": "Depois do setup concluído não há caminho para reaplicar ou revisar o hardening pela interface — funcionalidade central fica órfã.",
+      "doc": "seguranca/index.json"
+    },
+    {
+      "id": "dmarc-estagio-morto",
+      "severidade": "media",
+      "categoria": "produto",
+      "titulo": "DMARC progressivo é só texto na UI",
+      "descricao": "`dmarcStage` é gravado como `\"none\"` na criação e nunca atualizado em lugar nenhum. Não existe endpoint para avançar o estágio.",
+      "onde": "packages/mailer/src/dns-checklist.ts",
+      "impacto": "A UI promete um recurso que não existe; o domínio permanece em política DMARC permissiva para sempre.",
+      "doc": "email/conceito-dns.json"
+    },
+    {
+      "id": "sessao-orfa-inconsistente",
+      "severidade": "baixa",
+      "categoria": "correcao",
+      "titulo": "Sessão órfã destruída em /me mas não em /change-password",
+      "descricao": "`GET /api/auth/me` destrói a sessão quando o usuário não existe mais; `POST /api/auth/change-password` responde 401 e deixa a sessão viva até expirar.",
+      "onde": "apps/server/src/routes/auth.ts:117-121 vs :140-143",
+      "impacto": "Inconsistência de comportamento entre dois handlers do mesmo arquivo.",
+      "doc": "autenticacao/trocar-senha.json"
+    },
+    {
+      "id": "setup-advance-retrocede",
+      "severidade": "baixa",
+      "categoria": "correcao",
+      "titulo": "POST /api/setup/advance aceita retroceder o passo",
+      "descricao": "Não há validação de que o novo `step` seja maior ou igual ao atual. Somado a isso, o `advance()` no frontend é best-effort: se a persistência falhar, a UI já navegou e um reload devolve o usuário a um passo anterior.",
+      "onde": "apps/server/src/routes/setup.ts",
+      "impacto": "Estado do wizard pode divergir do que o usuário vê na tela.",
+      "doc": "setup/avancar.json"
+    },
+    {
+      "id": "contrato-jobs-inconsistente",
+      "severidade": "baixa",
+      "categoria": "correcao",
+      "titulo": "GET /:id/jobs devolve 200 vazio para projeto inexistente",
+      "descricao": "Quase todas as outras rotas com `:id` retornam 404 nesse caso.",
+      "onde": "apps/server/src/routes/projects.ts",
+      "impacto": "Inconsistência de contrato que dificulta o tratamento de erro no cliente.",
+      "doc": "projetos/listar-jobs.json"
+    },
+    {
+      "id": "sessao-sem-refresh",
+      "severidade": "baixa",
+      "categoria": "produto",
+      "titulo": "Sessão de 12h fixas, sem renovação por atividade",
+      "descricao": "`SESSION_TTL_MS` é fixo e não há mecanismo de refresh — a sessão expira mesmo com uso contínuo. O `LoginLimiter` também é 100% em memória, então um restart zera todos os lockouts em andamento.",
+      "onde": "apps/server/src/services/session-store.ts, login-limiter.ts",
+      "impacto": "Atrito de usabilidade; o limiter em memória é aceitável para painel single-node.",
+      "doc": "autenticacao/login.json"
+    },
+    {
+      "id": "guardrails-3x",
+      "severidade": "baixa",
+      "categoria": "desempenho",
+      "titulo": "runGuardrails executa até 3 vezes por deploy",
+      "descricao": "Preview, validação antes do job e revalidação pós-ingestão no engine — sem cache entre elas.",
+      "onde": "packages/deploy/src/engine.ts",
+      "impacto": "Custo desnecessário em repositórios grandes.",
+      "doc": "projetos/deploy.json"
+    },
+    {
+      "id": "valores-mortos",
+      "severidade": "baixa",
+      "categoria": "dividaTecnica",
+      "titulo": "Valores declarados que o código nunca produz",
+      "descricao": "`source: \"system\"` existe em `AlertSource` mas nenhum código cria alerta com essa origem. `critical` existe em `HealthLevel` mas o scan só produz `ok`/`warning`. `net.db-ports-exposed` está marcado `fixable: true` mas `03-firewall.sh` não tem lógica para portas de banco.",
+      "onde": "packages/core/src/monitoring.ts, apps/server/src/services/system-info.ts, packages/security/src/checks.ts",
+      "impacto": "Tipos prometem estados que não acontecem; a UI pode ter ramos inalcançáveis.",
+      "doc": "monitoramento/conceito-alertas.json"
+    },
+    {
+      "id": "config-nao-aplicada",
+      "severidade": "baixa",
+      "categoria": "correcao",
+      "titulo": "DOCKER_SOCKET_PATH não afeta a listagem de containers",
+      "descricao": "`docker-service.ts` sempre usa o binário `docker` via subprocesso. A configuração só influencia `docker-socket.ts`, usado pelo terminal.",
+      "onde": "apps/server/src/services/docker-service.ts",
+      "impacto": "Configurar um socket alternativo funciona para o terminal e silenciosamente não funciona para o dashboard.",
+      "doc": "global/configuracao.json"
+    },
+    {
+      "id": "reaper-so-no-boot",
+      "severidade": "baixa",
+      "categoria": "robustez",
+      "titulo": "Limpeza de containers de terminal órfãos roda só no boot",
+      "descricao": "Não há verificação periódica. Um leak causado por caminho de erro não coberto por `handleSessionEnd` só é limpo no próximo restart.",
+      "onde": "apps/server/src/services/docker-socket.ts",
+      "impacto": "Acúmulo de containers privilegiados órfãos em instalações que raramente reiniciam.",
+      "doc": "terminal/conceito-pty.json"
+    },
+    {
+      "id": "confirmacao-fase-01",
+      "severidade": "baixa",
+      "categoria": "produto",
+      "titulo": "Plano não avisa que a fase 01 pode exigir confirmação",
+      "descricao": "`requiresConfirmation` marca apenas as fases 02/03, mas a fase 01 também dispara `awaiting_confirmation` em runtime quando uma chave SSH é fornecida (trava o root).",
+      "onde": "packages/security/src/planner.ts",
+      "impacto": "O operador é surpreendido por um passo de confirmação que o plano não anunciou.",
+      "doc": "seguranca/conceito-fases.json"
+    },
+    {
+      "id": "limites-de-retencao",
+      "severidade": "baixa",
+      "categoria": "robustez",
+      "titulo": "Tetos de retenção sem arquivamento",
+      "descricao": "Histórico de segurança limitado a 200 entradas (pode expulsar o scan 'Antes' congelado do resumo `applied`); auditoria limitada a 2000 entradas sem arquivamento.",
+      "onde": "apps/server/src/services/security-service.ts, audit-service.ts",
+      "impacto": "Perda de rastreabilidade histórica em instalações movimentadas.",
+      "doc": "monitoramento/conceito-auditoria.json"
+    },
+    {
+      "id": "lacunas-menores",
+      "severidade": "baixa",
+      "categoria": "diversos",
+      "titulo": "Lacunas menores agrupadas",
+      "descricao": "README menciona 'JSON/SQLite' mas não há SQLite no código. `apps/web` é o único workspace sem thresholds numéricos de cobertura. `GET /api/docker/containers` não tem teste de rota. `scanSystemHealth()` não tem try/catch. A verificação de domínio só consulta registros A (IPv4). `DELETE .../mailboxes/:id` não grava auditoria. Certificado TLS do Stalwart é autoassinado. Setup token não expira. `DELETE /api/projects/:id` não verifica deploy em andamento. Logout no frontend é best-effort e navega mesmo se falhar.",
+      "onde": "diversos",
+      "impacto": "Individualmente baixo; em conjunto indicam onde o polimento ainda não chegou.",
+      "doc": null
+    },
+    {
+      "id": "rce-git-clone-ext",
+      "severidade": "alta",
+      "categoria": "seguranca",
+      "titulo": "RCE via transporte ext:: na URL de repositório (CORRIGIDO)",
+      "descricao": "A URL de repositório não era validada e ia como argumento posicional para git clone. O transporte ext:: do git executa comando via sh, permitindo execução arbitrária a partir de um POST /api/projects seguido de deploy. Como o painel tem acesso ao socket do Docker, isso equivalia a root no host.",
+      "onde": "apps/server/src/services/deploy-service.ts, packages/deploy/src/ingest.ts",
+      "impacto": "Explorável por engenharia social: bastava convencer o operador a colar uma URL de repositório maliciosa.",
+      "statusEm20260824": "CORRIGIDO — allowlist de esquema (https/ssh/scp) em validateGitSource, allowlist de caracteres em validateBranch, com testes de regressão em apps/server/tests/deploy-validation.test.ts",
+      "doc": "projetos/conceito-validacao-fonte.json"
+    },
+    {
+      "id": "api-sem-validacao-schema",
+      "severidade": "media",
+      "categoria": "seguranca",
+      "titulo": "Nenhuma rota da API usava validação de schema (CORRIGIDO)",
+      "descricao": "As 10 rotas do servidor não declaravam schema Fastify: toda validação era manual, inconsistente entre módulos e ausente em campos críticos.",
+      "onde": "apps/server/src/routes/",
+      "impacto": "Causa raiz do RCE acima e de outras entradas não validadas chegarem à lógica de negócio.",
+      "statusEm20260824": "CORRIGIDO — schema de entrada em todas as rotas que recebem body, params ou querystring; coerção de tipos e removeAdditional desligados no Ajv; erro padronizado que nomeia o campo",
+      "doc": "global/ajv-options.json"
+    },
+    {
+      "id": "teste-terminal-intermitente",
+      "severidade": "baixa",
+      "categoria": "testes",
+      "titulo": "Teste de WebSocket do terminal é intermitente",
+      "descricao": "O teste da regra de ouro (input do usuário nunca na auditoria) em apps/server/tests/routes-terminal.test.ts falhou uma vez numa execução da suíte completa e passou em 3 execuções isoladas e 2 suítes completas subsequentes. Depende de timing real de WebSocket.",
+      "onde": "apps/server/tests/routes-terminal.test.ts",
+      "impacto": "Falso negativo ocasional no CI, que erode a confiança na suíte. O comportamento testado está correto.",
+      "statusEm20260824": "conhecido, não corrigido",
+      "doc": "terminal/websocket.json"
+    },
+    {
+      "id": "testes-fora-do-typecheck-server",
+      "severidade": "baixa",
+      "categoria": "testes",
+      "titulo": "tsconfig.json de apps/server exclui os testes do typecheck",
+      "descricao": "`apps/server/tsconfig.json` declara `\"include\": [\"src\"]` — só o código de produção entra no typecheck do workspace; os arquivos em apps/server/tests/ ficam de fora. Um fixture de teste que fica desatualizado em relação a um tipo real (ex.: um objeto Project construído manualmente num teste, sem os campos novos de uma interface) não é pego pelo typecheck: só quebraria se, e quando, algum código de produção referenciasse esse mesmo tipo de um jeito que o tsc alcançasse — o que não é o caso de um literal de objeto dentro de um arquivo de teste.",
+      "onde": "apps/server/tsconfig.json",
+      "impacto": "A cobertura de tipos dos testes deste workspace não é verificada por `tsc`/CI. Foi o caso concreto dos fixtures `Project` usados em apps/server/tests/ após a adição de `deployedBranch`/`deployedSource` à interface (packages/core/src/deploy.ts) — os fixtures desatualizados não geraram nenhum erro de typecheck e precisaram ser corrigidos manualmente.",
+      "doc": "global/testes.json",
+      "statusEm20260824": "conhecido, não corrigido"
+    }
+  ],
+  "resumoPorSeveridade": {
+    "alta": 4,
+    "media": 14,
+    "baixa": 13,
+    "total": 30
+  },
+  "observacoes": [
+    "Não há nenhum marcador TODO, FIXME, XXX ou HACK em todo o código — a dívida técnica está registrada em prosa e em comentários explicativos, não em marcadores inline.",
+    "Os comentários do código são densos e explicam o porquê das decisões, não o que o código faz. Isso é incomum e facilita muito a manutenção.",
+    "Os três achados de severidade alta são consequências diretas da proposta do produto (um PaaS precisa de acesso privilegiado ao host). Não são descuidos, são o custo arquitetural do que o sistema se propõe a fazer — mas definem o modelo de ameaça que a documentação de segurança deveria declarar explicitamente.",
+    "Atualizado em 2026-08-24 após a rodada de correções: o RCE do git clone e a ausência de validação de schema foram corrigidos com testes de regressão. Os três achados de severidade alta originais permanecem, agora declarados explicitamente em global/threat-model.json como custo arquitetural assumido, com mitigações e dívida conhecida documentadas.",
+    "A documentação foi auditada por um agente com acesso restrito apenas a comoFuncionaSistema/ (sem ler o código): 9 de 10 perguntas sobre o sistema foram respondidas de forma completa, a navegação index→módulo→arquivo funcionou sem links quebrados, e duas contradições internas foram encontradas e corrigidas (contagem de arquivos de teste e situação do Dependabot)."
+  ]
+}

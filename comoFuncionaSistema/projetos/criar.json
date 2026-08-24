@@ -1,0 +1,70 @@
+{
+  "id": "criar",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects",
+  "resumo": "Cria o registro de um novo projeto (nome, modo de ingestão, fonte do código, domínio). Não toca em Docker/Caddy — apenas persiste o projeto para os passos seguintes (detect → deploy).",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:43",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "name", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (createProjectSchema, projects.ts): minLength 1, maxLength 100. Depois, regra de negócio no service: trim() não pode ficar vazio.", "descricao": "Nome de exibição do projeto; também é a base do slug (kebab-case, ASCII, até 40 chars, com sufixo hex em caso de colisão)." },
+      { "nome": "ingestMode", "tipo": "\"git\" | \"upload\" | \"existing\"", "obrigatorio": true, "regras": "schema Fastify: enum [git, upload, existing] (INGEST_MODE) — corpo com outro valor é recusado na borda (400 invalid_request) antes mesmo de chegar em INGEST_MODES.includes() no service.", "descricao": "Origem do código-fonte." },
+      { "nome": "source", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify: minLength 1, maxLength 500. Depois, regra de negócio no service: em modo git, passa por validateGitSource (allowlist https://, ssh:// ou scp git@host:caminho — ver projetos/conceito-validacao-fonte.json); em upload/existing precisa existir em disco (existsSync do caminho resolvido).", "descricao": "URL git (modo git) ou caminho local absoluto/relativo ao processo do servidor (modos upload/existing)." },
+      { "nome": "branch", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: maxLength 200 (schema não valida formato). Depois, regra de negócio no service via validateBranch: padrão [A-Za-z0-9._/][A-Za-z0-9._/-]{0,200}, não pode começar com '-' nem conter '..'; default 'main' na ingestão se omitido — ver projetos/conceito-validacao-fonte.json.", "descricao": "Branch a clonar/atualizar." },
+      { "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify: minLength 1, maxLength 253. Depois, regra de negócio no service: normalizeDomain (lowercase, remove http(s)://, remove path) agora TAMBÉM valida contra um padrão estrito de hostname (HOSTNAME_RE) e devolve \"\" para valor que não bater — não pode ficar vazio após normalizar; deve ser único entre projetos.", "descricao": "Domínio de acesso do projeto (ex.: app.exemplo.com ou app.localhost)." },
+      { "nome": "websocket", "tipo": "boolean", "obrigatorio": false, "regras": "schema Fastify: type boolean (sem coerção — 'true' string é recusado). default false", "descricao": "Se true, o Caddy desativa buffer de resposta (flush_interval -1) para esse domínio." },
+      { "nome": "proxyService", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: maxLength 100", "descricao": "Override manual do serviço compose que recebe o proxy (normalmente preenchido depois, no PATCH pós-detecção)." },
+      { "nome": "proxyPort", "tipo": "integer", "obrigatorio": false, "regras": "schema Fastify: type integer, minimum 1, maximum 65535", "descricao": "Override manual da porta do proxy." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 201,
+      "quando": "projeto criado com sucesso",
+      "corpo": { "project": "Project", "status": "ProjectStatus", "containers": "DockerContainerInfo[]", "url": "string" },
+      "exemplo": {
+        "project": { "id": "a1b2c3d4e5f6", "name": "Loja", "slug": "loja", "ingestMode": "upload", "source": "/home/kelvin/apps/loja", "branch": null, "domain": "loja.localhost", "websocket": false, "detection": null, "proxyService": null, "proxyPort": null, "createdAt": "2026-08-24T10:00:00.000Z", "updatedAt": "2026-08-24T10:00:00.000Z", "lastDeployAt": null, "lastDeployStatus": null },
+        "status": "created",
+        "containers": [],
+        "url": "http://loja.localhost"
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (createProjectSchema) ANTES do handler/service rodar: campo obrigatório ausente (name/ingestMode/source/domain), tipo errado, string maior que o limite, ingestMode fora do enum, proxyPort fora de 1-65535, ou corpo com campo desconhecido (additionalProperties:false).", "mensagem": "Campo obrigatório ausente: name. / Campo inválido: ingestMode. / Campo desconhecido no corpo da requisição: <campo>." },
+    { "status": 400, "codigo": "invalid_name", "quando": "name passou pelo schema (não vazio, ≤100 chars) mas ficou vazio/só espaços após trim() no service — ainda reachable (ex.: name: '   ').", "mensagem": "Informe o nome do projeto." },
+    { "status": 400, "codigo": "invalid_ingest_mode", "quando": "Código legado no service — na prática inalcançável agora: o schema já restringe ingestMode ao enum [git, upload, existing] antes do service rodar.", "mensagem": "Modo de ingestão inválido. Aceitos: git, upload, existing." },
+    { "status": 400, "codigo": "invalid_source", "quando": "DUAS causas possíveis, ambas no service (schema só garante string 1-500 chars): (1) source vazio/só espaços após trim(); (2) ingestMode='git' e source reprovado por validateGitSource — fora da allowlist https://, ssh:// ou scp git@host:caminho (ver projetos/conceito-validacao-fonte.json).", "mensagem": "Informe a fonte do código (URL git ou caminho local). / Fonte de código inválida. Use uma URL https://, ssh:// ou git@host:caminho." },
+    { "status": 400, "codigo": "invalid_branch", "quando": "branch informado mas reprovado por validateBranch — formato inválido ou contém '..' (nova validação; ver projetos/conceito-validacao-fonte.json).", "mensagem": "Nome de branch inválido." },
+    { "status": 400, "codigo": "source_not_found", "quando": "ingestMode é upload ou existing e o caminho resolvido não existe em disco no servidor", "mensagem": "Caminho não encontrado: <source>" },
+    { "status": 400, "codigo": "invalid_domain", "quando": "DUAS causas possíveis, ambas no service (schema só garante string 1-253 chars): (1) domain vazio após normalizeDomain(); (2) domain não vazio mas reprovado no novo padrão estrito de hostname (HOSTNAME_RE) dentro de normalizeDomain — ex.: contém espaço, '{', '}' ou outro caractere fora de [a-z0-9-.].", "mensagem": "Informe o domínio desejado." },
+    { "status": 409, "codigo": "domain_in_use", "quando": "já existe outro projeto com o mesmo domínio normalizado", "mensagem": "O domínio <domain> já está em uso por outro projeto." },
+    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado não tratado (inclusive throw de valor não-Error)", "mensagem": "Erro interno." }
+  ],
+  "fluxo": [
+    "0. Schema Fastify (createProjectSchema) valida tipos/limites/enum/additionalProperties ANTES do handler — corpo malformado nunca chega ao service (400 invalid_request).",
+    "1. No service: valida name, ingestMode, source (com checagem de existência em disco para upload/existing e, em modo git, allowlist de esquema via validateGitSource), branch (validateBranch) e domain (normalizeDomain, agora com validação de hostname), nessa ordem — o primeiro que falhar aborta com 400.",
+    "2. Gera slug via slugify(name); se colidir com um projeto existente, acrescenta um sufixo hex de 2 bytes até ficar único.",
+    "3. Verifica unicidade do domínio normalizado entre os projetos já cadastrados → 409 domain_in_use se colidir.",
+    "4. Monta o objeto Project com id aleatório (16 hex chars), detection=null, lastDeployAt/lastDeployStatus=null e timestamps ISO.",
+    "5. Persiste em data/projects.json (mode 0o600) e retorna o projeto com status recém-calculado ('created', pois ainda não há containers) e a URL de acesso."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.createProject", "arquivo": "apps/server/src/services/deploy-service.ts:219", "papel": "Validação, slugify, unicidade de domínio, persistência." },
+    { "tipo": "servico", "nome": "validateGitSource / validateBranch", "arquivo": "apps/server/src/services/deploy-service.ts", "papel": "Allowlist de esquema para source em modo git; formato de branch. Ver projetos/conceito-validacao-fonte.json." },
+    { "tipo": "global", "nome": "error-handler", "arquivo": "apps/server/src/plugins/error-handler.ts", "papel": "Converte falha de schema em 400 invalid_request nomeando o campo, antes do handler rodar." }
+  ],
+  "efeitosColaterais": ["grava data/projects.json"],
+  "chamadoPor": ["apps/web/src/pages/NewProjectPage.tsx (createAndDetect, passo 1 do wizard)"],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "apps/server/tests/routes-projects-schema.test.ts", "apps/server/tests/deploy-validation.test.ts"],
+  "observacoes": [
+    "Corpo ausente (POST sem body) é recusado pelo schema Fastify com 400 invalid_request (campo obrigatório ausente: name) — ANTES de chegar ao service. O antigo caminho 'request.body ?? {} passado ao service, que falha em invalid_name' só é alcançável agora se o corpo tiver os 4 campos obrigatórios presentes mas name for string vazia/só espaços.",
+    "A checagem source_not_found é feita no MOMENTO da criação, olhando o filesystem do processo do servidor — não valida URLs git além da allowlist de esquema (validateGitSource); um host/caminho git inexistente só falha no clone durante o deploy.",
+    "validateGitSource é uma defesa contra o vetor `ext::` do git (transporte que executa comando via sh) e contra valores iniciados por '-' (que o git leria como flag) — ver projetos/conceito-validacao-fonte.json para o detalhamento completo do que é aceito/recusado e por quê."
+  ]
+}

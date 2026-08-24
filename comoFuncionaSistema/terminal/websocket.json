@@ -1,0 +1,119 @@
+{
+  "id": "websocket",
+  "modulo": "terminal",
+  "metodo": "GET",
+  "url": "/api/terminal/ws",
+  "resumo": "Handshake WebSocket (upgrade HTTP) que abre ou reanexa a única sessão de PTY do servidor e faz relay puro (byte a byte) entre o navegador (xterm.js) e o shell no alvo (host da VPS ou container de dev).",
+  "arquivoFonte": "apps/server/src/routes/terminal.ts:52",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "websocket",
+    "detalhe": "A guarda global de /api/* (apps/server/src/plugins/auth.ts, hook onRequest) roda ANTES do upgrade do WebSocket ser aceito, porque a rota é registrada como uma rota Fastify normal com {websocket:true} — o hook de auth se aplica tanto a essa GET quanto a qualquer outra. Enquanto o setup NÃO foi concluído: exige o setup token, aceito por header x-setup-token OU pela query string ?token=<token> (SETUP_TOKEN_QUERY) — a query é o único jeito viável no navegador, já que a API WebSocket nativa não permite headers customizados no handshake. Depois do setup concluído: exige sessão admin válida via cookie httpOnly (paas_session), enviado automaticamente pelo navegador no handshake do WS por ser same-origin — nenhum token na URL é necessário nessa fase. Sem auth válida (nem token nem sessão): o servidor responde 401 e o upgrade nunca ocorre — nenhum PTY é aberto."
+  },
+  "rateLimit": "Rate limit HTTP geral do servidor (200 req/min por padrão, RATE_LIMIT_MAX) se aplica ao handshake do WS como a qualquer requisição /api/*. Não há rate limit específico de mensagens após a conexão estabelecida (o payload máximo por frame é 64KB, maxPayload em fastifyWebsocket).",
+  "parametros": {
+    "path": [],
+    "query": [
+      { "nome": "token", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify (terminalWsSchema, terminal.ts): quando presente, maxLength 512, sem pattern (o admin pode definir SETUP_TOKEN livremente via env var); additionalProperties:false na querystring (só token/clientId são aceitos — um terceiro parâmetro qualquer é recusado). Comparação real do token continua sendo feita bit a bit por tokenMatches no plugin de auth, ANTES do schema desta rota rodar.", "descricao": "Setup token, exigido apenas enquanto o setup não foi concluído (equivalente ao header x-setup-token). Ignorado/desnecessário depois do setup — a sessão via cookie assume." },
+      { "nome": "clientId", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: quando presente, minLength 1, maxLength 128, pattern ^[A-Za-z0-9_-]+$ (compatível com crypto.randomUUID() e o fallback base36 do frontend). Um clientId com caractere fora desse alfabeto (espaço, '!', etc.) ou maior que 128 chars agora é recusado com 400 ANTES do upgrade do WebSocket ocorrer.", "descricao": "Identidade estável da aba do navegador (gerada com crypto.randomUUID e persistida em sessionStorage). Usada para o mecanismo anti-ping-pong: permite distinguir 'o mesmo cliente reconectando' de 'uma aba diferente disputando a sessão'. Clientes sem clientId (legados) são tratados como sempre substituindo o dono anterior." }
+    ],
+    "body": [],
+    "headers": [
+      { "nome": "x-setup-token", "tipo": "string", "obrigatorio": false, "descricao": "Alternativa ao query param `token` para autenticar durante o setup. Na prática o navegador usa a query, já que a API WebSocket não permite headers customizados." },
+      { "nome": "Cookie: paas_session", "tipo": "string", "obrigatorio": false, "descricao": "Cookie httpOnly de sessão admin, enviado automaticamente pelo navegador (same-origin) depois que o setup foi concluído." }
+    ]
+  },
+  "protocoloDeMensagens": {
+    "clienteParaServidor": [
+      {
+        "tipo": "input (relay puro)",
+        "formato": "frame de texto ou binário com os bytes crus a serem escritos no stdin do PTY",
+        "quando": "qualquer digitação do usuário no xterm.js (term.onData), incluindo respostas a prompts interativos (senha, confirmação y/n)",
+        "observacao": "NUNCA inspecionado, logado ou auditado pelo servidor — vai direto a TerminalService.write() e reseta o timer de inatividade. Um frame de TEXTO que comece com '{' é primeiro testado como frame de controle JSON (ver 'resize' abaixo); se o parse falhar ou não for um resize válido, cai de volta no relay comum como input normal."
+      },
+      {
+        "tipo": "resize (frame de controle)",
+        "formato": "{\"type\":\"resize\",\"cols\":number,\"rows\":number}",
+        "quando": "ao (re)conectar (sincroniza o tamanho inicial do PTY) e sempre que o painel é redimensionado/expandido no navegador (ResizeObserver + FitAddon do xterm.js)",
+        "observacao": "Único desvio do relay puro. Validado em TerminalService.resize(): cols/rows precisam ser inteiros entre 2 e 500 (cols) / 2 e 200 (rows); valores fora da faixa são silenciosamente ignorados (sem erro ao cliente)."
+      }
+    ],
+    "servidorParaCliente": [
+      {
+        "tipo": "replay inicial",
+        "formato": "frame de texto com até 64.000 caracteres (scrollbackChars) de saída acumulada do PTY",
+        "quando": "logo após a Promise de term.connect() resolver, se houver scrollback e o socket ainda estiver aberto",
+        "observacao": "Permite reanexar a uma sessão que já produziu saída antes desta conexão específica (fase em andamento, ou reload do navegador)."
+      },
+      {
+        "tipo": "output (relay puro ao vivo)",
+        "formato": "frame de texto com os bytes crus produzidos pelo PTY (stdout/stderr misturados, já que é um TTY hijacked sem multiplex)",
+        "quando": "continuamente, via TerminalService.onOutput(), enquanto o socket estiver OPEN",
+        "observacao": "Espelha exatamente o que apareceria num terminal SSH real, incluindo sequências ANSI de cor/cursor."
+      },
+      {
+        "tipo": "mensagem de erro (texto formatado, não JSON)",
+        "formato": "\"\\r\\n\\x1b[31m[terminal] <mensagem>\\x1b[0m\\r\\n\"",
+        "quando": "se term.connect() rejeitar (ex.: TerminalUnavailableError — docker.sock inacessível, falha ao criar/iniciar o helper, imagem não pôde ser baixada)",
+        "observacao": "Enviada como texto simples formatado em vermelho ANSI para aparecer diretamente no xterm.js do usuário; a conexão é fechada logo em seguida com o código 1011 (ver 'fechamento')."
+      },
+      {
+        "tipo": "aviso de sessão encerrada",
+        "formato": "\"\\r\\n\\x1b[33m[terminal] sessão encerrada — reconecte para abrir outra\\x1b[0m\\r\\n\"",
+        "quando": "quando o PTY morre por conta própria (stream 'end'/'close'/'error' do alvo) — handleSessionEnd em terminal-service.ts",
+        "observacao": "Broadcast a todos os clientes assinantes; o WS em si NÃO é fechado por este evento (o cliente pode reconectar e uma nova sessão é aberta na próxima ação)."
+      },
+      {
+        "tipo": "aviso de comando interrompido por timeout",
+        "formato": "\"\\r\\n\\x1b[33m[terminal] comando interrompido por tempo limite — a sessão continua ativa\\x1b[0m\\r\\n\"",
+        "quando": "quando um comando disparado pelo executor de hardening (runCommand/runCommandCaptured) excede seu timeoutMs (default 30 min) — o servidor manda Ctrl-C (\\x03) e aguarda 5s pelo marcador antes de desistir",
+        "observacao": "A sessão do terminal NÃO é derrubada; apenas o comando específico é interrompido e a fila de comandos segue."
+      }
+    ]
+  },
+  "fechamento": {
+    "codigosDeClose": [
+      { "codigo": 1011, "quando": "o PTY não pôde ser aberto (TerminalUnavailableError ou outro erro em term.connect())", "reconectaAutomaticamente": true },
+      { "codigo": 4000, "constante": "WS_CLOSE_REPLACED", "quando": "o MESMO clientId (ou um cliente legado sem clientId) abriu uma nova conexão — a conexão antiga é fechada porque a nova assumiu a sessão (reattach por reload/queda de rede)", "reconectaAutomaticamente": true },
+      { "codigo": 4009, "constante": "WS_CLOSE_BUSY", "razao": "terminal em uso em outra aba/janela", "quando": "um clientId DIFERENTE do dono atual tenta conectar enquanto o dono segue com o socket OPEN", "reconectaAutomaticamente": false, "observacao": "O cliente recusado NÃO deve tentar reconectar — é a regra que evita o ping-pong infinito (~1 conexão/1.5s) entre duas abas disputando a sessão. TerminalPanel.tsx trata esse código explicitamente e para o backoff." },
+      { "codigo": "close normal (1000) ou perda de rede", "quando": "usuário fecha a aba, navega para fora, ou a conexão cai por instabilidade de rede", "reconectaAutomaticamente": true, "observacao": "TerminalPanel.tsx reconecta com backoff exponencial + jitter (1s, 2s, 4s… teto 30s, resetado ao reconectar com sucesso). O PTY no servidor NÃO é encerrado por essa desconexão — vira uma sessão órfã que qualquer clientId pode reanexar depois." }
+    ],
+    "efeitoNoServidor": "Em qualquer fechamento (com ou sem código especial), o handler 'close' do socket cancela a assinatura de output (unsubscribe) e, se esse socket era o dono registrado, limpa o dono (owner=null) — a sessão de PTY em si só é destruída pelo timeout de inatividade (idleTimeoutMs) ou por dispose() explícito no shutdown do processo, nunca pelo simples fechamento do WS."
+  },
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Querystring do handshake reprovada pelo schema Fastify (terminalWsSchema): clientId fora do padrão [A-Za-z0-9_-]+ ou maior que 128 chars, token maior que 512 chars, ou parâmetro desconhecido na query (additionalProperties:false). A validação de schema roda na fase 'Validation' do Fastify, DEPOIS do hook onRequest do auth-plugin (então um token de auth inválido ainda vence e responde 401 antes de o schema ser avaliado) mas ANTES do upgrade do WebSocket ser aceito. Verificado em apps/server/tests/routes-misc-schema.test.ts.", "mensagem": "Campo inválido: clientId. / Campo desconhecido no corpo da requisição: <campo>." },
+    { "status": 401, "codigo": "setup_token_missing", "quando": "servidor sem setup token configurado (nem env var nem arquivo) durante a fase de setup", "mensagem": "Servidor sem setup token configurado. Defina SETUP_TOKEN ou crie o arquivo de token (veja scripts/install.sh)." },
+    { "status": 401, "codigo": "unauthorized", "quando": "setup token ausente/inválido (durante setup) ou sessão cookie ausente/inválida/expirada (depois do setup) — o upgrade do WebSocket é recusado ANTES de qualquer PTY ser aberto", "mensagem": "Setup token inválido ou ausente. / Sessão inválida ou expirada." },
+    { "status": null, "codigo": "ws-close-1011", "quando": "PTY não pôde ser aberto (docker.sock inacessível, falha ao criar/iniciar o container helper, falha ao baixar a imagem)", "mensagem": "Mensagem textual formatada enviada ao xterm antes do close 1011 — variantes incluem 'docker.sock inacessível (<path>): <erro>. O painel precisa do socket do Docker montado.', 'falha ao criar o helper do terminal: <erro>', 'falha ao criar exec no container <target> (ele existe? rode uma fase ou crie o alvo de dev): <erro>'." },
+    { "status": null, "codigo": "ws-close-4009", "quando": "sessão já tem dono (outro clientId conectado)", "mensagem": "terminal em uso em outra aba/janela" }
+  ],
+  "fluxo": [
+    "1. Navegador abre WS para /api/terminal/ws com ?clientId=<uuid> e, se ainda em setup, &token=<setupToken>.",
+    "2. Hook onRequest global (auth.ts) valida o token ou a sessão; se inválido, responde 401 e o upgrade não ocorre.",
+    "2b. Schema Fastify (terminalWsSchema) valida clientId/token da querystring (fase 'Validation', depois do onRequest de auth): parâmetro fora do padrão ou desconhecido → 400 invalid_request, upgrade não ocorre.",
+    "3. routes/terminal.ts verifica se já existe um 'owner' (dono) com socket OPEN: mesmo clientId → fecha a conexão antiga com 4000 e assume; clientId diferente → recusa a NOVA conexão com 4009 sem tocar no dono; sem dono → assume direto.",
+    "4. Registra 'terminal.connect' na auditoria (actor = username da sessão ou 'setup').",
+    "5. Chama term.connect(): abre o PTY se ainda não existir (openSession → createDockerPtyFactory) ou reaproveita a sessão existente.",
+    "6. Envia o replay do scrollback acumulado (se houver) e assina onOutput() para retransmitir toda saída futura do PTY.",
+    "7. Loop de mensagens: cada frame recebido do cliente é testado como JSON de controle {type:'resize'}; se não for, é repassado cru ao PTY via term.write() (relay puro).",
+    "8. No fechamento do socket (por qualquer motivo): cancela a assinatura de output, libera o 'owner' se era o dono, e registra 'terminal.disconnect' na auditoria. O PTY permanece vivo no servidor até o timeout de inatividade."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "TerminalService", "arquivo": "apps/server/src/services/terminal-service.ts", "papel": "gerencia a sessão única de PTY, scrollback, timeout de inatividade e fila de comandos." },
+    { "tipo": "servico", "nome": "createDockerPtyFactory / RemotePty", "arquivo": "apps/server/src/services/docker-socket.ts", "papel": "abre o PTY de fato via Docker Engine API (helper nsenter no host ou docker exec no container de dev)." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "hook onRequest global que autentica o handshake do WS antes do upgrade (setup token ou sessão)." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "registra apenas eventos de ciclo de vida (connect/disconnect/session/session-end/idle-timeout), nunca conteúdo." },
+    { "tipo": "global", "nome": "error-handler", "arquivo": "apps/server/src/plugins/error-handler.ts", "papel": "Converte falha de schema em 400 invalid_request antes do upgrade." }
+  ],
+  "efeitosColaterais": [
+    "abre (ou reaproveita) um container helper paas-terminal-<hex> privileged no daemon Docker do host (perfil host) ou um `docker exec` no container de dev (perfil container)",
+    "grava eventos terminal.connect / terminal.disconnect em data/audit.json",
+    "reseta o timer de inatividade de 30 min a cada byte de I/O"
+  ],
+  "chamadoPor": ["apps/web/src/components/TerminalPanel.tsx:terminalWsUrl/connect"],
+  "testes": ["apps/server/tests/routes-terminal.test.ts", "apps/server/tests/routes-misc-schema.test.ts"],
+  "observacoes": [
+    "O frame de controle 'resize' é o único formato JSON reconhecido pelo protocolo; não há outros tipos de mensagem estruturada cliente->servidor (sem 'ping'/'ack'/etc. — o keepalive é implícito no timer de inatividade e nos frames de dados).",
+    "MUDANÇA DE COMPORTAMENTO: antes, clientId era usado cru (qualquer string) na lógica de reattach/anti-ping-pong; agora um clientId com caractere fora de [A-Za-z0-9_-] ou maior que 128 chars é recusado com 400 antes mesmo do upgrade — nunca chega à lógica de owner/reattach. apps/server/tests/routes-misc-schema.test.ts confirma que uma requisição sem cabeçalhos de upgrade mas com querystring válida responde 404 (comportamento do @fastify/websocket para GET sem upgrade), não 400 — ou seja, o teste só garante que o schema NÃO bloqueia um par válido, não testa o upgrade real."
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "status",
+  "modulo": "setup",
+  "metodo": "GET",
+  "url": "/api/setup/status",
+  "resumo": "Devolve o estado persistido do wizard (passo atual, se já foi concluído) e a lista estática de passos conhecidos (SETUP_STEPS). Usado pelo frontend para restaurar o progresso ao recarregar a página do wizard.",
+  "arquivoFonte": "apps/server/src/routes/setup.ts:32",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "setup-token",
+    "detalhe": "Não há isenção para /api/setup/status no hook global (apps/server/src/plugins/auth.ts): exige x-setup-token (header) ou ?token= (query) válido enquanto o setup está em andamento; responde 403 setup_completed se já concluído."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [
+      { "nome": "token", "tipo": "string", "obrigatorio": false, "descricao": "Forma alternativa de enviar o setup token (SETUP_TOKEN_QUERY), aceita além do header x-setup-token." }
+    ],
+    "body": [],
+    "headers": [
+      { "nome": "x-setup-token", "tipo": "string", "obrigatorio": false, "descricao": "Setup token (SETUP_TOKEN_HEADER); obrigatório se não enviado via query." }
+    ]
+  },
+  "respostas": [
+    { "status": 200, "quando": "Token válido e setup ainda não concluído.", "corpo": { "state": { "currentStep": "number", "completed": "boolean", "updatedAt": "string (ISO)" }, "steps": "SetupStepInfo[]" }, "exemplo": { "state": { "currentStep": 0, "completed": false, "updatedAt": "2026-08-24T12:00:00.000Z" }, "steps": [ { "id": 0, "key": "welcome", "title": "Boas-vindas e token", "available": true }, { "id": 1, "key": "health", "title": "Saúde da máquina", "available": true }, { "id": 2, "key": "security", "title": "Segurança", "available": true }, { "id": 3, "key": "admin", "title": "Conta de administrador", "available": true } ] } }
+  ],
+  "erros": [
+    { "status": 401, "codigo": "unauthorized", "quando": "Setup token ausente ou não confere (via requireSetupToken em apps/server/src/plugins/auth.ts).", "mensagem": "Setup token inválido ou ausente." },
+    { "status": 503, "codigo": "setup_token_missing", "quando": "Servidor sem setupToken configurado (env/arquivo ausentes).", "mensagem": "Servidor sem setup token configurado. Defina SETUP_TOKEN ou crie o arquivo de token (veja scripts/install.sh)." },
+    { "status": 403, "codigo": "setup_completed", "quando": "setupState.completed já é true.", "mensagem": "O setup já foi concluído. Entre com sua conta de administrador." }
+  ],
+  "fluxo": [
+    "1. app.setupState.load() lê data/setup-state.json (defaults tolerantes se ausente/corrompido).",
+    "2. Monta { state, steps: SETUP_STEPS } e responde 200.",
+    "Nota: a checagem de token/setup_completed acontece ANTES desta rota, no hook onRequest global de auth.ts — o handler em si não valida nada."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SetupStateStore.load", "arquivo": "apps/server/src/services/setup-state.ts:26", "papel": "Lê o estado persistido em data/setup-state.json." },
+    { "tipo": "global", "nome": "auth-plugin (hook onRequest)", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Aplica a exigência de setup token / bloqueio pós-conclusão antes do handler rodar." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/SetupPage.tsx"],
+  "testes": ["apps/server/tests/routes-setup.test.ts"],
+  "observacoes": [
+    "steps é sempre a constante estática SETUP_STEPS (apps/server/src/services/setup-state.ts:6) — não reflete nenhuma configuração dinâmica; o frontend mantém uma cópia idêntica hardcoded como FALLBACK_STEPS em SetupPage.tsx para renderizar antes da primeira resposta."
+  ]
+}

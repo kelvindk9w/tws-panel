@@ -1,0 +1,67 @@
+{
+  "id": "criar-dominio",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/domains",
+  "resumo": "Provisiona um domínio de e-mail: cria o domínio no Stalwart, gera o par DKIM RSA 2048 e cria a caixa postmaster@ (com alias abuse@).",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:87",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (createMailDomainSchema, mail.ts): minLength 1, maxLength 253, pattern MAIL_DOMAIN_PATTERN (mesmo alfabeto do service, mas aceitando as duas caixas — a normalização para minúsculas acontece depois, no service); additionalProperties:false no corpo. Depois, regra de negócio no service via normalizeMailDomain: trim + lowercase + remove pontos nas pontas e revalida contra o mesmo padrão em minúsculas.", "descricao": "Nome do domínio (ex.: exemplo.com.br)." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 201,
+      "quando": "Domínio válido, ainda não cadastrado, servidor rodando — provisionado com sucesso.",
+      "corpo": { "domain": "MailDomainSummary" },
+      "exemplo": { "domain": { "name": "exemplo.com.br", "dkimSelector": "paas", "dkimPublicKey": "MIIBIjANBg...", "dkimKeyBits": 2048, "dmarcStage": "none", "createdAt": "2026-08-24T12:00:00.000Z", "mailboxCount": 1, "lastVerify": null } }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (createMailDomainSchema) ANTES do handler: domain ausente, vazio, maior que 253 chars, fora do padrão de domínio, ou corpo com campo desconhecido.", "mensagem": "Campo obrigatório ausente: domain. / Campo inválido: domain." },
+    { "status": 400, "codigo": "invalid_domain", "quando": "domain passou pelo schema mas normalizeMailDomain ainda reprova (ex.: só espaços, ou dessincronia entre o pattern do schema — que aceita maiúsculas — e o do service).", "mensagem": "Domínio inválido: {valor informado}." },
+    { "status": 409, "codigo": "domain_exists", "quando": "Domínio (já normalizado) já está em data.domains.", "mensagem": "O domínio {domínio} já está cadastrado." },
+    { "status": 409, "codigo": "mail_server_stopped", "quando": "requireRunning(): o container do Stalwart não está rodando.", "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar." },
+    { "status": 409, "codigo": "mail_not_initialized", "quando": "adminSecret ainda não existe (servidor nunca iniciado) — manager()/client() lançam antes mesmo do requireRunning.", "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro." },
+    { "status": 500, "codigo": "internal_error", "quando": "Erro da API do Stalwart (StalwartApiError) não mapeado, ex.: falha de rede com o container.", "mensagem": "Stalwart: {detalhe retornado pela API}." }
+  ],
+  "fluxo": [
+    "1. normalizeMailDomain(name): valida/normaliza; 400 invalid_domain se inválido.",
+    "2. Verifica duplicidade em data.domains; 409 domain_exists se já existe.",
+    "3. requireRunning(): consulta manager().status(); 409 mail_server_stopped se não estiver rodando.",
+    "4. client().createDomain(domain): POST /api/principal {type:'domain', name}.",
+    "5. client().createDkimSignature(domain, 'paas'): POST /api/dkim {algorithm:'Rsa', domain, selector:'paas', id:'rsa-<domínio>'} — se já existir (400 do Stalwart), segue com o id existente (idempotente).",
+    "6. client().getDkimPublicKey(id): GET /api/dkim/{id} — valida que a chave tem pelo menos 100 chars, senão 500.",
+    "7. Persiste o StoredDomain (dkimSelector, dkimPublicKey, dkimKeyBits:2048, dmarcStage:'none', createdAt, lastVerify:null) em data.domains.",
+    "8. Gera senha e cria a caixa postmaster@<domínio> no Stalwart com alias abuse@<domínio> (client().createMailbox); persiste como StoredMailbox kind:'system'.",
+    "9. save() → grava data/mail/mail.json.",
+    "10. Rota grava auditoria mail.domain.add (target = nome do domínio, detail com dkimKeyBits) e responde 201."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.addDomain", "arquivo": "apps/server/src/services/mail-service.ts:231", "papel": "Orquestra criação do domínio + DKIM + postmaster@." },
+    { "tipo": "pacote", "nome": "StalwartClient", "arquivo": "packages/mailer/src/client.ts:33", "papel": "createDomain / createDkimSignature / getDkimPublicKey / createMailbox via API REST do Stalwart." },
+    { "tipo": "pacote", "nome": "generatePassword", "arquivo": "packages/mailer/src/mailboxes.ts:13", "papel": "Senha da caixa postmaster@." },
+    { "tipo": "servico", "nome": "AuditService.record", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Auditoria mail.domain.add." }
+  ],
+  "efeitosColaterais": [
+    "Cria domínio + par DKIM + caixa postmaster@/abuse@ dentro do Stalwart (volume paas_stalwart_data).",
+    "Grava data/mail/mail.json (novo domínio + nova caixa 'system').",
+    "Auditoria: mail.domain.add."
+  ],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx:92"],
+  "testes": ["scripts/test-mail.mts (passo 2)"],
+  "observacoes": [
+    "A senha da caixa postmaster@ é gerada e guardada em texto plano em data/mail/mail.json, mas NUNCA é devolvida na resposta desta rota — só reobtida depois via GET /api/mail/mailboxes/:id/credentials.",
+    "O schema Fastify (MAIL_DOMAIN_PATTERN) é uma cópia deliberada do padrão de normalizeMailDomain no service, mas aceitando as duas caixas (a/A) — o comentário no código explica que isso é para não restringir o conjunto de domínios aceitos além do que o service já aceita. Os dois padrões precisam ser mantidos em sincronia manualmente; não há teste de contrato garantindo isso."
+  ]
+}

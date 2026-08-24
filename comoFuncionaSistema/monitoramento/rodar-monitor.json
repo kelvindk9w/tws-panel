@@ -1,0 +1,68 @@
+{
+  "id": "rodar-monitor",
+  "modulo": "monitoramento",
+  "metodo": "POST",
+  "url": "/api/security/monitor/run",
+  "resumo": "Executa um scan de segurança agora (fora do agendamento): coleta o estado atual do alvo, compara com o baseline (se existir) e gera alertas por categoria de desvio.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:149",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota. Não há proteção contra chamadas concorrentes vindas da própria API (o lock 'inFlight' só protege contra sobreposição com o TICK do scheduler, ver observações).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "scan concluído (com ou sem alertas gerados)",
+      "corpo": { "result": "MonitorScanResult" },
+      "exemplo": {
+        "result": {
+          "id": "r2...",
+          "ranAt": "2026-08-24T10:15:00.000Z",
+          "target": "container:paas-target-test",
+          "durationMs": 910,
+          "baselineId": "b0f1...",
+          "baselineAt": "2026-08-24T09:00:00.000Z",
+          "diff": {
+            "newPackages": ["netcat-openbsd=1.219-1"],
+            "removedPackages": [],
+            "newPorts": [{ "proto": "tcp", "port": 23456, "process": "nc" }],
+            "closedPorts": [],
+            "changedFiles": ["/etc/ssh/sshd_config"],
+            "removedFiles": [],
+            "addedFiles": []
+          },
+          "alertsCreated": 3,
+          "note": null
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 500, "codigo": "monitor_run_failed", "quando": "collectBaseline() ou a geração de alertas lançam de forma não capturada", "mensagem": "Mensagem do erro original, ou 'Falha ao executar o scan.' como fallback." }
+  ],
+  "fluxo": [
+    "1. MonitorService.runNow() chama executeScan() diretamente (NÃO passa pelo MonitorScheduler — o scheduler tem seu próprio lock 'inFlight' que só protege ticks automáticos entre si).",
+    "2. executeScan(): lê o baseline salvo, coleta um snapshot atual (collectBaseline) e, se houver baseline, calcula diffBaseline(baseline, current).",
+    "3. Se não houver baseline, diff fica null e result.note explica que é preciso criar um baseline primeiro (nenhum alerta de diff é gerado).",
+    "4. alertDiff(diff): para cada categoria não-vazia (newPorts, closedPorts, packages, arquivos) cria/atualiza um alerta via AlertsService.create — dedup por (source='scan', title).",
+    "5. Hook de blacklist de e-mail (best-effort, try/catch): se o módulo de e-mail tiver domínios e algum estiver listado, cria/atualiza um alerta crítico (source='blacklist').",
+    "6. Monta o MonitorScanResult (id novo, ranAt, target, durationMs, baselineId/baselineAt, diff, alertsCreated, note), salva como lastResult em data/security/monitor.json e retorna."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MonitorService", "arquivo": "apps/server/src/services/monitor-service.ts", "papel": "executeScan()/runNow() orquestram coleta, diff, alertas e persistência do resultado." },
+    { "tipo": "pacote", "nome": "diffBaseline/isDiffEmpty", "arquivo": "packages/security/src/baseline.ts", "papel": "Compara dois snapshots e decide se há mudança." },
+    { "tipo": "servico", "nome": "AlertsService", "arquivo": "apps/server/src/services/alerts-service.ts", "papel": "create() por categoria de desvio e pela checagem de blacklist." }
+  ],
+  "efeitosColaterais": [
+    "grava data/security/monitor.json (lastRunAt, lastResult)",
+    "pode criar/atualizar alertas em data/alerts.json (source: scan e/ou blacklist)"
+  ],
+  "chamadoPor": ["apps/web/src/pages/SecurityPage.tsx:216 (MonitorCard.runNow)"],
+  "testes": ["scripts/test-fase4.mts (step 5 — diff real com pacote+porta+arquivo alterados no container alvo)"],
+  "observacoes": [
+    "O lock 'inFlight' do MonitorScheduler NÃO cobre chamadas a este endpoint — runNow() chama executeScan() diretamente, então em teoria dois POSTs concorrentes a /api/security/monitor/run (ou um POST coincidindo com um tick automático) podem rodar collectBaseline duas vezes em paralelo contra o mesmo alvo. Não testado explicitamente nos arquivos revisados."
+  ]
+}

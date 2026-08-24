@@ -1,0 +1,43 @@
+{
+  "id": "arquitetura",
+  "titulo": "Arquitetura do sistema",
+  "resumo": "TWS Panel é um monorepo pnpm: um servidor Fastify (apps/server) expõe a API REST/WebSocket, uma SPA React (apps/web) consome essa API e é servida como estático pelo próprio Fastify, e quatro pacotes internos (packages/core, security, deploy, mailer) concentram tipos e lógica de domínio livre de HTTP. O servidor monta serviços singleton no boot via app.decorate e os injeta nas rotas; a ordem de registro dos plugins define o que já está disponível quando cada rota roda.",
+  "arquivoFonte": "apps/server/src/app.ts",
+  "tipo": "infraestrutura",
+  "api": [
+    { "simbolo": "app.decorate(\"config\", ServerConfig)", "assinatura": "apps/server/src/app.ts:68", "descricao": "Config carregada de env vars (config.ts). Consumida por praticamente todo serviço construído depois (DeployService, AuditService, AlertsService, TerminalService, e os que se decoram nas próprias rotas: MonitorService, MailService, SecurityService)." },
+    { "simbolo": "app.decorate(\"setupState\", SetupStateStore)", "assinatura": "apps/server/src/app.ts:69", "descricao": "Persiste o passo/estado do wizard (data/setup-state.json). Consumida pelo plugin de auth (decide setup-token vs sessão) e pelas rotas de setup.ts." },
+    { "simbolo": "app.decorate(\"userStore\", UserStore)", "assinatura": "apps/server/src/app.ts:70", "descricao": "Único usuário admin (data/users.json). Consumida por routes/auth.ts e routes/setup.ts (criação da conta)." },
+    { "simbolo": "app.decorate(\"sessionStore\", SessionStore)", "assinatura": "apps/server/src/app.ts:71-73", "descricao": "Sessões revogáveis + segredo HMAC do cookie. Consumida pelo plugin de auth (resolve o cookie a cada request) e por routes/auth.ts (login/logout/change-password)." },
+    { "simbolo": "app.decorate(\"auditService\", AuditService)", "assinatura": "apps/server/src/app.ts:75", "descricao": "Log de auditoria (data/audit.json). Consumida por routes/auth.ts, routes/setup.ts, routes/security.ts, routes/mail.ts, routes/monitoring.ts, routes/terminal.ts e indiretamente por DeployService (hook injetado)." },
+    { "simbolo": "app.decorate(\"alertsService\", AlertsService)", "assinatura": "apps/server/src/app.ts:76", "descricao": "Central de alertas (data/alerts.json). Consumida por DeployService (guardrails), MonitorService e routes/monitoring.ts." },
+    { "simbolo": "app.decorate(\"deployService\", DeployService)", "assinatura": "apps/server/src/app.ts:79-82", "descricao": "Orquestra projetos/deploys (packages/deploy). Consumida por routes/projects.ts; routes/mail.ts injeta nela o provider de env SMTP via setEnvProvider()." },
+    { "simbolo": "app.decorate(\"terminalService\", TerminalService)", "assinatura": "apps/server/src/app.ts:86-93", "descricao": "Sessão única de PTY do terminal web embutido. Consumida por routes/terminal.ts (WebSocket) e por SecurityService (executa fases de hardening dentro do terminal, visão dupla)." },
+    { "simbolo": "app.decorate(\"setupToken\", string | null)", "assinatura": "apps/server/src/app.ts:112", "descricao": "Token de setup carregado no boot (env SETUP_TOKEN ou arquivo). Consumido pelo plugin de auth (guarda global) e por routes/setup.ts (verify-token)." },
+    { "simbolo": "app.decorate(\"monitorService\", MonitorService)", "assinatura": "apps/server/src/routes/monitoring.ts:35", "descricao": "Scan recorrente + diff de baseline, agendado dentro do próprio processo (sem cron externo). Só existe depois que routes/monitoring.ts é registrado." },
+    { "simbolo": "app.decorate(\"mailService\", MailService)", "assinatura": "apps/server/src/routes/mail.ts:39", "descricao": "Orquestra o Stalwart (packages/mailer). Consumida por routes/mail.ts e pelo hook de blacklist do MonitorService (monitoring.ts chama app.mailService.listDomains/checkBlacklists)." },
+    { "simbolo": "app.decorate(\"securityService\", SecurityService)", "assinatura": "apps/server/src/routes/security.ts:41", "descricao": "Orquestra scan/plano/aplicação de hardening (packages/security). Recebe app.terminalService e app.auditService no construtor." }
+  ],
+  "comportamento": [
+    "Camadas: routes/*.ts (HTTP/WS, validação de payload, tradução de erro) -> services/*.ts em apps/server (orquestração com estado/IO local, ex.: AuditService, DeployService) -> packages/{security,deploy,mailer}/src (lógica de domínio pura ou quase-pura, reusável e testável sem Fastify) -> packages/core (tipos/constantes compartilhados por TODAS as camadas, inclusive o frontend).",
+    "O monorepo é gerenciado por pnpm workspaces (pnpm-workspace.yaml: apps/*, packages/*); os pacotes internos são consumidos via 'workspace:*' e importados como @paas/core, @paas/deploy, @paas/mailer, @paas/security — sem build intermediário: apps/server roda os pacotes via tsx (TypeScript direto), só apps/web passa pelo bundler Vite.",
+    "buildApp() (apps/server/src/app.ts:48-186) monta a instância Fastify na ordem: (1) decora config/serviços base (setupState, userStore, sessionStore, auditService, alertsService, deployService, terminalService), (2) reaper de boot remove containers de terminal órfãos de um processo anterior (não bloqueia o startup), (3) carrega o setup token, (4) registra segurança HTTP (helmet, cors, rate-limit), (5) registra o plugin de auth (guarda global — precisa vir ANTES das rotas para interceptar toda request), (6) registra as rotas em ordem fixa: auth, setup, health, security, projects, docker, domains, mail, monitoring, terminal.",
+    "A ordem de registro das rotas importa por dependências entre decorates: mail.ts roda ANTES de monitoring.ts porque monitoring.ts usa app.mailService.listDomains()/checkBlacklists() dentro do hook de blacklist do scan recorrente — se a ordem fosse invertida, app.mailService ainda não existiria quando monitoring.ts tentasse acessá-lo (erro em runtime). O comentário em app.ts:158 confirma isso é intencional ('Fase 4 — por último: consome mailService').",
+    "O plugin de auth (fastify-plugin, não encapsulado) roda um hook onRequest global que resolve a sessão do cookie em TODA requisição (inclusive as públicas) e decide se a rota exige setup-token, sessão ou é pública — ver global/auth-plugin.json para o detalhe completo da lógica.",
+    "Frontend: se apps/web/dist/index.html existir (build do Vite), o Fastify registra @fastify/static apontando para config.webDist e define um notFoundHandler que serve index.html para qualquer GET que não comece com /api/ (fallback de SPA, necessário para rotas client-side como /projects/:id funcionarem em refresh direto). Sem o build, o servidor loga aviso e serve só a API (404 puro para qualquer rota não-API) — modo usado em dev, onde o Vite dev server roda separado na porta 5173 e faz proxy de /api para o Fastify.",
+    "index.ts (entrypoint) chama buildApp(), sobe o listen na porta/host de config, e registra handlers de SIGINT/SIGTERM que fecham a app graciosamente (app.close(), que dispara o onClose hook — terminalService.dispose())."
+  ],
+  "usadoPor": [
+    { "referencia": "todas as rotas de apps/server/src/routes/*.ts", "arquivo": "apps/server/src/app.ts", "doc": null },
+    { "referencia": "entrypoint do processo", "arquivo": "apps/server/src/index.ts:1-3", "doc": null },
+    { "referencia": "todos os módulos de negócio documentados (autenticacao, setup, seguranca, projetos, dominios, email, monitoramento, terminal)", "arquivo": "comoFuncionaSistema/*/index.json", "doc": null }
+  ],
+  "testes": [
+    "apps/server/tests/config.test.ts",
+    "apps/server/tests/security-history.test.ts"
+  ],
+  "observacoes": [
+    "Só apps/server/tests/security-history.test.ts constrói a app inteira via buildApp(); as demais rotas são testadas por um harness próprio (test-utils.ts: buildAuthTestApp), não pela app completa.",
+    "vitest.config.ts de apps/server exclui explicitamente app.ts/index.ts da cobertura (ver global/testes.json)."
+  ]
+}

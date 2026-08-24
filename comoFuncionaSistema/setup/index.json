@@ -1,0 +1,108 @@
+{
+  "modulo": "setup",
+  "titulo": "Setup (wizard de instalação inicial)",
+  "resumo": "Wizard de 4 passos executado uma única vez por instalação: valida o setup token gerado pelo instalador, mostra o diagnóstico da máquina, conduz o hardening de segurança e termina criando a única conta de administrador do painel. A partir daí a API para de aceitar o setup token e passa a exigir sessão.",
+  "pontoDeEntrada": { "api": "POST /api/setup/verify-token", "web": "/setup" },
+  "comoFunciona": [
+    "O instalador (scripts/install.sh, fora deste módulo) gera um setup token aleatório, grava em /etc/paas/setup-token (ou na env SETUP_TOKEN) e imprime no terminal um link no formato http://IP:9000/?token=TOKEN.",
+    "No boot do servidor, apps/server/src/app.ts:111 chama loadSetupToken(config.setupTokenFile), que prioriza a variável de ambiente SETUP_TOKEN e cai para o arquivo em disco; o resultado (string ou null) é decorado em app.setupToken. Se null, todas as rotas que exigem o token respondem 503 setup_token_missing até o operador configurar a env ou o arquivo e reiniciar o processo — não há hot-reload do token.",
+    "No frontend, apps/web/src/lib/api.ts captura o ?token= da URL no CARREGAMENTO DO MÓDULO (antes do React renderizar, para sobreviver ao redirect do guard de rotas de '/' para '/setup'), guarda em sessionStorage sob a chave 'paas.setup-token' e limpa a query string via history.replaceState. Todo apiFetch() subsequente anexa esse token no header x-setup-token automaticamente.",
+    "Máquina de estados do wizard (SETUP_STEPS em apps/server/src/services/setup-state.ts:6, espelhado em FALLBACK_STEPS de apps/web/src/pages/SetupPage.tsx): passo 0 'welcome' (boas-vindas e token), passo 1 'health' (saúde da máquina, somente leitura), passo 2 'security' (hardening, módulo separado), passo 3 'admin' (criação da conta administradora).",
+    "Passo 0→1: o WelcomeStep chama POST /api/setup/verify-token com o token digitado (ou o pré-preenchido pela URL, auto-verificado ao montar). Se valid=true, o componente salva o token na sessão e o SetupPage libera o terminal web e chama advance(1), que atualiza o estado local IMEDIATAMENTE e dispara POST /api/setup/advance em paralelo (melhor esforço — falha de rede não bloqueia a navegação, só o valor persistido no servidor fica desatualizado).",
+    "Passo 1→2 e 2→3: HealthStep e SecurityStep chamam onNext(), que no SetupPage é advance(2) e advance(3) respectivamente. Nenhum desses passos tem lógica própria de conclusão no backend — 'concluir' um passo é simplesmente o frontend decidir avançar; o servidor só registra o número do passo, sem validar se o conteúdo daquele passo foi de fato executado.",
+    "Passo 3 (fim do wizard): AdminStep envia POST /api/setup/admin com username+password. Sucesso (201) grava o único usuário em data/users.json, chama app.setupState.complete() (grava completed:true em data/setup-state.json) e registra uma entrada de auditoria (setup.admin_created). O frontend então descarta o token da sessão (clearSetupToken()) e mostra a tela de sucesso com um botão para /login.",
+    "Trava pós-setup: o guard global (apps/server/src/plugins/auth.ts) lê setupState.load() em TODA requisição /api/*. Enquanto completed=false, qualquer rota /api/setup/* (exceto verify-token) exige o setup token válido via header x-setup-token ou query ?token=; demais rotas /api/* também aceitam o setup token nessa fase (permite o wizard operar sem sessão). Assim que completed=true, QUALQUER acesso a /api/setup/* passa a responder 403 setup_completed, e o restante da API passa a exigir sessão — o setup token perde toda utilidade a partir desse ponto, mesmo que ainda seja o valor correto.",
+    "Não há endpoint para 'desfazer' o setup ou trocar o admin único — reversão exige apagar data/setup-state.json e data/users.json manualmente (fora do escopo deste módulo)."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/setup.ts"],
+    "servicos": [
+      "apps/server/src/services/setup-state.ts",
+      "apps/server/src/services/setup-token.ts",
+      "apps/server/src/services/password.ts",
+      "apps/server/src/services/user-store.ts"
+    ],
+    "pacotes": ["packages/core/src/auth.ts", "packages/core/src/index.ts"],
+    "web": [
+      "apps/web/src/pages/SetupPage.tsx",
+      "apps/web/src/pages/setup/WelcomeStep.tsx",
+      "apps/web/src/pages/setup/HealthStep.tsx",
+      "apps/web/src/pages/setup/SecurityStep.tsx",
+      "apps/web/src/pages/setup/AdminStep.tsx",
+      "apps/web/src/components/Stepper.tsx",
+      "apps/web/src/lib/api.ts"
+    ],
+    "testes": [
+      "apps/server/tests/routes-setup.test.ts",
+      "apps/server/tests/setup-state.test.ts",
+      "apps/server/tests/setup-token.test.ts",
+      "apps/web/tests/setup-page.test.tsx",
+      "apps/web/tests/welcome-step.test.tsx",
+      "apps/web/tests/admin-step.test.tsx",
+      "apps/web/tests/security-step.test.tsx",
+      "apps/web/tests/health-step.test.tsx",
+      "apps/web/tests/setup-token-capture.test.ts"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/setup-state.json",
+      "formato": "json",
+      "conteudo": "Estado do wizard, escrito por SetupStateStore (apps/server/src/services/setup-state.ts). Campos: currentStep (number, passo atual 0-3), completed (boolean, true após criar o admin), updatedAt (string ISO, atualizado a cada save). Arquivo criado com mode 0600. Ausência ou JSON corrompido faz load() devolver silenciosamente o estado inicial (currentStep:0, completed:false) sem lançar erro; campos ausentes recebem defaults (currentStep vira 0 se ausente, completed vira false)."
+    },
+    {
+      "arquivo": "/etc/paas/setup-token (ou caminho de SETUP_TOKEN_FILE)",
+      "formato": "texto plano",
+      "conteudo": "Setup token gerado pelo instalador (scripts/install.sh, não faz parte deste módulo). Lido uma única vez no boot por loadSetupToken(); a variável de ambiente SETUP_TOKEN tem prioridade sobre o arquivo. Conteúdo é lido com trim(). Se ausente e sem env, app.setupToken fica null e o servidor loga um warning."
+    },
+    {
+      "arquivo": "data/users.json",
+      "formato": "json",
+      "conteudo": "Criado/gravado por UserStore.create() (apps/server/src/services/user-store.ts) no passo final do wizard. Contém o único usuário admin: id, username, usernameLower, passwordHash (argon2id), createdAt, updatedAt. Detalhado no módulo autenticacao."
+    },
+    {
+      "arquivo": "data/audit.json",
+      "formato": "json",
+      "conteudo": "Recebe a entrada 'setup.admin_created' ao concluir o wizard, gravada por AuditService.record(). Detalhado no módulo autenticacao/global."
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "verificar-token",
+      "metodo": "POST",
+      "url": "/api/setup/verify-token",
+      "resumo": "Valida o setup token informado pelo usuário no passo de boas-vindas (público, sem exigir o token no header).",
+      "arquivo": "verificar-token.json"
+    },
+    {
+      "id": "status",
+      "metodo": "GET",
+      "url": "/api/setup/status",
+      "resumo": "Devolve o estado atual do wizard (passo, concluído) e a lista de passos conhecidos.",
+      "arquivo": "status.json"
+    },
+    {
+      "id": "avancar",
+      "metodo": "POST",
+      "url": "/api/setup/advance",
+      "resumo": "Persiste o passo atual do wizard no servidor (idempotente, best-effort do ponto de vista do frontend).",
+      "arquivo": "avancar.json"
+    },
+    {
+      "id": "criar-admin",
+      "metodo": "POST",
+      "url": "/api/setup/admin",
+      "resumo": "Cria a única conta de administrador do painel e conclui o setup, invalidando o setup token.",
+      "arquivo": "criar-admin.json"
+    }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "GET /api/setup/status e POST /api/setup/advance também exigem o setup token (via auth.ts, não há isenção como em verify-token) — só verify-token é público. Isso não está descrito no README do endpoint status/advance no código, é implícito na ordem dos hooks do plugin de auth.",
+    "POST /api/setup/advance aceita QUALQUER inteiro entre 0 e o maior id de SETUP_STEPS, inclusive retroceder o passo (não há checagem de que o novo step seja >= currentStep) — o servidor não valida a ordem, só o formato do número.",
+    "Nenhum endpoint do wizard valida que o passo anterior foi 'de fato' concluído (ex.: HealthStep sempre libera onNext mesmo com avisos; SecurityStep pode ser pulado). A única barreira real de segurança é o passo 3 (criação do admin), que checa hasAdmin() no backend.",
+    "Corrida entre WelcomeStep.autoVerify (via token da URL) e o GET /api/setup/status inicial do SetupPage é tratada explicitamente com Math.max no frontend (ver comentário em SetupPage.tsx) para não regredir o passo já alcançado — mas é um patch de sintoma, não elimina a corrida.",
+    "advance() no frontend é 'melhor esforço': se a requisição POST /api/setup/advance falhar (rede, 401 por token expirado, etc.), o erro é silenciosamente engolido (.catch(() => undefined)) e a UI já avançou visualmente — um reload nesse ponto pode voltar o usuário para um passo anterior ao que via na tela.",
+    "Não existe expiração de tempo para o setup token nem para o próprio processo de setup: enquanto completed=false, o token do instalador continua válido indefinidamente (inclusive dias/semanas depois), sem rate limit dedicado nas rotas de setup além do timing-safe compare."
+  ]
+}

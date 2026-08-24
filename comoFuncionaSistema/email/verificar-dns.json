@@ -1,0 +1,56 @@
+{
+  "id": "verificar-dns",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/domains/:domain/verify",
+  "resumo": "Consulta o DNS real (resolver público) e compara com o checklist esperado; verifica também o reverse DNS (PTR) do IP.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:139",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200) — não há limite específico, então o usuário pode martelar 'Verificar agora' repetidamente (cada clique dispara consultas DNS reais).",
+  "parametros": {
+    "path": [{ "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (domainParamSchema, mail.ts): minLength 1, maxLength 253, pattern de domínio (MAIL_DOMAIN_SCHEMA).", "descricao": "Nome do domínio já cadastrado." }],
+    "query": [], "body": [], "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Verificação concluída (mesmo que registros estejam ausentes/divergentes — isso não é erro).",
+      "corpo": { "domain": "string", "verifiedAt": "string (ISO)", "summary": { "ok": "number", "total": "number" }, "records": "DnsRecordCheck[]", "ptr": "PtrCheck", "suggestion": "string|null" },
+      "exemplo": {
+        "domain": "exemplo.com.br", "verifiedAt": "2026-08-24T12:00:00.000Z", "summary": { "ok": 4, "total": 6 },
+        "records": [ { "id": "a", "type": "A", "name": "mail.exemplo.com.br", "expected": "203.0.113.10", "purpose": "...", "status": "found", "found": ["203.0.113.10"], "note": null } ],
+        "ptr": { "ip": "203.0.113.10", "expected": "mail.exemplo.com.br", "status": "action_required", "found": [], "ticketText": "Assunto: Solicitação de configuração de reverse DNS (PTR/rDNS)\n\nOlá,\n\nSolicito a configuração do registro de reverse DNS (PTR) do IP 203.0.113.10 para:\n\n    mail.exemplo.com.br\n\nAtualmente o IP não possui registro PTR.\npois este servidor hospeda um servidor de e-mail e o reverse DNS (FCrDNS) é\nexigido pelo Gmail, Yahoo e Microsoft para aceitar mensagens.\n\nObrigado!" },
+        "suggestion": "Estágio de observação: SPF \"~all\" e DMARC \"p=none\"..."
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "O segmento :domain reprovado pelo schema Fastify (domainParamSchema) ANTES do handler: fora do padrão de domínio ou maior que 253 chars.", "mensagem": "Campo inválido: domain." },
+    { "status": 404, "codigo": "domain_not_found", "quando": "Domínio no formato correto mas não cadastrado.", "mensagem": "Domínio {domínio} não encontrado." }
+  ],
+  "fluxo": [
+    "1. dnsChecklist(name): monta o checklist esperado local (mesmo helper de GET .../dns).",
+    "2. verifyDnsRecords(checklist, publicResolver()): resolver com servidores fixos 1.1.1.1/8.8.8.8 (independe do DNS local da VPS).",
+    "3. Para A/AAAA: resolve4/resolve6. Para MX: resolveMx, ordenado por prioridade, ponto final removido. Para TXT (SPF/DKIM/DMARC): resolveTxt — basta UM dos TXT do nome bater com o esperado (o nome pode ter outros TXT, ex.: google-site-verification).",
+    "4. Comparação normalizada (trim, remove ponto final, colapsa espaços). SPF com IP certo mas mecanismo final (~all/-all) diferente vira 'mismatch' com nota explicativa específica (não falha silenciosa).",
+    "5. Qualquer falha de consulta DNS (NXDOMAIN etc.) é tratada (função safe()) e vira found:[] → status 'missing', nunca derruba a rota.",
+    "6. PTR: reverse(ip); ausente → 'action_required' + ticketText pronto; presente mas diferente → 'mismatch' + ticketText citando o valor atual; igual ao esperado → 'found'.",
+    "7. domain.lastVerify = { at, ok, total } é PERSISTIDO em data/mail/mail.json (usado pelo badge agregado em MailPage).",
+    "8. Retorna summary { ok, total } = registros 'found' + (1 se PTR 'found')."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.verifyDomain", "arquivo": "apps/server/src/services/mail-service.ts:313", "papel": "Chama verifyDnsRecords e persiste lastVerify." },
+    { "tipo": "pacote", "nome": "verifyDnsRecords/publicResolver", "arquivo": "packages/mailer/src/dns-checklist.ts:183", "papel": "Consulta DNS real e compara com o esperado." }
+  ],
+  "efeitosColaterais": ["Grava data/mail/mail.json (domain.lastVerify). Consultas DNS reais a 1.1.1.1/8.8.8.8."],
+  "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:217"],
+  "testes": ["packages/mailer/tests/dns-checklist.test.ts", "scripts/test-mail.mts (passo 3)"],
+  "observacoes": [
+    "Não exige o servidor de e-mail (Stalwart) rodando — verifica DNS público, que existe independente do container estar de pé.",
+    "MUDANÇA DE COMPORTAMENTO: :domain fora do padrão de hostname agora vira 400 invalid_request na borda, em vez de chegar ao handler e falhar em requireDomain() como 404 domain_not_found."
+  ]
+}

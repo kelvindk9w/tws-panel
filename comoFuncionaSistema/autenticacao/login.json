@@ -1,0 +1,73 @@
+{
+  "id": "login",
+  "modulo": "autenticacao",
+  "metodo": "POST",
+  "url": "/api/auth/login",
+  "resumo": "Autentica usuário e senha do admin único do painel, cria uma sessão revogável e seta o cookie httpOnly de sessão.",
+  "arquivoFonte": "apps/server/src/routes/auth.ts:32",
+  "autenticacao": {
+    "exigida": false,
+    "tipo": "publica",
+    "detalhe": "Rota explicitamente liberada pelo guard global (apps/server/src/plugins/auth.ts:77, request.url.startsWith('/api/auth/login') retorna sem checar sessão nem setup token). Protegida em vez disso por rate limit de IP."
+  },
+  "rateLimit": "5 tentativas falhas por IP em janela de 60s (LoginLimiter). Ao estourar, lockout progressivo: 60s, 120s, 240s... até um teto de 30min, dobrando a cada novo estouro. O contador de falhas some ao logar com sucesso (onSuccess apaga o estado do IP). Estado 100% em memória (Map), reinicia com o processo do servidor.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "username", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (loginSchema, auth.ts): minLength 1, maxLength 100; additionalProperties:false no corpo", "descricao": "Nome de usuário do admin." },
+      { "nome": "password", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify: minLength 1, maxLength 512", "descricao": "Senha em claro (nunca logada nem persistida)." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Credenciais corretas e IP não bloqueado.",
+      "corpo": { "ok": true, "user": { "username": "string", "createdAt": "string (ISO)" }, "expiresAt": "string (ISO)" },
+      "exemplo": { "ok": true, "user": { "username": "admin", "createdAt": "2026-01-01T00:00:00.000Z" }, "expiresAt": "2026-08-24T12:00:00.000Z" }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (loginSchema) ANTES do handler rodar: username/password ausentes, vazios, maiores que o limite, de tipo diferente de string, ou corpo com campo desconhecido (additionalProperties:false). Gerado pelo error handler global (registerErrorHandler).", "mensagem": "Campo obrigatório ausente: username. / Campo inválido: username. / Campo desconhecido no corpo da requisição: <campo>." },
+    { "status": 400, "codigo": "invalid_payload", "quando": "Código legado dentro do handler (typeof !== 'string' || vazio) — na prática inalcançável agora: o schema já garante username/password como string não vazia antes do handler rodar.", "mensagem": "Informe usuário e senha." },
+    { "status": 401, "codigo": "invalid_credentials", "quando": "Usuário não encontrado OU senha incorreta — resposta idêntica nos dois casos, para não revelar se a conta existe (comparação em tempo constante contra hash dummy quando o usuário não existe).", "mensagem": "Credenciais inválidas." },
+    { "status": 429, "codigo": "too_many_attempts", "quando": "IP atingiu o limite de tentativas (checado ANTES de validar o payload/credenciais, e também logo após uma nova falha que estoura o limite). Header Retry-After (segundos) é enviado junto.", "mensagem": "Muitas tentativas. Aguarde {retryAfterSec}s e tente novamente." }
+  ],
+  "fluxo": [
+    "1. limiter.check(ip): se o IP está em lockout, responde 429 too_many_attempts com Retry-After antes de tocar no corpo da requisição.",
+    "2. Valida que username e password são strings não vazias no body; senão 400 invalid_payload.",
+    "3. Busca o usuário por username (case-insensitive) em UserStore.findByUsername.",
+    "4. Verifica a senha com verifyPasswordTimingSafe: se o usuário não existe, compara contra um hash dummy (mesmo custo de tempo) e sempre retorna false — evita timing attack para enumerar contas.",
+    "5. Se usuário não existe OU senha errada: limiter.onFailure(ip) registra a falha; grava auditoria auth.login_failed (actor 'anon', target = username informado); se essa falha estourou o limite, responde 429 too_many_attempts, senão 401 invalid_credentials.",
+    "6. Se credenciais corretas: limiter.onSuccess(ip) zera o estado de rate limit do IP.",
+    "7. Cria a sessão via SessionStore.create(user, { ip, userAgent }) — gera id aleatório (24 bytes), expiresAt = agora + 12h, e cookieValue = '<id>.<hmac>'.",
+    "8. Seta o cookie paas_session: path '/', httpOnly, sameSite 'lax', secure = (request.protocol === 'https'), maxAge = SESSION_TTL_MS/1000 (43200s).",
+    "9. Grava auditoria auth.login (actor = username).",
+    "10. Responde 200 com { ok: true, user: { username, createdAt }, expiresAt }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "LoginLimiter", "arquivo": "apps/server/src/services/login-limiter.ts", "papel": "Rate limit por IP com lockout progressivo." },
+    { "tipo": "servico", "nome": "UserStore", "arquivo": "apps/server/src/services/user-store.ts", "papel": "Busca o usuário admin por username (findByUsername)." },
+    { "tipo": "servico", "nome": "verifyPasswordTimingSafe / hashPassword", "arquivo": "apps/server/src/services/password.ts", "papel": "Verificação de senha argon2id em tempo constante, mesmo para usuário inexistente." },
+    { "tipo": "servico", "nome": "SessionStore", "arquivo": "apps/server/src/services/session-store.ts", "papel": "Cria a sessão e gera o valor assinado do cookie." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra auth.login e auth.login_failed." },
+    { "tipo": "pacote", "nome": "@paas/core (auth)", "arquivo": "packages/core/src/auth.ts", "papel": "Constantes SESSION_COOKIE, SESSION_TTL_MS e tipos LoginRequest/LoginResponse." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Libera esta rota do guard de sessão/setup token (é a exceção pública dentro de /api/auth/*)." }
+  ],
+  "efeitosColaterais": [
+    "Grava data/sessions.json (nova sessão) via SessionStore.create.",
+    "Seta o cookie paas_session (httpOnly, SameSite=Lax, secure condicional, maxAge 12h).",
+    "Auditoria: auth.login (sucesso) ou auth.login_failed (falha), incluindo IP.",
+    "Atualiza o estado em memória do LoginLimiter para o IP (contador de falhas ou reset em sucesso).",
+    "Header 'Cache-Control: no-store' em toda resposta (hook onSend do arquivo)."
+  ],
+  "chamadoPor": ["apps/web/src/pages/LoginPage.tsx:26"],
+  "testes": ["apps/server/tests/auth.test.ts"],
+  "observacoes": [
+    "A resposta e a auditoria de falha usam o username exatamente como enviado pelo cliente (sem normalização), mesmo quando o usuário não existe — não é sensível, mas registra em claro qualquer string que o atacante tentar como username.",
+    "Rate limit em memória: reinício do processo (ex.: deploy) zera todos os lockouts em andamento.",
+    "IMPORTANTE (mudança de comportamento): a validação de schema do Fastify roda na fase 'Validation' do ciclo de vida, ANTES do handler (onde vive a checagem do rate limiter). Um corpo malformado (ex.: username ausente) agora é recusado com 400 invalid_request SEM sequer chamar limiter.check(ip) — ou seja, tentativas malformadas não contam mais para (nem são bloqueadas por) o rate limit de login.",
+    "app.ts registra ajv com coerceTypes:false e removeAdditional:false (ver global/ajv-options.json) — por isso o schema recusa em vez de tentar 'consertar' o corpo."
+  ]
+}
