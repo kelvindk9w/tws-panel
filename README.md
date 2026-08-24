@@ -29,7 +29,7 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 
 - **Não-invasivo** — trabalha *com* o Docker que já existe na máquina; nunca mexe em stacks que já funcionam.
 - **Segurança primeiro** — nada sobe antes do hardening; baseline + monitoramento contínuo.
-- **Minimalista** — a VPS fica com o mínimo de pacotes; painel leve (Fastify + SQLite, sem banco externo).
+- **Minimalista** — a VPS fica com o mínimo de pacotes; painel leve (Fastify + arquivos JSON em disco, sem banco de dados algum).
 - **Open source** — MIT, pensado para contribuição desde o dia 1.
 
 ## Funcionalidades
@@ -37,8 +37,9 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 | Módulo | O que faz |
 |---|---|
 | **🖥️ Terminal web embutido** | **Visão dupla** nos 4 passos do wizard: em cima a UI formatada (cards/fases), embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), numa janela contida estilo IDE — **bloqueado até o setup token ser validado** e recolhido por padrão. As varreduras e as fases de hardening rodam DENTRO dele — você vê os comandos de verdade (`cat /etc/os-release`, checks do Lynis, scripts de fase), como no SSH. Prompts de senha/confirmação são digitados direto no terminal: o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita (audita só conexão/desconexão). |
-| **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. |
-| **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. |
+| **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. Disponível também **depois da instalação**, em `/security/hardening`, para revisar ou reaplicar quando quiser. |
+| **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. Nome, repositório, branch e domínio são **editáveis depois de criado**, e a tela mostra qual branch está de fato no ar quando a configuração diverge do último deploy. |
+| **🌿 Múltiplos ambientes** | O mesmo repositório pode ser hospedado mais de uma vez em branches e domínios diferentes — produção em `main` e sandbox em outra branch, lado a lado na mesma VPS. Cada projeto tem clone, imagem, containers e rede próprios; só o domínio precisa ser único. |
 | **📧 E-mail** | Servidor **Stalwart** (SMTP + IMAP + DKIM em um container), par **DKIM RSA 2048** gerado por domínio, **checklist DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) com valores prontos para colar no provedor, texto pronto para abrir chamado de PTR, criação de caixas com **credenciais prontas para Outlook/Gmail/Thunderbird**, e injeção automática de variáveis SMTP nos seus projetos. |
 | **🚧 Guardrails** | **6 regras** de segurança de deploy em 3 níveis (`block`, `warn`, `info`): porta de banco exposta no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado no código, tag `:latest`. Blocks exigem **override explícito e auditado**, com evidência e sugestão de correção. |
 | **📊 Monitoramento** | **Baseline** pós-hardening (pacotes, portas, hashes de arquivos críticos) + scans recorrentes com **diff** (o que mudou vira alerta), verificação de **blacklist de e-mail** (Spamhaus ZEN, SpamCop, Barracuda, Spamhaus DBL), central de alertas e **log de auditoria** de todas as ações sensíveis. |
@@ -438,7 +439,7 @@ Como os módulos se relacionam:
                        │              ┌───────────────┐
                        └─────────────►│   @paas/core  │ (tipos compartilhados)
                                       └───────────────┘
-        Estado persistido no volume paas_data (/data, JSON/SQLite, modo 0600)
+        Estado persistido no volume paas_data (/data, arquivos JSON, modo 0600)
         — sem serviços externos.
 ```
 
@@ -461,10 +462,23 @@ Fases já entregues: **0** Fundação · **1** Hardening · **2** Deploy + Domí
 Encontrou uma vulnerabilidade? **Não abra uma issue pública.** Leia [SECURITY.md](SECURITY.md)
 para saber como reportar de forma responsável.
 
-O próprio painel foi desenhado com segurança em mente: wizard protegido por token de uso único,
-nenhum shell arbitrário vindo da UI (apenas ações pré-definidas e auditadas), Docker socket nunca
-exposto via TCP, CORS same-origin por padrão, rate limiting, logs com redação de segredos e
-auditoria de todas as ações sensíveis.
+O painel foi desenhado com segurança em mente: wizard protegido por token de uso único, Docker
+socket nunca exposto via TCP, CORS same-origin por padrão, rate limiting, validação de schema em
+todas as rotas da API, logs com redação de segredos e auditoria de todas as ações sensíveis.
+
+**Seja franco sobre o que isto exige.** Um PaaS precisa de acesso privilegiado ao host — não há
+como criar containers e configurar firewall sem ele. Duas consequências que você deve conhecer
+antes de instalar:
+
+- **O terminal web é um shell real com root na VPS**, não uma lista de ações pré-aprovadas. É o
+  que permite ver e conduzir o hardening como se estivesse no SSH, e é também o ponto mais
+  sensível do sistema: quem tem sessão no painel tem a máquina.
+- **O socket do Docker é montado no container do painel**, o que equivale a root no host. É uma
+  propriedade do Docker, não uma falha do painel, e nenhum hardening do container altera isso.
+
+Ambos estão documentados em detalhe, junto com o que o projeto **não** protege e as dívidas de
+segurança conhecidas, em [comoFuncionaSistema/global/threat-model.json](comoFuncionaSistema/global/threat-model.json).
+Recomendamos não expor o painel à internet aberta: prefira VPN ou restrição por IP.
 
 **Autenticação:** o painel nasce protegido pelo setup token gerado na instalação; no Passo 4 do
 wizard você cria a conta de administrador (senha com hash argon2id, mínimo de 12 caracteres com
@@ -481,6 +495,8 @@ Login, logout, falhas e criação da conta admin ficam registrados no log de aud
 | [docs/production.md](docs/production.md) | Do dev à VPS real: portas, DNS, ACME, PTR, ordem recomendada |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Porta 25 bloqueada, e-mail em spam, cert não emitido, wizard inacessível… |
 | [docs/README.md](docs/README.md) | Índice completo da documentação |
+| [comoFuncionaSistema/](comoFuncionaSistema/) | Documentação legível por máquina: um JSON por endpoint, com parâmetros, erros, efeitos colaterais e testes. Escrita para agentes de IA — comece por `index.json` |
+| [threat-model.json](comoFuncionaSistema/global/threat-model.json) | O que o painel protege, o que não protege, quais privilégios exige e por quê |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Como contribuir (setup, padrões, como estender o painel) |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Código de conduta |
 | [SECURITY.md](SECURITY.md) | Política de segurança e reporte de vulnerabilidades |
