@@ -118,6 +118,13 @@ export class SecurityService {
   private readonly lastReportFile: string;
   private readonly jobsFile: string;
   private lastScan: SecurityScanReport | null = null;
+  /**
+   * Fila das escritas de jobs. Elas são disparadas sem await no onChange
+   * (persistir não pode atrasar a requisição), então precisamos de um jeito
+   * de esperar as pendentes — no desligamento do painel e nos testes, que
+   * senão apagam o diretório no meio de uma gravação.
+   */
+  private jobWrites: Promise<void> = Promise.resolve();
   private runningScan: Promise<SecurityScanReport> | null = null;
 
   constructor(
@@ -405,7 +412,17 @@ export class SecurityService {
    * exatamente os que precisam sobreviver a um restart; o teto só afeta jobs
    * terminais antigos, priorizando os mais recentes.
    */
+  /** Aguarda as gravações de jobs pendentes. */
+  async flushJobWrites(): Promise<void> {
+    await this.jobWrites;
+  }
+
   private async persistJobs(): Promise<void> {
+    this.jobWrites = this.jobWrites.then(() => this.writeJobsFile()).catch(() => undefined);
+    await this.jobWrites;
+  }
+
+  private async writeJobsFile(): Promise<void> {
     try {
       const jobs = this.executor.listJobs();
       const nonTerminal = jobs.filter((j) => !TERMINAL_JOB_STATUSES.has(j.status));
