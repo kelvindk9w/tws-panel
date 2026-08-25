@@ -262,8 +262,16 @@ describe("WS /api/terminal/ws — sessão destacável e anti-ping-pong (clientId
     expect((await wsClosed(intruder)).code).toBe(WS_CLOSE_BUSY);
     await tick();
     expect(ctx.ptys).toHaveLength(1); // só o PTY do dono
-    const auditRaw = await readFile(path.join(ctx.dir, "audit.json"), "utf8");
-    expect(auditRaw.match(/terminal\.connect/g)).toHaveLength(1); // só o dono auditado
+
+    // A auditoria é fire-and-forget: espera a entrada do dono APARECER antes de
+    // contar, em vez de assumir que um tick fixo bastou. Sem isso o arquivo
+    // pode estar vazio na hora da leitura e o match devolve null — falha
+    // intermitente que não diz nada sobre o comportamento testado.
+    const auditRaw = await waitForAuditContains(ctx.dir, "terminal.connect");
+    // Só o dono foi auditado: o intruso foi recusado antes de abrir PTY. O
+    // tick acima já deu à conexão recusada tempo de sobra para auditar, se
+    // fosse auditar.
+    expect(auditRaw.match(/terminal\.connect/g)).toHaveLength(1);
     ownerWs.close();
   });
 });
