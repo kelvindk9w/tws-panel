@@ -87,65 +87,6 @@ fingerprint fica salvo e a conexão é direta.
 
 </details>
 
-<details>
-<summary>⏱️ <strong>A conexão cai sozinha depois de alguns minutos parado?</strong></summary>
-
-Acontece, e a causa muda conforme o momento da instalação. Vale entender, porque a solução
-de um caso é diferente da do outro.
-
-**Antes do hardening (agora).** O Ubuntu recém-instalado não desconecta ninguém por
-inatividade — quem derruba costuma ser o **firewall/NAT do provedor**, que descarta conexões
-TCP sem tráfego. A correção é o seu computador mandar um sinal de vida periódico. Faça isso
-**no seu computador**, nunca na VPS:
-
-```bash
-# no SEU computador (não na VPS): ~/.ssh/config
-Host *
-    ServerAliveInterval 60
-    ServerAliveCountMax 3
-```
-
-A cada 60 segundos o seu cliente envia um pacote de keepalive, e a conexão para de parecer
-ociosa para o provedor. Isso **não enfraquece nada** — a sessão continua sendo encerrada se a
-rede realmente cair.
-
-**Depois do hardening.** Aí a desconexão passa a ser nossa, e é de propósito. O passo de
-segurança do painel grava em `/etc/ssh/sshd_config.d/`:
-
-```text
-ClientAliveInterval 300     # verifica a cada 5 minutos
-ClientAliveCountMax 2       # desconecta após 2 verificações sem resposta
-```
-
-Na prática: **cerca de 10 minutos** de inatividade real encerram a sessão. Existe para o caso
-de você esquecer um terminal aberto — num notebook, num café, numa máquina compartilhada.
-
-**Se ainda assim quiser mudar**, edite no servidor e reinicie o SSH:
-
-```bash
-sudo nano /etc/ssh/sshd_config.d/99-tws-panel.conf
-# aumentar para ~1 hora:
-#   ClientAliveInterval 600
-#   ClientAliveCountMax 6
-# desligar a desconexão por inatividade (não recomendado):
-#   ClientAliveInterval 0
-#   ClientAliveCountMax 0
-sudo sshd -t && sudo systemctl restart ssh   # -t valida antes de reiniciar
-```
-
-> [!WARNING]
-> Rode `sudo sshd -t` **antes** de reiniciar. Um erro de digitação no arquivo pode impedir o
-> SSH de subir, e aí você fica sem acesso à máquina. Mantenha a sessão atual aberta e teste a
-> reconexão em **outra janela** antes de fechar a que funciona.
-
-**A recomendação:** use `ServerAliveInterval` no seu computador e **deixe o timeout do servidor
-como está**. Os dois resolvem sintomas diferentes — o keepalive impede que o provedor derrube
-uma sessão em que você está trabalhando, e o timeout do servidor continua fechando a sessão
-que você realmente abandonou. Desligar o timeout troca uma proteção real por uma conveniência
-que o keepalive já entrega.
-
-</details>
-
 **3. Crie o seu usuário não-root** — é ele quem vai operar a VPS daqui em diante:
 
 ```bash
@@ -153,7 +94,8 @@ adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a
 usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
 ```
 
-Agora entre na conta que você acabou de criar. Há duas formas, e **a recomendada é a segunda**:
+Agora entre na conta que você acabou de criar. Há duas formas — a segunda é a recomendada,
+porque com ela você **sai de vez da conta de root**, em vez de ficar com ela aberta por baixo:
 
 ```bash
 # Opção A — atalho: troca de usuário sem sair da sessão atual
@@ -166,6 +108,9 @@ exit                     # sai do root e fecha a conexão SSH
 ssh kelvin@SEU_IP        # conecte de novo; "kelvin" é o usuário que você acabou de criar
                          # e a senha é a que você definiu no adduser
 ```
+
+A partir daqui, **todos os passos são feitos como esse usuário** — o que precisar de permissão
+de administrador vai pedir `sudo` e a sua senha.
 
 <details>
 <summary>🤔 <strong>Por que a opção B é a recomendada?</strong></summary>
@@ -237,6 +182,51 @@ Is the information correct? [Y/n]
 > o wizard só precisa **validar** que ele existe (Fase 01 de segurança) em vez de criá-lo — e o
 > acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
 > novo no passo de Segurança do wizard.
+
+**Ainda no passo 3 — a conexão está caindo sozinha quando você para de digitar?**
+
+Se você já percebeu a sessão fechando depois de alguns minutos parado, o culpado quase sempre
+é o **provedor da VPS**, não o servidor: firewalls de rede costumam descartar conexões que
+ficam um tempo sem tráfego. O seu computador pode resolver isso mandando um sinal de vida a
+cada minuto. Rode **no seu computador**, não na VPS:
+
+```bash
+# no SEU computador (Linux/macOS). No Windows com PuTTY, o campo equivalente é
+# "Seconds between keepalives" em Connection.
+printf 'Host *\n    ServerAliveInterval 60\n    ServerAliveCountMax 3\n' >> ~/.ssh/config
+```
+
+Depois disso, reconecte. **Isso não enfraquece a segurança** — a sessão continua sendo
+encerrada se a rede realmente cair; o que muda é que ela para de *parecer* abandonada enquanto
+você está trabalhando.
+
+> [!IMPORTANT]
+> **Mais adiante, no wizard, isso muda.** Quando você aplicar o passo de segurança do painel,
+> ele passa a encerrar sessões ociosas por conta própria, em cerca de **10 minutos**. É
+> proposital: protege você de deixar um terminal aberto e esquecido — num notebook, num café,
+> numa máquina compartilhada. Com o keepalive acima configurado, você não sente isso enquanto
+> está trabalhando, só quando realmente abandona a sessão.
+>
+> **Recomendamos deixar assim.** Mas se o seu caso exigir sessões ociosas mais longas (um build
+> demorado que você acompanha de longe, por exemplo), dá para ajustar depois da instalação:
+>
+> ```bash
+> sudo nano /etc/ssh/sshd_config.d/99-tws-panel.conf
+> #   para ~1 hora:      ClientAliveInterval 600   e   ClientAliveCountMax 6
+> #   para desligar:     ClientAliveInterval 0     e   ClientAliveCountMax 0
+> sudo sshd -t && sudo systemctl restart ssh
+> ```
+>
+> O `sshd -t` confere o arquivo **antes** de reiniciar — sem ele, um erro de digitação pode
+> impedir o SSH de subir e te deixar sem acesso à máquina. Mantenha a janela atual aberta e
+> teste a reconexão em **outra** antes de fechar a que funciona.
+>
+> **E quando terminar o que precisava**, volte ao padrão. É um comando só:
+>
+> ```bash
+> sudo sed -i 's/^ClientAliveInterval .*/ClientAliveInterval 300/; s/^ClientAliveCountMax .*/ClientAliveCountMax 2/' /etc/ssh/sshd_config.d/99-tws-panel.conf
+> sudo sshd -t && sudo systemctl restart ssh
+> ```
 
 **4. Instale o git:**
 
