@@ -1,0 +1,37 @@
+{
+  "id": "error-handler",
+  "titulo": "Handler de erro padronizado (validação de schema)",
+  "resumo": "Handler de erro Fastify (`app.setErrorHandler`) que intercepta especificamente falhas de validação de schema (`error.validation` presente) e as converte em 400 no formato de erro do painel (`{ error: 'invalid_request', message }`), com uma mensagem em pt-BR que nomeia o campo recusado sem expor o jargão interno do Ajv (instancePath, schemaPath, keyword). Qualquer outro erro (sem `error.validation`) segue para a serialização padrão do Fastify sem alteração. Chamado via `registerErrorHandler(app)` logo no início de cada um dos 10 plugins de rota.",
+  "arquivoFonte": "apps/server/src/plugins/error-handler.ts",
+  "tipo": "middleware",
+  "api": [
+    { "simbolo": "registerErrorHandler", "assinatura": "(app: FastifyInstance) => void", "descricao": "Registra `app.setErrorHandler(...)` na instância/encapsulamento passado. Chamada uma vez por plugin de rota (não é global — cada um dos 10 arquivos de rota chama a própria vez, pois cada `FastifyPluginAsync` roda em um encapsulamento próprio do Fastify)." },
+    { "simbolo": "invalidFieldMessage", "assinatura": "(error: FastifyError) => string", "descricao": "Função interna (não exportada) que monta a mensagem em pt-BR a partir do primeiro item de error.validation: 'Campo obrigatório ausente: <nome>.' para keyword 'required', 'Campo desconhecido no corpo da requisição: <nome>.' para 'additionalProperties', ou 'Campo inválido: <path>.' para qualquer outro keyword (pattern, minLength, maxLength, type, enum, minimum, maximum etc.), derivando o nome do campo de error.instancePath." }
+  ],
+  "comportamento": [
+    "Só age quando error.validation está presente (erro de validação de schema do Fastify/Ajv) — qualquer outro erro (lançado pelo handler, por um service, erro 500 genuíno) é repassado sem alteração via `reply.send(error)`, preservando o comportamento padrão do Fastify para esses casos.",
+    "Sempre responde 400, mesmo que o erro de validação original tivesse um status code diferente — na prática toda falha de schema do Fastify já é 400 por definição, então isso não muda nada na prática, só formaliza.",
+    "O corpo completo do erro de validação (error.validation, com instancePath/schemaPath/keyword/params do Ajv) é logado no servidor (request.log.warn) mas NUNCA aparece na resposta HTTP — só o nome do campo chega ao cliente, não a estrutura interna do schema.",
+    "allErrors:false no Ajv (ver global/ajv-options.json) significa que error.validation tem no máximo 1 item — a mensagem sempre descreve o PRIMEIRO campo que falhou, nunca uma lista de todos os problemas do corpo.",
+    "Mensagens cobrem 3 categorias: campo obrigatório ausente (keyword 'required'), campo desconhecido quando additionalProperties:false (keyword 'additionalProperties'), e qualquer outra violação de tipo/formato/limite (fallback genérico 'Campo inválido: <path>.' — não distingue minLength de pattern de enum de maxLength)."
+  ],
+  "usadoPor": [
+    { "referencia": "authRoutes", "arquivo": "apps/server/src/routes/auth.ts:53", "doc": "autenticacao/index.json" },
+    { "referencia": "dockerRoutes", "arquivo": "apps/server/src/routes/docker.ts:7", "doc": "docker/index.json" },
+    { "referencia": "domainsRoutes", "arquivo": "apps/server/src/routes/domains.ts:41", "doc": "dominios/index.json" },
+    { "referencia": "healthRoutes", "arquivo": "apps/server/src/routes/health.ts:30", "doc": "saude/index.json" },
+    { "referencia": "mailRoutes", "arquivo": "apps/server/src/routes/mail.ts:159", "doc": "email/index.json" },
+    { "referencia": "monitoringRoutes", "arquivo": "apps/server/src/routes/monitoring.ts:89", "doc": "monitoramento/index.json" },
+    { "referencia": "projectsRoutes", "arquivo": "apps/server/src/routes/projects.ts:70", "doc": "projetos/index.json" },
+    { "referencia": "securityRoutes", "arquivo": "apps/server/src/routes/security.ts:90", "doc": "seguranca/index.json" },
+    { "referencia": "setupRoutes", "arquivo": "apps/server/src/routes/setup.ts:61", "doc": "setup/index.json" },
+    { "referencia": "terminalRoutes", "arquivo": "apps/server/src/routes/terminal.ts:65", "doc": "terminal/index.json" }
+  ],
+  "testes": [
+    "Sem teste unitário isolado de error-handler.ts (a função invalidFieldMessage não é exportada) — o comportamento é exercitado indiretamente por TODOS os testes de schema por rota, que verificam `res.json().error === 'invalid_request'` e, em alguns casos, o texto da mensagem: apps/server/tests/routes-auth-schema.test.ts, routes-mail-schema.test.ts, routes-misc-schema.test.ts, routes-monitoring-schema.test.ts, routes-projects-schema.test.ts, routes-security-schema.test.ts, routes-setup-schema.test.ts."
+  ],
+  "observacoes": [
+    "É registrado POR PLUGIN, não uma única vez globalmente em app.ts — os 10 arquivos de rota chamam registerErrorHandler(app) individualmente logo no início da função de registro. Um 11º plugin de rota que viesse a declarar `schema` sem chamar registerErrorHandler cairia no error handler padrão do Fastify (formato { statusCode, error: 'Bad Request', message: 'body/x must be ...' }), inconsistente com o resto da API — não há teste de contrato garantindo que todo plugin novo lembre de chamar isso.",
+    "O fallback 'Campo inválido: <path>.' não diferencia a causa raiz (string curta demais vs. longa demais vs. fora do enum vs. fora do pattern) — para depuração mais fina só o log do servidor (request.log.warn com o error.validation completo) tem o detalhe; a resposta HTTP é deliberadamente genérica por design (evitar vazar a estrutura exata do schema/regex para um cliente potencialmente malicioso)."
+  ]
+}

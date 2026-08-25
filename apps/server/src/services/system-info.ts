@@ -26,20 +26,33 @@ function parseOsRelease(content: string): Record<string, string> {
   return out;
 }
 
+async function readFirst(paths: string[]): Promise<string | null> {
+  for (const p of paths) {
+    try {
+      return await readFile(p, "utf8");
+    } catch {
+      // tenta o próximo caminho
+    }
+  }
+  return null;
+}
+
 async function readOsInfo(): Promise<OsInfo> {
   let osRelease: Record<string, string> = {};
-  try {
-    osRelease = parseOsRelease(await readFile("/etc/os-release", "utf8"));
-  } catch {
-    // sistema não-Linux ou arquivo ausente; campos ficam "unknown"
+  // Em container, /host/etc/os-release (montado via compose) reflete a VPS
+  // real; /etc/os-release local é o da imagem (Debian) — fica como fallback.
+  const osReleaseRaw = await readFirst(["/host/etc/os-release", "/etc/os-release"]);
+  if (osReleaseRaw !== null) {
+    osRelease = parseOsRelease(osReleaseRaw);
   }
+  const hostName = (await readFirst(["/host/etc/hostname"]))?.trim();
   return {
     prettyName: osRelease["PRETTY_NAME"] ?? os.platform(),
     id: osRelease["ID"] ?? "unknown",
     versionId: osRelease["VERSION_ID"] ?? "unknown",
     kernel: os.release(),
     arch: os.arch(),
-    hostname: os.hostname(),
+    hostname: hostName ?? os.hostname(),
   };
 }
 
@@ -109,6 +122,17 @@ async function readNetworkInfo(): Promise<NetworkInfo> {
   return { publicIp, interfaces };
 }
 
+/**
+ * Tetos abaixo dos quais a máquina não consegue, na prática, hospedar
+ * projetos — não é mais "recomendado ampliar", é "não vai funcionar":
+ * RAM insuficiente para o daemon Docker + containers derruba tudo por OOM,
+ * e disco quase cheio faz `docker pull`/`build` falhar de cara. Ficam bem
+ * abaixo dos mínimos de warning (1 GiB RAM / 10 GiB disco) de propósito —
+ * o nível `critical` é para quando hospedar já é inviável, não apertado.
+ */
+const CRITICAL_MIN_RAM_BYTES = 512 * 1024 ** 2; // 512 MiB
+const CRITICAL_MIN_FREE_DISK_BYTES = 1 * 1024 ** 3; // 1 GiB
+
 function buildChecks(osInfo: OsInfo, memTotal: number, disk: DiskInfo): HealthScanResult["checks"] {
   const supported =
     (HEALTH_LIMITS.supportedDistroIds as readonly string[]).includes(osInfo.id) &&
@@ -124,12 +148,22 @@ function buildChecks(osInfo: OsInfo, memTotal: number, disk: DiskInfo): HealthSc
   const memCheck: HealthCheck =
     memTotal >= HEALTH_LIMITS.minRamBytes
       ? { level: "ok", message: "Memória suficiente (mínimo: 1 GiB)." }
-      : { level: "warning", message: "Menos de 1 GiB de RAM — recomendado ampliar antes de hospedar projetos." };
+      : memTotal >= CRITICAL_MIN_RAM_BYTES
+        ? { level: "warning", message: "Menos de 1 GiB de RAM — recomendado ampliar antes de hospedar projetos." }
+        : {
+            level: "critical",
+            message: "Menos de 512 MiB de RAM — insuficiente para rodar o Docker e hospedar projetos.",
+          };
 
   const diskCheck: HealthCheck =
     disk.freeBytes >= HEALTH_LIMITS.minFreeDiskBytes
       ? { level: "ok", message: "Espaço livre suficiente (mínimo: 10 GiB)." }
-      : { level: "warning", message: "Menos de 10 GiB livres no disco raiz — imagens Docker consomem espaço rápido." };
+      : disk.freeBytes >= CRITICAL_MIN_FREE_DISK_BYTES
+        ? { level: "warning", message: "Menos de 10 GiB livres no disco raiz — imagens Docker consomem espaço rápido." }
+        : {
+            level: "critical",
+            message: "Menos de 1 GiB livre no disco raiz — builds e pulls de imagem vão falhar.",
+          };
 
   return { os: osCheck, memory: memCheck, disk: diskCheck };
 }

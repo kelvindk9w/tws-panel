@@ -1,0 +1,49 @@
+{
+  "id": "avancar",
+  "modulo": "setup",
+  "metodo": "POST",
+  "url": "/api/setup/advance",
+  "resumo": "Persiste no servidor qual passo do wizard o usuário está vendo. Chamado pelo frontend a cada transição de passo, em paralelo com a atualização otimista da UI (best-effort — falha não bloqueia a navegação).",
+  "arquivoFonte": "apps/server/src/routes/setup.ts:39",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "setup-token",
+    "detalhe": "Mesma regra de status: header x-setup-token ou query ?token=, exigido pelo hook global de apps/server/src/plugins/auth.ts; 403 setup_completed se o setup já terminou."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "step", "tipo": "integer", "obrigatorio": true, "regras": "schema Fastify (advanceSchema, setup.ts): type integer, minimum 0, maximum MAX_STEP (maior id de SETUP_STEPS, atualmente 3); additionalProperties:false no corpo. Sem coerção (ajv coerceTypes:false — ver global/ajv-options.json), então uma string '2' é recusada, não convertida. Não há checagem de que o valor seja >= currentStep atual — retroceder é aceito.", "descricao": "Índice do passo a marcar como atual." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "quando": "step válido.", "corpo": { "state": { "currentStep": "number", "completed": "boolean", "updatedAt": "string" }, "steps": "SetupStepInfo[]" }, "exemplo": { "state": { "currentStep": 2, "completed": false, "updatedAt": "2026-08-24T12:00:00.000Z" }, "steps": "[...]" } }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (advanceSchema) ANTES do handler: step ausente, não-inteiro, fora de [0, MAX_STEP], ou corpo com campo desconhecido.", "mensagem": "Campo obrigatório ausente: step. / Campo inválido: step. / Campo desconhecido no corpo da requisição: <campo>." },
+    { "status": 400, "codigo": "invalid_step", "quando": "Código legado dentro do handler — na prática inalcançável agora: o schema já cobre exatamente as mesmas condições (ausente, não-inteiro, fora do intervalo) antes do handler rodar.", "mensagem": "Passo inválido. Informe um inteiro entre 0 e {maxStep}." },
+    { "status": 401, "codigo": "unauthorized", "quando": "Setup token ausente ou inválido.", "mensagem": "Setup token inválido ou ausente." },
+    { "status": 503, "codigo": "setup_token_missing", "quando": "Servidor sem setupToken configurado.", "mensagem": "Servidor sem setup token configurado. Defina SETUP_TOKEN ou crie o arquivo de token (veja scripts/install.sh)." },
+    { "status": 403, "codigo": "setup_completed", "quando": "setupState.completed já é true.", "mensagem": "O setup já foi concluído. Entre com sua conta de administrador." }
+  ],
+  "fluxo": [
+    "1. Calcula maxStep = maior id em SETUP_STEPS.",
+    "2. Valida step: deve ser number, Number.isInteger, 0 <= step <= maxStep; senão 400 invalid_step.",
+    "3. app.setupState.setStep(step) carrega o estado atual, sobrescreve currentStep e grava (setStep chama internamente save(), que atualiza updatedAt e regrava o arquivo com mode 0600).",
+    "4. Responde 200 { state, steps: SETUP_STEPS }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SetupStateStore.setStep", "arquivo": "apps/server/src/services/setup-state.ts:50", "papel": "Carrega, atualiza currentStep e persiste data/setup-state.json." }
+  ],
+  "efeitosColaterais": ["grava data/setup-state.json (currentStep, updatedAt)"],
+  "chamadoPor": ["apps/web/src/pages/SetupPage.tsx (função advance)"],
+  "testes": ["apps/server/tests/routes-setup.test.ts"],
+  "observacoes": [
+    "Endpoint é idempotente (comentário no código) mas NÃO é apenas 'avançar': aceita step menor que o currentStep atual sem erro, permitindo retroceder o estado persistido. A UI nunca chama advance() com um valor menor, mas nada no backend impede uma chamada direta com step regressivo.",
+    "invalid_step virou código morto: o schema Fastify já recusa (400 invalid_request) tudo que a checagem manual do handler recusaria, antes mesmo do handler ser chamado.",
+    "No frontend, a chamada é feita com .catch(() => undefined): se a requisição falhar (rede, token expirado etc.), o erro é silenciosamente ignorado e a navegação do wizard já ocorreu no cliente antes da resposta — um reload logo depois de uma falha pode devolver o usuário a um passo anterior ao que ele via na tela."
+  ]
+}

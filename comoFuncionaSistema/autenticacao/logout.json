@@ -1,0 +1,41 @@
+{
+  "id": "logout",
+  "modulo": "autenticacao",
+  "metodo": "POST",
+  "url": "/api/auth/logout",
+  "resumo": "Encerra a sessão atual (revoga no servidor) e limpa o cookie de sessão no cliente.",
+  "arquivoFonte": "apps/server/src/routes/auth.ts:102",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sessão validada pelo guard global antes da rota rodar (request.url começa com /api/auth/ e não é /login → exige request.session). Se não houver sessão, o guard já responde 401 antes de chegar aqui."
+  },
+  "rateLimit": null,
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    { "status": 200, "quando": "Sempre (mesmo que, por alguma corrida, request.session já não exista no momento do handler).", "corpo": { "ok": true }, "exemplo": { "ok": true } }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. Se request.session existe (deveria sempre existir, garantido pelo guard global): destrói a sessão em SessionStore.destroy(session.id) e grava auditoria auth.logout (actor = username da sessão).",
+    "2. Limpa o cookie paas_session no cliente (clearCookie, path '/').",
+    "3. Responde 200 { ok: true }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SessionStore", "arquivo": "apps/server/src/services/session-store.ts", "papel": "Remove a sessão de data/sessions.json (destroy)." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra auth.logout." },
+    { "tipo": "pacote", "nome": "@paas/core (auth)", "arquivo": "packages/core/src/auth.ts", "papel": "Constante SESSION_COOKIE." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Exige sessão válida antes de a rota rodar." }
+  ],
+  "efeitosColaterais": [
+    "Grava data/sessions.json removendo a sessão atual (via SessionStore.destroy).",
+    "Limpa o cookie paas_session no cliente (Set-Cookie com expiração no passado).",
+    "Auditoria: auth.logout.",
+    "Header 'Cache-Control: no-store' em toda resposta."
+  ],
+  "chamadoPor": ["apps/web/src/components/UserMenu.tsx:154"],
+  "testes": ["apps/server/tests/auth.test.ts"],
+  "observacoes": [
+    "O frontend (UserMenu.tsx) chama este endpoint em modo 'best-effort': se a chamada falhar, o código local ignora o erro e navega para /login mesmo assim — a sessão pode continuar válida no servidor até expirar (12h) se a chamada de rede falhar."
+  ]
+}

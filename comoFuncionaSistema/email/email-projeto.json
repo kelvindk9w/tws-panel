@@ -1,0 +1,53 @@
+{
+  "id": "email-projeto",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/projects/:id/email",
+  "resumo": "Configuração de e-mail atual do projeto: se está habilitado, qual caixa técnica usa, e as env vars SMTP que serão injetadas (senha mascarada).",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:219",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (projectIdParamSchema, mail.ts): minLength 1, maxLength 64 (mesmo limite usado em projects.ts/updateProjectSchema).", "descricao": "ID do projeto (gerenciado pelo módulo de Projetos/DeployService)." }],
+    "query": [], "body": [], "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Projeto existe. Pode vir com enabled:false se nunca habilitou e-mail.",
+      "corpo": { "email": "ProjectEmailConfig" },
+      "exemplo": { "email": { "enabled": true, "domain": "exemplo.com.br", "mailbox": "minha-loja@exemplo.com.br", "mailFrom": "minha-loja@exemplo.com.br", "env": { "SMTP_HOST": "paas-stalwart", "SMTP_PORT": "587", "SMTP_USER": "minha-loja@exemplo.com.br", "SMTP_PASS": "••••••••••••", "MAIL_FROM": "minha-loja@exemplo.com.br" } } }
+    },
+    {
+      "status": 200,
+      "quando": "Projeto nunca habilitou e-mail, OU habilitou mas a caixa técnica associada não existe mais em data.mailboxes (dessincronia).",
+      "corpo": { "email": { "enabled": false, "domain": null, "mailbox": null, "mailFrom": null, "env": {} } },
+      "exemplo": { "email": { "enabled": false, "domain": null, "mailbox": null, "mailFrom": null, "env": {} } }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "id maior que 64 chars — reprovado pelo schema Fastify (projectIdParamSchema) ANTES do handler.", "mensagem": "Campo inválido: id." },
+    { "status": 404, "codigo": "project_not_found", "quando": "app.deployService.getProject(id) retorna null.", "mensagem": "Projeto não encontrado." }
+  ],
+  "fluxo": [
+    "1. app.deployService.getProject(id); 404 project_not_found se ausente.",
+    "2. service.projectEmailConfig(project.id): busca data.projects[projectId]; se ausente, devolve enabled:false com tudo null/{}.",
+    "3. Se existe, busca a caixa em data.mailboxes[stored.mailbox]; se a caixa não existir mais (dessincronia), TAMBÉM devolve enabled:false.",
+    "4. Senão, buildSmtpEnv({ mailbox: caixa.id, password: caixa.password, mailFrom: caixa.id }) e maskEnv() (troca só SMTP_PASS por '••••••••••••', mantém host/porta/user/from em claro)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.projectEmailConfig", "arquivo": "apps/server/src/services/mail-service.ts:454", "papel": "Monta a config atual (com env mascarada) para exibir na UI." },
+    { "tipo": "servico", "nome": "DeployService.getProject", "arquivo": "apps/server/src/services/deploy-service.ts:170", "papel": "Resolve o projeto pelo id (módulo de Projetos)." },
+    { "tipo": "pacote", "nome": "buildSmtpEnv/maskEnv", "arquivo": "packages/mailer/src/smtp-inject.ts:28", "papel": "Monta e mascara as 5 env vars SMTP." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura)."],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx:73 (componente ProjectEmailCard)"],
+  "testes": ["scripts/test-mail.mts (fluxo de habilitar cobre indiretamente este formato de resposta)"],
+  "observacoes": [
+    "Consumido pelo card 'E-mail do projeto' na página de detalhe do projeto (não nas páginas de e-mail MailPage/MailDomainPage) — é o painel de projetos que decide habilitar e-mail, escolhendo entre os domínios listados via GET /api/mail/domains."
+  ]
+}

@@ -21,6 +21,7 @@ export default defineConfig({
         "src/pages/setup/**",
         "src/pages/MailDomainPage.tsx",
         "src/pages/ProjectDetailPage.tsx",
+        "src/components/TerminalPanel.tsx",
         "src/lib/**",
       ],
       reporter: ["text", "html"],

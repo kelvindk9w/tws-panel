@@ -53,12 +53,56 @@ export function slugify(name: string): string {
   return slug || `projeto-${randomBytes(3).toString("hex")}`;
 }
 
+/**
+ * Hostname válido: rótulos alfanuméricos separados por ponto. Impede que
+ * caracteres de controle do Caddyfile (`{`, `}`, quebra de linha, espaço)
+ * cheguem ao arquivo gerado em caddy.ts.
+ */
+const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
 export function normalizeDomain(domain: string): string {
-  return domain
+  const normalized = domain
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/.*$/, "");
+  return HOSTNAME_RE.test(normalized) ? normalized : "";
+}
+
+/**
+ * URL de repositório aceita: https://, ssh:// ou o formato scp (git@host:caminho).
+ *
+ * Segurança: o valor vai como argumento posicional para `git clone` (ingest.ts).
+ * O git interpreta a própria string, então uma allowlist de esquema é o que
+ * bloqueia o transporte `ext::` (executa comando via sh) e valores iniciados
+ * por `-`, que o git leria como flag.
+ */
+const GIT_URL_RE = /^(https|ssh):\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$/;
+const GIT_SCP_RE = /^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[A-Za-z0-9._~/-]+$/;
+
+export function validateGitSource(source: string): string {
+  const value = source.trim();
+  if (GIT_URL_RE.test(value) || GIT_SCP_RE.test(value)) return value;
+  throw httpError(
+    400,
+    "invalid_source",
+    "Fonte de código inválida. Use uma URL https://, ssh:// ou git@host:caminho.",
+  );
+}
+
+/**
+ * Nome de branch aceito: letras, números, ponto, traço, barra e underscore.
+ * Não pode começar com `-` (o git leria como flag em checkout/pull).
+ */
+const BRANCH_RE = /^[A-Za-z0-9._/][A-Za-z0-9._/-]{0,200}$/;
+
+export function validateBranch(branch: string | null | undefined): string | null {
+  const value = (branch ?? "").trim();
+  if (!value) return null;
+  if (!BRANCH_RE.test(value) || value.includes("..")) {
+    throw httpError(400, "invalid_branch", "Nome de branch inválido.");
+  }
+  return value;
 }
 
 /** Hooks opcionais da Fase 4 (auditoria + alertas) injetados pela API. */
@@ -179,11 +223,15 @@ export class DeployService {
     if (!INGEST_MODES.includes(req.ingestMode)) {
       throw httpError(400, "invalid_ingest_mode", `Modo de ingestão inválido. Aceitos: ${INGEST_MODES.join(", ")}.`);
     }
-    const source = (req.source ?? "").trim();
-    if (!source) throw httpError(400, "invalid_source", "Informe a fonte do código (URL git ou caminho local).");
+    const rawSource = (req.source ?? "").trim();
+    if (!rawSource) throw httpError(400, "invalid_source", "Informe a fonte do código (URL git ou caminho local).");
+    // Modo git: a fonte vira argumento do `git clone`, então passa pela
+    // allowlist de esquema. Modos upload/existing são caminhos locais.
+    const source = req.ingestMode === "git" ? validateGitSource(rawSource) : rawSource;
     if ((req.ingestMode === "upload" || req.ingestMode === "existing") && !existsSync(path.resolve(source))) {
       throw httpError(400, "source_not_found", `Caminho não encontrado: ${source}`);
     }
+    const branch = validateBranch(req.branch);
     const domain = normalizeDomain(req.domain ?? "");
     if (!domain) throw httpError(400, "invalid_domain", "Informe o domínio desejado.");
 
@@ -200,7 +248,7 @@ export class DeployService {
       slug,
       ingestMode: req.ingestMode,
       source,
-      branch: req.branch?.trim() || null,
+      branch,
       domain,
       websocket: Boolean(req.websocket),
       detection: null,
@@ -210,6 +258,8 @@ export class DeployService {
       updatedAt: now,
       lastDeployAt: null,
       lastDeployStatus: null,
+      deployedBranch: null,
+      deployedSource: null,
     };
     this.projects.push(project);
     await this.saveProjects();
@@ -218,6 +268,22 @@ export class DeployService {
 
   async updateProject(id: string, req: UpdateProjectRequest): Promise<Project> {
     const project = await this.requireProject(id);
+    // O slug NÃO é recalculado a partir do nome: ele nomeia o diretório do
+    // clone, o compose project, a imagem, o alias de rede e os containers.
+    // Renomear o projeto é uma mudança de rótulo; mexer no slug seria uma
+    // migração de infraestrutura.
+    if (req.name !== undefined) {
+      const name = req.name.trim();
+      if (!name) throw httpError(400, "invalid_name", "Informe o nome do projeto.");
+      project.name = name;
+    }
+    if (req.source !== undefined) {
+      project.source =
+        project.ingestMode === "git" ? validateGitSource(req.source) : req.source.trim();
+    }
+    if (req.branch !== undefined) {
+      project.branch = validateBranch(req.branch);
+    }
     if (req.domain !== undefined) {
       const domain = normalizeDomain(req.domain);
       if (!domain) throw httpError(400, "invalid_domain", "Domínio inválido.");
@@ -339,8 +405,24 @@ export class DeployService {
     // os guardrails após a ingestão e aplica a mesma decisão.
     const guardrailOverride = opts?.guardrailOverride === true;
     const srcDir = this.sourceDirOf(project);
+    // Reaproveitado pelo engine na revalidação pós-ingestão quando é seguro
+    // (ver comentário abaixo) — evita rodar o mesmo scan de guardrails duas
+    // vezes sobre o mesmo diretório inalterado.
+    let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
       const report = await runGuardrails(srcDir);
+      // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
+      // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
+      // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",
+      // ingestCode() não copia nem faz pull — é literalmente o mesmo
+      // diretório com o mesmo conteúdo. Em "git"/"upload" o conteúdo PODE
+      // mudar (fetch+pull / recópia), então a revalidação pós-ingestão
+      // precisa rodar de novo sobre o código efetivamente ingerido — é
+      // exatamente o motivo de ela existir (pegar código que mudou depois do
+      // clone), então não reaproveitamos o pré-check nesses dois modos.
+      if (project.ingestMode === "existing") {
+        precomputedGuardrailReport = report;
+      }
       if (report.blockers > 0) {
         const blocking = report.findings.filter((f) => f.level === "block");
         const detail = blocking.map((f) => `[${f.rule}] ${f.title} — ${f.evidence}`).join("\n");
@@ -414,10 +496,18 @@ export class DeployService {
 
     void (async () => {
       try {
-        await this.engine.deploy(project, this.projects, appendLog, { guardrailOverride });
+        await this.engine.deploy(project, this.projects, appendLog, {
+          guardrailOverride,
+          precomputedGuardrailReport,
+        });
         job.status = "success";
         project.lastDeployAt = new Date().toISOString();
         project.lastDeployStatus = "success";
+        // Registra o FATO do que foi publicado. É a partir daqui que a tela
+        // consegue dizer "configurado sandbox, no ar main" quando alguém edita
+        // a configuração sem publicar em seguida.
+        project.deployedBranch = project.branch;
+        project.deployedSource = project.source;
         // persiste detecção feita durante o deploy
         project.updatedAt = new Date().toISOString();
       } catch (err) {

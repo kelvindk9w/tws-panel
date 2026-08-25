@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SETUP_TOKEN_HEADER, type Project } from "@paas/core";
+import { SETUP_TOKEN_HEADER, type GuardrailReport, type Project } from "@paas/core";
 import projectsRoutes from "../src/routes/projects.js";
 import { httpError, type DeployService } from "../src/services/deploy-service.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
@@ -28,6 +28,8 @@ const PROJECT: Project = {
   updatedAt: new Date().toISOString(),
   lastDeployAt: null,
   lastDeployStatus: null,
+  deployedBranch: null,
+  deployedSource: null,
 };
 
 /** Stub do DeployService: métodos configuráveis por teste. */
@@ -60,7 +62,7 @@ async function build(overrides: Record<string, unknown> = {}): Promise<void> {
   service = makeServiceStub(overrides);
   ctx = await buildAuthTestApp(TOKEN);
   app = ctx.app;
-  app.decorate("deployService", service);
+  app.decorate("deployService", service as unknown as DeployService);
   await app.register(projectsRoutes);
 }
 
@@ -144,11 +146,15 @@ describe("POST /api/projects", () => {
     expect(res.json().error).toBe("internal_error");
   });
 
-  it("sem corpo → createProject recebe {} (rota não quebra)", async () => {
+  it("sem corpo → 400 pelo schema, sem chegar ao service", async () => {
+    // Mudança deliberada: a rota passou a validar o corpo por schema (Fastify),
+    // então requisição sem corpo é recusada antes do service. Nenhum cliente do
+    // painel faz POST /api/projects sem corpo.
     await build();
     const res = await app.inject({ method: "POST", url: "/api/projects", headers: auth });
-    expect(res.statusCode).toBe(201);
-    expect(service.createProject).toHaveBeenCalledWith({});
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_request");
+    expect(service.createProject).not.toHaveBeenCalled();
   });
 
   it("erro não-Error (throw de string) → 500 com mensagem genérica", async () => {
@@ -206,7 +212,7 @@ describe("POST /api/projects/:id/deploy", () => {
   });
 
   it("bloqueio por guardrails → 409 guardrail_blocked COM o relatório no corpo", async () => {
-    const report = {
+    const report: GuardrailReport = {
       ranAt: new Date().toISOString(),
       dir: "/tmp/loja",
       findings: [
@@ -279,11 +285,14 @@ describe("PATCH /api/projects/:id", () => {
     expect(service.updateProject).toHaveBeenCalledWith("p1", { domain: "shop.localhost" });
   });
 
-  it("sem corpo → atualiza com objeto vazio (não quebra)", async () => {
+  it("sem corpo → 400 pelo schema, sem chegar ao service", async () => {
+    // Mudança deliberada, mesmo motivo do POST: o corpo passou a ser validado
+    // por schema. Um PATCH sem corpo não tem semântica útil.
     await build();
     const res = await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: auth });
-    expect(res.statusCode).toBe(200);
-    expect(service.updateProject).toHaveBeenCalledWith("p1", {});
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_request");
+    expect(service.updateProject).not.toHaveBeenCalled();
   });
 
   it("projeto inexistente → 404 mapeado do erro de domínio", async () => {
@@ -358,6 +367,18 @@ describe("jobs e ciclo de vida (complementos)", () => {
     const res = await app.inject({ method: "GET", url: "/api/projects/p1/jobs", headers: auth });
     expect(res.statusCode).toBe(200);
     expect(res.json().jobs).toHaveLength(2);
+  });
+
+  it("GET /jobs em projeto inexistente → 404 project_not_found (mesmo contrato das outras rotas :id)", async () => {
+    await build({
+      listJobs: vi.fn(async () => {
+        throw new Error("listJobs não deveria ser chamado para projeto inexistente");
+      }),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/projects/xyz/jobs", headers: auth });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("project_not_found");
+    expect(service.listJobs).not.toHaveBeenCalled();
   });
 
   it("POST /:id/stop com erro → status do erro de domínio e log parcial", async () => {

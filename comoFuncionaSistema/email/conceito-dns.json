@@ -1,0 +1,97 @@
+{
+  "id": "conceito-dns",
+  "titulo": "Registros DNS exigidos por um domínio de e-mail (MX, SPF, DKIM, DMARC, A/AAAA, PTR)",
+  "resumo": "Lista literal dos registros de DNS que o painel espera/gera para que um domínio envie e receba e-mail de forma confiável (Gmail/Yahoo/Microsoft), com o formato exato usado pelo código (packages/mailer/src/dns-checklist.ts) — não é infraestrutura reaproveitável entre módulos, é o contrato de dados de e-mail do sistema.",
+  "arquivoFonte": "packages/mailer/src/dns-checklist.ts",
+  "tipo": "configuracao",
+  "registros": [
+    {
+      "id": "a",
+      "tipo": "A",
+      "nome": "mail.<domínio>",
+      "valorExemplo": "203.0.113.10",
+      "formato": "Igual a serverIp() do MailService: env PAAS_PUBLIC_IP OU a primeira interface IPv4 externa (não-loopback) da máquina do painel; fallback 127.0.0.1.",
+      "finalidade": "O hostname do servidor de e-mail (mail.<domínio>) precisa resolver para o IP público da VPS — é o hostname usado no HELO/banner SMTP e no certificado TLS.",
+      "obrigatorio": true
+    },
+    {
+      "id": "aaaa",
+      "tipo": "AAAA",
+      "nome": "mail.<domínio>",
+      "valorExemplo": "2001:db8::10",
+      "formato": "Igual a config.publicIpv6 (env, opcional). Só entra no checklist se configurado.",
+      "finalidade": "IPv6 do servidor — se presente, o Gmail exige que esteja correto (senão pode preferir/exigir IPv6 e falhar).",
+      "obrigatorio": false
+    },
+    {
+      "id": "mx",
+      "tipo": "MX",
+      "nome": "<domínio>",
+      "valorExemplo": "10 mail.<domínio>",
+      "formato": "'<prioridade> <hostname>' — prioridade sempre fixa em 10 (não configurável pelo painel); aponta para o HOSTNAME (mail.<domínio>), nunca para o IP direto.",
+      "finalidade": "Recebimento de e-mail: diz a outros servidores para onde entregar mensagens endereçadas a @<domínio>.",
+      "obrigatorio": true
+    },
+    {
+      "id": "spf",
+      "tipo": "TXT",
+      "nome": "<domínio>",
+      "valorExemplo": "v=spf1 ip4:203.0.113.10 ~all",
+      "formato": "'v=spf1 ip4:<serverIp> <mecanismo-final>' — mecanismo final é '~all' (soft-fail) enquanto dmarcStage === 'none' (estágio de observação), e vira '-all' (hard-fail) a partir de dmarcStage 'quarantine' ou 'reject'. Gerado por spfValue() em packages/mailer/src/dns-checklist.ts:34.",
+      "finalidade": "Declara quais IPs têm permissão para enviar e-mail em nome do domínio — a base da autenticação de remetente (evita spoofing).",
+      "obrigatorio": true
+    },
+    {
+      "id": "dkim",
+      "tipo": "TXT",
+      "nome": "paas._domainkey.<domínio>",
+      "valorExemplo": "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCg... (chave pública RSA 2048, ~392 caracteres base64)",
+      "formato": "'v=DKIM1; k=rsa; p=<chave pública base64>' — seletor fixo 'paas' (constante DKIM_SELECTOR em packages/core/src/mail.ts:17); chave RSA 2048 bits gerada pelo próprio Stalwart (POST /api/dkim {algorithm:'Rsa'}) — a chave PRIVADA nunca sai do Stalwart, só a pública é lida (GET /api/dkim/{id}) e exposta neste registro.",
+      "finalidade": "Assinatura criptográfica de toda mensagem enviada — prova que o e-mail não foi alterado em trânsito e realmente saiu de um servidor autorizado pelo domínio.",
+      "obrigatorio": true
+    },
+    {
+      "id": "dmarc",
+      "tipo": "TXT",
+      "nome": "_dmarc.<domínio>",
+      "valorExemplo": "v=DMARC1; p=none; rua=mailto:dmarc@<domínio>",
+      "formato": "'v=DMARC1; p=<estágio>; rua=mailto:dmarc@<domínio>' — estágio progressivo (campo dmarcStage do domínio, começa em 'none'). Gerado por dmarcValue() em packages/mailer/src/dns-checklist.ts:39.",
+      "finalidade": "Política de autenticação (o que fazer com e-mail que falha SPF/DKIM) + endereço de relatórios agregados (rua). Evolução recomendada pelo painel (stageSuggestion()): none (observação, 2–4 semanas) → quarantine (suspeitos vão para spam) → reject (bloqueio total; exigido inclusive para BIMI).",
+      "obrigatorio": true
+    },
+    {
+      "id": "ptr",
+      "tipo": "PTR",
+      "nome": "reverse de <IP público>",
+      "valorExemplo": "mail.<domínio>",
+      "formato": "Reverse DNS do IP (não é registro do DNS do domínio — configurado no PAINEL DE CONTROLE do PROVEDOR DA VPS, não em um provedor de DNS comum). O painel só consegue LER (via dns.reverse) e comparar, nunca escrever.",
+      "finalidade": "FCrDNS (Forward-confirmed reverse DNS): Gmail, Yahoo e Microsoft rejeitam ou penalizam fortemente e-mail de IPs sem PTR válido apontando de volta para o hostname do servidor.",
+      "obrigatorio": true
+    }
+  ],
+  "estagiosDmarc": [
+    { "estagio": "none", "spf": "~all (soft-fail)", "dmarc": "p=none", "quando": "Padrão ao criar o domínio — período de observação via relatórios (rua) sem impacto na entrega." },
+    { "estagio": "quarantine", "spf": "-all (hard-fail)", "dmarc": "p=quarantine", "quando": "Depois de 2–4 semanas sem falsos positivos nos relatórios DMARC — e-mails que falham autenticação vão para spam." },
+    { "estagio": "reject", "spf": "-all (hard-fail)", "dmarc": "p=reject", "quando": "Estágio final — e-mails que falham autenticação são bloqueados. Exigido inclusive para habilitar BIMI (logo no cliente de e-mail)." }
+  ],
+  "verificacao": {
+    "resolverUsado": "1.1.1.1 e 8.8.8.8 fixos (packages/mailer/src/dns-checklist.ts publicResolver()) — nunca o resolver DNS local da VPS, para não dar falso-positivo com cache local.",
+    "regraDeComparacao": "Normaliza (trim, remove ponto final, colapsa espaços) e compara. Para TXT (SPF/DKIM/DMARC), basta UM dos registros TXT do nome bater — o nome pode ter outros TXT não relacionados (ex.: google-site-verification).",
+    "statusPossiveis": ["found", "missing", "mismatch", "action_required (só PTR ausente)", "pending (antes de qualquer verificação)"],
+    "casoEspecialSpf": "Se o SPF tem o IP certo mas o mecanismo final (~all/-all) diverge do esperado para o estágio atual, o status é 'mismatch' com uma nota específica em vez do genérico 'valor difere do esperado' — indica que está quase certo, só falta endurecer/afrouxar."
+  },
+  "comportamento": [
+    "Nenhum registro é escrito automaticamente em nenhum provedor de DNS — o painel só gera o VALOR esperado; o usuário copia manualmente para o provedor de DNS do domínio (não há integração com Cloudflare/Route53/etc.).",
+    "O único registro que o painel não consegue nem sugerir a escrita (porque não é DNS do domínio) é o PTR — para esse caso, o painel gera um texto de chamado pronto (ptrTicketText) para abrir suporte com o provedor da VPS."
+  ],
+  "usadoPor": [
+    { "referencia": "GET /api/mail/domains/:domain/dns", "arquivo": "apps/server/src/routes/mail.ts:127", "doc": "dns-checklist.json" },
+    { "referencia": "POST /api/mail/domains/:domain/verify", "arquivo": "apps/server/src/routes/mail.ts:139", "doc": "verificar-dns.json" },
+    { "referencia": "POST /api/mail/domains", "arquivo": "apps/server/src/routes/mail.ts:87", "doc": "criar-dominio.json" }
+  ],
+  "testes": ["packages/mailer/tests/dns-checklist.test.ts", "scripts/test-mail.mts (passo 2 e 3)"],
+  "observacoes": [
+    "A prioridade do MX é sempre fixa em 10 — não há suporte a múltiplos MX/prioridades diferentes (ex.: um MX de backup).",
+    "O checklist inteiro é recalculado a cada chamada de GET .../dns a partir do estado atual do domínio (dmarcStage, dkimPublicKey) — não há cache; se o dmarcStage mudar (não há endpoint de update visível no código lido para isso), o SPF/DMARC esperados mudam automaticamente na próxima consulta."
+  ]
+}

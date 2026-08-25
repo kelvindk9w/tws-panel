@@ -1,0 +1,33 @@
+{
+  "modulo": "dominios",
+  "titulo": "Domínios",
+  "resumo": "Verifica se um domínio (registro DNS A) já aponta para esta máquina, para orientar o usuário antes de o Caddy central emitir o certificado TLS automático. Tem um atalho de desenvolvimento local: qualquer *.localhost é considerado sempre pronto, sem nenhuma consulta de DNS. É puramente informativo — não bloqueia salvar o domínio de um projeto mesmo quando a checagem falha.",
+  "pontoDeEntrada": { "api": "GET /api/domains/check", "web": "/projects/new (passo 3 — Domínio e criação)" },
+  "comoFunciona": [
+    "GET /api/domains/check?domain=... recebe o domínio via querystring, aplica trim() + toLowerCase() e responde 400 se ficar vazio.",
+    "Calcula os IPs desta máquina (machineIps): todo IPv4 não interno das interfaces de rede do host (os.networkInterfaces()), sempre incluindo 127.0.0.1, mais a variável de ambiente PAAS_PUBLIC_IP quando definida.",
+    "Se o domínio é 'localhost' ou termina em '.localhost', responde imediatamente devLocal:true, ok:true, resolvedIps fixo ['127.0.0.1','::1'] — sem nenhuma consulta de DNS (modo de desenvolvimento).",
+    "Caso contrário, resolve o domínio via dns.resolve4 (somente registros A/IPv4); qualquer erro de resolução (ex.: NXDOMAIN) é tratado como lista vazia, nunca propaga como erro HTTP.",
+    "ok = true quando algum IP resolvido está entre os IPs desta máquina; a mensagem varia entre 'pronto para emissão de certificado', 'não resolveu nenhum registro A' (lista vazia) e 'não aponta para esta máquina' (resolveu, mas para outro IP).",
+    "O resultado é só informativo: o assistente de projeto (NewProjectPage.tsx) mostra a mensagem, mas permite salvar o domínio mesmo com ok:false. A emissão de certificado de fato acontece depois, de forma assíncrona, quando o CaddyManager (packages/deploy/src/caddy.ts) aplica o Caddyfile do projeto — esse endpoint não dispara nem consulta esse processo."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/domains.ts"],
+    "servicos": [],
+    "pacotes": ["packages/deploy/src/caddy.ts"],
+    "web": ["apps/web/src/pages/NewProjectPage.tsx"],
+    "testes": ["apps/server/tests/routes-domains.test.ts"]
+  },
+  "persistencia": [],
+  "endpoints": [
+    { "id": "verificar", "metodo": "GET", "url": "/api/domains/check", "resumo": "Verifica se o domínio informado resolve (DNS A) para o IP desta máquina.", "arquivo": "verificar.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "Só verifica registros A (IPv4) via dns.resolve4 — não consulta AAAA (IPv6). Um domínio servido só por IPv6 sempre cai em 'não resolveu nenhum registro A', mesmo apontando corretamente para a máquina.",
+    "PAAS_PUBLIC_IP é uma env var manual; se a VPS estiver atrás de NAT/IP dinâmico e essa variável não for configurada, machineIps pode não conter o IP público real e um domínio corretamente configurado aparece como 'não aponta para esta máquina' (falso negativo).",
+    "domains.ts e caddy.ts são módulos irmãos que só compartilham o conceito de domínio: a checagem de DNS aqui não chama nem é chamada pelo CaddyManager — a emissão real de TLS acontece de forma totalmente separada, disparada pelo fluxo de deploy de projetos (fora deste módulo).",
+    "NewProjectPage.tsx:152 monta a query com `/api/domains/check?domain=${domain}` sem encodeURIComponent — inofensivo para domínios válidos (o charset de um hostname já é seguro em URL), mas quebraria se o campo aceitasse texto livre com '&', '#' ou espaços.",
+    "Não há validação de formato de hostname no backend (regex de domínio válido, etc.) — qualquer string não vazia é aceita e passada direto para dns.resolve4."
+  ]
+}

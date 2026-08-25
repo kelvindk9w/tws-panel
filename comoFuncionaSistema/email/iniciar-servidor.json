@@ -1,0 +1,50 @@
+{
+  "id": "iniciar-servidor",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/server/start",
+  "resumo": "Provisiona (1ª vez) ou inicia o container do Stalwart Mail Server e espera a API HTTP dele responder.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:57",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Container criado/iniciado e a API HTTP do Stalwart respondeu (200 ou 401) dentro do timeout (60s).",
+      "corpo": { "ok": true, "status": "MailServerStatus" },
+      "exemplo": { "ok": true, "status": { "installed": true, "running": true, "version": "0.11.8", "image": "stalwartlabs/mail-server:v0.11.8", "containerName": "paas-stalwart", "hostname": "mail.localhost", "ports": { "smtp": 25, "submission": 587, "submissions": 465, "imap": 143, "imaps": 993, "http": 8080 }, "message": null } }
+    }
+  ],
+  "erros": [
+    { "status": 500, "codigo": "internal_error", "quando": "Falha ao criar a rede paas-net, falha no 'docker run' (ex.: porta já em uso), ou timeout de 60s esperando a API HTTP responder — todos viram Error genérico capturado pelo catch da rota (não há httpError com código específico aqui).", "mensagem": "mensagem originada do erro (ex.: 'Stalwart não respondeu na porta 8080 após 60s (...)' ou 'falha ao criar paas-stalwart: ...')." }
+  ],
+  "fluxo": [
+    "1. ensureLoaded(); se data.adminSecret é null, gera um novo com generatePassword(24) (base64url, 192 bits de entropia) e salva IMEDIATAMENTE em data/mail/mail.json (0600) — antes mesmo do container subir.",
+    "2. manager().start(): garante a rede Docker paas-net (cria se não existir, idempotente); renderiza/sobrescreve data/mail/stalwart/config.toml com o hostname e o adminSecret atuais.",
+    "3. Se o container já existe: tenta 'docker start'; se falhar por motivo diferente de 'already in use', remove o container (docker rm -f) e recria do zero com a config atual (garante que mudanças de porta/hostname sejam aplicadas).",
+    "4. Se não existe: 'docker run -d --restart unless-stopped --network paas-net --network-alias paas-stalwart' publicando as 6 portas configuradas (smtp/submission/submissions/imap/imaps/http), com o volume nomeado paas_stalwart_data e o config.toml montado read-only.",
+    "5. manager.waitReady(httpPort): faz polling (a cada 1.5s, até 60s) em GET http://127.0.0.1:<porta-http>/api/principal?limit=1 — 200 ou 401 = pronto; estoura Error se o timeout vencer.",
+    "6. Retorna manager.status() (mesmo formato de GET /api/mail/status)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.startServer", "arquivo": "apps/server/src/services/mail-service.ts:169", "papel": "Gera/persiste o adminSecret e delega ao StalwartManager." },
+    { "tipo": "pacote", "nome": "StalwartManager.start/waitReady", "arquivo": "packages/mailer/src/server.ts:114", "papel": "Ciclo de vida do container Docker (rede, config, run/start, health check)." },
+    { "tipo": "pacote", "nome": "generatePassword", "arquivo": "packages/mailer/src/mailboxes.ts:13", "papel": "Gera o adminSecret aleatório (24 bytes → base64url)." }
+  ],
+  "efeitosColaterais": [
+    "Grava/atualiza data/mail/mail.json (adminSecret) na primeira vez.",
+    "Escreve data/mail/stalwart/config.toml (0600).",
+    "Cria a rede Docker paas-net (se ausente), o volume paas_stalwart_data e/ou o container paas-stalwart; pode remover e recriar o container existente."
+  ],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx:75", "scripts/test-mail.mts (passo 1)"],
+  "testes": ["scripts/test-mail.mts"],
+  "observacoes": [
+    "Não é idempotente em rollback: se o 'docker run' falhar após o adminSecret já ter sido salvo, o secret persiste em disco mesmo sem container — uma nova chamada reaproveita o mesmo secret (data.adminSecret ??= ...).",
+    "Nenhuma auditoria (auditService.record) é gravada para start/stop do servidor — só para criação/remoção de domínio e caixa."
+  ]
+}

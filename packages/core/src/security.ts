@@ -30,6 +30,23 @@ export const RISKY_PHASES: readonly SecurityPhaseId[] = ["02", "03"];
 export type CheckSeverity = "critical" | "warning" | "info";
 export type CheckStatus = "pass" | "fail" | "unknown";
 
+/**
+ * Perfil do alvo do scan/hardening:
+ *  - "host": VPS real (via host bridge nsenter) — todos os checks se aplicam;
+ *  - "container": container Docker descartável (dev/teste) — checks de host
+ *    (ufw, sshd, fail2ban, snapd, etc.) são pulados para não gerar
+ *    falsos-positivos de contexto.
+ */
+export type SecurityTargetProfile = "host" | "container";
+
+/** Check pulado por não se aplicar ao perfil do alvo (documentado no relatório). */
+export interface SecuritySkippedCheck {
+  id: string;
+  title: string;
+  /** Motivo (pt-BR) pelo qual o check não se aplica ao perfil do alvo. */
+  reason: string;
+}
+
 export interface SecurityCheckResult {
   /** Identificador estável, ex.: "ssh.password-auth". */
   id: string;
@@ -66,6 +83,12 @@ export interface SecurityScanReport {
   lynisAvailable: boolean;
   checks: SecurityCheckResult[];
   summary: SecurityScanSummary;
+  /** Perfil do alvo: "host" (VPS real) ou "container" (dev/teste). */
+  profile: SecurityTargetProfile;
+  /** Checks pulados por não se aplicarem ao perfil (ex.: ufw em container). */
+  skippedChecks: SecuritySkippedCheck[];
+  /** Nota de contexto do perfil (pt-BR) exibida no relatório; null no perfil host. */
+  profileNote: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +158,8 @@ export interface SecurityJob {
   rollbackScheduled: boolean;
   rollbackDeadline: string | null;
   error: string | null;
+  /** Fase 01: usuário não-root criado (para a UI instruir o teste de login). */
+  sshUser?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,8 +168,10 @@ export interface SecurityJob {
 
 export interface SecurityScanResponse {
   report: SecurityScanReport;
-  /** true se veio do cache de 60s. */
+  /** true se o relatório é o último conhecido (nenhuma varredura nova foi executada). */
   cached: boolean;
+  /** true quando um scan fresco (?fresh=1/agendador) está em andamento em background. */
+  refreshing: boolean;
 }
 
 export interface SecurityPlanRequest {
@@ -155,6 +182,50 @@ export interface SecurityPlanRequest {
 export interface SecurityApplyRequest {
   phase: SecurityPhaseId;
   dryRun: boolean;
+  /** Fase 01: nome do usuário não-root a criar (default "deploy"). */
+  sshUser?: string;
+  /** Fase 01: chave pública SSH do operador (instalada no novo usuário). */
+  sshPublicKey?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Validação de chave SSH / usuário (Fase 01) — usada no servidor e na UI
+// ---------------------------------------------------------------------------
+
+/**
+ * Formato de authorized_keys: "<tipo> <base64> [comentário]".
+ * O comentário nunca pode conter aspas/quebras de linha (a chave é injetada
+ * em comando shell single-quoted pelo executor).
+ */
+const SSH_PUBKEY_RE =
+  /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521) ([A-Za-z0-9+/]{40,}={0,2})( [^\r\n'"\\]{0,120})?$/;
+
+export function isValidSshPublicKey(key: string): boolean {
+  const trimmed = key.trim();
+  if (trimmed.length < 50 || trimmed.length > 2048) return false;
+  return SSH_PUBKEY_RE.test(trimmed);
+}
+
+/** Nome de usuário Linux seguro (minúsculas, começa com letra/_, nunca root). */
+export function isValidSshUsername(name: string): boolean {
+  return /^[a-z_][a-z0-9_-]{0,31}$/.test(name) && name !== "root";
+}
+
+// ---------------------------------------------------------------------------
+// Modo manual por fase (o operador executa os comandos por conta própria)
+// ---------------------------------------------------------------------------
+
+export interface SecurityManualCommandsResponse {
+  phase: SecurityPhaseId;
+  phaseKey: SecurityPhaseKey;
+  title: string;
+  script: string;
+  /** Comandos exatos (copiáveis) para executar a fase manualmente no alvo. */
+  commands: string[];
+  /** Conteúdo do script da fase (para conferência/cópia). */
+  scriptContent: string;
+  /** Observações de contexto (pt-BR). */
+  notes: string[];
 }
 
 export interface SecurityApplyResponse {
@@ -176,18 +247,44 @@ export interface SecurityHistoryEntry {
   kind: "scan" | "job";
   /** Para scans: índice; para jobs: fase + status. */
   hardeningIndex?: number | null;
+  /** Para scans: fonte do índice (persistida para o antes/depois sobreviver a restart). */
+  hardeningIndexSource?: "lynis" | "internal";
   phase?: SecurityPhaseId;
   dryRun?: boolean;
   status?: SecurityJobStatus;
+}
+
+/**
+ * Resumo do hardening já aplicado — derivado do histórico persistido em
+ * disco. É o que permite ao wizard RESTAURAR a tela "Hardening aplicado"
+ * após um restart do painel (sem re-rodar plano/dry-run/apply de fases já
+ * satisfeitas) e manter o "Antes" congelado (o índice pré-hardening é o do
+ * último scan anterior ao primeiro apply real — nunca recalculado).
+ */
+export interface SecurityAppliedSummary {
+  /** Data do último apply real (não dry-run) bem-sucedido. */
+  appliedAt: string;
+  /** Índice CONGELADO do último scan antes do primeiro apply real. */
+  beforeIndex: number | null;
+  beforeIndexSource: "lynis" | "internal" | null;
+  /** Índice do scan mais recente após o apply. */
+  afterIndex: number | null;
+  afterIndexSource: "lynis" | "internal" | null;
 }
 
 export interface SecurityHistoryResponse {
   entries: SecurityHistoryEntry[];
   firstIndex: number | null;
   latestIndex: number | null;
+  /** Não-null quando o último apply real terminou com sucesso. */
+  applied: SecurityAppliedSummary | null;
 }
 
-/** Tempo de cache do scan (ms). */
+/**
+ * Tempo de cache do scan (ms). LEGADO: o GET sem `fresh` não dispara mais
+ * varredura nova — sempre devolve o último relatório conhecido. Mantido para
+ * compatibilidade de API.
+ */
 export const SECURITY_SCAN_CACHE_MS = 60_000;
 
 /** Janela de rollback automático agendado (ms) — alinhado a `at now +5 minutes`. */

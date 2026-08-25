@@ -3,9 +3,29 @@
 Este guia cobre tudo o que muda entre rodar o paas localmente (`pnpm dev`, domínios
 `.localhost`, portas altas) e rodar em uma VPS Ubuntu 22.04/24.04 exposta na internet.
 
-> Leia também: [troubleshooting.md](troubleshooting.md) para os problemas mais comuns.
+> Leia também: [troubleshooting.md](troubleshooting.md) para os problemas mais comuns e
+> [host-bridge.md](host-bridge.md) para entender como o scan/hardening roda na VPS real
+> (e por que o container do painel é endurecido daquele jeito).
 
 ---
+
+## 0. Requisitos do host criados pelo install.sh
+
+O `scripts/install.sh` deixa tudo pronto; se você instala/atualiza manualmente, garanta:
+
+- **DOCKER_GID no `.env`**: o painel roda como usuário não-root (`tws`) e acessa o
+  `/var/run/docker.sock` via `group_add`. Sem o GID certo o socket nega acesso:
+  ```bash
+  echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> .env
+  docker compose up -d --build
+  ```
+- **Imagem do host bridge**: na primeira execução do scan/hardening com
+  `PAAS_TARGET=host` o painel baixa `alpine:3` (helper descartável do nsenter).
+  VPS sem saída para a internet? Faça `docker pull alpine:3` antes (ou defina
+  `PAAS_HOST_HELPER_IMAGE` para uma imagem local com `nsenter`/`tar`/`sh`).
+- O container do painel sobe com `cap_drop ALL`, `no-new-privileges` e rootfs
+  read-only — só `/data` (volume) e `/tmp` (tmpfs) são graváveis. Não remova
+  essas flags: o host bridge NÃO depende de capabilities do container.
 
 ## 1. O que muda em produção
 
@@ -82,8 +102,12 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
 
 ```
 1. HARDENING          → rode o wizard e conclua o scan + hardening primeiro.
-                        Nada sobe na internet antes disso. Confirme o acesso SSH
-                        para cancelar o rollback automático.
+                        O scan/hardening roda NA VPS REAL via host bridge
+                        (nsenter — docs/host-bridge.md), não no container do painel.
+                        Na Fase 01 cole sua CHAVE PÚBLICA SSH: o root só é travado
+                        com a chave instalada, e o alerta pulsante pede para testar
+                        o login em OUTRA janela SSH antes de confirmar (rollback
+                        automático em 5 min se você não confirmar).
 2. PAINEL             → conclua o wizard (conta admin) e garanta que o painel
                         responde na porta 9000.
 3. DOMÍNIO DO PAINEL  → aponte painel.seudominio.com para a VPS e acesse o painel
@@ -117,3 +141,37 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
 - [ ] Baseline de segurança criado + monitoramento recorrente ativo
 - [ ] Blacklist verificada em **E-mail → Blacklist** (tudo clean)
 - [ ] Nenhum alerta crítico aberto em **Alertas**
+
+---
+
+## 4. Operação: token e reset do wizard
+
+### Recuperar o setup token
+
+O token é impresso UMA vez no fim do `install.sh`, mas fica persistido no volume
+`paas_data` (`/data/setup-token` dentro do container). Para reexibi-lo a qualquer
+momento — sem reinstalar nada:
+
+```bash
+./scripts/show-token.sh
+```
+
+O script lê o volume (fallback: `SETUP_TOKEN` do container em execução), detecta o IP
+público (best-effort; use `PAAS_PUBLIC_IP=<ip>` para fixar) e imprime o banner com a
+URL completa `http://IP:9000/?token=...`.
+
+> Lembrete: depois que a conta admin é criada (passo 4 do wizard), o setup token é
+> invalidado de propósito — a partir daí o acesso é pelo login normal.
+
+### Resetar o setup (recomeçar o wizard do zero)
+
+```bash
+./scripts/reset-setup.sh           # volta o wizard ao passo 0 (conta admin mantida)
+./scripts/reset-setup.sh --full    # + apaga usuários admin e sessões ativas
+```
+
+Ambos pedem confirmação interativa (digitar `resetar`) e reiniciam o painel ao final.
+O que é apagado fica restrito ao volume `paas_data`: `setup-state.json` (sempre) e, no
+modo `--full`, também `users.json` e `sessions.json`. **Projetos, domínios, e-mail,
+histórico de segurança e o setup token NÃO são tocados.** Depois do reset, use
+`./scripts/show-token.sh` para pegar o link do wizard de novo.

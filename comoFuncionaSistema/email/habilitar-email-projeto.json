@@ -1,0 +1,60 @@
+{
+  "id": "habilitar-email-projeto",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/projects/:id/email",
+  "resumo": "Ativa e-mail para o projeto: cria (se necessário) a caixa técnica <slug-do-projeto>@<domínio> e liga a injeção automática de credenciais SMTP nos próximos deploys.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:229",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (enableProjectEmailSchema, mail.ts): minLength 1, maxLength 64.", "descricao": "ID do projeto." }],
+    "query": [],
+    "body": [{ "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify: minLength 1, maxLength 253, pattern de domínio (MAIL_DOMAIN_SCHEMA); additionalProperties:false no corpo. Depois, regra de negócio no service: precisa ser um domínio já cadastrado em /api/mail/domains.", "descricao": "Domínio de e-mail a associar ao projeto." }],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Habilitado com sucesso (ou reafirmado, se já estava habilitado no mesmo domínio).",
+      "corpo": { "email": "ProjectEmailConfig" },
+      "exemplo": { "email": { "enabled": true, "domain": "exemplo.com.br", "mailbox": "minha-loja@exemplo.com.br", "mailFrom": "minha-loja@exemplo.com.br", "env": { "SMTP_HOST": "paas-stalwart", "SMTP_PORT": "587", "SMTP_USER": "minha-loja@exemplo.com.br", "SMTP_PASS": "••••••••••••", "MAIL_FROM": "minha-loja@exemplo.com.br" } } }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo/params reprovados pelo schema Fastify (enableProjectEmailSchema) ANTES do handler: id maior que 64 chars, domain ausente/vazio/fora do padrão/maior que 253 chars, ou corpo com campo desconhecido.", "mensagem": "Campo obrigatório ausente: domain. / Campo inválido: domain." },
+    { "status": 404, "codigo": "project_not_found", "quando": "Projeto não encontrado (checado ANTES de chamar o service).", "mensagem": "Projeto não encontrado." },
+    { "status": 404, "codigo": "domain_not_found", "quando": "domain informado não está cadastrado em /api/mail/domains.", "mensagem": "Domínio {domínio} não encontrado." },
+    { "status": 409, "codigo": "mail_server_stopped", "quando": "requireRunning(): servidor parado.", "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar." },
+    { "status": 409, "codigo": "mail_not_initialized", "quando": "Servidor nunca iniciado.", "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro." }
+  ],
+  "fluxo": [
+    "1. app.deployService.getProject(id); 404 project_not_found se ausente.",
+    "2. requireDomain(domainName); requireRunning().",
+    "3. address = projectMailboxAddress(project, domain.name) = '<project.slug>@<domínio>'.",
+    "4. Se essa caixa AINDA NÃO existe em data.mailboxes: gera senha e client().createMailbox(address, password) no Stalwart, persiste como StoredMailbox kind:'project'. Se já existe (reuso — ex.: reabilitar depois de desabilitar), NÃO gera senha nova, reaproveita a caixa técnica existente.",
+    "5. data.projects[project.id] = { domain: domain.name, mailbox: address, enabledAt: now }.",
+    "6. save() e retorna projectEmailConfig(project.id) (env já mascarada).",
+    "7. (Efeito indireto, fora desta rota): a partir daqui, todo deploy do projeto passa a chamar service.envForProject(project) — registrado no boot do módulo via app.deployService.setEnvProvider(service.envForProject) em mail.ts:42 — e o engine de deploy injeta SMTP_HOST/PORT/USER/PASS/MAIL_FROM (packages/deploy/src/engine.ts:124-127) nas variáveis de ambiente do container: em TODOS os serviços do compose.yml (deploy tipo compose) ou via -e no build (tipo dockerfile); sites estáticos ignoram a injeção (log de aviso)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.enableProjectEmail", "arquivo": "apps/server/src/services/mail-service.ts:419", "papel": "Cria/reaproveita a caixa técnica e registra a associação projeto→caixa." },
+    { "tipo": "pacote", "nome": "projectMailboxAddress", "arquivo": "packages/mailer/src/smtp-inject.ts:39", "papel": "Deriva o endereço da caixa técnica a partir do slug do projeto." },
+    { "tipo": "servico", "nome": "DeployService.getProject/setEnvProvider", "arquivo": "apps/server/src/services/deploy-service.ts:103", "papel": "Resolve o projeto; o provedor de env é registrado uma única vez no boot do módulo (não a cada chamada)." },
+    { "tipo": "pacote", "nome": "buildEngine (extraEnv)", "arquivo": "packages/deploy/src/engine.ts:124", "papel": "No deploy seguinte, chama envForProject(project) e injeta as env vars no container." }
+  ],
+  "efeitosColaterais": [
+    "Pode criar uma nova caixa no Stalwart (kind 'project') com senha em texto plano persistida.",
+    "Grava data/mail/mail.json (nova entrada em data.projects e, se nova, em data.mailboxes).",
+    "A partir do próximo deploy do projeto, injeta as 5 env vars SMTP no(s) container(es) — não afeta containers já rodando até o próximo deploy."
+  ],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx:97 (componente ProjectEmailCard, botão de habilitar)"],
+  "testes": ["scripts/test-mail.mts (passo 6)"],
+  "observacoes": [
+    "Não há endpoint para TROCAR o domínio de um projeto já habilitado sem antes desabilitar — chamar de novo com outro domain criaria uma segunda caixa técnica no novo domínio e sobrescreveria data.projects[id], deixando a caixa antiga órfã (ainda existente no Stalwart, sem 'mailbox_in_use' pois não está mais referenciada)."
+  ]
+}

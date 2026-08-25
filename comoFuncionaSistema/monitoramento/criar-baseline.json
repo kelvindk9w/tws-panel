@@ -1,0 +1,58 @@
+{
+  "id": "criar-baseline",
+  "modulo": "monitoramento",
+  "metodo": "POST",
+  "url": "/api/security/baseline",
+  "resumo": "Coleta um snapshot do alvo (pacotes, portas, hashes de arquivos críticos) agora e o salva como o novo baseline, substituindo o anterior por completo.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:122",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 201,
+      "quando": "coleta e escrita bem-sucedidas",
+      "corpo": { "baseline": "SecurityBaseline" },
+      "exemplo": {
+        "baseline": {
+          "id": "b0f1...",
+          "createdAt": "2026-08-24T09:00:00.000Z",
+          "target": "container:paas-target-test",
+          "packages": ["bash=5.2.15-2"],
+          "ports": [{ "proto": "tcp", "port": 22, "process": "sshd" }],
+          "files": { "/etc/ssh/sshd_config": "aaaa..." }
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 500, "codigo": "baseline_failed", "quando": "collectBaseline() ou a escrita em disco lançam (ex.: runner indisponível, alvo inacessível)", "mensagem": "Mensagem do erro original, ou 'Falha ao criar o baseline.' como fallback." }
+  ],
+  "fluxo": [
+    "1. MonitorService.createBaseline() chama collectBaseline(runner) — runner é HostRunner ou ContainerRunner conforme config.securityTarget (env PAAS_TARGET).",
+    "2. collectBaseline roda 3 comandos FIXOS no alvo em paralelo (timeout 60s cada): dpkg-query (pacotes), ss -tulpnH com fallback /proc/net (portas), find+sha256sum em sshd_config/ufw/fail2ban (arquivos).",
+    "3. Parseia cada saída; comando com exit code != 0 degrada para lista vazia (não lança).",
+    "4. Monta o SecurityBaseline com id novo (randomUUID), createdAt=agora e target=runner.label; escreve em data/security/baseline.json (mkdir recursive, chmod 600), sobrescrevendo o anterior.",
+    "5. Rota grava uma entrada de auditoria 'security.baseline' com contagem de pacotes/portas/arquivos e responde 201."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MonitorService", "arquivo": "apps/server/src/services/monitor-service.ts", "papel": "createBaseline() orquestra a coleta e a persistência." },
+    { "tipo": "pacote", "nome": "collectBaseline", "arquivo": "packages/security/src/baseline.ts", "papel": "Executa os comandos fixos no alvo e faz o parsing das saídas." },
+    { "tipo": "pacote", "nome": "TargetRunner (HostRunner/ContainerRunner)", "arquivo": "packages/security/src/runner.ts", "papel": "Abstrai onde os comandos rodam: host (via host bridge) ou container alvo (docker exec)." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra a criação do baseline em data/audit.json." }
+  ],
+  "efeitosColaterais": [
+    "grava data/security/baseline.json (sobrescreve o baseline anterior)",
+    "auditoria: security.baseline"
+  ],
+  "chamadoPor": ["apps/web/src/pages/SecurityPage.tsx:138 (BaselineCard.create)"],
+  "testes": ["packages/security/tests/baseline.test.ts (collectBaseline/parsing, não a rota HTTP)", "scripts/test-fase4.mts (step 4)"],
+  "observacoes": [
+    "Não existe validação de \"já existe um baseline recente\" nem confirmação — qualquer chamada substitui o baseline vigente imediatamente, o que também reseta a base de comparação de todos os scans seguintes.",
+    "Os comandos executados são CONSTANTES exportadas em BASELINE_COMMANDS (packages/security/src/baseline.ts:23) — usadas como allowlist pelo host bridge quando o alvo é 'host', reforçando que nenhuma entrada do request chega a um shell."
+  ]
+}

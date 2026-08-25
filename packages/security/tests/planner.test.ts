@@ -63,6 +63,13 @@ describe("buildSecurityPlan", () => {
       if (action.phase === "02" || action.phase === "03") {
         expect(action.requiresConfirmation).toBe(true);
         expect(action.impact).toContain("Rollback automático");
+      } else if (action.phase === "01") {
+        // fase 01: o plano marca requiresConfirmation mesmo sem saber ainda
+        // se o operador vai fornecer uma chave SSH — em runtime (executor.ts)
+        // a confirmação só é REALMENTE disparada quando a chave é fornecida,
+        // mas o plano avisa antecipadamente para não surpreender o operador.
+        expect(action.requiresConfirmation).toBe(true);
+        expect(action.impact).toContain("root");
       } else {
         expect(action.requiresConfirmation).toBe(false);
         expect(action.impact).toBeNull();

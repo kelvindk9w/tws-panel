@@ -25,6 +25,7 @@ const PHASE_DESCRIPTIONS: Record<SecurityPhaseId, string> = {
 };
 
 const PHASE_IMPACTS: Partial<Record<SecurityPhaseId, string>> = {
+  "01": "Trava a senha do root após instalar sua chave SSH no novo usuário. Teste o login em outra janela antes de confirmar — rollback automático em 5 min.",
   "02": "Pode afetar seu acesso SSH: senha e root são desabilitados. Rollback automático em 5 min se você não confirmar.",
   "03": "Pode afetar sua conectividade: firewall default-deny é ativado. Rollback automático em 5 min se você não confirmar.",
 };
@@ -61,7 +62,13 @@ export function buildSecurityPlan(report: SecurityScanReport): SecurityPlan {
       script: phase.script,
       description: PHASE_DESCRIPTIONS[phase.id],
       fixesCheckIds: fixes,
-      requiresConfirmation: RISKY_PHASES.includes(phase.id),
+      // Fases 02/03 SEMPRE exigem confirmação. A fase 01 exige em runtime
+      // (executor.ts) somente quando o operador fornece uma chave SSH — mas
+      // o plano não sabe disso de antemão (é gerado a partir do scan, não do
+      // apply). Marcar aqui como true evita que o plano prometa um fluxo
+      // sem confirmação e o operador seja surpreendido pelo awaiting_confirmation
+      // que o executor pode disparar de qualquer forma.
+      requiresConfirmation: RISKY_PHASES.includes(phase.id) || phase.id === "01",
       hasRollback: true,
       impact: PHASE_IMPACTS[phase.id] ?? null,
       preselected: hasCriticalFail,

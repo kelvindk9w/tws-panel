@@ -1,0 +1,89 @@
+{
+  "resumoExecutivo": "TWS Panel é um PaaS self-hosted (Fastify + React, monorepo pnpm) em estágio beta funcional: as 6 fases planejadas pelo README (Fundação, Hardening, Deploy+Domínios, E-mail, Guardrails+Monitoramento, Polish open source) estão implementadas, testadas (70 arquivos Vitest, 763 testes + 2 suítes E2E reais) e documentadas. Uma segunda rodada de correções (posterior ao commit e7d4f18, ver global/review-2026-08-24.json) endureceu vários pontos identificados na primeira revisão: alertas/auditoria não descartam mais dados abertos/antigos sem arquivamento, o scheduler de monitoramento serializa scans, jobs de hardening sobrevivem a restart, start/stop e listagem de jobs devolvem erros de domínio corretos, Docker indisponível é observável, e o fluxo de hardening ficou acessível fora do wizard. Continuam abertos: a imagem Stalwart descontinuada (agora com uma CVE conhecida sem backport, ver stalwart-descontinuado no review), o scan Trivy HIGH ainda report-only, e os 3 riscos altos aceitos como custo arquitetural do produto.",
+  "faseAtual": "Pós-Fase-5 (Polish open source) — estabilização e correção de bugs do terminal web/wizard/host bridge, sem feature nova grande em desenvolvimento no momento deste review.",
+  "oQueEstaPronto": [
+    "Autenticação: login/logout/troca de senha com sessão revogável (cookie HMAC), rate limit de login por IP, hash argon2id.",
+    "Wizard de setup completo (token de instalação -> saúde da máquina -> hardening -> criação da conta admin), com terminal web visível em todos os passos.",
+    "Hardening em 6 fases idempotentes (00-06) via scripts shell, com scan Lynis + checks próprios, dry-run, rollback automático agendado para fases de risco (SSH/firewall) e host bridge (nsenter) para atacar a VPS real com allowlist estrita.",
+    "Deploy de projetos: 3 modos de ingestão (git/upload/compose existente), detecção automática de pipeline, guardrails de segurança (6 regras, block/warn/info), Caddy central com SSL automático e reload sem downtime.",
+    "Módulo de e-mail completo: servidor Stalwart gerenciado, DKIM por domínio, checklist DNS verificável, criação de caixas com credenciais prontas, injeção de env SMTP em projetos.",
+    "Monitoramento: baseline pós-hardening + scan recorrente com diff, checagem de blacklist de e-mail (4 DNSBLs), central de alertas, log de auditoria de 2.000 entradas.",
+    "Terminal web embutido: PTY real via docker.sock, sessão destacável/reanexável, mecanismo anti-ping-pong entre abas, relay puro sem logar input do usuário.",
+    "CI: typecheck + build + testes com thresholds de cobertura em todo push/PR; scan de vulnerabilidades da imagem (Trivy); git hooks locais (pre-commit bloqueia segredos/arquivos proibidos, pre-push roda a suíte completa).",
+    "Execução de comandos: nenhuma injeção de shell encontrada na revisão — todo docker/git CLI usa execFile/spawn com argv em array; o único ponto que monta string de shell (host bridge) é allowlisted e revalida cada argumento."
+  ],
+  "oQueEstaParcial": [
+    "Cobertura de testes do frontend (apps/web) não tem thresholds numéricos — pode regredir sem quebrar o CI, ao contrário de todos os outros workspaces.",
+    "Scan de imagem Trivy: CRITICAL agora bloqueia o merge (CORRIGIDO nesta rodada), mas HIGH continua report-only (exit-code 0) — decisão deliberada de política, não uma lacuna esquecida.",
+    "3 branches do Dependabot abertas (fastify/static-10.1.2, nodemailer-9.0.1, vite-6.4.3) aguardando merge — atualizações de dependência pendentes (não verificado nesta rodada se ainda estão abertas).",
+    "GET /api/audit não tem nenhum filtro (só paginação) — qualquer busca por ação/ator/período precisa ser feita client-side sobre a página retornada.",
+    "Rate limiter de login (LoginLimiter) guarda tudo em memória (Map por IP) — reiniciar o processo zera todos os contadores/lockouts; aceitável para o painel single-node atual, mas não sobrevive a restart nem escalaria para múltiplas instâncias."
+  ],
+  "oQueFalta": [
+    "Itens do próprio Roadmap do README: 2FA TOTP, MTA-STS/TLS-RPT, BIMI, assistente de warm-up de IP, backups agendáveis pela UI, suporte multi-servidor (v2).",
+    "Endpoint para trocar a senha de uma caixa de e-mail já criada — hoje só existe criar (com senha opcional) ou remover; 'resetar senha' exige recriar a caixa.",
+    "Filtro/busca no log de auditoria (por ação, ator ou intervalo de datas).",
+    "Publicação automática da imagem Docker em um registry a partir do CI — hoje a imagem só é construída para o scan Trivy, não é publicada em lugar nenhum."
+  ],
+  "riscos": [
+    {
+      "severidade": "alta",
+      "descricao": "O terminal web embutido, no perfil 'host' (produção real), abre um shell interativo COMPLETO nos namespaces do host via container privilegiado + nsenter — equivalente a acesso root via SSH na VPS inteira, SEM allowlist de comandos (ao contrário do host bridge do hardening, que restringe a scripts fixos). A única proteção é a camada de autenticação HTTP/WS (setup token ou cookie de sessão). Um vazamento de sessão/cookie ou de setup token nesse cenário equivale a comprometimento total do host, não apenas do painel.",
+      "onde": "apps/server/src/services/docker-socket.ts; documentado explicitamente em comoFuncionaSistema/terminal/index.json (ponto de atenção 'SUPERFÍCIE MÁXIMA DE RISCO DO SISTEMA')."
+    },
+    {
+      "severidade": "alta",
+      "descricao": "Senhas de caixas de e-mail e o adminSecret do Stalwart ficam em TEXTO PLANO em data/mail/mail.json e data/mail/stalwart/config.toml — protegidos apenas por chmod 0o600. Qualquer leitura desses arquivos (backup mal protegido, outro processo rodando como o mesmo usuário do SO, volume Docker exposto por engano) expõe todas as credenciais SMTP/IMAP e o acesso administrativo ao Stalwart.",
+      "onde": "apps/server/src/services/mail-service.ts:44-45; packages/mailer/src/server.ts:62-68."
+    },
+    {
+      "severidade": "media",
+      "descricao": "A imagem do Stalwart usada (stalwartlabs/mail-server:v0.11.8) é uma linha antiga/descontinuada — o próprio código documenta que a linha nova (stalwartlabs/stalwart v0.16+) removeu a API REST que todo o módulo de e-mail depende. Migrar de versão exigiria reescrever client.ts inteiro; ficar na linha antiga significa não receber correções de segurança futuras do Stalwart. DADO NOVO: CVE-2025-61600 (DoS não autenticada no parser IMAP) foi corrigida só na 0.13.4, SEM backport para a linha 0.11.x — a versão usada é vulnerável e permanecerá assim enquanto não migrar.",
+      "onde": "packages/mailer/src/server.ts:7-11.",
+      "statusEm20260824": "aberto — permanece dívida técnica conhecida, não corrigido nesta rodada."
+    },
+    {
+      "severidade": "media",
+      "descricao": "Cap de 500 entradas em data/alerts.json descartava as MAIS ANTIGAS (independente de status) quando o limite era ultrapassado — um alerta 'open' nunca reconhecido/resolvido podia ser silenciosamente perdido se alertas mais novos (mesmo já resolvidos) ultrapassassem o limite, sem nenhum log/aviso de que isso aconteceu.",
+      "onde": "apps/server/src/services/alerts-service.ts; documentado em comoFuncionaSistema/monitoramento/conceito-alertas.json.",
+      "statusEm20260824": "CORRIGIDO — a eviction agora prioriza descartar resolvidos/reconhecidos mais antigos; se o teto for atingido só com alertas abertos, todos são mantidos e um aviso é logado."
+    },
+    {
+      "severidade": "media",
+      "descricao": "O hook de checagem de blacklist dentro do scan recorrente engole qualquer erro silenciosamente (try/catch vazio) — se a resolução DNS ou o serviço de e-mail falhar, o scan simplesmente não reporta blacklist naquele ciclo, indistinguível de 'nada listado'. Falso senso de segurança possível.",
+      "onde": "apps/server/src/services/monitor-service.ts.",
+      "statusEm20260824": "aberto — verificado no código: NÃO foi alterado nesta rodada, o try/catch continua vazio. Outros dois caminhos silenciosos relacionados (listContainers, removeDomain) foram corrigidos nesta rodada — ver achado 'falhas-silenciosas' no review."
+    },
+    {
+      "severidade": "media",
+      "descricao": "MonitorScheduler pulava o ciclo inteiro se o scan anterior ainda estivesse em voo, e o intervalo mínimo aceito pela API era de apenas 10s (MONITOR_MIN_INTERVAL_MS) — era fácil configurar um intervalo menor que a duração real de um scan completo (dpkg+ss+sha256 no alvo), fazendo o monitoramento rodar bem mais raro que o configurado, sem aviso algum ao operador. Além disso, runNow() (POST manual) não respeitava esse mesmo lock, podendo rodar em paralelo com um tick automático.",
+      "onde": "packages/security/src/monitor.ts; packages/core/src/monitoring.ts.",
+      "statusEm20260824": "CORRIGIDO — runNow() agora compartilha o lock inFlight do scheduler (recusa com 409 scan_in_progress em vez de rodar em paralelo); MonitorService aplica um piso efetivo de 60s (EFFECTIVE_MIN_INTERVAL_MS) sobre qualquer intervalo configurado, mesmo que o schema de validação de entrada continue aceitando 10s."
+    },
+    {
+      "severidade": "baixa",
+      "descricao": "runStream (packages/deploy/src/exec.ts) não aplicava timeout algum — um `docker build`/`compose up --build` travado podia travar um job de deploy indefinidamente; só o timeout de 60s do health check pós-build dava algum limite, e isso só entrava em jogo depois que o build já teria travado.",
+      "onde": "packages/deploy/src/exec.ts (runStream); documentado em comoFuncionaSistema/projetos/deploy.json.",
+      "statusEm20260824": "CORRIGIDO — runStream agora tem timeout padrão de 30 minutos (DEFAULT_STREAM_TIMEOUT_MS), generoso mas finito; o processo é morto de verdade, não só a promise rejeitada."
+    },
+    {
+      "severidade": "baixa",
+      "descricao": "Inconsistência de comportamento entre rotas de auth: GET /api/auth/me destrói a sessão quando o usuário associado não existe mais ('sessão fantasma'), mas POST /api/auth/change-password apenas responde 401 no mesmo caso e não destrói a sessão. Hoje é inofensivo (painel mono-usuário, sem rota de exclusão de usuário), mas é uma divergência que deveria ser unificada.",
+      "onde": "apps/server/src/routes/auth.ts:117-121 vs :140-143."
+    }
+  ],
+  "dividaTecnica": [
+    "Zero marcadores TODO/FIXME/XXX/HACK reais encontrados em todo o código (apps, packages, scripts) — a dívida técnica do projeto está documentada em prosa dentro dos próprios módulos (comentários extensos, seções 'pontosDeAtencao' desta documentação) em vez de marcadores inline.",
+    "Cobertura de apps/web sem thresholds numéricos definidos (diferente de todos os outros workspaces) é a lacuna de processo mais evidente — nada impede uma regressão silenciosa de cobertura no frontend.",
+    "Ausência de filtro/busca na API de auditoria (GET /api/audit só pagina) é uma lacuna de usabilidade que cresce junto com o volume de eventos até o cap de 2.000 entradas.",
+    "Não há schema/versionamento explícito para os arquivos JSON de estado (data/*.json) — uma mudança de formato em versão futura do painel dependeria de os campos serem opcionais o bastante para não quebrar o parse em upgrades, sem nenhuma migração automática."
+  ],
+  "sugestoesDeProximoPasso": [
+    "Fazer o merge das 3 branches do Dependabot pendentes (fastify/static, nodemailer, vite) — são atualizações de dependência de baixo risco aparente e já têm CI passando presumivelmente.",
+    "Adicionar allowlist de comandos (ou pelo menos um modo 'somente leitura' opcional) ao terminal web quando o alvo é 'host', reduzindo a superfície de risco documentada como a maior do sistema — mesmo que isso reduza a flexibilidade do terminal, um modo restrito para operações rotineiras mitigaria o pior cenário de vazamento de sessão.",
+    "Definir thresholds de cobertura numéricos para apps/web, alinhando o frontend ao rigor já aplicado aos demais workspaces.",
+    "Avaliar criptografar (não só chmod 0600) os campos de segredo em data/mail/mail.json e config.toml do Stalwart, ou ao menos documentar essa limitação com mais destaque no SECURITY.md/README para operadores que fazem backup do volume paas_data.",
+    "Avaliar se vale endurecer também o step HIGH do image-scan do CI (hoje deliberadamente report-only) — decisão de política, não uma lacuna técnica.",
+    "Planejar a migração do Stalwart para a linha nova (stalwartlabs/stalwart v0.16+, reescrevendo client.ts) — motivo mais forte agora do que na revisão anterior: a versão fixada (v0.11.8) tem uma CVE conhecida (CVE-2025-61600) sem backport."
+  ]
+}

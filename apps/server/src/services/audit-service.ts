@@ -2,6 +2,11 @@
  * audit-service.ts — log de auditoria de ações sensíveis (Fase 4, plano §7).
  * Persistência JSON em data/audit.json (append, cap de entradas).
  * NUNCA registrar segredos no detalhe.
+ *
+ * Ao estourar o teto, as entradas mais antigas são movidas para audit.1.json
+ * em vez de descartadas: a trilha existe para investigação pós-incidente, e a
+ * pergunta que se faz depois ("quando isso foi configurado?") costuma ser
+ * justamente sobre o começo do histórico.
  */
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -14,14 +19,41 @@ interface AuditFile {
   entries: AuditEntry[];
 }
 
+export interface AuditServiceOptions {
+  /** Teto de entradas no arquivo ativo. Acima disso, rotaciona. */
+  maxEntries?: number;
+}
+
 export class AuditService {
   private readonly file: string;
+  private readonly archiveFile: string;
+  private readonly maxEntries: number;
   private entries: AuditEntry[] = [];
   private loaded = false;
   private writing: Promise<void> = Promise.resolve();
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, opts: AuditServiceOptions = {}) {
     this.file = path.join(dataDir, "audit.json");
+    this.archiveFile = path.join(dataDir, "audit.1.json");
+    this.maxEntries = opts.maxEntries ?? MAX_ENTRIES;
+  }
+
+  /** Move as entradas excedentes para o arquivo de arquivo, preservando-as. */
+  private async archive(excedente: AuditEntry[]): Promise<void> {
+    if (excedente.length === 0) return;
+    let anteriores: AuditEntry[] = [];
+    try {
+      const raw = JSON.parse(await readFile(this.archiveFile, "utf8")) as Partial<AuditFile>;
+      if (Array.isArray(raw.entries)) anteriores = raw.entries;
+    } catch {
+      // sem arquivo de arquivo ainda, ou ilegível — recomeça deste ponto
+    }
+    await mkdir(path.dirname(this.archiveFile), { recursive: true });
+    await writeFile(
+      this.archiveFile,
+      JSON.stringify({ entries: [...anteriores, ...excedente] }, null, 2),
+      { mode: 0o600 },
+    );
   }
 
   private async ensureLoaded(): Promise<void> {
@@ -52,7 +84,13 @@ export class AuditService {
       detail: input.detail,
     };
     this.entries.push(entry);
-    this.entries = this.entries.slice(-MAX_ENTRIES);
+    if (this.entries.length > this.maxEntries) {
+      const excedente = this.entries.slice(0, this.entries.length - this.maxEntries);
+      this.entries = this.entries.slice(-this.maxEntries);
+      // best-effort, como o resto da auditoria: falha de disco no arquivamento
+      // não pode derrubar a ação que estava sendo registrada.
+      await this.archive(excedente).catch(() => undefined);
+    }
     // serializa escritas para não intercalar JSON
     this.writing = this.writing.then(() => this.save()).catch(() => undefined);
     await this.writing;

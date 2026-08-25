@@ -101,3 +101,45 @@ describe("AuditService.list", () => {
     expect((await new AuditService(dir).list()).total).toBe(0);
   });
 });
+
+describe("rotação do log de auditoria", () => {
+  it("arquiva as entradas mais antigas em vez de descartá-las ao atingir o teto", async () => {
+    // A trilha de auditoria existe para investigação pós-incidente. Descartar
+    // silenciosamente o começo apaga justamente o que se quer ler ("quando isso
+    // foi configurado?"). Ao estourar o teto, as antigas vão para audit.1.json.
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-audit-rot-"));
+    try {
+      const service = new AuditService(dir, { maxEntries: 5 });
+      for (let i = 1; i <= 8; i++) {
+        await service.record({ action: "teste.acao", detail: `evento ${i}` });
+      }
+
+      const atual = JSON.parse(await readFile(path.join(dir, "audit.json"), "utf8"));
+      expect(atual.entries).toHaveLength(5);
+      expect(atual.entries[0].detail).toBe("evento 4");
+
+      const arquivado = JSON.parse(await readFile(path.join(dir, "audit.1.json"), "utf8"));
+      const detalhes = arquivado.entries.map((e: { detail: string }) => e.detail);
+      expect(detalhes).toContain("evento 1");
+      expect(detalhes).toContain("evento 3");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("acumula no arquivo de arquivo em rotações sucessivas, sem perder o começo", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-audit-rot2-"));
+    try {
+      const service = new AuditService(dir, { maxEntries: 3 });
+      for (let i = 1; i <= 12; i++) {
+        await service.record({ action: "teste.acao", detail: `evento ${i}` });
+      }
+      const arquivado = JSON.parse(await readFile(path.join(dir, "audit.1.json"), "utf8"));
+      const detalhes = arquivado.entries.map((e: { detail: string }) => e.detail);
+      expect(detalhes).toContain("evento 1");
+      expect(arquivado.entries.length).toBeGreaterThanOrEqual(9);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

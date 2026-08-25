@@ -41,11 +41,25 @@ describe("POST /api/setup/verify-token", () => {
   });
 
   it("token errado ou ausente → valid: false (sem 401 — é endpoint público)", async () => {
-    for (const payload of [{ token: "errado" }, {}, { token: 123 }]) {
+    for (const payload of [{ token: "errado" }, {}]) {
       const res = await app.inject({ method: "POST", url: "/api/setup/verify-token", payload });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ valid: false });
     }
+  });
+
+  // Mudança intencional: a rota agora tem `schema` (Fastify/Ajv) exigindo
+  // que `token`, quando presente, seja string. Antes um `token` de tipo
+  // errado ainda chegava ao handler e virava `valid: false`; agora é
+  // recusado ANTES do handler, com 400 `invalid_request`.
+  it("token com tipo errado → 400 invalid_request (recusado pelo schema)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/setup/verify-token",
+      payload: { token: 123 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_request");
   });
 
   it("servidor sem token configurado → 503 setup_token_missing", async () => {
@@ -101,6 +115,10 @@ describe("POST /api/setup/advance", () => {
     expect((await store.load()).currentStep).toBe(2);
   });
 
+  // Mudança intencional: a rota agora tem `schema` (Fastify/Ajv: integer,
+  // minimum/maximum), então todos esses valores são recusados ANTES do
+  // handler, com o código genérico `invalid_request` (não mais o
+  // `invalid_step` que a validação manual antiga produzia).
   it("passo inválido → 400 e estado inalterado", async () => {
     for (const step of [-1, 99, 1.5, "dois", null]) {
       const res = await app.inject({
@@ -110,7 +128,7 @@ describe("POST /api/setup/advance", () => {
         payload: { step },
       });
       expect(res.statusCode, JSON.stringify(step)).toBe(400);
-      expect(res.json().error).toBe("invalid_step");
+      expect(res.json().error).toBe("invalid_request");
     }
     expect((await store.load()).currentStep).toBe(0);
   });
@@ -119,5 +137,41 @@ describe("POST /api/setup/advance", () => {
     const res = await app.inject({ method: "POST", url: "/api/setup/advance", payload: { step: 1 } });
     expect(res.statusCode).toBe(401);
     expect((await store.load()).currentStep).toBe(0);
+  });
+
+  it("é idempotente: repetir o mesmo passo não é retrocesso", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/api/setup/advance",
+      headers: { [SETUP_TOKEN_HEADER]: TOKEN },
+      payload: { step: 2 },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/setup/advance",
+      headers: { [SETUP_TOKEN_HEADER]: TOKEN },
+      payload: { step: 2 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().state.currentStep).toBe(2);
+  });
+
+  it("recusa retroceder o passo já alcançado (estado persistido não pode voltar atrás)", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/api/setup/advance",
+      headers: { [SETUP_TOKEN_HEADER]: TOKEN },
+      payload: { step: 2 },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/setup/advance",
+      headers: { [SETUP_TOKEN_HEADER]: TOKEN },
+      payload: { step: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("step_regression");
+    // estado persistido continua no passo mais avançado — não retrocede
+    expect((await store.load()).currentStep).toBe(2);
   });
 });

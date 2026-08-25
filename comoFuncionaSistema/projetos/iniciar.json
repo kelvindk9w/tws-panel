@@ -1,0 +1,47 @@
+{
+  "id": "iniciar",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/start",
+  "resumo": "Inicia (docker start) os containers já existentes do projeto — NÃO faz deploy nem recria nada; falha se nunca houve um deploy (nenhum container a iniciar).",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:166",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "containers encontrados e iniciados",
+      "corpo": { "ok": true, "log": "string" },
+      "exemplo": { "ok": true, "log": "2 container(es) iniciado(s).\n" }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe", "mensagem": "Projeto não encontrado." },
+    { "status": 409, "codigo": "no_containers", "quando": "zero containers do projeto encontrados (engineError de domínio, packages/deploy/src/engine.ts)", "mensagem": "Nenhum container encontrado para \"<nome>\" — faça um deploy primeiro." },
+    { "status": 502, "codigo": "docker_start_failed", "quando": "docker start retornou código ≠ 0", "mensagem": "Falha ao iniciar containers: <stderr>." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. engine.projectContainers(project) — mesma resolução de start.json (label paas.project ou compose project).",
+    "3. Se zero containers → engineError(409, 'no_containers', ...) — erro de domínio com statusCode/code, não mais um Error genérico (CORRIGIDO nesta rodada: antes virava 500 internal_error opaco, ver observações).",
+    "4. docker start <ids...> (timeout 120s); código≠0 → engineError(502, 'docker_start_failed', ...).",
+    "5. Log agregado retornado em { ok: true, log }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.start", "arquivo": "apps/server/src/services/deploy-service.ts:476", "papel": "Delega a engine.start." },
+    { "tipo": "pacote", "nome": "DeployEngine.start", "arquivo": "packages/deploy/src/engine.ts:404", "papel": "Resolve containers e roda docker start." }
+  ],
+  "efeitosColaterais": ["docker start nos containers do projeto"],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('start'), botão 'Iniciar' — desabilitado quando status já é 'running', 'deploying' ou 'created')"],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "packages/deploy/tests/engine-lifecycle.test.ts"],
+  "observacoes": [
+    "CORRIGIDO nesta rodada: a falta de containers agora lança um erro de domínio (engineError, packages/deploy/src/engine.ts) com statusCode=409/code='no_containers', em vez de um Error comum mapeado para 500 internal_error — a mensagem 'faça um deploy primeiro' agora chega de fato ao cliente. O botão 'Iniciar' já fica desabilitado quando status==='created' no frontend, então esse caminho só é alcançável via chamada direta à API ou corrida de estado (status desatualizado no polling).",
+    "Mesmo padrão de erro de domínio agora vale para stop (ver parar.json). remove ainda pode cair em Error genérico em caminhos não cobertos por httpError explícito."
+  ]
+}

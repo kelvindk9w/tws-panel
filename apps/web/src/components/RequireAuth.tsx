@@ -42,7 +42,11 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     );
   }
   if (state.status === "redirect") {
-    return <Navigate to={state.to} replace state={{ from: location.pathname }} />;
+    // Preserva a query string no redirect: o link do instalador chega como
+    // "/?token=..." e o Navigate do React Router derrubaria o ?token= — sem
+    // ele o wizard abriria com o campo de token vazio (defesa em profundidade;
+    // a captura principal acontece no carregamento do módulo em lib/api.ts).
+    return <Navigate to={{ pathname: state.to, search: location.search }} replace state={{ from: location.pathname }} />;
   }
   return <AuthContext.Provider value={{ user: state.user }}>{children}</AuthContext.Provider>;
 }

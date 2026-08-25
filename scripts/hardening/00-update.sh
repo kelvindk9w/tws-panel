@@ -36,7 +36,10 @@ ok "Índice de pacotes atualizado"
 step "Aplicando atualizações (apt full-upgrade)"
 if [ "$PAAS_DRY_RUN" = "1" ]; then
   echo "[dry-run] apt-get -y full-upgrade"
-  apt-get -s full-upgrade 2>/dev/null | grep -cE '^Inst' | xargs -I{} echo "[dry-run] {} pacote(s) seriam atualizados"
+  # grep -c sai 1 quando não há matches (0 pacotes) — sem `|| true` o
+  # pipefail mataria o dry-run num sistema já atualizado.
+  COUNT="$(apt-get -s full-upgrade 2>/dev/null | grep -cE '^Inst' || true)"
+  echo "[dry-run] $COUNT pacote(s) seriam atualizados"
 else
   env DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade
 fi

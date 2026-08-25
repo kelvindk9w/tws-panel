@@ -1,0 +1,32 @@
+{
+  "id": "conceito-validacao-fonte",
+  "titulo": "Allowlist de source (URL git) e branch",
+  "resumo": "Duas funções exportadas por deploy-service.ts — validateGitSource e validateBranch — que recusam, na criação de projeto em modo 'git', qualquer valor de source/branch fora de um formato seguro ANTES de ele ser usado como argumento posicional de `git clone`/`git checkout` (packages/deploy/src/ingest.ts). Sem allowlist, o transporte `ext::` do git executa um comando arbitrário via shell, e um valor iniciado por `-` é interpretado pelo git como flag em vez de argumento.",
+  "arquivoFonte": "apps/server/src/services/deploy-service.ts",
+  "tipo": "utilitario",
+  "api": [
+    { "simbolo": "validateGitSource", "assinatura": "(source: string) => string", "descricao": "Recebe o `source` já trim()ado. Devolve o mesmo valor se bater com GIT_URL_RE ou GIT_SCP_RE; senão lança httpError(400, 'invalid_source', 'Fonte de código inválida. Use uma URL https://, ssh:// ou git@host:caminho.'). Chamada em createProject SOMENTE quando ingestMode === 'git' — modos upload/existing são caminhos locais e não passam por esta função." },
+    { "simbolo": "validateBranch", "assinatura": "(branch: string | null | undefined) => string | null", "descricao": "Trim() no valor; string vazia ou ausente devolve null (sem branch definido — ingestão usa o default 'main'). Valor não vazio precisa bater com BRANCH_RE e não conter '..'; senão lança httpError(400, 'invalid_branch', 'Nome de branch inválido.'). Chamada incondicionalmente em createProject, para QUALQUER ingestMode (embora só faça sentido em modo git — o valor é simplesmente ignorado depois se ingestMode não for 'git')." }
+  ],
+  "comportamento": [
+    "GIT_URL_RE = /^(https|ssh):\\/\\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$/ — exige esquema https:// ou ssh:// explícito seguido só de caracteres típicos de URL (RFC 3986 unreserved + sub-delims + alguns caracteres de path/query). ACEITA: 'https://github.com/usuario/repo.git', 'ssh://git@github.com/usuario/repo.git'. RECUSA: qualquer outro esquema, incluindo 'ext::' (transporte do git que executa comando via `sh -c`), 'file://' (leitura de arquivo arbitrário do disco do servidor) e 'http://' (sem TLS — só https é aceito, não http).",
+    "GIT_SCP_RE = /^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[A-Za-z0-9._~/-]+$/ — formato scp-like do git (sem esquema explícito), usado por SSH: 'usuario@host:caminho'. ACEITA: 'git@github.com:usuario/repo.git'. O primeiro segmento (usuário@host) só aceita alfanumérico/ponto/underscore/hífen — não aceita espaço nem os caracteres usados em flags do git.",
+    "Um source é aceito se bater em QUALQUER UMA das duas regras (GIT_URL_RE OU GIT_SCP_RE) — não precisa satisfazer as duas.",
+    "Um source que não bate em nenhuma das duas é recusado com 400 invalid_source, incluindo: o transporte 'ext::' do git (ex.: 'ext::sh -c touch$IFS/tmp/pwned' — executaria o comando via shell durante o clone, RCE completo no servidor), 'file:///etc/passwd' (leitura de arquivo local via o transporte file do git), e qualquer valor iniciado por '-' (ex.: '--upload-pack=/bin/sh' — o git interpretaria como uma flag de linha de comando em vez de uma URL, permitindo injetar --upload-pack ou outras flags perigosas do protocolo git).",
+    "BRANCH_RE = /^[A-Za-z0-9._/][A-Za-z0-9._/-]{0,200}$/ — o PRIMEIRO caractere não pode ser hífen (bloqueia flags como '--upload-pack=...'), os demais (até 200 caracteres depois do primeiro) aceitam letras, números, ponto, barra, underscore e hífen — o suficiente para nomes usuais como 'main', 'feature/nova-tela', 'release-1.2.3'.",
+    "Verificação adicional fora do regex: branch não pode conter a sequência '..' em nenhuma posição (ex.: 'main..other') — vetor de path traversal / revision range do git, que BRANCH_RE sozinho não bloquearia (dois pontos batem no regex, já que '.' é aceito).",
+    "branch ausente ou string vazia/só espaços é uma condição válida (não um erro): validateBranch devolve null, e o valor default 'main' é aplicado depois, na ingestão (packages/deploy/src/ingest.ts), não em validateBranch."
+  ],
+  "usadoPor": [
+    { "referencia": "DeployService.createProject", "arquivo": "apps/server/src/services/deploy-service.ts:219", "doc": "projetos/criar.json", "nota": "validateGitSource só roda quando ingestMode==='git'; validateBranch roda sempre." }
+  ],
+  "testes": [
+    "apps/server/tests/deploy-validation.test.ts — cobre as duas funções isoladamente (URLs https/ssh/scp aceitas; ext::, file://, e valor iniciado por '-' recusados; branches usuais aceitos; branch iniciado por '-' ou com caracteres de shell ';'/'$()' recusado; branch ausente/vazio vira null) e via DeployService.createProject de ponta a ponta (fonte com ext:: recusada ANTES de persistir o projeto — listProjects() continua vazio; branch malicioso recusado com code 'invalid_branch'; modos upload/existing NÃO passam pela validação de URL, só existsSync do caminho)."
+  ],
+  "observacoes": [
+    "Esta validação é ESPECÍFICA do modo 'git' para source — os modos 'upload' e 'existing' usam o valor como caminho local no disco do servidor (checado com existsSync, não com estas regras), então uma string que pareceria um source git inválido (ex.: um caminho absoluto '/home/usuario/app') é perfeitamente válida nesses dois modos.",
+    "Não valida se a URL/host realmente existe ou é alcançável — só o FORMATO. Um repositório https válido no formato mas inexistente (404) só falha depois, no `git clone` real durante o deploy (ver projetos/deploy.json).",
+    "Related, mas uma peça DIFERENTE: o domínio do projeto (campo `domain`, não `source`/`branch`) passa por uma allowlist separada dentro de normalizeDomain (HOSTNAME_RE em deploy-service.ts) e por uma segunda camada de defesa em profundidade em packages/deploy/src/caddy.ts (isSafeCaddyTarget, SAFE_DOMAIN_RE/SAFE_UPSTREAM_RE) que descarta na hora de RENDERIZAR o Caddyfile qualquer alvo com domínio/upstream malformado — proteção extra para projetos persistidos ANTES de normalizeDomain existir. Ver packages/deploy/tests/caddy-render.test.ts. Este documento cobre só source/branch; o domínio não é o foco aqui.",
+    "sshUser e sshPublicKey (parâmetros de POST /api/security/apply, fase 01 de hardening) são um vetor DIFERENTE, com suas próprias funções de validação (isValidSshUsername/isValidSshPublicKey em packages/core/src/security.ts) — não fazem parte desta allowlist de source/branch, ver seguranca/aplicar.json."
+  ]
+}

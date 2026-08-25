@@ -53,11 +53,14 @@ function check(domain?: string) {
 
 describe("GET /api/domains/check", () => {
   it("sem ?domain= → 400 invalid_domain", async () => {
-    for (const res of [await check(), await check("   ")]) {
-      expect(res.statusCode).toBe(400);
-      expect(res.json().error).toBe("invalid_domain");
-    }
+    const res = await check();
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_domain");
   });
+
+  // "   " agora é recusado ANTES do handler, pelo schema de querystring
+  // (pattern de hostname — ver routes-misc-schema.test.ts), então não chega
+  // mais a cair no ramo `!domain` do handler que gera "invalid_domain".
 
   it("localhost e *.localhost → devLocal sem consultar DNS", async () => {
     for (const domain of ["localhost", "loja.localhost"]) {
@@ -97,9 +100,11 @@ describe("GET /api/domains/check", () => {
     expect(body.message).toContain("não resolveu nenhum registro A");
   });
 
-  it("normaliza o domínio (maiúsculas/espaços) antes de consultar", async () => {
+  it("normaliza o domínio (maiúsculas) antes de consultar", async () => {
+    // Espaço nas pontas não chega mais aqui: o schema de querystring (pattern
+    // de hostname) já recusa isso antes do handler — ver routes-misc-schema.test.ts.
     resolve4.mockResolvedValue([PUBLIC_IP]);
-    const res = await check("  APP.Exemplo.COM ");
+    const res = await check("APP.Exemplo.COM");
     expect(res.json().domain).toBe("app.exemplo.com");
     expect(resolve4).toHaveBeenCalledWith("app.exemplo.com");
   });

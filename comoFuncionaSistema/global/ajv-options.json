@@ -1,0 +1,27 @@
+{
+  "id": "ajv-options",
+  "titulo": "Opções globais do Ajv (validação de schema)",
+  "resumo": "Configuração passada na criação da instância Fastify (`Fastify({ ajv: AJV_OPTIONS })`) que desliga dois comportamentos padrão do Ajv considerados inadequados para validação de segurança: `coerceTypes` (converteria tipos em vez de recusar) e `removeAdditional` (apagaria em silêncio campos desconhecidos em vez de recusar a requisição). É a peça que torna os `schema` declarados em cada rota realmente estritos — sem ela, um schema com `type: 'integer'` aceitaria a string `'123'` e um `additionalProperties: false` simplesmente descartaria o campo extra em vez de gerar erro 400.",
+  "arquivoFonte": "apps/server/src/ajv-options.ts",
+  "tipo": "configuracao",
+  "api": [
+    { "simbolo": "AJV_OPTIONS", "assinatura": "{ customOptions: { coerceTypes: false, removeAdditional: false, useDefaults: true, allErrors: false } }", "descricao": "Objeto passado como `ajv` na opção do construtor Fastify (`Fastify({ ajv: AJV_OPTIONS, ... })`). `customOptions` é o formato exigido pelo Fastify para repassar opções ao compilador Ajv interno." }
+  ],
+  "comportamento": [
+    "coerceTypes: false — um valor do tipo errado (ex.: querystring `page: '12'` contra um schema `type: 'integer'`, ou `websocket: 'true'` contra `type: 'boolean'`) é RECUSADO com 400 em vez de convertido. É por isso que rotas com paginação (ex.: /api/alerts, /api/audit) declaram page/perPage como `type: 'string'` com `pattern` numérico em vez de `type: 'integer'` — querystring é sempre string no protocolo HTTP, e sem coerção o schema precisa aceitar o tipo real que chega.",
+    "removeAdditional: false — um corpo com campo desconhecido (quando o schema declara `additionalProperties: false`) é RECUSADO com 400 em vez de ter o campo extra silenciosamente apagado antes de chegar ao handler. Sem essa opção, um cliente que tenta setar um campo interno do painel via corpo malformado teria o campo descartado sem aviso — nenhum sinal de que a tentativa aconteceu.",
+    "useDefaults: true — mantido ligado (era o comportamento útil do default do Fastify): um schema pode declarar `default` para uma propriedade ausente e o Ajv preenche o valor antes da validação prosseguir; nenhuma rota do painel usa essa capacidade hoje (nenhum schema revisado declara `default`), mas a opção continua disponível.",
+    "allErrors: false — mantido no valor padrão do Ajv (só o primeiro erro de validação é coletado, não todos). registerErrorHandler (ver global/error-handler.json) só usa `error.validation[0]` para montar a mensagem, então múltiplos erros no mesmo corpo não mudam o comportamento — o cliente só vê o primeiro campo reprovado por requisição."
+  ],
+  "usadoPor": [
+    { "referencia": "buildApp() — construtor da instância Fastify de produção", "arquivo": "apps/server/src/app.ts:53", "doc": "global/arquitetura.json" },
+    { "referencia": "buildAuthTestApp() — instância Fastify usada por todos os testes de rota", "arquivo": "apps/server/tests/test-utils.ts:31", "doc": "global/testes.json" }
+  ],
+  "testes": [
+    "Sem teste unitário dedicado a ajv-options.ts em si — o comportamento é exercitado indiretamente por todo teste que depende de coerção/additionalProperties serem recusados: apps/server/tests/routes-auth-schema.test.ts, routes-mail-schema.test.ts, routes-misc-schema.test.ts, routes-monitoring-schema.test.ts, routes-projects-schema.test.ts, routes-security-schema.test.ts, routes-setup-schema.test.ts."
+  ],
+  "observacoes": [
+    "Por ser opção da INSTÂNCIA Fastify (não por rota), aplica-se a toda validação de schema do processo — inclusive a schemas que viessem a ser adicionados fora dos 10 plugins de rota já cobertos.",
+    "Antes desta mudança, o Fastify usava seus defaults (coerceTypes:true, removeAdditional:true implícitos no preset padrão) — não havia nenhum schema Fastify declarado nas rotas até esta revisão de segurança, então a diferença prática só passou a existir junto com a introdução dos schemas por rota."
+  ]
+}

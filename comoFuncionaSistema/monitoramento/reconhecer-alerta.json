@@ -1,0 +1,59 @@
+{
+  "id": "reconhecer-alerta",
+  "modulo": "monitoramento",
+  "metodo": "POST",
+  "url": "/api/alerts/:id/ack",
+  "resumo": "Marca um alerta como reconhecido (open → acknowledged), carimbando acknowledgedAt.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:103",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (alertIdParamsSchema, monitoring.ts): minLength 1, maxLength 64.", "descricao": "Id do alerta (16 hex chars, gerado com randomBytes(8).toString('hex'))." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "alerta encontrado",
+      "corpo": { "alert": "Alert" },
+      "exemplo": {
+        "alert": {
+          "id": "a1b2c3d4e5f60718",
+          "severity": "critical",
+          "source": "scan",
+          "title": "Monitoramento: novas portas abertas no servidor",
+          "detail": "+ tcp/23456 (nc)",
+          "status": "acknowledged",
+          "createdAt": "2026-08-24T10:00:00.000Z",
+          "acknowledgedAt": "2026-08-24T10:05:00.000Z",
+          "resolvedAt": null
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "id maior que 64 chars — reprovado pelo schema Fastify (alertIdParamsSchema) ANTES do handler.", "mensagem": "Campo inválido: id." },
+    { "status": 404, "codigo": "alert_not_found", "quando": "nenhum alerta com esse id em data/alerts.json", "mensagem": "Alerta não encontrado." }
+  ],
+  "fluxo": [
+    "1. AlertsService.setStatus(id, 'acknowledged') busca o alerta pelo id.",
+    "2. Se não existir → 404 alert_not_found.",
+    "3. Se existir e status atual for 'open' → seta status='acknowledged' e acknowledgedAt=agora; PERSISTE.",
+    "4. Se existir mas status atual já for 'acknowledged' ou 'resolved' → NÃO altera nada (no-op), mas ainda retorna 200 com o alerta como está (ver observações)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "AlertsService", "arquivo": "apps/server/src/services/alerts-service.ts", "papel": "setStatus() aplica a transição e persiste em data/alerts.json." }
+  ],
+  "efeitosColaterais": ["grava data/alerts.json"],
+  "chamadoPor": ["apps/web/src/pages/AlertsPage.tsx:67 (transition(id, \"ack\"))"],
+  "testes": ["apps/server/tests/alerts-service.test.ts (setStatus — transições)", "scripts/test-fase4.mts (step 7)"],
+  "observacoes": [
+    "Chamar ack em um alerta já 'resolved' retorna 200 sem erro e sem alterar o status para 'acknowledged' — o alerta continua 'resolved'. Não é tratado como erro pela API, só como no-op silencioso (apps/server/src/services/alerts-service.ts:110-114)."
+  ]
+}

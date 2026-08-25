@@ -1,0 +1,64 @@
+{
+  "id": "conceito-alertas",
+  "modulo": "monitoramento",
+  "titulo": "Tipos de alerta que o sistema pode gerar",
+  "resumo": "Lista literal de todos os pontos do código que criam um Alert (AlertsService.create), com severidade, origem (source) e o gatilho exato. Nenhum outro alerta é gerado hoje além destes 7.",
+  "arquivoFonte": "busca por 'alerts.create(' / 'hooks.alerts?.create(' em todo apps/server/src",
+  "itens": [
+    {
+      "titulo": "Monitoramento: novas portas abertas no servidor",
+      "severidade": "critical",
+      "origem": "scan",
+      "gatilho": "Scan recorrente ou manual encontra ao menos uma porta (proto/porta) em listen no alvo que NÃO existia no baseline salvo.",
+      "arquivoFonte": "apps/server/src/services/monitor-service.ts:219-225"
+    },
+    {
+      "titulo": "Monitoramento: portas que deixaram de escutar",
+      "severidade": "warning",
+      "origem": "scan",
+      "gatilho": "Scan encontra ao menos uma porta que existia no baseline mas não está mais em listen no alvo.",
+      "arquivoFonte": "apps/server/src/services/monitor-service.ts:226-232"
+    },
+    {
+      "titulo": "Monitoramento: pacotes instalados/removidos",
+      "severidade": "warning",
+      "origem": "scan",
+      "gatilho": "Scan encontra pacotes (dpkg) novos e/ou pacotes que sumiram em relação ao baseline (as duas listas — novos e removidos — viram UM único alerta).",
+      "arquivoFonte": "apps/server/src/services/monitor-service.ts:233-238"
+    },
+    {
+      "titulo": "Monitoramento: arquivos críticos alterados",
+      "severidade": "critical",
+      "origem": "scan",
+      "gatilho": "Scan encontra ao menos um arquivo crítico (sshd_config, /etc/ufw, /etc/fail2ban) com hash sha256 diferente do baseline, removido, ou novo em um dos diretórios rastreados (changedFiles+removedFiles+addedFiles combinados em UM alerta).",
+      "arquivoFonte": "apps/server/src/services/monitor-service.ts:239-246"
+    },
+    {
+      "titulo": "E-mail: IP ou domínio listado em blacklist",
+      "severidade": "critical",
+      "origem": "blacklist",
+      "gatilho": "Dentro do scan recorrente/manual, se o módulo de e-mail tiver ao menos um domínio cadastrado, o hook de blacklist roda checkBlacklists() e encontra o IP público e/ou algum domínio listado em pelo menos uma DNSBL (status='listed'). Best-effort: erros do hook são engolidos e não geram alerta.",
+      "arquivoFonte": "apps/server/src/services/monitor-service.ts:171-187"
+    },
+    {
+      "titulo": "Deploy bloqueado por guardrails: <nome do projeto>",
+      "severidade": "critical",
+      "origem": "guardrail",
+      "gatilho": "POST /api/projects/:id/deploy SEM guardrailOverride, quando o relatório de guardrails do código-fonte tem ao menos 1 finding 'block' (ex.: porta de banco exposta, credencial fraca, container privileged). O deploy é recusado com 409 guardrail_blocked.",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:347-353"
+    },
+    {
+      "titulo": "Deploy com override de guardrails: <nome do projeto>",
+      "severidade": "warning",
+      "origem": "guardrail",
+      "gatilho": "POST /api/projects/:id/deploy COM guardrailOverride:true, quando havia findings 'block' — o deploy é permitido a seguir, mas o override fica registrado como alerta (além da entrada de auditoria guardrail.override).",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:367-378"
+    }
+  ],
+  "observacoes": [
+    "Todos os alertas passam pela mesma regra de dedup do AlertsService.create: um alerta 'open' com a mesma origem+título é atualizado (bump de detail/severity/createdAt) em vez de duplicado; um alerta já 'resolved' com o mesmo título/origem NÃO é reaberto — um novo é criado.",
+    "Os títulos com <nome do projeto> são dinâmicos (interpolados com project.name), então o dedup por título só funciona por projeto: dois projetos diferentes bloqueados por guardrail geram dois alertas distintos, não um só.",
+    "CORRIGIDO nesta rodada: AlertSource 'system' foi REMOVIDO do tipo (packages/core/src/monitoring.ts) — não existia nenhum ponto do código que criasse alerta com essa origem, então era um valor 'morto' no tipo, em ALERT_SOURCES e no filtro de AlertsPage. As três origens válidas hoje são exatamente as 7 combinações de gatilho listadas acima: 'scan', 'blacklist' e 'guardrail'.",
+    "CORRIGIDO nesta rodada: o teto de retenção (MAX_ALERTS=500, apps/server/src/services/alerts-service.ts) não descarta mais alertas abertos. enforceCap() agora prioriza descartar os RESOLVIDOS/RECONHECIDOS mais antigos (por createdAt) quando o teto é atingido; se o teto for atingido só com alertas 'open' (nenhum fechado para descartar), TODOS são mantidos e um aviso é logado (console.warn) em vez de perder silenciosamente um alerta nunca reconhecido. Antes, o corte era um slice(-500) simples que descartava os mais antigos independentemente do status."
+  ]
+}

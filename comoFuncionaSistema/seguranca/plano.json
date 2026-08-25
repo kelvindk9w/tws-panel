@@ -1,0 +1,76 @@
+{
+  "id": "plano",
+  "modulo": "seguranca",
+  "metodo": "POST",
+  "url": "/api/security/plan",
+  "resumo": "Gera o plano de correção: uma ação por fase de hardening (00 a 06), com os checks que ela corrige, se já está satisfeita, se exige confirmação de acesso e o impacto potencial.",
+  "arquivoFonte": "apps/server/src/routes/security.ts:60",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Mesmo guard global das demais rotas de segurança — sessão fora do setup, setup token durante o setup."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "(nenhum campo obrigatório)",
+        "tipo": "objeto",
+        "obrigatorio": false,
+        "regras": "O corpo é ignorado pela rota — o frontend envia '{}'. O tipo SecurityPlanRequest ({ phases?: SecurityPhaseId[] }) existe em packages/core mas NÃO é lido pela implementação atual: o plano sempre cobre as 7 fases.",
+        "descricao": "Sem efeito hoje."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre — internamente faz um SecurityService.scan() (usa cache se houver; só roda de fato se não houver nenhum relatório ainda).",
+      "corpo": { "id": "string", "createdAt": "string (ISO)", "basedOnScanId": "string", "hardeningIndex": "number | null", "actions": "SecurityPlanAction[]" },
+      "exemplo": {
+        "id": "3fae...",
+        "createdAt": "2026-08-24T10:05:00.000Z",
+        "basedOnScanId": "b3f1...",
+        "hardeningIndex": 75,
+        "actions": [
+          {
+            "id": "apply-02-ssh",
+            "phase": "02",
+            "phaseKey": "ssh",
+            "title": "Hardening de SSH",
+            "script": "02-ssh.sh",
+            "description": "drop-in de hardening do sshd (somente chave, root bloqueado, crypto moderna) com validação e rollback agendado.",
+            "fixesCheckIds": ["ssh.password-auth", "ssh.max-auth-tries"],
+            "requiresConfirmation": true,
+            "hasRollback": true,
+            "impact": "Pode afetar seu acesso SSH: senha e root são desabilitados. Rollback automático em 5 min se você não confirmar.",
+            "preselected": true,
+            "alreadySatisfied": false
+          }
+        ]
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. { report } = service.scan() — sem forçar fresh; reaproveita o último relatório conhecido.",
+    "2. Para cada check do relatório, procura a definição em SECURITY_CHECKS; ignora checks não-fixable (não corrigidos por nenhum script) e agrupa os que falharam (status='fail') por fase.",
+    "3. Para cada uma das 7 SECURITY_PHASES (na ordem fixa 00→06), monta uma SecurityPlanAction: fixesCheckIds = ids dos checks fixable que falharam nessa fase; hasCriticalFail = algum desses checks é severity='critical' → preselected=true; requiresConfirmation = RISKY_PHASES.includes(fase) || fase==='01' (CORRIGIDO nesta rodada — antes só '02'/'03'; ver observações); hasRollback = true (sempre); impact = texto fixo do mapa PHASE_IMPACTS (só '01','02','03' têm texto; as demais null); alreadySatisfied = a fase tem checks fixable aplicáveis E nenhum deles falhou.",
+    "4. Retorna { id, createdAt, basedOnScanId: report.id, hardeningIndex: report.hardeningIndex, actions }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SecurityService.plan/scan", "arquivo": "apps/server/src/services/security-service.ts:171", "papel": "Obtém o relatório base (cache) e delega a montagem do plano." },
+    { "tipo": "pacote", "nome": "buildSecurityPlan", "arquivo": "packages/security/src/planner.ts:33", "papel": "Agrupa checks falhando por fase e monta as ações do plano." },
+    { "tipo": "pacote", "nome": "SECURITY_PHASES / RISKY_PHASES", "arquivo": "packages/core/src/security.ts:10", "papel": "Lista fixa das 7 fases e quais são consideradas de risco (02, 03)." }
+  ],
+  "efeitosColaterais": ["Nenhum além dos efeitos colaterais do scan subjacente (que normalmente é servido do cache, sem efeito colateral novo)."],
+  "chamadoPor": ["apps/web/src/pages/setup/SecurityStep.tsx:279 (buildPlan)", "apps/web/src/pages/setup/SecurityStep.tsx:315 (rescanAfterManual)"],
+  "testes": ["packages/security/tests/planner.test.ts"],
+  "observacoes": [
+    "CORRIGIDO nesta rodada: requiresConfirmation agora é RISKY_PHASES.includes(fase) || fase==='01' — a fase '01' também termina em 'awaiting_confirmation' em runtime quando uma chave SSH do operador é fornecida (trava a senha do root), e o plano passou a sinalizar isso de antemão para o operador não ser surpreendido. Note que requiresConfirmation=true para a fase 01 é uma promessa CONSERVADORA: mesmo que o operador não forneça chave SSH (nesse caso a fase não trava o root e não pede confirmação de verdade em runtime), o plano já mostra o aviso — false positive aceitável, considerado melhor que o false negative anterior.",
+    "O SecurityPlanRequest.phases (filtro de fases) é um campo de tipo existente em @paas/core mas não implementado nesta rota nem consumido pelo frontend — o plano sempre inclui as 7 fases."
+  ]
+}

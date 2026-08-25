@@ -75,18 +75,44 @@ ok "auditd configurado"
 step "Baseline do AIDE"
 if [ "$WITH_AIDE" = "0" ]; then
   skip "AIDE ignorado (--skip-aide)"
-elif [ "$PAAS_DRY_RUN" = "1" ]; then
-  echo "[dry-run] aideinit && mv aide.db.new aide.db"
-elif [ -f /var/lib/aide/aide.db ]; then
-  info "baseline do AIDE já existe (idempotente) — use 'aide --update' manualmente após mudanças legítimas"
 else
-  info "gerando baseline do AIDE (pode levar alguns minutos)…"
-  if aideinit -y -f >/dev/null 2>&1 && [ -f /var/lib/aide/aide.db.new ]; then
-    mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
-    info "baseline salvo em /var/lib/aide/aide.db"
-    warn "guarde uma cópia do aide.db + sha256 FORA do servidor (spec §2.9)"
+  # Exclui os armazenamentos de containers do baseline de integridade.
+  # /var/lib/docker (overlay2) guarda MILHÕES de arquivos efêmeros: sem a
+  # exclusão o aideinit levou ~20 min na VPS real e cada `aide --check`
+  # diário vira ruído operacional (containers mudam a todo deploy — a
+  # integridade deles não é auditável por AIDE). Nome sem ponto: o
+  # @@x_include do aide.conf só aceita ^[a-zA-Z0-9_-]+$.
+  AIDE_EXCLUDES="/etc/aide/aide.conf.d/99_paas_container_excludes"
+  write_file "$AIDE_EXCLUDES" <<'EOF'
+# Gerenciado pelo painel PaaS (06-audit.sh).
+# Containers são efêmeros: overlay2 do Docker/containerd muda a cada deploy
+# e infla o baseline/check de integridade em ordens de grandeza (na prática:
+# ~20 min de aideinit numa VPS com Docker → segundos com a exclusão).
+!/var/lib/docker
+!/var/lib/containerd
+EOF
+  if [ "$PAAS_DRY_RUN" != "1" ]; then
+    # Valida a config resultante; se o drop-in quebrar o parse, remove-o e
+    # segue com a config padrão (o cron diário de aide --check não pode
+    # quebrar por causa da exclusão).
+    if ! aide --config=/etc/aide/aide.conf --config-check >/dev/null 2>&1; then
+      warn "aide --config-check falhou com o drop-in de exclusões — removendo $AIDE_EXCLUDES"
+      run rm -f "$AIDE_EXCLUDES"
+    fi
+  fi
+  if [ "$PAAS_DRY_RUN" = "1" ]; then
+    echo "[dry-run] aideinit && mv aide.db.new aide.db"
+  elif [ -f /var/lib/aide/aide.db ]; then
+    info "baseline do AIDE já existe (idempotente) — use 'aide --update' manualmente após mudanças legítimas"
   else
-    warn "aideinit falhou — baseline pode ser gerado depois com 'aideinit'"
+    info "gerando baseline do AIDE (pode levar alguns minutos)…"
+    if aideinit -y -f >/dev/null 2>&1 && [ -f /var/lib/aide/aide.db.new ]; then
+      mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      info "baseline salvo em /var/lib/aide/aide.db"
+      warn "guarde uma cópia do aide.db + sha256 FORA do servidor (spec §2.9)"
+    else
+      warn "aideinit falhou — baseline pode ser gerado depois com 'aideinit'"
+    fi
   fi
 fi
 ok "AIDE verificado"
@@ -113,7 +139,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 30 3 * * 0 root lynis audit system --cronjob >/dev/null 2>&1
 
 # AIDE diário (04:15) — diff de integridade contra o baseline
-15 4 * * * root test -f /var/lib/aide/aide.db && aide --check >/var/log/aide-check.log 2>&1 || true
+# (aide 0.18 exige --config explícito: sem ele falha com "missing configuration")
+15 4 * * * root test -f /var/lib/aide/aide.db && aide --config=/etc/aide/aide.conf --check >/var/log/aide-check.log 2>&1 || true
 
 # rkhunter diário (04:45) — somente warnings em /var/log/rkhunter.log
 45 4 * * * root command -v rkhunter >/dev/null && rkhunter --check --skip-keypress --report-warnings-only >/dev/null 2>&1 || true

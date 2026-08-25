@@ -1,0 +1,58 @@
+{
+  "modulo": "terminal",
+  "titulo": "Terminal web embutido",
+  "resumo": "Shell interativo real (PTY) no host da VPS ou no container de dev, exposto ao navegador via WebSocket e xterm.js. É o ponto mais sensível do sistema em termos de segurança: quem controla essa sessão tem um shell root equivalente a SSH. O mesmo terminal é reutilizado pelo executor de fases de hardening para rodar comandos com transparência total ao usuário.",
+  "pontoDeEntrada": { "api": "GET /api/terminal/ws (WebSocket)", "web": "componente TerminalPanel, embutido no wizard de setup e no dashboard" },
+  "comoFunciona": [
+    "O servidor mantém NO MÁXIMO uma sessão de terminal por vez (TerminalService, singleton decorado em app.ts). A sessão é destacável do WebSocket: o PTY vive no servidor independente da conexão do navegador — cair o WS não interrompe uma fase de hardening em andamento; ao reconectar, o cliente reanexa e recebe o scrollback acumulado (até 64.000 caracteres, DEFAULT_SCROLLBACK_CHARS) mais o stream ao vivo.",
+    "Abertura do PTY (docker-socket.ts): não usa node-pty (evitaria dependências nativas na imagem hardened). Em vez disso fala HTTP sobre o unix socket do Docker (/var/run/docker.sock) e faz 'hijack' da conexão (Connection: Upgrade / Upgrade: tcp) para obter um stream cru bidirecional — o mesmo padrão usado pelo host bridge de hardening.",
+    "Alvo 'host' (produção, PAAS_TARGET=host): cria um container helper DESCARTÁVEL chamado paas-terminal-<8 hex>, privileged, PidMode=host, AutoRemove=true, rodando `nsenter -t 1 -m -u -i -n -p -- bash -l` — ou seja, um bash de login executando nos NAMESPACES DO HOST via PID 1. Isso dá controle total da VPS, equivalente a um SSH root.",
+    "Alvo 'container' (dev, PAAS_TARGET=container): abre um `docker exec` com Tty:true no container de desenvolvimento configurado (PAAS_TARGET_CONTAINER), rodando bash (ou sh se bash não existir).",
+    "O WebSocket (routes/terminal.ts) é RELAY PURO: todo byte recebido do cliente vai direto ao stdin do PTY via TerminalService.write(), e todo byte produzido pelo PTY é retransmitido a todos os clientes assinantes. A única exceção é um frame de controle JSON de texto ({\"type\":\"resize\",\"cols\":n,\"rows\":n}) usado para sincronizar o tamanho do PTY com o xterm.js do navegador — qualquer outro frame de texto que comece com '{' mas não seja um resize válido cai de volta no relay comum.",
+    "Timeout de ociosidade: 30 minutos por padrão (DEFAULT_IDLE_TIMEOUT_MS = 30*60_000 em terminal-service.ts), configurável via PAAS_TERMINAL_IDLE_TIMEOUT_MS. O timer (touch()) é resetado a cada byte de input OU de output do PTY. Se um comando estiver em andamento (this.waiter setado, ex.: `apt upgrade` longo) o timeout se adia automaticamente em vez de matar a sessão no meio de uma fase.",
+    "Reaper de helpers órfãos no boot (removeOrphanTerminalHelpers, chamado uma vez em app.ts ao subir o servidor): lista todos os containers (inclusive parados) e remove, por FORCE DELETE, qualquer um cujo nome bata exatamente com o padrão paas-terminal-<8 hex de minúsculas>. Existe porque o AutoRemove do Docker só dispara quando o processo principal (nsenter→bash) SAI — se o painel morrer/reiniciar (deploy, crash) com uma sessão de terminal aberta, ninguém fecha o stream e o bash interativo (e o container privileged) ficam vivos para sempre, vazando um shell root sem dono. O reaper é best-effort e não fatal: falha ao listar propaga como warning no log, mas nunca impede o boot.",
+    "Por que o input do usuário NÃO é auditado: é a REGRA DE OURO do módulo, documentada em múltiplos comentários no código-fonte. O terminal é usado tanto para digitar comandos livres quanto para responder prompts interativos de senha/confirmação durante as fases de hardening (ex.: senha de root, confirmação de firewall). Logar esse conteúdo criaria um registro em texto claro de segredos no disco do próprio servidor que se está tentando proteger — um risco maior que a perda de rastreabilidade. Por isso `write()` em terminal-service.ts repassa os bytes ao PTY sem nenhuma inspeção, e a auditoria (audit-service) só registra eventos de CICLO DE VIDA: conexão/desconexão do WS, sessão aberta/encerrada, timeout de inatividade, e (no lado do executor de hardening) qual COMANDO foi disparado — nunca o que o usuário digitou em resposta.",
+    "Integração com o hardening (terminal-runner.ts): o SecurityExecutor roda DENTRO deste mesmo terminal via TerminalRelayRunner, que implementa a interface TargetRunner do pacote @paas/security. Scripts de fase (execStream) transmitem saída ao vivo no xterm do usuário; checks somente-leitura do scanner (exec) usam runCommandCaptured, que envolve o comando com marcadores :::PAAS_BEGIN_<nonce> / :::PAAS_EXIT_<nonce>:<code> para extrair APENAS o stdout real (sem eco do comando nem prompt) e entregá-lo ao parser do scanner — enquanto o usuário continua vendo o comando rodando de verdade no terminal, como um SSH observado. No perfil 'host', comandos fora da allowlist do host bridge (isAllowedHostCommand) não sobem pelo terminal e caem no runner base (fail-closed).",
+    "Fallback de indisponibilidade: se o PTY não puder ser aberto (ex.: docker.sock ausente em ambiente de teste, ou falha ao criar/iniciar o helper), TerminalService lança TerminalUnavailableError ANTES de qualquer comando começar — o runner de hardening cai de volta ao runner direto (SSH/exec direto, sem o espelho no terminal). Se a sessão morrer NO MEIO de um comando (stream 'end'/'close'/'error'), o erro propaga sem fallback — o comando NUNCA é reexecutado, para não duplicar efeitos colaterais (ex.: aplicar uma fase de hardening duas vezes)."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/terminal.ts", "apps/server/src/routes/health.ts"],
+    "servicos": [
+      "apps/server/src/services/terminal-service.ts",
+      "apps/server/src/services/terminal-runner.ts",
+      "apps/server/src/services/docker-socket.ts"
+    ],
+    "pacotes": [
+      "packages/security/src/executor.ts",
+      "packages/security/src/runner.ts",
+      "packages/security/src/host-bridge.ts"
+    ],
+    "web": ["apps/web/src/components/TerminalPanel.tsx"],
+    "testes": [
+      "apps/server/tests/routes-terminal.test.ts",
+      "apps/server/tests/terminal-service.test.ts",
+      "apps/server/tests/terminal-service-pty.test.ts",
+      "apps/server/tests/terminal-runner.test.ts",
+      "apps/web/tests/terminal-panel.test.tsx"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/audit.json",
+      "formato": "json",
+      "conteudo": "Eventos de ciclo de vida do terminal: terminal.connect, terminal.disconnect, terminal.session, terminal.session-end, terminal.idle-timeout, e (via SecurityExecutor/TerminalRelayRunner) hardening.host-exec com o COMANDO fixo executado (nunca o input digitado pelo usuário em resposta a prompts)."
+    }
+  ],
+  "endpoints": [
+    { "id": "websocket", "metodo": "GET", "url": "/api/terminal/ws", "resumo": "Handshake WebSocket que abre/reanexa a sessão de PTY e faz relay puro de I/O entre o navegador e o shell no alvo.", "arquivo": "websocket.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "SUPERFÍCIE MÁXIMA DE RISCO DO SISTEMA: no perfil 'host' (produção), o terminal abre um bash de login nos namespaces do HOST via container privileged + nsenter PID 1 — equivalente a um shell root por SSH na VPS inteira, sem allowlist de comandos (diferente do host bridge do hardening, que restringe a scripts fixos). Qualquer um que consiga uma conexão WS autenticada tem controle total da máquina.",
+    "O que protege o acesso hoje: (1) a guarda global de /api/* (plugins/auth.ts) exige setup token válido (header x-setup-token ou query ?token=) enquanto o setup não foi concluído, e cookie de sessão admin válido depois — sem isso o upgrade do WS retorna 401 antes de qualquer PTY ser aberto; (2) uma única sessão de PTY por vez, com mecanismo anti-ping-pong por clientId (ver websocket.json); (3) o painel web bloqueia a UI do terminal até o token/sessão serem validados (TerminalPanel com prop `enabled`); (4) helmet + CSP restringem a origem de conexão no navegador; (5) rate limit HTTP geral (200 req/min) se aplica também ao handshake do WS.",
+    "O que aconteceria se a sessão vazasse: como não há segunda camada de autorização DENTRO do WS (nenhum allowlist de comandos no perfil host, ao contrário do runner de hardening), um cookie de sessão roubado ou um setup token vazado (ex.: em log, em URL compartilhada, XSS) dá controle root completo do host — não apenas do painel. Isso é estruturalmente mais grave que vazar uma sessão de API comum, porque o WS não distingue 'usuário do painel' de 'operador da VPS'.",
+    "Timeout de ociosidade é de 30 minutos (PAAS_TERMINAL_IDLE_TIMEOUT_MS, default 30*60_000ms) e é resetado por QUALQUER I/O — inclusive por espelhos automáticos de leitura como o de /api/health/scan (health.ts), que roda comandos somente-leitura periodicamente. Uma sessão pode, na prática, nunca expirar se o painel estiver em uso ativo, o que é o comportamento desejado mas também significa que a janela de exposição de uma sessão comprometida pode ser longa enquanto há atividade legítima.",
+    "O input do usuário é deliberadamente NUNCA auditado nem logado (ver comoFunciona) — isso é uma escolha consciente para não persistir senhas/segredos digitados em claro, mas tem como efeito colateral que um abuso de shell (comandos destrutivos digitados por um invasor com a sessão) não deixa rastro granular no sistema de auditoria, apenas o fato de que houve conexão/desconexão.",
+    "O reaper de helpers órfãos roda só UMA VEZ no boot do processo — se o painel ficar de pé por muito tempo e a sessão morrer por um caminho que não passe por handleSessionEnd (bug), não há verificação periódica que remova o helper órfão até o próximo restart do painel."
+  ]
+}

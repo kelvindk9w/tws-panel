@@ -1,0 +1,91 @@
+{
+  "categoria": "global",
+  "titulo": "Peças globais e transversais do TWS Panel",
+  "resumo": "Tudo que é reutilizado por vários módulos de negócio: a arquitetura do servidor Fastify, as variáveis de ambiente, a guarda de autenticação, a camada de execução de comandos, a persistência em disco, o serviço de auditoria, a arquitetura do frontend React, a infraestrutura Docker/CI e a estratégia de testes. Módulos de negócio (autenticação, setup, segurança, projetos, domínios, e-mail, monitoramento, terminal) são documentados fora desta pasta e apontam para estas peças via 'dependenciasGlobais'.",
+  "pecas": [
+    {
+      "id": "arquitetura",
+      "titulo": "Arquitetura do sistema",
+      "resumo": "Camadas rotas -> services -> packages, monorepo pnpm, decorates do Fastify e quem os consome, ordem de registro de plugins/rotas, e como o frontend estático é servido com fallback de SPA.",
+      "arquivo": "global/arquitetura.json"
+    },
+    {
+      "id": "configuracao",
+      "titulo": "Configuração e variáveis de ambiente",
+      "resumo": "Lista exaustiva de toda env var reconhecida pelo sistema (config.ts, Dockerfile, docker-compose, código avulso), com default e o que cada uma controla.",
+      "arquivo": "global/configuracao.json"
+    },
+    {
+      "id": "ajv-options",
+      "titulo": "Opções globais do Ajv (validação de schema)",
+      "resumo": "Configuração da instância Fastify (AJV_OPTIONS) que desliga coerceTypes e removeAdditional do Ajv — o schema recusa corpo malformado em vez de tentar convertê-lo/limpá-lo em silêncio.",
+      "arquivo": "global/ajv-options.json"
+    },
+    {
+      "id": "error-handler",
+      "titulo": "Handler de erro padronizado (validação de schema)",
+      "resumo": "setErrorHandler registrado em cada plugin de rota (registerErrorHandler) que converte falha de schema em 400 { error: 'invalid_request', message } nomeando o campo, sem o jargão interno do Ajv.",
+      "arquivo": "global/error-handler.json"
+    },
+    {
+      "id": "auth-plugin",
+      "titulo": "Plugin de autenticação (guarda global)",
+      "resumo": "Hook onRequest que decide entre público, setup-token e sessão para toda rota /api/*; lista completa dos endpoints protegidos.",
+      "arquivo": "global/auth-plugin.json"
+    },
+    {
+      "id": "execucao-de-comandos",
+      "titulo": "Execução de comandos no host/containers",
+      "resumo": "Como o sistema roda docker/git/scripts de hardening (exec.ts, host-bridge.ts), a allowlist do host bridge, e uma avaliação honesta do risco de injeção de comando.",
+      "arquivo": "global/execucao-de-comandos.json"
+    },
+    {
+      "id": "persistencia",
+      "titulo": "Persistência em disco (data/*)",
+      "resumo": "Todo arquivo JSON/estado gravado sob config.dataDir: caminho, formato, quem escreve/lê, e se contém segredo.",
+      "arquivo": "global/persistencia.json"
+    },
+    {
+      "id": "auditoria",
+      "titulo": "Serviço de auditoria (AuditService)",
+      "resumo": "A API reutilizável de log de ações sensíveis (record/list) e todos os pontos do sistema que registram eventos nela.",
+      "arquivo": "global/auditoria.json"
+    },
+    {
+      "id": "frontend",
+      "titulo": "Arquitetura do frontend (SPA React)",
+      "resumo": "Rotas React, o cliente HTTP (lib/api.ts), o contexto de autenticação, o design system (Tailwind + Radix/shadcn) e os padrões de polling.",
+      "arquivo": "global/frontend.json"
+    },
+    {
+      "id": "infraestrutura",
+      "titulo": "Infraestrutura: Docker, CI e git hooks",
+      "resumo": "Dockerfile multi-stage, docker-compose de produção e dev, CI do GitHub Actions (typecheck/build/testes/Trivy) e os git hooks locais (scan de segredos).",
+      "arquivo": "global/infraestrutura.json"
+    },
+    {
+      "id": "testes",
+      "titulo": "Estratégia de testes",
+      "resumo": "Vitest por workspace (70 arquivos, 763 testes, thresholds de cobertura), os dois scripts E2E reais (e-mail e guardrails/monitoramento) e lacunas de cobertura conhecidas.",
+      "arquivo": "global/testes.json"
+    },
+    {
+      "id": "estado-atual",
+      "titulo": "Estado atual do projeto (review)",
+      "resumo": "Resumo executivo, o que está pronto/parcial/faltando, riscos priorizados por severidade, dívida técnica e sugestões de próximo passo.",
+      "arquivo": "global/estado-atual.json"
+    },
+    {
+      "id": "review-2026-08-24",
+      "titulo": "Review consolidado do sistema (2026-08-24)",
+      "resumo": "Os 30 achados das nove revisões independentes de módulo, com severidade, local no código, impacto e link para a documentação relacionada. Leia junto com estado-atual.json.",
+      "arquivo": "global/review-2026-08-24.json"
+    },
+    {
+      "id": "threat-model",
+      "titulo": "Modelo de ameaças",
+      "resumo": "O que o sistema protege, o que não protege, quais privilégios exige e por quê. Documento público, destinado a quem avalia instalar o painel.",
+      "arquivo": "global/threat-model.json"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "id": "criar-admin",
+  "modulo": "setup",
+  "metodo": "POST",
+  "url": "/api/setup/admin",
+  "resumo": "Passo final do wizard: cria a ÚNICA conta de administrador do painel, marca o setup como concluído e registra a auditoria. A partir desta chamada, o setup token deixa de ter qualquer validade e toda a API passa a exigir sessão.",
+  "arquivoFonte": "apps/server/src/routes/setup.ts:58",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "setup-token",
+    "detalhe": "Header x-setup-token ou query ?token=, exigido pelo hook global de apps/server/src/plugins/auth.ts enquanto setupState.completed=false; 403 setup_completed se já concluído (efetivamente torna este endpoint chamável no máximo uma vez com sucesso por instalação)."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "username", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (createAdminSchema, setup.ts): minLength 1, maxLength 100, additionalProperties:false. Depois, regra de negócio no handler via validateUsername: 3 a 32 caracteres, começando com letra ou número, apenas [a-zA-Z0-9_.-] depois do primeiro caractere.", "descricao": "Nome de usuário da conta admin." },
+      { "nome": "password", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify: minLength 1, maxLength 512. Depois, regra de negócio no handler via passwordStrengthErrors: mínimo 12 caracteres, ao menos 1 maiúscula, 1 minúscula, 1 número (PASSWORD_MIN_LENGTH em packages/core/src/auth.ts)", "descricao": "Senha em texto claro, nunca persistida — apenas o hash argon2id." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 201, "quando": "Conta criada com sucesso.", "corpo": { "ok": true, "user": { "username": "string", "createdAt": "string" } }, "exemplo": { "ok": true, "user": { "username": "admin", "createdAt": "2026-08-24T12:00:00.000Z" } } }
+  ],
+  "erros": [
+    { "status": 409, "codigo": "admin_exists", "quando": "app.userStore.hasAdmin() já retorna true (checagem prévia) OU a criação em si lança (corrida entre duas requisições concorrentes — UserStore.create rejeita se já houver algum usuário).", "mensagem": "A conta de administrador já foi criada. Entre pela tela de login." },
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (createAdminSchema) ANTES do handler: username/password ausentes, vazios, maiores que o limite (100/512), de tipo diferente de string, ou campo desconhecido no corpo.", "mensagem": "Campo obrigatório ausente: username. / Campo inválido: username. / Campo desconhecido no corpo da requisição: <campo>." },
+    { "status": 400, "codigo": "invalid_username", "quando": "username passou pelo schema (string 1-100 chars) mas reprovado por validateUsername (regra de negócio: 3-32 chars, padrão de caracteres) — ainda reachable, o schema não checa esse padrão.", "mensagem": "Usuário inválido: 3 a 32 caracteres, começando com letra ou número (letras, números, '_', '.', '-')." },
+    { "status": 400, "codigo": "invalid_payload", "quando": "Código legado dentro do handler (password ausente/não-string) — na prática inalcançável agora: o schema já garante password como string não vazia antes do handler rodar.", "mensagem": "Informe a senha." },
+    { "status": 400, "codigo": "weak_password", "quando": "password passou pelo schema (string 1-512 chars) mas não passa em passwordStrengthErrors — regra de negócio (força), o schema não checa complexidade.", "mensagem": "Senha fraca: {lista de regras não atendidas separadas por vírgula}." },
+    { "status": 401, "codigo": "unauthorized", "quando": "Setup token ausente ou inválido.", "mensagem": "Setup token inválido ou ausente." },
+    { "status": 503, "codigo": "setup_token_missing", "quando": "Servidor sem setupToken configurado.", "mensagem": "Servidor sem setup token configurado. Defina SETUP_TOKEN ou crie o arquivo de token (veja scripts/install.sh)." },
+    { "status": 403, "codigo": "setup_completed", "quando": "setupState.completed já é true (segunda chamada bem-sucedida nunca ocorre; esta é a barreira que impede recriar o admin).", "mensagem": "O setup já foi concluído. Entre com sua conta de administrador." }
+  ],
+  "fluxo": [
+    "1. Se app.userStore.hasAdmin() → 409 admin_exists.",
+    "2. Valida username com validateUsername; inválido → 400 invalid_username.",
+    "3. Valida tipo de password; ausente/não-string → 400 invalid_payload.",
+    "4. Valida força da senha com passwordStrengthErrors; se houver erros → 400 weak_password.",
+    "5. hashPassword(password) (argon2id, apps/server/src/services/password.ts) e app.userStore.create(username, hash) — se lançar (corrida), captura e responde 409 admin_exists.",
+    "6. app.setupState.complete() marca completed=true em data/setup-state.json.",
+    "7. app.auditService.record({ actor: user.username, action: 'setup.admin_created', detail: '...' }) grava em data/audit.json.",
+    "8. Responde 201 { ok: true, user: { username, createdAt } } — nunca inclui o hash da senha."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "UserStore.hasAdmin / UserStore.create", "arquivo": "apps/server/src/services/user-store.ts", "papel": "Garante e persiste a conta única em data/users.json; create() lança se já existir alguém." },
+    { "tipo": "servico", "nome": "hashPassword", "arquivo": "apps/server/src/services/password.ts:13", "papel": "Deriva o hash argon2id da senha em claro." },
+    { "tipo": "servico", "nome": "SetupStateStore.complete", "arquivo": "apps/server/src/services/setup-state.ts:58", "papel": "Marca completed=true, encerrando o wizard e a validade do setup token." },
+    { "tipo": "servico", "nome": "AuditService.record", "arquivo": "apps/server/src/services/audit-service.ts:39", "papel": "Registra a entrada setup.admin_created em data/audit.json." },
+    { "tipo": "pacote", "nome": "validateUsername / passwordStrengthErrors", "arquivo": "packages/core/src/auth.ts", "papel": "Regras de validação compartilhadas entre frontend (checklist ao vivo) e backend (fonte da verdade)." }
+  ],
+  "efeitosColaterais": [
+    "grava data/users.json (cria o único usuário admin)",
+    "grava data/setup-state.json (completed:true)",
+    "grava data/audit.json (setup.admin_created)",
+    "invalida o setup token globalmente: após esta chamada, /api/setup/* responde 403 setup_completed e o resto da API exige sessão"
+  ],
+  "chamadoPor": ["apps/web/src/pages/setup/AdminStep.tsx"],
+  "testes": ["apps/server/tests/routes-setup.test.ts", "apps/web/tests/admin-step.test.tsx"],
+  "observacoes": [
+    "invalid_payload (password) virou código morto: o schema Fastify já recusa (400 invalid_request) corpo sem password string antes do handler rodar. invalid_username e weak_password continuam reachable porque são regras de negócio (formato de username, força de senha) que o schema de borda não cobre — só tamanho/tipo/presença.",
+    "O painel suporta apenas UMA conta admin por design (hasAdmin() checa users.length > 0, não um papel específico) — não há como criar um segundo usuário por este fluxo nem por nenhum outro endpoint observado no módulo setup.",
+    "A checagem hasAdmin() + create() não é atômica a nível de arquivo (duas requisições concorrentes podem passar a checagem antes de qualquer uma persistir), mas UserStore.create() serializa as escritas (this.writing) e relança 'admin_exists' se, ao efetivamente gravar, já houver usuário — por isso o backend trata esse caminho como 409 em vez de deixar corromper o arquivo."
+  ]
+}

@@ -67,7 +67,7 @@ describe("list — filtros e paginação", () => {
   beforeEach(async () => {
     await service.create(INPUT); // critical/scan
     await service.create({ severity: "warning", source: "guardrail", title: "Senha fraca", detail: "d" });
-    await service.create({ severity: "info", source: "system", title: "Disco ok", detail: "d" });
+    await service.create({ severity: "info", source: "blacklist", title: "IP limpo", detail: "d" });
   });
 
   it("filtra por status, severidade e origem; openCount só conta abertos", async () => {
@@ -88,7 +88,7 @@ describe("list — filtros e paginação", () => {
   it("mais recentes primeiro + clamps de paginação", async () => {
     const page = await service.list({ page: -5, perPage: 2 });
     expect(page.page).toBe(1);
-    expect(page.alerts.map((a) => a.title)).toEqual(["Disco ok", "Senha fraca"]);
+    expect(page.alerts.map((a) => a.title)).toEqual(["IP limpo", "Senha fraca"]);
 
     const clamped = await service.list({ perPage: 999 });
     expect(clamped.perPage).toBe(200);
@@ -127,6 +127,38 @@ describe("setStatus — transições", () => {
 
   it("id inexistente → null", async () => {
     expect(await service.setStatus("nope", "acknowledged")).toBeNull();
+  });
+});
+
+describe("teto de retenção — preserva alertas abertos", () => {
+  it("ao atingir o teto, descarta primeiro os RESOLVIDOS/RECONHECIDOS mais antigos", async () => {
+    const small = new AlertsService(dir, { maxAlerts: 3 });
+    const a = await small.create({ ...INPUT, title: "alerta A (vai ser resolvido)" });
+    await small.setStatus(a.alert.id, "resolved"); // mais antigo E fechado — primeiro candidato a sair
+    await small.create({ ...INPUT, title: "alerta B (fica aberto)" });
+    await small.create({ ...INPUT, title: "alerta C (fica aberto)" });
+    // 4º alerta estoura o teto de 3 — deve expulsar "A" (resolvido), não "B" (aberto)
+    await small.create({ ...INPUT, title: "alerta D (fica aberto)" });
+
+    const { alerts, total } = await small.list();
+    expect(total).toBe(3);
+    expect(alerts.map((x) => x.title).sort()).toEqual(
+      ["alerta B (fica aberto)", "alerta C (fica aberto)", "alerta D (fica aberto)"].sort(),
+    );
+  });
+
+  it("teto atingido só com alertas ABERTOS → nenhum é descartado, apenas loga um aviso", async () => {
+    const warnings: string[] = [];
+    const small = new AlertsService(dir, { maxAlerts: 2, log: (msg) => warnings.push(msg) });
+    await small.create({ ...INPUT, title: "aberto 1" });
+    await small.create({ ...INPUT, title: "aberto 2" });
+    // 3º alerta aberto estoura o teto, mas não há nenhum resolvido/reconhecido para expulsar
+    await small.create({ ...INPUT, title: "aberto 3" });
+
+    const { alerts, total } = await small.list();
+    expect(total).toBe(3); // nenhum alerta aberto foi descartado, mesmo acima do teto
+    expect(alerts.map((x) => x.title).sort()).toEqual(["aberto 1", "aberto 2", "aberto 3"].sort());
+    expect(warnings.some((w) => w.includes("teto") && w.includes("aberto"))).toBe(true);
   });
 });
 

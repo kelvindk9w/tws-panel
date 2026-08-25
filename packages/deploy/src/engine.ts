@@ -17,6 +17,7 @@ import {
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
   PAAS_NETWORK,
+  type GuardrailReport,
   type Project,
 } from "@paas/core";
 import { parse, stringify } from "yaml";
@@ -45,6 +46,25 @@ export interface EngineContext extends IngestContext {
 }
 
 export type LogFn = (chunk: string) => void;
+
+/**
+ * Erro de domínio do engine: mesmo formato duck-typed que `httpError`
+ * (apps/server/src/services/deploy-service.ts) — `statusCode` + `code` +
+ * `message` em pt-BR. packages/deploy não depende de apps/server, então o
+ * tipo é definido aqui; `sendError()` (routes/projects.ts) já lê essas
+ * propriedades de qualquer erro lançado, não exige uma classe específica.
+ */
+export interface EngineError extends Error {
+  statusCode: number;
+  code: string;
+}
+
+function engineError(statusCode: number, code: string, message: string): EngineError {
+  const err = new Error(message) as EngineError;
+  err.statusCode = statusCode;
+  err.code = code;
+  return err;
+}
 
 /** Nome do compose project usado ao adotar um compose existente. */
 export function composeProjectName(project: Project): string {
@@ -83,7 +103,7 @@ export class DeployEngine {
     project: Project,
     allProjects: Project[],
     onLog: LogFn,
-    opts?: { guardrailOverride?: boolean },
+    opts?: { guardrailOverride?: boolean; precomputedGuardrailReport?: GuardrailReport },
   ): Promise<void> {
     const type = project.detection?.type;
     if (!type || type === "unknown") {
@@ -94,7 +114,14 @@ export class DeployEngine {
     const src = await ingestCode(this.ctx, project, onLog);
 
     onLog("\n=== Guardrails de segurança (Fase 4) ===\n");
-    const report = await runGuardrails(src);
+    // Desempenho: startDeploy() (deploy-service.ts) já roda os guardrails uma
+    // vez antes de criar o job. Quando o modo de ingestão garante que o
+    // diretório não mudou desde então (ver comentário no chamador), ele passa
+    // esse resultado pronto aqui em vez de escanear a árvore de novo.
+    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src));
+    if (opts?.precomputedGuardrailReport) {
+      onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
+    }
     if (report.findings.length === 0) {
       onLog("Nenhum problema encontrado pelos guardrails.\n");
     } else {
@@ -393,21 +420,36 @@ export class DeployEngine {
   async stop(project: Project, onLog: LogFn): Promise<void> {
     const ids = await this.projectContainers(project);
     if (ids.length === 0) {
-      onLog("Nenhum container do projeto encontrado.\n");
-      return;
+      // Mesmo padrão de erro do start (bug conhecido): sem containers não há
+      // o que parar — é uma condição de negócio, não uma falha de infra, e
+      // precisa do statusCode/code corretos para sendError() não mapear
+      // para 500 internal_error.
+      throw engineError(
+        409,
+        "no_containers",
+        `Nenhum container encontrado para "${project.name}" — faça um deploy primeiro.`,
+      );
     }
     const r = await run("docker", ["stop", ...ids], { timeoutMs: 120_000 });
-    if (r.code !== 0) throw new Error(`falha ao parar containers: ${r.stderr}`);
+    if (r.code !== 0) {
+      throw engineError(502, "docker_stop_failed", `Falha ao parar containers: ${r.stderr}`);
+    }
     onLog(`${ids.length} container(es) parado(s).\n`);
   }
 
   async start(project: Project, onLog: LogFn): Promise<void> {
     const ids = await this.projectContainers(project);
     if (ids.length === 0) {
-      throw new Error("Nenhum container do projeto encontrado — faça um deploy primeiro.");
+      throw engineError(
+        409,
+        "no_containers",
+        `Nenhum container encontrado para "${project.name}" — faça um deploy primeiro.`,
+      );
     }
     const r = await run("docker", ["start", ...ids], { timeoutMs: 120_000 });
-    if (r.code !== 0) throw new Error(`falha ao iniciar containers: ${r.stderr}`);
+    if (r.code !== 0) {
+      throw engineError(502, "docker_start_failed", `Falha ao iniciar containers: ${r.stderr}`);
+    }
     onLog(`${ids.length} container(es) iniciado(s).\n`);
   }
 

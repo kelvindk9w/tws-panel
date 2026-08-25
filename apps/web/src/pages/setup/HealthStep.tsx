@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  ArrowLeft,
   ArrowRight,
   CheckCircle2,
   AlertTriangle,
@@ -21,6 +22,8 @@ import {
 
 interface HealthStepProps {
   onNext: () => void;
+  /** Navegação de volta no wizard (opcional — ex.: voltar às boas-vindas). */
+  onBack?: () => void;
 }
 
 function CheckBadge({ check }: { check: HealthCheck }) {
@@ -35,7 +38,7 @@ function CheckBadge({ check }: { check: HealthCheck }) {
   );
 }
 
-export function HealthStep({ onNext }: HealthStepProps) {
+export function HealthStep({ onNext, onBack }: HealthStepProps) {
   const [scan, setScan] = useState<HealthScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,7 +67,7 @@ export function HealthStep({ onNext }: HealthStepProps) {
     <div className="flex animate-fade-in flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold">Saúde da máquina</h2>
+          <h2 className="text-xl font-semibold tracking-tight">Saúde da máquina</h2>
           <p className="text-sm text-muted-foreground">
             Diagnóstico do servidor antes da instalação. Nada é alterado — esta etapa é somente
             leitura.
@@ -203,7 +206,14 @@ export function HealthStep({ onNext }: HealthStepProps) {
             </p>
           )}
 
-          <div className="flex justify-end">
+          <div className="flex justify-between">
+            {onBack ? (
+              <Button variant="outline" onClick={onBack}>
+                <ArrowLeft className="h-4 w-4" /> Voltar
+              </Button>
+            ) : (
+              <span />
+            )}
             <Button onClick={onNext}>
               Continuar <ArrowRight className="h-4 w-4" />
             </Button>

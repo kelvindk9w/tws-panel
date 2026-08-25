@@ -30,10 +30,33 @@ function OpenAlertsBadge() {
       }
     }
     void tick();
-    const timer = setInterval(() => void tick(), 30_000);
+    // Polling pausado com a aba oculta; retoma (e atualiza) ao voltar.
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = () => {
+      if (timer === null && document.visibilityState !== "hidden") {
+        timer = setInterval(() => void tick(), 30_000);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        stop();
+      } else {
+        void tick();
+        start();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 
@@ -48,9 +71,9 @@ function OpenAlertsBadge() {
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
+      <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md">
         <div className="container flex h-14 items-center gap-6">
-          <Link to="/" className="font-semibold tracking-tight">
+          <Link to="/" className="font-semibold tracking-tight transition-opacity hover:opacity-80">
             TWS <span className="text-muted-foreground">Panel</span>
           </Link>
           <nav className="flex items-center gap-1 text-sm">

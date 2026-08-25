@@ -21,6 +21,7 @@ import {
   type MonitorStateResponse,
 } from "@paas/core";
 import { MonitorService } from "../services/monitor-service.js";
+import { registerErrorHandler } from "../plugins/error-handler.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -28,10 +29,69 @@ declare module "fastify" {
   }
 }
 
+// Paginação: os handlers já fazem `Number(...)` manualmente e a coerção de
+// tipos do Ajv está desligada globalmente — por isso page/perPage chegam
+// como string aqui (não `integer`), restritas por um padrão numérico.
+// perPage limitado a 3 dígitos (max 999) para um cliente não pedir a base
+// inteira de uma vez; o service ainda garante o teto de 200 por página.
+const PAGE_PATTERN = "^[1-9][0-9]{0,5}$";
+const PER_PAGE_PATTERN = "^[1-9][0-9]{0,2}$";
+
+const alertsQuerySchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      status: { type: "string", enum: [...ALERT_STATUSES] },
+      severity: { type: "string", enum: [...ALERT_SEVERITIES] },
+      source: { type: "string", enum: [...ALERT_SOURCES] },
+      page: { type: "string", pattern: PAGE_PATTERN },
+      perPage: { type: "string", pattern: PER_PAGE_PATTERN },
+    },
+  },
+} as const;
+
+const alertIdParamsSchema = {
+  params: {
+    type: "object",
+    required: ["id"],
+    additionalProperties: false,
+    properties: {
+      id: { type: "string", minLength: 1, maxLength: 64 },
+    },
+  },
+} as const;
+
+const monitorConfigSchema = {
+  body: {
+    type: "object",
+    required: ["intervalMs"],
+    additionalProperties: false,
+    properties: {
+      // MONITOR_MIN_INTERVAL_MS evita busy-loop de scans.
+      intervalMs: { type: "integer", minimum: MONITOR_MIN_INTERVAL_MS },
+    },
+  },
+} as const;
+
+const auditQuerySchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      page: { type: "string", pattern: PAGE_PATTERN },
+      perPage: { type: "string", pattern: PER_PAGE_PATTERN },
+    },
+  },
+} as const;
+
 const monitoringRoutes: FastifyPluginAsync = async (app) => {
+  registerErrorHandler(app);
   const alerts = app.alertsService;
   const audit = app.auditService;
-  const monitor = new MonitorService(app.config, alerts);
+  const monitor = new MonitorService(app.config, alerts, (msg) => {
+    app.log.warn(msg);
+  });
   app.decorate("monitorService", monitor);
 
   // Inclui o check de blacklist no scan recorrente quando o módulo de e-mail
@@ -65,28 +125,23 @@ const monitoringRoutes: FastifyPluginAsync = async (app) => {
   // -------------------------------------------------------------------------
 
   app.get<{
-    Querystring: { status?: string; severity?: string; source?: string; page?: string; perPage?: string };
-  }>("/api/alerts", async (request, reply) => {
-    const { status, severity, source, page, perPage } = request.query;
-    if (status && !ALERT_STATUSES.includes(status as AlertStatus)) {
-      return reply.code(400).send({ error: "invalid_status", message: `Status inválido. Aceitos: ${ALERT_STATUSES.join(", ")}.` });
-    }
-    if (severity && !ALERT_SEVERITIES.includes(severity as AlertSeverity)) {
-      return reply.code(400).send({ error: "invalid_severity", message: `Severidade inválida. Aceitas: ${ALERT_SEVERITIES.join(", ")}.` });
-    }
-    if (source && !ALERT_SOURCES.includes(source as AlertSource)) {
-      return reply.code(400).send({ error: "invalid_source", message: `Origem inválida. Aceitas: ${ALERT_SOURCES.join(", ")}.` });
-    }
-    const result = await alerts.list({
-      ...(status ? { status: status as AlertStatus } : {}),
-      ...(severity ? { severity: severity as AlertSeverity } : {}),
-      ...(source ? { source: source as AlertSource } : {}),
-      ...(page ? { page: Number(page) } : {}),
-      ...(perPage ? { perPage: Number(perPage) } : {}),
-    });
-    const response: AlertListResponse = result;
-    return reply.send(response);
-  });
+    Querystring: { status?: AlertStatus; severity?: AlertSeverity; source?: AlertSource; page?: string; perPage?: string };
+  }>(
+    "/api/alerts",
+    { schema: alertsQuerySchema },
+    async (request, reply) => {
+      const { status, severity, source, page, perPage } = request.query;
+      const result = await alerts.list({
+        ...(status ? { status } : {}),
+        ...(severity ? { severity } : {}),
+        ...(source ? { source } : {}),
+        ...(page ? { page: Number(page) } : {}),
+        ...(perPage ? { perPage: Number(perPage) } : {}),
+      });
+      const response: AlertListResponse = result;
+      return reply.send(response);
+    },
+  );
 
   const transition = async (
     id: string,
@@ -100,15 +155,23 @@ const monitoringRoutes: FastifyPluginAsync = async (app) => {
     return { status: 200, body: response };
   };
 
-  app.post<{ Params: { id: string } }>("/api/alerts/:id/ack", async (request, reply) => {
-    const { status, body } = await transition(request.params.id, "acknowledged");
-    return reply.code(status).send(body);
-  });
+  app.post<{ Params: { id: string } }>(
+    "/api/alerts/:id/ack",
+    { schema: alertIdParamsSchema },
+    async (request, reply) => {
+      const { status, body } = await transition(request.params.id, "acknowledged");
+      return reply.code(status).send(body);
+    },
+  );
 
-  app.post<{ Params: { id: string } }>("/api/alerts/:id/resolve", async (request, reply) => {
-    const { status, body } = await transition(request.params.id, "resolved");
-    return reply.code(status).send(body);
-  });
+  app.post<{ Params: { id: string } }>(
+    "/api/alerts/:id/resolve",
+    { schema: alertIdParamsSchema },
+    async (request, reply) => {
+      const { status, body } = await transition(request.params.id, "resolved");
+      return reply.code(status).send(body);
+    },
+  );
 
   // -------------------------------------------------------------------------
   // Baseline de segurança
@@ -152,44 +215,48 @@ const monitoringRoutes: FastifyPluginAsync = async (app) => {
       const response: MonitorRunResponse = { result };
       return reply.send(response);
     } catch (err) {
-      return reply.code(500).send({
-        error: "monitor_run_failed",
-        message: err instanceof Error ? err.message : "Falha ao executar o scan.",
+      const message = err instanceof Error ? err.message : "Falha ao executar o scan.";
+      // Já existe um scan em andamento (lock do MonitorScheduler) → 409, no
+      // mesmo padrão do job_conflict do SecurityExecutor — não é uma falha
+      // interna, é uma recusa esperada.
+      const conflict = message.includes("já existe um scan");
+      return reply.code(conflict ? 409 : 500).send({
+        error: conflict ? "scan_in_progress" : "monitor_run_failed",
+        message,
       });
     }
   });
 
-  app.put<{ Body: { intervalMs?: number } }>("/api/security/monitor/config", async (request, reply) => {
-    const intervalMs = request.body?.intervalMs;
-    if (typeof intervalMs !== "number" || !Number.isFinite(intervalMs) || intervalMs < MONITOR_MIN_INTERVAL_MS) {
-      return reply.code(400).send({
-        error: "invalid_interval",
-        message: `intervalMs inválido — mínimo ${MONITOR_MIN_INTERVAL_MS / 1000}s.`,
+  app.put<{ Body: { intervalMs: number } }>(
+    "/api/security/monitor/config",
+    { schema: monitorConfigSchema },
+    async (request, reply) => {
+      const { intervalMs } = request.body;
+      await monitor.setIntervalMs(intervalMs);
+      await audit.record({
+        action: "monitor.config",
+        target: null,
+        detail: `Intervalo do scan recorrente alterado para ${Math.round(intervalMs / 60_000)} min.`,
       });
-    }
-    await monitor.setIntervalMs(Math.round(intervalMs));
-    await audit.record({
-      action: "monitor.config",
-      target: null,
-      detail: `Intervalo do scan recorrente alterado para ${Math.round(intervalMs / 60_000)} min.`,
-    });
-    const config: MonitorConfig = { intervalMs: Math.round(intervalMs) };
-    return reply.send({ config });
-  });
+      const config: MonitorConfig = { intervalMs };
+      return reply.send({ config });
+    },
+  );
 
   // -------------------------------------------------------------------------
   // Auditoria
   // -------------------------------------------------------------------------
 
-  app.get<{ Querystring: { page?: string; perPage?: string } }>("/api/audit", async (request, reply) => {
-    const page = Number(request.query.page ?? 1);
-    const perPage = Number(request.query.perPage ?? 50);
-    const response: AuditListResponse = await audit.list(
-      Number.isFinite(page) ? page : 1,
-      Number.isFinite(perPage) ? perPage : 50,
-    );
-    return reply.send(response);
-  });
+  app.get<{ Querystring: { page?: string; perPage?: string } }>(
+    "/api/audit",
+    { schema: auditQuerySchema },
+    async (request, reply) => {
+      const page = Number(request.query.page ?? 1);
+      const perPage = Number(request.query.perPage ?? 50);
+      const response: AuditListResponse = await audit.list(page, perPage);
+      return reply.send(response);
+    },
+  );
 };
 
 export default monitoringRoutes;

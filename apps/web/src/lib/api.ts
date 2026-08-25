@@ -2,7 +2,11 @@ import { SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY, type ApiError } from "@paas/core
 
 const STORAGE_KEY = "paas.setup-token";
 
-/** Lê o token da query string (?token=...) na primeira visita e persiste na sessão. */
+/**
+ * Lê o token da query string (?token=...) na primeira visita e persiste na
+ * sessão, limpando a URL. IDEMPOTENTE: chamadas seguintes devolvem o token
+ * já guardado na sessão (a URL já foi limpa na primeira).
+ */
 export function initSetupToken(): string | null {
   const params = new URLSearchParams(window.location.search);
   const fromQuery = params.get(SETUP_TOKEN_QUERY);
@@ -16,6 +20,12 @@ export function initSetupToken(): string | null {
   }
   return sessionStorage.getItem(STORAGE_KEY);
 }
+
+// Captura o ?token= o MAIS CEDO possível: no carregamento do módulo, ANTES
+// de o React renderizar. Sem isso o link do instalador (http://IP:9000/?token=...)
+// se perdia: o guard de rotas redireciona "/" → "/setup" e o redirect do
+// React Router pode derrubar a query string antes de qualquer useEffect rodar.
+initSetupToken();
 
 export function getSetupToken(): string | null {
   return sessionStorage.getItem(STORAGE_KEY);

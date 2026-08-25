@@ -16,7 +16,6 @@ const SOURCE_LABELS: Record<Alert["source"], string> = {
   guardrail: "guardrail",
   scan: "monitoramento",
   blacklist: "blacklist",
-  system: "sistema",
 };
 
 const STATUS_LABELS: Record<Alert["status"], string> = {
@@ -105,7 +104,6 @@ export function AlertsPage() {
           <option value="guardrail" className="bg-background">guardrail</option>
           <option value="scan" className="bg-background">monitoramento</option>
           <option value="blacklist" className="bg-background">blacklist</option>
-          <option value="system" className="bg-background">sistema</option>
         </select>
       </div>
 

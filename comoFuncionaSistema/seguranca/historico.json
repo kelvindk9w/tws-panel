@@ -1,0 +1,59 @@
+{
+  "id": "historico",
+  "modulo": "seguranca",
+  "metodo": "GET",
+  "url": "/api/security/history",
+  "resumo": "Histórico persistido de scans e jobs de hardening (até 200 entradas), com a evolução do índice (primeiro/último) e um resumo derivado do hardening já aplicado com sucesso.",
+  "arquivoFonte": "apps/server/src/routes/security.ts:167",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Mesmo guard global das demais rotas de segurança — sessão fora do setup, setup token durante o setup."
+  },
+  "rateLimit": null,
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre — arquivo ausente/corrompido é tratado como histórico vazio.",
+      "corpo": {
+        "entries": "SecurityHistoryEntry[]",
+        "firstIndex": "number | null",
+        "latestIndex": "number | null",
+        "applied": "SecurityAppliedSummary | null"
+      },
+      "exemplo": {
+        "entries": [
+          { "id": "scan-1", "at": "2026-08-20T10:00:00Z", "kind": "scan", "hardeningIndex": 39, "hardeningIndexSource": "lynis" },
+          { "id": "job-00-1", "at": "2026-08-20T10:06:00Z", "kind": "job", "phase": "00", "dryRun": false, "status": "success" },
+          { "id": "scan-2", "at": "2026-08-20T10:25:00Z", "kind": "scan", "hardeningIndex": 75, "hardeningIndexSource": "lynis" }
+        ],
+        "firstIndex": 39,
+        "latestIndex": 75,
+        "applied": { "appliedAt": "2026-08-20T10:20:00Z", "beforeIndex": 39, "beforeIndexSource": "lynis", "afterIndex": 75, "afterIndexSource": "lynis" }
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. loadHistory() lê data/security-history.json; JSON inválido ou arquivo ausente vira lista vazia (try/catch silencioso).",
+    "2. scanIndexes = hardeningIndex de todas as entradas kind='scan' com índice numérico, NA ORDEM DE INSERÇÃO (não reordenado); firstIndex = primeiro dessa lista, latestIndex = último.",
+    "3. applied = buildAppliedSummary(entries): isRealApply(e) = kind='job' && dryRun===false. lastApply = último apply real; se inexistente OU status != 'success', applied=null. Senão: firstApplyPos = índice do PRIMEIRO apply real; before = último scan ANTES de firstApplyPos (índice 'congelado', nunca recalculado mesmo que existam scans intermediários depois); after = último scan DEPOIS de firstApplyPos.",
+    "4. Retorna { entries, firstIndex, latestIndex, applied }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SecurityService.history", "arquivo": "apps/server/src/services/security-service.ts:239", "papel": "Lê o histórico e calcula os agregados." },
+    { "tipo": "funcao", "nome": "buildAppliedSummary", "arquivo": "apps/server/src/services/security-service.ts:50", "papel": "Deriva o resumo 'hardening aplicado' (antes/depois congelados) — exportada e testada isoladamente." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura)."],
+  "chamadoPor": [
+    "apps/web/src/pages/setup/SecurityStep.tsx:230 (restauração da tela 'Hardening aplicado' após restart)",
+    "apps/web/src/pages/SecurityPage.tsx:39 (HardeningCard — evolução do índice e badges de scans recentes)"
+  ],
+  "testes": ["apps/server/tests/security-history.test.ts"],
+  "observacoes": [
+    "'Antes' congelado: uma vez que existe um apply real bem-sucedido, o beforeIndex NUNCA muda, mesmo que scans anteriores a ele sejam reinterpretados — corrige um bug real em que o scan final (pós-apply) sobrescrevia o relatório em memória e o 'Antes' mostrado na tela mudava entre renders (ex.: 39 → 49).",
+    "dry-runs (dryRun=true) NUNCA contam como 'aplicado' — só o último apply REAL (dryRun=false) decide o resultado de `applied`; se esse último apply real falhou ou foi revertido (status 'failed'/'rolled_back'), applied=null e o wizard segue o fluxo normal (scan → plano) em vez de mostrar a tela de sucesso.",
+    "Histórico limitado a 200 entradas (MAX_HISTORY_ENTRIES, apps/server/src/services/security-service.ts:33) — mais antigas são descartadas silenciosamente (slice(-200)); em um servidor com scans muito frequentes (módulo 'monitoramento'), isso pode empurrar para fora o registro do apply original mais rápido do que se esperaria, quebrando o 'Antes' congelado (buildAppliedSummary não encontraria mais o scan anterior ao apply)."
+  ]
+}

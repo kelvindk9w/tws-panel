@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
+import { AJV_OPTIONS } from "../src/ajv-options.js";
 import authPlugin from "../src/plugins/auth.js";
 import { AuditService } from "../src/services/audit-service.js";
 import { SessionStore } from "../src/services/session-store.js";
@@ -25,7 +26,9 @@ export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
-  const app = Fastify({ logger: false });
+  // Mesmas opções de validação da produção (app.ts), para que os testes de
+  // rota exerçam o comportamento real do Ajv.
+  const app = Fastify({ logger: false, ajv: AJV_OPTIONS });
   const setupState = new SetupStateStore(dir);
   const userStore = new UserStore(dir);
   const sessionStore = new SessionStore(dir);

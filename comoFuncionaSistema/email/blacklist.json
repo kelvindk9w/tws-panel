@@ -1,0 +1,52 @@
+{
+  "id": "blacklist",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/blacklist",
+  "resumo": "Consulta o IP público do servidor e cada domínio de e-mail cadastrado contra as principais DNSBLs (blacklists de spam).",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:118",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre — cada consulta individual a uma DNSBL tem seu próprio tratamento de erro (nunca derruba a rota).",
+      "corpo": { "checkedAt": "string (ISO)", "ip": "BlacklistTargetResult|null", "domains": "BlacklistTargetResult[]", "listedCount": "number" },
+      "exemplo": {
+        "checkedAt": "2026-08-24T12:00:00.000Z",
+        "ip": { "target": "203.0.113.10", "results": [
+          { "dnsbl": "spamhaus-zen", "label": "Spamhaus ZEN", "status": "clean", "detail": null, "removalUrl": null },
+          { "dnsbl": "spamcop", "label": "SpamCop", "status": "clean", "detail": null, "removalUrl": null },
+          { "dnsbl": "barracuda", "label": "Barracuda Reputation", "status": "clean", "detail": null, "removalUrl": null }
+        ] },
+        "domains": [ { "target": "exemplo.com.br", "results": [ { "dnsbl": "spamhaus-dbl", "label": "Spamhaus DBL", "status": "clean", "detail": null, "removalUrl": null } ] } ],
+        "listedCount": 0
+      }
+    }
+  ],
+  "erros": [
+    { "status": 500, "codigo": "internal_error", "quando": "Erro inesperado fora das consultas DNS individuais (essas já retornam status:'unknown' em vez de lançar).", "mensagem": "Erro interno." }
+  ],
+  "fluxo": [
+    "1. serverIp(): usa PAAS_PUBLIC_IP (config) ou a primeira interface IPv4 externa (não-loopback) da máquina; fallback 127.0.0.1.",
+    "2. checkIpBlacklists(ip): para cada DNSBL de IP (spamhaus-zen, spamcop, barracuda), inverte os octetos do IP e consulta <ip-invertido>.<zona> via resolve4; resposta 127.x.x.x (exceto 127.255.255.x) = listed; NXDOMAIN/ENODATA = clean; 127.255.255.x = unknown (zona recusou a consulta); outro erro de rede = unknown.",
+    "3. Em paralelo, checkDomainBlacklists(domínio) para cada domínio cadastrado, na zona spamhaus-dbl (<domínio>.dbl.spamhaus.org).",
+    "4. listedCount soma quantos resultados (IP + todos os domínios) têm status 'listed'."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.checkBlacklists", "arquivo": "apps/server/src/services/mail-service.ts:199", "papel": "Determina o IP e dispara as consultas em paralelo." },
+    { "tipo": "pacote", "nome": "checkIpBlacklists/checkDomainBlacklists", "arquivo": "packages/mailer/src/blacklist.ts:129", "papel": "Consulta DNSBL via reverse-DNS lookup." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura; consultas DNS externas)."],
+  "chamadoPor": ["apps/web/src/pages/SecurityPage.tsx:364"],
+  "testes": ["packages/mailer/tests/blacklist.test.ts"],
+  "observacoes": [
+    "Consumida pela página de Segurança (SecurityPage.tsx), não pelas páginas de e-mail (MailPage/MailDomainPage) — está no módulo de e-mail por dono do dado (domínios cadastrados), mas a UI mistura o resultado com guardrails/monitoramento na aba de segurança.",
+    "O resolver de blacklist usa o resolver DNS do PRÓPRIO SISTEMA (não 1.1.1.1/8.8.8.8 como o checklist de e-mail) porque DNSBLs sérias como a Spamhaus recusam consultas vindas de resolvedores públicos abertos."
+  ]
+}

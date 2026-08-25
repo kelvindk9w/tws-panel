@@ -1,0 +1,115 @@
+{
+  "modulo": "projetos",
+  "titulo": "Projetos",
+  "resumo": "Coração do painel: cadastro de projetos, ingestão do código-fonte, detecção automática de stack, guardrails de segurança, pipeline de deploy (build + subida + proxy Caddy), acompanhamento de jobs/logs e ciclo start/stop/delete.",
+  "pontoDeEntrada": { "api": "POST /api/projects", "web": "/projects/new" },
+  "comoFunciona": [
+    "1. Criar (POST /api/projects): o operador informa nome, modo de ingestão (git/upload/existing), fonte (URL git ou caminho local) e domínio. O DeployService valida os campos, gera um slug único (slugify + sufixo hex em caso de colisão) e persiste o projeto em data/projects.json com detection=null. Nada é feito no Docker/filesystem além de gravar o registro.",
+    "2. Ingestão do código (packages/deploy/src/ingest.ts, chamada durante detect/deploy): modo 'git' clona (ou faz fetch+checkout+pull se já clonado) para data/projects/<slug>/src; modo 'upload' copia o diretório local para data/projects/<slug>/src excluindo node_modules/.git/dist/out/build/.next/.turbo; modo 'existing' usa o próprio caminho informado sem copiar nada (dev local).",
+    "3. Detecção de stack (POST /api/projects/:id/detect, packages/deploy/src/detect.ts): analisa o diretório de código (o já ingerido, ou a fonte local direta para upload/existing antes do 1º deploy) e classifica em 'compose' (arquivo compose.*.yml adotado, tem prioridade sobre tudo), 'static-node' (package.json com build que gera pasta estática conhecida), 'dockerfile' (Dockerfile sozinho ou junto de um build sem saída estática) ou 'unknown'. O resultado (DetectResult) é persistido em project.detection.",
+    "4. Guardrails de segurança (GET /api/projects/:id/guardrails e reexecutados no deploy, packages/deploy/src/rules.ts): varre o compose adotado (portas de banco expostas, credenciais fracas, containers privilegiados, serviços de dev) e faz scan de secrets no código-fonte. Findings 'block' impedem o deploy a menos que o operador confirme um override explícito (auditado); 'warn' e 'info' apenas avisam.",
+    "5. Deploy (POST /api/projects/:id/deploy → job assíncrono, packages/deploy/src/engine.ts): 5 etapas logadas em tempo real — (1) ingestão do código, (2) guardrails + preparação (rede paas-net, env vars extras de e-mail), (3) build/subida conforme o tipo (build estático em container Node + nginx; docker compose up --build com override de rede; ou docker build + docker run), (4) atualização do Caddyfile central com TODOS os domínios de projetos com lastDeployStatus=success, (5) health check via HTTP através do próprio Caddy.",
+    "6. Domínio/Proxy (packages/deploy/src/caddy.ts): um único container 'paas-caddy' compartilhado por todos os projetos. O Caddyfile é regerado a cada deploy/remoção e recarregado com 'caddy reload' (fallback: restart do container). Domínios *.localhost usam http:// explícito (dev); qualquer outro domínio recebe HTTPS automático do Caddy.",
+    "7. Jobs/Logs (DeployService.startDeploy): cada deploy cria um DeployJob com 5 steps fixos, status inicial 'running' no step 1 e 'skipped' nos demais; os steps avançam conforme marcadores '=== Etapa N/5' aparecem no log. O log bruto (stdout+stderr concatenado) fica truncado em DEPLOY_LOG_MAX_CHARS=400000 caracteres (mantém o fim). Persistido em data/deploy-jobs.json (mantém só os últimos 100 no arquivo; a API expõe só os últimos 20 por projeto). Não há WebSocket: o frontend faz polling (GET .../jobs/:jobId a cada 1.5s enquanto 'running', 5s quando parado).",
+    "8. Start/Stop (POST /api/projects/:id/stop e /start): localizam os containers do projeto por label paas.project=<slug> ou por compose project 'paas-<slug>' e rodam 'docker stop/start' neles. Não tocam no Caddyfile nem no registro do projeto.",
+    "9. Remover (DELETE /api/projects/:id): para/derruba os containers (compose down --rmi local --remove-orphans quando for tipo compose, senão docker rm -f + remoção da imagem paas-<slug>:latest), recalcula o Caddyfile sem o projeto, opcionalmente apaga o código-fonte copiado (?deleteSource=true, ignorado em modo 'existing') e remove o projeto de data/projects.json.",
+    "10. Editar (PATCH /api/projects/:id, apps/web/src/components/ProjectConfigCard.tsx): depois de criado, o operador pode corrigir nome, repositório, branch e domínio pelo card 'Configuração' da tela do projeto. O slug NUNCA muda. Como a edição só grava a CONFIGURAÇÃO (project.source/branch) e não o que está efetivamente publicado (project.deployedSource/deployedBranch, gravados só ao fim de um deploy com sucesso), o card compara os dois conjuntos de campos: se divergem, mostra um aviso ('no ar: branch X, deploy de <data>') e oferece 'Salvar e publicar' (PATCH + POST .../deploy em sequência) além de 'Salvar' (só o PATCH, para revisar antes de publicar). Esse ciclo — editar → ver a divergência configurado/publicado → publicar — é o que permite corrigir um projeto git apontando para a branch errada sem recriá-lo."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/projects.ts"],
+    "servicos": ["apps/server/src/services/deploy-service.ts"],
+    "pacotes": [
+      "packages/deploy/src/engine.ts",
+      "packages/deploy/src/detect.ts",
+      "packages/deploy/src/guardrails.ts",
+      "packages/deploy/src/rules.ts",
+      "packages/deploy/src/caddy.ts",
+      "packages/deploy/src/ingest.ts",
+      "packages/deploy/src/exec.ts",
+      "packages/deploy/src/index.ts",
+      "packages/core/src/deploy.ts",
+      "packages/core/src/monitoring.ts"
+    ],
+    "web": [
+      "apps/web/src/pages/NewProjectPage.tsx",
+      "apps/web/src/pages/ProjectDetailPage.tsx",
+      "apps/web/src/pages/DashboardPage.tsx",
+      "apps/web/src/components/ProjectConfigCard.tsx"
+    ],
+    "testes": [
+      "packages/deploy/tests/detect.test.ts",
+      "packages/deploy/tests/guardrails.test.ts",
+      "packages/deploy/tests/rules.test.ts",
+      "packages/deploy/tests/ingest-branch.test.ts",
+      "apps/server/tests/routes-projects.test.ts",
+      "apps/server/tests/routes-projects-schema.test.ts",
+      "apps/server/tests/deploy-validation.test.ts",
+      "packages/deploy/tests/caddy-render.test.ts",
+      "apps/web/tests/guardrail-modal.test.tsx",
+      "apps/web/tests/dashboard-page.test.tsx",
+      "apps/web/tests/project-config-card.test.tsx"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/projects.json",
+      "formato": "json",
+      "conteudo": "{ projects: Project[] } — CRUD completo dos projetos (id, slug, ingestMode, source, branch, domain, websocket, detection, proxyService/proxyPort, timestamps, lastDeployAt/lastDeployStatus, deployedBranch, deployedSource). Gravado com mode 0o600. deployedBranch/deployedSource (packages/core/src/deploy.ts) registram o FATO do que o último deploy bem-sucedido publicou — distinto de source/branch, que são a CONFIGURAÇÃO atual (o que o próximo deploy vai tentar publicar); os dois só coincidem depois de um deploy com sucesso sem edições posteriores. Ambos null enquanto nenhum deploy nunca teve sucesso."
+    },
+    {
+      "arquivo": "data/deploy-jobs.json",
+      "formato": "json",
+      "conteudo": "{ jobs: DeployJob[] } — histórico de jobs de deploy (id, projectId, status, steps, log truncado, error). Mantém só os últimos 100 jobs no arquivo (MAX_JOBS). Ao reiniciar o servidor, jobs 'running'/'queued' órfãos são marcados 'failed' com erro 'Servidor reiniciado durante o deploy.'. Gravado com mode 0o600."
+    },
+    {
+      "arquivo": "data/projects/<slug>/src",
+      "formato": "arquivos (código-fonte)",
+      "conteudo": "Código-fonte ingerido (clone git ou cópia upload). Em modo 'existing', src NÃO existe — o código é lido diretamente do caminho original."
+    },
+    {
+      "arquivo": "data/projects/<slug>/paas.override.yml",
+      "formato": "yaml",
+      "conteudo": "Override de compose gerado pelo painel para projetos tipo 'compose': anexa o serviço web à rede paas-net com alias <slug> e injeta env vars extras (SMTP) nos serviços quando aplicável. Nunca reescreve o compose original do usuário."
+    },
+    {
+      "arquivo": "data/caddy/Caddyfile",
+      "formato": "texto (Caddyfile)",
+      "conteudo": "Configuração do Caddy central, um bloco por projeto com lastDeployStatus=success, mapeando domínio → upstream (container:porta na rede paas-net). Regerado a cada deploy/remoção; montado como bind mount read-only no container paas-caddy."
+    }
+  ],
+  "endpoints": [
+    { "id": "listar", "metodo": "GET", "url": "/api/projects", "resumo": "Lista todos os projetos com status calculado a partir dos containers Docker e a URL de acesso.", "arquivo": "listar.json" },
+    { "id": "criar", "metodo": "POST", "url": "/api/projects", "resumo": "Cria um novo projeto (registro apenas — sem tocar em Docker).", "arquivo": "criar.json" },
+    { "id": "detalhe", "metodo": "GET", "url": "/api/projects/:id", "resumo": "Detalhe de um projeto com status e containers associados.", "arquivo": "detalhe.json" },
+    { "id": "atualizar", "metodo": "PATCH", "url": "/api/projects/:id", "resumo": "Atualiza nome/source/branch/domínio/websocket/proxyService/proxyPort. Source e branch só têm efeito no próximo deploy; o slug nunca muda.", "arquivo": "atualizar.json" },
+    { "id": "detectar", "metodo": "POST", "url": "/api/projects/:id/detect", "resumo": "Roda a detecção automática de stack sobre o código-fonte disponível.", "arquivo": "detectar.json" },
+    { "id": "guardrails", "metodo": "GET", "url": "/api/projects/:id/guardrails", "resumo": "Relatório de guardrails de segurança sob demanda (pré-visualização antes do deploy).", "arquivo": "guardrails.json" },
+    { "id": "deploy", "metodo": "POST", "url": "/api/projects/:id/deploy", "resumo": "Inicia um job de deploy assíncrono (5 etapas).", "arquivo": "deploy.json" },
+    { "id": "job", "metodo": "GET", "url": "/api/projects/:id/jobs/:jobId", "resumo": "Status e log de um job de deploy específico (usado no polling do frontend).", "arquivo": "job.json" },
+    { "id": "listar-jobs", "metodo": "GET", "url": "/api/projects/:id/jobs", "resumo": "Histórico dos últimos deploys do projeto (mais recente primeiro).", "arquivo": "listar-jobs.json" },
+    { "id": "parar", "metodo": "POST", "url": "/api/projects/:id/stop", "resumo": "Para (docker stop) os containers do projeto.", "arquivo": "parar.json" },
+    { "id": "iniciar", "metodo": "POST", "url": "/api/projects/:id/start", "resumo": "Inicia (docker start) os containers já existentes do projeto.", "arquivo": "iniciar.json" },
+    { "id": "remover", "metodo": "DELETE", "url": "/api/projects/:id", "resumo": "Remove containers/imagem/domínio do projeto; opcionalmente apaga o código-fonte copiado.", "arquivo": "remover.json" }
+  ],
+  "conceitos": [
+    { "id": "conceito-guardrails", "titulo": "Guardrails de deploy", "arquivo": "conceito-guardrails.json" },
+    { "id": "conceito-deteccao-stack", "titulo": "Detecção automática de stack", "arquivo": "conceito-deteccao-stack.json" },
+    { "id": "conceito-validacao-fonte", "titulo": "Allowlist de source (URL git) e branch", "arquivo": "conceito-validacao-fonte.json" },
+    { "id": "conceito-ambientes", "titulo": "Múltiplos ambientes do mesmo repositório", "arquivo": "conceito-ambientes.json" }
+  ],
+  "referenciasCruzadas": [
+    "Os endpoints POST/GET/DELETE /api/projects/:id/email* (caixa técnica de e-mail + injeção de env vars SMTP no deploy) pertencem ao módulo 'email', não a este — ver módulo email/index.json.",
+    "GET /api/domains/check (verificação DNS usada no passo 3 do wizard de criação) pertence ao módulo 'dominios'.",
+    "GET /api/docker/containers (containers externos exibidos no Dashboard) pertence ao módulo 'docker'.",
+    "Auditoria (project.delete, deploy.start, deploy.blocked, guardrail.override) e alertas (deploy bloqueado/override) são gravados via AuditService/AlertsService — ver global/."
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "A checagem de guardrails acontece em dois pontos: no relatório sob demanda (GET .../guardrails, direto via runGuardrails) e dentro de startDeploy antes de criar o job. O DeployEngine.deploy roda os guardrails de novo após a ingestão (necessário nos modos 'git'/'upload', onde o código pode mudar entre a checagem e o deploy) — até 3 varreduras completas do diretório fonte por deploy nesses dois modos. CORRIGIDO nesta rodada para o modo 'existing' (diretório local, sem cópia/pull entre as checagens): deploy-service.ts passa o relatório do pré-check pronto (opts.precomputedGuardrailReport) e o engine reaproveita em vez de re-escanear — só 2 varreduras nesse modo. Ver projetos/deploy.json e packages/deploy/tests/engine-guardrail-reuse.test.ts.",
+    "runGuardrails (rules.ts, usado no deploy/bloqueio E no preview GET .../guardrails — NUNCA foi só o segundo) e analyzeCompose (guardrails.ts, usado só na detecção de stack para popular DetectResult.warnings, propósito diferente: avisos informativos na tela de detecção, não bloqueio) continuam dois sistemas de regras distintos: guardrails.ts não faz scan de secrets no restante da árvore de arquivos (só analisa o compose) e tem uma lista de portas de banco ligeiramente diferente. CORRIGIDO nesta rodada: guardrails.ts passou a reaproveitar mountsDockerSock() de rules.ts e replicar a regra de container privilegiado — antes só rules.ts detectava isso, agora os dois estão alinhados nesse ponto específico. Ver projetos/conceito-guardrails.json e global/review-2026-08-24.json (achado 'guardrails-duplicados', reescrito nesta rodada — a formulação anterior sugeria erroneamente que o preview de guardrails do deploy era incompleto, o que nunca foi verdade).",
+    "startDeploy não é atômico entre o teste de 'deploy_in_progress' e a criação do job — duas chamadas concorrentes poderiam, em teoria, passar pela checagem antes de qualquer uma persistir o job (race condition não coberta por teste).",
+    "guardrailsForProject/detect exigem código local disponível (sourceDirOf): no modo git, antes do primeiro deploy, ambos retornam 409/'código ainda não ingerido' — o wizard sempre cria o projeto ANTES de chamar detect, então isso só afeta re-detecção manual antes do 1º deploy em projetos git.",
+    "CORRIGIDO nesta rodada: runStream (exec.ts) agora aplica timeout de 30 minutos (DEFAULT_STREAM_TIMEOUT_MS) — um `docker build`/`compose up --build` travado não trava mais o job indefinidamente; o processo é morto e o job termina 'failed' com mensagem clara. O timeout HTTP do health check (60s) continua existindo separadamente, na etapa 5.",
+    "O upstream calculado em upstreamFor() usa project.proxyPort ?? project.detection?.proxyPort ?? 80 para compose/dockerfile — se a detecção mudar de porta num redeploy e o operador não tiver fixado proxyPort manualmente, o Caddyfile pode apontar para a porta antiga até o próximo deploy bem-sucedido recalculá-lo."
+  ]
+}

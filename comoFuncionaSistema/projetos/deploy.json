@@ -1,0 +1,86 @@
+{
+  "id": "deploy",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/deploy",
+  "resumo": "Inicia um job de deploy assíncrono de 5 etapas (ingestão → guardrails/preparação → build/subida → proxy Caddy → health check). Retorna imediatamente com o job em execução; o progresso é acompanhado via GET .../jobs/:jobId.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:119",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
+    "query": [],
+    "body": [
+      { "nome": "guardrailOverride", "tipo": "boolean", "obrigatorio": false, "regras": "só é lido como true se === true; qualquer outro valor vira false", "descricao": "Confirmação explícita do operador para prosseguir mesmo com findings 'block' nos guardrails. Fica registrado em auditoria (ação 'guardrail.override')." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 202,
+      "quando": "job aceito e iniciado (assíncrono)",
+      "corpo": { "job": "DeployJob" },
+      "exemplo": {
+        "job": {
+          "id": "f00dcafe1234",
+          "projectId": "a1b2c3d4e5f6",
+          "status": "running",
+          "createdAt": "2026-08-24T10:00:00.000Z",
+          "startedAt": "2026-08-24T10:00:00.000Z",
+          "finishedAt": null,
+          "steps": [
+            { "name": "Ingestão do código", "status": "running" },
+            { "name": "Preparação", "status": "skipped" },
+            { "name": "Build e subida", "status": "skipped" },
+            { "name": "Proxy reverso (Caddy)", "status": "skipped" },
+            { "name": "Health check", "status": "skipped" }
+          ],
+          "log": "",
+          "error": null
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe", "mensagem": "Projeto não encontrado." },
+    { "status": 409, "codigo": "deploy_in_progress", "quando": "já existe um job 'running' ou 'queued' para o mesmo projectId", "mensagem": "Já existe um deploy em andamento para este projeto." },
+    { "status": 409, "codigo": "unknown_type", "quando": "project.detection é null (e não há diretório fonte para detectar na hora) ou detection.type === 'unknown'", "mensagem": "Tipo de projeto desconhecido. Rode a detecção e ajuste a configuração antes de deployar." },
+    { "status": 409, "codigo": "guardrail_blocked", "quando": "runGuardrails encontrou findings 'block' E guardrailOverride não foi enviado como true", "mensagem": "Deploy bloqueado: <N> violação(ões) de segurança (block). Corrija ou confirme o override explícito.", "detalheAdicional": "o corpo do erro inclui report: GuardrailReport (payload extra HttpError.report), consumido pelo frontend para abrir o GuardrailOverrideModal" },
+    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado síncrono ao criar o job (o erro DENTRO do pipeline assíncrono não gera resposta HTTP — vira job.status=failed)", "mensagem": "Erro interno." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. Rejeita se já houver job running/queued para o projeto → 409 deploy_in_progress.",
+    "3. Se project.detection ainda é null, tenta detectar agora (sourceDirOf); se detection continuar null OU type=unknown → 409 unknown_type.",
+    "4. Se há diretório fonte disponível (sourceDirOf), roda runGuardrails síncronamente ANTES de criar o job: se blockers>0 e guardrailOverride≠true → registra alerta 'critical' + auditoria 'deploy.blocked' e responde 409 guardrail_blocked com o report anexado. Se override=true, registra auditoria 'guardrail.override' + alerta 'warning' e segue.",
+    "5. Registra auditoria 'deploy.start'.",
+    "6. Cria o DeployJob (id aleatório, status='running', 5 steps pré-definidos, o 1º 'running' e os demais 'skipped'), persiste em data/projects.json e data/deploy-jobs.json, e retorna 202 IMEDIATAMENTE.",
+    "7. Em background (IIFE não aguardada): chama engine.deploy(project, allProjects, appendLog, {guardrailOverride}) — ver engine.ts. appendLog acumula o log (truncado a DEPLOY_LOG_MAX_CHARS) e usa o marcador '=== Etapa N/5' para avançar job.steps.",
+    "8. Ao terminar (sucesso ou falha): job.status='success'|'failed', project.lastDeployAt/lastDeployStatus atualizados, todos os steps ainda 'running' viram 'done' ou 'failed' conforme o resultado, e tudo é persistido novamente. SE E SOMENTE SE o deploy terminou em sucesso, project.deployedBranch e project.deployedSource são gravados a partir de project.branch/project.source NESSE MOMENTO — é o registro do FATO do que ficou publicado, não uma cópia antecipada da configuração. Uma falha no meio do pipeline (build quebrado, health check reprovado) NÃO atualiza deployedBranch/deployedSource, então eles continuam refletindo o último deploy que realmente deu certo."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.startDeploy", "arquivo": "apps/server/src/services/deploy-service.ts:316", "papel": "Validações, checagem de guardrails, criação e execução assíncrona do job." },
+    { "tipo": "pacote", "nome": "DeployEngine.deploy", "arquivo": "packages/deploy/src/engine.ts:82", "papel": "Executa o pipeline de 5 etapas (ingestão, guardrails, build/subida, Caddy, health check)." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra deploy.start/deploy.blocked/guardrail.override." },
+    { "tipo": "servico", "nome": "AlertsService", "arquivo": "apps/server/src/services/alerts-service.ts", "papel": "Cria alertas critical/warning em deploy bloqueado ou com override." }
+  ],
+  "efeitosColaterais": [
+    "grava data/projects.json e data/deploy-jobs.json (múltiplas vezes durante o ciclo do job)",
+    "executa docker/git/compose no host via CLI (clone/build/run/up)",
+    "regrava e recarrega o Caddyfile central (data/caddy/Caddyfile)",
+    "auditoria: deploy.start, deploy.blocked, guardrail.override",
+    "alertas: severidade critical (bloqueio) ou warning (override)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/ProjectDetailPage.tsx (doDeploy(override), disparado por deployWithGuardrails() ou pelo botão de confirmação do GuardrailOverrideModal)",
+    "apps/web/src/components/ProjectConfigCard.tsx (botão 'Salvar e publicar' — PATCH seguido deste POST, sem guardrailOverride)"
+  ],
+  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "observacoes": [
+    "A resposta 202 reflete só o momento da criação do job (status inicial 'running' no primeiro step) — falhas do pipeline (build, guardrail bloqueando após ingestão no modo git, health check) só aparecem depois, via polling de GET .../jobs/:jobId.",
+    "unknown_type pode ocorrer mesmo após uma detecção OK anterior se o projeto foi criado, nunca detectado, e o diretório fonte não estava disponível no momento do startDeploy (ex.: upload apontando para um caminho que sumiu).",
+    "CORRIGIDO nesta rodada: runStream (packages/deploy/src/exec.ts) agora tem timeout padrão de 30 minutos (DEFAULT_STREAM_TIMEOUT_MS) — generoso de propósito (build+push de imagem grande pode legitimamente demorar), mas finito: excedido o tempo, o processo é morto de verdade (não só a promise rejeitada) e o job termina em 'failed' com mensagem clara, em vez de ficar pendurado indefinidamente. Além disso, o health check da etapa 5 continua com seu próprio timeout de 60s.",
+    "Reaproveitamento de guardrails entre o pré-check (startDeploy) e a revalidação pós-ingestão do engine: no modo ingestMode='existing' (diretório local já ingerido, sem cópia/pull entre as duas checagens), deploy-service.ts passa o relatório já calculado como opts.precomputedGuardrailReport e o engine NÃO re-escaneia (packages/deploy/src/engine.ts:121). Nos modos 'git' e 'upload' o conteúdo pode mudar entre as duas checagens (fetch+pull, recópia), então o engine sempre re-executa runGuardrails sobre o código efetivamente ingerido — o achado 'guardrails-3x' do review permanece parcialmente válido para esses dois modos (até 3 execuções: GET /guardrails sob demanda + pré-check do startDeploy + revalidação do engine), mas já não se aplica ao modo 'existing'.",
+    "Se project.source/project.branch foram editados via PATCH /api/projects/:id desde o último deploy bem-sucedido, a etapa 1 (ingestão, packages/deploy/src/ingest.ts) percebe a divergência entre o clone em disco e a configuração atual e refaz o clone do zero antes de seguir — ver projetos/atualizar.json e packages/deploy/tests/ingest-branch.test.ts. deployedBranch/deployedSource só passam a refletir essa mudança depois que ESTE deploy terminar em sucesso."
+  ]
+}

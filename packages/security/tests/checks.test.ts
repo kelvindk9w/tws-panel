@@ -216,6 +216,32 @@ describe("intrusão, minimização e auditoria (fases 04–06)", () => {
     expect(check("audit.recurring-scan").evaluate(exec("absent\n")).status).toBe("fail");
   });
 
+  // Falso-positivo real: `dpkg -s <pkg>` retorna 0 até para pacote em estado
+  // "rc" (removido, só restam configs) — o check minimal.snapd-absent
+  // reportava "snapd instalado" logo após o purge da fase 05. O gate correto
+  // é o Status-Abbrev do dpkg-query: só "ii " = instalado ("rc "/"un " =
+  // ausente). Comandos validados em container ubuntu:24.04 real:
+  //   ii  → dpkg -s: exit 0, gate ^ii : instalado   (correto)
+  //   rc  → dpkg -s: exit 0 (FALSO-POSITIVO), gate ^ii : ausente (correto)
+  it("checks de pacote NÃO usam `dpkg -s` (aceita estado rc): gate é dpkg-query Status-Abbrev ^ii", () => {
+    for (const c of SECURITY_CHECKS) {
+      expect(c.command, c.id).not.toMatch(/dpkg -s\b/);
+    }
+    // todos os checks que testam pacote instalado passam pelo gate "ii "
+    const pkgChecks = [
+      "update.unattended-upgrades",
+      "intrusion.fail2ban",
+      "minimal.snapd-absent",
+      "minimal.legacy-clients",
+      "audit.auditd",
+    ];
+    for (const id of pkgChecks) {
+      const cmd = check(id).command;
+      expect(cmd, id).toContain("dpkg-query -W -f='${db:Status-Abbrev}'");
+      expect(cmd, id).toContain("grep -q '^ii '");
+    }
+  });
+
   it("minimal.unnecessary-services: qualquer serviço listado falha com evidência", () => {
     const c = check("minimal.unnecessary-services");
     expect(c.evaluate(exec("")).status).toBe("pass");

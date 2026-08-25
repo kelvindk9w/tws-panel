@@ -2,10 +2,16 @@
 # =============================================================================
 # TWS Panel — instalador one-shot (100% Docker)
 #
-# Uso (como root em uma VPS Ubuntu 22.04/24.04 limpa):
-#   apt update && apt install -y git
-#   git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+# Uso (VPS Ubuntu 22.04/24.04 limpa — com o usuário não-root criado no README):
+#   sudo apt update && sudo apt install -y git
+#   sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+#   sudo chown -R $USER:$USER /opt/tws-panel
 #   cd /opt/tws-panel && ./scripts/install.sh
+#
+# O script PRECISA de privilégios de root: se for executado por um usuário
+# comum, ele se reexecuta automaticamente via `sudo` (preservando as
+# variáveis PAAS_* / SETUP_TOKEN). Chamar com `sudo ./scripts/install.sh`
+# também funciona — os dois caminhos são equivalentes.
 #
 # Pré-requisito: Ubuntu com git. Não precisa instalar Docker, Node ou mais
 # nada manualmente — este script cuida de tudo.
@@ -70,7 +76,16 @@ done
 TARGET_DIR="${TARGET_ARG:-${PAAS_DIR:-/opt/tws-panel}}"
 
 # --- 0. Pré-requisitos básicos ----------------------------------------------
-[ "$(id -u)" -eq 0 ] || die "Execute como root (ou via sudo)."
+# Precisamos de root (apt, docker, volumes). Se o operador rodou o script com
+# o usuário comum, reexecutamos via sudo preservando as variáveis de ambiente
+# relevantes — assim tanto `./scripts/install.sh` quanto
+# `sudo ./scripts/install.sh` funcionam (o README recomenda o primeiro).
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 || die "Este script precisa de root. Rode como root ou instale o sudo (apt install sudo)."
+  log "Privilégios de administrador necessários — reexecutando via sudo…"
+  exec sudo --preserve-env=PAAS_FORCE,PAAS_DIR,PAAS_PORT,TWS_REPO_URL,SETUP_TOKEN \
+    bash "$(readlink -f "$0")" "$@"
+fi
 
 # --- 1. Pré-flight check (SOMENTE LEITURA) -------------------------------------
 # Roda ANTES de instalar qualquer coisa. Nada aqui altera o sistema: apenas
@@ -207,9 +222,27 @@ if ! command -v docker >/dev/null 2>&1; then
   log "Instalando Docker (get.docker.com)…"
   command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl ca-certificates; }
   curl -fsSL https://get.docker.com | sh
-  systemctl enable --now docker
+  # Em VPS há systemd; em containers de teste (sem systemd) o dockerd precisa
+  # ser iniciado manualmente — não é erro, apenas não há o que habilitar.
+  if [ -d /run/systemd/system ]; then
+    systemctl enable --now docker
+  else
+    warn "systemd ausente (container?) — inicie o dockerd manualmente antes de continuar."
+  fi
 else
   log "Docker já instalado: $(docker --version)"
+fi
+
+# Conveniência: quem chamou o instalador via sudo entra no grupo docker —
+# assim os comandos do dia a dia (docker compose ps, logs…) não precisam de
+# sudo depois de um novo login. Não é requisito: tudo funciona com sudo.
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  if id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx docker; then
+    info "Usuário $SUDO_USER já está no grupo docker."
+  else
+    usermod -aG docker "$SUDO_USER" && \
+      log "Usuário $SUDO_USER adicionado ao grupo docker (vale a partir do próximo login)."
+  fi
 fi
 
 docker compose version >/dev/null 2>&1 || die "Plugin 'docker compose' não encontrado. Reinstale o Docker por https://get.docker.com"
@@ -255,6 +288,22 @@ else
   fi
 fi
 
+# --- 5b. GID do grupo do docker.sock ------------------------------------------------------
+# O painel roda como usuário não-root (tws) e acessa o socket via group_add.
+# Persistimos o GID no .env para sobreviver a restarts/rebuilds futuros.
+DOCKER_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 999)"
+if [ -f .env ] && grep -q '^DOCKER_GID=' .env; then
+  sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/" .env
+else
+  printf 'DOCKER_GID=%s\n' "$DOCKER_GID" >> .env
+fi
+# O .env é lido por `docker compose` rodado pelo USUÁRIO depois — devolve a
+# propriedade a quem invocou o sudo (o repo foi chown'ed para ele no README).
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
+fi
+log "Grupo do docker.sock no host: GID $DOCKER_GID (gravado em .env)"
+
 # --- 6. Build + subida ------------------------------------------------------------------
 log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
 SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build
@@ -264,27 +313,58 @@ SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build
 docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
   "printf '%s' '$SETUP_TOKEN' > /data/setup-token && chmod 600 /data/setup-token"
 
+# Garante que o usuário não-root do painel (tws, UID/GID fixo 10001) seja
+# dono de TODO o volume — volumes criados por versões antigas (root ou UIDs
+# variáveis de builds anteriores) causariam EACCES no boot do painel.
+log "Ajustando dono do volume $VOLUME_NAME para tws (10001:10001)…"
+docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
+  'chown -R 10001:10001 /data'
+
 # --- 7. Resumo ---------------------------------------------------------------------------
 PUBLIC_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
+# Cores/ênfase (só se o terminal suportar).
+if [ -t 1 ]; then
+  BOLD="$(tput bold 2>/dev/null || true)"; RESET="$(tput sgr0 2>/dev/null || true)"
+  GREEN="$(tput setaf 2 2>/dev/null || true)"; YELLOW="$(tput setaf 3 2>/dev/null || true)"
+  CYAN="$(tput setaf 6 2>/dev/null || true)"; BG_GREEN="$(tput setab 2 2>/dev/null || true)"
+else
+  BOLD=""; RESET=""; GREEN=""; YELLOW=""; CYAN=""; BG_GREEN=""
+fi
+
+# Toca o "bell" do terminal para chamar atenção ao fim da instalação.
+printf '\a'
+
 cat <<EOF
 
-================================================================================
-  ✅ TWS Panel instalado e rodando!
+${GREEN}${BOLD}██████████████████████████████████████████████████████████████████████████████
+██                                                                          ██
+██               ✅  TWS PANEL INSTALADO E RODANDO COM SUCESSO!               ██
+██                                                                          ██
+██████████████████████████████████████████████████████████████████████████████${RESET}
 
-  Abra no navegador:
+${BOLD}👉  PASSO ÚNICO AGORA: abra este link no seu navegador${RESET}
 
-      http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN
+${CYAN}${BOLD}      http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN${RESET}
 
-  Setup token:
+${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
+│                            ⚑  SETUP TOKEN  ⚑                              │
+│                                                                          │
+│   $SETUP_TOKEN                       │
+│                                                                          │
+│   ⚠  Ele aparece SÓ AGORA em destaque. Guarde-o até concluir o wizard.   │
+│   ⚠  Após criar sua conta admin (passo 4 do wizard), ele é invalidado.   │
+└──────────────────────────────────────────────────────────────────────────┘${RESET}
 
-      $SETUP_TOKEN
+${BOLD}Perdeu o token? Recupere a qualquer momento com:${RESET}
 
-  O assistente vai diagnosticar o servidor e guiar o setup.
+      docker exec tws-panel cat /data/setup-token
 
-  Comandos úteis (em $APP_DIR):
+O assistente vai diagnosticar o servidor e guiar o setup.
+
+Comandos úteis (em $APP_DIR):
     docker compose ps              # status do painel
     docker compose logs -f panel   # logs em tempo real
     docker compose up -d --build   # rebuild/restart (ex.: após git pull)
-================================================================================
+
 EOF
