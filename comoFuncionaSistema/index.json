@@ -4,6 +4,7 @@
   "versao": "0.1.0",
   "atualizadoEm": "2026-08-24",
   "comoUsarEstaDocumentacao": [
+    "Retomando o trabalho? Leia _ESTADO-DA-SESSAO.md ANTES de tudo: ele diz onde o trabalho parou, o que está pendente e por quê.",
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
     "Leia SEMPRE este index.json primeiro para descobrir qual módulo trata do assunto.",
     "Depois abra <modulo>/index.json para o panorama do módulo e a lista de endpoints.",
@@ -301,5 +302,6 @@
       "motivo": "docker-socket.ts serve tanto à listagem quanto à criação do PTY"
     }
   ],
-  "threatModel": "global/threat-model.json"
+  "threatModel": "global/threat-model.json",
+  "estadoDaSessao": "_ESTADO-DA-SESSAO.md"
 }
