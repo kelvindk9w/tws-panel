@@ -92,8 +92,45 @@ fingerprint fica salvo e a conexão é direta.
 ```bash
 adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a senha na hora
 usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
-su - kelvin              # entra na conta dele — todos os próximos passos são feitos como ele
 ```
+
+Agora entre na conta que você acabou de criar. Há duas formas — a segunda é a recomendada,
+porque com ela você **sai de vez da conta de root**, em vez de ficar com ela aberta por baixo:
+
+```bash
+# Opção A — atalho: troca de usuário sem sair da sessão atual
+su - kelvin
+```
+
+```bash
+# Opção B (recomendada) — encerra a sessão root e entra direto como o novo usuário
+exit                     # sai do root e fecha a conexão SSH
+ssh kelvin@SEU_IP        # conecte de novo; "kelvin" é o usuário que você acabou de criar
+                         # e a senha é a que você definiu no adduser
+```
+
+A partir daqui, **todos os passos são feitos como esse usuário** — o que precisar de permissão
+de administrador vai pedir `sudo` e a sua senha.
+
+<details>
+<summary>🤔 <strong>Por que a opção B é a recomendada?</strong></summary>
+
+Com `su - kelvin` você continua **dentro da sessão do root** — apenas com outra identidade por
+cima. Um `exit` te devolve ao root em vez de encerrar o acesso, e é fácil esquecer que aquele
+terminal ainda tem uma sessão de root aberta embaixo.
+
+Entrando por SSH direto como o seu usuário, a sessão é dele do começo ao fim: `exit` encerra de
+verdade, e tudo que exigir privilégio vai passar por `sudo` — que pede senha e fica registrado
+no log do sistema. É a diferença entre "estou de root com outro chapéu" e "estou como usuário
+comum e peço permissão quando preciso".
+
+Isso também conversa com o passo anterior: se você configurou o keepalive e vai deixar a
+sessão aberta por um tempo, é melhor que ela seja a do seu usuário, não a do root.
+
+**A opção A não está errada** — funciona e é mais rápida se você só quer seguir o passo a passo
+agora. Só saiba que a sessão root continua ali atrás.
+
+</details>
 
 <details>
 <summary>👤 <strong>Travou no <code>adduser</code>? O que aparece e o que preencher</strong></summary>
@@ -145,6 +182,51 @@ Is the information correct? [Y/n]
 > o wizard só precisa **validar** que ele existe (Fase 01 de segurança) em vez de criá-lo — e o
 > acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
 > novo no passo de Segurança do wizard.
+
+**Ainda no passo 3 — a conexão está caindo sozinha quando você para de digitar?**
+
+Se você já percebeu a sessão fechando depois de alguns minutos parado, o culpado quase sempre
+é o **provedor da VPS**, não o servidor: firewalls de rede costumam descartar conexões que
+ficam um tempo sem tráfego. O seu computador pode resolver isso mandando um sinal de vida a
+cada minuto. Rode **no seu computador**, não na VPS:
+
+```bash
+# no SEU computador (Linux/macOS). No Windows com PuTTY, o campo equivalente é
+# "Seconds between keepalives" em Connection.
+printf 'Host *\n    ServerAliveInterval 60\n    ServerAliveCountMax 3\n' >> ~/.ssh/config
+```
+
+Depois disso, reconecte. **Isso não enfraquece a segurança** — a sessão continua sendo
+encerrada se a rede realmente cair; o que muda é que ela para de *parecer* abandonada enquanto
+você está trabalhando.
+
+> [!IMPORTANT]
+> **Mais adiante, no wizard, isso muda.** Quando você aplicar o passo de segurança do painel,
+> ele passa a encerrar sessões ociosas por conta própria, em cerca de **10 minutos**. É
+> proposital: protege você de deixar um terminal aberto e esquecido — num notebook, num café,
+> numa máquina compartilhada. Com o keepalive acima configurado, você não sente isso enquanto
+> está trabalhando, só quando realmente abandona a sessão.
+>
+> **Recomendamos deixar assim.** Mas se o seu caso exigir sessões ociosas mais longas (um build
+> demorado que você acompanha de longe, por exemplo), dá para ajustar depois da instalação:
+>
+> ```bash
+> sudo nano /etc/ssh/sshd_config.d/99-tws-panel.conf
+> #   para ~1 hora:      ClientAliveInterval 600   e   ClientAliveCountMax 6
+> #   para desligar:     ClientAliveInterval 0     e   ClientAliveCountMax 0
+> sudo sshd -t && sudo systemctl restart ssh
+> ```
+>
+> O `sshd -t` confere o arquivo **antes** de reiniciar — sem ele, um erro de digitação pode
+> impedir o SSH de subir e te deixar sem acesso à máquina. Mantenha a janela atual aberta e
+> teste a reconexão em **outra** antes de fechar a que funciona.
+>
+> **E quando terminar o que precisava**, volte ao padrão. É um comando só:
+>
+> ```bash
+> sudo sed -i 's/^ClientAliveInterval .*/ClientAliveInterval 300/; s/^ClientAliveCountMax .*/ClientAliveCountMax 2/' /etc/ssh/sshd_config.d/99-tws-panel.conf
+> sudo sshd -t && sudo systemctl restart ssh
+> ```
 
 **4. Instale o git:**
 
@@ -199,11 +281,29 @@ cd /opt/tws-panel && git checkout main
 > **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
 > desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
 
+> [!IMPORTANT]
+> **Confira que a `main` está em dia antes de instalar.** Rode:
+>
+> ```bash
+> git fetch origin && git log --oneline main..origin/dev | wc -l
+> ```
+>
+> O resultado esperado é `0`. Um número alto significa que a `main` ficou para trás da `dev` e
+> você estaria instalando uma versão antiga — inclusive sem correções de segurança já
+> publicadas. Nesse caso, [abra uma issue](https://github.com/kelvindk9w/tws-panel/issues)
+> avisando, e enquanto isso use `git checkout dev` para instalar a versão atual.
+
 **6. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
 
 ```bash
 ./scripts/install.sh
 ```
+
+> [!NOTE]
+> O instalador precisa de privilégios de administrador (instalar Docker, criar volumes, abrir
+> portas). Você **não precisa digitar `sudo`**: rodando como o seu usuário comum, ele detecta
+> isso e se reexecuta via `sudo` sozinho, pedindo a sua senha. Se preferir ser explícito,
+> `sudo ./scripts/install.sh` faz exatamente a mesma coisa — os dois caminhos são equivalentes.
 
 Não precisa de `sudo` na frente: ao detectar que está rodando como usuário comum, o script **se
 reexecuta via sudo automaticamente** (chamar `sudo ./scripts/install.sh` também funciona — os dois

@@ -24,8 +24,16 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // As gravações de jobs são disparadas sem await (o onChange não pode
+  // atrasar a requisição). Sem esperar por elas, o cleanup apaga o diretório
+  // no meio de uma gravação e o rmdir falha com ENOTEMPTY.
+  await Promise.all(criados.map((s) => s.flushJobWrites().catch(() => undefined)));
+  criados.length = 0;
   await rm(dir, { recursive: true, force: true });
 });
+
+/** Services criados no teste corrente — usados para aguardar gravações. */
+const criados: SecurityService[] = [];
 
 function freshService(): SecurityService {
   const config = {
@@ -36,7 +44,9 @@ function freshService(): SecurityService {
     hostHelperImage: "alpine:3",
     hostRepoDir: "/opt/tws-panel",
   } as ServerConfig;
-  return new SecurityService(config);
+  const s = new SecurityService(config);
+  criados.push(s);
+  return s;
 }
 
 function awaitingConfirmationJob(overrides: Partial<SecurityJob> = {}): SecurityJob {
@@ -105,9 +115,9 @@ describe("SecurityService — restoreJobsFromDisk (restart durante awaiting_conf
     expect(restored?.error).toMatch(/reiniciado/i);
 
     // persistJobs() é disparado pelo onChange do executor de forma
-    // fire-and-forget (void) — espera a escrita em disco assentar antes de
-    // ler de volta.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // fire-and-forget (void) — aguarda a gravação pendente em vez de dormir
+    // um tempo fixo, que falharia sob carga.
+    await service.flushJobWrites();
     const onDisk = JSON.parse(await readFile(path.join(dir, "security-jobs.json"), "utf8")) as {
       jobs: SecurityJob[];
     };
