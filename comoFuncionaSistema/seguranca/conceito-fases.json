@@ -1,0 +1,111 @@
+{
+  "id": "conceito-fases",
+  "titulo": "Fases de hardening (scripts de scripts/hardening/)",
+  "resumo": "Lista literal e completa das 7 fases de hardening (SECURITY_PHASES, packages/core/src/security.ts) — cada uma é um script idempotente em scripts/hardening/, aplicável via POST /api/security/apply (automática) ou copiando os comandos de GET /api/security/phases/:phase/manual (manual). Todo script suporta --dry-run e --rollback; só as fases de risco (01 com chave, 02, 03) suportam --confirm.",
+  "arquivoFonte": "packages/core/src/security.ts:10 (SECURITY_PHASES) e scripts/hardening/*.sh",
+  "tipo": "conceito",
+  "comportamento": [
+    "Todo script faz 'source lib.sh' logo após 'set -euo pipefail' e segue as convenções: idempotente (rodar de novo nunca quebra/duplica), backup automático de todo arquivo alterado (<arquivo>.paas-backup.<timestamp>), --dry-run mostra o que faria sem alterar nada, --rollback restaura o backup mais recente (ou remove o que foi criado, se não houver backup).",
+    "Marcadores de progresso ':::PAAS_STEP <nome>' / ':::PAAS_OK' / ':::PAAS_FAIL' / ':::PAAS_SKIP' são emitidos no stdout e parseados pelo SecurityExecutor (packages/security/src/executor.ts) para montar a lista de passos ao vivo na UI.",
+    "Reversível (--rollback) NÃO é o mesmo que 'rollback automático agendado' (--confirm): TODAS as 7 fases suportam --rollback e o executor chama isso sozinho se o script falhar durante um apply real; só as fases de risco também agendam uma reversão automática NO ALVO que dispara se ninguém confirmar em 5 minutos."
+  ],
+  "itens": [
+    {
+      "id": "00",
+      "chave": "update",
+      "titulo": "Atualizações do sistema",
+      "script": "00-update.sh",
+      "oQueAplica": "apt-get update + apt-get -y full-upgrade; instala unattended-upgrades, apt-listchanges e needrestart; ativa 'APT::Periodic::Unattended-Upgrade \"1\"' em /etc/apt/apt.conf.d/20auto-upgrades.",
+      "corrigeChecks": ["update.pending-packages", "update.unattended-upgrades"],
+      "manualOuAutomatica": "ambas (automática via apply; manual via /phases/00/manual)",
+      "reversivel": "parcial — --rollback restaura só o arquivo 20auto-upgrades; pacotes já atualizados via full-upgrade NÃO são revertidos (downgrade é inseguro/impraticável, decisão explícita do script).",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "01",
+      "chave": "user",
+      "titulo": "Usuário não-root",
+      "script": "01-user.sh",
+      "oQueAplica": "Cria (ou confirma) o usuário não-root informado, adiciona ao grupo sudo, instala a chave pública SSH do operador, verifica o acesso por chave e SÓ ENTÃO trava a senha do root (passwd -l root) — proteção anti-lockout explícita: sem --pubkey, o script recusa travar o root.",
+      "corrigeChecks": ["user.root-password-locked", "user.non-root-sudo"],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback destrava o root e remove o usuário criado pelo script (se foi ele quem criou).",
+      "arriscada": "condicional — só quando --pubkey é fornecida (trava a senha do root). Sem chave, a fase só cria o usuário/sudo e não é arriscada.",
+      "exigeConfirmacao": "condicional em runtime — o executor (packages/security/src/executor.ts, needsConfirmation) trata esta fase como exigindo confirmação SÓ quando sshPublicKey foi informada; nesse caso agenda rollback automático de 5 min via schedule_rollback/--confirm, igual às fases 02/03. CORRIGIDO nesta rodada: o plano (planner.ts) agora marca requiresConfirmation=true para a fase 01 SEMPRE (RISKY_PHASES=['02','03'] || phase.id==='01'), mesmo antes de saber se uma chave será fornecida — decisão deliberada para o plano nunca prometer um fluxo sem confirmação que o executor pode contradizer em runtime; o operador não é mais surpreendido pela fase 01 entrando em awaiting_confirmation sem aviso prévio."
+    },
+    {
+      "id": "02",
+      "chave": "ssh",
+      "titulo": "Hardening de SSH",
+      "script": "02-ssh.sh",
+      "oQueAplica": "Garante o OpenSSH server instalado; verifica pré-requisitos anti-lockout (usuário --user existe e tem chave SSH — senão recusa com die); agenda o rollback automático de 5 min ANTES de aplicar; escreve um drop-in de hardening (PermitRootLogin/PasswordAuthentication no, MaxAuthTries 3, forwardings desabilitados, crypto moderna); valida com 'sshd -t'; recarrega o SSH.",
+      "corrigeChecks": ["ssh.root-login", "ssh.password-auth", "ssh.max-auth-tries", "ssh.forwarding-disabled"],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback restaura a configuração de SSH anterior (a partir do backup).",
+      "arriscada": true,
+      "exigeConfirmacao": true
+    },
+    {
+      "id": "03",
+      "chave": "firewall",
+      "titulo": "Firewall (UFW)",
+      "script": "03-firewall.sh",
+      "oQueAplica": "Instala UFW; agenda rollback automático de 5 min ANTES de ativar; define política padrão deny incoming/allow outgoing; libera SSH (a porta configurada) e HTTP/80+HTTPS/443 ANTES de ativar o firewall; opcionalmente libera portas de e-mail (25/465/587/993) com --profile mail; ativa o UFW; aplica hardening de kernel via /etc/sysctl.d/99-paas-hardening.conf.",
+      "corrigeChecks": ["firewall.ufw-active", "firewall.default-deny", "net.sysctl-hardening"],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback desativa o UFW e restaura as configurações anteriores.",
+      "arriscada": true,
+      "exigeConfirmacao": true
+    },
+    {
+      "id": "04",
+      "chave": "intrusion",
+      "titulo": "Prevenção de intrusão",
+      "script": "04-intrusion.sh",
+      "oQueAplica": "Instala fail2ban e apparmor-utils; configura jails (sshd, nginx, recidive; portas de e-mail com --profile mail) em jail.local; valida a configuração; ativa o fail2ban; verifica/reforça os perfis do AppArmor.",
+      "corrigeChecks": ["intrusion.fail2ban", "intrusion.apparmor"],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback restaura a configuração anterior do fail2ban.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "05",
+      "chave": "minimal",
+      "titulo": "Minimização de pacotes",
+      "script": "05-minimal.sh",
+      "oQueAplica": "Purga o snapd (ordem correta) e o bloqueia com apt-mark hold; desabilita/mascara serviços desnecessários (avahi/cups/bluetooth/etc.); remove clientes legados inseguros (telnet/rsh/ftp/tftp/talk/nis) e pacotes de desktop/impressão; limpa dependências órfãs; configura o APT para não instalar Recommends/Suggests (previne re-crescimento); salva um baseline de pacotes.",
+      "corrigeChecks": ["minimal.snapd-absent", "minimal.unnecessary-services", "minimal.legacy-clients"],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "parcial — --rollback restaura só a configuração do APT; pacotes purgados não são reinstalados automaticamente.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "06",
+      "chave": "audit",
+      "titulo": "Auditoria e detecção",
+      "script": "06-audit.sh",
+      "oQueAplica": "Instala auditd, Lynis e cron; grava regras essenciais do auditd (passwd, sudoers, cron, etc.); cria a baseline do AIDE (aideinit em sistema limpo); configura rkhunter/chkrootkit com baseline (propupd), a menos que --skip-rkhunter/--skip-aide sejam passados; agenda cron de varreduras recorrentes (Lynis semanal, AIDE diário, rkhunter diário) em /etc/cron.d/paas-security-scan.",
+      "corrigeChecks": ["audit.auditd", "audit.aide-baseline", "audit.rkhunter", "audit.recurring-scan"],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback remove o cron de varredura e restaura as regras de auditoria anteriores.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    }
+  ],
+  "checksSemFaseAutomatica": [
+    "supplychain.third-party-repos (fase 00, fixable=false)",
+    "user.only-root-uid0 (fase 01, fixable=false)",
+    "net.db-ports-exposed (fase 03, fixable=false — CORRIGIDO nesta rodada, era true; corrige-se ajustando bind do serviço de banco, fora dos scripts)",
+    "net.docker-api-exposed (fase 03, fixable=false)",
+    "net.listening-inventory (fase 03, fixable=false)",
+    "docker.privileged-containers (fase 06, fixable=false)",
+    "docker.sock-mounted (fase 06, fixable=false)"
+  ],
+  "observacoes": [
+    "A ordem de execução 00→06 é a ordem 'segura' documentada no planner (atualizar → usuário → SSH → firewall → intrusão → minimização → auditoria) — o wizard sempre enfileira as fases pendentes nessa ordem fixa (pendingPhases() em SecurityStep.tsx filtra SECURITY_PHASES na ordem declarada).",
+    "CORRIGIDO nesta rodada: net.db-ports-exposed passou a fixable=false em checks.ts (era true) — nenhum dos 7 scripts de fase contém lógica para fazer bind de bancos de dados em 127.0.0.1, então o valor anterior prometia uma cobertura automática que nunca existiu (a remediação sugerida no check sempre foi uma instrução manual, word-for-word). Com fixable=false, este check nunca mais aparece em fixesCheckIds de nenhuma SecurityPlanAction, refletindo a realidade."
+  ]
+}

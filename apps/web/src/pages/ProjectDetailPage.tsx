@@ -11,6 +11,7 @@ import type {
   ProjectResponse,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
+import { ProjectConfigCard } from "@/components/ProjectConfigCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -528,6 +529,8 @@ export function ProjectDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      <ProjectConfigCard project={project} onSaved={() => void refresh()} />
 
       <ProjectEmailCard projectId={project.id} />
 

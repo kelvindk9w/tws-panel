@@ -59,16 +59,40 @@ async function ingestGit(
   const branch = project.branch ?? "main";
 
   const inside = await run("git", ["-C", src, "rev-parse", "--is-inside-work-tree"]);
+  // Um clone existente só pode ser reaproveitado se ainda corresponder ao que
+  // está configurado. O clone é --single-branch: se a branch mudou, o checkout
+  // falharia porque a nova branch nem existe localmente. E se a URL do
+  // repositório mudou, o fetch traria o código do repositório ANTIGO sem erro
+  // algum — falha silenciosa. Nos dois casos, re-clonar é a saída correta.
   if (inside.code === 0 && inside.stdout.trim() === "true") {
-    onLog(`Atualizando clone existente (git fetch + checkout ${branch})…\n`);
-    const fetch = await run("git", ["-C", src, "fetch", "--all", "--prune"], { timeoutMs: 600_000 });
-    if (fetch.code !== 0) throw new Error(`git fetch falhou: ${fetch.stderr.trim()}`);
-    const checkout = await run("git", ["-C", src, "checkout", branch]);
-    if (checkout.code !== 0) throw new Error(`git checkout ${branch} falhou: ${checkout.stderr.trim()}`);
-    const pull = await run("git", ["-C", src, "pull", "--ff-only", "origin", branch], { timeoutMs: 600_000 });
-    if (pull.code !== 0) throw new Error(`git pull falhou: ${pull.stderr.trim()}`);
-    onLog(pull.stdout);
-    return src;
+    const origemAtual = await run("git", ["-C", src, "remote", "get-url", "origin"]);
+    const branchAtual = await run("git", ["-C", src, "rev-parse", "--abbrev-ref", "HEAD"]);
+    const mesmoRepositorio = origemAtual.stdout.trim() === project.source;
+    const mesmaBranch = branchAtual.stdout.trim() === branch;
+
+    if (!mesmoRepositorio) {
+      onLog(
+        `Repositório configurado mudou (${origemAtual.stdout.trim()} → ${project.source}). ` +
+          `Refazendo o clone do zero…\n`,
+      );
+    } else if (!mesmaBranch) {
+      onLog(
+        `Branch configurada mudou (${branchAtual.stdout.trim()} → ${branch}). ` +
+          `Refazendo o clone do zero…\n`,
+      );
+    }
+
+    if (mesmoRepositorio && mesmaBranch) {
+      onLog(`Atualizando clone existente (git fetch + checkout ${branch})…\n`);
+      const fetch = await run("git", ["-C", src, "fetch", "--all", "--prune"], { timeoutMs: 600_000 });
+      if (fetch.code !== 0) throw new Error(`git fetch falhou: ${fetch.stderr.trim()}`);
+      const checkout = await run("git", ["-C", src, "checkout", branch]);
+      if (checkout.code !== 0) throw new Error(`git checkout ${branch} falhou: ${checkout.stderr.trim()}`);
+      const pull = await run("git", ["-C", src, "pull", "--ff-only", "origin", branch], { timeoutMs: 600_000 });
+      if (pull.code !== 0) throw new Error(`git pull falhou: ${pull.stderr.trim()}`);
+      onLog(pull.stdout);
+      return src;
+    }
   }
 
   onLog(`Clonando ${project.source} (branch ${branch})…\n`);

@@ -1,0 +1,61 @@
+{
+  "id": "status",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/status",
+  "resumo": "Retorna o estado atual do servidor de e-mail: se já foi criado, se está rodando, versão detectada, portas e hostname.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:48",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): após o setup concluído exige sessão via cookie; enquanto o setup está pendente, aceita o setup token (header X-Setup-Token ou query)."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200) — nenhum limite específico desta rota.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "adminSecret ainda não existe (servidor nunca iniciado) — não toca no Docker, responde direto 'não instalado'.",
+      "corpo": { "installed": false, "running": false, "version": null, "image": "string", "containerName": "string", "hostname": "string", "ports": "MailServerPorts", "message": "string" },
+      "exemplo": {
+        "installed": false, "running": false, "version": null,
+        "image": "stalwartlabs/mail-server:v0.11.8", "containerName": "paas-stalwart",
+        "hostname": "mail.localhost",
+        "ports": { "smtp": 25, "submission": 587, "submissions": 465, "imap": 143, "imaps": 993, "http": 8080 },
+        "message": "Servidor de e-mail ainda não foi criado. Clique em iniciar para provisionar o container."
+      }
+    },
+    {
+      "status": 200,
+      "quando": "adminSecret existe: consulta o Docker de fato (docker inspect + docker exec <container> stalwart-mail --version).",
+      "corpo": { "installed": "boolean", "running": "boolean", "version": "string|null", "image": "string", "containerName": "string", "hostname": "string", "ports": "MailServerPorts", "message": "string|null" },
+      "exemplo": {
+        "installed": true, "running": true, "version": "0.11.8",
+        "image": "stalwartlabs/mail-server:v0.11.8", "containerName": "paas-stalwart",
+        "hostname": "mail.exemplo.com.br",
+        "ports": { "smtp": 25, "submission": 587, "submissions": 465, "imap": 143, "imaps": 993, "http": 8080 },
+        "message": null
+      }
+    }
+  ],
+  "erros": [
+    { "status": 500, "codigo": "internal_error", "quando": "Falha inesperada (ex.: docker CLI indisponível) capturada pelo catch genérico da rota.", "mensagem": "Erro interno." }
+  ],
+  "fluxo": [
+    "1. ensureLoaded(): carrega data/mail/mail.json (ou usa o estado vazio em memória se o arquivo não existir).",
+    "2. Se data.adminSecret é null (nunca iniciado): retorna installed=false/running=false direto, SEM chamar o Docker.",
+    "3. Senão: instancia StalwartManager e chama status() — docker inspect -f '{{.State.Running}}|{{.Config.Image}}' <containerName>; se rodando, tenta 'docker exec <container> stalwart-mail --version' (e, como fallback, o binário 'stalwart' da linha nova) para extrair a versão via regex.",
+    "4. Monta a mensagem amigável conforme o estado: parado → orienta iniciar; nunca criado → orienta provisionar; rodando → null."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.status", "arquivo": "apps/server/src/services/mail-service.ts:151", "papel": "Decide se consulta o Docker ou retorna o estado 'não instalado' sem tocar nele." },
+    { "tipo": "pacote", "nome": "StalwartManager.status", "arquivo": "packages/mailer/src/server.ts:73", "papel": "docker inspect + docker exec --version." },
+    { "tipo": "pacote", "nome": "run (exec.ts)", "arquivo": "packages/mailer/src/exec.ts:17", "papel": "Executa o docker CLI via execFile (argumentos separados, sem shell)." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura; não inicia nem altera o container)."],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx:56"],
+  "testes": ["scripts/test-mail.mts (passo 1)"],
+  "observacoes": [
+    "Quando o servidor nunca foi iniciado, esta rota NÃO reflete o estado real do Docker (nem tenta) — só o fato de o painel já ter gerado um adminSecret alguma vez."
+  ]
+}

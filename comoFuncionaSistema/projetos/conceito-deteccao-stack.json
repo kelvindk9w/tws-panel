@@ -1,0 +1,45 @@
+{
+  "id": "conceito-deteccao-stack",
+  "titulo": "Detecção automática de stack",
+  "resumo": "Heurística que examina um diretório de código-fonte e classifica o projeto em um dos 4 ProjectType, decidindo qual pipeline de deploy usar. Implementada em packages/deploy/src/detect.ts, função detectProject(dir).",
+  "arquivoFonte": "packages/deploy/src/detect.ts",
+  "tipo": "utilitario",
+  "api": [
+    { "simbolo": "detectProject", "assinatura": "(dir: string) => Promise<DetectResult>", "descricao": "Ponto de entrada único da detecção. Nunca lança — diretório inexistente ou sem nenhum sinal reconhecido retorna type='unknown' com detalhes explicativos." }
+  ],
+  "comportamento": [
+    "ORDEM DE PRIORIDADE (a primeira regra que casa decide o tipo, sem continuar avaliando as demais):",
+    "1) COMPOSE — se existir qualquer arquivo da lista COMPOSE_CANDIDATES no diretório: type='compose'. Ordem de busca (primeiro que existir vence): compose.prod.yml, compose.prod.yaml, compose.production.yml, docker-compose.prod.yml, docker-compose.prod.yaml, docker-compose.production.yml, compose.yml, compose.yaml, docker-compose.yml, docker-compose.yaml. O painel ADOTA o compose (nunca reescreve o arquivo do usuário). Roda analyzeCompose() sobre o conteúdo (regras de guardrails.ts, distintas de rules.ts — ver conceito-guardrails.json) e guessProxyTarget() para sugerir proxyService/proxyPort. Se o YAML for inválido, retorna type='compose' mesmo assim com um warning crítico 'compose.invalid-yaml' e ENCERRA a função ali (sem tentar proxyService/redes customizadas).",
+    "2) DOCKERFILE PURO — se não houver compose, existir Dockerfile E NÃO existir package.json: type='dockerfile'. Porta é lida do primeiro EXPOSE do Dockerfile (regex /^\\s*EXPOSE\\s+(\\d+)/im); se não houver EXPOSE, proxyPort fica null e é preciso configurar manualmente.",
+    "3) PACKAGE.JSON COM BUILD — se houver package.json com scripts.build definido: detecta o gerenciador de pacotes (packageManager declarado no package.json > pnpm-lock.yaml > yarn.lock > fallback npm) e monta buildCommand ('npm run build' ou '<pm> build'). Em seguida chama detectStaticOutput():",
+    "   3a) Next.js com output:\"export\" em next.config.{js,mjs,cjs,ts} → outputDir='out', type='static-node'.",
+    "   3b) dependência 'vite' em dependencies/devDependencies → outputDir='dist', type='static-node'.",
+    "   3c) pasta out/, dist/ ou build/ (nessa ordem) já contendo index.html no código commitado → outputDir=essa pasta, type='static-node'.",
+    "   3d) nenhuma pista de framework: se NÃO houver Dockerfile, fallback assume outputDir='dist' e type='static-node' (com nota explícita de que pode estar errado); se HOUVER Dockerfile, type='dockerfile' e tenta ler a porta via EXPOSE.",
+    "4) PACKAGE.JSON SEM SCRIPT DE BUILD — type continua 'unknown' com detalhe 'package.json sem script de build.'.",
+    "5) NADA RECONHECIDO — sem compose, sem Dockerfile, sem package.json: type='unknown' com detalhe 'Nenhum compose, package.json ou Dockerfile encontrado — configuração manual necessária.'",
+    "DIRETÓRIO INEXISTENTE: detectProject não lança — retorna imediatamente type='unknown' com detail 'Diretório não encontrado: <dir>'.",
+    "warnings do DetectResult vêm EXCLUSIVAMENTE de analyzeCompose()/guessProxyTarget() (só quando type=compose) — projetos static-node/dockerfile/unknown sempre têm warnings=[]."
+  ],
+  "camposDetectResult": {
+    "type": "'static-node' | 'compose' | 'dockerfile' | 'unknown'",
+    "composeFile": "nome do arquivo compose adotado, ou null",
+    "outputDir": "pasta de saída estática ('out'|'dist'|'build'|custom), ou null",
+    "packageManager": "'npm' | 'pnpm' | 'yarn' | null",
+    "buildCommand": "comando de build detectado, ou null",
+    "proxyService": "serviço compose sugerido como upstream, ou null",
+    "proxyPort": "porta sugerida (compose/dockerfile), ou null",
+    "warnings": "GuardrailWarning[] — só populado para type=compose",
+    "details": "string[] — notas legíveis em pt-BR explicando a decisão"
+  },
+  "usadoPor": [
+    { "referencia": "POST /api/projects/:id/detect", "arquivo": "apps/server/src/services/deploy-service.ts:305", "doc": "projetos/detectar.json" },
+    { "referencia": "POST /api/projects/:id/deploy", "arquivo": "apps/server/src/services/deploy-service.ts:326", "doc": "projetos/deploy.json", "nota": "re-roda a detecção se project.detection ainda for null no momento do deploy" }
+  ],
+  "testes": ["packages/deploy/tests/detect.test.ts"],
+  "observacoes": [
+    "A heurística de output estático é uma lista fechada (Next export → out/, Vite → dist/, pasta já commitada) — frameworks estáticos que não sejam Next/Vite (ex.: Astro, Hugo via npm wrapper, Gatsby) caem no fallback 'assume dist/' se não houver Dockerfile, o que pode estar ERRADO e só é percebido no build/health-check.",
+    "A prioridade compose > tudo é intencional (ver docs/projects-analysis.md, perfil 'trader'): mesmo que o projeto tenha package.json com build E Dockerfile, um compose.yml presente sempre vence — o painel nunca tenta 'adivinhar' ao redor de um compose existente.",
+    "detectStaticOutput() olha only next.config.{js,mjs,cjs,ts} — não cobre next.config.mts nem configuração dentro de package.json (campo 'next')."
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "obter-baseline",
+  "modulo": "monitoramento",
+  "metodo": "GET",
+  "url": "/api/security/baseline",
+  "resumo": "Retorna o baseline de segurança atual (snapshot completo) ou null se nenhum foi criado ainda.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:117",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre",
+      "corpo": { "baseline": "SecurityBaseline | null" },
+      "exemplo": {
+        "baseline": {
+          "id": "b0f1...",
+          "createdAt": "2026-08-24T09:00:00.000Z",
+          "target": "container:paas-target-test",
+          "packages": ["bash=5.2.15-2", "coreutils=9.1-1"],
+          "ports": [{ "proto": "tcp", "port": 22, "process": "sshd" }],
+          "files": { "/etc/ssh/sshd_config": "aaaa...", "/etc/ufw/user.rules": "bbbb..." }
+        }
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. MonitorService.getBaseline() lê data/security/baseline.json.",
+    "2. Se o arquivo não existir ou o parse falhar → retorna null (nunca lança).",
+    "3. Rota sempre responde 200, mesmo sem baseline."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MonitorService", "arquivo": "apps/server/src/services/monitor-service.ts", "papel": "getBaseline() lê e faz parse de data/security/baseline.json." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/SecurityPage.tsx:118 (BaselineCard.refresh)"],
+  "testes": ["scripts/test-fase4.mts (indiretamente, via POST /api/security/baseline no step 4)"],
+  "observacoes": [
+    "Consumido pela página de segurança (SecurityPage.tsx), não pelas páginas deste módulo (AlertsPage/AuditPage) — a UI de baseline/monitor recorrente vive junto do hardening, fora de apps/server/src/routes/monitoring.ts mas ainda servida por ele."
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "id": "scan",
+  "modulo": "saude",
+  "metodo": "GET",
+  "url": "/api/health/scan",
+  "resumo": "Varredura somente-leitura da máquina: SO, CPU, memória, disco, rede e virtualização, mais três checagens de compatibilidade (SO suportado, RAM mínima, disco livre mínimo). Também dispara, em paralelo e sem bloquear a resposta, um espelho ao vivo no terminal web embutido.",
+  "arquivoFonte": "apps/server/src/routes/health.ts:33",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Rota comum de /api/*: apps/server/src/plugins/auth.ts exige sessão de usuário válida quando o setup já foi concluído; enquanto o setup está pendente (caso do wizard, onde este endpoint é de fato usado), aceita o setup token (header x-setup-token ou query ?token=)."
+  },
+  "rateLimit": "Nenhum específico desta rota — apenas o rate limit global da API (200 req/min por padrão, RATE_LIMIT_MAX). Cada chamada é cara (I/O de disco + até duas requisições HTTP externas para descobrir o IP público), mas nada limita chamadas repetidas além do limite global.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre que a coleta não lança exceção (caminho normal).",
+      "corpo": "HealthScanResult (packages/core/src/index.ts:106)",
+      "exemplo": {
+        "scannedAt": "2026-08-24T12:00:00.000Z",
+        "os": { "prettyName": "Ubuntu 24.04.1 LTS", "id": "ubuntu", "versionId": "24.04", "kernel": "6.8.0-45-generic", "arch": "x64", "hostname": "vps-tws" },
+        "cpu": { "model": "AMD EPYC 7402P 24-Core Processor", "cores": 4, "loadAvg": [0.12, 0.2, 0.18] },
+        "memory": { "totalBytes": 4294967296, "freeBytes": 1073741824, "usedBytes": 3221225472 },
+        "disk": { "mount": "/", "totalBytes": 42949672960, "freeBytes": 21474836480, "usedBytes": 21474836480 },
+        "network": { "publicIp": "203.0.113.10", "interfaces": [{ "name": "eth0", "addresses": ["10.0.0.5"] }] },
+        "virtualization": "KVM",
+        "uptimeSeconds": 604800,
+        "checks": {
+          "os": { "level": "ok", "message": "Ubuntu 24.04.1 LTS é suportado." },
+          "memory": { "level": "ok", "message": "Memória suficiente (mínimo: 1 GiB)." },
+          "disk": { "level": "ok", "message": "Espaço livre suficiente (mínimo: 10 GiB)." }
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 401, "codigo": "unauthorized", "quando": "Sem sessão válida (setup já concluído).", "mensagem": "Sessão inválida ou expirada." },
+    { "status": 401, "codigo": "unauthorized", "quando": "Setup token inválido ou ausente (setup ainda pendente).", "mensagem": "Setup token inválido ou ausente." },
+    { "status": 503, "codigo": "setup_token_missing", "quando": "Setup pendente e nenhum setup token configurado no servidor.", "mensagem": "Servidor sem setup token configurado. Defina SETUP_TOKEN ou crie o arquivo de token (veja scripts/install.sh)." },
+    { "status": 500, "codigo": null, "quando": "scanSystemHealth() lança uma exceção não tratada (ex.: statfs('/') falha) — não há try/catch na rota; cai no handler de erro padrão do Fastify.", "mensagem": "Corpo genérico do Fastify (não customizado por esta rota)." }
+  ],
+  "fluxo": [
+    "1. Chama scanSystemHealth() (system-info.ts).",
+    "2. Lê sincronamente os.cpus(), os.totalmem(), os.freemem().",
+    "3. Em paralelo (Promise.all): readOsInfo(), statfs('/'), readNetworkInfo(), detectVirtualization().",
+    "4. readOsInfo(): lê /host/etc/os-release (fallback /etc/os-release) e faz parse de linhas KEY=VALUE; lê /host/etc/hostname (fallback os.hostname()); kernel = os.release(); arch = os.arch().",
+    "5. statfs('/'): totalBytes = blocks*bsize, freeBytes = bavail*bsize (fs.statfs nativo do Node, sem shell).",
+    "6. readNetworkInfo(): monta a lista de interfaces via os.networkInterfaces() (só endereços não internos) e chama fetchPublicIp().",
+    "7. fetchPublicIp(): tenta GET https://api.ipify.org, depois https://ifconfig.me/ip (timeout de 3s cada, na ordem, para no primeiro sucesso); valida o formato do IP com uma regex; retorna null se ambos falharem ou o formato não bater.",
+    "8. detectVirtualization(): lê /sys/class/dmi/id/product_name e compara com uma lista fixa (kvm, qemu, virtualbox, vmware, hyper-v, xen, bhyve, aws ec2, google cloud, openstack); se o produto é desconhecido, checa a flag 'hypervisor' em /proc/cpuinfo; se /sys estiver inacessível, cai direto para checar /proc/cpuinfo; sem nenhum sinal, retorna 'nenhuma (bare metal)'.",
+    "9. buildChecks(osInfo, memTotal, disk): monta os 3 checks (ver 'checagens' abaixo).",
+    "10. Monta e retorna o HealthScanResult completo (scannedAt = new Date().toISOString(), uptimeSeconds = Math.floor(os.uptime())).",
+    "11. A rota dispara (fire-and-forget, sem aguardar) o espelho no terminal: roda cada comando de HEALTH_MIRROR_COMMANDS em sequência via app.terminalService.runCommand(cmd, ..., { timeoutMs: 15000 }); se o terminal estiver indisponível (TerminalUnavailableError), o espelho é pulado em silêncio; qualquer outro erro vira app.log.warn (não derruba a resposta).",
+    "12. Responde 200 com o HealthScanResult, independentemente do resultado do espelho (que continua rodando em background)."
+  ],
+  "checagens": [
+    {
+      "id": "os",
+      "oQueVerifica": "Se osInfo.id (campo ID de /etc/os-release, ex.: 'ubuntu') está em HEALTH_LIMITS.supportedDistroIds = ['ubuntu'] E osInfo.versionId (campo VERSION_ID, ex.: '24.04') está em HEALTH_LIMITS.supportedVersionIds = ['22.04','24.04'].",
+      "ok": "Ambos batem → level:'ok', mensagem '<prettyName> é suportado.'",
+      "falha": "Qualquer um não bate → level:'warning' (nunca 'critical' — não há noção de SO 'crítico', só suportado/não suportado), mensagem '<prettyName> não é um SO oficialmente suportado (esperado Ubuntu 22.04/24.04).'"
+    },
+    {
+      "id": "memory",
+      "oQueVerifica": "Três faixas por os.totalmem(): >= HEALTH_LIMITS.minRamBytes (1 GiB); entre CRITICAL_MIN_RAM_BYTES (512 MiB) e 1 GiB; < 512 MiB. CORRIGIDO nesta rodada: a faixa crítica (< 512 MiB) agora existe e é alcançável — antes só havia a checagem binária ok/warning.",
+      "ok": ">= 1 GiB → level:'ok', mensagem 'Memória suficiente (mínimo: 1 GiB).'",
+      "falha": "< 1 GiB e >= 512 MiB → level:'warning', mensagem 'Menos de 1 GiB de RAM — recomendado ampliar antes de hospedar projetos.'; < 512 MiB → level:'critical' (NOVO), mensagem 'Menos de 512 MiB de RAM — insuficiente para rodar o Docker e hospedar projetos.'"
+    },
+    {
+      "id": "disk",
+      "oQueVerifica": "Três faixas por disk.freeBytes (bavail*bsize de statfs('/')): >= HEALTH_LIMITS.minFreeDiskBytes (10 GiB); entre CRITICAL_MIN_FREE_DISK_BYTES (1 GiB) e 10 GiB; < 1 GiB. CORRIGIDO nesta rodada: a faixa crítica (< 1 GiB livre) agora existe e é alcançável.",
+      "ok": ">= 10 GiB livres → level:'ok', mensagem 'Espaço livre suficiente (mínimo: 10 GiB).'",
+      "falha": "< 10 GiB e >= 1 GiB → level:'warning', mensagem 'Menos de 10 GiB livres no disco raiz — imagens Docker consomem espaço rápido.'; < 1 GiB → level:'critical' (NOVO), mensagem 'Menos de 1 GiB livre no disco raiz — builds e pulls de imagem vão falhar.'"
+    }
+  ],
+  "metricasColetadas": [
+    { "campo": "os.prettyName/id/versionId", "origem": "/host/etc/os-release (fallback /etc/os-release) via readFile + parse de linhas KEY=\"VALUE\"/KEY=VALUE; fallback de prettyName é os.platform(), de id é 'unknown', de versionId é 'unknown'." },
+    { "campo": "os.hostname", "origem": "/host/etc/hostname (trim); fallback os.hostname()." },
+    { "campo": "os.kernel", "origem": "os.release() (Node)." },
+    { "campo": "os.arch", "origem": "os.arch() (Node)." },
+    { "campo": "cpu.model", "origem": "os.cpus()[0].model.trim(); 'desconhecido' se a lista vier vazia." },
+    { "campo": "cpu.cores", "origem": "os.cpus().length." },
+    { "campo": "cpu.loadAvg", "origem": "os.loadavg() — [1min, 5min, 15min]." },
+    { "campo": "memory.totalBytes/freeBytes/usedBytes", "origem": "os.totalmem() / os.freemem(); usedBytes = total - free." },
+    { "campo": "disk.totalBytes/freeBytes/usedBytes", "origem": "fs.statfs('/') (Node nativo, sem shell): totalBytes = blocks*bsize, freeBytes = bavail*bsize, usedBytes = total - free; mount é sempre a string fixa '/'." },
+    { "campo": "network.interfaces", "origem": "os.networkInterfaces(), filtrando endereços internos; para IPv6 usa o campo cidr quando disponível, senão address." },
+    { "campo": "network.publicIp", "origem": "fetch HTTPS para https://api.ipify.org, depois https://ifconfig.me/ip (timeout 3s cada, AbortSignal.timeout), validado por regex IPV4_OR_V6; null se ambos falharem." },
+    { "campo": "virtualization", "origem": "/sys/class/dmi/id/product_name (lista fixa de fabricantes conhecidos) com fallback para a flag 'hypervisor' em /proc/cpuinfo; 'nenhuma (bare metal)' se nada indicar virtualização." },
+    { "campo": "uptimeSeconds", "origem": "Math.floor(os.uptime())." },
+    { "campo": "scannedAt", "origem": "new Date().toISOString() no momento da chamada." }
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "scanSystemHealth", "arquivo": "apps/server/src/services/system-info.ts", "papel": "Coleta todos os dados e monta o HealthScanResult, sem shell." },
+    { "tipo": "servico", "nome": "TerminalService.runCommand", "arquivo": "apps/server/src/services/terminal-service.ts", "papel": "Espelha a varredura ao vivo no terminal web (fire-and-forget); documentado em detalhe no módulo terminal." },
+    { "tipo": "pacote", "nome": "HEALTH_LIMITS / HealthScanResult / HealthCheck / OsInfo / DiskInfo / NetworkInfo", "arquivo": "packages/core/src/index.ts", "papel": "Limites de compatibilidade e tipos compartilhados entre servidor e frontend." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Guarda de sessão/setup token aplicada antes desta rota." }
+  ],
+  "efeitosColaterais": [
+    "Nenhuma escrita em disco/estado do painel.",
+    "Duas requisições HTTP de saída (fetchPublicIp, best-effort) a cada chamada.",
+    "Dispara até 8 comandos de leitura no terminal web embutido (fire-and-forget) — ver HEALTH_MIRROR_COMMANDS em health.ts:17."
+  ],
+  "chamadoPor": ["apps/web/src/pages/setup/HealthStep.tsx:50 (runScan, ao montar o passo e no botão 'Revarrer')"],
+  "testes": ["apps/server/tests/routes-health.test.ts"],
+  "observacoes": [
+    "CORRIGIDO nesta rodada: o nível 'critical' de HealthLevel agora é produzido de verdade pelos checks memory/disk (buildChecks, system-info.ts) — RAM < 512 MiB (CRITICAL_MIN_RAM_BYTES) ou disco livre < 1 GiB (CRITICAL_MIN_FREE_DISK_BYTES). Os limiares críticos ficam bem abaixo dos limiares de warning (1 GiB RAM / 10 GiB disco) de propósito: 'critical' significa 'hospedar já é inviável na prática' (Docker cai por falta de RAM, docker pull/build falha por disco cheio), não 'apertado'. O check 'os' continua só ok/warning (não há noção de SO crítico).",
+    "scanSystemHealth() não tem try/catch: uma falha inesperada em statfs('/') ou nas leituras de /proc,/sys,/etc propaga como exceção não tratada e a rota responde com o erro genérico padrão do Fastify (sem código de erro específico documentado).",
+    "O espelho no terminal (HEALTH_MIRROR_COMMANDS) é só cosmético/feedback ao vivo — os dados mostrados nos cards do HealthStep vêm inteiramente do JSON desta resposta, nunca da saída desses comandos de terminal.",
+    "fetchPublicIp() depende de dois serviços de terceiros (api.ipify.org, ifconfig.me); se ambos estiverem fora do ar, cada chamada ao scan pode demorar ~6s a mais só nessa etapa antes de cair em publicIp:null.",
+    "detectVirtualization() lê /sys/class/dmi/id/product_name, caminho que pode não estar acessível de dentro do container do painel (não há bind mount de /sys no docker-compose.yml) — nesse caso cai no fallback via /proc/cpuinfo ou em 'nenhuma (bare metal)', mesmo em VMs reais.",
+    "health.ts agora chama registerErrorHandler(app) no início do plugin, mas isso só reformata erros com error.validation (falha de schema) — como esta rota não tem schema de entrada, uma falha inesperada em scanSystemHealth() ainda cai no serializador de erro padrão do Fastify (reply.send(error) dentro do handler), sem mudança de comportamento."
+  ]
+}

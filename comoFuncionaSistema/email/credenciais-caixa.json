@@ -1,0 +1,57 @@
+{
+  "id": "credenciais-caixa",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/mailboxes/:id/credentials",
+  "resumo": "Devolve o bloco completo de credenciais IMAP/SMTP (host, portas, segurança, senha em claro) pronto para configurar um cliente de e-mail externo (Outlook/Gmail/Thunderbird).",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:202",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200) — nenhum limite extra apesar de devolver a senha em claro.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (mailboxIdParamSchema, mail.ts): minLength 1, maxLength 90; sem pattern.", "descricao": "Endereço completo da caixa (ex.: contato@exemplo.com.br), URL-encoded; comparado em lowercase. Note que esta rota não tem :domain no path — busca a caixa direto pelo id global." }],
+    "query": [], "body": [], "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Caixa existe.",
+      "corpo": { "credentials": "MailboxCredentials" },
+      "exemplo": { "credentials": {
+        "email": "contato@exemplo.com.br", "username": "contato@exemplo.com.br", "password": "kQ2f8...xy_9Az",
+        "imap": { "host": "mail.exemplo.com.br", "port": 993, "security": "ssl" },
+        "imapAlt": { "host": "mail.exemplo.com.br", "port": 143, "security": "starttls" },
+        "smtp": { "host": "mail.exemplo.com.br", "port": 587, "security": "starttls" },
+        "smtpAlt": { "host": "mail.exemplo.com.br", "port": 465, "security": "ssl" },
+        "notes": [
+          "Usuário = endereço de e-mail completo (não apenas a parte antes do @).",
+          "Recebimento (IMAP): prefira SSL na porta 993.",
+          "Envio (SMTP): porta 587 com STARTTLS (padrão) ou 465 com SSL.",
+          "No Gmail: Configurações → Contas → 'Adicionar outro endereço de e-mail' (envio) e 'Verificar e-mails de outras contas' (recebimento).",
+          "Sem autenticação anônima: sempre marque 'autenticar com usuário e senha' no envio."
+        ]
+      } }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "id maior que 90 chars — reprovado pelo schema Fastify (mailboxIdParamSchema) ANTES do handler.", "mensagem": "Campo inválido: id." },
+    { "status": 404, "codigo": "mailbox_not_found", "quando": "Caixa não existe em data.mailboxes.", "mensagem": "Caixa {email} não encontrada." }
+  ],
+  "fluxo": [
+    "1. email = decodeURIComponent(id).toLowerCase(); busca direto em data.mailboxes (SEM checar :domain — a rota não recebe domain no path).",
+    "2. buildCredentials({ email, password: stored.password, host:'mail.'+stored.domain, ports: config.mailPorts }) — monta os 4 blocos (imap SSL, imapAlt STARTTLS, smtp STARTTLS, smtpAlt SSL) e as notas de orientação em pt-BR."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.mailboxCredentials", "arquivo": "apps/server/src/services/mail-service.ts:399", "papel": "Busca a caixa e monta o bloco de credenciais." },
+    { "tipo": "pacote", "nome": "buildCredentials", "arquivo": "packages/mailer/src/mailboxes.ts:26", "papel": "Monta host/portas/segurança para IMAP e SMTP a partir da config de portas do painel." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura; retorna a senha em claro na resposta)."],
+  "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:255"],
+  "testes": ["scripts/test-mail.mts (passo 5)"],
+  "observacoes": [
+    "Esta é a única forma de reobter a senha de uma caixa depois da criação — a senha nunca é reescrita/mascarada nesta rota (ao contrário de email-projeto.json, que mascara SMTP_PASS)."
+  ]
+}

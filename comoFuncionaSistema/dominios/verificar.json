@@ -1,0 +1,138 @@
+{
+  "id": "verificar",
+  "modulo": "dominios",
+  "metodo": "GET",
+  "url": "/api/domains/check",
+  "resumo": "Verifica se o domínio informado resolve, via DNS A, para algum IP desta máquina — usado para orientar o usuário antes de apontar um domínio real para o painel.",
+  "arquivoFonte": "apps/server/src/routes/domains.ts:24",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Rota comum de /api/* (não está na lista de rotas públicas nem de /api/setup ou /api/auth): apps/server/src/plugins/auth.ts exige sessão de usuário válida quando o setup já foi concluído; enquanto o setup está pendente, aceita o setup token (header x-setup-token ou query ?token=)."
+  },
+  "rateLimit": "Nenhum específico desta rota — apenas o rate limit global da API (200 req/min por padrão, configurável via RATE_LIMIT_MAX).",
+  "parametros": {
+    "path": [],
+    "query": [
+      {
+        "nome": "domain",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "schema Fastify (checkDomainSchema, domains.ts): quando presente, maxLength 253 e pattern de hostname RFC 1123 estrito (HOSTNAME_PATTERN — rótulos de 1-63 caracteres alfanuméricos/hífen, sem hífen nas pontas, separados por ponto); additionalProperties:false na querystring (só 'domain' é aceito). Depois, regra de negócio no handler: trim() + toLowerCase(), não pode ficar vazio.",
+        "descricao": "Domínio a verificar, ex.: app.exemplo.com ou loja.localhost."
+      }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "domain === 'localhost' ou termina em '.localhost' (modo dev local)",
+      "corpo": "DomainCheckResponse (packages/core/src/deploy.ts:129)",
+      "exemplo": {
+        "domain": "loja.localhost",
+        "devLocal": true,
+        "ok": true,
+        "resolvedIps": ["127.0.0.1", "::1"],
+        "machineIps": ["127.0.0.1", "203.0.113.10"],
+        "message": "Domínio .localhost: resolve automaticamente para esta máquina. O Caddy serve em HTTP puro (sem certificado) neste modo de desenvolvimento."
+      }
+    },
+    {
+      "status": 200,
+      "quando": "domínio real cujo DNS resolve para um IP desta máquina",
+      "corpo": "DomainCheckResponse",
+      "exemplo": {
+        "domain": "app.exemplo.com",
+        "devLocal": false,
+        "ok": true,
+        "resolvedIps": ["203.0.113.10"],
+        "machineIps": ["203.0.113.10"],
+        "message": "O domínio aponta para esta máquina — pronto para emissão de certificado."
+      }
+    },
+    {
+      "status": 200,
+      "quando": "domínio real cujo DNS resolve, mas para outro IP",
+      "corpo": "DomainCheckResponse",
+      "exemplo": {
+        "domain": "app.exemplo.com",
+        "devLocal": false,
+        "ok": false,
+        "resolvedIps": ["198.51.100.99"],
+        "machineIps": ["203.0.113.10"],
+        "message": "O domínio não aponta para esta máquina. Ajuste o registro A no provedor de DNS antes de emitir o certificado."
+      }
+    },
+    {
+      "status": 200,
+      "quando": "domínio real sem nenhum registro A (NXDOMAIN ou qualquer erro de resolução — tratado igual, como lista vazia)",
+      "corpo": "DomainCheckResponse",
+      "exemplo": {
+        "domain": "inexistente.exemplo.com",
+        "devLocal": false,
+        "ok": false,
+        "resolvedIps": [],
+        "machineIps": ["203.0.113.10"],
+        "message": "O domínio não resolveu nenhum registro A. Crie um registro A apontando para o IP desta máquina."
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "?domain= presente mas reprovado pelo schema Fastify (checkDomainSchema) ANTES do handler: maior que 253 chars, ou fora do padrão de hostname RFC 1123 estrito (ex.: contém espaço, '/', 'https://', porta ':8080', ou qualquer caractere fora de [a-z0-9-.]). Gerado pelo error handler global.",
+      "mensagem": "Campo inválido: domain."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_domain",
+      "quando": "?domain= AUSENTE da query — o schema não marca domain como obrigatório, então a ausência passa pela validação e cai na checagem manual do handler. Um domain PRESENTE mas vazio ('') já é recusado antes disso pelo pattern do schema (não casa com HOSTNAME_PATTERN), virando invalid_request em vez de invalid_domain.",
+      "mensagem": "Informe ?domain=..."
+    },
+    {
+      "status": 401,
+      "codigo": "unauthorized",
+      "quando": "Sem sessão válida (setup já concluído).",
+      "mensagem": "Sessão inválida ou expirada."
+    },
+    {
+      "status": 401,
+      "codigo": "unauthorized",
+      "quando": "Setup token inválido ou ausente (setup ainda pendente).",
+      "mensagem": "Setup token inválido ou ausente."
+    },
+    {
+      "status": 503,
+      "codigo": "setup_token_missing",
+      "quando": "Setup pendente e o servidor não tem nenhum setup token configurado (nem env var, nem arquivo).",
+      "mensagem": "Servidor sem setup token configurado. Defina SETUP_TOKEN ou crie o arquivo de token (veja scripts/install.sh)."
+    }
+  ],
+  "fluxo": [
+    "1. Extrai ?domain=, aplica trim() e toLowerCase(); se vazio, responde 400 invalid_domain.",
+    "2. Calcula machineIps(): junta os IPv4 não internos de todas as interfaces de rede do host (os.networkInterfaces()), sempre inclui 127.0.0.1, e adiciona PAAS_PUBLIC_IP (env var) se configurado.",
+    "3. Se domain é 'localhost' ou termina em '.localhost': responde devLocal:true, ok:true, resolvedIps fixo ['127.0.0.1','::1'] — sem consultar DNS.",
+    "4. Caso contrário: chama dns.resolve4(domain); qualquer erro (ex.: ENOTFOUND) é capturado com .catch() e vira lista vazia de IPs.",
+    "5. ok = resolvedIps.some(ip => machineIps.includes(ip)).",
+    "6. Monta a mensagem conforme o caso: pronto (ok), sem registro A (resolvedIps vazio) ou aponta para outra máquina (resolvedIps não vazio, sem match).",
+    "7. Responde 200 com DomainCheckResponse."
+  ],
+  "dependencias": [
+    { "tipo": "pacote", "nome": "node:dns/promises (resolve4)", "arquivo": "apps/server/src/routes/domains.ts:5", "papel": "Resolve registros A do domínio informado." },
+    { "tipo": "pacote", "nome": "node:os (networkInterfaces)", "arquivo": "apps/server/src/routes/domains.ts:6", "papel": "Lista os IPs desta máquina para comparar com o DNS resolvido." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Guarda de sessão/setup token aplicada a toda /api/* antes desta rota rodar." },
+    { "tipo": "global", "nome": "error-handler", "arquivo": "apps/server/src/plugins/error-handler.ts", "papel": "Converte falha de schema em 400 invalid_request nomeando o campo." }
+  ],
+  "efeitosColaterais": ["Nenhum — rota somente leitura; não grava nada em disco nem altera estado do painel."],
+  "chamadoPor": ["apps/web/src/pages/NewProjectPage.tsx:152 (checkDns, botão 'Verificar DNS' no passo 3 do assistente de novo projeto)"],
+  "testes": ["apps/server/tests/routes-domains.test.ts"],
+  "observacoes": [
+    "MUDANÇA DE COMPORTAMENTO: antes, qualquer string não vazia em ?domain= chegava ao dns.resolve4 (uma URL com scheme, porta, ou caractere inválido apenas falhava a resolução e virava ok:false/resolvedIps:[]). Agora o schema Fastify recusa esses formatos ANTES do handler (400 invalid_request) — só chega ao handler um valor que já bate com o padrão de hostname RFC 1123.",
+    "Só verifica IPv4 (dns.resolve4) — um domínio que só tem registro AAAA sempre resultará em resolvedIps:[] e na mensagem de 'sem registro A', mesmo apontando corretamente por IPv6.",
+    "Puramente informativo: o assistente de projeto permite salvar o domínio mesmo com ok:false — não há nenhum bloqueio no backend (rota de criar/editar projeto) baseado no resultado desta checagem.",
+    "resolvedIps agrega qualquer erro de dns.resolve4 (NXDOMAIN, timeout, servidor DNS indisponível etc.) na mesma mensagem genérica de 'não resolveu nenhum registro A' — não distingue 'domínio não existe' de 'falha temporária de rede'."
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "id": "trocar-senha",
+  "modulo": "autenticacao",
+  "metodo": "POST",
+  "url": "/api/auth/change-password",
+  "resumo": "Troca a senha do admin (exige a senha atual) e invalida todas as OUTRAS sessões do usuário, mantendo a sessão atual válida.",
+  "arquivoFonte": "apps/server/src/routes/auth.ts:130",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sessão validada pelo guard global antes da rota rodar."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "currentPassword", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (changePasswordSchema, auth.ts): minLength 1, maxLength 512; additionalProperties:false no corpo", "descricao": "Senha atual do usuário, usada para reautenticar antes da troca." },
+      { "nome": "newPassword", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify: minLength 1, maxLength 512; ALÉM disso, validada em regra de negócio no handler contra passwordStrengthErrors (mínimo 12 caracteres, ao menos 1 maiúscula, 1 minúscula e 1 número)", "descricao": "Nova senha desejada." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "quando": "Senha atual correta e nova senha atende às regras de força.", "corpo": { "ok": true }, "exemplo": { "ok": true } }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (changePasswordSchema) ANTES do handler rodar: currentPassword/newPassword ausentes, vazios, maiores que 512 chars, de tipo diferente de string, ou campo desconhecido no corpo.", "mensagem": "Campo obrigatório ausente: currentPassword. / Campo inválido: currentPassword. / Campo desconhecido no corpo da requisição: <campo>." },
+    { "status": 400, "codigo": "invalid_payload", "quando": "Código legado dentro do handler (typeof !== 'string') — na prática inalcançável agora: o schema já garante ambos como string não vazia antes do handler rodar.", "mensagem": "Informe a senha atual e a nova senha." },
+    { "status": 401, "codigo": "unauthorized", "quando": "O usuário associado à sessão não existe mais (sessão 'fantasma').", "mensagem": "Sessão inválida ou expirada." },
+    { "status": 401, "codigo": "invalid_current_password", "quando": "currentPassword não confere com o hash armazenado.", "mensagem": "A senha atual está incorreta." },
+    { "status": 400, "codigo": "weak_password", "quando": "newPassword não atende a alguma das regras de força (passwordStrengthErrors retorna erros).", "mensagem": "Senha fraca: {lista de regras não atendidas em português, separadas por vírgula}." }
+  ],
+  "fluxo": [
+    "1. Valida que currentPassword e newPassword são strings; senão 400 invalid_payload.",
+    "2. Busca o usuário por session.userId (UserStore.findById); se não existe, 401 unauthorized (sessão fantasma — NÃO destrói a sessão, diferente de GET /api/auth/me).",
+    "3. Verifica currentPassword contra o hash armazenado com verifyPasswordTimingSafe; se incorreta, 401 invalid_current_password.",
+    "4. Valida a força de newPassword com passwordStrengthErrors; se houver violações, 400 weak_password com a lista de regras faltantes na mensagem.",
+    "5. Gera o novo hash argon2id (hashPassword) e persiste via UserStore.updatePassword(user.id, hash).",
+    "6. Invalida as demais sessões do usuário com SessionStore.destroyOthersForUser(user.id, session.id) — mantém a sessão atual.",
+    "7. Grava auditoria auth.password_changed (actor = username, detalhe inclui a quantidade de sessões revogadas).",
+    "8. Responde 200 { ok: true }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "UserStore", "arquivo": "apps/server/src/services/user-store.ts", "papel": "Busca o usuário (findById) e persiste o novo hash (updatePassword)." },
+    { "tipo": "servico", "nome": "verifyPasswordTimingSafe / hashPassword", "arquivo": "apps/server/src/services/password.ts", "papel": "Verifica a senha atual e gera o novo hash argon2id." },
+    { "tipo": "servico", "nome": "SessionStore", "arquivo": "apps/server/src/services/session-store.ts", "papel": "destroyOthersForUser revoga as demais sessões do usuário." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra auth.password_changed." },
+    { "tipo": "pacote", "nome": "@paas/core (auth)", "arquivo": "packages/core/src/auth.ts", "papel": "passwordStrengthErrors, PASSWORD_MIN_LENGTH e tipo ChangePasswordRequest." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Exige sessão válida antes de a rota rodar." }
+  ],
+  "efeitosColaterais": [
+    "Grava data/users.json com o novo hash de senha (UserStore.updatePassword).",
+    "Grava data/sessions.json removendo todas as sessões do usuário exceto a atual (SessionStore.destroyOthersForUser).",
+    "Auditoria: auth.password_changed (inclui contagem de sessões revogadas na mensagem).",
+    "Header 'Cache-Control: no-store' em toda resposta."
+  ],
+  "chamadoPor": ["apps/web/src/components/UserMenu.tsx:34"],
+  "testes": ["apps/server/tests/auth.test.ts"],
+  "observacoes": [
+    "Diferente de GET /api/auth/me, esta rota NÃO destrói a sessão quando o usuário associado não existe mais — apenas responde 401 unauthorized e deixa a sessão fantasma no arquivo até expirar (registrado em pontosDeAtencao de index.json).",
+    "A ordem de validação é: schema Fastify (400 invalid_request, antes do handler) → existência do usuário → senha atual → força da nova senha (weak_password, ainda regra de negócio no handler — o schema não checa complexidade). Uma senha atual errada é detectada (401) antes mesmo de a nova senha ser validada quanto à força."
+  ]
+}

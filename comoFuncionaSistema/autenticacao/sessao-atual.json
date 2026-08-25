@@ -1,0 +1,49 @@
+{
+  "id": "sessao-atual",
+  "modulo": "autenticacao",
+  "metodo": "GET",
+  "url": "/api/auth/me",
+  "resumo": "Retorna o usuário admin e a expiração da sessão atual; é a rota usada pelo guard de rotas do frontend para decidir se o visitante está autenticado.",
+  "arquivoFonte": "apps/server/src/routes/auth.ts:115",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sessão validada pelo guard global antes da rota rodar. Se o setup do painel ainda não foi concluído, o guard responde 401 setup_incomplete em vez de unauthorized (apps/server/src/plugins/auth.ts:94-104), orientando o frontend a ir para /setup em vez de /login."
+  },
+  "rateLimit": null,
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sessão válida e usuário associado ainda existe.",
+      "corpo": { "user": { "username": "string", "createdAt": "string (ISO)" }, "session": { "expiresAt": "string (ISO)" } },
+      "exemplo": { "user": { "username": "admin", "createdAt": "2026-01-01T00:00:00.000Z" }, "session": { "expiresAt": "2026-08-24T12:00:00.000Z" } }
+    }
+  ],
+  "erros": [
+    { "status": 401, "codigo": "unauthorized", "quando": "Sem sessão válida (guard global) OU sessão válida mas o usuário associado não existe mais (sessão 'fantasma' — nesse caso a sessão também é destruída no servidor antes de responder).", "mensagem": "Sessão inválida ou expirada." },
+    { "status": 401, "codigo": "setup_incomplete", "quando": "Setup do painel ainda não foi concluído (nenhum admin criado) — emitido pelo guard global antes de a rota rodar, não pelo handler desta rota.", "mensagem": "Conclua o setup para criar a conta de administrador." }
+  ],
+  "fluxo": [
+    "1. request.session já foi resolvido e validado pelo guard global (garantido não-nulo aqui).",
+    "2. Busca o usuário por session.userId em UserStore.findById.",
+    "3. Se o usuário não existe mais: destrói a sessão em SessionStore.destroy(session.id) e responde 401 unauthorized.",
+    "4. Se existe: responde 200 com { user: { username, createdAt }, session: { expiresAt } }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "UserStore", "arquivo": "apps/server/src/services/user-store.ts", "papel": "Busca o usuário por id (findById)." },
+    { "tipo": "servico", "nome": "SessionStore", "arquivo": "apps/server/src/services/session-store.ts", "papel": "Destrói a sessão caso o usuário associado não exista mais." },
+    { "tipo": "pacote", "nome": "@paas/core (auth)", "arquivo": "packages/core/src/auth.ts", "papel": "Tipo AuthMeResponse." },
+    { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Resolve e exige a sessão antes de a rota rodar; decide unauthorized vs setup_incomplete." }
+  ],
+  "efeitosColaterais": [
+    "Pode gravar data/sessions.json removendo a sessão, apenas no caso 'fantasma' (usuário inexistente).",
+    "Header 'Cache-Control: no-store' em toda resposta.",
+    "Nenhuma auditoria é registrada por esta rota."
+  ],
+  "chamadoPor": ["apps/web/src/components/RequireAuth.tsx:23"],
+  "testes": ["apps/server/tests/auth.test.ts"],
+  "observacoes": [
+    "É a única rota entre as quatro deste módulo que efetivamente limpa uma sessão fantasma (usuário removido) — POST /api/auth/change-password tem o mesmo cenário possível mas não destrói a sessão nesse caso (ver pontosDeAtencao em index.json)."
+  ]
+}

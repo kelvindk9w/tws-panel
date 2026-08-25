@@ -52,11 +52,12 @@ export interface DeployRequest {
 // ---------------------------------------------------------------------------
 
 export type AlertSeverity = "critical" | "warning" | "info";
-export type AlertSource = "guardrail" | "scan" | "blacklist" | "system";
+/** Origem de um alerta. Toda origem aqui é de fato produzida em código. */
+export type AlertSource = "guardrail" | "scan" | "blacklist";
 export type AlertStatus = "open" | "acknowledged" | "resolved";
 
 export const ALERT_SEVERITIES: readonly AlertSeverity[] = ["critical", "warning", "info"];
-export const ALERT_SOURCES: readonly AlertSource[] = ["guardrail", "scan", "blacklist", "system"];
+export const ALERT_SOURCES: readonly AlertSource[] = ["guardrail", "scan", "blacklist"];
 export const ALERT_STATUSES: readonly AlertStatus[] = ["open", "acknowledged", "resolved"];
 
 export interface Alert {

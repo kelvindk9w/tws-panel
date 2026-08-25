@@ -1,0 +1,87 @@
+{
+  "id": "aplicar",
+  "modulo": "seguranca",
+  "metodo": "POST",
+  "url": "/api/security/apply",
+  "resumo": "Inicia (assíncrono, um job por vez) a aplicação de uma fase de hardening no alvo — em modo dry-run (simulação) ou real, conforme o campo dryRun.",
+  "arquivoFonte": "apps/server/src/routes/security.ts:66",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Mesmo guard global das demais rotas de segurança — sessão fora do setup, setup token durante o setup."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "phase", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (applySchema, security.ts): enum PHASE_IDS (ids de SECURITY_PHASES, '00'..'06'), maxLength 2; additionalProperties:false no corpo. A checagem manual de isValidPhase() foi REMOVIDA do handler — agora é 100% responsabilidade do schema.", "descricao": "Fase de hardening a aplicar." },
+      { "nome": "dryRun", "tipo": "boolean", "obrigatorio": true, "regras": "schema Fastify: type boolean, sem coerção (não aceita truthy/falsy nem string 'true'). A checagem manual no handler foi REMOVIDA.", "descricao": "true = simula sem alterar nada no alvo; false = aplica de verdade." },
+      { "nome": "sshUser", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: minLength 1, maxLength 32 (só tamanho — o schema não valida o padrão de caracteres). Depois, regra de negócio no handler: só aceito quando phase='01'; validado por isValidSshUsername (minúsculas, começa com letra/_, nunca 'root').", "descricao": "Nome do usuário não-root a criar/confirmar (default 'deploy' se omitido no frontend)." },
+      { "nome": "sshPublicKey", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: minLength 1, maxLength 2048 (só tamanho). Depois, regra de negócio no handler: só aceito quando phase='01'; validado por isValidSshPublicKey (ssh-ed25519/ssh-rsa/ecdsa-*, corpo base64, comentário sem aspas/quebras de linha, 50-2048 chars); trim() aplicado antes de usar.", "descricao": "Chave pública SSH do operador a instalar no novo usuário. Presente = a fase também trava a senha do root ao final." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 202,
+      "quando": "Fase válida, dryRun booleano, parâmetros de SSH (se houver) válidos, e nenhum job em andamento.",
+      "corpo": { "job": "SecurityJob (status inicial 'queued', log vazio)" },
+      "exemplo": {
+        "job": {
+          "id": "8f2a...",
+          "phase": "01",
+          "phaseKey": "user",
+          "title": "Usuário não-root",
+          "dryRun": false,
+          "status": "queued",
+          "createdAt": "2026-08-24T10:10:00.000Z",
+          "startedAt": null,
+          "finishedAt": null,
+          "steps": [],
+          "log": "",
+          "rollbackScheduled": false,
+          "rollbackDeadline": null,
+          "error": null,
+          "sshUser": "deploy"
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (applySchema) ANTES do handler: phase/dryRun ausentes, phase fora do enum, dryRun não-boolean, sshUser/sshPublicKey maiores que o limite, ou corpo com campo desconhecido. SUBSTITUI COMPLETAMENTE os antigos invalid_phase e invalid_dry_run — o handler não tem mais nenhuma checagem manual para esses dois campos.", "mensagem": "Campo obrigatório ausente: phase. / Campo inválido: phase." },
+    { "status": 400, "codigo": "invalid_params", "quando": "sshUser ou sshPublicKey informados com phase diferente de '01' — ainda checado no handler (regra de negócio que depende de dois campos juntos, schema não expressa isso).", "mensagem": "sshUser/sshPublicKey só se aplicam à fase 01." },
+    { "status": 400, "codigo": "invalid_ssh_user", "quando": "sshUser informado mas reprovado por isValidSshUsername.", "mensagem": "Nome de usuário inválido (minúsculas, sem espaços, nunca root)." },
+    { "status": 400, "codigo": "invalid_ssh_key", "quando": "sshPublicKey informada mas reprovada por isValidSshPublicKey.", "mensagem": "Chave pública inválida. Cole uma chave ssh-ed25519 ou ssh-rsa (conteúdo do .pub)." },
+    { "status": 409, "codigo": "job_conflict", "quando": "Já existe um job de hardening em andamento (SecurityExecutor.busy=true) — mutex de um job por vez.", "mensagem": "já existe um job de hardening em andamento" }
+  ],
+  "fluxo": [
+    "0. Schema Fastify (applySchema) valida phase (enum)/dryRun (boolean)/tamanhos ANTES do handler — corpo malformado nunca chega ao handler (400 invalid_request).",
+    "1. No handler: se phase !== '01', rejeita sshUser/sshPublicKey (400 invalid_params). Valida cada um individualmente (isValidSshUsername/isValidSshPublicKey) se presentes.",
+    "2. service.apply(phase, dryRun, params) → executor.startJob: rejeita com 409 se já houver job em andamento (this.busy); senão cria o SecurityJob (status 'queued') e dispara a execução assíncrona (void this.run(...)) SEM aguardar — o handler HTTP retorna o job imediatamente.",
+    "3. Em background (SecurityExecutor.run): job.status='running'; runner.ensureReady(); runner.uploadDir(scriptsDir, remoteDir='/opt/paas-hardening'); monta o comando via buildPhaseScriptCommand (valida script contra a allowlist, remoteDir, flags mutuamente exclusivas dry-run/rollback/confirm, revalida sshUser/sshPublicKey) e roda via runner.execStream, parseando marcadores ':::PAAS_STEP'/':::PAAS_FAIL' linha a linha para popular job.steps e concatenando toda a saída em job.log (truncado em 500_000 chars, mantém o fim).",
+    "4. Se o script sai com código != 0: job.status='failed'; se NÃO for dry-run, roda automaticamente o mesmo script com --rollback antes de finalizar.",
+    "5. Se o script sai com código 0: se NÃO for dry-run E (a fase é '02'/'03' OU é '01' com sshPublicKey informada) → job.status='awaiting_confirmation', rollbackScheduled=true, rollbackDeadline = agora + 5 min (SECURITY_ROLLBACK_WINDOW_MS), e um timer local é agendado para, se ninguém confirmar, marcar o job como 'rolled_back' (o rollback de fato já rodou NO ALVO, agendado pelo próprio script via `at`/timer em background). Caso contrário → job.status='success' direto.",
+    "6. Ao terminar em qualquer status terminal (success/failed/rolled_back), o callback onChange grava a entrada 'job' no histórico (data/security-history.json) e uma auditoria hardening.apply é registrada no momento do POST (não do término)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SecurityService.apply", "arquivo": "apps/server/src/services/security-service.ts:177", "papel": "Repassa ao executor." },
+    { "tipo": "pacote", "nome": "SecurityExecutor", "arquivo": "packages/security/src/executor.ts:44", "papel": "Mutex de job único, upload dos scripts, execução com streaming, rollback automático em falha, agendamento de confirmação nas fases de risco." },
+    { "tipo": "pacote", "nome": "buildPhaseScriptCommand", "arquivo": "packages/security/src/host-bridge.ts:81", "papel": "Monta e valida o comando shell do script de fase (allowlist)." },
+    { "tipo": "pacote", "nome": "isValidSshUsername / isValidSshPublicKey", "arquivo": "packages/core/src/security.ts:203", "papel": "Validação do usuário/chave SSH da fase 01, reaproveitada na rota, no host-bridge (defense-in-depth) e no frontend." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra hardening.apply no momento do POST." }
+  ],
+  "efeitosColaterais": [
+    "Altera o alvo real quando dryRun=false: escreve/edita arquivos de configuração (com backup automático), instala pacotes, ativa/desativa serviços.",
+    "Fases 01 (com chave)/02/03 em modo real: agendam uma reversão automática NO ALVO (job `at` ou timer em background) que roda sozinha se não houver confirmação em 5 min.",
+    "Anexa entrada 'job' a data/security-history.json ao finalizar.",
+    "Auditoria hardening.apply (POST) e, quando o alvo é host, hardening.host-exec por comando executado via host bridge."
+  ],
+  "chamadoPor": ["apps/web/src/pages/setup/SecurityStep.tsx:369 (runPhases)"],
+  "testes": [],
+  "observacoes": [
+    "MUDANÇA DE COMPORTAMENTO: VALID_PHASES/isValidPhase() foram removidos de security.ts — a checagem de fase válida e de dryRun booleano é 100% do schema Fastify agora (antes era feita manualmente no handler com os mesmos códigos de erro que agora não existem mais: invalid_phase, invalid_dry_run).",
+    "Não há teste automatizado dedicado ao SecurityExecutor (nem em packages/security/tests nem em apps/server/tests) apesar de ser a peça mais crítica do módulo (mutex, parsing de steps, rollback automático, agendamento de confirmação) — cobertura hoje é só indireta via host-bridge.test.ts (validação de comandos) e os testes de scan/history.",
+    "O mutex 'um job por vez' é por PROCESSO do servidor (this.busy em memória) — reiniciar o painel no meio de um job perde o rastreamento do mutex (job em memória se perde), mas o rollback agendado NO ALVO continua rodando de forma independente."
+  ]
+}

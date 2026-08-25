@@ -1,0 +1,80 @@
+{
+  "modulo": "monitoramento",
+  "titulo": "Monitoramento (Fase 4)",
+  "resumo": "Baseline de segurança do alvo (host ou container), scan recorrente que compara o estado atual contra esse baseline e vira alerta por categoria de desvio, central de alertas com ciclo de vida (aberto → reconhecido → resolvido) e log de auditoria de toda ação sensível do painel — incluindo as de outros módulos (auth, deploy, e-mail, terminal, hardening).",
+  "pontoDeEntrada": { "api": "GET /api/security/monitor/last", "web": "/alerts" },
+  "comoFunciona": [
+    "Baseline = uma fotografia do estado 'seguro' do alvo, criada sob demanda via POST /api/security/baseline: lista de pacotes instalados (dpkg-query), portas TCP/UDP em listen (ss -tulpnH, com fallback para /proc/net/{tcp,udp}{,6} quando ss não existe) e sha256 de arquivos críticos (sshd_config, /etc/ufw, /etc/fail2ban). Todos os comandos executados no alvo são strings FIXAS (packages/security/src/baseline.ts:14-20), nunca construídas a partir de input da API — isso é o que permite executá-los pelo host bridge com allowlist.",
+    "O monitor roda um scheduler DENTRO do processo do servidor (setInterval com unref, packages/security/src/monitor.ts) — não usa cron/systemd do host. A cada tick ele coleta um novo snapshot do alvo (mesmos comandos do baseline) e, se existir um baseline salvo, calcula o diff (diffBaseline): pacotes novos/removidos, portas novas/fechadas (chave proto/porta) e arquivos críticos alterados/removidos/adicionados (hash antes/depois). Sem baseline salvo, o scan roda mas não compara nada — MonitorScanResult.diff fica null e result.note explica que é preciso criar um baseline.",
+    "Cada categoria de diferença não-vazia no diff vira UM alerta (monitor-service.ts:alertDiff): portas novas e arquivos alterados são 'critical'; portas fechadas e pacotes instalados/removidos são 'warning'. Além do diff, o scan também roda (best-effort, dentro de um try/catch que engole erros) um hook de blacklist de e-mail registrado pelas próprias rotas — se o módulo de e-mail tiver domínios cadastrados e o IP/domínio aparecer listado em alguma DNSBL, gera um alerta 'critical' de origem 'blacklist'.",
+    "Alertas são desduplicados por (origem, título) enquanto estiverem 'open': rodar o mesmo scan de novo e encontrar o mesmo problema apenas atualiza (bump) o alerta existente — detail e severity são sobrescritos, createdAt é renovado — em vez de empilhar um alerta novo a cada ciclo. Um alerta já 'resolved' com o mesmo título/origem NÃO é reaberto: um alerta novo é criado do zero.",
+    "Ciclo de vida do alerta: 'open' (criado por um scan, blacklist ou guardrail de deploy bloqueado/com override) → 'acknowledged' via POST /api/alerts/:id/ack (carimba acknowledgedAt, só tem efeito se ainda estiver 'open') → 'resolved' via POST /api/alerts/:id/resolve (carimba resolvedAt; se ainda não tinha sido reconhecido, acknowledgedAt é preenchido junto). Não há operação para reabrir ou apagar um alerta — o próximo scan que encontrar o mesmo problema cria um alerta 'open' novo.",
+    "Auditoria é um log de append-only de toda ação sensível do sistema (não só deste módulo): cada chamada a auditService.record(action, target, detail) grava uma entrada com id, timestamp, ator ('operador' por padrão — painel é mono-usuário), a ação (string estável tipo 'deploy.start') e um detalhe legível em pt-BR. O comentário no código é explícito: NUNCA registrar segredos no detalhe. A escrita é best-effort — falha de disco não derruba a ação que originou o registro (o erro é engolido).",
+    "Este módulo registra as próprias rotas (monitoringRoutes) por ÚLTIMO em apps/server/src/app.ts (depois de mailRoutes) porque, ao subir, ele registra em monitor.setMailBlacklistHook um callback que lê app.mailService.listDomains()/checkBlacklists() — essa decoração só existe depois que mailRoutes é registrado. Se a ordem fosse invertida, o acesso a app.mailService dentro do hook quebraria (decorator ainda não existiria no momento do registro, embora o hook só seja CHAMADO durante um scan, então o erro só apareceria em runtime, não no boot)."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/monitoring.ts"],
+    "servicos": [
+      "apps/server/src/services/monitor-service.ts",
+      "apps/server/src/services/alerts-service.ts",
+      "apps/server/src/services/audit-service.ts"
+    ],
+    "pacotes": [
+      "packages/security/src/baseline.ts",
+      "packages/security/src/monitor.ts",
+      "packages/security/src/runner.ts",
+      "packages/core/src/monitoring.ts"
+    ],
+    "web": ["apps/web/src/pages/AlertsPage.tsx", "apps/web/src/pages/AuditPage.tsx"],
+    "testes": [
+      "packages/security/tests/baseline.test.ts",
+      "apps/server/tests/alerts-service.test.ts",
+      "apps/server/tests/audit-service.test.ts",
+      "scripts/test-fase4.mts"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/security/baseline.json",
+      "formato": "json",
+      "conteudo": "SecurityBaseline (id, createdAt, target, packages[], ports[], files{caminho: hash|null}) — um único baseline ativo; POST /api/security/baseline SUBSTITUI o anterior por completo (sem histórico). Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "data/security/monitor.json",
+      "formato": "json",
+      "conteudo": "{ intervalMs, lastRunAt, lastResult } — configuração do scheduler e o resultado (MonitorScanResult) do último scan, recarregados no boot para sobreviver a reinícios do servidor. Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "data/alerts.json",
+      "formato": "json",
+      "conteudo": "{ alerts: Alert[] } — até 500 alertas. CORRIGIDO nesta rodada: ao ultrapassar o teto, os RESOLVIDOS/RECONHECIDOS mais antigos são descartados primeiro; se o teto for atingido só com alertas 'open', todos são mantidos (log de aviso em vez de descarte silencioso). Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "data/audit.json",
+      "formato": "json",
+      "conteudo": "{ entries: AuditEntry[] } — até 2000 entradas de auditoria. CORRIGIDO nesta rodada: ao ultrapassar o teto, as entradas mais antigas não são mais descartadas — são movidas para data/audit.1.json (ver global/persistencia.json e conceito-auditoria.json). Arquivo criado com chmod 600."
+    }
+  ],
+  "endpoints": [
+    { "id": "listar-alertas", "metodo": "GET", "url": "/api/alerts", "resumo": "Lista alertas com filtros (status/severidade/origem) e paginação.", "arquivo": "listar-alertas.json" },
+    { "id": "reconhecer-alerta", "metodo": "POST", "url": "/api/alerts/:id/ack", "resumo": "Marca um alerta como reconhecido (open → acknowledged).", "arquivo": "reconhecer-alerta.json" },
+    { "id": "resolver-alerta", "metodo": "POST", "url": "/api/alerts/:id/resolve", "resumo": "Marca um alerta como resolvido.", "arquivo": "resolver-alerta.json" },
+    { "id": "obter-baseline", "metodo": "GET", "url": "/api/security/baseline", "resumo": "Retorna o baseline de segurança atual (ou null se nunca criado).", "arquivo": "obter-baseline.json" },
+    { "id": "criar-baseline", "metodo": "POST", "url": "/api/security/baseline", "resumo": "Coleta um snapshot do alvo agora e o salva como novo baseline.", "arquivo": "criar-baseline.json" },
+    { "id": "ultimo-monitor", "metodo": "GET", "url": "/api/security/monitor/last", "resumo": "Estado do scheduler: config, se está rodando, última execução e resultado.", "arquivo": "ultimo-monitor.json" },
+    { "id": "rodar-monitor", "metodo": "POST", "url": "/api/security/monitor/run", "resumo": "Executa um scan agora, fora do agendamento.", "arquivo": "rodar-monitor.json" },
+    { "id": "configurar-monitor", "metodo": "PUT", "url": "/api/security/monitor/config", "resumo": "Altera o intervalo do scan recorrente.", "arquivo": "configurar-monitor.json" },
+    { "id": "auditoria", "metodo": "GET", "url": "/api/audit", "resumo": "Lista o log de auditoria, paginado, mais recente primeiro.", "arquivo": "auditoria.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "CORRIGIDO nesta rodada: o teto de 500 alertas (apps/server/src/services/alerts-service.ts) não descarta mais alertas 'open' — descarta primeiro os resolvidos/reconhecidos mais antigos; se o teto for atingido só com abertos, todos são mantidos e um aviso é logado. Ver monitoramento/conceito-alertas.json.",
+    "CORRIGIDO nesta rodada: a origem 'system' foi REMOVIDA do tipo AlertSource (packages/core/src/monitoring.ts) — não existia nenhum ponto do código que criasse alerta com essa origem.",
+    "O hook de blacklist dentro do scan (monitor-service.ts) continua rodando em try/catch que engole qualquer erro sem logar nem criar alerta — se o serviço de e-mail ou a resolução DNS falhar, o scan simplesmente não reporta blacklist naquele ciclo, sem qualquer sinal de que a checagem falhou (silencioso por design, mas não distinguível de 'nada listado'; não alterado nesta rodada).",
+    "CORRIGIDO nesta rodada: POST /api/security/monitor/run agora compartilha o MESMO lock inFlight do tick automático — dois scans não rodam mais em paralelo; se já houver um em andamento, a chamada recusa com 409 scan_in_progress em vez de rodar concorrentemente. O piso efetivo do intervalo também subiu de facto: MONITOR_MIN_INTERVAL_MS continua 10s no schema/validação de entrada (packages/core/src/monitoring.ts), mas MonitorService agora aplica um clamp para 60s (EFFECTIVE_MIN_INTERVAL_MS, apps/server/src/services/monitor-service.ts) em qualquer intervalo configurado/persistido/default — um scan completo raramente termina em 10s. Ver monitoramento/rodar-monitor.json e configurar-monitor.json.",
+    "setStatus('acknowledged') só tem efeito se o alerta ainda estiver 'open' (alerts-service.ts:110-114); chamar POST /api/alerts/:id/ack em um alerta já 'resolved' retorna 200 com o alerta inalterado (ainda 'resolved'), sem erro — pode confundir quem espera uma transição.",
+    "alertDiff agrupa TODAS as mudanças de uma categoria em um único alerta (ex.: todos os pacotes novos+removidos em 'Monitoramento: pacotes instalados/removidos'); como o dedup é por (origem,título), um novo diff da mesma categoria SOBRESCREVE o detail anterior — o histórico de qual pacote apareceu em qual scan não fica registrado em lugar nenhum, só o estado mais recente do alerta aberto.",
+    "Não existe endpoint para apagar/resetar o baseline nem para consultar baselines anteriores — POST /api/security/baseline sempre sobrescreve data/security/baseline.json por completo.",
+    "O scan recorrente roda sozinho desde o boot do servidor (monitor.start() em monitoring.ts:55) mesmo sem baseline algum — ele só não gera alertas de diff até alguém criar o primeiro baseline manualmente; não há criação automática de baseline no primeiro boot ou após o hardening."
+  ]
+}

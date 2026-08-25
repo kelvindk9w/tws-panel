@@ -1,0 +1,56 @@
+{
+  "id": "dns-checklist",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/domains/:domain/dns",
+  "resumo": "Monta a lista dos registros DNS esperados (A, MX, SPF, DKIM, DMARC, PTR) para o domínio, sem consultar o DNS real nem o Stalwart.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:127",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [{ "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (domainParamSchema, mail.ts): minLength 1, maxLength 253, pattern de domínio (MAIL_DOMAIN_SCHEMA).", "descricao": "Nome do domínio já cadastrado." }],
+    "query": [], "body": [], "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Domínio existe (não exige o servidor de e-mail rodando).",
+      "corpo": { "domain": "string", "mailHostname": "string", "serverIp": "string", "records": "DnsRecordCheck[] (status sempre 'pending' aqui)", "ptr": "PtrCheck (status 'pending')", "suggestion": "string|null" },
+      "exemplo": {
+        "domain": "exemplo.com.br", "mailHostname": "mail.exemplo.com.br", "serverIp": "203.0.113.10",
+        "records": [
+          { "id": "a", "type": "A", "name": "mail.exemplo.com.br", "expected": "203.0.113.10", "purpose": "Hostname do servidor de e-mail precisa resolver para o IP da VPS.", "status": "pending", "found": [], "note": null },
+          { "id": "mx", "type": "MX", "name": "exemplo.com.br", "expected": "10 mail.exemplo.com.br", "purpose": "Recebimento de e-mail — aponta para o hostname, nunca para IP.", "status": "pending", "found": [], "note": null },
+          { "id": "spf", "type": "TXT", "name": "exemplo.com.br", "expected": "v=spf1 ip4:203.0.113.10 ~all", "purpose": "SPF: declara quais IPs podem enviar pelo domínio.", "status": "pending", "found": [], "note": null },
+          { "id": "dkim", "type": "TXT", "name": "paas._domainkey.exemplo.com.br", "expected": "v=DKIM1; k=rsa; p=MIIBIjANBg...", "purpose": "DKIM (RSA 2048): assinatura criptográfica de toda mensagem enviada.", "status": "pending", "found": [], "note": null },
+          { "id": "dmarc", "type": "TXT", "name": "_dmarc.exemplo.com.br", "expected": "v=DMARC1; p=none; rua=mailto:dmarc@exemplo.com.br", "purpose": "DMARC: política de autenticação + relatórios (evoluir none → quarantine → reject).", "status": "pending", "found": [], "note": null }
+        ],
+        "ptr": { "ip": "203.0.113.10", "expected": "mail.exemplo.com.br", "status": "pending", "found": [], "ticketText": null },
+        "suggestion": "Estágio de observação: SPF \"~all\" e DMARC \"p=none\". Após 2–4 semanas monitorando os relatórios (rua) sem falsos positivos, endureça para p=quarantine e SPF \"-all\"."
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "O segmento :domain reprovado pelo schema Fastify (domainParamSchema) ANTES do handler: fora do padrão de domínio ou maior que 253 chars.", "mensagem": "Campo inválido: domain." },
+    { "status": 404, "codigo": "domain_not_found", "quando": "Domínio no formato correto mas não cadastrado.", "mensagem": "Domínio {domínio} não encontrado." }
+  ],
+  "fluxo": [
+    "1. requireDomain(name).",
+    "2. buildDnsChecklist({ domain, mailHostname:'mail.'+domain, serverIp: serverIp(), serverIpv6: config.publicIpv6, dkimSelector, dkimPublicKey, dmarcStage }) — puramente local, monta os 5 (ou 6 com AAAA) registros esperados com status 'pending' e found:[].",
+    "3. Não consulta o DNS real nem exige o servidor de e-mail rodando — só precisa que o domínio já esteja cadastrado no painel."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.dnsChecklist", "arquivo": "apps/server/src/services/mail-service.ts:299", "papel": "Monta o input e delega a buildDnsChecklist." },
+    { "tipo": "pacote", "nome": "buildDnsChecklist", "arquivo": "packages/mailer/src/dns-checklist.ts:56", "papel": "Gera os registros esperados (SPF/DMARC dependem do dmarcStage do domínio)." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura, sem I/O de rede)."],
+  "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:198"],
+  "testes": ["packages/mailer/tests/dns-checklist.test.ts", "scripts/test-mail.mts (passo 2)"],
+  "observacoes": [
+    "MUDANÇA DE COMPORTAMENTO: :domain fora do padrão de hostname agora vira 400 invalid_request na borda, em vez de chegar ao handler e falhar em requireDomain() como 404 domain_not_found."
+  ]
+}

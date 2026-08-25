@@ -1,0 +1,200 @@
+{
+  "id": "threat-model",
+  "titulo": "Modelo de ameaças do TWS Panel",
+  "versao": "1.0",
+  "atualizadoEm": "2026-08-24",
+  "resumo": "Declaração explícita do que este sistema protege, do que não protege, e de quais privilégios ele exige para funcionar. Um painel PaaS precisa de acesso privilegiado ao host — não há como hospedar containers e configurar firewall sem isso. Este documento existe para que essa escolha seja informada, não descoberta depois.",
+  "porQueEsteDocumentoExiste": [
+    "Projetos desta categoria (Coolify, Dokploy, CapRover, Dokku, Portainer) publicam SECURITY.md, mas nenhum publica modelo de ameaças.",
+    "Em 2026 vários deles sofreram divulgações públicas de falhas críticas — command injection com root, RCE via terminal web, credenciais fixas no instalador.",
+    "Quem avalia um PaaS self-hosted precisa saber o que está aceitando ANTES de instalar, não depois de uma CVE."
+  ],
+  "premissasDeConfianca": [
+    {
+      "id": "operador-unico",
+      "premissa": "O painel tem uma única conta de administrador e não é multi-tenant.",
+      "implicacao": "Quem autentica no painel é tratado como dono da máquina. Não existe separação de privilégio entre usuários do painel porque não existem múltiplos usuários.",
+      "verificadoEm": "apps/server/src/services/user-store.ts (hasAdmin)"
+    },
+    {
+      "id": "host-confiavel",
+      "premissa": "A VPS onde o painel roda pertence ao operador e não é compartilhada com terceiros não confiáveis.",
+      "implicacao": "Quem tem acesso local ao host (shell, leitura de volumes, snapshot) contorna todos os controles do painel."
+    },
+    {
+      "id": "rede-exposta",
+      "premissa": "O painel pode estar exposto à internet pública.",
+      "implicacao": "A superfície HTTP é tratada como hostil: autenticação, rate limit e validação de entrada são obrigatórios em toda rota."
+    }
+  ],
+  "ativos": [
+    {
+      "id": "host",
+      "descricao": "A VPS inteira — root, dados de todos os projetos hospedados",
+      "criticidade": "critica"
+    },
+    {
+      "id": "credenciais-painel",
+      "descricao": "Senha do admin e cookies de sessão",
+      "criticidade": "critica"
+    },
+    {
+      "id": "codigo-projetos",
+      "descricao": "Código-fonte dos projetos hospedados, incluindo segredos que contenham",
+      "criticidade": "alta"
+    },
+    {
+      "id": "credenciais-email",
+      "descricao": "Senhas das caixas e adminSecret do servidor de e-mail",
+      "criticidade": "alta"
+    },
+    {
+      "id": "reputacao-ip",
+      "descricao": "Reputação do IP para envio de e-mail (blacklists)",
+      "criticidade": "media"
+    }
+  ],
+  "privilegiosExigidos": [
+    {
+      "id": "socket-docker",
+      "privilegio": "Socket do Docker montado com leitura e escrita no container do painel",
+      "porQue": "Sem ele o painel não consegue criar, parar ou inspecionar os containers dos projetos.",
+      "consequencia": "Acesso ao socket do Docker é equivalente a root no host. Isto é uma propriedade do Docker, não uma falha do painel: qualquer processo que fale com o socket pode montar o sistema de arquivos do host num container e escrever nele.",
+      "mitigacaoPossivel": "Nenhuma que preserve a função. O hardening do container do painel (usuário não-root, cap_drop ALL, read_only) reduz outras superfícies, mas não altera esta.",
+      "onde": "docker-compose.yml"
+    },
+    {
+      "id": "terminal-host",
+      "privilegio": "Terminal web com PTY no host, via container helper privilegiado com PidMode host e nsenter",
+      "porQue": "O wizard de hardening precisa executar comandos no host, e o operador precisa ver exatamente o que é executado em seu nome.",
+      "consequencia": "Uma sessão autenticada do painel é um shell root na VPS, sem allowlist de comandos. Deliberadamente, o conteúdo digitado NÃO é auditado (evita capturar senhas), o que significa que o abuso não deixa rastro granular.",
+      "mitigacaoPossivel": "Exigir sessão autenticada (implementado), timeout de ociosidade (implementado, 30 min por padrão), e futuramente 2FA e possibilidade de desabilitar o terminal por configuração.",
+      "onde": "apps/server/src/services/docker-socket.ts"
+    },
+    {
+      "id": "execucao-hardening",
+      "privilegio": "Execução de scripts de hardening no host (SSH, firewall, atualizações)",
+      "porQue": "É a função central do produto: transformar uma VPS recém-criada em máquina endurecida.",
+      "consequencia": "Um erro nesses scripts pode derrubar o acesso SSH do operador à própria máquina.",
+      "mitigacaoPossivel": "Dry-run, confirmação explícita de acesso nas fases de risco e rollback agendado no alvo (todos implementados).",
+      "onde": "packages/security/src/executor.ts, scripts/hardening/"
+    }
+  ],
+  "dentroDoEscopo": [
+    {
+      "id": "auth-bypass",
+      "ameaca": "Acessar a API sem autenticação",
+      "controle": "Guarda global que exige setup token durante a instalação e sessão depois; cookie assinado com HMAC; rate limit de login por IP com lockout progressivo.",
+      "onde": "apps/server/src/plugins/auth.ts",
+      "estado": "implementado"
+    },
+    {
+      "id": "injecao-comando",
+      "ameaca": "Executar comando arbitrário no host através de entrada do usuário",
+      "controle": "Comandos executados com array de argumentos (sem shell); allowlist de esquema na URL de repositório, que bloqueia o transporte ext:: do git; allowlist de caracteres em nome de branch; validação de hostname em domínios.",
+      "onde": "packages/deploy/src/exec.ts, apps/server/src/services/deploy-service.ts",
+      "estado": "implementado em 2026-08-24",
+      "historico": "Antes desta data, a URL de repositório não era validada e o transporte ext:: permitia execução de comando arbitrário. Corrigido com teste de regressão em apps/server/tests/deploy-validation.test.ts."
+    },
+    {
+      "id": "injecao-configuracao",
+      "ameaca": "Injetar diretivas no Caddyfile através do domínio de um projeto",
+      "controle": "Validação de hostname na entrada e descarte de alvos malformados na geração do arquivo (defesa em profundidade, protege também projetos gravados antes da validação existir).",
+      "onde": "packages/deploy/src/caddy.ts",
+      "estado": "implementado em 2026-08-24"
+    },
+    {
+      "id": "entrada-malformada",
+      "ameaca": "Corpo, parâmetro ou querystring malformados chegando à lógica de negócio",
+      "controle": "Schema de validação em toda rota que recebe entrada, com coerção de tipos e remoção de propriedades desconhecidas DESLIGADAS — o schema recusa, não conserta. Erro padronizado que nomeia o campo sem expor o jargão do validador.",
+      "onde": "apps/server/src/routes/, apps/server/src/ajv-options.ts",
+      "estado": "implementado em 2026-08-24"
+    },
+    {
+      "id": "vazamento-segredo-log",
+      "ameaca": "Segredos aparecendo em logs ou respostas",
+      "controle": "Redact do pino em cabeçalhos de autorização, cookies e token de query; senha nunca retornada; input do terminal nunca auditado.",
+      "onde": "apps/server/src/app.ts",
+      "estado": "implementado"
+    },
+    {
+      "id": "deploy-inseguro",
+      "ameaca": "Deploy de código com segredos versionados ou configuração perigosa de container",
+      "controle": "Guardrails que varrem o código antes do deploy e bloqueiam com relatório, exigindo override explícito.",
+      "onde": "packages/deploy/src/rules.ts",
+      "estado": "implementado"
+    }
+  ],
+  "foraDoEscopo": [
+    {
+      "id": "operador-malicioso",
+      "naoProtegemosContra": "O próprio operador autenticado agindo contra a máquina",
+      "porQue": "Ele já tem root por design. O painel é ferramenta dele, não barreira contra ele."
+    },
+    {
+      "id": "acesso-local",
+      "naoProtegemosContra": "Quem tem shell no host, acesso ao volume de dados, snapshot da VPS ou backup",
+      "porQue": "Os arquivos de dados são protegidos por permissão de sistema (0600), não por criptografia. Um backup vazado expõe o conteúdo.",
+      "situacaoAtual": "Senhas de caixas de e-mail e o adminSecret do servidor de e-mail estão em texto plano. Corrigir isso está pendente e é considerado dívida de segurança conhecida."
+    },
+    {
+      "id": "codigo-hospedado",
+      "naoProtegemosContra": "Vulnerabilidades dentro dos projetos que o operador hospeda",
+      "porQue": "O painel isola projetos em containers, mas não audita nem protege o código de terceiros que ele executa."
+    },
+    {
+      "id": "provedor",
+      "naoProtegemosContra": "Comprometimento do provedor de VPS, do registrador de domínio ou do provedor de DNS",
+      "porQue": "Fora do alcance de qualquer software que rode na máquina."
+    },
+    {
+      "id": "supply-chain",
+      "naoProtegemosContra": "Comprometimento de dependências npm ou de imagens Docker de base",
+      "porQue": "Mitigado parcialmente por lockfile e scan de imagem, mas sem SBOM, assinatura de release ou pinning de digest no momento.",
+      "situacaoAtual": "CORRIGIDO PARCIALMENTE nesta rodada: o scan Trivy no CI agora bloqueia o merge para CVEs CRITICAL com fix disponível (exit-code 1, com allowlist documentada para o único CRITICAL fora do controle do projeto); HIGH continua em modo relatório, por decisão deliberada. O Dependabot está ATIVO (há branches dependabot/* no remoto: fastify/static, nodemailer, vite), mas habilitado pela interface do GitHub — não existe .github/dependabot.yml versionado, então a configuração não é revisável nem reproduzível a partir do repositório. Não há SBOM, assinatura de release nem pinning por digest."
+    }
+  ],
+  "dividaDeSegurancaConhecida": [
+    {
+      "id": "segredos-texto-plano",
+      "severidade": "alta",
+      "descricao": "Senhas de caixas de e-mail e adminSecret do Stalwart gravados sem criptografia, protegidos apenas por permissão de arquivo.",
+      "planejado": "Camada genérica de segredos cifrados (AES-256-GCM) com chave mestra fora do diretório de dados, absorvendo também futuras credenciais de repositório Git."
+    },
+    {
+      "id": "trivy-nao-bloqueia",
+      "severidade": "media",
+      "descricao": "CVEs HIGH e CRITICAL não impedem merge no CI.",
+      "planejado": "Passar o scan para modo bloqueante com allowlist explícita e revisada."
+    },
+    {
+      "id": "sem-atualizacao-automatica",
+      "severidade": "baixa",
+      "descricao": "O Dependabot está ativo via configuração da interface do GitHub (há PRs abertos), mas sem arquivo .github/dependabot.yml no repositório: a configuração não é versionada, revisável em PR, nem reproduzível por quem forkar o projeto.",
+      "planejado": "Versionar a configuração em .github/dependabot.yml, cobrindo todos os workspaces do monorepo, e definir política de merge das atualizações."
+    },
+    {
+      "id": "terminal-sem-limites",
+      "severidade": "media",
+      "descricao": "O container helper do terminal não tem limite de CPU ou memória, e a limpeza de helpers órfãos só roda no boot do painel.",
+      "planejado": "Definir limites de recurso e uma verificação periódica de órfãos."
+    },
+    {
+      "id": "sem-2fa",
+      "severidade": "media",
+      "descricao": "A única barreira entre a internet e um shell root é uma senha.",
+      "planejado": "Segundo fator para a conta de administrador, e opção de desabilitar o terminal web por configuração."
+    }
+  ],
+  "comoReportarVulnerabilidade": {
+    "referencia": "SECURITY.md na raiz do repositório",
+    "resumo": "Contato privado por e-mail, sem abrir issue pública. Resposta em até 72 horas e correção em até 90 dias."
+  },
+  "recomendacoesAoOperador": [
+    "Não exponha o painel à internet sem necessidade — prefira acesso por VPN ou restrição de IP.",
+    "Trate a senha do painel com o mesmo cuidado da senha de root da VPS, porque elas são equivalentes na prática.",
+    "Faça backup do diretório de dados sabendo que ele contém segredos em texto plano.",
+    "Aplique o hardening oferecido pelo wizard antes de hospedar qualquer projeto (e revise/reaplique quando quiser depois, em /security/hardening).",
+    "Mantenha o painel atualizado: correções de segurança são publicadas nas releases."
+  ]
+}

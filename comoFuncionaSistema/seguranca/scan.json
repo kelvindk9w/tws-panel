@@ -1,0 +1,89 @@
+{
+  "id": "scan",
+  "modulo": "seguranca",
+  "metodo": "GET",
+  "url": "/api/security/scan",
+  "resumo": "Devolve o relatório de varredura de segurança da VPS. Sem ?fresh, NUNCA dispara uma varredura nova — devolve imediatamente o último relatório conhecido (memória, ou disco no primeiro acesso após restart).",
+  "arquivoFonte": "apps/server/src/routes/security.ts:52",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): fora do fluxo de setup exige sessão válida; durante o setup (antes da conta admin ser criada) aceita o setup token via header x-setup-token ou query ?token= — é assim que o passo 2 do wizard (SecurityStep) chama esta rota antes de existir login."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [
+      {
+        "nome": "fresh",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "schema Fastify (scanSchema, security.ts): quando presente, enum ['0','1'] — qualquer outro valor (ex.: 'true', 'yes') agora é RECUSADO com 400 em vez de tratado como ausente; additionalProperties:false na querystring. Semântica de negócio inalterada: force = (query.fresh === '1'), '0' e ausência têm o mesmo efeito.",
+        "descricao": "Força uma varredura nova em vez de servir o cache. Semântica: force = (query.fresh === '1')."
+      }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre (não há caminho de erro nesta rota — falhas de execução de check viram status 'unknown' dentro do relatório, nunca uma resposta HTTP de erro).",
+      "corpo": { "report": "SecurityScanReport", "cached": "boolean", "refreshing": "boolean" },
+      "exemplo": {
+        "report": {
+          "id": "b3f1...",
+          "scannedAt": "2026-08-24T10:00:00.000Z",
+          "durationMs": 2100,
+          "target": "host",
+          "hardeningIndex": 75,
+          "hardeningIndexSource": "lynis",
+          "lynisAvailable": true,
+          "checks": [
+            { "id": "ssh.password-auth", "phase": "02", "title": "Autenticação SSH somente por chave", "severity": "critical", "status": "fail", "description": "...", "remediation": "...", "detail": "PasswordAuthentication yes" }
+          ],
+          "summary": { "total": 27, "pass": 20, "fail": 5, "unknown": 2, "critical": 2, "warning": 3 },
+          "profile": "host",
+          "skippedChecks": [],
+          "profileNote": null
+        },
+        "cached": true,
+        "refreshing": false
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "?fresh= presente mas fora de ['0','1'], ou querystring com campo desconhecido — reprovado pelo schema Fastify (scanSchema) ANTES do handler. MUDANÇA DE COMPORTAMENTO: antes, qualquer valor diferente de '1' (ex.: '?fresh=true') era silenciosamente tratado como ausente (force=false, 200); agora é 400.", "mensagem": "Campo inválido: fresh." }
+  ],
+  "fluxo": [
+    "1. force = (query.fresh === '1').",
+    "2. Se !force: procura o relatório em memória (this.lastScan); se ausente, tenta carregar de data/security-last-scan.json (loadLastReport). Se encontrado, devolve { report, cached: true, refreshing: (há um scan fresh em andamento em background?) } IMEDIATAMENTE, sem tocar no runner.",
+    "3. Se !force e NÃO há relatório nenhum (primeiro uso do painel): cai para o passo 4 mesmo assim — só este caso executa um scan síncrono na ausência de ?fresh.",
+    "4. Se force (ou passo 3): garante que só um scan roda por vez (this.runningScan é reaproveitado se já houver um em andamento — dois refreshes simultâneos não disparam dois scans). runSecurityScan(runner, { onCheckTiming }) roda: ensureReady() no alvo, particiona os ~27 checks pelo perfil do alvo (host roda tudo; container pula os hostOnly), executa cada check aplicável via runner.exec (timeout 60s cada), sanitiza a saída com stripAnsi, e por fim tenta o Lynis (lynis audit system --quick, timeout 300s) se presente no alvo.",
+    "5. Ao terminar, o relatório é gravado em memória, anexado ao histórico (data/security-history.json, kind='scan') e persistido em disco (data/security-last-scan.json) — NESSA ORDEM, ANTES de a promise resolver, para que um restart logo após o scan ainda encontre o relatório.",
+    "6. onCheckTiming(checkId, durationMs) loga (nível info, nunca conteúdo) o tempo de cada check — introduzido após uma regressão real em VPS (2.1s → 133.4s por um check travado em Docker; ver docker.privileged-containers/docker.sock-mounted em checks.ts, que usam timeout 25 justamente por causa disso).",
+    "7. Resposta: { report, cached: false, refreshing: false } quando um scan de fato rodou; { report: <último conhecido>, cached: true, refreshing: <true se outro scan estava em voo> } quando serviu do cache."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SecurityService.scan", "arquivo": "apps/server/src/services/security-service.ts:136", "papel": "Orquestra cache em memória/disco vs. scan novo; garante um scan por vez." },
+    { "tipo": "pacote", "nome": "runSecurityScan", "arquivo": "packages/security/src/scanner.ts:59", "papel": "Executa os checks + Lynis e monta o SecurityScanReport." },
+    { "tipo": "pacote", "nome": "SECURITY_CHECKS", "arquivo": "packages/security/src/checks.ts:58", "papel": "Definição dos ~27 checks fixos (comando + avaliador)." },
+    { "tipo": "pacote", "nome": "partitionChecksForProfile", "arquivo": "packages/security/src/profiles.ts:27", "papel": "Filtra checks hostOnly quando o alvo é um container de dev." },
+    { "tipo": "pacote", "nome": "TargetRunner (NsenterHostRunner/ContainerRunner)", "arquivo": "packages/security/src/runner.ts", "papel": "Executa os comandos fixos no alvo (host real via host bridge, ou container descartável)." },
+    { "tipo": "servico", "nome": "TerminalRelayRunner", "arquivo": "apps/server/src/services/terminal-runner.ts", "papel": "Envolve o runner para que os checks também apareçam ao vivo no terminal web embutido." }
+  ],
+  "efeitosColaterais": [
+    "Quando um scan de fato roda: grava data/security-last-scan.json e anexa uma entrada 'scan' em data/security-history.json.",
+    "Quando o alvo é 'host' (PAAS_TARGET=host): cria e remove containers helper descartáveis via docker run --rm (host bridge) para cada comando; auditoria hardening.host-exec por comando executado no host."
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/setup/SecurityStep.tsx:258 (runScan)",
+    "apps/web/src/pages/SecurityPage.tsx:38 (HardeningCard)"
+  ],
+  "testes": ["apps/server/tests/security-scan.test.ts", "packages/security/tests/scanner.test.ts"],
+  "observacoes": [
+    "MUDANÇA DE COMPORTAMENTO: esta é a única rota do módulo cujo schema pode transformar um antigo 200 em 400 para um valor antes tolerado — ?fresh=<qualquer coisa diferente de 0/1> agora é recusado na borda em vez de cair no ramo 'tratado como ausente'.",
+    "A constante SECURITY_SCAN_CACHE_MS (packages/core/src/security.ts) segue exportada mas é código morto para esta rota — comentário no próprio arquivo a marca como legado, mantida só por compatibilidade de tipos/API.",
+    "Não há paginação/streaming: o relatório inteiro (todos os checks + detail) volta em um único corpo JSON."
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "id": "listar",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects",
+  "resumo": "Lista todos os projetos cadastrados, com status calculado a partir dos containers Docker atuais e a URL pública de acesso de cada um.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:30",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global (apps/server/src/plugins/auth.ts): setup token enquanto o setup não foi concluído, sessão de cookie depois. Sem exceção para esta rota." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP (@fastify/rate-limit em app.ts), sem limite específico da rota.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre (lista vazia se não houver projetos)",
+      "corpo": { "projects": "ProjectResponse[]" },
+      "exemplo": {
+        "projects": [
+          {
+            "project": {
+              "id": "a1b2c3d4e5f6",
+              "name": "Loja",
+              "slug": "loja",
+              "ingestMode": "upload",
+              "source": "/home/kelvin/apps/loja",
+              "branch": null,
+              "domain": "loja.localhost",
+              "websocket": false,
+              "detection": { "type": "static-node", "composeFile": null, "outputDir": "dist", "packageManager": "npm", "buildCommand": "npm run build", "proxyService": null, "proxyPort": null, "warnings": [], "details": [] },
+              "proxyService": null,
+              "proxyPort": null,
+              "createdAt": "2026-08-20T12:00:00.000Z",
+              "updatedAt": "2026-08-20T12:05:00.000Z",
+              "lastDeployAt": "2026-08-20T12:05:00.000Z",
+              "lastDeployStatus": "success"
+            },
+            "status": "running",
+            "containers": [],
+            "url": "http://loja.localhost"
+          }
+        ]
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. service.listContainers() — lista TODOS os containers Docker via `docker ps -a` (não filtrado por projeto).",
+    "2. service.listProjects() — carrega data/projects.json (lazy-load na 1ª chamada do processo).",
+    "3. Para cada projeto: service.statusOf(project, containers) filtra os containers pelo label paas.project=<slug>/compose project e calcula o ProjectStatus ('deploying' se há job running/queued; 'created' se nenhum container e nunca falhou; 'running' se algum container está state=running; 'stopped'/'error' conforme lastDeployStatus).",
+    "4. service.projectUrl(project) monta a URL (http://<domain> ou http://<domain>:<porta> se caddyHttpPort ≠ 80, útil em dev)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService", "arquivo": "apps/server/src/services/deploy-service.ts", "papel": "Orquestra CRUD de projetos, status e integração com Docker/Caddy." },
+    { "tipo": "servico", "nome": "listContainers", "arquivo": "apps/server/src/services/docker-service.ts", "papel": "Lista containers Docker (gerenciados e externos)." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/DashboardPage.tsx (refresh, polling 15s pausado com aba oculta)"],
+  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "observacoes": [
+    "Não há paginação — todos os projetos são retornados de uma vez.",
+    "listContainers() é uma chamada Docker de custo O(n) rodada em toda listagem; o Dashboard faz polling a cada 15s (antes era 5s, reduzido por perf — ver commit dd58b60)."
+  ]
+}

@@ -27,6 +27,16 @@ export interface ServerConfig {
   securityTargetContainer: string;
   /** Diretório local dos scripts de hardening. */
   hardeningScriptsDir: string;
+  /**
+   * Imagem do helper descartável do host bridge (nsenter no PID 1 do host).
+   * Só usada quando securityTarget=host.
+   */
+  hostHelperImage: string;
+  /**
+   * Caminho do checkout do repo NO HOST (onde install.sh clonou o projeto) —
+   * usado para montar os comandos do modo manual de cada fase.
+   */
+  hostRepoDir: string;
   /** Porta HTTP publicada do Caddy central (80 em produção; configurável em dev). */
   caddyHttpPort: number;
   /** Porta HTTPS publicada do Caddy central (443 em produção). */
@@ -41,6 +51,10 @@ export interface ServerConfig {
   publicIpv6: string | null;
   /** Intervalo inicial do scan recorrente de segurança (ms). Persistido depois. */
   monitorIntervalMs: number;
+  /** Caminho do unix socket do Docker (terminal web, host bridge, deploys). */
+  dockerSocketPath: string;
+  /** Timeout de inatividade da sessão do terminal web (ms). Default 30 min. */
+  terminalIdleTimeoutMs: number;
 }
 
 export function loadConfig(): ServerConfig {
@@ -57,6 +71,8 @@ export function loadConfig(): ServerConfig {
     securityTarget: process.env.PAAS_TARGET === "host" ? "host" : "container",
     securityTargetContainer: process.env.PAAS_TARGET_CONTAINER ?? "paas-target-test",
     hardeningScriptsDir: path.resolve(process.env.PAAS_SCRIPTS_DIR ?? "../../scripts/hardening"),
+    hostHelperImage: process.env.PAAS_HOST_HELPER_IMAGE ?? "alpine:3",
+    hostRepoDir: process.env.PAAS_HOST_REPO_DIR ?? "/opt/tws-panel",
     caddyHttpPort: Number(process.env.PAAS_CADDY_HTTP_PORT ?? 80),
     caddyHttpsPort: Number(process.env.PAAS_CADDY_HTTPS_PORT ?? 443),
     mailPorts: {
@@ -71,5 +87,7 @@ export function loadConfig(): ServerConfig {
     publicIp: process.env.PAAS_PUBLIC_IP?.trim() || null,
     publicIpv6: process.env.PAAS_PUBLIC_IPV6?.trim() || null,
     monitorIntervalMs: Number(process.env.PAAS_MONITOR_INTERVAL_MS ?? MONITOR_DEFAULT_INTERVAL_MS),
+    dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
+    terminalIdleTimeoutMs: Number(process.env.PAAS_TERMINAL_IDLE_TIMEOUT_MS ?? 30 * 60_000),
   };
 }

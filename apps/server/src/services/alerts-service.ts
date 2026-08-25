@@ -23,14 +23,25 @@ export interface AlertFilters {
   perPage?: number;
 }
 
+export interface AlertsServiceOptions {
+  /** Teto de retenção (default MAX_ALERTS = 500). Configurável para testes. */
+  maxAlerts?: number;
+  /** Log de avisos (ex.: teto atingido só com alertas abertos). Default: console.warn. */
+  log?: (msg: string) => void;
+}
+
 export class AlertsService {
   private readonly file: string;
+  private readonly maxAlerts: number;
+  private readonly log: (msg: string) => void;
   private alerts: Alert[] = [];
   private loaded = false;
   private writing: Promise<void> = Promise.resolve();
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, opts: AlertsServiceOptions = {}) {
     this.file = path.join(dataDir, "alerts.json");
+    this.maxAlerts = opts.maxAlerts ?? MAX_ALERTS;
+    this.log = opts.log ?? ((msg) => console.warn(msg));
   }
 
   private async ensureLoaded(): Promise<void> {
@@ -77,9 +88,39 @@ export class AlertsService {
       resolvedAt: null,
     };
     this.alerts.push(alert);
-    this.alerts = this.alerts.slice(-MAX_ALERTS);
+    this.enforceCap();
     await this.persist();
     return { alert, created: true };
+  }
+
+  /**
+   * Aplica o teto de retenção preservando alertas abertos: descarta primeiro
+   * os resolvidos/reconhecidos mais antigos (por createdAt). Se o teto for
+   * atingido só com alertas abertos, mantém todos e apenas loga um aviso —
+   * um alerta `open` nunca reconhecido é exatamente o que mais importa não
+   * perder silenciosamente.
+   */
+  private enforceCap(): void {
+    const overflow = this.alerts.length - this.maxAlerts;
+    if (overflow <= 0) return;
+
+    const closedByAge = this.alerts
+      .map((alert, index) => ({ alert, index }))
+      .filter(({ alert }) => alert.status !== "open")
+      .sort((a, b) => a.alert.createdAt.localeCompare(b.alert.createdAt));
+
+    const indexesToDrop = new Set(closedByAge.slice(0, overflow).map(({ index }) => index));
+    if (indexesToDrop.size > 0) {
+      this.alerts = this.alerts.filter((_, index) => !indexesToDrop.has(index));
+    }
+
+    const stillOver = overflow - indexesToDrop.size;
+    if (stillOver > 0) {
+      this.log(
+        `alerts: teto de ${this.maxAlerts} atingido só com alertas ainda abertos — ` +
+          `mantendo todos os ${this.alerts.length} (nenhum alerta aberto foi descartado).`,
+      );
+    }
   }
 
   async list(filters: AlertFilters = {}): Promise<{

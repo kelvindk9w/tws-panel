@@ -206,7 +206,7 @@ describe("auth contract", () => {
 describe("monitoring contract", () => {
   it("severidades, fontes e status de alerta são conjuntos fechados", () => {
     expect(ALERT_SEVERITIES).toEqual(["critical", "warning", "info"]);
-    expect(ALERT_SOURCES).toEqual(["guardrail", "scan", "blacklist", "system"]);
+    expect(ALERT_SOURCES).toEqual(["guardrail", "scan", "blacklist"]);
     expect(ALERT_STATUSES).toEqual(["open", "acknowledged", "resolved"]);
   });
 

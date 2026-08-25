@@ -1,9 +1,10 @@
 /**
  * Testes do guard de rotas (RequireAuth): sessão válida renderiza o painel;
- * 401 unauthorized → /login; 401 setup_incomplete → /setup.
+ * 401 unauthorized → /login; 401 setup_incomplete → /setup — preservando a
+ * query string (?token=...) no redirect (link do instalador).
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequireAuth } from "../src/components/RequireAuth";
 
@@ -70,5 +71,35 @@ describe("RequireAuth (guard de rotas)", () => {
     );
     renderGuard();
     expect(await screen.findByText("tela-setup")).toBeInTheDocument();
+  });
+
+  it("redirect para /setup PRESERVA a query string (?token= do link do instalador)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ error: "setup_incomplete", message: "Conclua o setup para criar a conta." }, 401),
+      ),
+    );
+    function SetupSearchProbe() {
+      const location = useLocation();
+      return <div>search:{location.search}</div>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/security?token=token-do-instalador"]}>
+        <Routes>
+          <Route
+            path="/security"
+            element={
+              <RequireAuth>
+                <div>painel-protegido</div>
+              </RequireAuth>
+            }
+          />
+          <Route path="/setup" element={<SetupSearchProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    // o destino recebe a query intacta — o token não se perde no redirect
+    expect(await screen.findByText("search:?token=token-do-instalador")).toBeInTheDocument();
   });
 });

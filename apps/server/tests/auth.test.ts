@@ -142,14 +142,18 @@ describe("POST /api/setup/admin", () => {
     expect((await ctx.setupState.load()).completed).toBe(false);
   });
 
-  it("sem corpo → 400 invalid_username; senha ausente → 400 invalid_payload", async () => {
+  // Mudança intencional: a rota agora tem `schema` (Fastify/Ajv), então corpo
+  // sem `username`/`password` é recusado ANTES do handler, com o código
+  // genérico `invalid_request` (via registerErrorHandler) em vez dos códigos
+  // específicos que a validação manual antiga produzia.
+  it("sem corpo → 400 invalid_request; senha ausente → 400 invalid_request", async () => {
     const semCorpo = await app.inject({
       method: "POST",
       url: "/api/setup/admin",
       headers: auth,
     });
     expect(semCorpo.statusCode).toBe(400);
-    expect(semCorpo.json().error).toBe("invalid_username");
+    expect(semCorpo.json().error).toBe("invalid_request");
 
     const semSenha = await app.inject({
       method: "POST",
@@ -158,7 +162,7 @@ describe("POST /api/setup/admin", () => {
       payload: { username: "admin" },
     });
     expect(semSenha.statusCode).toBe(400);
-    expect(semSenha.json().error).toBe("invalid_payload");
+    expect(semSenha.json().error).toBe("invalid_request");
   });
 });
 
@@ -430,10 +434,12 @@ describe("POST /api/auth/login — casos de borda", () => {
     await createAdmin();
   });
 
-  it("sem corpo algum → 400 invalid_payload", async () => {
+  // Mudança intencional: com `schema` na rota, corpo ausente é recusado pelo
+  // Ajv antes do handler → `invalid_request` (não mais `invalid_payload`).
+  it("sem corpo algum → 400 invalid_request", async () => {
     const res = await app.inject({ method: "POST", url: "/api/auth/login" });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe("invalid_payload");
+    expect(res.json().error).toBe("invalid_request");
   });
 
   it("user-agent é registrado na sessão criada", async () => {
@@ -470,7 +476,10 @@ describe("GET /api/auth/me — casos de borda", () => {
 });
 
 describe("POST /api/auth/change-password — casos de borda", () => {
-  it("payload inválido → 400 invalid_payload", async () => {
+  // Mudança intencional: com `schema` na rota, corpo sem os dois campos (ou
+  // não-objeto) é recusado pelo Ajv antes do handler → `invalid_request`
+  // (não mais `invalid_payload`).
+  it("payload inválido → 400 invalid_request", async () => {
     await createAdmin();
     const cookie = sessionCookieOf(await login());
     for (const payload of [{}, { currentPassword: PASSWORD }, null]) {
@@ -481,11 +490,11 @@ describe("POST /api/auth/change-password — casos de borda", () => {
         payload: payload as unknown as Record<string, unknown>,
       });
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
-      expect(res.json().error).toBe("invalid_payload");
+      expect(res.json().error).toBe("invalid_request");
     }
   });
 
-  it("sessão de usuário inexistente → 401 (sem tocar na senha)", async () => {
+  it("sessão de usuário inexistente → 401 (sem tocar na senha) e sessão destruída", async () => {
     await createAdmin();
     const ghost = await ctx.sessionStore.create({ id: "fantasma", username: "fantasma" });
     const res = await app.inject({
@@ -497,6 +506,9 @@ describe("POST /api/auth/change-password — casos de borda", () => {
     expect(res.statusCode).toBe(401);
     // a senha do admin de verdade não mudou
     expect((await login()).statusCode).toBe(200);
+    // mesmo padrão de /api/auth/me: sessão órfã é revogada de verdade, não
+    // deixada viva até expirar por conta própria.
+    expect(await ctx.sessionStore.resolve(ghost.cookieValue)).toBeNull();
   });
 });
 

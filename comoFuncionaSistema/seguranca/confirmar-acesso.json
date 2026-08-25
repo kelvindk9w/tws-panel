@@ -1,0 +1,58 @@
+{
+  "id": "confirmar-acesso",
+  "modulo": "seguranca",
+  "metodo": "POST",
+  "url": "/api/security/confirm-access",
+  "resumo": "Cancela o rollback automático agendado NO ALVO depois que o operador confirmou (testando em uma nova sessão) que ainda tem acesso ao servidor após uma fase de risco (SSH/firewall, ou usuário com senha do root travada).",
+  "arquivoFonte": "apps/server/src/routes/security.ts:134",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Mesmo guard global das demais rotas de segurança — sessão fora do setup, setup token durante o setup."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "jobId", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (confirmAccessSchema, security.ts): minLength 1, maxLength 64; additionalProperties:false no corpo. A checagem manual de string não-vazia foi REMOVIDA do handler.", "descricao": "id do SecurityJob que está com status 'awaiting_confirmation'." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "jobId existe, o job está em status 'awaiting_confirmation', e o script rodou --confirm com sucesso (exit 0) no alvo.",
+      "corpo": { "confirmed": "boolean", "job": "SecurityJob | null" },
+      "exemplo": { "confirmed": true, "job": { "id": "8f2a...", "status": "success", "rollbackScheduled": false, "rollbackDeadline": null } }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (confirmAccessSchema) ANTES do handler: jobId ausente, vazio, maior que 64 chars, ou corpo com campo desconhecido. SUBSTITUI o antigo invalid_job — removido do código, não existe mais.", "mensagem": "Campo obrigatório ausente: jobId." },
+    { "status": 404, "codigo": "job_not_found", "quando": "Nenhum job com esse id (mensagem do serviço contém 'não encontrado').", "mensagem": "job não encontrado: <jobId>" },
+    { "status": 409, "codigo": "confirm_failed", "quando": "Job existe mas não está em status 'awaiting_confirmation' (ex.: já confirmado, já expirou, ainda rodando), OU o comando --confirm falhou no alvo (exit != 0) — nesse caso o rollback agendado CONTINUA de pé.", "mensagem": "job <jobId> não está aguardando confirmação (status: <status>) — ou — falha ao confirmar acesso no alvo (exit <code>) — rollback continua agendado" }
+  ],
+  "fluxo": [
+    "0. Schema Fastify (confirmAccessSchema) valida jobId (string 1-64 chars) ANTES do handler — corpo malformado nunca chega ao handler (400 invalid_request, substitui o antigo invalid_job).",
+    "2. executor.confirmAccess(jobId): busca o job; se ausente, lança erro com 'não encontrado' (rota mapeia para 404); se status != 'awaiting_confirmation', lança erro (rota mapeia para 409 confirm_failed).",
+    "3. Roda o script da fase com --confirm (buildPhaseScriptCommand({ ..., confirm: true })) via runner.execStream, cujo efeito no alvo é chamar confirm_rollback (lib.sh): cancela o job `at` pendente (atrm) ou mata o timer em background (kill), e remove os arquivos de estado /etc/paas/pending-rollback-<id>.{at,pid}.",
+    "4. Se o script sair com código != 0: lança erro (rota mapeia para 409 confirm_failed) — o rollback SEGUE agendado no alvo, nada muda no lado do job.",
+    "5. Se sucesso: cancela o timer local que refletiria o rollback (clearTimeout), zera rollbackScheduled/rollbackDeadline, marca job.status='success' e finishedAt=agora; notifica (onChange grava a entrada de histórico)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SecurityService.confirmAccess", "arquivo": "apps/server/src/services/security-service.ts:234", "papel": "Repassa ao executor." },
+    { "tipo": "pacote", "nome": "SecurityExecutor.confirmAccess", "arquivo": "packages/security/src/executor.ts:110", "papel": "Roda --confirm no alvo e atualiza o estado do job." },
+    { "tipo": "script (alvo)", "nome": "confirm_rollback (lib.sh)", "arquivo": "scripts/hardening/lib.sh:242", "papel": "Cancela o job `at`/timer em background agendado por schedule_rollback." }
+  ],
+  "efeitosColaterais": [
+    "Cancela a reversão automática agendada no ALVO (atrm do job at, ou kill do processo em background).",
+    "Remove /etc/paas/pending-rollback-<id>.{at,pid} no alvo.",
+    "Anexa entrada 'job' (status='success') ao histórico ao finalizar."
+  ],
+  "chamadoPor": ["apps/web/src/pages/setup/SecurityStep.tsx:437 (confirmAccess)"],
+  "testes": [],
+  "observacoes": [
+    "Não há proteção contra o operador confirmar acesso de um servidor DIFERENTE do que teve o acesso testado — a rota confia inteiramente na ação humana ('testei e funcionou') sem qualquer verificação automática de conectividade SSH real por parte do painel.",
+    "Se o painel for reiniciado durante a janela de awaiting_confirmation, o job em memória se perde (getJob passaria a 404) mas o rollback agendado NO ALVO continua rodando de forma independente e reverte sozinho no prazo — não há como confirmar por essa rota depois do restart, porque o job não existe mais no executor."
+  ]
+}

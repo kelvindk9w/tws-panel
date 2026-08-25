@@ -1,0 +1,35 @@
+{
+  "modulo": "saude",
+  "titulo": "Saúde da máquina",
+  "resumo": "Diagnóstico somente-leitura da VPS: liveness público para healthcheck/monitoramento (GET /api/healthz) e uma varredura completa de SO, CPU, memória, disco, rede e virtualização com três checagens de compatibilidade (GET /api/health/scan). O scan é usado no passo de saúde do assistente de instalação, antes de o usuário poder hospedar qualquer projeto.",
+  "pontoDeEntrada": { "api": "GET /api/health/scan", "web": "wizard de setup — passo 'Saúde da máquina' (HealthStep.tsx)" },
+  "comoFunciona": [
+    "GET /api/healthz é liveness puro: sem autenticação, sem lógica, sempre responde { status: 'ok' } — usado pelo HEALTHCHECK do Dockerfile/compose e por monitoramento externo.",
+    "GET /api/health/scan chama scanSystemHealth() (system-info.ts), que coleta TUDO via módulo `os` do Node e leitura direta de arquivos em /proc, /sys e /etc — NENHUM shell é executado para montar os dados retornados na resposta.",
+    "A coleta roda em paralelo (Promise.all): informações de SO (/etc/os-release, /etc/hostname), estatística de disco (statfs('/')), informações de rede (interfaces + IP público) e detecção de virtualização (/sys/class/dmi/id/product_name, /proc/cpuinfo).",
+    "Três checagens (checks.os, checks.memory, checks.disk) comparam os dados coletados contra limites fixos em HEALTH_LIMITS (packages/core/src/index.ts) e produzem nível 'ok' ou 'warning' com uma mensagem — o nível 'critical' existe no tipo HealthLevel mas NUNCA é atribuído por este código.",
+    "Depois de montar o resultado, a rota dispara um 'espelho' fire-and-forget: roda uma lista fixa de comandos somente-leitura (cat /etc/os-release, free -h, df -h /, uptime, etc.) no terminal web embutido, só para o usuário VER a varredura acontecendo ao vivo no xterm — esse espelho nunca atrasa nem altera a resposta HTTP, e falhas nele (inclusive terminal indisponível) só geram um warning de log.",
+    "O resultado NÃO é persistido em disco: cada chamada a /api/health/scan recalcula tudo do zero, na hora."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/health.ts"],
+    "servicos": ["apps/server/src/services/system-info.ts"],
+    "pacotes": ["packages/core/src/index.ts"],
+    "web": ["apps/web/src/pages/setup/HealthStep.tsx"],
+    "testes": ["apps/server/tests/routes-health.test.ts"]
+  },
+  "persistencia": [],
+  "endpoints": [
+    { "id": "healthz", "metodo": "GET", "url": "/api/healthz", "resumo": "Liveness público, sem autenticação — usado por healthcheck/monitoramento.", "arquivo": "healthz.json" },
+    { "id": "scan", "metodo": "GET", "url": "/api/health/scan", "resumo": "Varredura completa de SO/CPU/memória/disco/rede/virtualização com checagens de compatibilidade.", "arquivo": "scan.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "GET /api/health/scan só é consumido pelo HealthStep.tsx do wizard de instalação (apps/web/src/pages/setup/HealthStep.tsx) — não existe nenhuma tela pós-setup (Dashboard, projeto, etc.) que mostre saúde da máquina continuamente; depois do wizard, o dado praticamente não é mais olhado pela UI.",
+    "As checagens usam limiares fixos e conservadores: HEALTH_LIMITS.minRamBytes = 1 GiB, minFreeDiskBytes = 10 GiB, supportedDistroIds = ['ubuntu'], supportedVersionIds = ['22.04','24.04'] (packages/core/src/index.ts). Qualquer outra distro/versão (Debian, Alpine, Ubuntu 20.04/26.04 etc.) sempre cai em 'warning', mesmo que funcione na prática.",
+    "scanSystemHealth() não tem try/catch: se statfs('/') ou qualquer leitura falhar de forma inesperada, a exceção propaga e cai no handler de erro padrão do Fastify (resposta 500 genérica, sem código de erro específico documentado pela rota).",
+    "detectVirtualization() depende de /sys/class/dmi/id/product_name, que normalmente exige privilégio de leitura no host; dentro do container do painel isso só funciona se o host expõe esse caminho ao container (não há bind mount de /sys no docker-compose.yml) — em produção a detecção provavelmente cai sempre no fallback via /proc/cpuinfo (flag 'hypervisor') ou em 'nenhuma (bare metal)'.",
+    "fetchPublicIp() faz requisições HTTP de saída para api.ipify.org e ifconfig.me (timeout de 3s cada, sequenciais) toda vez que o scan roda — se ambos estiverem fora do ar ou sem rede de saída, network.publicIp fica null e o scan demora até ~6s a mais só nessa etapa.",
+    "O 'espelho' no terminal (HEALTH_MIRROR_COMMANDS) roda os MESMOS diagnósticos por um caminho totalmente separado (shell de verdade, via TerminalService) só para efeito visual — os dados exibidos nos cards do HealthStep vêm exclusivamente do JSON de scanSystemHealth(), nunca da saída desses comandos de terminal."
+  ]
+}

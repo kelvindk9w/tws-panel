@@ -1,0 +1,49 @@
+{
+  "id": "desabilitar-email-projeto",
+  "modulo": "email",
+  "metodo": "DELETE",
+  "url": "/api/projects/:id/email",
+  "resumo": "Desativa a injeção SMTP do projeto (remove a associação projeto→caixa); a caixa técnica em si NÃO é apagada.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:246",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (projectIdParamSchema, mail.ts): minLength 1, maxLength 64.", "descricao": "ID do projeto." }],
+    "query": [], "body": [], "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre (mesmo se o projeto nunca teve e-mail habilitado — delete é idempotente).",
+      "corpo": { "email": { "enabled": false, "domain": null, "mailbox": null, "mailFrom": null, "env": {} } },
+      "exemplo": { "email": { "enabled": false, "domain": null, "mailbox": null, "mailFrom": null, "env": {} } }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "id maior que 64 chars — reprovado pelo schema Fastify (projectIdParamSchema) ANTES do handler.", "mensagem": "Campo inválido: id." },
+    { "status": 404, "codigo": "project_not_found", "quando": "Projeto não encontrado.", "mensagem": "Projeto não encontrado." }
+  ],
+  "fluxo": [
+    "1. app.deployService.getProject(id); 404 project_not_found se ausente.",
+    "2. service.disableProjectEmail(project.id): delete data.projects[project.id]; save().",
+    "3. Retorna projectEmailConfig(project.id) — agora enabled:false, pois não há mais entrada em data.projects.",
+    "4. A caixa técnica <slug>@<domínio> NÃO é removida do Stalwart nem de data.mailboxes — fica órfã, disponível para reuso se o e-mail for reabilitado depois."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.disableProjectEmail", "arquivo": "apps/server/src/services/mail-service.ts:446", "papel": "Remove a associação projeto→caixa (não apaga a caixa)." },
+    { "tipo": "servico", "nome": "DeployService.getProject", "arquivo": "apps/server/src/services/deploy-service.ts:170", "papel": "Resolve o projeto pelo id." }
+  ],
+  "efeitosColaterais": [
+    "Grava data/mail/mail.json (remove a entrada em data.projects).",
+    "A partir do próximo deploy, envForProject(project) passa a devolver {} — nenhuma env SMTP é mais injetada. Containers já rodando mantêm as env vars antigas até o próximo deploy."
+  ],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx:102 (componente ProjectEmailCard, botão de desabilitar)"],
+  "testes": [],
+  "observacoes": [
+    "Deixa a caixa técnica órfã (ainda existe no Stalwart e em data/mail/mail.json) — não há limpeza automática nem aviso na UI; é preciso ir à página do domínio e remover a caixa manualmente (DELETE .../mailboxes/:id) se não for mais usá-la, e mailbox_in_use só bloqueia enquanto a associação em data.projects existir."
+  ]
+}

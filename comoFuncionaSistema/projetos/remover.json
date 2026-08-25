@@ -1,0 +1,55 @@
+{
+  "id": "remover",
+  "modulo": "projetos",
+  "metodo": "DELETE",
+  "url": "/api/projects/:id",
+  "resumo": "Remove o projeto: para/derruba os containers Docker (e a stack compose, se aplicável), recalcula o Caddyfile sem o domínio do projeto, opcionalmente apaga o código-fonte copiado, e remove o registro de data/projects.json.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:177",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
+    "query": [{ "nome": "deleteSource", "tipo": "string", "obrigatorio": false, "regras": "comparado com a string exata 'true'; qualquer outro valor (inclusive ausente) equivale a false", "descricao": "Se 'true', também apaga data/projects/<slug>/src (ignorado em ingestMode='existing', onde o código nunca foi copiado)." }],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "remoção concluída",
+      "corpo": { "ok": true, "log": "string" },
+      "exemplo": { "ok": true, "log": "Stack compose removida.\n1 container(es) removido(s).\nCaddyfile aplicado com 2 domínio(s).\nCódigo-fonte removido.\n" }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe (via requireProject)", "mensagem": "Projeto não encontrado." },
+    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado não tratado como HttpError (ex.: falha ao apagar data/projects/<slug>/src) — a mensagem original NÃO chega ao cliente", "mensagem": "Erro interno." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. Registra auditoria 'project.delete' (com deleteSource no detalhe) ANTES de qualquer ação destrutiva.",
+    "3. engine.remove(project, onLog): se type=compose, roda 'docker compose down --rmi local --remove-orphans' (best-effort — código de saída não interrompe o fluxo, só é logado); resolve os IDs de container do projeto e roda 'docker rm -f'; roda 'docker image rm -f paas-<slug>:latest' (best-effort).",
+    "4. Remove o projeto do array em memória (this.projects) ANTES de recalcular o Caddy, para que o domínio removido não apareça no novo Caddyfile.",
+    "5. engine.syncCaddy(this.projects) — best-effort: se falhar, apenas loga 'Aviso: não foi possível recarregar o Caddy após a remoção.' e continua (não propaga erro).",
+    "6. Se deleteSource=true e ingestMode≠'existing', apaga recursivamente data/projects/<slug> (rm force+recursive).",
+    "7. Persiste data/projects.json sem o projeto removido."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.deleteProject", "arquivo": "apps/server/src/services/deploy-service.ts:237", "papel": "Orquestra remoção de containers, Caddy e código-fonte." },
+    { "tipo": "pacote", "nome": "DeployEngine.remove", "arquivo": "packages/deploy/src/engine.ts:415", "papel": "Remove containers/imagem/stack compose do Docker." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra project.delete." }
+  ],
+  "efeitosColaterais": [
+    "docker compose down / docker rm -f / docker image rm -f",
+    "regrava e recarrega o Caddyfile central sem o domínio do projeto",
+    "opcionalmente apaga data/projects/<slug>/ do disco (irreversível)",
+    "grava data/projects.json sem o projeto",
+    "auditoria: project.delete"
+  ],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (remove(), fluxo de confirmação em 2 passos na 'Zona de perigo' com checkbox opcional 'Apagar também o código-fonte')"],
+  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "observacoes": [
+    "Todas as etapas de engine.remove() (compose down, docker rm, image rm) são best-effort e não lançam em caso de falha de comando — na prática, o endpoint praticamente só falha com 404 (projeto inexistente) ou com um erro de filesystem ao apagar deleteSource. O teste de rota que simula 409 'deploy_in_progress' usa um STUB do serviço só para validar o mapeamento genérico de erro→resposta; não corresponde a uma checagem real existente no código de deleteProject (não há verificação de deploy em andamento antes da remoção).",
+    "Não há proteção contra remover um projeto com deploy em andamento — em teoria dá para remover containers enquanto um job de deploy ainda está gravando neles."
+  ]
+}

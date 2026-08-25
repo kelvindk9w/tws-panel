@@ -20,8 +20,37 @@ import {
 } from "@paas/core";
 import { hashPassword, verifyPasswordTimingSafe } from "../services/password.js";
 import { LoginLimiter } from "../services/login-limiter.js";
+import { registerErrorHandler } from "../plugins/error-handler.js";
+
+// Schemas de validação. `additionalProperties: false` recusa campo
+// desconhecido no corpo. `maxLength` em toda string é defesa contra payload
+// gigante — nunca menor que 200 na senha, para não recusar senha legítima.
+const loginSchema = {
+  body: {
+    type: "object",
+    required: ["username", "password"],
+    additionalProperties: false,
+    properties: {
+      username: { type: "string", minLength: 1, maxLength: 100 },
+      password: { type: "string", minLength: 1, maxLength: 512 },
+    },
+  },
+} as const;
+
+const changePasswordSchema = {
+  body: {
+    type: "object",
+    required: ["currentPassword", "newPassword"],
+    additionalProperties: false,
+    properties: {
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      newPassword: { type: "string", minLength: 1, maxLength: 512 },
+    },
+  },
+} as const;
 
 const authRoutes: FastifyPluginAsync = async (app) => {
+  registerErrorHandler(app);
   const limiter = new LoginLimiter();
 
   // respostas de auth nunca devem ser cacheadas
@@ -29,7 +58,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     reply.header("cache-control", "no-store");
   });
 
-  app.post<{ Body: LoginRequest }>("/api/auth/login", async (request, reply) => {
+  app.post<{ Body: LoginRequest }>(
+    "/api/auth/login",
+    { schema: loginSchema },
+    async (request, reply) => {
     const ip = request.ip;
     const gate = limiter.check(ip);
     if (!gate.allowed) {
@@ -97,7 +129,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       expiresAt: session.expiresAt,
     };
     return reply.send(response);
-  });
+    },
+  );
 
   app.post("/api/auth/logout", async (request, reply) => {
     if (request.session) {
@@ -127,7 +160,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(response);
   });
 
-  app.post<{ Body: ChangePasswordRequest }>("/api/auth/change-password", async (request, reply) => {
+  app.post<{ Body: ChangePasswordRequest }>(
+    "/api/auth/change-password",
+    { schema: changePasswordSchema },
+    async (request, reply) => {
     const session = request.session!;
     const { currentPassword, newPassword } = request.body ?? {};
     if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
@@ -139,6 +175,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     const user = await app.userStore.findById(session.userId);
     if (!user) {
+      // usuário removido/recriado: mesmo padrão de /api/auth/me — a sessão
+      // não vale mais e não pode ficar viva até expirar por conta própria.
+      await app.sessionStore.destroy(session.id);
       return reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
     }
 
@@ -167,7 +206,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       detail: `Senha alterada; ${revoked} sessão(ões) anterior(es) invalidada(s).`,
     });
     return reply.send({ ok: true });
-  });
+    },
+  );
 };
 
 export default authRoutes;

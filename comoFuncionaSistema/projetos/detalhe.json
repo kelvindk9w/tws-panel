@@ -1,0 +1,44 @@
+{
+  "id": "detalhe",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/:id",
+  "resumo": "Retorna um projeto específico com status calculado e a lista de containers Docker associados a ele.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:60",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto (getProject aceita ambos)." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "projeto encontrado",
+      "corpo": { "project": "Project", "status": "ProjectStatus", "containers": "DockerContainerInfo[]", "url": "string" },
+      "exemplo": { "project": { "id": "a1b2c3d4e5f6", "slug": "loja" }, "status": "running", "containers": [{ "id": "abcd1234", "name": "paas-loja-web", "image": "nginx:alpine", "state": "running", "status": "Up 2 hours", "managed": true, "projectSlug": "loja", "composeProject": null, "ports": [] }], "url": "http://loja.localhost" }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "nenhum projeto com esse id/slug", "mensagem": "Projeto não encontrado." }
+  ],
+  "fluxo": [
+    "1. service.getProject(id) busca por id OU slug em data/projects.json.",
+    "2. Se não encontrado → 404 project_not_found (checagem feita direto na rota, não via httpError).",
+    "3. service.statusOf(project) filtra os containers Docker atuais pelo slug e calcula o status.",
+    "4. Retorna projeto + status + containers + URL."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.getProject", "arquivo": "apps/server/src/services/deploy-service.ts:170", "papel": "Busca por id ou slug." },
+    { "tipo": "servico", "nome": "DeployService.statusOf", "arquivo": "apps/server/src/services/deploy-service.ts:485", "papel": "Calcula o ProjectStatus agregado." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/pages/ProjectDetailPage.tsx (refresh, polling contínuo — 1.5s com job rodando, 5s parado)",
+    "apps/web/src/pages/NewProjectPage.tsx (indiretamente, via criar+detect)"
+  ],
+  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "observacoes": ["A rota aceita tanto o id (hex) quanto o slug como parâmetro :id — não há endpoint separado para busca por slug."]
+}

@@ -1,0 +1,68 @@
+{
+  "modulo": "autenticacao",
+  "titulo": "Autenticação",
+  "resumo": "Login/logout com sessão via cookie assinado (HMAC), verificação da sessão atual e troca de senha do único usuário admin do painel. Login é público mas limitado por IP (5 tentativas/min com lockout progressivo); as demais rotas exigem sessão válida, verificada em toda requisição /api/* pelo plugin global de autenticação.",
+  "pontoDeEntrada": { "api": "POST /api/auth/login", "web": "/login" },
+  "comoFunciona": [
+    "O plugin global (apps/server/src/plugins/auth.ts) resolve o cookie paas_session em toda requisição e expõe request.session (null se ausente/inválido/expirado).",
+    "POST /api/auth/login é a única rota pública de auth: verifica rate limit por IP, busca o usuário, compara a senha com argon2id em tempo constante (mesmo para usuário inexistente) e, se válida, cria uma sessão e devolve o cookie httpOnly.",
+    "GET /api/auth/me, POST /api/auth/logout e POST /api/auth/change-password exigem sessão válida (garantida pelo guard global antes de a rota rodar).",
+    "Trocar a senha invalida todas as OUTRAS sessões do usuário (mantém a sessão atual) e força reautenticação nos demais dispositivos.",
+    "Sessões são objetos revogáveis em data/sessions.json (não JWT stateless): logout, troca de senha ou expiração (TTL 12h) removem a sessão do arquivo.",
+    "O cookie carrega '<id>.<hmac>', assinado com um segredo gerado no primeiro boot e persistido em data/session-secret; sem esse segredo um cookie forjado é rejeitado por comparação em tempo constante."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/auth.ts"],
+    "servicos": [
+      "apps/server/src/services/user-store.ts",
+      "apps/server/src/services/session-store.ts",
+      "apps/server/src/services/password.ts",
+      "apps/server/src/services/login-limiter.ts"
+    ],
+    "pacotes": ["packages/core/src/auth.ts"],
+    "web": [
+      "apps/web/src/pages/LoginPage.tsx",
+      "apps/web/src/lib/auth.tsx",
+      "apps/web/src/components/RequireAuth.tsx",
+      "apps/web/src/components/UserMenu.tsx",
+      "apps/web/src/lib/api.ts"
+    ],
+    "testes": [
+      "apps/server/tests/auth.test.ts",
+      "apps/server/tests/session-store.test.ts",
+      "apps/server/tests/user-store.test.ts",
+      "apps/server/tests/password.test.ts"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/users.json",
+      "formato": "json",
+      "conteudo": "{ users: StoredUser[] } — um único usuário admin (id, username, usernameLower, passwordHash argon2id, createdAt, updatedAt). Nunca guarda a senha em claro. Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "data/sessions.json",
+      "formato": "json",
+      "conteudo": "{ sessions: Session[] } — sessões ativas (id, userId, username, createdAt, expiresAt, ip, userAgent). Sessões expiradas são purgadas na carga (boot) e no resolve(). Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "data/session-secret",
+      "formato": "texto (64 chars hex = 32 bytes)",
+      "conteudo": "Segredo HMAC-SHA256 gerado no primeiro boot (crypto.randomBytes(32)) e reutilizado nos boots seguintes; assina o valor do cookie de sessão. Arquivo criado com chmod 600."
+    }
+  ],
+  "endpoints": [
+    { "id": "login", "metodo": "POST", "url": "/api/auth/login", "resumo": "Autentica o admin, cria sessão e seta o cookie httpOnly.", "arquivo": "login.json" },
+    { "id": "logout", "metodo": "POST", "url": "/api/auth/logout", "resumo": "Encerra a sessão atual e limpa o cookie.", "arquivo": "logout.json" },
+    { "id": "sessao-atual", "metodo": "GET", "url": "/api/auth/me", "resumo": "Retorna o usuário e a expiração da sessão atual.", "arquivo": "sessao-atual.json" },
+    { "id": "trocar-senha", "metodo": "POST", "url": "/api/auth/change-password", "resumo": "Troca a senha do admin e invalida as demais sessões.", "arquivo": "trocar-senha.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "LoginLimiter (apps/server/src/services/login-limiter.ts) guarda o rate limit inteiramente em memória (Map por IP); reiniciar o processo do servidor zera todos os contadores e lockouts — aceitável para o painel single-node atual, mas seria perdido em qualquer deploy multi-processo/multi-instância.",
+    "Inconsistência entre rotas: GET /api/auth/me destrói a sessão quando o usuário associado não existe mais (sessão 'fantasma'), mas POST /api/auth/change-password apenas responde 401 nesse mesmo caso e NÃO destrói a sessão fantasma (apps/server/src/routes/auth.ts:140-143 vs :117-121). Hoje é inofensivo porque o painel só tem um usuário admin e não há rota de exclusão de usuário, mas é uma divergência de comportamento entre endpoints que deveriam tratar o caso igual.",
+    "O rate limit de login é por IP; como app.ts registra trustProxy:true, isso depende de o servidor estar corretamente atrás de um proxy confiável — um servidor exposto direto à internet sem proxy também usa request.ip normalmente (fastify calcula a partir da conexão TCP), então não há bypass óbvio, mas se algum dia um proxy adicional for inserido sem preservar X-Forwarded-For corretamente, todo tráfego cairia num único 'IP' e o lockout afetaria todos os usuários.",
+    "A senha nunca é logada nem retorna nas respostas (verificado nos testes), e a comparação de senha usa verifyPasswordTimingSafe com hash dummy para usuário inexistente, evitando enumeração de contas por tempo de resposta.",
+    "SESSION_TTL_MS é fixo em 12h (packages/core/src/auth.ts) e não há refresh/renovação de sessão: a sessão expira exatos 12h após o login, mesmo com uso contínuo do painel — o usuário precisa logar de novo mesmo estando ativo."
+  ]
+}

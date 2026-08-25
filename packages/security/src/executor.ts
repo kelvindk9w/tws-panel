@@ -19,8 +19,15 @@ import {
   type SecurityPhaseId,
 } from "@paas/core";
 import type { TargetRunner } from "./runner.js";
+import { buildPhaseScriptCommand } from "./host-bridge.js";
 
 const MAX_LOG_CHARS = 500_000;
+
+/** Parâmetros opcionais de uma fase (Fase 01: usuário/chave SSH do operador). */
+export interface PhaseParams {
+  sshUser?: string;
+  sshPublicKey?: string;
+}
 
 export interface ExecutorOptions {
   runner: TargetRunner;
@@ -65,10 +72,13 @@ export class SecurityExecutor {
   }
 
   /** Inicia a execução assíncrona de uma fase. */
-  async startJob(phase: SecurityPhaseId, dryRun: boolean): Promise<SecurityJob> {
+  async startJob(phase: SecurityPhaseId, dryRun: boolean, params?: PhaseParams): Promise<SecurityJob> {
     const phaseDef = SECURITY_PHASES.find((p) => p.id === phase);
     if (!phaseDef) throw new Error(`fase desconhecida: ${phase}`);
     if (this.busy) throw new Error("já existe um job de hardening em andamento");
+    if (params && phase !== "01") {
+      throw new Error("parâmetros de fase (usuário/chave SSH) só se aplicam à fase 01");
+    }
 
     const job: SecurityJob = {
       id: randomUUID(),
@@ -85,11 +95,12 @@ export class SecurityExecutor {
       rollbackScheduled: false,
       rollbackDeadline: null,
       error: null,
+      ...(params?.sshUser !== undefined ? { sshUser: params.sshUser } : {}),
     };
     this.jobs.set(job.id, job);
     this.busy = true;
     // execução assíncrona — o endpoint retorna o job imediatamente
-    void this.run(job, phaseDef.script).finally(() => {
+    void this.run(job, phaseDef.script, params).finally(() => {
       this.busy = false;
     });
     return job;
@@ -107,7 +118,7 @@ export class SecurityExecutor {
 
     this.appendLog(job, `\n[executor] operador confirmou acesso — cancelando rollback agendado\n`);
     const code = await this.runner.execStream(
-      `bash '${this.remoteDir}/${phaseDef.script}' --confirm`,
+      buildPhaseScriptCommand({ remoteDir: this.remoteDir, script: phaseDef.script, confirm: true }),
       (chunk) => this.appendLog(job, chunk),
     );
     if (code !== 0) {
@@ -126,7 +137,7 @@ export class SecurityExecutor {
 
   // -------------------------------------------------------------------------
 
-  private async run(job: SecurityJob, script: string): Promise<void> {
+  private async run(job: SecurityJob, script: string, params?: PhaseParams): Promise<void> {
     job.status = "running";
     job.startedAt = new Date().toISOString();
     this.notify(job);
@@ -135,17 +146,21 @@ export class SecurityExecutor {
       await this.runner.ensureReady();
       await this.runner.uploadDir(this.scriptsDir, this.remoteDir);
 
-      const args = job.dryRun ? " --dry-run" : "";
       // Propaga a janela de rollback para o script (default 300s = at now +5 minutes).
       const delaySec = Math.round(this.rollbackWindowMs / 1000);
+      const command = buildPhaseScriptCommand({
+        remoteDir: this.remoteDir,
+        script,
+        dryRun: job.dryRun,
+        rollbackDelaySec: delaySec,
+        ...(params?.sshUser !== undefined ? { sshUser: params.sshUser } : {}),
+        ...(params?.sshPublicKey !== undefined ? { sshPublicKey: params.sshPublicKey } : {}),
+      });
       this.appendLog(
         job,
         `[executor] alvo=${this.runner.label} fase=${job.phase} script=${script} dryRun=${job.dryRun} rollbackDelay=${delaySec}s\n`,
       );
-      const code = await this.runner.execStream(
-        `PAAS_ROLLBACK_DELAY=${delaySec} bash '${this.remoteDir}/${script}'${args}`,
-        (chunk) => this.processChunk(job, chunk),
-      );
+      const code = await this.runner.execStream(command, (chunk) => this.processChunk(job, chunk));
       this.finishCurrentStep(job, code === 0 ? "done" : "failed");
 
       if (code !== 0) {
@@ -153,7 +168,7 @@ export class SecurityExecutor {
         if (!job.dryRun) {
           this.appendLog(job, `\n[executor] FALHA — executando rollback imediato (--rollback)\n`);
           const rbCode = await this.runner.execStream(
-            `bash '${this.remoteDir}/${script}' --rollback`,
+            buildPhaseScriptCommand({ remoteDir: this.remoteDir, script, rollback: true }),
             (chunk) => this.appendLog(job, chunk),
           );
           this.appendLog(
@@ -169,7 +184,11 @@ export class SecurityExecutor {
         return;
       }
 
-      if (!job.dryRun && RISKY_PHASES.includes(job.phase)) {
+      // Fases de risco (SSH/firewall) + Fase 01 COM chave (root é travado).
+      const needsConfirmation =
+        RISKY_PHASES.includes(job.phase) ||
+        (job.phase === "01" && typeof params?.sshPublicKey === "string" && params.sshPublicKey.length > 0);
+      if (!job.dryRun && needsConfirmation) {
         // O script já agendou a reversão NO ALVO (at/timer de 5 min).
         job.status = "awaiting_confirmation";
         job.rollbackScheduled = true;
@@ -189,8 +208,13 @@ export class SecurityExecutor {
     }
   }
 
-  /** Reflete o rollback agendado no alvo quando a janela expira sem confirmação. */
-  private scheduleStatusFlip(job: SecurityJob): void {
+  /**
+   * Reflete o rollback agendado no alvo quando a janela expira sem
+   * confirmação. `delayMs` é configurável para restoreJobs() reagendar com o
+   * tempo RESTANTE de uma janela que já estava correndo antes de um restart
+   * do painel (o timer original morre com o processo).
+   */
+  private scheduleStatusFlip(job: SecurityJob, delayMs = this.rollbackWindowMs + 15_000): void {
     const timer = setTimeout(() => {
       this.timers.delete(job.id);
       if (job.status === "awaiting_confirmation") {
@@ -203,9 +227,65 @@ export class SecurityExecutor {
         );
         this.notify(job);
       }
-    }, this.rollbackWindowMs + 15_000);
+    }, delayMs);
     timer.unref();
     this.timers.set(job.id, timer);
+  }
+
+  /**
+   * Restaura jobs persistidos (ex.: após restart do painel) — sem isso,
+   * GET /api/security/jobs/:id respondia 404 para um job em
+   * "awaiting_confirmation" logo após um restart, mesmo com o rollback
+   * agendado NO ALVO (at/timer) continuando a correr de forma independente.
+   * O operador perdia visibilidade justo no momento em que precisa confirmar
+   * que ainda tem acesso.
+   *
+   * Regras:
+   *  - "queued"/"running": o processo do script morreu junto com o painel —
+   *    não há como saber o resultado real, então o job é marcado "failed"
+   *    com uma nota explicando o motivo (nunca fica preso em execução).
+   *  - "awaiting_confirmation": se a janela (rollbackDeadline) já expirou
+   *    enquanto o painel estava fora do ar, assume-se que o rollback
+   *    agendado NO ALVO já reverteu — marca "rolled_back" imediatamente. Se
+   *    ainda há tempo, reagenda o flip (scheduleStatusFlip) com o tempo
+   *    RESTANTE, preservando o comportamento normal; confirmAccess() ainda
+   *    funciona normalmente sobre o job restaurado.
+   *  - qualquer outro status (terminal: success/failed/rolled_back): restaura
+   *    como está, sem efeitos colaterais.
+   */
+  restoreJobs(jobs: readonly SecurityJob[]): void {
+    for (const job of jobs) {
+      if (job.status === "queued" || job.status === "running") {
+        job.status = "failed";
+        job.error = "processo do painel reiniciado durante a execução — status real não pôde ser confirmado";
+        job.finishedAt = job.finishedAt ?? new Date().toISOString();
+        this.appendLog(
+          job,
+          "\n[executor] painel reiniciado com este job em execução — marcado como falho (verifique o alvo manualmente)\n",
+        );
+        this.jobs.set(job.id, job);
+        this.notify(job);
+        continue;
+      }
+
+      this.jobs.set(job.id, job);
+
+      if (job.status === "awaiting_confirmation" && job.rollbackDeadline) {
+        const remainingMs = new Date(job.rollbackDeadline).getTime() - Date.now() + 15_000;
+        if (remainingMs <= 0) {
+          job.status = "rolled_back";
+          job.rollbackScheduled = false;
+          job.finishedAt = new Date().toISOString();
+          this.appendLog(
+            job,
+            "\n[executor] painel reiniciado após a janela de confirmação — assumindo que o rollback agendado no alvo reverteu a configuração\n",
+          );
+          this.notify(job);
+        } else {
+          this.scheduleStatusFlip(job, remainingMs);
+        }
+      }
+    }
   }
 
   private processChunk(job: SecurityJob, chunk: string): void {

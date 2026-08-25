@@ -1,0 +1,66 @@
+{
+  "id": "criar-caixa",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/domains/:domain/mailboxes",
+  "resumo": "Cria uma caixa de e-mail (IMAP/SMTP) em um domínio, com senha informada ou gerada automaticamente.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:168",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [{ "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (createMailboxSchema, mail.ts): minLength 1, maxLength 253, pattern de domínio (MAIL_DOMAIN_SCHEMA).", "descricao": "Domínio já cadastrado." }],
+    "query": [],
+    "body": [
+      { "nome": "localPart", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify: minLength 1, maxLength 64, pattern ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ (mesmo alfabeto de normalizeLocalPart, aceitando as duas caixas); additionalProperties:false no corpo. Depois, regra de negócio no service via normalizeLocalPart: trim + lowercase e revalida sem '..'.", "descricao": "Parte antes do @ (ex.: 'contato')." },
+      { "nome": "password", "tipo": "string", "obrigatorio": false, "regras": "schema Fastify: quando presente, minLength 8, maxLength 200. Se ausente, o painel gera uma com generatePassword() (24 chars base64url).", "descricao": "Senha da caixa." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 201,
+      "quando": "Caixa criada com sucesso.",
+      "corpo": { "mailbox": "Mailbox", "password": "string (em claro — única vez que é retornada na criação)" },
+      "exemplo": { "mailbox": { "id": "contato@exemplo.com.br", "localPart": "contato", "domain": "exemplo.com.br", "kind": "user", "createdAt": "2026-08-24T12:00:00.000Z" }, "password": "kQ2f8...xy_9Az" }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo/params reprovados pelo schema Fastify (createMailboxSchema) ANTES do handler: domain fora do padrão, localPart ausente/fora do padrão/maior que 64 chars, password presente mas com menos de 8 ou mais de 200 chars, ou corpo com campo desconhecido.", "mensagem": "Campo obrigatório ausente: localPart. / Campo inválido: localPart." },
+    { "status": 404, "codigo": "domain_not_found", "quando": "Domínio no formato correto mas não cadastrado.", "mensagem": "Domínio {domínio} não encontrado." },
+    { "status": 400, "codigo": "invalid_mailbox", "quando": "localPart passou pelo schema (padrão de caracteres, 1-64 chars) mas contém '..' — única causa ainda reachable, já que o schema cobre o resto do que normalizeLocalPart checava.", "mensagem": "Nome de caixa inválido: {valor informado}." },
+    { "status": 409, "codigo": "mailbox_exists", "quando": "Já existe uma caixa com este endereço (localPart@domínio) em data.mailboxes.", "mensagem": "A caixa {email} já existe." },
+    { "status": 409, "codigo": "mail_server_stopped", "quando": "requireRunning(): servidor parado.", "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar." },
+    { "status": 409, "codigo": "mail_not_initialized", "quando": "Servidor nunca iniciado.", "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro." },
+    { "status": 400, "codigo": "weak_password", "quando": "Senha informada tem >=8 chars no corpo (passa o schema) mas contém espaços que, após password.trim() no service, deixam menos de 8 caracteres — o único caso ainda reachable; o schema já barra qualquer password < 8 chars enviado diretamente.", "mensagem": "A senha deve ter pelo menos 8 caracteres." }
+  ],
+  "fluxo": [
+    "1. requireDomain(domainName); normalizeLocalPart(localPart).",
+    "2. Monta o e-mail completo; 409 mailbox_exists se já existir.",
+    "3. requireRunning().",
+    "4. finalPassword = password?.trim() || generatePassword() (24 chars). Se o comprimento final < 8, 400 weak_password (só pode acontecer com senha explícita curta, já que a gerada tem 24 chars).",
+    "5. client().createMailbox(email, finalPassword): POST /api/principal {type:'individual', name:email, secrets:[senha], emails:[email], quota:0, roles:['user']} — o papel 'user' é obrigatório (sem ele o Stalwart autentica mas nega SMTP/IMAP).",
+    "6. Persiste StoredMailbox (kind:'user', password em claro) e save().",
+    "7. Rota grava auditoria mail.mailbox.create e responde 201 com { mailbox, password } — a ÚNICA vez que a senha aparece na resposta da API."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.createMailbox", "arquivo": "apps/server/src/services/mail-service.ts:345", "papel": "Valida, gera senha se preciso, cria no Stalwart e persiste." },
+    { "tipo": "pacote", "nome": "StalwartClient.createMailbox", "arquivo": "packages/mailer/src/client.ts:117", "papel": "POST /api/principal com role 'user'." },
+    { "tipo": "pacote", "nome": "generatePassword", "arquivo": "packages/mailer/src/mailboxes.ts:13", "papel": "Senha aleatória forte (base64url, sem caracteres que quebrem YAML/env)." },
+    { "tipo": "servico", "nome": "AuditService.record", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Auditoria mail.mailbox.create." }
+  ],
+  "efeitosColaterais": [
+    "Cria a caixa no Stalwart (volume paas_stalwart_data).",
+    "Grava data/mail/mail.json com a senha em TEXTO PLANO.",
+    "Auditoria: mail.mailbox.create."
+  ],
+  "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:238"],
+  "testes": ["scripts/test-mail.mts (passo 4)"],
+  "observacoes": [
+    "A senha em claro persiste indefinidamente em data/mail/mail.json (não é hasheada) — necessário porque o painel precisa reexibi-la em /credentials e reutilizá-la na injeção SMTP dos projetos; risco caso o arquivo ou um backup vaze.",
+    "invalid_mailbox e weak_password quase viraram código morto com o novo schema — só seguem reachable para os casos de borda ('..' no localPart; password com espaços que trim() reduz abaixo de 8 chars) que o schema não cobre por não fazer trim/normalização (coerceTypes/removeAdditional desligados — ver global/ajv-options.json — mas o schema em si também não tem transform de string)."
+  ]
+}

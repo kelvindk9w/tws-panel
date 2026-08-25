@@ -1,0 +1,49 @@
+{
+  "id": "frontend",
+  "titulo": "Arquitetura do frontend (SPA React)",
+  "resumo": "SPA React 18 + React Router 7 + Vite 6 + Tailwind 3, com um design system próprio inspirado em shadcn/ui (Radix UI + class-variance-authority) em components/ui/. Toda comunicação com a API passa por um único cliente fetch (lib/api.ts) que injeta o setup token e normaliza erros; a sessão é validada por um guard de rota (RequireAuth) que consulta GET /api/auth/me antes de renderizar qualquer página protegida.",
+  "arquivoFonte": "apps/web/src/App.tsx",
+  "tipo": "infraestrutura",
+  "api": [
+    { "simbolo": "apiFetch<T>", "assinatura": "(path: string, init?: RequestInit) => Promise<T>", "descricao": "apps/web/src/lib/api.ts:56-85. Fetch wrapper: seta Accept: application/json, Content-Type: application/json quando há body, e o header x-setup-token quando há token de setup guardado. Em resposta não-ok, tenta parsear o corpo JSON de erro ({error, message}) e lança ApiRequestError(status, code, message, data); em erro de rede lança ApiRequestError(0, 'network_error', ...)." },
+    { "simbolo": "ApiRequestError", "assinatura": "class extends Error { status; code; message; data? }", "descricao": "apps/web/src/lib/api.ts:42-53. Erro tipado usado em toda a UI para distinguir 401 (setup_incomplete vs unauthorized), 409 (guardrail bloqueado, com o report no campo data) etc." },
+    { "simbolo": "initSetupToken / getSetupToken / setSetupToken / clearSetupToken", "assinatura": "ver lib/api.ts:10-40", "descricao": "Captura o ?token= da URL no carregamento do MÓDULO (antes do React renderizar, para não perder o link do instalador), persiste em sessionStorage (paas.setup-token) e limpa a URL." },
+    { "simbolo": "AuthContext / useAuth", "assinatura": "apps/web/src/lib/auth.tsx", "descricao": "Contexto React com { user: AdminUser }, só populado DENTRO de RequireAuth; useAuth() lança erro se chamado fora dele." },
+    { "simbolo": "RequireAuth", "assinatura": "apps/web/src/components/RequireAuth.tsx", "descricao": "Guard de rota: chama GET /api/auth/me no mount; 'loading' enquanto pendente; em erro, redireciona para /setup (código setup_incomplete) ou /login (qualquer outro erro, inclusive unauthorized), preservando a query string; em sucesso, provê o AuthContext para os filhos." },
+    { "simbolo": "cn", "assinatura": "(...inputs: ClassValue[]) => string", "descricao": "apps/web/src/lib/utils.ts:4-6. clsx + tailwind-merge — helper padrão de composição de className usado em todo o design system." },
+    { "simbolo": "formatBytes / formatUptime", "assinatura": "apps/web/src/lib/utils.ts:8-27", "descricao": "Formatação humana de bytes (B/KiB/MiB/GiB/TiB) e uptime (d/h/min) usados nas telas de saúde/segurança." }
+  ],
+  "comportamento": [
+    "Rotas (apps/web/src/App.tsx, createBrowserRouter): protegidas por RequireAuth+Layout — '/' DashboardPage, '/projects/new' NewProjectPage, '/projects/:id' ProjectDetailPage, '/mail' MailPage, '/mail/:domain' MailDomainPage, '/security' SecurityPage, '/security/hardening' HardeningPage (NOVA nesta rodada — reaproveita SecurityStep do wizard fora do setup, ver seguranca/index.json), '/alerts' AlertsPage, '/audit' AuditPage. Fora do layout/guard: '/setup' SetupPage (wizard) e '/login' LoginPage. Wildcard '*' cai em RequireAuth+DashboardPage (sem Layout).",
+    "O wizard de setup (SetupPage, apps/web/src/pages/setup/{WelcomeStep,HealthStep,SecurityStep,AdminStep}.tsx) não usa RequireAuth nem Layout — ele é anterior à existência de uma sessão, protegido pelo próprio backend via setup token.",
+    "Design system: components/ui/ tem badge.tsx (variantes default/secondary/destructive/outline/success/warning via CVA), button.tsx (variantes + Radix Slot para asChild), card.tsx, input.tsx, progress.tsx (Radix Progress). Todos usam cn() e seguem a convenção shadcn/ui (componentes 'copiados' para o repo, não uma lib externa de UI).",
+    "Componentes de produto reutilizáveis fora de ui/: Layout.tsx (header/nav/footer + badge de alertas abertos), RequireAuth.tsx (guard), UserMenu.tsx (menu do usuário logado, troca de senha, logout), Stepper.tsx (indicador de passos do wizard), IndexGauge.tsx (anel SVG do índice de hardening, animado via stroke-dashoffset), CopyButton.tsx (botão copiar com feedback), TerminalPanel.tsx (terminal web embutido via @xterm/xterm + WebSocket, usado em todos os passos do wizard e em telas de segurança), ProjectConfigCard.tsx (card 'Configuração' na tela do projeto: edita nome/repositório/branch/domínio via PATCH /api/projects/:id; slug exibido mas fixo/não editável; compara project.branch/source configurados com project.deployedBranch/deployedSource publicados e mostra um aviso de divergência quando diferem; botões 'Salvar' (só PATCH) e 'Salvar e publicar' (PATCH + POST .../deploy) — usado em ProjectDetailPage.tsx, ver projetos/index.json e projetos/atualizar.json).",
+    "Tailwind (tailwind.config + tailwindcss-animate) com tema dark fixo (o painel é 'dashboard dark pt-BR', conforme README) — não há toggle de tema claro/escuro na aplicação.",
+    "Padrão de polling (sem lib de data-fetching como react-query — tudo é useEffect+setInterval manual): Layout.tsx (badge de alertas abertos) faz poll a cada 30s; DashboardPage faz poll a cada 15s. Ambos param o timer quando document.visibilityState === 'hidden' e retomam (com fetch imediato) ao voltar o foco via evento visibilitychange — economiza requisições com a aba em segundo plano."
+  ],
+  "usadoPor": [
+    { "referencia": "todas as páginas em apps/web/src/pages/*.tsx", "arquivo": "apps/web/src/pages", "doc": null },
+    { "referencia": "todos os componentes de produto (Layout, UserMenu, TerminalPanel, etc.)", "arquivo": "apps/web/src/components", "doc": null }
+  ],
+  "testes": [
+    "apps/web/tests/setup-token-capture.test.ts",
+    "apps/web/tests/require-auth.test.tsx",
+    "apps/web/tests/login-page.test.tsx",
+    "apps/web/tests/dashboard-page.test.tsx",
+    "apps/web/tests/security-page.test.tsx",
+    "apps/web/tests/terminal-panel.test.tsx",
+    "apps/web/tests/guardrail-modal.test.tsx",
+    "apps/web/tests/mail-domain-page.test.tsx",
+    "apps/web/tests/setup-page.test.tsx",
+    "apps/web/tests/welcome-step.test.tsx",
+    "apps/web/tests/health-step.test.tsx",
+    "apps/web/tests/security-step.test.tsx",
+    "apps/web/tests/admin-step.test.tsx",
+    "apps/web/tests/project-config-card.test.tsx",
+    "apps/web/tests/hardening-page.test.tsx"
+  ],
+  "observacoes": [
+    "vitest.config.ts de apps/web roda em environment: jsdom com @testing-library/react e cobre só os componentes efetivamente exercitados pelos testes (wizard, MailDomainPage, ProjectDetailPage, TerminalPanel, lib/**) — não há thresholds numéricos de cobertura definidos para este workspace, ao contrário dos demais.",
+    "O router usa react-router 7 (createBrowserRouter/RouterProvider da API de data router), não a API de <Routes>/<Route> mais antiga."
+  ]
+}

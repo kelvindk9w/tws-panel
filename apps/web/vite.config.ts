@@ -15,6 +15,8 @@ export default defineConfig({
       "/api": {
         target: process.env.API_PROXY_TARGET ?? "http://localhost:9000",
         changeOrigin: true,
+        // terminal web embutido (/api/terminal/ws)
+        ws: true,
       },
     },
   },

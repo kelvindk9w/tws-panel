@@ -54,3 +54,66 @@ jobs:
 
       - name: Unit tests (com cobertura e thresholds)
         run: pnpm test:coverage
+
+  # Scan de vulnerabilidades da imagem de produção (Trivy).
+  # Política: CRITICAL com fix disponível BLOQUEIA o merge (exit-code 1).
+  # HIGH continua report-only (exit-code 0) — visibilidade sem travar o PR
+  # por severidade menor. `ignore-unfixed` já tira da mesa CVE sem correção
+  # publicada; a allowlist abaixo é só para o caso raro de CVE CRITICAL COM
+  # fix disponível mas fora do nosso controle (ex.: dependência interna da
+  # própria imagem base, que não é gerenciada pelo nosso pnpm-lock.yaml).
+  image-scan:
+    name: image-scan (trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build da imagem de produção
+        run: docker build -t tws-panel:ci .
+
+      # Allowlist explícita de CVEs CRITICAL conhecidos sem correção possível
+      # da nossa parte. Cada entrada precisa do porquê e de quando foi revista
+      # — isso aqui é uma exceção, não um lugar para acumular ruído.
+      - name: Allowlist de CVEs CRITICAL sem correção possível (documentada)
+        run: |
+          cat <<'EOF' > .trivyignore
+          # Allowlist de CVE CRITICAL que não está sob nosso controle direto.
+          # Revisar a cada atualização da imagem base ou das dependências.
+          #
+          # CVE-2026-59873 (tar 7.5.10/7.5.11 → fix em 7.5.19)
+          # Não é dependência do nosso pnpm-lock.yaml: é o `tar` vendorizado
+          # dentro do npm que já vem embutido em node:22-bookworm-slim. Sai
+          # sozinho quando a imagem base atualizar o npm.
+          CVE-2026-59873
+          #
+          # CVE-2025-68121 (stdlib Go do binário do esbuild)
+          # O esbuild é ferramenta de BUILD (dependência transitiva do Vite) e
+          # nunca é executado em runtime — o painel roda o servidor Fastify, não
+          # o bundler. Ele só aparece no scan porque a imagem de runtime copia o
+          # estágio de build inteiro, node_modules incluído (Dockerfile:87).
+          # A correção de raiz é não levar devDependencies para a imagem final,
+          # o que reduziria também o tamanho e a superfície de ataque; está
+          # registrado como dívida em comoFuncionaSistema/global/review-*.json.
+          CVE-2025-68121
+          EOF
+
+      - name: Trivy — CRITICAL da imagem (bloqueante)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: tws-panel:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+          format: table
+
+      - name: Trivy — HIGH da imagem (report-only)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: tws-panel:ci
+          severity: HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+          format: table

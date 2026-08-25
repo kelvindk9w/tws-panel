@@ -1,0 +1,51 @@
+{
+  "id": "configurar-monitor",
+  "modulo": "monitoramento",
+  "metodo": "PUT",
+  "url": "/api/security/monitor/config",
+  "resumo": "Altera o intervalo do scan recorrente; reagenda o scheduler imediatamente se ele já estiver rodando.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:162",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "intervalMs", "tipo": "integer", "obrigatorio": true, "regras": "schema Fastify (monitorConfigSchema, monitoring.ts): type integer, minimum MONITOR_MIN_INTERVAL_MS (10_000 ms = 10s); additionalProperties:false no corpo. MUDANÇA: a checagem manual (typeof/Number.isFinite) e o Math.round() antes de salvar foram REMOVIDOS do handler — o valor agora precisa já chegar como inteiro (um float como 15000.5 é recusado, não mais arredondado).", "descricao": "Novo intervalo entre scans automáticos, em milissegundos." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "quando": "intervalo válido", "corpo": { "config": { "intervalMs": "number" } }, "exemplo": { "config": { "intervalMs": 21600000 } } }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (monitorConfigSchema) ANTES do handler: intervalMs ausente, não-inteiro (inclusive float), menor que MONITOR_MIN_INTERVAL_MS, ou corpo com campo desconhecido. SUBSTITUI COMPLETAMENTE o antigo invalid_interval — removido do código, não existe mais.", "mensagem": "Campo obrigatório ausente: intervalMs. / Campo inválido: intervalMs." }
+  ],
+  "fluxo": [
+    "0. Schema Fastify (monitorConfigSchema) valida intervalMs (integer, >= 10_000ms) ANTES do handler — corpo malformado nunca chega ao handler (400 invalid_request).",
+    "2. MonitorService.setIntervalMs(intervalMs) atualiza o estado em memória, chama MonitorScheduler.setIntervalMs() (que para e reinicia o setInterval interno com o novo valor SE já estiver rodando) e persiste em data/security/monitor.json.",
+    "3. Rota grava uma entrada de auditoria 'monitor.config' com o novo intervalo em minutos e responde 200 com o config atualizado."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MonitorService", "arquivo": "apps/server/src/services/monitor-service.ts", "papel": "setIntervalMs() atualiza o scheduler e persiste." },
+    { "tipo": "pacote", "nome": "MonitorScheduler", "arquivo": "packages/security/src/monitor.ts", "papel": "setIntervalMs() reagenda o setInterval interno (stop+start) se estiver ativo." },
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra a alteração de intervalo." }
+  ],
+  "efeitosColaterais": [
+    "grava data/security/monitor.json",
+    "auditoria: monitor.config",
+    "reagenda o timer do scheduler em memória (efeito imediato, sem reiniciar o servidor)"
+  ],
+  "chamadoPor": ["apps/web/src/pages/SecurityPage.tsx:234 (MonitorCard.saveInterval — a UI trabalha em horas e converte para ms: Math.round(horas * 3_600_000))"],
+  "testes": ["scripts/test-fase4.mts (step 8 — configura 10_000ms, confirma persistência em disco e que 1_000ms é rejeitado com 400)"],
+  "observacoes": [
+    "MUDANÇA DE COMPORTAMENTO: antes, um intervalMs fracionário (ex.: 15000.5) era aceito e silenciosamente arredondado (Math.round) antes de salvar; agora o schema exige `type: integer` e recusa qualquer valor não-inteiro com 400 invalid_request — o cliente precisa mandar um inteiro exato.",
+    "Intervalo padrão é MONITOR_DEFAULT_INTERVAL_MS = 6 horas (packages/core/src/monitoring.ts:188), aplicado quando não há data/security/monitor.json ainda OU quando a env var PAAS_MONITOR_INTERVAL_MS (apps/server/src/config.ts:89) não está definida/é <= 0. Uma vez que este endpoint é chamado, o valor salvo em disco passa a valer nos boots seguintes, independentemente da env var.",
+    "MONITOR_MIN_INTERVAL_MS continua 10 segundos no schema de validação de entrada (packages/core/src/monitoring.ts) — um PUT com intervalMs=10000 ainda passa pelo schema. CORRIGIDO nesta rodada: MonitorService agora aplica um piso EFETIVO mais realista por cima disso — clampInterval()/EFFECTIVE_MIN_INTERVAL_MS = 60_000ms (apps/server/src/services/monitor-service.ts) eleva qualquer intervalo configurado, persistido ou default que fique abaixo de 60s, tanto em setIntervalMs() quanto ao carregar o estado salvo em disco.",
+    "PEGADINHA DE RESPOSTA (verificado no código, não corrigido nesta rodada): a rota (routes/monitoring.ts) monta a resposta { config: { intervalMs } } e a mensagem de auditoria ('Intervalo alterado para N min') a partir do intervalMs BRUTO do corpo da requisição, não do valor clampado que monitor.setIntervalMs() efetivamente aplica e persiste. Ou seja: enviar intervalMs=10000 responde 200 com { config: { intervalMs: 10000 } } e audita '0 min', mas o scheduler roda de fato a 60000ms — o valor exibido/auditado diverge do valor realmente ativo até a próxima leitura de GET /api/security/monitor/last (que devolve o estado clampado real)."
+  ]
+}

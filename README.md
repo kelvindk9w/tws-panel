@@ -29,67 +29,264 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 
 - **Não-invasivo** — trabalha *com* o Docker que já existe na máquina; nunca mexe em stacks que já funcionam.
 - **Segurança primeiro** — nada sobe antes do hardening; baseline + monitoramento contínuo.
-- **Minimalista** — a VPS fica com o mínimo de pacotes; painel leve (Fastify + SQLite, sem banco externo).
+- **Minimalista** — a VPS fica com o mínimo de pacotes; painel leve (Fastify + arquivos JSON em disco, sem banco de dados algum).
 - **Open source** — MIT, pensado para contribuição desde o dia 1.
 
 ## Funcionalidades
 
 | Módulo | O que faz |
 |---|---|
-| **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. |
-| **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. |
+| **🖥️ Terminal web embutido** | **Visão dupla** nos 4 passos do wizard: em cima a UI formatada (cards/fases), embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), numa janela contida estilo IDE — **bloqueado até o setup token ser validado** e recolhido por padrão. As varreduras e as fases de hardening rodam DENTRO dele — você vê os comandos de verdade (`cat /etc/os-release`, checks do Lynis, scripts de fase), como no SSH. Prompts de senha/confirmação são digitados direto no terminal: o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita (audita só conexão/desconexão). |
+| **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. Disponível também **depois da instalação**, em `/security/hardening`, para revisar ou reaplicar quando quiser. |
+| **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. Nome, repositório, branch e domínio são **editáveis depois de criado**, e a tela mostra qual branch está de fato no ar quando a configuração diverge do último deploy. |
+| **🌿 Múltiplos ambientes** | O mesmo repositório pode ser hospedado mais de uma vez em branches e domínios diferentes — produção em `main` e sandbox em outra branch, lado a lado na mesma VPS. Cada projeto tem clone, imagem, containers e rede próprios; só o domínio precisa ser único. |
 | **📧 E-mail** | Servidor **Stalwart** (SMTP + IMAP + DKIM em um container), par **DKIM RSA 2048** gerado por domínio, **checklist DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) com valores prontos para colar no provedor, texto pronto para abrir chamado de PTR, criação de caixas com **credenciais prontas para Outlook/Gmail/Thunderbird**, e injeção automática de variáveis SMTP nos seus projetos. |
 | **🚧 Guardrails** | **6 regras** de segurança de deploy em 3 níveis (`block`, `warn`, `info`): porta de banco exposta no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado no código, tag `:latest`. Blocks exigem **override explícito e auditado**, com evidência e sugestão de correção. |
 | **📊 Monitoramento** | **Baseline** pós-hardening (pacotes, portas, hashes de arquivos críticos) + scans recorrentes com **diff** (o que mudou vira alerta), verificação de **blacklist de e-mail** (Spamhaus ZEN, SpamCop, Barracuda, Spamhaus DBL), central de alertas e **log de auditoria** de todas as ações sensíveis. |
 
 ## Instalação — VPS limpa do zero
 
-**Não precisa instalar Docker, Node ou mais nada manualmente — só Ubuntu e git.**
+> [!NOTE]
+> **Único pré-requisito:** uma VPS com Ubuntu 22.04 ou 24.04 LTS limpa. Docker, Node e todo o resto são instalados automaticamente — basta seguir os passos abaixo, na ordem.
 
-1. **Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
+**1. Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
 
-2. **Acesse via SSH:**
+**2. Acesse como root via SSH** e confirme a versão do SO:
 
-   ```bash
-   ssh root@SEU_IP
-   ```
+```bash
+ssh root@SEU_IP
+cat /etc/os-release   # esperado: PRETTY_NAME="Ubuntu 24.04.x LTS" (ou 22.04)
+```
 
-3. **Instale o git** (se ainda não tiver):
+<details>
+<summary>🔐 <strong>Primeira vez conectando via SSH? O que aparece e o que responder</strong></summary>
 
-   ```bash
-   apt update && apt install -y git
-   ```
+Na **primeira conexão** com qualquer servidor novo, o SSH mostra este aviso:
 
-4. **Clone o repositório** (pode personalizar o diretório — o padrão sugerido é `/opt/tws-panel`):
+```text
+The authenticity of host '203.0.113.10 (203.0.113.10)' can't be established.
+ED25519 key fingerprint is SHA256:Xk9vN2mQpL7dR4wT8yB3cF6hJ1uA5sE0gH9zK2xW4vM.
+This key is not known by any other names.
+Are you sure you want to continue connecting (yes/no/[fingerprint])?
+```
 
-   ```bash
-   git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
-   cd /opt/tws-panel
-   ```
+**O que responder:** digite `yes` e pressione Enter.
 
-5. **Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
+**O que é isso?** O *fingerprint* é a "digital" do servidor — é assim que o seu computador
+reconhece a VPS nas próximas conexões. O aviso aparece **só na primeira vez**; depois o
+fingerprint fica salvo e a conexão é direta.
 
-   ```bash
-   ./scripts/install.sh
-   ```
+**Erros comuns:**
 
-   > **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz
-   > verificações **somente-leitura** (SO, RAM/disco, Docker e containers em
-   > execução, portas 80/443/9000/25/587/993 e serviços como nginx, apache,
-   > caddy, postfix, mysql e postgres) e exibe um relatório. Se a VPS já estiver
-   > em uso, ele avisa que o painel foi feito para uma VPS limpa e pede
-   > confirmação explícita (digite `continuar`) — ou use
-   > `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele **nunca
-   > remove nem para** nada que já exista na máquina.
+- **"Digito a senha e nada aparece"** — é normal! O terminal **não mostra nenhum caractere**
+  (nem `*`) enquanto você digita senhas. Digite com calma e pressione Enter.
+- **`Permission denied (publickey,password)`** — senha errada ou o provedor da VPS exige
+  chave SSH. Confira a senha no painel do provedor e tente de novo.
+- **O aviso de fingerprint aparece de novo depois de reinstalar a VPS** — normal, a máquina
+  mudou. Remova a entrada antiga com `ssh-keygen -R SEU_IP` e conecte novamente.
 
-6. **Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
+</details>
+
+**3. Crie o seu usuário não-root** — é ele quem vai operar a VPS daqui em diante:
+
+```bash
+adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a senha na hora
+usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
+su - kelvin              # entra na conta dele — todos os próximos passos são feitos como ele
+```
+
+<details>
+<summary>👤 <strong>Travou no <code>adduser</code>? O que aparece e o que preencher</strong></summary>
+
+Ao rodar `adduser kelvin`, o sistema faz uma série de perguntas. É assim que aparece:
+
+```text
+Adding user `kelvin' ...
+Adding new group `kelvin' (1000) ...
+Adding new user `kelvin' (1000) with group `kelvin' ...
+Creating home directory `/home/kelvin' ...
+Copying files from `/etc/skel' ...
+New password:
+Retype new password:
+passwd: password updated successfully
+Changing the user information for kelvin
+Enter the new value, or press ENTER for the default
+        Full Name []:
+        Room Number []:
+        Work Phone []:
+        Home Phone []:
+        Other []:
+Is the information correct? [Y/n]
+```
+
+**O que preencher, passo a passo:**
+
+1. **`New password:`** — crie uma senha forte **que você vai lembrar** (é a senha do seu
+   usuário, usada no SSH e no `sudo`). Atenção: **nada aparece enquanto você digita** —
+   nem `*`. É normal, a senha está sendo registrada. Digite e pressione Enter.
+2. **`Retype new password:`** — repita a mesma senha.
+3. **`Full Name`, `Room Number`, `Work Phone`, `Home Phone`, `Other`** — dados opcionais.
+   Pode deixar tudo em branco: basta pressionar **Enter** em cada um.
+4. **`Is the information correct? [Y/n]`** — digite `Y` (ou só Enter) para confirmar.
+
+**Erros comuns:**
+
+- **`Sorry, passwords do not match`** — as duas senhas digitadas foram diferentes. O sistema
+  repete o pedido; digite as duas iguais, com calma.
+- **`BAD PASSWORD: ...`** — aviso de senha fraca. O sistema aceita, mas prefira uma senha
+  longa (frase com palavras + números, ex.: `cavalo-bateria-42-janela`).
+- **"Acho que digitei errado porque não vi nada"** — sem problemas: se errou, o `adduser`
+  reclama (`Sorry, try again.`) e pede de novo.
+
+</details>
+
+> [!IMPORTANT]
+> **Por que antes de tudo?** Operar como root é um anti-padrão de segurança. Criando o usuário agora,
+> o wizard só precisa **validar** que ele existe (Fase 01 de segurança) em vez de criá-lo — e o
+> acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
+> novo no passo de Segurança do wizard.
+
+**4. Instale o git:**
+
+```bash
+sudo apt update && sudo apt install -y git
+```
+
+<details>
+<summary>🔑 <strong>Primeiro <code>sudo</code>: o aviso gigante e a senha que não aparece</strong></summary>
+
+Na **primeira vez** que você usa `sudo` com um usuário novo, aparece um aviso clássico:
+
+```text
+We trust you have received the usual lecture from the local System
+Administrator. It usually boils down to these three things:
+
+    #1) Respect the privacy of others.
+    #2) Think before you type.
+    #3) With great power comes great responsibility.
+
+[sudo] password for kelvin:
+```
+
+**O que fazer:**
+
+1. O aviso é só cerimônia de boas-vindas (uma tradição do Linux) — não exige resposta.
+2. Em **`[sudo] password for kelvin:`**, digite **a senha do SEU usuário** (a que você criou
+   no `adduser`), **não** a senha de root.
+3. Lembre-se: **nada aparece na tela enquanto você digita** — nem `*`. Digite e Enter.
+
+Esse aviso longo só aparece uma vez. Depois disso o `sudo` pede a senha direto — e, por
+alguns minutos, nem isso (ele "lembra" que você se autenticou).
+
+**Erros comuns:**
+
+- **`Sorry, try again.`** — senha errada. Você tem 3 tentativas antes de o comando falhar.
+- **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador.
+  Volte para a sessão de root e rode `usermod -aG sudo kelvin` (passo 3).
+
+</details>
+
+**5. Clone o repositório em `/opt` e dê a propriedade da pasta ao seu usuário:**
+
+```bash
+sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo chown -R $USER:$USER /opt/tws-panel
+cd /opt/tws-panel && git checkout main
+```
+
+> [!TIP]
+> O clone começa na branch `dev` (default do repositório, usada pelos contribuidores). Para
+> **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
+> desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+**6. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
+
+```bash
+./scripts/install.sh
+```
+
+Não precisa de `sudo` na frente: ao detectar que está rodando como usuário comum, o script **se
+reexecuta via sudo automaticamente** (chamar `sudo ./scripts/install.sh` também funciona — os dois
+caminhos são equivalentes). No final, ele ainda te adiciona ao **grupo docker**, para os comandos
+do dia a dia não precisarem de sudo (vale a partir do próximo login).
+
+> [!NOTE]
+> **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz verificações
+> **somente-leitura** (SO, RAM/disco, Docker e containers em execução, portas 80/443/9000/25/587/993
+> e serviços como nginx, apache, caddy, postfix, mysql e postgres) e exibe um relatório. Se a VPS já
+> estiver em uso, ele avisa que o painel foi feito para uma VPS limpa e pede confirmação explícita
+> (digite `continuar`) — ou use `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele
+> **nunca remove nem para** nada que já exista na máquina.
+
+<details>
+<summary>🩺 <strong>Pré-flight: o que aparece na tela e o que fazer em cada cenário</strong></summary>
+
+**Cenário 1 — VPS limpa (o esperado):** o relatório sai todo verde e a instalação segue
+sozinha, sem pedir nada:
+
+```text
+[tws-panel] Pré-flight: inspecionando a máquina (nada será alterado nesta etapa)…
+  ✓ SO: Ubuntu 24.04.2 LTS (suportado)
+  ✓ RAM: 1984 MB
+  ✓ Disco livre em /: 23 GB
+  ✓ Docker: ausente (será instalado por este script)
+  ✓ Nenhum container Docker em execução
+  ✓ Portas 80/443/9000/25/587/993 livres
+[tws-panel] Máquina limpa detectada ✓ — prosseguindo com a instalação.
+```
+
+Não precisa fazer nada — só aguardar o build (leva alguns minutos na primeira vez).
+
+**Cenário 2 — VPS já em uso:** o relatório mostra itens com `⚠` e o instalador **para e
+espera sua decisão**:
+
+```text
+  ⚠ Portas em uso: 80 443
+  ⚠ Serviço ativo: nginx
+
+================================================================================
+  ⚠️  ATENÇÃO: esta VPS NÃO parece estar limpa (2 ponto(s) acima).
+
+  O TWS Panel foi feito para uma VPS Ubuntu LIMPA. Continuar pode causar
+  conflitos (portas, serviços, recursos) com o que já existe na máquina.
+  Este instalador NUNCA remove ou para nada que já exista — mas os
+  serviços do painel podem falhar ao subir se as portas estiverem ocupadas.
+
+  Para prosseguir mesmo assim, digite "continuar" — ou rode com
+  --force (PAAS_FORCE=1) em automações.
+================================================================================
+
+Digite "continuar" para prosseguir:
+```
+
+**O que fazer:**
+
+- **Recomendado:** pressione **Ctrl+C** (ou simplesmente não digite nada e feche) para
+  abortar — nada foi instalado nem alterado. Resolva os conflitos (ex.: desative o nginx se
+  ele não é mais usado, ou contrate uma VPS limpa) e rode o instalador de novo.
+- **Se você sabe o que está fazendo** (ex.: o serviço listado não usa as portas do painel):
+  digite `continuar` e pressione Enter. Ao digitar, você confirma que **leu o relatório e
+  aceita o risco** de conflitos.
+
+**Erros comuns:**
+
+- **Digitou errado (`continua`, `Continuar`)** — o instalador aborta com
+  `Instalação abortada. Nada foi instalado ou alterado.` É só rodar de novo.
+- **Não use `--force` no seu primeiro contato** — ele pula exatamente a reflexão que este
+  aviso quer provocar. O `--force` existe para automação, não para pressa.
+
+</details>
+
+**7. Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Assistente de configuração — http://SEU-IP:9000/?token=…   │
 ├─────────────────────────────────────────────────────────────┤
-│  1. Boas-vindas      → valida o setup token                 │
-│  2. Saúde da máquina → CPU, RAM, disco, rede, virtualização │
+│  1. Boas-vindas      → valida o setup token e libera o      │
+│                        terminal ao vivo do servidor         │
+│  2. Saúde da máquina → CPU, RAM, disco, rede — os checks    │
+│                        rodam AO VIVO no terminal embutido   │
 │  3. Segurança        → scan Lynis → plano → hardening       │
 │                        (com rollback automático em 5 min)   │
 │  4. Conta admin      → usuário + senha forte do painel      │
@@ -100,6 +297,58 @@ O instalador é **idempotente**: pode ser executado de novo sem quebrar nada (re
 O painel roda 100% em Docker (`docker compose up -d`), com o estado persistido no volume
 `paas_data` e acesso ao socket do Docker para gerenciar Caddy, Stalwart e seus projetos.
 
+> [!TIP]
+> **Perdeu o setup token?** Recupere a qualquer momento com `./scripts/show-token.sh` ou
+> `docker exec tws-panel cat /data/setup-token`.
+
+<details>
+<summary>🎫 <strong>Banner final do instalador — e como recuperar o token depois</strong></summary>
+
+Quando a instalação termina, o terminal toca um "bip" e mostra um banner assim:
+
+```text
+██████████████████████████████████████████████████████████████████████████████
+██                                                                          ██
+██               ✅  TWS PANEL INSTALADO E RODANDO COM SUCESSO!               ██
+██                                                                          ██
+██████████████████████████████████████████████████████████████████████████████
+
+👉  PASSO ÚNICO AGORA: abra este link no seu navegador
+
+      http://203.0.113.10:9000/?token=<seu-token-de-48-caracteres>
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                            ⚑  SETUP TOKEN  ⚑                              │
+│                                                                          │
+│   <seu-token-de-48-caracteres>                                            │
+│                                                                          │
+│   ⚠  Ele aparece SÓ AGORA em destaque. Guarde-o até concluir o wizard.   │
+│   ⚠  Após criar sua conta admin (passo 4 do wizard), ele é invalidado.   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**O que fazer:** copie o **link completo** (`http://SEU-IP:9000/?token=...`) e cole no
+navegador. O link já leva o token embutido — não precisa digitar nada.
+
+**Fechou o terminal e perdeu o banner?** Sem pânico. Na VPS, rode qualquer um dos dois:
+
+```bash
+./scripts/show-token.sh                       # reexibe o link completo + token
+docker exec tws-panel cat /data/setup-token   # mostra só o token
+```
+
+**Erros comuns:**
+
+- **`permission denied while trying to connect to the Docker daemon socket`** — faça
+  logout/login uma vez (o instalador te adicionou ao grupo docker) ou rode com `sudo`.
+- **`setup token não encontrado... O painel está instalado?`** — o `show-token.sh` foi rodado
+  numa máquina sem o painel instalado. Rode-o na VPS certa, de dentro de `/opt/tws-panel`.
+- **O token não funciona mais no navegador** — depois que você cria a conta admin (passo 4
+  do wizard), o token é **invalidado para sempre**. A partir daí o acesso é pela tela de
+  login, com seu usuário e senha do painel.
+
+</details>
+
 Depois do wizard: cadastre um projeto, aponte o DNS, e o painel cuida do build, do proxy e do
 SSL. Guia completo de produção em [docs/production.md](docs/production.md).
 
@@ -109,7 +358,14 @@ SSL. Guia completo de produção em [docs/production.md](docs/production.md).
 docker compose ps            # status do painel
 docker compose logs -f panel # logs em tempo real
 docker compose up -d --build # atualizar para uma nova versão (git pull antes)
+
+./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
+./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)
 ```
+
+> [!NOTE]
+> Se `docker compose ps` reclamar de permissão, faça logout/login uma vez (o instalador te
+> adicionou ao grupo docker) — ou rode os comandos com `sudo`.
 
 ### Modo dev local
 
@@ -125,8 +381,12 @@ SETUP_TOKEN=dev-token docker compose -f docker-compose.dev.yml up
 - Wizard: `http://localhost:5173/setup` com o token `dev-token`
 - Domínios de projeto: use `*.localhost` (servidos em HTTP puro pelo Caddy, sem SSL)
 
-Exemplos prontos para deploy em [`examples/`](examples/README.md) ⚠️ *(apenas para testes)*.
+Exemplos prontos para deploy em [`examples/`](examples/README.md).
 
+> [!WARNING]
+> Os exemplos são **apenas para testes** — não os use como base de produção sem revisão.
+
+> [!IMPORTANT]
 > 🔒 **Validação automática:** o `pnpm install` ativa hooks locais de pre-commit
 > (arquivos proibidos + scan de segredos + typecheck incremental) e pre-push
 > (testes + cobertura + build). O CI no GitHub Actions é o portão final —
@@ -179,7 +439,7 @@ Como os módulos se relacionam:
                        │              ┌───────────────┐
                        └─────────────►│   @paas/core  │ (tipos compartilhados)
                                       └───────────────┘
-        Estado persistido no volume paas_data (/data, JSON/SQLite, modo 0600)
+        Estado persistido no volume paas_data (/data, arquivos JSON, modo 0600)
         — sem serviços externos.
 ```
 
@@ -202,10 +462,23 @@ Fases já entregues: **0** Fundação · **1** Hardening · **2** Deploy + Domí
 Encontrou uma vulnerabilidade? **Não abra uma issue pública.** Leia [SECURITY.md](SECURITY.md)
 para saber como reportar de forma responsável.
 
-O próprio painel foi desenhado com segurança em mente: wizard protegido por token de uso único,
-nenhum shell arbitrário vindo da UI (apenas ações pré-definidas e auditadas), Docker socket nunca
-exposto via TCP, CORS same-origin por padrão, rate limiting, logs com redação de segredos e
-auditoria de todas as ações sensíveis.
+O painel foi desenhado com segurança em mente: wizard protegido por token de uso único, Docker
+socket nunca exposto via TCP, CORS same-origin por padrão, rate limiting, validação de schema em
+todas as rotas da API, logs com redação de segredos e auditoria de todas as ações sensíveis.
+
+**Seja franco sobre o que isto exige.** Um PaaS precisa de acesso privilegiado ao host — não há
+como criar containers e configurar firewall sem ele. Duas consequências que você deve conhecer
+antes de instalar:
+
+- **O terminal web é um shell real com root na VPS**, não uma lista de ações pré-aprovadas. É o
+  que permite ver e conduzir o hardening como se estivesse no SSH, e é também o ponto mais
+  sensível do sistema: quem tem sessão no painel tem a máquina.
+- **O socket do Docker é montado no container do painel**, o que equivale a root no host. É uma
+  propriedade do Docker, não uma falha do painel, e nenhum hardening do container altera isso.
+
+Ambos estão documentados em detalhe, junto com o que o projeto **não** protege e as dívidas de
+segurança conhecidas, em [comoFuncionaSistema/global/threat-model.json](comoFuncionaSistema/global/threat-model.json).
+Recomendamos não expor o painel à internet aberta: prefira VPN ou restrição por IP.
 
 **Autenticação:** o painel nasce protegido pelo setup token gerado na instalação; no Passo 4 do
 wizard você cria a conta de administrador (senha com hash argon2id, mínimo de 12 caracteres com
@@ -222,6 +495,8 @@ Login, logout, falhas e criação da conta admin ficam registrados no log de aud
 | [docs/production.md](docs/production.md) | Do dev à VPS real: portas, DNS, ACME, PTR, ordem recomendada |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Porta 25 bloqueada, e-mail em spam, cert não emitido, wizard inacessível… |
 | [docs/README.md](docs/README.md) | Índice completo da documentação |
+| [comoFuncionaSistema/](comoFuncionaSistema/) | Documentação legível por máquina: um JSON por endpoint, com parâmetros, erros, efeitos colaterais e testes. Escrita para agentes de IA — comece por `index.json` |
+| [threat-model.json](comoFuncionaSistema/global/threat-model.json) | O que o painel protege, o que não protege, quais privilégios exige e por quê |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Como contribuir (setup, padrões, como estender o painel) |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Código de conduta |
 | [SECURITY.md](SECURITY.md) | Política de segurança e reporte de vulnerabilidades |
