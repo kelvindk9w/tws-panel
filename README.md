@@ -87,13 +87,105 @@ fingerprint fica salvo e a conexão é direta.
 
 </details>
 
+<details>
+<summary>⏱️ <strong>A conexão cai sozinha depois de alguns minutos parado?</strong></summary>
+
+Acontece, e a causa muda conforme o momento da instalação. Vale entender, porque a solução
+de um caso é diferente da do outro.
+
+**Antes do hardening (agora).** O Ubuntu recém-instalado não desconecta ninguém por
+inatividade — quem derruba costuma ser o **firewall/NAT do provedor**, que descarta conexões
+TCP sem tráfego. A correção é o seu computador mandar um sinal de vida periódico. Faça isso
+**no seu computador**, nunca na VPS:
+
+```bash
+# no SEU computador (não na VPS): ~/.ssh/config
+Host *
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+```
+
+A cada 60 segundos o seu cliente envia um pacote de keepalive, e a conexão para de parecer
+ociosa para o provedor. Isso **não enfraquece nada** — a sessão continua sendo encerrada se a
+rede realmente cair.
+
+**Depois do hardening.** Aí a desconexão passa a ser nossa, e é de propósito. O passo de
+segurança do painel grava em `/etc/ssh/sshd_config.d/`:
+
+```text
+ClientAliveInterval 300     # verifica a cada 5 minutos
+ClientAliveCountMax 2       # desconecta após 2 verificações sem resposta
+```
+
+Na prática: **cerca de 10 minutos** de inatividade real encerram a sessão. Existe para o caso
+de você esquecer um terminal aberto — num notebook, num café, numa máquina compartilhada.
+
+**Se ainda assim quiser mudar**, edite no servidor e reinicie o SSH:
+
+```bash
+sudo nano /etc/ssh/sshd_config.d/99-tws-panel.conf
+# aumentar para ~1 hora:
+#   ClientAliveInterval 600
+#   ClientAliveCountMax 6
+# desligar a desconexão por inatividade (não recomendado):
+#   ClientAliveInterval 0
+#   ClientAliveCountMax 0
+sudo sshd -t && sudo systemctl restart ssh   # -t valida antes de reiniciar
+```
+
+> [!WARNING]
+> Rode `sudo sshd -t` **antes** de reiniciar. Um erro de digitação no arquivo pode impedir o
+> SSH de subir, e aí você fica sem acesso à máquina. Mantenha a sessão atual aberta e teste a
+> reconexão em **outra janela** antes de fechar a que funciona.
+
+**A recomendação:** use `ServerAliveInterval` no seu computador e **deixe o timeout do servidor
+como está**. Os dois resolvem sintomas diferentes — o keepalive impede que o provedor derrube
+uma sessão em que você está trabalhando, e o timeout do servidor continua fechando a sessão
+que você realmente abandonou. Desligar o timeout troca uma proteção real por uma conveniência
+que o keepalive já entrega.
+
+</details>
+
 **3. Crie o seu usuário não-root** — é ele quem vai operar a VPS daqui em diante:
 
 ```bash
 adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a senha na hora
 usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
-su - kelvin              # entra na conta dele — todos os próximos passos são feitos como ele
 ```
+
+Agora entre na conta que você acabou de criar. Há duas formas, e **a recomendada é a segunda**:
+
+```bash
+# Opção A — atalho: troca de usuário sem sair da sessão atual
+su - kelvin
+```
+
+```bash
+# Opção B (recomendada) — encerra a sessão root e entra direto como o novo usuário
+exit                     # sai do root e fecha a conexão SSH
+ssh kelvin@SEU_IP        # conecte de novo; "kelvin" é o usuário que você acabou de criar
+                         # e a senha é a que você definiu no adduser
+```
+
+<details>
+<summary>🤔 <strong>Por que a opção B é a recomendada?</strong></summary>
+
+Com `su - kelvin` você continua **dentro da sessão do root** — apenas com outra identidade por
+cima. Um `exit` te devolve ao root em vez de encerrar o acesso, e é fácil esquecer que aquele
+terminal ainda tem uma sessão de root aberta embaixo.
+
+Entrando por SSH direto como o seu usuário, a sessão é dele do começo ao fim: `exit` encerra de
+verdade, e tudo que exigir privilégio vai passar por `sudo` — que pede senha e fica registrado
+no log do sistema. É a diferença entre "estou de root com outro chapéu" e "estou como usuário
+comum e peço permissão quando preciso".
+
+Isso também conversa com o passo anterior: se você configurou o keepalive e vai deixar a
+sessão aberta por um tempo, é melhor que ela seja a do seu usuário, não a do root.
+
+**A opção A não está errada** — funciona e é mais rápida se você só quer seguir o passo a passo
+agora. Só saiba que a sessão root continua ali atrás.
+
+</details>
 
 <details>
 <summary>👤 <strong>Travou no <code>adduser</code>? O que aparece e o que preencher</strong></summary>
@@ -199,11 +291,29 @@ cd /opt/tws-panel && git checkout main
 > **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
 > desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
 
+> [!IMPORTANT]
+> **Confira que a `main` está em dia antes de instalar.** Rode:
+>
+> ```bash
+> git fetch origin && git log --oneline main..origin/dev | wc -l
+> ```
+>
+> O resultado esperado é `0`. Um número alto significa que a `main` ficou para trás da `dev` e
+> você estaria instalando uma versão antiga — inclusive sem correções de segurança já
+> publicadas. Nesse caso, [abra uma issue](https://github.com/kelvindk9w/tws-panel/issues)
+> avisando, e enquanto isso use `git checkout dev` para instalar a versão atual.
+
 **6. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
 
 ```bash
 ./scripts/install.sh
 ```
+
+> [!NOTE]
+> O instalador precisa de privilégios de administrador (instalar Docker, criar volumes, abrir
+> portas). Você **não precisa digitar `sudo`**: rodando como o seu usuário comum, ele detecta
+> isso e se reexecuta via `sudo` sozinho, pedindo a sua senha. Se preferir ser explícito,
+> `sudo ./scripts/install.sh` faz exatamente a mesma coisa — os dois caminhos são equivalentes.
 
 Não precisa de `sudo` na frente: ao detectar que está rodando como usuário comum, o script **se
 reexecuta via sudo automaticamente** (chamar `sudo ./scripts/install.sh` também funciona — os dois
