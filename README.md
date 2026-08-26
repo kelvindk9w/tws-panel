@@ -240,7 +240,92 @@ você está trabalhando.
 > sudo sshd -t && sudo systemctl restart ssh
 > ```
 
-**4. Instale o git:**
+**4. Gere sua chave SSH** — antes de ir para o wizard:
+
+O passo de Segurança do wizard vai desligar o login por senha no SSH (fase 02 do hardening). A
+partir daí, a chave é a sua porta de entrada — e o wizard **pede a chave pública já na primeira
+fase**, com um rollback automático de 5 minutos correndo. Gerando agora, com o terminal já
+aberto, você não para no meio do processo para trocar de janela.
+
+> [!TIP]
+> **A senha que você acabou de criar no `adduser` não vai embora.** O que muda é só a porta de
+> entrada remota (SSH). Dentro da máquina, essa senha continua sendo a que o `sudo` pede.
+
+Rode os comandos abaixo **no seu computador, não na VPS** — é lá que a chave precisa existir
+para você se autenticar depois.
+
+**Linux, macOS ou WSL:**
+
+```bash
+ssh-keygen -t ed25519
+cat ~/.ssh/id_ed25519.pub
+```
+
+**Windows (PowerShell):**
+
+```powershell
+ssh-keygen -t ed25519
+Get-Content ~\.ssh\id_ed25519.pub
+```
+
+O `ssh-keygen` faz duas perguntas:
+
+1. **Onde salvar o arquivo** — pressione Enter para aceitar o local padrão.
+2. **Passphrase** — recomendada; é uma senha extra só para usar a chave, e **nada aparece na
+   tela** enquanto você digita. Se não quiser digitá-la toda vez, rode `ssh-add` depois para
+   guardá-la na sessão atual.
+
+> [!IMPORTANT]
+> O comando gera **dois arquivos**, e eles não são intercambiáveis:
+>
+> - **`id_ed25519.pub`** — a chave **pública**. É a que você cola no wizard. Pode ser mostrada a
+>   qualquer um, sem risco.
+> - **`id_ed25519`** (sem extensão) — a chave **privada**. **Nunca sai do seu computador**, nunca
+>   é colada em lugar nenhum. Quem tiver esse arquivo tem acesso à VPS.
+>
+> A linha inteira que o `cat`/`Get-Content` mostrou — começando em `ssh-ed25519` — é o que vai no
+> campo de chave pública da fase 01 do wizard.
+
+<details>
+<summary>🔑 <strong>E se eu perder, apagar ou corromper a chave privada?</strong></summary>
+
+**Prevenção (faça isso antes de seguir em frente):**
+
+- Guarde uma cópia da chave privada em lugar seguro, como um gerenciador de senhas. Quem tiver
+  essa cópia acessa a VPS — trate-a como uma senha.
+- Alternativa mais robusta: tenha uma **segunda chave**, gerada num outro dispositivo (outro
+  computador, ou o seu celular). O campo do wizard aceita **uma chave por vez**, então instale a
+  segunda depois de concluir o wizard, enquanto a primeira ainda funciona.
+
+  Pegue a chave **pública** do outro dispositivo (o conteúdo do `.pub` dele), conecte na VPS pelo
+  computador que já tem acesso e acrescente a linha:
+
+  ```bash
+  echo "COLE_AQUI_A_SEGUNDA_CHAVE_PUBLICA" >> ~/.ssh/authorized_keys
+  ```
+
+  Use `>>` e não `>` — um `>` sozinho **apaga** as chaves existentes e te tranca para fora na
+  próxima conexão. Confira o resultado com `cat ~/.ssh/authorized_keys`: devem aparecer as duas
+  linhas. Assim, perder um dispositivo não te deixa sem acesso.
+
+**Se você já perdeu a chave:**
+
+- O caminho é o **console do provedor da VPS** — Contabo, Hetzner, DigitalOcean e afins oferecem
+  um acesso via navegador (geralmente chamado "Console", "VNC" ou "Rescue"). Ele não passa pelo
+  SSH do servidor, então a restrição de login por senha não vale ali.
+- É por isso que o usuário criado **com senha** no passo 3 é uma rede de segurança: pelo console
+  do provedor, você entra com esse usuário e senha, e acrescenta uma chave nova em
+  `~/.ssh/authorized_keys`. Isso só funciona porque você criou a conta com senha — se o wizard
+  tivesse criado o usuário, ela ficaria sem senha, acessível só por chave, e essa saída não
+  existiria.
+- A senha do **root** fica travada pelo hardening — a recuperação é sempre pela conta do seu
+  usuário, nunca por root.
+- Se nem o console resolver, resta o modo de recuperação (rescue) do provedor, que monta o disco
+  a partir de outro sistema. É o último recurso; o procedimento varia por provedor.
+
+</details>
+
+**5. Instale o git:**
 
 ```bash
 sudo apt update && sudo apt install -y git
@@ -280,7 +365,7 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 
 </details>
 
-**5. Clone o repositório em `/opt` e dê a propriedade da pasta ao seu usuário:**
+**6. Clone o repositório em `/opt` e dê a propriedade da pasta ao seu usuário:**
 
 ```bash
 sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
@@ -315,7 +400,7 @@ cd /opt/tws-panel && git checkout main
 >   avisando, porque pode ser uma correção de segurança não publicada, e aguarde a promoção — a
 >   `dev` é a branch de desenvolvimento e não passa pelo mesmo processo de validação da `main`.
 
-**6. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
+**7. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
 
 ```bash
 ./scripts/install.sh
@@ -427,7 +512,7 @@ Digite "continuar" para prosseguir:
 > **Acesso direto pelo link do IP** só é tolerável em ambiente de teste descartável, cuja senha
 > de admin você não vai reaproveitar em lugar nenhum.
 
-**7. Abra o painel** — pelo túnel SSH acima (recomendado) ou, se aceitar o risco descrito acima, direto em `http://SEU_IP:9000` — cole o **setup token** exibido no terminal e siga o wizard:
+**8. Abra o painel** — pelo túnel SSH acima (recomendado) ou, se aceitar o risco descrito acima, direto em `http://SEU_IP:9000` — cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -630,6 +715,15 @@ para saber como reportar de forma responsável.
 O painel foi desenhado com segurança em mente: wizard protegido por token de uso único, Docker
 socket nunca exposto via TCP, CORS same-origin por padrão, rate limiting, validação de schema em
 todas as rotas da API, logs com redação de segredos e auditoria de todas as ações sensíveis.
+
+> [!TIP]
+> Duas fases do hardening (Passo 3 do wizard) merecem atenção antes de rodar:
+>
+> - **Fase 05 (Minimização)** remove o `snapd` e o bloqueia. Se algum programa seu depende de
+>   snap, saiba disso antes — o rollback dessa fase restaura a configuração do APT, mas **não
+>   reinstala** os pacotes removidos.
+> - **Fase 06 (Auditoria)** demora vários minutos: ela cria a baseline do AIDE varrendo o sistema
+>   de arquivos. Parece travada, mas não está.
 
 **Seja franco sobre o que isto exige.** Um PaaS precisa de acesso privilegiado ao host — não há
 como criar containers e configurar firewall sem ele. Duas consequências que você deve conhecer
