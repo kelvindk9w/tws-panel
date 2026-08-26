@@ -343,9 +343,28 @@ ${GREEN}${BOLD}█████████████████████�
 ██                                                                          ██
 ██████████████████████████████████████████████████████████████████████████████${RESET}
 
-${BOLD}👉  PASSO ÚNICO AGORA: abra este link no seu navegador${RESET}
+${BOLD}👉  PRÓXIMO PASSO: abra o painel no navegador${RESET}
 
-${CYAN}${BOLD}      http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN${RESET}
+${BOLD}Recomendado — acesse por túnel SSH.${RESET} A senha de administrador que você vai
+criar no passo 4 do wizard é permanente: por túnel ela nunca trafega em texto
+claro pela internet.
+
+  1) Numa janela NOVA do terminal, no SEU COMPUTADOR (não na VPS), deixe aberto:
+
+${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${SUDO_USER:-SEU_USUARIO}@$PUBLIC_IP${RESET}
+
+  2) Com essa janela aberta, abra no navegador:
+
+${CYAN}${BOLD}      http://localhost:$PORT/?token=$SETUP_TOKEN${RESET}
+
+     (Windows: PowerShell já traz o comando ssh acima pronto para uso; no
+     PuTTY, configure em Connection → SSH → Tunnels: Source port $PORT,
+     Destination localhost:$PORT, Local.)
+
+${YELLOW}Direto pelo IP${RESET} — sem criptografia; use só em rede confiável ou ambiente de
+teste descartável:
+
+${CYAN}      http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN${RESET}
 
 ${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
 │                            ⚑  SETUP TOKEN  ⚑                              │

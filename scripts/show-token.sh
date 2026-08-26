@@ -59,9 +59,20 @@ ${GREEN}${BOLD}█████████████████████�
 ██                                                                          ██
 ██████████████████████████████████████████████████████████████████████████████${RESET}
 
-${BOLD}👉  Abra este link no seu navegador:${RESET}
+${BOLD}👉  Abra o painel no navegador${RESET}
 
-${CYAN}${BOLD}      http://$PUBLIC_IP:$PORT/?token=$TOKEN${RESET}
+${BOLD}Recomendado — por túnel SSH.${RESET} Numa janela NOVA, no SEU COMPUTADOR, deixe aberto:
+
+${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${SUDO_USER:-SEU_USUARIO}@$PUBLIC_IP${RESET}
+
+E então acesse:
+
+${CYAN}${BOLD}      http://localhost:$PORT/?token=$TOKEN${RESET}
+
+${YELLOW}Direto pelo IP${RESET} — sem criptografia; o token e a senha de admin trafegam
+em texto claro. Use só em rede confiável ou ambiente de teste descartável:
+
+${CYAN}      http://$PUBLIC_IP:$PORT/?token=$TOKEN${RESET}
 
 ${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
 │                            ⚑  SETUP TOKEN  ⚑                              │
