@@ -83,7 +83,15 @@ describe.skipIf(!HAS_DOCKER)("TerminalService — repro P0 com PTY REAL (docker 
       const payload =
         "10.0.0.1:22 10.0.0.1:80 10.0.0.1:443 10.0.0.1:9000 10.0.0.1:9001 ";
       const cmd = `printf '%s' '${payload}'`; // saída sem newline final
-      const result = await service.runCommandCaptured(cmd, { timeoutMs: 20_000 });
+      // 60s é TETO de execução, não sono fixo: a promise resolve assim que o
+      // marcador EXIT chega no stream (runCommandNow), então o número só
+      // importa quando o ambiente engasga. Com 20s falhou 1x no CI — 25054ms,
+      // que são os 20s do teto mais os 5s de Ctrl-C que o serviço soma antes
+      // de rejeitar — enquanto o mesmo commit passava 2min antes no job de
+      // push. Localmente roda em ~1,4s; a folga cobre o runner de 2 vCPUs com
+      // cobertura ligada sem esconder dessincronia de captura, que continua
+      // falhando na hora via CaptureDesyncError.
+      const result = await service.runCommandCaptured(cmd, { timeoutMs: 60_000 });
       // ANTES do fix: { code: 0, output: "" } — a captura dessincronizava e
       // o scanner avaliava lixo. DEPOIS: a saída real, byte a byte.
       expect(result.code).toBe(0);
@@ -100,10 +108,13 @@ describe.skipIf(!HAS_DOCKER)("TerminalService — repro P0 com PTY REAL (docker 
     const service = new TerminalService({ openPty: createDockerPtyFactory(config) });
     try {
       // 1) saída sem newline final (cola o EXIT — fix d274efd)…
-      const first = await service.runCommandCaptured("printf 'a b '", { timeoutMs: 20_000 });
+      // timeoutMs em 60s pelo mesmo motivo do teste acima: teto de execução
+      // com folga para CI com cobertura em runner de 2 vCPUs, não um sono
+      // fixo — cada chamada resolve assim que o marcador EXIT chega.
+      const first = await service.runCommandCaptured("printf 'a b '", { timeoutMs: 60_000 });
       expect(first).toEqual({ code: 0, output: "a b " });
       // 2) …e o check seguinte continua capturando (BEGIN limpo ou colado)
-      const second = await service.runCommandCaptured("hostname", { timeoutMs: 20_000 });
+      const second = await service.runCommandCaptured("hostname", { timeoutMs: 60_000 });
       expect(second.code).toBe(0);
       expect(second.output.trim()).not.toBe("");
       // 3) comando real do catálogo: net.listening-inventory (ss pode não
@@ -111,7 +122,7 @@ describe.skipIf(!HAS_DOCKER)("TerminalService — repro P0 com PTY REAL (docker 
       // pipeline, mesmo vazia, sem dessincronizar)
       const inventory = await service.runCommandCaptured(
         "ss -tuln 2>/dev/null | tail -n +2 | awk '{print $5}' | sort -u | tr '\\n' ' '",
-        { timeoutMs: 20_000 },
+        { timeoutMs: 60_000 },
       );
       expect(inventory.code).toBe(0);
     } finally {
