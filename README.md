@@ -516,6 +516,59 @@ Digite "continuar" para prosseguir:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Como conduzir o Passo 3 (Segurança) com segurança
+
+O Passo 3 aplica o hardening em **sete fases**, uma de cada vez: aplique, confirme, só então
+avance para a próxima. Nunca dispare uma fase nova com a anterior ainda pendente de confirmação.
+
+| Fase | O que faz | Pede confirmação? |
+|---|---|---|
+| 00 · Atualizações | `apt full-upgrade` + atualizações automáticas | Não |
+| 01 · Usuário não-root | Instala sua chave SSH e trava a senha do root | **Sim** |
+| 02 · SSH | Desliga login por senha e acesso root via SSH | **Sim** |
+| 03 · Firewall | Ativa o UFW (nega tudo, exceto o que for liberado antes) | **Sim** |
+| 04 · Prevenção de intrusão | fail2ban + AppArmor | Não |
+| 05 · Minimização | Remove pacotes desnecessários (ex.: snapd) | Não |
+| 06 · Auditoria | auditd, Lynis, AIDE, rkhunter — demorada | Não |
+
+As três fases marcadas com confirmação (01, 02 e 03) mexem em como você entra na máquina — a
+chave, a senha e o firewall. É por isso que, antes de aplicar qualquer uma delas, o próprio script
+**já agenda a reversão automática no servidor**. Se ninguém confirmar em ~5 minutos, o servidor
+desfaz sozinho o que acabou de fazer. Confirmar cancela esse agendamento — por isso o teste abaixo
+importa: é a sua única forma de saber, antes de cancelar a rede de segurança, se ela ainda seria
+necessária.
+
+> [!IMPORTANT]
+> **O procedimento de confirmação, passo a passo:**
+>
+> 1. Depois de aplicar a fase, o painel fica "aguardando confirmação" e um cronômetro de ~5
+>    minutos começa a correr no servidor.
+> 2. **Não teste na janela que já está aberta.** Uma sessão SSH já conectada continua
+>    funcionando mesmo que a configuração nova esteja quebrada — ela não prova nada, porque não
+>    passou pela mudança que você acabou de aplicar.
+> 3. Abra uma **janela nova** de terminal (sem fechar a antiga) e conecte de novo:
+>    ```bash
+>    ssh SEU_USUARIO@SEU_IP
+>    ```
+> 4. **Só depois que a janela nova conectar de verdade**, volte ao painel e confirme.
+> 5. Se a janela nova **não** conectar: **não confirme**. Deixe os 5 minutos passarem — o
+>    servidor reverte sozinho a mudança, e você continua com o acesso da janela antiga.
+> 6. Mantenha a janela antiga aberta até o fim de todo o Passo 3, mesmo depois de confirmar cada
+>    fase.
+>
+> **Teste específico da fase 01:** a conexão na janela nova precisa entrar **sem pedir a senha da
+> conta**. Ela pode pedir a *passphrase da sua chave* — isso é outra coisa, é local e não envolve
+> o servidor. Se a janela nova ainda pedir a senha da conta, a chave não foi instalada
+> corretamente; **não confirme**, e não avance para a fase 02 nesse estado — sem a chave
+> funcionando, a fase 02 (que desliga o login por senha) trancaria você para fora.
+
+Duas proteções já existem no próprio script e ajudam a evitar o pior cenário, mas **não
+substituem o teste na janela nova**: a fase 01 só trava a senha do root se encontrar ao menos uma
+chave SSH instalada, e a fase 02 se recusa a rodar (com erro) se o usuário informado não existir
+ou não tiver chave. São redes de segurança, não uma prova de que o seu acesso específico funciona.
+
+Se mesmo assim alguma coisa der errado, veja [Perdi o acesso — e agora?](#perdi-o-acesso--e-agora).
+
 O instalador é **idempotente**: pode ser executado de novo sem quebrar nada (rebuild + restart).
 O painel roda 100% em Docker (`docker compose up -d`), com o estado persistido no volume
 `paas_data` e acesso ao socket do Docker para gerenciar Caddy, Stalwart e seus projetos.
