@@ -137,6 +137,34 @@ pelos guardrails como qualquer deploy. Use os exemplos em `examples/` como refer
 4. Abra o PR preenchendo o template: o que muda, por quê, como testar.
 5. Responda à revisão — PRs pequenos e focados são aceitos muito mais rápido.
 
+## Licença da sua contribuição
+
+O TWS Panel é distribuído sob a licença [MIT](LICENSE), e continua sendo — este projeto é e
+seguirá sendo open source.
+
+Ao abrir um Pull Request, você declara que:
+
+1. **A contribuição é sua**, ou você tem o direito de submetê-la. Se ela contém código de
+   terceiros, você identifica a origem e a licença no próprio PR.
+2. **Você concede à TWS** uma licença perpétua, mundial, irrevogável e isenta de royalties para
+   usar, reproduzir, modificar, distribuir e **sublicenciar** a sua contribuição, inclusive sob
+   termos diferentes dos atuais.
+3. **Você mantém a autoria e o direito de usar a sua contribuição** como quiser, em qualquer
+   outro lugar. Nada aqui tira nada de você.
+
+> [!NOTE]
+> **Por que isso existe, sem rodeios.** O item 2 permite que a TWS ofereça o painel sob outras
+> condições no futuro — por exemplo, uma edição gerenciada ou paga que sustente o
+> desenvolvimento. Sem essa permissão, qualquer mudança nesse sentido exigiria localizar e obter
+> o aceite de cada pessoa que já contribuiu; bastaria uma não ser encontrada para inviabilizar.
+>
+> **O que isso NÃO significa:** o código já publicado sob MIT permanece MIT para sempre — isso é
+> irreversível por natureza da licença, e ninguém pode tirar de você o que já está lá. Este
+> repositório continua aberto e gratuito. Se você não concorda com o item 2, diga no PR: dá para
+> conversar sobre outro arranjo, ou simplesmente manter a sua contribuição como um fork.
+
+Não há formulário a assinar: abrir o PR já vale como aceite.
+
 ## Reportando bugs e sugerindo features
 
 Use os templates de issue no GitHub. Para **vulnerabilidades de segurança**, nunca abra issue
