@@ -49,6 +49,54 @@ automático e e-mail profissional com DKIM/SPF/DMARC.
 > [!NOTE]
 > **Único pré-requisito:** uma VPS com Ubuntu 22.04 ou 24.04 LTS limpa. Docker, Node e todo o resto são instalados automaticamente — basta seguir os passos abaixo, na ordem.
 
+<details>
+<summary>🔄 <strong>Já tinha o painel instalado e quer começar de novo?</strong></summary>
+
+Antes de reinstalar a máquina inteira, veja se o caso é mesmo esse — quase sempre não é.
+
+**Só quero refazer o assistente de configuração.** Não precisa reinstalar nada. Na VPS:
+
+```bash
+cd /opt/tws-panel
+./scripts/reset-setup.sh     # o wizard volta ao passo 0
+./scripts/show-token.sh      # mostra o setup token de novo
+```
+
+Seus projetos, domínios, e-mail e histórico de segurança continuam intactos. Use `--full` no
+primeiro comando se quiser apagar também a conta de administrador do painel.
+
+**Quero a máquina limpa de verdade.** Aí sim é reinstalação do sistema operacional, e ela acontece
+em dois lugares:
+
+**1. No painel do seu provedor de VPS.** Procure por "Reinstall", "Reimage" ou "Reinstalar sistema"
+— o nome muda conforme o provedor. Escolha **Ubuntu 24.04 LTS** e **anote a nova senha de root**
+que ele gerar; a antiga deixa de valer.
+
+> [!WARNING]
+> Reinstalar apaga **tudo**: seus projetos, bancos de dados, e-mails, certificados TLS e o painel.
+> Não há desfazer. Se houver algo que você queira manter, copie antes.
+
+**2. No seu computador.** Como o sistema é outro, o servidor passa a se identificar com uma chave
+diferente, e o SSH vai recusar a conexão com um aviso em letras garrafais
+(`REMOTE HOST IDENTIFICATION HAS CHANGED!`). Remova a identidade antiga e conecte de novo:
+
+```bash
+ssh-keygen -R SEU_IP
+ssh root@SEU_IP
+```
+
+Ele vai perguntar se você confia na nova identidade — responda `yes`.
+
+> [!IMPORTANT]
+> **Esse aviso não é burocracia.** Ele é a única defesa do SSH contra alguém se passando pelo seu
+> servidor. Ignorá-lo é seguro **só quando você sabe por que a identidade mudou** — e reinstalar o
+> sistema é um motivo legítimo. Se esse aviso aparecer sem você ter reinstalado nada, **não
+> continue**: investigue antes.
+
+Depois disso é só seguir do Passo 1 em diante, como numa VPS nova — porque agora ela é uma.
+
+</details>
+
 **1. Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
 
 **2. Acesse como root via SSH** e confirme a versão do SO:
