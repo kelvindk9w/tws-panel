@@ -149,8 +149,8 @@ fingerprint fica salvo e a conexão é direta.
 **3. Crie o seu usuário não-root** — é ele quem vai operar a VPS daqui em diante:
 
 ```bash
-adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a senha na hora
-usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
+adduser SEU_USUARIO           # troque SEU_USUARIO pelo nome que quiser; você escolhe a senha na hora
+usermod -aG sudo SEU_USUARIO  # dá permissão de administrador (sudo)
 ```
 
 Agora entre na conta que você acabou de criar. Há duas formas — a segunda é a recomendada,
@@ -158,13 +158,13 @@ porque com ela você **sai de vez da conta de root**, em vez de ficar com ela ab
 
 ```bash
 # Opção A — atalho: troca de usuário sem sair da sessão atual
-su - kelvin
+su - SEU_USUARIO
 ```
 
 ```bash
 # Opção B (recomendada) — encerra a sessão root e entra direto como o novo usuário
 exit                     # sai do root e fecha a conexão SSH
-ssh kelvin@SEU_IP        # conecte de novo; "kelvin" é o usuário que você acabou de criar
+ssh SEU_USUARIO@SEU_IP   # conecte de novo, já com o usuário que você acabou de criar
                          # e a senha é a que você definiu no adduser
 ```
 
@@ -174,7 +174,7 @@ de administrador vai pedir `sudo` e a sua senha.
 <details>
 <summary>🤔 <strong>Por que a opção B é a recomendada?</strong></summary>
 
-Com `su - kelvin` você continua **dentro da sessão do root** — apenas com outra identidade por
+Com `su - SEU_USUARIO` você continua **dentro da sessão do root** — apenas com outra identidade por
 cima. Um `exit` te devolve ao root em vez de encerrar o acesso, e é fácil esquecer que aquele
 terminal ainda tem uma sessão de root aberta embaixo.
 
@@ -194,7 +194,9 @@ agora. Só saiba que a sessão root continua ali atrás.
 <details>
 <summary>👤 <strong>Travou no <code>adduser</code>? O que aparece e o que preencher</strong></summary>
 
-Ao rodar `adduser kelvin`, o sistema faz uma série de perguntas. É assim que aparece:
+Ao rodar `adduser SEU_USUARIO`, o sistema faz uma série de perguntas. Nos exemplos abaixo
+usamos "kelvin" como nome de exemplo — no seu caso vai aparecer o nome de usuário que você
+escolheu. É assim que aparece:
 
 ```text
 Adding user `kelvin' ...
@@ -397,8 +399,9 @@ Administrator. It usually boils down to these three things:
 **O que fazer:**
 
 1. O aviso é só cerimônia de boas-vindas (uma tradição do Linux) — não exige resposta.
-2. Em **`[sudo] password for kelvin:`**, digite **a senha do SEU usuário** (a que você criou
-   no `adduser`), **não** a senha de root.
+2. Em **`[sudo] password for kelvin:`** (no seu terminal vai aparecer o nome do usuário que
+   você criou, não "kelvin"), digite **a senha do SEU usuário** (a que você criou no
+   `adduser`), **não** a senha de root.
 3. Lembre-se: **nada aparece na tela enquanto você digita** — nem `*`. Digite e Enter.
 
 Esse aviso longo só aparece uma vez. Depois disso o `sudo` pede a senha direto — e, por
@@ -408,7 +411,7 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 
 - **`Sorry, try again.`** — senha errada. Você tem 3 tentativas antes de o comando falhar.
 - **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador.
-  Volte para a sessão de root e rode `usermod -aG sudo kelvin` (passo 3).
+  Volte para a sessão de root e rode `usermod -aG sudo SEU_USUARIO` (passo 3).
 
 </details>
 
