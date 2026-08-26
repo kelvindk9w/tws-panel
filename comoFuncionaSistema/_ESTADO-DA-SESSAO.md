@@ -1,4 +1,4 @@
-# Estado da sessão — 25/08/2026
+# Estado da sessão — 25/08/2026 (atualizado ao fim da sessão)
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
@@ -13,13 +13,17 @@ pendente e por quê — informação que não está no código nem no git log.
 | Repositório | `github.com/kelvindk9w/tws-panel` |
 | Branch de desenvolvimento | `dev` (default do repo) |
 | Branch de instalação | `main` — protegida, exige Pull Request |
-| PR aberto | **#8** — promove `dev` → `main`, aguardando merge |
-| Branch do PR | `release/promote-dev-to-main` |
+| PR #8 | **MESCLADO** (squash) — promoveu `dev` → `main` |
+| Sincronização | **feita** — `dev` e `main` com o mesmo conteúdo |
 
-**Atenção:** os dois commits mais recentes (ajustes do README sobre SSH/sudo e a
-serialização das escritas de jobs) nasceram na branch do PR. Depois que o #8 for
-mesclado, **a `dev` precisa ser sincronizada com a `main`**, senão volta a
-divergir — que foi exatamente o problema que originou o PR.
+**A `main` está pronta para instalação**: RCE fechado, validação de schema, Dockerfile
+corrigido, README completo, CI verde nos dois jobs. É o que o README manda clonar.
+
+**Cuidado que originou o PR #8, para não repetir:** a `main` tinha ficado 96 commits
+atrás enquanto o README dirigia instalações reais a ela — ou seja, o caminho
+documentado entregava software vulnerável. Sempre que houver trabalho relevante na
+`dev`, promova. O README agora tem um comando para o usuário conferir isso antes de
+instalar.
 
 ## O que foi feito nesta sessão
 
@@ -69,10 +73,14 @@ de e-mail deixaram de ser silenciosas; auditoria arquiva em vez de descartar.
 ## Pendências — o que fazer a seguir
 
 ### Imediato
-1. **Mesclar o PR #8** e depois **sincronizar a `dev` com a `main`**.
-2. **Instalação na VPS** — a primeira tentativa falhou porque a `main` estava
-   desatualizada (Dockerfile copiava `scripts/` depois do `pnpm install` que
-   depende dele). Corrigido; falta repetir o teste.
+1. **Instalação na VPS — em andamento.** A primeira tentativa falhou porque a `main`
+   estava desatualizada (o Dockerfile copiava `scripts/` depois do `pnpm install` que
+   depende dele). Corrigido e mesclado. O usuário resetou a VPS e está refazendo o
+   fluxo do zero.
+   - Ao reconectar após o reset, o SSH avisa que a identidade do host mudou. É
+     esperado (o SO foi reinstalado): `ssh-keygen -f ~/.ssh/known_hosts -R SEU_IP`.
+   - Nada foi validado numa máquina real ainda: DNS, emissão de certificado TLS,
+     porta 25 do provedor e o hardening aplicado de verdade só se provam lá.
 
 ### Próximo bloco de trabalho: repositórios privados
 Ordem definida com o usuário, **nesta sequência**:
@@ -128,6 +136,25 @@ Ordem definida com o usuário, **nesta sequência**:
 - **Espera fixa em teste é falso negativo esperando acontecer.** Dois testes
   intermitentes vieram de `setTimeout` fixo aguardando escrita assíncrona. A
   correção é esperar pela condição ou expor um `flush()`, nunca aumentar o sono.
+
+## Detalhes que custaram tempo e vale saber de antemão
+
+- **A `main` é protegida** (`protect-main`): push direto é rejeitado, só entra por Pull
+  Request. Isso é correto e foi respeitado — quando o push falhou, o caminho foi abrir
+  PR, nunca contornar. `protect-dev` também está ativa, mas aceita push direto.
+- **O PR #8 foi mesclado com squash**, então a `main` tem a release como um commit único
+  sem história compartilhada com a `dev`. Sincronizar depois disso gera conflitos que são
+  artefato da história divergente, não de conteúdo: resolver favorecendo a `main` funciona,
+  mas **verifique antes que ela é superconjunto** (foi o caso — as linhas que só a `dev`
+  tinha eram versões antigas de trechos reescritos).
+- **Hook local verde não significa CI verde.** O pre-push roda testes, cobertura e build;
+  o CI roda isso **mais o scan de imagem**, que precisa construir o Dockerfile. Confira com
+  `gh run list` e compare o SHA testado com o topo da branch — CI verde de dois commits
+  atrás não diz nada.
+- **Ao investigar um teste intermitente, varra o arquivo inteiro pelo mesmo padrão.** A
+  causa era sempre a mesma (esperar por tempo fixo em vez de por condição) e estava em três
+  lugares: dois no teste do terminal e um no de jobs de segurança. Corrigir só a linha que
+  apitou fez o problema voltar duas vezes.
 
 ## Convenções observadas
 
