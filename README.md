@@ -12,37 +12,48 @@
 
 ## Por que este projeto existe?
 
-A TWS pagava **R$50/mês** em um plano de hospedagem praticamente só para ter e-mail
-profissional para **1 cliente**. Testamos painéis pesados que assumiam o controle de toda a
-máquina (e quebravam stacks que já funcionavam) e hospedagens que nos deixavam na mão. Então
-decidimos construir o painel que queríamos ter encontrado: **leve, não-invasivo e seguro desde
-o primeiro boot** — e liberar para a comunidade sob licença MIT.
+A TWS mantinha um plano de hospedagem mensal usado basicamente para ter e-mails profissionais.
+Quando surgiu a chance de testar um serviço alternativo, mais simples e nacional, topamos —
+por uma escolha deliberada de apoiar outros empreendedores brasileiros.
+No começo funcionou bem: migramos projetos reais, principalmente sites institucionais de
+clientes.
+
+Até que um dia precisamos fazer algo trivial — atualizar o número de WhatsApp de um cliente no
+site — e não conseguimos. Abrimos um chamado pelo canal oficial de suporte do serviço e
+ficamos dias sem resposta, sem qualquer posicionamento. Com o projeto do cliente parado e
+nenhuma previsão de solução, a sensação foi a de um serviço abandonado.
+
+Essa experiência deixou claro que o problema não era só nosso: é o medo que trava qualquer
+pessoa na hora de colocar um projeto real na infraestrutura de outra empresa — não o medo do
+serviço cair, mas o de ficar sem resposta, sem aviso e sem saída. Em vez de sair atrás de outro
+fornecedor, decidimos construir nossa própria infraestrutura. O TWS Panel nasceu disso — e
+agora está aberto para quem tiver o mesmo receio.
 
 ## O que é
 
-Um painel open-source que transforma uma VPS Ubuntu 22.04/24.04 crua em uma plataforma de
-hospedagem pessoal. Você roda **um comando** e um assistente web passo a passo protege a máquina,
-configura o painel e deixa tudo pronto para publicar projetos com Docker, domínios com SSL
-automático e e-mail profissional com DKIM/SPF/DMARC.
+O TWS Panel transforma uma VPS Ubuntu 22.04/24.04 crua em uma plataforma de hospedagem própria.
+Um único comando abre um assistente web que conduz o processo do início ao fim: protege a
+máquina, instala e configura o painel, e deixa tudo pronto para publicar projetos com Docker,
+domínios com SSL automático e e-mail profissional com DKIM/SPF/DMARC.
 
 **Princípios**
 
-- **Não-invasivo** — trabalha *com* o Docker que já existe na máquina; nunca mexe em stacks que já funcionam.
-- **Segurança primeiro** — nada sobe antes do hardening; baseline + monitoramento contínuo.
-- **Minimalista** — a VPS fica com o mínimo de pacotes; painel leve (Fastify + arquivos JSON em disco, sem banco de dados algum).
-- **Open source** — MIT, pensado para contribuição desde o dia 1.
+- **Não-invasivo** — usa o Docker que já está na máquina; não mexe nas stacks que já funcionam.
+- **Segurança primeiro** — nada entra no ar antes do hardening da VPS; depois, baseline registrado e monitoramento contínuo.
+- **Minimalista** — instala o mínimo de pacotes na VPS; o próprio painel é leve (Fastify + arquivos JSON em disco, sem banco de dados).
+- **Open source** — licença MIT, aberto a contribuições desde o primeiro commit.
 
 ## Funcionalidades
 
 | Módulo | O que faz |
 |---|---|
-| **🖥️ Terminal web embutido** | **Visão dupla** nos 4 passos do wizard: em cima a UI formatada (cards/fases), embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), numa janela contida estilo IDE — **bloqueado até o setup token ser validado** e recolhido por padrão. As varreduras e as fases de hardening rodam DENTRO dele — você vê os comandos de verdade (`cat /etc/os-release`, checks do Lynis, scripts de fase), como no SSH. Prompts de senha/confirmação são digitados direto no terminal: o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita (audita só conexão/desconexão). |
-| **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. Disponível também **depois da instalação**, em `/security/hardening`, para revisar ou reaplicar quando quiser. |
-| **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. Nome, repositório, branch e domínio são **editáveis depois de criado**, e a tela mostra qual branch está de fato no ar quando a configuração diverge do último deploy. |
-| **🌿 Múltiplos ambientes** | O mesmo repositório pode ser hospedado mais de uma vez em branches e domínios diferentes — produção em `main` e sandbox em outra branch, lado a lado na mesma VPS. Cada projeto tem clone, imagem, containers e rede próprios; só o domínio precisa ser único. |
-| **📧 E-mail** | Servidor **Stalwart** (SMTP + IMAP + DKIM em um container), par **DKIM RSA 2048** gerado por domínio, **checklist DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) com valores prontos para colar no provedor, texto pronto para abrir chamado de PTR, criação de caixas com **credenciais prontas para Outlook/Gmail/Thunderbird**, e injeção automática de variáveis SMTP nos seus projetos. |
-| **🚧 Guardrails** | **6 regras** de segurança de deploy em 3 níveis (`block`, `warn`, `info`): porta de banco exposta no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado no código, tag `:latest`. Blocks exigem **override explícito e auditado**, com evidência e sugestão de correção. |
-| **📊 Monitoramento** | **Baseline** pós-hardening (pacotes, portas, hashes de arquivos críticos) + scans recorrentes com **diff** (o que mudou vira alerta), verificação de **blacklist de e-mail** (Spamhaus ZEN, SpamCop, Barracuda, Spamhaus DBL), central de alertas e **log de auditoria** de todas as ações sensíveis. |
+| **🖥️ Terminal web embutido** | Nos 4 passos do wizard, a tela mostra **visão dupla**: em cima a UI formatada em cards e fases, embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), numa janela contida estilo IDE — **bloqueado até o setup token ser validado** e recolhido por padrão. As varreduras e as fases de hardening rodam DENTRO dele: você vê os comandos de verdade (`cat /etc/os-release`, checks do Lynis, scripts de fase), como faria por SSH. Prompts de senha e confirmação são digitados direto no terminal — o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita, só audita conexão e desconexão. |
+| **🛡️ Wizard de segurança** | Um scan com **Lynis** e checks próprios dá o score antes e depois. O hardening roda em fases idempotentes — SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE e outras — com backup de cada arquivo alterado. Um **rollback automático** fica agendado e só é cancelado depois que você confirma que ainda tem acesso. Disponível também **depois da instalação**, em `/security/hardening`, para revisar ou reaplicar quando quiser. |
+| **🚀 Deploy** | **3 modos de ingestão**: git com branch configurável, upload de diretório, ou adoção de um compose existente sem reescrevê-lo. O tipo de pipeline é **detectado automaticamente** (estático, Node, Dockerfile, compose). Um **Caddy central** cuida do SSL automático e do reload sem downtime, com suporte a WebSocket e conexões longas, e os logs de deploy aparecem em tempo real. Nome, repositório, branch e domínio são **editáveis depois de criado**, e a tela mostra qual branch está de fato no ar quando a configuração diverge do último deploy. |
+| **🌿 Múltiplos ambientes** | O mesmo repositório pode rodar mais de uma vez, em branches e domínios diferentes — produção em `main`, sandbox em outra branch, lado a lado na mesma VPS. Cada instância tem clone, imagem, containers e rede próprios; só o domínio precisa ser único. |
+| **📧 E-mail** | Um único container **Stalwart** cobre SMTP, IMAP e DKIM. Cada domínio ganha seu par de chaves **DKIM RSA 2048**, e um **checklist de DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) traz os valores prontos para colar no provedor — inclusive um texto pronto para abrir chamado de PTR. Criar uma caixa gera **credenciais prontas para Outlook, Gmail ou Thunderbird**, e as variáveis SMTP são injetadas automaticamente nos seus projetos. |
+| **🚧 Guardrails** | **6 regras** de segurança de deploy, em 3 níveis (`block`, `warn`, `info`): porta de banco exposta no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado no código, tag `:latest`. Um bloqueio (`block`) só passa com **override explícito e auditado**, com evidência do problema e sugestão de correção. |
+| **📊 Monitoramento** | Depois do hardening, um **baseline** registra pacotes, portas e hashes de arquivos críticos. Scans recorrentes comparam o estado atual com esse baseline, e qualquer mudança vira alerta (**diff**). Também verifica se o domínio caiu em **blacklist de e-mail** (Spamhaus ZEN, SpamCop, Barracuda, Spamhaus DBL), e mantém uma central de alertas e um **log de auditoria** de todas as ações sensíveis. |
 
 ## Instalação — VPS limpa do zero
 
@@ -944,9 +955,9 @@ o acesso a ele, garanta antes que o console do seu provedor funciona.
 
 O **TWS Panel** é um projeto open source mantido pela **TWS**, software house fundada e liderada
 pelo CEO **Kelvin**. A TWS desenvolve soluções web, sistemas e automações sob medida para
-clientes — e este projeto nasceu de uma dor real da própria empresa: pagar hospedagem cara
-praticamente só para ter e-mail profissional. Em vez de ficar só no uso interno, decidimos
-liberar o painel para a comunidade, sob licença MIT.
+clientes — e este projeto nasceu de uma dor real da própria empresa, contada logo no começo
+deste README: ficar com projetos de clientes parados, dependendo de uma resposta que não vinha.
+Em vez de ficar só no uso interno, decidimos liberar o painel para a comunidade, sob licença MIT.
 
 Quer conversar sobre parcerias, projetos ou contribuições?
 
