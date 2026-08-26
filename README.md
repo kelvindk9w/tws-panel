@@ -208,23 +208,35 @@ você está trabalhando.
 > está trabalhando, só quando realmente abandona a sessão.
 >
 > **Recomendamos deixar assim.** Mas se o seu caso exigir sessões ociosas mais longas (um build
-> demorado que você acompanha de longe, por exemplo), dá para ajustar depois da instalação:
+> demorado que você acompanha de longe, por exemplo), crie um arquivo **seu** com o nome exato
+> abaixo. Copie e cole as três linhas de uma vez — sem editor de texto, sem margem para erro de
+> digitação:
 >
 > ```bash
-> sudo nano /etc/ssh/sshd_config.d/99-tws-panel.conf
-> #   para ~1 hora:      ClientAliveInterval 600   e   ClientAliveCountMax 6
-> #   para desligar:     ClientAliveInterval 0     e   ClientAliveCountMax 0
+> printf 'ClientAliveInterval 600\nClientAliveCountMax 6\n' | sudo tee /etc/ssh/sshd_config.d/10-local-override.conf
 > sudo sshd -t && sudo systemctl restart ssh
+> sudo sshd -T | grep -i clientalive
 > ```
 >
-> O `sshd -t` confere o arquivo **antes** de reiniciar — sem ele, um erro de digitação pode
-> impedir o SSH de subir e te deixar sem acesso à máquina. Mantenha a janela atual aberta e
-> teste a reconexão em **outra** antes de fechar a que funciona.
+> O tempo até a desconexão é `ClientAliveInterval` **×** `ClientAliveCountMax` — acima, 600 × 6 =
+> **1 hora**. Para nunca desconectar por ociosidade, use `0` nos dois valores (não recomendamos).
 >
-> **E quando terminar o que precisava**, volte ao padrão. É um comando só:
+> **O nome do arquivo não é decoração.** O painel grava a configuração dele em
+> `99-paas-hardening.conf`, e o SSH lê os arquivos dessa pasta em ordem alfabética valendo **o
+> primeiro valor que encontrar**. Um arquivo começando por `10-` é lido antes e por isso vence; um
+> `99-alguma-coisa` seria lido depois do painel e simplesmente não teria efeito nenhum.
+>
+> As duas últimas linhas são a sua rede de proteção. O `sshd -t` confere o arquivo **antes** de
+> reiniciar — sem ele, um erro de digitação pode impedir o SSH de subir e te deixar sem acesso à
+> máquina. O `sshd -T` mostra o que o servidor de fato adotou, então você não fica no achismo:
+> tem que aparecer `clientaliveinterval 600` e `clientalivecountmax 6`. Mantenha a janela atual
+> aberta e teste a reconexão em **outra** antes de fechar a que funciona.
+>
+> **E quando terminar o que precisava**, apague o arquivo. O padrão do painel volta a valer
+> sozinho, sem você precisar lembrar quais eram os valores originais:
 >
 > ```bash
-> sudo sed -i 's/^ClientAliveInterval .*/ClientAliveInterval 300/; s/^ClientAliveCountMax .*/ClientAliveCountMax 2/' /etc/ssh/sshd_config.d/99-tws-panel.conf
+> sudo rm /etc/ssh/sshd_config.d/10-local-override.conf
 > sudo sshd -t && sudo systemctl restart ssh
 > ```
 

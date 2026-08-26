@@ -151,6 +151,14 @@ Ordem definida com o usuário, **nesta sequência**:
   o CI roda isso **mais o scan de imagem**, que precisa construir o Dockerfile. Confira com
   `gh run list` e compare o SHA testado com o topo da branch — CI verde de dois commits
   atrás não diz nada.
+- **Drop-in de sshd: o primeiro arquivo vence, não o último.** O README mandava o usuário criar
+  `99-tws-panel.conf` para afrouxar o timeout de sessão ociosa, mas o painel grava
+  `99-paas-hardening.conf` — que ordena antes e, pela semântica do OpenSSH (*the first obtained
+  value will be used*), ganha. O override do usuário virava letra morta em silêncio, só depois de
+  aplicar o hardening. Corrigido para `10-local-override.conf`. Ao contrário de systemd/sysctl.d,
+  em `sshd_config.d` prefixo numérico **baixo** significa prioridade **alta**. E a verificação
+  honesta não é olhar o arquivo, é `sudo sshd -T | grep -i clientalive`, que mostra o que o
+  servidor de fato adotou.
 - **Ao investigar um teste intermitente, varra o arquivo inteiro pelo mesmo padrão.** A
   causa era sempre a mesma (esperar por tempo fixo em vez de por condição) e estava em três
   lugares: dois no teste do terminal e um no de jobs de segurança. Corrigir só a linha que
