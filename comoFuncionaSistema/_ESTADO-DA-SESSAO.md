@@ -151,6 +151,14 @@ Ordem definida com o usuário, **nesta sequência**:
   o CI roda isso **mais o scan de imagem**, que precisa construir o Dockerfile. Confira com
   `gh run list` e compare o SHA testado com o topo da branch — CI verde de dois commits
   atrás não diz nada.
+- **Squash merge invalida qualquer verificação baseada em ancestralidade.** O README mandava o
+  operador rodar `git log --oneline main..origin/dev | wc -l` e esperar `0` antes de instalar.
+  Como a `main` recebe cada release como um commit único, os commits originais da `dev` nunca
+  viram ancestrais dela: numa VPS real o comando devolveu **100** com apenas 3 arquivos de
+  diferença real, nenhum de produção. Pior, o texto mandava usar `git checkout dev` nesse caso —
+  a verificação criada para evitar instalar versão velha empurrava para a branch de
+  desenvolvimento. Corrigido para `git diff --stat origin/main origin/dev`, que compara conteúdo.
+  Regra geral: neste repositório, `A..B` mente; compare arquivos, não histórico.
 - **Drop-in de sshd: o primeiro arquivo vence, não o último.** O README mandava o usuário criar
   `99-tws-panel.conf` para afrouxar o timeout de sessão ociosa, mas o painel grava
   `99-paas-hardening.conf` — que ordena antes e, pela semântica do OpenSSH (*the first obtained

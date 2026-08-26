@@ -294,16 +294,26 @@ cd /opt/tws-panel && git checkout main
 > desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 > [!IMPORTANT]
-> **Confira que a `main` está em dia antes de instalar.** Rode:
+> **Confira que a `main` está em dia antes de instalar.** Já aconteceu de a `main` ficar 96
+> commits atrás enquanto este README mandava instalar a partir dela. Rode:
 >
 > ```bash
-> git fetch origin && git log --oneline main..origin/dev | wc -l
+> git fetch origin && git diff --stat origin/main origin/dev
 > ```
 >
-> O resultado esperado é `0`. Um número alto significa que a `main` ficou para trás da `dev` e
-> você estaria instalando uma versão antiga — inclusive sem correções de segurança já
-> publicadas. Nesse caso, [abra uma issue](https://github.com/kelvindk9w/tws-panel/issues)
-> avisando, e enquanto isso use `git checkout dev` para instalar a versão atual.
+> Contar commits de diferença não funciona aqui: cada versão liberada para a `main` entra como
+> um único commit (squash), então a contagem sempre mostra dezenas de commits mesmo quando o
+> conteúdo das duas branches é idêntico. O que importa é o conteúdo — por isso comparamos os
+> arquivos, não o histórico. Interprete o resultado assim:
+>
+> - **Nenhuma saída** — as branches têm o mesmo conteúdo. Pode instalar.
+> - **Poucos arquivos, e nenhum deles código do painel** — documentação (`README.md`, `docs/`,
+>   `comoFuncionaSistema/`) ou testes (`*.test.ts`). É trabalho em andamento que não muda nada do
+>   que roda na sua máquina. Pode instalar.
+> - **Arquivos dentro de `apps/` ou `packages/`** — há código de produção na `dev` que ainda não
+>   foi promovido para a `main`. Aí sim, [abra uma issue](https://github.com/kelvindk9w/tws-panel/issues)
+>   avisando, porque pode ser uma correção de segurança não publicada, e aguarde a promoção — a
+>   `dev` é a branch de desenvolvimento e não passa pelo mesmo processo de validação da `main`.
 
 **6. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
 
