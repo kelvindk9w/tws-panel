@@ -399,7 +399,35 @@ Digite "continuar" para prosseguir:
 
 </details>
 
-**7. Abra o painel** em `http://SEU_IP:9000`, cole o **setup token** exibido no terminal e siga o wizard:
+> [!IMPORTANT]
+> **Antes de abrir o painel: o link que o instalador imprime é HTTP puro, sem criptografia.**
+> O instalador termina mostrando algo como `http://SEU_IP:9000/?token=...`, e o navegador vai
+> marcar esse endereço como **"Não seguro"**. Não é alarme falso: é uma VPS com IP público, sem
+> TLS. Tudo que passa por ali — o setup token e, principalmente, a **senha da conta de
+> administrador** que você cria no passo 4 do wizard — viajaria legível pela internet. Ao
+> contrário do token, essa senha não expira: é a credencial permanente de um painel com acesso
+> ao socket do Docker (equivalente a root na máquina).
+>
+> **Recomendado — abra por túnel SSH.** Você já tem uma sessão SSH nesta VPS, então isso não
+> exige nada novo. No **seu computador** (não na VPS), abra uma **segunda janela** de terminal —
+> deixe a primeira aberta — e rode:
+>
+> ```bash
+> ssh -L 9000:localhost:9000 SEU_USUARIO@SEU_IP
+> ```
+>
+> Com essa janela aberta, acesse `http://localhost:9000/?token=SEU_TOKEN` no navegador. Ele
+> ainda vai mostrar **"Não seguro"** — é `http://localhost`, e dessa vez não tem problema: o
+> tráfego viaja criptografado dentro do túnel SSH e nada sai da sua máquina em texto claro.
+>
+> No Windows 10/11, o PowerShell já vem com `ssh` nativo — o mesmo comando acima funciona sem
+> instalar nada. No PuTTY, o equivalente fica em Connection → SSH → Tunnels (Source port `9000`,
+> Destination `localhost:9000`, Local).
+>
+> **Acesso direto pelo link do IP** só é tolerável em ambiente de teste descartável, cuja senha
+> de admin você não vai reaproveitar em lugar nenhum.
+
+**7. Abra o painel** — pelo túnel SSH acima (recomendado) ou, se aceitar o risco descrito acima, direto em `http://SEU_IP:9000` — cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -435,7 +463,20 @@ Quando a instalação termina, o terminal toca um "bip" e mostra um banner assim
 ██                                                                          ██
 ██████████████████████████████████████████████████████████████████████████████
 
-👉  PASSO ÚNICO AGORA: abra este link no seu navegador
+👉  PRÓXIMO PASSO: abra o painel no navegador
+
+Recomendado — acesse por túnel SSH.
+
+  1) Numa janela NOVA do terminal, no SEU COMPUTADOR (não na VPS), deixe aberto:
+
+      ssh -L 9000:localhost:9000 SEU_USUARIO@203.0.113.10
+
+  2) Com essa janela aberta, abra no navegador:
+
+      http://localhost:9000/?token=<seu-token-de-48-caracteres>
+
+Direto pelo IP — sem criptografia; use só em rede confiável ou ambiente de
+teste descartável:
 
       http://203.0.113.10:9000/?token=<seu-token-de-48-caracteres>
 
@@ -449,7 +490,9 @@ Quando a instalação termina, o terminal toca um "bip" e mostra um banner assim
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**O que fazer:** copie o **link completo** (`http://SEU-IP:9000/?token=...`) e cole no
+**O que fazer:** veja a explicação completa **acima** (túnel SSH recomendado). O link direto
+pelo IP funciona, mas trafega sem criptografia — copie o **link completo**
+(`http://SEU-IP:9000/?token=...` ou, pelo túnel, `http://localhost:9000/?token=...`) e cole no
 navegador. O link já leva o token embutido — não precisa digitar nada.
 
 **Fechou o terminal e perdeu o banner?** Sem pânico. Na VPS, rode qualquer um dos dois:
