@@ -308,20 +308,8 @@ O `ssh-keygen` faz duas perguntas:
   próxima conexão. Confira o resultado com `cat ~/.ssh/authorized_keys`: devem aparecer as duas
   linhas. Assim, perder um dispositivo não te deixa sem acesso.
 
-**Se você já perdeu a chave:**
-
-- O caminho é o **console do provedor da VPS** — Contabo, Hetzner, DigitalOcean e afins oferecem
-  um acesso via navegador (geralmente chamado "Console", "VNC" ou "Rescue"). Ele não passa pelo
-  SSH do servidor, então a restrição de login por senha não vale ali.
-- É por isso que o usuário criado **com senha** no passo 3 é uma rede de segurança: pelo console
-  do provedor, você entra com esse usuário e senha, e acrescenta uma chave nova em
-  `~/.ssh/authorized_keys`. Isso só funciona porque você criou a conta com senha — se o wizard
-  tivesse criado o usuário, ela ficaria sem senha, acessível só por chave, e essa saída não
-  existiria.
-- A senha do **root** fica travada pelo hardening — a recuperação é sempre pela conta do seu
-  usuário, nunca por root.
-- Se nem o console resolver, resta o modo de recuperação (rescue) do provedor, que monta o disco
-  a partir de outro sistema. É o último recurso; o procedimento varia por provedor.
+**Se você já perdeu a chave** — ou a senha, ou o acesso ao painel — veja
+[Perdi o acesso — e agora?](#perdi-o-acesso--e-agora), que cobre cada caso e o caminho de volta.
 
 </details>
 
@@ -746,6 +734,97 @@ diante todo acesso exige login (`/login`): as sessões são revogáveis, persist
 (cookie httpOnly, SameSite=Lax, expiração de 12h — nada de JWT stateless), o login tem rate limit
 de 5 tentativas/minuto por IP com lockout progressivo, e trocar a senha invalida as demais sessões.
 Login, logout, falhas e criação da conta admin ficam registrados no log de auditoria.
+
+## Perdi o acesso — e agora?
+
+O hardening fecha portas de propósito, e isso corta caminhos de volta. Esta seção existe para
+você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto para ele.
+
+| O que você perdeu | O que ainda funciona | Caminho de volta |
+|---|---|---|
+| Senha do **painel** (login web) | SSH na VPS | `./scripts/reset-setup.sh --full` |
+| Senha do **usuário Linux** (a do `sudo`) | SSH + painel | Terminal do painel → `passwd SEU_USUARIO` |
+| **Chave SSH** | Painel acessível | Terminal do painel → recoloca a chave |
+| **Chave SSH** | Console do provedor | Login com usuário e senha → recoloca a chave |
+| Tudo acima | — | Modo de recuperação (rescue) do provedor |
+
+> [!IMPORTANT]
+> **Confirme o seu caminho de recuperação ANTES de aplicar o hardening.** Entre no painel do seu
+> provedor e procure por "Console", "VNC", "Rescue" ou "Modo de recuperação". Se você não achar
+> nenhum, a prevenção descrita no Passo 4 deixa de ser recomendação e passa a ser obrigatória:
+> sem console, não existe rede de segurança e uma chave perdida pode significar reinstalar a
+> máquina do zero.
+
+### Perdi a senha do painel
+
+A conta de administrador do painel é independente do sistema. Com acesso SSH à VPS, apague a
+conta e refaça o Passo 4 do wizard:
+
+```bash
+cd /opt/tws-panel
+./scripts/reset-setup.sh --full
+./scripts/show-token.sh
+```
+
+O primeiro comando apaga a conta admin e todas as sessões (pede confirmação: digite `resetar`).
+O segundo mostra o setup token de novo, para você reabrir o wizard e criar uma conta nova.
+
+**Seus projetos, domínios, e-mail e histórico de segurança não são tocados.**
+
+### Perdi a senha do usuário Linux
+
+Essa é a mais traiçoeira, porque parece que está tudo bem: a chave SSH ainda te deixa entrar, mas
+nenhum `sudo` funciona — e o hardening travou a senha do root, então não dá para virar root pelo
+caminho normal.
+
+A saída é o **terminal embutido do painel**, que roda como root. No painel, abra o terminal e
+rode:
+
+```bash
+passwd SEU_USUARIO
+```
+
+Defina a nova senha e pronto. Se o painel também estiver inacessível, vá para o console do
+provedor ou o modo de recuperação.
+
+### Perdi a chave SSH
+
+Você precisa reinstalar uma chave nova em `~/.ssh/authorized_keys` do seu usuário. Gere um par
+novo no seu computador (Passo 4) e use um dos caminhos abaixo, na ordem:
+
+**1. Pelo terminal do painel** — se você ainda consegue entrar no painel. Ele roda como root, então
+acrescente a chave direto:
+
+```bash
+echo "COLE_AQUI_A_NOVA_CHAVE_PUBLICA" >> /home/SEU_USUARIO/.ssh/authorized_keys
+```
+
+**2. Pelo console do provedor** — o acesso via navegador não passa pelo SSH, então a restrição de
+login por senha não vale ali. Entre com o seu usuário e a senha, e rode o mesmo comando (sem o
+caminho completo, já que você está logado como ele):
+
+```bash
+echo "COLE_AQUI_A_NOVA_CHAVE_PUBLICA" >> ~/.ssh/authorized_keys
+```
+
+**3. Pelo modo de recuperação** — último recurso. O provedor inicia a máquina por outro sistema e
+monta o seu disco, permitindo editar o `authorized_keys` de fora. O procedimento varia por
+provedor; procure na documentação dele por "rescue mode".
+
+> [!WARNING]
+> Sempre `>>`, nunca `>`. Um `>` sozinho **apaga** as chaves que já estavam lá — inclusive a que
+> você talvez ainda estivesse usando. Confira o resultado com `cat ~/.ssh/authorized_keys` antes
+> de fechar a sessão, e teste a conexão numa janela nova **antes** de encerrar a que funciona.
+
+### O paradoxo do terminal do painel
+
+Você deve ter notado que o terminal embutido aparece duas vezes como salvação. Ele roda como root
+na máquina, o que é exatamente o motivo de ele ser o ponto mais sensível do sistema — e, pelo
+mesmo motivo, a porta dos fundos quando tudo o mais falha.
+
+Vale saber que é assim, e decidir conscientemente: manter o painel acessível é uma rede de
+segurança, mas é também a maior superfície de ataque da instalação. Se você optar por restringir
+o acesso a ele, garanta antes que o console do seu provedor funciona.
 
 ## Documentação
 
