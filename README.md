@@ -371,14 +371,42 @@ Vai aparecer **uma única linha**, longa, mais ou menos assim:
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8k2p... seu-usuario@seu-computador
 ```
 
+Se a linha apareceu, a chave está criada. **Agora instale ela na VPS**, enquanto a senha ainda
+funciona:
+
+```bash
+ssh-copy-id SEU_USUARIO@SEU_IP
+```
+
+Ele pede a senha do `adduser` uma última vez e grava a sua chave pública no servidor. No
+**Windows (PowerShell)**, onde o `ssh-copy-id` não existe, o equivalente é:
+
+```powershell
+Get-Content ~\.ssh\id_ed25519.pub | ssh SEU_USUARIO@SEU_IP "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+```
+
+**Agora teste, e é o teste que importa:**
+
+```bash
+ssh SEU_USUARIO@SEU_IP
+```
+
+Se você entrar **sem que ele peça a senha da conta**, está funcionando. Ele pode pedir a
+*passphrase da chave* — isso é outra coisa, é local, e não tem relação com o servidor.
+
 > [!IMPORTANT]
-> **Não precisa copiar nada agora.** Essa linha só vai ser usada lá no Passo de Segurança do
-> wizard — depois de instalar o git, clonar o repositório, rodar o instalador e abrir o painel.
-> Copiar agora não adianta: você usaria a área de transferência várias vezes até lá.
+> **Por que instalar e testar agora, e não deixar para o wizard.** O passo de Segurança desliga o
+> login por senha. Se a chave só for testada lá, o primeiro teste real acontece no pior momento
+> possível: com o hardening já aplicado e um rollback de 5 minutos correndo.
 >
-> **O que fazer agora:** se a linha apareceu começando com `ssh-ed25519`, sua chave está pronta.
-> Siga para o próximo passo. Quando o wizard pedir a chave pública, você volta a este terminal e
-> roda o mesmo `cat` de novo — aí sim copia e cola.
+> Fazendo aqui, você testa com calma e com a senha ainda ativa como rede de segurança. Se algo
+> estiver errado, dá para corrigir sem pressão. Quando chegar no wizard, o acesso por chave já é
+> um fato comprovado.
+
+> [!NOTE]
+> O wizard ainda vai **pedir a chave pública colada** na fase 01. Não é trabalho perdido: é ali
+> que ele registra qual usuário e qual chave o painel deve considerar. Quando chegar lá, volte a
+> este terminal, rode o `cat` de novo e cole a linha.
 
 > [!IMPORTANT]
 > O comando gera **dois arquivos**, e eles não são intercambiáveis:
@@ -418,20 +446,8 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8k2p... seu-usuario@seu-computador
 
 </details>
 
-Com a chave gerada e a linha pública copiada, volte para a VPS — agora com o usuário que você
-criou no Passo 3:
-
-```bash
-ssh SEU_USUARIO@SEU_IP   # a senha é a que você definiu no adduser
-```
-
-> [!NOTE]
-> **Ainda é a senha que te deixa entrar, e está tudo certo.** A chave só passa a valer quando o
-> wizard instalar a sua pública na VPS (fase 01 do passo de Segurança). Até lá, a senha é o
-> caminho normal.
-
-A partir daqui, **todos os passos são feitos na VPS, com esse usuário** — o que precisar de
-permissão de administrador vai pedir `sudo` e a sua senha.
+O teste acima já te deixou conectado na VPS. A partir daqui, **todos os passos são feitos lá,
+com esse usuário** — o que precisar de permissão de administrador vai pedir `sudo` e a sua senha.
 
 **5. Instale o git:**
 
