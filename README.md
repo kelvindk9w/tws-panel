@@ -210,17 +210,14 @@ Is the information correct? [Y/n]
 > acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
 > novo no passo de Segurança do wizard.
 
-**Agora entre na máquina com esse usuário.** Encerre a sessão de root e conecte de novo — assim
-a sessão é do seu usuário do começo ao fim, sem uma de root aberta por baixo:
+**Agora encerre a sessão de root.** Não vamos reconectar ainda — o próximo passo acontece no
+seu computador, e o `exit` já te deixa lá:
 
 ```bash
-exit                     # sai do root e fecha a conexão SSH
-ssh SEU_USUARIO@SEU_IP   # conecte de novo, já com o usuário que você acabou de criar
-                         # e a senha é a que você definiu no adduser
+exit    # sai do root e fecha a conexão SSH
 ```
 
-A partir daqui, **todos os passos são feitos como esse usuário** — o que precisar de permissão
-de administrador vai pedir `sudo` e a sua senha.
+Você volta para o terminal do seu computador. É de lá que o Passo 4 continua.
 
 <details>
 <summary>🤔 <strong>E o <code>su - SEU_USUARIO</code>, não serve?</strong></summary>
@@ -324,8 +321,9 @@ aberto, você não para no meio do processo para trocar de janela.
 > **A senha que você acabou de criar no `adduser` não vai embora.** O que muda é só a porta de
 > entrada remota (SSH). Dentro da máquina, essa senha continua sendo a que o `sudo` pede.
 
-Rode os comandos abaixo **no seu computador, não na VPS** — é lá que a chave precisa existir
-para você se autenticar depois.
+Você acabou de sair da VPS, então já está no lugar certo: os comandos abaixo rodam **no seu
+computador**. É nele que a chave precisa existir para você se autenticar depois — se ela fosse
+gerada na VPS, não serviria para entrar nela.
 
 **Linux, macOS ou WSL:**
 
@@ -385,6 +383,21 @@ O `ssh-keygen` faz duas perguntas:
 [Perdi o acesso — e agora?](#perdi-o-acesso--e-agora), que cobre cada caso e o caminho de volta.
 
 </details>
+
+Com a chave gerada e a linha pública copiada, volte para a VPS — agora com o usuário que você
+criou no Passo 3:
+
+```bash
+ssh SEU_USUARIO@SEU_IP   # a senha é a que você definiu no adduser
+```
+
+> [!NOTE]
+> **Ainda é a senha que te deixa entrar, e está tudo certo.** A chave só passa a valer quando o
+> wizard instalar a sua pública na VPS (fase 01 do passo de Segurança). Até lá, a senha é o
+> caminho normal.
+
+A partir daqui, **todos os passos são feitos na VPS, com esse usuário** — o que precisar de
+permissão de administrador vai pedir `sudo` e a sua senha.
 
 **5. Instale o git:**
 
