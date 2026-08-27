@@ -353,17 +353,32 @@ Ela é recomendada, e para não digitá-la a cada conexão você pode guardá-la
 eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
 ```
 
-**Quando o comando terminar**, mostre a sua chave pública para copiar:
+**Quando o comando terminar**, confira que a chave foi criada:
 
 ```bash
 cat ~/.ssh/id_ed25519.pub
 ```
 
-No **Windows (PowerShell)**, o comando para exibir é outro:
+No **Windows (PowerShell)** o comando para exibir é outro:
 
 ```powershell
 Get-Content ~\.ssh\id_ed25519.pub
 ```
+
+Vai aparecer **uma única linha**, longa, mais ou menos assim:
+
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8k2p... seu-usuario@seu-computador
+```
+
+> [!IMPORTANT]
+> **Não precisa copiar nada agora.** Essa linha só vai ser usada lá no Passo de Segurança do
+> wizard — depois de instalar o git, clonar o repositório, rodar o instalador e abrir o painel.
+> Copiar agora não adianta: você usaria a área de transferência várias vezes até lá.
+>
+> **O que fazer agora:** se a linha apareceu começando com `ssh-ed25519`, sua chave está pronta.
+> Siga para o próximo passo. Quando o wizard pedir a chave pública, você volta a este terminal e
+> roda o mesmo `cat` de novo — aí sim copia e cola.
 
 > [!IMPORTANT]
 > O comando gera **dois arquivos**, e eles não são intercambiáveis:
