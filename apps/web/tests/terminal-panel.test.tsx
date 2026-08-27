@@ -172,6 +172,16 @@ describe("TerminalPanel — habilitado", () => {
     expect(screen.getByText(/Interferir por conta própria pode interromper/)).toBeInTheDocument();
   });
 
+  it("explica por que a sessão aparece como root, sem jargão técnico", () => {
+    render(<TerminalPanel enabled={true} />);
+    expect(screen.getByText(/hardening do servidor exige/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/usuário não-root que você criou na instalação continua sendo o do seu acesso por SSH/i),
+    ).toBeInTheDocument();
+    // linguagem para quem pode não ser desenvolvedor: sem jargão de container
+    expect(screen.queryByText(/nsenter/i)).not.toBeInTheDocument();
+  });
+
   it("colapsa/expande e persiste o estado em sessionStorage", async () => {
     render(<TerminalPanel enabled={true} />);
     const toggle = screen.getByRole("button", { name: /Terminal do servidor/ });

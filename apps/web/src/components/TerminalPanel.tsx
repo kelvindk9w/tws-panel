@@ -31,7 +31,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { getSetupToken } from "@/lib/api";
-import { ChevronDown, ChevronUp, Lock, TerminalSquare } from "lucide-react";
+import { ChevronDown, ChevronUp, Info, Lock, TerminalSquare } from "lucide-react";
 
 /** Evento disparado pela UI (ex.: fase aguardando confirmação) para acender
  * o alerta pulsante do terminal ("olhe o terminal"). */
@@ -324,6 +324,16 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </span>
       </button>
+
+      {/* Por que a sessão é root — evita que o operador estranhe o "root@" no
+          prompt achando que o usuário não-root criado na instalação foi ignorado. */}
+      <p className="flex items-start gap-1.5 border-t border-white/5 px-4 py-1.5 text-[10px] leading-relaxed text-emerald-100/45">
+        <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+        <span>
+          Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário
+          não-root que você criou na instalação continua sendo o do seu acesso por SSH.
+        </span>
+      </p>
 
       {status === "busy" && (
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
