@@ -236,8 +236,9 @@ comum e peço permissão quando preciso".
 Isso vale ainda mais se você vai deixar a sessão aberta por um tempo: melhor que ela seja a do
 seu usuário, não a do root.
 
-**Se preferir o atalho mesmo assim**, é `su - SEU_USUARIO`. Funciona para seguir o passo a passo;
-só saiba que a sessão de root continua aberta ali atrás.
+**E por que não usamos esse atalho aqui?** Além da sessão de root que fica aberta, ele te
+mantém dentro da VPS — e o Passo 4 acontece no seu computador. Você teria que sair de qualquer
+forma, então o `exit` resolve as duas coisas de uma vez.
 
 </details>
 
