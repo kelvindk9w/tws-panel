@@ -26,8 +26,12 @@ nenhuma previsão de solução, a sensação foi a de um serviço abandonado.
 Essa experiência deixou claro que o problema não era só nosso: é o medo que trava qualquer
 pessoa na hora de colocar um projeto real na infraestrutura de outra empresa — não o medo do
 serviço cair, mas o de ficar sem resposta, sem aviso e sem saída. Em vez de sair atrás de outro
-fornecedor, decidimos construir nossa própria infraestrutura. O TWS Panel nasceu disso — e
-agora está aberto para quem tiver o mesmo receio.
+fornecedor, decidimos resolver a parte que nos deixava dependentes: a configuração.
+
+O TWS Panel não é uma hospedagem, e não quer ser a próxima empresa de quem você depende. É o
+painel que prepara a VPS para você — o hardening, o deploy, o domínio com SSL, o e-mail
+profissional — em qualquer provedor que você escolher. Se um dia quiser trocar de provedor,
+troca: o painel vai junto, e a infraestrutura continua sendo sua.
 
 ## O que é
 
@@ -244,7 +248,17 @@ Is the information correct? [Y/n]
 > acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
 > novo no passo de Segurança do wizard.
 
-**Ainda no passo 3 — a conexão está caindo sozinha quando você para de digitar?**
+> [!WARNING]
+> **Essa senha não vai bastar para entrar na VPS.** Ela te leva até aqui e continua sendo a que o
+> `sudo` pede dentro da máquina — mas o passo de Segurança do wizard **desliga o login por senha
+> no SSH**. A partir dali, quem entra é a sua chave.
+>
+> Por isso o **Passo 4, logo abaixo, não é opcional**: é onde você gera essa chave. Se pular, vai
+> travar no meio do wizard, com um cronômetro de 5 minutos correndo, tendo que sair para outro
+> terminal para resolver.
+
+<details>
+<summary>⏱️ <strong>A conexão está caindo sozinha quando você para de digitar?</strong> (opcional)</summary>
 
 Se você já percebeu a sessão fechando depois de alguns minutos parado, o culpado quase sempre
 é o **provedor da VPS**, não o servidor: firewalls de rede costumam descartar conexões que
@@ -300,6 +314,8 @@ você está trabalhando.
 > sudo rm /etc/ssh/sshd_config.d/10-local-override.conf
 > sudo sshd -t && sudo systemctl restart ssh
 > ```
+
+</details>
 
 **4. Gere sua chave SSH** — antes de ir para o wizard:
 
