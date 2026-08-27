@@ -326,26 +326,44 @@ Você acabou de sair da VPS, então já está no lugar certo: os comandos abaixo
 computador**. É nele que a chave precisa existir para você se autenticar depois — se ela fosse
 gerada na VPS, não serviria para entrar nela.
 
-**Linux, macOS ou WSL:**
+**Primeiro, gere o par de chaves.** O comando é o mesmo no Linux, no macOS, no WSL e no
+PowerShell do Windows:
 
 ```bash
 ssh-keygen -t ed25519
+```
+
+> [!WARNING]
+> **Rode só essa linha e espere.** O `ssh-keygen` é interativo: ele para e faz perguntas. Se você
+> colar mais de um comando de uma vez, o segundo vira **resposta** à primeira pergunta e a chave
+> acaba salva num arquivo com nome errado.
+
+Ele faz três perguntas, nesta ordem:
+
+| O que aparece | O que fazer |
+|---|---|
+| `Enter file in which to save the key (...id_ed25519):` | Só **Enter** — aceita o local padrão |
+| `Enter passphrase (empty for no passphrase):` | Digite uma senha. **Nada aparece na tela**, nem asterisco |
+| `Enter same passphrase again:` | Repita a mesma |
+
+A passphrase é uma senha extra que protege a chave caso alguém tenha acesso ao seu computador.
+Ela é recomendada, e para não digitá-la a cada conexão você pode guardá-la na sessão:
+
+```bash
+eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
+```
+
+**Quando o comando terminar**, mostre a sua chave pública para copiar:
+
+```bash
 cat ~/.ssh/id_ed25519.pub
 ```
 
-**Windows (PowerShell):**
+No **Windows (PowerShell)**, o comando para exibir é outro:
 
 ```powershell
-ssh-keygen -t ed25519
 Get-Content ~\.ssh\id_ed25519.pub
 ```
-
-O `ssh-keygen` faz duas perguntas:
-
-1. **Onde salvar o arquivo** — pressione Enter para aceitar o local padrão.
-2. **Passphrase** — recomendada; é uma senha extra só para usar a chave, e **nada aparece na
-   tela** enquanto você digita. Se não quiser digitá-la toda vez, rode `ssh-add` depois para
-   guardá-la na sessão atual.
 
 > [!IMPORTANT]
 > O comando gera **dois arquivos**, e eles não são intercambiáveis:
