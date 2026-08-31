@@ -223,17 +223,31 @@ describe("SecurityStep — plano de correção", () => {
     });
   });
 
-  it("tutorial guiado de chave SSH está presente na Fase 01 (o que é, para que serve, comandos por SO)", async () => {
+  it("tutorial guiado de chave SSH está recolhido por padrão e expande sob demanda na Fase 01", async () => {
     await reachPlanStage();
-    expect(screen.getByText(/Nunca usou chave SSH\? Aprenda em 2 minutos/)).toBeInTheDocument();
+    expect(screen.getByText(/Nunca usou chave SSH\? Veja como gerar em 2 minutos/)).toBeInTheDocument();
+    // fechado por padrão: o conteúdo do tutorial não aparece antes de expandir
+    expect(screen.queryByText(/O que é:/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Veja como gerar em 2 minutos/ }));
     expect(screen.getByText(/O que é:/)).toBeInTheDocument();
     expect(screen.getByText(/depois que o acesso root for desativado/)).toBeInTheDocument();
     expect(screen.getAllByText("ssh-keygen -t ed25519")).toHaveLength(2); // Windows + Linux/Mac
     expect(screen.getByText(/Windows \(PowerShell\)/)).toBeInTheDocument();
     expect(screen.getByText(/Linux \/ 🍎 macOS \(Terminal\)/)).toBeInTheDocument();
     expect(screen.getAllByText(/~\/\.ssh\/id_ed25519\.pub/).length).toBeGreaterThan(0);
-    // texto de validação/confirmação do usuário criado no README
-    expect(screen.getByText(/confirma que ele existe/)).toBeInTheDocument();
+  });
+
+  it("fase 01 explica que, se usuário e chave já existem, a fase ainda desativa a senha do root", async () => {
+    await reachPlanStage();
+    expect(screen.getByText(/desativar a senha do usuário root/i)).toBeInTheDocument();
+  });
+
+  it("campo de usuário tem placeholder curto e a explicação como texto auxiliar", async () => {
+    await reachPlanStage();
+    const campo = screen.getByLabelText(/Usuário não-root criado na instalação/);
+    expect(campo).toHaveAttribute("placeholder", "deploy");
+    expect(screen.getByText(/nome que você criou/i)).toBeInTheDocument();
   });
 
   it("valida o formato da chave ao colar e mostra 'Sua chave parece válida ✅'", async () => {

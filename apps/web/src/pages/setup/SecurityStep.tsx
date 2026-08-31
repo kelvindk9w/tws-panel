@@ -727,12 +727,12 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
                   instalar sua chave SSH
                 </CardTitle>
                 <CardDescription>
-                  Você já criou o <strong>usuário não-root</strong> no início da instalação (passo do
-                  README: <code>adduser</code> + <code>usermod -aG sudo</code>). Esta fase{" "}
-                  <strong>confirma que ele existe</strong>, instala a <strong>sua chave pública SSH</strong>{" "}
-                  nele e só então trava a senha do root (o login root via SSH é bloqueado na Fase
-                  02). A senha do root <strong>só é travada com a chave presente</strong> (proteção
-                  anti-lockout).
+                  Você provavelmente já criou esse <strong>usuário não-root</strong> e gerou a chave
+                  seguindo o README. Esta fase <strong>confirma que os dois estão certos</strong> e,
+                  se já estiverem, segue direto para o que falta:{" "}
+                  <strong>desativar a senha do usuário root</strong>, para que ela não possa mais ser
+                  usada para entrar no servidor. Isso só acontece depois que uma chave SSH válida
+                  estiver instalada — assim você nunca fica trancado para fora.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
@@ -746,8 +746,13 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
                     value={sshUser}
                     onChange={(e) => setSshUser(e.target.value)}
                     className="h-8 w-64 font-mono"
-                    placeholder="o nome que você criou (ex.: deploy)"
+                    placeholder="deploy"
                   />
+                  {sshUser.trim() === "" && (
+                    <p className="text-xs text-muted-foreground">
+                      O nome que você criou ao seguir o README (ex.: deploy).
+                    </p>
+                  )}
                   {sshUser.trim() !== "" && !sshUserOk && (
                     <p className="text-xs text-red-400">Nome inválido (minúsculas, sem espaços, nunca root).</p>
                   )}

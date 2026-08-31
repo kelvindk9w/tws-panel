@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { CopyButton } from "@/components/CopyButton";
-import { KeyRound } from "lucide-react";
+import { ChevronDown, ChevronRight, KeyRound } from "lucide-react";
 
 function CommandRow({ cmd }: { cmd: string }) {
   return (
@@ -17,15 +18,32 @@ function CommandRow({ cmd }: { cmd: string }) {
  * painel — o usuário só COLA a chave pública, e este guia ensina, passo a
  * passo e por sistema operacional, como gerar a chave no PRÓPRIO computador
  * e copiar o conteúdo do arquivo .pub.
+ *
+ * Recolhível e FECHADO por padrão: quem já tem a chave (o caminho recomendado
+ * pelo README) vai direto aos campos, sem rolar por um tutorial que não
+ * precisa. Quem nunca usou chave SSH abre o resumo e vê o passo a passo.
  */
 export function SshKeyGuide() {
+  const [open, setOpen] = useState(false);
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-secondary/20 p-4 text-sm">
-      <p className="flex items-center gap-2 font-medium">
-        <KeyRound className="h-4 w-4 text-amber-400" />
-        Nunca usou chave SSH? Aprenda em 2 minutos.
-      </p>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 text-left font-medium"
+      >
+        {open ? (
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
+        <KeyRound className="h-4 w-4 shrink-0 text-amber-400" />
+        Nunca usou chave SSH? Veja como gerar em 2 minutos.
+      </button>
 
+      {open && (
+      <>
       <div className="flex flex-col gap-1 text-xs leading-relaxed text-muted-foreground">
         <p>
           <strong className="text-foreground">O que é:</strong> um par de chaves criptográficas. A{" "}
@@ -91,6 +109,8 @@ export function SshKeyGuide() {
         acima mostrar uma linha começando com ssh-ed25519 ou ssh-rsa, não precisa gerar outra — use
         a que você já tem.
       </p>
+      </>
+      )}
     </div>
   );
 }

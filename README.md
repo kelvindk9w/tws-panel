@@ -12,37 +12,52 @@
 
 ## Por que este projeto existe?
 
-A TWS pagava **R$50/mês** em um plano de hospedagem praticamente só para ter e-mail
-profissional para **1 cliente**. Testamos painéis pesados que assumiam o controle de toda a
-máquina (e quebravam stacks que já funcionavam) e hospedagens que nos deixavam na mão. Então
-decidimos construir o painel que queríamos ter encontrado: **leve, não-invasivo e seguro desde
-o primeiro boot** — e liberar para a comunidade sob licença MIT.
+A TWS mantinha um plano de hospedagem mensal usado basicamente para ter e-mails profissionais.
+Quando surgiu a chance de testar um serviço alternativo, mais simples e nacional, topamos —
+por uma escolha deliberada de apoiar outros empreendedores brasileiros.
+No começo funcionou bem: migramos projetos reais, principalmente sites institucionais de
+clientes.
+
+Até que um dia precisamos fazer algo trivial — atualizar o número de WhatsApp de um cliente no
+site — e não conseguimos. Abrimos um chamado pelo canal oficial de suporte do serviço e
+ficamos dias sem resposta, sem qualquer posicionamento. Com o projeto do cliente parado e
+nenhuma previsão de solução, a sensação foi a de um serviço abandonado.
+
+Essa experiência deixou claro que o problema não era só nosso: é o medo que trava qualquer
+pessoa na hora de colocar um projeto real na infraestrutura de outra empresa — não o medo do
+serviço cair, mas o de ficar sem resposta, sem aviso e sem saída. Em vez de sair atrás de outro
+fornecedor, decidimos resolver a parte que nos deixava dependentes: a configuração.
+
+O TWS Panel não é uma hospedagem, e não quer ser a próxima empresa de quem você depende. É o
+painel que prepara a VPS para você — o hardening, o deploy, o domínio com SSL, o e-mail
+profissional — em qualquer provedor que você escolher. Se um dia quiser trocar de provedor,
+troca: o painel vai junto, e a infraestrutura continua sendo sua.
 
 ## O que é
 
-Um painel open-source que transforma uma VPS Ubuntu 22.04/24.04 crua em uma plataforma de
-hospedagem pessoal. Você roda **um comando** e um assistente web passo a passo protege a máquina,
-configura o painel e deixa tudo pronto para publicar projetos com Docker, domínios com SSL
-automático e e-mail profissional com DKIM/SPF/DMARC.
+O TWS Panel transforma uma VPS Ubuntu 22.04/24.04 crua em uma plataforma de hospedagem própria.
+Um único comando abre um assistente web que conduz o processo do início ao fim: protege a
+máquina, instala e configura o painel, e deixa tudo pronto para publicar projetos com Docker,
+domínios com SSL automático e e-mail profissional com DKIM/SPF/DMARC.
 
 **Princípios**
 
-- **Não-invasivo** — trabalha *com* o Docker que já existe na máquina; nunca mexe em stacks que já funcionam.
-- **Segurança primeiro** — nada sobe antes do hardening; baseline + monitoramento contínuo.
-- **Minimalista** — a VPS fica com o mínimo de pacotes; painel leve (Fastify + arquivos JSON em disco, sem banco de dados algum).
-- **Open source** — MIT, pensado para contribuição desde o dia 1.
+- **Não-invasivo** — usa o Docker que já está na máquina; não mexe nas stacks que já funcionam.
+- **Segurança primeiro** — nada entra no ar antes do hardening da VPS; depois, baseline registrado e monitoramento contínuo.
+- **Minimalista** — instala o mínimo de pacotes na VPS; o próprio painel é leve (Fastify + arquivos JSON em disco, sem banco de dados).
+- **Open source** — licença MIT, aberto a contribuições desde o primeiro commit.
 
 ## Funcionalidades
 
 | Módulo | O que faz |
 |---|---|
-| **🖥️ Terminal web embutido** | **Visão dupla** nos 4 passos do wizard: em cima a UI formatada (cards/fases), embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), numa janela contida estilo IDE — **bloqueado até o setup token ser validado** e recolhido por padrão. As varreduras e as fases de hardening rodam DENTRO dele — você vê os comandos de verdade (`cat /etc/os-release`, checks do Lynis, scripts de fase), como no SSH. Prompts de senha/confirmação são digitados direto no terminal: o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita (audita só conexão/desconexão). |
-| **🛡️ Wizard de segurança** | Scan com **Lynis** + checks próprios (score antes/depois), hardening idempotente em fases (SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE…), backup de cada arquivo alterado e **rollback automático** agendado — cancelado só depois que você confirma que continua com acesso. Disponível também **depois da instalação**, em `/security/hardening`, para revisar ou reaplicar quando quiser. |
-| **🚀 Deploy** | **3 modos de ingestão** (git com branch configurável, upload de diretório, ou adoção de um compose existente — sem reescrevê-lo), **detecção automática** de pipeline (estático Node, Dockerfile, compose), **Caddy central** com SSL automático e reload sem downtime, suporte a WebSocket/conexões longas, logs de deploy em tempo real. Nome, repositório, branch e domínio são **editáveis depois de criado**, e a tela mostra qual branch está de fato no ar quando a configuração diverge do último deploy. |
-| **🌿 Múltiplos ambientes** | O mesmo repositório pode ser hospedado mais de uma vez em branches e domínios diferentes — produção em `main` e sandbox em outra branch, lado a lado na mesma VPS. Cada projeto tem clone, imagem, containers e rede próprios; só o domínio precisa ser único. |
-| **📧 E-mail** | Servidor **Stalwart** (SMTP + IMAP + DKIM em um container), par **DKIM RSA 2048** gerado por domínio, **checklist DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) com valores prontos para colar no provedor, texto pronto para abrir chamado de PTR, criação de caixas com **credenciais prontas para Outlook/Gmail/Thunderbird**, e injeção automática de variáveis SMTP nos seus projetos. |
-| **🚧 Guardrails** | **6 regras** de segurança de deploy em 3 níveis (`block`, `warn`, `info`): porta de banco exposta no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado no código, tag `:latest`. Blocks exigem **override explícito e auditado**, com evidência e sugestão de correção. |
-| **📊 Monitoramento** | **Baseline** pós-hardening (pacotes, portas, hashes de arquivos críticos) + scans recorrentes com **diff** (o que mudou vira alerta), verificação de **blacklist de e-mail** (Spamhaus ZEN, SpamCop, Barracuda, Spamhaus DBL), central de alertas e **log de auditoria** de todas as ações sensíveis. |
+| **🖥️ Terminal web embutido** | Nos 4 passos do wizard, a tela mostra **visão dupla**: em cima a UI formatada em cards e fases, embaixo um **terminal real ao vivo** do servidor (xterm.js + WebSocket + PTY), numa janela contida estilo IDE — **bloqueado até o setup token ser validado** e recolhido por padrão. As varreduras e as fases de hardening rodam DENTRO dele: você vê os comandos de verdade (`cat /etc/os-release`, checks do Lynis, scripts de fase), como faria por SSH. Prompts de senha e confirmação são digitados direto no terminal — o backend faz **relay puro** do PTY e **nunca lê, loga ou armazena** o que você digita, só audita conexão e desconexão. |
+| **🛡️ Wizard de segurança** | Um scan com **Lynis** e checks próprios dá o score antes e depois. O hardening roda em fases idempotentes — SSH, UFW, fail2ban, unattended-upgrades, auditd/AIDE e outras — com backup de cada arquivo alterado. Um **rollback automático** fica agendado e só é cancelado depois que você confirma que ainda tem acesso. Disponível também **depois da instalação**, em `/security/hardening`, para revisar ou reaplicar quando quiser. |
+| **🚀 Deploy** | **3 modos de ingestão**: git com branch configurável, upload de diretório, ou adoção de um compose existente sem reescrevê-lo. O tipo de pipeline é **detectado automaticamente** (estático, Node, Dockerfile, compose). Um **Caddy central** cuida do SSL automático e do reload sem downtime, com suporte a WebSocket e conexões longas, e os logs de deploy aparecem em tempo real. Nome, repositório, branch e domínio são **editáveis depois de criado**, e a tela mostra qual branch está de fato no ar quando a configuração diverge do último deploy. |
+| **🌿 Múltiplos ambientes** | O mesmo repositório pode rodar mais de uma vez, em branches e domínios diferentes — produção em `main`, sandbox em outra branch, lado a lado na mesma VPS. Cada instância tem clone, imagem, containers e rede próprios; só o domínio precisa ser único. |
+| **📧 E-mail** | Um único container **Stalwart** cobre SMTP, IMAP e DKIM. Cada domínio ganha seu par de chaves **DKIM RSA 2048**, e um **checklist de DNS verificável** (A/AAAA/MX/SPF/DKIM/DMARC/PTR) traz os valores prontos para colar no provedor — inclusive um texto pronto para abrir chamado de PTR. Criar uma caixa gera **credenciais prontas para Outlook, Gmail ou Thunderbird**, e as variáveis SMTP são injetadas automaticamente nos seus projetos. |
+| **🚧 Guardrails** | **6 regras** de segurança de deploy, em 3 níveis (`block`, `warn`, `info`): porta de banco exposta no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado no código, tag `:latest`. Um bloqueio (`block`) só passa com **override explícito e auditado**, com evidência do problema e sugestão de correção. |
+| **📊 Monitoramento** | Depois do hardening, um **baseline** registra pacotes, portas e hashes de arquivos críticos. Scans recorrentes comparam o estado atual com esse baseline, e qualquer mudança vira alerta (**diff**). Também verifica se o domínio caiu em **blacklist de e-mail** (Spamhaus ZEN, SpamCop, Barracuda, Spamhaus DBL), e mantém uma central de alertas e um **log de auditoria** de todas as ações sensíveis. |
 
 ## Instalação — VPS limpa do zero
 
@@ -138,52 +153,16 @@ fingerprint fica salvo e a conexão é direta.
 **3. Crie o seu usuário não-root** — é ele quem vai operar a VPS daqui em diante:
 
 ```bash
-adduser kelvin           # troque "kelvin" pelo nome que quiser; você escolhe a senha na hora
-usermod -aG sudo kelvin  # dá permissão de administrador (sudo)
+adduser SEU_USUARIO           # troque SEU_USUARIO pelo nome que quiser; você escolhe a senha na hora
+usermod -aG sudo SEU_USUARIO  # dá permissão de administrador (sudo)
 ```
-
-Agora entre na conta que você acabou de criar. Há duas formas — a segunda é a recomendada,
-porque com ela você **sai de vez da conta de root**, em vez de ficar com ela aberta por baixo:
-
-```bash
-# Opção A — atalho: troca de usuário sem sair da sessão atual
-su - kelvin
-```
-
-```bash
-# Opção B (recomendada) — encerra a sessão root e entra direto como o novo usuário
-exit                     # sai do root e fecha a conexão SSH
-ssh kelvin@SEU_IP        # conecte de novo; "kelvin" é o usuário que você acabou de criar
-                         # e a senha é a que você definiu no adduser
-```
-
-A partir daqui, **todos os passos são feitos como esse usuário** — o que precisar de permissão
-de administrador vai pedir `sudo` e a sua senha.
-
-<details>
-<summary>🤔 <strong>Por que a opção B é a recomendada?</strong></summary>
-
-Com `su - kelvin` você continua **dentro da sessão do root** — apenas com outra identidade por
-cima. Um `exit` te devolve ao root em vez de encerrar o acesso, e é fácil esquecer que aquele
-terminal ainda tem uma sessão de root aberta embaixo.
-
-Entrando por SSH direto como o seu usuário, a sessão é dele do começo ao fim: `exit` encerra de
-verdade, e tudo que exigir privilégio vai passar por `sudo` — que pede senha e fica registrado
-no log do sistema. É a diferença entre "estou de root com outro chapéu" e "estou como usuário
-comum e peço permissão quando preciso".
-
-Isso também conversa com o passo anterior: se você configurou o keepalive e vai deixar a
-sessão aberta por um tempo, é melhor que ela seja a do seu usuário, não a do root.
-
-**A opção A não está errada** — funciona e é mais rápida se você só quer seguir o passo a passo
-agora. Só saiba que a sessão root continua ali atrás.
-
-</details>
 
 <details>
 <summary>👤 <strong>Travou no <code>adduser</code>? O que aparece e o que preencher</strong></summary>
 
-Ao rodar `adduser kelvin`, o sistema faz uma série de perguntas. É assim que aparece:
+Ao rodar `adduser SEU_USUARIO`, o sistema faz uma série de perguntas. Nos exemplos abaixo
+usamos "kelvin" como nome de exemplo — no seu caso vai aparecer o nome de usuário que você
+escolheu. É assim que aparece:
 
 ```text
 Adding user `kelvin' ...
@@ -229,9 +208,51 @@ Is the information correct? [Y/n]
 > **Por que antes de tudo?** Operar como root é um anti-padrão de segurança. Criando o usuário agora,
 > o wizard só precisa **validar** que ele existe (Fase 01 de segurança) em vez de criá-lo — e o
 > acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
-> novo no passo de Segurança do wizard.
+> novo na etapa de Segurança do wizard.
 
-**Ainda no passo 3 — a conexão está caindo sozinha quando você para de digitar?**
+**Agora encerre a sessão de root.** Não vamos reconectar ainda — o próximo passo acontece no
+seu computador, e o `exit` já te deixa lá:
+
+```bash
+exit    # sai do root e fecha a conexão SSH
+```
+
+Você volta para o terminal do seu computador. É de lá que o Passo 4 continua.
+
+<details>
+<summary>🤔 <strong>E o <code>su - SEU_USUARIO</code>, não serve?</strong></summary>
+
+Serve, e é mais rápido — mas tem um efeito colateral que vale conhecer.
+
+Com `su - SEU_USUARIO` você continua **dentro da sessão do root** — apenas com outra identidade por
+cima. Um `exit` te devolve ao root em vez de encerrar o acesso, e é fácil esquecer que aquele
+terminal ainda tem uma sessão de root aberta embaixo.
+
+Entrando por SSH direto como o seu usuário, a sessão é dele do começo ao fim: `exit` encerra de
+verdade, e tudo que exigir privilégio vai passar por `sudo` — que pede senha e fica registrado
+no log do sistema. É a diferença entre "estou de root com outro chapéu" e "estou como usuário
+comum e peço permissão quando preciso".
+
+Isso vale ainda mais se você vai deixar a sessão aberta por um tempo: melhor que ela seja a do
+seu usuário, não a do root.
+
+**E por que não usamos esse atalho aqui?** Além da sessão de root que fica aberta, ele te
+mantém dentro da VPS — e o Passo 4 acontece no seu computador. Você teria que sair de qualquer
+forma, então o `exit` resolve as duas coisas de uma vez.
+
+</details>
+
+> [!WARNING]
+> **Essa senha não vai bastar para entrar na VPS.** Ela te leva até aqui e continua sendo a que o
+> `sudo` pede dentro da máquina — mas a etapa de Segurança do wizard **desliga o login por senha
+> no SSH**. A partir dali, quem entra é a sua chave.
+>
+> Por isso o **Passo 4, logo abaixo, não é opcional**: é onde você gera essa chave. Se pular, vai
+> travar no meio do wizard, com um cronômetro de 5 minutos correndo, tendo que sair para outro
+> terminal para resolver.
+
+<details>
+<summary>⏱️ <strong>A conexão está caindo sozinha quando você para de digitar?</strong> (opcional)</summary>
 
 Se você já percebeu a sessão fechando depois de alguns minutos parado, o culpado quase sempre
 é o **provedor da VPS**, não o servidor: firewalls de rede costumam descartar conexões que
@@ -288,9 +309,11 @@ você está trabalhando.
 > sudo sshd -t && sudo systemctl restart ssh
 > ```
 
+</details>
+
 **4. Gere sua chave SSH** — antes de ir para o wizard:
 
-O passo de Segurança do wizard vai desligar o login por senha no SSH (fase 02 do hardening). A
+A etapa de Segurança do wizard vai desligar o login por senha no SSH (fase 02 do hardening). A
 partir daí, a chave é a sua porta de entrada — e o wizard **pede a chave pública já na primeira
 fase**, com um rollback automático de 5 minutos correndo. Gerando agora, com o terminal já
 aberto, você não para no meio do processo para trocar de janela.
@@ -299,29 +322,91 @@ aberto, você não para no meio do processo para trocar de janela.
 > **A senha que você acabou de criar no `adduser` não vai embora.** O que muda é só a porta de
 > entrada remota (SSH). Dentro da máquina, essa senha continua sendo a que o `sudo` pede.
 
-Rode os comandos abaixo **no seu computador, não na VPS** — é lá que a chave precisa existir
-para você se autenticar depois.
+Você acabou de sair da VPS, então já está no lugar certo: os comandos abaixo rodam **no seu
+computador**. É nele que a chave precisa existir para você se autenticar depois — se ela fosse
+gerada na VPS, não serviria para entrar nela.
 
-**Linux, macOS ou WSL:**
+**Primeiro, gere o par de chaves.** O comando é o mesmo no Linux, no macOS, no WSL e no
+PowerShell do Windows:
 
 ```bash
 ssh-keygen -t ed25519
+```
+
+> [!WARNING]
+> **Rode só essa linha e espere.** O `ssh-keygen` é interativo: ele para e faz perguntas. Se você
+> colar mais de um comando de uma vez, o segundo vira **resposta** à primeira pergunta e a chave
+> acaba salva num arquivo com nome errado.
+
+Ele faz três perguntas, nesta ordem:
+
+| O que aparece | O que fazer |
+|---|---|
+| `Enter file in which to save the key (...id_ed25519):` | Só **Enter** — aceita o local padrão |
+| `Enter passphrase (empty for no passphrase):` | Digite uma senha. **Nada aparece na tela**, nem asterisco |
+| `Enter same passphrase again:` | Repita a mesma |
+
+A passphrase é uma senha extra que protege a chave caso alguém tenha acesso ao seu computador.
+Ela é recomendada, e para não digitá-la a cada conexão você pode guardá-la na sessão:
+
+```bash
+eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
+```
+
+**Quando o comando terminar**, confira que a chave foi criada:
+
+```bash
 cat ~/.ssh/id_ed25519.pub
 ```
 
-**Windows (PowerShell):**
+No **Windows (PowerShell)** o comando para exibir é outro:
 
 ```powershell
-ssh-keygen -t ed25519
 Get-Content ~\.ssh\id_ed25519.pub
 ```
 
-O `ssh-keygen` faz duas perguntas:
+Vai aparecer **uma única linha**, longa, mais ou menos assim:
 
-1. **Onde salvar o arquivo** — pressione Enter para aceitar o local padrão.
-2. **Passphrase** — recomendada; é uma senha extra só para usar a chave, e **nada aparece na
-   tela** enquanto você digita. Se não quiser digitá-la toda vez, rode `ssh-add` depois para
-   guardá-la na sessão atual.
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8k2p... seu-usuario@seu-computador
+```
+
+Se a linha apareceu, a chave está criada. **Agora instale ela na VPS**, enquanto a senha ainda
+funciona:
+
+```bash
+ssh-copy-id SEU_USUARIO@SEU_IP
+```
+
+Ele pede a senha do `adduser` uma última vez e grava a sua chave pública no servidor. No
+**Windows (PowerShell)**, onde o `ssh-copy-id` não existe, o equivalente é:
+
+```powershell
+Get-Content ~\.ssh\id_ed25519.pub | ssh SEU_USUARIO@SEU_IP "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+```
+
+**Agora teste, e é o teste que importa:**
+
+```bash
+ssh SEU_USUARIO@SEU_IP
+```
+
+Se você entrar **sem que ele peça a senha da conta**, está funcionando. Ele pode pedir a
+*passphrase da chave* — isso é outra coisa, é local, e não tem relação com o servidor.
+
+> [!IMPORTANT]
+> **Por que instalar e testar agora, e não deixar para o wizard.** A etapa de Segurança desliga o
+> login por senha. Se a chave só for testada lá, o primeiro teste real acontece no pior momento
+> possível: com o hardening já aplicado e um rollback de 5 minutos correndo.
+>
+> Fazendo aqui, você testa com calma e com a senha ainda ativa como rede de segurança. Se algo
+> estiver errado, dá para corrigir sem pressão. Quando chegar no wizard, o acesso por chave já é
+> um fato comprovado.
+
+> [!NOTE]
+> O wizard ainda vai **pedir a chave pública colada** na fase 01. Não é trabalho perdido: é ali
+> que ele registra qual usuário e qual chave o painel deve considerar. Quando chegar lá, volte a
+> este terminal, rode o `cat` de novo e cole a linha.
 
 > [!IMPORTANT]
 > O comando gera **dois arquivos**, e eles não são intercambiáveis:
@@ -361,6 +446,9 @@ O `ssh-keygen` faz duas perguntas:
 
 </details>
 
+O teste acima já te deixou conectado na VPS. A partir daqui, **todos os passos são feitos lá,
+com esse usuário** — o que precisar de permissão de administrador vai pedir `sudo` e a sua senha.
+
 **5. Instale o git:**
 
 ```bash
@@ -386,8 +474,9 @@ Administrator. It usually boils down to these three things:
 **O que fazer:**
 
 1. O aviso é só cerimônia de boas-vindas (uma tradição do Linux) — não exige resposta.
-2. Em **`[sudo] password for kelvin:`**, digite **a senha do SEU usuário** (a que você criou
-   no `adduser`), **não** a senha de root.
+2. Em **`[sudo] password for kelvin:`** (no seu terminal vai aparecer o nome do usuário que
+   você criou, não "kelvin"), digite **a senha do SEU usuário** (a que você criou no
+   `adduser`), **não** a senha de root.
 3. Lembre-se: **nada aparece na tela enquanto você digita** — nem `*`. Digite e Enter.
 
 Esse aviso longo só aparece uma vez. Depois disso o `sudo` pede a senha direto — e, por
@@ -397,7 +486,7 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 
 - **`Sorry, try again.`** — senha errada. Você tem 3 tentativas antes de o comando falhar.
 - **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador.
-  Volte para a sessão de root e rode `usermod -aG sudo kelvin` (passo 3).
+  Volte para a sessão de root e rode `usermod -aG sudo SEU_USUARIO` (Passo 3 da instalação).
 
 </details>
 
@@ -447,11 +536,9 @@ cd /opt/tws-panel && git checkout main
 > portas). Você **não precisa digitar `sudo`**: rodando como o seu usuário comum, ele detecta
 > isso e se reexecuta via `sudo` sozinho, pedindo a sua senha. Se preferir ser explícito,
 > `sudo ./scripts/install.sh` faz exatamente a mesma coisa — os dois caminhos são equivalentes.
-
-Não precisa de `sudo` na frente: ao detectar que está rodando como usuário comum, o script **se
-reexecuta via sudo automaticamente** (chamar `sudo ./scripts/install.sh` também funciona — os dois
-caminhos são equivalentes). No final, ele ainda te adiciona ao **grupo docker**, para os comandos
-do dia a dia não precisarem de sudo (vale a partir do próximo login).
+>
+> No final, ele ainda te adiciona ao **grupo docker**, para os comandos do dia a dia não
+> precisarem de sudo (vale a partir do próximo login).
 
 > [!NOTE]
 > **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz verificações
@@ -525,7 +612,7 @@ Digite "continuar" para prosseguir:
 > O instalador termina mostrando algo como `http://SEU_IP:9000/?token=...`, e o navegador vai
 > marcar esse endereço como **"Não seguro"**. Não é alarme falso: é uma VPS com IP público, sem
 > TLS. Tudo que passa por ali — o setup token e, principalmente, a **senha da conta de
-> administrador** que você cria no passo 4 do wizard — viajaria legível pela internet. Ao
+> administrador** que você cria na última etapa do wizard — viajaria legível pela internet. Ao
 > contrário do token, essa senha não expira: é a credencial permanente de um painel com acesso
 > ao socket do Docker (equivalente a root na máquina).
 >
@@ -564,9 +651,9 @@ Digite "continuar" para prosseguir:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Como conduzir o Passo 3 (Segurança) com segurança
+### Como conduzir a etapa **Segurança** do wizard
 
-O Passo 3 aplica o hardening em **sete fases**, uma de cada vez: aplique, confirme, só então
+A etapa **Segurança** aplica o hardening em **sete fases**, uma de cada vez: aplique, confirme, só então
 avance para a próxima. Nunca dispare uma fase nova com a anterior ainda pendente de confirmação.
 
 | Fase | O que faz | Pede confirmação? |
@@ -601,7 +688,7 @@ necessária.
 > 4. **Só depois que a janela nova conectar de verdade**, volte ao painel e confirme.
 > 5. Se a janela nova **não** conectar: **não confirme**. Deixe os 5 minutos passarem — o
 >    servidor reverte sozinho a mudança, e você continua com o acesso da janela antiga.
-> 6. Mantenha a janela antiga aberta até o fim de todo o Passo 3, mesmo depois de confirmar cada
+> 6. Mantenha a janela antiga aberta até o fim de toda a etapa Segurança, mesmo depois de confirmar cada
 >    fase.
 >
 > **Teste específico da fase 01:** a conexão na janela nova precisa entrar **sem pedir a senha da
@@ -660,7 +747,7 @@ teste descartável:
 │   <seu-token-de-48-caracteres>                                            │
 │                                                                          │
 │   ⚠  Ele aparece SÓ AGORA em destaque. Guarde-o até concluir o wizard.   │
-│   ⚠  Após criar sua conta admin (passo 4 do wizard), ele é invalidado.   │
+│   ⚠  Após criar a conta admin no fim do wizard, ele é invalidado.        │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -682,8 +769,8 @@ docker exec tws-panel cat /data/setup-token   # mostra só o token
   logout/login uma vez (o instalador te adicionou ao grupo docker) ou rode com `sudo`.
 - **`setup token não encontrado... O painel está instalado?`** — o `show-token.sh` foi rodado
   numa máquina sem o painel instalado. Rode-o na VPS certa, de dentro de `/opt/tws-panel`.
-- **O token não funciona mais no navegador** — depois que você cria a conta admin (passo 4
-  do wizard), o token é **invalidado para sempre**. A partir daí o acesso é pela tela de
+- **O token não funciona mais no navegador** — depois que você cria a conta admin (última
+  etapa do wizard), o token é **invalidado para sempre**. A partir daí o acesso é pela tela de
   login, com seu usuário e senha do painel.
 
 </details>
@@ -806,7 +893,7 @@ socket nunca exposto via TCP, CORS same-origin por padrão, rate limiting, valid
 todas as rotas da API, logs com redação de segredos e auditoria de todas as ações sensíveis.
 
 > [!TIP]
-> Duas fases do hardening (Passo 3 do wizard) merecem atenção antes de rodar:
+> Duas fases do hardening (etapa **Segurança** do wizard) merecem atenção antes de rodar:
 >
 > - **Fase 05 (Minimização)** remove o `snapd` e o bloqueia. Se algum programa seu depende de
 >   snap, saiba disso antes — o rollback dessa fase restaura a configuração do APT, mas **não
@@ -828,8 +915,8 @@ Ambos estão documentados em detalhe, junto com o que o projeto **não** protege
 segurança conhecidas, em [comoFuncionaSistema/global/threat-model.json](comoFuncionaSistema/global/threat-model.json).
 Recomendamos não expor o painel à internet aberta: prefira VPN ou restrição por IP.
 
-**Autenticação:** o painel nasce protegido pelo setup token gerado na instalação; no Passo 4 do
-wizard você cria a conta de administrador (senha com hash argon2id, mínimo de 12 caracteres com
+**Autenticação:** o painel nasce protegido pelo setup token gerado na instalação; na etapa
+**Conta de administrador** do wizard você cria essa conta (senha com hash argon2id, mínimo de 12 caracteres com
 maiúsculas, minúsculas e números), o que conclui o setup e invalida o token para sempre. Daí em
 diante todo acesso exige login (`/login`): as sessões são revogáveis, persistidas no servidor
 (cookie httpOnly, SameSite=Lax, expiração de 12h — nada de JWT stateless), o login tem rate limit
@@ -852,14 +939,14 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 > [!IMPORTANT]
 > **Confirme o seu caminho de recuperação ANTES de aplicar o hardening.** Entre no painel do seu
 > provedor e procure por "Console", "VNC", "Rescue" ou "Modo de recuperação". Se você não achar
-> nenhum, a prevenção descrita no Passo 4 deixa de ser recomendação e passa a ser obrigatória:
+> nenhum, a prevenção descrita no Passo 4 da instalação deixa de ser recomendação e passa a ser obrigatória:
 > sem console, não existe rede de segurança e uma chave perdida pode significar reinstalar a
 > máquina do zero.
 
 ### Perdi a senha do painel
 
 A conta de administrador do painel é independente do sistema. Com acesso SSH à VPS, apague a
-conta e refaça o Passo 4 do wizard:
+conta e refaça a etapa **Conta de administrador** do wizard:
 
 ```bash
 cd /opt/tws-panel
@@ -891,7 +978,7 @@ provedor ou o modo de recuperação.
 ### Perdi a chave SSH
 
 Você precisa reinstalar uma chave nova em `~/.ssh/authorized_keys` do seu usuário. Gere um par
-novo no seu computador (Passo 4) e use um dos caminhos abaixo, na ordem:
+novo no seu computador (Passo 4 da instalação) e use um dos caminhos abaixo, na ordem:
 
 **1. Pelo terminal do painel** — se você ainda consegue entrar no painel. Ele roda como root, então
 acrescente a chave direto:
@@ -944,9 +1031,9 @@ o acesso a ele, garanta antes que o console do seu provedor funciona.
 
 O **TWS Panel** é um projeto open source mantido pela **TWS**, software house fundada e liderada
 pelo CEO **Kelvin**. A TWS desenvolve soluções web, sistemas e automações sob medida para
-clientes — e este projeto nasceu de uma dor real da própria empresa: pagar hospedagem cara
-praticamente só para ter e-mail profissional. Em vez de ficar só no uso interno, decidimos
-liberar o painel para a comunidade, sob licença MIT.
+clientes — e este projeto nasceu de uma dor real da própria empresa, contada logo no começo
+deste README: ficar com projetos de clientes parados, dependendo de uma resposta que não vinha.
+Em vez de ficar só no uso interno, decidimos liberar o painel para a comunidade, sob licença MIT.
 
 Quer conversar sobre parcerias, projetos ou contribuições?
 
