@@ -1,6 +1,6 @@
 # Política de Segurança
 
-O paas é um painel que **administra uma VPS inteira** — segurança é levada a sério por aqui.
+O TWS Panel é um painel que **administra uma VPS inteira** — segurança é levada a sério por aqui.
 Se você encontrou uma vulnerabilidade, agradecemos o reporte responsável.
 
 ## Reportando uma vulnerabilidade
@@ -46,7 +46,11 @@ Inclua, se possível:
 
 - **Wizard protegido por token** de uso único (comparação em tempo constante), gerado pelo
   instalador com permissão 0600;
-- **Nenhum shell arbitrário vindo da UI** — apenas ações pré-definidas e auditadas;
+- **Terminal web com root, por desenho** — é o que permite conduzir o hardening pela interface,
+  e é a maior superfície de ataque do sistema: quem tem sessão no painel tem a máquina. Isso
+  **não é uma vulnerabilidade a reportar** — está declarado em
+  [threat-model.json](comoFuncionaSistema/global/threat-model.json) como risco aceito. Falhas que
+  permitam chegar a esse terminal **sem sessão válida**, sim;
 - **Docker socket nunca exposto via TCP**; acesso somente pelo socket local;
 - **CORS same-origin** por padrão, headers de segurança (Helmet/CSP) e rate limiting;
 - **Segredos em disco com modo 0600** e **redação de tokens/senhas nos logs**;
@@ -54,8 +58,8 @@ Inclua, se possível:
   alterações de e-mail e monitoramento);
 - **Guardrails de deploy** que bloqueiam configurações perigosas (porta de banco exposta,
   credenciais fracas, container privilegiado) e exigem override explícito e auditado;
-- **Hardening com rollback automático**: o usuário nunca perde acesso à máquina por causa
-  de uma correção aplicada pelo painel.
+- **Hardening com rollback automático** nas três fases que mexem no acesso (usuário, SSH e
+  firewall): se ninguém confirmar em ~5 minutos, o servidor desfaz sozinho o que aplicou.
 
 ## Versões suportadas
 
