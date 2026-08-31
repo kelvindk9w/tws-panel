@@ -326,8 +326,28 @@ Você acabou de sair da VPS, então já está no lugar certo: os comandos abaixo
 computador**. É nele que a chave precisa existir para você se autenticar depois — se ela fosse
 gerada na VPS, não serviria para entrar nela.
 
-**Primeiro, gere o par de chaves.** O comando é o mesmo no Linux, no macOS, no WSL e no
-PowerShell do Windows:
+**Primeiro, veja se você já tem uma chave.** Se você já usa SSH para alguma coisa — GitHub,
+outro servidor, o trabalho — ela provavelmente já existe, e **gerar outra por cima apaga a
+antiga**. Rode:
+
+```bash
+ls -l ~/.ssh/*.pub
+```
+
+No **Windows (PowerShell)**:
+
+```powershell
+Get-ChildItem ~\.ssh\*.pub
+```
+
+- **Apareceu algum arquivo `.pub`** (`id_ed25519.pub`, `id_rsa.pub`…) — **você já tem chave e não
+  precisa gerar nenhuma.** Pule a geração e vá direto para **"Instale a chave na VPS"**, mais
+  abaixo. Se o seu arquivo tiver outro nome, é só trocar `id_ed25519` por ele nos comandos de lá:
+  uma chave `id_rsa` é mais antiga, mas o servidor aceita do mesmo jeito.
+- **`No such file or directory`** (ou nada) — você não tem chave ainda. Siga para o próximo bloco.
+
+**Agora sim, gere o par de chaves** (só se o comando acima não achou nada). É o mesmo comando no
+Linux, no macOS, no WSL e no PowerShell do Windows:
 
 ```bash
 ssh-keygen -t ed25519
@@ -345,6 +365,12 @@ Ele faz três perguntas, nesta ordem:
 | `Enter file in which to save the key (...id_ed25519):` | Só **Enter** — aceita o local padrão |
 | `Enter passphrase (empty for no passphrase):` | Digite uma senha. **Nada aparece na tela**, nem asterisco |
 | `Enter same passphrase again:` | Repita a mesma |
+
+> [!CAUTION]
+> **Se aparecer `id_ed25519 already exists. Overwrite (y/n)?`, responda `n`.** Você já tinha uma
+> chave e o comando está prestes a **apagá-la para sempre** — junto com o acesso a tudo que
+> dependia dela. Respondendo `n` o comando cancela sem estragar nada; volte ao bloco anterior e
+> siga pelo caminho "já tenho chave".
 
 A passphrase é uma senha extra que protege a chave caso alguém tenha acesso ao seu computador.
 Ela é recomendada, e para não digitá-la a cada conexão você pode guardá-la na sessão:
@@ -371,8 +397,9 @@ Vai aparecer **uma única linha**, longa, mais ou menos assim:
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8k2p... seu-usuario@seu-computador
 ```
 
-Se a linha apareceu, a chave está criada. **Agora instale ela na VPS**, enquanto a senha ainda
-funciona:
+Se a linha apareceu, a chave está criada.
+
+**Instale a chave na VPS** — agora, enquanto a senha ainda funciona:
 
 ```bash
 ssh-copy-id SEU_USUARIO@SEU_IP
