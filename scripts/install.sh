@@ -346,7 +346,7 @@ ${GREEN}${BOLD}█████████████████████�
 ${BOLD}👉  PRÓXIMO PASSO: abra o painel no navegador${RESET}
 
 ${BOLD}Recomendado — acesse por túnel SSH.${RESET} A senha de administrador que você vai
-criar no passo 4 do wizard é permanente: por túnel ela nunca trafega em texto
+criar na última etapa do wizard é permanente: por túnel ela nunca trafega em texto
 claro pela internet.
 
   1) Numa janela NOVA do terminal, no SEU COMPUTADOR (não na VPS), deixe aberto:
@@ -372,7 +372,7 @@ ${YELLOW}${BOLD}┌────────────────────�
 │   $SETUP_TOKEN                       │
 │                                                                          │
 │   ⚠  Ele aparece SÓ AGORA em destaque. Guarde-o até concluir o wizard.   │
-│   ⚠  Após criar sua conta admin (passo 4 do wizard), ele é invalidado.   │
+│   ⚠  Após criar a conta admin no fim do wizard, ele é invalidado.        │
 └──────────────────────────────────────────────────────────────────────────┘${RESET}
 
 ${BOLD}Perdeu o token? Recupere a qualquer momento com:${RESET}

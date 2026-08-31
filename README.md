@@ -208,7 +208,7 @@ Is the information correct? [Y/n]
 > **Por que antes de tudo?** Operar como root é um anti-padrão de segurança. Criando o usuário agora,
 > o wizard só precisa **validar** que ele existe (Fase 01 de segurança) em vez de criá-lo — e o
 > acesso root será travado no final do processo. **Anote o nome escolhido**: você vai digitá-lo de
-> novo no passo de Segurança do wizard.
+> novo na etapa de Segurança do wizard.
 
 **Agora encerre a sessão de root.** Não vamos reconectar ainda — o próximo passo acontece no
 seu computador, e o `exit` já te deixa lá:
@@ -244,7 +244,7 @@ forma, então o `exit` resolve as duas coisas de uma vez.
 
 > [!WARNING]
 > **Essa senha não vai bastar para entrar na VPS.** Ela te leva até aqui e continua sendo a que o
-> `sudo` pede dentro da máquina — mas o passo de Segurança do wizard **desliga o login por senha
+> `sudo` pede dentro da máquina — mas a etapa de Segurança do wizard **desliga o login por senha
 > no SSH**. A partir dali, quem entra é a sua chave.
 >
 > Por isso o **Passo 4, logo abaixo, não é opcional**: é onde você gera essa chave. Se pular, vai
@@ -313,7 +313,7 @@ você está trabalhando.
 
 **4. Gere sua chave SSH** — antes de ir para o wizard:
 
-O passo de Segurança do wizard vai desligar o login por senha no SSH (fase 02 do hardening). A
+A etapa de Segurança do wizard vai desligar o login por senha no SSH (fase 02 do hardening). A
 partir daí, a chave é a sua porta de entrada — e o wizard **pede a chave pública já na primeira
 fase**, com um rollback automático de 5 minutos correndo. Gerando agora, com o terminal já
 aberto, você não para no meio do processo para trocar de janela.
@@ -395,7 +395,7 @@ Se você entrar **sem que ele peça a senha da conta**, está funcionando. Ele p
 *passphrase da chave* — isso é outra coisa, é local, e não tem relação com o servidor.
 
 > [!IMPORTANT]
-> **Por que instalar e testar agora, e não deixar para o wizard.** O passo de Segurança desliga o
+> **Por que instalar e testar agora, e não deixar para o wizard.** A etapa de Segurança desliga o
 > login por senha. Se a chave só for testada lá, o primeiro teste real acontece no pior momento
 > possível: com o hardening já aplicado e um rollback de 5 minutos correndo.
 >
@@ -486,7 +486,7 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 
 - **`Sorry, try again.`** — senha errada. Você tem 3 tentativas antes de o comando falhar.
 - **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador.
-  Volte para a sessão de root e rode `usermod -aG sudo SEU_USUARIO` (passo 3).
+  Volte para a sessão de root e rode `usermod -aG sudo SEU_USUARIO` (Passo 3 da instalação).
 
 </details>
 
@@ -536,11 +536,9 @@ cd /opt/tws-panel && git checkout main
 > portas). Você **não precisa digitar `sudo`**: rodando como o seu usuário comum, ele detecta
 > isso e se reexecuta via `sudo` sozinho, pedindo a sua senha. Se preferir ser explícito,
 > `sudo ./scripts/install.sh` faz exatamente a mesma coisa — os dois caminhos são equivalentes.
-
-Não precisa de `sudo` na frente: ao detectar que está rodando como usuário comum, o script **se
-reexecuta via sudo automaticamente** (chamar `sudo ./scripts/install.sh` também funciona — os dois
-caminhos são equivalentes). No final, ele ainda te adiciona ao **grupo docker**, para os comandos
-do dia a dia não precisarem de sudo (vale a partir do próximo login).
+>
+> No final, ele ainda te adiciona ao **grupo docker**, para os comandos do dia a dia não
+> precisarem de sudo (vale a partir do próximo login).
 
 > [!NOTE]
 > **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz verificações
@@ -614,7 +612,7 @@ Digite "continuar" para prosseguir:
 > O instalador termina mostrando algo como `http://SEU_IP:9000/?token=...`, e o navegador vai
 > marcar esse endereço como **"Não seguro"**. Não é alarme falso: é uma VPS com IP público, sem
 > TLS. Tudo que passa por ali — o setup token e, principalmente, a **senha da conta de
-> administrador** que você cria no passo 4 do wizard — viajaria legível pela internet. Ao
+> administrador** que você cria na última etapa do wizard — viajaria legível pela internet. Ao
 > contrário do token, essa senha não expira: é a credencial permanente de um painel com acesso
 > ao socket do Docker (equivalente a root na máquina).
 >
@@ -653,9 +651,9 @@ Digite "continuar" para prosseguir:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Como conduzir o Passo 3 (Segurança) com segurança
+### Como conduzir a etapa **Segurança** do wizard
 
-O Passo 3 aplica o hardening em **sete fases**, uma de cada vez: aplique, confirme, só então
+A etapa **Segurança** aplica o hardening em **sete fases**, uma de cada vez: aplique, confirme, só então
 avance para a próxima. Nunca dispare uma fase nova com a anterior ainda pendente de confirmação.
 
 | Fase | O que faz | Pede confirmação? |
@@ -690,7 +688,7 @@ necessária.
 > 4. **Só depois que a janela nova conectar de verdade**, volte ao painel e confirme.
 > 5. Se a janela nova **não** conectar: **não confirme**. Deixe os 5 minutos passarem — o
 >    servidor reverte sozinho a mudança, e você continua com o acesso da janela antiga.
-> 6. Mantenha a janela antiga aberta até o fim de todo o Passo 3, mesmo depois de confirmar cada
+> 6. Mantenha a janela antiga aberta até o fim de toda a etapa Segurança, mesmo depois de confirmar cada
 >    fase.
 >
 > **Teste específico da fase 01:** a conexão na janela nova precisa entrar **sem pedir a senha da
@@ -749,7 +747,7 @@ teste descartável:
 │   <seu-token-de-48-caracteres>                                            │
 │                                                                          │
 │   ⚠  Ele aparece SÓ AGORA em destaque. Guarde-o até concluir o wizard.   │
-│   ⚠  Após criar sua conta admin (passo 4 do wizard), ele é invalidado.   │
+│   ⚠  Após criar a conta admin no fim do wizard, ele é invalidado.        │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -771,8 +769,8 @@ docker exec tws-panel cat /data/setup-token   # mostra só o token
   logout/login uma vez (o instalador te adicionou ao grupo docker) ou rode com `sudo`.
 - **`setup token não encontrado... O painel está instalado?`** — o `show-token.sh` foi rodado
   numa máquina sem o painel instalado. Rode-o na VPS certa, de dentro de `/opt/tws-panel`.
-- **O token não funciona mais no navegador** — depois que você cria a conta admin (passo 4
-  do wizard), o token é **invalidado para sempre**. A partir daí o acesso é pela tela de
+- **O token não funciona mais no navegador** — depois que você cria a conta admin (última
+  etapa do wizard), o token é **invalidado para sempre**. A partir daí o acesso é pela tela de
   login, com seu usuário e senha do painel.
 
 </details>
@@ -895,7 +893,7 @@ socket nunca exposto via TCP, CORS same-origin por padrão, rate limiting, valid
 todas as rotas da API, logs com redação de segredos e auditoria de todas as ações sensíveis.
 
 > [!TIP]
-> Duas fases do hardening (Passo 3 do wizard) merecem atenção antes de rodar:
+> Duas fases do hardening (etapa **Segurança** do wizard) merecem atenção antes de rodar:
 >
 > - **Fase 05 (Minimização)** remove o `snapd` e o bloqueia. Se algum programa seu depende de
 >   snap, saiba disso antes — o rollback dessa fase restaura a configuração do APT, mas **não
@@ -917,8 +915,8 @@ Ambos estão documentados em detalhe, junto com o que o projeto **não** protege
 segurança conhecidas, em [comoFuncionaSistema/global/threat-model.json](comoFuncionaSistema/global/threat-model.json).
 Recomendamos não expor o painel à internet aberta: prefira VPN ou restrição por IP.
 
-**Autenticação:** o painel nasce protegido pelo setup token gerado na instalação; no Passo 4 do
-wizard você cria a conta de administrador (senha com hash argon2id, mínimo de 12 caracteres com
+**Autenticação:** o painel nasce protegido pelo setup token gerado na instalação; na etapa
+**Conta de administrador** do wizard você cria essa conta (senha com hash argon2id, mínimo de 12 caracteres com
 maiúsculas, minúsculas e números), o que conclui o setup e invalida o token para sempre. Daí em
 diante todo acesso exige login (`/login`): as sessões são revogáveis, persistidas no servidor
 (cookie httpOnly, SameSite=Lax, expiração de 12h — nada de JWT stateless), o login tem rate limit
@@ -941,14 +939,14 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 > [!IMPORTANT]
 > **Confirme o seu caminho de recuperação ANTES de aplicar o hardening.** Entre no painel do seu
 > provedor e procure por "Console", "VNC", "Rescue" ou "Modo de recuperação". Se você não achar
-> nenhum, a prevenção descrita no Passo 4 deixa de ser recomendação e passa a ser obrigatória:
+> nenhum, a prevenção descrita no Passo 4 da instalação deixa de ser recomendação e passa a ser obrigatória:
 > sem console, não existe rede de segurança e uma chave perdida pode significar reinstalar a
 > máquina do zero.
 
 ### Perdi a senha do painel
 
 A conta de administrador do painel é independente do sistema. Com acesso SSH à VPS, apague a
-conta e refaça o Passo 4 do wizard:
+conta e refaça a etapa **Conta de administrador** do wizard:
 
 ```bash
 cd /opt/tws-panel
@@ -980,7 +978,7 @@ provedor ou o modo de recuperação.
 ### Perdi a chave SSH
 
 Você precisa reinstalar uma chave nova em `~/.ssh/authorized_keys` do seu usuário. Gere um par
-novo no seu computador (Passo 4) e use um dos caminhos abaixo, na ordem:
+novo no seu computador (Passo 4 da instalação) e use um dos caminhos abaixo, na ordem:
 
 **1. Pelo terminal do painel** — se você ainda consegue entrar no painel. Ele roda como root, então
 acrescente a chave direto:
