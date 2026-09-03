@@ -268,6 +268,27 @@ Is the information correct? [Y/n]
 
 </details>
 
+**Confira que deu certo antes de seguir:**
+
+```bash
+id SEU_USUARIO
+```
+
+Tem que aparecer `sudo` na lista de grupos. Se não aparecer, o segundo comando não pegou.
+
+> [!CAUTION]
+> **Os dois comandos acima são um par — e o segundo é o mais fácil de perder.** Se você errar o
+> nome, desistir no meio e criar o usuário de novo com **outro nome**, o `usermod` que você já
+> rodou continua apontando para o usuário antigo. O novo nasce **sem permissão de administrador**,
+> e o sintoma só aparece bem mais adiante, no Passo 5:
+>
+> ```text
+> SEU_USUARIO is not in the sudoers file.
+> ```
+>
+> Trocou o nome do usuário? **Rode os dois comandos de novo**, com o nome novo, e confirme com o
+> `id` acima.
+
 > [!IMPORTANT]
 > **Por que antes de tudo?** Operar como root é um anti-padrão de segurança. Criando o usuário agora,
 > o wizard só precisa **validar** que ele existe (Fase 01 de segurança) em vez de criá-lo — e o
@@ -550,6 +571,31 @@ sudo apt update && sudo apt install -y git
 ```
 
 <details>
+<summary>📦 <strong>O <code>git</code> já estava instalado. Isso é normal?</strong></summary>
+
+**É normal, sim.** "Ubuntu 24.04 LTS" no painel do seu provedor quase nunca é o sistema cru da
+Canonical: é um *template* montado pelo provedor, e `git`, `curl`, `wget` e `vim` costumam vir
+nesse pacote. Encontrar o `git` já pronto numa máquina recém-criada não indica que alguém entrou
+nela.
+
+O comando do Passo 5 continua valendo: se o pacote já estiver lá, o `apt` responde
+`git is already the newest version` e não faz nada.
+
+**Quer confirmar em vez de confiar?** São três verificações de leitura, nenhuma altera o sistema:
+
+```bash
+dpkg -V git             # silêncio = arquivos idênticos aos do pacote oficial
+apt-cache policy git    # a origem deve ser archive.ubuntu.com ou security.ubuntu.com
+last -a | head          # só os seus próprios logins devem aparecer
+```
+
+O `dpkg -V` compara cada arquivo instalado com a assinatura oficial do pacote — **nenhuma saída
+é o resultado bom**. No `apt-cache policy`, o que importa é a origem: um repositório
+desconhecido aí, sim, seria motivo para parar e investigar.
+
+</details>
+
+<details>
 <summary>🔑 <strong>Primeiro <code>sudo</code>: o aviso gigante e a senha que não aparece</strong></summary>
 
 Na **primeira vez** que você usa `sudo` com um usuário novo, aparece um aviso clássico:
@@ -579,8 +625,23 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 **Erros comuns:**
 
 - **`Sorry, try again.`** — senha errada. Você tem 3 tentativas antes de o comando falhar.
-- **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador.
-  Volte para a sessão de root e rode `usermod -aG sudo SEU_USUARIO` (Passo 3 da instalação).
+- **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador,
+  porque o `usermod` do Passo 3 não chegou a rodar para **este** usuário. Como o próprio `sudo`
+  está bloqueado, a correção tem que ser feita como root. **No seu computador**, abra a sessão de
+  root, dê a permissão e confirme:
+
+  ```bash
+  ssh root@SEU_IP
+  usermod -aG sudo SEU_USUARIO
+  id SEU_USUARIO          # tem que listar "sudo"
+  exit
+  ```
+
+  **E agora o detalhe que engana todo mundo:** volte ao terminal do seu usuário, feche a sessão
+  com `exit` e **conecte de novo**. O Linux só lê os grupos de um usuário **no momento em que a
+  sessão abre** — a sua foi aberta antes de o grupo existir, então ela continuaria recusando o
+  comando mesmo com a correção já aplicada. Reconectado, teste com `sudo whoami`: deve responder
+  `root`.
 
 </details>
 
