@@ -64,8 +64,8 @@ ENV NODE_ENV=production \
 # scan/hardening na VPS real via helper descartável `docker run ... nsenter`.
 ARG DOCKER_CLI_VERSION=29.7.2
 ARG DOCKER_CLI_SHA256=803d433f226db4776e1768fd319fc6c6e4935a456acf84fcc0080818b854bc8f
-ARG COMPOSE_VERSION=5.5.0
-ARG COMPOSE_SHA256=c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
+ARG COMPOSE_VERSION=5.5.1
+ARG COMPOSE_SHA256=db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576
 ADD https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz /tmp/docker.tgz
 ADD https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64 \
     /usr/local/libexec/docker/cli-plugins/docker-compose

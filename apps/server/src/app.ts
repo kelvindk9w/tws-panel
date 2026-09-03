@@ -163,6 +163,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
 
   app.addHook("onClose", async () => {
     await terminalService.dispose();
+    // Depois do dispose: encerrar terminais dispara auditoria sem await, e
+    // essas gravações precisam terminar antes de o processo sair.
+    await app.auditService.flush();
   });
 
   // Frontend estático (build do Vite) com fallback SPA
