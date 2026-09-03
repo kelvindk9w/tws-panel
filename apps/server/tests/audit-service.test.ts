@@ -127,6 +127,18 @@ describe("rotação do log de auditoria", () => {
     }
   });
 
+  it("flush() espera as gravações disparadas sem await (fire-and-forget)", async () => {
+    // As rotas de terminal/segurança chamam `void auditService.record(...)` de
+    // propósito, para não bloquear o caminho quente. Sem um ponto de dreno, a
+    // gravação pode aterrissar depois que o dono do diretório já o apagou.
+    const service = new AuditService(dir);
+    void service.record({ action: "terminal.encerrado", detail: "sem await" });
+    await service.flush();
+    const gravado = JSON.parse(await readFile(path.join(dir, "audit.json"), "utf8"));
+    expect(gravado.entries).toHaveLength(1);
+    expect(gravado.entries[0].detail).toBe("sem await");
+  });
+
   it("acumula no arquivo de arquivo em rotações sucessivas, sem perder o começo", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "paas-audit-rot2-"));
     try {

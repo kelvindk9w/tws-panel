@@ -65,6 +65,48 @@ domínios com SSL automático e e-mail profissional com DKIM/SPF/DMARC.
 > **Único pré-requisito:** uma VPS com Ubuntu 22.04 ou 24.04 LTS limpa. Docker, Node e todo o resto são instalados automaticamente — basta seguir os passos abaixo, na ordem.
 
 <details>
+<summary>⚠️ <strong>Deu erro ao conectar: "REMOTE HOST IDENTIFICATION HAS CHANGED!"</strong></summary>
+
+<a id="host-identification-changed"></a>
+
+Se, ao tentar conectar, apareceu isto em letras garrafais e a conexão foi recusada:
+
+```text
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
+...
+Host key verification failed.
+```
+
+**O que aconteceu.** O SSH guarda a "digital" de cada servidor em que você já entrou. A digital
+que o servidor apresentou agora é **diferente** da que está guardada no seu computador — e o SSH
+prefere recusar a conexão a te conectar num servidor que pode não ser o seu.
+
+**Quando isso é esperado:** você reinstalou o sistema da VPS, trocou de VPS, ou o provedor
+reatribuiu aquele mesmo IP a outra máquina. Nesses casos o servidor é outro de verdade, e a
+digital antiga não vale mais.
+
+**A solução** — apague a digital antiga daquele IP e conecte de novo. Rode **no seu computador**:
+
+```bash
+ssh-keygen -R SEU_IP
+ssh root@SEU_IP
+```
+
+Ele vai perguntar se você confia na nova identidade — responda `yes`. Pronto, a conexão volta ao
+normal.
+
+> [!IMPORTANT]
+> **Esse aviso não é burocracia.** Ele é a única defesa do SSH contra alguém se passando pelo seu
+> servidor. Ignorá-lo é seguro **só quando você sabe por que a identidade mudou** — e reinstalar o
+> sistema é um motivo legítimo. Se ele apareceu **sem** que você tenha reinstalado ou trocado de
+> máquina, **não continue**: investigue antes.
+
+</details>
+
+<details>
 <summary>🔄 <strong>Já tinha o painel instalado e quer começar de novo?</strong></summary>
 
 Antes de reinstalar a máquina inteira, veja se o caso é mesmo esse — quase sempre não é.
@@ -92,27 +134,25 @@ que ele gerar; a antiga deixa de valer.
 > Não há desfazer. Se houver algo que você queira manter, copie antes.
 
 **2. No seu computador.** Como o sistema é outro, o servidor passa a se identificar com uma chave
-diferente, e o SSH vai recusar a conexão com um aviso em letras garrafais
-(`REMOTE HOST IDENTIFICATION HAS CHANGED!`). Remova a identidade antiga e conecte de novo:
+diferente, e a sua próxima conexão vai ser **recusada** com o aviso
+`REMOTE HOST IDENTIFICATION HAS CHANGED!`. Isso é esperado, e a solução está no bloco logo acima:
 
-```bash
-ssh-keygen -R SEU_IP
-ssh root@SEU_IP
-```
-
-Ele vai perguntar se você confia na nova identidade — responda `yes`.
-
-> [!IMPORTANT]
-> **Esse aviso não é burocracia.** Ele é a única defesa do SSH contra alguém se passando pelo seu
-> servidor. Ignorá-lo é seguro **só quando você sabe por que a identidade mudou** — e reinstalar o
-> sistema é um motivo legítimo. Se esse aviso aparecer sem você ter reinstalado nada, **não
-> continue**: investigue antes.
+**[⬆️ Deu erro ao conectar: "REMOTE HOST IDENTIFICATION HAS CHANGED!"](#host-identification-changed)**
 
 Depois disso é só seguir do Passo 1 em diante, como numa VPS nova — porque agora ela é uma.
 
 </details>
 
 **1. Contrate uma VPS** com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
+
+> [!NOTE]
+> **Nunca contratou uma VPS antes?** Este guia começa no momento em que você já tem **um IP e uma
+> senha de root** em mãos. Como contratar, pagar e escolher a região muda de provedor para
+> provedor, quem documenta essa parte melhor é o próprio provedor — procure por "primeiros passos"
+> ou "getting started" na central de ajuda dele, e escolha **Ubuntu 24.04 LTS** na criação.
+>
+> Travou aí, antes de ter o IP? [Fale com a TWS](https://tws.tec.br/) — a gente ajuda e, se o seu
+> caso for comum, ele entra nesta documentação.
 
 **2. Acesse como root via SSH** e confirme a versão do SO:
 
@@ -155,6 +195,11 @@ fingerprint fica salvo e a conexão é direta.
 ```bash
 adduser SEU_USUARIO           # troque SEU_USUARIO pelo nome que quiser; você escolhe a senha na hora
 usermod -aG sudo SEU_USUARIO  # dá permissão de administrador (sudo)
+
+
+# --- Errou a senha, desistiu no meio ou quer recomeçar? Escolha UMA das duas: ---
+passwd SEU_USUARIO                  # define/redefine só a senha, mantendo o usuário
+deluser --remove-home SEU_USUARIO   # apaga o usuário e a pasta dele, para criar tudo de novo
 ```
 
 <details>
@@ -195,14 +240,54 @@ Is the information correct? [Y/n]
 
 **Erros comuns:**
 
-- **`Sorry, passwords do not match`** — as duas senhas digitadas foram diferentes. O sistema
-  repete o pedido; digite as duas iguais, com calma.
+- **`Sorry, passwords do not match`** seguido de **`Try again? [y/N]`** — as duas senhas
+  digitadas foram diferentes. Responda **`y`** para digitar de novo. Cuidado com o `N`
+  maiúsculo: ele é o padrão, então **só pressionar Enter é o mesmo que responder `n`**.
+
+  **E se eu já respondi `n`?** Aí o `adduser` desiste da senha mas **continua e cria o
+  usuário** — você vai ver `passwd: password unchanged` e, no final, `Adding new user ...`.
+  O usuário existe, mas **sem senha**, e não consegue entrar por SSH. Não é perda: defina a
+  senha agora, sem recriar nada.
+
+  ```bash
+  passwd SEU_USUARIO
+  ```
+
+  Se preferir começar do zero, apague e rode o `adduser` de novo:
+
+  ```bash
+  deluser --remove-home SEU_USUARIO
+  ```
+- **Digitei `n` (ou qualquer coisa) em `Room Number` / `Work Phone`** — são campos puramente
+  cosméticos, não afetam login nem permissão. Se quiser limpar: `chfn SEU_USUARIO` e pressione
+  Enter em cada campo.
 - **`BAD PASSWORD: ...`** — aviso de senha fraca. O sistema aceita, mas prefira uma senha
   longa (frase com palavras + números, ex.: `cavalo-bateria-42-janela`).
 - **"Acho que digitei errado porque não vi nada"** — sem problemas: se errou, o `adduser`
   reclama (`Sorry, try again.`) e pede de novo.
 
 </details>
+
+**Confira que deu certo antes de seguir:**
+
+```bash
+id SEU_USUARIO
+```
+
+Tem que aparecer `sudo` na lista de grupos. Se não aparecer, o segundo comando não pegou.
+
+> [!CAUTION]
+> **Os dois comandos acima são um par — e o segundo é o mais fácil de perder.** Se você errar o
+> nome, desistir no meio e criar o usuário de novo com **outro nome**, o `usermod` que você já
+> rodou continua apontando para o usuário antigo. O novo nasce **sem permissão de administrador**,
+> e o sintoma só aparece bem mais adiante, no Passo 5:
+>
+> ```text
+> SEU_USUARIO is not in the sudoers file.
+> ```
+>
+> Trocou o nome do usuário? **Rode os dois comandos de novo**, com o nome novo, e confirme com o
+> `id` acima.
 
 > [!IMPORTANT]
 > **Por que antes de tudo?** Operar como root é um anti-padrão de segurança. Criando o usuário agora,
@@ -252,7 +337,7 @@ forma, então o `exit` resolve as duas coisas de uma vez.
 > terminal para resolver.
 
 <details>
-<summary>⏱️ <strong>A conexão está caindo sozinha quando você para de digitar?</strong> (opcional)</summary>
+<summary>⏱️ <strong>Quer controlar quanto tempo a sua sessão SSH sobrevive parada?</strong> (opcional — leia se a conexão cai sozinha quando você para de digitar)</summary>
 
 Se você já percebeu a sessão fechando depois de alguns minutos parado, o culpado quase sempre
 é o **provedor da VPS**, não o servidor: firewalls de rede costumam descartar conexões que
@@ -341,8 +426,9 @@ Get-ChildItem ~\.ssh\*.pub
 ```
 
 - **Apareceu algum arquivo `.pub`** (`id_ed25519.pub`, `id_rsa.pub`…) — **você já tem chave e não
-  precisa gerar nenhuma.** Pule a geração e vá direto para **"Instale a chave na VPS"**, mais
-  abaixo. Se o seu arquivo tiver outro nome, é só trocar `id_ed25519` por ele nos comandos de lá:
+  precisa gerar nenhuma.** Pule a geração inteira e vá direto para
+  **[⬇️ Instale a chave na VPS](#instale-a-chave-na-vps)** (é um link — clique nele).
+  Se o seu arquivo tiver outro nome, é só trocar `id_ed25519` por ele nos comandos de lá:
   uma chave `id_rsa` é mais antiga, mas o servidor aceita do mesmo jeito.
 - **`No such file or directory`** (ou nada) — você não tem chave ainda. Siga para o próximo bloco.
 
@@ -398,6 +484,8 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8k2p... seu-usuario@seu-computador
 ```
 
 Se a linha apareceu, a chave está criada.
+
+<a id="instale-a-chave-na-vps"></a>
 
 **Instale a chave na VPS** — agora, enquanto a senha ainda funciona:
 
@@ -483,6 +571,31 @@ sudo apt update && sudo apt install -y git
 ```
 
 <details>
+<summary>📦 <strong>O <code>git</code> já estava instalado. Isso é normal?</strong></summary>
+
+**É normal, sim.** "Ubuntu 24.04 LTS" no painel do seu provedor quase nunca é o sistema cru da
+Canonical: é um *template* montado pelo provedor, e `git`, `curl`, `wget` e `vim` costumam vir
+nesse pacote. Encontrar o `git` já pronto numa máquina recém-criada não indica que alguém entrou
+nela.
+
+O comando do Passo 5 continua valendo: se o pacote já estiver lá, o `apt` responde
+`git is already the newest version` e não faz nada.
+
+**Quer confirmar em vez de confiar?** São três verificações de leitura, nenhuma altera o sistema:
+
+```bash
+dpkg -V git             # silêncio = arquivos idênticos aos do pacote oficial
+apt-cache policy git    # a origem deve ser archive.ubuntu.com ou security.ubuntu.com
+last -a | head          # só os seus próprios logins devem aparecer
+```
+
+O `dpkg -V` compara cada arquivo instalado com a assinatura oficial do pacote — **nenhuma saída
+é o resultado bom**. No `apt-cache policy`, o que importa é a origem: um repositório
+desconhecido aí, sim, seria motivo para parar e investigar.
+
+</details>
+
+<details>
 <summary>🔑 <strong>Primeiro <code>sudo</code>: o aviso gigante e a senha que não aparece</strong></summary>
 
 Na **primeira vez** que você usa `sudo` com um usuário novo, aparece um aviso clássico:
@@ -512,8 +625,23 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 **Erros comuns:**
 
 - **`Sorry, try again.`** — senha errada. Você tem 3 tentativas antes de o comando falhar.
-- **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador.
-  Volte para a sessão de root e rode `usermod -aG sudo SEU_USUARIO` (Passo 3 da instalação).
+- **`kelvin is not in the sudoers file`** — o usuário não tem permissão de administrador,
+  porque o `usermod` do Passo 3 não chegou a rodar para **este** usuário. Como o próprio `sudo`
+  está bloqueado, a correção tem que ser feita como root. **No seu computador**, abra a sessão de
+  root, dê a permissão e confirme:
+
+  ```bash
+  ssh root@SEU_IP
+  usermod -aG sudo SEU_USUARIO
+  id SEU_USUARIO          # tem que listar "sudo"
+  exit
+  ```
+
+  **E agora o detalhe que engana todo mundo:** volte ao terminal do seu usuário, feche a sessão
+  com `exit` e **conecte de novo**. O Linux só lê os grupos de um usuário **no momento em que a
+  sessão abre** — a sua foi aberta antes de o grupo existir, então ela continuaria recusando o
+  comando mesmo com a correção já aplicada. Reconectado, teste com `sudo whoami`: deve responder
+  `root`.
 
 </details>
 

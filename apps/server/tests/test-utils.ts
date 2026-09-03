@@ -45,6 +45,11 @@ export async function buildAuthTestApp(
 
 export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {
   await ctx.app.close();
+  // A app de teste registra só o plugin de auth, sem o hook onClose do app.ts:
+  // o dreno precisa ser explícito aqui. Sem ele, uma auditoria disparada com
+  // `void record(...)` recria o diretório no meio do rm e o apagamento falha
+  // com ENOTEMPTY — de forma intermitente, dependendo do timing da máquina.
+  await ctx.auditService.flush();
   await rm(ctx.dir, { recursive: true, force: true });
 }
 

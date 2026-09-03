@@ -23,7 +23,7 @@
     "@paas/deploy": "workspace:*",
     "@paas/mailer": "workspace:*",
     "@paas/security": "workspace:*",
-    "fastify": "^5.1.0",
+    "fastify": "^5.12.1",
     "fastify-plugin": "^5.0.1"
   },
   "devDependencies": {

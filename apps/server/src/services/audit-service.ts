@@ -31,6 +31,13 @@ export class AuditService {
   private entries: AuditEntry[] = [];
   private loaded = false;
   private writing: Promise<void> = Promise.resolve();
+  /**
+   * Registros em andamento. Existe porque as rotas de terminal e de segurança
+   * chamam `record()` sem await de propósito (auditar não pode atrasar o
+   * caminho quente). Sem isso não há como esperar por essas gravações no
+   * desligamento — elas aterrissariam depois de o processo achar que terminou.
+   */
+  private readonly pending = new Set<Promise<unknown>>();
 
   constructor(dataDir: string, opts: AuditServiceOptions = {}) {
     this.file = path.join(dataDir, "audit.json");
@@ -69,6 +76,35 @@ export class AuditService {
 
   /** Registra uma ação sensível. Best-effort: falha de disco não derruba a ação. */
   async record(input: {
+    actor?: string;
+    action: string;
+    target?: string | null;
+    detail: string;
+  }): Promise<AuditEntry> {
+    // O registro entra em `pending` de forma síncrona, antes do primeiro await,
+    // para que um `void record(...)` já esteja visível a um flush() imediato.
+    const op = this.doRecord(input);
+    this.pending.add(op);
+    try {
+      return await op;
+    } finally {
+      this.pending.delete(op);
+    }
+  }
+
+  /**
+   * Espera terminarem os registros já disparados, inclusive os que ninguém
+   * aguardou. Use antes de desligar o processo ou de descartar o diretório de
+   * dados; sem isso, uma gravação atrasada pode recriar o diretório ao salvar.
+   */
+  async flush(): Promise<void> {
+    while (this.pending.size > 0) {
+      await Promise.allSettled([...this.pending]);
+    }
+    await this.writing.catch(() => undefined);
+  }
+
+  private async doRecord(input: {
     actor?: string;
     action: string;
     target?: string | null;
