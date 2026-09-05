@@ -6,7 +6,7 @@
  * ser confundidos com pass.
  */
 import { describe, expect, it } from "vitest";
-import { SECURITY_CHECKS } from "../src/checks.js";
+import { parseSudoUsers, SECURITY_CHECKS } from "../src/checks.js";
 import type { ExecResult } from "../src/runner.js";
 
 function exec(stdout: string, code = 0): ExecResult {
@@ -150,8 +150,57 @@ describe("usuários (fase 01)", () => {
 
   it("user.non-root-sudo: uid ≥ 1000 passa; vazio falha", () => {
     const c = check("user.non-root-sudo");
-    expect(c.evaluate(exec("1000\n")).status).toBe("pass");
+    expect(c.evaluate(exec("sudo-user deploy 1000\n")).status).toBe("pass");
     expect(c.evaluate(exec("")).status).toBe("fail");
+  });
+
+  it("user.non-root-sudo: cita o nome do usuário detectado no detalhe", () => {
+    const r = check("user.non-root-sudo").evaluate(exec("sudo-user kelvin 1001\n"));
+    expect(r.status).toBe("pass");
+    expect(r.detail).toContain("kelvin");
+    expect(r.detail).toContain("1001");
+  });
+
+  it("user.non-root-sudo: detecta vários usuários, na ordem da saída", () => {
+    const out = "sudo-user deploy 1000\nsudo-user kelvin 1001\n";
+    const r = check("user.non-root-sudo").evaluate(exec(out));
+    expect(r.status).toBe("pass");
+    expect(r.detail?.indexOf("deploy")).toBeLessThan(r.detail?.indexOf("kelvin") ?? -1);
+  });
+
+  it("user.non-root-sudo: uid de sistema (< 1000) não conta como usuário comum", () => {
+    expect(check("user.non-root-sudo").evaluate(exec("sudo-user daemon 1\n")).status).toBe("fail");
+  });
+
+  it("user.non-root-sudo: saída malformada → fail, sem exceção", () => {
+    const c = check("user.non-root-sudo");
+    expect(c.evaluate(exec("getent: comando nao encontrado\n")).status).toBe("fail");
+    expect(c.evaluate(exec("sudo-user\n")).status).toBe("fail");
+    expect(c.evaluate(exec("1000\n")).status).toBe("fail");
+  });
+});
+
+describe("parseSudoUsers (fase 01)", () => {
+  it("extrai nome e uid de cada linha bem formada", () => {
+    expect(parseSudoUsers("sudo-user deploy 1000\nsudo-user kelvin 1001\n")).toEqual([
+      { name: "deploy", uid: 1000 },
+      { name: "kelvin", uid: 1001 },
+    ]);
+  });
+
+  it("ignora ruído do PTY e linhas fora do formato", () => {
+    const out = "Welcome to Ubuntu\nsudo-user deploy 1000\nlixo qualquer\n";
+    expect(parseSudoUsers(out)).toEqual([{ name: "deploy", uid: 1000 }]);
+  });
+
+  it("descarta uid < 1000 e saída vazia", () => {
+    expect(parseSudoUsers("sudo-user daemon 1\n")).toEqual([]);
+    expect(parseSudoUsers("")).toEqual([]);
+  });
+
+  it("descarta nomes que não são nome de usuário válido", () => {
+    const out = "sudo-user ../etc 1000\nsudo-user root 1000\nsudo-user deploy 1000\n";
+    expect(parseSudoUsers(out)).toEqual([{ name: "deploy", uid: 1000 }]);
   });
 });
 

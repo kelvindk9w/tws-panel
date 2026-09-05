@@ -11,37 +11,254 @@
     "O Hardening Index interno (quando o Lynis está ausente) pondera cada check por severidade: critical=3, warning=2, info=1; status 'pass' conta o peso cheio, 'unknown' conta metade, 'fail' conta zero."
   ],
   "itens": [
-    { "id": "update.pending-packages", "fase": "00", "titulo": "Pacotes com atualização pendente", "severidade": "warning", "fixable": true, "hostOnly": false, "oQueVerifica": "Conta pacotes com update disponível via 'apt list --upgradable'. Falha se n > 0." },
-    { "id": "update.unattended-upgrades", "fase": "00", "titulo": "Atualizações automáticas de segurança", "severidade": "critical", "fixable": true, "hostOnly": true, "oQueVerifica": "unattended-upgrades instalado (dpkg Status-Abbrev 'ii') E 'Unattended-Upgrade \"1\"' presente em /etc/apt/apt.conf.d/20auto-upgrades." },
-    { "id": "supplychain.third-party-repos", "fase": "00", "titulo": "Repositórios APT de terceiros", "severidade": "info", "fixable": false, "hostOnly": false, "oQueVerifica": "Lista arquivos em /etc/apt/sources.list.d/ (sempre 'pass' — é inventário para revisão manual, não um binário certo/errado)." },
-    { "id": "user.only-root-uid0", "fase": "01", "titulo": "Apenas root com UID 0", "severidade": "critical", "fixable": false, "hostOnly": false, "oQueVerifica": "awk em /etc/passwd: nenhuma conta além de 'root' pode ter UID 0 (backdoor clássico)." },
-    { "id": "user.root-password-locked", "fase": "01", "titulo": "Senha do root travada", "severidade": "warning", "fixable": true, "hostOnly": false, "oQueVerifica": "Campo shadow de root começa com '!' ou '*' (senha bloqueada)." },
-    { "id": "user.non-root-sudo", "fase": "01", "titulo": "Usuário não-root no grupo sudo", "severidade": "critical", "fixable": true, "hostOnly": false, "oQueVerifica": "Existe pelo menos um usuário com UID ≥ 1000 no grupo sudo (diferente de root)." },
-    { "id": "ssh.root-login", "fase": "02", "titulo": "Login root via SSH desabilitado", "severidade": "critical", "fixable": true, "hostOnly": true, "oQueVerifica": "sshd -T: PermitRootLogin é 'no', 'prohibit-password', 'without-password' (alias legado) ou 'forced-commands-only'." },
-    { "id": "ssh.password-auth", "fase": "02", "titulo": "Autenticação SSH somente por chave", "severidade": "critical", "fixable": true, "hostOnly": true, "oQueVerifica": "sshd -T: PasswordAuthentication é exatamente 'no'." },
-    { "id": "ssh.max-auth-tries", "fase": "02", "titulo": "Tentativas de autenticação SSH limitadas", "severidade": "warning", "fixable": true, "hostOnly": true, "oQueVerifica": "sshd -T: MaxAuthTries ≤ 3." },
-    { "id": "ssh.forwarding-disabled", "fase": "02", "titulo": "Forwardings SSH desabilitados", "severidade": "info", "fixable": true, "hostOnly": true, "oQueVerifica": "sshd -T: nenhum de X11Forwarding/AllowAgentForwarding/AllowTcpForwarding é 'yes'." },
-    { "id": "firewall.ufw-active", "fase": "03", "titulo": "Firewall UFW ativo", "severidade": "critical", "fixable": true, "hostOnly": true, "oQueVerifica": "'ufw status' começa com 'active' (não 'inactive')." },
-    { "id": "firewall.default-deny", "fase": "03", "titulo": "Política padrão: deny incoming", "severidade": "critical", "fixable": true, "hostOnly": true, "oQueVerifica": "'ufw status verbose': linha 'Default:' contém 'deny (incoming)'." },
-    { "id": "net.db-ports-exposed", "fase": "03", "titulo": "Portas de banco de dados não expostas", "severidade": "critical", "fixable": false, "hostOnly": false, "oQueVerifica": "'ss -tuln': nenhuma das portas 3306/5432/6379/27017 (MySQL/Postgres/Redis/MongoDB) escutando em 0.0.0.0/*/::. CORRIGIDO nesta rodada: fixable passou de true para false — 03-firewall.sh não tem (e nunca teve) lógica para portas de banco, então marcar fixable=true prometia uma remediação automática que não existe." },
-    { "id": "net.docker-api-exposed", "fase": "03", "titulo": "API do Docker não exposta em TCP", "severidade": "critical", "fixable": false, "hostOnly": false, "oQueVerifica": "'ss -tuln': portas 2375/2376 (Docker API) não escutando publicamente. Referência: CVE-2025-9074, CVSS 9.3." },
-    { "id": "net.sysctl-hardening", "fase": "03", "titulo": "Hardening de kernel (sysctl)", "severidade": "warning", "fixable": true, "hostOnly": true, "oQueVerifica": "tcp_syncookies=1 E o arquivo /etc/sysctl.d/99-paas-hardening.conf está presente." },
-    { "id": "net.listening-inventory", "fase": "03", "titulo": "Inventário de portas escutando", "severidade": "info", "fixable": false, "hostOnly": false, "oQueVerifica": "Lista as portas TCP/UDP em escuta ('ss -tuln') — sempre 'pass', é inventário informativo para comparar com a matriz de portas esperada." },
-    { "id": "intrusion.fail2ban", "fase": "04", "titulo": "fail2ban ativo", "severidade": "critical", "fixable": true, "hostOnly": true, "oQueVerifica": "'fail2ban-client ping' responde 'pong' (rodando); se só instalado mas não rodando, ou ausente, falha." },
-    { "id": "intrusion.apparmor", "fase": "04", "titulo": "AppArmor habilitado", "severidade": "warning", "fixable": true, "hostOnly": true, "oQueVerifica": "/sys/module/apparmor/parameters/enabled = 'Y'. Se o arquivo não existe (kernel sem AppArmor, ex.: container), status='unknown' em vez de 'fail'." },
-    { "id": "minimal.snapd-absent", "fase": "05", "titulo": "snapd ausente", "severidade": "warning", "fixable": true, "hostOnly": true, "oQueVerifica": "dpkg Status-Abbrev de 'snapd' NÃO é 'ii' (instalado de fato — corrige um bug real em que 'rc'/estado removido-mas-com-config ainda era contado como instalado)." },
-    { "id": "minimal.unnecessary-services", "fase": "05", "titulo": "Serviços desnecessários desabilitados", "severidade": "warning", "fixable": true, "hostOnly": true, "oQueVerifica": "Nenhum de avahi-daemon/cups/bluetooth/ModemManager/rpcbind/whoopsie/apport rodando (via systemctl ou ps, conforme haja systemd)." },
-    { "id": "minimal.legacy-clients", "fase": "05", "titulo": "Clientes legados inseguros ausentes", "severidade": "info", "fixable": true, "hostOnly": false, "oQueVerifica": "Nenhum de telnet/rsh-client/rsh-redone-client/ftp/tftp-hpa/tftp/talk/nis instalado (protocolos em texto claro)." },
-    { "id": "audit.auditd", "fase": "06", "titulo": "auditd instalado e ativo", "severidade": "critical", "fixable": true, "hostOnly": true, "oQueVerifica": "Pacote 'auditd' instalado de fato (dpkg Status-Abbrev 'ii')." },
-    { "id": "audit.aide-baseline", "fase": "06", "titulo": "Baseline de integridade (AIDE)", "severidade": "warning", "fixable": true, "hostOnly": true, "oQueVerifica": "Arquivo /var/lib/aide/aide.db existe." },
-    { "id": "audit.rkhunter", "fase": "06", "titulo": "Scanner de rootkits instalado", "severidade": "info", "fixable": true, "hostOnly": true, "oQueVerifica": "Binário 'rkhunter' presente no PATH." },
-    { "id": "audit.recurring-scan", "fase": "06", "titulo": "Varreduras recorrentes agendadas", "severidade": "warning", "fixable": true, "hostOnly": true, "oQueVerifica": "Arquivo /etc/cron.d/paas-security-scan existe." },
-    { "id": "docker.privileged-containers", "fase": "06", "titulo": "Nenhum container privilegiado", "severidade": "critical", "fixable": false, "hostOnly": false, "oQueVerifica": "'docker ps' + 'docker inspect' (com timeout 25s cada, ver observacoes): nenhum container tem HostConfig.Privileged=true. Sem Docker/sem containers → status 'unknown', não 'pass'." },
-    { "id": "docker.sock-mounted", "fase": "06", "titulo": "docker.sock não montado em containers", "severidade": "critical", "fixable": false, "hostOnly": false, "oQueVerifica": "'docker inspect' (mounts) de todos os containers: nenhum tem /var/run/docker.sock como Source de um mount. Sem Docker/sem mounts → status 'unknown'." }
+    {
+      "id": "update.pending-packages",
+      "fase": "00",
+      "titulo": "Pacotes com atualização pendente",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": false,
+      "oQueVerifica": "Conta pacotes com update disponível via 'apt list --upgradable'. Falha se n > 0."
+    },
+    {
+      "id": "update.unattended-upgrades",
+      "fase": "00",
+      "titulo": "Atualizações automáticas de segurança",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "unattended-upgrades instalado (dpkg Status-Abbrev 'ii') E 'Unattended-Upgrade \"1\"' presente em /etc/apt/apt.conf.d/20auto-upgrades."
+    },
+    {
+      "id": "supplychain.third-party-repos",
+      "fase": "00",
+      "titulo": "Repositórios APT de terceiros",
+      "severidade": "info",
+      "fixable": false,
+      "hostOnly": false,
+      "oQueVerifica": "Lista arquivos em /etc/apt/sources.list.d/ (sempre 'pass' — é inventário para revisão manual, não um binário certo/errado)."
+    },
+    {
+      "id": "user.only-root-uid0",
+      "fase": "01",
+      "titulo": "Apenas root com UID 0",
+      "severidade": "critical",
+      "fixable": false,
+      "hostOnly": false,
+      "oQueVerifica": "awk em /etc/passwd: nenhuma conta além de 'root' pode ter UID 0 (backdoor clássico)."
+    },
+    {
+      "id": "user.root-password-locked",
+      "fase": "01",
+      "titulo": "Senha do root travada",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": false,
+      "oQueVerifica": "Campo shadow de root começa com '!' ou '*' (senha bloqueada)."
+    },
+    {
+      "id": "user.non-root-sudo",
+      "fase": "01",
+      "titulo": "Usuário não-root no grupo sudo",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": false,
+      "oQueVerifica": "Existe pelo menos um usuário com UID ≥ 1000 no grupo sudo (diferente de root). NOVO nesta rodada: o comando emite uma linha 'sudo-user <nome> <uid>' por candidato (todos os membros do grupo sudo com uid ≥ 1000), em sh puro, para que os NOMES cheguem ao relatório — antes só o uid do primeiro era impresso e o nome era descartado. O prefixo fixo faz banner/MOTD do servidor não serem confundidos com nome de usuário. Aprovação/reprovação inalterada; o detail agora cita os nomes encontrados."
+    },
+    {
+      "id": "ssh.root-login",
+      "fase": "02",
+      "titulo": "Login root via SSH desabilitado",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "sshd -T: PermitRootLogin é 'no', 'prohibit-password', 'without-password' (alias legado) ou 'forced-commands-only'."
+    },
+    {
+      "id": "ssh.password-auth",
+      "fase": "02",
+      "titulo": "Autenticação SSH somente por chave",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "sshd -T: PasswordAuthentication é exatamente 'no'."
+    },
+    {
+      "id": "ssh.max-auth-tries",
+      "fase": "02",
+      "titulo": "Tentativas de autenticação SSH limitadas",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "sshd -T: MaxAuthTries ≤ 3."
+    },
+    {
+      "id": "ssh.forwarding-disabled",
+      "fase": "02",
+      "titulo": "Forwardings SSH desabilitados",
+      "severidade": "info",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "sshd -T: nenhum de X11Forwarding/AllowAgentForwarding/AllowTcpForwarding é 'yes'."
+    },
+    {
+      "id": "firewall.ufw-active",
+      "fase": "03",
+      "titulo": "Firewall UFW ativo",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "'ufw status' começa com 'active' (não 'inactive')."
+    },
+    {
+      "id": "firewall.default-deny",
+      "fase": "03",
+      "titulo": "Política padrão: deny incoming",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "'ufw status verbose': linha 'Default:' contém 'deny (incoming)'."
+    },
+    {
+      "id": "net.db-ports-exposed",
+      "fase": "03",
+      "titulo": "Portas de banco de dados não expostas",
+      "severidade": "critical",
+      "fixable": false,
+      "hostOnly": false,
+      "oQueVerifica": "'ss -tuln': nenhuma das portas 3306/5432/6379/27017 (MySQL/Postgres/Redis/MongoDB) escutando em 0.0.0.0/*/::. CORRIGIDO nesta rodada: fixable passou de true para false — 03-firewall.sh não tem (e nunca teve) lógica para portas de banco, então marcar fixable=true prometia uma remediação automática que não existe."
+    },
+    {
+      "id": "net.docker-api-exposed",
+      "fase": "03",
+      "titulo": "API do Docker não exposta em TCP",
+      "severidade": "critical",
+      "fixable": false,
+      "hostOnly": false,
+      "oQueVerifica": "'ss -tuln': portas 2375/2376 (Docker API) não escutando publicamente. Referência: CVE-2025-9074, CVSS 9.3."
+    },
+    {
+      "id": "net.sysctl-hardening",
+      "fase": "03",
+      "titulo": "Hardening de kernel (sysctl)",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "tcp_syncookies=1 E o arquivo /etc/sysctl.d/99-paas-hardening.conf está presente."
+    },
+    {
+      "id": "net.listening-inventory",
+      "fase": "03",
+      "titulo": "Inventário de portas escutando",
+      "severidade": "info",
+      "fixable": false,
+      "hostOnly": false,
+      "oQueVerifica": "Lista as portas TCP/UDP em escuta ('ss -tuln') — sempre 'pass', é inventário informativo para comparar com a matriz de portas esperada."
+    },
+    {
+      "id": "intrusion.fail2ban",
+      "fase": "04",
+      "titulo": "fail2ban ativo",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "'fail2ban-client ping' responde 'pong' (rodando); se só instalado mas não rodando, ou ausente, falha."
+    },
+    {
+      "id": "intrusion.apparmor",
+      "fase": "04",
+      "titulo": "AppArmor habilitado",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "/sys/module/apparmor/parameters/enabled = 'Y'. Se o arquivo não existe (kernel sem AppArmor, ex.: container), status='unknown' em vez de 'fail'."
+    },
+    {
+      "id": "minimal.snapd-absent",
+      "fase": "05",
+      "titulo": "snapd ausente",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "dpkg Status-Abbrev de 'snapd' NÃO é 'ii' (instalado de fato — corrige um bug real em que 'rc'/estado removido-mas-com-config ainda era contado como instalado)."
+    },
+    {
+      "id": "minimal.unnecessary-services",
+      "fase": "05",
+      "titulo": "Serviços desnecessários desabilitados",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "Nenhum de avahi-daemon/cups/bluetooth/ModemManager/rpcbind/whoopsie/apport rodando (via systemctl ou ps, conforme haja systemd)."
+    },
+    {
+      "id": "minimal.legacy-clients",
+      "fase": "05",
+      "titulo": "Clientes legados inseguros ausentes",
+      "severidade": "info",
+      "fixable": true,
+      "hostOnly": false,
+      "oQueVerifica": "Nenhum de telnet/rsh-client/rsh-redone-client/ftp/tftp-hpa/tftp/talk/nis instalado (protocolos em texto claro)."
+    },
+    {
+      "id": "audit.auditd",
+      "fase": "06",
+      "titulo": "auditd instalado e ativo",
+      "severidade": "critical",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "Pacote 'auditd' instalado de fato (dpkg Status-Abbrev 'ii')."
+    },
+    {
+      "id": "audit.aide-baseline",
+      "fase": "06",
+      "titulo": "Baseline de integridade (AIDE)",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "Arquivo /var/lib/aide/aide.db existe."
+    },
+    {
+      "id": "audit.rkhunter",
+      "fase": "06",
+      "titulo": "Scanner de rootkits instalado",
+      "severidade": "info",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "Binário 'rkhunter' presente no PATH."
+    },
+    {
+      "id": "audit.recurring-scan",
+      "fase": "06",
+      "titulo": "Varreduras recorrentes agendadas",
+      "severidade": "warning",
+      "fixable": true,
+      "hostOnly": true,
+      "oQueVerifica": "Arquivo /etc/cron.d/paas-security-scan existe."
+    },
+    {
+      "id": "docker.privileged-containers",
+      "fase": "06",
+      "titulo": "Nenhum container privilegiado",
+      "severidade": "critical",
+      "fixable": false,
+      "hostOnly": false,
+      "oQueVerifica": "'docker ps' + 'docker inspect' (com timeout 25s cada, ver observacoes): nenhum container tem HostConfig.Privileged=true. Sem Docker/sem containers → status 'unknown', não 'pass'."
+    },
+    {
+      "id": "docker.sock-mounted",
+      "fase": "06",
+      "titulo": "docker.sock não montado em containers",
+      "severidade": "critical",
+      "fixable": false,
+      "hostOnly": false,
+      "oQueVerifica": "'docker inspect' (mounts) de todos os containers: nenhum tem /var/run/docker.sock como Source de um mount. Sem Docker/sem mounts → status 'unknown'."
+    }
   ],
   "observacoes": [
     "docker.privileged-containers e docker.sock-mounted usam 'timeout 25' em cada chamada docker porque o CLI docker NÃO tem timeout próprio e pode bloquear indefinidamente se o daemon estiver ocupado (comentário no código cita isso como o suspeito nº 1 de uma regressão real de scan de 133.4s observada em VPS; ver onCheckTiming em scanner.ts).",
     "CORRIGIDO nesta rodada: net.db-ports-exposed agora é fixable=false (era true) — nenhum dos 7 scripts de fase faz bind de bancos em 127.0.0.1, então o check nunca teve cobertura automática de verdade; a remediação sugerida no próprio check já era 100% manual. Ver seguranca/conceito-fases.json (checksSemFaseAutomatica) e o plano (buildSecurityPlan ignora checks não-fixable ao montar fixesCheckIds — esta checagem nunca aparece mais como ação de uma fase, mesmo que falhe).",
-    "Nenhum check tem status 'fail' fixo por padrão — DPKG_INSTALLED usa especificamente o Status-Abbrev ('ii ' vs 'rc '/'un ') para não confundir pacote removido-mas-com-config-residual como instalado (bug real documentado no código: minimal.snapd-absent reportava 'snapd instalado' após um purge da fase 05 antes dessa correção)."
+    "Nenhum check tem status 'fail' fixo por padrão — DPKG_INSTALLED usa especificamente o Status-Abbrev ('ii ' vs 'rc '/'un ') para não confundir pacote removido-mas-com-config-residual como instalado (bug real documentado no código: minimal.snapd-absent reportava 'snapd instalado' após um purge da fase 05 antes dessa correção).",
+    "O check user.non-root-sudo alimenta SecurityScanReport.nonRootSudoUsers (packages/security/src/scanner.ts, parseSudoUsers): os nomes passam por isValidSshUsername e só são expostos quando o check passa — check fail/unknown, saída malformada ou nome inválido resultam em lista vazia, nunca em palpite. É esse campo que faz o wizard pré-preencher o usuário da Fase 01 em vez de pedir para o operador digitá-lo."
   ]
 }
