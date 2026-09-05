@@ -24,6 +24,10 @@ export function SetupPage() {
   const [maxReached, setMaxReached] = useState(0);
   /** Terminal web SÓ é liberado depois de o setup token ser validado. */
   const [terminalEnabled, setTerminalEnabled] = useState(false);
+  /** Usuário não-root detectado na varredura (ou escolhido) na etapa de
+   * Segurança. Vive aqui porque o terminal é irmão dos passos, não filho
+   * deles: o nome sobe da SecurityStep e desce para o TerminalPanel. */
+  const [detectedSshUser, setDetectedSshUser] = useState<string | null>(null);
 
   // Captura ?token= da URL na primeira renderização.
   useEffect(() => {
@@ -102,7 +106,11 @@ export function SetupPage() {
         )}
         {maxReached >= 2 && (
           <div className={step === 2 ? "animate-fade-in" : "hidden"}>
-            <SecurityStep onNext={() => advance(3)} onBack={() => goTo(1)} />
+            <SecurityStep
+              onNext={() => advance(3)}
+              onBack={() => goTo(1)}
+              onSshUserDetected={setDetectedSshUser}
+            />
           </div>
         )}
         {maxReached >= 3 && (
@@ -119,7 +127,7 @@ export function SetupPage() {
 
         {/* Visão dupla: terminal real do servidor ao vivo, como janela contida
             na área de conteúdo — bloqueado até o token ser validado */}
-        <TerminalPanel enabled={terminalEnabled} />
+        <TerminalPanel enabled={terminalEnabled} sshUser={detectedSshUser} />
       </main>
 
       <footer className="border-t py-6">

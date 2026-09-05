@@ -51,8 +51,11 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/components/TerminalPanel", () => ({
-  TerminalPanel: ({ enabled }: { enabled: boolean }) => (
-    <div data-testid="terminal-mock">{enabled ? "terminal:liberado" : "terminal:bloqueado"}</div>
+  TerminalPanel: ({ enabled, sshUser }: { enabled: boolean; sshUser?: string | null }) => (
+    <div data-testid="terminal-mock">
+      {enabled ? "terminal:liberado" : "terminal:bloqueado"}
+      <span data-testid="terminal-ssh-user">{sshUser ?? "(sem nome)"}</span>
+    </div>
   ),
 }));
 
@@ -75,11 +78,20 @@ vi.mock("@/pages/setup/HealthStep", () => ({
 }));
 
 vi.mock("@/pages/setup/SecurityStep", () => ({
-  SecurityStep: ({ onNext, onBack }: { onNext: () => void; onBack?: () => void }) => (
+  SecurityStep: ({
+    onNext,
+    onBack,
+    onSshUserDetected,
+  }: {
+    onNext: () => void;
+    onBack?: () => void;
+    onSshUserDetected?: (user: string | null) => void;
+  }) => (
     <div data-testid="step-security">
       <span>conteúdo-segurança</span>
       {onBack && <button onClick={onBack}>voltar-segurança</button>}
       <button onClick={onNext}>avançar-segurança</button>
+      <button onClick={() => onSshUserDetected?.("deploy")}>detectar-usuário</button>
     </div>
   ),
 }));
@@ -174,6 +186,19 @@ describe("SetupPage", () => {
     // o passo NÃO regride: saúde continua visível e boas-vindas oculta
     expect(wrapperOf("step-health")).not.toHaveClass("hidden");
     expect(wrapperOf("step-welcome")).toHaveClass("hidden");
+  });
+
+  it("o usuário não-root detectado na Segurança chega ao terminal", async () => {
+    // O TerminalPanel é irmão dos passos (fora da SecurityStep): o nome sobe
+    // pela SecurityStep e desce pela prop, sem contexto global.
+    render(<SetupPage />);
+    fireEvent.click(await screen.findByText("validar-token"));
+    fireEvent.click(await screen.findByText("avançar-saúde"));
+    await screen.findByTestId("step-security");
+    expect(screen.getByTestId("terminal-ssh-user")).toHaveTextContent("(sem nome)");
+
+    fireEvent.click(screen.getByText("detectar-usuário"));
+    await waitFor(() => expect(screen.getByTestId("terminal-ssh-user")).toHaveTextContent("deploy"));
   });
 
   it("passos futuros NÃO são clicáveis no stepper", async () => {

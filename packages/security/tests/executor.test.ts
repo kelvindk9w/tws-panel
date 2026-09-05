@@ -303,3 +303,108 @@ describe("SecurityExecutor — restoreJobs (persistência após restart do paine
     expect(executor.getJob("j5")).toEqual(terminal);
   });
 });
+
+describe("SecurityExecutor — fase 01 e o marcador de rollback agendado", () => {
+  /** Saída típica do 01-user.sh quando ele TRAVOU o root e agendou a reversão. */
+  const LOCKED_OUTPUT =
+    ":::PAAS_STEP Travando senha do root (passwd -l root)\n" +
+    ":::PAAS_OK Senha do root travada (acesso root direto desabilitado)\n" +
+    ":::PAAS_ROLLBACK_SCHEDULED user\n";
+
+  /** Saída típica quando NÃO havia chave instalada — root intacto, nada agendado. */
+  const NOT_LOCKED_OUTPUT =
+    ":::PAAS_STEP Travando senha do root (passwd -l root)\n" +
+    ":::PAAS_SKIP Travamento do root adiado até existir chave SSH para deploy\n";
+
+  it("fase 01 SEM chave colada, mas com o marcador na saída → awaiting_confirmation com prazo", async () => {
+    // O BUG: o script encontra a chave que o operador já instalou pelo README,
+    // trava o root e agenda a reversão de 5 min NO ALVO. Como nenhuma chave foi
+    // COLADA no painel, o executor antigo declarava "success" na hora e o
+    // operador nunca via o passo de confirmar acesso — o servidor revertia sozinho.
+    const runner = makeRunner({ execStream: scriptedExecStream([{ code: 0, chunks: [LOCKED_OUTPUT] }]) });
+    const executor = new SecurityExecutor({ runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+
+    const job = await executor.startJob("01", false, { sshUser: "deploy" });
+    await flushMicrotasks();
+
+    const current = executor.getJob(job.id) as SecurityJob;
+    expect(current.status).toBe("awaiting_confirmation");
+    expect(current.rollbackScheduled).toBe(true);
+    expect(current.rollbackDeadline).not.toBeNull();
+  });
+
+  it("o marcador de rollback não vira passo nem contamina a lista exibida ao operador", async () => {
+    const runner = makeRunner({ execStream: scriptedExecStream([{ code: 0, chunks: [LOCKED_OUTPUT] }]) });
+    const executor = new SecurityExecutor({ runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+
+    const job = await executor.startJob("01", false, { sshUser: "deploy" });
+    await flushMicrotasks();
+
+    const current = executor.getJob(job.id) as SecurityJob;
+    expect(current.steps.map((s) => s.name)).toEqual(["Travando senha do root (passwd -l root)"]);
+    expect(current.steps.some((s) => s.name.includes("ROLLBACK"))).toBe(false);
+  });
+
+  it("fase 01 SEM chave colada e SEM o marcador → success honesto, e nunca vira rolled_back", async () => {
+    vi.useFakeTimers();
+    try {
+      const runner = makeRunner({ execStream: scriptedExecStream([{ code: 0, chunks: [NOT_LOCKED_OUTPUT] }]) });
+      const executor = new SecurityExecutor({ runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+
+      const job = await executor.startJob("01", false, { sshUser: "deploy" });
+      await flushMicrotasks();
+
+      let current = executor.getJob(job.id) as SecurityJob;
+      expect(current.status).toBe("success");
+      expect(current.rollbackScheduled).toBe(false);
+      expect(current.rollbackDeadline).toBeNull();
+      expect(current.finishedAt).not.toBeNull();
+
+      // nada foi agendado no alvo — a janela passando não pode "reverter" nada
+      await vi.advanceTimersByTimeAsync(5_000 + 15_000);
+      current = executor.getJob(job.id) as SecurityJob;
+      expect(current.status).toBe("success");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fase 01 COM chave colada e com o marcador → continua entrando em awaiting_confirmation", async () => {
+    const runner = makeRunner({ execStream: scriptedExecStream([{ code: 0, chunks: [LOCKED_OUTPUT] }]) });
+    const executor = new SecurityExecutor({ runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+
+    const job = await executor.startJob("01", false, {
+      sshUser: "deploy",
+      sshPublicKey: `ssh-ed25519 ${"A".repeat(68)} operador@laptop`,
+    });
+    await flushMicrotasks();
+
+    const current = executor.getJob(job.id) as SecurityJob;
+    expect(current.status).toBe("awaiting_confirmation");
+    expect(current.rollbackScheduled).toBe(true);
+  });
+
+  it("fases de risco (02 e 03) continuam exigindo confirmação, independentemente do marcador", async () => {
+    for (const phase of ["02", "03"] as const) {
+      const runner = makeRunner({ execStream: scriptedExecStream([{ code: 0, chunks: [":::PAAS_STEP algo\n"] }]) });
+      const executor = new SecurityExecutor({ runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+      const job = await executor.startJob(phase, false);
+      await flushMicrotasks();
+      const current = executor.getJob(job.id) as SecurityJob;
+      expect(current.status).toBe("awaiting_confirmation");
+      expect(current.rollbackScheduled).toBe(true);
+    }
+  });
+
+  it("em dry-run nenhuma fase entra em awaiting_confirmation, nem com o marcador na saída", async () => {
+    for (const phase of ["00", "01", "02", "03"] as const) {
+      const runner = makeRunner({ execStream: scriptedExecStream([{ code: 0, chunks: [LOCKED_OUTPUT] }]) });
+      const executor = new SecurityExecutor({ runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+      const job = await executor.startJob(phase, true);
+      await flushMicrotasks();
+      const current = executor.getJob(job.id) as SecurityJob;
+      expect(current.status).toBe("success");
+      expect(current.rollbackScheduled).toBe(false);
+    }
+  });
+});

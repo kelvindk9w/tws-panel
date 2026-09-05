@@ -16,7 +16,10 @@
       "titulo": "Atualizações do sistema",
       "script": "00-update.sh",
       "oQueAplica": "apt-get update + apt-get -y full-upgrade; instala unattended-upgrades, apt-listchanges e needrestart; ativa 'APT::Periodic::Unattended-Upgrade \"1\"' em /etc/apt/apt.conf.d/20auto-upgrades.",
-      "corrigeChecks": ["update.pending-packages", "update.unattended-upgrades"],
+      "corrigeChecks": [
+        "update.pending-packages",
+        "update.unattended-upgrades"
+      ],
       "manualOuAutomatica": "ambas (automática via apply; manual via /phases/00/manual)",
       "reversivel": "parcial — --rollback restaura só o arquivo 20auto-upgrades; pacotes já atualizados via full-upgrade NÃO são revertidos (downgrade é inseguro/impraticável, decisão explícita do script).",
       "arriscada": false,
@@ -27,12 +30,15 @@
       "chave": "user",
       "titulo": "Usuário não-root",
       "script": "01-user.sh",
-      "oQueAplica": "Cria (ou confirma) o usuário não-root informado, adiciona ao grupo sudo, instala a chave pública SSH do operador, verifica o acesso por chave e SÓ ENTÃO trava a senha do root (passwd -l root) — proteção anti-lockout explícita: sem --pubkey, o script recusa travar o root.",
-      "corrigeChecks": ["user.root-password-locked", "user.non-root-sudo"],
+      "oQueAplica": "Cria (ou confirma) o usuário não-root informado, adiciona ao grupo sudo, instala a chave pública SSH do operador quando --pubkey é fornecida, verifica o acesso por chave e SÓ ENTÃO trava a senha do root (passwd -l root). CORRIGIDO nesta rodada (a documentação anterior estava errada): a proteção anti-lockout NÃO olha para o argumento --pubkey — ela olha para o arquivo ~<usuario>/.ssh/authorized_keys que JÁ EXISTE no alvo (01-user.sh, linhas ~116-129). Sem --pubkey o script mantém o authorized_keys existente e, se ele já tiver uma chave válida (caso normal de quem instalou a própria chave seguindo o README), TRAVA o root normalmente. O root só deixa de ser travado quando não há chave nenhuma instalada.",
+      "corrigeChecks": [
+        "user.root-password-locked",
+        "user.non-root-sudo"
+      ],
       "manualOuAutomatica": "ambas",
       "reversivel": "sim — --rollback destrava o root e remove o usuário criado pelo script (se foi ele quem criou).",
-      "arriscada": "condicional — só quando --pubkey é fornecida (trava a senha do root). Sem chave, a fase só cria o usuário/sudo e não é arriscada.",
-      "exigeConfirmacao": "condicional em runtime — o executor (packages/security/src/executor.ts, needsConfirmation) trata esta fase como exigindo confirmação SÓ quando sshPublicKey foi informada; nesse caso agenda rollback automático de 5 min via schedule_rollback/--confirm, igual às fases 02/03. CORRIGIDO nesta rodada: o plano (planner.ts) agora marca requiresConfirmation=true para a fase 01 SEMPRE (RISKY_PHASES=['02','03'] || phase.id==='01'), mesmo antes de saber se uma chave será fornecida — decisão deliberada para o plano nunca prometer um fluxo sem confirmação que o executor pode contradizer em runtime; o operador não é mais surpreendido pela fase 01 entrando em awaiting_confirmation sem aviso prévio."
+      "arriscada": "condicional — arriscada sempre que o root for de fato travado, o que depende de haver chave instalada no alvo, NÃO de --pubkey ter sido passada. Sem nenhuma chave instalada, a fase só cria o usuário/sudo e não é arriscada.",
+      "exigeConfirmacao": "derivado do que o script REALMENTE fez, não dos argumentos. CORRIGIDO nesta rodada: schedule_rollback (lib.sh) emite ':::PAAS_ROLLBACK_SCHEDULED <id>' nos dois caminhos de agendamento real (at e timer em background) e nunca em dry-run; o executor (packages/security/src/executor.ts) consome esse marcador — needsConfirmation = RISKY_PHASES.includes(fase) || (fase === '01' && marcador visto). O marcador é tratado antes dos demais ramos do parser e NÃO vira passo na UI. Antes o executor olhava params.sshPublicKey: com a chave opcional na UI, a fase 01 podia travar o root (usando a chave já instalada), agendar a reversão de 5 min no host e mesmo assim ser marcada como 'success' na hora — o operador nunca via o passo de confirmar acesso e o servidor destravava o root sozinho depois da janela. Efeito colateral corrigido junto: fase 01 que NÃO travou o root não entra em awaiting_confirmation e portanto nunca vira 'rolled_back' mentindo sobre uma reversão que não houve. O plano (planner.ts) segue marcando requiresConfirmation=true para a fase 01 sempre, para não prometer um fluxo sem confirmação."
     },
     {
       "id": "02",
@@ -40,7 +46,12 @@
       "titulo": "Hardening de SSH",
       "script": "02-ssh.sh",
       "oQueAplica": "Garante o OpenSSH server instalado; verifica pré-requisitos anti-lockout (usuário --user existe e tem chave SSH — senão recusa com die); agenda o rollback automático de 5 min ANTES de aplicar; escreve um drop-in de hardening (PermitRootLogin/PasswordAuthentication no, MaxAuthTries 3, forwardings desabilitados, crypto moderna); valida com 'sshd -t'; recarrega o SSH.",
-      "corrigeChecks": ["ssh.root-login", "ssh.password-auth", "ssh.max-auth-tries", "ssh.forwarding-disabled"],
+      "corrigeChecks": [
+        "ssh.root-login",
+        "ssh.password-auth",
+        "ssh.max-auth-tries",
+        "ssh.forwarding-disabled"
+      ],
       "manualOuAutomatica": "ambas",
       "reversivel": "sim — --rollback restaura a configuração de SSH anterior (a partir do backup).",
       "arriscada": true,
@@ -52,7 +63,11 @@
       "titulo": "Firewall (UFW)",
       "script": "03-firewall.sh",
       "oQueAplica": "Instala UFW; agenda rollback automático de 5 min ANTES de ativar; define política padrão deny incoming/allow outgoing; libera SSH (a porta configurada) e HTTP/80+HTTPS/443 ANTES de ativar o firewall; opcionalmente libera portas de e-mail (25/465/587/993) com --profile mail; ativa o UFW; aplica hardening de kernel via /etc/sysctl.d/99-paas-hardening.conf.",
-      "corrigeChecks": ["firewall.ufw-active", "firewall.default-deny", "net.sysctl-hardening"],
+      "corrigeChecks": [
+        "firewall.ufw-active",
+        "firewall.default-deny",
+        "net.sysctl-hardening"
+      ],
       "manualOuAutomatica": "ambas",
       "reversivel": "sim — --rollback desativa o UFW e restaura as configurações anteriores.",
       "arriscada": true,
@@ -64,7 +79,10 @@
       "titulo": "Prevenção de intrusão",
       "script": "04-intrusion.sh",
       "oQueAplica": "Instala fail2ban e apparmor-utils; configura jails (sshd, nginx, recidive; portas de e-mail com --profile mail) em jail.local; valida a configuração; ativa o fail2ban; verifica/reforça os perfis do AppArmor.",
-      "corrigeChecks": ["intrusion.fail2ban", "intrusion.apparmor"],
+      "corrigeChecks": [
+        "intrusion.fail2ban",
+        "intrusion.apparmor"
+      ],
       "manualOuAutomatica": "ambas",
       "reversivel": "sim — --rollback restaura a configuração anterior do fail2ban.",
       "arriscada": false,
@@ -76,7 +94,11 @@
       "titulo": "Minimização de pacotes",
       "script": "05-minimal.sh",
       "oQueAplica": "Purga o snapd (ordem correta) e o bloqueia com apt-mark hold; desabilita/mascara serviços desnecessários (avahi/cups/bluetooth/etc.); remove clientes legados inseguros (telnet/rsh/ftp/tftp/talk/nis) e pacotes de desktop/impressão; limpa dependências órfãs; configura o APT para não instalar Recommends/Suggests (previne re-crescimento); salva um baseline de pacotes.",
-      "corrigeChecks": ["minimal.snapd-absent", "minimal.unnecessary-services", "minimal.legacy-clients"],
+      "corrigeChecks": [
+        "minimal.snapd-absent",
+        "minimal.unnecessary-services",
+        "minimal.legacy-clients"
+      ],
       "manualOuAutomatica": "ambas",
       "reversivel": "parcial — --rollback restaura só a configuração do APT; pacotes purgados não são reinstalados automaticamente.",
       "arriscada": false,
@@ -88,7 +110,12 @@
       "titulo": "Auditoria e detecção",
       "script": "06-audit.sh",
       "oQueAplica": "Instala auditd, Lynis e cron; grava regras essenciais do auditd (passwd, sudoers, cron, etc.); cria a baseline do AIDE (aideinit em sistema limpo); configura rkhunter/chkrootkit com baseline (propupd), a menos que --skip-rkhunter/--skip-aide sejam passados; agenda cron de varreduras recorrentes (Lynis semanal, AIDE diário, rkhunter diário) em /etc/cron.d/paas-security-scan.",
-      "corrigeChecks": ["audit.auditd", "audit.aide-baseline", "audit.rkhunter", "audit.recurring-scan"],
+      "corrigeChecks": [
+        "audit.auditd",
+        "audit.aide-baseline",
+        "audit.rkhunter",
+        "audit.recurring-scan"
+      ],
       "manualOuAutomatica": "ambas",
       "reversivel": "sim — --rollback remove o cron de varredura e restaura as regras de auditoria anteriores.",
       "arriscada": false,
@@ -106,6 +133,7 @@
   ],
   "observacoes": [
     "A ordem de execução 00→06 é a ordem 'segura' documentada no planner (atualizar → usuário → SSH → firewall → intrusão → minimização → auditoria) — o wizard sempre enfileira as fases pendentes nessa ordem fixa (pendingPhases() em SecurityStep.tsx filtra SECURITY_PHASES na ordem declarada).",
-    "CORRIGIDO nesta rodada: net.db-ports-exposed passou a fixable=false em checks.ts (era true) — nenhum dos 7 scripts de fase contém lógica para fazer bind de bancos de dados em 127.0.0.1, então o valor anterior prometia uma cobertura automática que nunca existiu (a remediação sugerida no check sempre foi uma instrução manual, word-for-word). Com fixable=false, este check nunca mais aparece em fixesCheckIds de nenhuma SecurityPlanAction, refletindo a realidade."
+    "CORRIGIDO nesta rodada: net.db-ports-exposed passou a fixable=false em checks.ts (era true) — nenhum dos 7 scripts de fase contém lógica para fazer bind de bancos de dados em 127.0.0.1, então o valor anterior prometia uma cobertura automática que nunca existiu (a remediação sugerida no check sempre foi uma instrução manual, word-for-word). Com fixable=false, este check nunca mais aparece em fixesCheckIds de nenhuma SecurityPlanAction, refletindo a realidade.",
+    "Marcadores de lib.sh parseados pelo executor: :::PAAS_STEP / :::PAAS_OK / :::PAAS_SKIP / :::PAAS_FAIL (montam a lista de passos) e :::PAAS_ROLLBACK_SCHEDULED (NOVO — sinaliza que uma reversão automática foi agendada NO ALVO; não vira passo, não sai em dry-run, e é a única fonte de verdade para exigir confirmação de acesso)."
   ]
 }

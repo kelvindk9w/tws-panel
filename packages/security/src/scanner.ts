@@ -5,10 +5,13 @@
 import { randomUUID } from "node:crypto";
 import type { SecurityCheckResult, SecurityScanReport, SecurityScanSummary } from "@paas/core";
 import { stripAnsi } from "./ansi.js";
-import { SECURITY_CHECKS } from "./checks.js";
+import { parseSudoUsers, SECURITY_CHECKS } from "./checks.js";
 import { LYNIS_CHECK_CMD, LYNIS_REPORT_CMD, LYNIS_RUN_CMD } from "./host-bridge.js";
 import { partitionChecksForProfile, profileNote } from "./profiles.js";
 import type { TargetRunner } from "./runner.js";
+
+/** Check cuja saída revela os usuários não-root com sudo do alvo. */
+const SUDO_USERS_CHECK_ID = "user.non-root-sudo";
 
 const SEVERITY_WEIGHT = { critical: 3, warning: 2, info: 1 } as const;
 
@@ -68,6 +71,11 @@ export async function runSecurityScan(
   const { run: applicableChecks, skipped } = partitionChecksForProfile(SECURITY_CHECKS, runner.profile);
 
   const checks: SecurityCheckResult[] = [];
+  // Nomes dos usuários não-root com sudo descobertos no alvo. Preenchido a
+  // partir da saída BRUTA do check "user.non-root-sudo" (o SecurityCheckResult
+  // só carrega o `detail` legível) e só quando o check passa — se falhou, deu
+  // unknown ou veio em formato inesperado, a lista fica vazia.
+  let nonRootSudoUsers: string[] = [];
   for (const def of applicableChecks) {
     const checkStart = Date.now();
     let result: SecurityCheckResult;
@@ -87,6 +95,9 @@ export async function runSecurityScan(
         remediation: def.remediation,
         ...(evaluation.detail !== undefined ? { detail: evaluation.detail } : {}),
       };
+      if (def.id === SUDO_USERS_CHECK_ID && evaluation.status === "pass") {
+        nonRootSudoUsers = parseSudoUsers(stripAnsi(r.stdout)).map((u) => u.name);
+      }
     } catch (err) {
       result = {
         id: def.id,
@@ -121,5 +132,6 @@ export async function runSecurityScan(
     profile: runner.profile,
     skippedChecks: skipped,
     profileNote: profileNote(runner.profile),
+    nonRootSudoUsers,
   };
 }

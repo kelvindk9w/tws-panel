@@ -8,6 +8,9 @@
  *  - fases de risco (SSH/firewall) ficam "awaiting_confirmation" até o operador
  *    confirmar acesso; o rollback agendado NO ALVO (at/timer de 5 min) reverte
  *    sozinho se ninguém confirmar — o executor apenas reflete o estado.
+ *  - a Fase 01 é decidida pelo marcador :::PAAS_ROLLBACK_SCHEDULED emitido pelo
+ *    próprio script: quem sabe se o root foi travado (e a reversão agendada) é
+ *    o script, não os argumentos que a interface mandou.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -22,6 +25,20 @@ import type { TargetRunner } from "./runner.js";
 import { buildPhaseScriptCommand } from "./host-bridge.js";
 
 const MAX_LOG_CHARS = 500_000;
+
+/**
+ * Marcador emitido por schedule_rollback (scripts/hardening/lib.sh) quando uma
+ * reversão automática foi DE FATO agendada no alvo. É a única prova confiável
+ * de que existe uma janela de confirmação correndo lá — em dry-run o script
+ * retorna cedo e não emite nada.
+ */
+const ROLLBACK_SCHEDULED_MARKER = ":::PAAS_ROLLBACK_SCHEDULED";
+
+/** Estado acumulado durante o parsing da saída de UM job. */
+interface OutputScan {
+  /** true assim que o marcador de rollback agendado aparece na saída. */
+  rollbackScheduled: boolean;
+}
 
 /** Parâmetros opcionais de uma fase (Fase 01: usuário/chave SSH do operador). */
 export interface PhaseParams {
@@ -160,7 +177,8 @@ export class SecurityExecutor {
         job,
         `[executor] alvo=${this.runner.label} fase=${job.phase} script=${script} dryRun=${job.dryRun} rollbackDelay=${delaySec}s\n`,
       );
-      const code = await this.runner.execStream(command, (chunk) => this.processChunk(job, chunk));
+      const scan: OutputScan = { rollbackScheduled: false };
+      const code = await this.runner.execStream(command, (chunk) => this.processChunk(job, chunk, scan));
       this.finishCurrentStep(job, code === 0 ? "done" : "failed");
 
       if (code !== 0) {
@@ -184,10 +202,15 @@ export class SecurityExecutor {
         return;
       }
 
-      // Fases de risco (SSH/firewall) + Fase 01 COM chave (root é travado).
+      // Fases de risco (SSH/firewall) sempre agendam reversão. A Fase 01 só
+      // trava o root quando encontra uma chave já instalada no alvo — o que
+      // NÃO se deduz dos argumentos: quem seguiu o README instalou a própria
+      // chave antes de abrir o painel e não precisa colar nada. Por isso a
+      // decisão vem do marcador que o script emite ao agendar a reversão; sem
+      // ele, nada foi travado e o job termina em sucesso honesto (nunca vira
+      // "rolled_back" depois, porque não há reversão alguma para acontecer).
       const needsConfirmation =
-        RISKY_PHASES.includes(job.phase) ||
-        (job.phase === "01" && typeof params?.sshPublicKey === "string" && params.sshPublicKey.length > 0);
+        RISKY_PHASES.includes(job.phase) || (job.phase === "01" && scan.rollbackScheduled);
       if (!job.dryRun && needsConfirmation) {
         // O script já agendou a reversão NO ALVO (at/timer de 5 min).
         job.status = "awaiting_confirmation";
@@ -288,12 +311,16 @@ export class SecurityExecutor {
     }
   }
 
-  private processChunk(job: SecurityJob, chunk: string): void {
+  private processChunk(job: SecurityJob, chunk: string, scan?: OutputScan): void {
     this.appendLog(job, chunk);
     // Parseia marcadores de passo linha a linha (mantendo resto parcial no log).
     const lines = chunk.split("\n");
     for (const line of lines) {
-      if (line.startsWith(":::PAAS_STEP ")) {
+      if (line.startsWith(ROLLBACK_SCHEDULED_MARKER)) {
+        // Sinal de controle, não um passo: tratado antes (e à parte) do
+        // :::PAAS_STEP para nunca aparecer na lista exibida ao operador.
+        if (scan) scan.rollbackScheduled = true;
+      } else if (line.startsWith(":::PAAS_STEP ")) {
         this.finishCurrentStep(job, "done");
         job.steps.push({ name: line.slice(":::PAAS_STEP ".length).trim(), status: "running" });
       } else if (line.startsWith(":::PAAS_SKIP ")) {

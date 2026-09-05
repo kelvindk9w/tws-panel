@@ -16,6 +16,11 @@
  *  - ao validar o token (prop `enabled` → true), o WS conecta IMEDIATAMENTE;
  *  - começa RECOLHIDO, com a orientação fixa no cabeçalho ("apenas observe;
  *    aja SOMENTE quando for solicitado");
+ *  - nota fixa explicando por que o prompt é root (a sessão entra no host a
+ *    partir de um container privilegiado, não por SSH) — citando pelo NOME o
+ *    usuário não-root detectado na varredura, quando o wizard o conhece
+ *    (prop `sshUser`), para que ninguém ache que o usuário criado na
+ *    instalação foi ignorado; sem nome, a nota fica genérica;
  *  - altura colapsável/expansível, estado persistido em sessionStorage;
  *  - alerta pulsante (evento "paas:terminal-attention") quando uma fase
  *    precisa de ação no terminal — o painel se expande sozinho;
@@ -104,9 +109,15 @@ interface TerminalPanelProps {
   /** true somente DEPOIS de o setup token ter sido validado pelo wizard.
    * Antes disso o terminal nem tenta conectar (placeholder bloqueado). */
   enabled: boolean;
+  /**
+   * Usuário não-root detectado no servidor (ou escolhido pelo operador) na
+   * etapa de Segurança. OPCIONAL de propósito: sem ele a nota do cabeçalho
+   * segue genérica, e nenhum uso existente do painel precisa mudar.
+   */
+  sshUser?: string | null;
 }
 
-export function TerminalPanel({ enabled }: TerminalPanelProps) {
+export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
   // Começa RECOLHIDO por padrão (o usuário expande se quiser acompanhar).
   const [open, setOpen] = useState(() => sessionStorage.getItem(STORAGE_KEY) === "1");
   const [attention, setAttention] = useState(false);
@@ -326,13 +337,25 @@ export function TerminalPanel({ enabled }: TerminalPanelProps) {
       </button>
 
       {/* Por que a sessão é root — evita que o operador estranhe o "root@" no
-          prompt achando que o usuário não-root criado na instalação foi ignorado. */}
+          prompt achando que o usuário não-root criado na instalação foi ignorado.
+          Com o nome detectado na varredura (prop `sshUser`), a nota o cita: dizer
+          "o usuário que você criou" no abstrato não bastava — o operador que
+          reportou o problema leu isso e continuou achando que tinha sido ignorado. */}
       <p className="flex items-start gap-1.5 border-t border-white/5 px-4 py-1.5 text-[10px] leading-relaxed text-emerald-100/45">
         <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-        <span>
-          Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário
-          não-root que você criou na instalação continua sendo o do seu acesso por SSH.
-        </span>
+        {sshUser ? (
+          <span>
+            Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário{" "}
+            <strong className="font-mono text-emerald-100/70">{sshUser}</strong>, que você criou na
+            instalação, <strong>não foi ignorado</strong> — ele continua sendo o do seu acesso por
+            SSH.
+          </span>
+        ) : (
+          <span>
+            Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário
+            não-root que você criou na instalação continua sendo o do seu acesso por SSH.
+          </span>
+        )}
       </p>
 
       {status === "busy" && (
