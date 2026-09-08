@@ -21,6 +21,12 @@
  *    usuário não-root detectado na varredura, quando o wizard o conhece
  *    (prop `sshUser`), para que ninguém ache que o usuário criado na
  *    instalação foi ignorado; sem nome, a nota fica genérica;
+ *  - botão "abrir como <usuário>" no cabeçalho, só com `sshUser` VÁLIDO
+ *    (isValidSshUsername) e sessão conectada: digita `su - <usuário>` pelo
+ *    MESMO caminho de input do xterm (relay puro, nada logado), para o
+ *    operador VER o usuário que criou no prompt ao vivo. A sessão segue root
+ *    por baixo — o hardening não passa a rodar como não-root — e um `exit`
+ *    digitado por ele volta ao root; o title do botão diz isso;
  *  - altura colapsável/expansível, estado persistido em sessionStorage;
  *  - alerta pulsante (evento "paas:terminal-attention") quando uma fase
  *    precisa de ação no terminal — o painel se expande sozinho;
@@ -35,6 +41,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { isValidSshUsername } from "@paas/core";
 import { getSetupToken } from "@/lib/api";
 import { ChevronDown, ChevronUp, Info, Lock, TerminalSquare } from "lucide-react";
 
@@ -129,6 +136,16 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptsRef = useRef(0);
 
+  /**
+   * ÚNICO caminho de input do painel: o que o operador digita no xterm e o
+   * comando do botão "abrir como <usuário>" saem exatamente por aqui — bytes
+   * crus no MESMO WebSocket. Nada é logado, auditado ou inspecionado (regra de
+   * ouro do relay puro; ver apps/server/src/services/terminal-service.ts).
+   */
+  const sendInput = useCallback((data: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(data);
+  }, []);
+
   // -------------------------------------------------------------- WS + xterm
   // Só roda quando `enabled` vira true (token validado): conecta NA HORA.
   useEffect(() => {
@@ -148,9 +165,6 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
     fitRef.current = fit;
     if (containerRef.current) term.open(containerRef.current);
 
-    const sendInput = (data: string) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(data);
-    };
     const dataSub = term.onData(sendInput);
 
     let disposed = false;
@@ -254,6 +268,22 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
     return () => sub.dispose();
   }, [attention]);
 
+  /**
+   * O nome vem da prop e é interpolado num comando de shell: só é aceito se
+   * passar pela MESMA validação do resto do sistema (isValidSshUsername, em
+   * @paas/core), cujo formato — [a-z_][a-z0-9_-]{0,31} e nunca "root" — não
+   * admite espaço, aspas, ";", "$", "\n" nem qualquer metacaractere. Nome fora
+   * disso: nenhum botão e nenhum byte enviado.
+   */
+  const userShellName = sshUser && isValidSshUsername(sshUser) ? sshUser : null;
+  // Sessão caída/em outra aba não aceita input: não ofereça a ação.
+  const canOpenUserShell = userShellName !== null && status === "online";
+
+  const openUserShell = useCallback(() => {
+    if (!userShellName || !isValidSshUsername(userShellName)) return;
+    sendInput(`su - ${userShellName}\n`);
+  }, [sendInput, userShellName]);
+
   const toggle = useCallback(() => {
     setOpen((prev) => {
       const next = !prev;
@@ -341,22 +371,37 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
           Com o nome detectado na varredura (prop `sshUser`), a nota o cita: dizer
           "o usuário que você criou" no abstrato não bastava — o operador que
           reportou o problema leu isso e continuou achando que tinha sido ignorado. */}
-      <p className="flex items-start gap-1.5 border-t border-white/5 px-4 py-1.5 text-[10px] leading-relaxed text-emerald-100/45">
-        <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-        {sshUser ? (
-          <span>
-            Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário{" "}
-            <strong className="font-mono text-emerald-100/70">{sshUser}</strong>, que você criou na
-            instalação, <strong>não foi ignorado</strong> — ele continua sendo o do seu acesso por
-            SSH.
-          </span>
-        ) : (
-          <span>
-            Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário
-            não-root que você criou na instalação continua sendo o do seu acesso por SSH.
-          </span>
+      <div className="flex items-start gap-2 border-t border-white/5 px-4 py-1.5">
+        <p className="flex flex-1 items-start gap-1.5 text-[10px] leading-relaxed text-emerald-100/45">
+          <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+          {sshUser ? (
+            <span>
+              Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário{" "}
+              <strong className="font-mono text-emerald-100/70">{sshUser}</strong>, que você criou na
+              instalação, <strong>não foi ignorado</strong> — ele continua sendo o do seu acesso por
+              SSH.
+            </span>
+          ) : (
+            <span>
+              Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário
+              não-root que você criou na instalação continua sendo o do seu acesso por SSH.
+            </span>
+          )}
+        </p>
+        {/* Ver o usuário criado, sem quebrar o hardening: a sessão continua root
+            (scanner e fases dependem disso) — o botão só abre um shell DELE
+            dentro da sessão, digitando o comando pelo mesmo caminho do input. */}
+        {canOpenUserShell && (
+          <button
+            type="button"
+            onClick={openUserShell}
+            title={`Abre um shell de ${sshUser} dentro desta sessão (o prompt vira ${sshUser}@…). A sessão continua sendo root por baixo — o hardening NÃO passa a rodar como não-root. Digite exit no terminal para voltar ao root.`}
+            className="shrink-0 rounded border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100/80 transition-colors hover:bg-emerald-400/20"
+          >
+            {`Abrir como ${sshUser}`}
+          </button>
         )}
-      </p>
+      </div>
 
       {status === "busy" && (
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">

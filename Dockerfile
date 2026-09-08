@@ -75,6 +75,15 @@ RUN echo "${DOCKER_CLI_SHA256}  /tmp/docker.tgz" | sha256sum -c - \
     && echo "${COMPOSE_SHA256}  /usr/local/libexec/docker/cli-plugins/docker-compose" | sha256sum -c - \
     && chmod +x /usr/local/libexec/docker/cli-plugins/docker-compose
 
+# git: o modo de ingestão "git" do painel (packages/deploy/ingest.ts) clona o
+# repositório do usuário DENTRO deste container, em /data/projects/<slug>/src.
+# A imagem base não traz o binário; sem ele o clone falhava com ENOENT em
+# qualquer repositório. Limpeza das listas do apt na MESMA camada para não
+# carregar o cache do apt na imagem final.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # pnpm preparado em build (sem download em runtime) + usuário não-root.
 RUN corepack enable \
     && corepack prepare pnpm@10.31.0 --activate \
