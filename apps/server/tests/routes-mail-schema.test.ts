@@ -55,6 +55,7 @@ function makeConfig(dir: string): ServerConfig {
     port: 0,
     host: "127.0.0.1",
     dataDir: dir,
+    projectsDir: `${dir}/projects`,
     webDist: dir,
     allowedOrigins: [],
     setupTokenFile: `${dir}/setup-token`,

@@ -933,6 +933,44 @@ docker exec tws-panel cat /data/setup-token   # mostra só o token
 Depois do wizard: cadastre um projeto, aponte o DNS, e o painel cuida do build, do proxy e do
 SSL. Guia completo de produção em [docs/production.md](docs/production.md).
 
+### Onde ficam os arquivos dos seus projetos
+
+Cada projeto que você implanta tem uma pasta própria no servidor, com o código clonado do Git
+e o `docker-compose.yml` que o painel gera. Por padrão essas pastas ficam em
+**`/opt/tws-projects`** — ao lado de `/opt/tws-panel`, e fora de qualquer `/home`, para não
+sumirem se você um dia apagar um usuário do Linux.
+
+Elas ficam num diretório de verdade da VPS, e não escondidas dentro do container, por dois
+motivos práticos:
+
+- **Você consegue olhar.** Conectado por SSH, `ls /opt/tws-projects` já mostra tudo; dá para
+  ler um log, copiar um arquivo ou fazer backup com as ferramentas de sempre.
+- **Projetos que gravam arquivos funcionam.** Se o `docker-compose.yml` do seu projeto tem uma
+  linha como `./dados:/app/dados` (guardar uploads, um banco SQLite, o que for), quem procura
+  essa pasta `dados` é o Docker **da VPS**, não o painel. Se ela existisse só dentro do
+  container do painel, o Docker criaria uma pasta vazia e o seu projeto subiria sem os dados.
+  Por isso o caminho é exatamente o mesmo dentro e fora.
+
+**Quer usar outro lugar** (um disco maior montado em `/mnt/dados`, por exemplo)? Escolha na
+hora de instalar:
+
+```bash
+./scripts/install.sh --projects-dir=/mnt/dados/projetos
+```
+
+> [!IMPORTANT]
+> Essa escolha é feita **na instalação**, não numa tela do painel. Trocar a pasta significa
+> trocar uma montagem do container, e um container só pega uma montagem nova quando é
+> recriado. Se precisar mudar depois, edite a linha `PAAS_PROJECTS_DIR=` do arquivo `.env` em
+> `/opt/tws-panel`, mova os arquivos antigos para o novo lugar (`sudo mv`), ajuste o dono
+> (`sudo chown -R 10001:10001 /novo/caminho`) e rode `docker compose up -d` — ele recria o
+> painel com a nova pasta. Só reiniciar (`restart`) **não** basta.
+
+> [!NOTE]
+> Se você já tinha o painel instalado antes desta mudança, nada se move sozinho: sem a linha
+> `PAAS_PROJECTS_DIR=` no `.env`, o painel continua usando o lugar antigo e os projetos que
+> você já criou seguem onde estavam.
+
 ### Comandos úteis (produção)
 
 ```bash

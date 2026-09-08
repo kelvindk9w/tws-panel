@@ -10,17 +10,278 @@
  * efetivamente publicou, para responder "qual branch está no ar agora?".
  */
 import { useState, type FormEvent } from "react";
-import type { Project, ProjectResponse, UpdateProjectRequest } from "@paas/core";
+import { DEFAULT_GIT_CREDENTIAL_USERNAME } from "@paas/core";
+import type {
+  Project,
+  ProjectCredentialInfo,
+  ProjectCredentialResponse,
+  ProjectResponse,
+  SetProjectCredentialRequest,
+  UpdateProjectRequest,
+} from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { AlertTriangle, Loader2, Settings } from "lucide-react";
+import { AlertTriangle, Eye, KeyRound, Loader2, Settings, Trash2 } from "lucide-react";
 
 export interface ProjectConfigCardProps {
   project: Project;
+  /**
+   * Existência (nunca o valor) da credencial de leitura do repositório. Vem
+   * junto de toda ProjectResponse. Opcional para quem ainda não a repassa.
+   */
+  credential?: ProjectCredentialInfo;
   /** Chamado após salvar com sucesso, para a página recarregar os dados. */
   onSaved: () => void;
+}
+
+/** Estado neutro usado quando a página ainda não repassou a credencial. */
+const SEM_CREDENCIAL: ProjectCredentialInfo = {
+  configured: false,
+  hint: null,
+  username: null,
+  updatedAt: null,
+};
+
+/**
+ * Bloco da credencial de LEITURA do repositório privado.
+ *
+ * Mora no card de Configuração, logo abaixo de repositório/branch, porque é
+ * exatamente a mesma decisão do operador: de onde o painel puxa o código. O
+ * token entra aqui e some — o servidor guarda cifrado e nunca devolve o valor;
+ * a interface só volta a mostrar a dica dos últimos caracteres.
+ */
+function CredencialSection({
+  projectId,
+  credential,
+  onSaved,
+}: {
+  projectId: string;
+  credential: ProjectCredentialInfo;
+  onSaved: () => void;
+}) {
+  const [token, setToken] = useState("");
+  const [username, setUsername] = useState("");
+  // formulário sempre aberto quando não há credencial; para substituir, o
+  // operador precisa pedir — assim o estado "já cadastrada" fica evidente.
+  const [editando, setEditando] = useState(false);
+  const [confirmandoRemocao, setConfirmandoRemocao] = useState(false);
+  const [busy, setBusy] = useState<"salvar" | "remover" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const cadastrando = !credential.configured || editando;
+
+  async function salvar() {
+    if (token.trim().length === 0) return;
+    setBusy("salvar");
+    setError(null);
+    try {
+      const req: SetProjectCredentialRequest = { token: token.trim() };
+      if (username.trim().length > 0) req.username = username.trim();
+      await apiFetch<ProjectCredentialResponse>(`/api/projects/${projectId}/credential`, {
+        method: "PUT",
+        body: JSON.stringify(req),
+      });
+      // some com o segredo da memória do componente e da tela
+      setToken("");
+      setUsername("");
+      setEditando(false);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao salvar a credencial.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remover() {
+    setBusy("remover");
+    setError(null);
+    try {
+      await apiFetch(`/api/projects/${projectId}/credential`, { method: "DELETE" });
+      setConfirmandoRemocao(false);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao remover a credencial.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="mt-6 flex flex-col gap-3 border-t pt-5">
+      <div className="flex flex-col gap-1">
+        <h3 className="flex items-center gap-2 text-sm font-medium">
+          <KeyRound className="h-4 w-4" /> Credencial do repositório privado
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Só é necessária para clonar repositórios privados. Fica cifrada no servidor e o valor
+          nunca é exibido de volta.
+        </p>
+      </div>
+
+      {credential.configured ? (
+        <div
+          data-testid="credencial-resumo"
+          className="flex flex-col gap-1 rounded-md border bg-secondary/40 px-3 py-2 text-sm"
+        >
+          <span>
+            Credencial cadastrada — token terminado em{" "}
+            <code className="rounded bg-background px-1.5 py-0.5 font-mono text-xs">
+              ••••{credential.hint ?? "????"}
+            </code>
+          </span>
+          <span className="text-xs text-muted-foreground">
+            Usuário: {credential.username ?? "—"}
+            {credential.updatedAt
+              ? ` · atualizada em ${new Date(credential.updatedAt).toLocaleString("pt-BR")}`
+              : ""}
+          </span>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Nenhuma credencial cadastrada. Repositórios públicos não precisam de uma.
+        </p>
+      )}
+
+      {cadastrando ? (
+        <>
+          {/*
+            A promessa central do produto, dita no momento em que o operador
+            entrega o token: é por isso que o escopo pedido é o mínimo.
+          */}
+          <div
+            data-testid="credencial-somente-leitura"
+            className="flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-300"
+          >
+            <Eye className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              <strong>Acesso somente leitura.</strong> O painel apenas clona o repositório — nunca
+              escreve, nunca commita, nunca faz push. Use um token de leitura de escopo mínimo: no
+              GitHub, um <em>fine-grained personal access token</em> com a permissão{" "}
+              <code className="rounded bg-background/60 px-1 py-0.5 font-mono text-xs">
+                Contents: Read
+              </code>{" "}
+              apenas para este repositório. Em outros provedores (GitLab, Bitbucket, Gitea), gere um
+              token de acesso de leitura ao repositório.
+            </span>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="cfg-token" className="text-sm font-medium">
+                Token de leitura
+              </label>
+              <Input
+                id="cfg-token"
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="cole o token aqui"
+              />
+              <span className="text-xs text-muted-foreground">
+                Guardado cifrado. Depois de salvo, só a dica dos últimos caracteres volta a aparecer.
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="cfg-cred-usuario" className="text-sm font-medium">
+                Usuário do git (opcional)
+              </label>
+              <Input
+                id="cfg-cred-usuario"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="off"
+                placeholder={DEFAULT_GIT_CREDENTIAL_USERNAME}
+              />
+              <span className="text-xs text-muted-foreground">
+                No GitHub qualquer valor serve com um PAT; em branco usa{" "}
+                {DEFAULT_GIT_CREDENTIAL_USERNAME}.
+              </span>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+
+      {confirmandoRemocao ? (
+        <div className="flex flex-col gap-3 rounded-md border border-destructive/40 px-3 py-3">
+          <p className="text-sm">
+            Remover a credencial de leitura deste projeto? O próximo deploy de um repositório
+            privado vai falhar até que uma nova seja cadastrada.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => setConfirmandoRemocao(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => void remover()}
+            >
+              {busy === "remover" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Confirmar remoção
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {cadastrando ? (
+            <Button type="button" size="sm" disabled={busy !== null} onClick={() => void salvar()}>
+              {busy === "salvar" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Salvar credencial
+            </Button>
+          ) : (
+            <Button type="button" size="sm" variant="outline" onClick={() => setEditando(true)}>
+              Substituir credencial
+            </Button>
+          )}
+          {credential.configured ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              disabled={busy !== null}
+              onClick={() => setConfirmandoRemocao(true)}
+            >
+              <Trash2 className="h-4 w-4" /> Remover credencial
+            </Button>
+          ) : null}
+          {credential.configured && editando ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setToken("");
+                setUsername("");
+                setEditando(false);
+              }}
+            >
+              Descartar
+            </Button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Descreve a divergência entre o configurado e o publicado, ou null se não há. */
@@ -42,7 +303,7 @@ function divergencia(project: Project): string | null {
   return `No ar: ${partes.join(" e ")} (deploy de ${quando}). Publique para aplicar as mudanças.`;
 }
 
-export function ProjectConfigCard({ project, onSaved }: ProjectConfigCardProps) {
+export function ProjectConfigCard({ project, credential, onSaved }: ProjectConfigCardProps) {
   const [name, setName] = useState(project.name);
   const [source, setSource] = useState(project.source);
   const [branch, setBranch] = useState(project.branch ?? "");
@@ -177,6 +438,18 @@ export function ProjectConfigCard({ project, onSaved }: ProjectConfigCardProps) 
             </Button>
           </div>
         </form>
+
+        {/*
+          Fora do <form> de propósito: Enter no campo do token não pode disparar
+          o "Salvar" da configuração, e form aninhado não é HTML válido.
+        */}
+        {ehGit ? (
+          <CredencialSection
+            projectId={project.id}
+            credential={credential ?? SEM_CREDENCIAL}
+            onSaved={onSaved}
+          />
+        ) : null}
       </CardContent>
     </Card>
   );
