@@ -3,7 +3,13 @@
  * Spec: docs/security-research.md (checklist de 6 fases/30 passos).
  */
 export { stripAnsi } from "./ansi.js";
-export { SECURITY_CHECKS, type CheckDefinition, type CheckEvaluation } from "./checks.js";
+export {
+  SECURITY_CHECKS,
+  parseSudoUsers,
+  type CheckDefinition,
+  type CheckEvaluation,
+  type SudoUser,
+} from "./checks.js";
 export { runSecurityScan } from "./scanner.js";
 export { buildSecurityPlan } from "./planner.js";
 export { SecurityExecutor, type ExecutorOptions, type PhaseParams } from "./executor.js";

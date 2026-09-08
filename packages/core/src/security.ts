@@ -89,6 +89,16 @@ export interface SecurityScanReport {
   skippedChecks: SecuritySkippedCheck[];
   /** Nota de contexto do perfil (pt-BR) exibida no relatório; null no perfil host. */
   profileNote: string | null;
+  /**
+   * Nomes dos usuários não-root com sudo (UID ≥ 1000) DETECTADOS no alvo pelo
+   * check "user.non-root-sudo" — cada instalação tem o seu, escolhido pelo
+   * operador ao seguir o README, então nunca há valor fixo. A UI usa a lista
+   * para sugerir o usuário em vez de pedir que ele seja digitado. Lista vazia
+   * quando nenhum foi encontrado; ausente em relatórios persistidos antes
+   * desta detecção existir (por isso opcional — quem lê deve tratar
+   * undefined como lista vazia).
+   */
+  nonRootSudoUsers?: string[];
 }
 
 // ---------------------------------------------------------------------------

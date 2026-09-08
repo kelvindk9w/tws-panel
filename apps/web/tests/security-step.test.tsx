@@ -73,9 +73,22 @@ const PLAN: SecurityPlan = {
   ],
 };
 
+/**
+ * Usuários não-root com sudo que a varredura devolve NESTA execução de teste.
+ * `undefined` reproduz um relatório antigo, persistido antes de a detecção
+ * existir — o campo é opcional no contrato e a UI deve tratá-lo como lista
+ * vazia. Cada teste ajusta o valor antes de chegar ao plano.
+ */
+let detectedSudoUsers: string[] | undefined;
+
 const apiFetchMock = vi.fn(async (path: string, init?: RequestInit) => {
   if (path === "/api/security/history") return HISTORY_EMPTY;
-  if (path.startsWith("/api/security/scan")) return { report: SCAN_REPORT, cached: false };
+  if (path.startsWith("/api/security/scan")) {
+    const report: SecurityScanReport = detectedSudoUsers
+      ? { ...SCAN_REPORT, nonRootSudoUsers: detectedSudoUsers }
+      : SCAN_REPORT;
+    return { report, cached: false };
+  }
   if (path === "/api/security/plan") return PLAN;
   if (path === "/api/security/phases/00/manual") {
     return {
@@ -136,6 +149,7 @@ async function reachPlanStage() {
 beforeEach(() => {
   sessionStorage.clear();
   apiFetchMock.mockClear();
+  detectedSudoUsers = undefined;
 });
 
 afterEach(() => {
@@ -243,11 +257,13 @@ describe("SecurityStep — plano de correção", () => {
     expect(screen.getByText(/desativar a senha do usuário root/i)).toBeInTheDocument();
   });
 
-  it("campo de usuário tem placeholder curto e a explicação como texto auxiliar", async () => {
+  it("campo de usuário não tem placeholder enganoso; a explicação fica no texto auxiliar", async () => {
     await reachPlanStage();
     const campo = screen.getByLabelText(/Usuário não-root criado na instalação/);
-    expect(campo).toHaveAttribute("placeholder", "deploy");
+    // "deploy" em cinza dentro do campo parecia valor preenchido — foi removido
+    expect(campo).not.toHaveAttribute("placeholder");
     expect(screen.getByText(/nome que você criou/i)).toBeInTheDocument();
+    expect(screen.getByText(/ex\.: deploy/i)).toBeInTheDocument();
   });
 
   it("valida o formato da chave ao colar e mostra 'Sua chave parece válida ✅'", async () => {
@@ -265,7 +281,7 @@ describe("SecurityStep — plano de correção", () => {
     expect(screen.getByText("Sua chave parece válida ✅")).toBeInTheDocument();
   });
 
-  it("Fase 01 exige usuário + chave para habilitar 'Executar apenas esta fase'", async () => {
+  it("Fase 01 com usuário e chave válidos habilita 'Executar apenas esta fase'", async () => {
     await reachPlanStage();
     const [, fase01Btn] = screen.getAllByRole("button", { name: /Executar apenas esta fase/ });
     expect(fase01Btn!.closest("button")).toBeDisabled();
@@ -280,5 +296,173 @@ describe("SecurityStep — plano de correção", () => {
       },
     });
     expect(fase01Btn!.closest("button")).toBeEnabled();
+  });
+});
+
+/**
+ * A chave pública é OPCIONAL na Fase 01 — o script 01-user.sh trata --pubkey
+ * como opcional (sem ela mantém o authorized_keys existente) e tem trava
+ * anti-lockout própria: sem nenhuma chave instalada, não trava a senha do root.
+ * Quem instalou a chave seguindo o README não deve ser obrigado a colá-la.
+ */
+describe("SecurityStep — Fase 01 com chave SSH opcional", () => {
+  const CHAVE_VALIDA =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILSr6Jdm+iXYbln6BfkP2uCTKNO/eVi89lEjP7rH7dHN eu@notebook";
+
+  /** Botão "Executar apenas esta fase" do card da Fase 01 (o segundo do plano). */
+  function fase01Button() {
+    return screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[1]!;
+  }
+
+  function preencherUsuario(valor: string) {
+    fireEvent.change(screen.getByLabelText(/Usuário não-root criado na instalação/), {
+      target: { value: valor },
+    });
+  }
+
+  function preencherChave(valor: string) {
+    fireEvent.change(screen.getByLabelText(/Chave pública/), { target: { value: valor } });
+  }
+
+  it("usuário válido + chave VAZIA → botão da Fase 01 habilitado", async () => {
+    await reachPlanStage();
+    preencherUsuario("kelvin");
+    expect(fase01Button()).toBeEnabled();
+    // e o dry-run de todas as fases também deixa de ser bloqueado
+    expect(
+      screen.getByRole("button", { name: /Executar dry-run de todas as fases pendentes/ }),
+    ).toBeEnabled();
+  });
+
+  it("usuário válido + chave de formato INVÁLIDO → botão continua desabilitado", async () => {
+    await reachPlanStage();
+    preencherUsuario("kelvin");
+    preencherChave("nao-e-uma-chave");
+    expect(fase01Button()).toBeDisabled();
+
+    // limpar o campo volta a habilitar (vazio = reaproveita a chave do servidor)
+    preencherChave("");
+    expect(fase01Button()).toBeEnabled();
+  });
+
+  it("usuário vazio ou inválido → botão continua desabilitado, mesmo com chave válida", async () => {
+    await reachPlanStage();
+    expect(fase01Button()).toBeDisabled();
+
+    preencherChave(CHAVE_VALIDA);
+    expect(fase01Button()).toBeDisabled();
+
+    preencherUsuario("root");
+    expect(fase01Button()).toBeDisabled();
+
+    preencherUsuario("kelvin");
+    expect(fase01Button()).toBeEnabled();
+  });
+
+  it("o campo de chave se anuncia como opcional e explica que a chave do servidor é reaproveitada", async () => {
+    await reachPlanStage();
+    expect(screen.getByLabelText(/Chave pública.*opcional/i)).toBeInTheDocument();
+    expect(screen.getByText(/pode deixar em branco/i)).toBeInTheDocument();
+    expect(screen.getByText(/chave que já está no servidor/i)).toBeInTheDocument();
+  });
+
+  it("avisa, junto do campo, que sem nenhuma chave instalada a senha do root NÃO é travada", async () => {
+    await reachPlanStage();
+    expect(screen.getByText(/não vai travar a senha do root/i)).toBeInTheDocument();
+    expect(screen.getByText(/nunca causa lockout/i)).toBeInTheDocument();
+  });
+
+  it("com o formulário incompleto, a explicação aparece dentro do card da Fase 01, junto do botão", async () => {
+    await reachPlanStage();
+    const cardFase01 = fase01Button().closest("div.rounded-md.border")!;
+    expect(cardFase01).toHaveTextContent(/Informe abaixo o usuário não-root/i);
+
+    preencherUsuario("kelvin");
+    expect(cardFase01).not.toHaveTextContent(/Informe abaixo o usuário não-root/i);
+  });
+});
+
+/**
+ * O nome do usuário não-root NÃO se digita às cegas: a varredura já descobre
+ * quem é (`nonRootSudoUsers`), e cada instalação tem o seu — nunca há valor
+ * fixo. O campo é preenchido/oferecido a partir dessa detecção, o operador
+ * continua podendo editar, e o que ele escreveu nunca é sobrescrito.
+ */
+describe("SecurityStep — usuário não-root detectado pela varredura", () => {
+  function campoUsuario(): HTMLInputElement {
+    return screen.getByLabelText(/Usuário não-root criado na instalação/) as HTMLInputElement;
+  }
+
+  it("um único detectado preenche o campo e a UI diz que o nome veio do servidor", async () => {
+    detectedSudoUsers = ["deploy"];
+    await reachPlanStage();
+
+    expect(campoUsuario().value).toBe("deploy");
+    expect(screen.getByText(/detectado no servidor/i)).toBeInTheDocument();
+    // e o formulário já nasce válido: nada a digitar para liberar a fase
+    expect(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[1]!).toBeEnabled();
+  });
+
+  it("dois ou mais detectados são oferecidos para escolha e a escolha preenche o campo", async () => {
+    detectedSudoUsers = ["deploy", "kelvin"];
+    await reachPlanStage();
+
+    // ambíguo: não escolhe sozinho — pergunta
+    expect(campoUsuario().value).toBe("");
+    expect(screen.getByText(/2 usuários/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "kelvin" }));
+    expect(campoUsuario().value).toBe("kelvin");
+    expect(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[1]!).toBeEnabled();
+
+    // continua sendo possível digitar um nome fora da lista
+    fireEvent.change(campoUsuario(), { target: { value: "outro" } });
+    expect(campoUsuario().value).toBe("outro");
+  });
+
+  it("nenhum detectado mantém o comportamento atual: campo vazio com texto de ajuda", async () => {
+    detectedSudoUsers = [];
+    await reachPlanStage();
+
+    expect(campoUsuario().value).toBe("");
+    expect(screen.getByText(/nome que você criou/i)).toBeInTheDocument();
+    expect(screen.queryByText(/detectado no servidor/i)).not.toBeInTheDocument();
+  });
+
+  it("relatório antigo (sem o campo) se comporta como 'nenhum detectado', sem quebrar", async () => {
+    detectedSudoUsers = undefined; // relatório persistido antes da detecção existir
+    await reachPlanStage();
+
+    expect(campoUsuario().value).toBe("");
+    expect(screen.getByText(/nome que você criou/i)).toBeInTheDocument();
+    expect(screen.queryByText(/detectado no servidor/i)).not.toBeInTheDocument();
+  });
+
+  it("o que o operador digitou NÃO é sobrescrito por uma varredura posterior", async () => {
+    await reachPlanStage(); // primeira varredura: nada detectado
+    fireEvent.change(campoUsuario(), { target: { value: "kelvin" } });
+
+    // agora o servidor passa a detectar outro nome e o operador revarre
+    detectedSudoUsers = ["deploy"];
+    fireEvent.click(screen.getAllByRole("button", { name: /Fazer manualmente/ })[0]!);
+    await screen.findByRole("dialog");
+    fireEvent.click(await screen.findByRole("button", { name: /Já executei — revarrer/ }));
+    await waitFor(() => {
+      const calls = apiFetchMock.mock.calls.map(([p]) => String(p));
+      expect(calls).toContain("/api/security/scan?fresh=1");
+    });
+
+    expect(campoUsuario().value).toBe("kelvin"); // a escolha do operador manda
+  });
+
+  it("informa o nome ao wizard, para que o terminal possa citá-lo", async () => {
+    detectedSudoUsers = ["deploy"];
+    const onSshUserDetected = vi.fn();
+    render(<SecurityStep onNext={() => undefined} onSshUserDetected={onSshUserDetected} />);
+    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Gerar plano de correção"));
+    await screen.findByText(/Fase 00 — Atualizações do sistema/);
+
+    await waitFor(() => expect(onSshUserDetected).toHaveBeenCalledWith("deploy"));
   });
 });

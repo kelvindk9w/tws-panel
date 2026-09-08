@@ -4,7 +4,7 @@
  *
  * Cada check é um comando FIXO + avaliador. Nada de input externo.
  */
-import type { CheckSeverity, SecurityPhaseId } from "@paas/core";
+import { isValidSshUsername, type CheckSeverity, type SecurityPhaseId } from "@paas/core";
 import type { ExecResult } from "./runner.js";
 
 export interface CheckEvaluation {
@@ -54,6 +54,40 @@ function firstLine(s: string): string {
  */
 const DPKG_INSTALLED = (pkg: string) =>
   `dpkg-query -W -f='\${db:Status-Abbrev}' ${pkg} 2>/dev/null | grep -q '^ii '`;
+
+/** Prefixo das linhas emitidas pelo check "user.non-root-sudo". */
+const SUDO_USER_PREFIX = "sudo-user";
+
+/** Usuário comum (UID ≥ 1000) pertencente ao grupo sudo, detectado no alvo. */
+export interface SudoUser {
+  name: string;
+  uid: number;
+}
+
+/**
+ * Lê a saída do check "user.non-root-sudo" — uma linha "sudo-user <nome> <uid>"
+ * por candidato. Formato de linha com prefixo fixo justamente porque a saída
+ * vem de um PTY: qualquer ruído (banner, aviso do getent) simplesmente não
+ * casa e é ignorado, em vez de virar "nome de usuário".
+ *
+ * Defensivo por contrato: nunca lança, nunca inventa nome. Descarta uid < 1000
+ * (contas de sistema) e todo nome que não seja um nome de usuário Linux válido
+ * — o valor vira sugestão na UI e depois argumento do script de hardening.
+ */
+export function parseSudoUsers(stdout: string): SudoUser[] {
+  const out: SudoUser[] = [];
+  for (const line of stdout.split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length !== 3 || parts[0] !== SUDO_USER_PREFIX) continue;
+    const name = parts[1] ?? "";
+    const rawUid = parts[2] ?? "";
+    if (!/^\d+$/.test(rawUid)) continue;
+    const uid = Number.parseInt(rawUid, 10);
+    if (uid < 1000 || !isValidSshUsername(name)) continue;
+    out.push({ name, uid });
+  }
+  return out;
+}
 
 export const SECURITY_CHECKS: CheckDefinition[] = [
   // ------------------------------------------------------------------ Fase 00
@@ -149,12 +183,20 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Verifica se existe ao menos um usuário comum (UID ≥ 1000) no grupo sudo — operar como root é anti-padrão.",
     remediation: "Aplicar a fase 01 (cria usuário não-root + sudo).",
     fixable: true,
+    // Emite uma linha "sudo-user <nome> <uid>" por candidato (todos, não só o
+    // primeiro): o NOME é o que a UI usa para não pedir que o operador digite
+    // o usuário que ele mesmo criou seguindo o README. POSIX sh puro (o alvo
+    // pode não ter bash) e `true` no fim para o comando sair 0 mesmo com o
+    // grupo sudo inexistente ou vazio.
     command:
-      "for u in $(getent group sudo 2>/dev/null | cut -d: -f4 | tr ',' ' '); do [ \"$u\" != root ] && id -u \"$u\" 2>/dev/null; done | head -1",
+      "for u in $(getent group sudo 2>/dev/null | cut -d: -f4 | tr ',' ' '); do [ \"$u\" = root ] && continue; uid=$(id -u \"$u\" 2>/dev/null); [ -n \"$uid\" ] && [ \"$uid\" -ge 1000 ] && echo \"sudo-user $u $uid\"; done; true",
     evaluate: (r) => {
-      const uid = Number.parseInt(firstLine(r.stdout), 10);
-      return !Number.isNaN(uid) && uid >= 1000
-        ? { status: "pass", detail: `usuário não-root com sudo (uid ${uid})` }
+      const users = parseSudoUsers(r.stdout);
+      return users.length > 0
+        ? {
+            status: "pass",
+            detail: `usuário(s) não-root com sudo: ${users.map((u) => `${u.name} (uid ${u.uid})`).join(", ")}`,
+          }
         : { status: "fail", detail: "nenhum usuário não-root no grupo sudo" };
     },
   },

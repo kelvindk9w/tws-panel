@@ -51,6 +51,13 @@ interface SecurityStepProps {
   onNext: () => void;
   /** Navegação de volta no wizard (ex.: voltar à Saúde da máquina). */
   onBack?: () => void;
+  /**
+   * Avisa o wizard qual é o usuário não-root em jogo (detectado na varredura
+   * ou escolhido pelo operador), para que o terminal — renderizado FORA deste
+   * passo, na SetupPage — possa citá-lo pelo nome. `null` quando ainda não há
+   * nome confiável.
+   */
+  onSshUserDetected?: (user: string | null) => void;
 }
 
 type Stage = "scan" | "plan" | "run" | "done";
@@ -176,7 +183,7 @@ function StepList({ steps }: { steps: SecurityJobStep[] }) {
 // Componente principal
 // ---------------------------------------------------------------------------
 
-export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
+export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStepProps) {
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
 
@@ -195,6 +202,9 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
   // início da instalação, seguindo o README — aqui ele é VALIDADO)
   const [sshUser, setSshUser] = useState("");
   const [sshPublicKey, setSshPublicKey] = useState("");
+  // O operador já mexeu no campo? A partir daí, nenhuma varredura posterior
+  // sobrescreve o que ele escreveu/escolheu — a decisão é dele.
+  const sshUserTouched = useRef(false);
 
   // modo manual por fase — modal com passo a passo copiável + revarredura
   const [manualModal, setManualModal] = useState<SecurityPhaseId | null>(null);
@@ -244,6 +254,27 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
       cancelled = true;
     };
   }, []);
+
+  // Usuários não-root com sudo DETECTADOS no servidor pela varredura. O campo
+  // é opcional no contrato (relatórios antigos, persistidos antes de a
+  // detecção existir, não o trazem): undefined vale como lista vazia.
+  const detectedSudoUsers = report?.nonRootSudoUsers ?? [];
+  const soleDetectedUser = detectedSudoUsers.length === 1 ? detectedSudoUsers[0]! : null;
+
+  // Um único candidato: preenche o campo sozinho — o nome já foi descoberto no
+  // servidor, não faz sentido pedir que seja digitado às cegas. Só vale para o
+  // campo INTOCADO; havendo dois ou mais, o painel pergunta em vez de chutar.
+  useEffect(() => {
+    if (sshUserTouched.current || soleDetectedUser === null) return;
+    setSshUser(soleDetectedUser);
+  }, [soleDetectedUser]);
+
+  // Sobe o nome para a SetupPage, que o repassa ao terminal (renderizado fora
+  // deste passo). Só um nome válido viaja — nada de meio-nome sendo digitado.
+  useEffect(() => {
+    const name = sshUser.trim();
+    onSshUserDetected?.(isValidSshUsername(name) ? name : null);
+  }, [sshUser, onSshUserDetected]);
 
   const logRef = useRef<HTMLPreElement | null>(null);
   useEffect(() => {
@@ -454,8 +485,12 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
   const phaseTitle = (id: string) => SECURITY_PHASES.find((p) => p.id === id)?.title ?? id;
   const phase01Selected = pendingPhases().includes("01");
   const sshUserOk = isValidSshUsername(sshUser.trim());
+  const sshKeyEmpty = sshPublicKey.trim() === "";
   const sshKeyOk = isValidSshPublicKey(sshPublicKey);
-  const sshFormValid = !phase01Selected || (sshUserOk && sshKeyOk);
+  // A chave é OPCIONAL: sem `--pubkey` o 01-user.sh mantém o authorized_keys
+  // que já está no servidor (quem seguiu o README não precisa colá-la de novo).
+  // Colar algo malformado, porém, continua bloqueando — o script rejeitaria.
+  const sshFormValid = !phase01Selected || (sshUserOk && (sshKeyEmpty || sshKeyOk));
   // "Antes" da tela de resultado: SEMPRE o snapshot congelado (no início da
   // execução ou restaurado do histórico após restart); `report` é só fallback.
   const beforeView: IndexSnapshot | null =
@@ -686,8 +721,19 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
                     {!a.alreadySatisfied && (
                       <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
                         <span className="text-xs text-muted-foreground">
-                          O painel executa no terminal abaixo — primeiro em dry-run (simulação), só
-                          depois de verdade, com a sua confirmação.
+                          {/* A causa do botão desabilitado fica ao lado do botão, não
+                              só no rodapé da página (longe demais para ser vista). */}
+                          {a.phase === "01" && !sshFormValid ? (
+                            <span className="text-amber-400">
+                              Informe abaixo o usuário não-root criado na instalação para habilitar
+                              esta fase (a chave SSH é opcional).
+                            </span>
+                          ) : (
+                            <>
+                              O painel executa no terminal abaixo — primeiro em dry-run (simulação),
+                              só depois de verdade, com a sua confirmação.
+                            </>
+                          )}
                         </span>
                         <div className="flex items-center gap-2">
                           <Button
@@ -744,11 +790,55 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
                   <Input
                     id="ssh-user"
                     value={sshUser}
-                    onChange={(e) => setSshUser(e.target.value)}
+                    onChange={(e) => {
+                      // a partir do primeiro toque, a varredura não decide mais
+                      // por ele (nem uma revarredura posterior)
+                      sshUserTouched.current = true;
+                      setSshUser(e.target.value);
+                    }}
                     className="h-8 w-64 font-mono"
-                    placeholder="deploy"
                   />
-                  {sshUser.trim() === "" && (
+                  {/* Um único candidato: o campo já veio preenchido — deixar
+                      explícito que o nome saiu do SERVIDOR, e não de um chute
+                      do painel, é o que tira o operador da dúvida. */}
+                  {soleDetectedUser !== null && (
+                    <p className="text-xs text-emerald-400">
+                      🔎 Nome <strong>detectado no servidor</strong>:{" "}
+                      <strong className="font-mono">{soleDetectedUser}</strong> — é o único usuário
+                      não-root com sudo que existe aí. Se não for esse, é só editar.
+                    </p>
+                  )}
+                  {/* Dois ou mais: o painel NÃO escolhe por ele. Oferece os
+                      nomes achados para um clique, sem impedir que digite outro. */}
+                  {detectedSudoUsers.length > 1 && (
+                    <div className="flex flex-col gap-1">
+                      <p className="text-xs text-muted-foreground">
+                        Encontramos <strong>{detectedSudoUsers.length} usuários</strong> não-root com
+                        sudo no servidor. Qual deles você criou na instalação?
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {detectedSudoUsers.map((name) => (
+                          <Button
+                            key={name}
+                            type="button"
+                            size="sm"
+                            variant={sshUser.trim() === name ? "default" : "outline"}
+                            className="h-7 font-mono text-xs"
+                            onClick={() => {
+                              sshUserTouched.current = true;
+                              setSshUser(name);
+                            }}
+                          >
+                            {name}
+                          </Button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Não é nenhum deles? Digite o nome no campo acima.
+                      </p>
+                    </div>
+                  )}
+                  {detectedSudoUsers.length === 0 && sshUser.trim() === "" && (
                     <p className="text-xs text-muted-foreground">
                       O nome que você criou ao seguir o README (ex.: deploy).
                     </p>
@@ -765,7 +855,7 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-xs text-muted-foreground" htmlFor="ssh-pubkey">
-                    Chave pública (ssh-ed25519 ou ssh-rsa)
+                    Chave pública (ssh-ed25519 ou ssh-rsa) — opcional
                   </label>
                   <textarea
                     id="ssh-pubkey"
@@ -783,6 +873,25 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
                     </p>
                   )}
                   {sshKeyOk && <p className="text-xs text-emerald-400">Sua chave parece válida ✅</p>}
+                  {/* Campo opcional: sem chave nova, a fase reaproveita a que já
+                      está no authorized_keys do servidor. */}
+                  <p className="text-xs text-muted-foreground">
+                    Se você já instalou sua chave no servidor seguindo o README,{" "}
+                    <strong>pode deixar em branco</strong> — a fase reaproveita a{" "}
+                    chave que já está no servidor. Cole algo aqui só para{" "}
+                    <strong>adicionar</strong> mais uma chave.
+                  </p>
+                  {/* Aviso honesto: a trava anti-lockout do 01-user.sh se recusa a
+                      travar o root enquanto não houver nenhuma chave instalada. */}
+                  <p className="flex items-start gap-1 text-xs text-amber-400">
+                    <ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span>
+                      Se <strong>nenhuma chave</strong> estiver instalada no servidor para esse
+                      usuário, a fase <strong>não vai travar a senha do root</strong> — é a proteção
+                      anti-lockout do próprio script. Deixar em branco é seguro:{" "}
+                      <strong>nunca causa lockout</strong>.
+                    </span>
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -798,8 +907,9 @@ export function SecurityStep({ onNext, onBack }: SecurityStepProps) {
           </div>
           {!sshFormValid && (
             <p className="text-right text-xs text-amber-400">
-              Informe o usuário criado na instalação e cole uma chave pública SSH válida para
-              executar a Fase 01 (ou use "Fazer manualmente" na fase).
+              Informe o usuário criado na instalação para executar a Fase 01 — a chave pública SSH
+              é opcional, mas se você colar uma ela precisa estar em formato válido (ou use "Fazer
+              manualmente" na fase).
             </p>
           )}
         </>

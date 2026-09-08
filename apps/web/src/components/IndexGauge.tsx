@@ -5,6 +5,12 @@
  * cor por faixa de score (emerald ≥ 75, amber ≥ 50, red abaixo) com glow sutil
  * na mesma cor. Usado no wizard (antes/depois do hardening) e na tela de
  * conclusão do setup.
+ *
+ * O rótulo da fonte da nota fica dentro do anel, que tem só 96px ou 112px de
+ * largura: por isso ele é curto ("Lynis" / "Interno") e não quebra linha. O
+ * nome por extenso ("Lynis Index" / "Índice interno") continua disponível no
+ * title do rótulo e no aria-label do anel, para quem passa o mouse e para
+ * leitor de tela.
  */
 interface IndexGaugeProps {
   value: number | null;
@@ -22,11 +28,14 @@ export function IndexGauge({ value, source, size = "md" }: IndexGaugeProps) {
   const filled = Math.min(Math.max(v, 0), 100) / 100;
   const box = size === "sm" ? "h-24 w-24" : "h-28 w-28";
   const number = size === "sm" ? "text-2xl" : "text-3xl";
+  const lynis = source === "lynis";
+  const fonteCurta = lynis ? "Lynis" : "Interno";
+  const fonteLonga = lynis ? "Lynis Index" : "Índice interno";
   return (
     <div
       className={`relative ${box}`}
       role="img"
-      aria-label={`Índice de segurança: ${value ?? "—"} de 100`}
+      aria-label={`Índice de segurança: ${value ?? "—"} de 100 (fonte: ${fonteLonga})`}
     >
       <svg
         viewBox="0 0 112 112"
@@ -47,10 +56,15 @@ export function IndexGauge({ value, source, size = "md" }: IndexGaugeProps) {
           style={{ transition: "stroke-dashoffset 700ms cubic-bezier(0.16, 1, 0.3, 1)" }}
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`${number} font-bold tracking-tight tabular ${color}`}>{value ?? "—"}</span>
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          {source === "lynis" ? "Lynis Index" : "Índice interno"}
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 px-2">
+        <span className={`${number} font-bold leading-none tracking-tight tabular ${color}`}>
+          {value ?? "—"}
+        </span>
+        <span
+          className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[10px] uppercase leading-none tracking-wide text-muted-foreground"
+          title={fonteLonga}
+        >
+          {fonteCurta}
         </span>
       </div>
     </div>

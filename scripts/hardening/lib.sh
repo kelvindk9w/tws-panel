@@ -8,6 +8,10 @@
 #  - --dry-run: mostra o que faria sem alterar nada.
 #  - --rollback: restaura os backups mais recentes e desfaz o que for seguro desfazer.
 #  - Marcadores `:::PAAS_STEP/:::PAAS_OK/...` são parseados pelo executor (packages/security).
+#  - `:::PAAS_ROLLBACK_SCHEDULED <id>` é emitido por schedule_rollback SÓ quando
+#    uma reversão automática foi mesmo agendada no host (nunca em dry-run). O
+#    executor usa esse marcador — e não os argumentos da fase — para saber que
+#    existe uma janela de confirmação correndo no alvo.
 
 # shellcheck shell=bash
 
@@ -23,6 +27,9 @@ PAAS_ROLLBACK_DELAY="${PAAS_ROLLBACK_DELAY:-300}" # 5 min (alinhado a `at now +5
 step()  { echo ":::PAAS_STEP $*"; }
 ok()    { echo ":::PAAS_OK $*"; }
 skip()  { echo ":::PAAS_SKIP $*"; }
+# Sinal de controle (não é um passo): avisa o executor que existe uma reversão
+# automática agendada no host, com a janela correndo. Só schedule_rollback emite.
+rollback_scheduled() { echo ":::PAAS_ROLLBACK_SCHEDULED $*"; }
 info()  { echo "[paas] $*"; }
 warn()  { echo "[paas] WARN: $*" >&2; }
 die()   { echo ":::PAAS_FAIL $*" >&2; echo "[paas] ERROR: $*" >&2; exit 1; }
@@ -227,6 +234,7 @@ schedule_rollback() {
     if [ -n "$job" ]; then
       echo "$job" > "$jobfile"
       info "rollback agendado via at (job $job) em $((PAAS_ROLLBACK_DELAY / 60)) min"
+      rollback_scheduled "$id"
       return 0
     fi
     warn "agendamento via at falhou; usando timer em background"
@@ -236,6 +244,7 @@ schedule_rollback() {
     >"/var/log/paas-rollback-${id}.log" 2>&1 &
   echo "$!" > "$pidfile"
   info "rollback agendado via timer em background (pid $(cat "$pidfile")) em ${PAAS_ROLLBACK_DELAY}s"
+  rollback_scheduled "$id"
 }
 
 # confirm_rollback <id> — cancela o rollback agendado (operador confirmou acesso).

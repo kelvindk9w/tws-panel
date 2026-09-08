@@ -182,6 +182,27 @@ describe("TerminalPanel — habilitado", () => {
     expect(screen.queryByText(/nsenter/i)).not.toBeInTheDocument();
   });
 
+  /**
+   * Sem o NOME, a nota continuava abstrata ("o usuário que você criou") e o
+   * operador seguia achando que o usuário dele tinha sido ignorado. Com o nome
+   * detectado na varredura, a nota responde à dúvida real dele.
+   */
+  it("cita o nome do usuário detectado, quando o wizard o conhece", () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    expect(screen.getByText(/hardening do servidor exige/i)).toBeInTheDocument();
+    expect(screen.getByText("kelvin")).toBeInTheDocument();
+    expect(screen.getByText(/não foi ignorado/i)).toBeInTheDocument();
+    expect(screen.getByText(/acesso por SSH/i)).toBeInTheDocument();
+  });
+
+  it("sem nome conhecido, mantém a nota genérica de hoje", () => {
+    render(<TerminalPanel enabled={true} />);
+    expect(
+      screen.getByText(/usuário não-root que você criou na instalação continua sendo o do seu acesso por SSH/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/não foi ignorado/i)).not.toBeInTheDocument();
+  });
+
   it("colapsa/expande e persiste o estado em sessionStorage", async () => {
     render(<TerminalPanel enabled={true} />);
     const toggle = screen.getByRole("button", { name: /Terminal do servidor/ });

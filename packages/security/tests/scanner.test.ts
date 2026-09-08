@@ -72,3 +72,52 @@ describe("runSecurityScan — timing por check", () => {
     expect(report.hardeningIndexSource).toBe("internal");
   });
 });
+
+/**
+ * nonRootSudoUsers — o scan descobre no alvo os nomes dos usuários não-root
+ * com sudo (cada instalação tem o seu, escolhido pelo operador no README) e
+ * os expõe no relatório para a UI não precisar pedir que sejam digitados.
+ */
+describe("runSecurityScan — nonRootSudoUsers", () => {
+  const SUDO_CMD = SECURITY_CHECKS.find((c) => c.id === "user.non-root-sudo")?.command ?? "";
+
+  /** Runner que responde ao check de sudo com `stdout` e o resto vazio. */
+  function runnerWithSudoOutput(stdout: string): TargetRunner {
+    return fakeRunner((cmd: string) => {
+      if (cmd.startsWith("command -v lynis")) return Promise.resolve({ code: 1, stdout: "", stderr: "" });
+      if (cmd === SUDO_CMD) return Promise.resolve({ code: 0, stdout, stderr: "" });
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    });
+  }
+
+  it("um único usuário não-root com sudo: nome detectado", async () => {
+    const report = await runSecurityScan(runnerWithSudoOutput("sudo-user deploy 1000\n"));
+    expect(report.nonRootSudoUsers).toEqual(["deploy"]);
+    expect(report.checks.find((c) => c.id === "user.non-root-sudo")?.status).toBe("pass");
+  });
+
+  it("vários usuários: todos detectados, na ordem da saída", async () => {
+    const report = await runSecurityScan(
+      runnerWithSudoOutput("sudo-user deploy 1000\nsudo-user kelvin 1001\n"),
+    );
+    expect(report.nonRootSudoUsers).toEqual(["deploy", "kelvin"]);
+  });
+
+  it("nenhum usuário não-root com sudo: lista vazia e check falhando", async () => {
+    const report = await runSecurityScan(runnerWithSudoOutput(""));
+    expect(report.nonRootSudoUsers).toEqual([]);
+    expect(report.checks.find((c) => c.id === "user.non-root-sudo")?.status).toBe("fail");
+  });
+
+  it("saída malformada: lista vazia, sem exceção", async () => {
+    const report = await runSecurityScan(runnerWithSudoOutput("getent: not found\n?????\n"));
+    expect(report.nonRootSudoUsers).toEqual([]);
+  });
+
+  it("nome inválido na saída é descartado; o válido permanece", async () => {
+    const report = await runSecurityScan(
+      runnerWithSudoOutput("sudo-user Bad;Name 1000\nsudo-user deploy 1000\n"),
+    );
+    expect(report.nonRootSudoUsers).toEqual(["deploy"]);
+  });
+});
