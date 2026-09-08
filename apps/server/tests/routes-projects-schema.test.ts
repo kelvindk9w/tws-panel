@@ -52,6 +52,14 @@ beforeEach(async () => {
     listProjects: vi.fn(async () => [PROJECT]),
     statusOf: vi.fn(async () => ({ status: "running" as const, containers: [] })),
     projectUrl: vi.fn(() => "http://loja.localhost"),
+    // Informação pública da credencial (existe? dica?) — o valor do token
+    // nunca passa por aqui.
+    credentialInfo: vi.fn(async () => ({
+      configured: false,
+      hint: null,
+      username: null,
+      updatedAt: null,
+    })),
     createProject,
     updateProject,
     getProject: vi.fn(async () => PROJECT),

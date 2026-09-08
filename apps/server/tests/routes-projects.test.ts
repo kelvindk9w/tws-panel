@@ -39,6 +39,14 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     listProjects: vi.fn(async () => [PROJECT]),
     statusOf: vi.fn(async () => ({ status: "running" as const, containers: [] })),
     projectUrl: vi.fn((p: Project) => `http://${p.domain}`),
+    // Informação pública da credencial (existe? dica?) — o valor do token
+    // nunca passa por aqui.
+    credentialInfo: vi.fn(async () => ({
+      configured: false,
+      hint: null,
+      username: null,
+      updatedAt: null,
+    })),
     createProject: vi.fn(async () => PROJECT),
     getProject: vi.fn(async (id: string) => (id === "p1" ? PROJECT : null)),
     updateProject: vi.fn(async () => PROJECT),

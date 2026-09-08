@@ -29,6 +29,9 @@
 #      PAAS_DIR=<dir> ou ./scripts/install.sh <dir>) e clona o repo se ele
 #      não existir (ou usa o diretório atual se já for o repo)
 #   5. Gera SETUP_TOKEN aleatório (persistido no volume paas_data)
+#   5c. Cria o diretório dos projetos no host (default /opt/tws-projects;
+#      personalize com PAAS_PROJECTS_DIR=<dir> ou --projects-dir=<dir>) e
+#      grava a escolha no .env
 #   6. docker compose up -d --build (build da imagem + sobe o painel na 9000)
 #   7. Imprime a URL do wizard + o token
 #
@@ -51,6 +54,13 @@ Uso: $0 [--force] [diretório-alvo]
 
   --force          prossegue mesmo se o pré-flight encontrar conflitos
                    (equivalente a PAAS_FORCE=1 — útil em automação)
+  --projects-dir=<dir>
+                   onde ficam os arquivos dos projetos implantados, NO HOST
+                   (default: /opt/tws-projects, ou \$PAAS_PROJECTS_DIR).
+                   O container monta esse caminho com o mesmo nome dentro e
+                   fora; trocá-lo depois exige `docker compose up -d`.
+                   Numa instalação já existente, o valor gravado no .env é
+                   respeitado e esta opção só o substitui se for informada.
   diretório-alvo   onde clonar o repo quando o script roda fora dele
                    (default: /opt/tws-panel, ou \$PAAS_DIR)
 EOF
@@ -59,9 +69,11 @@ EOF
 # --- Argumentos ---------------------------------------------------------------
 FORCE=0
 TARGET_ARG=""
+PROJECTS_DIR_ARG=""
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
+    --projects-dir=*) PROJECTS_DIR_ARG="${arg#*=}" ;;
     -h|--help) usage; exit 0 ;;
     *)
       if [ -z "$TARGET_ARG" ]; then
@@ -83,7 +95,7 @@ TARGET_DIR="${TARGET_ARG:-${PAAS_DIR:-/opt/tws-panel}}"
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || die "Este script precisa de root. Rode como root ou instale o sudo (apt install sudo)."
   log "Privilégios de administrador necessários — reexecutando via sudo…"
-  exec sudo --preserve-env=PAAS_FORCE,PAAS_DIR,PAAS_PORT,TWS_REPO_URL,SETUP_TOKEN \
+  exec sudo --preserve-env=PAAS_FORCE,PAAS_DIR,PAAS_PORT,PAAS_PROJECTS_DIR,TWS_REPO_URL,SETUP_TOKEN \
     bash "$(readlink -f "$0")" "$@"
 fi
 
@@ -303,6 +315,46 @@ if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/
   chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
 fi
 log "Grupo do docker.sock no host: GID $DOCKER_GID (gravado em .env)"
+
+# --- 5c. Diretório dos projetos no host -----------------------------------------------
+# Os arquivos dos projetos implantados NÃO ficam num volume Docker: ficam num
+# diretório de verdade do host, montado no container com o MESMO caminho dos
+# dois lados. Motivo: o deploy roda `docker compose --project-directory <esse
+# caminho>` e quem resolve os bind mounts do compose do usuário
+# (`./dados:/app/dados`) é o daemon do host — um caminho que só existisse
+# dentro do container faria o daemon criar pastas vazias no host.
+#
+# Precedência: --projects-dir > PAAS_PROJECTS_DIR > valor já gravado no .env
+# (a escolha de um operador que já instalou não é sobrescrita) > default.
+ENV_PROJECTS_DIR=""
+if [ -f .env ]; then
+  ENV_PROJECTS_DIR="$(sed -n 's/^PAAS_PROJECTS_DIR=//p' .env | tail -n1)"
+fi
+PROJECTS_DIR="${PROJECTS_DIR_ARG:-${PAAS_PROJECTS_DIR:-${ENV_PROJECTS_DIR:-/opt/tws-projects}}}"
+case "$PROJECTS_DIR" in
+  /*) ;;
+  *) die "--projects-dir precisa ser um caminho absoluto (recebi: $PROJECTS_DIR)." ;;
+esac
+
+if [ ! -d "$PROJECTS_DIR" ]; then
+  log "Criando o diretório dos projetos em $PROJECTS_DIR…"
+  mkdir -p "$PROJECTS_DIR"
+fi
+# O painel roda como usuário não-root fixo (tws, UID/GID 10001). O rootfs do
+# container é somente-leitura; um bind mount continua gravável, mas só se o
+# dono no host permitir — sem este chown o primeiro deploy morre com EACCES.
+chown 10001:10001 "$PROJECTS_DIR"
+chmod 755 "$PROJECTS_DIR"
+
+if [ -f .env ] && grep -q '^PAAS_PROJECTS_DIR=' .env; then
+  sed -i "s#^PAAS_PROJECTS_DIR=.*#PAAS_PROJECTS_DIR=$PROJECTS_DIR#" .env
+else
+  printf 'PAAS_PROJECTS_DIR=%s\n' "$PROJECTS_DIR" >> .env
+fi
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
+fi
+log "Arquivos dos projetos no host: $PROJECTS_DIR (gravado em .env)"
 
 # --- 6. Build + subida ------------------------------------------------------------------
 log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
