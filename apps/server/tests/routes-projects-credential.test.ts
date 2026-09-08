@@ -168,6 +168,26 @@ describe("PUT /api/projects/:id/credential", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it("audita mesmo quando o cofre não sabe o usuário nem a dica do token", async () => {
+    // Credencial guardada sem username e sem dica: a auditoria continua
+    // registrando o fato, com marcadores no lugar dos dados ausentes.
+    await build({
+      setCredential: vi.fn(async () => ({ ...INFO_COM_CREDENCIAL, username: null, hint: null })),
+    });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/projects/p1/credential",
+      headers: auth,
+      payload: { token: SEGREDO },
+    });
+    expect(res.statusCode).toBe(200);
+    await ctx.auditService.flush();
+    const { entries } = await ctx.auditService.list();
+    const registro = entries.find((e) => e.action === "project.credential.set");
+    expect(registro?.detail).toContain('usuário "-"');
+    expect(registro?.detail).toContain("terminado em ????");
+  });
+
   it("audita o FATO de a credencial ter sido definida — nunca o valor", async () => {
     await build();
     await app.inject({
@@ -209,6 +229,38 @@ describe("DELETE /api/projects/:id/credential", () => {
       headers: auth,
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it("remover credencial de projeto que não tinha nenhuma responde sucesso", async () => {
+    await build({ removeCredential: vi.fn(async () => false) });
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/api/projects/p1/credential",
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, credential: INFO_SEM_CREDENCIAL });
+  });
+
+  it("a auditoria distingue remoção real de remoção sem credencial cadastrada", async () => {
+    // Projeto COM credencial: o registro diz que ela saiu do cofre.
+    await build();
+    await app.inject({ method: "DELETE", url: "/api/projects/p1/credential", headers: auth });
+    await ctx.auditService.flush();
+    const comCredencial = (await ctx.auditService.list()).entries.find(
+      (e) => e.action === "project.credential.remove",
+    );
+    expect(comCredencial?.detail).toContain("removida do cofre");
+    await closeAuthTestApp(ctx);
+
+    // Projeto SEM credencial: o registro diz que não havia nada cadastrado.
+    await build({ removeCredential: vi.fn(async () => false) });
+    await app.inject({ method: "DELETE", url: "/api/projects/p1/credential", headers: auth });
+    await ctx.auditService.flush();
+    const semCredencial = (await ctx.auditService.list()).entries.find(
+      (e) => e.action === "project.credential.remove",
+    );
+    expect(semCredencial?.detail).toContain("não tinha nenhuma cadastrada");
   });
 
   it("audita o FATO da remoção", async () => {
