@@ -12,6 +12,25 @@ import { run } from "./exec.js";
 /** Diretórios/arquivos excluídos ao copiar código no modo upload. */
 const UPLOAD_EXCLUDES = new Set(["node_modules", ".git", "dist", "out", "build", ".next", ".turbo"]);
 
+/**
+ * Erro de um comando git com mensagem SEMPRE acionável.
+ *
+ * O `run()` já preenche o stderr quando o processo sequer pôde ser executado,
+ * mas um comando pode falhar calado (código != 0 e stderr vazio). Nesse caso
+ * o operador via só "git clone falhou:" e nada depois — nenhuma pista. O
+ * fallback abaixo garante que a mensagem diga ao menos o código de saída e
+ * onde olhar.
+ */
+function falhaGit(rotulo: string, r: { code: number; stderr: string }): Error {
+  const detalhe = r.stderr.trim();
+  return new Error(
+    detalhe
+      ? `${rotulo} falhou: ${detalhe}`
+      : `${rotulo} falhou com código ${r.code} e sem nenhuma saída de erro — ` +
+        `confirme que o git está instalado na imagem do painel e que o repositório é acessível.`,
+  );
+}
+
 export interface IngestContext {
   /** Raiz dos dados de projetos (data/projects). */
   projectsDir: string;
@@ -85,11 +104,11 @@ async function ingestGit(
     if (mesmoRepositorio && mesmaBranch) {
       onLog(`Atualizando clone existente (git fetch + checkout ${branch})…\n`);
       const fetch = await run("git", ["-C", src, "fetch", "--all", "--prune"], { timeoutMs: 600_000 });
-      if (fetch.code !== 0) throw new Error(`git fetch falhou: ${fetch.stderr.trim()}`);
+      if (fetch.code !== 0) throw falhaGit("git fetch", fetch);
       const checkout = await run("git", ["-C", src, "checkout", branch]);
-      if (checkout.code !== 0) throw new Error(`git checkout ${branch} falhou: ${checkout.stderr.trim()}`);
+      if (checkout.code !== 0) throw falhaGit(`git checkout ${branch}`, checkout);
       const pull = await run("git", ["-C", src, "pull", "--ff-only", "origin", branch], { timeoutMs: 600_000 });
-      if (pull.code !== 0) throw new Error(`git pull falhou: ${pull.stderr.trim()}`);
+      if (pull.code !== 0) throw falhaGit("git pull", pull);
       onLog(pull.stdout);
       return src;
     }
@@ -102,7 +121,7 @@ async function ingestGit(
     ["clone", "--branch", branch, "--single-branch", project.source, src],
     { timeoutMs: 900_000 },
   );
-  if (clone.code !== 0) throw new Error(`git clone falhou: ${clone.stderr.trim()}`);
+  if (clone.code !== 0) throw falhaGit("git clone", clone);
   onLog(clone.stderr || clone.stdout);
   return src;
 }

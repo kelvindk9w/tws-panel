@@ -379,3 +379,63 @@ describe("TerminalPanel — reconexão resiliente", () => {
     }
   });
 });
+
+/**
+ * Botão "abrir como <usuário>" — o operador quer VER o usuário que criou
+ * dentro do terminal ao vivo (ele grava/printa essa tela). A sessão continua
+ * sendo root por baixo (o scanner e as fases precisam disso): o botão apenas
+ * abre um shell do usuário DENTRO dela, e `exit` volta para root.
+ */
+describe("TerminalPanel — abrir shell do usuário não-root", () => {
+  it("sem sshUser: não há o que abrir, o botão não aparece", async () => {
+    render(<TerminalPanel enabled={true} />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
+  });
+
+  it("com sshUser e sessão conectada: o botão aparece citando o nome", async () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+    const btn = screen.getByRole("button", { name: /abrir como kelvin/i });
+    expect(btn).toBeInTheDocument();
+    // deixa claro como voltar — o operador não pode achar que ficou preso
+    expect(btn.getAttribute("title")).toMatch(/exit/i);
+  });
+
+  it("clicar envia o comando de troca de usuário pelo MESMO caminho do input", async () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+
+    fireEvent.click(screen.getByRole("button", { name: /abrir como kelvin/i }));
+    // relay puro: o comando trafega como se tivesse sido digitado no xterm
+    expect(lastWs().sent).toContain("su - kelvin\n");
+  });
+
+  it("com a sessão caída (ou em outra aba), o botão não é oferecido", async () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /abrir como kelvin/i })).toBeInTheDocument();
+
+    act(() => lastWs().serverClose(4009)); // em uso em outra aba
+    await waitFor(() => expect(screen.getByText("em uso em outra aba")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
+  });
+
+  it("nome implausível: nenhum botão e NADA é enviado (sem injeção de comando)", async () => {
+    for (const nome of ["root", "kelvin; rm -rf /", "kelvin\nreboot", "Kelvin$(id)"]) {
+      render(<TerminalPanel enabled={true} sshUser={nome} />);
+      await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+      expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
+      expect(lastWs().sent.some((m) => m.includes("su "))).toBe(false);
+      cleanup();
+    }
+  });
+
+  it("o aviso de que a sessão é root continua no cabeçalho, junto com o botão", async () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+    expect(screen.getByText(/hardening do servidor exige/i)).toBeInTheDocument();
+    expect(screen.getByText(/não foi ignorado/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /abrir como kelvin/i })).toBeInTheDocument();
+  });
+});

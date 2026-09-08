@@ -29,11 +29,38 @@ export async function run(
     });
     return { code: 0, stdout, stderr };
   } catch (err) {
-    const e = err as { code?: number; stdout?: string; stderr?: string };
+    const e = err as {
+      code?: number | string;
+      signal?: string;
+      message?: string;
+      stdout?: string;
+      stderr?: string;
+    };
+    const stdout = e.stdout ?? "";
+    const stderr = e.stderr ?? "";
+
+    // Processo rodou e saiu com código != 0: quem fala é ele, nada é
+    // acrescentado à saída (chamadores já exibem o stderr do comando).
+    if (typeof e.code === "number") return { code: e.code, stdout, stderr };
+
+    // Aqui o processo NÃO chegou a rodar (ENOENT = binário ausente do PATH,
+    // EACCES = sem permissão) ou foi morto (timeout/sinal). Sem isto, o
+    // retorno seria `code: 1` com stderr VAZIO — indistinguível de um comando
+    // que rodou e falhou calado, e o chamador propagaria "X falhou:" seguido
+    // de nada. Foi exatamente o que aconteceu com o `git` faltando na imagem.
+    const motivo = e.message?.trim() || (typeof e.code === "string" ? e.code : "erro desconhecido");
+    const dica =
+      e.code === "ENOENT"
+        ? ` — binário "${file}" não encontrado no PATH`
+        : e.signal
+          ? ` — processo encerrado pelo sinal ${e.signal}`
+          : "";
+    const descricao = `Falha ao executar "${file}": ${motivo}${dica}`;
+
     return {
-      code: typeof e.code === "number" ? e.code : 1,
-      stdout: e.stdout ?? "",
-      stderr: e.stderr ?? "",
+      code: 1,
+      stdout,
+      stderr: stderr.trim() ? `${stderr.trimEnd()}\n${descricao}` : descricao,
     };
   }
 }
