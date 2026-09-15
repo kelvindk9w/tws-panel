@@ -15,6 +15,8 @@ export const SETUP_TOKEN_FILE = "/etc/paas/setup-token";
 
 /** Limites para alertas de saúde da máquina. */
 export const HEALTH_LIMITS = {
+  /** Mínimo recomendado no README ("1 vCPU / 2 GB RAM / 25 GB de disco"). */
+  minCpuCores: 1,
   minRamBytes: 1 * 1024 ** 3, // 1 GiB
   minFreeDiskBytes: 10 * 1024 ** 3, // 10 GiB
   supportedDistroIds: ["ubuntu"],
@@ -58,7 +60,12 @@ export interface VerifyTokenResponse {
 // Saúde da máquina (GET /api/health/scan)
 // ---------------------------------------------------------------------------
 
-export type HealthLevel = "ok" | "warning" | "critical";
+/**
+ * - ok / warning / critical: avaliação feita com dado confiável;
+ * - unknown: NÃO verificado (a fonte do dado não estava legível) — nunca
+ *   deve ser lido como "ok".
+ */
+export type HealthLevel = "ok" | "warning" | "critical" | "unknown";
 
 export interface HealthCheck {
   level: HealthLevel;
@@ -100,7 +107,21 @@ export interface NetworkInterfaceInfo {
 
 export interface NetworkInfo {
   publicIp: string | null;
+  /**
+   * Interfaces DA VPS, lidas no host (nunca as do container do painel).
+   * Vazia quando `interfacesSource` é "unavailable".
+   */
   interfaces: NetworkInterfaceInfo[];
+  /** "host": lidas na VPS; "unavailable": o host não estava legível. */
+  interfacesSource: "host" | "unavailable";
+}
+
+/** Reinicialização pendente no host (/var/run/reboot-required do Ubuntu). */
+export interface RebootInfo {
+  /** true/false quando lido no host; null quando não foi possível verificar. */
+  pending: boolean | null;
+  /** Pacotes que pediram a reinicialização (reboot-required.pkgs). */
+  packages: string[];
 }
 
 export interface HealthScanResult {
@@ -112,10 +133,14 @@ export interface HealthScanResult {
   network: NetworkInfo;
   virtualization: string;
   uptimeSeconds: number;
+  reboot: RebootInfo;
   checks: {
     os: HealthCheck;
+    cpu: HealthCheck;
     memory: HealthCheck;
     disk: HealthCheck;
+    network: HealthCheck;
+    reboot: HealthCheck;
   };
 }
 

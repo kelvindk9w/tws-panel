@@ -21,9 +21,9 @@ import {
   collectBaseline,
   ContainerRunner,
   diffBaseline,
-  HostRunner,
   isDiffEmpty,
   MonitorScheduler,
+  NsenterHostRunner,
   type TargetRunner,
 } from "@paas/security";
 import type { ServerConfig } from "../config.js";
@@ -34,6 +34,20 @@ interface MonitorFile {
   lastRunAt: string | null;
   lastResult: MonitorScanResult | null;
 }
+
+/** Gancho de auditoria (mesmo formato do SecurityAuditHook). */
+export type MonitorAuditHook = (action: string, detail: string) => void;
+
+/**
+ * Marca de origem gravada no baseline.json. Necessária porque o mecanismo
+ * antigo do perfil host (HostRunner, que rodava `bash -c` DENTRO do container
+ * do painel) e o host bridge usam o mesmo rótulo "host" — só pelo `target`
+ * não dá para saber se a linha de base descreve a VPS ou o container.
+ * Linhas de base anteriores a esta correção não têm o campo.
+ */
+type BaselineCollector = "host-bridge" | "container";
+
+type StoredBaseline = SecurityBaseline & { collector?: BaselineCollector };
 
 /** Descrições de listagens em blacklist (vazio = tudo limpo / módulo inativo). */
 export type MailBlacklistHook = () => Promise<string[]>;
@@ -62,18 +76,42 @@ export class MonitorService {
   private readonly monitorFile: string;
   private readonly scheduler: MonitorScheduler;
   private readonly log: (msg: string) => void;
+  private readonly audit: MonitorAuditHook | undefined;
+  private readonly collector: BaselineCollector;
   private mailHook: MailBlacklistHook | null = null;
   private state: MonitorFile;
   private stateLoaded = false;
   private writing: Promise<void> = Promise.resolve();
 
-  constructor(config: ServerConfig, alerts: AlertsService, log?: (msg: string) => void) {
-    this.runner =
-      config.securityTarget === "host"
-        ? new HostRunner()
-        : new ContainerRunner({ name: config.securityTargetContainer });
+  constructor(
+    config: ServerConfig,
+    alerts: AlertsService,
+    log?: (msg: string) => void,
+    opts?: { audit?: MonitorAuditHook },
+  ) {
     this.alerts = alerts;
     this.log = log ?? ((msg) => console.warn(msg));
+    this.audit = opts?.audit;
+    // Alvo "host": host bridge (nsenter via helper privilegiado descartável),
+    // o mesmo mecanismo da SecurityService — os comandos da linha de base
+    // rodam na VPS real, NÃO no container do painel (o HostRunner local
+    // descrevia o container e a VPS ficava sem vigilância). Não passa pelo
+    // terminal ao vivo: o scan é agendado e roda sem ninguém olhando.
+    if (config.securityTarget === "host") {
+      this.collector = "host-bridge";
+      this.runner = new NsenterHostRunner({
+        image: config.hostHelperImage,
+        onAudit: (detail) => this.audit?.("monitor.host-exec", detail),
+      });
+      if (!this.audit) {
+        this.log(
+          "Monitoramento: nenhum gancho de auditoria injetado — os comandos executados no host não serão registrados em auditoria.",
+        );
+      }
+    } else {
+      this.collector = "container";
+      this.runner = new ContainerRunner({ name: config.securityTargetContainer });
+    }
     this.securityDir = path.join(config.dataDir, "security");
     this.baselineFile = path.join(this.securityDir, "baseline.json");
     this.monitorFile = path.join(this.securityDir, "monitor.json");
@@ -122,10 +160,10 @@ export class MonitorService {
   // Baseline
   // -------------------------------------------------------------------------
 
-  async getBaseline(): Promise<SecurityBaseline | null> {
+  async getBaseline(): Promise<StoredBaseline | null> {
     try {
       const raw = await readFile(this.baselineFile, "utf8");
-      return JSON.parse(raw) as SecurityBaseline;
+      return JSON.parse(raw) as StoredBaseline;
     } catch {
       return null;
     }
@@ -134,12 +172,28 @@ export class MonitorService {
   /** Cria (ou substitui) o baseline a partir do estado atual do alvo. */
   async createBaseline(): Promise<SecurityBaseline> {
     const baseline = await collectBaseline(this.runner);
+    await this.saveBaseline(baseline);
+    return baseline;
+  }
+
+  private async saveBaseline(baseline: SecurityBaseline): Promise<void> {
+    const stored: StoredBaseline = { ...baseline, collector: this.collector };
     await mkdir(this.securityDir, { recursive: true });
-    await writeFile(this.baselineFile, JSON.stringify(baseline, null, 2) + "\n", {
+    await writeFile(this.baselineFile, JSON.stringify(stored, null, 2) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
-    return baseline;
+  }
+
+  /**
+   * true se a linha de base gravada NÃO descreve a VPS real e precisa ser
+   * recoletada no perfil host: sem a marca `collector: "host-bridge"` ela foi
+   * coletada pelo HostRunner antigo (dentro do container do painel) ou num
+   * perfil container. Compará-la com a VPS acusaria diferença em tudo.
+   * No perfil container nada muda (linhas de base sem marca seguem válidas).
+   */
+  private needsRecollection(baseline: StoredBaseline): boolean {
+    return this.collector === "host-bridge" && baseline.collector !== "host-bridge";
   }
 
   // -------------------------------------------------------------------------
@@ -195,7 +249,7 @@ export class MonitorService {
   private async executeScan(): Promise<MonitorScanResult> {
     await this.ensureStateLoaded();
     const startedAt = Date.now();
-    const baseline = await this.getBaseline();
+    let baseline = await this.getBaseline();
     const current = await collectBaseline(this.runner);
 
     let diff: BaselineDiff | null = null;
@@ -204,6 +258,20 @@ export class MonitorService {
 
     if (!baseline) {
       note = "Nenhum baseline salvo — crie um em POST /api/security/baseline para ativar a comparação.";
+    } else if (this.needsRecollection(baseline)) {
+      // Migração: substitui a linha de base antiga pelo snapshot da VPS real,
+      // SEM comparar — senão o primeiro scan geraria uma enxurrada de alertas
+      // falsos (tudo difere entre o container do painel e a VPS).
+      const old = baseline;
+      await this.saveBaseline(current);
+      baseline = current;
+      const detail =
+        `linha de base ${old.id} (target=${old.target}, coletada em ${old.createdAt}, ` +
+        `origem=${old.collector ?? "mecanismo antigo"}) substituída por ${current.id} coletada pelo host bridge`;
+      this.audit?.("monitor.baseline-recollected", detail);
+      this.log(`Monitoramento: ${detail} — nenhuma comparação feita neste ciclo.`);
+      note =
+        "A linha de base anterior não foi coletada na VPS real (mecanismo antigo); uma nova linha de base foi coletada pelo host bridge. A comparação volta no próximo scan.";
     } else {
       diff = diffBaseline(baseline, current);
       alertsCreated += await this.alertDiff(diff);
