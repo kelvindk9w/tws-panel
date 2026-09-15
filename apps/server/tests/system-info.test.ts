@@ -55,7 +55,33 @@ vi.mock("node:os", () => ({
   },
 }));
 
-const { scanSystemHealth } = await import("../src/services/system-info.js");
+const { scanSystemHealth, HOST_NETWORK_COMMAND, HOST_REBOOT_COMMAND } = await import(
+  "../src/services/system-info.js"
+);
+
+/** Saída real de `ip -o addr show scope global` numa VPS com Docker instalado. */
+const IP_ADDR_VPS = [
+  "2: eth0    inet 169.58.235.67/24 metric 100 brd 169.58.235.255 scope global dynamic eth0\\       valid_lft 86000sec preferred_lft 86000sec",
+  "2: eth0    inet6 2001:db8::67/64 scope global dynamic mngtmpaddr noprefixroute \\       valid_lft 86000sec preferred_lft 14000sec",
+  "3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\\       valid_lft forever preferred_lft forever",
+  "4: br-5f2a9c1d7e3b    inet 172.18.0.1/16 brd 172.18.255.255 scope global br-5f2a9c1d7e3b\\       valid_lft forever preferred_lft forever",
+  "",
+].join("\r\n");
+
+/**
+ * Host simulado: responde aos dois comandos fixos como o terminal do servidor
+ * responderia. `null` numa chave = aquele comando falha (terminal caiu).
+ */
+function hostComSaidas(saidas: { rede?: string | null; reboot?: string | null; codigo?: number }) {
+  const chamadas: string[] = [];
+  const probe = vi.fn(async (cmd: string) => {
+    chamadas.push(cmd);
+    const saida = cmd === HOST_NETWORK_COMMAND ? saidas.rede : cmd === HOST_REBOOT_COMMAND ? saidas.reboot : undefined;
+    if (saida === null || saida === undefined) throw new Error("terminal indisponível");
+    return { code: saidas.codigo ?? 0, output: saida };
+  });
+  return { probe, chamadas };
+}
 
 const OS_RELEASE_UBUNTU = [
   'PRETTY_NAME="Ubuntu 24.04.1 LTS"',
@@ -199,6 +225,15 @@ describe("detecção de virtualização", () => {
     expect(scan.virtualization).toBe("KVM");
   });
 
+  it.each(["Standard PC (i440FX + PIIX, 1996)", "Standard PC (Q35 + ICH9, 2009)"])(
+    "nome de máquina padrão do QEMU %s → KVM/QEMU (não 'genérico')",
+    async (produto) => {
+      maquina.arquivos.set("/sys/class/dmi/id/product_name", `${produto}\n`);
+      const scan = await scanSystemHealth();
+      expect(scan.virtualization).toBe("KVM/QEMU");
+    },
+  );
+
   it("produto DMI desconhecido com flag de hypervisor na CPU → genérico nomeando o produto", async () => {
     maquina.arquivos.set("/sys/class/dmi/id/product_name", "Placa Exotica X\n");
     const scan = await scanSystemHealth();
@@ -224,6 +259,13 @@ describe("detecção de virtualização", () => {
     expect(scan.virtualization).toBe("genérica (flag hypervisor presente)");
   });
 
+  it("produto DMI desconhecido e /proc/cpuinfo ilegível → bare metal (sem quebrar)", async () => {
+    maquina.arquivos.set("/sys/class/dmi/id/product_name", "Placa Exotica X\n");
+    maquina.arquivos.delete("/proc/cpuinfo");
+    const scan = await scanSystemHealth();
+    expect(scan.virtualization).toBe("nenhuma (bare metal)");
+  });
+
   it("sem /sys e cpuinfo sem flag de hypervisor → bare metal", async () => {
     maquina.arquivos.delete("/sys/class/dmi/id/product_name");
     maquina.arquivos.set("/proc/cpuinfo", "flags: fpu vme\n");
@@ -240,20 +282,63 @@ describe("detecção de virtualização", () => {
 });
 
 describe("rede", () => {
-  it("lista só endereços externos e mantém o prefixo dos IPv6", async () => {
-    maquina.interfaces = {
-      lo: [{ internal: true, family: "IPv4", address: "127.0.0.1" }],
-      eth0: [
-        { internal: false, family: "IPv4", address: "203.0.113.7" },
-        { internal: false, family: "IPv6", address: "2001:db8::1", cidr: "2001:db8::1/64" },
-        { internal: false, family: "IPv6", address: "2001:db8::2", cidr: null },
-      ],
-      vazia: undefined,
-    };
-    const scan = await scanSystemHealth();
+  it("as interfaces vêm do HOST: o IP do container nunca aparece como interface da VPS", async () => {
+    // o que os.networkInterfaces() devolve DENTRO do container do painel
+    maquina.interfaces = { eth0: [{ internal: false, family: "IPv4", address: "172.18.0.2" }] };
+    const { probe } = hostComSaidas({ rede: IP_ADDR_VPS, reboot: "PAAS_REBOOT=0\r\n" });
+    const scan = await scanSystemHealth({ hostProbe: probe });
+    expect(scan.network.interfacesSource).toBe("host");
+    // pontes do Docker (docker0, br-*) ficam de fora: são redes internas
     expect(scan.network.interfaces).toEqual([
-      { name: "eth0", addresses: ["203.0.113.7", "2001:db8::1/64", "2001:db8::2"] },
+      { name: "eth0", addresses: ["169.58.235.67/24", "2001:db8::67/64"] },
     ]);
+    expect(JSON.stringify(scan.network)).not.toContain("172.18.0.2");
+  });
+
+  it("sem acesso ao host, nenhuma interface é exibida — nem a do container", async () => {
+    maquina.interfaces = { eth0: [{ internal: false, family: "IPv4", address: "172.18.0.2" }] };
+    const scan = await scanSystemHealth();
+    expect(scan.network.interfacesSource).toBe("unavailable");
+    expect(scan.network.interfaces).toEqual([]);
+  });
+
+  it("terminal do host falhando ou comando com erro → interfaces não verificadas", async () => {
+    const caiu = hostComSaidas({ rede: null, reboot: null });
+    expect((await scanSystemHealth({ hostProbe: caiu.probe })).network.interfacesSource).toBe("unavailable");
+
+    const erro = hostComSaidas({ rede: "ip: command not found", reboot: "", codigo: 127 });
+    const scan = await scanSystemHealth({ hostProbe: erro.probe });
+    expect(scan.network.interfacesSource).toBe("unavailable");
+    expect(scan.network.interfaces).toEqual([]);
+  });
+
+  it("ignora cores ANSI, linhas estranhas, sufixo @ifN e endereços repetidos", async () => {
+    const saida = [
+      "\x1b[0mlixo que não é linha do ip",
+      "5: ens3@if7    inet 203.0.113.9/24 scope global ens3",
+      "5: ens3@if7    inet 203.0.113.9/24 scope global ens3",
+      "6: veth1a2b3c    inet 169.254.1.1/16 scope global veth1a2b3c",
+    ].join("\n");
+    const { probe } = hostComSaidas({ rede: saida, reboot: "PAAS_REBOOT=0" });
+    const scan = await scanSystemHealth({ hostProbe: probe });
+    expect(scan.network.interfaces).toEqual([{ name: "ens3", addresses: ["203.0.113.9/24"] }]);
+  });
+
+  it("host legível sem interface global → lista vazia, mas vinda do host", async () => {
+    const { probe } = hostComSaidas({ rede: "", reboot: "PAAS_REBOOT=0" });
+    const scan = await scanSystemHealth({ hostProbe: probe });
+    expect(scan.network.interfacesSource).toBe("host");
+    expect(scan.network.interfaces).toEqual([]);
+  });
+
+  it("IP público detectado → selo ok; sem IP público → aviso de que os domínios não chegam", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: async () => "169.58.235.67\n" })));
+    expect((await scanSystemHealth()).checks.network.level).toBe("ok");
+
+    semIpPublico();
+    const scan = await scanSystemHealth();
+    expect(scan.checks.network.level).toBe("warning");
+    expect(scan.checks.network.message).toContain("domínios");
   });
 
   it("quando o primeiro provedor de IP público falha, o segundo é consultado", async () => {
@@ -287,6 +372,58 @@ describe("rede", () => {
   });
 });
 
+describe("reinicialização pendente (lida no host)", () => {
+  it("marcador presente → aviso com a instrução exata e os pacotes que pediram", async () => {
+    const saida = "PAAS_REBOOT=1\r\nlinux-image-6.8.0-45-generic\r\nlibc6\r\nlibc6\r\n";
+    const { probe, chamadas } = hostComSaidas({ rede: IP_ADDR_VPS, reboot: saida });
+    const scan = await scanSystemHealth({ hostProbe: probe });
+    expect(chamadas).toContain(HOST_REBOOT_COMMAND);
+    expect(scan.reboot).toEqual({ pending: true, packages: ["linux-image-6.8.0-45-generic", "libc6"] });
+    expect(scan.checks.reboot.level).toBe("warning");
+    expect(scan.checks.reboot.message).toContain("sudo reboot");
+    expect(scan.checks.reboot.message).toContain("1 minuto");
+  });
+
+  it("marcador ausente → ok", async () => {
+    const { probe } = hostComSaidas({ rede: IP_ADDR_VPS, reboot: "PAAS_REBOOT=0\r\n" });
+    const scan = await scanSystemHealth({ hostProbe: probe });
+    expect(scan.reboot).toEqual({ pending: false, packages: [] });
+    expect(scan.checks.reboot.level).toBe("ok");
+  });
+
+  it("sem acesso ao host → não verificado, nunca ok", async () => {
+    const scan = await scanSystemHealth();
+    expect(scan.reboot.pending).toBeNull();
+    expect(scan.checks.reboot.level).toBe("unknown");
+    expect(scan.checks.reboot.message).toContain("Não verificado");
+  });
+
+  it("terminal caiu, comando falhou ou saída sem o marcador → não verificado", async () => {
+    for (const saidas of [
+      { rede: IP_ADDR_VPS, reboot: null },
+      { rede: IP_ADDR_VPS, reboot: "PAAS_REBOOT=0", codigo: 1 },
+      // eco do comando digitado vazou para a captura: contém o texto, mas não a linha
+      { rede: IP_ADDR_VPS, reboot: HOST_REBOOT_COMMAND },
+    ]) {
+      const { probe } = hostComSaidas(saidas);
+      const scan = await scanSystemHealth({ hostProbe: probe });
+      expect(scan.reboot.pending).toBeNull();
+      expect(scan.checks.reboot.level).toBe("unknown");
+    }
+  });
+});
+
+describe("todo card tem uma avaliação", () => {
+  it("SO, CPU, memória, disco, rede e reinicialização saem sempre com nível", async () => {
+    const scan = await scanSystemHealth();
+    expect(Object.keys(scan.checks).sort()).toEqual(["cpu", "disk", "memory", "network", "os", "reboot"]);
+    for (const check of Object.values(scan.checks)) {
+      expect(["ok", "warning", "critical", "unknown"]).toContain(check.level);
+      expect(check.message.length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("CPU e uptime", () => {
   it("usa o modelo da primeira CPU, sem espaços, e conta os núcleos", async () => {
     const scan = await scanSystemHealth();
@@ -294,6 +431,8 @@ describe("CPU e uptime", () => {
     expect(scan.cpu.cores).toBe(2);
     expect(scan.cpu.loadAvg).toEqual([0.5, 0.4, 0.3]);
     expect(scan.uptimeSeconds).toBe(3600);
+    expect(scan.checks.cpu.level).toBe("ok");
+    expect(scan.checks.cpu.message).toContain(`${HEALTH_LIMITS.minCpuCores} vCPU`);
   });
 
   it("sem CPU e sem load reportados, o relatório usa marcadores em vez de undefined", async () => {
@@ -303,5 +442,7 @@ describe("CPU e uptime", () => {
     expect(scan.cpu.model).toBe("desconhecido");
     expect(scan.cpu.cores).toBe(0);
     expect(scan.cpu.loadAvg).toEqual([0, 0, 0]);
+    // zero núcleos = contagem ilegível, não "CPU insuficiente"
+    expect(scan.checks.cpu.level).toBe("unknown");
   });
 });

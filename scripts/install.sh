@@ -23,6 +23,8 @@
 #      Se a VPS não estiver limpa, exibe um relatório e exige confirmação
 #      interativa (digitar "continuar") ou --force / PAAS_FORCE=1.
 #      NUNCA remove ou para nada que já exista na máquina.
+#      Se o Ubuntu sinalizar reinicialização pendente (/var/run/reboot-required),
+#      PARA antes de tudo e orienta `sudo reboot` (com --force só avisa).
 #   2. Instala git se ausente
 #   3. Instala Docker se ausente (get.docker.com) + plugin compose
 #   4. Define o diretório alvo (default /opt/tws-panel; personalize com
@@ -109,6 +111,56 @@ info() { printf '  \033[1;34mℹ\033[0m %s\n' "$*"; }
 flag() { printf '  \033[1;33m⚠\033[0m %s\n' "$*"; ISSUES=$((ISSUES + 1)); }
 
 log "Pré-flight: inspecionando a máquina (nada será alterado nesta etapa)…"
+
+# Reinicialização pendente. No Ubuntu, quem instala uma atualização que só vale
+# depois de reiniciar (kernel, libc, systemd…) cria /var/run/reboot-required e
+# anota o pacote em /var/run/reboot-required.pkgs — é esse arquivo que faz o
+# login mostrar "*** System restart required ***". VPS recém-entregue pelo
+# provedor costuma vir assim. Checado PRIMEIRO e com parada imediata (antes do
+# relatório de conflitos), para a pessoa não digitar "continuar" à toa: instalar
+# Docker e subir containers em cima de um kernel que vai ser trocado no próximo
+# boot é pedir comportamento estranho. Com --force/PAAS_FORCE=1 (automação que
+# não tem como reiniciar no meio) só avisa e segue.
+if [ -e /var/run/reboot-required ]; then
+  REBOOT_PKGS=""
+  if [ -r /var/run/reboot-required.pkgs ]; then
+    REBOOT_PKGS="$(sort -u /var/run/reboot-required.pkgs | grep -v '^$' | paste -sd' ' - || true)"
+  fi
+  # Comando exato para rodar de novo: se o script está dentro do repo, aponta
+  # para ele; senão (ex.: baixado avulso), repete o caminho usado agora.
+  SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  SELF_REPO="$(cd "$(dirname "$SELF")/.." 2>/dev/null && pwd || true)"
+  if [ -n "$SELF_REPO" ] && [ -f "$SELF_REPO/$COMPOSE_FILE" ]; then
+    RERUN_CMD="cd $SELF_REPO && ./scripts/install.sh"
+  else
+    RERUN_CMD="bash $SELF"
+  fi
+  if [ "$FORCE" = "1" ]; then
+    flag "Reinicialização pendente${REBOOT_PKGS:+ (pedida por: $REBOOT_PKGS)} — --force ativo, seguindo sem reiniciar."
+  else
+    cat >&2 <<EOF
+
+================================================================================
+  🔄  A VPS precisa ser REINICIADA antes da instalação.
+
+  O sistema recebeu atualizações que só passam a valer depois de reiniciar
+  (é o aviso "System restart required" que aparece ao entrar na VPS).
+  Isso é normal em máquina nova. NADA foi instalado ainda.
+${REBOOT_PKGS:+
+  Pacotes que pediram o reinício: $REBOOT_PKGS
+}
+  Faça assim:
+    1. Rode:  sudo reboot
+    2. A conexão cai. Espere cerca de 1 minuto.
+    3. Entre de novo na VPS (o mesmo comando ssh de antes).
+    4. Rode o instalador outra vez:
+         $RERUN_CMD
+================================================================================
+
+EOF
+    exit 1
+  fi
+fi
 
 # SO: Ubuntu 22.04/24.04 = ok; qualquer outro = aviso.
 . /etc/os-release

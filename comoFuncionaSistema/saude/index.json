@@ -2,7 +2,10 @@
   "modulo": "saude",
   "titulo": "Saúde da máquina",
   "resumo": "Diagnóstico somente-leitura da VPS: liveness público para healthcheck/monitoramento (GET /api/healthz) e uma varredura completa de SO, CPU, memória, disco, rede e virtualização com três checagens de compatibilidade (GET /api/health/scan). O scan é usado no passo de saúde do assistente de instalação, antes de o usuário poder hospedar qualquer projeto.",
-  "pontoDeEntrada": { "api": "GET /api/health/scan", "web": "wizard de setup — passo 'Saúde da máquina' (HealthStep.tsx)" },
+  "pontoDeEntrada": {
+    "api": "GET /api/health/scan",
+    "web": "wizard de setup — passo 'Saúde da máquina' (HealthStep.tsx)"
+  },
   "comoFunciona": [
     "GET /api/healthz é liveness puro: sem autenticação, sem lógica, sempre responde { status: 'ok' } — usado pelo HEALTHCHECK do Dockerfile/compose e por monitoramento externo.",
     "GET /api/health/scan chama scanSystemHealth() (system-info.ts), que coleta TUDO via módulo `os` do Node e leitura direta de arquivos em /proc, /sys e /etc — NENHUM shell é executado para montar os dados retornados na resposta.",
@@ -12,24 +15,50 @@
     "O resultado NÃO é persistido em disco: cada chamada a /api/health/scan recalcula tudo do zero, na hora."
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/health.ts"],
-    "servicos": ["apps/server/src/services/system-info.ts"],
-    "pacotes": ["packages/core/src/index.ts"],
-    "web": ["apps/web/src/pages/setup/HealthStep.tsx"],
-    "testes": ["apps/server/tests/routes-health.test.ts"]
+    "rotas": [
+      "apps/server/src/routes/health.ts"
+    ],
+    "servicos": [
+      "apps/server/src/services/system-info.ts"
+    ],
+    "pacotes": [
+      "packages/core/src/index.ts"
+    ],
+    "web": [
+      "apps/web/src/pages/setup/HealthStep.tsx"
+    ],
+    "testes": [
+      "apps/server/tests/routes-health.test.ts"
+    ]
   },
   "persistencia": [],
   "endpoints": [
-    { "id": "healthz", "metodo": "GET", "url": "/api/healthz", "resumo": "Liveness público, sem autenticação — usado por healthcheck/monitoramento.", "arquivo": "healthz.json" },
-    { "id": "scan", "metodo": "GET", "url": "/api/health/scan", "resumo": "Varredura completa de SO/CPU/memória/disco/rede/virtualização com checagens de compatibilidade.", "arquivo": "scan.json" }
+    {
+      "id": "healthz",
+      "metodo": "GET",
+      "url": "/api/healthz",
+      "resumo": "Liveness público, sem autenticação — usado por healthcheck/monitoramento.",
+      "arquivo": "healthz.json"
+    },
+    {
+      "id": "scan",
+      "metodo": "GET",
+      "url": "/api/health/scan",
+      "resumo": "Varredura completa de SO/CPU/memória/disco/rede/virtualização com checagens de compatibilidade.",
+      "arquivo": "scan.json"
+    }
   ],
-  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json"
+  ],
   "pontosDeAtencao": [
     "GET /api/health/scan só é consumido pelo HealthStep.tsx do wizard de instalação (apps/web/src/pages/setup/HealthStep.tsx) — não existe nenhuma tela pós-setup (Dashboard, projeto, etc.) que mostre saúde da máquina continuamente; depois do wizard, o dado praticamente não é mais olhado pela UI.",
     "As checagens usam limiares fixos e conservadores: HEALTH_LIMITS.minRamBytes = 1 GiB, minFreeDiskBytes = 10 GiB, supportedDistroIds = ['ubuntu'], supportedVersionIds = ['22.04','24.04'] (packages/core/src/index.ts). Qualquer outra distro/versão (Debian, Alpine, Ubuntu 20.04/26.04 etc.) sempre cai em 'warning', mesmo que funcione na prática.",
     "scanSystemHealth() não tem try/catch: se statfs('/') ou qualquer leitura falhar de forma inesperada, a exceção propaga e cai no handler de erro padrão do Fastify (resposta 500 genérica, sem código de erro específico documentado pela rota).",
     "detectVirtualization() depende de /sys/class/dmi/id/product_name, que normalmente exige privilégio de leitura no host; dentro do container do painel isso só funciona se o host expõe esse caminho ao container (não há bind mount de /sys no docker-compose.yml) — em produção a detecção provavelmente cai sempre no fallback via /proc/cpuinfo (flag 'hypervisor') ou em 'nenhuma (bare metal)'.",
     "fetchPublicIp() faz requisições HTTP de saída para api.ipify.org e ifconfig.me (timeout de 3s cada, sequenciais) toda vez que o scan roda — se ambos estiverem fora do ar ou sem rede de saída, network.publicIp fica null e o scan demora até ~6s a mais só nessa etapa.",
-    "O 'espelho' no terminal (HEALTH_MIRROR_COMMANDS) roda os MESMOS diagnósticos por um caminho totalmente separado (shell de verdade, via TerminalService) só para efeito visual — os dados exibidos nos cards do HealthStep vêm exclusivamente do JSON de scanSystemHealth(), nunca da saída desses comandos de terminal."
+    "O 'espelho' no terminal (HEALTH_MIRROR_COMMANDS) roda os MESMOS diagnósticos por um caminho totalmente separado (shell de verdade, via TerminalService) só para efeito visual — os dados exibidos nos cards do HealthStep vêm exclusivamente do JSON de scanSystemHealth(), nunca da saída desses comandos de terminal.",
+    "NOVO nesta rodada — todo card da tela 'Saúde da máquina' tem avaliação e selo. Antes só os, memory e disk eram avaliados; CPU, Rede e Uptime ficavam sem selo e o leigo lia a ausência como falha. Checks: os, memory, disk (inalterados), cpu (mínimo de 1 vCPU em HEALTH_LIMITS, coerente com o README; contagem zerada = 'unknown', não 'insuficiente'), network (IP público detectado = ok; sem IP público = warning, porque domínios não chegam à VPS) e reboot. Níveis: ok, warning, critical (agora com aparência própria — antes era o mesmo selo âmbar do warning) e unknown ('Não verificado', que NÃO dispara o aviso geral). reboot: lido NO HOST (/var/run/reboot-required e .pkgs) pelo terminal; pendente = warning com os pacotes e a instrução sudo reboot; host ilegível = unknown, nunca ok. O reboot é seguro no meio do wizard: restart: unless-stopped, setup-state.json e setup-token ficam no volume paas_data; no navegador o token vive no sessionStorage (sobrevive a recarregar a aba, não a fechá-la). Virtualização: 'Standard PC (i440FX + PIIX, 1996)' e 'Standard PC (Q35 + ICH9, 2009)' são os nomes de máquina do QEMU e passam a aparecer como KVM/QEMU. As leituras no host só acontecem com PAAS_TARGET=host; no alvo container de dev, terminal indisponível, erro, saída sem marcador ou 20 s sem resposta, os campos do host ficam 'não verificados' e o restante da varredura segue.",
+    "Instalador (scripts/install.sh): o pré-flight PARA antes de instalar qualquer coisa se /var/run/reboot-required existir, listando os pacotes e os passos (sudo reboot, reconectar, rodar de novo). Com --force/PAAS_FORCE=1 apenas avisa e segue (automação). Motivação: o aviso 'System restart required' do login não é lido — nem por leigo, nem por experiente."
   ]
 }

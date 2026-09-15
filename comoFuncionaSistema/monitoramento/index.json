@@ -2,7 +2,10 @@
   "modulo": "monitoramento",
   "titulo": "Monitoramento (Fase 4)",
   "resumo": "Baseline de segurança do alvo (host ou container), scan recorrente que compara o estado atual contra esse baseline e vira alerta por categoria de desvio, central de alertas com ciclo de vida (aberto → reconhecido → resolvido) e log de auditoria de toda ação sensível do painel — incluindo as de outros módulos (auth, deploy, e-mail, terminal, hardening).",
-  "pontoDeEntrada": { "api": "GET /api/security/monitor/last", "web": "/alerts" },
+  "pontoDeEntrada": {
+    "api": "GET /api/security/monitor/last",
+    "web": "/alerts"
+  },
   "comoFunciona": [
     "Baseline = uma fotografia do estado 'seguro' do alvo, criada sob demanda via POST /api/security/baseline: lista de pacotes instalados (dpkg-query), portas TCP/UDP em listen (ss -tulpnH, com fallback para /proc/net/{tcp,udp}{,6} quando ss não existe) e sha256 de arquivos críticos (sshd_config, /etc/ufw, /etc/fail2ban). Todos os comandos executados no alvo são strings FIXAS (packages/security/src/baseline.ts:14-20), nunca construídas a partir de input da API — isso é o que permite executá-los pelo host bridge com allowlist.",
     "O monitor roda um scheduler DENTRO do processo do servidor (setInterval com unref, packages/security/src/monitor.ts) — não usa cron/systemd do host. A cada tick ele coleta um novo snapshot do alvo (mesmos comandos do baseline) e, se existir um baseline salvo, calcula o diff (diffBaseline): pacotes novos/removidos, portas novas/fechadas (chave proto/porta) e arquivos críticos alterados/removidos/adicionados (hash antes/depois). Sem baseline salvo, o scan roda mas não compara nada — MonitorScanResult.diff fica null e result.note explica que é preciso criar um baseline.",
@@ -13,7 +16,9 @@
     "Este módulo registra as próprias rotas (monitoringRoutes) por ÚLTIMO em apps/server/src/app.ts (depois de mailRoutes) porque, ao subir, ele registra em monitor.setMailBlacklistHook um callback que lê app.mailService.listDomains()/checkBlacklists() — essa decoração só existe depois que mailRoutes é registrado. Se a ordem fosse invertida, o acesso a app.mailService dentro do hook quebraria (decorator ainda não existiria no momento do registro, embora o hook só seja CHAMADO durante um scan, então o erro só apareceria em runtime, não no boot)."
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/monitoring.ts"],
+    "rotas": [
+      "apps/server/src/routes/monitoring.ts"
+    ],
     "servicos": [
       "apps/server/src/services/monitor-service.ts",
       "apps/server/src/services/alerts-service.ts",
@@ -25,7 +30,10 @@
       "packages/security/src/runner.ts",
       "packages/core/src/monitoring.ts"
     ],
-    "web": ["apps/web/src/pages/AlertsPage.tsx", "apps/web/src/pages/AuditPage.tsx"],
+    "web": [
+      "apps/web/src/pages/AlertsPage.tsx",
+      "apps/web/src/pages/AuditPage.tsx"
+    ],
     "testes": [
       "packages/security/tests/baseline.test.ts",
       "apps/server/tests/alerts-service.test.ts",
@@ -56,17 +64,73 @@
     }
   ],
   "endpoints": [
-    { "id": "listar-alertas", "metodo": "GET", "url": "/api/alerts", "resumo": "Lista alertas com filtros (status/severidade/origem) e paginação.", "arquivo": "listar-alertas.json" },
-    { "id": "reconhecer-alerta", "metodo": "POST", "url": "/api/alerts/:id/ack", "resumo": "Marca um alerta como reconhecido (open → acknowledged).", "arquivo": "reconhecer-alerta.json" },
-    { "id": "resolver-alerta", "metodo": "POST", "url": "/api/alerts/:id/resolve", "resumo": "Marca um alerta como resolvido.", "arquivo": "resolver-alerta.json" },
-    { "id": "obter-baseline", "metodo": "GET", "url": "/api/security/baseline", "resumo": "Retorna o baseline de segurança atual (ou null se nunca criado).", "arquivo": "obter-baseline.json" },
-    { "id": "criar-baseline", "metodo": "POST", "url": "/api/security/baseline", "resumo": "Coleta um snapshot do alvo agora e o salva como novo baseline.", "arquivo": "criar-baseline.json" },
-    { "id": "ultimo-monitor", "metodo": "GET", "url": "/api/security/monitor/last", "resumo": "Estado do scheduler: config, se está rodando, última execução e resultado.", "arquivo": "ultimo-monitor.json" },
-    { "id": "rodar-monitor", "metodo": "POST", "url": "/api/security/monitor/run", "resumo": "Executa um scan agora, fora do agendamento.", "arquivo": "rodar-monitor.json" },
-    { "id": "configurar-monitor", "metodo": "PUT", "url": "/api/security/monitor/config", "resumo": "Altera o intervalo do scan recorrente.", "arquivo": "configurar-monitor.json" },
-    { "id": "auditoria", "metodo": "GET", "url": "/api/audit", "resumo": "Lista o log de auditoria, paginado, mais recente primeiro.", "arquivo": "auditoria.json" }
+    {
+      "id": "listar-alertas",
+      "metodo": "GET",
+      "url": "/api/alerts",
+      "resumo": "Lista alertas com filtros (status/severidade/origem) e paginação.",
+      "arquivo": "listar-alertas.json"
+    },
+    {
+      "id": "reconhecer-alerta",
+      "metodo": "POST",
+      "url": "/api/alerts/:id/ack",
+      "resumo": "Marca um alerta como reconhecido (open → acknowledged).",
+      "arquivo": "reconhecer-alerta.json"
+    },
+    {
+      "id": "resolver-alerta",
+      "metodo": "POST",
+      "url": "/api/alerts/:id/resolve",
+      "resumo": "Marca um alerta como resolvido.",
+      "arquivo": "resolver-alerta.json"
+    },
+    {
+      "id": "obter-baseline",
+      "metodo": "GET",
+      "url": "/api/security/baseline",
+      "resumo": "Retorna o baseline de segurança atual (ou null se nunca criado).",
+      "arquivo": "obter-baseline.json"
+    },
+    {
+      "id": "criar-baseline",
+      "metodo": "POST",
+      "url": "/api/security/baseline",
+      "resumo": "Coleta um snapshot do alvo agora e o salva como novo baseline.",
+      "arquivo": "criar-baseline.json"
+    },
+    {
+      "id": "ultimo-monitor",
+      "metodo": "GET",
+      "url": "/api/security/monitor/last",
+      "resumo": "Estado do scheduler: config, se está rodando, última execução e resultado.",
+      "arquivo": "ultimo-monitor.json"
+    },
+    {
+      "id": "rodar-monitor",
+      "metodo": "POST",
+      "url": "/api/security/monitor/run",
+      "resumo": "Executa um scan agora, fora do agendamento.",
+      "arquivo": "rodar-monitor.json"
+    },
+    {
+      "id": "configurar-monitor",
+      "metodo": "PUT",
+      "url": "/api/security/monitor/config",
+      "resumo": "Altera o intervalo do scan recorrente.",
+      "arquivo": "configurar-monitor.json"
+    },
+    {
+      "id": "auditoria",
+      "metodo": "GET",
+      "url": "/api/audit",
+      "resumo": "Lista o log de auditoria, paginado, mais recente primeiro.",
+      "arquivo": "auditoria.json"
+    }
   ],
-  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json"
+  ],
   "pontosDeAtencao": [
     "CORRIGIDO nesta rodada: o teto de 500 alertas (apps/server/src/services/alerts-service.ts) não descarta mais alertas 'open' — descarta primeiro os resolvidos/reconhecidos mais antigos; se o teto for atingido só com abertos, todos são mantidos e um aviso é logado. Ver monitoramento/conceito-alertas.json.",
     "CORRIGIDO nesta rodada: a origem 'system' foi REMOVIDA do tipo AlertSource (packages/core/src/monitoring.ts) — não existia nenhum ponto do código que criasse alerta com essa origem.",
@@ -75,6 +139,7 @@
     "setStatus('acknowledged') só tem efeito se o alerta ainda estiver 'open' (alerts-service.ts:110-114); chamar POST /api/alerts/:id/ack em um alerta já 'resolved' retorna 200 com o alerta inalterado (ainda 'resolved'), sem erro — pode confundir quem espera uma transição.",
     "alertDiff agrupa TODAS as mudanças de uma categoria em um único alerta (ex.: todos os pacotes novos+removidos em 'Monitoramento: pacotes instalados/removidos'); como o dedup é por (origem,título), um novo diff da mesma categoria SOBRESCREVE o detail anterior — o histórico de qual pacote apareceu em qual scan não fica registrado em lugar nenhum, só o estado mais recente do alerta aberto.",
     "Não existe endpoint para apagar/resetar o baseline nem para consultar baselines anteriores — POST /api/security/baseline sempre sobrescreve data/security/baseline.json por completo.",
-    "O scan recorrente roda sozinho desde o boot do servidor (monitor.start() em monitoring.ts:55) mesmo sem baseline algum — ele só não gera alertas de diff até alguém criar o primeiro baseline manualmente; não há criação automática de baseline no primeiro boot ou após o hardening."
+    "O scan recorrente roda sozinho desde o boot do servidor (monitor.start() em monitoring.ts:55) mesmo sem baseline algum — ele só não gera alertas de diff até alguém criar o primeiro baseline manualmente; não há criação automática de baseline no primeiro boot ou após o hardening.",
+    "CORRIGIDO nesta rodada — o monitoramento vigiava o container, não a VPS. No perfil host, MonitorService usava HostRunner (bash -c local ao container do painel). A linha de base (pacotes via dpkg-query, portas via ss/proc/net, sha256 das configs de sshd/UFW/fail2ban) e cada scan agendado comparavam o Debian da imagem do painel, as portas do próprio Node e arquivos que no container nem existem; uma mudança real na VPS nunca gerava alerta. Agora usa NsenterHostRunner (mesma ponte da SecurityService), sem passar pelo terminal ao vivo, e audita cada comando no host como 'monitor.host-exec' (gancho passado por routes/monitoring.ts). Os três comandos da linha de base já estavam na allowlist do host bridge — há teste com a allowlist real. baseline.json ganhou o campo 'collector' ('host-bridge' | 'container'): no perfil host, uma linha de base sem 'collector: host-bridge' é RECOLETADA da VPS no mesmo scan, sem comparar e sem alertar, e a troca é auditada como 'monitor.baseline-recollected' — sem isso a primeira comparação contra a máquina real acusaria diferença em tudo."
   ]
 }

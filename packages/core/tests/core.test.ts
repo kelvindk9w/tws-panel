@@ -58,6 +58,10 @@ describe("health limits", () => {
     expect(HEALTH_LIMITS.minFreeDiskBytes).toBe(10 * 1024 ** 3);
   });
 
+  it("mínimo de CPU coerente com o README (1 vCPU)", () => {
+    expect(HEALTH_LIMITS.minCpuCores).toBe(1);
+  });
+
   it("suporta apenas Ubuntu 22.04/24.04", () => {
     expect(HEALTH_LIMITS.supportedDistroIds).toEqual(["ubuntu"]);
     expect(HEALTH_LIMITS.supportedVersionIds).toEqual(["22.04", "24.04"]);

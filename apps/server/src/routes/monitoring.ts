@@ -89,9 +89,20 @@ const monitoringRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const alerts = app.alertsService;
   const audit = app.auditService;
-  const monitor = new MonitorService(app.config, alerts, (msg) => {
-    app.log.warn(msg);
-  });
+  const monitor = new MonitorService(
+    app.config,
+    alerts,
+    (msg) => {
+      app.log.warn(msg);
+    },
+    {
+      // Cada comando que o monitoramento executa na VPS real (host bridge)
+      // vai para a auditoria — mesmo padrão da SecurityService.
+      audit: (action, detail) => {
+        void audit.record({ action, detail });
+      },
+    },
+  );
   app.decorate("monitorService", monitor);
 
   // Inclui o check de blacklist no scan recorrente quando o módulo de e-mail

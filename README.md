@@ -425,14 +425,28 @@ No **Windows (PowerShell)**:
 Get-ChildItem ~\.ssh\*.pub
 ```
 
-- **Apareceu algum arquivo `.pub`** (`id_ed25519.pub`, `id_rsa.pub`…) — **você já tem chave e não
-  precisa gerar nenhuma.** Pule a geração inteira e vá direto para
-  **[⬇️ Instale a chave na VPS](#instale-a-chave-na-vps)** (é um link — clique nele).
-  Se o seu arquivo tiver outro nome, é só trocar `id_ed25519` por ele nos comandos de lá:
-  uma chave `id_rsa` é mais antiga, mas o servidor aceita do mesmo jeito.
-- **`No such file or directory`** (ou nada) — você não tem chave ainda. Siga para o próximo bloco.
+Olhe **só o nome dos arquivos** que apareceram e siga a primeira linha da tabela que bate com
+o que você viu:
 
-**Agora sim, gere o par de chaves** (só se o comando acima não achou nada). É o mesmo comando no
+| Se na lista aparece… | Use esta chave | O que fazer agora |
+|---|---|---|
+| `id_ed25519.pub` (mesmo que apareçam outros arquivos junto) | `id_ed25519` | **Não gere nada.** Vá direto para **[⬇️ Instale a chave na VPS](#instale-a-chave-na-vps)** (é um link — clique nele) |
+| `id_rsa.pub`, mas **não** `id_ed25519.pub` | `id_rsa` | **Não gere nada.** Vá para **[⬇️ Instale a chave na VPS](#instale-a-chave-na-vps)** e, lá, use os comandos com `id_rsa` |
+| Só arquivos com **outros nomes** (ex.: `github_deploy.pub`, `algum_servico_deploy.pub`) | nenhuma delas | **Gere uma chave nova** no próximo bloco |
+| `No such file or directory` (ou nada) | — | **Gere uma chave nova** no próximo bloco |
+
+Por que essa regra, e não "escolha a que achar melhor":
+
+- **`id_ed25519` e `id_rsa` são nomes que o `ssh` experimenta sozinho** toda vez que você conecta.
+  Usando uma delas, o login na VPS funciona sem nenhuma configuração extra no seu computador. A
+  `id_rsa` é mais antiga, mas o servidor aceita do mesmo jeito.
+- **Chaves com outros nomes foram criadas para um serviço específico** (um deploy, uma empresa,
+  uma ferramenta). Não reaproveite: além de o `ssh` não tentá-las sozinho, misturar acessos
+  significa que quem tem aquela chave passa a entrar também na sua VPS.
+- **Gerar uma `id_ed25519` nova, nesses dois últimos casos, não apaga nada** — ela ainda não
+  existe, então não há o que sobrescrever.
+
+**Agora sim, gere o par de chaves** (só se a tabela acima mandou gerar). É o mesmo comando no
 Linux, no macOS, no WSL e no PowerShell do Windows:
 
 ```bash
@@ -487,11 +501,24 @@ Se a linha apareceu, a chave está criada.
 
 <a id="instale-a-chave-na-vps"></a>
 
-**Instale a chave na VPS** — agora, enquanto a senha ainda funciona:
+**Instale a chave na VPS** — agora, enquanto a senha ainda funciona. O comando sempre diz **qual
+arquivo** instalar; use a linha da chave que a tabela escolheu:
 
 ```bash
-ssh-copy-id SEU_USUARIO@SEU_IP
+ssh-copy-id -i ~/.ssh/id_ed25519.pub SEU_USUARIO@SEU_IP
 ```
+
+Se a tabela mandou usar a `id_rsa`, a linha é esta (em vez da de cima):
+
+```bash
+ssh-copy-id -i ~/.ssh/id_rsa.pub SEU_USUARIO@SEU_IP
+```
+
+> [!WARNING]
+> **Não rode o `ssh-copy-id` sem o `-i ~/.ssh/...pub`.** Sem ele, o comando decide sozinho o que
+> enviar: se o seu computador tiver chaves carregadas na sessão, ele instala **todas** na VPS
+> (inclusive chaves de outros serviços); se não tiver, pega o arquivo `id*.pub` alterado mais
+> recentemente — que pode não ser o que você quer. Com o `-i`, vai exatamente a chave escolhida.
 
 Ele pede a senha do `adduser` uma última vez e grava a sua chave pública no servidor. No
 **Windows (PowerShell)**, onde o `ssh-copy-id` não existe, o equivalente é:
@@ -499,6 +526,9 @@ Ele pede a senha do `adduser` uma última vez e grava a sua chave pública no se
 ```powershell
 Get-Content ~\.ssh\id_ed25519.pub | ssh SEU_USUARIO@SEU_IP "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
 ```
+
+Com a `id_rsa`, troque `id_ed25519.pub` por `id_rsa.pub` nessa linha. Daqui em diante, sempre que
+um comando citar `id_ed25519` (o `cat`, o `ssh-add`), quem usa `id_rsa` faz a mesma troca.
 
 **Agora teste, e é o teste que importa:**
 
@@ -685,6 +715,13 @@ cd /opt/tws-panel && git checkout main
 ```bash
 ./scripts/install.sh
 ```
+
+> [!TIP]
+> **Ele pode parar logo no começo pedindo para reiniciar a VPS — é normal, ainda mais em VPS
+> nova.** O provedor entrega o sistema com atualizações que só passam a valer depois de reiniciar
+> (é o `*** System restart required ***` que aparece ao entrar). Nada foi instalado ainda: rode
+> `sudo reboot`, espere cerca de um minuto, entre de novo com o mesmo `ssh` e repita os dois
+> comandos, `cd /opt/tws-panel` e `./scripts/install.sh`.
 
 > [!NOTE]
 > O instalador precisa de privilégios de administrador (instalar Docker, criar volumes, abrir
