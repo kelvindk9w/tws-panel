@@ -726,3 +726,93 @@ describe("TerminalService — ciclo de vida do alvo e falhas de limpeza", () => 
     await service.dispose();
   });
 });
+
+/**
+ * Acesso do usuário do terminal ao Docker do host (grupo do docker.sock =
+ * root sem senha). A verificação roda quando a sessão abre, nunca bloqueia a
+ * abertura, e só afirma "sim"/"nao" quando de fato verificou.
+ */
+describe("TerminalService — acesso do usuário ao Docker do host", () => {
+  function withProbe(probe: () => Promise<"sim" | "nao" | "nao-verificado">, timeoutMs?: number) {
+    const ptys: FakePty[] = [];
+    const calls = { n: 0 };
+    const service = new TerminalService({
+      openPty: () => {
+        const pty = new FakePty();
+        ptys.push(pty);
+        return Promise.resolve(pty);
+      },
+      probeHostDockerAccess: () => {
+        calls.n += 1;
+        return probe();
+      },
+      ...(timeoutMs !== undefined ? { hostDockerAccessTimeoutMs: timeoutMs } : {}),
+    });
+    return { service, ptys, calls };
+  }
+
+  it("sem sonda configurada (root, legado, dev): não se aplica → null", async () => {
+    const { service } = makeService();
+    await expect(service.hostDockerAccess()).resolves.toBeNull();
+  });
+
+  it("abrir a sessão dispara a verificação; a consulta seguinte usa o resultado sem repetir", async () => {
+    const { service, calls } = withProbe(() => Promise.resolve("sim"));
+    await service.connect();
+    expect(calls.n).toBe(1);
+    await expect(service.hostDockerAccess()).resolves.toBe("sim");
+    await expect(service.hostDockerAccess()).resolves.toBe("sim");
+    expect(calls.n).toBe(1);
+    await service.dispose();
+  });
+
+  it("consulta antes de qualquer sessão também verifica (e consultas simultâneas não duplicam)", async () => {
+    const { service, calls } = withProbe(() => Promise.resolve("nao"));
+    const [a, b] = await Promise.all([service.hostDockerAccess(), service.hostDockerAccess()]);
+    expect([a, b]).toEqual(["nao", "nao"]);
+    expect(calls.n).toBe(1);
+  });
+
+  it("uma nova sessão verifica de novo (o operador pode ter tirado o usuário do grupo)", async () => {
+    let answer: "sim" | "nao" = "sim";
+    const { service, ptys, calls } = withProbe(() => Promise.resolve(answer));
+    await service.connect();
+    await expect(service.hostDockerAccess()).resolves.toBe("sim");
+    answer = "nao";
+    ptys[0]!.end();
+    await flush();
+    await service.connect();
+    await flush();
+    expect(calls.n).toBe(2);
+    await expect(service.hostDockerAccess()).resolves.toBe("nao");
+    await service.dispose();
+  });
+
+  it("sonda que falha → nao-verificado, e não fica guardado (a próxima consulta tenta de novo)", async () => {
+    let fail = true;
+    const { service, calls } = withProbe(() => (fail ? Promise.reject(new Error("docker fora")) : Promise.resolve("nao")));
+    await expect(service.hostDockerAccess()).resolves.toBe("nao-verificado");
+    fail = false;
+    await expect(service.hostDockerAccess()).resolves.toBe("nao");
+    expect(calls.n).toBe(2);
+  });
+
+  it("resultado nao-verificado da sonda também não é guardado", async () => {
+    const { service, calls } = withProbe(() => Promise.resolve("nao-verificado"));
+    await expect(service.hostDockerAccess()).resolves.toBe("nao-verificado");
+    await expect(service.hostDockerAccess()).resolves.toBe("nao-verificado");
+    expect(calls.n).toBe(2);
+  });
+
+  it("sonda travada: desiste no tempo-limite com nao-verificado", async () => {
+    const { service } = withProbe(() => new Promise(() => undefined), 20);
+    await expect(service.hostDockerAccess()).resolves.toBe("nao-verificado");
+  });
+
+  it("NUNCA bloqueia a abertura do terminal: connect resolve com a sonda ainda pendente", async () => {
+    const { service, ptys } = withProbe(() => new Promise(() => undefined), 60_000);
+    await expect(service.connect()).resolves.toEqual({ replay: "" });
+    expect(ptys).toHaveLength(1);
+    await service.dispose();
+  });
+});

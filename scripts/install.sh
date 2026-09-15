@@ -38,6 +38,9 @@
 #      --force e sem essas escolhas, NÃO adivinha: mantém o terminal como
 #      root (comportamento anterior) e avisa. Reinstalação: o que já está
 #      no .env é respeitado; --reconfigure-terminal pergunta de novo.
+#   1c. GRUPO DOCKER: ninguém é adicionado a ele (equivale a root sem senha).
+#      Se o usuário do terminal (não-root) já estiver no grupo, pergunta se
+#      remove (recomendado); sem TTY ou com --force, não mexe e avisa no final.
 #   2. Instala git se ausente
 #   3. Instala Docker se ausente (get.docker.com) + plugin compose
 #   4. Define o diretório alvo (default /opt/tws-panel; personalize com
@@ -628,6 +631,66 @@ if [ -z "$TERMINAL_SOURCE" ]; then
   done
 fi
 
+# --- 1c. Usuário do terminal no grupo docker ---------------------------------------
+# Estar no grupo docker é ter root na VPS SEM senha: qualquer membro roda
+# `docker run --privileged -v /:/host ... chroot /host`. Os modos "senha" e
+# "segundo-plano" existem para que uma aba esquecida do painel NÃO dê root;
+# com o usuário do terminal nesse grupo, essa garantia é falsa. Por isso o
+# instalador não coloca ninguém no grupo docker (versões antigas colocavam
+# quem chamou o sudo) e, se o usuário do terminal já estiver lá, pergunta se
+# remove. Sem ninguém para responder, não mexe em grupo: só avisa no final.
+# A remoção em si fica para depois da etapa do Docker, junto das outras
+# alterações — até aqui nada foi alterado na máquina.
+user_in_docker_group() { # user_in_docker_group <usuário>
+  id -nG "$1" 2>/dev/null | tr ' ' '\n' | grep -qx docker
+}
+DOCKER_GROUP_STATE=""   # "" (nada a dizer) | remover | removido | recusou | automacao | falhou
+if [ "$TERMINAL_SOURCE" != "legado" ] && [ "$TERMINAL_USER" != "root" ] && user_in_docker_group "$TERMINAL_USER"; then
+  if [ "$INTERACTIVE" = "1" ] && [ "$FORCE" = "0" ]; then
+    if [ "$ROOT_MODE" = "senha" ]; then
+      protecao="do pedido da sua senha do sudo"
+    else
+      protecao="da Auditoria (rodar root sem passar pelo painel)"
+    fi
+    say ""
+    say "================================================================================"
+    say "  ⚠️  \"$TERMINAL_USER\" ESTÁ NO GRUPO DOCKER — isso anula a proteção que você escolheu"
+    say ""
+    say "  Quem está no grupo docker consegue virar root na VPS sem digitar senha nenhuma:"
+    say "  basta um único comando docker. Então, do terminal do painel aberto como"
+    say "  \"$TERMINAL_USER\", daria para passar por cima $protecao."
+    say "  Uma aba do navegador esquecida aberta voltaria a ser acesso de root à VPS."
+    say ""
+    say "  (Isso costuma vir de uma versão antiga deste instalador, que colocava no grupo"
+    say "  quem o executava. Desinstalar o painel não desfaz.)"
+    say ""
+    say "  RECOMENDADO: remover. Você não perde nada: os comandos docker continuam"
+    say "  funcionando com sudo na frente (ex.: sudo docker compose ps)."
+    say "  A mudança só vale em sessões novas: sessões SSH de \"$TERMINAL_USER\" já abertas"
+    say "  mantêm o acesso antigo até você sair (exit) e entrar de novo."
+    say "================================================================================"
+    while :; do
+      ask "  Remover \"$TERMINAL_USER\" do grupo docker? [s/n] "
+      case "$ANSWER" in
+        s|S|sim|Sim|SIM)
+          DOCKER_GROUP_STATE="remover"
+          log "Combinado: \"$TERMINAL_USER\" sai do grupo docker durante a instalação."
+          break ;;
+        n|N|nao|não|Nao|Não|NAO|NÃO)
+          DOCKER_GROUP_STATE="recusou"
+          warn "\"$TERMINAL_USER\" continua no grupo docker — o aviso vai se repetir no final."
+          break ;;
+        *) say "  ✗ Responda s (remover, recomendado) ou n (manter)." ;;
+      esac
+    done
+  else
+    DOCKER_GROUP_STATE="automacao"
+    warn "\"$TERMINAL_USER\" (usuário do terminal do painel) está no grupo docker: isso é root sem"
+    warn "senha e anula a proteção do modo \"$ROOT_MODE\". Em automação (sem terminal interativo ou"
+    warn "com --force) o instalador não altera grupos. Para corrigir: sudo gpasswd -d $TERMINAL_USER docker"
+  fi
+fi
+
 # Chave SSH do computador do operador — SÓ para imprimir os comandos certos no
 # final. O instalador roda na VPS e não enxerga as chaves do computador da
 # pessoa; o ssh experimenta id_ed25519 e id_rsa sozinho, então só um nome
@@ -701,15 +764,16 @@ else
   log "Docker já instalado: $(docker --version)"
 fi
 
-# Conveniência: quem chamou o instalador via sudo entra no grupo docker —
-# assim os comandos do dia a dia (docker compose ps, logs…) não precisam de
-# sudo depois de um novo login. Não é requisito: tudo funciona com sudo.
-if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
-  if id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx docker; then
-    info "Usuário $SUDO_USER já está no grupo docker."
+# Grupo docker: ninguém é adicionado (é root sem senha — veja o passo 1c). Os
+# comandos do dia a dia funcionam com sudo na frente. Aqui só se executa a
+# remoção que a pessoa autorizou no passo 1c.
+if [ "$DOCKER_GROUP_STATE" = "remover" ]; then
+  if gpasswd -d "$TERMINAL_USER" docker >/dev/null 2>&1 && ! user_in_docker_group "$TERMINAL_USER"; then
+    DOCKER_GROUP_STATE="removido"
+    log "\"$TERMINAL_USER\" removido do grupo docker (vale para sessões novas: saia e entre de novo por SSH)."
   else
-    usermod -aG docker "$SUDO_USER" && \
-      log "Usuário $SUDO_USER adicionado ao grupo docker (vale a partir do próximo login)."
+    DOCKER_GROUP_STATE="falhou"
+    warn "Não consegui remover \"$TERMINAL_USER\" do grupo docker. Confira com: id $TERMINAL_USER"
   fi
 fi
 
@@ -913,6 +977,37 @@ else
   TERMINAL_SUMMARY="abre como $TERMINAL_USER; comandos de root rodam em segundo plano (veja a Auditoria)."
 fi
 
+# Grupo docker do usuário do terminal (passo 1c): confirma a remoção ou avisa,
+# em destaque, que a proteção do modo escolhido não está valendo.
+DOCKER_GROUP_NOTE=""
+case "$DOCKER_GROUP_STATE" in
+  removido)
+    DOCKER_GROUP_NOTE="
+${BOLD}Grupo docker:${RESET} $TERMINAL_USER foi removido, como você autorizou. Só vale para sessões
+    novas: saia da VPS (exit) e entre de novo por SSH — as sessões já abertas
+    continuam com o acesso antigo até lá.
+" ;;
+  recusou|automacao|falhou)
+    case "$DOCKER_GROUP_STATE" in
+      recusou)   motivo_docker="Você preferiu manter assim durante a instalação." ;;
+      automacao) motivo_docker="Em automação, o instalador não altera grupos sem confirmação." ;;
+      *)         motivo_docker="O instalador tentou remover e não conseguiu (confira com: id $TERMINAL_USER)." ;;
+    esac
+    DOCKER_GROUP_NOTE="
+${YELLOW}${BOLD}⚠  ATENÇÃO: A PROTEÇÃO DO TERMINAL DO PAINEL NÃO ESTÁ VALENDO${RESET}
+${YELLOW}    $TERMINAL_USER está no grupo docker, e quem está nesse grupo vira root sem senha
+    com um único comando docker. Do terminal do painel dá para contornar o modo
+    \"$ROOT_MODE\". $motivo_docker${RESET}
+
+    Para corrigir, rode na VPS:
+
+${CYAN}${BOLD}      sudo gpasswd -d $TERMINAL_USER docker${RESET}
+
+    Depois saia da VPS (exit) e entre de novo por SSH: a mudança só vale em
+    sessões novas.
+" ;;
+esac
+
 # Toca o "bell" do terminal para chamar atenção ao fim da instalação.
 printf '\a'
 
@@ -960,16 +1055,17 @@ ${YELLOW}${BOLD}┌────────────────────�
 
 ${BOLD}Perdeu o token? Recupere a qualquer momento com:${RESET}
 
-      docker exec tws-panel cat /data/setup-token
+      sudo docker exec tws-panel cat /data/setup-token
 
 O assistente vai diagnosticar o servidor e guiar o setup.
 
 ${BOLD}Terminal do painel:${RESET} ${TERMINAL_SUMMARY}
     Para trocar depois: ./scripts/install.sh --reconfigure-terminal
-
-Comandos úteis (em $APP_DIR):
-    docker compose ps              # status do painel
-    docker compose logs -f panel   # logs em tempo real
-    docker compose up -d --build   # rebuild/restart (ex.: após git pull)
+${DOCKER_GROUP_NOTE}
+Comandos úteis (em $APP_DIR) — com sudo: o painel não coloca ninguém no grupo
+docker, porque estar nele é ter root sem senha.
+    sudo docker compose ps              # status do painel
+    sudo docker compose logs -f panel   # logs em tempo real
+    sudo docker compose up -d --build   # rebuild/restart (ex.: após git pull)
 
 EOF

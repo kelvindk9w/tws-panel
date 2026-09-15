@@ -36,7 +36,7 @@ function Probe({ enabled }: { enabled: boolean }) {
   const { info, unavailable } = useTerminalInfo(enabled);
   return (
     <p data-testid="probe">
-      {info ? `${info.elevation}:${info.user}` : unavailable ? "indisponível" : "carregando"}
+      {info ? `${info.elevation}:${info.user}:${String(info.hostDockerAccess)}` : unavailable ? "indisponível" : "carregando"}
     </p>
   );
 }
@@ -55,7 +55,7 @@ describe("useTerminalInfo", () => {
     apiFetchMock.mockResolvedValue(INFO);
     const { rerender } = render(<Probe enabled={false} />);
     rerender(<Probe enabled={true} />);
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("senha:kelvin"));
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("senha:kelvin:nao-verificado"));
     expect(apiFetchMock).toHaveBeenCalledWith("/api/terminal/info");
   });
 
@@ -68,6 +68,44 @@ describe("useTerminalInfo", () => {
     apiFetchMock.mockResolvedValueOnce({ report: {} });
     render(<Probe enabled={true} />);
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("indisponível"));
+  });
+});
+
+describe("useTerminalInfo — acesso do usuário ao Docker do host", () => {
+  it.each([
+    ["sim", "sim"],
+    ["nao", "nao"],
+    ["nao-verificado", "nao-verificado"],
+  ])("modo de usuário comum com %s: repassa", async (valor, esperado) => {
+    apiFetchMock.mockResolvedValue({ ...INFO, hostDockerAccess: valor });
+    render(<Probe enabled={true} />);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent(`senha:kelvin:${esperado}`));
+  });
+
+  it("servidor antigo (campo ausente) ou valor estranho: nao-verificado — nunca 'nao' sem verificação", async () => {
+    apiFetchMock.mockResolvedValueOnce(INFO);
+    render(<Probe enabled={true} />);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("senha:kelvin:nao-verificado"));
+    cleanup();
+
+    apiFetchMock.mockResolvedValueOnce({ ...INFO, elevation: "segundo-plano", rootMode: "segundo-plano", hostDockerAccess: "talvez" });
+    render(<Probe enabled={true} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("probe")).toHaveTextContent("segundo-plano:kelvin:nao-verificado"),
+    );
+  });
+
+  it("sessões root e container de dev: não se aplica (null), mesmo que o servidor mande algo", async () => {
+    apiFetchMock.mockResolvedValueOnce({
+      ...INFO,
+      user: "root",
+      configuredUser: null,
+      rootMode: null,
+      elevation: "root-legado",
+      hostDockerAccess: "sim",
+    });
+    render(<Probe enabled={true} />);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("root-legado:root:null"));
   });
 });
 

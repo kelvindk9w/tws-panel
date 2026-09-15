@@ -116,7 +116,7 @@ vi.stubGlobal(
 let fakeLocation = { protocol: "http:", hostname: "localhost" };
 vi.mock("@/lib/page-location", () => ({ pageLocation: () => fakeLocation }));
 
-import type { TerminalElevation, TerminalInfoResponse, TerminalControlMessage } from "@paas/core";
+import type { HostDockerAccess, TerminalElevation, TerminalInfoResponse, TerminalControlMessage } from "@paas/core";
 import { encodeTerminalControl } from "@paas/core";
 import { TerminalPanel, TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { setSetupToken } from "@/lib/api";
@@ -133,7 +133,11 @@ function lastTerm(): MockTerm {
   return t;
 }
 
-function infoFor(elevation: TerminalElevation, user = "kelvin"): TerminalInfoResponse {
+function infoFor(
+  elevation: TerminalElevation,
+  user = "kelvin",
+  hostDockerAccess: HostDockerAccess | null = null,
+): TerminalInfoResponse {
   const root = elevation === "root" || elevation === "root-legado";
   return {
     target: elevation === "container-dev" ? "container" : "host",
@@ -142,6 +146,7 @@ function infoFor(elevation: TerminalElevation, user = "kelvin"): TerminalInfoRes
     rootMode: elevation === "senha" || elevation === "segundo-plano" ? elevation : null,
     elevation,
     scheduledMonitoringRunsAsRoot: true,
+    hostDockerAccess,
   };
 }
 
@@ -728,5 +733,69 @@ describe("TerminalPanel — comando root em segundo plano", () => {
 
     control({ type: "background-exec", state: "end", command: "bash /opt/paas-hardening/00-update.sh", code: 0 });
     expect(screen.queryByTestId("background-exec-indicator")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Usuário do terminal com acesso ao Docker do host = root sem senha
+ * (`docker run --privileged -v /:/host … chroot /host`). Nos modos senha e
+ * segundo-plano, a proteção escolhida não vale enquanto isso continuar.
+ */
+describe("TerminalPanel — usuário com acesso ao Docker do host", () => {
+  it.each(["senha", "segundo-plano"] as const)(
+    "%s + acesso: aviso de segurança visível, verdadeiro e acionável no cabeçalho",
+    (mode) => {
+      render(<TerminalPanel enabled={true} info={infoFor(mode, "kelvin", "sim")} />);
+      const alert = screen.getByTestId("terminal-docker-group-warning");
+      expect(alert).toHaveAttribute("role", "alert");
+      expect(alert).toHaveTextContent(/kelvin/);
+      expect(alert).toHaveTextContent(/grupo docker/i);
+      expect(alert).toHaveTextContent(/acesso de root à VPS sem senha/i);
+      expect(alert).toHaveTextContent(
+        mode === "senha" ? /proteção do modo senha não vale/i : /proteção do modo segundo plano não vale/i,
+      );
+      expect(alert).toHaveTextContent("sudo gpasswd -d kelvin docker");
+      expect(alert).toHaveTextContent(/encerr\w+ a sessão/i);
+      expect(alert).toHaveTextContent(/SSH/);
+      // fica no cabeçalho, antes do terminal, mesmo recolhido
+      const container = screen.getByTestId("terminal-container");
+      expect(alert.compareDocumentPosition(container) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.queryByTestId("terminal-docker-unverified")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["senha", "segundo-plano"] as const)("%s sem acesso: nada extra", (mode) => {
+    render(<TerminalPanel enabled={true} info={infoFor(mode, "kelvin", "nao")} />);
+    expect(screen.queryByTestId("terminal-docker-group-warning")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("terminal-docker-unverified")).not.toBeInTheDocument();
+    expect(screen.queryByText(/gpasswd/)).not.toBeInTheDocument();
+  });
+
+  it.each(["senha", "segundo-plano"] as const)(
+    "%s sem verificação: nota discreta dizendo isso, sem afirmar nem negar",
+    (mode) => {
+      render(<TerminalPanel enabled={true} info={infoFor(mode, "kelvin", "nao-verificado")} />);
+      const note = screen.getByTestId("terminal-docker-unverified");
+      expect(note).toHaveTextContent(/não foi possível verificar/i);
+      expect(note).toHaveTextContent(/kelvin/);
+      expect(note).toHaveTextContent(/docker/i);
+      expect(note).not.toHaveAttribute("role", "alert");
+      expect(screen.queryByTestId("terminal-docker-group-warning")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["root", "root-legado", "container-dev"] as const)(
+    "%s: não se aplica — nem aviso nem nota, mesmo com um valor estranho",
+    (elevation) => {
+      render(<TerminalPanel enabled={true} info={infoFor(elevation, "kelvin", "sim")} />);
+      expect(screen.queryByTestId("terminal-docker-group-warning")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-docker-unverified")).not.toBeInTheDocument();
+    },
+  );
+
+  it("sem a informação ainda: nada sobre Docker", () => {
+    render(<TerminalPanel enabled={true} info={null} />);
+    expect(screen.queryByTestId("terminal-docker-group-warning")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("terminal-docker-unverified")).not.toBeInTheDocument();
   });
 });

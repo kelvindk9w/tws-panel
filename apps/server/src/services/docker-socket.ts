@@ -26,7 +26,7 @@
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
-import { isValidSshUsername } from "@paas/core";
+import { isValidSshUsername, type HostDockerAccess } from "@paas/core";
 import { resolveTerminalAccess, type ServerConfig } from "../config.js";
 
 /** Handle de um PTY remoto: stream cru + resize + encerramento. */
@@ -215,33 +215,47 @@ export function buildHostTerminalCmd(user: string | null): string[] {
 }
 
 /**
+ * Roda um comando NÃO interativo nos namespaces do host num helper
+ * descartável (paas-terminal-check-<8 hex>, sem TTY) e devolve o código de
+ * saída. O helper é removido sempre, com ou sem sucesso. `what` só compõe a
+ * mensagem de erro. `cmd` é argv puro — nada passa por shell.
+ */
+async function runHostCheck(socketPath: string, image: string, cmd: string[], what: string): Promise<number> {
+  const name = `paas-terminal-check-${randomBytes(4).toString("hex")}`;
+  const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {
+    Image: image,
+    Cmd: cmd,
+    HostConfig: { Privileged: true, PidMode: "host" },
+  });
+  if (create.status !== 201) {
+    throw new DockerSocketError(`falha ao ${what}: ${errorMessage(create.body)}`, create.status);
+  }
+  const id = (JSON.parse(create.body.toString("utf8")) as { Id: string }).Id;
+  try {
+    const start = await request(socketPath, "POST", `/containers/${id}/start`);
+    if (start.status !== 204 && start.status !== 304) {
+      throw new DockerSocketError(`falha ao ${what}: ${errorMessage(start.body)}`, start.status);
+    }
+    const wait = await request(socketPath, "POST", `/containers/${id}/wait`);
+    return (JSON.parse(wait.body.toString("utf8")) as { StatusCode?: number }).StatusCode ?? -1;
+  } finally {
+    await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
+  }
+}
+
+/**
  * Confirma que o usuário existe NA VPS antes de abrir o terminal: sem isso o
  * runuser sairia na hora ("user does not exist"), a sessão morreria sem
  * explicação — e nunca se cai para root no lugar. Helper não interativo,
  * `id -u <usuário>` nos namespaces do host, removido depois de consultado.
  */
 async function assertHostUserExists(socketPath: string, image: string, user: string): Promise<void> {
-  const name = `paas-terminal-check-${randomBytes(4).toString("hex")}`;
-  const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {
-    Image: image,
-    Cmd: [...NSENTER_HOST, "id", "-u", user],
-    HostConfig: { Privileged: true, PidMode: "host" },
-  });
-  if (create.status !== 201) {
-    throw new DockerSocketError(`falha ao verificar o usuário do terminal: ${errorMessage(create.body)}`, create.status);
-  }
-  const id = (JSON.parse(create.body.toString("utf8")) as { Id: string }).Id;
-  let statusCode: number;
-  try {
-    const start = await request(socketPath, "POST", `/containers/${id}/start`);
-    if (start.status !== 204 && start.status !== 304) {
-      throw new DockerSocketError(`falha ao verificar o usuário do terminal: ${errorMessage(start.body)}`, start.status);
-    }
-    const wait = await request(socketPath, "POST", `/containers/${id}/wait`);
-    statusCode = (JSON.parse(wait.body.toString("utf8")) as { StatusCode?: number }).StatusCode ?? -1;
-  } finally {
-    await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
-  }
+  const statusCode = await runHostCheck(
+    socketPath,
+    image,
+    [...NSENTER_HOST, "id", "-u", user],
+    "verificar o usuário do terminal",
+  );
   if (statusCode !== 0) {
     throw new DockerSocketError(
       `o usuário "${user}" definido em PAAS_TERMINAL_USER não existe na VPS (id -u saiu com código ${statusCode}). ` +
@@ -249,6 +263,88 @@ async function assertHostUserExists(socketPath: string, image: string, user: str
         `O terminal não foi aberto como root no lugar dele.`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Acesso do usuário do terminal ao Docker do host
+// ---------------------------------------------------------------------------
+
+/**
+ * Caminho do socket do Docker NO HOST. É o que o docker-compose.yml monta no
+ * painel e o que o install.sh consulta (`stat -c %g /var/run/docker.sock`).
+ */
+export const HOST_DOCKER_SOCKET = "/var/run/docker.sock";
+
+/** argv: o socket existe no host? (root; `test -S` = existe e é socket). */
+export function buildHostDockerSocketPresentCmd(): string[] {
+  return [...NSENTER_HOST, "test", "-S", HOST_DOCKER_SOCKET];
+}
+
+/**
+ * argv: o usuário consegue ESCREVER no socket do Docker do host?
+ * `runuser -u <usuário> -- test -w <socket>` roda o `test` do host com o uid
+ * do usuário e os grupos que o /etc/group dá a ele (initgroups) — os mesmos
+ * de uma sessão nova dele (SSH ou este terminal).
+ *
+ * Por que testar o ACESSO e não o nome do grupo `docker`: conectar num
+ * socket unix exige permissão de escrita nele, e é exatamente isso que o
+ * kernel avalia no access(W_OK) do `test -w` — dono, grupo dono (qualquer que
+ * seja o nome ou GID, inclusive quando a distribuição/instalação usa outro
+ * grupo) e ACLs. Checar só `id -nG | grep docker` erraria nos dois sentidos
+ * (grupo com outro nome dando acesso; grupo "docker" que não é o dono).
+ *
+ * O nome vai como ELEMENTO SEPARADO do argv (nunca numa string de shell) e é
+ * revalidado aqui. root não se aplica (já é root) e é recusado.
+ */
+export function buildHostDockerAccessCheckCmd(user: string): string[] {
+  if (!isValidSshUsername(user)) throw new DockerSocketError(`usuário do terminal inválido: ${JSON.stringify(user)}`);
+  return [...NSENTER_HOST, "runuser", "-u", user, "--", "test", "-w", HOST_DOCKER_SOCKET];
+}
+
+/**
+ * Verifica no host se `user` tem acesso ao Docker (ver argv acima). Nunca
+ * lança e só responde "sim"/"nao" com evidência:
+ *  - socket ausente no caminho padrão → "nao-verificado" (o Docker pode
+ *    estar em outro lugar; "nao" seria afirmar sem saber);
+ *  - `test -w` saiu 0 → "sim"; saiu 1 → "nao";
+ *  - qualquer outro código (runuser 125/126/127, -1) ou erro de Docker →
+ *    "nao-verificado".
+ */
+export async function checkHostDockerAccess(
+  socketPath: string,
+  image: string,
+  user: string,
+): Promise<HostDockerAccess> {
+  try {
+    const accessCmd = buildHostDockerAccessCheckCmd(user);
+    await ensureImage(socketPath, image);
+    const present = await runHostCheck(
+      socketPath,
+      image,
+      buildHostDockerSocketPresentCmd(),
+      "verificar o socket do Docker no host",
+    );
+    if (present !== 0) return "nao-verificado";
+    const code = await runHostCheck(socketPath, image, accessCmd, "verificar o acesso do usuário ao Docker");
+    if (code === 0) return "sim";
+    if (code === 1) return "nao";
+    return "nao-verificado";
+  } catch {
+    return "nao-verificado";
+  }
+}
+
+/**
+ * Sonda do acesso ao Docker para o TerminalService, ou null quando não se
+ * aplica: container de dev, legado sem usuário e root explícito.
+ */
+export function createHostDockerAccessProbe(config: ServerConfig): (() => Promise<HostDockerAccess>) | null {
+  if (config.securityTarget !== "host") return null;
+  const user = config.terminalUser ?? null;
+  if (user === null || user === "root") return null;
+  const socketPath = config.dockerSocketPath;
+  const image = config.hostHelperImage;
+  return () => checkHostDockerAccess(socketPath, image, user);
 }
 
 async function openHostPty(socketPath: string, image: string, user: string | null): Promise<RemotePty> {

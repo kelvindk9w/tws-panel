@@ -17,6 +17,7 @@ import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
 import {
   createDockerPtyFactory,
+  createHostDockerAccessProbe,
   removeOrphanTerminalHelpers,
   type PtyFactory,
 } from "./services/docker-socket.js";
@@ -86,11 +87,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // container de dev), compartilhada entre o WS do painel e o executor de
   // hardening. Relay puro — input do usuário nunca é logado/auditado.
   const terminalAccess = resolveTerminalAccess(config);
+  // Testes que injetam um PTY falso não falam com Docker nenhum.
+  const hostDockerAccessProbe = options?.terminalPtyFactory ? null : createHostDockerAccessProbe(config);
   const terminalService = new TerminalService({
     openPty: options?.terminalPtyFactory ?? createDockerPtyFactory(config),
     idleTimeoutMs: config.terminalIdleTimeoutMs,
     // Modo senha: observa a SAÍDA atrás do prompt do sudo (nunca o input).
     watchSudoPrompt: terminalAccess.elevation === "senha",
+    // Modos de usuário comum: confere no host se o usuário tem acesso ao
+    // Docker (= root sem senha) e expõe em /api/terminal/info. Não bloqueia.
+    ...(hostDockerAccessProbe ? { probeHostDockerAccess: hostDockerAccessProbe } : {}),
     audit: (action, detail) => {
       void app.auditService.record({ action, detail });
     },
