@@ -30,6 +30,18 @@
  *      · container-dev: ambiente de desenvolvimento (container descartável);
  *    nos modos não-root, uma linha avisa que o monitoramento AGENDADO roda
  *    sozinho como root em segundo plano, auditado (não há quem digite senha);
+ *  - usuário com acesso ao Docker do host (`info.hostDockerAccess`, verificado
+ *    NO HOST pelo servidor): quem escreve no docker.sock — em geral o grupo
+ *    docker — obtém root sem senha, e a proteção dos modos senha/segundo-plano
+ *    deixa de valer. Só nesses dois modos:
+ *      · "sim" → aviso de segurança destacado (role=alert) no cabeçalho, com
+ *        o comando para corrigir (`sudo gpasswd -d <usuário> docker`) e que é
+ *        preciso encerrar a sessão (este terminal e as sessões SSH) para valer;
+ *      · "nao-verificado" → nota discreta dizendo que não deu para verificar
+ *        (nunca afirma nem nega);
+ *      · "nao" → nada extra.
+ *    Nas sessões root e no container de dev não se aplica e nada aparece. O
+ *    terminal não é bloqueado: a decisão é do operador;
  *  - botão "abrir como <usuário>" SÓ em sessão root (root/root-legado), com
  *    `sshUser` VÁLIDO (isValidSshUsername) e sessão conectada: digita
  *    `su - <usuário>` pelo MESMO caminho de input do xterm (relay puro, nada
@@ -385,6 +397,9 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
   const userShellName = sshUser && isValidSshUsername(sshUser) ? sshUser : null;
   const elevation = info?.elevation ?? null;
   const rootSession = elevation === "root" || elevation === "root-legado";
+  // Acesso ao Docker do host só importa quando o terminal é de um usuário comum.
+  const dockerAccess =
+    elevation === "senha" || elevation === "segundo-plano" ? (info?.hostDockerAccess ?? "nao-verificado") : null;
   // Só faz sentido trocar de usuário numa sessão que COMPROVADAMENTE é root;
   // sessão caída/em outra aba não aceita input: não ofereça a ação.
   const canOpenUserShell = rootSession && userShellName !== null && status === "online";
@@ -504,6 +519,16 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
               </span>
             </p>
           )}
+          {dockerAccess === "nao-verificado" && info && (
+            <p className="flex items-start gap-1.5" data-testid="terminal-docker-unverified">
+              <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+              <span>
+                Não foi possível verificar se <strong className={NAME}>{info.user}</strong> tem acesso ao
+                Docker do servidor (por exemplo, pelo grupo docker). Se tiver, ele consegue virar root sem
+                senha — confira no servidor com <code className={NAME}>id {info.user}</code>.
+              </span>
+            </p>
+          )}
           {backgroundCommand !== null && (
             <p
               className="flex items-center gap-1.5 text-amber-200/80"
@@ -530,6 +555,37 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
           </button>
         )}
       </div>
+
+      {dockerAccess === "sim" && info && (
+        <div
+          role="alert"
+          data-testid="terminal-docker-group-warning"
+          className="flex items-start gap-2 border-t-2 border-red-500/70 bg-red-600/20 px-4 py-2.5 text-xs leading-relaxed text-red-100"
+        >
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" aria-hidden />
+          <div className="flex flex-col gap-1">
+            <p className="font-semibold text-red-200">
+              Atenção: o usuário <span className="font-mono">{info.user}</span> tem acesso ao Docker do
+              servidor
+            </p>
+            <p>
+              O usuário <strong className="font-mono">{info.user}</strong> está no grupo docker (ou tem outro
+              acesso ao Docker do servidor), o que permite obter acesso de root à VPS sem senha. A proteção
+              do {info.elevation === "senha" ? "modo senha" : "modo segundo plano"} não vale enquanto isso
+              continuar: uma aba esquecida aberta com este terminal ainda dá root.
+            </p>
+            <p>
+              Para corrigir, rode no servidor{" "}
+              <code className="rounded bg-black/50 px-1 font-mono text-emerald-300">
+                sudo gpasswd -d {info.user} docker
+              </code>{" "}
+              e depois encerre a sessão: digite <code className="font-mono">exit</code> neste terminal e
+              saia de todas as sessões SSH de {info.user} — a mudança só vale para sessões abertas depois
+              dela.
+            </p>
+          </div>
+        </div>
+      )}
 
       {status === "busy" && (
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">

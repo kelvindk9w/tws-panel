@@ -115,8 +115,8 @@ Antes de reinstalar a máquina inteira, veja se o caso é mesmo esse — quase s
 
 ```bash
 cd /opt/tws-panel
-./scripts/reset-setup.sh     # o wizard volta ao passo 0
-./scripts/show-token.sh      # mostra o setup token de novo
+sudo ./scripts/reset-setup.sh     # o wizard volta ao passo 0
+sudo ./scripts/show-token.sh      # mostra o setup token de novo
 ```
 
 Seus projetos, domínios, e-mail e histórico de segurança continuam intactos. Use `--full` no
@@ -753,8 +753,9 @@ cd /opt/tws-panel && git checkout main
 > isso e se reexecuta via `sudo` sozinho, pedindo a sua senha. Se preferir ser explícito,
 > `sudo ./scripts/install.sh` faz exatamente a mesma coisa — os dois caminhos são equivalentes.
 >
-> No final, ele ainda te adiciona ao **grupo docker**, para os comandos do dia a dia não
-> precisarem de sudo (vale a partir do próximo login).
+> Depois da instalação, os comandos de Docker do dia a dia também levam `sudo` na frente
+> (ex.: `sudo docker compose ps`) — o motivo está em
+> [Por que o painel não te coloca no grupo docker](#grupo-docker).
 
 > [!NOTE]
 > **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz verificações
@@ -870,6 +871,11 @@ saída aparece no terminal só para você acompanhar.
 senha — continua executando como root em segundo plano, e cada execução fica registrada na
 Auditoria.
 
+**Condição para os dois modos protegerem de verdade:** o usuário do terminal **não pode estar no
+grupo `docker`**. Quem está nesse grupo vira root sem senha com um único comando, então passaria
+por cima tanto do pedido de senha quanto da Auditoria. Se ele estiver, o instalador avisa e oferece
+remover — veja [Por que o painel não te coloca no grupo docker](#grupo-docker).
+
 **Instalando por automação** (sem ninguém para responder)? Passe as escolhas direto:
 
 ```bash
@@ -882,6 +888,26 @@ primeira vez é mantido sem perguntar de novo — para trocar, veja
 [Trocar o usuário do terminal do painel](#trocar-terminal).
 
 </details>
+
+<a id="grupo-docker"></a>
+
+> [!IMPORTANT]
+> **Por que o painel não te coloca no grupo docker.** Estar no grupo `docker` é o mesmo que ter
+> root na VPS **sem digitar senha**: qualquer membro consegue, com um comando, abrir um container
+> com o disco inteiro da máquina. Se o usuário do terminal estivesse nesse grupo, uma aba do painel
+> esquecida aberta voltaria a dar root à VPS, e os modos `senha` e `segundo-plano` não protegeriam
+> nada. Por isso os comandos de Docker levam `sudo` na frente (`sudo docker compose ps`).
+>
+> **Já está no grupo** (uma versão antiga do instalador colocava você lá, e desinstalar o painel
+> não desfaz)? Ao rodar o instalador, ele pergunta se remove — responda `s`. Para fazer à mão:
+>
+> ```bash
+> sudo gpasswd -d SEU_USUARIO docker
+> ```
+>
+> Depois saia da VPS (`exit`) e entre de novo por SSH: como no grupo `sudo`, a mudança só vale em
+> sessões novas. Confira com `groups` — `docker` não deve aparecer na lista. Em instalação sem
+> ninguém para responder, o instalador não mexe em grupos: só avisa em destaque no final.
 
 > [!IMPORTANT]
 > **Antes de abrir o painel: o link que o instalador imprime é HTTP puro, sem criptografia.**
@@ -985,8 +1011,8 @@ O painel roda 100% em Docker (`docker compose up -d`), com o estado persistido n
 `paas_data` e acesso ao socket do Docker para gerenciar Caddy, Stalwart e seus projetos.
 
 > [!TIP]
-> **Perdeu o setup token?** Recupere a qualquer momento com `./scripts/show-token.sh` ou
-> `docker exec tws-panel cat /data/setup-token`.
+> **Perdeu o setup token?** Recupere a qualquer momento com `sudo ./scripts/show-token.sh` ou
+> `sudo docker exec tws-panel cat /data/setup-token`.
 
 <details>
 <summary>🎫 <strong>Banner final do instalador — e como recuperar o token depois</strong></summary>
@@ -1035,14 +1061,15 @@ navegador. O link já leva o token embutido — não precisa digitar nada.
 **Fechou o terminal e perdeu o banner?** Sem pânico. Na VPS, rode qualquer um dos dois:
 
 ```bash
-./scripts/show-token.sh                       # reexibe o link completo + token
-docker exec tws-panel cat /data/setup-token   # mostra só o token
+sudo ./scripts/show-token.sh                       # reexibe o link completo + token
+sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
 ```
 
 **Erros comuns:**
 
-- **`permission denied while trying to connect to the Docker daemon socket`** — faça
-  logout/login uma vez (o instalador te adicionou ao grupo docker) ou rode com `sudo`.
+- **`permission denied while trying to connect to the Docker daemon socket`** — faltou o `sudo`
+  na frente do comando. É de propósito: o painel não coloca ninguém no grupo docker (veja
+  [o porquê](#grupo-docker)).
 - **`setup token não encontrado... O painel está instalado?`** — o `show-token.sh` foi rodado
   numa máquina sem o painel instalado. Rode-o na VPS certa, de dentro de `/opt/tws-panel`.
 - **O token não funciona mais no navegador** — depois que você cria a conta admin (última
@@ -1084,7 +1111,7 @@ hora de instalar:
 > trocar uma montagem do container, e um container só pega uma montagem nova quando é
 > recriado. Se precisar mudar depois, edite a linha `PAAS_PROJECTS_DIR=` do arquivo `.env` em
 > `/opt/tws-panel`, mova os arquivos antigos para o novo lugar (`sudo mv`), ajuste o dono
-> (`sudo chown -R 10001:10001 /novo/caminho`) e rode `docker compose up -d` — ele recria o
+> (`sudo chown -R 10001:10001 /novo/caminho`) e rode `sudo docker compose up -d` — ele recria o
 > painel com a nova pasta. Só reiniciar (`restart`) **não** basta.
 
 > [!NOTE]
@@ -1122,19 +1149,20 @@ segura de sempre. Se preferir não responder nada, informe direto:
 ### Comandos úteis (produção)
 
 ```bash
-docker compose ps            # status do painel
-docker compose logs -f panel # logs em tempo real
-docker compose up -d --build # atualizar para uma nova versão (git pull antes)
+sudo docker compose ps            # status do painel
+sudo docker compose logs -f panel # logs em tempo real
+sudo docker compose up -d --build # atualizar para uma nova versão (git pull antes)
 
-./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
-./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)
+sudo ./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
+sudo ./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)
 ./scripts/install.sh --reconfigure-terminal   # troca o usuário/modo do terminal do painel
 ./scripts/uninstall.sh --dry-run              # mostra o que a remoção do painel apagaria
 ```
 
 > [!NOTE]
-> Se `docker compose ps` reclamar de permissão, faça logout/login uma vez (o instalador te
-> adicionou ao grupo docker) — ou rode os comandos com `sudo`.
+> Os comandos de Docker e os scripts `show-token.sh` e `reset-setup.sh` levam `sudo` porque o
+> painel não coloca ninguém no grupo docker — estar nele é ter root sem senha
+> ([entenda](#grupo-docker)). Sem o `sudo`, o erro é `permission denied ... docker.sock`.
 
 ### Modo dev local
 
@@ -1276,7 +1304,7 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 
 | O que você perdeu | O que ainda funciona | Caminho de volta |
 |---|---|---|
-| Senha do **painel** (login web) | SSH na VPS | `./scripts/reset-setup.sh --full` |
+| Senha do **painel** (login web) | SSH na VPS | `sudo ./scripts/reset-setup.sh --full` |
 | Senha do **usuário Linux** (a do `sudo`) | SSH + painel | Terminal do painel (se ele abre como root) → `passwd SEU_USUARIO`; senão, console do provedor |
 | **Chave SSH** | Painel acessível | Terminal do painel (se ele abre com o seu usuário ou root) → recoloca a chave |
 | **Chave SSH** | Console do provedor | Login com usuário e senha → recoloca a chave |
@@ -1296,8 +1324,8 @@ conta e refaça a etapa **Conta de administrador** do wizard:
 
 ```bash
 cd /opt/tws-panel
-./scripts/reset-setup.sh --full
-./scripts/show-token.sh
+sudo ./scripts/reset-setup.sh --full
+sudo ./scripts/show-token.sh
 ```
 
 O primeiro comando apaga a conta admin e todas as sessões (pede confirmação: digite `resetar`).

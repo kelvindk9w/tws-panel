@@ -52,7 +52,13 @@
  *  nenhum destes eventos contém, deriva ou inspeciona o que foi digitado.
  *
  * GET /api/terminal/info: usuário com que o terminal abre e o modo de root
- * (TerminalInfoResponse), com a mesma autenticação do WS.
+ * (TerminalInfoResponse), com a mesma autenticação do WS. Nos modos senha e
+ * segundo-plano inclui `hostDockerAccess` ("sim" | "nao" | "nao-verificado"):
+ * se o usuário do terminal consegue usar o Docker do host — o que equivale a
+ * root sem senha e anula a proteção do modo. Verificado no host
+ * (TerminalService.hostDockerAccess → docker-socket.ts); nunca "nao" sem ter
+ * verificado. null nas sessões root e no container de dev (não se aplica).
+ * O terminal abre de qualquer jeito: a decisão é do operador.
  */
 import type { FastifyPluginAsync } from "fastify";
 import fastifyWebsocket, { type WebSocket } from "@fastify/websocket";
@@ -102,7 +108,12 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
   // Mesma guarda global de /api/* que protege o WS (setup token durante o
   // wizard, sessão admin depois). Sem entrada do cliente.
   app.get("/api/terminal/info", async (_request, reply) => {
-    const response: TerminalInfoResponse = resolveTerminalAccess(app.config);
+    const access = resolveTerminalAccess(app.config);
+    const userSession = access.elevation === "senha" || access.elevation === "segundo-plano";
+    const hostDockerAccess = userSession
+      ? ((await app.terminalService.hostDockerAccess().catch(() => null)) ?? "nao-verificado")
+      : null;
+    const response: TerminalInfoResponse = { ...access, hostDockerAccess };
     return reply.send(response);
   });
 

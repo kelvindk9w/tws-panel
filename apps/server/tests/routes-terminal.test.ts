@@ -15,7 +15,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import terminalRoutes, { WS_CLOSE_BUSY, WS_CLOSE_REPLACED } from "../src/routes/terminal.js";
 import { TerminalService } from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
-import { TERMINAL_CONTROL_PREFIX, parseTerminalControl, type TerminalInfoResponse } from "@paas/core";
+import {
+  TERMINAL_CONTROL_PREFIX,
+  parseTerminalControl,
+  type HostDockerAccess,
+  type TerminalInfoResponse,
+} from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
 
@@ -58,12 +63,14 @@ interface TerminalTestContext extends AuthTestContext {
 async function buildTerminalTestApp(opts?: {
   config?: Partial<ServerConfig>;
   watchSudoPrompt?: boolean;
+  probeHostDockerAccess?: () => Promise<HostDockerAccess>;
 }): Promise<TerminalTestContext> {
   const ctx = await buildAuthTestApp(SETUP_TOKEN);
   if (opts?.config) ctx.app.decorate("config", opts.config as ServerConfig);
   const ptys: FakePty[] = [];
   const terminalService = new TerminalService({
     watchSudoPrompt: opts?.watchSudoPrompt ?? false,
+    ...(opts?.probeHostDockerAccess ? { probeHostDockerAccess: opts.probeHostDockerAccess } : {}),
     openPty: () => {
       const pty = new FakePty();
       ptys.push(pty);
@@ -135,14 +142,16 @@ async function waitForAuditContains(dir: string, needle: string, timeoutMs = 15_
 
 let ctx: TerminalTestContext | null = null;
 
-afterEach(async () => {
+async function closeTerminalCtx(): Promise<void> {
   if (ctx) {
     // a auditoria de disconnect é fire-and-forget: espera ela gravar antes do rm
     await tick();
     await closeAuthTestApp(ctx);
     ctx = null;
   }
-});
+}
+
+afterEach(closeTerminalCtx);
 
 describe("WS /api/terminal/ws — autenticação", () => {
   it("sem setup token → handshake recusado (401)", async () => {
@@ -300,15 +309,25 @@ describe("GET /api/terminal/info — usuário e modo do terminal", () => {
   });
 
   it.each([
-    [{}, { user: "root", configuredUser: null, rootMode: null, elevation: "root-legado" }],
-    [{ terminalUser: "root" }, { user: "root", configuredUser: "root", rootMode: null, elevation: "root" }],
+    [{}, { user: "root", configuredUser: null, rootMode: null, elevation: "root-legado", hostDockerAccess: null }],
+    [
+      { terminalUser: "root" },
+      { user: "root", configuredUser: "root", rootMode: null, elevation: "root", hostDockerAccess: null },
+    ],
+    // sem sonda configurada nos modos de usuário comum: nunca "nao" — não verificou
     [
       { terminalUser: "kelvin", terminalRootMode: "senha" },
-      { user: "kelvin", configuredUser: "kelvin", rootMode: "senha", elevation: "senha" },
+      { user: "kelvin", configuredUser: "kelvin", rootMode: "senha", elevation: "senha", hostDockerAccess: "nao-verificado" },
     ],
     [
       { terminalUser: "kelvin", terminalRootMode: "segundo-plano" },
-      { user: "kelvin", configuredUser: "kelvin", rootMode: "segundo-plano", elevation: "segundo-plano" },
+      {
+        user: "kelvin",
+        configuredUser: "kelvin",
+        rootMode: "segundo-plano",
+        elevation: "segundo-plano",
+        hostDockerAccess: "nao-verificado",
+      },
     ],
   ] as const)("config %j → %j", async (over, expected) => {
     ctx = await buildTerminalTestApp({ config: hostConfig(over as Partial<ServerConfig>) });
@@ -316,6 +335,52 @@ describe("GET /api/terminal/info — usuário e modo do terminal", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json<TerminalInfoResponse>();
     expect(body).toEqual({ target: "host", scheduledMonitoringRunsAsRoot: true, ...expected });
+  });
+
+  it.each(["senha", "segundo-plano"] as const)(
+    "modo %s: expõe o resultado da verificação no host (sim / nao / nao-verificado)",
+    async (mode) => {
+      for (const answer of ["sim", "nao", "nao-verificado"] as const) {
+        ctx = await buildTerminalTestApp({
+          config: hostConfig({ terminalUser: "kelvin", terminalRootMode: mode }),
+          probeHostDockerAccess: () => Promise.resolve(answer),
+        });
+        const res = await ctx.app.inject({
+          method: "GET",
+          url: "/api/terminal/info",
+          headers: { "x-setup-token": SETUP_TOKEN },
+        });
+        expect(res.json<TerminalInfoResponse>().hostDockerAccess).toBe(answer);
+        await closeTerminalCtx();
+      }
+    },
+  );
+
+  it("sonda que lança: a rota responde 200 com nao-verificado (não derruba o cabeçalho)", async () => {
+    ctx = await buildTerminalTestApp({
+      config: hostConfig({ terminalUser: "kelvin", terminalRootMode: "senha" }),
+      probeHostDockerAccess: () => Promise.reject(new Error("docker fora")),
+    });
+    const res = await ctx.app.inject({ method: "GET", url: "/api/terminal/info", headers: { "x-setup-token": SETUP_TOKEN } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<TerminalInfoResponse>().hostDockerAccess).toBe("nao-verificado");
+  });
+
+  it("sessões root e container de dev: a sonda nem é consultada (não se aplica → null)", async () => {
+    let calls = 0;
+    for (const config of [hostConfig({}), hostConfig({ terminalUser: "root" }), { securityTarget: "container" as const, terminalUser: null, terminalRootMode: null }]) {
+      ctx = await buildTerminalTestApp({
+        config,
+        probeHostDockerAccess: () => {
+          calls += 1;
+          return Promise.resolve("sim");
+        },
+      });
+      const res = await ctx.app.inject({ method: "GET", url: "/api/terminal/info", headers: { "x-setup-token": SETUP_TOKEN } });
+      expect(res.json<TerminalInfoResponse>().hostDockerAccess).toBeNull();
+      await closeTerminalCtx();
+    }
+    expect(calls).toBe(0);
   });
 });
 

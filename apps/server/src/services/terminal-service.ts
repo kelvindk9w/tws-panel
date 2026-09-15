@@ -23,9 +23,19 @@
  *    passa por write() exatamente como qualquer outro byte;
  *  - enquanto o prompt está aberto o relógio do comando fica PAUSADO e corre
  *    um relógio próprio de espera pela senha (sudoPasswordTimeoutMs).
+ *
+ * ACESSO AO DOCKER DO HOST (modos senha e segundo-plano):
+ *  - quem consegue escrever no docker.sock do host (em geral: membro do grupo
+ *    `docker`) é root sem senha — a proteção dos dois modos deixa de valer;
+ *  - cada sessão nova dispara a sonda (probeHostDockerAccess, verificação no
+ *    host via helper não interativo — docker-socket.ts) SEM bloquear a
+ *    abertura: é decisão do operador, o painel só expõe o fato
+ *    (hostDockerAccess(), servido em GET /api/terminal/info);
+ *  - só "sim"/"nao" verificados ficam guardados; falha ou tempo-limite
+ *    respondem "nao-verificado" e a próxima consulta tenta de novo.
  */
 import { randomBytes } from "node:crypto";
-import type { SudoPromptOutcome, TerminalControlMessage } from "@paas/core";
+import type { HostDockerAccess, SudoPromptOutcome, TerminalControlMessage } from "@paas/core";
 import type { PtyFactory, RemotePty } from "./docker-socket.js";
 
 /** Lançado quando o PTY não pôde ser aberto (antes de qualquer comando rodar). */
@@ -152,6 +162,13 @@ export interface TerminalServiceOptions {
   watchSudoPrompt?: boolean;
   /** Espera máxima pela senha do sudo com o prompt aberto (default 5 min). */
   sudoPasswordTimeoutMs?: number;
+  /**
+   * Verifica no host se o usuário do terminal tem acesso ao Docker (modos de
+   * usuário comum). Ausente = não se aplica (root, legado, container de dev).
+   */
+  probeHostDockerAccess?: () => Promise<HostDockerAccess>;
+  /** Tempo-limite da sonda acima (default 20 s). */
+  hostDockerAccessTimeoutMs?: number;
 }
 
 interface CommandWaiter {
@@ -198,6 +215,7 @@ interface RunOptions {
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_HOST_DOCKER_ACCESS_TIMEOUT_MS = 20_000;
 const DEFAULT_SCROLLBACK_CHARS = 64_000;
 // SEM âncora de início: comandos cuja saída NÃO termina com newline (ex.:
 // `... | tr '\\n' ' '`) fazem o echo do marcador imprimir COLADO na mesma
@@ -223,7 +241,12 @@ export class TerminalService {
   private ensureTarget?: (() => Promise<void>) | undefined;
   private readonly watchSudoPrompt: boolean;
   private readonly sudoPasswordTimeoutMs: number;
+  private readonly probeHostDockerAccess?: (() => Promise<HostDockerAccess>) | undefined;
+  private readonly hostDockerAccessTimeoutMs: number;
 
+  /** Último resultado VERIFICADO ("sim"/"nao"); null = nada verificado. */
+  private dockerAccess: Exclude<HostDockerAccess, "nao-verificado"> | null = null;
+  private dockerAccessProbe: Promise<HostDockerAccess> | null = null;
   private pty: RemotePty | null = null;
   private opening: Promise<RemotePty> | null = null;
   private scrollback = "";
@@ -249,6 +272,48 @@ export class TerminalService {
     this.ensureTarget = opts.ensureTarget;
     this.watchSudoPrompt = opts.watchSudoPrompt ?? false;
     this.sudoPasswordTimeoutMs = opts.sudoPasswordTimeoutMs ?? DEFAULT_SUDO_PASSWORD_TIMEOUT_MS;
+    this.probeHostDockerAccess = opts.probeHostDockerAccess;
+    this.hostDockerAccessTimeoutMs = opts.hostDockerAccessTimeoutMs ?? DEFAULT_HOST_DOCKER_ACCESS_TIMEOUT_MS;
+  }
+
+  /**
+   * O usuário do terminal tem acesso ao Docker do host? null = não se aplica
+   * (sem sonda). Usa o último resultado verificado; sem ele, verifica agora
+   * (consultas simultâneas compartilham a mesma verificação).
+   */
+  async hostDockerAccess(): Promise<HostDockerAccess | null> {
+    if (!this.probeHostDockerAccess) return null;
+    if (this.dockerAccess !== null) return this.dockerAccess;
+    return this.refreshHostDockerAccess();
+  }
+
+  private refreshHostDockerAccess(): Promise<HostDockerAccess> {
+    const probe = this.probeHostDockerAccess;
+    if (!probe) return Promise.resolve("nao-verificado");
+    this.dockerAccessProbe ??= new Promise<HostDockerAccess>((resolve) => {
+      const timer = setTimeout(() => resolve("nao-verificado"), this.hostDockerAccessTimeoutMs);
+      timer.unref();
+      probe().then(
+        (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        () => {
+          clearTimeout(timer);
+          resolve("nao-verificado");
+        },
+      );
+    })
+      .then((result) => {
+        // Só o verificado fica guardado; falha apaga o anterior (não reafirma
+        // um "sim"/"nao" antigo que não conseguiu confirmar).
+        this.dockerAccess = result === "nao-verificado" ? null : result;
+        return result;
+      })
+      .finally(() => {
+        this.dockerAccessProbe = null;
+      });
+    return this.dockerAccessProbe;
   }
 
   /** true enquanto o sudo está pedindo senha no terminal (modo senha). */
@@ -304,6 +369,12 @@ export class TerminalService {
       pty.stream.on("error", () => this.handleSessionEnd("erro no fluxo do terminal"));
       this.audit?.("terminal.session", "Sessão de terminal aberta no alvo.");
       this.touch();
+      // Sessão nova: confere de novo o acesso ao Docker do host (o operador
+      // pode ter mudado o grupo). Em paralelo — nunca atrasa a abertura.
+      if (this.probeHostDockerAccess) {
+        this.dockerAccess = null;
+        void this.refreshHostDockerAccess();
+      }
       return pty;
     } catch (err) {
       throw new TerminalUnavailableError(

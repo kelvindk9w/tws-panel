@@ -48,8 +48,10 @@
 #     AppArmor, atualizações automáticas, pacotes removidos (ex.: snapd),
 #     auditd/AIDE/rkhunter e o agendamento /etc/cron.d/paas-security-scan,
 #     os backups *.paas-backup.* e o estado em /etc/paas;
-#   • o seu usuário não-root, a chave SSH instalada nele e a entrada dele no
-#     grupo docker;
+#   • o seu usuário não-root e a chave SSH instalada nele. Se ele estiver no
+#     grupo docker (instaladores antigos faziam isso), essa entrada também
+#     fica — e ela equivale a root sem senha: remova com
+#     `sudo gpasswd -d <usuário> docker`;
 #   • o Docker e o git;
 #   • imagens públicas baixadas (alpine, caddy, stalwart, node, nginx) — são só
 #     cache; o comando para apagá-las é mostrado no final.
@@ -213,7 +215,10 @@ ${BOLD}NÃO será desfeito:${RESET}
      sem root, firewall UFW, fail2ban, AppArmor, atualizações automáticas,
      pacotes removidos (ex.: snapd), auditd/AIDE/rkhunter, o agendamento
      /etc/cron.d/paas-security-scan, os backups *.paas-backup.* e /etc/paas
-   • o seu usuário não-root, a chave SSH dele e a entrada no grupo docker
+   • o seu usuário não-root e a chave SSH dele
+   • a entrada de algum usuário no grupo docker, se houver (instaladores antigos
+     faziam isso) — ela equivale a root sem senha; confira com  groups  e
+     remova com  sudo gpasswd -d SEU_USUARIO docker
    • o Docker e o git
    • imagens públicas já baixadas (alpine, caddy, stalwart, node, nginx)
 

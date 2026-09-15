@@ -8,7 +8,7 @@ import {
   isTerminalRootMode,
   isValidSshUsername,
   type MailServerPorts,
-  type TerminalInfoResponse,
+  type TerminalAccess,
   type TerminalRootMode,
 } from "@paas/core";
 
@@ -147,7 +147,7 @@ function loadTerminalAccess(env: NodeJS.ProcessEnv): Pick<ServerConfig, "termina
  */
 export function resolveTerminalAccess(
   config: Pick<ServerConfig, "securityTarget" | "terminalUser" | "terminalRootMode">,
-): TerminalInfoResponse {
+): TerminalAccess {
   const common = {
     target: config.securityTarget,
     configuredUser: config.terminalUser,

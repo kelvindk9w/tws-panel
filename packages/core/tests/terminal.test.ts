@@ -6,9 +6,11 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  HOST_DOCKER_ACCESS_STATES,
   TERMINAL_CONTROL_PREFIX,
   TERMINAL_ROOT_MODES,
   encodeTerminalControl,
+  isHostDockerAccess,
   isTerminalRootMode,
   parseTerminalControl,
   type TerminalControlMessage,
@@ -21,6 +23,16 @@ describe("modos de root do terminal", () => {
     expect(isTerminalRootMode("segundo-plano")).toBe(true);
     for (const invalido of ["", "Senha", "segundo_plano", "root", "sudo", " senha"]) {
       expect(isTerminalRootMode(invalido)).toBe(false);
+    }
+  });
+});
+
+describe("acesso do usuário do terminal ao Docker do host", () => {
+  it("três estados, e 'não verificado' nunca se confunde com 'não'", () => {
+    expect([...HOST_DOCKER_ACCESS_STATES]).toEqual(["sim", "nao", "nao-verificado"]);
+    for (const valido of HOST_DOCKER_ACCESS_STATES) expect(isHostDockerAccess(valido)).toBe(true);
+    for (const invalido of [null, undefined, "", "não", "Sim", true, false, 0]) {
+      expect(isHostDockerAccess(invalido)).toBe(false);
     }
   });
 });

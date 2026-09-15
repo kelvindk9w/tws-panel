@@ -8,11 +8,15 @@
  *    do WebSocket: sem token/sessão válida, nenhuma chamada);
  *  - resposta com formato inesperado vale como "indisponível" — a interface
  *    nunca inventa um modo que o servidor não declarou;
+ *  - `hostDockerAccess` (usuário do terminal com acesso ao Docker do host =
+ *    root sem senha): nos modos senha/segundo-plano, campo ausente (servidor
+ *    antigo) ou valor desconhecido vira "nao-verificado" — nunca "nao" sem
+ *    verificação; nas sessões root e no container de dev é sempre null;
  *  - transporte da senha: fora de https e fora do túnel SSH (localhost), o
  *    que se digita no terminal atravessa a internet SEM criptografia.
  */
 import { useEffect, useState } from "react";
-import type { TerminalElevation, TerminalInfoResponse } from "@paas/core";
+import { isHostDockerAccess, type TerminalElevation, type TerminalInfoResponse } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 
 const ELEVATIONS: readonly TerminalElevation[] = ["root-legado", "root", "senha", "segundo-plano", "container-dev"];
@@ -26,6 +30,14 @@ function isTerminalInfo(value: unknown): value is TerminalInfoResponse {
     (ELEVATIONS as readonly string[]).includes(v.elevation) &&
     (v.configuredUser === null || typeof v.configuredUser === "string")
   );
+}
+
+/** Normaliza `hostDockerAccess` conforme o modo (ver regras no topo). */
+function withHostDockerAccess(info: TerminalInfoResponse): TerminalInfoResponse {
+  const userSession = info.elevation === "senha" || info.elevation === "segundo-plano";
+  const raw: unknown = (info as { hostDockerAccess?: unknown }).hostDockerAccess;
+  const hostDockerAccess = userSession ? (isHostDockerAccess(raw) ? raw : "nao-verificado") : null;
+  return { ...info, hostDockerAccess };
 }
 
 export interface TerminalInfoState {
@@ -44,7 +56,7 @@ export function useTerminalInfo(enabled: boolean): TerminalInfoState {
     apiFetch<unknown>("/api/terminal/info")
       .then((res) => {
         if (cancelled) return;
-        setState(isTerminalInfo(res) ? { info: res, unavailable: false } : { info: null, unavailable: true });
+        setState(isTerminalInfo(res) ? { info: withHostDockerAccess(res), unavailable: false } : { info: null, unavailable: true });
       })
       .catch(() => {
         if (!cancelled) setState({ info: null, unavailable: true });

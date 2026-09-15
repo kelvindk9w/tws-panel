@@ -14,8 +14,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DockerSocketError,
+  HOST_DOCKER_SOCKET,
+  buildHostDockerAccessCheckCmd,
+  buildHostDockerSocketPresentCmd,
   buildHostTerminalCmd,
+  checkHostDockerAccess,
   createDockerPtyFactory,
+  createHostDockerAccessProbe,
   removeOrphanTerminalHelpers,
   scheduleOrphanTerminalHelperReap,
 } from "../src/services/docker-socket.js";
@@ -29,6 +34,10 @@ interface MockState {
   created: Array<{ name: string; body: Record<string, unknown> }>;
   /** StatusCode devolvido por POST /containers/:id/wait. */
   waitStatusCode: number;
+  /** StatusCodes por helper, na ordem de criação (vazio = waitStatusCode). */
+  waitStatusCodes: number[];
+  /** Status de POST /containers/create (201 = criado). */
+  createStatus: number;
 }
 
 let server: http.Server | null = null;
@@ -40,7 +49,7 @@ let upgradedSockets: Set<import("node:stream").Duplex>;
 beforeEach(async () => {
   tmp = await mkdtemp(path.join(tmpdir(), "paas-docker-mock-"));
   socketPath = path.join(tmp, "docker.sock");
-  state = { containers: [], deleted: [], listStatus: 200, created: [], waitStatusCode: 0 };
+  state = { containers: [], deleted: [], listStatus: 200, created: [], waitStatusCode: 0, waitStatusCodes: [], createStatus: 201 };
   upgradedSockets = new Set();
   server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url?.startsWith("/containers/json")) {
@@ -63,6 +72,11 @@ beforeEach(async () => {
       let body = "";
       req.on("data", (c: Buffer) => (body += c.toString("utf8")));
       req.on("end", () => {
+        if (state.createStatus !== 201) {
+          res.writeHead(state.createStatus, { "content-type": "application/json" });
+          res.end(JSON.stringify({ message: "daemon recusou" }));
+          return;
+        }
         state.containers.push({ Id: name, Names: [`/${name}`] });
         state.created.push({ name, body: JSON.parse(body) as Record<string, unknown> });
         res.writeHead(201, { "content-type": "application/json" });
@@ -77,7 +91,7 @@ beforeEach(async () => {
     }
     if (req.method === "POST" && /^\/containers\/[^/]+\/wait$/.test(req.url ?? "")) {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ StatusCode: state.waitStatusCode }));
+      res.end(JSON.stringify({ StatusCode: state.waitStatusCodes.shift() ?? state.waitStatusCode }));
       return;
     }
     const del = /^DELETE \/containers\/([^?]+)\?force=true$/.exec(`${req.method} ${req.url}`);
@@ -305,5 +319,107 @@ describe("usuário do terminal no host", () => {
     // só o helper de verificação foi criado (e removido) — nenhum PTY
     expect(state.created).toHaveLength(1);
     expect(state.containers).toHaveLength(0);
+  });
+});
+
+/**
+ * Pertencer ao grupo dono do docker.sock do host = root sem senha
+ * (`docker run --privileged -v /:/host … chroot /host`). Nos modos senha e
+ * segundo-plano isso anula a proteção — o painel verifica e expõe o fato.
+ */
+describe("acesso do usuário do terminal ao Docker do host", () => {
+  const NSENTER = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--"];
+
+  it("argv puro: socket conferido como root; acesso testado COMO o usuário, nome em elemento separado", () => {
+    expect(HOST_DOCKER_SOCKET).toBe("/var/run/docker.sock");
+    expect(buildHostDockerSocketPresentCmd()).toEqual([...NSENTER, "test", "-S", "/var/run/docker.sock"]);
+    const argv = buildHostDockerAccessCheckCmd("kelvin");
+    expect(argv).toEqual([...NSENTER, "runuser", "-u", "kelvin", "--", "test", "-w", "/var/run/docker.sock"]);
+    // nunca uma string de shell: nenhum sh -c, nenhum elemento com espaço
+    expect(argv).not.toContain("sh");
+    expect(argv).not.toContain("-c");
+    expect(argv.some((a) => a.includes(" "))).toBe(false);
+  });
+
+  it("argv puro recusa nome inválido e root (não se aplica)", () => {
+    expect(() => buildHostDockerAccessCheckCmd("kelvin; bash")).toThrow(/usuário do terminal inválido/);
+    expect(() => buildHostDockerAccessCheckCmd("root")).toThrow(/usuário do terminal inválido/);
+  });
+
+  it("socket presente e o usuário consegue escrever nele → sim (dois helpers, ambos removidos)", async () => {
+    state.waitStatusCodes = [0, 0];
+    await expect(checkHostDockerAccess(socketPath, "alpine:3", "kelvin")).resolves.toBe("sim");
+    expect(state.created.map((c) => c.body["Cmd"])).toEqual([
+      [...NSENTER, "test", "-S", "/var/run/docker.sock"],
+      [...NSENTER, "runuser", "-u", "kelvin", "--", "test", "-w", "/var/run/docker.sock"],
+    ]);
+    for (const c of state.created) {
+      expect(c.name).toMatch(/^paas-terminal-check-[0-9a-f]{8}$/);
+      expect(c.body["Tty"]).toBeFalsy();
+      expect(state.deleted).toContain(c.name);
+    }
+    expect(state.containers).toHaveLength(0);
+  });
+
+  it("socket presente e o usuário NÃO consegue escrever (test sai 1) → nao", async () => {
+    state.waitStatusCodes = [0, 1];
+    await expect(checkHostDockerAccess(socketPath, "alpine:3", "kelvin")).resolves.toBe("nao");
+  });
+
+  it("socket ausente no caminho padrão: não afirma 'nao' — nao-verificado, sem testar o usuário", async () => {
+    state.waitStatusCodes = [1];
+    await expect(checkHostDockerAccess(socketPath, "alpine:3", "kelvin")).resolves.toBe("nao-verificado");
+    expect(state.created).toHaveLength(1);
+  });
+
+  it.each([125, 126, 127, -1])("runuser falhou (código %i) → nao-verificado", async (code) => {
+    state.waitStatusCodes = [0, code];
+    await expect(checkHostDockerAccess(socketPath, "alpine:3", "kelvin")).resolves.toBe("nao-verificado");
+  });
+
+  it("Docker recusou criar o helper → nao-verificado (nunca lança)", async () => {
+    state.createStatus = 500;
+    await expect(checkHostDockerAccess(socketPath, "alpine:3", "kelvin")).resolves.toBe("nao-verificado");
+  });
+
+  it("docker.sock do painel inacessível → nao-verificado", async () => {
+    await expect(checkHostDockerAccess(path.join(tmp, "nao-existe.sock"), "alpine:3", "kelvin")).resolves.toBe(
+      "nao-verificado",
+    );
+  });
+
+  it("nome inválido → nao-verificado sem criar helper nenhum", async () => {
+    await expect(checkHostDockerAccess(socketPath, "alpine:3", "x; reboot")).resolves.toBe("nao-verificado");
+    expect(state.created).toHaveLength(0);
+  });
+
+  describe("createHostDockerAccessProbe", () => {
+    const cfg = (over: Partial<ServerConfig>) =>
+      ({
+        dockerSocketPath: socketPath,
+        securityTarget: "host",
+        hostHelperImage: "alpine:3",
+        terminalUser: null,
+        terminalRootMode: null,
+        ...over,
+      }) as unknown as ServerConfig;
+
+    it("não se aplica (null) no legado, em root explícito e no container de dev", () => {
+      expect(createHostDockerAccessProbe(cfg({}))).toBeNull();
+      expect(createHostDockerAccessProbe(cfg({ terminalUser: "root" }))).toBeNull();
+      expect(
+        createHostDockerAccessProbe(cfg({ securityTarget: "container", terminalUser: "kelvin", terminalRootMode: "senha" })),
+      ).toBeNull();
+    });
+
+    it("usuário comum: a sonda verifica no host o usuário configurado", async () => {
+      const probe = createHostDockerAccessProbe(cfg({ terminalUser: "kelvin", terminalRootMode: "segundo-plano" }));
+      expect(probe).not.toBeNull();
+      state.waitStatusCodes = [0, 0];
+      await expect(probe!()).resolves.toBe("sim");
+      expect(state.created[1]!.body["Cmd"]).toEqual([
+        ...NSENTER, "runuser", "-u", "kelvin", "--", "test", "-w", "/var/run/docker.sock",
+      ]);
+    });
   });
 });
