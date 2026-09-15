@@ -12,6 +12,21 @@ export interface ServerConfig {
   host: string;
   /** Diretório de dados de runtime (setup-state.json, etc.). */
   dataDir: string;
+  /**
+   * Diretório onde vive o código dos projetos gerenciados.
+   *
+   * Em produção é um caminho REAL do host, montado no container com o mesmo
+   * caminho dos dois lados (ver docker-compose.yml): o daemon Docker resolve
+   * os bind mounts declarados no compose do usuário NO HOST, então um caminho
+   * que só existisse dentro do container quebraria qualquer projeto que use
+   * `./dados:/app/dados`.
+   *
+   * Sem PAAS_PROJECTS_DIR o valor é exatamente o de antes (<dataDir>/projects).
+   * Isso não é cosmético: uma instalação existente que só rodou `git pull`
+   * continua achando os projetos que já clonou, em vez de perdê-los em
+   * silêncio.
+   */
+  projectsDir: string;
   /** Diretório do build do frontend (SPA). */
   webDist: string;
   /** Origens extras permitidas no CORS (ex.: dev do Vite). */
@@ -58,10 +73,12 @@ export interface ServerConfig {
 }
 
 export function loadConfig(): ServerConfig {
+  const dataDir = path.resolve(process.env.PAAS_DATA_DIR ?? "../../data");
   return {
     port: Number(process.env.PORT ?? SETUP_PORT),
     host: process.env.HOST ?? "0.0.0.0",
-    dataDir: path.resolve(process.env.PAAS_DATA_DIR ?? "../../data"),
+    dataDir,
+    projectsDir: path.resolve(process.env.PAAS_PROJECTS_DIR ?? path.join(dataDir, "projects")),
     webDist: path.resolve(process.env.WEB_DIST ?? "../web/dist"),
     allowedOrigins: (process.env.ALLOWED_ORIGINS ?? "")
       .split(",")

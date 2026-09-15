@@ -2,6 +2,7 @@
  * Testes do loadConfig (config.ts): defaults de produção e overrides via
  * variáveis de ambiente — a fonte única de configuração do servidor.
  */
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAIL_DEFAULT_PORTS, MONITOR_DEFAULT_INTERVAL_MS, SETUP_PORT, SETUP_TOKEN_FILE } from "@paas/core";
 import { loadConfig } from "../src/config.js";
@@ -18,6 +19,7 @@ const KEYS = [
   "PAAS_SCRIPTS_DIR",
   "PAAS_HOST_HELPER_IMAGE",
   "PAAS_HOST_REPO_DIR",
+  "PAAS_PROJECTS_DIR",
   "PAAS_CADDY_HTTP_PORT",
   "PAAS_CADDY_HTTPS_PORT",
   "PAAS_STALWART_PORT_SMTP",
@@ -83,6 +85,22 @@ describe("loadConfig", () => {
     expect(config.mailHostname).toBe("mail.exemplo.com");
     expect(config.publicIp).toBe("203.0.113.10");
     expect(config.publicIpv6).toBeNull();
+  });
+
+  it("sem PAAS_PROJECTS_DIR, os projetos ficam onde sempre ficaram (<dataDir>/projects)", () => {
+    // Teste de compatibilidade: uma instalação antiga que só rodou `git pull`
+    // não tem a variável no .env e precisa continuar achando os projetos que
+    // já clonou. Mudar este default silenciosamente some com eles.
+    setEnv("PAAS_DATA_DIR", "/data");
+    const config = loadConfig();
+    expect(config.projectsDir).toBe(path.join("/data", "projects"));
+    expect(config.projectsDir).toBe(path.join(config.dataDir, "projects"));
+  });
+
+  it("com PAAS_PROJECTS_DIR, o diretório dos projetos é o valor da variável", () => {
+    setEnv("PAAS_DATA_DIR", "/data");
+    setEnv("PAAS_PROJECTS_DIR", "/opt/tws-projects");
+    expect(loadConfig().projectsDir).toBe("/opt/tws-projects");
   });
 
   it("PAAS_TARGET só vira 'host' com o valor exato (default seguro)", () => {

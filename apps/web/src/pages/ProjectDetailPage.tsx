@@ -393,7 +393,7 @@ export function ProjectDetailPage() {
     );
   }
 
-  const { project, status, containers, url } = data;
+  const { project, status, containers, url, credential } = data;
   const running = status === "deploying";
 
   return (
@@ -530,7 +530,7 @@ export function ProjectDetailPage() {
         </Card>
       )}
 
-      <ProjectConfigCard project={project} onSaved={() => void refresh()} />
+      <ProjectConfigCard project={project} credential={credential} onSaved={() => void refresh()} />
 
       <ProjectEmailCard projectId={project.id} />
 

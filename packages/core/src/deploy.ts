@@ -89,6 +89,55 @@ export interface Project {
 }
 
 // ---------------------------------------------------------------------------
+// Credencial de LEITURA de repositório privado
+// ---------------------------------------------------------------------------
+
+/**
+ * Credencial usada para CLONAR repositórios privados.
+ *
+ * Restrição inegociável do produto: o painel só LÊ repositórios — nunca
+ * escreve, commita ou faz push. Por isso a credencial recomendada é um token
+ * de escopo mínimo de leitura (no GitHub, um fine-grained PAT com
+ * `Contents: Read`).
+ *
+ * O valor vive apenas no cofre cifrado do servidor e no ambiente do processo
+ * git durante o clone. NUNCA volta pela API e NUNCA entra em log.
+ */
+export interface GitReadCredential {
+  /** Usuário enviado ao git. No GitHub qualquer valor serve com um PAT. */
+  username: string;
+  /** Token de leitura. Nunca sai do servidor. */
+  token: string;
+}
+
+/** Usuário padrão quando o operador informa só o token (convenção do GitHub). */
+export const DEFAULT_GIT_CREDENTIAL_USERNAME = "x-access-token";
+
+/**
+ * O que a API pode contar sobre a credencial de um projeto: que ela existe e,
+ * no máximo, uma dica não sensível para o operador conferir qual token está
+ * cadastrado. O valor jamais aparece aqui.
+ */
+export interface ProjectCredentialInfo {
+  configured: boolean;
+  /** Últimos 4 caracteres do token (dica de conferência), ou null. */
+  hint: string | null;
+  username: string | null;
+  updatedAt: string | null;
+}
+
+export interface SetProjectCredentialRequest {
+  /** Token de LEITURA do repositório. */
+  token: string;
+  /** Usuário associado (opcional — padrão DEFAULT_GIT_CREDENTIAL_USERNAME). */
+  username?: string;
+}
+
+export interface ProjectCredentialResponse {
+  credential: ProjectCredentialInfo;
+}
+
+// ---------------------------------------------------------------------------
 // Jobs de deploy
 // ---------------------------------------------------------------------------
 
@@ -182,6 +231,8 @@ export interface ProjectResponse {
   containers: DockerContainerInfo[];
   /** URL de acesso em dev (http://<dominio>). */
   url: string;
+  /** Existência (nunca o valor) da credencial de leitura do repositório. */
+  credential: ProjectCredentialInfo;
 }
 
 export interface ProjectListResponse {

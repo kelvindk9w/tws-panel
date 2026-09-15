@@ -6,8 +6,11 @@ import type {
   DeployRequest,
   DetectResponse,
   GuardrailReportResponse,
+  Project,
+  ProjectCredentialResponse,
   ProjectListResponse,
   ProjectResponse,
+  SetProjectCredentialRequest,
   UpdateProjectRequest,
 } from "@paas/core";
 import { httpError, type HttpError } from "../services/deploy-service.js";
@@ -104,6 +107,23 @@ const updateProjectSchema = {
   },
 } as const;
 
+// Credencial de LEITURA do repositório privado. O token entra por aqui e
+// NUNCA volta: as respostas só dizem que existe e mostram os 4 últimos
+// caracteres. `additionalProperties: false` impede um cliente de tentar
+// pedir escopo/permissão extra — o painel só lê repositórios.
+const setCredentialSchema = {
+  params: projectIdParams,
+  body: {
+    type: "object",
+    required: ["token"],
+    additionalProperties: false,
+    properties: {
+      token: { type: "string", minLength: 1, maxLength: 500 },
+      username: { type: "string", minLength: 1, maxLength: 100 },
+    },
+  },
+} as const;
+
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   const e = err as Partial<HttpError>;
   return reply.code(e.statusCode ?? 500).send({
@@ -119,22 +139,32 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // DeployService compartilhado (decorado no escopo raiz em app.ts).
   const service = app.deployService;
 
+  /**
+   * Monta a resposta de um projeto. Centralizado de propósito: a informação de
+   * credencial é sempre a versão pública (existe? dica?), nunca o valor — e um
+   * único lugar de montagem é o que garante isso em TODAS as rotas.
+   */
+  async function projectResponse(
+    project: Project,
+    containers?: Awaited<ReturnType<typeof service.listContainers>>,
+  ): Promise<ProjectResponse> {
+    const { status, containers: mine } = await service.statusOf(project, containers);
+    return {
+      project,
+      status,
+      containers: mine,
+      url: service.projectUrl(project),
+      credential: await service.credentialInfo(project),
+    };
+  }
+
   // Lista projetos + status calculado a partir dos containers.
   app.get("/api/projects", async (_request, reply) => {
     const containers = await service.listContainers();
     const projects = await service.listProjects();
     const responses: ProjectResponse[] = [];
     for (const project of projects) {
-      const { status, containers: mine } = await service.statusOf(
-        project,
-        containers,
-      );
-      responses.push({
-        project,
-        status,
-        containers: mine,
-        url: service.projectUrl(project),
-      });
+      responses.push(await projectResponse(project, containers));
     }
     const response: ProjectListResponse = { projects: responses };
     return reply.send(response);
@@ -149,14 +179,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         const project = await service.createProject(
           request.body ?? ({} as CreateProjectRequest),
         );
-        const { status, containers } = await service.statusOf(project);
-        const response: ProjectResponse = {
-          project,
-          status,
-          containers,
-          url: service.projectUrl(project),
-        };
-        return reply.code(201).send(response);
+        return reply.code(201).send(await projectResponse(project));
       } catch (err) {
         return sendError(reply, err);
       }
@@ -177,14 +200,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
             message: "Projeto não encontrado.",
           });
       }
-      const { status, containers } = await service.statusOf(project);
-      const response: ProjectResponse = {
-        project,
-        status,
-        containers,
-        url: service.projectUrl(project),
-      };
-      return reply.send(response);
+      return reply.send(await projectResponse(project));
     },
   );
 
@@ -198,14 +214,58 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           request.params.id,
           request.body ?? {},
         );
-        const { status, containers } = await service.statusOf(project);
-        const response: ProjectResponse = {
-          project,
-          status,
-          containers,
-          url: service.projectUrl(project),
-        };
+        return reply.send(await projectResponse(project));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Define/substitui a credencial de LEITURA do repositório privado.
+  //
+  // O corpo carrega o token, mas a resposta e a auditoria carregam apenas o
+  // FATO: existe uma credencial, cadastrada agora, terminada em XXXX. O valor
+  // vive só no cofre cifrado (services/credential-vault.ts) e no ambiente do
+  // processo git durante o clone.
+  app.put<{ Params: { id: string }; Body: SetProjectCredentialRequest }>(
+    "/api/projects/:id/credential",
+    { schema: setCredentialSchema },
+    async (request, reply) => {
+      try {
+        const credential = await service.setCredential(request.params.id, request.body);
+        await app.auditService.record({
+          action: "project.credential.set",
+          target: request.params.id,
+          detail:
+            `Credencial de LEITURA do repositório definida (usuário "${credential.username ?? "-"}", ` +
+            `token terminado em ${credential.hint ?? "????"}). O valor não é registrado.`,
+        });
+        const response: ProjectCredentialResponse = { credential };
         return reply.send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Remove a credencial de leitura do projeto.
+  app.delete<{ Params: { id: string } }>(
+    "/api/projects/:id/credential",
+    { schema: projectIdParamsSchema },
+    async (request, reply) => {
+      try {
+        const havia = await service.removeCredential(request.params.id);
+        await app.auditService.record({
+          action: "project.credential.remove",
+          target: request.params.id,
+          detail: havia
+            ? "Credencial de LEITURA do repositório removida do cofre."
+            : "Remoção de credencial solicitada, mas o projeto não tinha nenhuma cadastrada.",
+        });
+        return reply.send({
+          ok: true,
+          credential: { configured: false, hint: null, username: null, updatedAt: null },
+        });
       } catch (err) {
         return sendError(reply, err);
       }

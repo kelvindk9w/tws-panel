@@ -15,17 +15,27 @@ export interface ExecResult {
   stderr: string;
 }
 
-/** Executa um comando e captura a saída completa. */
+/**
+ * Executa um comando e captura a saída completa.
+ *
+ * `env` SUBSTITUI o ambiente do processo filho (semântica do child_process),
+ * então quem passa deve montar o ambiente completo — normalmente
+ * `{ ...process.env, ... }`. Existe para o único caminho seguro de entregar
+ * um segredo a um subprocesso: variável de ambiente, nunca argv (o argv é
+ * visível no `ps` de qualquer processo do host). Omitir mantém o
+ * comportamento antigo (herda o ambiente do painel).
+ */
 export async function run(
   file: string,
   args: string[],
-  opts?: { timeoutMs?: number; cwd?: string },
+  opts?: { timeoutMs?: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ): Promise<ExecResult> {
   try {
     const { stdout, stderr } = await execFileAsync(file, args, {
       timeout: opts?.timeoutMs ?? 300_000,
       maxBuffer: 32 * 1024 * 1024,
       cwd: opts?.cwd,
+      ...(opts?.env ? { env: opts.env } : {}),
     });
     return { code: 0, stdout, stderr };
   } catch (err) {
@@ -87,10 +97,15 @@ export function runStream(
   file: string,
   args: string[],
   onData: (chunk: string) => void,
-  opts?: { cwd?: string; timeoutMs?: number },
+  opts?: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv },
 ): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"], cwd: opts?.cwd });
+    const child = spawn(file, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: opts?.cwd,
+      // Mesma semântica de `run()`: substitui o ambiente do filho quando dado.
+      ...(opts?.env ? { env: opts.env } : {}),
+    });
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
     let settled = false;
     let timedOut = false;

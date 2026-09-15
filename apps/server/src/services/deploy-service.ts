@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  DEFAULT_GIT_CREDENTIAL_USERNAME,
   DEPLOY_LOG_MAX_CHARS,
   INGEST_MODES,
   type CreateProjectRequest,
@@ -16,7 +17,9 @@ import {
   type DockerContainerInfo,
   type GuardrailReport,
   type Project,
+  type ProjectCredentialInfo,
   type ProjectStatus,
+  type SetProjectCredentialRequest,
   type UpdateProjectRequest,
 } from "@paas/core";
 import {
@@ -30,6 +33,7 @@ import {
 import type { ServerConfig } from "../config.js";
 import type { AlertsService } from "./alerts-service.js";
 import type { AuditService } from "./audit-service.js";
+import { CredentialVault } from "./credential-vault.js";
 import { listContainers } from "./docker-service.js";
 
 const MAX_JOBS = 100;
@@ -119,18 +123,29 @@ export class DeployService {
   private readonly jobsFile: string;
   private readonly caddyHttpPort: number;
   private readonly hooks: DeployHooks;
+  /**
+   * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
+   * não em app.ts) porque quem conhece o ciclo de vida do projeto é este
+   * serviço: criar, usar no clone e — principalmente — apagar junto com o
+   * projeto.
+   */
+  private readonly credentials: CredentialVault;
   private projects: Project[] = [];
   private jobs: DeployJob[] = [];
   private loaded = false;
 
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
-    this.projectsDir = path.join(config.dataDir, "projects");
+    this.projectsDir = config.projectsDir;
     this.projectsFile = path.join(config.dataDir, "projects.json");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
     this.caddyHttpPort = config.caddyHttpPort;
+    this.credentials = new CredentialVault(config.dataDir);
     this.engineCtx = {
       projectsDir: this.projectsDir,
+      // A ingestão pede a credencial na hora do clone. O valor em claro só
+      // existe em memória e no ambiente do processo git (ver ingest.ts).
+      credentialFor: (project: Project) => this.credentials.get(project.id),
       caddyDir: path.join(config.dataDir, "caddy"),
       nodeImage: process.env.PAAS_NODE_IMAGE ?? "node:22",
       staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
@@ -315,6 +330,11 @@ export class DeployService {
     } catch {
       onLog("Aviso: não foi possível recarregar o Caddy após a remoção.\n");
     }
+    // A credencial é um segredo com o mesmo ciclo de vida do projeto: sem
+    // isto, o token sobreviveria ao projeto no disco — passivo, não recurso.
+    if (await this.credentials.remove(project.id)) {
+      onLog("Credencial de leitura do repositório removida do cofre.\n");
+    }
     if (deleteSource && project.ingestMode !== "existing") {
       await rm(projectWorkDir({ projectsDir: this.projectsDir }, project), {
         recursive: true,
@@ -323,6 +343,42 @@ export class DeployService {
       onLog("Código-fonte removido.\n");
     }
     await this.saveProjects();
+  }
+
+  // -------------------------------------------------------------------------
+  // Credencial de LEITURA do repositório (repositórios privados)
+  // -------------------------------------------------------------------------
+
+  /** Existência + dica da credencial. NUNCA o valor. */
+  async credentialInfo(project: Project): Promise<ProjectCredentialInfo> {
+    return this.credentials.info(project.id);
+  }
+
+  /**
+   * Grava (ou substitui) a credencial de leitura do projeto.
+   * Devolve apenas o que pode ser mostrado — existência e dica.
+   */
+  async setCredential(
+    id: string,
+    req: SetProjectCredentialRequest,
+  ): Promise<ProjectCredentialInfo> {
+    const project = await this.requireProject(id);
+    const token = (req.token ?? "").trim();
+    if (!token) {
+      throw httpError(
+        400,
+        "invalid_credential",
+        "Informe o token de LEITURA do repositório (no GitHub, um fine-grained PAT com \"Contents: Read\").",
+      );
+    }
+    const username = (req.username ?? "").trim() || DEFAULT_GIT_CREDENTIAL_USERNAME;
+    return this.credentials.set(project.id, { username, token });
+  }
+
+  /** Apaga a credencial do projeto. true = havia uma credencial cadastrada. */
+  async removeCredential(id: string): Promise<boolean> {
+    const project = await this.requireProject(id);
+    return this.credentials.remove(project.id);
   }
 
   // -------------------------------------------------------------------------

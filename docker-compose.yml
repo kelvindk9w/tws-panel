@@ -25,7 +25,8 @@
 #    ele apenas fala com o socket; quem confere --privileged ao helper é o
 #    daemon do host (que já é alcançável pelo socket de qualquer forma);
 #  - read_only: rootfs imutável; os únicos diretórios graváveis são /data
-#    (volume de estado) e /tmp (tmpfs volátil).
+#    (volume de estado), /tmp (tmpfs volátil) e o diretório dos projetos
+#    (PAAS_PROJECTS_DIR, bind mount do host — veja o comentário em volumes).
 services:
   panel:
     build: .
@@ -41,6 +42,9 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       SETUP_TOKEN_FILE: /data/setup-token
       PAAS_TARGET: ${PAAS_TARGET:-host}
+      # Mesmo caminho da montagem abaixo — o processo precisa enxergar a
+      # variável, senão volta ao default antigo (/data/projects).
+      PAAS_PROJECTS_DIR: ${PAAS_PROJECTS_DIR:-/opt/tws-projects}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     security_opt:
       - no-new-privileges:true
@@ -59,6 +63,18 @@ services:
       # node:*-slim), então /etc/os-release local NÃO reflete a VPS real.
       - /etc/os-release:/host/etc/os-release:ro
       - /etc/hostname:/host/etc/hostname:ro
+      # Código dos projetos implantados: diretório REAL do host, montado com o
+      # MESMO caminho dentro e fora do container. Isso não é capricho: o
+      # deploy roda `docker compose --project-directory <esse caminho>`, e
+      # quem resolve os bind mounts declarados no compose do usuário
+      # (`./dados:/app/dados`, por exemplo) é o daemon Docker DO HOST. Um
+      # caminho que existisse só dentro do container faria o daemon criar um
+      # diretório vazio no host — o projeto subiria sem os dados dele.
+      # De quebra, o operador inspeciona os arquivos por SSH sem entrar em
+      # container nenhum. O install.sh cria o diretório com dono 10001:10001
+      # (o usuário não-root do painel); o rootfs é somente-leitura, mas um
+      # bind mount continua gravável.
+      - ${PAAS_PROJECTS_DIR:-/opt/tws-projects}:${PAAS_PROJECTS_DIR:-/opt/tws-projects}
       - paas_data:/data
 
 volumes:
