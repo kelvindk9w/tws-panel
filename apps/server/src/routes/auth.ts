@@ -7,6 +7,10 @@
  *
  * A senha NUNCA aparece em logs nem em respostas. Todas as respostas levam
  * Cache-Control: no-store (além dos headers do helmet).
+ *
+ * Falha de gravação (users.json/sessions.json) nunca vira sucesso: os stores
+ * desfazem a alteração em memória e rejeitam com `storage_write_failed`, e a
+ * rota responde 500 dizendo o que NÃO foi feito — sem detalhe do disco.
  */
 import type { FastifyPluginAsync } from "fastify";
 import {
@@ -48,6 +52,11 @@ const changePasswordSchema = {
     },
   },
 } as const;
+
+/** Erro de gravação dos stores (ver persist() em user-store/session-store). */
+function isStorageWriteFailure(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === "storage_write_failed";
+}
 
 const authRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
@@ -107,10 +116,22 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     limiter.onSuccess(ip);
-    const { session, cookieValue } = await app.sessionStore.create(user, {
-      ip,
-      userAgent: request.headers["user-agent"] ?? null,
-    });
+    let created;
+    try {
+      created = await app.sessionStore.create(user, {
+        ip,
+        userAgent: request.headers["user-agent"] ?? null,
+      });
+    } catch (err) {
+      if (!isStorageWriteFailure(err)) throw err;
+      request.log.error({ err }, "falha ao gravar a sessão do login");
+      return reply.code(500).send({
+        error: "storage_write_failed",
+        message:
+          "Não foi possível salvar a sessão no servidor. O login não foi concluído; tente novamente.",
+      });
+    }
+    const { session, cookieValue } = created;
     reply.setCookie(SESSION_COOKIE, cookieValue, {
       path: "/",
       httpOnly: true,
@@ -134,7 +155,20 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/auth/logout", async (request, reply) => {
     if (request.session) {
-      await app.sessionStore.destroy(request.session.id);
+      try {
+        await app.sessionStore.destroy(request.session.id);
+      } catch (err) {
+        if (!isStorageWriteFailure(err)) throw err;
+        request.log.error({ err }, "falha ao gravar a revogação da sessão no logout");
+        // O cookie fica: apagá-lo faria o navegador parecer deslogado enquanto
+        // a sessão continua valendo no servidor para quem tiver o cookie.
+        return reply.code(500).send({
+          error: "storage_write_failed",
+          message:
+            "Não foi possível salvar o encerramento da sessão no servidor. Nada foi alterado: " +
+            "a sessão continua válida. Tente sair novamente.",
+        });
+      }
       await app.auditService.record({
         actor: request.session.username,
         action: "auth.logout",
@@ -197,9 +231,47 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    await app.userStore.updatePassword(user.id, await hashPassword(newPassword));
-    // invalida as OUTRAS sessões — a atual continua válida
-    const revoked = await app.sessionStore.destroyOthersForUser(user.id, session.id);
+    try {
+      await app.userStore.updatePassword(user.id, await hashPassword(newPassword));
+    } catch (err) {
+      if (!isStorageWriteFailure(err)) throw err;
+      request.log.error({ err }, "falha ao gravar a nova senha");
+      return reply.code(500).send({
+        error: "storage_write_failed",
+        message:
+          "Não foi possível salvar a nova senha no servidor. Nada foi alterado: a senha atual " +
+          "continua valendo e nenhuma sessão foi encerrada.",
+      });
+    }
+
+    // invalida as OUTRAS sessões — a atual continua válida.
+    //
+    // Se ESTA gravação falhar, a senha nova já está no disco e fica: desfazê-la
+    // seria outra gravação sujeita à mesma falha, e quem troca a senha por
+    // suspeita de vazamento não deve voltar à senha antiga. A resposta não é
+    // sucesso e diz exatamente o que ficou pendente: as outras sessões podem
+    // continuar válidas (em memória e no disco, de forma consistente).
+    let revoked: number;
+    try {
+      revoked = await app.sessionStore.destroyOthersForUser(user.id, session.id);
+    } catch (err) {
+      if (!isStorageWriteFailure(err)) throw err;
+      request.log.error({ err }, "senha trocada, mas falha ao gravar a revogação das outras sessões");
+      await app.auditService.record({
+        actor: user.username,
+        action: "auth.password_changed",
+        detail:
+          "Senha alterada, mas não foi possível invalidar as sessões anteriores (falha de gravação) — " +
+          "elas podem continuar válidas.",
+      });
+      return reply.code(500).send({
+        error: "sessions_not_revoked",
+        message:
+          "A senha foi alterada, mas não foi possível encerrar as outras sessões no servidor: elas " +
+          "podem continuar válidas. Troque a senha novamente (usando a nova como atual) para " +
+          "tentar encerrá-las.",
+      });
+    }
     await app.auditService.record({
       actor: user.username,
       action: "auth.password_changed",

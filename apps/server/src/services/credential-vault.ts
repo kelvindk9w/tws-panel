@@ -54,7 +54,7 @@ export class CredentialVault {
   private readonly file: string;
   private readonly keyFile: string;
   private records: CredentialRecord[] = [];
-  private loaded = false;
+  private loading: Promise<void> | null = null;
   private key: Buffer | null = null;
   private writing: Promise<void> = Promise.resolve();
 
@@ -86,16 +86,18 @@ export class CredentialVault {
     this.key = gerada;
   }
 
-  private async ensureLoaded(): Promise<void> {
-    await this.init();
-    if (this.loaded) return;
-    this.loaded = true;
-    try {
-      const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<CredentialsFile>;
-      this.records = Array.isArray(raw.credentials) ? raw.credentials : [];
-    } catch {
-      this.records = [];
-    }
+  /** Carga única e compartilhada (chamadas concorrentes esperam a mesma leitura). */
+  private ensureLoaded(): Promise<void> {
+    this.loading ??= (async () => {
+      await this.init();
+      try {
+        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<CredentialsFile>;
+        this.records = Array.isArray(raw.credentials) ? raw.credentials : [];
+      } catch {
+        this.records = [];
+      }
+    })();
+    return this.loading;
   }
 
   /** Grava (ou substitui) a credencial de leitura de um projeto. */
@@ -119,8 +121,9 @@ export class CredentialVault {
       tag: cipher.getAuthTag().toString("base64"),
       data: payload.toString("base64"),
     };
-    this.records = [...this.records.filter((r) => r.projectId !== projectId), record];
-    await this.persist();
+    await this.persist(() => {
+      this.records = [...this.records.filter((r) => r.projectId !== projectId), record];
+    });
     return this.infoOf(record);
   }
 
@@ -179,11 +182,12 @@ export class CredentialVault {
   /** Apaga a credencial. Retorna true se havia algo para apagar. */
   async remove(projectId: string): Promise<boolean> {
     await this.ensureLoaded();
-    const antes = this.records.length;
-    this.records = this.records.filter((r) => r.projectId !== projectId);
-    if (this.records.length === antes) return false;
-    await this.persist();
-    return true;
+    return this.persist(() => {
+      const restantes = this.records.filter((r) => r.projectId !== projectId);
+      if (restantes.length === this.records.length) return false;
+      this.records = restantes;
+      return true;
+    });
   }
 
   /**
@@ -226,10 +230,34 @@ export class CredentialVault {
     return this.key;
   }
 
-  /** Serializa as escritas para não intercalar JSON no arquivo. */
-  private async persist(): Promise<void> {
-    this.writing = this.writing.then(() => this.save()).catch(() => undefined);
-    await this.writing;
+  /**
+   * Aplica `change` e grava, em fila (sem intercalar JSON no arquivo).
+   *
+   * `change` só roda na vez dele, com as alterações anteriores já gravadas (ou
+   * já desfeitas): restaurar a lista de antes em caso de falha nunca apaga a
+   * alteração de outra chamada. Se a gravação falha, a memória volta ao que
+   * está no disco — "removida" com o token ainda gravado, nunca — e quem pediu
+   * recebe `storage_write_failed`; a cadeia `writing` segue resolvida para a
+   * próxima gravação.
+   */
+  private persist<T>(change: () => T): Promise<T> {
+    const run = this.writing.then(async () => {
+      const antes = this.records;
+      const result = change();
+      if (this.records === antes) return result;
+      try {
+        await this.save();
+      } catch (err) {
+        this.records = antes;
+        throw storageWriteFailed(err);
+      }
+      return result;
+    });
+    this.writing = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private async save(): Promise<void> {
@@ -241,4 +269,19 @@ export class CredentialVault {
     });
     await chmod(this.file, 0o600).catch(() => undefined);
   }
+}
+
+/**
+ * Erro de gravação com formato de HttpError (`statusCode` + `code`) e mensagem
+ * sem detalhe do sistema de arquivos — o caminho e o errno ficam em `cause`,
+ * para log. As rotas trocam a mensagem pela do contexto (o que NÃO foi feito).
+ */
+function storageWriteFailed(cause: unknown): Error & { statusCode: number; code: string } {
+  const err = new Error(
+    "Não foi possível salvar o cofre de credenciais no disco do servidor. Nada foi alterado.",
+    { cause },
+  ) as Error & { statusCode: number; code: string };
+  err.statusCode = 500;
+  err.code = "storage_write_failed";
+  return err;
 }

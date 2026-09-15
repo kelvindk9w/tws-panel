@@ -85,17 +85,55 @@ describe("UserStore", () => {
 });
 
 describe("UserStore — falha de gravação", () => {
-  it("uma gravação que falha não trava as seguintes: a troca de senha seguinte persiste o usuário", async () => {
+  const arquivo = () => path.join(dir, "users.json");
+
+  it("create que não chega ao disco REJEITA e não deixa admin em memória; a tentativa seguinte funciona", async () => {
     const store = new UserStore(dir);
     // users.json vira diretório: a escrita falha com EISDIR
-    await mkdir(path.join(dir, "users.json"));
+    await mkdir(arquivo());
+    await expect(store.create("admin", "$argon2id$hash-1")).rejects.toMatchObject({
+      code: "storage_write_failed",
+    });
+    expect(await store.hasAdmin()).toBe(false);
+    expect(await store.findByUsername("admin")).toBeNull();
+
+    // a cadeia de gravações continua saudável: com o disco de volta, grava
+    await rm(arquivo(), { recursive: true });
     const user = await store.create("admin", "$argon2id$hash-1");
+    const onDisk = JSON.parse(await readFile(arquivo(), "utf8"));
+    expect(onDisk.users.map((u: { id: string }) => u.id)).toEqual([user.id]);
+  });
 
-    await rm(path.join(dir, "users.json"), { recursive: true });
-    await store.updatePassword(user.id, "$argon2id$hash-2");
+  it("a mensagem do erro não vaza caminho nem código do sistema de arquivos", async () => {
+    const store = new UserStore(dir);
+    await mkdir(arquivo());
+    const err = (await store.create("admin", "h").catch((e: unknown) => e)) as Error;
+    expect(err.message).not.toContain(dir);
+    expect(err.message).not.toMatch(/EISDIR/);
+  });
 
-    const onDisk = JSON.parse(await readFile(path.join(dir, "users.json"), "utf8"));
-    expect(onDisk.users).toHaveLength(1);
-    expect(onDisk.users[0].passwordHash).toBe("$argon2id$hash-2");
+  it("updatePassword que falha REJEITA: a senha antiga continua em memória e após recarregar do disco", async () => {
+    const store = new UserStore(dir);
+    const user = await store.create("admin", "$argon2id$hash-1");
+    const conteudoAntes = await readFile(arquivo(), "utf8");
+
+    await rm(arquivo());
+    await mkdir(arquivo());
+    await expect(store.updatePassword(user.id, "$argon2id$hash-2")).rejects.toMatchObject({
+      code: "storage_write_failed",
+    });
+    expect((await store.findById(user.id))?.passwordHash).toBe("$argon2id$hash-1");
+    // o objeto devolvido antes não foi mutado por baixo
+    expect(user.passwordHash).toBe("$argon2id$hash-1");
+
+    // "reinício": o disco tem o conteúdo de antes da tentativa
+    await rm(arquivo(), { recursive: true });
+    await writeFile(arquivo(), conteudoAntes, { mode: 0o600 });
+    expect((await new UserStore(dir).findById(user.id))?.passwordHash).toBe("$argon2id$hash-1");
+
+    // e a gravação seguinte, no mesmo processo, persiste normalmente
+    await store.updatePassword(user.id, "$argon2id$hash-3");
+    const onDisk = JSON.parse(await readFile(arquivo(), "utf8"));
+    expect(onDisk.users[0].passwordHash).toBe("$argon2id$hash-3");
   });
 });

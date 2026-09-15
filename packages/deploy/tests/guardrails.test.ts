@@ -81,9 +81,9 @@ describe("analyzeCompose — compose.db-port-exposed", () => {
     expect(warnings.some((w) => w.id === "compose.db-port-exposed")).toBe(true);
   });
 
-  it("entradas de ports que não dão para interpretar não escondem o banco publicado na mesma lista", () => {
-    // só porta do container ("8080"), host não numérico ("abc:80"), item nulo e
-    // forma longa sem published são ignorados — o 5432:5432 continua acusado
+  it("entradas inválidas ou de portas que não são de banco não escondem nem inventam banco publicado", () => {
+    // "8080" e target 9000 publicam, mas não são banco; "abc:80" o Compose
+    // rejeita; item nulo é ignorado — só o 5432:5432 é acusado
     const warnings = analyzeCompose(
       compose(
         '  db:\n    image: postgres:16\n    ports:\n      - "8080"\n      - "abc:80"\n      -\n      - target: 9000\n      - "5432:5432"',
@@ -93,6 +93,44 @@ describe("analyzeCompose — compose.db-port-exposed", () => {
     const hits = warnings.filter((w) => w.id === "compose.db-port-exposed");
     expect(hits).toHaveLength(1);
     expect(hits[0]?.message).toContain("porta 5432 do host");
+  });
+
+  it.each([
+    ['"5432"', "uma porta aleatória do host"],
+    ["5432", "uma porta aleatória do host"],
+    ['"${DB_PORT}:5432"', "variável ${DB_PORT}"],
+    ['"15432-15433:5432"', "faixa 15432-15433 do host"],
+    ['"5432-5433"', "uma porta aleatória do host"],
+    ['"5432-5433:5432-5433"', "porta 5432 do host"],
+    ['"[::]:5432:5432"', "porta 5432 do host"],
+    ['"5432:5432/tcp"', "porta 5432 do host"],
+  ])("detecta banco publicado na forma %s", (ports, trecho) => {
+    const warnings = analyzeCompose(compose(`  db:\n    image: postgres:16\n    ports: [${ports}]`), "compose.yml");
+    const hits = warnings.filter((w) => w.id === "compose.db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.message).toContain(trecho);
+    expect(hits[0]?.message).not.toMatch(/NaN|undefined|null/);
+  });
+
+  it("detecta a forma longa só com target e com published por variável", () => {
+    const warnings = analyzeCompose(
+      compose(
+        '  db:\n    image: postgres:16\n    ports:\n      - target: 5432\n      - target: 5432\n        published: "${DB_PORT}"',
+      ),
+      "compose.yml",
+    );
+    const hits = warnings.filter((w) => w.id === "compose.db-port-exposed");
+    expect(hits).toHaveLength(2);
+    expect(hits[0]?.message).toContain("aleatória");
+    expect(hits[1]?.message).toContain("${DB_PORT}");
+  });
+
+  it("mostra o endereço do host quando informado (loopback continua acusado)", () => {
+    const warnings = analyzeCompose(
+      compose('  db:\n    image: postgres:16\n    ports: ["127.0.0.1:5432:5432"]'),
+      "compose.yml",
+    );
+    expect(warnings.find((w) => w.id === "compose.db-port-exposed")?.message).toContain("em 127.0.0.1");
   });
 
   it("edge: sufixo de protocolo (/udp) é tolerado no parsing", () => {
@@ -382,6 +420,39 @@ describe("guessProxyTarget", () => {
     // é porta web (regra 2) e não há expose (regra 3) → fallback manual
     expect(target.service).toBe("entrada");
     expect(target.port).toBeNull();
+  });
+
+  // o proxy precisa só da porta do CONTAINER (upstream na rede Docker); a porta
+  // do host desconhecida não atrapalha e nunca vira a porta escolhida
+  it("porta do host vinda de variável: usa a porta web do container", () => {
+    const target = guessProxyTarget(compose('  api:\n    image: app\n    ports: ["${APP_PORT:-3000}:3000"]'));
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(3000);
+  });
+
+  it("só a porta do container publicada (host aleatório) conta como porta web", () => {
+    const target = guessProxyTarget(compose('  api:\n    image: app\n    ports: ["8080"]'));
+    expect(target).toMatchObject({ service: "api", port: 8080 });
+  });
+
+  it("proxy nomeado com faixa de host: escolhe a porta do container, não a do host", () => {
+    const target = guessProxyTarget(compose('  nginx:\n    image: nginx\n    ports: ["8000-9000:80"]'));
+    expect(target.port).toBe(80);
+  });
+
+  it("proxy nomeado com published por variável na forma longa: porta do container", () => {
+    const target = guessProxyTarget(
+      compose('  caddy:\n    image: caddy:2\n    ports:\n      - target: 443\n        published: "${HTTPS}"'),
+    );
+    expect(target.port).toBe(443);
+  });
+
+  it("porta do container vinda de variável não é usada como alvo", () => {
+    const target = guessProxyTarget(
+      compose('  web:\n    image: app\n    ports: ["80:${PORTA}"]\n    expose: ["9000"]'),
+    );
+    // "web" é nome de proxy, mas a única porta tem container desconhecido → 80 padrão
+    expect(target).toMatchObject({ service: "web", port: 80 });
   });
 });
 

@@ -153,12 +153,27 @@ const setupRoutes: FastifyPluginAsync = async (app) => {
     let user;
     try {
       user = await app.userStore.create(username, await hashPassword(password));
-    } catch {
-      // corrida: outra requisição criou o admin entre a checagem e a criação
-      return reply.code(409).send({
-        error: "admin_exists",
-        message: "A conta de administrador já foi criada. Entre pela tela de login.",
-      });
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code;
+      if (code === "storage_write_failed") {
+        // O store já desfez a criação em memória: sem admin, setup aberto e
+        // token ainda válido — o operador pode simplesmente tentar de novo.
+        request.log.error({ err }, "falha ao gravar a conta de administrador");
+        return reply.code(500).send({
+          error: "storage_write_failed",
+          message:
+            "Não foi possível salvar a conta de administrador no servidor. Nada foi alterado: " +
+            "o setup continua aberto; tente novamente.",
+        });
+      }
+      if (err instanceof Error && err.message === "admin_exists") {
+        // corrida: outra requisição criou o admin entre a checagem e a criação
+        return reply.code(409).send({
+          error: "admin_exists",
+          message: "A conta de administrador já foi criada. Entre pela tela de login.",
+        });
+      }
+      throw err;
     }
 
     await app.setupState.complete();
