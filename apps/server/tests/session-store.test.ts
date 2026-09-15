@@ -5,7 +5,7 @@
  * em diretório temporário, verificando o ESTADO resultante em disco.
  */
 import { createHmac } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -187,5 +187,21 @@ describe("revogação", () => {
     );
     const expected = createHmac("sha256", secret).update(session.id).digest("hex");
     expect(cookieValue).toBe(`${session.id}.${expected}`);
+  });
+});
+
+describe("falha de gravação", () => {
+  it("uma gravação que falha não trava as seguintes: a próxima sessão persiste as duas", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    // sessions.json vira diretório: a escrita falha com EISDIR
+    await mkdir(path.join(dir, "sessions.json"));
+    const primeira = await store.create(USER);
+
+    await rm(path.join(dir, "sessions.json"), { recursive: true });
+    const segunda = await store.create(USER);
+
+    const ids = (await readSessionsFile()).sessions.map((s) => s.id);
+    expect(ids).toEqual([primeira.session.id, segunda.session.id]);
   });
 });

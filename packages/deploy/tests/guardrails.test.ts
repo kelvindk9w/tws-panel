@@ -81,6 +81,20 @@ describe("analyzeCompose — compose.db-port-exposed", () => {
     expect(warnings.some((w) => w.id === "compose.db-port-exposed")).toBe(true);
   });
 
+  it("entradas de ports que não dão para interpretar não escondem o banco publicado na mesma lista", () => {
+    // só porta do container ("8080"), host não numérico ("abc:80"), item nulo e
+    // forma longa sem published são ignorados — o 5432:5432 continua acusado
+    const warnings = analyzeCompose(
+      compose(
+        '  db:\n    image: postgres:16\n    ports:\n      - "8080"\n      - "abc:80"\n      -\n      - target: 9000\n      - "5432:5432"',
+      ),
+      "compose.yml",
+    );
+    const hits = warnings.filter((w) => w.id === "compose.db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.message).toContain("porta 5432 do host");
+  });
+
   it("edge: sufixo de protocolo (/udp) é tolerado no parsing", () => {
     const warnings = analyzeCompose(
       compose('  svc:\n    image: app\n    ports: ["5353:5353/udp"]'),
@@ -144,6 +158,14 @@ describe("analyzeCompose — compose.weak-credentials", () => {
       "compose.yml",
     );
     expect(warnings.some((w) => w.id === "compose.weak-credentials")).toBe(true);
+  });
+
+  it("NÃO dispara para valor com ':' cujos lados diferem (usuário:senha forte)", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    image: app:1\n    environment:\n      API_TOKEN: "deploy:K9vQ2mX7pL4wZ"'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.weak-credentials")).toHaveLength(0);
   });
 
   it("NÃO dispara para senha forte", () => {
@@ -295,6 +317,14 @@ describe("guessProxyTarget", () => {
   it("fallback: primeiro serviço com expose", () => {
     const target = guessProxyTarget(
       compose('  api:\n    image: app\n    expose: ["9000"]\n  db:\n    image: postgres:16'),
+    );
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(9000);
+  });
+
+  it("fallback por expose pula serviço cujo expose não é numérico e segue para o próximo", () => {
+    const target = guessProxyTarget(
+      compose('  worker:\n    image: app\n    expose: ["${PORTA}"]\n  api:\n    image: app\n    expose: ["9000/tcp"]'),
     );
     expect(target.service).toBe("api");
     expect(target.port).toBe(9000);

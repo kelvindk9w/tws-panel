@@ -268,6 +268,19 @@ describe("jobs e ciclo de vida", () => {
     expect(res.json()).toEqual({ ok: true, log: "parando containers…\nfeito.\n" });
   });
 
+  it("DELETE /:id agrega o log da remoção na resposta", async () => {
+    await closeAuthTestApp(ctx);
+    await build({
+      deleteProject: vi.fn(async (_id: string, _deleteSource: boolean, onLog: (chunk: string) => void) => {
+        onLog("removendo containers…\n");
+        onLog("domínio removido.\n");
+      }),
+    });
+    const res = await app.inject({ method: "DELETE", url: "/api/projects/p1", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, log: "removendo containers…\ndomínio removido.\n" });
+  });
+
   it("DELETE /:id?deleteSource=true repassa o flag de remoção do código", async () => {
     const res = await app.inject({
       method: "DELETE",

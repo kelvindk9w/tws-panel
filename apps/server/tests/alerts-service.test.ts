@@ -3,10 +3,10 @@
  * abertos (bump), filtros/paginação e as transições de status (ack/resolve)
  * com seus timestamps — com arquivos reais em diretório temporário.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AlertsService } from "../src/services/alerts-service.js";
 
 let dir: string;
@@ -147,6 +147,49 @@ describe("teto de retenção — preserva alertas abertos", () => {
     );
   });
 
+  it("com vários fechados, descarta os de createdAt mais ANTIGO — não os primeiros do arquivo", async () => {
+    // arquivo com a ordem física diferente da idade: o mais novo vem primeiro
+    const fechado = (id: string, title: string, createdAt: string) => ({
+      ...INPUT,
+      id,
+      title,
+      status: "acknowledged",
+      createdAt,
+      acknowledgedAt: createdAt,
+      resolvedAt: null,
+    });
+    await writeFile(
+      path.join(dir, "alerts.json"),
+      JSON.stringify({
+        alerts: [
+          fechado("a1", "novo", "2022-01-01T00:00:00.000Z"),
+          fechado("a2", "velho", "2020-01-01T00:00:00.000Z"),
+          fechado("a3", "meio", "2021-01-01T00:00:00.000Z"),
+        ],
+      }),
+      "utf8",
+    );
+    const small = new AlertsService(dir, { maxAlerts: 3 });
+    // dois abertos novos estouram o teto em 2 → saem "velho" e "meio"
+    await small.create({ ...INPUT, title: "aberto 1" });
+    await small.create({ ...INPUT, title: "aberto 2" });
+
+    const { alerts } = await small.list();
+    expect(alerts.map((x) => x.title).sort()).toEqual(["aberto 1", "aberto 2", "novo"]);
+  });
+
+  it("sem logger injetado (como em produção), o aviso de teto vai para console.warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const small = new AlertsService(dir, { maxAlerts: 1 });
+      await small.create({ ...INPUT, title: "aberto 1" });
+      await small.create({ ...INPUT, title: "aberto 2" });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("teto de 1"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("teto atingido só com alertas ABERTOS → nenhum é descartado, apenas loga um aviso", async () => {
     const warnings: string[] = [];
     const small = new AlertsService(dir, { maxAlerts: 2, log: (msg) => warnings.push(msg) });
@@ -173,5 +216,26 @@ describe("tolerância a falhas", () => {
     await writeFile(path.join(dir, "alerts.json"), JSON.stringify({ alerts: "oops" }), "utf8");
     const fresh = new AlertsService(dir);
     expect((await fresh.list()).total).toBe(0);
+  });
+});
+
+describe("persistência", () => {
+  it("alertas sobrevivem ao reinício (lidos de alerts.json por uma instância nova)", async () => {
+    const { alert } = await service.create(INPUT);
+    const fresh = new AlertsService(dir);
+    const { alerts } = await fresh.list();
+    expect(alerts.map((a) => a.id)).toEqual([alert.id]);
+  });
+
+  it("uma gravação que falha não trava as seguintes: o próximo alerta persiste os dois", async () => {
+    // alerts.json vira diretório: a escrita falha com EISDIR
+    await mkdir(path.join(dir, "alerts.json"));
+    await expect(service.create({ ...INPUT, title: "durante a falha" })).resolves.toBeDefined();
+
+    await rm(path.join(dir, "alerts.json"), { recursive: true });
+    await service.create({ ...INPUT, title: "depois da falha" });
+
+    const { alerts } = await new AlertsService(dir).list();
+    expect(alerts.map((a) => a.title).sort()).toEqual(["depois da falha", "durante a falha"]);
   });
 });

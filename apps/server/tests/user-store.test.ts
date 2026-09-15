@@ -3,7 +3,7 @@
  * case-insensitive, atualização de senha e tolerância a arquivo corrompido —
  * com arquivos reais em diretório temporário.
  */
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,5 +81,21 @@ describe("UserStore", () => {
 
     await writeFile(path.join(dir, "users.json"), JSON.stringify({ users: "oops" }), "utf8");
     expect(await new UserStore(dir).hasAdmin()).toBe(false);
+  });
+});
+
+describe("UserStore — falha de gravação", () => {
+  it("uma gravação que falha não trava as seguintes: a troca de senha seguinte persiste o usuário", async () => {
+    const store = new UserStore(dir);
+    // users.json vira diretório: a escrita falha com EISDIR
+    await mkdir(path.join(dir, "users.json"));
+    const user = await store.create("admin", "$argon2id$hash-1");
+
+    await rm(path.join(dir, "users.json"), { recursive: true });
+    await store.updatePassword(user.id, "$argon2id$hash-2");
+
+    const onDisk = JSON.parse(await readFile(path.join(dir, "users.json"), "utf8"));
+    expect(onDisk.users).toHaveLength(1);
+    expect(onDisk.users[0].passwordHash).toBe("$argon2id$hash-2");
   });
 });

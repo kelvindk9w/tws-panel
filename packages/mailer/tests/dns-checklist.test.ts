@@ -150,6 +150,18 @@ describe("verificação contra o DNS real (resolver mockado)", () => {
     expect(spf?.note).toContain("mecanismo final");
   });
 
+  it("SPF com IP de outro servidor → mismatch com a nota genérica, não a de quase-conforme", async () => {
+    const checklist = buildDnsChecklist(BASE_INPUT);
+    const resolver = mockResolver({
+      resolveTxt: async (name) => (name === "exemplo.com.br" ? [["v=spf1 ip4:198.51.100.99 ~all"]] : []),
+    });
+    const result = await verifyDnsRecords(checklist, resolver);
+    const spf = result.records.find((r) => r.id === "spf");
+    expect(spf?.status).toBe("mismatch");
+    expect(spf?.note).toBe("Registro existe, mas o valor difere do esperado.");
+    expect(spf?.note).not.toContain("mecanismo final");
+  });
+
   it("TXT: basta UM dos registros do nome conferir (SPF divide o nome com outros TXT)", async () => {
     const checklist = buildDnsChecklist(BASE_INPUT);
     const resolver = mockResolver({

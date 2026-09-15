@@ -35,7 +35,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/services/security-service.js", () => ({
-  SecurityService: vi.fn().mockImplementation(() => mocks),
+  // Vitest 4: mock instanciado com `new` precisa de implementação construtível
+  // (function/class) — arrow function não é construtor e lança TypeError.
+  SecurityService: vi.fn().mockImplementation(function () {
+    return mocks;
+  }),
 }));
 
 const REPORT = {

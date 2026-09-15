@@ -3,7 +3,7 @@
  * (mais recentes primeiro, clamps), cap de entradas e tolerância a arquivo
  * corrompido — com arquivos reais em diretório temporário.
  */
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -153,5 +153,42 @@ describe("rotação do log de auditoria", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("auditoria best-effort — falha de disco não derruba a ação", () => {
+  it("gravação que falha não rejeita o registro nem trava as gravações seguintes", async () => {
+    const service = new AuditService(dir);
+    // audit.json vira diretório: a escrita falha com EISDIR
+    await mkdir(path.join(dir, "audit.json"));
+    await expect(service.record({ action: "teste.durante", detail: "durante a falha" })).resolves.toMatchObject({
+      action: "teste.durante",
+    });
+
+    await rm(path.join(dir, "audit.json"), { recursive: true });
+    await service.record({ action: "teste.depois", detail: "depois da falha" });
+
+    const gravado = JSON.parse(await readFile(path.join(dir, "audit.json"), "utf8"));
+    expect(gravado.entries.map((e: AuditEntry) => e.action)).toEqual(["teste.durante", "teste.depois"]);
+  });
+
+  it("falha ao gravar o arquivo de rotação não impede o registro nem o teto do arquivo ativo", async () => {
+    const service = new AuditService(dir, { maxEntries: 2 });
+    // audit.1.json vira diretório: o arquivamento falha
+    await mkdir(path.join(dir, "audit.1.json"));
+    for (let i = 1; i <= 3; i++) {
+      await service.record({ action: "teste.acao", detail: `evento ${i}` });
+    }
+    const atual = JSON.parse(await readFile(path.join(dir, "audit.json"), "utf8"));
+    expect(atual.entries.map((e: AuditEntry) => e.detail)).toEqual(["evento 2", "evento 3"]);
+  });
+
+  it("arquivo de rotação com formato inesperado é recomeçado, preservando o excedente", async () => {
+    await writeFile(path.join(dir, "audit.1.json"), JSON.stringify({ entries: "oops" }), "utf8");
+    const service = new AuditService(dir, { maxEntries: 1 });
+    await service.record({ action: "teste.acao", detail: "evento 1" });
+    await service.record({ action: "teste.acao", detail: "evento 2" });
+    const arquivado = JSON.parse(await readFile(path.join(dir, "audit.1.json"), "utf8"));
+    expect(arquivado.entries.map((e: AuditEntry) => e.detail)).toEqual(["evento 1"]);
   });
 });

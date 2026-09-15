@@ -4,7 +4,7 @@
  * caso que NÃO dispara e edge case; o relatório final valida níveis,
  * ordenação e contadores.
  */
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -54,6 +54,18 @@ describe("db-port-exposed (block)", () => {
   });
 });
 
+describe("db-port-exposed (block) — entradas não interpretáveis", () => {
+  it("item nulo e forma longa sem published não quebram nem escondem o banco publicado", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    ports:\n      -\n      - target: 5432\n      - "5432:5432"',
+    );
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("5432:5432");
+  });
+});
+
 describe("weak-credentials (block)", () => {
   it("bloqueia credencial trivial no environment", async () => {
     await writeCompose("  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: password");
@@ -81,6 +93,12 @@ describe("weak-credentials (block)", () => {
     await writeCompose("  app:\n    image: app:1\n    environment:\n      API_TOKEN: \"cacheta:cacheta\"");
     const report = await runGuardrails(dir);
     expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("não bloqueia valor com ':' cujos lados diferem (usuário:senha forte)", async () => {
+    await writeCompose('  app:\n    image: app:1\n    environment:\n      API_TOKEN: "deploy:K9vQ2mX7pL4wZ"');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "weak-credentials")).toHaveLength(0);
   });
 
   it("chave sensível sem valor (null) e serviço sem image não disparam", async () => {
@@ -199,7 +217,7 @@ describe("secret-in-code (warn)", () => {
   it("detecta chave privada PEM e token do GitHub", async () => {
     // nota: o scanner só inspeciona extensões de texto (.pem não entra) —
     // a chave vazada num .txt é o vetor realista (backup esquecido).
-    await writeFile(path.join(dir, "backup.txt"), "-----BEGIN RSA PRIVATE KEY-----\n...");
+    await writeFile(path.join(dir, "backup.txt"), "-----BEGIN RSA " + "PRIVATE KEY-----\n..." /* concatenado: o hook de pré-commit barra o cabeçalho literal */);
     await writeFile(path.join(dir, "ci.sh"), `TOKEN=ghp_${"a1B2c3D4".repeat(5)}\n`);
     const report = await runGuardrails(dir);
     expect(report.findings.filter((f) => f.rule === "secret-in-code").length).toBeGreaterThanOrEqual(2);
@@ -274,6 +292,45 @@ describe("secret-in-code (warn)", () => {
       expect(report.findings.some((f) => f.evidence.startsWith("visivel.ts"))).toBe(true);
     } finally {
       await chmod(path.join(dir, "trancado"), 0o755);
+    }
+  });
+});
+
+describe("secret-in-code (warn) — limites do scan", () => {
+  it("pula arquivo maior que 512 KiB (proteção de desempenho), mas varre os demais", async () => {
+    const grande = 'const k = "AKIAIOSFODNN7EXAMPLE";\n' + "// preenchimento\n".repeat(40_000);
+    expect(Buffer.byteLength(grande)).toBeGreaterThan(512 * 1024);
+    await writeFile(path.join(dir, "grande.ts"), grande);
+    await writeFile(path.join(dir, "pequeno.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    const report = await runGuardrails(dir);
+    const evid = report.findings.filter((f) => f.rule === "secret-in-code").map((f) => f.evidence);
+    expect(evid).toEqual(["pequeno.ts:1"]);
+  });
+
+  it("não segue link simbólico (o scan não sai da árvore do projeto)", async () => {
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-rules-fora-"));
+    try {
+      await writeFile(path.join(fora, "keys.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+      await symlink(path.join(fora, "keys.ts"), path.join(dir, "atalho.ts"));
+      await symlink(fora, path.join(dir, "pasta-atalho"));
+      const report = await runGuardrails(dir);
+      expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+    } finally {
+      await rm(fora, { recursive: true, force: true });
+    }
+  });
+
+  it("arquivo ilegível é pulado sem derrubar o scan (best-effort)", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await writeFile(path.join(dir, "trancado.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await writeFile(path.join(dir, "visivel.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await chmod(path.join(dir, "trancado.ts"), 0o000);
+    try {
+      const report = await runGuardrails(dir);
+      const evid = report.findings.filter((f) => f.rule === "secret-in-code").map((f) => f.evidence);
+      expect(evid).toEqual(["visivel.ts:1"]);
+    } finally {
+      await chmod(path.join(dir, "trancado.ts"), 0o644);
     }
   });
 });

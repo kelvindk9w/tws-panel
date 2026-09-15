@@ -28,6 +28,10 @@ const ALLOWLIST = [
   /your[_-]/i,
   /x{4,}/i,
   /\*{4,}/,
+  // Chave de exemplo OFICIAL da documentação da AWS — pública e canônica, usada
+  // nos testes do próprio detector de segredos do painel (packages/deploy).
+  // Só esta string exata: qualquer outra AKIA… continua sendo barrada.
+  /\bAKIAIOSFODNN7EXAMPLE\b/,
 ];
 
 let findings = 0;

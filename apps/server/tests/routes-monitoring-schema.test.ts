@@ -33,7 +33,11 @@ const monitorMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/services/monitor-service.js", () => ({
-  MonitorService: vi.fn().mockImplementation(() => monitorMocks),
+  // Vitest 4: mock instanciado com `new` precisa de implementação construtível
+  // (function/class) — arrow function não é construtor e lança TypeError.
+  MonitorService: vi.fn().mockImplementation(function () {
+    return monitorMocks;
+  }),
 }));
 
 const ALERT = {
