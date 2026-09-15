@@ -134,6 +134,15 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   });
 }
 
+/**
+ * Falha de gravação do cofre (ver persist() em services/credential-vault.ts).
+ * A mensagem genérica do store não diz o que ficou valendo — cada rota troca
+ * pela do contexto, sem detalhe do sistema de arquivos.
+ */
+function isStorageWriteFailure(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === "storage_write_failed";
+}
+
 const projectsRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   // DeployService compartilhado (decorado no escopo raiz em app.ts).
@@ -243,6 +252,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         const response: ProjectCredentialResponse = { credential };
         return reply.send(response);
       } catch (err) {
+        if (isStorageWriteFailure(err)) {
+          request.log.error({ err }, "falha ao gravar a credencial no cofre");
+          return sendError(reply, {
+            statusCode: 500,
+            code: "storage_write_failed",
+            message:
+              "Não foi possível salvar a credencial no servidor. Nada foi alterado: a credencial " +
+              "anterior (se havia uma) continua valendo.",
+          });
+        }
         return sendError(reply, err);
       }
     },
@@ -267,6 +286,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           credential: { configured: false, hint: null, username: null, updatedAt: null },
         });
       } catch (err) {
+        if (isStorageWriteFailure(err)) {
+          request.log.error({ err }, "falha ao gravar a remoção da credencial no cofre");
+          return sendError(reply, {
+            statusCode: 500,
+            code: "storage_write_failed",
+            message:
+              "Não foi possível remover a credencial no servidor. Nada foi alterado: a credencial " +
+              "continua cadastrada.",
+          });
+        }
         return sendError(reply, err);
       }
     },

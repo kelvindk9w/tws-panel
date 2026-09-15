@@ -40,9 +40,11 @@ export default defineConfig({
         "src/services/user-store.ts",
       ],
       reporter: ["text", "html"],
-      // atingido: ~97% linhas no escopo; residual = system-info (ramos que
-      // dependem do hardware/SO do host) e defesas inalcançáveis pela API
-      // pública (corrida admin_exists, sign antes de init)
+      // Residual (medido no Vitest 4, que conta ramos e callbacks defensivos
+      // que a v3 ignorava): defesas inalcançáveis pela API pública — checagens
+      // de tipo que o schema do Fastify já barra (routes/auth.ts, routes/setup.ts)
+      // e sign() antes de init() em session-store. A corrida admin_exists NÃO é
+      // mais residual: é alcançável com requisições concorrentes e tem teste.
       thresholds: { lines: 94, functions: 98, branches: 91, statements: 94 },
     },
   },

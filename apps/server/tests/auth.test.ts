@@ -93,6 +93,27 @@ describe("POST /api/setup/admin", () => {
     expect(await ctx.userStore.findByUsername("outro")).toBeNull();
   });
 
+  it("duas criações CONCORRENTES do admin: uma vence (201), a outra recebe 409 admin_exists", async () => {
+    // as duas passam pela checagem hasAdmin antes de qualquer uma gravar (o hash
+    // argon2 é lento) — a unicidade é garantida no userStore.create
+    const criar = (username: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/setup/admin",
+        headers: auth,
+        payload: { username, password: PASSWORD },
+      });
+    const respostas = await Promise.all([criar("admin"), criar("outro")]);
+    expect(respostas.map((r) => r.statusCode).sort()).toEqual([201, 409]);
+    const perdedora = respostas.find((r) => r.statusCode === 409)!;
+    expect(perdedora.json().error).toBe("admin_exists");
+    const vencedora = respostas.find((r) => r.statusCode === 201)!.json().user.username;
+    const perdedor = vencedora === "admin" ? "outro" : "admin";
+    expect(await ctx.userStore.findByUsername(perdedor)).toBeNull();
+    const audit = await ctx.auditService.list();
+    expect(audit.entries.filter((e) => e.action === "setup.admin_created")).toHaveLength(1);
+  });
+
   it("senha fraca → 400 weak_password e NENHUM usuário criado", async () => {
     const res = await app.inject({
       method: "POST",

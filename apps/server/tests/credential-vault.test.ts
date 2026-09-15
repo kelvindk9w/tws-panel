@@ -6,7 +6,7 @@
  * dentro do dataDir. Chave própria, e não o segredo de sessão: rotacionar um
  * não pode invalidar o outro.
  */
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -171,5 +171,42 @@ describe("chave do cofre", () => {
     await chmod(chave, 0o600);
     await writeFile(chave, "cc".repeat(32) + "\n", { mode: 0o600 });
     await expect(new CredentialVault(dir).get("p1")).rejects.toThrow(/credencial/i);
+  });
+});
+
+describe("falha de gravação", () => {
+  const arquivo = () => path.join(dir, "credentials.json");
+
+  it("remove que falha REJEITA e a credencial continua existindo em memória e no disco", async () => {
+    await cofre.set("p1", { username: "u", token: TOKEN });
+    const conteudoAntes = await readFile(arquivo(), "utf8");
+
+    await rm(arquivo());
+    await mkdir(arquivo());
+    await expect(cofre.remove("p1")).rejects.toMatchObject({ code: "storage_write_failed" });
+    expect(await cofre.has("p1")).toBe(true);
+    expect((await cofre.info("p1")).configured).toBe(true);
+
+    await rm(arquivo(), { recursive: true });
+    await writeFile(arquivo(), conteudoAntes, { mode: 0o600 });
+    expect(await new CredentialVault(dir).get("p1")).toEqual({ username: "u", token: TOKEN });
+
+    // gravação seguinte funciona
+    expect(await cofre.remove("p1")).toBe(true);
+    expect(await new CredentialVault(dir).has("p1")).toBe(false);
+  });
+
+  it("set que falha REJEITA e mantém a credencial anterior; o set seguinte grava", async () => {
+    await cofre.set("p1", { username: "u", token: TOKEN });
+    await rm(arquivo());
+    await mkdir(arquivo());
+    await expect(cofre.set("p1", { username: "u", token: "outro-token-9999" })).rejects.toMatchObject({
+      code: "storage_write_failed",
+    });
+    expect(await cofre.get("p1")).toEqual({ username: "u", token: TOKEN });
+
+    await rm(arquivo(), { recursive: true });
+    await cofre.set("p1", { username: "u", token: "outro-token-9999" });
+    expect((await new CredentialVault(dir).get("p1"))?.token).toBe("outro-token-9999");
   });
 });

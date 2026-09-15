@@ -5,7 +5,7 @@
  * em diretório temporário, verificando o ESTADO resultante em disco.
  */
 import { createHmac } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -187,5 +187,142 @@ describe("revogação", () => {
     );
     const expected = createHmac("sha256", secret).update(session.id).digest("hex");
     expect(cookieValue).toBe(`${session.id}.${expected}`);
+  });
+});
+
+describe("falha de gravação", () => {
+  const arquivo = () => path.join(dir, "sessions.json");
+
+  it("create que falha REJEITA e a sessão não existe; a gravação seguinte persiste só a nova", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    // sessions.json vira diretório: a escrita falha com EISDIR
+    await mkdir(arquivo());
+    await expect(store.create(USER)).rejects.toMatchObject({ code: "storage_write_failed" });
+
+    await rm(arquivo(), { recursive: true });
+    const segunda = await store.create(USER);
+
+    const ids = (await readSessionsFile()).sessions.map((s) => s.id);
+    expect(ids).toEqual([segunda.session.id]);
+  });
+
+  it("destroy que falha REJEITA e a sessão continua válida em memória e no disco", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    const { session, cookieValue } = await store.create(USER);
+    const conteudoAntes = await readFile(arquivo(), "utf8");
+
+    await rm(arquivo());
+    await mkdir(arquivo());
+    await expect(store.destroy(session.id)).rejects.toMatchObject({ code: "storage_write_failed" });
+    // não fingir revogação: quem pediu sabe que falhou, e a sessão segue válida
+    expect((await store.resolve(cookieValue))?.id).toBe(session.id);
+
+    await rm(arquivo(), { recursive: true });
+    await writeFile(arquivo(), conteudoAntes, { mode: 0o600 });
+    const reiniciado = new SessionStore(dir);
+    await reiniciado.init();
+    expect((await reiniciado.resolve(cookieValue))?.id).toBe(session.id);
+
+    // com o disco de volta, a revogação funciona
+    await store.destroy(session.id);
+    expect(await store.resolve(cookieValue)).toBeNull();
+    expect((await readSessionsFile()).sessions).toEqual([]);
+  });
+
+  it("destroyOthersForUser que falha REJEITA e nenhuma sessão é dada como revogada", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    const atual = await store.create(USER);
+    const outra = await store.create(USER);
+
+    await rm(arquivo());
+    await mkdir(arquivo());
+    await expect(store.destroyOthersForUser(USER.id, atual.session.id)).rejects.toMatchObject({
+      code: "storage_write_failed",
+    });
+    expect(await store.resolve(outra.cookieValue)).not.toBeNull();
+
+    await rm(arquivo(), { recursive: true });
+    expect(await store.destroyOthersForUser(USER.id, atual.session.id)).toBe(1);
+    expect((await readSessionsFile()).sessions.map((s) => s.id)).toEqual([atual.session.id]);
+  });
+
+  it("sessão expirada cuja remoção falha continua recusada (resolve devolve null sem lançar)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const store = new SessionStore(dir);
+    await store.init();
+    const { cookieValue } = await store.create(USER);
+    await rm(arquivo());
+    await mkdir(arquivo());
+    vi.setSystemTime(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    expect(await store.resolve(cookieValue)).toBeNull();
+  });
+
+  it("purga de expiradas no boot que falha não derruba a carga", async () => {
+    const expirada: Session = {
+      id: "velha",
+      userId: "u1",
+      username: "admin",
+      createdAt: new Date(0).toISOString(),
+      expiresAt: new Date(1000).toISOString(),
+      ip: null,
+      userAgent: null,
+    };
+    await writeFile(arquivo(), JSON.stringify({ sessions: [expirada] }));
+    const store = new SessionStore(dir);
+    await store.init();
+    // o arquivo continua legível, mas a regravação sem as expiradas falha
+    const falhar = vi
+      .spyOn(store as unknown as { save: () => Promise<void> }, "save")
+      .mockRejectedValueOnce(new Error("disco cheio"));
+    const { session } = await store.create(USER);
+    expect(falhar).toHaveBeenCalledTimes(2);
+    expect((await readSessionsFile()).sessions.map((s) => s.id)).toEqual(["velha", session.id]);
+  });
+
+  it("concorrência: a falha de uma gravação não desfaz nem vaza a alteração de outra chamada em curso", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    const salvar = store as unknown as { save: () => Promise<void> };
+    const original = salvar.save.bind(store);
+    let chamadas = 0;
+    // 1ª gravação falha, 2ª funciona — as duas chamadas disparam juntas
+    vi.spyOn(salvar, "save").mockImplementation(async () => {
+      chamadas += 1;
+      if (chamadas === 1) throw new Error("falha simulada");
+      return original();
+    });
+
+    const [a, b] = await Promise.allSettled([store.create(USER), store.create(USER)]);
+    expect(a.status).toBe("rejected");
+    expect(b.status).toBe("fulfilled");
+    const idB = (b as PromiseFulfilledResult<{ session: Session }>).value.session.id;
+    expect((await readSessionsFile()).sessions.map((s) => s.id)).toEqual([idB]);
+  });
+
+  it("concorrência: a 1ª grava e a 2ª falha — o disco não guarda a alteração da 2ª", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    const salvar = store as unknown as { save: () => Promise<void> };
+    const original = salvar.save.bind(store);
+    let chamadas = 0;
+    vi.spyOn(salvar, "save").mockImplementation(async () => {
+      chamadas += 1;
+      if (chamadas === 2) throw new Error("falha simulada");
+      return original();
+    });
+
+    const [a, b] = await Promise.allSettled([store.create(USER), store.create(USER)]);
+    expect(a.status).toBe("fulfilled");
+    expect(b.status).toBe("rejected");
+    const { session, cookieValue } = (a as PromiseFulfilledResult<{
+      session: Session;
+      cookieValue: string;
+    }>).value;
+    // a sessão que "falhou" não pode ter pegado carona na gravação da outra
+    expect((await readSessionsFile()).sessions.map((s) => s.id)).toEqual([session.id]);
+    expect(await store.resolve(cookieValue)).not.toBeNull();
   });
 });

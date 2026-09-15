@@ -588,3 +588,141 @@ describe("TerminalService — runCommandCaptured (checks do scanner no terminal)
     await service.dispose();
   });
 });
+
+describe("TerminalService — ciclo de vida do alvo e falhas de limpeza", () => {
+  /** PTY cujo kill falha (ex.: container helper já removido pelo Docker). */
+  class KillFalhaPty extends FakePty {
+    override async kill(): Promise<void> {
+      this.killed = true;
+      throw new Error("no such container");
+    }
+  }
+
+  /** Coleta rejeições não tratadas enquanto `fn` roda — uma delas derrubaria o processo. */
+  async function semRejeicaoSolta(fn: () => Promise<void>): Promise<unknown[]> {
+    const soltas: unknown[] = [];
+    const ouvir = (reason: unknown) => soltas.push(reason);
+    process.on("unhandledRejection", ouvir);
+    try {
+      await fn();
+      await flush();
+      await flush();
+    } finally {
+      process.off("unhandledRejection", ouvir);
+    }
+    return soltas;
+  }
+
+  it("setEnsureTarget: o alvo registrado depois da construção é preparado ANTES de abrir o PTY", async () => {
+    const ordem: string[] = [];
+    const service = new TerminalService({
+      openPty: async () => {
+        ordem.push("openPty");
+        return new FakePty();
+      },
+    });
+    // o security-service registra o alvo (container de pé) só depois de criar o terminal
+    service.setEnsureTarget(async () => {
+      ordem.push("ensureTarget");
+    });
+    await service.connect();
+    expect(ordem).toEqual(["ensureTarget", "openPty"]);
+    await service.dispose();
+  });
+
+  it("setEnsureTarget: alvo que não sobe vira TerminalUnavailableError e nenhum PTY é aberto", async () => {
+    let aberturas = 0;
+    const service = new TerminalService({
+      openPty: async () => {
+        aberturas += 1;
+        return new FakePty();
+      },
+    });
+    service.setEnsureTarget(async () => {
+      throw new Error("container alvo não iniciou");
+    });
+    const erro = await service.connect().catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(TerminalUnavailableError);
+    expect((erro as Error).message).toContain("container alvo não iniciou");
+    expect(aberturas).toBe(0);
+  });
+
+  it("erro no fluxo do PTY encerra a sessão: remove o alvo, audita o motivo e rejeita o comando em curso", async () => {
+    const { service, audits, ptys, next } = makeService();
+    const comando = service.runCommand("bash /opt/fase.sh", () => undefined);
+    const rejeicao = expect(comando).rejects.toThrow(/erro no fluxo do terminal/);
+    await flush();
+    const primeiro = next();
+    primeiro.stream.emit("error", new Error("EPIPE"));
+    await rejeicao;
+    expect(service.sessionActive).toBe(false);
+    expect(primeiro.killed).toBe(true);
+    expect(audits).toContainEqual({
+      action: "terminal.session-end",
+      detail: "Sessão de terminal encerrada (erro no fluxo do terminal).",
+    });
+    // a próxima conexão abre um PTY novo em vez de reaproveitar o quebrado
+    await service.connect();
+    expect(ptys).toHaveLength(2);
+    await service.dispose();
+  });
+
+  it("kill do alvo falhando ao fim da sessão não vira rejeição solta (que derrubaria o painel)", async () => {
+    const pty = new KillFalhaPty();
+    const service = new TerminalService({ openPty: async () => pty });
+    const soltas = await semRejeicaoSolta(async () => {
+      await service.connect();
+      pty.stream.emit("error", new Error("EPIPE"));
+    });
+    expect(pty.killed).toBe(true);
+    expect(service.sessionActive).toBe(false);
+    expect(soltas).toEqual([]);
+  });
+
+  it("dispose() resolve mesmo quando o kill do alvo falha", async () => {
+    const pty = new KillFalhaPty();
+    const service = new TerminalService({ openPty: async () => pty });
+    await service.connect();
+    await expect(service.dispose()).resolves.toBeUndefined();
+    expect(pty.killed).toBe(true);
+    expect(service.sessionActive).toBe(false);
+  });
+
+  it("idle timeout é ADIADO enquanto um comando roda (apt upgrade longo não é cortado)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, audits, next } = makeService({ idleTimeoutMs: 1_000 });
+      const comando = service.runCommand("apt-get upgrade -y", () => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      // três janelas de inatividade inteiras sem nenhuma saída
+      await vi.advanceTimersByTimeAsync(3_500);
+      expect(service.sessionActive).toBe(true);
+      expect(next().killed).toBe(false);
+      expect(audits.some((a) => a.action === "terminal.idle-timeout")).toBe(false);
+
+      const nonce = /PAAS_EXIT_([0-9a-f]+):/.exec(next().inputs.join(""))?.[1];
+      next().emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(comando).resolves.toBe(0);
+
+      // sem comando em curso, a inatividade volta a encerrar a sessão
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(service.sessionActive).toBe(false);
+      expect(audits.some((a) => a.action === "terminal.idle-timeout")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("scrollback guarda só os últimos N caracteres para o replay", async () => {
+    const pty = new FakePty();
+    const service = new TerminalService({ openPty: async () => pty, scrollbackChars: 10 });
+    await service.connect();
+    pty.emit("0123456789");
+    pty.emit("ABCDE");
+    await flush();
+    const { replay } = await service.connect();
+    expect(replay).toBe("56789ABCDE");
+    await service.dispose();
+  });
+});

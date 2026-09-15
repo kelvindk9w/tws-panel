@@ -9,19 +9,8 @@
  */
 import { parse } from "yaml";
 import type { GuardrailWarning } from "@paas/core";
+import { DATABASE_PORTS, describeHostSide, publishedPorts } from "./compose-ports.js";
 import { mountsDockerSock } from "./rules.js";
-
-/** Portas de container conhecidas de bancos de dados. */
-const DATABASE_PORTS = new Map<number, string>([
-  [5432, "PostgreSQL"],
-  [3306, "MySQL/MariaDB"],
-  [6379, "Redis"],
-  [27017, "MongoDB"],
-  [1521, "Oracle"],
-  [1433, "SQL Server"],
-  [5984, "CouchDB"],
-  [9200, "Elasticsearch"],
-]);
 
 /** Imagens de serviços típicos de desenvolvimento. */
 const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
@@ -73,34 +62,6 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/** Extrai pares hostPort->containerPort das formas curta/longa do compose. */
-function publishedPorts(ports: unknown): Array<{ host: number; container: number }> {
-  if (!Array.isArray(ports)) return [];
-  const result: Array<{ host: number; container: number }> = [];
-  for (const entry of ports) {
-    if (typeof entry === "string" || typeof entry === "number") {
-      const str = String(entry);
-      // formas: "8080:80", "127.0.0.1:8080:80", "8080:80/tcp"
-      const parts = str.replace(/\/(tcp|udp)$/i, "").split(":");
-      if (parts.length >= 2) {
-        const host = Number(parts[parts.length - 2]);
-        const container = Number(parts[parts.length - 1]);
-        if (Number.isInteger(host) && Number.isInteger(container)) {
-          result.push({ host, container });
-        }
-      }
-    } else if (entry && typeof entry === "object") {
-      const e = entry as { published?: unknown; target?: unknown };
-      const host = Number(e.published);
-      const container = Number(e.target);
-      if (Number.isInteger(host) && Number.isInteger(container)) {
-        result.push({ host, container });
-      }
-    }
-  }
-  return result;
-}
-
 function envEntries(environment: unknown): Array<[string, string | null]> {
   if (Array.isArray(environment)) {
     return environment
@@ -143,14 +104,17 @@ export function analyzeCompose(content: string, fileName: string): GuardrailWarn
 
   for (const [name, service] of Object.entries(services)) {
     // 1) porta de banco publicada no host
-    for (const { host, container } of publishedPorts(service.ports)) {
-      const db = DATABASE_PORTS.get(container);
+    // A porta do host pode ser aleatória ou vir de variável — o que decide é a
+    // porta do container. O endereço (hostIp) ainda não é considerado: loopback
+    // também é acusado, igual à regra que bloqueia em rules.ts.
+    for (const port of publishedPorts(service.ports)) {
+      const db = DATABASE_PORTS.get(port.container);
       if (db) {
         warnings.push({
           id: "compose.db-port-exposed",
           severity: "critical",
           service: name,
-          message: `Serviço "${name}" publica a porta ${host} do host para a porta ${container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
+          message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
         });
       }
     }
@@ -241,6 +205,8 @@ export function guessProxyTarget(
   for (const name of names) {
     const svc = services[name];
     if (svc && (WEB_NAME.test(name) || /^(caddy|nginx|traefik)/i.test(asString(svc.image) ?? ""))) {
+      // só a porta do container interessa (upstream na rede Docker); a do host,
+      // que pode ser aleatória ou vir de variável, nunca é usada aqui
       const ports = publishedPorts(svc.ports);
       const containerPort = ports.find((p) => WEB_PORTS.includes(p.container))?.container ?? ports[0]?.container ?? null;
       notes.push(`Serviço "${name}" identificado como entrada web (nome/imagem de proxy).`);

@@ -51,14 +51,18 @@ vi.mock("@paas/security", async (importOriginal) => {
   return {
     ...actual,
     collectBaseline: collectBaselineMock,
-    ContainerRunner: vi.fn().mockImplementation(() => ({
-      label: "container:fake",
-      profile: "container",
-      ensureReady: () => Promise.resolve(),
-      exec: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
-      execStream: () => Promise.resolve(0),
-      uploadDir: () => Promise.resolve(),
-    })),
+    // Vitest 4: mock instanciado com `new` precisa de implementação construtível
+    // (function/class) — arrow function não é construtor e lança TypeError.
+    ContainerRunner: vi.fn().mockImplementation(function () {
+      return {
+        label: "container:fake",
+        profile: "container",
+        ensureReady: () => Promise.resolve(),
+        exec: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+        execStream: () => Promise.resolve(0),
+        uploadDir: () => Promise.resolve(),
+      };
+    }),
   };
 });
 

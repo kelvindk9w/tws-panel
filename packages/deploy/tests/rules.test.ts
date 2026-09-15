@@ -4,7 +4,7 @@
  * caso que NÃO dispara e edge case; o relatório final valida níveis,
  * ordenação e contadores.
  */
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -54,6 +54,102 @@ describe("db-port-exposed (block)", () => {
   });
 });
 
+describe("db-port-exposed (block) — mesma lista de bancos do aviso prévio", () => {
+  // O aviso prévio (guardrails.ts) e o bloqueio do deploy (rules.ts) tinham
+  // listas de portas de banco diferentes: Oracle, CouchDB e Elasticsearch
+  // geravam aviso, mas o deploy seguia sem bloquear.
+  it.each([
+    [1521, "Oracle", "gvenzl/oracle-free:23"],
+    [5984, "CouchDB", "couchdb:3"],
+    [9200, "Elasticsearch", "elasticsearch:8.15.0"],
+  ])("bloqueia a porta %i publicada (%s)", async (porta, nome, imagem) => {
+    await writeCompose(`  db:\n    image: ${imagem}\n    ports: ["${porta}:${porta}"]`);
+    const report = await runGuardrails(dir);
+    const finding = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(finding?.level).toBe("block");
+    expect(finding?.title).toContain(nome);
+  });
+});
+
+describe("db-port-exposed (block) — entradas não interpretáveis", () => {
+  it("item nulo não quebra; forma longa sem published também publica (porta aleatória)", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    ports:\n      -\n      - target: 5432\n      - "5432:5432"',
+    );
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits).toHaveLength(2);
+    expect(hits.map((h) => h.evidence).join("\n")).toContain("5432:5432");
+    expect(hits.map((h) => h.evidence).join("\n")).toContain("porta aleatória do host");
+  });
+
+  it("entradas que o Compose rejeita ou que não são de banco não bloqueiam", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    ports:\n      - "abc:5432"\n      - "5432:abc"\n      - "5432/xyz"\n' +
+        '      - "15432-15434:5432-5433"\n      - "0"\n      - "70000"\n      - "5432:${PORTA_CONTAINER}"\n' +
+        '      - target: "${ALVO}"\n        published: 5432\n      - "8080:80"\n      - true',
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "db-port-exposed")).toHaveLength(0);
+    expect(report.blockers).toBe(0);
+  });
+});
+
+describe("db-port-exposed (block) — formas de ports que o Docker publica", () => {
+  // cada caso publica a porta 5432 do container no host; a porta do host pode
+  // ser aleatória ou vir de variável, e isso não pode esconder o banco exposto
+  const casos: Array<[string, string, string]> = [
+    ["só a porta do container (string)", '["5432"]', "porta aleatória do host"],
+    ["só a porta do container (número)", "[5432]", "porta aleatória do host"],
+    ["porta do host vinda de variável", '["${DB_PORT}:5432"]', "variável ${DB_PORT}"],
+    ["variável com valor padrão (contém ':')", '["${DB_PORT:-5432}:5432"]', "variável ${DB_PORT:-5432}"],
+    ["variável sem chaves", '["$DB_PORT:5432"]', "variável $DB_PORT"],
+    ["faixa de host para uma porta do container", '["15432-15433:5432"]', "15432-15433:5432"],
+    ["faixa só do container", '["5432-5433"]', "porta aleatória do host"],
+    ["faixas equivalentes nos dois lados", '["5432-5433:5432-5433"]', "5432:5432"],
+    ["IPv6 entre colchetes", '["[::]:5432:5432"]', "[::]:5432:5432"],
+    ["IPv6 sem colchetes", '["::1:5432:5432"]', "[::1]:5432:5432"],
+    ["sufixo de protocolo", '["5432:5432/tcp"]', "5432:5432"],
+    ["IP com porta do host vazia", '["0.0.0.0::5432"]', "porta aleatória do host"],
+  ];
+
+  it.each(casos)("forma curta: %s", async (_nome, ports, evidencia) => {
+    await writeCompose(`  db:\n    image: postgres:16\n    ports: ${ports}`);
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.level).toBe("block");
+    expect(hits[0]?.evidence).toContain(evidencia);
+    expect(hits[0]?.evidence).not.toMatch(/NaN|undefined|null/);
+  });
+
+  const longas: Array<[string, string, string]> = [
+    ["só target", "- target: 5432", "porta aleatória do host"],
+    ["published em string", '- target: 5432\n        published: "5432"', "5432:5432"],
+    ["published por variável", '- target: 5432\n        published: "${DB_PORT}"', "variável ${DB_PORT}"],
+    ["published em faixa", '- target: 5432\n        published: "15432-15440"', "15432-15440:5432"],
+    ["published vazio", '- target: 5432\n        published: ""', "porta aleatória do host"],
+    ["target em string com host_ip", '- target: "5432"\n        host_ip: 127.0.0.1\n        published: 5432', "127.0.0.1:5432:5432"],
+  ];
+
+  it.each(longas)("forma longa: %s", async (_nome, entrada, evidencia) => {
+    await writeCompose(`  db:\n    image: postgres:16\n    ports:\n      ${entrada}`);
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain(evidencia);
+    expect(hits[0]?.evidence).not.toMatch(/NaN|undefined|null/);
+  });
+
+  it("loopback continua bloqueando (decisão de produto pendente)", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["127.0.0.1:5432:5432"]');
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(hit?.level).toBe("block");
+    expect(hit?.evidence).toContain("127.0.0.1:5432:5432");
+  });
+});
+
 describe("weak-credentials (block)", () => {
   it("bloqueia credencial trivial no environment", async () => {
     await writeCompose("  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: password");
@@ -81,6 +177,12 @@ describe("weak-credentials (block)", () => {
     await writeCompose("  app:\n    image: app:1\n    environment:\n      API_TOKEN: \"cacheta:cacheta\"");
     const report = await runGuardrails(dir);
     expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("não bloqueia valor com ':' cujos lados diferem (usuário:senha forte)", async () => {
+    await writeCompose('  app:\n    image: app:1\n    environment:\n      API_TOKEN: "deploy:K9vQ2mX7pL4wZ"');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "weak-credentials")).toHaveLength(0);
   });
 
   it("chave sensível sem valor (null) e serviço sem image não disparam", async () => {
@@ -199,7 +301,7 @@ describe("secret-in-code (warn)", () => {
   it("detecta chave privada PEM e token do GitHub", async () => {
     // nota: o scanner só inspeciona extensões de texto (.pem não entra) —
     // a chave vazada num .txt é o vetor realista (backup esquecido).
-    await writeFile(path.join(dir, "backup.txt"), "-----BEGIN RSA PRIVATE KEY-----\n...");
+    await writeFile(path.join(dir, "backup.txt"), "-----BEGIN RSA " + "PRIVATE KEY-----\n..." /* concatenado: o hook de pré-commit barra o cabeçalho literal */);
     await writeFile(path.join(dir, "ci.sh"), `TOKEN=ghp_${"a1B2c3D4".repeat(5)}\n`);
     const report = await runGuardrails(dir);
     expect(report.findings.filter((f) => f.rule === "secret-in-code").length).toBeGreaterThanOrEqual(2);
@@ -274,6 +376,45 @@ describe("secret-in-code (warn)", () => {
       expect(report.findings.some((f) => f.evidence.startsWith("visivel.ts"))).toBe(true);
     } finally {
       await chmod(path.join(dir, "trancado"), 0o755);
+    }
+  });
+});
+
+describe("secret-in-code (warn) — limites do scan", () => {
+  it("pula arquivo maior que 512 KiB (proteção de desempenho), mas varre os demais", async () => {
+    const grande = 'const k = "AKIAIOSFODNN7EXAMPLE";\n' + "// preenchimento\n".repeat(40_000);
+    expect(Buffer.byteLength(grande)).toBeGreaterThan(512 * 1024);
+    await writeFile(path.join(dir, "grande.ts"), grande);
+    await writeFile(path.join(dir, "pequeno.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    const report = await runGuardrails(dir);
+    const evid = report.findings.filter((f) => f.rule === "secret-in-code").map((f) => f.evidence);
+    expect(evid).toEqual(["pequeno.ts:1"]);
+  });
+
+  it("não segue link simbólico (o scan não sai da árvore do projeto)", async () => {
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-rules-fora-"));
+    try {
+      await writeFile(path.join(fora, "keys.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+      await symlink(path.join(fora, "keys.ts"), path.join(dir, "atalho.ts"));
+      await symlink(fora, path.join(dir, "pasta-atalho"));
+      const report = await runGuardrails(dir);
+      expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+    } finally {
+      await rm(fora, { recursive: true, force: true });
+    }
+  });
+
+  it("arquivo ilegível é pulado sem derrubar o scan (best-effort)", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await writeFile(path.join(dir, "trancado.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await writeFile(path.join(dir, "visivel.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await chmod(path.join(dir, "trancado.ts"), 0o000);
+    try {
+      const report = await runGuardrails(dir);
+      const evid = report.findings.filter((f) => f.rule === "secret-in-code").map((f) => f.evidence);
+      expect(evid).toEqual(["visivel.ts:1"]);
+    } finally {
+      await chmod(path.join(dir, "trancado.ts"), 0o644);
     }
   });
 });

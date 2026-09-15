@@ -218,6 +218,19 @@ describe("detecção de virtualização", () => {
     expect(scan.virtualization).toBe("genérica (flag hypervisor presente)");
   });
 
+  it("produto DMI vazio não decide sozinho: a flag de hypervisor no cpuinfo denuncia a virtualização", async () => {
+    maquina.arquivos.set("/sys/class/dmi/id/product_name", "\n");
+    const scan = await scanSystemHealth();
+    expect(scan.virtualization).toBe("genérica (flag hypervisor presente)");
+  });
+
+  it("sem /sys e cpuinfo sem flag de hypervisor → bare metal", async () => {
+    maquina.arquivos.delete("/sys/class/dmi/id/product_name");
+    maquina.arquivos.set("/proc/cpuinfo", "flags: fpu vme\n");
+    const scan = await scanSystemHealth();
+    expect(scan.virtualization).toBe("nenhuma (bare metal)");
+  });
+
   it("sem /sys e sem /proc/cpuinfo → bare metal", async () => {
     maquina.arquivos.delete("/sys/class/dmi/id/product_name");
     maquina.arquivos.delete("/proc/cpuinfo");

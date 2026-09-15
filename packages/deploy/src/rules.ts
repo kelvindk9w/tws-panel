@@ -22,19 +22,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { GuardrailFinding, GuardrailLevel, GuardrailReport } from "@paas/core";
 import { parse } from "yaml";
+import { DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
 
 // ---------------------------------------------------------------------------
 // Constantes das regras
 // ---------------------------------------------------------------------------
-
-/** Portas de container conhecidas de bancos de dados. */
-const DATABASE_PORTS = new Map<number, string>([
-  [5432, "PostgreSQL"],
-  [3306, "MySQL/MariaDB"],
-  [6379, "Redis"],
-  [27017, "MongoDB"],
-  [1433, "SQL Server"],
-]);
 
 /** Imagens de serviços típicos de desenvolvimento/depuração. */
 const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
@@ -215,33 +207,6 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/** Extrai pares hostPort->containerPort das formas curta/longa do compose. */
-function publishedPorts(ports: unknown): Array<{ host: number; container: number }> {
-  if (!Array.isArray(ports)) return [];
-  const result: Array<{ host: number; container: number }> = [];
-  for (const entry of ports) {
-    if (typeof entry === "string" || typeof entry === "number") {
-      const str = String(entry);
-      const parts = str.replace(/\/(tcp|udp)$/i, "").split(":");
-      if (parts.length >= 2) {
-        const host = Number(parts[parts.length - 2]);
-        const container = Number(parts[parts.length - 1]);
-        if (Number.isInteger(host) && Number.isInteger(container)) {
-          result.push({ host, container });
-        }
-      }
-    } else if (entry && typeof entry === "object") {
-      const e = entry as { published?: unknown; target?: unknown };
-      const host = Number(e.published);
-      const container = Number(e.target);
-      if (Number.isInteger(host) && Number.isInteger(container)) {
-        result.push({ host, container });
-      }
-    }
-  }
-  return result;
-}
-
 function envEntries(environment: unknown): Array<[string, string | null]> {
   if (Array.isArray(environment)) {
     return environment
@@ -302,14 +267,18 @@ function analyzeComposeRules(content: string, fileName: string): GuardrailFindin
 
   for (const [name, service] of Object.entries(services)) {
     // db-port-exposed (block)
-    for (const { host, container } of publishedPorts(service.ports)) {
-      const db = DATABASE_PORTS.get(container);
+    // Decide pela porta do CONTAINER: porta do host aleatória ou vinda de
+    // variável também expõe o banco (o Docker publica por cima do UFW).
+    // Política atual: o endereço (port.hostIp) não é considerado — publicar
+    // só em 127.0.0.1 também bloqueia.
+    for (const port of publishedPorts(service.ports)) {
+      const db = DATABASE_PORTS.get(port.container);
       if (db) {
         findings.push({
           rule: "db-port-exposed",
           level: "block",
           title: `Porta de banco de dados publicada no host (${db})`,
-          evidence: `${fileName}: serviço "${name}" publica ${host}:${container}`,
+          evidence: `${fileName}: serviço "${name}" publica ${formatPortMapping(port)}`,
           fix: "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH.",
           service: name,
         });

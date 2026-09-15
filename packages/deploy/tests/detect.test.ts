@@ -3,7 +3,7 @@
  * fixtures reais em disco: static-node, compose, dockerfile e unknown,
  * incluindo as prioridades entre os sinais (compose > Dockerfile > package.json).
  */
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -216,6 +216,44 @@ describe("dockerfile", () => {
     const result = await detectProject(dir);
     expect(result.type).toBe("dockerfile");
     expect(result.proxyPort).toBe(8080);
+  });
+
+  it("Next.js sem output: \"export\" (SSR) + Dockerfile → dockerfile, nunca servido como estático out/", async () => {
+    await writeJson("package.json", { scripts: { build: "next build" }, dependencies: { next: "^15.0.0" } });
+    await writeFile(path.join(dir, "next.config.js"), "module.exports = { reactStrictMode: true };\n");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node:22\nEXPOSE 3000\n");
+    const result = await detectProject(dir);
+    expect(result.type).toBe("dockerfile");
+    expect(result.outputDir).toBeNull();
+    expect(result.proxyPort).toBe(3000);
+    expect(result.details.join(" ")).not.toContain("output: \"export\"");
+  });
+  it("Dockerfile ilegível não derruba a detecção: segue docker sem porta, pedindo configuração manual", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await writeFile(path.join(dir, "Dockerfile"), "FROM nginx\nEXPOSE 8080\n");
+    await chmod(path.join(dir, "Dockerfile"), 0o000);
+    try {
+      const result = await detectProject(dir);
+      expect(result.type).toBe("dockerfile");
+      expect(result.proxyPort).toBeNull();
+      expect(result.details.join(" ")).toContain("informe a porta do proxy manualmente");
+    } finally {
+      await chmod(path.join(dir, "Dockerfile"), 0o644);
+    }
+  });
+
+  it("next.config ilegível não derruba a detecção: cai para as próximas pistas (Vite → dist/)", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await writeJson("package.json", { scripts: { build: "vite build" }, devDependencies: { vite: "^5.0.0" } });
+    await writeFile(path.join(dir, "next.config.mjs"), 'export default { output: "export" };\n');
+    await chmod(path.join(dir, "next.config.mjs"), 0o000);
+    try {
+      const result = await detectProject(dir);
+      expect(result.type).toBe("static-node");
+      expect(result.outputDir).toBe("dist");
+    } finally {
+      await chmod(path.join(dir, "next.config.mjs"), 0o644);
+    }
   });
 });
 
