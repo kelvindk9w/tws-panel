@@ -2,6 +2,8 @@
  * setup-page.test.tsx — fluxo do wizard:
  *  - terminal bloqueado até o token ser validado (enabled=false) e liberado
  *    imediatamente após a validação;
+ *  - /api/terminal/info só é consultado com o terminal liberado e chega ao
+ *    terminal (cabeçalho por modo) e à Segurança (usuário configurado);
  *  - navegação de volta: botão "Voltar" do passo + stepper clicável para
  *    passos já alcançados — SEM perder o estado (passos ficam montados).
  */
@@ -27,14 +29,19 @@ const DEFAULT_STATUS = {
   ],
 };
 
+const TERMINAL_INFO = {
+  target: "host",
+  user: "kelvin",
+  configuredUser: "kelvin",
+  rootMode: "senha",
+  elevation: "senha",
+  scheduledMonitoringRunsAsRoot: true,
+};
+
+const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
+
 vi.mock("@/lib/api", () => ({
-  apiFetch: vi.fn(async (path: string) => {
-    if (path === "/api/setup/status") {
-      if (statusOverride) return statusOverride;
-      return DEFAULT_STATUS;
-    }
-    return {};
-  }),
+  apiFetch: apiFetchMock,
   initSetupToken: () => tokenFromUrl,
   getSetupToken: () => tokenFromUrl,
   setSetupToken: vi.fn(),
@@ -51,10 +58,19 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/components/TerminalPanel", () => ({
-  TerminalPanel: ({ enabled, sshUser }: { enabled: boolean; sshUser?: string | null }) => (
+  TerminalPanel: ({
+    enabled,
+    sshUser,
+    info,
+  }: {
+    enabled: boolean;
+    sshUser?: string | null;
+    info?: { elevation: string } | null;
+  }) => (
     <div data-testid="terminal-mock">
       {enabled ? "terminal:liberado" : "terminal:bloqueado"}
       <span data-testid="terminal-ssh-user">{sshUser ?? "(sem nome)"}</span>
+      <span data-testid="terminal-elevation">{info?.elevation ?? "(sem info)"}</span>
     </div>
   ),
 }));
@@ -82,12 +98,15 @@ vi.mock("@/pages/setup/SecurityStep", () => ({
     onNext,
     onBack,
     onSshUserDetected,
+    configuredUser,
   }: {
     onNext: () => void;
     onBack?: () => void;
     onSshUserDetected?: (user: string | null) => void;
+    configuredUser?: string | null;
   }) => (
     <div data-testid="step-security">
+      <span data-testid="security-configured-user">{configuredUser ?? "(sem configuração)"}</span>
       <span>conteúdo-segurança</span>
       {onBack && <button onClick={onBack}>voltar-segurança</button>}
       <button onClick={onNext}>avançar-segurança</button>
@@ -109,6 +128,15 @@ function wrapperOf(testId: string): HTMLElement {
 }
 
 beforeEach(() => {
+  apiFetchMock.mockReset();
+  apiFetchMock.mockImplementation(async (path: string) => {
+    if (path === "/api/setup/status") {
+      if (statusOverride) return statusOverride;
+      return DEFAULT_STATUS;
+    }
+    if (path === "/api/terminal/info") return TERMINAL_INFO;
+    return {};
+  });
   sessionStorage.clear();
   tokenFromUrl = null;
   statusOverride = null;
@@ -199,6 +227,22 @@ describe("SetupPage", () => {
 
     fireEvent.click(screen.getByText("detectar-usuário"));
     await waitFor(() => expect(screen.getByTestId("terminal-ssh-user")).toHaveTextContent("deploy"));
+  });
+
+  it("info do terminal: nada é consultado antes do token; depois chega ao terminal e à Segurança", async () => {
+    render(<SetupPage />);
+    await screen.findByTestId("step-welcome");
+    const chamadas = () => apiFetchMock.mock.calls.map(([p]) => String(p));
+    expect(chamadas()).not.toContain("/api/terminal/info");
+    expect(screen.getByTestId("terminal-elevation")).toHaveTextContent("(sem info)");
+
+    fireEvent.click(screen.getByText("validar-token"));
+    await waitFor(() => expect(screen.getByTestId("terminal-elevation")).toHaveTextContent("senha"));
+    expect(chamadas()).toContain("/api/terminal/info");
+
+    fireEvent.click(await screen.findByText("avançar-saúde"));
+    await screen.findByTestId("step-security");
+    expect(screen.getByTestId("security-configured-user")).toHaveTextContent("kelvin");
   });
 
   it("passos futuros NÃO são clicáveis no stepper", async () => {

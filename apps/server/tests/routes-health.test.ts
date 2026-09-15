@@ -11,8 +11,9 @@ import { HEALTH_LIMITS, SETUP_TOKEN_HEADER } from "@paas/core";
 import healthRoutes, { HOST_PROBE_TIMEOUT_MS } from "../src/routes/health.js";
 import { HOST_NETWORK_COMMAND, HOST_REBOOT_COMMAND } from "../src/services/system-info.js";
 import type { ServerConfig } from "../src/config.js";
-import { TerminalUnavailableError } from "../src/services/terminal-service.js";
-import type { TerminalService } from "../src/services/terminal-service.js";
+import { Duplex } from "node:stream";
+import { TerminalService, TerminalUnavailableError } from "../src/services/terminal-service.js";
+import type { RemotePty } from "../src/services/docker-socket.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
 
 /** Terminal falso: registra os comandos do espelho e simula indisponibilidade. */
@@ -269,4 +270,72 @@ describe("GET /api/health/scan", () => {
       await new Promise((r) => setTimeout(r, 50));
     },
   );
+});
+
+/**
+ * Usuário do terminal: as leituras de saúde não precisam de root e rodam SEM
+ * elevação nos três cenários (legado, senha, segundo-plano) — no modo senha
+ * nunca pedem senha à toa. Terminal REAL (TerminalService) sobre um PTY que
+ * responde sozinho, para provar o que é de fato digitado.
+ */
+describe("GET /api/health/scan — usuário do terminal", () => {
+  class AnswerPty implements RemotePty {
+    readonly inputs: string[] = [];
+    readonly stream: Duplex;
+    constructor() {
+      this.stream = new Duplex({
+        write: (chunk, _enc, cb) => {
+          const line = Buffer.from(chunk).toString("utf8");
+          this.inputs.push(line);
+          const exit = /PAAS_EXIT_([0-9a-f]+):/.exec(line)?.[1];
+          const begin = /PAAS_BEGIN_([0-9a-f]+)/.exec(line)?.[1];
+          if (exit) {
+            setImmediate(() =>
+              this.stream.push(`${begin ? `:::PAAS_BEGIN_${begin}\r\nPAAS_REBOOT=0\r\n` : ""}:::PAAS_EXIT_${exit}:0\r\n`),
+            );
+          }
+          cb();
+        },
+        read: () => undefined,
+      });
+    }
+    resize(): void {}
+    async kill(): Promise<void> {
+      this.stream.push(null);
+    }
+  }
+
+  it.each([
+    ["legado", { terminalUser: null, terminalRootMode: null }],
+    ["senha", { terminalUser: "kelvin", terminalRootMode: "senha" }],
+    ["segundo-plano", { terminalUser: "kelvin", terminalRootMode: "segundo-plano" }],
+  ] as const)("%s: leituras e espelho no terminal, sem sudo e sem pedido de senha", async (modo, over) => {
+    semRede();
+    const ptys: AnswerPty[] = [];
+    const term = new TerminalService({
+      openPty: () => {
+        const pty = new AnswerPty();
+        ptys.push(pty);
+        return Promise.resolve(pty);
+      },
+      watchSudoPrompt: modo === "senha",
+    });
+    const events: unknown[] = [];
+    term.onControl((m) => events.push(m));
+    app.decorate("terminalService", term);
+    app.decorate("config", { securityTarget: "host", ...over } as unknown as ServerConfig);
+
+    const res = await app.inject({ method: "GET", url: "/api/health/scan", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().reboot).toEqual({ pending: false, packages: [] }); // lido no host pelo terminal
+    for (let i = 0; i < 100 && (ptys[0]?.inputs.length ?? 0) < 9; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const typed = ptys[0]!.inputs.join("");
+    expect(typed).toContain(HOST_NETWORK_COMMAND);
+    expect(typed).toContain("free -h");
+    expect(typed).not.toContain("sudo");
+    expect(events).toEqual([]);
+    await term.dispose();
+  });
 });

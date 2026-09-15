@@ -4,8 +4,21 @@ import {
   MONITOR_DEFAULT_INTERVAL_MS,
   SETUP_PORT,
   SETUP_TOKEN_FILE,
+  TERMINAL_ROOT_MODES,
+  isTerminalRootMode,
+  isValidSshUsername,
   type MailServerPorts,
+  type TerminalInfoResponse,
+  type TerminalRootMode,
 } from "@paas/core";
+
+/** Configuração inválida: a inicialização para com uma mensagem acionável. */
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigError";
+  }
+}
 
 export interface ServerConfig {
   port: number;
@@ -70,6 +83,96 @@ export interface ServerConfig {
   dockerSocketPath: string;
   /** Timeout de inatividade da sessão do terminal web (ms). Default 30 min. */
   terminalIdleTimeoutMs: number;
+  /**
+   * Usuário com que o terminal web abre na VPS (PAAS_TERMINAL_USER).
+   *
+   * null = variável ausente/vazia: comportamento LEGADO, idêntico ao de antes
+   * de a escolha existir (terminal root, varredura e fases digitadas nele).
+   * Uma instalação que só rodou `git pull` não muda de comportamento em
+   * silêncio. "root" é aceito como escolha explícita (desaconselhada).
+   */
+  terminalUser: string | null;
+  /**
+   * Como os comandos que precisam de root rodam quando o terminal NÃO é root
+   * (PAAS_ROOT_MODE): "senha" (sudo no próprio terminal, recomendado) ou
+   * "segundo-plano" (host bridge, com espelho só de visualização). null
+   * quando o terminal é root (legado ou explícito) — aí o modo não se aplica.
+   */
+  terminalRootMode: TerminalRootMode | null;
+}
+
+/**
+ * Lê e valida PAAS_TERMINAL_USER / PAAS_ROOT_MODE. Nunca adivinha: valor
+ * inválido, ou usuário comum sem modo, para a inicialização com ConfigError.
+ */
+function loadTerminalAccess(env: NodeJS.ProcessEnv): Pick<ServerConfig, "terminalUser" | "terminalRootMode"> {
+  const rawUser = env.PAAS_TERMINAL_USER ?? "";
+  const rawMode = env.PAAS_ROOT_MODE ?? "";
+  const modes = TERMINAL_ROOT_MODES.join(" ou ");
+
+  // Modo com erro de digitação é rejeitado mesmo quando não se aplica: um
+  // "senhaa" esquecido no .env viraria surpresa no dia em que o usuário
+  // fosse definido.
+  if (rawMode !== "" && !isTerminalRootMode(rawMode)) {
+    throw new ConfigError(
+      `PAAS_ROOT_MODE inválido (${JSON.stringify(rawMode)}): use ${modes}. ` +
+        `"senha" (recomendado) roda o que precisa de root com sudo no próprio terminal; ` +
+        `"segundo-plano" roda pelo host bridge como root e só espelha a saída no terminal.`,
+    );
+  }
+
+  if (rawUser === "") return { terminalUser: null, terminalRootMode: null };
+  if (rawUser === "root") return { terminalUser: "root", terminalRootMode: null };
+
+  if (!isValidSshUsername(rawUser)) {
+    throw new ConfigError(
+      `PAAS_TERMINAL_USER inválido (${JSON.stringify(rawUser)}): informe "root" ou um usuário Linux existente na VPS ` +
+        `(minúsculas, começando com letra ou "_", até 32 caracteres: letras, números, "_" e "-").`,
+    );
+  }
+  if (rawMode === "") {
+    throw new ConfigError(
+      `PAAS_TERMINAL_USER=${rawUser} exige PAAS_ROOT_MODE=senha (recomendado: o sudo pede a sua senha no próprio terminal) ` +
+        `ou PAAS_ROOT_MODE=segundo-plano (a varredura e as fases rodam como root pelo host bridge, auditadas). ` +
+        `O painel não escolhe por você.`,
+    );
+  }
+  return { terminalUser: rawUser, terminalRootMode: rawMode as TerminalRootMode };
+}
+
+/**
+ * Deriva quem é o terminal DE FATO e como a elevação acontece. No alvo
+ * container (dev) usuário e modo não se aplicam: o terminal continua sendo o
+ * shell do container descartável, como sempre foi.
+ */
+export function resolveTerminalAccess(
+  config: Pick<ServerConfig, "securityTarget" | "terminalUser" | "terminalRootMode">,
+): TerminalInfoResponse {
+  const common = {
+    target: config.securityTarget,
+    configuredUser: config.terminalUser,
+    scheduledMonitoringRunsAsRoot: true as const,
+  };
+  if (config.securityTarget !== "host") {
+    return { ...common, user: "root", rootMode: null, elevation: "container-dev" };
+  }
+  if (config.terminalUser === null) {
+    return { ...common, user: "root", rootMode: null, elevation: "root-legado" };
+  }
+  if (config.terminalUser === "root") {
+    return { ...common, user: "root", rootMode: null, elevation: "root" };
+  }
+  if (config.terminalRootMode === null) {
+    // Inalcançável via loadConfig (que já recusa); protege config montada à
+    // mão de cair em root por omissão.
+    throw new ConfigError(`PAAS_TERMINAL_USER=${config.terminalUser} exige PAAS_ROOT_MODE (senha ou segundo-plano).`);
+  }
+  return {
+    ...common,
+    user: config.terminalUser,
+    rootMode: config.terminalRootMode,
+    elevation: config.terminalRootMode,
+  };
 }
 
 export function loadConfig(): ServerConfig {
@@ -106,5 +209,6 @@ export function loadConfig(): ServerConfig {
     monitorIntervalMs: Number(process.env.PAAS_MONITOR_INTERVAL_MS ?? MONITOR_DEFAULT_INTERVAL_MS),
     dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
     terminalIdleTimeoutMs: Number(process.env.PAAS_TERMINAL_IDLE_TIMEOUT_MS ?? 30 * 60_000),
+    ...loadTerminalAccess(process.env),
   };
 }

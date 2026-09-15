@@ -41,6 +41,23 @@ fi
 
 [ -n "$TOKEN" ] || die "setup token não encontrado (nem no volume $VOLUME_NAME, nem no container tws-panel). O painel está instalado?"
 
+# Usuário do túnel SSH: o escolhido na instalação (PAAS_TERMINAL_USER no .env do
+# repositório) quando não for root — o hardening desliga o SSH de root, então
+# um túnel como root deixaria de funcionar. Sem escolha registrada, usa quem
+# chamou o sudo, como antes.
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+env_value() {
+  [ -r "$ENV_FILE" ] || return 0
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 | tr -d '"'"'"
+}
+TERMINAL_USER="$(env_value PAAS_TERMINAL_USER)"
+ROOT_MODE="$(env_value PAAS_ROOT_MODE)"
+if [ -n "$TERMINAL_USER" ] && [ "$TERMINAL_USER" != "root" ]; then
+  TUNNEL_USER="$TERMINAL_USER"
+else
+  TUNNEL_USER="${SUDO_USER:-SEU_USUARIO}"
+fi
+
 # IP público (melhor esforço; o acesso local sempre funciona)
 PUBLIC_IP="${PAAS_PUBLIC_IP:-}"
 if [ -z "$PUBLIC_IP" ]; then
@@ -49,6 +66,10 @@ if [ -z "$PUBLIC_IP" ]; then
     || hostname -I 2>/dev/null | awk '{print $1}' \
     || echo 'SEU-IP')"
 fi
+
+# No modo "senha" a senha do sudo também é digitada no terminal do painel.
+SUDO_NOTE=""
+[ "$ROOT_MODE" = "senha" ] && SUDO_NOTE=", assim como a senha do sudo que você digitar no terminal do painel"
 
 printf '\a'
 cat <<EOF
@@ -63,14 +84,14 @@ ${BOLD}👉  Abra o painel no navegador${RESET}
 
 ${BOLD}Recomendado — por túnel SSH.${RESET} Numa janela NOVA, no SEU COMPUTADOR, deixe aberto:
 
-${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${SUDO_USER:-SEU_USUARIO}@$PUBLIC_IP${RESET}
+${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP${RESET}
 
 E então acesse:
 
 ${CYAN}${BOLD}      http://localhost:$PORT/?token=$TOKEN${RESET}
 
 ${YELLOW}Direto pelo IP${RESET} — sem criptografia; o token e a senha de admin trafegam
-em texto claro. Use só em rede confiável ou ambiente de teste descartável:
+em texto claro${SUDO_NOTE}. Use só em rede confiável ou ambiente de teste descartável:
 
 ${CYAN}      http://$PUBLIC_IP:$PORT/?token=$TOKEN${RESET}
 

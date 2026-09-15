@@ -23,8 +23,8 @@ import {
   type PhaseParams,
   type TargetRunner,
 } from "@paas/security";
-import type { ServerConfig } from "../config.js";
-import { TerminalRelayRunner } from "./terminal-runner.js";
+import { resolveTerminalAccess, type ServerConfig } from "../config.js";
+import { BackgroundMirrorRunner, TerminalRelayRunner } from "./terminal-runner.js";
 import type { TerminalService } from "./terminal-service.js";
 
 /** Callback de auditoria para comandos executados no host real. */
@@ -143,18 +143,31 @@ export class SecurityService {
             onAudit: (detail) => opts?.audit?.("hardening.host-exec", detail),
           })
         : new ContainerRunner({ name: config.securityTargetContainer });
-    // Visão dupla: os scripts de fase (execStream) e os checks somente-leitura
-    // do scanner (exec) rodam DENTRO do terminal web embutido — saída ao vivo
-    // no xterm + prompts interativos respondidos pelo usuário direto no
-    // terminal. Fallback ao runner direto se o PTY estiver indisponível.
-    this.runner = opts?.terminal
-      ? new TerminalRelayRunner(baseRunner, opts.terminal, {
-          onAudit:
-            config.securityTarget === "host"
-              ? (detail) => opts?.audit?.("hardening.host-exec", detail)
-              : undefined,
-        })
-      : baseRunner;
+    // Como a varredura e as fases chegam ao root depende do modo escolhido na
+    // instalação (PAAS_TERMINAL_USER / PAAS_ROOT_MODE):
+    //  - legado/root: visão dupla — scripts de fase (execStream) e checks
+    //    somente-leitura (exec) rodam DENTRO do terminal web (já root), com
+    //    saída ao vivo e prompts respondidos no xterm; fallback ao runner
+    //    direto se o PTY estiver indisponível;
+    //  - senha: o mesmo, mas cada comando é digitado com sudo no terminal do
+    //    usuário e a senha é pedida a ele (sem fallback para o host bridge);
+    //  - segundo-plano: host bridge direto (root, allowlist, auditoria) com a
+    //    saída só ESPELHADA no terminal — nada é digitado no shell do usuário.
+    // O monitoramento agendado (monitor-service.ts) NÃO passa por aqui: roda
+    // sozinho pelo host bridge como root em qualquer modo.
+    const { elevation } = resolveTerminalAccess(config);
+    const hostAudit =
+      config.securityTarget === "host" ? (detail: string) => opts?.audit?.("hardening.host-exec", detail) : undefined;
+    if (!opts?.terminal) {
+      this.runner = baseRunner;
+    } else if (elevation === "segundo-plano") {
+      this.runner = new BackgroundMirrorRunner(baseRunner, opts.terminal);
+    } else {
+      this.runner = new TerminalRelayRunner(baseRunner, opts.terminal, {
+        onAudit: hostAudit,
+        elevation: elevation === "senha" ? "sudo" : "none",
+      });
+    }
     // O PTY do modo dev (container alvo) precisa do container de pé.
     opts?.terminal?.setEnsureTarget(() => baseRunner.ensureReady());
     this.historyFile = path.join(config.dataDir, "security-history.json");
@@ -231,6 +244,12 @@ export class SecurityService {
       },
     })
       .then(async (report) => {
+        // Modo senha: o scanner transforma erro de check em "unknown"; uma
+        // falha do SUDO (senha errada 3x, sem permissão, tempo esgotado) não
+        // é resultado de check — a varredura inteira falha com a mensagem
+        // acionável, e o relatório parcial não é gravado nem exibido.
+        const sudoFailure = this.runner instanceof TerminalRelayRunner ? this.runner.takeElevationFailure() : null;
+        if (sudoFailure) throw sudoFailure;
         this.lastScan = report;
         // persistidos ANTES de resolver: um restart logo após o scan ainda
         // encontra o relatório (o GET sem fresh nunca bloqueia).

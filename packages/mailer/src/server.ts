@@ -6,7 +6,7 @@
  *
  * NOTA DE VERSÃO: a imagem é `stalwartlabs/mail-server` (linha v0.11.x), a
  * última com API REST de gerenciamento (/api/principal, /api/dkim) e bootstrap
- * determinístico via config.toml montado. A linha nova (`stalwartlabs/stalwart`
+ * determinístico via config.toml (entregue ao container com `docker cp`). A linha nova (`stalwartlabs/stalwart`
  * v0.16+) removeu a API REST em favor de JMAP `x:` e exige um wizard de setup
  * interativo (config.json) — migração fica como roadmap (ver docs/fase-3-email.md).
  */
@@ -20,12 +20,31 @@ import {
   type MailServerPorts,
   type MailServerStatus,
 } from "@paas/core";
+import {
+  copyFilesToContainer,
+  hasLegacyConfigBind,
+  INSPECT_RUNNING_AND_MOUNTS,
+  parseContainerInspect,
+} from "./container-files.js";
 import { run } from "./exec.js";
 
 export const STALWART_IMAGE = "stalwartlabs/mail-server:v0.11.8";
 
+/**
+ * Raiz do Stalwart na imagem (VOLUME anônimo da imagem; `data` recebe o
+ * volume nomeado). Por isso a remoção usa `rm -f -v`: descarta só o volume
+ * anônimo (que guarda apenas etc/, regravado a cada start), nunca o nomeado.
+ */
+export const STALWART_BASE_DIR = "/opt/stalwart-mail";
+/** Diretório lido pelo entrypoint da imagem (`--config etc/config.toml`). */
+export const STALWART_ETC_DIR = `${STALWART_BASE_DIR}/etc`;
+
 export interface StalwartManagerOptions {
-  /** Diretório data/mail/stalwart (config.toml renderizado aqui). */
+  /**
+   * Diretório data/mail/stalwart: espelho local do config.toml, só para
+   * inspeção. O Stalwart NUNCA lê daqui — o arquivo é entregue ao container
+   * pelo daemon (`docker cp`), sem bind mount (ver start()).
+   */
   configDir: string;
   /** Hostname do servidor (ex.: mail.exemplo.com) — vai no HELO/banner. */
   hostname: string;
@@ -34,29 +53,35 @@ export interface StalwartManagerOptions {
   ports: MailServerPorts;
   image?: string;
   containerName?: string;
+  /** Rede Docker (padrão paas-net). */
+  network?: string;
+  /** Volume nomeado dos dados (padrão paas_stalwart_data). */
+  dataVolume?: string;
 }
 
 export class StalwartManager {
   readonly image: string;
   readonly containerName: string;
+  private readonly network: string;
 
   constructor(private readonly opts: StalwartManagerOptions) {
     this.image = opts.image ?? STALWART_IMAGE;
     this.containerName = opts.containerName ?? PAAS_STALWART_CONTAINER;
+    this.network = opts.network ?? PAAS_NETWORK;
   }
 
   /** Garante a rede dedicada do painel (idempotente). */
   private async ensureNetwork(): Promise<void> {
-    const inspect = await run("docker", ["network", "inspect", PAAS_NETWORK]);
+    const inspect = await run("docker", ["network", "inspect", this.network]);
     if (inspect.code === 0) return;
     const create = await run("docker", [
       "network",
       "create",
       "--label",
       `${PAAS_LABEL_MANAGED}=true`,
-      PAAS_NETWORK,
+      this.network,
     ]);
-    if (create.code !== 0) throw new Error(`falha ao criar a rede ${PAAS_NETWORK}: ${create.stderr}`);
+    if (create.code !== 0) throw new Error(`falha ao criar a rede ${this.network}: ${create.stderr}`);
   }
 
   /** Renderiza o config.toml do Stalwart (idempotente, sobrescreve). */
@@ -110,33 +135,60 @@ export class StalwartManager {
     };
   }
 
-  /** Sobe (ou garante) o container do Stalwart com config renderizada. */
+  /** Entrega o config.toml ao container (parado ou rodando) pelo daemon. */
+  private async pushConfig(): Promise<void> {
+    const cp = await copyFilesToContainer(this.containerName, STALWART_BASE_DIR, [
+      { name: "etc/", mode: 0o755 },
+      {
+        name: "etc/config.toml",
+        content: renderConfigToml(this.opts.hostname, this.opts.adminSecret),
+        mode: 0o600,
+      },
+    ]);
+    if (cp.code !== 0) {
+      throw new Error(`falha ao gravar a configuração em ${this.containerName}: ${cp.stderr.trim()}`);
+    }
+  }
+
+  /**
+   * Sobe (ou garante) o container do Stalwart com config renderizada.
+   *
+   * A configuração vai para dentro do container via `docker cp` antes do
+   * start. Antes ela era um bind mount de `configDir`, caminho que só existe
+   * onde o painel roda: com o painel em container (produção), o daemon do
+   * host montava um diretório vazio e o entrypoint da imagem caía no
+   * `--init` com configuração padrão. Um container existente com essa
+   * montagem antiga é removido e recriado (os dados ficam no volume nomeado).
+   */
   async start(): Promise<void> {
     await this.ensureNetwork();
     await this.writeConfig();
 
-    const inspect = await run("docker", ["inspect", this.containerName]);
+    const inspect = await run("docker", ["inspect", "-f", INSPECT_RUNNING_AND_MOUNTS, this.containerName]);
     if (inspect.code === 0) {
-      const start = await run("docker", ["start", this.containerName]);
-      if (start.code !== 0 && !/already in use/i.test(start.stderr)) {
-        // Container existe mas pode estar com config/versão antiga: recria.
-        await run("docker", ["rm", "-f", this.containerName]);
+      const { running, mounts } = parseContainerInspect(inspect.stdout);
+      if (hasLegacyConfigBind(mounts, STALWART_ETC_DIR)) {
+        await run("docker", ["rm", "-f", "-v", this.containerName]);
       } else {
-        return;
+        // Rodando: o arquivo novo vale a partir do próximo restart (como antes).
+        await this.pushConfig();
+        if (running) return;
+        const start = await run("docker", ["start", this.containerName]);
+        if (start.code === 0 || /already in use/i.test(start.stderr)) return;
+        // Container existe mas pode estar com config/versão antiga: recria.
+        await run("docker", ["rm", "-f", "-v", this.containerName]);
       }
     }
 
     const { ports } = this.opts;
-    const etcDir = this.opts.configDir;
     const create = await run("docker", [
-      "run",
-      "-d",
+      "create",
       "--name",
       this.containerName,
       "--restart",
       "unless-stopped",
       "--network",
-      PAAS_NETWORK,
+      this.network,
       "--network-alias",
       "paas-stalwart",
       "-p",
@@ -152,9 +204,7 @@ export class StalwartManager {
       "-p",
       `${ports.http}:8080`,
       "-v",
-      `${PAAS_STALWART_VOLUME}:/opt/stalwart-mail/data`,
-      "-v",
-      `${etcDir}:/opt/stalwart-mail/etc:ro`,
+      `${this.opts.dataVolume ?? PAAS_STALWART_VOLUME}:${STALWART_BASE_DIR}/data`,
       "--label",
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
@@ -163,6 +213,11 @@ export class StalwartManager {
     ]);
     if (create.code !== 0) {
       throw new Error(`falha ao criar ${this.containerName}: ${create.stderr}`);
+    }
+    await this.pushConfig();
+    const start = await run("docker", ["start", this.containerName]);
+    if (start.code !== 0) {
+      throw new Error(`falha ao iniciar ${this.containerName}: ${start.stderr}`);
     }
   }
 

@@ -45,6 +45,18 @@ services:
       # Mesmo caminho da montagem abaixo — o processo precisa enxergar a
       # variável, senão volta ao default antigo (/data/projects).
       PAAS_PROJECTS_DIR: ${PAAS_PROJECTS_DIR:-/opt/tws-projects}
+      # Com qual usuário da VPS o terminal ao vivo abre, e como os comandos
+      # que precisam de root são executados quando ele não é root
+      # ("senha" = sudo dentro do terminal, com a senha digitada pelo
+      # operador; "segundo-plano" = executados como root pela ponte do host,
+      # registrados na Auditoria). Quem grava o par no .env é o install.sh,
+      # a partir do que o operador escolheu na instalação.
+      # SEM valor padrão de propósito: vazio mantém o comportamento de antes
+      # (terminal como root), para que uma instalação existente não mude
+      # sozinha ao atualizar. O servidor recusa subir com usuário não-root
+      # e modo vazio — por isso o instalador sempre grava os dois juntos.
+      PAAS_TERMINAL_USER: ${PAAS_TERMINAL_USER:-}
+      PAAS_ROOT_MODE: ${PAAS_ROOT_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     security_opt:
       - no-new-privileges:true

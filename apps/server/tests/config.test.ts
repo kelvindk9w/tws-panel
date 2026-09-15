@@ -5,7 +5,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAIL_DEFAULT_PORTS, MONITOR_DEFAULT_INTERVAL_MS, SETUP_PORT, SETUP_TOKEN_FILE } from "@paas/core";
-import { loadConfig } from "../src/config.js";
+import { ConfigError, loadConfig, resolveTerminalAccess, type ServerConfig } from "../src/config.js";
 
 const KEYS = [
   "PORT",
@@ -27,6 +27,8 @@ const KEYS = [
   "PAAS_PUBLIC_IP",
   "PAAS_PUBLIC_IPV6",
   "PAAS_MONITOR_INTERVAL_MS",
+  "PAAS_TERMINAL_USER",
+  "PAAS_ROOT_MODE",
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -43,6 +45,11 @@ afterEach(() => {
 function setEnv(key: (typeof KEYS)[number], value: string): void {
   if (!saved.has(key)) saved.set(key, process.env[key]);
   process.env[key] = value;
+}
+
+function unsetEnv(key: (typeof KEYS)[number]): void {
+  if (!saved.has(key)) saved.set(key, process.env[key]);
+  delete process.env[key];
 }
 
 describe("loadConfig", () => {
@@ -108,5 +115,128 @@ describe("loadConfig", () => {
     expect(loadConfig().securityTarget).toBe("container");
     setEnv("PAAS_TARGET", "host");
     expect(loadConfig().securityTarget).toBe("host");
+  });
+});
+
+describe("usuário do terminal e modo de root (PAAS_TERMINAL_USER / PAAS_ROOT_MODE)", () => {
+  it("sem PAAS_TERMINAL_USER: comportamento legado (terminal root, execução nele)", () => {
+    // Compatibilidade: uma instalação que só rodou `git pull` não tem a
+    // variável no .env e NÃO pode mudar de comportamento em silêncio.
+    unsetEnv("PAAS_TERMINAL_USER");
+    unsetEnv("PAAS_ROOT_MODE");
+    const config = loadConfig();
+    expect(config.terminalUser).toBeNull();
+    expect(config.terminalRootMode).toBeNull();
+  });
+
+  it("PAAS_TERMINAL_USER vazio (compose com ${VAR:-}) também é legado", () => {
+    setEnv("PAAS_TERMINAL_USER", "");
+    unsetEnv("PAAS_ROOT_MODE");
+    expect(loadConfig().terminalUser).toBeNull();
+  });
+
+  it("usuário comum + modo senha", () => {
+    setEnv("PAAS_TERMINAL_USER", "kelvin");
+    setEnv("PAAS_ROOT_MODE", "senha");
+    const config = loadConfig();
+    expect(config.terminalUser).toBe("kelvin");
+    expect(config.terminalRootMode).toBe("senha");
+  });
+
+  it("usuário comum + modo segundo-plano", () => {
+    setEnv("PAAS_TERMINAL_USER", "deploy_1");
+    setEnv("PAAS_ROOT_MODE", "segundo-plano");
+    const config = loadConfig();
+    expect(config.terminalUser).toBe("deploy_1");
+    expect(config.terminalRootMode).toBe("segundo-plano");
+  });
+
+  it("root explícito é aceito e o modo não se aplica", () => {
+    setEnv("PAAS_TERMINAL_USER", "root");
+    unsetEnv("PAAS_ROOT_MODE");
+    const config = loadConfig();
+    expect(config.terminalUser).toBe("root");
+    expect(config.terminalRootMode).toBeNull();
+    setEnv("PAAS_ROOT_MODE", "senha");
+    expect(loadConfig().terminalRootMode).toBeNull();
+  });
+
+  it("usuário comum SEM modo falha a inicialização em vez de adivinhar", () => {
+    setEnv("PAAS_TERMINAL_USER", "kelvin");
+    unsetEnv("PAAS_ROOT_MODE");
+    expect(() => loadConfig()).toThrow(ConfigError);
+    expect(() => loadConfig()).toThrow(/PAAS_ROOT_MODE.*senha.*segundo-plano/);
+  });
+
+  it.each(["Kelvin", "1abc", "ke lvin", "kelvin;rm -rf /", "-kelvin", "a".repeat(40), "kelvin\r"])(
+    "PAAS_TERMINAL_USER inválido (%j) é rejeitado com mensagem clara",
+    (valor) => {
+      setEnv("PAAS_TERMINAL_USER", valor);
+      setEnv("PAAS_ROOT_MODE", "senha");
+      expect(() => loadConfig()).toThrow(ConfigError);
+      expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_USER/);
+    },
+  );
+
+  it.each(["SENHA", "sudo", "segundo_plano", "background"])("PAAS_ROOT_MODE inválido (%j) é rejeitado", (valor) => {
+    setEnv("PAAS_TERMINAL_USER", "kelvin");
+    setEnv("PAAS_ROOT_MODE", valor);
+    expect(() => loadConfig()).toThrow(ConfigError);
+    expect(() => loadConfig()).toThrow(/PAAS_ROOT_MODE/);
+  });
+
+  it("PAAS_ROOT_MODE inválido é rejeitado mesmo sem usuário (erro de digitação não passa)", () => {
+    unsetEnv("PAAS_TERMINAL_USER");
+    setEnv("PAAS_ROOT_MODE", "senhaa");
+    expect(() => loadConfig()).toThrow(/PAAS_ROOT_MODE/);
+  });
+});
+
+describe("resolveTerminalAccess", () => {
+  const base = { securityTarget: "host", terminalUser: null, terminalRootMode: null } as const;
+  const resolve = (over: Partial<Pick<ServerConfig, "securityTarget" | "terminalUser" | "terminalRootMode">>) =>
+    resolveTerminalAccess({ ...base, ...over });
+
+  it("legado no host: root, elevation root-legado", () => {
+    expect(resolve({})).toEqual({
+      target: "host",
+      user: "root",
+      configuredUser: null,
+      rootMode: null,
+      elevation: "root-legado",
+      scheduledMonitoringRunsAsRoot: true,
+    });
+  });
+
+  it("root explícito", () => {
+    expect(resolve({ terminalUser: "root" })).toMatchObject({ user: "root", configuredUser: "root", elevation: "root" });
+  });
+
+  it("usuário comum sem modo nunca vira root por omissão", () => {
+    expect(() => resolve({ terminalUser: "kelvin" })).toThrow(ConfigError);
+  });
+
+  it("senha e segundo-plano no host", () => {
+    expect(resolve({ terminalUser: "kelvin", terminalRootMode: "senha" })).toMatchObject({
+      user: "kelvin",
+      rootMode: "senha",
+      elevation: "senha",
+    });
+    expect(resolve({ terminalUser: "kelvin", terminalRootMode: "segundo-plano" })).toMatchObject({
+      user: "kelvin",
+      rootMode: "segundo-plano",
+      elevation: "segundo-plano",
+    });
+  });
+
+  it("alvo container (dev): usuário/modo não se aplicam, mas o valor configurado é informado", () => {
+    expect(resolve({ securityTarget: "container", terminalUser: "kelvin", terminalRootMode: "senha" })).toEqual({
+      target: "container",
+      user: "root",
+      configuredUser: "kelvin",
+      rootMode: null,
+      elevation: "container-dev",
+      scheduledMonitoringRunsAsRoot: true,
+    });
   });
 });

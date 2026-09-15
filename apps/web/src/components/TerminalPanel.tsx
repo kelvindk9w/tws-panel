@@ -16,17 +16,48 @@
  *  - ao validar o token (prop `enabled` → true), o WS conecta IMEDIATAMENTE;
  *  - começa RECOLHIDO, com a orientação fixa no cabeçalho ("apenas observe;
  *    aja SOMENTE quando for solicitado");
- *  - nota fixa explicando por que o prompt é root (a sessão entra no host a
- *    partir de um container privilegiado, não por SSH) — citando pelo NOME o
- *    usuário não-root detectado na varredura, quando o wizard o conhece
- *    (prop `sshUser`), para que ninguém ache que o usuário criado na
- *    instalação foi ignorado; sem nome, a nota fica genérica;
- *  - botão "abrir como <usuário>" no cabeçalho, só com `sshUser` VÁLIDO
- *    (isValidSshUsername) e sessão conectada: digita `su - <usuário>` pelo
- *    MESMO caminho de input do xterm (relay puro, nada logado), para o
- *    operador VER o usuário que criou no prompt ao vivo. A sessão segue root
- *    por baixo — o hardening não passa a rodar como não-root — e um `exit`
- *    digitado por ele volta ao root; o title do botão diz isso;
+ *  - o cabeçalho diz a VERDADE sobre com qual usuário a sessão abre e como
+ *    os comandos de root rodam, lendo GET /api/terminal/info (prop `info`,
+ *    buscada pelo wizard só com o terminal liberado). Nunca afirma um modo
+ *    que o servidor não declarou: enquanto a info não chega (ou se falhou),
+ *    diz só isso. Por modo (`elevation`):
+ *      · senha: sessão como o usuário; o que precisa de root roda aqui com
+ *        sudo e a senha DELE é pedida neste terminal;
+ *      · segundo-plano: sessão como o usuário; o root roda em segundo plano
+ *        pelo host bridge, a saída aqui é só visualização e fica na Auditoria;
+ *      · root / root-legado: sessão root + risco de deixar a aba aberta; no
+ *        legado, como mudar (./scripts/install.sh --reconfigure-terminal);
+ *      · container-dev: ambiente de desenvolvimento (container descartável);
+ *    nos modos não-root, uma linha avisa que o monitoramento AGENDADO roda
+ *    sozinho como root em segundo plano, auditado (não há quem digite senha);
+ *  - botão "abrir como <usuário>" SÓ em sessão root (root/root-legado), com
+ *    `sshUser` VÁLIDO (isValidSshUsername) e sessão conectada: digita
+ *    `su - <usuário>` pelo MESMO caminho de input do xterm (relay puro, nada
+ *    logado), para o operador inspecionar o servidor como o usuário detectado.
+ *    A sessão segue root por baixo e um `exit` volta ao root (o title diz
+ *    isso). Nos modos senha/segundo-plano o terminal JÁ abre como o usuário:
+ *    o botão não existe (um `su -` ali só pediria senha à toa);
+ *  - frames de controle do servidor (prefixo "\u0000paas-control:", decodificados
+ *    com parseTerminalControl) NUNCA são escritos no xterm;
+ *  - pedido de senha do sudo (sudo-password-requested): expande, pulsa, rola
+ *    o painel para o centro da tela e dá FOCO ao xterm. O alerta fica ACIMA do
+ *    terminal, dentro da janela, sem sobrepor a área de digitação — um modal
+ *    no meio da tela cobriria o terminal e roubaria o foco. Ele NÃO tem campo
+ *    de senha: a senha é digitada no xterm e segue o relay puro; o painel não
+ *    lê, não guarda e não inspeciona o que é digitado. Texto de transparência
+ *    obrigatório (por onde a senha passa e o que o painel não faz com ela);
+ *  - transporte inseguro: página fora de https E fora do túnel SSH
+ *    (localhost/127.0.0.1/[::1]) → aviso destacado no alerta de que a senha
+ *    trafegaria SEM criptografia. Não bloqueia a digitação (a decisão é do
+ *    operador), mas o risco fica inequívoco;
+ *  - desfechos do prompt: rejected mantém o alerta com "senha incorreta";
+ *    answered/session-ended fecham; exhausted/not-permitted/timeout trocam o
+ *    pedido por uma explicação acionável até o operador dispensar;
+ *  - modo segundo-plano: indicador discreto do comando root em execução
+ *    (background-exec start/end); a saída espelhada chega como frame comum;
+ *  - ao cair o WebSocket, alerta de senha e indicador são limpos: o servidor
+ *    reenvia o pedido de senha a quem reconecta com o prompt aberto, e um
+ *    indicador antigo poderia afirmar algo que já terminou;
  *  - altura colapsável/expansível, estado persistido em sessionStorage;
  *  - alerta pulsante (evento "paas:terminal-attention") quando uma fase
  *    precisa de ação no terminal — o painel se expande sozinho;
@@ -41,9 +72,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { isValidSshUsername } from "@paas/core";
+import {
+  isValidSshUsername,
+  parseTerminalControl,
+  type SudoPromptOutcome,
+  type TerminalControlMessage,
+  type TerminalInfoResponse,
+} from "@paas/core";
 import { getSetupToken } from "@/lib/api";
-import { ChevronDown, ChevronUp, Info, Lock, TerminalSquare } from "lucide-react";
+import { pageLocation } from "@/lib/page-location";
+import { isInsecureTransport } from "@/lib/terminal-info";
+import { ChevronDown, ChevronUp, Cog, Info, KeyRound, Lock, ShieldAlert, TerminalSquare } from "lucide-react";
 
 /** Evento disparado pela UI (ex.: fase aguardando confirmação) para acender
  * o alerta pulsante do terminal ("olhe o terminal"). */
@@ -122,13 +161,34 @@ interface TerminalPanelProps {
    * segue genérica, e nenhum uso existente do painel precisa mudar.
    */
   sshUser?: string | null;
+  /**
+   * Com qual usuário o terminal abre e como o root é obtido
+   * (GET /api/terminal/info). Ausente/null enquanto carrega ou se falhou —
+   * o cabeçalho então não afirma usuário nenhum.
+   */
+  info?: TerminalInfoResponse | null;
+  /** A consulta de /api/terminal/info falhou. */
+  infoUnavailable?: boolean;
 }
 
-export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
+/** Desfechos do prompt do sudo que exigem explicação (não fecham sozinhos). */
+type SudoFailureOutcome = Extract<SudoPromptOutcome, "exhausted" | "not-permitted" | "timeout">;
+
+type SudoAlert =
+  /** O sudo está pedindo a senha agora. `retry`: a anterior foi recusada. */
+  | { kind: "prompt"; user: string | null; retry: boolean; seq: number }
+  /** O sudo desistiu / não pode / o painel cansou de esperar. */
+  | { kind: "failed"; user: string | null; outcome: SudoFailureOutcome };
+
+export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: TerminalPanelProps) {
   // Começa RECOLHIDO por padrão (o usuário expande se quiser acompanhar).
   const [open, setOpen] = useState(() => sessionStorage.getItem(STORAGE_KEY) === "1");
   const [attention, setAttention] = useState(false);
   const [status, setStatus] = useState<WsStatus>("connecting");
+  const [sudoAlert, setSudoAlert] = useState<SudoAlert | null>(null);
+  /** Comando root rodando agora em segundo plano (modo segundo-plano). */
+  const [backgroundCommand, setBackgroundCommand] = useState<string | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -144,6 +204,43 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
    */
   const sendInput = useCallback((data: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(data);
+  }, []);
+
+  /**
+   * Mensagens de controle do servidor (nunca chegam ao xterm). Só usa
+   * setters de estado — estável, pode ser chamada de dentro do WS.
+   */
+  const handleControl = useCallback((msg: TerminalControlMessage) => {
+    switch (msg.type) {
+      case "sudo-password-requested":
+        setSudoAlert((prev) => ({
+          kind: "prompt",
+          user: msg.user,
+          // o "senha incorreta" sobrevive ao novo pedido que vem logo depois
+          retry: prev?.kind === "prompt" ? prev.retry : false,
+          seq: prev?.kind === "prompt" ? prev.seq + 1 : 0,
+        }));
+        setAttention(true);
+        setOpen(true);
+        return;
+      case "sudo-password-prompt-closed":
+        setSudoAlert((prev) => {
+          const user = prev?.user ?? null;
+          switch (msg.outcome) {
+            case "rejected":
+              return { kind: "prompt", user, retry: true, seq: prev?.kind === "prompt" ? prev.seq : 0 };
+            case "answered":
+            case "session-ended":
+              return null;
+            default:
+              return { kind: "failed", user, outcome: msg.outcome };
+          }
+        });
+        return;
+      case "background-exec":
+        setBackgroundCommand(msg.state === "start" ? msg.command : null);
+        return;
+    }
   }, []);
 
   // -------------------------------------------------------------- WS + xterm
@@ -187,12 +284,22 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
         }
       };
       ws.onmessage = (ev) => {
-        if (typeof ev.data === "string") term.write(ev.data);
+        if (typeof ev.data === "string") {
+          // Controle primeiro: um frame de controle NUNCA é escrito no xterm.
+          const control = parseTerminalControl(ev.data);
+          if (control) handleControl(control);
+          else term.write(ev.data);
+        }
         else if (ev.data instanceof Blob) void ev.data.arrayBuffer().then((b) => term.write(new Uint8Array(b)));
       };
       ws.onclose = (ev: CloseEvent) => {
         if (disposed) return;
         wsRef.current = null;
+        // Sem conexão, nada disso é confirmável: o servidor reenvia o pedido de
+        // senha a quem reconecta com o prompt aberto; um indicador de segundo
+        // plano antigo afirmaria algo que talvez já tenha terminado.
+        setSudoAlert((prev) => (prev?.kind === "prompt" ? null : prev));
+        setBackgroundCommand(null);
         if (ev.code === WS_CLOSE_BUSY || ev.code === WS_CLOSE_REPLACED) {
           // Sessão em uso por OUTRA aba/janela (ou esta aba reanexou por outra
           // conexão): NÃO reconectar — reconectar aqui é o que gerava o
@@ -276,8 +383,21 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
    * disso: nenhum botão e nenhum byte enviado.
    */
   const userShellName = sshUser && isValidSshUsername(sshUser) ? sshUser : null;
-  // Sessão caída/em outra aba não aceita input: não ofereça a ação.
-  const canOpenUserShell = userShellName !== null && status === "online";
+  const elevation = info?.elevation ?? null;
+  const rootSession = elevation === "root" || elevation === "root-legado";
+  // Só faz sentido trocar de usuário numa sessão que COMPROVADAMENTE é root;
+  // sessão caída/em outra aba não aceita input: não ofereça a ação.
+  const canOpenUserShell = rootSession && userShellName !== null && status === "online";
+
+  // ------------------------------------------- pedido de senha: foco no xterm
+  // A pessoa vai digitar AGORA: painel no centro da tela e cursor no terminal.
+  // Repete a cada novo pedido (seq), inclusive depois de uma senha recusada.
+  const promptSeq = sudoAlert?.kind === "prompt" ? sudoAlert.seq : null;
+  useEffect(() => {
+    if (promptSeq === null || !open) return;
+    sectionRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    termRef.current?.focus();
+  }, [promptSeq, open]);
 
   const openUserShell = useCallback(() => {
     if (!userShellName || !isValidSshUsername(userShellName)) return;
@@ -328,6 +448,7 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
 
   return (
     <section
+      ref={sectionRef}
       aria-label="Terminal do servidor"
       className="overflow-hidden rounded-xl border border-[#22302a] bg-[#0b0f0d] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_12px_40px_rgba(0,0,0,0.5)]"
     >
@@ -366,39 +487,46 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
         </span>
       </button>
 
-      {/* Por que a sessão é root — evita que o operador estranhe o "root@" no
-          prompt achando que o usuário não-root criado na instalação foi ignorado.
-          Com o nome detectado na varredura (prop `sshUser`), a nota o cita: dizer
-          "o usuário que você criou" no abstrato não bastava — o operador que
-          reportou o problema leu isso e continuou achando que tinha sido ignorado. */}
+      {/* Com qual usuário a sessão abre e como o root é obtido — a partir do
+          que a instalação configurou (info), nunca de uma suposição. */}
       <div className="flex items-start gap-2 border-t border-white/5 px-4 py-1.5">
-        <p className="flex flex-1 items-start gap-1.5 text-[10px] leading-relaxed text-emerald-100/45">
-          <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-          {sshUser ? (
-            <span>
-              Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário{" "}
-              <strong className="font-mono text-emerald-100/70">{sshUser}</strong>, que você criou na
-              instalação, <strong>não foi ignorado</strong> — ele continua sendo o do seu acesso por
-              SSH.
-            </span>
-          ) : (
-            <span>
-              Esta sessão aparece como root porque é isso que o hardening do servidor exige. O usuário
-              não-root que você criou na instalação continua sendo o do seu acesso por SSH.
-            </span>
+        <div className="flex flex-1 flex-col gap-1 text-[10px] leading-relaxed text-emerald-100/45">
+          <p className="flex items-start gap-1.5" data-testid="terminal-session-note">
+            <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+            <SessionNote info={info ?? null} unavailable={infoUnavailable === true} sshUser={userShellName} />
+          </p>
+          {(elevation === "senha" || elevation === "segundo-plano") && (
+            <p className="flex items-start gap-1.5" data-testid="terminal-monitoring-note">
+              <Cog className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+              <span>
+                O monitoramento automático agendado roda sozinho como root em segundo plano (não há
+                ninguém para digitar senha) e cada comando dele fica registrado na <AuditLink />.
+              </span>
+            </p>
           )}
-        </p>
-        {/* Ver o usuário criado, sem quebrar o hardening: a sessão continua root
-            (scanner e fases dependem disso) — o botão só abre um shell DELE
-            dentro da sessão, digitando o comando pelo mesmo caminho do input. */}
+          {backgroundCommand !== null && (
+            <p
+              className="flex items-center gap-1.5 text-amber-200/80"
+              data-testid="background-exec-indicator"
+              title={backgroundCommand}
+            >
+              <Cog className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
+              <span className="shrink-0">Executando em segundo plano como root:</span>
+              <code className="truncate font-mono text-amber-100/90">{backgroundCommand}</code>
+            </p>
+          )}
+        </div>
+        {/* Sessão root: abre um shell do usuário detectado DENTRO dela,
+            digitando o comando pelo mesmo caminho do input (a sessão segue
+            root por baixo). Nos modos em que o terminal já é do usuário, some. */}
         {canOpenUserShell && (
           <button
             type="button"
             onClick={openUserShell}
-            title={`Abre um shell de ${sshUser} dentro desta sessão (o prompt vira ${sshUser}@…). A sessão continua sendo root por baixo — o hardening NÃO passa a rodar como não-root. Digite exit no terminal para voltar ao root.`}
+            title={`Abre um shell de ${userShellName} dentro desta sessão (o prompt vira ${userShellName}@…). A sessão continua sendo root por baixo — a varredura e as fases NÃO passam a rodar como ${userShellName}. Digite exit no terminal para voltar ao root.`}
             className="shrink-0 rounded border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100/80 transition-colors hover:bg-emerald-400/20"
           >
-            {`Abrir como ${sshUser}`}
+            {`Abrir como ${userShellName}`}
           </button>
         )}
       </div>
@@ -418,6 +546,14 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
         Interferir por conta própria pode interromper ou quebrar o processo.
       </p>
 
+      {sudoAlert && (
+        <SudoPasswordAlert
+          alert={sudoAlert}
+          fallbackUser={info && info.elevation !== "root" && info.elevation !== "root-legado" ? info.user : null}
+          onDismiss={() => setSudoAlert(null)}
+        />
+      )}
+
       <div
         ref={containerRef}
         data-testid="terminal-container"
@@ -425,5 +561,203 @@ export function TerminalPanel({ enabled, sshUser }: TerminalPanelProps) {
         style={{ height: open ? PANEL_HEIGHT_PX : 0, display: open ? "block" : "none" }}
       />
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Textos do cabeçalho e do alerta de senha
+// ---------------------------------------------------------------------------
+
+/** Link para a Auditoria (a página exige a conta de administrador). */
+function AuditLink() {
+  return (
+    <a href="/audit" className="underline decoration-dotted underline-offset-2 hover:text-emerald-100/80">
+      Auditoria
+    </a>
+  );
+}
+
+const NAME = "font-mono text-emerald-100/70";
+
+function SessionNote({
+  info,
+  unavailable,
+  sshUser,
+}: {
+  info: TerminalInfoResponse | null;
+  unavailable: boolean;
+  sshUser: string | null;
+}) {
+  if (!info) {
+    return unavailable ? (
+      <span>
+        Não foi possível confirmar com qual usuário esta sessão abre (o painel não respondeu). O
+        prompt do terminal mostra o usuário real.
+      </span>
+    ) : (
+      <span>Verificando com qual usuário esta sessão abre…</span>
+    );
+  }
+
+  // Na sessão root, o operador que criou um usuário na instalação precisa ler
+  // que ele não foi ignorado — dizer isso no abstrato não bastava.
+  const sshUserLine = sshUser ? (
+    <>
+      {" "}O usuário <strong className={NAME}>{sshUser}</strong> <strong>não foi ignorado</strong> — ele
+      continua sendo o do seu acesso por SSH.
+    </>
+  ) : null;
+
+  switch (info.elevation) {
+    case "senha":
+      return (
+        <span>
+          Esta sessão abre como <strong className={NAME}>{info.user}</strong>. Quando a varredura ou uma
+          fase precisa de root, o comando roda aqui mesmo com <strong>sudo</strong> e a senha de{" "}
+          <strong className={NAME}>{info.user}</strong> é pedida neste terminal.
+        </span>
+      );
+    case "segundo-plano":
+      return (
+        <span>
+          Esta sessão abre como <strong className={NAME}>{info.user}</strong>. Os comandos que precisam
+          de root (varredura e fases) rodam em segundo plano como root, fora deste shell: a saída
+          deles aparece aqui só para visualização e cada comando fica registrado na <AuditLink /> (a
+          página fica disponível depois de criar a conta de administrador).
+        </span>
+      );
+    case "root":
+      return (
+        <span>
+          Esta sessão abre como <strong className={NAME}>root</strong>, conforme escolhido na instalação.
+          Tudo o que for digitado aqui roda com poder total sobre o servidor — não deixe esta aba aberta
+          sem necessidade.{sshUserLine}
+        </span>
+      );
+    case "root-legado":
+      return (
+        <span>
+          Esta sessão abre como <strong className={NAME}>root</strong>: esta instalação não definiu um
+          usuário para o terminal, então ele segue como nas versões anteriores. Tudo o que for digitado
+          aqui roda com poder total sobre o servidor — não deixe esta aba aberta sem necessidade. Para
+          abrir como um usuário comum, rode no servidor{" "}
+          <code className={NAME}>./scripts/install.sh --reconfigure-terminal</code>.{sshUserLine}
+        </span>
+      );
+    case "container-dev":
+      return (
+        <span>
+          Ambiente de desenvolvimento: este é o terminal do container de testes descartável, não o de
+          uma VPS real. Usuário e modo de root da instalação não se aplicam aqui.
+        </span>
+      );
+  }
+}
+
+function SudoPasswordAlert({
+  alert,
+  fallbackUser,
+  onDismiss,
+}: {
+  alert: SudoAlert;
+  /** Usuário da sessão (modos não-root), quando o pedido não trouxe o nome. */
+  fallbackUser: string | null;
+  onDismiss: () => void;
+}) {
+  const user = alert.user ?? fallbackUser;
+  const userLabel = user ? (
+    <strong className="font-mono text-amber-100">{user}</strong>
+  ) : (
+    <strong>do terminal</strong>
+  );
+  // Calculado a cada render: é o endereço com que ESTA página foi aberta.
+  const insecure = isInsecureTransport(pageLocation());
+
+  return (
+    <div
+      role="alert"
+      data-testid="sudo-password-alert"
+      className="border-y-2 border-amber-500/70 bg-amber-500/15 px-4 py-3 text-xs leading-relaxed text-amber-50"
+    >
+      {alert.kind === "prompt" ? (
+        <div className="mx-auto flex max-w-2xl flex-col gap-2">
+          <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+            <KeyRound className="h-4 w-4 shrink-0" aria-hidden /> O sudo está pedindo a senha
+          </p>
+          {alert.retry && (
+            <p className="rounded bg-red-500/20 px-2 py-1 font-semibold text-red-200">
+              ❌ Senha incorreta, tente de novo.
+            </p>
+          )}
+          <p className="text-[13px]">
+            Digite a senha do usuário {userLabel} no terminal abaixo e pressione <strong>Enter</strong>.
+            Os caracteres não aparecem enquanto você digita — isso é normal.
+          </p>
+          <p className="text-amber-100/80">
+            A senha vai do seu navegador, passa pelo painel e chega ao terminal da sua VPS. O painel não
+            grava, não registra e não envia essa senha para nenhum outro lugar. O código é aberto e pode
+            ser conferido.
+          </p>
+          {insecure && (
+            <p
+              data-testid="sudo-insecure-transport"
+              className="flex items-start gap-2 rounded border border-red-500/60 bg-red-600/25 px-2 py-1.5 text-red-100"
+            >
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+              <span>
+                <strong>Atenção: esta página não está protegida.</strong> Ela foi aberta sem https e fora
+                do túnel SSH, então a senha trafegaria <strong>SEM criptografia</strong> pela internet e
+                poderia ser lida no caminho. Recomendado: não digite agora — feche esta página e acesse
+                o painel pelo túnel SSH (endereço localhost), como explica o README. A decisão é sua: a
+                digitação não foi bloqueada.
+              </span>
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="mx-auto flex max-w-2xl flex-col gap-2">
+          <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+            <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />
+            {alert.outcome === "exhausted" && "O sudo desistiu após 3 tentativas"}
+            {alert.outcome === "not-permitted" && "Sem permissão de sudo"}
+            {alert.outcome === "timeout" && "Tempo esgotado aguardando a senha"}
+          </p>
+          {alert.outcome === "exhausted" && (
+            <p>
+              A senha foi recusada 3 vezes e o sudo desistiu. Nada foi executado como root. Para
+              continuar, execute de novo a varredura ou a fase e digite a senha correta quando ela for
+              pedida.
+            </p>
+          )}
+          {alert.outcome === "not-permitted" && (
+            <p>
+              O usuário {userLabel} não tem permissão de sudo neste servidor, então nada foi executado
+              como root. Para corrigir, entre no servidor como root e rode{" "}
+              <code className="rounded bg-black/50 px-1 font-mono text-emerald-300">
+                usermod -aG sudo {user ?? "<usuário>"}
+              </code>
+              . Depois reconecte com uma sessão nova (digite <code className="font-mono">exit</code> neste
+              terminal e recarregue a página) — a permissão só vale para sessões abertas depois da
+              mudança — e execute de novo.
+            </p>
+          )}
+          {alert.outcome === "timeout" && (
+            <p>
+              Tempo esgotado aguardando a senha: o painel cancelou o pedido e nada foi executado como
+              root. Execute de novo quando puder digitar a senha no terminal.
+            </p>
+          )}
+          <div>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="rounded border border-amber-400/50 bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium hover:bg-amber-400/25"
+            >
+              Entendi
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

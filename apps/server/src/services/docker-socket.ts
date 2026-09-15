@@ -12,7 +12,8 @@
  * pelo próprio daemon Docker, que JÁ está acessível via /var/run/docker.sock:
  *  - alvo "host": container helper DESCARTÁVEL (--rm, privileged, pid=host)
  *    com Tty:true rodando `nsenter -t 1 ... -- bash -l` — um shell interativo
- *    real na VPS, idêntico ao SSH;
+ *    real na VPS, idêntico ao SSH. Com PAAS_TERMINAL_USER=<usuário comum>, o
+ *    shell é `nsenter ... -- runuser -l <usuário>` (ver buildHostTerminalCmd);
  *  - alvo "container" (dev): `docker exec` com Tty:true no container alvo.
  *
  * Em ambos os casos o I/O é um stream CRU hijacked (Tty:true = sem multiplex
@@ -25,7 +26,8 @@
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
-import type { ServerConfig } from "../config.js";
+import { isValidSshUsername } from "@paas/core";
+import { resolveTerminalAccess, type ServerConfig } from "../config.js";
 
 /** Handle de um PTY remoto: stream cru + resize + encerramento. */
 export interface RemotePty {
@@ -183,13 +185,81 @@ async function ensureImage(socketPath: string, image: string): Promise<void> {
  */
 const activeHelperNames = new Set<string>();
 
-async function openHostPty(socketPath: string, image: string): Promise<RemotePty> {
+/** Entrada nos namespaces do PID 1 do host (mesmas flags do host bridge). */
+const NSENTER_HOST = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--"] as const;
+
+/**
+ * argv do processo principal do helper do terminal no host.
+ *
+ *  - null / "root" (legado ou escolha explícita): `bash -l` como root —
+ *    EXATAMENTE o argv de antes de o usuário ser configurável;
+ *  - usuário comum: `runuser -l <usuário>`.
+ *
+ * Por que runuser: o nsenter já roda como root, e o runuser (util-linux,
+ * pacote Essential — presente em /usr/sbin/runuser em todo Ubuntu 22.04 e
+ * 24.04) é a ferramenta feita para root trocar de usuário SEM autenticação
+ * (não passa pelo PAM auth, só pela sessão "runuser-l"); `-l` dá shell de
+ * login com o ambiente do usuário (HOME, shell do /etc/passwd, profile),
+ * preservando TERM. `su -` funcionaria igual, mas depende de pam_rootok para
+ * não pedir senha. O CVE-2016-2779 (TIOCSTI para "escapar" para a sessão
+ * pai) não tem alvo aqui: não existe shell root acima do runuser — quando o
+ * shell do usuário sai, o helper inteiro termina.
+ *
+ * O nome vai como ELEMENTO SEPARADO do argv (nunca numa string de shell) e é
+ * revalidado aqui mesmo já tendo sido validado no config.
+ */
+export function buildHostTerminalCmd(user: string | null): string[] {
+  if (user === null || user === "root") return [...NSENTER_HOST, "bash", "-l"];
+  if (!isValidSshUsername(user)) throw new DockerSocketError(`usuário do terminal inválido: ${JSON.stringify(user)}`);
+  return [...NSENTER_HOST, "runuser", "-l", user];
+}
+
+/**
+ * Confirma que o usuário existe NA VPS antes de abrir o terminal: sem isso o
+ * runuser sairia na hora ("user does not exist"), a sessão morreria sem
+ * explicação — e nunca se cai para root no lugar. Helper não interativo,
+ * `id -u <usuário>` nos namespaces do host, removido depois de consultado.
+ */
+async function assertHostUserExists(socketPath: string, image: string, user: string): Promise<void> {
+  const name = `paas-terminal-check-${randomBytes(4).toString("hex")}`;
+  const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {
+    Image: image,
+    Cmd: [...NSENTER_HOST, "id", "-u", user],
+    HostConfig: { Privileged: true, PidMode: "host" },
+  });
+  if (create.status !== 201) {
+    throw new DockerSocketError(`falha ao verificar o usuário do terminal: ${errorMessage(create.body)}`, create.status);
+  }
+  const id = (JSON.parse(create.body.toString("utf8")) as { Id: string }).Id;
+  let statusCode: number;
+  try {
+    const start = await request(socketPath, "POST", `/containers/${id}/start`);
+    if (start.status !== 204 && start.status !== 304) {
+      throw new DockerSocketError(`falha ao verificar o usuário do terminal: ${errorMessage(start.body)}`, start.status);
+    }
+    const wait = await request(socketPath, "POST", `/containers/${id}/wait`);
+    statusCode = (JSON.parse(wait.body.toString("utf8")) as { StatusCode?: number }).StatusCode ?? -1;
+  } finally {
+    await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
+  }
+  if (statusCode !== 0) {
+    throw new DockerSocketError(
+      `o usuário "${user}" definido em PAAS_TERMINAL_USER não existe na VPS (id -u saiu com código ${statusCode}). ` +
+        `Crie o usuário (ex.: sudo adduser ${user}) ou corrija PAAS_TERMINAL_USER no .env e reinicie o painel. ` +
+        `O terminal não foi aberto como root no lugar dele.`,
+    );
+  }
+}
+
+async function openHostPty(socketPath: string, image: string, user: string | null): Promise<RemotePty> {
   await ensureImage(socketPath, image);
+  const cmd = buildHostTerminalCmd(user);
+  if (user !== null && user !== "root") await assertHostUserExists(socketPath, image, user);
   const name = `paas-terminal-${randomBytes(4).toString("hex")}`;
   const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {
     Image: image,
     // Shell de login interativo NOS NAMESPACES DO HOST (bash é o do host).
-    Cmd: ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "bash", "-l"],
+    Cmd: cmd,
     Env: ["TERM=xterm-256color"],
     Tty: true,
     OpenStdin: true,
@@ -359,7 +429,10 @@ let periodicReaperArmed = false;
 /**
  * Monta a fábrica de PTY conforme o alvo de segurança configurado:
  *  - PAAS_TARGET=host → shell interativo no HOST (helper nsenter descartável);
- *  - alvo container (dev) → bash interativo no container alvo.
+ *  - alvo container (dev) → bash interativo no container alvo. Aqui
+ *    PAAS_TERMINAL_USER/PAAS_ROOT_MODE NÃO se aplicam: o container de dev é
+ *    descartável, não tem os usuários da VPS, e o comportamento continua o
+ *    de sempre (shell root do container).
  *
  * Também arma o reaper PERIÓDICO de helpers órfãos (só no alvo "host", onde
  * paas-terminal-* é criado) — app.ts já chama removeOrphanTerminalHelpers()
@@ -374,7 +447,12 @@ export function createDockerPtyFactory(config: ServerConfig): PtyFactory {
       periodicReaperArmed = true;
       scheduleOrphanTerminalHelperReap(socketPath);
     }
-    return () => openHostPty(socketPath, image);
+    const { user } = resolveTerminalAccess({
+      securityTarget: "host",
+      terminalUser: config.terminalUser ?? null,
+      terminalRootMode: config.terminalRootMode ?? null,
+    });
+    return () => openHostPty(socketPath, image, user);
   }
   const target = config.securityTargetContainer;
   return () => openContainerExecPty(socketPath, target);

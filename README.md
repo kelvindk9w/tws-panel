@@ -122,6 +122,30 @@ cd /opt/tws-panel
 Seus projetos, domínios, e-mail e histórico de segurança continuam intactos. Use `--full` no
 primeiro comando se quiser apagar também a conta de administrador do painel.
 
+<a id="remover-o-painel"></a>
+
+**Quero remover o painel e instalar de novo, sem reinstalar o sistema.** Serve para testar a
+instalação quantas vezes quiser. Na VPS:
+
+```bash
+cd /opt/tws-panel
+./scripts/uninstall.sh --dry-run   # só mostra o que seria apagado; não mexe em nada
+./scripts/uninstall.sh             # mostra de novo e pede para você digitar "remover"
+```
+
+Ele apaga **tudo o que o painel criou**: o painel e os containers dele, o proxy (Caddy), o servidor
+de e-mail, os projetos implantados com seus dados, a pasta `/opt/tws-projects`, os scripts de
+hardening copiados para a VPS e, por último, a própria pasta `/opt/tws-panel`. Antes de apagar, ele
+lista exatamente o que encontrou. Depois, entre em outra pasta (`cd ~`) e **recomece pelo Passo 6**
+(clonar o repositório) — o git do Passo 5 continua instalado. Quer manter a pasta do repositório?
+Use `--keep-repo` e vá direto ao Passo 7.
+
+> [!WARNING]
+> **O que ele NÃO desfaz:** as fases de segurança que já foram aplicadas continuam valendo — a
+> senha do root segue travada, o SSH segue sem login por senha, o firewall, o fail2ban e os pacotes
+> removidos ficam como estão. Seu usuário, a chave SSH instalada nele e o Docker também ficam. Para
+> uma VPS realmente do zero, o caminho é o próximo: reinstalar o sistema.
+
 **Quero a máquina limpa de verdade.** Aí sim é reinstalação do sistema operacional, e ela acontece
 em dois lugares:
 
@@ -799,6 +823,66 @@ Digite "continuar" para prosseguir:
 
 </details>
 
+<a id="terminal-do-painel"></a>
+
+**Logo depois do pré-flight, o instalador faz três perguntas.** Elas decidem como o **terminal ao
+vivo do painel** trabalha — é nele que a varredura de segurança e o hardening rodam:
+
+1. **Com qual usuário o terminal abre.** Ele mostra os usuários da VPS que têm permissão de
+   administrador, mas **quem digita o nome é você** — mesmo que só exista um. Digite o usuário
+   que você criou no Passo 3. `root` também é aceito, mas não recomendamos: uma aba do navegador
+   esquecida aberta daria acesso de root à VPS para quem sentasse na frente dela.
+2. **Como rodar o que precisa de root.** Responda **`1` (senha)** — é o recomendado: quando algo
+   precisar de administrador, o painel usa o `sudo` dentro do terminal e **você digita a sua
+   senha ali**, como faria por SSH. A outra opção, `2` (segundo-plano), não pede senha: esses
+   comandos rodam como root por trás, e você confere depois na tela de **Auditoria**.
+3. **Qual chave SSH você usa** (opcional). Usou `id_ed25519` ou `id_rsa` no Passo 4? Só aperte
+   Enter. É só para o comando de acesso impresso no final já sair pronto para copiar.
+
+Se o usuário não servir (não existe, está sem senha, não tem `sudo`…), o instalador explica o que
+fazer e pergunta de novo. Nada é instalado antes de você responder.
+
+<details>
+<summary>🔑 <strong>Senha ou segundo plano? O que acontece em cada um, sem letras miúdas</strong></summary>
+
+**Modo `senha` (recomendado).** O terminal abre como o seu usuário. Quando uma varredura ou uma fase
+do hardening precisa de root, o painel roda o comando com `sudo` no próprio terminal, e o `sudo`
+pede a sua senha — a mesma do `adduser`. Nada roda como administrador sem você ver e autorizar.
+
+- **O trade-off:** a senha sai do seu navegador, passa pelo painel e chega ao terminal da VPS. Ela
+  não é gravada, registrada nem enviada a lugar nenhum — o projeto é open source e isso pode ser
+  conferido no código. Mas, justamente porque ela passa por ali, **abra o painel sempre pelo túnel
+  SSH** (explicado logo abaixo). Pelo link do IP direto, ela viajaria pela internet sem
+  criptografia.
+- **Exige** que o usuário tenha senha e esteja no grupo `sudo` — o que o Passo 3 já fez.
+
+**Modo `segundo-plano`.** O terminal também abre como o seu usuário, mas os comandos que precisam de
+root rodam **como root, por trás**, pela mesma ponte que o painel já usa para falar com a VPS. A
+saída aparece no terminal só para você acompanhar.
+
+- **O trade-off:** não pede senha, então você não autoriza comando a comando. A conferência é
+  depois: tudo fica registrado na tela de **Auditoria** do painel.
+- **Não exige `sudo`** — dá até para usar um usuário criado só para o painel. O instalador avisa se
+  o usuário escolhido não tiver `sudo`, porque aí, entrando por SSH com ele, você não consegue fazer
+  nada como administrador.
+
+**Nos dois modos**, o monitoramento automático agendado — que roda sozinho, sem ninguém para digitar
+senha — continua executando como root em segundo plano, e cada execução fica registrada na
+Auditoria.
+
+**Instalando por automação** (sem ninguém para responder)? Passe as escolhas direto:
+
+```bash
+./scripts/install.sh --terminal-user=SEU_USUARIO --root-mode=senha
+```
+
+Sem essas opções, com `--force` ou sem terminal interativo, o instalador **não adivinha**: mantém o
+comportamento antigo (terminal como root) e avisa. Numa reinstalação, o que você escolheu da
+primeira vez é mantido sem perguntar de novo — para trocar, veja
+[Trocar o usuário do terminal do painel](#trocar-terminal).
+
+</details>
+
 > [!IMPORTANT]
 > **Antes de abrir o painel: o link que o instalador imprime é HTTP puro, sem criptografia.**
 > O instalador termina mostrando algo como `http://SEU_IP:9000/?token=...`, e o navegador vai
@@ -1008,6 +1092,33 @@ hora de instalar:
 > `PAAS_PROJECTS_DIR=` no `.env`, o painel continua usando o lugar antigo e os projetos que
 > você já criou seguem onde estavam.
 
+<a id="trocar-terminal"></a>
+
+### Trocar o usuário do terminal do painel
+
+O usuário com que o terminal abre e o modo (`senha` ou `segundo-plano`) ficam gravados no arquivo
+`.env` de `/opt/tws-panel`. Para mudar, rode o instalador de novo pedindo para ele perguntar outra
+vez:
+
+```bash
+cd /opt/tws-panel
+./scripts/install.sh --reconfigure-terminal
+```
+
+Ele refaz as mesmas perguntas, valida a resposta e recria o painel com a escolha nova. Seus
+projetos, domínios, e-mail e a conta de administrador não são tocados — é a mesma reinstalação
+segura de sempre. Se preferir não responder nada, informe direto:
+
+```bash
+./scripts/install.sh --terminal-user=OUTRO_USUARIO --root-mode=segundo-plano
+```
+
+> [!NOTE]
+> Instalou o painel antes de essa pergunta existir? Nada muda sozinho: sem as linhas
+> `PAAS_TERMINAL_USER=` e `PAAS_ROOT_MODE=` no `.env`, o terminal continua abrindo como root, como
+> antes. Rodar o instalador de novo de forma interativa faz a pergunta — e, se quiser manter tudo
+> como está, basta responder `root`.
+
 ### Comandos úteis (produção)
 
 ```bash
@@ -1017,6 +1128,8 @@ docker compose up -d --build # atualizar para uma nova versão (git pull antes)
 
 ./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
 ./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)
+./scripts/install.sh --reconfigure-terminal   # troca o usuário/modo do terminal do painel
+./scripts/uninstall.sh --dry-run              # mostra o que a remoção do painel apagaria
 ```
 
 > [!NOTE]
@@ -1135,9 +1248,12 @@ todas as rotas da API, logs com redação de segredos e auditoria de todas as a�
 como criar containers e configurar firewall sem ele. Duas consequências que você deve conhecer
 antes de instalar:
 
-- **O terminal web é um shell real com root na VPS**, não uma lista de ações pré-aprovadas. É o
-  que permite ver e conduzir o hardening como se estivesse no SSH, e é também o ponto mais
-  sensível do sistema: quem tem sessão no painel tem a máquina.
+- **O terminal web é um shell real na VPS**, não uma lista de ações pré-aprovadas. É o que
+  permite ver e conduzir o hardening como se estivesse no SSH, e é também o ponto mais sensível
+  do sistema. Na instalação você escolhe com qual usuário ele abre: com o seu usuário comum, o que
+  precisa de root passa pelo `sudo` com a sua senha (modo `senha`) ou roda por trás e fica na
+  Auditoria (modo `segundo-plano`); com `root`, quem tem sessão no painel tem o terminal de root
+  da máquina. Veja [o que cada escolha significa](#terminal-do-painel).
 - **O socket do Docker é montado no container do painel**, o que equivale a root no host. É uma
   propriedade do Docker, não uma falha do painel, e nenhum hardening do container altera isso.
 
@@ -1161,8 +1277,8 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 | O que você perdeu | O que ainda funciona | Caminho de volta |
 |---|---|---|
 | Senha do **painel** (login web) | SSH na VPS | `./scripts/reset-setup.sh --full` |
-| Senha do **usuário Linux** (a do `sudo`) | SSH + painel | Terminal do painel → `passwd SEU_USUARIO` |
-| **Chave SSH** | Painel acessível | Terminal do painel → recoloca a chave |
+| Senha do **usuário Linux** (a do `sudo`) | SSH + painel | Terminal do painel (se ele abre como root) → `passwd SEU_USUARIO`; senão, console do provedor |
+| **Chave SSH** | Painel acessível | Terminal do painel (se ele abre com o seu usuário ou root) → recoloca a chave |
 | **Chave SSH** | Console do provedor | Login com usuário e senha → recoloca a chave |
 | Tudo acima | — | Modo de recuperação (rescue) do provedor |
 
@@ -1195,27 +1311,41 @@ Essa é a mais traiçoeira, porque parece que está tudo bem: a chave SSH ainda 
 nenhum `sudo` funciona — e o hardening travou a senha do root, então não dá para virar root pelo
 caminho normal.
 
-A saída é o **terminal embutido do painel**, que roda como root. No painel, abra o terminal e
-rode:
+**Se o terminal do painel abre como root** (a escolha `root` na instalação, ou uma instalação
+anterior a essa pergunta), ele é a saída. No painel, abra o terminal e rode:
 
 ```bash
 passwd SEU_USUARIO
 ```
 
-Defina a nova senha e pronto. Se o painel também estiver inacessível, vá para o console do
-provedor ou o modo de recuperação.
+Defina a nova senha e pronto.
+
+**Se ele abre com o seu usuário**, esse caminho não existe, e é de propósito: no modo `senha`, o
+`sudo` pediria justamente a senha que você perdeu; no modo `segundo-plano`, o painel só executa
+como root os próprios comandos de varredura e hardening, não um `passwd` qualquer. A saída é o
+**console do provedor** ou o modo de recuperação — por isso vale confirmar que eles funcionam
+antes do hardening.
 
 ### Perdi a chave SSH
 
 Você precisa reinstalar uma chave nova em `~/.ssh/authorized_keys` do seu usuário. Gere um par
 novo no seu computador (Passo 4 da instalação) e use um dos caminhos abaixo, na ordem:
 
-**1. Pelo terminal do painel** — se você ainda consegue entrar no painel. Ele roda como root, então
-acrescente a chave direto:
+**1. Pelo terminal do painel** — se você ainda consegue entrar no painel. Se ele abre com o
+**seu usuário**, a pasta `~/.ssh` é dele, e não precisa de root nenhum:
+
+```bash
+echo "COLE_AQUI_A_NOVA_CHAVE_PUBLICA" >> ~/.ssh/authorized_keys
+```
+
+Se ele abre como **root**, informe o caminho completo:
 
 ```bash
 echo "COLE_AQUI_A_NOVA_CHAVE_PUBLICA" >> /home/SEU_USUARIO/.ssh/authorized_keys
 ```
+
+(Escolheu na instalação um usuário diferente do que você usa no SSH? Então o terminal não alcança a
+pasta do seu usuário sem root — siga para o caminho 2.)
 
 **2. Pelo console do provedor** — o acesso via navegador não passa pelo SSH, então a restrição de
 login por senha não vale ali. Entre com o seu usuário e a senha, e rode o mesmo comando (sem o
@@ -1236,9 +1366,10 @@ provedor; procure na documentação dele por "rescue mode".
 
 ### O paradoxo do terminal do painel
 
-Você deve ter notado que o terminal embutido aparece duas vezes como salvação. Ele roda como root
-na máquina, o que é exatamente o motivo de ele ser o ponto mais sensível do sistema — e, pelo
-mesmo motivo, a porta dos fundos quando tudo o mais falha.
+Você deve ter notado que o terminal embutido aparece duas vezes como salvação. Quanto mais poder
+ele tem, mais ele salva — e mais perigoso ele é. Aberto como root, ele é a porta dos fundos quando
+tudo o mais falha, e exatamente por isso o ponto mais sensível do sistema. Aberto com o seu
+usuário (o recomendado), ele salva menos, mas uma sessão esquecida também entrega menos.
 
 Vale saber que é assim, e decidir conscientemente: manter o painel acessível é uma rede de
 segurança, mas é também a maior superfície de ataque da instalação. Se você optar por restringir
