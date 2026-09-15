@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
-import { loadConfig, type ServerConfig } from "./config.js";
+import { loadConfig, resolveTerminalAccess, type ServerConfig } from "./config.js";
 import { AJV_OPTIONS } from "./ajv-options.js";
 import { loadSetupToken } from "./services/setup-token.js";
 import { SetupStateStore } from "./services/setup-state.js";
@@ -85,14 +85,23 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Terminal web embutido: uma sessão de PTY no alvo (host via host bridge ou
   // container de dev), compartilhada entre o WS do painel e o executor de
   // hardening. Relay puro — input do usuário nunca é logado/auditado.
+  const terminalAccess = resolveTerminalAccess(config);
   const terminalService = new TerminalService({
     openPty: options?.terminalPtyFactory ?? createDockerPtyFactory(config),
     idleTimeoutMs: config.terminalIdleTimeoutMs,
+    // Modo senha: observa a SAÍDA atrás do prompt do sudo (nunca o input).
+    watchSudoPrompt: terminalAccess.elevation === "senha",
     audit: (action, detail) => {
       void app.auditService.record({ action, detail });
     },
   });
   app.decorate("terminalService", terminalService);
+  // Transparência: quem é o terminal e como o root acontece, no log de boot.
+  app.log.info(
+    "Terminal web: usuário=%s, modo=%s (monitoramento agendado roda como root pelo host bridge em qualquer modo)",
+    terminalAccess.user,
+    terminalAccess.elevation,
+  );
 
   // Reaper de boot (uma vez, não fatal): remove containers paas-terminal-*
   // órfãos de um processo anterior do painel — a sessão morre com o processo

@@ -3,14 +3,15 @@
  *
  * Um container Caddy gerenciado pelo painel atua como reverse proxy da máquina.
  * O Caddyfile é gerado a partir dos projetos (domínio → upstream container:porta)
- * e recarregado sem downtime via `caddy reload` dentro do container.
+ * e recarregado sem downtime via `caddy reload` dentro do container. O arquivo é
+ * entregue ao container pelo daemon (`docker cp`), nunca por bind mount de um
+ * caminho do painel — ver o comentário da classe CaddyManager.
  *
  * Modo dev local: domínios *.localhost são servidos em HTTP puro (o Caddy
  * trataria .localhost como nome local e emitiria cert interno; para testes com
  * curl/navegador sem instalar a CA, usamos o esquema http:// explícito).
  * Em produção (domínio real): endereço sem esquema → HTTPS automático.
  */
-import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -19,7 +20,17 @@ import {
   PAAS_NETWORK,
   type Project,
 } from "@paas/core";
+import {
+  copyFilesToContainer,
+  hasLegacyConfigBind,
+  INSPECT_RUNNING_AND_MOUNTS,
+  parseContainerInspect,
+} from "./container-files.js";
 import { run } from "./exec.js";
+
+/** Diretório da configuração dentro do container do Caddy (existe na imagem). */
+export const CADDY_CONFIG_DIR = "/etc/caddy";
+export const CADDYFILE_PATH = `${CADDY_CONFIG_DIR}/Caddyfile`;
 
 export interface CaddyTarget {
   /** Domínio do projeto (ex.: app.localhost ou app.exemplo.com). */
@@ -37,76 +48,113 @@ export interface CaddyPorts {
   https: number;
 }
 
+export interface CaddyManagerOptions {
+  /** Nome do container (padrão paas-caddy). */
+  containerName?: string;
+  /** Rede Docker (padrão paas-net). */
+  network?: string;
+  /** Volume dos certificados/estado do Caddy (padrão paas_caddy_data). */
+  dataVolume?: string;
+  /** Volume do autosave do Caddy (padrão paas_caddy_config). */
+  configVolume?: string;
+}
+
+/**
+ * Onde o Caddyfile mora: na camada gravável do próprio container do Caddy,
+ * escrito com `docker cp` (ver container-files.ts). NÃO há bind mount de
+ * caminho do painel — em produção o painel roda em container e esse caminho
+ * não existe no host, onde o daemon resolve o `-v`. O arquivo sobrevive a
+ * `docker restart`/reboot (a camada do container persiste) e é regravado
+ * antes de todo `docker start` e em todo `apply()`. A cópia em `caddyDir` é
+ * só um espelho para inspeção; o Caddy nunca a lê.
+ */
 export class CaddyManager {
+  private readonly name: string;
+  private readonly network: string;
+  private readonly dataVolume: string;
+  private readonly configVolume: string;
+
   constructor(
-    /** Diretório data/caddy (Caddyfile persistido aqui). */
+    /** Diretório data/caddy (espelho do último Caddyfile aplicado, só para inspeção). */
     private readonly caddyDir: string,
     private readonly image = "caddy:2-alpine",
     /** Portas publicadas no host (configurável para dev, ex.: 9080/9443). */
     private readonly ports: CaddyPorts = { http: 80, https: 443 },
-  ) {}
+    options: CaddyManagerOptions = {},
+  ) {
+    this.name = options.containerName ?? PAAS_CADDY_CONTAINER;
+    this.network = options.network ?? PAAS_NETWORK;
+    this.dataVolume = options.dataVolume ?? "paas_caddy_data";
+    this.configVolume = options.configVolume ?? "paas_caddy_config";
+  }
 
   get containerName(): string {
-    return PAAS_CADDY_CONTAINER;
+    return this.name;
   }
 
   /** Garante a rede dedicada do painel. */
   async ensureNetwork(): Promise<void> {
-    const inspect = await run("docker", ["network", "inspect", PAAS_NETWORK]);
+    const inspect = await run("docker", ["network", "inspect", this.network]);
     if (inspect.code === 0) return;
     const create = await run("docker", [
       "network",
       "create",
       "--label",
       `${PAAS_LABEL_MANAGED}=true`,
-      PAAS_NETWORK,
+      this.network,
     ]);
-    if (create.code !== 0) throw new Error(`falha ao criar a rede ${PAAS_NETWORK}: ${create.stderr}`);
+    if (create.code !== 0) throw new Error(`falha ao criar a rede ${this.network}: ${create.stderr}`);
   }
 
   async isRunning(): Promise<boolean> {
-    const r = await run("docker", ["inspect", "-f", "{{.State.Running}}", PAAS_CADDY_CONTAINER]);
+    const r = await run("docker", ["inspect", "-f", "{{.State.Running}}", this.name]);
     return r.code === 0 && r.stdout.trim() === "true";
   }
 
-  /** Sobe (ou garante) o container do Caddy central. */
-  async ensureRunning(): Promise<void> {
+  /**
+   * Sobe (ou garante) o container do Caddy central.
+   *
+   * `initialCaddyfile` é o conteúdo gravado quando o container precisa ser
+   * criado (padrão: Caddyfile sem sites). Um container existente cuja
+   * montagem é a da versão antiga (bind mount sobre /etc/caddy) é removido e
+   * recriado: em produção ele enxerga um diretório vazio no lugar do arquivo e
+   * nunca sobe. Nada é apagado no host — só o container.
+   */
+  async ensureRunning(initialCaddyfile?: string): Promise<void> {
     await this.ensureNetwork();
-    if (await this.isRunning()) return;
 
-    const exists = await run("docker", ["inspect", PAAS_CADDY_CONTAINER]);
-    if (exists.code === 0) {
-      const start = await run("docker", ["start", PAAS_CADDY_CONTAINER]);
-      if (start.code !== 0) throw new Error(`falha ao iniciar ${PAAS_CADDY_CONTAINER}: ${start.stderr}`);
-      return;
+    const inspect = await run("docker", ["inspect", "-f", INSPECT_RUNNING_AND_MOUNTS, this.name]);
+    if (inspect.code === 0) {
+      const { running, mounts } = parseContainerInspect(inspect.stdout);
+      if (!hasLegacyConfigBind(mounts, CADDY_CONFIG_DIR)) {
+        if (running) return;
+        if (initialCaddyfile !== undefined) await this.pushCaddyfile(initialCaddyfile);
+        const start = await run("docker", ["start", this.name]);
+        if (start.code !== 0) throw new Error(`falha ao iniciar ${this.name}: ${start.stderr}`);
+        return;
+      }
+      const rm = await run("docker", ["rm", "-f", this.name]);
+      if (rm.code !== 0) {
+        throw new Error(`falha ao remover ${this.name} com montagem antiga do Caddyfile: ${rm.stderr}`);
+      }
     }
 
-    await mkdir(this.caddyDir, { recursive: true });
-    const caddyfile = path.join(this.caddyDir, "Caddyfile");
-    // Garante que o arquivo existe ANTES do bind mount (senão o Docker cria um
-    // diretório no lugar e o mount falha).
-    if (!existsSync(caddyfile)) {
-      await writeFile(caddyfile, renderCaddyfile([]), "utf8");
-    }
     const create = await run("docker", [
-      "run",
-      "-d",
+      "create",
       "--name",
-      PAAS_CADDY_CONTAINER,
+      this.name,
       "--restart",
       "unless-stopped",
       "--network",
-      PAAS_NETWORK,
+      this.network,
       "-p",
       `${this.ports.http}:80`,
       "-p",
       `${this.ports.https}:443`,
       "-v",
-      `${caddyfile}:/etc/caddy/Caddyfile:ro`,
+      `${this.dataVolume}:/data`,
       "-v",
-      "paas_caddy_data:/data",
-      "-v",
-      "paas_caddy_config:/config",
+      `${this.configVolume}:/config`,
       "--label",
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
@@ -114,29 +162,54 @@ export class CaddyManager {
       this.image,
     ]);
     if (create.code !== 0) {
-      throw new Error(`falha ao criar ${PAAS_CADDY_CONTAINER}: ${create.stderr}`);
+      throw new Error(`falha ao criar ${this.name}: ${create.stderr}`);
+    }
+    await this.pushCaddyfile(initialCaddyfile ?? renderCaddyfile([]));
+    const start = await run("docker", ["start", this.name]);
+    if (start.code !== 0) throw new Error(`falha ao iniciar ${this.name}: ${start.stderr}`);
+  }
+
+  /** Grava o Caddyfile dentro do container (parado ou rodando) pelo daemon. */
+  private async pushCaddyfile(content: string): Promise<void> {
+    const cp = await copyFilesToContainer(this.name, CADDY_CONFIG_DIR, [
+      { name: "Caddyfile", content, mode: 0o644 },
+    ]);
+    if (cp.code !== 0) {
+      throw new Error(`falha ao gravar o Caddyfile em ${this.name}: ${cp.stderr.trim()}`);
+    }
+  }
+
+  /** Espelho local para inspeção; falhar aqui não pode derrubar o proxy. */
+  private async writeMirror(content: string, onLog?: (chunk: string) => void): Promise<void> {
+    try {
+      await mkdir(this.caddyDir, { recursive: true });
+      await writeFile(path.join(this.caddyDir, "Caddyfile"), content, "utf8");
+    } catch (err) {
+      onLog?.(`aviso: cópia local do Caddyfile não gravada (${err instanceof Error ? err.message : String(err)}).\n`);
     }
   }
 
   /** Gera o Caddyfile a partir dos alvos e recarrega o Caddy sem downtime. */
   async apply(targets: CaddyTarget[], onLog?: (chunk: string) => void): Promise<void> {
-    await this.ensureRunning();
     const content = renderCaddyfile(targets);
-    const file = path.join(this.caddyDir, "Caddyfile");
-    await mkdir(this.caddyDir, { recursive: true });
-    await writeFile(file, content, "utf8");
+    await this.ensureRunning(content);
+    // Sempre regrava: se o container já estava rodando, ensureRunning não mexeu no arquivo.
+    await this.pushCaddyfile(content);
+    await this.writeMirror(content, onLog);
 
     const reload = await run("docker", [
       "exec",
-      PAAS_CADDY_CONTAINER,
+      this.name,
       "caddy",
       "reload",
       "--config",
-      "/etc/caddy/Caddyfile",
+      CADDYFILE_PATH,
+      "--adapter",
+      "caddyfile",
     ]);
     if (reload.code !== 0) {
       onLog?.(`caddy reload falhou (${reload.stderr.trim()}); reiniciando o container…\n`);
-      const restart = await run("docker", ["restart", PAAS_CADDY_CONTAINER]);
+      const restart = await run("docker", ["restart", this.name]);
       if (restart.code !== 0) {
         throw new Error(`falha ao recarregar o Caddy: ${reload.stderr} / restart: ${restart.stderr}`);
       }

@@ -24,9 +24,40 @@
  *    sessão continua viva no servidor até o idle timeout.
  * Clientes antigos (sem clientId) seguem o comportamento de substituição
  * entre si, mas nunca derrubam um dono identificado.
+ *
+ * PROTOCOLO SERVIDOR → NAVEGADOR (frames de texto):
+ *  - frame comum = bytes do terminal (saída do PTY, replay do scrollback e o
+ *    espelho do modo segundo-plano). Todo byte NUL (U+0000) é REMOVIDO antes
+ *    do envio — terminais ignoram NUL, e é isso que torna o controle abaixo
+ *    impossível de forjar por um programa rodando no shell;
+ *  - frame de controle = TERMINAL_CONTROL_PREFIX ("\u0000paas-control:")
+ *    seguido de JSON (TerminalControlMessage, @paas/core). Decodifique com
+ *    parseTerminalControl(frame): devolve a mensagem ou null (frame comum).
+ *    Nunca escreva um frame de controle no xterm. Mensagens:
+ *    · {"type":"sudo-password-requested","user":"kelvin"|null}
+ *      O sudo está pedindo senha no terminal (detectado na SAÍDA). Também é
+ *      enviada logo após o replay a quem conecta com o prompt já aberto.
+ *    · {"type":"sudo-password-prompt-closed","outcome":...}
+ *      O prompt terminou. outcome: "answered" (seguiu sem erro), "rejected"
+ *      ("Sorry, try again." — um novo requested costuma vir em seguida),
+ *      "exhausted" (3 tentativas erradas), "not-permitted" (usuário sem
+ *      sudo), "timeout" (o painel cansou de esperar e mandou Ctrl-C) ou
+ *      "session-ended" (a sessão acabou com o prompt aberto).
+ *    · {"type":"background-exec","state":"start","command":"<cmd>"} e
+ *      {"type":"background-exec","state":"end","command":"<cmd>","code":n|null}
+ *      Modo segundo-plano: um comando começou/terminou como root pelo host
+ *      bridge; a saída chega como frames comuns (espelho), nunca digitada no
+ *      shell do usuário. code null = falhou antes de ter código.
+ *  A senha que o operador digita continua sendo input comum (relay puro):
+ *  nenhum destes eventos contém, deriva ou inspeciona o que foi digitado.
+ *
+ * GET /api/terminal/info: usuário com que o terminal abre e o modo de root
+ * (TerminalInfoResponse), com a mesma autenticação do WS.
  */
 import type { FastifyPluginAsync } from "fastify";
 import fastifyWebsocket, { type WebSocket } from "@fastify/websocket";
+import { encodeTerminalControl, type TerminalInfoResponse } from "@paas/core";
+import { resolveTerminalAccess } from "../config.js";
 import type { TerminalService } from "../services/terminal-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
@@ -68,6 +99,13 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
     options: { maxPayload: 64 * 1024 },
   });
 
+  // Mesma guarda global de /api/* que protege o WS (setup token durante o
+  // wizard, sessão admin depois). Sem entrada do cliente.
+  app.get("/api/terminal/info", async (_request, reply) => {
+    const response: TerminalInfoResponse = resolveTerminalAccess(app.config);
+    return reply.send(response);
+  });
+
   /** Dono atual da sessão de terminal (uma conexão por vez). */
   let owner: { clientId: string | null; socket: WebSocket } | null = null;
 
@@ -96,15 +134,28 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
     });
 
     let unsubscribe: (() => void) | null = null;
+    // Bytes do terminal sem NUL: nenhum frame comum começa como controle.
+    const sendOutput = (chunk: string) => {
+      const clean = chunk.includes("\u0000") ? chunk.replace(/\u0000/g, "") : chunk;
+      if (clean.length > 0 && socket.readyState === socket.OPEN) socket.send(clean);
+    };
 
     term
       .connect()
       .then(({ replay }) => {
         if (socket.readyState !== socket.OPEN) return;
-        if (replay.length > 0) socket.send(replay);
-        unsubscribe = term.onOutput((chunk) => {
-          if (socket.readyState === socket.OPEN) socket.send(chunk);
+        sendOutput(replay);
+        if (term.sudoPromptOpen) {
+          socket.send(encodeTerminalControl({ type: "sudo-password-requested", user: term.sudoPromptUser }));
+        }
+        const offOutput = term.onOutput(sendOutput);
+        const offControl = term.onControl((msg) => {
+          if (socket.readyState === socket.OPEN) socket.send(encodeTerminalControl(msg));
         });
+        unsubscribe = () => {
+          offOutput();
+          offControl();
+        };
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : "terminal indisponível";

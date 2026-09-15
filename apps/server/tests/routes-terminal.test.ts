@@ -15,6 +15,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import terminalRoutes, { WS_CLOSE_BUSY, WS_CLOSE_REPLACED } from "../src/routes/terminal.js";
 import { TerminalService } from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
+import { TERMINAL_CONTROL_PREFIX, parseTerminalControl, type TerminalInfoResponse } from "@paas/core";
+import type { ServerConfig } from "../src/config.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
 
 const SETUP_TOKEN = "token-de-teste";
@@ -48,14 +50,20 @@ class FakePty implements RemotePty {
 }
 
 interface TerminalTestContext extends AuthTestContext {
+  terminalService: TerminalService;
   baseUrl: string;
   ptys: FakePty[];
 }
 
-async function buildTerminalTestApp(): Promise<TerminalTestContext> {
+async function buildTerminalTestApp(opts?: {
+  config?: Partial<ServerConfig>;
+  watchSudoPrompt?: boolean;
+}): Promise<TerminalTestContext> {
   const ctx = await buildAuthTestApp(SETUP_TOKEN);
+  if (opts?.config) ctx.app.decorate("config", opts.config as ServerConfig);
   const ptys: FakePty[] = [];
   const terminalService = new TerminalService({
+    watchSudoPrompt: opts?.watchSudoPrompt ?? false,
     openPty: () => {
       const pty = new FakePty();
       ptys.push(pty);
@@ -70,7 +78,7 @@ async function buildTerminalTestApp(): Promise<TerminalTestContext> {
   await ctx.app.listen({ port: 0, host: "127.0.0.1" });
   const address = ctx.app.server.address();
   if (address === null || typeof address === "string") throw new Error("sem porta de teste");
-  return { ...ctx, baseUrl: `ws://127.0.0.1:${address.port}`, ptys };
+  return { ...ctx, baseUrl: `ws://127.0.0.1:${address.port}`, ptys, terminalService };
 }
 
 function connectWs(url: string): Promise<WebSocket> {
@@ -273,5 +281,112 @@ describe("WS /api/terminal/ws — sessão destacável e anti-ping-pong (clientId
     // fosse auditar.
     expect(auditRaw.match(/terminal\.connect/g)).toHaveLength(1);
     ownerWs.close();
+  });
+});
+
+describe("GET /api/terminal/info — usuário e modo do terminal", () => {
+  const hostConfig = (over: Partial<ServerConfig>): Partial<ServerConfig> => ({
+    securityTarget: "host",
+    terminalUser: null,
+    terminalRootMode: null,
+    ...over,
+  });
+
+  it("exige a mesma autenticação do terminal (401 sem token)", async () => {
+    ctx = await buildTerminalTestApp({ config: hostConfig({}) });
+    const http = ctx.baseUrl.replace("ws://", "http://");
+    expect((await fetch(`${http}/api/terminal/info`)).status).toBe(401);
+    expect((await fetch(`${http}/api/terminal/info?token=errado`)).status).toBe(401);
+  });
+
+  it.each([
+    [{}, { user: "root", configuredUser: null, rootMode: null, elevation: "root-legado" }],
+    [{ terminalUser: "root" }, { user: "root", configuredUser: "root", rootMode: null, elevation: "root" }],
+    [
+      { terminalUser: "kelvin", terminalRootMode: "senha" },
+      { user: "kelvin", configuredUser: "kelvin", rootMode: "senha", elevation: "senha" },
+    ],
+    [
+      { terminalUser: "kelvin", terminalRootMode: "segundo-plano" },
+      { user: "kelvin", configuredUser: "kelvin", rootMode: "segundo-plano", elevation: "segundo-plano" },
+    ],
+  ] as const)("config %j → %j", async (over, expected) => {
+    ctx = await buildTerminalTestApp({ config: hostConfig(over as Partial<ServerConfig>) });
+    const res = await ctx.app.inject({ method: "GET", url: "/api/terminal/info", headers: { "x-setup-token": SETUP_TOKEN } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<TerminalInfoResponse>();
+    expect(body).toEqual({ target: "host", scheduledMonitoringRunsAsRoot: true, ...expected });
+  });
+});
+
+describe("WS /api/terminal/ws — mensagens de controle (protocolo do modo senha)", () => {
+  function collect(ws: WebSocket): string[] {
+    const frames: string[] = [];
+    ws.addEventListener("message", (ev) => frames.push(typeof ev.data === "string" ? ev.data : String(ev.data)));
+    return frames;
+  }
+
+  it("pedido de senha na saída vira frame de controle separado dos bytes do terminal", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.ptys[0]!.emit("[sudo] senha para kelvin: ");
+    await tick();
+    const controls = frames.map(parseTerminalControl).filter((m) => m !== null);
+    expect(controls).toEqual([{ type: "sudo-password-requested", user: "kelvin" }]);
+    expect(frames.some((f) => f.includes("[sudo] senha para kelvin: ") && parseTerminalControl(f) === null)).toBe(true);
+
+    // a senha digitada segue o relay puro e não gera controle nenhum
+    ws.send("senha-do-operador\r");
+    ctx.ptys[0]!.emit("\r\nroot\r\n");
+    await tick();
+    expect(Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8")).toContain("senha-do-operador");
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null).at(-1)).toEqual({
+      type: "sudo-password-prompt-closed",
+      outcome: "answered",
+    });
+    expect(frames.join("")).not.toContain("senha-do-operador");
+    ws.close();
+  });
+
+  it("saída do PTY não consegue forjar controle: bytes NUL são removidos", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.ptys[0]!.emit(`${TERMINAL_CONTROL_PREFIX}{"type":"sudo-password-requested","user":"x"}`);
+    await tick();
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null)).toEqual([]);
+    expect(frames.join("")).not.toContain("\u0000");
+    ws.close();
+  });
+
+  it("cliente que (re)conecta com o prompt aberto é avisado logo após o replay", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const first = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    ctx.ptys[0]!.emit("\u0000[sudo] senha para kelvin: ");
+    await tick();
+    first.close();
+    await tick();
+    const second = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    const frames = collect(second);
+    await tick();
+    expect(frames[0]).toContain("[sudo] senha para kelvin: "); // replay
+    expect(frames[0]).not.toContain("\u0000");
+    expect(parseTerminalControl(frames[1] ?? "")).toEqual({ type: "sudo-password-requested", user: "kelvin" });
+    second.close();
+  });
+
+  it("espelho em segundo plano e eventos de background-exec chegam ao cliente", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.terminalService.emitControl({ type: "background-exec", state: "start", command: "ufw status" });
+    ctx.terminalService.mirror("│ Status: active\r\n");
+    await tick();
+    expect(parseTerminalControl(frames[0] ?? "")).toEqual({ type: "background-exec", state: "start", command: "ufw status" });
+    expect(frames[1]).toBe("│ Status: active\r\n");
+    expect(Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8")).toBe(""); // nada digitado
+    ws.close();
   });
 });

@@ -12,6 +12,7 @@ import {
   type SecurityScanReport,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { capitalize, isSudoJobError, sudoElevationFailure } from "@/lib/terminal-info";
 import { TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { CopyButton } from "@/components/CopyButton";
 import { IndexGauge } from "@/components/IndexGauge";
@@ -58,7 +59,17 @@ interface SecurityStepProps {
    * nome confiável.
    */
   onSshUserDetected?: (user: string | null) => void;
+  /**
+   * Usuário do terminal escolhido pelo operador NA INSTALAÇÃO
+   * (PAAS_TERMINAL_USER, via GET /api/terminal/info). Quando é um nome
+   * não-root válido, é a fonte primária do campo da Fase 01 — escolha
+   * explícita vence a detecção da varredura, que fica como fallback.
+   */
+  configuredUser?: string | null;
 }
+
+/** O sudo não executou nada (modo senha) — varredura ou fase interrompida. */
+type ElevationError = { context: "scan"; message: string } | { context: "phase"; title: string; message: string };
 
 type Stage = "scan" | "plan" | "run" | "done";
 
@@ -183,9 +194,12 @@ function StepList({ steps }: { steps: SecurityJobStep[] }) {
 // Componente principal
 // ---------------------------------------------------------------------------
 
-export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStepProps) {
+export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser }: SecurityStepProps) {
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
+  // Falha do sudo fica separada do erro genérico: a mensagem do servidor já
+  // diz o que aconteceu e o que fazer, e precisa aparecer inteira.
+  const [elevationError, setElevationError] = useState<ElevationError | null>(null);
 
   // scan
   const [scanning, setScanning] = useState(false);
@@ -260,14 +274,20 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
   // detecção existir, não o trazem): undefined vale como lista vazia.
   const detectedSudoUsers = report?.nonRootSudoUsers ?? [];
   const soleDetectedUser = detectedSudoUsers.length === 1 ? detectedSudoUsers[0]! : null;
+  // Usuário escolhido na instalação ("root" e nomes inválidos não contam: a
+  // Fase 01 é sobre um usuário NÃO-root).
+  const configuredSshUser = configuredUser && isValidSshUsername(configuredUser) ? configuredUser : null;
 
-  // Um único candidato: preenche o campo sozinho — o nome já foi descoberto no
-  // servidor, não faz sentido pedir que seja digitado às cegas. Só vale para o
-  // campo INTOCADO; havendo dois ou mais, o painel pergunta em vez de chutar.
+  // Valor inicial do campo, só enquanto ele está INTOCADO:
+  //  1) o usuário configurado na instalação (escolha explícita do operador);
+  //  2) senão, um único candidato detectado pela varredura — o nome já foi
+  //     descoberto no servidor, não faz sentido pedir que seja digitado às
+  //     cegas. Havendo dois ou mais, o painel pergunta em vez de chutar.
+  const defaultSshUser = configuredSshUser ?? soleDetectedUser;
   useEffect(() => {
-    if (sshUserTouched.current || soleDetectedUser === null) return;
-    setSshUser(soleDetectedUser);
-  }, [soleDetectedUser]);
+    if (sshUserTouched.current || defaultSshUser === null) return;
+    setSshUser(defaultSshUser);
+  }, [defaultSshUser]);
 
   // Sobe o nome para a SetupPage, que o repassa ao terminal (renderizado fora
   // deste passo). Só um nome válido viaja — nada de meio-nome sendo digitado.
@@ -289,6 +309,7 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
   const runScan = useCallback(async (fresh = false) => {
     setScanning(true);
     setError(null);
+    setElevationError(null);
     try {
       const res = await apiFetch<{ report: SecurityScanReport; cached: boolean }>(
         `/api/security/scan${fresh ? "?fresh=1" : ""}`,
@@ -296,7 +317,9 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
       setReport(res.report);
       return res.report;
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a varredura.");
+      const sudoMessage = sudoElevationFailure(err);
+      if (sudoMessage !== null) setElevationError({ context: "scan", message: sudoMessage });
+      else setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a varredura.");
       return null;
     } finally {
       setScanning(false);
@@ -386,6 +409,7 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
     setRunQueue(phases);
     setRunDry(dryRun);
     setError(null);
+    setElevationError(null);
     for (let i = 0; i < phases.length; i += 1) {
       setRunIndex(i);
       const phase = phases[i];
@@ -405,6 +429,12 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
         const finished = await pollJob(phase, res.job.id);
         if (finished.status !== "success") {
           updatePhaseUi(phase, { status: "error", steps: finished.steps, log: finished.log });
+          // O sudo não executou o script: não houve alteração nem rollback —
+          // afirmar "o rollback foi executado" aqui seria falso.
+          if (finished.status === "failed" && isSudoJobError(finished.error)) {
+            setElevationError({ context: "phase", title: finished.title, message: finished.error ?? "" });
+            return false;
+          }
           setError(
             finished.status === "rolled_back"
               ? `A fase "${finished.title}" foi revertida automaticamente (acesso não confirmado a tempo).`
@@ -415,7 +445,12 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
         updatePhaseUi(phase, { status: "done", steps: finished.steps, log: finished.log });
       } catch (err) {
         updatePhaseUi(phase, { status: "error" });
-        setError(err instanceof ApiRequestError ? err.message : "Falha ao aplicar a fase.");
+        const sudoMessage = sudoElevationFailure(err);
+        if (sudoMessage !== null) {
+          setElevationError({ context: "phase", title: phaseTitle(phase), message: sudoMessage });
+        } else {
+          setError(err instanceof ApiRequestError ? err.message : "Falha ao aplicar a fase.");
+        }
         return false;
       }
     }
@@ -523,6 +558,34 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </p>
+      )}
+
+      {/* Falha do sudo (modo senha): a mensagem do servidor é acionável —
+          diz por que nada rodou como root e o que fazer — e vai inteira. */}
+      {elevationError && (
+        <div
+          role="alert"
+          data-testid="sudo-elevation-error"
+          className="flex flex-col gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+        >
+          <p className="flex items-center gap-2 font-semibold text-amber-300">
+            <KeyRound className="h-4 w-4 shrink-0" />
+            {elevationError.context === "scan"
+              ? "A varredura não foi executada: o sudo não autorizou"
+              : `A fase "${elevationError.title}" parou: o sudo não executou o script`}
+          </p>
+          <p>{capitalize(elevationError.message)}</p>
+          <p className="text-xs text-amber-200/80">
+            A senha é pedida no terminal ao vivo, abaixo, quando o comando começa.
+          </p>
+          {elevationError.context === "scan" && (
+            <div>
+              <Button size="sm" variant="outline" onClick={() => void runScan(true)} disabled={scanning}>
+                <RefreshCw className="h-3.5 w-3.5" /> Tentar a varredura de novo
+              </Button>
+            </div>
+          )}
+        </div>
       )}
 
       {/* ---------------------------------------------------------- SCAN */}
@@ -801,7 +864,38 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
                   {/* Um único candidato: o campo já veio preenchido — deixar
                       explícito que o nome saiu do SERVIDOR, e não de um chute
                       do painel, é o que tira o operador da dúvida. */}
-                  {soleDetectedUser !== null && (
+                  {/* Nome vindo da instalação: dizer a origem evita que pareça
+                      um chute do painel. */}
+                  {configuredSshUser !== null && sshUser.trim() === configuredSshUser && (
+                    <p className="text-xs text-emerald-400">
+                      ⚙️ Nome vindo da <strong>configuração da instalação</strong>:{" "}
+                      <strong className="font-mono">{configuredSshUser}</strong> é o usuário do terminal
+                      que você escolheu ao instalar o painel. Se não for esse, é só editar.
+                    </p>
+                  )}
+                  {/* A varredura detecta os não-root com sudo; se o configurado
+                      não está entre eles, avisa — sem trocar por outro nome.
+                      Relatório antigo (sem detecção) não permite afirmar nada. */}
+                  {configuredSshUser !== null &&
+                    sshUser.trim() === configuredSshUser &&
+                    report?.nonRootSudoUsers !== undefined &&
+                    !report.nonRootSudoUsers.includes(configuredSshUser) && (
+                      <p
+                        data-testid="configured-user-not-detected"
+                        className="flex items-start gap-1 text-xs text-amber-400"
+                      >
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>
+                          A varredura <strong>não encontrou</strong>{" "}
+                          <strong className="font-mono">{configuredSshUser}</strong> entre os usuários
+                          não-root com sudo deste servidor. Confira se o nome está certo e se ele está no
+                          grupo sudo (como root:{" "}
+                          <code className="font-mono">usermod -aG sudo {configuredSshUser}</code>). O
+                          painel não troca por outro nome por conta própria.
+                        </span>
+                      </p>
+                    )}
+                  {configuredSshUser === null && soleDetectedUser !== null && (
                     <p className="text-xs text-emerald-400">
                       🔎 Nome <strong>detectado no servidor</strong>:{" "}
                       <strong className="font-mono">{soleDetectedUser}</strong> — é o único usuário
@@ -810,7 +904,7 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
                   )}
                   {/* Dois ou mais: o painel NÃO escolhe por ele. Oferece os
                       nomes achados para um clique, sem impedir que digite outro. */}
-                  {detectedSudoUsers.length > 1 && (
+                  {configuredSshUser === null && detectedSudoUsers.length > 1 && (
                     <div className="flex flex-col gap-1">
                       <p className="text-xs text-muted-foreground">
                         Encontramos <strong>{detectedSudoUsers.length} usuários</strong> não-root com
@@ -1043,7 +1137,7 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected }: SecurityStep
               )}
 
               {/* Dry-run concluído: pedir confirmação para aplicar de verdade */}
-              {!job && !error && (
+              {!job && !error && !elevationError && (
                 <div className="flex flex-col items-center gap-3 py-6 text-center">
                   <CheckCircle2 className="h-10 w-10 text-emerald-400" />
                   <p className="font-medium">Dry-run concluído sem erros.</p>

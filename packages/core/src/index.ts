@@ -158,3 +158,4 @@ export * from "./security";
 export * from "./deploy";
 export * from "./mail";
 export * from "./monitoring";
+export * from "./terminal";

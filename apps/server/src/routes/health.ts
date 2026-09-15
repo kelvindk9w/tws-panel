@@ -19,6 +19,22 @@ import { registerErrorHandler } from "../plugins/error-handler.js";
  * Os demais comandos (cabeçalho, os-release, free, df...) são o ESPELHO: rodam
  * de verdade no terminal para o usuário acompanhar, sem alimentar os cards.
  * Se o terminal estiver indisponível o espelho é pulado em silêncio.
+ *
+ * Usuário do terminal (PAAS_TERMINAL_USER / PAAS_ROOT_MODE): NENHUM destes
+ * comandos precisa de root (`ip -o addr`, /var/run/reboot-required, free, df
+ * são legíveis por qualquer usuário), então eles são digitados SEMPRE sem
+ * elevação, no terminal, nos três cenários:
+ *  - legado/root: como sempre, no terminal root;
+ *  - senha: no terminal do usuário, SEM sudo — a varredura de saúde nunca
+ *    dispara pedido de senha à toa;
+ *  - segundo-plano: também no terminal do usuário, e não pelo host bridge.
+ *    Motivos: menor privilégio (não sobe um container privilegiado como root
+ *    para uma leitura que um usuário comum faz), a allowlist do host bridge
+ *    não contém estas leituras (e não deve crescer para isso) e o operador vê
+ *    os comandos rodando no próprio shell, como sempre viu.
+ * Se um comando elevado estiver aguardando a senha, as leituras esperam na
+ * fila do terminal até o limite de HOST_PROBE_TIMEOUT_MS e saem como "não
+ * verificado" — nunca bloqueiam a resposta.
  */
 const HEALTH_MIRROR_HEADER =
   "printf '\\n\\033[1;34m── 🩺 Varredura de saúde da máquina (somente leitura) ──\\033[0m\\n'";

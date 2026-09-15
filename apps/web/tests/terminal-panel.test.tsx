@@ -6,7 +6,11 @@
  *  - expande/colapsa com estado persistido em sessionStorage;
  *  - alerta pulsante ("olhe o terminal") aparece quando uma fase pede ação;
  *  - input do xterm vai direto ao WS (relay puro) e saída do WS vai ao xterm;
- *  - resize do xterm é sincronizado como frame de controle JSON.
+ *  - resize do xterm é sincronizado como frame de controle JSON;
+ *  - cabeçalho diz a verdade sobre usuário/modo de root de cada instalação;
+ *  - frames de controle (" paas-control:") nunca chegam ao xterm;
+ *  - alerta de senha do sudo (transparência + transporte inseguro + desfechos);
+ *  - indicador discreto de comando root em segundo plano.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface MockTerm {
   write: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
   onData: (cb: (data: string) => void) => { dispose: () => void };
   fireData: (data: string) => void;
   cols: number;
@@ -33,6 +38,7 @@ vi.mock("@xterm/xterm", () => ({
     cols = 80;
     rows = 24;
     write = vi.fn();
+    focus = vi.fn();
     open = vi.fn();
     loadAddon = vi.fn();
     dispose = vi.fn();
@@ -106,6 +112,12 @@ vi.stubGlobal(
 
 // ---------------------------------------------------------------------------
 
+/** Endereço simulado da página (o jsdom fica preso em http://localhost). */
+let fakeLocation = { protocol: "http:", hostname: "localhost" };
+vi.mock("@/lib/page-location", () => ({ pageLocation: () => fakeLocation }));
+
+import type { TerminalElevation, TerminalInfoResponse, TerminalControlMessage } from "@paas/core";
+import { encodeTerminalControl } from "@paas/core";
 import { TerminalPanel, TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { setSetupToken } from "@/lib/api";
 
@@ -121,7 +133,27 @@ function lastTerm(): MockTerm {
   return t;
 }
 
+function infoFor(elevation: TerminalElevation, user = "kelvin"): TerminalInfoResponse {
+  const root = elevation === "root" || elevation === "root-legado";
+  return {
+    target: elevation === "container-dev" ? "container" : "host",
+    user: root ? "root" : user,
+    configuredUser: elevation === "root-legado" ? null : root ? "root" : user,
+    rootMode: elevation === "senha" || elevation === "segundo-plano" ? elevation : null,
+    elevation,
+    scheduledMonitoringRunsAsRoot: true,
+  };
+}
+
+const ROOT_LEGADO = infoFor("root-legado");
+
+/** O servidor manda um frame de controle pelo WS. */
+function control(msg: TerminalControlMessage) {
+  act(() => lastWs().serverSend(encodeTerminalControl(msg)));
+}
+
 beforeEach(() => {
+  fakeLocation = { protocol: "http:", hostname: "localhost" };
   sessionStorage.clear();
   MockWebSocket.instances = [];
   MockWebSocket.autoOpen = true;
@@ -172,34 +204,22 @@ describe("TerminalPanel — habilitado", () => {
     expect(screen.getByText(/Interferir por conta própria pode interromper/)).toBeInTheDocument();
   });
 
-  it("explica por que a sessão aparece como root, sem jargão técnico", () => {
-    render(<TerminalPanel enabled={true} />);
-    expect(screen.getByText(/hardening do servidor exige/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/usuário não-root que você criou na instalação continua sendo o do seu acesso por SSH/i),
-    ).toBeInTheDocument();
+  /**
+   * Sem o NOME, a nota continuava abstrata ("o usuário que você criou") e o
+   * operador seguia achando que o usuário dele tinha sido ignorado. Em sessão
+   * root, com o nome detectado na varredura, a nota responde à dúvida real.
+   */
+  it("sessão root: cita o nome do usuário detectado, quando o wizard o conhece", () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" info={ROOT_LEGADO} />);
+    expect(screen.getByText("kelvin")).toBeInTheDocument();
+    expect(screen.getByText(/não foi ignorado/i)).toBeInTheDocument();
+    expect(screen.getByText(/acesso por SSH/i)).toBeInTheDocument();
     // linguagem para quem pode não ser desenvolvedor: sem jargão de container
     expect(screen.queryByText(/nsenter/i)).not.toBeInTheDocument();
   });
 
-  /**
-   * Sem o NOME, a nota continuava abstrata ("o usuário que você criou") e o
-   * operador seguia achando que o usuário dele tinha sido ignorado. Com o nome
-   * detectado na varredura, a nota responde à dúvida real dele.
-   */
-  it("cita o nome do usuário detectado, quando o wizard o conhece", () => {
-    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
-    expect(screen.getByText(/hardening do servidor exige/i)).toBeInTheDocument();
-    expect(screen.getByText("kelvin")).toBeInTheDocument();
-    expect(screen.getByText(/não foi ignorado/i)).toBeInTheDocument();
-    expect(screen.getByText(/acesso por SSH/i)).toBeInTheDocument();
-  });
-
-  it("sem nome conhecido, mantém a nota genérica de hoje", () => {
-    render(<TerminalPanel enabled={true} />);
-    expect(
-      screen.getByText(/usuário não-root que você criou na instalação continua sendo o do seu acesso por SSH/i),
-    ).toBeInTheDocument();
+  it("sessão root sem nome conhecido: sem a frase do usuário ignorado", () => {
+    render(<TerminalPanel enabled={true} info={ROOT_LEGADO} />);
     expect(screen.queryByText(/não foi ignorado/i)).not.toBeInTheDocument();
   });
 
@@ -386,15 +406,15 @@ describe("TerminalPanel — reconexão resiliente", () => {
  * sendo root por baixo (o scanner e as fases precisam disso): o botão apenas
  * abre um shell do usuário DENTRO dela, e `exit` volta para root.
  */
-describe("TerminalPanel — abrir shell do usuário não-root", () => {
+describe("TerminalPanel — abrir shell do usuário não-root (sessão root)", () => {
   it("sem sshUser: não há o que abrir, o botão não aparece", async () => {
-    render(<TerminalPanel enabled={true} />);
+    render(<TerminalPanel enabled={true} info={ROOT_LEGADO} />);
     await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
   });
 
   it("com sshUser e sessão conectada: o botão aparece citando o nome", async () => {
-    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    render(<TerminalPanel enabled={true} sshUser="kelvin" info={ROOT_LEGADO} />);
     await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
     const btn = screen.getByRole("button", { name: /abrir como kelvin/i });
     expect(btn).toBeInTheDocument();
@@ -403,7 +423,7 @@ describe("TerminalPanel — abrir shell do usuário não-root", () => {
   });
 
   it("clicar envia o comando de troca de usuário pelo MESMO caminho do input", async () => {
-    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    render(<TerminalPanel enabled={true} sshUser="kelvin" info={ROOT_LEGADO} />);
     await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
 
     fireEvent.click(screen.getByRole("button", { name: /abrir como kelvin/i }));
@@ -412,7 +432,7 @@ describe("TerminalPanel — abrir shell do usuário não-root", () => {
   });
 
   it("com a sessão caída (ou em outra aba), o botão não é oferecido", async () => {
-    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    render(<TerminalPanel enabled={true} sshUser="kelvin" info={ROOT_LEGADO} />);
     await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: /abrir como kelvin/i })).toBeInTheDocument();
 
@@ -423,7 +443,7 @@ describe("TerminalPanel — abrir shell do usuário não-root", () => {
 
   it("nome implausível: nenhum botão e NADA é enviado (sem injeção de comando)", async () => {
     for (const nome of ["root", "kelvin; rm -rf /", "kelvin\nreboot", "Kelvin$(id)"]) {
-      render(<TerminalPanel enabled={true} sshUser={nome} />);
+      render(<TerminalPanel enabled={true} sshUser={nome} info={ROOT_LEGADO} />);
       await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
       expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
       expect(lastWs().sent.some((m) => m.includes("su "))).toBe(false);
@@ -432,10 +452,281 @@ describe("TerminalPanel — abrir shell do usuário não-root", () => {
   });
 
   it("o aviso de que a sessão é root continua no cabeçalho, junto com o botão", async () => {
-    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    render(<TerminalPanel enabled={true} sshUser="kelvin" info={ROOT_LEGADO} />);
     await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
-    expect(screen.getByText(/hardening do servidor exige/i)).toBeInTheDocument();
+    expect(screen.getByText(/Esta sessão abre como/i)).toBeInTheDocument();
     expect(screen.getByText(/não foi ignorado/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /abrir como kelvin/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * O terminal deixou de ser obrigatoriamente root: o cabeçalho descreve o que
+ * a instalação REALMENTE configurou (GET /api/terminal/info), sem prometer
+ * nada além do que o servidor faz.
+ */
+describe("TerminalPanel — cabeçalho por modo de execução", () => {
+  it("senha: sessão como o usuário; root pede a senha dele NESTE terminal", () => {
+    render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+    const nota = screen.getByTestId("terminal-session-note");
+    expect(nota).toHaveTextContent(/Esta sessão abre como kelvin/);
+    expect(nota).toHaveTextContent(/sudo/);
+    expect(nota).toHaveTextContent(/senha de kelvin é pedida neste terminal/i);
+    expect(nota).not.toHaveTextContent(/abre como root/);
+  });
+
+  it("segundo-plano: sessão como o usuário; root em segundo plano, só visualização, com link para a Auditoria", () => {
+    render(<TerminalPanel enabled={true} info={infoFor("segundo-plano")} />);
+    const nota = screen.getByTestId("terminal-session-note");
+    expect(nota).toHaveTextContent(/Esta sessão abre como kelvin/);
+    expect(nota).toHaveTextContent(/em segundo plano como root/i);
+    expect(nota).toHaveTextContent(/só para visualização/i);
+    const links = screen.getAllByRole("link", { name: /Auditoria/ });
+    expect(links[0]).toHaveAttribute("href", "/audit");
+  });
+
+  it("modos não-root avisam que o monitoramento agendado roda como root em segundo plano, auditado", () => {
+    for (const elevation of ["senha", "segundo-plano"] as const) {
+      render(<TerminalPanel enabled={true} info={infoFor(elevation)} />);
+      expect(screen.getByTestId("terminal-monitoring-note")).toHaveTextContent(
+        /monitoramento automático agendado roda sozinho como root em segundo plano/i,
+      );
+      expect(screen.getByTestId("terminal-monitoring-note")).toHaveTextContent(/Auditoria/);
+      cleanup();
+    }
+    for (const elevation of ["root", "root-legado", "container-dev"] as const) {
+      render(<TerminalPanel enabled={true} info={infoFor(elevation)} />);
+      expect(screen.queryByTestId("terminal-monitoring-note")).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("root (escolha explícita): sessão como root, com o risco de deixar a aba aberta", () => {
+    render(<TerminalPanel enabled={true} info={infoFor("root")} />);
+    const nota = screen.getByTestId("terminal-session-note");
+    expect(nota).toHaveTextContent(/Esta sessão abre como root/);
+    expect(nota).toHaveTextContent(/não deixe esta aba aberta/i);
+    expect(nota).not.toHaveTextContent(/reconfigure-terminal/);
+  });
+
+  it("root-legado: sessão root e como mudar (reinstalação com --reconfigure-terminal)", () => {
+    render(<TerminalPanel enabled={true} info={ROOT_LEGADO} />);
+    const nota = screen.getByTestId("terminal-session-note");
+    expect(nota).toHaveTextContent(/Esta sessão abre como root/);
+    expect(nota).toHaveTextContent(/não deixe esta aba aberta/i);
+    expect(nota).toHaveTextContent("./scripts/install.sh --reconfigure-terminal");
+  });
+
+  it("container-dev: ambiente de desenvolvimento, sem falar de VPS real", () => {
+    render(<TerminalPanel enabled={true} info={infoFor("container-dev")} />);
+    const nota = screen.getByTestId("terminal-session-note");
+    expect(nota).toHaveTextContent(/ambiente de desenvolvimento/i);
+    expect(nota).toHaveTextContent(/container/i);
+  });
+
+  it("sem a informação (carregando ou falhou): não afirma usuário nenhum", () => {
+    render(<TerminalPanel enabled={true} />);
+    expect(screen.getByTestId("terminal-session-note")).toHaveTextContent(/Verificando/i);
+    expect(screen.getByTestId("terminal-session-note")).not.toHaveTextContent(/abre como/);
+    cleanup();
+
+    render(<TerminalPanel enabled={true} infoUnavailable />);
+    expect(screen.getByTestId("terminal-session-note")).toHaveTextContent(/Não foi possível confirmar/i);
+    expect(screen.getByTestId("terminal-session-note")).not.toHaveTextContent(/abre como/);
+  });
+
+  it("a orientação 'apenas observe' continua em todos os modos", () => {
+    for (const elevation of ["senha", "segundo-plano", "root", "root-legado", "container-dev"] as const) {
+      render(<TerminalPanel enabled={true} info={infoFor(elevation)} />);
+      expect(screen.getByText(/apenas observe; aja SOMENTE quando for solicitado/i)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+});
+
+describe("TerminalPanel — botão 'Abrir como' só em sessão root", () => {
+  it("senha e segundo-plano: o terminal JÁ é do usuário — nada de su", async () => {
+    for (const elevation of ["senha", "segundo-plano"] as const) {
+      render(<TerminalPanel enabled={true} sshUser="kelvin" info={infoFor(elevation)} />);
+      await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("root explícito também oferece o botão (inspecionar como o usuário detectado)", async () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" info={infoFor("root")} />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /abrir como kelvin/i })).toBeInTheDocument();
+  });
+
+  it("modo ainda desconhecido ou container de dev: sem botão", async () => {
+    render(<TerminalPanel enabled={true} sshUser="kelvin" />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
+    cleanup();
+    render(<TerminalPanel enabled={true} sshUser="kelvin" info={infoFor("container-dev")} />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /abrir como/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("TerminalPanel — frames de controle", () => {
+  it("frame de controle NUNCA é escrito no xterm; frame comum é", async () => {
+    render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+    await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+
+    control({ type: "background-exec", state: "start", command: "cat /etc/os-release" });
+    control({ type: "sudo-password-requested", user: "kelvin" });
+    control({ type: "sudo-password-prompt-closed", outcome: "answered" });
+    expect(lastTerm().write).not.toHaveBeenCalled();
+
+    act(() => lastWs().serverSend("kelvin@vps:~$ "));
+    expect(lastTerm().write).toHaveBeenCalledWith("kelvin@vps:~$ ");
+    expect(lastTerm().write).toHaveBeenCalledTimes(1);
+  });
+
+  it("frame que só PARECE controle (sem o NUL do prefixo) é saída comum", async () => {
+    render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+    await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+    const forjado = 'paas-control:{"type":"sudo-password-requested","user":"kelvin"}';
+    act(() => lastWs().serverSend(forjado));
+    expect(lastTerm().write).toHaveBeenCalledWith(forjado);
+    expect(screen.queryByTestId("sudo-password-alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("TerminalPanel — alerta de senha do sudo", () => {
+  async function pedirSenha(user: string | null = "kelvin") {
+    render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+    await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+    control({ type: "sudo-password-requested", user });
+    return screen.findByTestId("sudo-password-alert");
+  }
+
+  it("aparece com o nome do usuário e o texto de transparência, sem campo de senha", async () => {
+    const alerta = await pedirSenha();
+    expect(alerta).toHaveTextContent(/Digite a senha do usuário kelvin no terminal abaixo e pressione Enter/);
+    expect(alerta).toHaveTextContent(/não aparecem enquanto você digita/i);
+    expect(alerta).toHaveTextContent(/isso é normal/i);
+    expect(alerta).toHaveTextContent(/passa pelo painel e chega ao terminal da sua VPS/i);
+    expect(alerta).toHaveTextContent(/não grava, não registra e não envia essa senha para nenhum outro lugar/i);
+    expect(alerta).toHaveTextContent(/código é aberto/i);
+    // a senha é digitada no xterm — o alerta não coleta nada
+    expect(alerta.querySelector("input, textarea")).toBeNull();
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it("sem nome no pedido, usa o usuário da sessão", async () => {
+    const alerta = await pedirSenha(null);
+    expect(alerta).toHaveTextContent(/senha do usuário kelvin/);
+  });
+
+  it("expande o terminal, pulsa e dá o foco ao xterm para digitar direto", async () => {
+    await pedirSenha();
+    expect(screen.getByTestId("terminal-container")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Terminal do servidor/ }).className).toContain("animate-pulse");
+    await waitFor(() => expect(lastTerm().focus).toHaveBeenCalled());
+  });
+
+  it("o alerta não cobre o terminal: fica ANTES dele no fluxo, não é um diálogo", async () => {
+    const alerta = await pedirSenha();
+    const container = screen.getByTestId("terminal-container");
+    expect(alerta.compareDocumentPosition(container) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("acesso por IP em http: aviso inequívoco de senha sem criptografia", async () => {
+    fakeLocation = { protocol: "http:", hostname: "203.0.113.10" };
+    const alerta = await pedirSenha();
+    const aviso = screen.getByTestId("sudo-insecure-transport");
+    expect(alerta).toContainElement(aviso);
+    expect(aviso).toHaveTextContent(/SEM criptografia/);
+    expect(aviso).toHaveTextContent(/túnel SSH/i);
+  });
+
+  it("localhost (túnel SSH) e https: sem aviso de transporte inseguro", async () => {
+    for (const loc of [
+      { protocol: "http:", hostname: "localhost" },
+      { protocol: "http:", hostname: "127.0.0.1" },
+      { protocol: "https:", hostname: "painel.exemplo.com" },
+    ]) {
+      fakeLocation = loc;
+      await pedirSenha();
+      expect(screen.queryByTestId("sudo-insecure-transport")).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("rejected: 'senha incorreta, tente de novo' e o alerta continua (inclusive após o novo pedido)", async () => {
+    await pedirSenha();
+    control({ type: "sudo-password-prompt-closed", outcome: "rejected" });
+    expect(screen.getByTestId("sudo-password-alert")).toHaveTextContent(/Senha incorreta, tente de novo/i);
+    control({ type: "sudo-password-requested", user: "kelvin" });
+    expect(screen.getByTestId("sudo-password-alert")).toHaveTextContent(/Senha incorreta, tente de novo/i);
+    expect(screen.getByTestId("sudo-password-alert")).toHaveTextContent(/Digite a senha do usuário kelvin/);
+  });
+
+  it("answered: fecha o alerta", async () => {
+    await pedirSenha();
+    control({ type: "sudo-password-prompt-closed", outcome: "answered" });
+    expect(screen.queryByTestId("sudo-password-alert")).not.toBeInTheDocument();
+  });
+
+  it("session-ended: fecha o alerta", async () => {
+    await pedirSenha();
+    control({ type: "sudo-password-prompt-closed", outcome: "session-ended" });
+    expect(screen.queryByTestId("sudo-password-alert")).not.toBeInTheDocument();
+  });
+
+  it("exhausted: o sudo desistiu após 3 tentativas — é preciso executar de novo", async () => {
+    await pedirSenha();
+    control({ type: "sudo-password-prompt-closed", outcome: "exhausted" });
+    const alerta = screen.getByTestId("sudo-password-alert");
+    expect(alerta).toHaveTextContent(/3 tentativas/);
+    expect(alerta).toHaveTextContent(/execut\w+ de novo/i);
+    expect(alerta).not.toHaveTextContent(/Digite a senha/);
+    fireEvent.click(screen.getByRole("button", { name: /Entendi/ }));
+    expect(screen.queryByTestId("sudo-password-alert")).not.toBeInTheDocument();
+  });
+
+  it("not-permitted: usuário sem sudo, com a correção exata", async () => {
+    await pedirSenha();
+    control({ type: "sudo-password-prompt-closed", outcome: "not-permitted" });
+    const alerta = screen.getByTestId("sudo-password-alert");
+    expect(alerta).toHaveTextContent(/não tem permissão de sudo/i);
+    expect(alerta).toHaveTextContent("usermod -aG sudo kelvin");
+    expect(alerta).toHaveTextContent(/como root/i);
+    expect(alerta).toHaveTextContent(/reconect/i);
+  });
+
+  it("timeout: tempo esgotado aguardando a senha", async () => {
+    await pedirSenha();
+    control({ type: "sudo-password-prompt-closed", outcome: "timeout" });
+    expect(screen.getByTestId("sudo-password-alert")).toHaveTextContent(/Tempo esgotado aguardando a senha/i);
+  });
+
+  it("o que se digita no xterm só vai ao WS — o alerta não lê nem guarda nada", async () => {
+    await pedirSenha();
+    lastTerm().fireData("minha-senha\r");
+    expect(lastWs().sent).toContain("minha-senha\r");
+    expect(screen.getByTestId("sudo-password-alert")).not.toHaveTextContent(/minha-senha/);
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain("minha-senha");
+  });
+});
+
+describe("TerminalPanel — comando root em segundo plano", () => {
+  it("start mostra o indicador com o comando; end remove", async () => {
+    render(<TerminalPanel enabled={true} info={infoFor("segundo-plano")} />);
+    await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+    expect(screen.queryByTestId("background-exec-indicator")).not.toBeInTheDocument();
+
+    control({ type: "background-exec", state: "start", command: "bash /opt/paas-hardening/00-update.sh" });
+    const indicador = screen.getByTestId("background-exec-indicator");
+    expect(indicador).toHaveTextContent(/segundo plano como root/i);
+    expect(indicador).toHaveTextContent("bash /opt/paas-hardening/00-update.sh");
+
+    control({ type: "background-exec", state: "end", command: "bash /opt/paas-hardening/00-update.sh", code: 0 });
+    expect(screen.queryByTestId("background-exec-indicator")).not.toBeInTheDocument();
   });
 });

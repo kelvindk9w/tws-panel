@@ -13,8 +13,19 @@
  * aparece digitado no xterm do usuário, a saída rola ao vivo e prompts
  * interativos (ex.: senha) são respondidos digitando no próprio terminal —
  * o input segue pelo PTY sem passar por nenhum log.
+ *
+ * MODO "senha" (PAAS_ROOT_MODE=senha — terminal aberto como usuário comum):
+ *  - comandos que precisam de root são digitados ELEVADOS INTEIROS:
+ *    `sudo -p '<prompt>' -- bash -c '<comando>'` (buildElevatedCommand);
+ *  - o pedido de senha do sudo é detectado na SAÍDA do PTY (watchSudoOutput)
+ *    e vira mensagem de controle aos clientes (onControl). A SAÍDA pode ser
+ *    observada; o INPUT continua nunca lido — a senha que o operador digita
+ *    passa por write() exatamente como qualquer outro byte;
+ *  - enquanto o prompt está aberto o relógio do comando fica PAUSADO e corre
+ *    um relógio próprio de espera pela senha (sudoPasswordTimeoutMs).
  */
 import { randomBytes } from "node:crypto";
+import type { SudoPromptOutcome, TerminalControlMessage } from "@paas/core";
 import type { PtyFactory, RemotePty } from "./docker-socket.js";
 
 /** Lançado quando o PTY não pôde ser aberto (antes de qualquer comando rodar). */
@@ -40,6 +51,89 @@ export class CaptureDesyncError extends Error {
   }
 }
 
+/** Por que o sudo não executou o comando pedido. */
+export type SudoFailureReason = "exhausted" | "not-permitted" | "timeout" | "not-executed";
+
+const SUDO_FAILURE_MESSAGES: Record<SudoFailureReason, string> = {
+  exhausted:
+    "o sudo recusou a senha 3 vezes. Nada foi executado como root. Confira a senha do usuário do terminal e rode de novo.",
+  "not-permitted":
+    "o usuário do terminal não tem permissão de sudo. Nada foi executado como root. Adicione-o ao grupo sudo " +
+    "(como root: usermod -aG sudo <usuário>) ou reinstale com PAAS_ROOT_MODE=segundo-plano.",
+  timeout:
+    "tempo esgotado aguardando a senha do sudo. Nada foi executado como root e o pedido de senha foi cancelado. " +
+    "Rode de novo e digite a senha no terminal.",
+  "not-executed":
+    "o sudo não executou o comando (senha não confirmada ou sudo interrompido). Nada foi executado como root. " +
+    "Rode de novo e digite a senha no terminal quando ela for pedida.",
+};
+
+/**
+ * O sudo não executou o comando (senha errada 3 vezes, usuário sem sudo,
+ * tempo de espera pela senha esgotado...). NUNCA é um resultado de comando:
+ * o caller deve falhar a varredura/fase com a mensagem, jamais tratá-lo como
+ * "ok" ou como "fail" de um check. Não há retentativa automática — repetir
+ * pediria a senha de novo.
+ */
+export class SudoElevationError extends Error {
+  /** Resposta HTTP quando chega a uma rota: 424 (dependência — o sudo — falhou). */
+  readonly statusCode = 424;
+  readonly code = "sudo_elevation_failed";
+  constructor(readonly reason: SudoFailureReason) {
+    super(SUDO_FAILURE_MESSAGES[reason]);
+    this.name = "SudoElevationError";
+  }
+}
+
+/**
+ * Prompt do sudo imposto com -p: independe do locale do host (o texto padrão
+ * é traduzido) e segue o formato do pt_BR, que o detector também reconhece.
+ * %p é expandido pelo próprio sudo para o usuário cuja senha é pedida.
+ */
+export const SUDO_PROMPT = "[sudo] senha para %p: ";
+
+/** Aspas simples POSIX: qualquer byte (exceto NUL) chega intacto ao bash. */
+export function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Linha digitada para rodar `cmd` como root no modo senha.
+ *
+ * `sudo cmd | outro` elevaria só o primeiro comando do pipeline; por isso o
+ * comando INTEIRO vira o argumento único de `bash -c`, entre aspas simples
+ * (os comandos são sempre de uma linha e já passaram pela allowlist no
+ * formato ORIGINAL — o prefixo nunca amplia o que é aceito). O marcador
+ * BEGIN é impresso DENTRO do bash elevado: se ele aparece, o sudo autorizou
+ * e o `$?` seguinte é o código do comando; se o EXIT chega sem BEGIN, o sudo
+ * não executou nada (SudoElevationError), sem confundir com o código 1 do
+ * próprio sudo.
+ */
+export function buildElevatedCommand(cmd: string, nonce: string): string {
+  const inner = `echo ":::PAAS_BEGIN_${nonce}"; ${cmd}`;
+  return `sudo -p ${shellSingleQuote(SUDO_PROMPT)} -- bash -c ${shellSingleQuote(inner)}`;
+}
+
+/** `sudo -v`: valida (pedindo a senha se preciso) e renova a credencial em cache. */
+export function buildSudoValidateCommand(): string {
+  return `sudo -p ${shellSingleQuote(SUDO_PROMPT)} -v`;
+}
+
+// Prompt do sudo: o formato imposto por -p (pt_BR) ou o padrão em inglês
+// (sudo digitado pelo próprio operador), terminando a saída acumulada ou a
+// linha (quando o Enter chega na mesma leitura). O nome segue a regra de
+// usuário Linux — o eco do comando digitado contém "%p: ", que não casa,
+// então o próprio comando nunca dispara um falso pedido de senha.
+const SUDO_PROMPT_RE = /\[sudo\] (?:senha para|password for) ([a-z_][a-z0-9_.-]{0,31}\$?): ?(?=\r?\n|$)/;
+const SUDO_EXHAUSTED_RE = /incorrect password attempts?|tentativas? de senha incorretas?/i;
+const SUDO_NOT_PERMITTED_RE =
+  /is not in the sudoers file|is not allowed to (?:run sudo|execute)|não está no arquivo sudoers|não tem permissão para executar/i;
+const SUDO_REJECTED_RE = /Sorry, try again\.|Desculpe, tente novamente\./i;
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+const DEFAULT_SUDO_PASSWORD_TIMEOUT_MS = 5 * 60_000;
+const SUDO_TAIL_MAX = 512;
+
 export interface TerminalServiceOptions {
   /** Fábrica do PTY remoto (docker-socket em produção; fake nos testes). */
   openPty: PtyFactory;
@@ -51,10 +145,27 @@ export interface TerminalServiceOptions {
   audit?: (action: string, detail: string) => void;
   /** Garante o alvo pronto antes de abrir o PTY (ex.: container de dev). */
   ensureTarget?: () => Promise<void>;
+  /**
+   * Observa a SAÍDA do PTY atrás do prompt de senha do sudo e emite
+   * mensagens de controle (modo senha). Desligado no legado.
+   */
+  watchSudoPrompt?: boolean;
+  /** Espera máxima pela senha do sudo com o prompt aberto (default 5 min). */
+  sudoPasswordTimeoutMs?: number;
 }
 
 interface CommandWaiter {
   marker: string;
+  /** Comando elevado: o BEGIN vem de dentro do bash elevado (buildElevatedCommand). */
+  elevated: boolean;
+  /** `sudo -v`: resolve só com código 0. */
+  sudoValidation: boolean;
+  /** Falha do sudo observada na saída enquanto este comando rodava. */
+  sudoFailure: SudoFailureReason | null;
+  timeoutMs: number;
+  /** Instante-limite do relógio do comando (pausado com o prompt aberto). */
+  deadline: number;
+  remainingMs: number;
   /**
    * Modo captura: um marcador :::PAAS_BEGIN_<nonce> é impresso ANTES do
    * comando; só a saída entre BEGIN e EXIT é entregue ao caller (o eco do
@@ -77,6 +188,13 @@ export interface CommandResult {
   code: number;
   /** Saída entre os marcadores BEGIN/EXIT (vazia fora do modo captura). */
   output: string;
+}
+
+interface RunOptions {
+  timeoutMs?: number | undefined;
+  capture?: boolean;
+  elevate?: boolean | undefined;
+  sudoValidation?: boolean;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
@@ -103,11 +221,21 @@ export class TerminalService {
   private readonly scrollbackChars: number;
   private readonly audit?: ((action: string, detail: string) => void) | undefined;
   private ensureTarget?: (() => Promise<void>) | undefined;
+  private readonly watchSudoPrompt: boolean;
+  private readonly sudoPasswordTimeoutMs: number;
 
   private pty: RemotePty | null = null;
   private opening: Promise<RemotePty> | null = null;
   private scrollback = "";
   private readonly listeners = new Set<(chunk: string) => void>();
+  private readonly controlListeners = new Set<(msg: TerminalControlMessage) => void>();
+  /** Fim da saída recente (sem ANSI), só para achar o prompt do sudo. */
+  private sudoTail = "";
+  private promptOpen = false;
+  private promptUser: string | null = null;
+  /** Saída desde que o prompt abriu (classifica como ele terminou). */
+  private sudoAfterPrompt = "";
+  private sudoPasswordTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private waiter: CommandWaiter | null = null;
   /** Mutex de comandos: o shell é um só, comandos rodam em fila. */
@@ -119,6 +247,18 @@ export class TerminalService {
     this.scrollbackChars = opts.scrollbackChars ?? DEFAULT_SCROLLBACK_CHARS;
     this.audit = opts.audit;
     this.ensureTarget = opts.ensureTarget;
+    this.watchSudoPrompt = opts.watchSudoPrompt ?? false;
+    this.sudoPasswordTimeoutMs = opts.sudoPasswordTimeoutMs ?? DEFAULT_SUDO_PASSWORD_TIMEOUT_MS;
+  }
+
+  /** true enquanto o sudo está pedindo senha no terminal (modo senha). */
+  get sudoPromptOpen(): boolean {
+    return this.promptOpen;
+  }
+
+  /** Usuário cuja senha o prompt aberto pede (null se fechado/desconhecido). */
+  get sudoPromptUser(): string | null {
+    return this.promptOpen ? this.promptUser : null;
   }
 
   setEnsureTarget(fn: (() => Promise<void>) | undefined): void {
@@ -179,6 +319,7 @@ export class TerminalService {
     const waiter = this.waiter;
     this.waiter = null;
     if (waiter) clearTimeout(waiter.timer);
+    this.closeSudoPrompt("session-ended");
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     // Limpa o alvo (container paas-terminal-* / exec): sem isso, uma sessão
@@ -212,6 +353,7 @@ export class TerminalService {
     const waiter = this.waiter;
     this.waiter = null;
     if (waiter) clearTimeout(waiter.timer);
+    this.closeSudoPrompt("session-ended");
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     waiter?.reject(new Error("sessão de terminal encerrada"));
@@ -242,6 +384,32 @@ export class TerminalService {
     return () => this.listeners.delete(cb);
   }
 
+  /** Assina as mensagens de controle (clientes WS). Retorna o unsubscribe. */
+  onControl(cb: (msg: TerminalControlMessage) => void): () => void {
+    this.controlListeners.add(cb);
+    return () => this.controlListeners.delete(cb);
+  }
+
+  /** Emite uma mensagem de controle aos clientes (nunca passa pelo PTY). */
+  emitControl(msg: TerminalControlMessage): void {
+    for (const cb of this.controlListeners) {
+      try {
+        cb(msg);
+      } catch {
+        // cliente quebrado não derruba o terminal
+      }
+    }
+  }
+
+  /**
+   * ESPELHO só de visualização (modo segundo-plano): o texto vai aos clientes
+   * e ao scrollback como se fosse saída, mas NUNCA é escrito na entrada do
+   * PTY — não é digitado no shell do usuário e não abre sessão.
+   */
+  mirror(text: string): void {
+    this.broadcast(text);
+  }
+
   private broadcast(chunk: string): void {
     this.scrollback += chunk;
     if (this.scrollback.length > this.scrollbackChars) {
@@ -262,6 +430,9 @@ export class TerminalService {
    */
   private handleOutput(chunk: string): void {
     this.touch();
+    // Antes do waiter: uma falha do sudo e o EXIT podem chegar na MESMA
+    // leitura, e a falha precisa estar registrada quando o EXIT resolver.
+    if (this.watchSudoPrompt) this.watchSudoOutput(chunk);
     const waiter = this.waiter;
     if (!waiter) {
       this.broadcast(chunk);
@@ -286,8 +457,17 @@ export class TerminalService {
     }
     if (done) {
       clearTimeout(waiter.timer);
+      this.clearSudoPasswordTimer();
       this.waiter = null;
-      if (waiter.capture && !waiter.capturing) {
+      if (waiter.sudoValidation) {
+        if (exitCode === 0) waiter.resolve({ code: 0, output: "" });
+        else waiter.reject(new SudoElevationError(waiter.sudoFailure ?? "not-executed"));
+      } else if (waiter.elevated && !waiter.capturing) {
+        // EXIT sem o BEGIN que só o bash ELEVADO imprime: o sudo não
+        // executou o comando. Nunca é desync (sem retentativa, que pediria a
+        // senha de novo) e nunca é o código do comando.
+        waiter.reject(new SudoElevationError(waiter.sudoFailure ?? "not-executed"));
+      } else if (waiter.capture && !waiter.capturing) {
         // GUARDA DE INTEGRIDADE: o EXIT chegou sem que o BEGIN tivesse sido
         // detectado — a captura está vazia/corrompida. Entregar "" como
         // sucesso faria o scanner avaliar lixo (todos os checks "ausente").
@@ -335,7 +515,7 @@ export class TerminalService {
       if (nl === -1) break;
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
-      if (waiter.capture && !waiter.capturing) {
+      if ((waiter.capture || waiter.elevated) && !waiter.capturing) {
         const b = beginRe.exec(line);
         if (b) {
           // Marcador de início: não é exibido nem capturado — a partir da
@@ -366,7 +546,8 @@ export class TerminalService {
     const beginFull = `:::PAAS_BEGIN_${waiter.marker}`;
     const candidate = buf.endsWith("\r") ? buf.slice(0, -1) : buf;
     const couldBeMarker = (full: string) => full.startsWith(candidate) || candidate.startsWith(full);
-    if (couldBeMarker(exitFull) || (waiter.capture && couldBeMarker(beginFull))) {
+    const watchBegin = waiter.capture || waiter.elevated;
+    if (couldBeMarker(exitFull) || (watchBegin && couldBeMarker(beginFull))) {
       waiter.pending = buf;
     } else {
       // Marcador colado NO MEIO da linha E dividido entre chunks (ex.: chunk
@@ -383,7 +564,7 @@ export class TerminalService {
         // chunks, ex.: `root@host:/# :::PAAS_BE` | `GIN_<n>`).
         if (
           exitFull.startsWith(suffix) ||
-          (waiter.capture && !waiter.capturing && beginFull.startsWith(suffix))
+          (watchBegin && !waiter.capturing && beginFull.startsWith(suffix))
         ) {
           glue = i;
         }
@@ -417,7 +598,7 @@ export class TerminalService {
   runCommand(
     cmd: string,
     onData: (chunk: string) => void,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; elevate?: boolean },
   ): Promise<number> {
     return this.enqueue(cmd, onData, { ...opts, capture: false }).then((r) => r.code);
   }
@@ -431,7 +612,7 @@ export class TerminalService {
    */
   runCommandCaptured(
     cmd: string,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; elevate?: boolean },
   ): Promise<CommandResult> {
     const attempt = () => this.enqueue(cmd, () => undefined, { ...opts, capture: true });
     return attempt().catch((err: unknown) => {
@@ -445,10 +626,20 @@ export class TerminalService {
     });
   }
 
+  /**
+   * Modo senha: `sudo -v` no início de uma execução longa (varredura, fila de
+   * fases) — pede a senha UMA vez, antes do primeiro comando, e renova a
+   * credencial em cache sem perguntar de novo enquanto ela vale. Rejeita com
+   * SudoElevationError se o sudo não confirmar.
+   */
+  validateSudo(opts?: { timeoutMs?: number }): Promise<void> {
+    return this.enqueue("", () => undefined, { ...opts, sudoValidation: true }).then(() => undefined);
+  }
+
   private enqueue(
     cmd: string,
     onData: (chunk: string) => void,
-    opts?: { timeoutMs?: number; capture?: boolean },
+    opts?: RunOptions,
   ): Promise<CommandResult> {
     if (cmd.includes("\n") || cmd.includes("\r")) {
       return Promise.reject(new Error("runCommand aceita apenas comandos de uma linha"));
@@ -462,34 +653,23 @@ export class TerminalService {
   private async runCommandNow(
     cmd: string,
     onData: (chunk: string) => void,
-    opts?: { timeoutMs?: number; capture?: boolean },
+    opts?: RunOptions,
   ): Promise<CommandResult> {
     await this.ensureSession(); // TerminalUnavailableError aqui = antes de começar
     const nonce = randomBytes(4).toString("hex");
     const capture = opts?.capture ?? false;
+    const sudoValidation = opts?.sudoValidation ?? false;
+    const elevated = !sudoValidation && (opts?.elevate ?? false);
+    const timeoutMs = opts?.timeoutMs ?? 30 * 60_000;
     return new Promise<CommandResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        // Timeout: interrompe com Ctrl-C e dá um grace curto pelo marcador.
-        this.write("\x03");
-        setTimeout(() => {
-          const w = this.waiter;
-          if (w?.marker !== nonce) return; // marcador chegou — resolveu normal
-          this.waiter = null;
-          // REGRA: o timeout de UM comando NUNCA derruba a sessão. Um check
-          // lento não pode destruir o terminal que o usuário está vendo
-          // (nem o container paas-terminal-*): o Ctrl-C devolve o prompt e
-          // a fila segue no mesmo shell. Sessão comprovadamente morta é
-          // tratada pelos eventos do stream (end/close/error →
-          // handleSessionEnd), nunca por timeout de comando.
-          this.broadcast(
-            "\r\n\x1b[33m[terminal] comando interrompido por tempo limite — a sessão continua ativa\x1b[0m\r\n",
-          );
-          w.reject(new Error(`comando excedeu o tempo limite no terminal (${opts?.timeoutMs ?? 0}ms)`));
-        }, 5_000).unref();
-      }, opts?.timeoutMs ?? 30 * 60_000);
-      timer.unref();
-      this.waiter = {
+      const waiter: CommandWaiter = {
         marker: nonce,
+        elevated,
+        sudoValidation,
+        sudoFailure: null,
+        timeoutMs,
+        deadline: 0,
+        remainingMs: timeoutMs,
         capture,
         capturing: false,
         captured: "",
@@ -497,12 +677,141 @@ export class TerminalService {
         resolve,
         reject,
         pending: "",
-        timer,
+        timer: undefined as unknown as NodeJS.Timeout,
       };
+      this.waiter = waiter;
+      this.armCommandTimer(waiter, timeoutMs);
       // O comando digitado inclui os marcadores de início/fim — honesto e
       // visível para o usuário, como num SSH real.
-      const prelude = capture ? `echo ":::PAAS_BEGIN_${nonce}"; ` : "";
-      this.write(`${prelude}${cmd}; echo ":::PAAS_EXIT_${nonce}:$?"\n`);
+      let line: string;
+      if (sudoValidation) line = buildSudoValidateCommand();
+      else if (elevated) line = buildElevatedCommand(cmd, nonce); // BEGIN vem de dentro do sudo
+      else line = `${capture ? `echo ":::PAAS_BEGIN_${nonce}"; ` : ""}${cmd}`;
+      this.write(`${line}; echo ":::PAAS_EXIT_${nonce}:$?"\n`);
     });
+  }
+
+  private armCommandTimer(waiter: CommandWaiter, ms: number): void {
+    waiter.deadline = Date.now() + ms;
+    waiter.timer = setTimeout(() => this.onCommandTimeout(waiter), ms);
+    waiter.timer.unref();
+  }
+
+  private onCommandTimeout(waiter: CommandWaiter): void {
+    // Timeout: interrompe com Ctrl-C e dá um grace curto pelo marcador.
+    this.write("\x03");
+    this.rejectAfterGrace(waiter, () => {
+      // REGRA: o timeout de UM comando NUNCA derruba a sessão. Um check
+      // lento não pode destruir o terminal que o usuário está vendo
+      // (nem o container paas-terminal-*): o Ctrl-C devolve o prompt e
+      // a fila segue no mesmo shell. Sessão comprovadamente morta é
+      // tratada pelos eventos do stream (end/close/error →
+      // handleSessionEnd), nunca por timeout de comando.
+      this.broadcast(
+        "\r\n\x1b[33m[terminal] comando interrompido por tempo limite — a sessão continua ativa\x1b[0m\r\n",
+      );
+      return new Error(`comando excedeu o tempo limite no terminal (${waiter.timeoutMs}ms)`);
+    });
+  }
+
+  /** Depois de um Ctrl-C: se o marcador não chegar na folga, rejeita e libera a fila. */
+  private rejectAfterGrace(waiter: CommandWaiter, makeError: () => Error): void {
+    setTimeout(() => {
+      if (this.waiter !== waiter) return; // marcador chegou — já resolvido
+      this.waiter = null;
+      waiter.reject(makeError());
+    }, 5_000).unref();
+  }
+
+  // -------------------------------------------------------------------------
+  // Prompt de senha do sudo (modo senha) — SÓ a SAÍDA do PTY é observada
+  // -------------------------------------------------------------------------
+
+  /**
+   * Chamado com cada pedaço de SAÍDA do PTY (nunca com input). Abre o prompt
+   * quando o fim da saída é o pedido de senha do sudo; com o prompt aberto,
+   * a primeira linha não vazia que chega diz como ele terminou.
+   */
+  private watchSudoOutput(chunk: string): void {
+    let text = chunk.replace(ANSI_RE, "");
+    while (text.length > 0) {
+      if (!this.promptOpen) {
+        const tail = this.sudoTail + text;
+        const m = SUDO_PROMPT_RE.exec(tail);
+        if (!m) {
+          this.sudoTail = tail.slice(-SUDO_TAIL_MAX);
+          break;
+        }
+        this.openSudoPrompt(m[1] ?? null);
+        // o que veio depois do prompt na mesma leitura (Enter, erro...) conta
+        text = tail.slice(m.index + m[0].length);
+        continue;
+      }
+      this.sudoAfterPrompt = (this.sudoAfterPrompt + text).slice(-SUDO_TAIL_MAX);
+      text = "";
+      const line = /^\s*(\S[^\n]*)\n/.exec(this.sudoAfterPrompt);
+      if (!line) continue; // só Enter/whitespace até aqui (ex.: atraso do PAM)
+      const first = line[1] ?? "";
+      const outcome: SudoPromptOutcome = SUDO_EXHAUSTED_RE.test(first)
+        ? "exhausted"
+        : SUDO_NOT_PERMITTED_RE.test(first)
+          ? "not-permitted"
+          : SUDO_REJECTED_RE.test(first)
+            ? "rejected"
+            : "answered";
+      // o resto (ex.: um prompt novo depois de "Sorry, try again.") é reanalisado
+      text = this.sudoAfterPrompt.slice(line[0].length);
+      this.closeSudoPrompt(outcome);
+    }
+  }
+
+  private openSudoPrompt(user: string | null): void {
+    this.promptOpen = true;
+    this.promptUser = user;
+    this.sudoTail = "";
+    this.sudoAfterPrompt = "";
+    this.emitControl({ type: "sudo-password-requested", user });
+    const waiter = this.waiter;
+    if (!waiter) return; // sudo digitado pelo operador: nenhum relógio do painel
+    // Pausa o relógio do comando: esperar a senha não é o comando demorando.
+    clearTimeout(waiter.timer);
+    waiter.remainingMs = Math.max(0, waiter.deadline - Date.now());
+    this.clearSudoPasswordTimer();
+    this.sudoPasswordTimer = setTimeout(() => this.onSudoPasswordTimeout(waiter), this.sudoPasswordTimeoutMs);
+    this.sudoPasswordTimer.unref();
+  }
+
+  private closeSudoPrompt(outcome: SudoPromptOutcome): void {
+    if (!this.promptOpen) return;
+    this.promptOpen = false;
+    this.sudoTail = "";
+    this.sudoAfterPrompt = "";
+    const hadPasswordTimer = this.sudoPasswordTimer !== null;
+    this.clearSudoPasswordTimer();
+    this.emitControl({ type: "sudo-password-prompt-closed", outcome });
+    const waiter = this.waiter;
+    if (!waiter) return;
+    if (outcome === "exhausted" || outcome === "not-permitted") waiter.sudoFailure = outcome;
+    // Retoma o relógio do comando com o tempo que restava.
+    if (hadPasswordTimer && outcome !== "session-ended") this.armCommandTimer(waiter, waiter.remainingMs);
+  }
+
+  private onSudoPasswordTimeout(waiter: CommandWaiter): void {
+    this.sudoPasswordTimer = null;
+    if (this.waiter !== waiter) return;
+    waiter.sudoFailure = "timeout";
+    this.closeSudoPrompt("timeout");
+    clearTimeout(waiter.timer); // sem relógio do comando: o desfecho é o da senha
+    this.broadcast(
+      "\r\n\x1b[33m[terminal] tempo esgotado aguardando a senha do sudo — pedido cancelado (Ctrl-C)\x1b[0m\r\n",
+    );
+    // Ctrl-C encerra o sudo: nada fica pendurado esperando senha.
+    this.write("\x03");
+    this.rejectAfterGrace(waiter, () => new SudoElevationError("timeout"));
+  }
+
+  private clearSudoPasswordTimer(): void {
+    if (this.sudoPasswordTimer) clearTimeout(this.sudoPasswordTimer);
+    this.sudoPasswordTimer = null;
   }
 }

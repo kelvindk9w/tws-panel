@@ -466,3 +466,159 @@ describe("SecurityStep — usuário não-root detectado pela varredura", () => {
     await waitFor(() => expect(onSshUserDetected).toHaveBeenCalledWith("deploy"));
   });
 });
+
+/**
+ * O usuário do terminal passou a ser escolha EXPLÍCITA do operador na
+ * instalação (PAAS_TERMINAL_USER → configuredUser). Quando existe, ele é a
+ * fonte primária do campo da Fase 01; a detecção da varredura vira fallback.
+ */
+describe("SecurityStep — usuário configurado na instalação", () => {
+  function campoUsuario(): HTMLInputElement {
+    return screen.getByLabelText(/Usuário não-root criado na instalação/) as HTMLInputElement;
+  }
+
+  async function reachPlanWith(configuredUser: string | null) {
+    render(<SecurityStep onNext={() => undefined} configuredUser={configuredUser} />);
+    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Gerar plano de correção"));
+    await screen.findByText(/Fase 00 — Atualizações do sistema/);
+  }
+
+  it("configuredUser preenche o campo e vence a detecção, dizendo de onde veio", async () => {
+    detectedSudoUsers = ["deploy", "kelvin"];
+    await reachPlanWith("kelvin");
+    expect(campoUsuario().value).toBe("kelvin");
+    expect(screen.getByText(/configuração da instalação/i)).toBeInTheDocument();
+    // a detecção não disputa com a escolha explícita
+    expect(screen.queryByText(/detectado no servidor/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/2 usuários/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("configured-user-not-detected")).not.toBeInTheDocument();
+  });
+
+  it("vence até um único detectado diferente — sem adivinhar outro nome", async () => {
+    detectedSudoUsers = ["deploy"];
+    await reachPlanWith("kelvin");
+    expect(campoUsuario().value).toBe("kelvin");
+  });
+
+  it("configurado mas NÃO encontrado no grupo sudo: aviso claro, sem bloquear", async () => {
+    detectedSudoUsers = ["deploy"];
+    await reachPlanWith("kelvin");
+    const aviso = screen.getByTestId("configured-user-not-detected");
+    expect(aviso).toHaveTextContent(/kelvin/);
+    expect(aviso).toHaveTextContent(/sudo/);
+    expect(aviso).toHaveTextContent("usermod -aG sudo kelvin");
+    // não bloqueia: a fase continua habilitada com o nome configurado
+    expect(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[1]!).toBeEnabled();
+  });
+
+  it("relatório antigo (sem detecção): não afirma que o usuário está ausente", async () => {
+    detectedSudoUsers = undefined;
+    await reachPlanWith("kelvin");
+    expect(campoUsuario().value).toBe("kelvin");
+    expect(screen.queryByTestId("configured-user-not-detected")).not.toBeInTheDocument();
+  });
+
+  it("sem configuração (legado ou root): a detecção continua valendo", async () => {
+    detectedSudoUsers = ["deploy"];
+    await reachPlanWith(null);
+    expect(campoUsuario().value).toBe("deploy");
+    expect(screen.getByText(/detectado no servidor/i)).toBeInTheDocument();
+    cleanup();
+
+    // "root" não é um usuário não-root válido: não vira fonte do campo
+    await reachPlanWith("root");
+    expect(campoUsuario().value).toBe("deploy");
+    expect(screen.queryByText(/configuração da instalação/i)).not.toBeInTheDocument();
+  });
+
+  it("o que o operador digitou não é sobrescrito quando a configuração chega depois", async () => {
+    const { rerender } = render(<SecurityStep onNext={() => undefined} configuredUser={null} />);
+    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Gerar plano de correção"));
+    await screen.findByText(/Fase 00 — Atualizações do sistema/);
+    fireEvent.change(campoUsuario(), { target: { value: "outro" } });
+
+    rerender(<SecurityStep onNext={() => undefined} configuredUser="kelvin" />);
+    expect(campoUsuario().value).toBe("outro");
+  });
+});
+
+/**
+ * No modo senha, a varredura e as fases dependem do sudo no terminal. Quando
+ * ele não executa nada (senha errada 3x, usuário sem sudo, tempo esgotado), o
+ * servidor responde 424 `sudo_elevation_failed` com uma mensagem acionável —
+ * que precisa chegar inteira ao operador, não virar "falha genérica".
+ */
+describe("SecurityStep — falha de elevação (sudo)", () => {
+  const MSG =
+    "o sudo recusou a senha 3 vezes. Nada foi executado como root. Confira a senha do usuário do terminal e rode de novo.";
+
+  it("varredura com 424 sudo_elevation_failed: mensagem do servidor visível e ação de tentar de novo", async () => {
+    const { ApiRequestError } = await import("@/lib/api");
+    const base = apiFetchMock.getMockImplementation()!;
+    let falhar = true;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (falhar && path.startsWith("/api/security/scan")) {
+        const err = new ApiRequestError(424, "Failed Dependency", MSG);
+        Object.assign(err, { data: { code: "sudo_elevation_failed" } });
+        throw err;
+      }
+      return base(path, init);
+    });
+    try {
+      render(<SecurityStep onNext={() => undefined} />);
+      fireEvent.click(await screen.findByText("Iniciar varredura"));
+
+      const bloco = await screen.findByTestId("sudo-elevation-error");
+      expect(bloco).toHaveTextContent(/O sudo recusou a senha 3 vezes/);
+      expect(bloco).toHaveTextContent(/Nada foi executado como root/);
+      expect(bloco).toHaveTextContent(/varredura/i);
+      expect(screen.queryByText("Falha ao executar a varredura.")).not.toBeInTheDocument();
+
+      falhar = false;
+      fireEvent.click(screen.getByRole("button", { name: /Tentar a varredura de novo/ }));
+      await screen.findByText("Gerar plano de correção");
+      expect(screen.queryByTestId("sudo-elevation-error")).not.toBeInTheDocument();
+    } finally {
+      apiFetchMock.mockImplementation(base);
+    }
+  });
+
+  it("fase que falha pelo sudo mostra a mensagem, sem afirmar rollback", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/jobs/job-1") {
+        return {
+          job: {
+            id: "job-1",
+            phase: "00",
+            phaseKey: "update",
+            title: "Atualizações do sistema",
+            dryRun: true,
+            status: "failed",
+            createdAt: "",
+            startedAt: null,
+            finishedAt: null,
+            steps: [],
+            log: "",
+            rollbackScheduled: false,
+            rollbackDeadline: null,
+            error: "tempo esgotado aguardando a senha do sudo. Nada foi executado como root.",
+          },
+        };
+      }
+      return base(path, init);
+    });
+    try {
+      await reachPlanStage();
+      fireEvent.click(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[0]!);
+      const bloco = await screen.findByTestId("sudo-elevation-error");
+      expect(bloco).toHaveTextContent(/Atualizações do sistema/);
+      expect(bloco).toHaveTextContent(/Tempo esgotado aguardando a senha do sudo/);
+      expect(screen.queryByText(/O rollback foi executado/)).not.toBeInTheDocument();
+    } finally {
+      apiFetchMock.mockImplementation(base);
+    }
+  });
+});

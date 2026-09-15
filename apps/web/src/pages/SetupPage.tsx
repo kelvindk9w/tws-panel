@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SetupStatusResponse } from "@paas/core";
 import { apiFetch, getSetupToken, initSetupToken, ApiRequestError } from "@/lib/api";
+import { useTerminalInfo } from "@/lib/terminal-info";
 import { Stepper } from "@/components/Stepper";
 import { TerminalPanel } from "@/components/TerminalPanel";
 import { WelcomeStep } from "@/pages/setup/WelcomeStep";
@@ -28,6 +29,10 @@ export function SetupPage() {
    * Segurança. Vive aqui porque o terminal é irmão dos passos, não filho
    * deles: o nome sobe da SecurityStep e desce para o TerminalPanel. */
   const [detectedSshUser, setDetectedSshUser] = useState<string | null>(null);
+  /** Usuário/modo do terminal definidos na instalação — consultado só com o
+   * terminal liberado (mesma regra do WebSocket). Desce para o terminal
+   * (cabeçalho por modo) e para a Segurança (usuário da Fase 01). */
+  const terminalInfo = useTerminalInfo(terminalEnabled);
 
   // Captura ?token= da URL na primeira renderização.
   useEffect(() => {
@@ -110,6 +115,7 @@ export function SetupPage() {
               onNext={() => advance(3)}
               onBack={() => goTo(1)}
               onSshUserDetected={setDetectedSshUser}
+              configuredUser={terminalInfo.info?.configuredUser ?? null}
             />
           </div>
         )}
@@ -127,7 +133,12 @@ export function SetupPage() {
 
         {/* Visão dupla: terminal real do servidor ao vivo, como janela contida
             na área de conteúdo — bloqueado até o token ser validado */}
-        <TerminalPanel enabled={terminalEnabled} sshUser={detectedSshUser} />
+        <TerminalPanel
+          enabled={terminalEnabled}
+          sshUser={detectedSshUser}
+          info={terminalInfo.info}
+          infoUnavailable={terminalInfo.unavailable}
+        />
       </main>
 
       <footer className="border-t py-6">
