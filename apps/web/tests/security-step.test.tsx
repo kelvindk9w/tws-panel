@@ -328,9 +328,9 @@ describe("SecurityStep — Fase 01 com chave SSH opcional", () => {
     await reachPlanStage();
     preencherUsuario("kelvin");
     expect(fase01Button()).toBeEnabled();
-    // e o dry-run de todas as fases também deixa de ser bloqueado
+    // e a simulação de todas as fases também deixa de ser bloqueada
     expect(
-      screen.getByRole("button", { name: /Executar dry-run de todas as fases pendentes/ }),
+      screen.getByRole("button", { name: /Simular todas as fases pendentes/ }),
     ).toBeEnabled();
   });
 
@@ -379,6 +379,73 @@ describe("SecurityStep — Fase 01 com chave SSH opcional", () => {
 
     preencherUsuario("kelvin");
     expect(cardFase01).not.toHaveTextContent(/Informe abaixo o usuário não-root/i);
+  });
+});
+
+/**
+ * Dúvidas literais do dono do produto instalando numa VPS real:
+ *  - "para que colar chave pública se agora eu digito a senha quando preciso?"
+ *  - "e colar isso numa página http não é falha de segurança?"
+ * As duas se respondem com TEXTO junto do campo — a lógica não muda.
+ */
+describe("SecurityStep — Fase 01 explica o que é a chave pública", () => {
+  it("diz que a pública não é segredo e que a PRIVADA nunca é colada", async () => {
+    await reachPlanStage();
+    const paragrafo = screen.getByText(/chave pública não é segredo/i).closest("p")!;
+    expect(paragrafo).toHaveTextContent(/é distribuída|distribuída|para ser distribuída/i);
+    expect(paragrafo).toHaveTextContent(/chave privada/i);
+    expect(paragrafo).toHaveTextContent(/sem \.pub/i);
+  });
+
+  it("separa a chave SSH da senha do sudo e explica por que a fase precisa dela", async () => {
+    await reachPlanStage();
+    const p = screen.getByText(/não tem relação com a senha do sudo/i).closest("p")!;
+    expect(p).toHaveTextContent(/entra.*na VPS pelo SSH/i);
+    expect(p).toHaveTextContent(/autoriza.*comandos administrativos/i);
+    expect(p).toHaveTextContent(/pelo menos uma chave instalada/i);
+    expect(p).toHaveTextContent(/sem te trancar para fora/i);
+  });
+
+  it("sobre http: colar a pública não vaza nada; o risco é alteração no caminho", async () => {
+    await reachPlanStage();
+    const p = screen.getByText(/não vaza nada útil/i).closest("p")!;
+    expect(p).toHaveTextContent(/alterar/i);
+    expect(p).toHaveTextContent(/túnel SSH/i);
+  });
+
+  it("o rótulo do campo deixa claro que é o conteúdo do arquivo .pub", async () => {
+    await reachPlanStage();
+    expect(screen.getByLabelText(/arquivo \.pub/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Chave pública.*opcional/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * "Executar dry-run de todas as fases pendentes" não se explicava a um leigo
+ * ("isso executa todas as fases? se eu clicar, o que acontece?"). O rótulo e a
+ * linha ao lado dele precisam responder isso sem jargão.
+ */
+describe("SecurityStep — botão de simulação se explica", () => {
+  it("rótulo sem jargão e explicação do que acontece ao clicar", async () => {
+    await reachPlanStage();
+    const botao = screen.getByRole("button", { name: /Simular todas as fases pendentes/ });
+    expect(botao).toHaveTextContent(/dry-run/i); // o termo técnico fica entre parênteses
+
+    const explicacao = screen.getByTestId("dry-run-explicacao");
+    expect(explicacao).toHaveTextContent(/simulação.*de todas as fases pendentes, na ordem/i);
+    expect(explicacao).toHaveTextContent(/Nada é alterado no servidor/i);
+    expect(explicacao).toHaveTextContent(/terminal/i);
+    expect(explicacao).toHaveTextContent(/sudo vai pedir a sua senha/i);
+    expect(explicacao).toHaveTextContent(/aplicar de verdade/i);
+  });
+
+  it("a fase individual também avisa que começa por uma simulação", async () => {
+    await reachPlanStage();
+    const cardFase00 = screen
+      .getAllByRole("button", { name: /Executar apenas esta fase/ })[0]!
+      .closest("div.rounded-md.border")!;
+    expect(cardFase00).toHaveTextContent(/Começa por uma.*simulação/i);
+    expect(cardFase00).toHaveTextContent(/nada é alterado no servidor/i);
   });
 });
 

@@ -113,7 +113,13 @@ vi.stubGlobal(
 // ---------------------------------------------------------------------------
 
 /** Endereço simulado da página (o jsdom fica preso em http://localhost). */
-let fakeLocation = { protocol: "http:", hostname: "localhost" };
+let fakeLocation: {
+  protocol: string;
+  hostname: string;
+  port?: string;
+  pathname?: string;
+  search?: string;
+} = { protocol: "http:", hostname: "localhost" };
 vi.mock("@/lib/page-location", () => ({ pageLocation: () => fakeLocation }));
 
 import type { HostDockerAccess, TerminalElevation, TerminalInfoResponse, TerminalControlMessage } from "@paas/core";
@@ -641,13 +647,52 @@ describe("TerminalPanel — alerta de senha do sudo", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("acesso por IP em http: aviso inequívoco de senha sem criptografia", async () => {
-    fakeLocation = { protocol: "http:", hostname: "203.0.113.10" };
+  it("acesso por IP em http: diz o fato sem criptografia e entrega a saída pronta", async () => {
+    fakeLocation = {
+      protocol: "http:",
+      hostname: "203.0.113.10",
+      port: "9000",
+      pathname: "/setup",
+      search: "?token=abc123",
+    };
     const alerta = await pedirSenha();
     const aviso = screen.getByTestId("sudo-insecure-transport");
     expect(alerta).toContainElement(aviso);
-    expect(aviso).toHaveTextContent(/SEM criptografia/);
-    expect(aviso).toHaveTextContent(/túnel SSH/i);
+    expect(aviso).toHaveTextContent(/trafega sem criptografia até a sua VPS/i);
+    // nada de alarme sem saída: o comando do túnel vem montado e copiável
+    expect(screen.getByTestId("sudo-tunnel-command")).toHaveTextContent(
+      "ssh -L 9000:localhost:9000 kelvin@203.0.113.10",
+    );
+    // e o endereço equivalente em localhost PRESERVA a query (setup token)
+    expect(screen.getByTestId("sudo-tunnel-url")).toHaveTextContent(
+      "http://localhost:9000/setup?token=abc123",
+    );
+    expect(screen.getAllByRole("button", { name: /Copiar/ })).toHaveLength(2);
+    // honestidade sobre o que já passou e sobre seguir agora
+    expect(aviso).toHaveTextContent(/setup token desta página já passou por esta mesma conexão/i);
+    expect(aviso).toHaveTextContent(/protege daqui para a frente/i);
+    expect(aviso).toHaveTextContent(/Pode digitar/i);
+    expect(aviso).toHaveTextContent(/rede doméstica ou num servidor de teste descartável/i);
+  });
+
+  it("o comando do túnel usa o usuário da instalação quando o pedido não traz nome", async () => {
+    fakeLocation = { protocol: "http:", hostname: "vps.exemplo.com", port: "9000", pathname: "/" };
+    render(<TerminalPanel enabled={true} info={infoFor("senha", "deploy")} />);
+    await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+    control({ type: "sudo-password-requested", user: null });
+    await screen.findByTestId("sudo-password-alert");
+    expect(screen.getByTestId("sudo-tunnel-command")).toHaveTextContent(
+      "ssh -L 9000:localhost:9000 deploy@vps.exemplo.com",
+    );
+  });
+
+  it("porta implícita (80): o comando do túnel usa a porta padrão do protocolo", async () => {
+    fakeLocation = { protocol: "http:", hostname: "203.0.113.10", port: "", pathname: "/setup" };
+    await pedirSenha();
+    expect(screen.getByTestId("sudo-tunnel-command")).toHaveTextContent(
+      "ssh -L 80:localhost:80 kelvin@203.0.113.10",
+    );
+    expect(screen.getByTestId("sudo-tunnel-url")).toHaveTextContent("http://localhost/setup");
   });
 
   it("localhost (túnel SSH) e https: sem aviso de transporte inseguro", async () => {
