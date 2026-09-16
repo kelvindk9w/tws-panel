@@ -73,6 +73,7 @@ function makeConfig(dir: string): ServerConfig {
     monitorIntervalMs: 60_000,
     dockerSocketPath: "/var/run/docker.sock",
     terminalIdleTimeoutMs: 1_800_000,
+    terminalSudoPasswordTimeoutMs: 120_000,
     terminalUser: null,
     terminalRootMode: null,
   };

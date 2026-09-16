@@ -29,6 +29,7 @@ const KEYS = [
   "PAAS_MONITOR_INTERVAL_MS",
   "PAAS_TERMINAL_USER",
   "PAAS_ROOT_MODE",
+  "PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS",
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -108,6 +109,17 @@ describe("loadConfig", () => {
     setEnv("PAAS_DATA_DIR", "/data");
     setEnv("PAAS_PROJECTS_DIR", "/opt/tws-projects");
     expect(loadConfig().projectsDir).toBe("/opt/tws-projects");
+  });
+
+  /**
+   * O default de 5 min de espera silenciosa pela senha do sudo foi um defeito
+   * de produto em produção (duas varreduras perdidas): o padrão agora é 2 min
+   * e o operador pode ajustar pelo .env como faz com o idle do terminal.
+   */
+  it("espera pela senha do sudo: 2 min por padrão, ajustável pela variável", () => {
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(120_000);
+    setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", "45000");
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(45_000);
   });
 
   it("PAAS_TARGET só vira 'host' com o valor exato (default seguro)", () => {

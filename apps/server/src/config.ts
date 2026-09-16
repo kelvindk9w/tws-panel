@@ -84,6 +84,19 @@ export interface ServerConfig {
   /** Timeout de inatividade da sessão do terminal web (ms). Default 30 min. */
   terminalIdleTimeoutMs: number;
   /**
+   * Espera máxima pela senha do sudo com o prompt aberto (ms), no modo senha —
+   * PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS. Default 2 min.
+   *
+   * Eram 5 min, e o campo provou que o número grande é o pior dos mundos: o
+   * operador não percebeu o pedido duas vezes seguidas e o painel ficou cinco
+   * minutos parado, em silêncio, antes de falhar. Esperar muito não faz
+   * ninguém digitar a senha — só transforma "pediram senha" em "o painel
+   * travou". 2 min é tempo de sobra para quem VIU o pedido (a contagem
+   * regressiva agora aparece no alerta) e devolve o controle rápido a quem
+   * não viu, com uma explicação em vez de um travamento.
+   */
+  terminalSudoPasswordTimeoutMs: number;
+  /**
    * Usuário com que o terminal web abre na VPS (PAAS_TERMINAL_USER).
    *
    * null = variável ausente/vazia: comportamento LEGADO, idêntico ao de antes
@@ -209,6 +222,7 @@ export function loadConfig(): ServerConfig {
     monitorIntervalMs: Number(process.env.PAAS_MONITOR_INTERVAL_MS ?? MONITOR_DEFAULT_INTERVAL_MS),
     dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
     terminalIdleTimeoutMs: Number(process.env.PAAS_TERMINAL_IDLE_TIMEOUT_MS ?? 30 * 60_000),
+    terminalSudoPasswordTimeoutMs: Number(process.env.PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS ?? 2 * 60_000),
     ...loadTerminalAccess(process.env),
   };
 }

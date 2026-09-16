@@ -35,7 +35,12 @@
  *    respondem "nao-verificado" e a próxima consulta tenta de novo.
  */
 import { randomBytes } from "node:crypto";
-import type { HostDockerAccess, SudoPromptOutcome, TerminalControlMessage } from "@paas/core";
+import type {
+  HostDockerAccess,
+  SudoPasswordRequested,
+  SudoPromptOutcome,
+  TerminalControlMessage,
+} from "@paas/core";
 import type { PtyFactory, RemotePty } from "./docker-socket.js";
 
 /** Lançado quando o PTY não pôde ser aberto (antes de qualquer comando rodar). */
@@ -141,7 +146,18 @@ const SUDO_NOT_PERMITTED_RE =
 const SUDO_REJECTED_RE = /Sorry, try again\.|Desculpe, tente novamente\./i;
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
-const DEFAULT_SUDO_PASSWORD_TIMEOUT_MS = 5 * 60_000;
+/**
+ * Espera máxima pela senha do sudo com o prompt aberto.
+ *
+ * Eram 5 minutos e o campo mostrou que isso é o pior dos mundos: o operador
+ * não percebeu o pedido, o painel ficou 5 minutos parado em silêncio e só
+ * então falhou — duas varreduras seguidas perdidas. Esperar mais não faz
+ * ninguém digitar a senha; só troca "pediram senha" por "o painel travou".
+ * 2 minutos é folga de sobra para quem VIU o pedido (o alerta agora mostra a
+ * contagem regressiva) e devolve o controle rápido, com explicação, a quem
+ * não viu. Ajustável por PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS (config.ts).
+ */
+const DEFAULT_SUDO_PASSWORD_TIMEOUT_MS = 2 * 60_000;
 const SUDO_TAIL_MAX = 512;
 
 export interface TerminalServiceOptions {
@@ -160,7 +176,7 @@ export interface TerminalServiceOptions {
    * mensagens de controle (modo senha). Desligado no legado.
    */
   watchSudoPrompt?: boolean;
-  /** Espera máxima pela senha do sudo com o prompt aberto (default 5 min). */
+  /** Espera máxima pela senha do sudo com o prompt aberto (default 2 min). */
   sudoPasswordTimeoutMs?: number;
   /**
    * Verifica no host se o usuário do terminal tem acesso ao Docker (modos de
@@ -259,6 +275,8 @@ export class TerminalService {
   /** Saída desde que o prompt abriu (classifica como ele terminou). */
   private sudoAfterPrompt = "";
   private sudoPasswordTimer: NodeJS.Timeout | null = null;
+  /** Instante (relógio DESTE servidor) em que a espera pela senha expira. */
+  private sudoPasswordDeadline: number | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private waiter: CommandWaiter | null = null;
   /** Mutex de comandos: o shell é um só, comandos rodam em fila. */
@@ -324,6 +342,34 @@ export class TerminalService {
   /** Usuário cuja senha o prompt aberto pede (null se fechado/desconhecido). */
   get sudoPromptUser(): string | null {
     return this.promptOpen ? this.promptUser : null;
+  }
+
+  /**
+   * Quanto ainda falta da espera pela senha, em ms. null = não há relógio
+   * correndo (prompt fechado, ou um `sudo` que o próprio operador digitou —
+   * aí o painel não desiste de nada e não há prazo a mostrar).
+   */
+  get sudoPromptRemainingMs(): number | null {
+    if (!this.promptOpen || this.sudoPasswordDeadline === null) return null;
+    return Math.max(0, this.sudoPasswordDeadline - Date.now());
+  }
+
+  /**
+   * A mensagem "o sudo está pedindo a senha" como ela deve ir para o cliente
+   * AGORA — inclusive no reenvio a quem (re)conecta com o prompt já aberto,
+   * onde `remainingMs` é o que ainda falta e não o prazo inteiro (a contagem
+   * regressiva continua de onde está, em vez de recomeçar do zero).
+   *
+   * Prazo em DURAÇÃO, nunca em instante absoluto: o relógio do navegador pode
+   * estar dessincronizado do desta VPS, e só a duração é imune a isso.
+   */
+  sudoPasswordRequestedMessage(): SudoPasswordRequested {
+    const remainingMs = this.sudoPromptRemainingMs;
+    return {
+      type: "sudo-password-requested",
+      user: this.sudoPromptUser,
+      ...(remainingMs === null ? {} : { timeoutMs: this.sudoPasswordTimeoutMs, remainingMs }),
+    };
   }
 
   setEnsureTarget(fn: (() => Promise<void>) | undefined): void {
@@ -841,15 +887,31 @@ export class TerminalService {
     this.promptUser = user;
     this.sudoTail = "";
     this.sudoAfterPrompt = "";
-    this.emitControl({ type: "sudo-password-requested", user });
     const waiter = this.waiter;
-    if (!waiter) return; // sudo digitado pelo operador: nenhum relógio do painel
-    // Pausa o relógio do comando: esperar a senha não é o comando demorando.
-    clearTimeout(waiter.timer);
-    waiter.remainingMs = Math.max(0, waiter.deadline - Date.now());
-    this.clearSudoPasswordTimer();
-    this.sudoPasswordTimer = setTimeout(() => this.onSudoPasswordTimeout(waiter), this.sudoPasswordTimeoutMs);
-    this.sudoPasswordTimer.unref();
+    // sudo digitado pelo operador (sem comando do painel esperando): nenhum
+    // relógio — o pedido vai sem prazo e a interface não mostra contagem.
+    if (waiter) {
+      // Pausa o relógio do comando: esperar a senha não é o comando demorando.
+      clearTimeout(waiter.timer);
+      waiter.remainingMs = Math.max(0, waiter.deadline - Date.now());
+      this.clearSudoPasswordTimer();
+      this.sudoPasswordDeadline = Date.now() + this.sudoPasswordTimeoutMs;
+      this.sudoPasswordTimer = setTimeout(() => this.onSudoPasswordTimeout(waiter), this.sudoPasswordTimeoutMs);
+      this.sudoPasswordTimer.unref();
+    }
+    // Depois de armar o relógio: no instante em que o prompt abre, o que falta
+    // é o prazo INTEIRO (dito assim, e não recalculado, para não depender de
+    // um milissegundo de relógio entre uma linha e outra).
+    this.emitControl(
+      waiter
+        ? {
+            type: "sudo-password-requested",
+            user,
+            timeoutMs: this.sudoPasswordTimeoutMs,
+            remainingMs: this.sudoPasswordTimeoutMs,
+          }
+        : { type: "sudo-password-requested", user },
+    );
   }
 
   private closeSudoPrompt(outcome: SudoPromptOutcome): void {
@@ -884,5 +946,6 @@ export class TerminalService {
   private clearSudoPasswordTimer(): void {
     if (this.sudoPasswordTimer) clearTimeout(this.sudoPasswordTimer);
     this.sudoPasswordTimer = null;
+    this.sudoPasswordDeadline = null;
   }
 }

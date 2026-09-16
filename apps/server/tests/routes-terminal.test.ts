@@ -63,6 +63,7 @@ interface TerminalTestContext extends AuthTestContext {
 async function buildTerminalTestApp(opts?: {
   config?: Partial<ServerConfig>;
   watchSudoPrompt?: boolean;
+  sudoPasswordTimeoutMs?: number;
   probeHostDockerAccess?: () => Promise<HostDockerAccess>;
 }): Promise<TerminalTestContext> {
   const ctx = await buildAuthTestApp(SETUP_TOKEN);
@@ -70,6 +71,7 @@ async function buildTerminalTestApp(opts?: {
   const ptys: FakePty[] = [];
   const terminalService = new TerminalService({
     watchSudoPrompt: opts?.watchSudoPrompt ?? false,
+    ...(opts?.sudoPasswordTimeoutMs !== undefined ? { sudoPasswordTimeoutMs: opts.sudoPasswordTimeoutMs } : {}),
     ...(opts?.probeHostDockerAccess ? { probeHostDockerAccess: opts.probeHostDockerAccess } : {}),
     openPty: () => {
       const pty = new FakePty();
@@ -439,6 +441,34 @@ describe("WS /api/terminal/ws — mensagens de controle (protocolo do modo senha
     expect(frames[0]).toContain("[sudo] senha para kelvin: "); // replay
     expect(frames[0]).not.toContain("\u0000");
     expect(parseTerminalControl(frames[1] ?? "")).toEqual({ type: "sudo-password-requested", user: "kelvin" });
+    second.close();
+  });
+
+  /**
+   * O operador reconectando (reload, queda de rede) não pode ver a contagem
+   * recomeçar do zero: o relógio da senha corre no SERVIDOR, e o reenvio leva
+   * o que AINDA FALTA — em duração, imune a relógio dessincronizado.
+   */
+  it("reconexão no meio da espera recebe o tempo RESTANTE, não o prazo inteiro", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true, sudoPasswordTimeoutMs: 60_000 });
+    const first = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    // comando elevado em andamento: é ele que dá relógio à espera da senha
+    void ctx.terminalService.runCommandCaptured("ufw status", { elevate: true }).catch(() => undefined);
+    await tick();
+    ctx.ptys[0]!.emit("[sudo] senha para kelvin: ");
+    await tick();
+    first.close();
+    await new Promise((r) => setTimeout(r, 40));
+
+    const second = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    const frames = collect(second);
+    await tick();
+    const pedido = frames.map(parseTerminalControl).find((m) => m?.type === "sudo-password-requested");
+    expect(pedido).toBeDefined();
+    const { timeoutMs, remainingMs } = pedido as { timeoutMs: number; remainingMs: number };
+    expect(timeoutMs).toBe(60_000);
+    expect(remainingMs).toBeLessThan(60_000);
+    expect(remainingMs).toBeGreaterThan(50_000);
     second.close();
   });
 

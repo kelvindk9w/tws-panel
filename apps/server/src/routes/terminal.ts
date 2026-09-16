@@ -34,9 +34,14 @@
  *    seguido de JSON (TerminalControlMessage, @paas/core). Decodifique com
  *    parseTerminalControl(frame): devolve a mensagem ou null (frame comum).
  *    Nunca escreva um frame de controle no xterm. Mensagens:
- *    · {"type":"sudo-password-requested","user":"kelvin"|null}
+ *    · {"type":"sudo-password-requested","user":"kelvin"|null,
+ *       "timeoutMs":n,"remainingMs":n}
  *      O sudo está pedindo senha no terminal (detectado na SAÍDA). Também é
- *      enviada logo após o replay a quem conecta com o prompt já aberto.
+ *      enviada logo após o replay a quem conecta com o prompt já aberto — aí
+ *      `remainingMs` é o que AINDA FALTA da espera, não o prazo inteiro. O
+ *      prazo viaja como DURAÇÃO (nunca um instante absoluto), porque o relógio
+ *      do navegador pode estar dessincronizado do da VPS. Sem os dois campos =
+ *      sem relógio (um `sudo` digitado pelo próprio operador).
  *    · {"type":"sudo-password-prompt-closed","outcome":...}
  *      O prompt terminou. outcome: "answered" (seguiu sem erro), "rejected"
  *      ("Sorry, try again." — um novo requested costuma vir em seguida),
@@ -157,7 +162,9 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         if (socket.readyState !== socket.OPEN) return;
         sendOutput(replay);
         if (term.sudoPromptOpen) {
-          socket.send(encodeTerminalControl({ type: "sudo-password-requested", user: term.sudoPromptUser }));
+          // O prazo vai como o que AINDA FALTA (não o total): quem reconecta no
+          // meio da espera continua a contagem de onde ela está.
+          socket.send(encodeTerminalControl(term.sudoPasswordRequestedMessage()));
         }
         const offOutput = term.onOutput(sendOutput);
         const offControl = term.onControl((msg) => {

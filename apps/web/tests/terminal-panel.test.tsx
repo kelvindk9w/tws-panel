@@ -763,6 +763,147 @@ describe("TerminalPanel — alerta de senha do sudo", () => {
     expect(screen.getByTestId("sudo-password-alert")).not.toHaveTextContent(/minha-senha/);
     expect(JSON.stringify({ ...sessionStorage })).not.toContain("minha-senha");
   });
+
+  /**
+   * Feedback de campo: o operador leu "digite a senha" e entendeu que o painel
+   * queria a senha de ROOT. O texto precisa dizer de quem é a senha e de quem
+   * NÃO é, na mesma frase.
+   */
+  it("diz de QUEM é a senha: a do usuário do terminal, a mesma do sudo por SSH — não a do root", async () => {
+    const alerta = await pedirSenha();
+    expect(alerta).toHaveTextContent(/mesma que você (usa|digita) no sudo/i);
+    expect(alerta).toHaveTextContent(/não é a senha do root/i);
+  });
+});
+
+/**
+ * O pior defeito relatado em produção: o pedido de senha passou despercebido
+ * DUAS vezes e o painel ficou 5 minutos parado, sem relógio à vista, antes de
+ * falhar. Agora o prazo vem do servidor em duração, a contagem aparece no
+ * alerta e um aviso fixo no topo da página torna o pedido impossível de perder.
+ */
+describe("TerminalPanel — contagem regressiva e aviso impossível de perder", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function pedirComPrazo(remainingMs: number | null = 120_000, timeoutMs = 120_000) {
+    render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1); // o WS abre
+    });
+    control({
+      type: "sudo-password-requested",
+      user: "kelvin",
+      ...(remainingMs === null ? {} : { timeoutMs, remainingMs }),
+    });
+    return screen.getByTestId("sudo-password-alert");
+  }
+
+  async function avancar(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("mostra minutos e segundos e diminui a cada segundo", async () => {
+    await pedirComPrazo();
+    expect(screen.getByTestId("sudo-countdown")).toHaveTextContent("2:00");
+    await avancar(1_000);
+    expect(screen.getByTestId("sudo-countdown")).toHaveTextContent("1:59");
+    await avancar(59_000);
+    expect(screen.getByTestId("sudo-countdown")).toHaveTextContent("1:00");
+  });
+
+  it("reconexão no meio da espera: mostra o que FALTA, não o total", async () => {
+    await pedirComPrazo(45_000);
+    expect(screen.getByTestId("sudo-countdown")).toHaveTextContent("0:45");
+    await avancar(5_000);
+    expect(screen.getByTestId("sudo-countdown")).toHaveTextContent("0:40");
+  });
+
+  it("destaque crescente quando o tempo está acabando", async () => {
+    await pedirComPrazo();
+    expect(screen.getByTestId("sudo-countdown")).toHaveAttribute("data-urgente", "nao");
+    await avancar(95_000); // faltam 25s
+    expect(screen.getByTestId("sudo-countdown")).toHaveAttribute("data-urgente", "sim");
+  });
+
+  it("ao expirar: explica o que aconteceu e aponta a ação de tentar de novo", async () => {
+    await pedirComPrazo(10_000);
+    await avancar(13_000); // prazo + folga
+    const alerta = screen.getByTestId("sudo-password-alert");
+    expect(alerta).toHaveTextContent(/Tempo esgotado aguardando a senha/i);
+    expect(alerta).toHaveTextContent(/nada foi executado como root/i);
+    expect(alerta).toHaveTextContent(/Tentar a varredura de novo/i);
+    expect(screen.queryByTestId("sudo-countdown")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sudo-password-banner")).not.toBeInTheDocument();
+  });
+
+  it("pedido sem prazo (sudo digitado pelo operador): alerta sem contagem", async () => {
+    const alerta = await pedirComPrazo(null);
+    expect(alerta).toHaveTextContent(/Digite a senha do usuário kelvin/);
+    expect(screen.queryByTestId("sudo-countdown")).not.toBeInTheDocument();
+    await avancar(600_000);
+    expect(screen.getByTestId("sudo-password-alert")).toHaveTextContent(/Digite a senha/); // nunca expira sozinho
+  });
+
+  it("aviso FIXO no topo da página enquanto o pedido está aberto, com o tempo e o usuário", async () => {
+    await pedirComPrazo();
+    const banner = screen.getByTestId("sudo-password-banner");
+    expect(banner).toHaveTextContent(/senha/i);
+    expect(banner).toHaveTextContent(/kelvin/);
+    expect(banner).toHaveTextContent("2:00");
+    expect(banner.className).toContain("fixed");
+    // não é modal: não cobre o terminal nem rouba o foco de quem digita
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("clicar no aviso fixo leva ao terminal: expande e devolve o foco ao xterm", async () => {
+    sessionStorage.setItem("paas.terminal.open", "0");
+    await pedirComPrazo();
+    lastTerm().focus.mockClear();
+    fireEvent.click(screen.getByTestId("sudo-password-banner-action"));
+    await avancar(1);
+    expect(screen.getByTestId("terminal-container")).toBeVisible();
+    expect(lastTerm().focus).toHaveBeenCalled();
+  });
+
+  it("o aviso fixo some quando o pedido termina", async () => {
+    await pedirComPrazo();
+    expect(screen.getByTestId("sudo-password-banner")).toBeInTheDocument();
+    control({ type: "sudo-password-prompt-closed", outcome: "answered" });
+    expect(screen.queryByTestId("sudo-password-banner")).not.toBeInTheDocument();
+  });
+
+  it("aba em segundo plano: o título avisa e volta ao normal ao fechar o pedido", async () => {
+    document.title = "TWS Panel — Setup";
+    await pedirComPrazo();
+    expect(document.title).toMatch(/senha/i);
+    expect(document.title).toContain("TWS Panel — Setup");
+    control({ type: "sudo-password-prompt-closed", outcome: "answered" });
+    expect(document.title).toBe("TWS Panel — Setup");
+  });
+
+  it("título restaurado também quando o painel é desmontado com o pedido aberto", async () => {
+    document.title = "TWS Panel — Setup";
+    await pedirComPrazo();
+    expect(document.title).not.toBe("TWS Panel — Setup");
+    cleanup();
+    expect(document.title).toBe("TWS Panel — Setup");
+  });
+
+  it("queda do WebSocket com o pedido aberto: aviso fixo, contagem e título somem juntos", async () => {
+    document.title = "TWS Panel — Setup";
+    await pedirComPrazo();
+    act(() => lastWs().serverClose(1006));
+    expect(screen.queryByTestId("sudo-password-banner")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sudo-countdown")).not.toBeInTheDocument();
+    expect(document.title).toBe("TWS Panel — Setup");
+  });
 });
 
 describe("TerminalPanel — comando root em segundo plano", () => {
