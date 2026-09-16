@@ -136,6 +136,45 @@ describe("SecurityService — restoreJobsFromDisk (restart durante awaiting_conf
     expect(service.getJob("job-expirado")?.status).toBe("rolled_back");
   });
 
+  it("job 'running' COM execução destacada persistida (runs) NÃO é declarado falho — o painel reatacha", async () => {
+    const job = awaitingConfirmationJob({
+      id: "job-destacado",
+      status: "running",
+      rollbackScheduled: false,
+      rollbackDeadline: null,
+    });
+    await writeFile(
+      path.join(dir, "security-jobs.json"),
+      JSON.stringify({ jobs: [job], runs: { "job-destacado": "f02-0123456789abcdef" } }),
+      "utf8",
+    );
+
+    const service = freshService();
+    await service.restoreJobsFromDisk();
+
+    // O bug que a execução destacada resolve: antes, TODO job em execução
+    // virava "failed" no restart, mesmo com a fase seguindo viva no servidor.
+    const restored = service.getJob("job-destacado");
+    expect(restored?.status).toBe("running");
+    expect(restored?.log).toMatch(/reatachando/i);
+  });
+
+  it("o mapa de execuções destacadas é gravado ao lado dos jobs", async () => {
+    const job = awaitingConfirmationJob({ id: "job-sem-run", status: "running", rollbackDeadline: null });
+    await writeFile(path.join(dir, "security-jobs.json"), JSON.stringify({ jobs: [job] }), "utf8");
+
+    const service = freshService();
+    await service.restoreJobsFromDisk();
+    await service.flushJobWrites();
+
+    const onDisk = JSON.parse(await readFile(path.join(dir, "security-jobs.json"), "utf8")) as {
+      jobs: SecurityJob[];
+      runs: Record<string, string>;
+    };
+    expect(onDisk.runs).toEqual({}); // job antigo, sem execução destacada conhecida
+    expect(onDisk.jobs.find((j) => j.id === "job-sem-run")?.status).toBe("failed");
+  });
+
   it("arquivo com `jobs` que não é array → ignorado silenciosamente", async () => {
     await writeFile(path.join(dir, "security-jobs.json"), JSON.stringify({ jobs: "oops" }), "utf8");
     const service = freshService();

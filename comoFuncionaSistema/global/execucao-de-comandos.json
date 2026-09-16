@@ -23,7 +23,7 @@
     {
       "simbolo": "buildPhaseScriptCommand",
       "assinatura": "(opts: PhaseScriptCommandOptions) => string",
-      "descricao": "host-bridge.ts:81. Monta `bash '<remoteDir>/<script>' [flags]`. Valida script contra a allowlist de fases, remoteDir contra REMOTE_DIR_RE, sshUser/sshPublicKey contra os validadores de packages/core, e limita rollbackDelaySec a um inteiro 1-86400. Lança erro (não executa) em qualquer violação."
+      "descricao": "host-bridge.ts. Monta `bash '<remoteDir>/<script>' [flags]` (forma direta, usada por --rollback/--confirm) ou, quando recebe runId, o LANÇADOR DESTACADO `[PAAS_ROLLBACK_DELAY=<n> ]bash '<remoteDir>/lib.sh' --paas-run-detached '<runDir>' <runId> <script> [flags]`. Valida script contra a allowlist de fases, remoteDir/runDir contra REMOTE_DIR_RE, runId contra PHASE_RUN_ID_RE ('f<fase>-<16 hex>', e a fase precisa ser a do script), sshUser/sshPublicKey contra os validadores de packages/core, e limita rollbackDelaySec a um inteiro 1-86400. Lança erro (não executa) em qualquer violação."
     },
     {
       "simbolo": "isAllowedHostCommand",
@@ -32,8 +32,13 @@
     },
     {
       "simbolo": "parsePhaseScriptCommand",
-      "assinatura": "(cmd: string, remoteDir: string) => { script; args } | null",
-      "descricao": "host-bridge.ts:137. Re-parseia o comando com regex ancorada à gramática exata de script/remoteDir e tokeniza+valida cada argumento individualmente (--dry-run/--rollback/--confirm/--user <válido>/--pubkey '<válido>'); qualquer token desconhecido retorna null."
+      "assinatura": "(cmd: string, remoteDir: string, runDir?: string) => { script; args; kind: 'direct'|'detached'|'follow'; runId? } | null",
+      "descricao": "host-bridge.ts. Re-parseia o comando com regex ancorada à gramática exata (três formas: direta, disparo destacado e reatache `bash '<remoteDir>/lib.sh' --paas-run-follow '<runDir>' <runId>`), tokeniza+valida cada argumento individualmente (--dry-run/--rollback/--confirm/--user <válido>/--pubkey '<válido>') e então RECONSTRÓI o comando pelo builder, exigindo igualdade byte a byte com o original — só passa o que o próprio painel montaria (nenhuma variação de ordem, espaçamento ou aspas escapa). Qualquer token desconhecido, runId fora do formato ou quebra de linha retorna null."
+    },
+    {
+      "simbolo": "buildPhaseFollowCommand / isPhaseFollowCommand",
+      "assinatura": "({ remoteDir, runId, runDir? }) => string / (cmd, remoteDir, runDir?) => boolean",
+      "descricao": "host-bridge.ts. Comando de REATACHE/reconciliação da execução destacada: só lê <runDir>/<runId>.log e <runId>.exit. isPhaseFollowCommand é o que permite ao TerminalRelayRunner rodá-lo SEM sudo no modo senha (a senha é pedida uma vez, no disparo) — o disparo e os comandos que alteram o host continuam elevados."
     },
     {
       "simbolo": "buildNsenterArgv / buildNsenterUploadArgv",

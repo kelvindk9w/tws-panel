@@ -9,7 +9,13 @@
  */
 import { Duplex } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { SecurityExecutor, type ExecResult, type TargetRunner } from "@paas/security";
+import {
+  SecurityExecutor,
+  buildPhaseFollowCommand,
+  buildPhaseScriptCommand,
+  type ExecResult,
+  type TargetRunner,
+} from "@paas/security";
 import type { SecurityTargetProfile } from "@paas/core";
 import type { TerminalControlMessage } from "@paas/core";
 import { BackgroundMirrorRunner, TerminalRelayRunner } from "../src/services/terminal-runner.js";
@@ -139,11 +145,14 @@ describe("TerminalRelayRunner — fases dentro do terminal", () => {
     await flush();
     await flush();
     const pty = ptys[0]!;
-    // o executor escreveu o script da fase no terminal (usuário vê o comando real)
+    // o executor escreveu o LANÇADOR destacado no terminal (usuário vê o comando real)
+    expect(pty.inputs.join("")).toContain("--paas-run-detached");
     expect(pty.inputs.join("")).toContain("00-update.sh");
     const nonce = /PAAS_EXIT_([0-9a-f]+):/.exec(pty.inputs.join(""))?.[1];
+    pty.emit(":::PAAS_RUN_STARTED f00-0123456789abcdef 4242\r\n");
     pty.emit(":::PAAS_STEP Verificando atualizações\r\n");
     pty.emit("[dry-run] apt-get upgrade\r\n");
+    pty.emit(":::PAAS_RUN_END 0 ok\r\n");
     pty.emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
 
     // espera o job terminar
@@ -154,6 +163,49 @@ describe("TerminalRelayRunner — fases dentro do terminal", () => {
     expect(job.log).toContain("[dry-run] apt-get upgrade");
     // a MESMA saída apareceu no stream do terminal (visão dupla)
     expect(terminalView.join("")).toContain("[dry-run] apt-get upgrade");
+    await terminal.dispose();
+  });
+
+  it("terminal morre NO MEIO da fase: o job NÃO falha, o executor reatacha e conclui com o código real", async () => {
+    const { runner, terminal, ptys } = setup();
+    const executor = new SecurityExecutor({
+      runner,
+      scriptsDir: "/tmp/nao-importa",
+      reattachDelayMs: 10,
+    });
+    const job = await executor.startJob("00", true);
+    await flush();
+    await flush();
+
+    const pty = ptys[0]!;
+    expect(pty.inputs.join("")).toContain("--paas-run-detached");
+    pty.emit(":::PAAS_RUN_STARTED f00-0123456789abcdef 4242\r\n");
+    pty.emit(":::PAAS_STEP Atualizando pacotes\r\n");
+    pty.end(); // a aba fechou / a rede caiu no meio do apt
+
+    await flush();
+    // a fase continua no servidor: o job não pode ter virado failed nem success
+    expect(job.status).toBe("running");
+
+    // o executor abre uma sessão nova e REATACHA pelo id da execução
+    for (let i = 0; i < 100 && ptys.length < 2; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const pty2 = ptys[1]!;
+    expect(pty2.inputs.join("")).toContain("--paas-run-follow '/etc/paas/runs' f00-");
+
+    // o reatache reexibe o que já passou e entrega o desfecho
+    pty2.emit(":::PAAS_STEP Atualizando pacotes\r\n");
+    pty2.emit("[dry-run] apt-get upgrade\r\n");
+    pty2.emit(":::PAAS_RUN_END 0 ok\r\n");
+    pty2.emit(`:::PAAS_EXIT_${lastNonce(pty2)}:0\r\n`);
+
+    for (let i = 0; i < 100 && job.status === "running"; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(job.status).toBe("success");
+    expect(job.log).toContain("[dry-run] apt-get upgrade");
+    expect(job.steps.map((s) => s.name)).toEqual(["Atualizando pacotes"]);
     await terminal.dispose();
   });
 });
@@ -229,6 +281,7 @@ describe("TerminalRelayRunner — exec (checks somente-leitura) dentro do termin
 
 const CHECK = "awk -F: '$3 == 0 {print $1}' /etc/passwd";
 const PHASE = "bash '/opt/paas-hardening/00-update.sh' --dry-run";
+const REMOTE_DIR = "/opt/paas-hardening";
 
 function lastNonce(pty: FakePty): string {
   const all = [...pty.inputs.join("").matchAll(/PAAS_EXIT_([0-9a-f]+):/g)];
@@ -365,6 +418,36 @@ describe("TerminalRelayRunner — modo senha (elevation: sudo)", () => {
     expect(job.status).toBe("failed");
     expect(job.error).toMatch(/recusou a senha 3 vezes/);
     await terminal.dispose();
+  });
+
+  it("execução destacada: o DISPARO é elevado (senha uma vez) e o REATACHE não pede senha nenhuma", async () => {
+    const { runner, ptys } = senha();
+    const runId = "f00-0123456789abcdef";
+    const start = buildPhaseScriptCommand({ remoteDir: REMOTE_DIR, script: "00-update.sh", runId, dryRun: true });
+    const follow = buildPhaseFollowCommand({ remoteDir: REMOTE_DIR, runId });
+
+    // 1) disparo: sudo -v (a senha é pedida aqui) + comando elevado
+    const startPromise = runner.execStream(start, () => undefined);
+    await flush();
+    const pty = ptys[0]!;
+    expect(pty.inputs.join("")).toContain(" -v;");
+    pty.emit(`[sudo] senha para kelvin: `);
+    pty.emit(`\r\n:::PAAS_EXIT_${lastNonce(pty)}:0\r\n`);
+    await flush();
+    const n = lastNonce(pty);
+    expect(pty.inputs.join("")).toContain(buildElevatedCommand(start, n));
+    pty.emit(`:::PAAS_BEGIN_${n}\r\n:::PAAS_RUN_END 0 ok\r\n:::PAAS_EXIT_${n}:0\r\n`);
+    await expect(startPromise).resolves.toBe(0);
+
+    // 2) reatache: digitado CRU, sem sudo e sem nova validação de credencial
+    const typedBefore = pty.inputs.length;
+    const followPromise = runner.execStream(follow, () => undefined);
+    await flush();
+    const typed = pty.inputs.slice(typedBefore).join("");
+    expect(typed).toContain(`${follow}; echo ":::PAAS_EXIT_`);
+    expect(typed).not.toContain("sudo");
+    pty.emit(`:::PAAS_RUN_END 0 ok\r\n:::PAAS_EXIT_${lastNonce(pty)}:0\r\n`);
+    await expect(followPromise).resolves.toBe(0);
   });
 });
 

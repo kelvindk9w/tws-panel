@@ -960,13 +960,30 @@ avance para a próxima. Nunca dispare uma fase nova com a anterior ainda pendent
 
 | Fase | O que faz | Pede confirmação? |
 |---|---|---|
-| 00 · Atualizações | `apt full-upgrade` + atualizações automáticas | Não |
+| 00 · Atualizações | `apt full-upgrade` + atualizações automáticas (**menos o Docker**) | Não |
 | 01 · Usuário não-root | Instala sua chave SSH e trava a senha do root | **Sim** |
 | 02 · SSH | Desliga login por senha e acesso root via SSH | **Sim** |
 | 03 · Firewall | Ativa o UFW (nega tudo, exceto o que for liberado antes) | **Sim** |
 | 04 · Prevenção de intrusão | fail2ban + AppArmor | Não |
 | 05 · Minimização | Remove pacotes desnecessários (ex.: snapd) | Não |
 | 06 · Auditoria | auditd, Lynis, AIDE, rkhunter — demorada | Não |
+
+> [!NOTE]
+> **A fase 00 não atualiza o Docker — de propósito.** As fases rodam num terminal que é mantido de
+> pé pelo próprio daemon do Docker, o mesmo que mantém o painel. Atualizar `docker-ce` reinicia esse
+> daemon, e a fase derrubaria a si mesma no meio de um `dpkg` — foi exatamente o que aconteceu antes
+> desta proteção existir. Por isso os pacotes do Docker ficam de fora do `full-upgrade` e também das
+> atualizações automáticas; a fase lista no log quais ficaram e qual comando rodar.
+>
+> Para atualizar o Docker, entre **por SSH** (não pelo terminal do painel) e rode:
+>
+> ```bash
+> sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+> ```
+>
+> O painel sai do ar por alguns segundos e **volta sozinho** (o compose usa `restart: unless-stopped`).
+> Faça isso de tempos em tempos: como o Docker está fora das atualizações automáticas, ninguém mais
+> vai fazer por você.
 
 As três fases marcadas com confirmação (01, 02 e 03) mexem em como você entra na máquina — a
 chave, a senha e o firewall. É por isso que, antes de aplicar qualquer uma delas, o próprio script
@@ -1268,7 +1285,9 @@ todas as rotas da API, logs com redação de segredos e auditoria de todas as a�
 >
 > - **Fase 05 (Minimização)** remove o `snapd` e o bloqueia. Se algum programa seu depende de
 >   snap, saiba disso antes — o rollback dessa fase restaura a configuração do APT, mas **não
->   reinstala** os pacotes removidos.
+>   reinstala** os pacotes removidos. Exceção: se o Docker deste servidor vier de um snap
+>   (`snap install docker`), a fase detecta isso e preserva esse snap e o `snapd` — removê-los
+>   derrubaria o próprio painel —, removendo só os demais snaps e explicando no log.
 > - **Fase 06 (Auditoria)** demora vários minutos: ela cria a baseline do AIDE varrendo o sistema
 >   de arquivos. Parece travada, mas não está.
 

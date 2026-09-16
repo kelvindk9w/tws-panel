@@ -41,6 +41,13 @@ interface HistoryFile {
 
 interface JobsFile {
   jobs: SecurityJob[];
+  /**
+   * job.id → id da execução DESTACADA no alvo (f<fase>-<hex>). Fica ao lado
+   * dos jobs (e não dentro deles) porque SecurityJob é o tipo da API pública.
+   * É o que permite ao painel reiniciado reatachar a uma fase que continuou
+   * rodando no servidor e recuperar o código de saída dela.
+   */
+  runs?: Record<string, string>;
 }
 
 /**
@@ -201,6 +208,11 @@ export class SecurityService {
     try {
       const raw = await readFile(this.jobsFile, "utf8");
       const parsed = JSON.parse(raw) as Partial<JobsFile>;
+      // Os runIds entram ANTES dos jobs: restoreJobs() decide reatachar ou não
+      // com base neles.
+      if (parsed.runs && typeof parsed.runs === "object") {
+        this.executor.restoreRunIds(parsed.runs as Record<string, string>);
+      }
       if (Array.isArray(parsed.jobs) && parsed.jobs.length > 0) {
         this.executor.restoreJobs(parsed.jobs);
       }
@@ -449,7 +461,14 @@ export class SecurityService {
         .filter((j) => TERMINAL_JOB_STATUSES.has(j.status))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, Math.max(0, MAX_PERSISTED_JOBS - nonTerminal.length));
-      const toSave: JobsFile = { jobs: [...nonTerminal, ...terminal] };
+      const saved = [...nonTerminal, ...terminal];
+      const allRuns = this.executor.runIdsSnapshot();
+      const runs: Record<string, string> = {};
+      for (const job of saved) {
+        const runId = allRuns[job.id];
+        if (runId !== undefined) runs[job.id] = runId;
+      }
+      const toSave: JobsFile = { jobs: saved, runs };
       await mkdir(path.dirname(this.jobsFile), { recursive: true });
       await writeFile(this.jobsFile, JSON.stringify(toSave, null, 2) + "\n", {
         encoding: "utf8",
