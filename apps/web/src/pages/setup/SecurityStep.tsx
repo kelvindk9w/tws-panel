@@ -793,8 +793,10 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
                             </span>
                           ) : (
                             <>
-                              O painel executa no terminal abaixo — primeiro em dry-run (simulação),
-                              só depois de verdade, com a sua confirmação.
+                              Começa por uma <strong>simulação</strong> (dry-run) só desta fase, no
+                              terminal abaixo: nada é alterado no servidor. No modo senha, o sudo vai
+                              pedir a sua senha. Se a simulação passar, aparece o botão para aplicar de
+                              verdade.
                             </>
                           )}
                         </span>
@@ -949,8 +951,18 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-xs text-muted-foreground" htmlFor="ssh-pubkey">
-                    Chave pública (ssh-ed25519 ou ssh-rsa) — opcional
+                    Chave pública SSH — conteúdo do arquivo .pub (ssh-ed25519 ou ssh-rsa) — opcional
                   </label>
+                  {/* Dúvida real de campo: "para que colar chave se eu digito a
+                      senha?" e "colar isso numa página http não é falha?". As
+                      duas se respondem com texto, não com mudança de lógica. */}
+                  <p className="text-xs text-muted-foreground">
+                    <strong>A chave pública não é segredo</strong> — ela existe justamente para ser
+                    distribuída e copiada para os servidores em que você quer entrar. O que{" "}
+                    <strong>nunca</strong> se cola em lugar nenhum é a <strong>chave privada</strong>: o
+                    arquivo sem <code className="font-mono">.pub</code> (ex.:{" "}
+                    <code className="font-mono">id_ed25519</code>), que fica só na sua máquina.
+                  </p>
                   <textarea
                     id="ssh-pubkey"
                     value={sshPublicKey}
@@ -975,6 +987,21 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
                     chave que já está no servidor. Cole algo aqui só para{" "}
                     <strong>adicionar</strong> mais uma chave.
                   </p>
+                  {/* Por que existe o campo, já que a senha do sudo é digitada
+                      no terminal: são coisas diferentes, e a fase precisa de uma
+                      chave instalada para poder desativar a senha do root. */}
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Este campo não tem relação com a senha do sudo.</strong> A chave SSH é como
+                    você <strong>entra</strong> na VPS pelo SSH; a senha do sudo é o que{" "}
+                    <strong>autoriza</strong> comandos administrativos depois que você já entrou. Esta
+                    fase precisa que exista pelo menos uma chave instalada para poder desativar a senha
+                    do root sem te trancar para fora.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Em conexão não protegida (http, fora do túnel SSH), colar a chave pública não vaza
+                    nada útil; o cuidado aqui é outro — alguém no meio do caminho poderia{" "}
+                    <strong>alterar</strong> o que trafega. É mais um motivo para usar o túnel SSH.
+                  </p>
                   {/* Aviso honesto: a trava anti-lockout do 01-user.sh se recusa a
                       travar o root enquanto não houver nenhuma chave instalada. */}
                   <p className="flex items-start gap-1 text-xs text-amber-400">
@@ -991,13 +1018,27 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
             </Card>
           )}
 
-          <div className="flex justify-between">
+          <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-start sm:justify-between">
             <Button variant="outline" onClick={() => setStage("scan")}>
               Voltar ao relatório
             </Button>
-            <Button onClick={() => void startExecution()} disabled={!sshFormValid}>
-              <Eye className="h-4 w-4" /> Executar dry-run de todas as fases pendentes
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              <Button onClick={() => void startExecution()} disabled={!sshFormValid}>
+                <Eye className="h-4 w-4" /> Simular todas as fases pendentes (dry-run)
+              </Button>
+              {/* O rótulo antigo ("Executar dry-run…") não dizia a um leigo o
+                  que o clique faz. A linha abaixo responde à pergunta literal
+                  do dono do produto: "se eu clicar, o que acontece?". */}
+              <p
+                data-testid="dry-run-explicacao"
+                className="max-w-md text-right text-xs text-muted-foreground"
+              >
+                Roda a <strong>simulação</strong> de todas as fases pendentes, na ordem.{" "}
+                <strong>Nada é alterado no servidor</strong> — você acompanha tudo no terminal abaixo. No
+                modo senha, o sudo vai pedir a sua senha no terminal. Se a simulação passar, aparece
+                então o botão para aplicar de verdade.
+              </p>
+            </div>
           </div>
           {!sshFormValid && (
             <p className="text-right text-xs text-amber-400">
@@ -1140,10 +1181,17 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
               {!job && !error && !elevationError && (
                 <div className="flex flex-col items-center gap-3 py-6 text-center">
                   <CheckCircle2 className="h-10 w-10 text-emerald-400" />
-                  <p className="font-medium">Dry-run concluído sem erros.</p>
+                  <p className="font-medium">
+                    Simulação concluída sem erros — nada foi alterado no servidor.
+                  </p>
                   <p className="max-w-md text-sm text-muted-foreground">
-                    Agora o hardening será aplicado DE VERDADE no alvo. Cada arquivo alterado terá
-                    backup e as fases de SSH/firewall terão rollback automático de 5 minutos.
+                    {runQueue.length === 1
+                      ? "A simulação percorreu a fase acima sem tocar em nada. "
+                      : `A simulação percorreu as ${runQueue.length} fases acima, na ordem, sem tocar em nada. `}
+                    Ao clicar em <strong>Aplicar de verdade</strong>, os mesmos passos rodam{" "}
+                    <strong>alterando o servidor</strong>: cada arquivo modificado ganha backup antes, e
+                    as fases de SSH/firewall entram com rollback automático de 5 minutos, revertendo
+                    sozinhas se você não confirmar que ainda consegue acessar o servidor.
                   </p>
                   <Button onClick={() => void startRealApply()}>
                     <ShieldCheck className="h-4 w-4" /> Aplicar de verdade

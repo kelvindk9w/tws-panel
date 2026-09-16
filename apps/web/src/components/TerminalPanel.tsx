@@ -59,9 +59,14 @@
  *    lê, não guarda e não inspeciona o que é digitado. Texto de transparência
  *    obrigatório (por onde a senha passa e o que o painel não faz com ela);
  *  - transporte inseguro: página fora de https E fora do túnel SSH
- *    (localhost/127.0.0.1/[::1]) → aviso destacado no alerta de que a senha
- *    trafegaria SEM criptografia. Não bloqueia a digitação (a decisão é do
- *    operador), mas o risco fica inequívoco;
+ *    (localhost/127.0.0.1/[::1]) → aviso no alerta. O texto diz o fato em uma
+ *    frase e entrega a SAÍDA pronta (feedback de campo: o aviso anterior só
+ *    assustava e deixava a pessoa travada): o comando do túnel montado com o
+ *    usuário do terminal, o host desta URL e a porta desta página, o endereço
+ *    equivalente em localhost preservando a query (o setup token vive nela),
+ *    a nota honesta de que o token já trafegou nesta conexão — o túnel protege
+ *    daqui para a frente — e o que significa seguir agora mesmo assim. Não
+ *    bloqueia a digitação: a decisão é do operador;
  *  - desfechos do prompt: rejected mantém o alerta com "senha incorreta";
  *    answered/session-ended fecham; exhausted/not-permitted/timeout trocam o
  *    pedido por uma explicação acionável até o operador dispensar;
@@ -93,7 +98,8 @@ import {
 } from "@paas/core";
 import { getSetupToken } from "@/lib/api";
 import { pageLocation } from "@/lib/page-location";
-import { isInsecureTransport } from "@/lib/terminal-info";
+import { isInsecureTransport, localhostUrl, sshTunnelCommand } from "@/lib/terminal-info";
+import { CopyButton } from "@/components/CopyButton";
 import { ChevronDown, ChevronUp, Cog, Info, KeyRound, Lock, ShieldAlert, TerminalSquare } from "lucide-react";
 
 /** Evento disparado pela UI (ex.: fase aguardando confirmação) para acender
@@ -606,6 +612,7 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
         <SudoPasswordAlert
           alert={sudoAlert}
           fallbackUser={info && info.elevation !== "root" && info.elevation !== "root-legado" ? info.user : null}
+          configuredUser={info?.configuredUser ?? null}
           onDismiss={() => setSudoAlert(null)}
         />
       )}
@@ -713,11 +720,14 @@ function SessionNote({
 function SudoPasswordAlert({
   alert,
   fallbackUser,
+  configuredUser,
   onDismiss,
 }: {
   alert: SudoAlert;
   /** Usuário da sessão (modos não-root), quando o pedido não trouxe o nome. */
   fallbackUser: string | null;
+  /** Usuário escolhido na instalação — último recurso para o comando do túnel. */
+  configuredUser?: string | null;
   onDismiss: () => void;
 }) {
   const user = alert.user ?? fallbackUser;
@@ -727,7 +737,13 @@ function SudoPasswordAlert({
     <strong>do terminal</strong>
   );
   // Calculado a cada render: é o endereço com que ESTA página foi aberta.
-  const insecure = isInsecureTransport(pageLocation());
+  const loc = pageLocation();
+  const insecure = isInsecureTransport(loc);
+  // Usuário do comando do túnel: o do pedido, o da sessão, o da instalação —
+  // e, se nada disso existir, um marcador claro de "preencha aqui".
+  const tunnelUser = user ?? (configuredUser && isValidSshUsername(configuredUser) ? configuredUser : "usuario");
+  const tunnelCmd = sshTunnelCommand(loc, tunnelUser);
+  const tunnelUrl = localhostUrl(loc);
 
   return (
     <div
@@ -755,19 +771,50 @@ function SudoPasswordAlert({
             ser conferido.
           </p>
           {insecure && (
-            <p
+            <div
               data-testid="sudo-insecure-transport"
-              className="flex items-start gap-2 rounded border border-red-500/60 bg-red-600/25 px-2 py-1.5 text-red-100"
+              className="flex flex-col gap-2 rounded border border-amber-400/50 bg-amber-950/30 px-2.5 py-2 text-amber-50/90"
             >
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-              <span>
-                <strong>Atenção: esta página não está protegida.</strong> Ela foi aberta sem https e fora
-                do túnel SSH, então a senha trafegaria <strong>SEM criptografia</strong> pela internet e
-                poderia ser lida no caminho. Recomendado: não digite agora — feche esta página e acesse
-                o painel pelo túnel SSH (endereço localhost), como explica o README. A decisão é sua: a
-                digitação não foi bloqueada.
+              <p className="flex items-start gap-2">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden />
+                <span>
+                  Esta página foi aberta por http e fora do túnel SSH, então o que você digita aqui —
+                  inclusive a senha — trafega sem criptografia até a sua VPS.
+                </span>
+              </p>
+              <p>
+                Dá para resolver em um minuto. No <strong>seu computador</strong>, abra um terminal e
+                rode:
+              </p>
+              <span className="flex items-center gap-1">
+                <code
+                  data-testid="sudo-tunnel-command"
+                  className="flex-1 overflow-x-auto rounded bg-black/50 px-2 py-1 font-mono text-[11px] text-emerald-300"
+                >
+                  {tunnelCmd}
+                </code>
+                <CopyButton text={tunnelCmd} />
               </span>
-            </p>
+              <p>Com o túnel aberto, volte ao painel por este endereço:</p>
+              <span className="flex items-center gap-1">
+                <code
+                  data-testid="sudo-tunnel-url"
+                  className="flex-1 overflow-x-auto rounded bg-black/50 px-2 py-1 font-mono text-[11px] text-emerald-300"
+                >
+                  {tunnelUrl}
+                </code>
+                <CopyButton text={tunnelUrl} />
+              </span>
+              <p className="text-amber-100/70">
+                Sendo honesto: o setup token desta página já passou por esta mesma conexão quando você a
+                abriu. O túnel protege daqui para a frente, não o que já trafegou.
+              </p>
+              <p className="text-amber-100/70">
+                Prefere seguir agora? Pode digitar — nada aqui está bloqueado. O risco é alguém com
+                acesso à rede entre você e a VPS; numa rede doméstica ou num servidor de teste
+                descartável, essa é uma decisão razoável sua.
+              </p>
+            </div>
           )}
         </div>
       ) : (

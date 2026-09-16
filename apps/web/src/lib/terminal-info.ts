@@ -76,6 +76,12 @@ export function useTerminalInfo(enabled: boolean): TerminalInfoState {
 export interface PageLocationLike {
   protocol: string;
   hostname: string;
+  /** Porta da página ("" quando é a padrão do protocolo). */
+  port?: string;
+  /** Caminho atual — repetido no endereço do túnel. */
+  pathname?: string;
+  /** Query atual, com o setup token — não pode se perder no túnel. */
+  search?: string;
 }
 
 /** Endereços do túnel SSH (`ssh -L 9000:localhost:9000 …`): o trecho pela
@@ -85,6 +91,33 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 export function isInsecureTransport(loc: PageLocationLike): boolean {
   if (loc.protocol === "https:") return false;
   return !LOOPBACK_HOSTS.has(loc.hostname.toLowerCase());
+}
+
+/** Porta com que a página foi aberta (a padrão do protocolo quando implícita). */
+export function pagePort(loc: PageLocationLike): string {
+  if (loc.port) return loc.port;
+  return loc.protocol === "https:" ? "443" : "80";
+}
+
+/**
+ * Comando PRONTO do túnel SSH, montado com o que a página já sabe: a porta é a
+ * mesma com que o painel foi aberto, o host é o desta URL e o usuário é o do
+ * terminal. Com ele de pé, o painel é acessado por localhost e todo o tráfego
+ * vai dentro do SSH.
+ */
+export function sshTunnelCommand(loc: PageLocationLike, user: string): string {
+  const port = pagePort(loc);
+  return `ssh -L ${port}:localhost:${port} ${user}@${loc.hostname}`;
+}
+
+/**
+ * Endereço equivalente em localhost (para usar DEPOIS de abrir o túnel):
+ * mesma porta, mesmo caminho e MESMA query — o setup token viaja na query e
+ * não pode se perder na troca de endereço.
+ */
+export function localhostUrl(loc: PageLocationLike): string {
+  const port = loc.port ? `:${loc.port}` : "";
+  return `${loc.protocol}//localhost${port}${loc.pathname ?? "/"}${loc.search ?? ""}`;
 }
 
 // ---------------------------------------------------------------------------
