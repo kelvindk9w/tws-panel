@@ -28,7 +28,13 @@
  *  - "senha": TerminalRelayRunner com elevation "sudo";
  *  - "segundo-plano": BackgroundMirrorRunner (host bridge + espelho).
  */
-import { isAllowedHostCommand, type TargetRunner, type ExecResult } from "@paas/security";
+import {
+  PHASE_RUN_DIR_DEFAULT,
+  isAllowedHostCommand,
+  isPhaseFollowCommand,
+  type TargetRunner,
+  type ExecResult,
+} from "@paas/security";
 import type { SecurityTargetProfile } from "@paas/core";
 import {
   SudoElevationError,
@@ -42,6 +48,8 @@ const HOST_REMOTE_DIR_DEFAULT = "/opt/paas-hardening";
 export interface TerminalRelayRunnerOptions {
   /** Diretório remoto dos scripts no host (validação da allowlist). */
   remoteDir?: string;
+  /** Diretório de estado das execuções destacadas (validação da allowlist). */
+  runDir?: string;
   /** Auditoria de comandos executados no host real via terminal. */
   onAudit?: (detail: string) => void;
   /**
@@ -61,6 +69,7 @@ function senhaModeUnavailable(err: TerminalUnavailableError): Error {
 
 export class TerminalRelayRunner implements TargetRunner {
   private readonly remoteDir: string;
+  private readonly runDir: string;
   private readonly onAudit?: ((detail: string) => void) | undefined;
   private readonly elevate: boolean;
   /**
@@ -78,6 +87,7 @@ export class TerminalRelayRunner implements TargetRunner {
     opts?: TerminalRelayRunnerOptions,
   ) {
     this.remoteDir = opts?.remoteDir ?? HOST_REMOTE_DIR_DEFAULT;
+    this.runDir = opts?.runDir ?? PHASE_RUN_DIR_DEFAULT;
     this.onAudit = opts?.onAudit;
     this.elevate = opts?.elevation === "sudo";
   }
@@ -130,8 +140,19 @@ export class TerminalRelayRunner implements TargetRunner {
   private allowedOnHost(cmd: string): boolean {
     // Com sudo a allowlist vale em QUALQUER perfil e sempre sobre o comando
     // ORIGINAL — o prefixo elevado nunca é aplicado a string arbitrária.
-    if (this.elevate) return isAllowedHostCommand(cmd, this.remoteDir);
-    return this.profile !== "host" || isAllowedHostCommand(cmd, this.remoteDir);
+    if (this.elevate) return isAllowedHostCommand(cmd, this.remoteDir, this.runDir);
+    return this.profile !== "host" || isAllowedHostCommand(cmd, this.remoteDir, this.runDir);
+  }
+
+  /**
+   * Modo senha: a senha é pedida UMA vez, no disparo da fase. O
+   * acompanhamento da execução destacada (lib.sh --paas-run-follow) só LÊ o
+   * log e o código de saída — arquivos deixados legíveis de propósito — então
+   * roda como o usuário comum do terminal, sem sudo e sem novo prompt. Isso
+   * vale também para os reataches, que podem acontecer muitas vezes.
+   */
+  private needsElevation(cmd: string): boolean {
+    return this.elevate && !isPhaseFollowCommand(cmd, this.remoteDir, this.runDir);
   }
 
   /**
@@ -143,7 +164,7 @@ export class TerminalRelayRunner implements TargetRunner {
     if (!this.allowedOnHost(cmd)) {
       return this.base.exec(cmd, opts);
     }
-    if (this.elevate) {
+    if (this.needsElevation(cmd)) {
       if (this.elevationFailure) throw this.elevationFailure;
       this.audit(`host-exec (terminal, sudo): ${cmd}`);
       const { code, output } = await this.elevated(() =>
@@ -161,6 +182,7 @@ export class TerminalRelayRunner implements TargetRunner {
       return { code, stdout: output, stderr: "" };
     } catch (err) {
       if (err instanceof TerminalUnavailableError) {
+        if (this.elevate) throw senhaModeUnavailable(err);
         // terminal indisponível ANTES de o comando começar: fallback seguro.
         return this.base.exec(cmd, opts);
       }
@@ -178,7 +200,7 @@ export class TerminalRelayRunner implements TargetRunner {
     if (!this.allowedOnHost(cmd)) {
       return this.base.execStream(cmd, onData);
     }
-    if (this.elevate) {
+    if (this.needsElevation(cmd)) {
       // Renova a credencial antes do script (fases podem ser longas): sem
       // prompt enquanto ela vale; se expirou, a senha é pedida ANTES de a
       // saída da fase começar a rolar.
@@ -191,6 +213,10 @@ export class TerminalRelayRunner implements TargetRunner {
       return await this.terminal.runCommand(cmd, onData);
     } catch (err) {
       if (err instanceof TerminalUnavailableError) {
+        // No modo senha o acompanhamento não eleva, mas também não cai para o
+        // host bridge: o operador escolheu que o painel não age no servidor
+        // por fora do terminal dele. O executor reatacha quando ele voltar.
+        if (this.elevate) throw senhaModeUnavailable(err);
         // terminal indisponível ANTES de o comando começar: fallback seguro.
         return this.base.execStream(cmd, onData);
       }

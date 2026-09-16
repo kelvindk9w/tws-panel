@@ -23,12 +23,19 @@ export {
 } from "./profiles.js";
 export {
   HOST_HELPER_IMAGE_DEFAULT,
+  PHASE_RUN_DIR_DEFAULT,
+  PHASE_RUN_ID_RE,
   buildNsenterArgv,
   buildNsenterUploadArgv,
+  buildPhaseFollowCommand,
   buildPhaseScriptCommand,
   fixedReadOnlyCommands,
   isAllowedHostCommand,
+  isPhaseFollowCommand,
+  isValidPhaseRunId,
   parsePhaseScriptCommand,
+  type ParsedPhaseCommand,
+  type PhaseCommandKind,
   type PhaseScriptCommandOptions,
 } from "./host-bridge.js";
 export {

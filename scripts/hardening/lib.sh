@@ -20,6 +20,16 @@ PAAS_BACKUP_TS="$(date +%Y%m%d-%H%M%S)"
 PAAS_STATE_DIR="/etc/paas"
 PAAS_ROLLBACK_DELAY="${PAAS_ROLLBACK_DELAY:-300}" # 5 min (alinhado a `at now +5 minutes`)
 
+# needrestart: NUNCA reiniciar serviços sozinho no meio de uma fase.
+# O needrestart é acionado pelo hook de dpkg em toda instalação/atualização e,
+# no modo automático, reinicia os serviços que usam bibliotecas atualizadas —
+# o que inclui docker.service e ssh.service. Reiniciar o Docker derruba o
+# container do painel e o container auxiliar onde a fase está rodando; o modo
+# interativo é igualmente ruim aqui, porque abriria um menu whiptail no meio do
+# log da fase. "l" (list only) só relata o que precisaria reiniciar.
+# Valores conferidos em needrestart(1) (Ubuntu noble): (l)ist, (i)nteractive, (a)utomatic.
+export NEEDRESTART_MODE="${NEEDRESTART_MODE:-l}"
+
 # ---------------------------------------------------------------------------
 # Logging / marcadores de progresso
 # ---------------------------------------------------------------------------
@@ -188,6 +198,95 @@ apt_install() {
   run env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
 }
 
+# ---------------------------------------------------------------------------
+# Pacotes que REINICIAM o daemon do Docker
+# ---------------------------------------------------------------------------
+# O painel roda DENTRO de um container, e as fases rodam num container auxiliar
+# (PTY via nsenter — apps/server/src/services/docker-socket.ts). Quem mantém os
+# dois de pé é o daemon do Docker. Atualizar qualquer um destes pacotes reinicia
+# o daemon e derruba, no meio do dpkg, o canal por onde a própria fase está
+# sendo executada.
+#
+# Nomes conferidos em docs.docker.com/engine/install/ubuntu (repositório oficial)
+# e no próprio get.docker.com — que é o instalador usado por scripts/install.sh.
+# Os dois últimos são a alternativa do arquivo do Ubuntu (docker.io/containerd),
+# que entra pelas mesmas origens que o unattended-upgrades atualiza sozinho.
+PAAS_DOCKER_PKGS="docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin docker-model-plugin docker.io containerd"
+
+# Pacotes que ESTE script colocou em hold (para desfazer no fim / no trap).
+PAAS_DOCKER_HELD_BY_US=""
+
+# paas_docker_pkgs_installed — lista (uma por linha) os pacotes do Docker presentes.
+paas_docker_pkgs_installed() {
+  local pkg
+  for pkg in $PAAS_DOCKER_PKGS; do
+    pkg_installed "$pkg" && echo "$pkg"
+  done
+  return 0
+}
+
+# paas_docker_pkgs_pending — lista os pacotes do Docker que um full-upgrade
+# atualizaria AGORA (usa a simulação do apt; precisa rodar ANTES do hold).
+paas_docker_pkgs_pending() {
+  local sim pkg
+  sim="$(apt-get -s full-upgrade 2>/dev/null | grep -E '^Inst ' || true)"
+  [ -n "$sim" ] || return 0
+  for pkg in $PAAS_DOCKER_PKGS; do
+    printf '%s\n' "$sim" | grep -qE "^Inst ${pkg} " && echo "$pkg"
+  done
+  return 0
+}
+
+# paas_docker_hold — segura os pacotes do Docker durante o upgrade desta fase.
+# Lê `apt-mark showhold` ANTES: o que já estava em hold foi decisão do operador
+# e NÃO é desfeito depois. Registra um trap para devolver o estado mesmo se o
+# script morrer no meio.
+paas_docker_hold() {
+  local already pkg to_hold=""
+  already="$(apt-mark showhold 2>/dev/null || true)"
+  for pkg in $(paas_docker_pkgs_installed); do
+    if printf '%s\n' "$already" | grep -qxF "$pkg"; then
+      info "$pkg já estava em hold (decisão do operador) — será mantido assim"
+    else
+      to_hold="$to_hold $pkg"
+    fi
+  done
+  # shellcheck disable=SC2086
+  set -- $to_hold
+  if [ $# -eq 0 ]; then
+    info "nenhum pacote do Docker a segurar"
+    return 0
+  fi
+  if [ "$PAAS_DRY_RUN" = "1" ]; then
+    echo "[dry-run] apt-mark hold $*"
+    return 0
+  fi
+  # O trap é armado ANTES do hold: se o apt-mark falhar no meio da lista, o
+  # unhold ainda roda para o que já tiver sido segurado.
+  PAAS_DOCKER_HELD_BY_US="$*"
+  trap 'paas_docker_unhold' EXIT
+  trap 'paas_docker_unhold; exit 130' INT
+  trap 'paas_docker_unhold; exit 143' TERM HUP
+  apt-mark hold "$@" >/dev/null || warn "apt-mark hold falhou para: $*"
+  info "pacotes do Docker segurados durante esta fase: $*"
+}
+
+# paas_docker_unhold — devolve ao estado anterior SÓ o que nós seguramos.
+# Idempotente: pode ser chamado pelo fluxo normal e de novo pelo trap.
+paas_docker_unhold() {
+  local held="$PAAS_DOCKER_HELD_BY_US"
+  [ -n "$held" ] || return 0
+  PAAS_DOCKER_HELD_BY_US=""
+  trap - EXIT INT TERM HUP
+  if [ "$PAAS_DRY_RUN" = "1" ]; then
+    echo "[dry-run] apt-mark unhold $held"
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  apt-mark unhold $held >/dev/null || warn "apt-mark unhold falhou para: $held"
+  info "hold temporário removido: $held"
+}
+
 # apt_purge_if_installed <pkgs...> — purge com simulação prévia (spec 5.2).
 apt_purge_if_installed() {
   local installed=()
@@ -283,6 +382,103 @@ confirm_rollback() {
 }
 
 # ---------------------------------------------------------------------------
+# Execução DESTACADA da fase (sobrevive à queda do canal)
+# ---------------------------------------------------------------------------
+# Por que: a fase é disparada pelo painel DENTRO de um canal efêmero — o PTY
+# (container auxiliar criado pelo daemon do Docker) ou o helper do host bridge.
+# Qualquer coisa que derrube esse canal (rede caindo, aba fechada, reinício do
+# daemon do Docker) matava o apt/dpkg no meio. Aqui a fase é lançada com setsid
+# (sessão própria, reparentada ao init), com a saída indo para um arquivo de log
+# e o código de saída para um arquivo próprio. O canal só ACOMPANHA o log: se
+# ele cair, a fase continua, e o painel reatacha depois pelo mesmo id.
+#
+# Arquivos em <dir> (default ${PAAS_STATE_DIR}/runs), criados com umask 022 —
+# legíveis por qualquer usuário DE PROPÓSITO: no modo senha o acompanhamento
+# roda como o usuário comum do terminal e não pode pedir a senha do sudo a cada
+# leitura. O que fica legível é a mesma saída que já rola no terminal dele.
+#   <id>.log       saída combinada (stdout+stderr) da fase
+#   <id>.pid       pid do processo destacado
+#   <id>.exit      código de saída — escrito SÓ no fim (é o sinal de "terminou")
+#   <script>.lock  trava por FASE (flock), mantida pelo processo destacado
+#                  enquanto ele vive: a mesma fase nunca roda duas vezes.
+PAAS_RUN_DIR_DEFAULT="${PAAS_STATE_DIR}/runs"
+
+# paas_run_stream <log> <exitf> <pid> — transmite o log e termina com o marcador
+# :::PAAS_RUN_END <código|-> <ok|dead>. Com o pid vivo usa `tail --pid`, que
+# drena o arquivo e sai sozinho quando o processo morre (sem corrida de leitura).
+paas_run_stream() {
+  local log="$1" exitf="$2" pid="$3"
+  if [ -n "$pid" ] && [ "$pid" != "0" ] && [ -d "/proc/$pid" ]; then
+    tail -c +1 -f --pid="$pid" "$log" 2>/dev/null || true
+  else
+    cat "$log" 2>/dev/null || true
+  fi
+  # O código de saída é gravado logo depois que o processo morre: pequena folga.
+  local i=0
+  while [ ! -e "$exitf" ] && [ "$i" -lt 15 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  if [ -e "$exitf" ]; then
+    local code
+    code="$(tr -dc '0-9' < "$exitf" | head -c 3)"
+    printf '\n:::PAAS_RUN_END %s ok\n' "${code:-1}"
+  else
+    printf '\n:::PAAS_RUN_END - dead\n'
+  fi
+}
+
+# paas_run_detached <dir> <id> <script> [args...] — lança a fase destacada e
+# acompanha até o fim. Chamado pelo painel como:
+#   bash <dir-dos-scripts>/lib.sh --paas-run-detached '<dir>' <id> <script> [args]
+paas_run_detached() {
+  local dir="$1" id="$2" script="$3"
+  shift 3
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local log="$dir/$id.log" exitf="$dir/$id.exit" pidf="$dir/$id.pid" lock="$dir/$script.lock"
+  umask 022
+  mkdir -p "$dir" || { printf ':::PAAS_RUN_FAIL sem acesso a %s\n' "$dir"; return 70; }
+  chmod 755 "$dir" 2>/dev/null || true
+  # A trava é aberta no fd 9 e HERDADA pelo processo destacado: quando este
+  # shell sai, o lock continua de pé porque o filho ainda tem o fd aberto.
+  exec 9>>"$lock" || { printf ':::PAAS_RUN_FAIL sem acesso a %s\n' "$lock"; return 70; }
+  if ! flock -n 9; then
+    printf ':::PAAS_RUN_BUSY %s\n' "$script"
+    return 75
+  fi
+  : > "$log"
+  chmod 644 "$log" 2>/dev/null || true
+  rm -f "$exitf"
+  # O corpo do filho é literal (aspas simples): nada é interpolado — os dados
+  # chegam como argv, então nenhum argumento vira shell.
+  setsid nohup bash -c '
+    log="$1"; exitf="$2"; target="$3"; shift 3
+    bash "$target" "$@" > "$log" 2>&1
+    printf "%s\n" "$?" > "$exitf.parcial"
+    mv -f "$exitf.parcial" "$exitf"
+  ' paas-run "$log" "$exitf" "$here/$script" "$@" < /dev/null > /dev/null 2>&1 &
+  local child=$!
+  printf '%s\n' "$child" > "$pidf"
+  chmod 644 "$pidf" 2>/dev/null || true
+  printf ':::PAAS_RUN_STARTED %s %s\n' "$id" "$child"
+  paas_run_stream "$log" "$exitf" "$child"
+}
+
+# paas_run_follow <dir> <id> — reatache: reexibe o log desde o início e segue
+# até o fim. É também o caminho da reconciliação (execução já terminada devolve
+# o log completo e o código na hora; execução inexistente devolve "missing").
+paas_run_follow() {
+  local dir="$1" id="$2"
+  local log="$dir/$id.log" exitf="$dir/$id.exit" pidf="$dir/$id.pid"
+  if [ ! -e "$log" ]; then
+    printf ':::PAAS_RUN_END - missing\n'
+    return 0
+  fi
+  paas_run_stream "$log" "$exitf" "$(cat "$pidf" 2>/dev/null || echo 0)"
+}
+
+# ---------------------------------------------------------------------------
 # Parsing de argumentos comum
 # ---------------------------------------------------------------------------
 
@@ -294,3 +490,22 @@ Opções comuns:
   --confirm    cancela o rollback automático agendado (fases SSH/firewall)
 EOF
 }
+
+# ---------------------------------------------------------------------------
+# Despacho quando lib.sh é EXECUTADO (não sourced) pelo painel
+# ---------------------------------------------------------------------------
+# Os sentinelas abaixo não são opção de nenhuma fase, então um `source lib.sh`
+# feito por um script de fase (que herda os argumentos dele: --dry-run,
+# --rollback, --confirm, --user, --pubkey) nunca cai aqui.
+case "${1:-}" in
+  --paas-run-detached)
+    shift
+    paas_run_detached "$@"
+    exit $?
+    ;;
+  --paas-run-follow)
+    shift
+    paas_run_follow "$@"
+    exit $?
+    ;;
+esac
