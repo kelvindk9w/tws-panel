@@ -86,6 +86,15 @@ function makeService(opts?: { watchSudoPrompt?: boolean; sudoPasswordTimeoutMs?:
 
 const PROMPT = "[sudo] senha para kelvin: ";
 
+/**
+ * Pedido de senha COM relógio do painel correndo (há um comando esperando):
+ * a mensagem leva o prazo em DURAÇÃO — no instante em que o prompt abre, o
+ * que falta é o prazo inteiro. Sem comando esperando, o pedido vai sem prazo.
+ */
+function pedido(user: string | null, timeoutMs = 120_000, remainingMs = timeoutMs): TerminalControlMessage {
+  return { type: "sudo-password-requested", user, timeoutMs, remainingMs };
+}
+
 // ---------------------------------------------------------------------------
 // Montagem do comando elevado — provada contra um bash real
 // ---------------------------------------------------------------------------
@@ -208,17 +217,14 @@ describe("TerminalService — comando elevado com captura", () => {
     h.pty().emit(`${typed.trimEnd()}\r\n`); // eco
     h.pty().emit(PROMPT);
     await flush();
-    expect(h.events).toEqual([{ type: "sudo-password-requested", user: "kelvin" }]);
+    expect(h.events).toEqual([pedido("kelvin")]);
     expect(h.service.sudoPromptOpen).toBe(true);
 
     h.pty().emit("\r\n"); // Enter (a senha em si NÃO ecoa)
     h.pty().emit(`:::PAAS_BEGIN_${n}\r\nPermitRootLogin no\r\n:::PAAS_EXIT_${n}:1\r\n`);
     const result = await promise;
     expect(result).toEqual({ code: 1, output: "PermitRootLogin no\n" });
-    expect(h.events).toEqual([
-      { type: "sudo-password-requested", user: "kelvin" },
-      { type: "sudo-password-prompt-closed", outcome: "answered" },
-    ]);
+    expect(h.events).toEqual([pedido("kelvin"), { type: "sudo-password-prompt-closed", outcome: "answered" }]);
     expect(h.service.sudoPromptOpen).toBe(false);
     // o operador viu o prompt no terminal
     expect(h.output.join("")).toContain(PROMPT);
@@ -250,9 +256,9 @@ describe("TerminalService — comando elevado com captura", () => {
     h.pty().emit(`\r\n:::PAAS_BEGIN_${n}\r\n0\r\n:::PAAS_EXIT_${n}:0\r\n`);
     await expect(promise).resolves.toEqual({ code: 0, output: "0\n" });
     expect(h.events).toEqual([
-      { type: "sudo-password-requested", user: "kelvin" },
+      pedido("kelvin"),
       { type: "sudo-password-prompt-closed", outcome: "rejected" },
-      { type: "sudo-password-requested", user: "kelvin" },
+      pedido("kelvin"),
       { type: "sudo-password-prompt-closed", outcome: "answered" },
     ]);
     await h.service.dispose();
@@ -268,7 +274,7 @@ describe("TerminalService — comando elevado com captura", () => {
     h.pty().emit("ra kelvin:");
     h.pty().emit(" ");
     await flush();
-    expect(h.events).toEqual([{ type: "sudo-password-requested", user: "kelvin" }]);
+    expect(h.events).toEqual([pedido("kelvin")]);
     await h.service.dispose();
   });
 
@@ -565,6 +571,74 @@ describe("TerminalService — espera pela senha tem relógio próprio", () => {
     await flush();
     expect(h.events.at(-1)).toEqual({ type: "sudo-password-prompt-closed", outcome: "answered" });
     await h.service.dispose();
+  });
+
+  /**
+   * O operador não percebeu o pedido duas vezes em produção e o painel ficou
+   * parado até estourar. Agora o prazo VIAJA com o pedido para o navegador
+   * mostrar a contagem — e quem reconecta no meio recebe o que FALTA.
+   */
+  it("o pedido leva o prazo em duração; o padrão da espera é 2 minutos", async () => {
+    const h = makeService();
+    void h.service.runCommandCaptured("ufw status", { elevate: true }).catch(() => undefined);
+    await flush();
+    h.pty().emit(PROMPT);
+    await flush();
+    // acabou de abrir: falta o prazo INTEIRO — 2 min, o default novo
+    expect(h.events).toEqual([pedido("kelvin", 120_000, 120_000)]);
+    await h.service.dispose();
+  });
+
+  it("reenvio a quem reconecta: o que falta, não o prazo inteiro", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const h = makeService({ sudoPasswordTimeoutMs: 120_000 });
+      void h.service.runCommandCaptured("ufw status", { elevate: true }).catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(1);
+      h.pty().emit(PROMPT);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      const falta = h.service.sudoPromptRemainingMs ?? 0;
+      expect(falta).toBeGreaterThan(89_000);
+      expect(falta).toBeLessThanOrEqual(90_000); // o que FALTA, não os 120s
+      expect(h.service.sudoPasswordRequestedMessage()).toEqual({
+        type: "sudo-password-requested",
+        user: "kelvin",
+        timeoutMs: 120_000,
+        remainingMs: falta,
+      });
+      await h.service.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sem prompt aberto ou sem relógio: nenhum prazo a reenviar", async () => {
+    const h = makeService({ sudoPasswordTimeoutMs: 20_000 });
+    await h.service.connect();
+    expect(h.service.sudoPromptRemainingMs).toBeNull();
+    expect(h.service.sudoPasswordRequestedMessage()).toEqual({ type: "sudo-password-requested", user: null });
+    // sudo digitado pelo operador: prompt aberto, mas o painel não espera nada
+    h.pty().emit(PROMPT);
+    await flush();
+    expect(h.service.sudoPromptOpen).toBe(true);
+    expect(h.service.sudoPromptRemainingMs).toBeNull();
+    expect(h.service.sudoPasswordRequestedMessage()).toEqual({ type: "sudo-password-requested", user: "kelvin" });
+    await h.service.dispose();
+  });
+
+  it("prazo configurável: o valor do config é o que vai na mensagem e o que expira", async () => {
+    const h = makeService({ sudoPasswordTimeoutMs: 150 });
+    const settled = h.service.runCommandCaptured("ufw status", { elevate: true }).catch((e: unknown) => e);
+    await flush();
+    h.pty().emit(PROMPT);
+    await flush();
+    expect(h.events[0]).toEqual(pedido("kelvin", 150, 150));
+    await flush(200);
+    expect(h.events.at(-1)).toEqual({ type: "sudo-password-prompt-closed", outcome: "timeout" });
+    expect(h.service.sudoPromptRemainingMs).toBeNull();
+    await h.service.dispose();
+    expect(await settled).toBeInstanceOf(Error);
   });
 });
 

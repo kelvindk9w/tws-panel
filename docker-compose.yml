@@ -57,6 +57,10 @@ services:
       # e modo vazio — por isso o instalador sempre grava os dois juntos.
       PAAS_TERMINAL_USER: ${PAAS_TERMINAL_USER:-}
       PAAS_ROOT_MODE: ${PAAS_ROOT_MODE:-}
+      # Quanto o painel espera a senha do sudo com o pedido aberto no terminal
+      # (modo "senha"). Vazio = o padrão do servidor (2 min). Só aumente com
+      # motivo: espera longa sem alguém olhando vira "o painel travou".
+      PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS: ${PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     security_opt:
       - no-new-privileges:true

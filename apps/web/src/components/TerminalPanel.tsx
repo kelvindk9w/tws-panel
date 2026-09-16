@@ -57,7 +57,26 @@
  *    no meio da tela cobriria o terminal e roubaria o foco. Ele NÃO tem campo
  *    de senha: a senha é digitada no xterm e segue o relay puro; o painel não
  *    lê, não guarda e não inspeciona o que é digitado. Texto de transparência
- *    obrigatório (por onde a senha passa e o que o painel não faz com ela);
+ *    obrigatório (por onde a senha passa e o que o painel não faz com ela) e
+ *    o texto diz DE QUEM é a senha: a do usuário do terminal, a mesma do sudo
+ *    por SSH — não a do root (o operador entendeu o contrário em campo);
+ *  - o pedido é IMPOSSÍVEL DE NÃO VER (defeito real: passou despercebido duas
+ *    vezes e a varredura morreu por timeout depois de 5 min de silêncio):
+ *      · contagem regressiva mm:ss no alerta, com destaque vermelho pulsante
+ *        nos últimos 30s. O prazo vem do servidor em DURAÇÃO (remainingMs) e
+ *        vira um instante do relógio DESTE navegador — relógio dessincronizado
+ *        entre navegador e VPS não atrapalha. Quem reconecta no meio recebe o
+ *        que FALTA (replay em routes/terminal.ts), então a contagem não
+ *        recomeça do zero;
+ *      · faixa FIXA no topo da PÁGINA (role=alert) enquanto o pedido está
+ *        aberto: visível com a página rolada em qualquer ponto e com a janela
+ *        do terminal recolhida; clicar nela expande, rola até o terminal e
+ *        devolve o foco ao xterm. Não é modal — não cobre onde se digita;
+ *      · título da aba prefixado com "⚠ senha necessária — " enquanto o pedido
+ *        está aberto (o único sinal visível com a aba em segundo plano),
+ *        restaurado ao fechar o pedido e ao desmontar o painel;
+ *      · ao esgotar o prazo (com folga: quem manda no relógio é o servidor), o
+ *        alerta explica que nada rodou como root e aponta a ação de repetir;
  *  - transporte inseguro: página fora de https E fora do túnel SSH
  *    (localhost/127.0.0.1/[::1]) → aviso no alerta. O texto diz o fato em uma
  *    frase e entrega a SAÍDA pronta (feedback de campo: o aviso anterior só
@@ -193,10 +212,37 @@ interface TerminalPanelProps {
 type SudoFailureOutcome = Extract<SudoPromptOutcome, "exhausted" | "not-permitted" | "timeout">;
 
 type SudoAlert =
-  /** O sudo está pedindo a senha agora. `retry`: a anterior foi recusada. */
-  | { kind: "prompt"; user: string | null; retry: boolean; seq: number }
+  /**
+   * O sudo está pedindo a senha agora. `retry`: a anterior foi recusada.
+   *
+   * `expiresAt` é um instante do RELÓGIO DESTE NAVEGADOR: o servidor manda
+   * quanto FALTA (duração) e aqui soma-se ao Date.now() local. Nenhum instante
+   * do servidor é comparado com o do navegador, então um relógio adiantado ou
+   * atrasado na VPS (ou aqui) não altera a contagem em nada — só a latência da
+   * mensagem, que é de milissegundos. null = pedido sem relógio (um `sudo` que
+   * o próprio operador digitou): mostra o alerta, sem contagem.
+   */
+  | {
+      kind: "prompt";
+      user: string | null;
+      retry: boolean;
+      seq: number;
+      expiresAt: number | null;
+      totalMs: number | null;
+    }
   /** O sudo desistiu / não pode / o painel cansou de esperar. */
   | { kind: "failed"; user: string | null; outcome: SudoFailureOutcome };
+
+/**
+ * Folga entre a contagem chegar a zero AQUI e o alerta virar "tempo esgotado".
+ * Quem decide o fim é o servidor (é lá que o relógio da senha corre e o Ctrl-C
+ * é enviado); a folga evita anunciar a falha um instante ANTES de o servidor
+ * ainda aceitar a senha. Se a mensagem do servidor chegar antes, ela vence.
+ */
+const SUDO_EXPIRY_GRACE_MS = 2_000;
+
+/** Prefixo no título da aba enquanto a senha é esperada (aba em segundo plano). */
+const SUDO_TITLE_PREFIX = "⚠ senha necessária — ";
 
 export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: TerminalPanelProps) {
   // Começa RECOLHIDO por padrão (o usuário expande se quiser acompanhar).
@@ -237,6 +283,9 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
           // o "senha incorreta" sobrevive ao novo pedido que vem logo depois
           retry: prev?.kind === "prompt" ? prev.retry : false,
           seq: prev?.kind === "prompt" ? prev.seq + 1 : 0,
+          // duração → instante LOCAL (ver o comentário do tipo SudoAlert)
+          expiresAt: typeof msg.remainingMs === "number" ? Date.now() + msg.remainingMs : null,
+          totalMs: typeof msg.timeoutMs === "number" ? msg.timeoutMs : null,
         }));
         setAttention(true);
         setOpen(true);
@@ -246,7 +295,16 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
           const user = prev?.user ?? null;
           switch (msg.outcome) {
             case "rejected":
-              return { kind: "prompt", user, retry: true, seq: prev?.kind === "prompt" ? prev.seq : 0 };
+              return {
+                kind: "prompt",
+                user,
+                retry: true,
+                seq: prev?.kind === "prompt" ? prev.seq : 0,
+                // o pedido novo (que vem logo em seguida) traz o prazo novo;
+                // até lá, segue valendo o que já estava correndo
+                expiresAt: prev?.kind === "prompt" ? prev.expiresAt : null,
+                totalMs: prev?.kind === "prompt" ? prev.totalMs : null,
+              };
             case "answered":
             case "session-ended":
               return null;
@@ -419,6 +477,44 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
     sectionRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
     termRef.current?.focus();
   }, [promptSeq, open]);
+
+  /** Leva a pessoa ao terminal (clique no aviso fixo do topo da página). */
+  const goToTerminal = useCallback(() => {
+    setOpen(true);
+    sessionStorage.setItem(STORAGE_KEY, "1");
+    sectionRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    termRef.current?.focus();
+  }, []);
+
+  // ------------------------------------------- pedido de senha: fim do prazo
+  // Quem manda no relógio é o SERVIDOR (é lá que o Ctrl-C sai); esta contagem
+  // local existe para o operador não ficar diante de um alerta que pede uma
+  // senha que já não vale — por exemplo se a mensagem do servidor se perder.
+  const promptExpiresAt = sudoAlert?.kind === "prompt" ? sudoAlert.expiresAt : null;
+  useEffect(() => {
+    if (promptExpiresAt === null) return;
+    const delay = Math.max(0, promptExpiresAt + SUDO_EXPIRY_GRACE_MS - Date.now());
+    const timer = setTimeout(() => {
+      setSudoAlert((prev) =>
+        prev?.kind === "prompt" ? { kind: "failed", user: prev.user, outcome: "timeout" } : prev,
+      );
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [promptExpiresAt]);
+
+  // ----------------------------------------- aba em segundo plano: o título
+  // O pedido pode chegar com a aba fora da tela; o título é o único sinal que
+  // aparece na barra de abas. Restaurado ao fechar o pedido e ao desmontar.
+  const promptOpen = sudoAlert?.kind === "prompt";
+  useEffect(() => {
+    if (!promptOpen) return;
+    const original = document.title;
+    // já prefixado (pedido repetido antes de restaurar): não empilha prefixo
+    if (!original.startsWith(SUDO_TITLE_PREFIX)) document.title = `${SUDO_TITLE_PREFIX}${original}`;
+    return () => {
+      document.title = original;
+    };
+  }, [promptOpen]);
 
   const openUserShell = useCallback(() => {
     if (!userShellName || !isValidSshUsername(userShellName)) return;
@@ -608,6 +704,37 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
         Interferir por conta própria pode interromper ou quebrar o processo.
       </p>
 
+      {/* Aviso FIXO no topo da PÁGINA: a janela do terminal pode estar
+          recolhida ou fora da área visível — foi exatamente o que fez o pedido
+          passar despercebido duas vezes. Não é modal (não cobre o terminal nem
+          rouba o foco de quem digita a senha): é uma faixa que leva até ele. */}
+      {sudoAlert?.kind === "prompt" && (
+        <div
+          role="alert"
+          data-testid="sudo-password-banner"
+          className="fixed inset-x-0 top-0 z-50 border-b-2 border-amber-400 bg-amber-500 text-black shadow-[0_4px_20px_rgba(0,0,0,0.45)]"
+          style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+        >
+          <button
+            type="button"
+            data-testid="sudo-password-banner-action"
+            onClick={goToTerminal}
+            className="mx-auto flex w-full max-w-4xl items-center gap-2 px-4 py-2 text-left text-sm font-semibold"
+          >
+            <KeyRound className="h-4 w-4 shrink-0 animate-pulse" aria-hidden />
+            <span className="flex-1">
+              O terminal está esperando a senha de{" "}
+              <span className="font-mono">{sudoAlert.user ?? info?.user ?? "seu usuário"}</span> para
+              continuar — clique aqui para digitar.
+            </span>
+            {sudoAlert.expiresAt !== null && (
+              <SudoCountdown expiresAt={sudoAlert.expiresAt} totalMs={sudoAlert.totalMs} variant="banner" />
+            )}
+            <span className="shrink-0 rounded bg-black/20 px-2 py-0.5 text-[11px] uppercase">ir ao terminal</span>
+          </button>
+        </div>
+      )}
+
       {sudoAlert && (
         <SudoPasswordAlert
           alert={sudoAlert}
@@ -717,6 +844,64 @@ function SessionNote({
   }
 }
 
+/** mm:ss a partir de milissegundos (arredondando para cima: 1ms ainda é 1s). */
+function formatRemaining(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** Faltando isto ou menos, o destaque muda (vermelho + pulso). */
+const SUDO_URGENT_MS = 30_000;
+
+/**
+ * Contagem regressiva da espera pela senha.
+ *
+ * O prazo chega do servidor como DURAÇÃO e vira um instante do relógio DESTE
+ * navegador (ver SudoAlert): a conta feita aqui é sempre "instante local menos
+ * agora local", então relógio dessincronizado entre navegador e VPS não
+ * atrapalha. Reconexão no meio da espera continua de onde estava, porque o
+ * servidor reenvia o que FALTA, não o prazo inteiro.
+ */
+function SudoCountdown({
+  expiresAt,
+  totalMs,
+  variant,
+}: {
+  expiresAt: number;
+  totalMs: number | null;
+  variant: "alert" | "banner";
+}) {
+  const [remaining, setRemaining] = useState(() => Math.max(0, expiresAt - Date.now()));
+  useEffect(() => {
+    setRemaining(Math.max(0, expiresAt - Date.now()));
+    const id = setInterval(() => setRemaining(Math.max(0, expiresAt - Date.now())), 1_000);
+    return () => clearInterval(id);
+  }, [expiresAt]);
+
+  const urgente = remaining <= SUDO_URGENT_MS;
+  const label = formatRemaining(remaining);
+  if (variant === "banner") {
+    return (
+      <span className={`shrink-0 font-mono text-sm ${urgente ? "animate-pulse font-bold" : ""}`}>{label}</span>
+    );
+  }
+  return (
+    <span
+      data-testid="sudo-countdown"
+      data-urgente={urgente ? "sim" : "nao"}
+      aria-live="off"
+      className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 font-mono text-sm font-bold ${
+        urgente ? "animate-pulse bg-red-500/30 text-red-100 ring-1 ring-red-400" : "bg-amber-400/20 text-amber-100"
+      }`}
+    >
+      ⏳ {label}
+      {totalMs !== null && (
+        <span className="font-sans text-[10px] font-normal opacity-70">de {formatRemaining(totalMs)}</span>
+      )}
+    </span>
+  );
+}
+
 function SudoPasswordAlert({
   alert,
   fallbackUser,
@@ -753,8 +938,11 @@ function SudoPasswordAlert({
     >
       {alert.kind === "prompt" ? (
         <div className="mx-auto flex max-w-2xl flex-col gap-2">
-          <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+          <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-amber-200">
             <KeyRound className="h-4 w-4 shrink-0" aria-hidden /> O sudo está pedindo a senha
+            {alert.expiresAt !== null && (
+              <SudoCountdown expiresAt={alert.expiresAt} totalMs={alert.totalMs} variant="alert" />
+            )}
           </p>
           {alert.retry && (
             <p className="rounded bg-red-500/20 px-2 py-1 font-semibold text-red-200">
@@ -765,6 +953,19 @@ function SudoPasswordAlert({
             Digite a senha do usuário {userLabel} no terminal abaixo e pressione <strong>Enter</strong>.
             Os caracteres não aparecem enquanto você digita — isso é normal.
           </p>
+          {/* Feedback de campo: o operador entendeu que o painel pedia a senha
+              de root. É a senha DELE, a mesma do sudo por SSH. */}
+          <p className="text-[13px] font-medium text-amber-100">
+            É a senha de {userLabel} nesta VPS — a mesma que você usa no <code className="font-mono">sudo</code>{" "}
+            quando entra por SSH. <strong>Não é a senha do root</strong> (e o painel não tem, nem pede, senha
+            de root).
+          </p>
+          {alert.expiresAt !== null && (
+            <p className="text-amber-100/80">
+              O pedido tem prazo: se o tempo acabar, o painel cancela a operação e nada roda como root — dá
+              para executar de novo depois.
+            </p>
+          )}
           <p className="text-amber-100/80">
             A senha vai do seu navegador, passa pelo painel e chega ao terminal da sua VPS. O painel não
             grava, não registra e não envia essa senha para nenhum outro lugar. O código é aberto e pode
@@ -845,10 +1046,18 @@ function SudoPasswordAlert({
             </p>
           )}
           {alert.outcome === "timeout" && (
-            <p>
-              Tempo esgotado aguardando a senha: o painel cancelou o pedido e nada foi executado como
-              root. Execute de novo quando puder digitar a senha no terminal.
-            </p>
+            <>
+              <p>
+                O sudo pediu a senha de {userLabel} neste terminal e o tempo de espera acabou sem ela: o
+                painel cancelou o pedido e <strong>nada foi executado como root</strong>. Nada quebrou — a
+                operação simplesmente não aconteceu.
+              </p>
+              <p>
+                Para seguir, clique em <strong>“Tentar a varredura de novo”</strong> (ou execute a fase
+                outra vez) e, assim que o pedido aparecer aqui, digite a senha no terminal abaixo. Desta
+                vez o alerta mostra o tempo restante na faixa amarela no topo da página.
+              </p>
+            </>
           )}
           <div>
             <button

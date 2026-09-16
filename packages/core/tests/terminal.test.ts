@@ -41,6 +41,10 @@ describe("mensagens de controle do terminal", () => {
   const exemplos: TerminalControlMessage[] = [
     { type: "sudo-password-requested", user: "kelvin" },
     { type: "sudo-password-requested", user: null },
+    // prazo da espera: pedido novo (falta o total) e reenvio a quem reconecta
+    // com o prompt já aberto (falta MENOS que o total)
+    { type: "sudo-password-requested", user: "kelvin", timeoutMs: 120_000, remainingMs: 120_000 },
+    { type: "sudo-password-requested", user: "kelvin", timeoutMs: 120_000, remainingMs: 42_000 },
     { type: "sudo-password-prompt-closed", outcome: "answered" },
     { type: "sudo-password-prompt-closed", outcome: "rejected" },
     { type: "sudo-password-prompt-closed", outcome: "exhausted" },
@@ -58,6 +62,29 @@ describe("mensagens de controle do terminal", () => {
       expect(frame.startsWith(TERMINAL_CONTROL_PREFIX)).toBe(true);
       expect(parseTerminalControl(frame)).toEqual(msg);
     }
+  });
+
+  /**
+   * O relógio do navegador pode estar dessincronizado do da VPS: um instante
+   * absoluto do servidor viraria uma contagem errada do lado de cá. Por isso o
+   * prazo é sempre DURAÇÃO, medida pelo navegador no próprio relógio.
+   */
+  it("o prazo da senha viaja como duração, nunca como instante absoluto", () => {
+    const msg = parseTerminalControl(
+      encodeTerminalControl({
+        type: "sudo-password-requested",
+        user: "kelvin",
+        timeoutMs: 120_000,
+        remainingMs: 95_000,
+      }),
+    );
+    expect(msg).toEqual({
+      type: "sudo-password-requested",
+      user: "kelvin",
+      timeoutMs: 120_000,
+      remainingMs: 95_000,
+    });
+    expect(JSON.stringify(msg)).not.toMatch(/expiresAt|deadline|\d{13}/);
   });
 
   it("o prefixo começa com NUL — byte que o servidor remove da saída do PTY", () => {

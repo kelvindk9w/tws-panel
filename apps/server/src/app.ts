@@ -94,6 +94,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     idleTimeoutMs: config.terminalIdleTimeoutMs,
     // Modo senha: observa a SAÍDA atrás do prompt do sudo (nunca o input).
     watchSudoPrompt: terminalAccess.elevation === "senha",
+    // Espera pela senha com o prompt aberto (PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS):
+    // o mesmo prazo que o navegador mostra na contagem regressiva do alerta.
+    sudoPasswordTimeoutMs: config.terminalSudoPasswordTimeoutMs,
     // Modos de usuário comum: confere no host se o usuário tem acesso ao
     // Docker (= root sem senha) e expõe em /api/terminal/info. Não bloqueia.
     ...(hostDockerAccessProbe ? { probeHostDockerAccess: hostDockerAccessProbe } : {}),
