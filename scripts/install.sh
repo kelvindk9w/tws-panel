@@ -1273,7 +1273,9 @@ LOCAL_PORT_NOTE="     Se o ssh recusar com \"bind [127.0.0.1]:$PORT: Address alr
 
 ${CYAN}${BOLD}       ssh ${SSH_KEY_OPT}-L $LOCAL_ALT:localhost:$PORT $TUNNEL_USER@$PUBLIC_IP${RESET}
 
-     e abra o navegador em http://localhost:$LOCAL_ALT/... em vez de :$PORT."
+     e, no passo 2, use o endereço com ESSE número no lugar do que está lá:
+
+${CYAN}${BOLD}       http://localhost:$LOCAL_ALT/?token=$SETUP_TOKEN${RESET}"
 
 # No modo "senha", a senha do sudo passa pelo painel: pelo IP direto ela
 # trafegaria sem criptografia. Reforça isso exatamente onde o link aparece.
@@ -1355,6 +1357,10 @@ $TUNNEL_NOTE
   2) Com essa janela aberta, abra no navegador:
 
 ${CYAN}${BOLD}      http://localhost:$PORT/?token=$SETUP_TOKEN${RESET}
+
+     O número aqui é o da ESQUERDA do comando do passo 1 — a porta do SEU
+     computador. Se você trocou aquele número, troque este também; o $PORT da
+     direita é a porta da VPS e não aparece no navegador.
 
      (Windows: PowerShell já traz o comando ssh acima pronto para uso; no
      PuTTY, configure em Connection → SSH → Tunnels: Source port $PORT,

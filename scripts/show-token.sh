@@ -97,11 +97,13 @@ ${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP${RESE
 
       Se o ssh recusar com "bind [127.0.0.1]:$PORT: Address already in use", a porta
       ocupada é a do SEU computador (o número da ESQUERDA), não a da VPS. Troque só
-      ele — por exemplo ssh -L $LOCAL_ALT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP — e abra o
-      navegador em http://localhost:$LOCAL_ALT/... em vez de :$PORT. Para escolher um número
-      livre antes de tentar, o README ensina a conferir a porta no seu computador.
+      ele — por exemplo ssh -L $LOCAL_ALT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP — e então
+      acesse http://localhost:$LOCAL_ALT/?token=$TOKEN (o endereço usa o número da
+      ESQUERDA do seu túnel, não o $PORT da VPS). Para escolher um número livre antes
+      de tentar, o README ensina a conferir a porta no seu computador.
 
-E então acesse:
+E então acesse (o número abaixo é o da ESQUERDA do comando acima — se você trocou,
+troque aqui também):
 
 ${CYAN}${BOLD}      http://localhost:$PORT/?token=$TOKEN${RESET}
 
