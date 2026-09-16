@@ -734,7 +734,60 @@ cd /opt/tws-panel && git checkout main
 >   avisando, porque pode ser uma correção de segurança não publicada, e aguarde a promoção — a
 >   `dev` é a branch de desenvolvimento e não passa pelo mesmo processo de validação da `main`.
 
-**7. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers:
+<a id="porta-livre-no-seu-computador"></a>
+
+> [!TIP]
+> **Antes de instalar: confira, no SEU computador, um número de porta livre.** Daqui a pouco o
+> instalador vai perguntar em qual porta o painel fica na VPS — e o comando de acesso que ele
+> imprime no final abre o túnel SSH usando **o mesmo número dos dois lados**
+> (`ssh -L 9000:localhost:9000`). Ou seja: **o número que você escolher aqui é o que vai ser
+> informado ao instalador**, e ele precisa estar livre nos dois lugares. Na VPS, o próprio
+> instalador confere e avisa; **no seu computador ele não tem como enxergar**, porque roda na VPS.
+> Por isso esta conferência é aqui, na sua máquina, antes de começar.
+>
+> Comece testando a **9000** (o padrão). Se estiver ocupada, teste **9100**, depois **9200**, e
+> assim por diante — qualquer número alto e livre serve. Troque o `9000` do comando pelo número
+> que estiver testando.
+>
+> **Linux e WSL:**
+>
+> ```bash
+> ss -ltnH 'sport = :9000'
+> ```
+>
+> **macOS:**
+>
+> ```bash
+> lsof -nP -iTCP:9000 -sTCP:LISTEN
+> ```
+>
+> **Windows (PowerShell):**
+>
+> ```powershell
+> Get-NetTCPConnection -State Listen -LocalPort 9000 -ErrorAction SilentlyContinue
+> ```
+>
+> **Como ler o resultado — vale para os três:**
+>
+> - **Não apareceu nada** (o terminal só volta a mostrar o prompt, sem nenhuma linha): a porta
+>   está **livre**. É esse número que você informa ao instalador no próximo passo.
+> - **Apareceu alguma linha**: já existe um programa ouvindo nessa porta no seu computador. Ela
+>   está **ocupada** — escolha outro número e rode o comando de novo.
+>
+> **Quer saber qual programa está ocupando?** No Linux e no WSL, acrescente `-p`
+> (`ss -ltnpH 'sport = :9000'`): sem administrador ele mostra só os seus próprios programas, então
+> use `sudo ss -ltnpH 'sport = :9000'` para ver todos. No macOS vale o mesmo: o `lsof` sem `sudo`
+> enxerga apenas os seus programas — se a porta parecer livre e mesmo assim o túnel reclamar,
+> repita com `sudo` na frente. No Windows, a coluna `OwningProcess` é o número do processo;
+> `Get-Process -Id <número>` diz o nome dele (abra o PowerShell como administrador se ele se
+> recusar a informar).
+>
+> Não precisa fechar nada nem liberar a 9000: escolher outro número é mais simples e não quebra o
+> programa que já estava lá. Entenda as [duas portas do túnel](#duas-portas).
+
+**7. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers.
+Tenha em mãos o número de porta que você [conferiu no seu computador](#porta-livre-no-seu-computador):
+é ele que você vai informar quando o instalador perguntar.
 
 ```bash
 ./scripts/install.sh
@@ -847,7 +900,9 @@ Digite "continuar" para prosseguir:
    são recusadas porque quebrariam o próprio produto: **22** (é por onde o SSH entra), **80** e
    **443** (o proxy que publica os seus sites com SSL) e **25, 465, 587, 143, 993 e 8080** (o
    servidor de e-mail). Essa é a porta **da VPS** — a porta do túnel no seu computador é outra
-   coisa, explicada [logo abaixo](#duas-portas).
+   coisa, explicada [logo abaixo](#duas-portas). Informe aqui o número que você
+   [conferiu no seu computador](#porta-livre-no-seu-computador): assim o comando do túnel impresso
+   no final, que usa o mesmo número dos dois lados, funciona de primeira.
 4. **Qual chave SSH você usa** (opcional). Usou `id_ed25519` ou `id_rsa` no Passo 4? Só aperte
    Enter. É só para o comando de acesso impresso no final já sair pronto para copiar.
 
@@ -996,6 +1051,10 @@ primeira vez é mantido sem perguntar de novo — para trocar, veja
 >
 > O instalador não tem como adivinhar o que está ocupado no seu computador — ele roda na VPS e
 > só enxerga a VPS. Por isso a porta da esquerda é sempre escolha sua, na hora de abrir o túnel.
+>
+> Para não descobrir isso só na hora do erro, dá para
+> [conferir antes, no seu computador, qual porta está livre](#porta-livre-no-seu-computador) — e
+> informar esse mesmo número ao instalador, para que os dois lados batam.
 
 **8. Abra o painel** — pelo túnel SSH acima (recomendado) ou, se aceitar o risco descrito acima, direto em `http://SEU_IP:9000` (troque `9000` pela porta que você escolheu na instalação) — cole o **setup token** exibido no terminal e siga o wizard:
 
@@ -1157,7 +1216,9 @@ sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
   está usando a 9000 (é comum em quem programa). Troque só esse número e abra o navegador nele:
   `ssh -L 9100:localhost:9000 SEU_USUARIO@SEU_IP`, depois `http://localhost:9100/?token=...`.
   Qualquer número alto e livre serve — 9100, 9300, 12345. Entenda as
-  [duas portas do túnel](#duas-portas).
+  [duas portas do túnel](#duas-portas). Na próxima instalação, esse erro nem aparece se você
+  [conferir antes qual porta está livre no seu computador](#porta-livre-no-seu-computador) e
+  informar esse número ao instalador.
 - **`channel 2: open failed: connect failed: Connection refused`** (o túnel abre, mas o navegador
   diz que não conseguiu conectar) — aí é o outro lado: o número da **direita** não bate com a porta
   em que o painel está na VPS. Confira com `sudo ./scripts/show-token.sh`, que imprime o comando
