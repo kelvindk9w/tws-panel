@@ -945,6 +945,10 @@ if [ -z "$PORT_SOURCE" ]; then
   say ""
   say "  Esta é a porta DA VPS. A porta do seu computador, na hora de abrir o túnel, é"
   say "  outra coisa e você escolhe lá — o instalador explica isso no final."
+  say ""
+  say "  O ideal é informar uma porta que também esteja livre NO COMPUTADOR de onde você vai abrir"
+  say "  o túnel: o comando impresso no final usa o mesmo número dos dois lados. O README ensina a"
+  say "  conferir isso (\"confira, no SEU computador, um número de porta livre\")."
   say "--------------------------------------------------------------------------------"
   # A situação da porta padrão é conferida UMA vez: repetir o aviso a cada
   # tentativa só faria barulho.
