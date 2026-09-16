@@ -1176,11 +1176,17 @@ Recomendado — acesse por túnel SSH.
 
        ssh -L 9100:localhost:9000 SEU_USUARIO@203.0.113.10
 
-     e abra o navegador em http://localhost:9100/... em vez de :9000.
+     e, no passo 2, use o endereço com ESSE número no lugar do que está lá:
+
+       http://localhost:9100/?token=<seu-token-de-48-caracteres>
 
   2) Com essa janela aberta, abra no navegador:
 
       http://localhost:9000/?token=<seu-token-de-48-caracteres>
+
+     O número aqui é o da ESQUERDA do comando do passo 1 — a porta do SEU
+     computador. Se você trocou aquele número, troque este também; o 9000 da
+     direita é a porta da VPS e não aparece no navegador.
 
 Direto pelo IP — sem criptografia; use só em rede confiável ou ambiente de
 teste descartável:
@@ -1219,6 +1225,11 @@ sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
   [duas portas do túnel](#duas-portas). Na próxima instalação, esse erro nem aparece se você
   [conferir antes qual porta está livre no seu computador](#porta-livre-no-seu-computador) e
   informar esse número ao instalador.
+- **"Não é possível acessar esse site"** no navegador, com o túnel aberto — o endereço está com o
+  número **errado**. O que vai no navegador é sempre o número da **esquerda** do seu `ssh -L`, que é
+  a porta do seu computador. Se o seu túnel é `ssh -L 9100:localhost:9001`, o endereço é
+  `http://localhost:9100/?token=...` — a `9001` é a porta da VPS e nunca aparece no navegador.
+  Confira qual número o seu túnel está escutando com `ss -ltnH 'sport = :9100'` (Linux/WSL).
 - **`channel 2: open failed: connect failed: Connection refused`** (o túnel abre, mas o navegador
   diz que não conseguiu conectar) — aí é o outro lado: o número da **direita** não bate com a porta
   em que o painel está na VPS. Confira com `sudo ./scripts/show-token.sh`, que imprime o comando
