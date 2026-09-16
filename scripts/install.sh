@@ -18,8 +18,10 @@
 #
 # O que faz:
 #   1. PRÉ-FLIGHT (somente leitura, antes de instalar qualquer coisa):
-#      SO, RAM/disco, Docker/containers, portas 80/443/9000/25/587/993 e
+#      SO, RAM/disco, Docker/containers, portas 80/443/25/465/587/143/993/8080 e
 #      serviços conhecidos (nginx, apache, caddy, postfix, mysql, postgres).
+#      A porta do PAINEL não entra nessa lista: ela é escolhida no passo 1d,
+#      que confere se está livre e oferece outra quando não está.
 #      Se a VPS não estiver limpa, exibe um relatório e exige confirmação
 #      interativa (digitar "continuar") ou --force / PAAS_FORCE=1.
 #      NUNCA remove ou para nada que já exista na máquina.
@@ -41,6 +43,15 @@
 #   1c. GRUPO DOCKER: ninguém é adicionado a ele (equivale a root sem senha).
 #      Se o usuário do terminal (não-root) já estiver no grupo, pergunta se
 #      remove (recomendado); sem TTY ou com --force, não mexe e avisa no final.
+#   1d. PORTA DO PAINEL NA VPS (4ª pergunta, padrão 9000): em qual porta da
+#      VPS o container publica o painel. Confere se está livre (ss, netstat
+#      ou /proc/net/tcp), diz quem a ocupa quando dá para descobrir e oferece
+#      uma porta livre como sugestão — nunca troca sozinho. Recusa 22 (SSH),
+#      80/443 (proxy Caddy dos projetos) e 25/465/587/143/993/8080 (servidor
+#      de e-mail Stalwart), além de valor não numérico ou fora de 1–65535.
+#      Automação: --port= (ou PAAS_PORT). Vai para o .env como PAAS_PORT e o
+#      docker-compose.yml publica "${PAAS_PORT:-9000}:9000" — a porta INTERNA
+#      do container continua 9000. Reinstalação respeita o valor do .env.
 #   2. Instala git se ausente
 #   3. Instala Docker se ausente (get.docker.com) + plugin compose
 #   4. Define o diretório alvo (default /opt/tws-panel; personalize com
@@ -51,7 +62,9 @@
 #      personalize com PAAS_PROJECTS_DIR=<dir> ou --projects-dir=<dir>) e
 #      grava a escolha no .env
 #   5d. Grava no .env o usuário do terminal e o modo escolhidos em 1b
-#   6. docker compose up -d --build (build da imagem + sobe o painel na 9000)
+#   5e. Grava no .env a porta do painel escolhida em 1d
+#   6. docker compose up -d --build (build da imagem + sobe o painel na porta
+#      escolhida em 1d — 9000 por padrão)
 #   7. Imprime a URL do wizard + o token
 #
 # Idempotente: pode ser executado mais de uma vez sem quebrar (uma
@@ -60,8 +73,12 @@
 set -euo pipefail
 
 REPO_URL="${TWS_REPO_URL:-https://github.com/kelvindk9w/tws-panel.git}"
-PORT="${PAAS_PORT:-9000}"
 COMPOSE_FILE="docker-compose.yml"
+
+# Porta padrão do painel na VPS. O container escuta sempre na 9000 por dentro;
+# esta é só a porta publicada no host (docker-compose.yml: "${PAAS_PORT:-9000}:9000").
+DEFAULT_PORT=9000
+PORT="$DEFAULT_PORT"
 
 log()  { printf '\033[1;34m[tws-panel]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[tws-panel][aviso]\033[0m %s\n' "$*" >&2; }
@@ -95,6 +112,15 @@ Uso: $0 [--force] [opções] [diretório-alvo]
                    numa reinstalação, pergunta de novo o usuário e o modo
                    do terminal em vez de reaproveitar o que está no .env.
                    (Informar --terminal-user/--root-mode também substitui.)
+  --port=<número>  em qual porta DA VPS o painel fica disponível
+                   (default: $DEFAULT_PORT, ou \$PAAS_PORT). O instalador
+                   confere se ela está livre e recusa as portas usadas pelo
+                   SSH (22), pelo proxy dos projetos (80, 443) e pelo
+                   servidor de e-mail (25, 465, 587, 143, 993, 8080).
+                   Não confundir com a porta do túnel no SEU computador:
+                   essa você escolhe na hora de abrir o túnel.
+                   Numa instalação já existente, o valor gravado no .env é
+                   respeitado e esta opção só o substitui se for informada.
   --projects-dir=<dir>
                    onde ficam os arquivos dos projetos implantados, NO HOST
                    (default: /opt/tws-projects, ou \$PAAS_PROJECTS_DIR).
@@ -114,10 +140,12 @@ PROJECTS_DIR_ARG=""
 TERMINAL_USER_ARG=""
 ROOT_MODE_ARG=""
 SSH_KEY_ARG=""
+PORT_ARG=""
 RECONFIGURE_TERMINAL=0
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
+    --port=*) PORT_ARG="${arg#*=}" ;;
     --projects-dir=*) PROJECTS_DIR_ARG="${arg#*=}" ;;
     --terminal-user=*) TERMINAL_USER_ARG="${arg#*=}" ;;
     --root-mode=*) ROOT_MODE_ARG="${arg#*=}" ;;
@@ -147,6 +175,120 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo --preserve-env=PAAS_FORCE,PAAS_DIR,PAAS_PORT,PAAS_PROJECTS_DIR,PAAS_TERMINAL_USER,PAAS_ROOT_MODE,PAAS_SSH_KEY,TWS_REPO_URL,SETUP_TOKEN \
     bash "$(readlink -f "$0")" "$@"
 fi
+
+# --- Portas: quem já está escutando nesta VPS ----------------------------------
+# Usado pelo pré-flight (passo 1) e pela escolha da porta do painel (passo 1d).
+#
+# Três fontes, nesta ordem, porque nem toda VPS tem as duas primeiras:
+#   1. ss        — iproute2, presente em qualquer Ubuntu atual. Com -p ainda
+#                  diz QUAL processo escuta (estamos como root neste ponto).
+#   2. netstat   — net-tools; não vem instalado por padrão no Ubuntu desde a
+#                  18.04, mas existe em imagens antigas e em quem o instalou.
+#   3. /proc/net/tcp — o próprio kernel. Não depende de pacote nenhum, então
+#                  SEMPRE há resposta; em troca, não identifica o processo.
+# Sem nenhuma das três (só aconteceria fora do Linux) a verificação é pulada e
+# dito com todas as letras que ela não aconteceu — nunca fingimos que está livre.
+PORT_PROBE=""
+if command -v ss >/dev/null 2>&1; then
+  PORT_PROBE="ss"
+elif command -v netstat >/dev/null 2>&1; then
+  PORT_PROBE="netstat"
+elif [ -r /proc/net/tcp ]; then
+  PORT_PROBE="proc"
+fi
+
+listening_ports() { # imprime uma porta TCP em escuta por linha (pode repetir)
+  case "$PORT_PROBE" in
+    ss)      ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://' ;;
+    netstat) netstat -ltn 2>/dev/null | awk '$1 ~ /^tcp/ {print $4}' | sed 's/.*://' ;;
+    proc)
+      # 4ª coluna = estado; 0A = LISTEN. A porta é a parte hexadecimal depois
+      # do ":" na 2ª coluna (endereço local). printf faz a conversão: nem todo
+      # Ubuntu tem gawk (o mawk padrão não conhece strtonum).
+      awk 'NR > 1 && $4 == "0A" { split($2, a, ":"); print a[2] }' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+        | while read -r hex; do printf '%d\n' "0x$hex" 2>/dev/null || true; done ;;
+    *) return 1 ;;
+  esac
+}
+
+port_in_use() { # port_in_use <porta> — 0 = ocupada, 1 = livre, 2 = não deu para saber
+  [ -n "$PORT_PROBE" ] || return 2
+  listening_ports | grep -qx -- "$1"
+}
+
+# Quem está escutando, em linguagem de gente ("nginx", "o container docker
+# 'loja'"). Vazio quando não dá para descobrir — aí a mensagem só diz que está
+# ocupada, sem inventar culpado.
+port_owner() { # port_owner <porta>
+  local p="$1" name="" container=""
+  case "$PORT_PROBE" in
+    ss)
+      name="$(ss -ltnp 2>/dev/null | awk -v re=":$p\$" '$4 ~ re {print $NF; exit}' \
+        | sed -n 's/.*(("\([^"]*\)".*/\1/p')" ;;
+    netstat)
+      name="$(netstat -ltnp 2>/dev/null | awk -v re=":$p\$" '$4 ~ re {print $NF; exit}' \
+        | sed 's#^[0-9]*/##')" ;;
+  esac
+  # docker-proxy/containerd não dizem nada a quem nunca mexeu numa VPS: se um
+  # container publica a porta, o nome dele é a informação útil.
+  if [ -z "$name" ] || [ "$name" = "docker-proxy" ] || [ "$name" = "containerd" ]; then
+    container="$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null \
+      | grep -F ":$p->" | head -n1 | cut -f1 || true)"
+    [ -n "$container" ] && { printf 'pelo container Docker "%s"' "$container"; return 0; }
+  fi
+  [ -n "$name" ] && printf 'pelo programa "%s"' "$name"
+}
+
+# Porta publicada pelo PRÓPRIO painel (reinstalação não é conflito).
+port_is_own_panel() { # port_is_own_panel <porta>
+  docker ps --filter 'name=^/tws-panel$' --format '{{.Ports}}' 2>/dev/null | grep -q ":$1->"
+}
+
+# Portas que o painel NÃO pode usar, com o motivo em português. Fontes:
+#   22            — o SSH desta VPS; perdê-lo é perder a máquina.
+#   80, 443       — apps/server/src/config.ts (caddyHttpPort/caddyHttpsPort) e
+#                   packages/deploy/src/caddy.ts, que publica "<http>:80" e
+#                   "<https>:443" do proxy que atende os SEUS projetos.
+#   25/465/587/143/993/8080 — packages/core/src/mail.ts (MAIL_DEFAULT_PORTS),
+#                   publicadas pelo container Stalwart do módulo de e-mail.
+port_reserved_reason() { # port_reserved_reason <porta> — vazio = pode usar
+  case "$1" in
+    22)   printf 'é por onde o SSH entra nesta VPS — usá-la aqui te deixaria sem acesso à máquina' ;;
+    80)   printf 'é a porta que o proxy dos seus projetos (Caddy) usa para o HTTP e para emitir os certificados SSL' ;;
+    443)  printf 'é a porta que o proxy dos seus projetos (Caddy) usa para o HTTPS — os sites que você publicar atendem nela' ;;
+    25)   printf 'é a porta de entrega de e-mail (SMTP) do servidor de e-mail do painel' ;;
+    465)  printf 'é a porta de envio com TLS (SMTPS) do servidor de e-mail do painel' ;;
+    587)  printf 'é a porta de envio (submissão) do servidor de e-mail do painel — a que o Outlook/Thunderbird usam' ;;
+    143)  printf 'é a porta de leitura de e-mail (IMAP) do servidor de e-mail do painel' ;;
+    993)  printf 'é a porta de leitura de e-mail com TLS (IMAPS) do servidor de e-mail do painel' ;;
+    8080) printf 'é a porta de administração do servidor de e-mail do painel (Stalwart)' ;;
+  esac
+}
+
+# Porta numérica e dentro do intervalo válido. Rejeita "9000 " com sobra,
+# "0080" (o [ -ge ] do shell leria como octal) e qualquer coisa não numérica.
+valid_port() { # valid_port <valor>
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    0*) return 1 ;;
+  esac
+  [ "${#1}" -le 5 ] || return 1
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+# Primeira porta livre a partir de <inicio>, pulando as reservadas. Vazio se
+# não achar nada na faixa varrida (aí a mensagem não sugere número nenhum).
+suggest_free_port() { # suggest_free_port <inicio>
+  local p="$1" limit=$(( $1 + 200 ))
+  [ "$limit" -gt 65535 ] && limit=65535
+  while [ "$p" -le "$limit" ]; do
+    if [ -z "$(port_reserved_reason "$p")" ] && ! port_in_use "$p"; then
+      printf '%s' "$p"; return 0
+    fi
+    p=$((p + 1))
+  done
+}
 
 # --- 1. Pré-flight check (SOMENTE LEITURA) -------------------------------------
 # Roda ANTES de instalar qualquer coisa. Nada aqui altera o sistema: apenas
@@ -256,26 +398,24 @@ else
   ok "Docker: ausente (será instalado por este script)"
 fi
 
-# Portas em uso: 80/443 (proxy Caddy), 9000 (painel), 25/587/993 (e-mail).
-if command -v ss >/dev/null 2>&1; then
+# Portas que o painel reserva para os SEUS projetos: 80/443 (proxy Caddy) e
+# 25/465/587/143/993/8080 (servidor de e-mail). A porta do painel em si NÃO
+# entra aqui: ela é perguntada no passo 1d, que confere se está livre e oferece
+# outra quando não está — não faz sentido abortar a instalação por algo que a
+# pergunta seguinte resolve.
+RESERVED_PORTS="80 443 25 465 587 143 993 8080"
+if [ -n "$PORT_PROBE" ]; then
   PORTS_IN_USE=""
-  for p in 80 443 9000 25 587 993; do
-    if ss -tuln | awk '{print $5}' | grep -qE "(^|:)${p}$"; then
-      # Na reinstalação, a 9000 ocupada pelo próprio painel não é conflito.
-      if [ "$p" = "9000" ] && [ "$OWN_PANEL" = "1" ] && \
-         docker ps --filter 'name=^/tws-panel$' --format '{{.Ports}}' 2>/dev/null | grep -q ':9000->'; then
-        continue
-      fi
-      PORTS_IN_USE="$PORTS_IN_USE $p"
-    fi
+  for p in $RESERVED_PORTS; do
+    port_in_use "$p" && PORTS_IN_USE="$PORTS_IN_USE $p"
   done
   if [ -n "$PORTS_IN_USE" ]; then
     flag "Portas em uso:$PORTS_IN_USE"
   else
-    ok "Portas 80/443/9000/25/587/993 livres"
+    ok "Portas do proxy e do e-mail (80/443/25/465/587/143/993/8080) livres"
   fi
 else
-  info "Utilitário 'ss' ausente — verificação de portas ignorada."
+  info "Sem 'ss', 'netstat' ou /proc/net/tcp — verificação de portas ignorada."
 fi
 
 # Web servers/serviços conhecidos ativos (podem conflitar com Caddy/Stalwart).
@@ -691,6 +831,154 @@ if [ "$TERMINAL_SOURCE" != "legado" ] && [ "$TERMINAL_USER" != "root" ] && user_
   fi
 fi
 
+# --- 1d. Porta do painel NA VPS ---------------------------------------------------
+# São DUAS portas diferentes, e confundi-las é o erro clássico:
+#   • esta aqui é a porta DA VPS, onde o container publica o painel. O
+#     instalador roda na VPS, então PODE conferir se ela está livre;
+#   • a porta do túnel no COMPUTADOR do operador (o número da esquerda em
+#     `ssh -L <local>:localhost:<vps>`) é outra história: o instalador não
+#     enxerga aquela máquina. Se lá der "Address already in use", basta trocar
+#     o número da esquerda — está explicado no banner final.
+# A porta INTERNA do container é sempre 9000 e não muda: o docker-compose.yml
+# publica "${PAAS_PORT:-9000}:9000".
+#
+# Precedência (igual à das outras escolhas): --port > PAAS_PORT do ambiente >
+# valor já gravado no .env > pergunta (padrão 9000).
+PORT_SOURCE=""          # arg | env | dotenv | pergunta | padrao
+ENV_PORT="$(env_value PAAS_PORT)"
+if [ -n "$PORT_ARG" ]; then
+  PORT="$PORT_ARG"; PORT_SOURCE="arg"
+elif [ -n "${PAAS_PORT:-}" ]; then
+  PORT="${PAAS_PORT}"; PORT_SOURCE="env"
+elif [ -n "$ENV_PORT" ]; then
+  PORT="$ENV_PORT"; PORT_SOURCE="dotenv"
+fi
+
+# check_port <porta> — diz por que a porta não serve e devolve 1. Devolve 0
+# quando ela pode ser usada (podendo ter avisado algo pelo caminho).
+check_port() {
+  local p="$1" motivo dono
+  if ! valid_port "$p"; then
+    say "  ✗ \"$p\" não é uma porta válida. Informe um número inteiro de 1 a 65535 (o padrão é $DEFAULT_PORT)."
+    return 1
+  fi
+  motivo="$(port_reserved_reason "$p")"
+  if [ -n "$motivo" ]; then
+    say "  ✗ A porta $p não pode ser usada pelo painel: $motivo."
+    say "    Escolha outra: qualquer número alto e livre serve (ex.: $DEFAULT_PORT, 9001, 9090)."
+    return 1
+  fi
+  if [ "$p" -lt 1024 ]; then
+    say "  ⚠ A porta $p é uma porta de sistema (abaixo de 1024). Funciona, mas costuma ser disputada"
+    say "    por outros serviços. Se não tiver um motivo para ela, prefira um número alto (ex.: $DEFAULT_PORT)."
+  fi
+  if port_is_own_panel "$p"; then
+    return 0   # reinstalação: quem ocupa é o próprio painel, não é conflito
+  fi
+  local estado=0
+  port_in_use "$p" || estado=$?
+  case "$estado" in
+    0)
+      dono="$(port_owner "$p")"
+      if [ -n "$dono" ]; then
+        say "  ✗ A porta $p já está ocupada nesta VPS $dono."
+      else
+        say "  ✗ A porta $p já está ocupada nesta VPS (não consegui descobrir por qual programa)."
+      fi
+      say "    Duas saídas: escolher outra porta aqui, ou desligar esse programa antes (o instalador"
+      say "    nunca para nada que já existe na máquina)."
+      return 1 ;;
+    2)
+      say "  ⚠ Não consegui conferir se a porta $p está livre (sem 'ss', 'netstat' ou /proc/net/tcp)."
+      say "    Se ela estiver ocupada, o painel vai falhar ao subir no fim da instalação." ;;
+  esac
+  return 0
+}
+
+# Valor vindo de parâmetro/ambiente/.env: valida antes de aceitar.
+if [ -n "$PORT_SOURCE" ]; then
+  case "$PORT_SOURCE" in
+    arg)    origem_porta="parâmetro --port" ;;
+    env)    origem_porta="variável PAAS_PORT" ;;
+    *)      origem_porta="$EARLY_ENV_FILE (instalação anterior)" ;;
+  esac
+  if check_port "$PORT"; then
+    if [ "$PORT_SOURCE" = "dotenv" ]; then
+      info "Porta do painel na VPS: mantendo a $PORT já gravada. Para trocar: --port=<número>"
+    else
+      info "Porta do painel na VPS: $PORT (via $origem_porta)."
+    fi
+  else
+    if [ "$INTERACTIVE" = "1" ] && [ "$FORCE" = "0" ]; then
+      warn "Porta do painel ($origem_porta): $PORT não serve (motivo acima). Vamos escolher de novo."
+      PORT_SOURCE=""
+    else
+      die "Porta do painel ($origem_porta): $PORT não serve (motivo acima). Informe outra com --port=<número>. Nada foi instalado ou alterado."
+    fi
+  fi
+fi
+
+# Sem escolha e sem ninguém para perguntar: fica no padrão, avisando se ele
+# não estiver livre (em automação, quem decide o que fazer é quem chamou).
+if [ -z "$PORT_SOURCE" ] && { [ "$FORCE" = "1" ] || [ "$INTERACTIVE" = "0" ]; }; then
+  PORT="$DEFAULT_PORT"; PORT_SOURCE="padrao"
+  if port_in_use "$PORT" && ! port_is_own_panel "$PORT"; then
+    PORT_ALT="$(suggest_free_port "$((DEFAULT_PORT + 1))")"
+    warn "Porta do painel: a $DEFAULT_PORT (padrão) já está ocupada nesta VPS${PORT_ALT:+ — a $PORT_ALT está livre}."
+    warn "Em automação o instalador não troca sozinho: o painel provavelmente vai falhar ao subir."
+    warn "Rode de novo com --port=<número> (ou PAAS_PORT=<número>) para escolher outra."
+  else
+    info "Porta do painel na VPS: $DEFAULT_PORT (padrão — nenhuma escolha informada)."
+  fi
+fi
+
+# Diálogo interativo.
+if [ -z "$PORT_SOURCE" ]; then
+  PORT_SOURCE="pergunta"
+  say ""
+  say "--------------------------------------------------------------------------------"
+  say "  🔌  Em qual porta DA VPS o painel deve ficar?"
+  say ""
+  say "  Uma porta é o \"número da sala\" onde um programa atende dentro do servidor: dois"
+  say "  programas não podem ocupar a mesma. O painel usa a $DEFAULT_PORT por padrão, e isso serve"
+  say "  para quase todo mundo — só troque se ela já estiver em uso aqui."
+  say ""
+  say "  Esta é a porta DA VPS. A porta do seu computador, na hora de abrir o túnel, é"
+  say "  outra coisa e você escolhe lá — o instalador explica isso no final."
+  say "--------------------------------------------------------------------------------"
+  # A situação da porta padrão é conferida UMA vez: repetir o aviso a cada
+  # tentativa só faria barulho.
+  PORT_SUGGESTION="$DEFAULT_PORT"
+  if port_in_use "$DEFAULT_PORT" && ! port_is_own_panel "$DEFAULT_PORT"; then
+    dono_padrao="$(port_owner "$DEFAULT_PORT")"
+    say ""
+    say "  ⚠ A porta $DEFAULT_PORT (a padrão) já está ocupada nesta VPS${dono_padrao:+ $dono_padrao}."
+    PORT_SUGGESTION="$(suggest_free_port "$((DEFAULT_PORT + 1))")"
+    if [ -n "$PORT_SUGGESTION" ]; then
+      say "    A porta $PORT_SUGGESTION está livre — mas quem escolhe é você."
+    else
+      say "    Não achei nenhuma porta livre logo acima dela; digite a que você quiser."
+    fi
+  fi
+  while :; do
+    say ""
+    if [ -n "$PORT_SUGGESTION" ]; then
+      ask "  Porta do painel na VPS [Enter = $PORT_SUGGESTION]: "
+      [ -z "$ANSWER" ] && ANSWER="$PORT_SUGGESTION"
+    else
+      ask "  Porta do painel na VPS: "
+      if [ -z "$ANSWER" ]; then
+        say "  ✗ Digite um número de porta."
+        continue
+      fi
+    fi
+    check_port "$ANSWER" || continue
+    PORT="$ANSWER"
+    break
+  done
+  log "Porta do painel na VPS: $PORT"
+fi
+
 # Chave SSH do computador do operador — SÓ para imprimir os comandos certos no
 # final. O instalador roda na VPS e não enxerga as chaves do computador da
 # pessoa; o ssh experimenta id_ed25519 e id_rsa sozinho, então só um nome
@@ -906,6 +1194,18 @@ else
   log "Terminal do painel: nenhuma escolha gravada — continua abrindo como root."
 fi
 
+# --- 5e. Porta do painel no .env --------------------------------------------------------
+# O docker-compose.yml publica "${PAAS_PORT:-9000}:9000": só o lado de FORA
+# muda: o painel continua escutando na 9000 dentro do container. Exportamos o
+# valor resolvido porque o `docker compose` dá preferência ao ambiente sobre o
+# .env — um PAAS_PORT antigo no shell não pode vencer a escolha de agora.
+env_set PAAS_PORT "$PORT"
+export PAAS_PORT="$PORT"
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
+fi
+log "Painel publicado na porta $PORT da VPS (gravado em .env; dentro do container continua 9000)"
+
 # --- 6. Build + subida ------------------------------------------------------------------
 log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
 SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build
@@ -955,6 +1255,21 @@ fi
 SSH_KEY_OPT=""
 [ -n "$SSH_KEY" ] && SSH_KEY_OPT="-i ~/.ssh/$SSH_KEY "
 TUNNEL_CMD="ssh ${SSH_KEY_OPT}-L $PORT:localhost:$PORT $TUNNEL_USER@$PUBLIC_IP"
+
+# O túnel tem duas pontas, e a da ESQUERDA é uma porta do computador do
+# operador — que este script não tem como inspecionar. Quando ela já está
+# ocupada lá, o ssh recusa com "Address already in use"; a correção é trocar só
+# aquele número. Não citamos comando para "achar uma porta livre" porque não
+# existe um que funcione igual em Linux, macOS e no PowerShell do Windows.
+LOCAL_ALT=9100
+[ "$PORT" = "9100" ] && LOCAL_ALT=9101
+LOCAL_PORT_NOTE="     Se o ssh recusar com \"bind [127.0.0.1]:$PORT: Address already in use\", a porta
+     ocupada é a do SEU computador (o número da ESQUERDA, antes dos dois-pontos) —
+     não a da VPS. Troque só ele por outro qualquer, por exemplo:
+
+${CYAN}${BOLD}       ssh ${SSH_KEY_OPT}-L $LOCAL_ALT:localhost:$PORT $TUNNEL_USER@$PUBLIC_IP${RESET}
+
+     e abra o navegador em http://localhost:$LOCAL_ALT/... em vez de :$PORT."
 
 # No modo "senha", a senha do sudo passa pelo painel: pelo IP direto ela
 # trafegaria sem criptografia. Reforça isso exatamente onde o link aparece.
@@ -1028,6 +1343,8 @@ claro pela internet.
   1) Numa janela NOVA do terminal, no SEU COMPUTADOR (não na VPS), deixe aberto:
 
 ${CYAN}${BOLD}      $TUNNEL_CMD${RESET}
+
+$LOCAL_PORT_NOTE
 ${TUNNEL_NOTE:+
 $TUNNEL_NOTE
 }
@@ -1058,6 +1375,9 @@ ${BOLD}Perdeu o token? Recupere a qualquer momento com:${RESET}
       sudo docker exec tws-panel cat /data/setup-token
 
 O assistente vai diagnosticar o servidor e guiar o setup.
+
+${BOLD}Porta do painel na VPS:${RESET} $PORT (gravada no .env; dentro do container continua 9000).
+    Para trocar depois: ./scripts/install.sh --port=<número>
 
 ${BOLD}Terminal do painel:${RESET} ${TERMINAL_SUMMARY}
     Para trocar depois: ./scripts/install.sh --reconfigure-terminal

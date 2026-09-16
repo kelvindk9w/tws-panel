@@ -5,7 +5,11 @@
   "arquivoFonte": "apps/server/src/config.ts",
   "tipo": "configuracao",
   "api": [
-    { "simbolo": "loadConfig", "assinatura": "() => ServerConfig", "descricao": "Lê todas as env vars listadas abaixo e monta o objeto ServerConfig decorado em app.config. Chamada uma única vez em buildApp()." }
+    {
+      "simbolo": "loadConfig",
+      "assinatura": "() => ServerConfig",
+      "descricao": "Lê todas as env vars listadas abaixo e monta o objeto ServerConfig decorado em app.config. Chamada uma única vez em buildApp()."
+    }
   ],
   "comportamento": [
     "PORT (config.ts:62) — porta HTTP do Fastify. Default: SETUP_PORT = 9000 (packages/core). Dockerfile fixa PORT=9000.",
@@ -39,15 +43,28 @@
     "DOCKER_GID (docker-compose.yml, produção) — GID do grupo dono de /var/run/docker.sock no host, adicionado ao container via group_add para permitir acesso ao socket sem rodar como root. Default: 999."
   ],
   "usadoPor": [
-    { "referencia": "loadConfig() decorado em app.config", "arquivo": "apps/server/src/app.ts:49,68", "doc": null },
-    { "referencia": "todos os serviços construídos com ServerConfig (DeployService, AuditService, AlertsService, TerminalService, MonitorService, MailService, SecurityService)", "arquivo": "apps/server/src/app.ts", "doc": null },
-    { "referencia": "dev server do frontend (proxy de /api)", "arquivo": "apps/web/vite.config.ts:16", "doc": null }
+    {
+      "referencia": "loadConfig() decorado em app.config",
+      "arquivo": "apps/server/src/app.ts:49,68",
+      "doc": null
+    },
+    {
+      "referencia": "todos os serviços construídos com ServerConfig (DeployService, AuditService, AlertsService, TerminalService, MonitorService, MailService, SecurityService)",
+      "arquivo": "apps/server/src/app.ts",
+      "doc": null
+    },
+    {
+      "referencia": "dev server do frontend (proxy de /api)",
+      "arquivo": "apps/web/vite.config.ts:16",
+      "doc": null
+    }
   ],
   "testes": [
     "apps/server/tests/config.test.ts"
   ],
   "observacoes": [
     "PAAS_PUBLIC_IP é lido em dois lugares independentes (config.ts, para o checklist DNS, e domains.ts diretamente, para a checagem de domínio) — mesma env var, duas leituras separadas de process.env, sem passar pela config compartilhada no segundo caso.",
-    "Não há validação/schema formal das env vars (ex.: zod/env-schema) — valores inválidos (ex.: PORT não numérico) resultam em NaN silencioso em vez de erro de boot explícito."
+    "Não há validação/schema formal das env vars (ex.: zod/env-schema) — valores inválidos (ex.: PORT não numérico) resultam em NaN silencioso em vez de erro de boot explícito.",
+    "PAAS_PORT — porta em que o painel é PUBLICADA no host. docker-compose.yml faz \"${PAAS_PORT:-9000}:9000\": só o lado esquerdo muda; a porta INTERNA do container continua 9000 (environment PORT: \"9000\"). NOVO nesta rodada: o install.sh pergunta a porta (4ª pergunta), confere se está livre na VPS (ss → netstat → /proc/net/tcp, nessa ordem; sem nenhuma das três, diz que não conseguiu conferir em vez de fingir que está livre), nomeia quem ocupa (com o nome do container quando é docker-proxy/containerd) e sugere a primeira livre acima — nunca escolhe sozinho. Recusa 22 (SSH), 80/443 (Caddy dos projetos — caddyHttpPort/caddyHttpsPort) e 25/465/587/143/993/8080 (Stalwart — MAIL_DEFAULT_PORTS): escolher uma delas quebraria o proxy ou o e-mail semanas depois, longe da causa. Abaixo de 1024 só avisa. Precedência: --port= > PAAS_PORT do ambiente > .env > pergunta; o valor resolvido é exportado antes do compose, porque o compose prefere o ambiente ao .env. ATENÇÃO à confusão que motivou isso: a porta do túnel SSH tem DOIS lados. `ssh -L <local>:localhost:<vps>` — 'Address already in use' é a porta do COMPUTADOR do operador (lado esquerdo), que o instalador não tem como conhecer; 'Connection refused' é a da VPS (lado direito). Os dois números não precisam ser iguais."
   ]
 }
