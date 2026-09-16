@@ -759,8 +759,11 @@ cd /opt/tws-panel && git checkout main
 
 > [!NOTE]
 > **🩺 Pré-flight check:** antes de instalar qualquer coisa, o instalador faz verificações
-> **somente-leitura** (SO, RAM/disco, Docker e containers em execução, portas 80/443/9000/25/587/993
-> e serviços como nginx, apache, caddy, postfix, mysql e postgres) e exibe um relatório. Se a VPS já
+> **somente-leitura** (SO, RAM/disco, Docker e containers em execução, as portas que o painel
+> reserva para os seus projetos — 80/443 do proxy e 25/465/587/143/993/8080 do e-mail — e serviços
+> como nginx, apache, caddy, postfix, mysql e postgres) e exibe um relatório. A porta do painel em
+> si não entra nessa lista: ela é escolhida logo depois, numa pergunta que já confere se está
+> livre. Se a VPS já
 > estiver em uso, ele avisa que o painel foi feito para uma VPS limpa e pede confirmação explícita
 > (digite `continuar`) — ou use `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele
 > **nunca remove nem para** nada que já exista na máquina.
@@ -778,7 +781,7 @@ sozinha, sem pedir nada:
   ✓ Disco livre em /: 23 GB
   ✓ Docker: ausente (será instalado por este script)
   ✓ Nenhum container Docker em execução
-  ✓ Portas 80/443/9000/25/587/993 livres
+  ✓ Portas do proxy e do e-mail (80/443/25/465/587/143/993/8080) livres
 [tws-panel] Máquina limpa detectada ✓ — prosseguindo com a instalação.
 ```
 
@@ -826,8 +829,8 @@ Digite "continuar" para prosseguir:
 
 <a id="terminal-do-painel"></a>
 
-**Logo depois do pré-flight, o instalador faz três perguntas.** Elas decidem como o **terminal ao
-vivo do painel** trabalha — é nele que a varredura de segurança e o hardening rodam:
+**Logo depois do pré-flight, o instalador faz quatro perguntas.** As duas primeiras decidem como o
+**terminal ao vivo do painel** trabalha — é nele que a varredura de segurança e o hardening rodam:
 
 1. **Com qual usuário o terminal abre.** Ele mostra os usuários da VPS que têm permissão de
    administrador, mas **quem digita o nome é você** — mesmo que só exista um. Digite o usuário
@@ -837,11 +840,40 @@ vivo do painel** trabalha — é nele que a varredura de segurança e o hardenin
    precisar de administrador, o painel usa o `sudo` dentro do terminal e **você digita a sua
    senha ali**, como faria por SSH. A outra opção, `2` (segundo-plano), não pede senha: esses
    comandos rodam como root por trás, e você confere depois na tela de **Auditoria**.
-3. **Qual chave SSH você usa** (opcional). Usou `id_ed25519` ou `id_rsa` no Passo 4? Só aperte
+3. **Em qual porta da VPS o painel fica.** O padrão é **9000** e serve para quase todo mundo — é só
+   apertar Enter. O instalador **confere antes se essa porta está livre nesta VPS**: se já houver
+   algo nela, ele diz qual programa (ou qual container) está usando, oferece uma porta livre como
+   sugestão e pergunta de novo — mas quem escolhe é você, ele nunca troca sozinho. Algumas portas
+   são recusadas porque quebrariam o próprio produto: **22** (é por onde o SSH entra), **80** e
+   **443** (o proxy que publica os seus sites com SSL) e **25, 465, 587, 143, 993 e 8080** (o
+   servidor de e-mail). Essa é a porta **da VPS** — a porta do túnel no seu computador é outra
+   coisa, explicada [logo abaixo](#duas-portas).
+4. **Qual chave SSH você usa** (opcional). Usou `id_ed25519` ou `id_rsa` no Passo 4? Só aperte
    Enter. É só para o comando de acesso impresso no final já sair pronto para copiar.
 
-Se o usuário não servir (não existe, está sem senha, não tem `sudo`…), o instalador explica o que
-fazer e pergunta de novo. Nada é instalado antes de você responder.
+Se o usuário não servir (não existe, está sem senha, não tem `sudo`…), ou se a porta estiver
+ocupada, o instalador explica o que fazer e pergunta de novo. Nada é instalado antes de você
+responder.
+
+<details>
+<summary>🔌 <strong>Quero instalar sem responder nada (automação) — como escolho a porta?</strong></summary>
+
+Passe direto na linha de comando:
+
+```bash
+./scripts/install.sh --port=9500 --terminal-user=SEU_USUARIO --root-mode=senha
+```
+
+Vale também a variável de ambiente `PAAS_PORT=9500`. A ordem de prioridade é: `--port=` primeiro,
+depois `PAAS_PORT`, depois o valor já gravado no `.env` por uma instalação anterior, e só então a
+pergunta (padrão 9000).
+
+Sem terminal para responder (ou com `--force`), o instalador **não escolhe outra porta sozinho**:
+fica na 9000 e, se ela estiver ocupada, avisa em destaque que o painel provavelmente vai falhar ao
+subir — para você rodar de novo com `--port=`. Numa reinstalação, a porta que você escolheu da
+primeira vez é mantida sem perguntar de novo.
+
+</details>
 
 <details>
 <summary>🔑 <strong>Senha ou segundo plano? O que acontece em cada um, sem letras miúdas</strong></summary>
@@ -937,7 +969,35 @@ primeira vez é mantido sem perguntar de novo — para trocar, veja
 > **Acesso direto pelo link do IP** só é tolerável em ambiente de teste descartável, cuja senha
 > de admin você não vai reaproveitar em lugar nenhum.
 
-**8. Abra o painel** — pelo túnel SSH acima (recomendado) ou, se aceitar o risco descrito acima, direto em `http://SEU_IP:9000` — cole o **setup token** exibido no terminal e siga o wizard:
+<a id="duas-portas"></a>
+
+> [!TIP]
+> **O túnel tem duas pontas, e elas são portas diferentes.** No comando
+> `ssh -L 9000:localhost:9000 ...`, os dois números parecem iguais, mas não são a mesma coisa:
+>
+> ```text
+> ssh -L 9000 : localhost : 9000  SEU_USUARIO@SEU_IP
+>      ─┬──              ─┬──
+>       │                 └── porta DA VPS: onde o painel atende. É a que você escolheu
+>       │                     na instalação (padrão 9000), gravada no .env.
+>       └── porta DO SEU COMPUTADOR: a "boca" do túnel na sua máquina. É essa que
+>           você digita no navegador, depois de localhost:.
+> ```
+>
+> Elas **não precisam ser iguais**. Usar o mesmo número dos dois lados é só um costume que deixa
+> o comando fácil de ler. Se a porta do seu computador já estiver ocupada por outro programa (é
+> comum: `9000` é usada por vários ambientes de desenvolvimento), **troque só o número da
+> esquerda** e abra o navegador nele:
+>
+> ```bash
+> ssh -L 9100:localhost:9000 SEU_USUARIO@SEU_IP
+> # e no navegador: http://localhost:9100/?token=SEU_TOKEN
+> ```
+>
+> O instalador não tem como adivinhar o que está ocupado no seu computador — ele roda na VPS e
+> só enxerga a VPS. Por isso a porta da esquerda é sempre escolha sua, na hora de abrir o túnel.
+
+**8. Abra o painel** — pelo túnel SSH acima (recomendado) ou, se aceitar o risco descrito acima, direto em `http://SEU_IP:9000` (troque `9000` pela porta que você escolheu na instalação) — cole o **setup token** exibido no terminal e siga o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -1051,6 +1111,14 @@ Recomendado — acesse por túnel SSH.
 
       ssh -L 9000:localhost:9000 SEU_USUARIO@203.0.113.10
 
+     Se o ssh recusar com "bind [127.0.0.1]:9000: Address already in use", a porta
+     ocupada é a do SEU computador (o número da ESQUERDA, antes dos dois-pontos) —
+     não a da VPS. Troque só ele por outro qualquer, por exemplo:
+
+       ssh -L 9100:localhost:9000 SEU_USUARIO@203.0.113.10
+
+     e abra o navegador em http://localhost:9100/... em vez de :9000.
+
   2) Com essa janela aberta, abra no navegador:
 
       http://localhost:9000/?token=<seu-token-de-48-caracteres>
@@ -1084,6 +1152,16 @@ sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
 
 **Erros comuns:**
 
+- **`bind [127.0.0.1]:9000: Address already in use`** (ao abrir o túnel) — a porta ocupada é a
+  **do seu computador**, não a da VPS: o número da **esquerda** no `ssh -L`. Algum programa seu já
+  está usando a 9000 (é comum em quem programa). Troque só esse número e abra o navegador nele:
+  `ssh -L 9100:localhost:9000 SEU_USUARIO@SEU_IP`, depois `http://localhost:9100/?token=...`.
+  Qualquer número alto e livre serve — 9100, 9300, 12345. Entenda as
+  [duas portas do túnel](#duas-portas).
+- **`channel 2: open failed: connect failed: Connection refused`** (o túnel abre, mas o navegador
+  diz que não conseguiu conectar) — aí é o outro lado: o número da **direita** não bate com a porta
+  em que o painel está na VPS. Confira com `sudo ./scripts/show-token.sh`, que imprime o comando
+  já com a porta certa.
 - **`permission denied while trying to connect to the Docker daemon socket`** — faltou o `sudo`
   na frente do comando. É de propósito: o painel não coloca ninguém no grupo docker (veja
   [o porquê](#grupo-docker)).
@@ -1163,6 +1241,33 @@ segura de sempre. Se preferir não responder nada, informe direto:
 > antes. Rodar o instalador de novo de forma interativa faz a pergunta — e, se quiser manter tudo
 > como está, basta responder `root`.
 
+<a id="trocar-porta"></a>
+
+### Trocar a porta do painel na VPS
+
+A porta em que o painel atende **na VPS** é a que você escolheu na instalação (padrão `9000`) e
+fica gravada na linha `PAAS_PORT=` do `.env` de `/opt/tws-panel`. Para trocar, rode o instalador
+de novo informando a nova:
+
+```bash
+cd /opt/tws-panel
+./scripts/install.sh --port=9500
+```
+
+Ele confere se a porta nova está livre, recusa as que quebrariam o painel (22, 80, 443 e as do
+e-mail), recria o container e imprime o comando de túnel já com o número certo. Seus projetos,
+domínios, e-mail e a conta de administrador não são tocados.
+
+> [!NOTE]
+> Só a porta **de fora** muda. Dentro do container o painel continua atendendo na 9000 — é o
+> `docker-compose.yml` que faz a ligação (`"${PAAS_PORT:-9000}:9000"`). Por isso não adianta
+> editar o `.env` e dar `restart`: um container só pega uma publicação de porta nova quando é
+> recriado (`sudo docker compose up -d`).
+
+> [!TIP]
+> Se o problema é a porta ocupada **no seu computador** na hora de abrir o túnel, não mexa aqui:
+> troque só o número da esquerda do `ssh -L`. Veja [as duas portas do túnel](#duas-portas).
+
 ### Comandos úteis (produção)
 
 ```bash
@@ -1173,6 +1278,7 @@ sudo docker compose up -d --build # atualizar para uma nova versão (git pull an
 sudo ./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
 sudo ./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)
 ./scripts/install.sh --reconfigure-terminal   # troca o usuário/modo do terminal do painel
+./scripts/install.sh --port=9500              # troca a porta do painel na VPS
 ./scripts/uninstall.sh --dry-run              # mostra o que a remoção do painel apagaria
 ```
 
@@ -1229,7 +1335,7 @@ tws-panel/
 ├── examples/                    # apps de exemplo para deploy (apenas testes)
 ├── docs/                        # specs, guias de produção e troubleshooting
 ├── Dockerfile                   # build multi-stage do painel (produção)
-├── docker-compose.yml           # produção: painel na porta 9000
+├── docker-compose.yml           # produção: painel em PAAS_PORT (padrão 9000)
 └── docker-compose.dev.yml       # dev local com hot reload
 ```
 

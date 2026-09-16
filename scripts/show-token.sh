@@ -9,13 +9,12 @@
 #   ./scripts/show-token.sh
 #
 # Variáveis opcionais:
-#   PAAS_PORT=9000        porta publicada do painel
+#   PAAS_PORT=9000        porta do painel NA VPS (vence o valor gravado no .env)
 #   PAAS_VOLUME=paas_data nome do volume de dados
 #   PAAS_PUBLIC_IP=<ip>   pula a detecção automática de IP público
 # =============================================================================
 set -euo pipefail
 
-PORT="${PAAS_PORT:-9000}"
 VOLUME_NAME="${PAAS_VOLUME:-paas_data}"
 
 if [ -t 1 ]; then
@@ -52,6 +51,12 @@ env_value() {
 }
 TERMINAL_USER="$(env_value PAAS_TERMINAL_USER)"
 ROOT_MODE="$(env_value PAAS_ROOT_MODE)"
+
+# Porta do painel NA VPS: a mesma fonte e a mesma precedência do usuário do
+# túnel — PAAS_PORT do ambiente > o que o instalador gravou no .env > 9000.
+# Sem isso, quem instalou em outra porta veria aqui um link que não abre.
+PORT="${PAAS_PORT:-$(env_value PAAS_PORT)}"
+PORT="${PORT:-9000}"
 if [ -n "$TERMINAL_USER" ] && [ "$TERMINAL_USER" != "root" ]; then
   TUNNEL_USER="$TERMINAL_USER"
 else
@@ -71,6 +76,10 @@ fi
 SUDO_NOTE=""
 [ "$ROOT_MODE" = "senha" ] && SUDO_NOTE=", assim como a senha do sudo que você digitar no terminal do painel"
 
+# Porta alternativa citada quando a ponta local do túnel estiver ocupada.
+LOCAL_ALT=9100
+[ "$PORT" = "9100" ] && LOCAL_ALT=9101
+
 printf '\a'
 cat <<EOF
 
@@ -85,6 +94,11 @@ ${BOLD}👉  Abra o painel no navegador${RESET}
 ${BOLD}Recomendado — por túnel SSH.${RESET} Numa janela NOVA, no SEU COMPUTADOR, deixe aberto:
 
 ${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP${RESET}
+
+      Se o ssh recusar com "bind [127.0.0.1]:$PORT: Address already in use", a porta
+      ocupada é a do SEU computador (o número da ESQUERDA), não a da VPS. Troque só
+      ele — por exemplo ssh -L $LOCAL_ALT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP — e abra o
+      navegador em http://localhost:$LOCAL_ALT/... em vez de :$PORT.
 
 E então acesse:
 
