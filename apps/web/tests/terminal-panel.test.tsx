@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 interface MockTerm {
   write: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  reset: ReturnType<typeof vi.fn>;
   onData: (cb: (data: string) => void) => { dispose: () => void };
   fireData: (data: string) => void;
   cols: number;
@@ -39,6 +40,7 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     write = vi.fn();
     focus = vi.fn();
+    reset = vi.fn();
     open = vi.fn();
     loadAddon = vi.fn();
     dispose = vi.fn();
@@ -123,7 +125,7 @@ let fakeLocation: {
 vi.mock("@/lib/page-location", () => ({ pageLocation: () => fakeLocation }));
 
 import type { HostDockerAccess, TerminalElevation, TerminalInfoResponse, TerminalControlMessage } from "@paas/core";
-import { encodeTerminalControl } from "@paas/core";
+import { TERMINAL_SUDO_CANCEL_REQUEST, encodeTerminalControl } from "@paas/core";
 import { TerminalPanel, TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { setSetupToken } from "@/lib/api";
 
@@ -615,17 +617,92 @@ describe("TerminalPanel — alerta de senha do sudo", () => {
     return screen.findByTestId("sudo-password-alert");
   }
 
-  it("aparece com o nome do usuário e o texto de transparência, sem campo de senha", async () => {
+  it("aparece com o nome do usuário, um campo de senha e o texto de transparência", async () => {
     const alerta = await pedirSenha();
-    expect(alerta).toHaveTextContent(/Digite a senha do usuário kelvin no terminal abaixo e pressione Enter/);
-    expect(alerta).toHaveTextContent(/não aparecem enquanto você digita/i);
-    expect(alerta).toHaveTextContent(/isso é normal/i);
+    expect(alerta).toHaveTextContent(/Digite a senha do usuário kelvin/);
     expect(alerta).toHaveTextContent(/passa pelo painel e chega ao terminal da sua VPS/i);
     expect(alerta).toHaveTextContent(/não grava, não registra e não envia essa senha para nenhum outro lugar/i);
     expect(alerta).toHaveTextContent(/código é aberto/i);
-    // a senha é digitada no xterm — o alerta não coleta nada
-    expect(alerta.querySelector("input, textarea")).toBeNull();
-    expect(document.querySelector('input[type="password"]')).toBeNull();
+    const campo = screen.getByLabelText(/Senha de kelvin/);
+    expect(campo).toHaveAttribute("type", "password");
+    expect(campo).toHaveAttribute("autocomplete", "off");
+    expect(alerta).toContainElement(campo);
+    // quem preferir continua podendo digitar direto no terminal
+    expect(alerta).toHaveTextContent(/ou digite direto no terminal/i);
+  });
+
+  /**
+   * Defeito de campo: o pedido apareceu e nenhuma tecla chegou ao terminal
+   * (foco fora do xterm, e a senha não aparece enquanto se digita). O campo
+   * no alerta tira a dependência de foco — e a senha segue o MESMO caminho
+   * de antes: vai ao WS como input do terminal, nada é guardado.
+   */
+  it("Enviar manda a senha + Enter pelo WS do terminal, limpa o campo e não guarda nada", async () => {
+    await pedirSenha();
+    const campo = screen.getByLabelText(/Senha de kelvin/) as HTMLInputElement;
+    fireEvent.change(campo, { target: { value: "minha-senha" } });
+    fireEvent.click(screen.getByRole("button", { name: /Enviar senha/ }));
+    expect(lastWs().sent).toContain("minha-senha\r");
+    expect(campo.value).toBe("");
+    expect(screen.getByTestId("sudo-password-alert")).toHaveTextContent(/Senha enviada.*conferindo/i);
+    expect(document.body.textContent).not.toContain("minha-senha");
+    expect(JSON.stringify({ ...sessionStorage, ...localStorage })).not.toContain("minha-senha");
+  });
+
+  it("Enter no campo também envia", async () => {
+    await pedirSenha();
+    const campo = screen.getByLabelText(/Senha de kelvin/);
+    fireEvent.change(campo, { target: { value: "outra" } });
+    fireEvent.submit(campo.closest("form")!);
+    expect(lastWs().sent).toContain("outra\r");
+  });
+
+  it("campo vazio não envia nada", async () => {
+    await pedirSenha();
+    const antes = lastWs().sent.length;
+    fireEvent.click(screen.getByRole("button", { name: /Enviar senha/ }));
+    expect(lastWs().sent).toHaveLength(antes);
+  });
+
+  it("senha recusada: o campo volta vazio, com o aviso, pronto para tentar de novo", async () => {
+    await pedirSenha();
+    const campo = screen.getByLabelText(/Senha de kelvin/);
+    fireEvent.change(campo, { target: { value: "errada" } });
+    fireEvent.click(screen.getByRole("button", { name: /Enviar senha/ }));
+    control({ type: "sudo-password-prompt-closed", outcome: "rejected" });
+    control({ type: "sudo-password-requested", user: "kelvin" });
+    expect(screen.getByTestId("sudo-password-alert")).toHaveTextContent(/Senha incorreta, tente de novo/i);
+    expect(screen.getByTestId("sudo-password-alert")).not.toHaveTextContent(/conferindo/i);
+    expect(screen.getByRole("button", { name: /Enviar senha/ })).toBeEnabled();
+  });
+
+  it("sem prazo: diz que o pedido espera até a pessoa enviar ou cancelar", async () => {
+    const alerta = await pedirSenha();
+    expect(alerta).toHaveTextContent(/fica aberto até você enviar a senha ou cancelar/i);
+  });
+
+  it("Cancelar pede ao servidor para encerrar o pedido (não digita nada no terminal)", async () => {
+    await pedirSenha();
+    fireEvent.click(screen.getByRole("button", { name: /^Cancelar/ }));
+    expect(lastWs().sent).toContain(TERMINAL_SUDO_CANCEL_REQUEST);
+    expect(lastWs().sent).not.toContain("\x03");
+  });
+
+  it("cancelled: diz que foi a pessoa que cancelou e que nada rodou como root", async () => {
+    await pedirSenha();
+    control({ type: "sudo-password-prompt-closed", outcome: "cancelled" });
+    const alerta = screen.getByTestId("sudo-password-alert");
+    expect(alerta).toHaveTextContent(/Você cancelou o pedido de senha/i);
+    expect(alerta).toHaveTextContent(/nada foi executado como root/i);
+    expect(screen.queryByLabelText(/Senha de kelvin/)).not.toBeInTheDocument();
+  });
+
+  it("idle nunca é escrito no xterm e fecha um pedido que já não vale", async () => {
+    await pedirSenha();
+    lastTerm().write.mockClear();
+    control({ type: "sudo-password-idle" });
+    expect(lastTerm().write).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("sudo-password-alert")).not.toBeInTheDocument();
   });
 
   it("sem nome no pedido, usa o usuário da sessão", async () => {
@@ -633,11 +710,11 @@ describe("TerminalPanel — alerta de senha do sudo", () => {
     expect(alerta).toHaveTextContent(/senha do usuário kelvin/);
   });
 
-  it("expande o terminal, pulsa e dá o foco ao xterm para digitar direto", async () => {
+  it("expande o terminal, pulsa e põe o cursor no campo de senha", async () => {
     await pedirSenha();
     expect(screen.getByTestId("terminal-container")).toBeVisible();
     expect(screen.getByRole("button", { name: /Terminal do servidor/ }).className).toContain("animate-pulse");
-    await waitFor(() => expect(lastTerm().focus).toHaveBeenCalled());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(/Senha de kelvin/)));
   });
 
   it("o alerta não cobre o terminal: fica ANTES dele no fluxo, não é um diálogo", async () => {
@@ -862,14 +939,14 @@ describe("TerminalPanel — contagem regressiva e aviso impossível de perder", 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("clicar no aviso fixo leva ao terminal: expande e devolve o foco ao xterm", async () => {
+  it("clicar no aviso fixo leva ao alerta: expande e põe o cursor no campo de senha", async () => {
     sessionStorage.setItem("paas.terminal.open", "0");
     await pedirComPrazo();
-    lastTerm().focus.mockClear();
+    (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.click(screen.getByTestId("sudo-password-banner-action"));
     await avancar(1);
     expect(screen.getByTestId("terminal-container")).toBeVisible();
-    expect(lastTerm().focus).toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByLabelText(/Senha de kelvin/));
   });
 
   it("o aviso fixo some quando o pedido termina", async () => {
@@ -896,12 +973,43 @@ describe("TerminalPanel — contagem regressiva e aviso impossível de perder", 
     expect(document.title).toBe("TWS Panel — Setup");
   });
 
-  it("queda do WebSocket com o pedido aberto: aviso fixo, contagem e título somem juntos", async () => {
-    document.title = "TWS Panel — Setup";
-    await pedirComPrazo();
+  /**
+   * Defeito de campo: a conexão do terminal caiu no meio do pedido e o alerta
+   * sumiu — com a pessoa possivelmente digitando. Agora o alerta fica, diz que
+   * a conexão caiu e não deixa enviar; ao reconectar, o servidor diz se o
+   * pedido ainda vale (requested) ou não (idle).
+   */
+  it("queda do WebSocket com o pedido aberto: o alerta FICA, avisa da queda e não deixa enviar", async () => {
+    await pedirComPrazo(null);
+    const campo = screen.getByLabelText(/Senha de kelvin/);
+    fireEvent.change(campo, { target: { value: "digitando" } });
     act(() => lastWs().serverClose(1006));
+    const alerta = screen.getByTestId("sudo-password-alert");
+    expect(alerta).toHaveTextContent(/conexão com o terminal caiu/i);
+    expect(screen.getByRole("button", { name: /Enviar senha/ })).toBeDisabled();
+    expect(screen.getByTestId("sudo-password-banner")).toBeInTheDocument();
+    expect((screen.getByLabelText(/Senha de kelvin/) as HTMLInputElement).value).toBe("digitando");
+  });
+
+  it("reconectou e o pedido ainda vale: o alerta volta a aceitar a senha", async () => {
+    await pedirComPrazo(null);
+    act(() => lastWs().serverClose(1006));
+    await avancar(2_100); // backoff de reconexão
+    act(() => lastWs().serverOpen());
+    control({ type: "sudo-password-requested", user: "kelvin" });
+    expect(screen.getByRole("button", { name: /Enviar senha/ })).toBeEnabled();
+    expect(screen.getByTestId("sudo-password-alert")).not.toHaveTextContent(/conexão com o terminal caiu/i);
+  });
+
+  it("reconectou e não há mais pedido (idle): alerta, aviso fixo e título somem", async () => {
+    document.title = "TWS Panel — Setup";
+    await pedirComPrazo(null);
+    act(() => lastWs().serverClose(1006));
+    await avancar(2_100);
+    act(() => lastWs().serverOpen());
+    control({ type: "sudo-password-idle" });
+    expect(screen.queryByTestId("sudo-password-alert")).not.toBeInTheDocument();
     expect(screen.queryByTestId("sudo-password-banner")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("sudo-countdown")).not.toBeInTheDocument();
     expect(document.title).toBe("TWS Panel — Setup");
   });
 });
@@ -983,5 +1091,44 @@ describe("TerminalPanel — usuário com acesso ao Docker do host", () => {
     render(<TerminalPanel enabled={true} info={null} />);
     expect(screen.queryByTestId("terminal-docker-group-warning")).not.toBeInTheDocument();
     expect(screen.queryByTestId("terminal-docker-unverified")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Defeito de campo: com a conexão caída, o que a pessoa digitava no terminal
+ * era descartado em silêncio. E, ao reconectar, o histórico reenviado pelo
+ * servidor era escrito POR CIMA do que já estava na tela (linhas duplicadas
+ * e cortadas no print do operador).
+ */
+describe("TerminalPanel — conexão caída e reconexão", () => {
+  it("digitar com a conexão caída avisa que NÃO foi enviado (uma vez por queda)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      act(() => lastWs().serverClose(1006));
+      lastTerm().write.mockClear();
+      act(() => lastTerm().fireData("a"));
+      act(() => lastTerm().fireData("b"));
+      expect(screen.getByTestId("terminal-input-dropped")).toHaveTextContent(/não foi enviado/i);
+      const avisos = lastTerm().write.mock.calls.filter(([t]) => String(t).includes("não foi enviado"));
+      expect(avisos).toHaveLength(1);
+      // reconectou: o aviso some
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_100);
+      });
+      act(() => lastWs().serverOpen());
+      expect(screen.queryByTestId("terminal-input-dropped")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ao (re)conectar, a tela é limpa antes do histórico do servidor (sem duplicar linhas)", async () => {
+    render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+    await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
+    expect(lastTerm().reset).toHaveBeenCalledTimes(1);
   });
 });

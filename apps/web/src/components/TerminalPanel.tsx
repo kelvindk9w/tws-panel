@@ -52,11 +52,16 @@
  *  - frames de controle do servidor (prefixo "\u0000paas-control:", decodificados
  *    com parseTerminalControl) NUNCA são escritos no xterm;
  *  - pedido de senha do sudo (sudo-password-requested): expande, pulsa, rola
- *    o painel para o centro da tela e dá FOCO ao xterm. O alerta fica ACIMA do
- *    terminal, dentro da janela, sem sobrepor a área de digitação — um modal
- *    no meio da tela cobriria o terminal e roubaria o foco. Ele NÃO tem campo
- *    de senha: a senha é digitada no xterm e segue o relay puro; o painel não
- *    lê, não guarda e não inspeciona o que é digitado. Texto de transparência
+ *    o painel para o centro da tela e põe o cursor no CAMPO DE SENHA do alerta.
+ *    O alerta fica ACIMA do terminal, dentro da janela, sem sobrepor a área de
+ *    digitação. O campo existe por um defeito de campo: o pedido apareceu e
+ *    nenhuma tecla chegou ao terminal (foco fora do xterm, e a senha não
+ *    aparece enquanto se digita). "Enviar" manda a senha + Enter pelo MESMO
+ *    caminho do teclado (sendInput → WS → PTY): nada é guardado, o campo é
+ *    esvaziado no envio e continua sendo possível digitar direto no xterm.
+ *    "Cancelar" pede ao servidor que encerre o sudo (TERMINAL_SUDO_CANCEL_REQUEST).
+ *    O painel NÃO desiste sozinho: sem prazo configurado no servidor, o pedido
+ *    fica aberto até a pessoa enviar ou cancelar. Texto de transparência
  *    obrigatório (por onde a senha passa e o que o painel não faz com ela) e
  *    o texto diz DE QUEM é a senha: a do usuário do terminal, a mesma do sudo
  *    por SSH — não a do root (o operador entendeu o contrário em campo);
@@ -87,13 +92,19 @@
  *    daqui para a frente — e o que significa seguir agora mesmo assim. Não
  *    bloqueia a digitação: a decisão é do operador;
  *  - desfechos do prompt: rejected mantém o alerta com "senha incorreta";
- *    answered/session-ended fecham; exhausted/not-permitted/timeout trocam o
- *    pedido por uma explicação acionável até o operador dispensar;
+ *    answered/session-ended fecham; exhausted/not-permitted/timeout/cancelled
+ *    trocam o pedido por uma explicação acionável até o operador dispensar;
  *  - modo segundo-plano: indicador discreto do comando root em execução
  *    (background-exec start/end); a saída espelhada chega como frame comum;
- *  - ao cair o WebSocket, alerta de senha e indicador são limpos: o servidor
- *    reenvia o pedido de senha a quem reconecta com o prompt aberto, e um
- *    indicador antigo poderia afirmar algo que já terminou;
+ *  - ao cair o WebSocket, o alerta de senha FICA (a pessoa pode estar
+ *    digitando), diz que a conexão caiu e trava o envio; ao reconectar o
+ *    servidor diz o estado — pedido aberto (requested) ou nenhum (idle). O
+ *    indicador de segundo plano é limpo (poderia afirmar algo que já terminou);
+ *  - com a conexão caída, o que se digita no xterm NÃO é enviado — e isso é
+ *    dito (aviso visível e uma linha no terminal), em vez de sumir calado;
+ *  - ao (re)conectar a tela é limpa ANTES do histórico que o servidor reenvia:
+ *    sem isso o histórico era escrito por cima do que já estava na tela
+ *    (linhas duplicadas e cortadas, visto em campo);
  *  - altura colapsável/expansível, estado persistido em sessionStorage;
  *  - alerta pulsante (evento "paas:terminal-attention") quando uma fase
  *    precisa de ação no terminal — o painel se expande sozinho;
@@ -104,11 +115,12 @@
  *    NÃO reconecta: sem isso duas abas disputavam a sessão em ping-pong
  *    infinito (~1 conexão/1.5s) e derrubavam execuções em andamento.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {
+  TERMINAL_SUDO_CANCEL_REQUEST,
   isValidSshUsername,
   parseTerminalControl,
   type SudoPromptOutcome,
@@ -209,7 +221,7 @@ interface TerminalPanelProps {
 }
 
 /** Desfechos do prompt do sudo que exigem explicação (não fecham sozinhos). */
-type SudoFailureOutcome = Extract<SudoPromptOutcome, "exhausted" | "not-permitted" | "timeout">;
+type SudoFailureOutcome = Extract<SudoPromptOutcome, "exhausted" | "not-permitted" | "timeout" | "cancelled">;
 
 type SudoAlert =
   /**
@@ -229,6 +241,8 @@ type SudoAlert =
       seq: number;
       expiresAt: number | null;
       totalMs: number | null;
+      /** A senha foi enviada pelo campo e o sudo ainda não respondeu. */
+      sent: boolean;
     }
   /** O sudo desistiu / não pode / o painel cansou de esperar. */
   | { kind: "failed"; user: string | null; outcome: SudoFailureOutcome };
@@ -259,6 +273,10 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptsRef = useRef(0);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  /** Já avisamos, nesta queda, que o que se digita não está sendo enviado. */
+  const droppedNoticeRef = useRef(false);
+  const [inputDropped, setInputDropped] = useState(false);
 
   /**
    * ÚNICO caminho de input do painel: o que o operador digita no xterm e o
@@ -267,7 +285,20 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
    * ouro do relay puro; ver apps/server/src/services/terminal-service.ts).
    */
   const sendInput = useCallback((data: string) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(data);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(data);
+      return;
+    }
+    // Conexão caída: o que foi digitado NÃO chega à VPS. Dizer isso (uma vez
+    // por queda), em vez de descartar calado — foi assim que uma senha se
+    // perdeu em campo sem ninguém perceber.
+    if (!droppedNoticeRef.current) {
+      droppedNoticeRef.current = true;
+      termRef.current?.write(
+        "\r\n\x1b[31m[painel] sem conexão com a VPS — o que você digitou não foi enviado. Reconectando…\x1b[0m\r\n",
+      );
+      setInputDropped(true);
+    }
   }, []);
 
   /**
@@ -286,6 +317,7 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
           // duração → instante LOCAL (ver o comentário do tipo SudoAlert)
           expiresAt: typeof msg.remainingMs === "number" ? Date.now() + msg.remainingMs : null,
           totalMs: typeof msg.timeoutMs === "number" ? msg.timeoutMs : null,
+          sent: false,
         }));
         setAttention(true);
         setOpen(true);
@@ -304,6 +336,7 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
                 // até lá, segue valendo o que já estava correndo
                 expiresAt: prev?.kind === "prompt" ? prev.expiresAt : null,
                 totalMs: prev?.kind === "prompt" ? prev.totalMs : null,
+                sent: false,
               };
             case "answered":
             case "session-ended":
@@ -312,6 +345,11 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
               return { kind: "failed", user, outcome: msg.outcome };
           }
         });
+        return;
+      case "sudo-password-idle":
+        // Nenhum pedido aberto no servidor (enviado a quem reconecta): um
+        // alerta de pedido que ficou da conexão anterior já não vale.
+        setSudoAlert((prev) => (prev?.kind === "prompt" ? null : prev));
         return;
       case "background-exec":
         setBackgroundCommand(msg.state === "start" ? msg.command : null);
@@ -350,6 +388,11 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
       wsRef.current = ws;
       ws.onopen = () => {
         attemptsRef.current = 0;
+        // O servidor reenvia o histórico inteiro a cada conexão: limpar ANTES,
+        // senão ele é escrito por cima do que já está na tela (duplicado).
+        term.reset();
+        droppedNoticeRef.current = false;
+        setInputDropped(false);
         setStatus("online");
         // sincroniza o tamanho do PTY ao (re)conectar
         try {
@@ -371,15 +414,18 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
       ws.onclose = (ev: CloseEvent) => {
         if (disposed) return;
         wsRef.current = null;
-        // Sem conexão, nada disso é confirmável: o servidor reenvia o pedido de
-        // senha a quem reconecta com o prompt aberto; um indicador de segundo
-        // plano antigo afirmaria algo que talvez já tenha terminado.
-        setSudoAlert((prev) => (prev?.kind === "prompt" ? null : prev));
+        // O alerta de senha FICA (a pessoa pode estar digitando): ele mostra
+        // que a conexão caiu e trava o envio; ao reconectar, o servidor diz se
+        // o pedido ainda vale (requested) ou não (idle). Já o indicador de
+        // segundo plano antigo afirmaria algo que talvez já tenha terminado.
         setBackgroundCommand(null);
         if (ev.code === WS_CLOSE_BUSY || ev.code === WS_CLOSE_REPLACED) {
           // Sessão em uso por OUTRA aba/janela (ou esta aba reanexou por outra
           // conexão): NÃO reconectar — reconectar aqui é o que gerava o
           // ping-pong infinito derrubando a sessão do dono.
+          // Esta aba não volta a conectar: um pedido de senha nela não tem
+          // como ser respondido daqui — quem responde é a aba dona.
+          setSudoAlert((prev) => (prev?.kind === "prompt" ? null : prev));
           setStatus("busy");
           return;
         }
@@ -471,19 +517,44 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
   // ------------------------------------------- pedido de senha: foco no xterm
   // A pessoa vai digitar AGORA: painel no centro da tela e cursor no terminal.
   // Repete a cada novo pedido (seq), inclusive depois de uma senha recusada.
+  // O cursor vai para o CAMPO de senha do alerta (não para o xterm): o foco
+  // no xterm dependia de a pessoa não clicar em mais nada — e em campo
+  // nenhuma tecla chegou ao terminal.
   const promptSeq = sudoAlert?.kind === "prompt" ? sudoAlert.seq : null;
   useEffect(() => {
     if (promptSeq === null || !open) return;
     sectionRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    termRef.current?.focus();
+    passwordInputRef.current?.focus();
   }, [promptSeq, open]);
 
-  /** Leva a pessoa ao terminal (clique no aviso fixo do topo da página). */
+  /** Leva a pessoa ao alerta (clique no aviso fixo do topo da página). */
   const goToTerminal = useCallback(() => {
     setOpen(true);
     sessionStorage.setItem(STORAGE_KEY, "1");
     sectionRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    termRef.current?.focus();
+    if (passwordInputRef.current) passwordInputRef.current.focus();
+    else termRef.current?.focus();
+  }, []);
+
+  /**
+   * "Enviar senha": a senha + Enter saem pelo MESMO caminho do teclado do
+   * xterm (sendInput → WS → PTY). Nada é guardado: o campo é esvaziado por
+   * quem chama. Sem conexão, não envia (o botão já fica travado).
+   */
+  const submitPassword = useCallback(
+    (password: string): boolean => {
+      if (password.length === 0 || wsRef.current?.readyState !== WebSocket.OPEN) return false;
+      sendInput(`${password}\r`);
+      setAttention(false);
+      setSudoAlert((prev) => (prev?.kind === "prompt" ? { ...prev, sent: true, retry: false } : prev));
+      return true;
+    },
+    [sendInput],
+  );
+
+  /** "Cancelar": o servidor encerra o sudo e registra o desfecho "cancelled". */
+  const cancelPassword = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(TERMINAL_SUDO_CANCEL_REQUEST);
   }, []);
 
   // ------------------------------------------- pedido de senha: fim do prazo
@@ -689,6 +760,17 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
         </div>
       )}
 
+      {inputDropped && (
+        <p
+          role="alert"
+          data-testid="terminal-input-dropped"
+          className="border-t border-red-500/40 bg-red-600/15 px-4 py-2 text-[11px] leading-relaxed text-red-200"
+        >
+          ⚠️ <strong>Sem conexão com a VPS.</strong> O que você digitou no terminal não foi enviado.
+          Reconectando — quando a conexão voltar, digite de novo.
+        </p>
+      )}
+
       {status === "busy" && (
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
           ⚠️ <strong>Terminal em uso em outra aba/janela.</strong> Feche a outra aba e recarregue
@@ -738,6 +820,10 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
       {sudoAlert && (
         <SudoPasswordAlert
           alert={sudoAlert}
+          connected={status === "online"}
+          inputRef={passwordInputRef}
+          onSubmitPassword={submitPassword}
+          onCancel={cancelPassword}
           fallbackUser={info && info.elevation !== "root" && info.elevation !== "root-legado" ? info.user : null}
           configuredUser={info?.configuredUser ?? null}
           onDismiss={() => setSudoAlert(null)}
@@ -904,11 +990,21 @@ function SudoCountdown({
 
 function SudoPasswordAlert({
   alert,
+  connected,
+  inputRef,
+  onSubmitPassword,
+  onCancel,
   fallbackUser,
   configuredUser,
   onDismiss,
 }: {
   alert: SudoAlert;
+  /** WebSocket do terminal aberto (sem ele, a senha não tem como chegar). */
+  connected: boolean;
+  inputRef: RefObject<HTMLInputElement>;
+  /** Envia a senha + Enter ao terminal; false = não enviou. */
+  onSubmitPassword: (password: string) => boolean;
+  onCancel: () => void;
   /** Usuário da sessão (modos não-root), quando o pedido não trouxe o nome. */
   fallbackUser: string | null;
   /** Usuário escolhido na instalação — último recurso para o comando do túnel. */
@@ -929,6 +1025,16 @@ function SudoPasswordAlert({
   const tunnelUser = user ?? (configuredUser && isValidSshUsername(configuredUser) ? configuredUser : "usuario");
   const tunnelCmd = sshTunnelCommand(loc, tunnelUser);
   const tunnelUrl = localhostUrl(loc);
+  // O valor digitado vive só aqui, até o envio (então é esvaziado). Não vai a
+  // storage nenhum. Sobrevive a uma queda de conexão: o alerta não é desmontado.
+  const [password, setPassword] = useState("");
+  const userName = user ?? "seu usuário";
+  const canSend = connected && !(alert.kind === "prompt" && alert.sent);
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault();
+    if (!canSend) return;
+    if (onSubmitPassword(password)) setPassword("");
+  };
 
   return (
     <div
@@ -950,8 +1056,51 @@ function SudoPasswordAlert({
             </p>
           )}
           <p className="text-[13px]">
-            Digite a senha do usuário {userLabel} no terminal abaixo e pressione <strong>Enter</strong>.
-            Os caracteres não aparecem enquanto você digita — isso é normal.
+            Digite a senha do usuário {userLabel} no campo abaixo e clique em <strong>Enviar senha</strong>.
+          </p>
+          <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+            <label htmlFor="sudo-password-input" className="sr-only">
+              Senha de {userName}
+            </label>
+            <input
+              id="sudo-password-input"
+              ref={inputRef}
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={password}
+              onChange={(ev) => setPassword(ev.target.value)}
+              placeholder={`Senha de ${userName}`}
+              className="min-w-0 flex-1 rounded border border-amber-400/60 bg-black/60 px-2 py-1.5 font-mono text-sm text-amber-50 placeholder:text-amber-100/40 focus:outline-none focus:ring-2 focus:ring-amber-400"
+            />
+            <button
+              type="submit"
+              disabled={!canSend}
+              className="rounded bg-amber-400 px-3 py-1.5 text-sm font-semibold text-black hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Enviar senha
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={!connected}
+              className="rounded border border-amber-400/50 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+          </form>
+          {!connected && (
+            <p className="rounded bg-red-500/20 px-2 py-1 font-semibold text-red-200">
+              A conexão com o terminal caiu — reconectando. O pedido continua aberto na VPS; assim que a
+              conexão voltar, você envia a senha.
+            </p>
+          )}
+          {connected && alert.sent && (
+            <p className="text-amber-100/90">Senha enviada — conferindo com o sudo…</p>
+          )}
+          <p className="text-amber-100/80">
+            Se preferir, ou digite direto no terminal abaixo e pressione <strong>Enter</strong> (os
+            caracteres não aparecem enquanto você digita — isso é normal).
           </p>
           {/* Feedback de campo: o operador entendeu que o painel pedia a senha
               de root. É a senha DELE, a mesma do sudo por SSH. */}
@@ -960,10 +1109,15 @@ function SudoPasswordAlert({
             quando entra por SSH. <strong>Não é a senha do root</strong> (e o painel não tem, nem pede, senha
             de root).
           </p>
-          {alert.expiresAt !== null && (
+          {alert.expiresAt !== null ? (
             <p className="text-amber-100/80">
               O pedido tem prazo: se o tempo acabar, o painel cancela a operação e nada roda como root — dá
               para executar de novo depois.
+            </p>
+          ) : (
+            <p className="text-amber-100/80">
+              O pedido fica aberto até você enviar a senha ou cancelar — o painel não desiste sozinho. Se
+              cancelar, nada roda como root.
             </p>
           )}
           <p className="text-amber-100/80">
@@ -1025,6 +1179,7 @@ function SudoPasswordAlert({
             {alert.outcome === "exhausted" && "O sudo desistiu após 3 tentativas"}
             {alert.outcome === "not-permitted" && "Sem permissão de sudo"}
             {alert.outcome === "timeout" && "Tempo esgotado aguardando a senha"}
+            {alert.outcome === "cancelled" && "Você cancelou o pedido de senha"}
           </p>
           {alert.outcome === "exhausted" && (
             <p>
@@ -1043,6 +1198,13 @@ function SudoPasswordAlert({
               . Depois reconecte com uma sessão nova (digite <code className="font-mono">exit</code> neste
               terminal e recarregue a página) — a permissão só vale para sessões abertas depois da
               mudança — e execute de novo.
+            </p>
+          )}
+          {alert.outcome === "cancelled" && (
+            <p>
+              O pedido de senha foi encerrado a seu pedido e <strong>nada foi executado como root</strong>.
+              Quando quiser seguir, execute de novo a varredura ou a fase e envie a senha de {userLabel} no
+              alerta.
             </p>
           )}
           {alert.outcome === "timeout" && (

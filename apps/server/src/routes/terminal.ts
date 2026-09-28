@@ -162,9 +162,13 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         if (socket.readyState !== socket.OPEN) return;
         sendOutput(replay);
         if (term.sudoPromptOpen) {
-          // O prazo vai como o que AINDA FALTA (não o total): quem reconecta no
-          // meio da espera continua a contagem de onde ela está.
+          // O prazo (se houver) vai como o que AINDA FALTA (não o total): quem
+          // reconecta no meio da espera continua a contagem de onde ela está.
           socket.send(encodeTerminalControl(term.sudoPasswordRequestedMessage()));
+        } else if (term.watchesSudoPrompt) {
+          // Nenhum pedido aberto: o navegador que caiu com o alerta na tela
+          // (e o manteve, porque a pessoa podia estar digitando) o fecha agora.
+          socket.send(encodeTerminalControl({ type: "sudo-password-idle" }));
         }
         const offOutput = term.onOutput(sendOutput);
         const offControl = term.onControl((msg) => {
@@ -192,6 +196,18 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
             const msg = JSON.parse(text) as { type?: string; cols?: number; rows?: number };
             if (msg.type === "resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
               term.resize(msg.cols, msg.rows);
+              return;
+            }
+            if (msg.type === "sudo-cancel") {
+              // Botão "Cancelar" do alerta de senha: o servidor encerra o sudo
+              // (Ctrl-C) só se houver pedido aberto — nunca um Ctrl-C solto.
+              if (term.cancelSudoPrompt()) {
+                void app.auditService.record({
+                  action: "terminal.sudo-cancel",
+                  actor: request.session?.username ?? "setup",
+                  detail: "Operador cancelou o pedido de senha do sudo no painel. Nada rodou como root.",
+                });
+              }
               return;
             }
           } catch {

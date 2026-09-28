@@ -9,6 +9,7 @@ import {
   HOST_DOCKER_ACCESS_STATES,
   TERMINAL_CONTROL_PREFIX,
   TERMINAL_ROOT_MODES,
+  TERMINAL_SUDO_CANCEL_REQUEST,
   encodeTerminalControl,
   isHostDockerAccess,
   isTerminalRootMode,
@@ -51,6 +52,8 @@ describe("mensagens de controle do terminal", () => {
     { type: "sudo-password-prompt-closed", outcome: "not-permitted" },
     { type: "sudo-password-prompt-closed", outcome: "timeout" },
     { type: "sudo-password-prompt-closed", outcome: "session-ended" },
+    { type: "sudo-password-prompt-closed", outcome: "cancelled" },
+    { type: "sudo-password-idle" },
     { type: "background-exec", state: "start", command: "ufw status" },
     { type: "background-exec", state: "end", command: "ufw status", code: 0 },
     { type: "background-exec", state: "end", command: "ufw status", code: null },
@@ -103,5 +106,16 @@ describe("mensagens de controle do terminal", () => {
     expect(parseTerminalControl(`${TERMINAL_CONTROL_PREFIX}[]`)).toBeNull();
     expect(parseTerminalControl(`${TERMINAL_CONTROL_PREFIX}{"type":"desconhecido"}`)).toBeNull();
     expect(parseTerminalControl(`${TERMINAL_CONTROL_PREFIX}{"sem":"type"}`)).toBeNull();
+  });
+});
+
+/**
+ * Navegador → servidor: o operador desiste do pedido de senha pelo botão do
+ * alerta. Viaja como JSON no mesmo canal do "resize" — nunca como um Ctrl-C
+ * solto, para o servidor saber que foi o operador quem cancelou.
+ */
+describe("pedido de cancelamento do navegador", () => {
+  it("é um JSON com type sudo-cancel", () => {
+    expect(JSON.parse(TERMINAL_SUDO_CANCEL_REQUEST)).toEqual({ type: "sudo-cancel" });
   });
 });
