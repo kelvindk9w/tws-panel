@@ -76,6 +76,7 @@ export async function runSecurityScan(
   // só carrega o `detail` legível) e só quando o check passa — se falhou, deu
   // unknown ou veio em formato inesperado, a lista fica vazia.
   let nonRootSudoUsers: string[] = [];
+  const nonRootSudoUserAccess: Record<string, { hasPassword: boolean; keyCount: number }> = {};
   for (const def of applicableChecks) {
     const checkStart = Date.now();
     let result: SecurityCheckResult;
@@ -96,7 +97,13 @@ export async function runSecurityScan(
         ...(evaluation.detail !== undefined ? { detail: evaluation.detail } : {}),
       };
       if (def.id === SUDO_USERS_CHECK_ID && evaluation.status === "pass") {
-        nonRootSudoUsers = parseSudoUsers(stripAnsi(r.stdout)).map((u) => u.name);
+        const users = parseSudoUsers(stripAnsi(r.stdout));
+        nonRootSudoUsers = users.map((u) => u.name);
+        for (const u of users) {
+          if (u.hasPassword !== undefined && u.keyCount !== undefined) {
+            nonRootSudoUserAccess[u.name] = { hasPassword: u.hasPassword, keyCount: u.keyCount };
+          }
+        }
       }
     } catch (err) {
       result = {
@@ -133,5 +140,6 @@ export async function runSecurityScan(
     skippedChecks: skipped,
     profileNote: profileNote(runner.profile),
     nonRootSudoUsers,
+    nonRootSudoUserAccess,
   };
 }

@@ -99,6 +99,13 @@ export interface SecurityScanReport {
    * undefined como lista vazia).
    */
   nonRootSudoUsers?: string[];
+  /**
+   * Por usuário de `nonRootSudoUsers`: tem senha utilizável e quantas chaves
+   * SSH tem. A Fase 01 só trava a senha do root com chave E senha, e a tela
+   * mostra esse estado antes de aplicar. Só entram os usuários cujo estado foi
+   * lido por completo; ausente em relatórios antigos.
+   */
+  nonRootSudoUserAccess?: Record<string, { hasPassword: boolean; keyCount: number }>;
 }
 
 // ---------------------------------------------------------------------------

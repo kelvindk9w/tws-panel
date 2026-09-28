@@ -181,6 +181,23 @@ describe("usuários (fase 01)", () => {
 });
 
 describe("parseSudoUsers (fase 01)", () => {
+  /**
+   * A Fase 01 só trava a senha do root se o usuário tiver chave E senha: a
+   * tela precisa mostrar esse estado ANTES de a pessoa aplicar. O check emite
+   * "sudo-user <nome> <uid> <estado da senha> <nº de chaves>".
+   */
+  it("lê o estado da senha (P = utilizável) e o número de chaves SSH", () => {
+    expect(parseSudoUsers("sudo-user kelvin 1001 P 2\nsudo-user novo 1002 L 1\nsudo-user ana 1003 NP 0\n")).toEqual([
+      { name: "kelvin", uid: 1001, hasPassword: true, keyCount: 2 },
+      { name: "novo", uid: 1002, hasPassword: false, keyCount: 1 },
+      { name: "ana", uid: 1003, hasPassword: false, keyCount: 0 },
+    ]);
+  });
+
+  it("estado desconhecido (?) ou nº de chaves ilegível: o dado fica ausente, nunca inventado", () => {
+    expect(parseSudoUsers("sudo-user kelvin 1001 ? x\n")).toEqual([{ name: "kelvin", uid: 1001 }]);
+  });
+
   it("extrai nome e uid de cada linha bem formada", () => {
     expect(parseSudoUsers("sudo-user deploy 1000\nsudo-user kelvin 1001\n")).toEqual([
       { name: "deploy", uid: 1000 },
