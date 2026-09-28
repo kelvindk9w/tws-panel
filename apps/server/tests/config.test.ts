@@ -112,14 +112,39 @@ describe("loadConfig", () => {
   });
 
   /**
-   * O default de 5 min de espera silenciosa pela senha do sudo foi um defeito
-   * de produto em produção (duas varreduras perdidas): o padrão agora é 2 min
-   * e o operador pode ajustar pelo .env como faz com o idle do terminal.
+   * Defeito de produção: o docker-compose.yml repassa a variável VAZIA quando o
+   * .env não a define, e `Number("")` é 0 — o painel mostrava o pedido de senha
+   * e o cancelava no mesmo instante. E, por decisão do dono do produto, o
+   * painel não desiste sozinho de esperar a senha: o padrão é SEM prazo (0).
    */
-  it("espera pela senha do sudo: 2 min por padrão, ajustável pela variável", () => {
-    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(120_000);
+  it("espera pela senha do sudo: sem prazo por padrão; vazio vale o padrão; prazo só se configurado", () => {
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(0);
+    setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", "");
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(0);
+    setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", "  ");
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(0);
     setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", "45000");
     expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(45_000);
+  });
+
+  it("número inválido numa variável numérica impede o painel de subir, com o nome da variável", () => {
+    for (const invalido of ["abc", "-1", "1.5", "10s"]) {
+      setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", invalido);
+      expect(() => loadConfig()).toThrow(ConfigError);
+      expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS/);
+    }
+  });
+
+  it("variável numérica vazia vale o padrão em todas elas (não vira 0)", () => {
+    setEnv("PORT", "");
+    setEnv("PAAS_CADDY_HTTP_PORT", "");
+    setEnv("PAAS_STALWART_PORT_SMTP", "");
+    setEnv("PAAS_MONITOR_INTERVAL_MS", "");
+    const config = loadConfig();
+    expect(config.port).toBe(SETUP_PORT);
+    expect(config.caddyHttpPort).toBe(80);
+    expect(config.mailPorts.smtp).toBe(MAIL_DEFAULT_PORTS.smtp);
+    expect(config.monitorIntervalMs).toBe(MONITOR_DEFAULT_INTERVAL_MS);
   });
 
   it("PAAS_TARGET só vira 'host' com o valor exato (default seguro)", () => {

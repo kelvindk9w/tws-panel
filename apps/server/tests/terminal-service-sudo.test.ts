@@ -87,12 +87,14 @@ function makeService(opts?: { watchSudoPrompt?: boolean; sudoPasswordTimeoutMs?:
 const PROMPT = "[sudo] senha para kelvin: ";
 
 /**
- * Pedido de senha COM relógio do painel correndo (há um comando esperando):
- * a mensagem leva o prazo em DURAÇÃO — no instante em que o prompt abre, o
- * que falta é o prazo inteiro. Sem comando esperando, o pedido vai sem prazo.
+ * Pedido de senha. Sem prazo configurado (o padrão), a mensagem vai SEM
+ * duração: o painel espera até o operador responder ou cancelar. Com prazo
+ * configurado e um comando esperando, a mensagem leva o prazo em DURAÇÃO — no
+ * instante em que o prompt abre, o que falta é o prazo inteiro.
  */
-function pedido(user: string | null, timeoutMs = 120_000, remainingMs = timeoutMs): TerminalControlMessage {
-  return { type: "sudo-password-requested", user, timeoutMs, remainingMs };
+function pedido(user: string | null, timeoutMs?: number, remainingMs = timeoutMs): TerminalControlMessage {
+  if (timeoutMs === undefined) return { type: "sudo-password-requested", user };
+  return { type: "sudo-password-requested", user, timeoutMs, remainingMs: remainingMs ?? timeoutMs };
 }
 
 // ---------------------------------------------------------------------------
@@ -574,18 +576,47 @@ describe("TerminalService — espera pela senha tem relógio próprio", () => {
   });
 
   /**
-   * O operador não percebeu o pedido duas vezes em produção e o painel ficou
-   * parado até estourar. Agora o prazo VIAJA com o pedido para o navegador
-   * mostrar a contagem — e quem reconecta no meio recebe o que FALTA.
+   * Em produção o pedido foi cancelado enquanto o operador tentava responder.
+   * Decisão do dono do produto: o painel NÃO desiste sozinho. Sem prazo
+   * configurado, nem o relógio da senha nem o do comando correm com o prompt
+   * aberto — só a resposta ou o botão "Cancelar" encerram a espera.
    */
-  it("o pedido leva o prazo em duração; o padrão da espera é 2 minutos", async () => {
-    const h = makeService();
+  it("padrão: sem prazo — o pedido vai sem duração e nada é cancelado, por mais que demore", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const h = makeService();
+      const settled = h.service
+        .runCommandCaptured("ufw status", { elevate: true, timeoutMs: 1_000 })
+        .catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(1);
+      const n = h.nonce();
+      h.pty().emit(PROMPT);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.events).toEqual([pedido("kelvin")]);
+      expect(h.service.sudoPromptRemainingMs).toBeNull();
+      await vi.advanceTimersByTimeAsync(60 * 60_000); // uma hora com o pedido aberto
+      expect(h.pty().inputs.join("")).not.toContain("\x03");
+      expect(h.service.sudoPromptOpen).toBe(true);
+      // respondido: o comando segue e termina normalmente
+      h.pty().emit(`\r\n:::PAAS_BEGIN_${n}\r\nStatus: active\r\n:::PAAS_EXIT_${n}:0\r\n`);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = (await settled) as { code: number; output: string };
+      expect(result.code).toBe(0);
+      expect(result.output).toContain("Status: active");
+      await h.service.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prazo 0 explícito é o mesmo que sem prazo", async () => {
+    const h = makeService({ sudoPasswordTimeoutMs: 0 });
     void h.service.runCommandCaptured("ufw status", { elevate: true }).catch(() => undefined);
     await flush();
     h.pty().emit(PROMPT);
-    await flush();
-    // acabou de abrir: falta o prazo INTEIRO — 2 min, o default novo
-    expect(h.events).toEqual([pedido("kelvin", 120_000, 120_000)]);
+    await flush(30);
+    expect(h.events).toEqual([pedido("kelvin")]);
+    expect(h.pty().inputs.join("")).not.toContain("\x03");
     await h.service.dispose();
   });
 
@@ -684,5 +715,52 @@ describe("TerminalService — espelho e controle", () => {
     h.service.emitControl(msg);
     expect(extra).toEqual([msg]);
     expect(h.events).toEqual([msg, msg]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cancelamento pelo operador (botão "Cancelar" do alerta)
+// ---------------------------------------------------------------------------
+
+describe("TerminalService — o operador cancela o pedido de senha", () => {
+  it("com comando esperando: Ctrl-C, desfecho 'cancelled' e falha que diz que foi cancelado", async () => {
+    const h = makeService();
+    const settled = h.service.runCommandCaptured("ufw status", { elevate: true }).catch((e: unknown) => e);
+    await flush();
+    const n = h.nonce();
+    h.pty().emit(PROMPT);
+    await flush();
+    expect(h.service.cancelSudoPrompt()).toBe(true);
+    expect(h.pty().inputs.join("")).toContain("\x03");
+    expect(h.events.at(-1)).toEqual({ type: "sudo-password-prompt-closed", outcome: "cancelled" });
+    expect(h.service.sudoPromptOpen).toBe(false);
+    h.pty().emit(`^C\r\n:::PAAS_EXIT_${n}:1\r\n`);
+    const err = (await settled) as SudoElevationError;
+    expect(err).toBeInstanceOf(SudoElevationError);
+    expect(err.reason).toBe("cancelled");
+    expect(err.message).toMatch(/cancelou/);
+    expect(err.message).toMatch(/Nada foi executado como root/);
+    expect(h.output.join("")).toContain("pedido de senha cancelado");
+    await h.service.dispose();
+  });
+
+  it("sudo digitado pelo próprio operador: Ctrl-C e desfecho 'cancelled', sem comando a falhar", async () => {
+    const h = makeService();
+    await h.service.connect();
+    h.pty().emit(PROMPT);
+    await flush();
+    expect(h.service.cancelSudoPrompt()).toBe(true);
+    expect(h.pty().inputs.join("")).toContain("\x03");
+    expect(h.events.at(-1)).toEqual({ type: "sudo-password-prompt-closed", outcome: "cancelled" });
+    await h.service.dispose();
+  });
+
+  it("sem pedido aberto: não faz nada (nenhum Ctrl-C solto no shell)", async () => {
+    const h = makeService();
+    await h.service.connect();
+    expect(h.service.cancelSudoPrompt()).toBe(false);
+    expect(h.pty().inputs.join("")).not.toContain("\x03");
+    expect(h.events).toEqual([]);
+    await h.service.dispose();
   });
 });

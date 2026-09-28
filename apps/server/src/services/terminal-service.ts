@@ -67,7 +67,7 @@ export class CaptureDesyncError extends Error {
 }
 
 /** Por que o sudo não executou o comando pedido. */
-export type SudoFailureReason = "exhausted" | "not-permitted" | "timeout" | "not-executed";
+export type SudoFailureReason = "exhausted" | "not-permitted" | "timeout" | "cancelled" | "not-executed";
 
 const SUDO_FAILURE_MESSAGES: Record<SudoFailureReason, string> = {
   exhausted:
@@ -78,6 +78,9 @@ const SUDO_FAILURE_MESSAGES: Record<SudoFailureReason, string> = {
   timeout:
     "tempo esgotado aguardando a senha do sudo. Nada foi executado como root e o pedido de senha foi cancelado. " +
     "Rode de novo e digite a senha no terminal.",
+  cancelled:
+    "você cancelou o pedido de senha do sudo. Nada foi executado como root. Rode de novo quando quiser e " +
+    "digite a senha no alerta ou no terminal.",
   "not-executed":
     "o sudo não executou o comando (senha não confirmada ou sudo interrompido). Nada foi executado como root. " +
     "Rode de novo e digite a senha no terminal quando ela for pedida.",
@@ -147,17 +150,16 @@ const SUDO_REJECTED_RE = /Sorry, try again\.|Desculpe, tente novamente\./i;
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 /**
- * Espera máxima pela senha do sudo com o prompt aberto.
+ * Espera máxima pela senha do sudo com o prompt aberto. 0 = SEM prazo.
  *
- * Eram 5 minutos e o campo mostrou que isso é o pior dos mundos: o operador
- * não percebeu o pedido, o painel ficou 5 minutos parado em silêncio e só
- * então falhou — duas varreduras seguidas perdidas. Esperar mais não faz
- * ninguém digitar a senha; só troca "pediram senha" por "o painel travou".
- * 2 minutos é folga de sobra para quem VIU o pedido (o alerta agora mostra a
- * contagem regressiva) e devolve o controle rápido, com explicação, a quem
- * não viu. Ajustável por PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS (config.ts).
+ * Histórico: eram 5 min, depois 2 min — e em produção o pedido foi cancelado
+ * enquanto o operador tentava responder (o compose repassava a variável vazia,
+ * lida como 0; ver envInt em config.ts). Decisão do dono do produto: o painel
+ * não desiste sozinho. O pedido fica aberto até o operador digitar a senha ou
+ * clicar em "Cancelar" no alerta (cancelSudoPrompt). Um prazo positivo em
+ * PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS continua possível para quem quiser.
  */
-const DEFAULT_SUDO_PASSWORD_TIMEOUT_MS = 2 * 60_000;
+const DEFAULT_SUDO_PASSWORD_TIMEOUT_MS = 0;
 const SUDO_TAIL_MAX = 512;
 
 export interface TerminalServiceOptions {
@@ -176,7 +178,7 @@ export interface TerminalServiceOptions {
    * mensagens de controle (modo senha). Desligado no legado.
    */
   watchSudoPrompt?: boolean;
-  /** Espera máxima pela senha do sudo com o prompt aberto (default 2 min). */
+  /** Espera máxima pela senha do sudo com o prompt aberto (default 0 = sem prazo). */
   sudoPasswordTimeoutMs?: number;
   /**
    * Verifica no host se o usuário do terminal tem acesso ao Docker (modos de
@@ -199,6 +201,8 @@ interface CommandWaiter {
   /** Instante-limite do relógio do comando (pausado com o prompt aberto). */
   deadline: number;
   remainingMs: number;
+  /** Relógio do comando pausado porque o prompt de senha abriu. */
+  paused: boolean;
   /**
    * Modo captura: um marcador :::PAAS_BEGIN_<nonce> é impresso ANTES do
    * comando; só a saída entre BEGIN e EXIT é entregue ao caller (o eco do
@@ -332,6 +336,11 @@ export class TerminalService {
         this.dockerAccessProbe = null;
       });
     return this.dockerAccessProbe;
+  }
+
+  /** O serviço observa o prompt do sudo (modo senha)? */
+  get watchesSudoPrompt(): boolean {
+    return this.watchSudoPrompt;
   }
 
   /** true enquanto o sudo está pedindo senha no terminal (modo senha). */
@@ -787,6 +796,7 @@ export class TerminalService {
         timeoutMs,
         deadline: 0,
         remainingMs: timeoutMs,
+        paused: false,
         capture,
         capturing: false,
         captured: "",
@@ -892,18 +902,23 @@ export class TerminalService {
     // relógio — o pedido vai sem prazo e a interface não mostra contagem.
     if (waiter) {
       // Pausa o relógio do comando: esperar a senha não é o comando demorando.
+      // Fica pausado mesmo SEM prazo de senha — só a resposta ou o cancelamento
+      // encerram a espera (closeSudoPrompt retoma o relógio do comando).
       clearTimeout(waiter.timer);
+      waiter.paused = true;
       waiter.remainingMs = Math.max(0, waiter.deadline - Date.now());
       this.clearSudoPasswordTimer();
-      this.sudoPasswordDeadline = Date.now() + this.sudoPasswordTimeoutMs;
-      this.sudoPasswordTimer = setTimeout(() => this.onSudoPasswordTimeout(waiter), this.sudoPasswordTimeoutMs);
-      this.sudoPasswordTimer.unref();
+      if (this.sudoPasswordTimeoutMs > 0) {
+        this.sudoPasswordDeadline = Date.now() + this.sudoPasswordTimeoutMs;
+        this.sudoPasswordTimer = setTimeout(() => this.onSudoPasswordTimeout(waiter), this.sudoPasswordTimeoutMs);
+        this.sudoPasswordTimer.unref();
+      }
     }
     // Depois de armar o relógio: no instante em que o prompt abre, o que falta
     // é o prazo INTEIRO (dito assim, e não recalculado, para não depender de
     // um milissegundo de relógio entre uma linha e outra).
     this.emitControl(
-      waiter
+      waiter && this.sudoPasswordTimeoutMs > 0
         ? {
             type: "sudo-password-requested",
             user,
@@ -919,22 +934,46 @@ export class TerminalService {
     this.promptOpen = false;
     this.sudoTail = "";
     this.sudoAfterPrompt = "";
-    const hadPasswordTimer = this.sudoPasswordTimer !== null;
     this.clearSudoPasswordTimer();
     this.emitControl({ type: "sudo-password-prompt-closed", outcome });
     const waiter = this.waiter;
     if (!waiter) return;
     if (outcome === "exhausted" || outcome === "not-permitted") waiter.sudoFailure = outcome;
-    // Retoma o relógio do comando com o tempo que restava.
-    if (hadPasswordTimer && outcome !== "session-ended") this.armCommandTimer(waiter, waiter.remainingMs);
+    const wasPaused = waiter.paused;
+    waiter.paused = false;
+    // Retoma o relógio do comando com o tempo que restava. Cancelado/tempo
+    // esgotado: o desfecho é o da senha (rejectAfterGrace), sem relógio novo.
+    if (wasPaused && outcome !== "session-ended" && outcome !== "timeout" && outcome !== "cancelled") {
+      this.armCommandTimer(waiter, waiter.remainingMs);
+    }
+  }
+
+  /**
+   * O operador desistiu do pedido de senha (botão "Cancelar" do alerta).
+   * Ctrl-C encerra o sudo; com um comando do painel esperando, ele falha com
+   * SudoElevationError("cancelled") — nada rodou como root. Sem pedido aberto
+   * não faz nada: um Ctrl-C solto interromperia o que estiver rodando.
+   */
+  cancelSudoPrompt(): boolean {
+    if (!this.promptOpen) return false;
+    const waiter = this.waiter;
+    if (waiter) {
+      waiter.sudoFailure = "cancelled";
+      clearTimeout(waiter.timer);
+    }
+    this.closeSudoPrompt("cancelled");
+    this.broadcast("\r\n\x1b[33m[terminal] pedido de senha cancelado por você — nada foi executado como root\x1b[0m\r\n");
+    this.write("\x03");
+    if (waiter) this.rejectAfterGrace(waiter, () => new SudoElevationError("cancelled"));
+    return true;
   }
 
   private onSudoPasswordTimeout(waiter: CommandWaiter): void {
     this.sudoPasswordTimer = null;
     if (this.waiter !== waiter) return;
     waiter.sudoFailure = "timeout";
-    this.closeSudoPrompt("timeout");
     clearTimeout(waiter.timer); // sem relógio do comando: o desfecho é o da senha
+    this.closeSudoPrompt("timeout");
     this.broadcast(
       "\r\n\x1b[33m[terminal] tempo esgotado aguardando a senha do sudo — pedido cancelado (Ctrl-C)\x1b[0m\r\n",
     );

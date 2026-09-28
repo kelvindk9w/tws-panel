@@ -17,6 +17,7 @@ import { TerminalService } from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
 import {
   TERMINAL_CONTROL_PREFIX,
+  TERMINAL_SUDO_CANCEL_REQUEST,
   parseTerminalControl,
   type HostDockerAccess,
   type TerminalInfoResponse,
@@ -400,7 +401,8 @@ describe("WS /api/terminal/ws — mensagens de controle (protocolo do modo senha
     ctx.ptys[0]!.emit("[sudo] senha para kelvin: ");
     await tick();
     const controls = frames.map(parseTerminalControl).filter((m) => m !== null);
-    expect(controls).toEqual([{ type: "sudo-password-requested", user: "kelvin" }]);
+    // ao conectar: "nenhum pedido aberto"; depois, o pedido que apareceu na saída
+    expect(controls).toEqual([{ type: "sudo-password-idle" }, { type: "sudo-password-requested", user: "kelvin" }]);
     expect(frames.some((f) => f.includes("[sudo] senha para kelvin: ") && parseTerminalControl(f) === null)).toBe(true);
 
     // a senha digitada segue o relay puro e não gera controle nenhum
@@ -470,6 +472,58 @@ describe("WS /api/terminal/ws — mensagens de controle (protocolo do modo senha
     expect(remainingMs).toBeLessThan(60_000);
     expect(remainingMs).toBeGreaterThan(50_000);
     second.close();
+  });
+
+  /**
+   * O navegador não apaga mais o alerta de senha quando a conexão cai (a
+   * pessoa pode estar digitando). Ao reconectar, o servidor diz o estado:
+   * pedido aberto (sudo-password-requested) ou nenhum (sudo-password-idle).
+   */
+  it("quem (re)conecta SEM pedido aberto recebe sudo-password-idle", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    await tick();
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null)).toEqual([{ type: "sudo-password-idle" }]);
+    ws.close();
+  });
+
+  it("fora do modo senha não há estado de senha a anunciar", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: false });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    await tick();
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null)).toEqual([]);
+    ws.close();
+  });
+
+  it("botão Cancelar: {type:sudo-cancel} cancela o pedido, não vira input e fica na auditoria", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.ptys[0]!.emit("[sudo] senha para kelvin: ");
+    await tick();
+    ws.send(TERMINAL_SUDO_CANCEL_REQUEST);
+    await tick();
+    const input = Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8");
+    expect(input).toContain("\x03");
+    expect(input).not.toContain("sudo-cancel");
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null).at(-1)).toEqual({
+      type: "sudo-password-prompt-closed",
+      outcome: "cancelled",
+    });
+    expect(await waitForAuditContains(ctx.dir, "terminal.sudo-cancel")).toContain("terminal.sudo-cancel");
+    ws.close();
+  });
+
+  it("Cancelar sem pedido aberto não manda Ctrl-C ao shell", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    await tick();
+    ws.send(TERMINAL_SUDO_CANCEL_REQUEST);
+    await tick();
+    expect(Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8")).not.toContain("\x03");
+    ws.close();
   });
 
   it("espelho em segundo plano e eventos de background-exec chegam ao cliente", async () => {

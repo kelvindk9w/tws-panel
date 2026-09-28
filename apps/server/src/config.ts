@@ -85,15 +85,13 @@ export interface ServerConfig {
   terminalIdleTimeoutMs: number;
   /**
    * Espera máxima pela senha do sudo com o prompt aberto (ms), no modo senha —
-   * PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS. Default 2 min.
+   * PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS. Default 0 = SEM prazo.
    *
-   * Eram 5 min, e o campo provou que o número grande é o pior dos mundos: o
-   * operador não percebeu o pedido duas vezes seguidas e o painel ficou cinco
-   * minutos parado, em silêncio, antes de falhar. Esperar muito não faz
-   * ninguém digitar a senha — só transforma "pediram senha" em "o painel
-   * travou". 2 min é tempo de sobra para quem VIU o pedido (a contagem
-   * regressiva agora aparece no alerta) e devolve o controle rápido a quem
-   * não viu, com uma explicação em vez de um travamento.
+   * O painel não desiste sozinho: o pedido fica aberto até o operador digitar
+   * a senha ou clicar em "Cancelar" no alerta (decisão do dono do produto,
+   * depois de ver o pedido ser cancelado enquanto tentava responder). Quem
+   * quiser um prazo configura um valor positivo; o alerta então mostra a
+   * contagem regressiva.
    */
   terminalSudoPasswordTimeoutMs: number;
   /**
@@ -188,10 +186,28 @@ export function resolveTerminalAccess(
   };
 }
 
+/**
+ * Lê uma variável numérica inteira (>= 0). Vazia ou só espaços vale o PADRÃO:
+ * o docker-compose.yml repassa `${VAR:-}` como string vazia quando o .env não
+ * a define, e `Number("")` é 0 — foi assim que a espera pela senha do sudo
+ * virou zero em produção e o painel cancelava o pedido no mesmo instante em
+ * que o mostrava. Valor que não é inteiro não-negativo impede o painel de
+ * subir, com o nome da variável (antes virava NaN em silêncio).
+ */
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) {
+    throw new ConfigError(`${name}=${value} não é um número inteiro maior ou igual a zero.`);
+  }
+  return Number(value);
+}
+
 export function loadConfig(): ServerConfig {
   const dataDir = path.resolve(process.env.PAAS_DATA_DIR ?? "../../data");
   return {
-    port: Number(process.env.PORT ?? SETUP_PORT),
+    port: envInt("PORT", SETUP_PORT),
     host: process.env.HOST ?? "0.0.0.0",
     dataDir,
     projectsDir: path.resolve(process.env.PAAS_PROJECTS_DIR ?? path.join(dataDir, "projects")),
@@ -206,23 +222,23 @@ export function loadConfig(): ServerConfig {
     hardeningScriptsDir: path.resolve(process.env.PAAS_SCRIPTS_DIR ?? "../../scripts/hardening"),
     hostHelperImage: process.env.PAAS_HOST_HELPER_IMAGE ?? "alpine:3",
     hostRepoDir: process.env.PAAS_HOST_REPO_DIR ?? "/opt/tws-panel",
-    caddyHttpPort: Number(process.env.PAAS_CADDY_HTTP_PORT ?? 80),
-    caddyHttpsPort: Number(process.env.PAAS_CADDY_HTTPS_PORT ?? 443),
+    caddyHttpPort: envInt("PAAS_CADDY_HTTP_PORT", 80),
+    caddyHttpsPort: envInt("PAAS_CADDY_HTTPS_PORT", 443),
     mailPorts: {
-      smtp: Number(process.env.PAAS_STALWART_PORT_SMTP ?? MAIL_DEFAULT_PORTS.smtp),
-      submission: Number(process.env.PAAS_STALWART_PORT_SUBMISSION ?? MAIL_DEFAULT_PORTS.submission),
-      submissions: Number(process.env.PAAS_STALWART_PORT_SUBMISSIONS ?? MAIL_DEFAULT_PORTS.submissions),
-      imap: Number(process.env.PAAS_STALWART_PORT_IMAP ?? MAIL_DEFAULT_PORTS.imap),
-      imaps: Number(process.env.PAAS_STALWART_PORT_IMAPS ?? MAIL_DEFAULT_PORTS.imaps),
-      http: Number(process.env.PAAS_STALWART_PORT_HTTP ?? MAIL_DEFAULT_PORTS.http),
+      smtp: envInt("PAAS_STALWART_PORT_SMTP", MAIL_DEFAULT_PORTS.smtp),
+      submission: envInt("PAAS_STALWART_PORT_SUBMISSION", MAIL_DEFAULT_PORTS.submission),
+      submissions: envInt("PAAS_STALWART_PORT_SUBMISSIONS", MAIL_DEFAULT_PORTS.submissions),
+      imap: envInt("PAAS_STALWART_PORT_IMAP", MAIL_DEFAULT_PORTS.imap),
+      imaps: envInt("PAAS_STALWART_PORT_IMAPS", MAIL_DEFAULT_PORTS.imaps),
+      http: envInt("PAAS_STALWART_PORT_HTTP", MAIL_DEFAULT_PORTS.http),
     },
     mailHostname: process.env.PAAS_MAIL_HOSTNAME?.trim() || null,
     publicIp: process.env.PAAS_PUBLIC_IP?.trim() || null,
     publicIpv6: process.env.PAAS_PUBLIC_IPV6?.trim() || null,
-    monitorIntervalMs: Number(process.env.PAAS_MONITOR_INTERVAL_MS ?? MONITOR_DEFAULT_INTERVAL_MS),
+    monitorIntervalMs: envInt("PAAS_MONITOR_INTERVAL_MS", MONITOR_DEFAULT_INTERVAL_MS),
     dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
-    terminalIdleTimeoutMs: Number(process.env.PAAS_TERMINAL_IDLE_TIMEOUT_MS ?? 30 * 60_000),
-    terminalSudoPasswordTimeoutMs: Number(process.env.PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS ?? 2 * 60_000),
+    terminalIdleTimeoutMs: envInt("PAAS_TERMINAL_IDLE_TIMEOUT_MS", 30 * 60_000),
+    terminalSudoPasswordTimeoutMs: envInt("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", 0),
     ...loadTerminalAccess(process.env),
   };
 }
