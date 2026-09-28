@@ -3,8 +3,13 @@
 # Spec: docs/security-research.md §2.2 e §4 (ordem usuário→chave→teste→só então travar root).
 #
 # REGRA DE OURO: este script NUNCA tranca o operador para fora:
-#  - `passwd -l root` só acontece se o novo usuário tiver AO MENOS uma chave SSH
-#    instalada e testável (~/.ssh/authorized_keys não-vazio).
+#  - `passwd -l root` só acontece se o usuário tiver AO MENOS uma chave SSH
+#    instalada (para ENTRAR) E uma senha utilizável (para o SUDO). Usuário sem
+#    senha entra por SSH mas não vira root — com a senha do root travada,
+#    ninguém mais administraria a VPS. Quem a fase cria nasce sem senha, então
+#    criar um usuário aqui nunca trava o root.
+#  - a simulação (--dry-run) lê o estado real e diz de antemão se a senha do
+#    root SERÁ ou NÃO será travada, e por quê.
 #
 # Uso: ./01-user.sh [--user deploy] [--pubkey "ssh-ed25519 AAAA..."] [--dry-run] [--rollback] [--confirm]
 #
@@ -113,23 +118,45 @@ else
 fi
 ok "Chave SSH instalada"
 
-step "Verificando acesso por chave antes de travar root"
+step "Verificando acesso por chave e senha antes de travar root"
 KEY_FILE="$USER_HOME/.ssh/authorized_keys"
-HAS_KEY=0
-if [ "$PAAS_DRY_RUN" != "1" ] && [ -s "$KEY_FILE" ] && grep -qE '^(ssh-|ecdsa-)' "$KEY_FILE"; then
-  HAS_KEY=1
+# Leitura pura: vale também na simulação, que precisa dizer o que VAI acontecer.
+KEY_COUNT=0
+if [ -f "$KEY_FILE" ]; then
+  KEY_COUNT="$(grep -cE '^(ssh-|ecdsa-|sk-)' "$KEY_FILE" 2>/dev/null || true)"
+  KEY_COUNT="${KEY_COUNT:-0}"
 fi
-if [ "$PAAS_DRY_RUN" = "1" ]; then
-  echo "[dry-run] só travaria root se $KEY_FILE tivesse ao menos uma chave válida"
-elif [ "$HAS_KEY" = "1" ]; then
-  info "chave presente — seguro travar a senha do root"
+# Simulação com --pubkey nova: conta a chave que SERIA instalada.
+if [ "$PAAS_DRY_RUN" = "1" ] && [ -n "$PUBKEY" ] && ! grep -qxF "$PUBKEY" "$KEY_FILE" 2>/dev/null; then
+  KEY_COUNT=$((KEY_COUNT + 1))
+fi
+# "P" = senha utilizável. Usuário inexistente (simulação) seria criado sem senha.
+PW_STATUS="$(passwd -S "$SSH_USER" 2>/dev/null | awk '{print $2}' || true)"
+HAS_KEY=0
+HAS_PW=0
+[ "$KEY_COUNT" -gt 0 ] && HAS_KEY=1
+[ "$PW_STATUS" = "P" ] && HAS_PW=1
+if [ "$HAS_KEY" = "1" ]; then
+  info "$KEY_COUNT chave(s) SSH instalada(s) para $SSH_USER"
 else
-  skip "NENHUMA chave SSH instalada para $SSH_USER — root NÃO será travado (proteção anti-lockout)"
+  info "nenhuma chave SSH instalada para $SSH_USER"
+fi
+if [ "$HAS_PW" = "1" ]; then
+  info "$SSH_USER tem senha (necessária para usar o sudo)"
+else
+  info "$SSH_USER não tem senha — sem ela não há como usar o sudo"
+fi
+if [ "$HAS_KEY" = "1" ] && [ "$HAS_PW" = "1" ]; then
+  info "resultado: a senha do root SERÁ travada — você entra com a chave e administra com a senha de $SSH_USER"
+elif [ "$HAS_KEY" = "0" ]; then
+  skip "resultado: a senha do root NÃO será travada — nenhuma chave SSH instalada para $SSH_USER (proteção anti-lockout)"
+else
+  skip "resultado: a senha do root NÃO será travada — $SSH_USER não tem senha e ficaria sem sudo (proteção anti-lockout; defina com: sudo passwd $SSH_USER)"
 fi
 ok "Verificação anti-lockout concluída"
 
 step "Travando senha do root (passwd -l root)"
-if [ "$HAS_KEY" = "1" ]; then
+if [ "$HAS_KEY" = "1" ] && [ "$HAS_PW" = "1" ]; then
   run passwd -l root
   ok "Senha do root travada (acesso root direto desabilitado)"
   # Anti-lockout: agenda reversão automática (at/timer) que destranca o root
@@ -146,7 +173,7 @@ EOF
     schedule_rollback "user" "$REVERT_SCRIPT"
   fi
 else
-  skip "Travamento do root adiado até existir chave SSH para $SSH_USER"
+  skip "Travamento do root adiado até $SSH_USER ter chave SSH e senha"
 fi
 
 step "Verificação"

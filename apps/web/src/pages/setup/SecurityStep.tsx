@@ -17,11 +17,10 @@ import { TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/comp
 import { CopyButton } from "@/components/CopyButton";
 import { IndexGauge } from "@/components/IndexGauge";
 import { ManualPhaseModal } from "@/components/setup/ManualPhaseModal";
-import { SshKeyGuide } from "@/components/setup/SshKeyGuide";
+import { Phase01Card } from "@/components/setup/Phase01Card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   AlertTriangle,
@@ -828,194 +827,23 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
             </CardContent>
           </Card>
 
-          {/* Fase 01 — VALIDAÇÃO do usuário não-root (criado no início da
-              instalação, seguindo o README) + chave pública SSH do operador */}
+          {/* Fase 01 — usuário não-root + chave SSH → desativar a senha do
+              root. O card mostra o estado lido pela varredura e o resultado. */}
           {phase01Selected && (
-            <Card className="border-amber-500/40">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <KeyRound className="h-4 w-4 text-amber-400" /> Fase 01 — confirmar usuário e
-                  instalar sua chave SSH
-                </CardTitle>
-                <CardDescription>
-                  Você provavelmente já criou esse <strong>usuário não-root</strong> e gerou a chave
-                  seguindo o README. Esta fase <strong>confirma que os dois estão certos</strong> e,
-                  se já estiverem, segue direto para o que falta:{" "}
-                  <strong>desativar a senha do usuário root</strong>, para que ela não possa mais ser
-                  usada para entrar no servidor. Isso só acontece depois que uma chave SSH válida
-                  estiver instalada — assim você nunca fica trancado para fora.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <SshKeyGuide />
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground" htmlFor="ssh-user">
-                    Usuário não-root criado na instalação
-                  </label>
-                  <Input
-                    id="ssh-user"
-                    value={sshUser}
-                    onChange={(e) => {
-                      // a partir do primeiro toque, a varredura não decide mais
-                      // por ele (nem uma revarredura posterior)
-                      sshUserTouched.current = true;
-                      setSshUser(e.target.value);
-                    }}
-                    className="h-8 w-64 font-mono"
-                  />
-                  {/* Um único candidato: o campo já veio preenchido — deixar
-                      explícito que o nome saiu do SERVIDOR, e não de um chute
-                      do painel, é o que tira o operador da dúvida. */}
-                  {/* Nome vindo da instalação: dizer a origem evita que pareça
-                      um chute do painel. */}
-                  {configuredSshUser !== null && sshUser.trim() === configuredSshUser && (
-                    <p className="text-xs text-emerald-400">
-                      ⚙️ Nome vindo da <strong>configuração da instalação</strong>:{" "}
-                      <strong className="font-mono">{configuredSshUser}</strong> é o usuário do terminal
-                      que você escolheu ao instalar o painel. Se não for esse, é só editar.
-                    </p>
-                  )}
-                  {/* A varredura detecta os não-root com sudo; se o configurado
-                      não está entre eles, avisa — sem trocar por outro nome.
-                      Relatório antigo (sem detecção) não permite afirmar nada. */}
-                  {configuredSshUser !== null &&
-                    sshUser.trim() === configuredSshUser &&
-                    report?.nonRootSudoUsers !== undefined &&
-                    !report.nonRootSudoUsers.includes(configuredSshUser) && (
-                      <p
-                        data-testid="configured-user-not-detected"
-                        className="flex items-start gap-1 text-xs text-amber-400"
-                      >
-                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span>
-                          A varredura <strong>não encontrou</strong>{" "}
-                          <strong className="font-mono">{configuredSshUser}</strong> entre os usuários
-                          não-root com sudo deste servidor. Confira se o nome está certo e se ele está no
-                          grupo sudo (como root:{" "}
-                          <code className="font-mono">usermod -aG sudo {configuredSshUser}</code>). O
-                          painel não troca por outro nome por conta própria.
-                        </span>
-                      </p>
-                    )}
-                  {configuredSshUser === null && soleDetectedUser !== null && (
-                    <p className="text-xs text-emerald-400">
-                      🔎 Nome <strong>detectado no servidor</strong>:{" "}
-                      <strong className="font-mono">{soleDetectedUser}</strong> — é o único usuário
-                      não-root com sudo que existe aí. Se não for esse, é só editar.
-                    </p>
-                  )}
-                  {/* Dois ou mais: o painel NÃO escolhe por ele. Oferece os
-                      nomes achados para um clique, sem impedir que digite outro. */}
-                  {configuredSshUser === null && detectedSudoUsers.length > 1 && (
-                    <div className="flex flex-col gap-1">
-                      <p className="text-xs text-muted-foreground">
-                        Encontramos <strong>{detectedSudoUsers.length} usuários</strong> não-root com
-                        sudo no servidor. Qual deles você criou na instalação?
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {detectedSudoUsers.map((name) => (
-                          <Button
-                            key={name}
-                            type="button"
-                            size="sm"
-                            variant={sshUser.trim() === name ? "default" : "outline"}
-                            className="h-7 font-mono text-xs"
-                            onClick={() => {
-                              sshUserTouched.current = true;
-                              setSshUser(name);
-                            }}
-                          >
-                            {name}
-                          </Button>
-                        ))}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Não é nenhum deles? Digite o nome no campo acima.
-                      </p>
-                    </div>
-                  )}
-                  {detectedSudoUsers.length === 0 && sshUser.trim() === "" && (
-                    <p className="text-xs text-muted-foreground">
-                      O nome que você criou ao seguir o README (ex.: deploy).
-                    </p>
-                  )}
-                  {sshUser.trim() !== "" && !sshUserOk && (
-                    <p className="text-xs text-red-400">Nome inválido (minúsculas, sem espaços, nunca root).</p>
-                  )}
-                  {sshUserOk && (
-                    <p className="text-xs text-emerald-400">
-                      ✅ Vamos validar <strong className="font-mono">{sshUser.trim()}</strong> no
-                      servidor — se ele ainda não existir, a fase o cria com as mesmas permissões.
-                    </p>
-                  )}
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground" htmlFor="ssh-pubkey">
-                    Chave pública SSH — conteúdo do arquivo .pub (ssh-ed25519 ou ssh-rsa) — opcional
-                  </label>
-                  {/* Dúvida real de campo: "para que colar chave se eu digito a
-                      senha?" e "colar isso numa página http não é falha?". As
-                      duas se respondem com texto, não com mudança de lógica. */}
-                  <p className="text-xs text-muted-foreground">
-                    <strong>A chave pública não é segredo</strong> — ela existe justamente para ser
-                    distribuída e copiada para os servidores em que você quer entrar. O que{" "}
-                    <strong>nunca</strong> se cola em lugar nenhum é a <strong>chave privada</strong>: o
-                    arquivo sem <code className="font-mono">.pub</code> (ex.:{" "}
-                    <code className="font-mono">id_ed25519</code>), que fica só na sua máquina.
-                  </p>
-                  <textarea
-                    id="ssh-pubkey"
-                    value={sshPublicKey}
-                    onChange={(e) => setSshPublicKey(e.target.value)}
-                    rows={3}
-                    spellCheck={false}
-                    placeholder="ssh-ed25519 AAAAC3NzaC… voce@sua-maquina"
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  {sshPublicKey.trim() !== "" && !sshKeyOk && (
-                    <p className="text-xs text-red-400">
-                      Formato não reconhecido — cole o conteúdo completo do arquivo .pub (uma linha,
-                      começando com ssh-ed25519 ou ssh-rsa).
-                    </p>
-                  )}
-                  {sshKeyOk && <p className="text-xs text-emerald-400">Sua chave parece válida ✅</p>}
-                  {/* Campo opcional: sem chave nova, a fase reaproveita a que já
-                      está no authorized_keys do servidor. */}
-                  <p className="text-xs text-muted-foreground">
-                    Se você já instalou sua chave no servidor seguindo o README,{" "}
-                    <strong>pode deixar em branco</strong> — a fase reaproveita a{" "}
-                    chave que já está no servidor. Cole algo aqui só para{" "}
-                    <strong>adicionar</strong> mais uma chave.
-                  </p>
-                  {/* Por que existe o campo, já que a senha do sudo é digitada
-                      no terminal: são coisas diferentes, e a fase precisa de uma
-                      chave instalada para poder desativar a senha do root. */}
-                  <p className="text-xs text-muted-foreground">
-                    <strong>Este campo não tem relação com a senha do sudo.</strong> A chave SSH é como
-                    você <strong>entra</strong> na VPS pelo SSH; a senha do sudo é o que{" "}
-                    <strong>autoriza</strong> comandos administrativos depois que você já entrou. Esta
-                    fase precisa que exista pelo menos uma chave instalada para poder desativar a senha
-                    do root sem te trancar para fora.
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Em conexão não protegida (http, fora do túnel SSH), colar a chave pública não vaza
-                    nada útil; o cuidado aqui é outro — alguém no meio do caminho poderia{" "}
-                    <strong>alterar</strong> o que trafega. É mais um motivo para usar o túnel SSH.
-                  </p>
-                  {/* Aviso honesto: a trava anti-lockout do 01-user.sh se recusa a
-                      travar o root enquanto não houver nenhuma chave instalada. */}
-                  <p className="flex items-start gap-1 text-xs text-amber-400">
-                    <ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>
-                      Se <strong>nenhuma chave</strong> estiver instalada no servidor para esse
-                      usuário, a fase <strong>não vai travar a senha do root</strong> — é a proteção
-                      anti-lockout do próprio script. Deixar em branco é seguro:{" "}
-                      <strong>nunca causa lockout</strong>.
-                    </span>
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+            <Phase01Card
+              sshUser={sshUser}
+              onSshUserChange={(value) => {
+                // a partir do primeiro toque, a varredura não decide mais por
+                // ele (nem uma revarredura posterior)
+                sshUserTouched.current = true;
+                setSshUser(value);
+              }}
+              sshPublicKey={sshPublicKey}
+              onSshPublicKeyChange={setSshPublicKey}
+              configuredSshUser={configuredSshUser}
+              detectedSudoUsers={detectedSudoUsers}
+              report={report}
+            />
           )}
 
           <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-start sm:justify-between">

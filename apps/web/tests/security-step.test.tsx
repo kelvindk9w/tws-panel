@@ -80,12 +80,25 @@ const PLAN: SecurityPlan = {
  * vazia. Cada teste ajusta o valor antes de chegar ao plano.
  */
 let detectedSudoUsers: string[] | undefined;
+/** Senha/chaves de cada usuário detectado (undefined = relatório antigo). */
+let sudoAccess: SecurityScanReport["nonRootSudoUserAccess"];
+
+/** Endereço simulado da página (o jsdom fica preso em http://localhost). */
+let fakeLocation: { protocol: string; hostname: string; port?: string } = {
+  protocol: "http:",
+  hostname: "localhost",
+};
+vi.mock("@/lib/page-location", () => ({ pageLocation: () => fakeLocation }));
 
 const apiFetchMock = vi.fn(async (path: string, init?: RequestInit) => {
   if (path === "/api/security/history") return HISTORY_EMPTY;
   if (path.startsWith("/api/security/scan")) {
     const report: SecurityScanReport = detectedSudoUsers
-      ? { ...SCAN_REPORT, nonRootSudoUsers: detectedSudoUsers }
+      ? {
+          ...SCAN_REPORT,
+          nonRootSudoUsers: detectedSudoUsers,
+          ...(sudoAccess ? { nonRootSudoUserAccess: sudoAccess } : {}),
+        }
       : SCAN_REPORT;
     return { report, cached: false };
   }
@@ -150,7 +163,20 @@ beforeEach(() => {
   sessionStorage.clear();
   apiFetchMock.mockClear();
   detectedSudoUsers = undefined;
+  sudoAccess = undefined;
+  fakeLocation = { protocol: "http:", hostname: "localhost" };
 });
+
+/** Abre a seção recolhível da chave SSH da Fase 01 (se estiver fechada). */
+function abrirSecaoChave() {
+  if (screen.queryByLabelText(/Chave pública/)) return;
+  fireEvent.click(screen.getByTestId("phase01-key-toggle"));
+}
+
+/** Abre "Detalhes e emergência" da Fase 01. */
+function abrirDetalhes() {
+  fireEvent.click(screen.getByRole("button", { name: /Detalhes e emergência/ }));
+}
 
 afterEach(() => {
   cleanup();
@@ -239,6 +265,7 @@ describe("SecurityStep — plano de correção", () => {
 
   it("tutorial guiado de chave SSH está recolhido por padrão e expande sob demanda na Fase 01", async () => {
     await reachPlanStage();
+    abrirSecaoChave();
     expect(screen.getByText(/Nunca usou chave SSH\? Veja como gerar em 2 minutos/)).toBeInTheDocument();
     // fechado por padrão: o conteúdo do tutorial não aparece antes de expandir
     expect(screen.queryByText(/O que é:/)).not.toBeInTheDocument();
@@ -252,9 +279,10 @@ describe("SecurityStep — plano de correção", () => {
     expect(screen.getAllByText(/~\/\.ssh\/id_ed25519\.pub/).length).toBeGreaterThan(0);
   });
 
-  it("fase 01 explica que, se usuário e chave já existem, a fase ainda desativa a senha do root", async () => {
+  it("fase 01 diz em uma frase o que faz: desativa a senha do root", async () => {
     await reachPlanStage();
-    expect(screen.getByText(/desativar a senha do usuário root/i)).toBeInTheDocument();
+    expect(screen.getByText(/Fase 01 — desativar a senha do root/)).toBeInTheDocument();
+    expect(screen.getByText(/ninguém entra como root com senha/i)).toBeInTheDocument();
   });
 
   it("campo de usuário não tem placeholder enganoso; a explicação fica no texto auxiliar", async () => {
@@ -268,6 +296,7 @@ describe("SecurityStep — plano de correção", () => {
 
   it("valida o formato da chave ao colar e mostra 'Sua chave parece válida ✅'", async () => {
     await reachPlanStage();
+    abrirSecaoChave();
     const campo = screen.getByLabelText(/Chave pública/);
     fireEvent.change(campo, { target: { value: "nao-e-uma-chave" } });
     expect(screen.getByText(/Formato não reconhecido/)).toBeInTheDocument();
@@ -289,6 +318,7 @@ describe("SecurityStep — plano de correção", () => {
     fireEvent.change(screen.getByLabelText(/Usuário não-root criado na instalação/), {
       target: { value: "kelvin" },
     });
+    abrirSecaoChave();
     fireEvent.change(screen.getByLabelText(/Chave pública/), {
       target: {
         value:
@@ -321,6 +351,7 @@ describe("SecurityStep — Fase 01 com chave SSH opcional", () => {
   }
 
   function preencherChave(valor: string) {
+    abrirSecaoChave();
     fireEvent.change(screen.getByLabelText(/Chave pública/), { target: { value: valor } });
   }
 
@@ -359,17 +390,11 @@ describe("SecurityStep — Fase 01 com chave SSH opcional", () => {
     expect(fase01Button()).toBeEnabled();
   });
 
-  it("o campo de chave se anuncia como opcional e explica que a chave do servidor é reaproveitada", async () => {
+  it("o campo de chave se anuncia como opcional e diz que a chave do servidor é reaproveitada", async () => {
     await reachPlanStage();
+    abrirSecaoChave();
     expect(screen.getByLabelText(/Chave pública.*opcional/i)).toBeInTheDocument();
-    expect(screen.getByText(/pode deixar em branco/i)).toBeInTheDocument();
-    expect(screen.getByText(/chave que já está no servidor/i)).toBeInTheDocument();
-  });
-
-  it("avisa, junto do campo, que sem nenhuma chave instalada a senha do root NÃO é travada", async () => {
-    await reachPlanStage();
-    expect(screen.getByText(/não vai travar a senha do root/i)).toBeInTheDocument();
-    expect(screen.getByText(/nunca causa lockout/i)).toBeInTheDocument();
+    expect(screen.getByText(/já está no servidor, deixe em branco/i)).toBeInTheDocument();
   });
 
   it("com o formulário incompleto, a explicação aparece dentro do card da Fase 01, junto do botão", async () => {
@@ -391,23 +416,31 @@ describe("SecurityStep — Fase 01 com chave SSH opcional", () => {
 describe("SecurityStep — Fase 01 explica o que é a chave pública", () => {
   it("diz que a pública não é segredo e que a PRIVADA nunca é colada", async () => {
     await reachPlanStage();
+    abrirSecaoChave();
     const paragrafo = screen.getByText(/chave pública não é segredo/i).closest("p")!;
     expect(paragrafo).toHaveTextContent(/é distribuída|distribuída|para ser distribuída/i);
     expect(paragrafo).toHaveTextContent(/chave privada/i);
     expect(paragrafo).toHaveTextContent(/sem \.pub/i);
   });
 
-  it("separa a chave SSH da senha do sudo e explica por que a fase precisa dela", async () => {
+  it("nos detalhes, separa a chave SSH da senha do sudo e diz por que a fase exige as duas", async () => {
     await reachPlanStage();
-    const p = screen.getByText(/não tem relação com a senha do sudo/i).closest("p")!;
+    abrirDetalhes();
+    const p = screen.getByText(/Não confunda/i).closest("p")!;
     expect(p).toHaveTextContent(/entra.*na VPS pelo SSH/i);
     expect(p).toHaveTextContent(/autoriza.*comandos administrativos/i);
     expect(p).toHaveTextContent(/pelo menos uma chave instalada/i);
     expect(p).toHaveTextContent(/sem te trancar para fora/i);
   });
 
-  it("sobre http: colar a pública não vaza nada; o risco é alteração no caminho", async () => {
+  it("sobre http: o aviso só aparece quando a página está sem proteção", async () => {
     await reachPlanStage();
+    abrirDetalhes();
+    expect(screen.queryByText(/não vaza nada útil/i)).not.toBeInTheDocument(); // túnel (localhost)
+    cleanup();
+    fakeLocation = { protocol: "http:", hostname: "203.0.113.10", port: "9001" };
+    await reachPlanStage();
+    abrirDetalhes();
     const p = screen.getByText(/não vaza nada útil/i).closest("p")!;
     expect(p).toHaveTextContent(/alterar/i);
     expect(p).toHaveTextContent(/túnel SSH/i);
@@ -415,8 +448,75 @@ describe("SecurityStep — Fase 01 explica o que é a chave pública", () => {
 
   it("o rótulo do campo deixa claro que é o conteúdo do arquivo .pub", async () => {
     await reachPlanStage();
+    abrirSecaoChave();
     expect(screen.getByLabelText(/arquivo \.pub/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Chave pública.*opcional/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Feedback de campo: o card da Fase 01 tinha oito parágrafos e o leigo não
+ * descobria o principal — o que vai acontecer com a VPS DELE. Agora o card
+ * mostra o estado lido pela varredura (o usuário tem senha? tem chave?) e o
+ * resultado, e o resto fica recolhido.
+ */
+describe("SecurityStep — Fase 01 mostra o que vai acontecer", () => {
+  const CHAVE =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILSr6Jdm+iXYbln6BfkP2uCTKNO/eVi89lEjP7rH7dHN eu@notebook";
+
+  async function comAcesso(hasPassword: boolean, keyCount: number) {
+    detectedSudoUsers = ["kelvin"];
+    sudoAccess = { kelvin: { hasPassword, keyCount } };
+    await reachPlanStage();
+    return screen.getByTestId("phase01-status");
+  }
+
+  it("com senha e chave: diz que a senha do root SERÁ desativada", async () => {
+    const status = await comAcesso(true, 1);
+    expect(status).toHaveTextContent(/kelvin tem senha/);
+    expect(status).toHaveTextContent(/1 chave SSH instalada/);
+    expect(status).toHaveTextContent(/a senha do root será desativada/i);
+    // a chave já está lá: a seção de chave fica recolhida
+    expect(screen.queryByLabelText(/Chave pública/)).not.toBeInTheDocument();
+  });
+
+  it("sem chave: NÃO será desativada, nada muda no acesso, e a seção de instalar a chave já vem aberta", async () => {
+    const status = await comAcesso(true, 0);
+    expect(status).toHaveTextContent(/nenhuma chave SSH instalada/i);
+    expect(status).toHaveTextContent(/não será desativada/i);
+    expect(status).toHaveTextContent(/continua entrando com a senha/i);
+    expect(screen.getByLabelText(/Chave pública/)).toBeInTheDocument();
+    expect(screen.getByTestId("phase01-key-toggle")).toHaveTextContent(/Instalar minha chave SSH/);
+  });
+
+  it("colar uma chave válida muda o resultado para 'será desativada'", async () => {
+    const status = await comAcesso(true, 0);
+    fireEvent.change(screen.getByLabelText(/Chave pública/), { target: { value: CHAVE } });
+    expect(status).toHaveTextContent(/a senha do root será desativada/i);
+  });
+
+  it("sem senha: NÃO será desativada, diz por quê e como corrigir", async () => {
+    const status = await comAcesso(false, 1);
+    expect(status).toHaveTextContent(/kelvin não tem senha/);
+    expect(status).toHaveTextContent(/não será desativada/i);
+    expect(status).toHaveTextContent(/sem sudo/i);
+    expect(status).toHaveTextContent("sudo passwd kelvin");
+  });
+
+  it("sem dado da varredura para o usuário: não afirma nada, aponta a simulação", async () => {
+    detectedSudoUsers = ["kelvin"];
+    await reachPlanStage();
+    const status = screen.getByTestId("phase01-status");
+    expect(status).toHaveTextContent(/simulação mostra/i);
+    expect(status).not.toHaveTextContent(/será desativada/i);
+  });
+
+  it("detalhes e emergência ficam recolhidos e explicam o console e a confirmação em 5 minutos", async () => {
+    await comAcesso(true, 1);
+    expect(screen.queryByText(/console/i)).not.toBeInTheDocument();
+    abrirDetalhes();
+    expect(screen.getByText(/console da sua hospedagem/i).closest("p")).toHaveTextContent(/kelvin/);
+    expect(screen.getByText(/nova janela SSH/i).closest("p")).toHaveTextContent(/5 minutos/);
   });
 });
 

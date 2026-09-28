@@ -114,6 +114,20 @@ describe("runSecurityScan — nonRootSudoUsers", () => {
     expect(report.nonRootSudoUsers).toEqual([]);
   });
 
+  it("senha e chaves de cada usuário vão ao relatório (a tela da Fase 01 mostra o que vai acontecer)", async () => {
+    const report = await runSecurityScan(runnerWithSudoOutput("sudo-user kelvin 1001 P 1\nsudo-user novo 1002 L 0\n"));
+    expect(report.nonRootSudoUsers).toEqual(["kelvin", "novo"]);
+    expect(report.nonRootSudoUserAccess).toEqual({
+      kelvin: { hasPassword: true, keyCount: 1 },
+      novo: { hasPassword: false, keyCount: 0 },
+    });
+  });
+
+  it("saída antiga (sem senha/chaves): nada é afirmado sobre o acesso", async () => {
+    const report = await runSecurityScan(runnerWithSudoOutput("sudo-user kelvin 1001\n"));
+    expect(report.nonRootSudoUserAccess).toEqual({});
+  });
+
   it("nome inválido na saída é descartado; o válido permanece", async () => {
     const report = await runSecurityScan(
       runnerWithSudoOutput("sudo-user Bad;Name 1000\nsudo-user deploy 1000\n"),

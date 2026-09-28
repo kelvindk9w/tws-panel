@@ -62,6 +62,13 @@ const SUDO_USER_PREFIX = "sudo-user";
 export interface SudoUser {
   name: string;
   uid: number;
+  /**
+   * Tem senha utilizável (`passwd -S` = "P")? Sem senha não há como usar o
+   * sudo — a Fase 01 então não trava a senha do root. Ausente = não lido.
+   */
+  hasPassword?: boolean;
+  /** Chaves SSH em ~/.ssh/authorized_keys. Ausente = não lido. */
+  keyCount?: number;
 }
 
 /**
@@ -78,13 +85,21 @@ export function parseSudoUsers(stdout: string): SudoUser[] {
   const out: SudoUser[] = [];
   for (const line of stdout.split("\n")) {
     const parts = line.trim().split(/\s+/);
-    if (parts.length !== 3 || parts[0] !== SUDO_USER_PREFIX) continue;
+    if ((parts.length !== 3 && parts.length !== 5) || parts[0] !== SUDO_USER_PREFIX) continue;
     const name = parts[1] ?? "";
     const rawUid = parts[2] ?? "";
     if (!/^\d+$/.test(rawUid)) continue;
     const uid = Number.parseInt(rawUid, 10);
     if (uid < 1000 || !isValidSshUsername(name)) continue;
-    out.push({ name, uid });
+    const user: SudoUser = { name, uid };
+    // Campos 4 e 5 (senha e chaves) só existem na saída nova; cada um só entra
+    // se for legível — nunca se inventa "tem senha" ou "tem chave".
+    const pw = parts[3];
+    if (pw === "P") user.hasPassword = true;
+    else if (pw === "L" || pw === "NP") user.hasPassword = false;
+    const keys = parts[4];
+    if (keys !== undefined && /^\d+$/.test(keys)) user.keyCount = Number.parseInt(keys, 10);
+    out.push(user);
   }
   return out;
 }
@@ -183,13 +198,16 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     description: "Verifica se existe ao menos um usuário comum (UID ≥ 1000) no grupo sudo — operar como root é anti-padrão.",
     remediation: "Aplicar a fase 01 (cria usuário não-root + sudo).",
     fixable: true,
-    // Emite uma linha "sudo-user <nome> <uid>" por candidato (todos, não só o
+    // Emite uma linha "sudo-user <nome> <uid> <senha> <chaves>" por candidato
+    // — senha = estado do `passwd -S` (P = utilizável), chaves = linhas do
+    // authorized_keys. A Fase 01 só trava a senha do root com chave E senha, e
+    // a tela mostra isso antes de aplicar. Vale para todos (não só o
     // primeiro): o NOME é o que a UI usa para não pedir que o operador digite
     // o usuário que ele mesmo criou seguindo o README. POSIX sh puro (o alvo
     // pode não ter bash) e `true` no fim para o comando sair 0 mesmo com o
     // grupo sudo inexistente ou vazio.
     command:
-      "for u in $(getent group sudo 2>/dev/null | cut -d: -f4 | tr ',' ' '); do [ \"$u\" = root ] && continue; uid=$(id -u \"$u\" 2>/dev/null); [ -n \"$uid\" ] && [ \"$uid\" -ge 1000 ] && echo \"sudo-user $u $uid\"; done; true",
+      "for u in $(getent group sudo 2>/dev/null | cut -d: -f4 | tr ',' ' '); do [ \"$u\" = root ] && continue; uid=$(id -u \"$u\" 2>/dev/null); [ -n \"$uid\" ] && [ \"$uid\" -ge 1000 ] || continue; pw=$(passwd -S \"$u\" 2>/dev/null | awk '{print $2}'); h=$(getent passwd \"$u\" | cut -d: -f6); k=$(grep -cE '^(ssh-|ecdsa-|sk-)' \"$h/.ssh/authorized_keys\" 2>/dev/null); echo \"sudo-user $u $uid ${pw:-?} ${k:-0}\"; done; true",
     evaluate: (r) => {
       const users = parseSudoUsers(r.stdout);
       return users.length > 0
