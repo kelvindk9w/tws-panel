@@ -1,8 +1,11 @@
-# Estado da sessão — 25/08/2026 (atualizado ao fim da sessão)
+# Estado da sessão — 28/09/2026 (atualizado ao fim da sessão)
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
 pendente e por quê — informação que não está no código nem no git log.
+
+> Este repositório vai ser público. Não registre aqui IP da VPS, token de setup,
+> senhas nem nomes de clientes.
 
 ---
 
@@ -12,170 +15,272 @@ pendente e por quê — informação que não está no código nem no git log.
 |---|---|
 | Repositório | `github.com/kelvindk9w/tws-panel` |
 | Branch de desenvolvimento | `dev` (default do repo) |
-| Branch de instalação | `main` — protegida, exige Pull Request |
-| PR #8 | **MESCLADO** (squash) — promoveu `dev` → `main` |
-| Sincronização | **feita** — `dev` e `main` com o mesmo conteúdo |
+| Branch de instalação | `main` — protegida, só entra por Pull Request |
+| Último PR mesclado | **#29** (squash) |
+| PRs abertos | nenhum |
+| Sincronização | `dev` e `main` com o **mesmo conteúdo** |
 
-**A `main` está pronta para instalação**: RCE fechado, validação de schema, Dockerfile
-corrigido, README completo, CI verde nos dois jobs. É o que o README manda clonar.
+A `main` é o que o README manda clonar. O Passo 6 do README manda o operador
+conferir `git diff --stat origin/main origin/dev` e esperar saída **vazia** —
+então todo trabalho relevante na `dev` precisa ser promovido, senão quem segue o
+README vê diferença e trava.
 
-**Cuidado que originou o PR #8, para não repetir:** a `main` tinha ficado 96 commits
-atrás enquanto o README dirigia instalações reais a ela — ou seja, o caminho
-documentado entregava software vulnerável. Sempre que houver trabalho relevante na
-`dev`, promova. O README agora tem um comando para o usuário conferir isso antes de
-instalar.
+## Situação da validação real (VPS de teste)
 
-## O que foi feito nesta sessão
+O dono do produto está validando o painel **seguindo o README literalmente**,
+numa VPS Contabo com Ubuntu 24.04.5 LTS, como um leigo faria. É daí que saiu
+quase todo o trabalho desta sessão.
 
-### 1. Documentação legível por máquina (`comoFuncionaSistema/`)
-93 arquivos JSON: um índice raiz, um índice por módulo, um arquivo por endpoint
-com parâmetros, erros, efeitos colaterais, chamadores e testes. Mais os arquivos
-de conceito (guardrails, detecção de stack, DNS, checagens de hardening, tipos de
-alerta, ações auditadas) e a pasta `global/` com as peças transversais.
+Estado da VPS no fim da sessão:
 
-Foi **testada**: um agente restrito a ler apenas esse diretório respondeu 9 de 10
-perguntas sobre o sistema de forma completa, sem links quebrados.
+- Usuário `kelvin` (uid 1001) criado pelo Passo 3, com `sudo`. **Removido do grupo
+  `docker`** (o instalador antigo o colocava lá — ver lições). Existe também um
+  usuário `ubuntu` com sudo, vindo da imagem do provedor.
+- Chave SSH `id_ed25519` instalada com `ssh-copy-id`.
+- Painel **reinstalado do zero** com o instalador novo, respondendo:
+  terminal `kelvin`, modo **`senha`**, porta da VPS **9001**, chave padrão.
+  Projetos em `/opt/tws-projects`.
+- Acesso pelo túnel: `ssh -L 9001:localhost:9001 kelvin@<ip>` e
+  `http://localhost:9001/?token=<token>`.
+- Wizard parado na etapa **Segurança**. A **Fase 00** precisa ser rodada de novo
+  (a primeira execução morreu no meio — ver lições). O `full-upgrade` em si
+  terminou no host; os passos seguintes da fase (unattended-upgrades,
+  needrestart) não chegaram a rodar.
+- Duas varreduras de segurança falharam por **tempo esgotado aguardando a senha
+  do sudo**: o pedido não foi percebido. Corrigido no PR #28 (faixa fixa,
+  contagem regressiva, título da aba).
+- O usuário acrescentou uma linha `127.0.1.1 <hostname>` ao `/etc/hosts` por
+  sugestão errada minha (o nome já estava lá). Redundante e inofensiva.
+- No fim da sessão ele estava rodando
+  `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`
+  para pegar os PRs #28 e #29.
 
-### 2. Correções de segurança
-- **Execução de comando pela URL do repositório** (o grave). O transporte `ext::`
-  do git executava comando arbitrário a partir de um `POST /api/projects` seguido
-  de deploy. Como o painel tem o socket do Docker, equivalia a root no host.
-  Fechado com allowlist de esquema em `validateGitSource` e de caracteres em
-  `validateBranch`.
-- **Injeção no Caddyfile** por domínio, fechada na entrada e de novo na geração
-  do arquivo (defesa em profundidade — projetos gravados antes da validação).
-- **Validação de schema em todas as 10 rotas**, com `coerceTypes` e
-  `removeAdditional` desligados no Ajv: o schema recusa, não conserta.
+**Plano do usuário:** terminar esta rodada (hardening + admin + deploy), e só
+então **reinstalar o sistema operacional** e refazer tudo do zero pelo README,
+cronometrando, como validação final.
 
-### 3. Correções de comportamento
-21 dos 25 achados abertos do review. Entre eles: alertas abertos não são mais
-descartados pelo teto; jobs de segurança são persistidos e restaurados no boot;
-`start`/`stop` devolvem erro de domínio em vez de 500 opaco; falhas de Docker e
-de e-mail deixaram de ser silenciosas; auditoria arquiva em vez de descartar.
+---
 
-### 4. Funcionalidades
-- **Edição de projeto** após a criação (nome, repositório, branch, domínio), com
-  o painel registrando qual branch está de fato publicada (`deployedBranch`).
-- **Fluxo de hardening acessível fora do wizard**, em `/security/hardening`.
-- Confirmado por teste que **o mesmo repositório pode ser hospedado duas vezes**
-  em branches e domínios diferentes (produção + sandbox) — já funcionava.
+## O que foi feito nesta sessão (PRs #13 a #29)
 
-### 5. Infraestrutura
-- Docker CLI 27.5.1 → 29.7.2 e Compose 2.32.4 → 5.5.0, eliminando 3 CVEs
-  CRITICAL. Validado que o override de rede que o painel gera ainda funciona no
-  Compose 5.x.
-- Trivy passou a bloquear CRITICAL, com allowlist documentada para os dois que
-  restam e não estão sob nosso controle.
-- `tsconfig.json` do servidor passou a incluir os testes no typecheck.
+### Instalação e README
+- **#13** — README à prova de instalação real (erro de host key separado do
+  reinício, `adduser`/`usermod` como par inseparável, reconectar depois do
+  `usermod`, git já instalado pelo provedor). Correção da corrida na auditoria.
+- **#20** — O instalador **para** antes de instalar se houver
+  `/var/run/reboot-required`. Escolha da chave SSH virou regra objetiva
+  (`id_ed25519` → `id_rsa` → gerar nova) e o comando sempre usa `-i`.
+- **#21** — Instalador pergunta usuário do terminal, modo de execução como root e
+  nome da chave local. Novo `scripts/uninstall.sh` (lista, pede para digitar
+  `remover`, `--dry-run`, `--keep-repo`, diz o que **não** desfaz).
+- **#22** — O instalador **não coloca mais ninguém no grupo `docker`**; se o
+  usuário do terminal já estiver lá, explica e pergunta se remove.
+- **#25 / #26 / #27** — Porta do painel: 4ª pergunta do instalador, confere se
+  está livre na VPS e recusa 22/80/443/portas de e-mail. README ensina a conferir
+  a porta livre **no computador do operador** (Linux/WSL, macOS, PowerShell)
+  antes de instalar. O banner explica que o número do endereço é o da **esquerda**
+  do túnel.
+
+### Terminal ao vivo
+- **#14** — Varredura detecta o usuário não-root do grupo sudo; Fase 01 vem
+  preenchida e a chave SSH ficou opcional.
+- **#15** — Botão "Abrir como `<usuário>`" (`su -`) nas sessões root.
+- **#21** — Terminal abre com o usuário escolhido na instalação
+  (`PAAS_TERMINAL_USER`) e dois modos (`PAAS_ROOT_MODE`):
+  - `senha` (recomendado): `sudo` no próprio terminal, o operador digita a senha;
+  - `segundo-plano`: comandos de root pelo host bridge, auditados, saída espelhada.
+  O monitoramento agendado roda como root nos dois modos. Protocolo de controle
+  no WebSocket (NUL + `paas-control:` + JSON) e `GET /api/terminal/info`.
+- **#22** — O painel verifica a cada sessão se o usuário do terminal consegue
+  escrever no socket do Docker (= root sem senha) e mostra aviso vermelho.
+- **#23** — Aviso de conexão não protegida com saída pronta (comando do túnel e
+  URL `localhost` montados); textos da chave pública e da simulação.
+- **#28** — Pedido de senha impossível de perder: faixa fixa no topo, contagem
+  regressiva (viaja como duração, não como instante), título da aba, prazo de
+  5 → 2 min (`PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS`), texto dizendo que a senha
+  é do usuário do terminal, **não** do root.
+
+### Hardening
+- **#14** — Confirmação de acesso da Fase 01 passou a vir do marcador
+  `:::PAAS_ROLLBACK_SCHEDULED`, emitido só quando uma reversão é de fato agendada.
+- **#24** — As fases não derrubam mais o próprio canal:
+  - Fase 00 segura (`apt-mark hold`) os pacotes que reiniciam o Docker e devolve o
+    estado por `trap`; unattended-upgrades exclui o Docker.
+  - `NEEDRESTART_MODE=l` em todas as fases.
+  - Fase 05 preserva Docker instalado via snap e simula o `autoremove` antes.
+  - **Execução destacada**: `setsid` + `flock` por fase + log/código de saída em
+    arquivos de estado; o painel reataja e reconcilia após queda do canal ou
+    reinício do próprio painel. Allowlist reconstrói o comando e compara byte a
+    byte.
+
+### Deploy e projetos
+- **#15** — `git` instalado na imagem (o modo git **nunca** tinha funcionado) e
+  erro de binário ausente com mensagem legível.
+- **#16** — Repositório privado com credencial de leitura cifrada (AES-256-GCM,
+  chave própria), entregue ao git por `GIT_ASKPASS` — nunca na URL nem no argv.
+  Diretório dos projetos configurável (`PAAS_PROJECTS_DIR`, montado com o mesmo
+  caminho dentro e fora do container).
+- **#19** — Gravação em disco que falha não é mais confirmada (senha, sessões,
+  credencial). Regra de banco exposto reconhece `"5432"`, `${VAR}:5432`, faixas,
+  IPv6 e forma longa; lista de bancos unificada. Migração para o Vitest 4.
+- **#21** — Caddy e Stalwart recebiam a configuração por bind mount de caminho
+  que só existe dentro do container: **não funcionavam em nenhuma VPS**. Agora a
+  config é gravada dentro dos containers com `docker cp`.
+
+### Saúde e monitoramento
+- **#20** — O monitoramento agendado **vigiava o container, não a VPS**
+  (`HostRunner` local). Corrigido para o host bridge, com recoleta da linha de
+  base antiga sem alertas falsos. Tela de saúde: todos os cards com selo, IP do
+  container removido, reinicialização pendente, KVM reconhecido.
+
+### CI e testes
+- **#16** — Lacunas reais de cobertura fechadas em vez de baixar limites.
+- **#19** — Vitest 4 com classificação trecho a trecho do que a nova régua passou
+  a contar; só um limite recalibrado, com justificativa no config.
+- **#29** — Teste do PTY real estabilizado: o `docker exec` devolve o stream antes
+  de o shell existir; o teste agora espera prontidão antes de medir.
 
 ---
 
 ## Pendências — o que fazer a seguir
 
-### Imediato
-1. **Instalação na VPS — em andamento.** A primeira tentativa falhou porque a `main`
-   estava desatualizada (o Dockerfile copiava `scripts/` depois do `pnpm install` que
-   depende dele). Corrigido e mesclado. O usuário resetou a VPS e está refazendo o
-   fluxo do zero.
-   - Ao reconectar após o reset, o SSH avisa que a identidade do host mudou. É
-     esperado (o SO foi reinstalado): `ssh-keygen -f ~/.ssh/known_hosts -R SEU_IP`.
-   - Nada foi validado numa máquina real ainda: DNS, emissão de certificado TLS,
-     porta 25 do provedor e o hardening aplicado de verdade só se provam lá.
+### Com o usuário, agora
+1. Depois do `git pull` + `docker compose up -d --build`: **Revarrer** na etapa
+   Segurança, digitar a senha do `kelvin` quando o pedido aparecer, e rodar a
+   **Fase 00** de novo. Conferir no log os pacotes do Docker que ficaram de fora.
+2. Fases 01–03 aplicadas de verdade: quando o painel pedir confirmação de acesso,
+   **abrir uma janela SSH nova sem fechar a atual** e testar o login antes de
+   confirmar (janela de 5 minutos, depois reverte sozinho).
+3. Criar a conta admin, depois deploy de **repositório público** e só então de
+   **privado** — para saber qual parte quebrou, se quebrar.
+4. Ainda não recebi o print do pedido de senha que ele descreveu como "senha
+   root" pelo IP. Com o #28 no ar, confirmar se o problema sumiu.
 
-### Próximo bloco de trabalho: repositórios privados
-Ordem definida com o usuário, **nesta sequência**:
-1. **Camada de segredos cifrados** (AES-256-GCM, chave mestra fora do `dataDir`).
-   Pré-requisito de tudo, e absorve as senhas do Stalwart que hoje estão em texto
-   plano.
-2. **Clone autenticado sem vazamento.** A credencial deve ir por
-   `git -c http.extraHeader`, **nunca embutida na URL** — se for na URL, ela
-   vaza em três lugares: log do job (visível na UI), stderr do git em caso de
-   falha, e `.git/config` (persistido em disco, e o scan de secrets do painel
-   exclui `.git`).
-3. **Fine-grained PAT** — aqui repositório privado já funciona.
-4. **GitHub App via manifest flow** — melhor UX e token de 1h, mas não destrava
-   capacidade nova. Permissão necessária: apenas `Contents: read-only`.
-5. **Webhook / deploy automático** — junto com o GitHub App, que já traz o canal
-   e a validação de assinatura. Exige expor o painel; a alternativa sem exposição
-   é polling.
+### Itens de interface pedidos e ainda não feitos
+- Fase 01: deixar explícito que **sem chave o operador digita a senha quando
+  necessário**, e botão "como instalar a minha chave" ao lado do "como gerar".
+- Botão "O que isso faz?" expansível junto de "Simular todas as fases pendentes".
+- Botão **verde** "Aplicar de verdade", com texto objetivo de que agora a VPS
+  será alterada.
 
-### Achados abertos (decisão do usuário)
-- **Stalwart** fixado em `v0.11.8`, afetado pelo **CVE-2025-61600** (DoS não
-  autenticado no parser IMAP, corrigido só na 0.13.4, sem backport). Migrar exige
-  reescrever `client.ts` (144 linhas, REST → JMAP) e o E2E. Recomendação: P1
-  pós-lançamento. Mitigação barata: restringir exposição das portas IMAP.
-- **Três riscos aceitos como custo arquitetural**, declarados em
-  `global/threat-model.json`: socket do Docker montado, terminal web com root,
-  senhas de e-mail em texto plano (esta última sai com o item 1 acima).
-- `PUT /api/security/monitor/config` responde e audita o `intervalMs` enviado,
-  não o valor efetivamente aplicado após o clamp.
-- Trivy bloqueia CRITICAL, mas **HIGH ainda passa**.
-- A imagem de produção **carrega devDependencies** (`Dockerfile:87` copia o
-  estágio de build inteiro). Corrigir reduz tamanho e superfície.
+### Decisões pendentes do usuário
+- **HTTPS com certificado próprio na instalação** (primeiro acesso pelo IP já
+  criptografado, impressão digital no banner). Proposto, sem resposta.
+- **Banco publicado só em loopback** (`127.0.0.1:5432:5432`) hoje é bloqueado.
+  Opções: manter; rebaixar para aviso (recomendado); liberar.
+- **Suporte ao Ubuntu 26.04**: rodada dedicada depois de o 24.04 estar validado.
+
+### Limitações e riscos conhecidos
+- `/security/hardening` (fora do wizard) não exibe terminal, e o terminal só
+  conecta com o setup token: no modo `senha`, varredura/fase disparada ali pede a
+  senha num terminal invisível e expira.
+- Logs de execução das fases (`/etc/paas/runs`) são legíveis por qualquer usuário
+  local (`umask 022`, para o usuário do terminal acompanhar sem senha).
+  Restringir ao usuário do terminal.
+- O Docker ficou **sem atualização automática de segurança** (troca consciente
+  para o painel não cair de madrugada). README e log da Fase 00 avisam.
+- `alerts-service` ainda engole falha de gravação (os outros stores já não).
+- O painel não exibe o diretório de projetos em uso.
+- Achados antigos ainda abertos: Stalwart `v0.11.8` com CVE-2025-61600 (P1
+  pós-lançamento); Trivy deixa passar HIGH; imagem de produção carrega
+  devDependencies; `intervalMs` do monitor auditado sem o clamp.
+- `global/threat-model.json` ainda descreve "terminal web com root" como risco
+  aceito — precisa refletir os modos `senha`/`segundo-plano` e o risco do grupo
+  `docker`.
+
+### Divulgação
+- Thread publicada no X (5 tweets, sem link do repositório). O próximo post
+  combinado é a **continuação da história** (resultado da validação), não uma
+  repetição. O link do repositório só entra depois da validação final.
 
 ---
 
 ## Lições desta sessão (evitar repetir)
 
-- **Subagentes no mesmo diretório se atropelam.** Quatro agentes rodando em
-  paralelo no mesmo working tree causaram `git stash`/`reset` que reverteram
-  trabalho uns dos outros. Nada se perdeu, mas por sorte. Use worktrees isolados.
-- **Hook local verde ≠ CI verde.** O pre-push roda testes, cobertura e build; o
-  CI roda isso **mais o scan de imagem**. O erro se esconde no lado que só um dos
-  dois executa. Verifique `gh run list` e compare o SHA testado com o topo da
-  branch.
-- **Achado de review é hipótese até traçar o caminho de chamada.** O review
-  afirmava que existiam "dois sistemas de guardrails dessincronizados". Seguindo
-  quem chama quem: `rules.ts` bloqueia o deploy (com scan de secrets) e
-  `guardrails.ts` alimenta a detecção de stack. Propósitos diferentes, não
-  duplicação.
-- **Números em documentação envelhecem sozinhos.** Contagem de testes divergiu
-  três vezes, o README afirmava usar SQLite (não existe) e dizia não haver shell
-  arbitrário na UI (há: o terminal web é root). Uma checagem automatizada no CI
-  para o que é verificável — contagens, links, caminhos citados — resolveria.
-- **Espera fixa em teste é falso negativo esperando acontecer.** Dois testes
-  intermitentes vieram de `setTimeout` fixo aguardando escrita assíncrona. A
-  correção é esperar pela condição ou expor um `flush()`, nunca aumentar o sono.
+- **O painel roda DENTRO de um container. Toda funcionalidade que toca o host
+  precisa ser pensada dos dois lados.** Esta sessão achou quatro defeitos graves
+  com a mesma raiz, nenhum pego por teste porque em desenvolvimento o painel roda
+  direto no host:
+  - bind mount de caminho do painel (`/data/...`) é resolvido pelo daemon **no
+    host**, onde não existe — Caddy e Stalwart nunca funcionaram numa VPS;
+  - `os.networkInterfaces()` mostra a rede do container, não a da VPS;
+  - `HostRunner` (`bash -c` local) roda no container — o monitoramento vigiava o
+    próprio painel;
+  - qualquer coisa que reinicie o `dockerd` (upgrade do `docker-ce`, `needrestart`,
+    remover snap do Docker) mata o PTY e o helper **no meio da fase**.
+  Pergunta obrigatória em code review: *isto roda no container ou no host, e o
+  caminho/processo existe dos dois lados?*
+- **Grupo `docker` = root sem senha.** Qualquer proteção baseada em "o usuário não
+  é root" é falsa se ele estiver no grupo. Verificar pela permissão real de
+  escrita no socket, não pelo nome do grupo.
+- **Teste de `sudo` precisa separar digitação de execução.** Medi `time sudo true`
+  com a credencial fora do cache e atribuí à rede o tempo que era a pessoa
+  digitando. Medir sempre com credencial em cache (`sudo -v` antes).
+- **"Lento" pode ser "esperando por alguém".** Os 296 s do relato eram o timeout
+  de senha, visível no log como `SudoElevationError reason:"timeout"`. Leia o log
+  com o campo `host` de cada requisição antes de concluir onde algo aconteceu.
+- **O túnel SSH tem duas portas.** `ssh -L <local>:localhost:<vps>` —
+  `Address already in use` é o lado esquerdo (computador do operador);
+  `Connection refused` é o direito; o navegador usa sempre o número da esquerda.
+- **Não aceite de subagente uma redução de escopo que contraria pedido explícito
+  do usuário.** O usuário pediu um comando para achar porta livre; o agente
+  decidiu não publicar "porque não existe um igual nos três sistemas" e eu
+  repassei. A resposta certa era publicar os três.
+- **Verifique pessoalmente as afirmações de segurança dos subagentes** (onde o
+  segredo trafega, allowlist, quoting). Em todas as vezes nesta sessão bateu,
+  mas é a parte que não pode estar errada.
+- **Remover uma trava de interface pode expor um defeito que ela escondia.** Ao
+  tornar a chave opcional na Fase 01, apareceu que o executor decidia a
+  confirmação de acesso pelo argumento, não pelo que o script fez.
+- **Teste instável tem causa.** O do PTY real falhou três vezes; subir o timeout
+  já tinha sido tentado. A causa (escrever antes de o shell existir) só apareceu
+  olhando o fluxo cru. Não usar retry automático onde ele esconde o defeito que o
+  teste existe para pegar.
 
 ## Detalhes que custaram tempo e vale saber de antemão
 
-- **A `main` é protegida** (`protect-main`): push direto é rejeitado, só entra por Pull
-  Request. Isso é correto e foi respeitado — quando o push falhou, o caminho foi abrir
-  PR, nunca contornar. `protect-dev` também está ativa, mas aceita push direto.
-- **O PR #8 foi mesclado com squash**, então a `main` tem a release como um commit único
-  sem história compartilhada com a `dev`. Sincronizar depois disso gera conflitos que são
-  artefato da história divergente, não de conteúdo: resolver favorecendo a `main` funciona,
-  mas **verifique antes que ela é superconjunto** (foi o caso — as linhas que só a `dev`
-  tinha eram versões antigas de trechos reescritos).
-- **Hook local verde não significa CI verde.** O pre-push roda testes, cobertura e build;
-  o CI roda isso **mais o scan de imagem**, que precisa construir o Dockerfile. Confira com
-  `gh run list` e compare o SHA testado com o topo da branch — CI verde de dois commits
-  atrás não diz nada.
-- **Squash merge invalida qualquer verificação baseada em ancestralidade.** O README mandava o
-  operador rodar `git log --oneline main..origin/dev | wc -l` e esperar `0` antes de instalar.
-  Como a `main` recebe cada release como um commit único, os commits originais da `dev` nunca
-  viram ancestrais dela: numa VPS real o comando devolveu **100** com apenas 3 arquivos de
-  diferença real, nenhum de produção. Pior, o texto mandava usar `git checkout dev` nesse caso —
-  a verificação criada para evitar instalar versão velha empurrava para a branch de
-  desenvolvimento. Corrigido para `git diff --stat origin/main origin/dev`, que compara conteúdo.
-  Regra geral: neste repositório, `A..B` mente; compare arquivos, não histórico.
-- **Drop-in de sshd: o primeiro arquivo vence, não o último.** O README mandava o usuário criar
-  `99-tws-panel.conf` para afrouxar o timeout de sessão ociosa, mas o painel grava
-  `99-paas-hardening.conf` — que ordena antes e, pela semântica do OpenSSH (*the first obtained
-  value will be used*), ganha. O override do usuário virava letra morta em silêncio, só depois de
-  aplicar o hardening. Corrigido para `10-local-override.conf`. Ao contrário de systemd/sysctl.d,
-  em `sshd_config.d` prefixo numérico **baixo** significa prioridade **alta**. E a verificação
-  honesta não é olhar o arquivo, é `sudo sshd -T | grep -i clientalive`, que mostra o que o
-  servidor de fato adotou.
-- **Ao investigar um teste intermitente, varra o arquivo inteiro pelo mesmo padrão.** A
-  causa era sempre a mesma (esperar por tempo fixo em vez de por condição) e estava em três
-  lugares: dois no teste do terminal e um no de jobs de segurança. Corrigir só a linha que
-  apitou fez o problema voltar duas vezes.
+- **Todo PR `dev` → `main` nasce `CONFLICTING`** por causa do squash merge. O
+  procedimento, sempre com verificação antes:
+  1. `git fetch origin` e conferir que `git diff origin/dev origin/main` só tem,
+     do lado da `main`, versões antigas do que a `dev` reescreveu (nenhum arquivo
+     só na `main`: `git diff origin/dev origin/main --name-status | grep '^A'`
+     vazio). Para JSON reformatado, comparar o conteúdo parseado, não linhas.
+  2. `git merge -s ours origin/main -m "chore: reconcile with main after squash merge"`
+  3. `git diff <commit anterior> HEAD --stat` **vazio** (a árvore não mudou).
+  4. `PAAS_SKIP_PREPUSH=1 git push origin dev` e esperar a CI de novo.
+- **Hook de pré-commit barra segredos em testes também.** Fixtures não podem
+  parecer tokens reais (`github_pat_…`). A chave de exemplo oficial da AWS
+  (`AKIAIOSFODNN7EXAMPLE`) está na allowlist como string exata; o cabeçalho de
+  chave privada é montado por concatenação no teste.
+- **Vitest 4:** mock de classe usado com `new` precisa de `function`, não arrow;
+  a cobertura remapeada por AST conta callbacks defensivos que a v3 ignorava.
+- **Corpo de PR com caractere de controle é recusado pela ferramenta** — usar
+  `gh pr create --body-file`.
+- **`gh run view --log-failed` pode vir vazio**; usar
+  `gh api repos/kelvindk9w/tws-panel/actions/jobs/<id>/logs`.
+- **A ferramenta bloqueia `sleep N && cmd`**; esperar condição com
+  `until <cheque>; do sleep 20; done`.
+- **A `main` é protegida** (`protect-main`); push direto é rejeitado. Nunca
+  contornar.
+- **Drop-in de sshd: o primeiro arquivo vence.** Override do usuário em
+  `10-local-override.conf`; verificar com `sudo sshd -T | grep -i clientalive`.
+- **Squash merge invalida verificação por ancestralidade** (`A..B` mente neste
+  repo); compare conteúdo com `git diff --stat`.
 
 ## Convenções observadas
 
-- Commits em inglês, conventional commits, corpo explicando **por quê**.
-- Comentários no código em português, densos, explicando a decisão e não o óbvio.
+- Commits em português, conventional commits, corpo explicando **por quê** e o
+  comportamento (não as linhas). Trailer de coautoria e link da sessão no fim.
+- PR com contexto do problema real, decisões, trade-offs honestos e validações.
+- Comentários no código em português, densos, explicando a decisão.
 - TDD: teste que falha primeiro, verificado falhando pelo motivo certo.
-- Nunca commitar sem `pnpm run test:unit` e `pnpm run typecheck` limpos.
+- Nunca commitar sem `pnpm test:coverage` (espelha a CI) e `pnpm run typecheck`
+  limpos; scripts com `bash -n` e `npx --yes shellcheck -x`.
+- Subagentes com escopo de escrita explícito por arquivo; em paralelo só em
+  arquivos disjuntos; nunca `git stash`/`reset`/`checkout` dentro deles.
+- `comoFuncionaSistema/` atualizado junto com o código.
 - O usuário não quer código colado no chat — cite o caminho do arquivo.
+- Público-alvo do README é o leigo: nada pode depender de sorte nem de a pessoa
+  ler uma mensagem solta na tela; transparência total (projeto open source).
+- `image1.png`/`image2.png` na raiz são prints do usuário com IP da VPS: **nunca
+  commitar**.
