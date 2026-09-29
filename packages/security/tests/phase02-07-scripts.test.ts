@@ -100,12 +100,15 @@ describe.skipIf(!HAS_DOCKER)("fases 02 e 07 num Ubuntu real", () => {
     expect(sh("grep -E '^UMASK' /etc/login.defs").out.trim()).toBe("UMASK 027");
     expect(sh("grep -E '^PASS_MIN_DAYS' /etc/login.defs").out.trim()).toBe("PASS_MIN_DAYS 1");
     expect(sh("grep -E '^PASS_MAX_DAYS' /etc/login.defs").out.trim()).toBe("PASS_MAX_DAYS\t99999"); // intocado
-    expect(sh("cat /etc/modprobe.d/99-paas-hardening.conf").out).toContain("install usb-storage /bin/false");
+    // o Lynis (NETW-3200) só reconhece o bloqueio na forma exata "install <protocolo> /bin/true"
+    const modprobe = sh("cat /etc/modprobe.d/99-paas-hardening.conf").out;
+    for (const p of ["dccp", "sctp", "rds", "tipc", "usb-storage"]) expect(modprobe).toContain(`install ${p} /bin/true`);
+    expect(modprobe).not.toMatch(/^install .* \/bin\/false$/m);
     expect(sh("cat /etc/security/limits.d/99-paas-nocore.conf").out).toContain("* hard core 0");
     expect(sh("cat /etc/issue.net").out).toContain("Authorized access only");
     expect(sh("stat -c %a /etc/crontab").out.trim()).toBe("600");
     expect(sh("stat -c %a /etc/cron.d").out.trim()).toBe("700");
-    for (const pkg of ["libpam-tmpdir", "debsums", "apt-show-versions", "acct", "sysstat", "libpam-pwquality"]) {
+    for (const pkg of ["libpam-tmpdir", "debsums", "apt-show-versions", "acct", "sysstat", "libpam-pwquality", "apt-listchanges"]) {
       expect(sh(`dpkg -s ${pkg} >/dev/null && echo ok`).out.trim(), pkg).toBe("ok");
     }
 

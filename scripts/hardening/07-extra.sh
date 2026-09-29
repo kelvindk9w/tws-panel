@@ -100,7 +100,9 @@ step "Instalando ferramentas de verificação e contabilidade"
 # libpam-tmpdir: $TMP privado por sessão; debsums: confere arquivos dos pacotes;
 # apt-show-versions: gestão de patches; acct: contabilidade de processos;
 # sysstat: histórico de uso; libpam-pwquality: força mínima de senha NOVA.
-apt_install libpam-tmpdir debsums apt-show-versions acct sysstat libpam-pwquality
+# apt-listchanges: mostra mudanças importantes antes de cada atualização (a
+# fase 00 também o instala, mas uma fase 00 interrompida o deixava de fora).
+apt_install libpam-tmpdir debsums apt-show-versions acct sysstat libpam-pwquality apt-listchanges
 ok "Ferramentas instaladas"
 
 step "Ativando a contabilidade de processos e o sysstat"
@@ -138,11 +140,13 @@ step "Bloqueando módulos de kernel sem uso numa VPS ($MODPROBE_FILE)"
 write_file "$MODPROBE_FILE" <<'EOF'
 # Gerenciado pelo painel PaaS (07-extra.sh).
 # Armazenamento USB (roubo de dados) e protocolos de rede raros (superfície de ataque).
-install usb-storage /bin/false
-install dccp /bin/false
-install sctp /bin/false
-install rds /bin/false
-install tipc /bin/false
+# /bin/true (e não /bin/false): é a forma exata que o Lynis (NETW-3200) reconhece;
+# o efeito é o mesmo — o módulo nunca carrega.
+install usb-storage /bin/true
+install dccp /bin/true
+install sctp /bin/true
+install rds /bin/true
+install tipc /bin/true
 blacklist usb-storage
 blacklist dccp
 blacklist sctp
