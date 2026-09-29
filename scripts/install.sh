@@ -62,10 +62,12 @@
 #      personalize com PAAS_PROJECTS_DIR=<dir> ou --projects-dir=<dir>) e
 #      grava a escolha no .env
 #   5d. Grava no .env o usuário do terminal e o modo escolhidos em 1b
-#   5e. Grava no .env a porta do painel escolhida em 1d
-#   6. docker compose up -d --build (build da imagem + sobe o painel na porta
-#      escolhida em 1d — 9000 por padrão)
-#   7. Imprime a URL do wizard + o token
+#   5e. Grava no .env a porta do painel (1d), o modo de acesso e o domínio (1d0)
+#   6. docker compose up -d --build (build da imagem + sobe o painel, que
+#      escuta só em 127.0.0.1 na porta de 1d)
+#   6b. Acesso HTTPS (padrão): espera https://<ip-com-hífens>.sslip.io responder
+#      com certificado válido (o painel sobe o Caddy com o site dele no boot)
+#   7. Imprime a URL do wizard + o token (HTTPS; ou o túnel, no modo tunel)
 #
 # Idempotente: pode ser executado mais de uma vez sem quebrar (uma
 # reinstalação detecta o próprio painel e não a trata como conflito).
@@ -112,6 +114,13 @@ Uso: $0 [--force] [opções] [diretório-alvo]
                    numa reinstalação, pergunta de novo o usuário e o modo
                    do terminal em vez de reaproveitar o que está no .env.
                    (Informar --terminal-user/--root-mode também substitui.)
+  --acesso=https|tunel
+                   como você abre o painel (ou \$PAAS_ACCESS). "https"
+                   (padrão): endereço pronto https://<seu-ip>.sslip.io, com
+                   certificado Let's Encrypt — sem túnel e sem escolher porta.
+                   "tunel": acesso só por túnel SSH (o painel fica invisível
+                   na internet). Numa reinstalação, o valor gravado no .env é
+                   respeitado e esta opção só o substitui se for informada.
   --port=<número>  em qual porta DA VPS o painel fica disponível
                    (default: $DEFAULT_PORT, ou \$PAAS_PORT). O instalador
                    confere se ela está livre e recusa as portas usadas pelo
@@ -141,11 +150,13 @@ TERMINAL_USER_ARG=""
 ROOT_MODE_ARG=""
 SSH_KEY_ARG=""
 PORT_ARG=""
+ACCESS_ARG=""
 RECONFIGURE_TERMINAL=0
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
     --port=*) PORT_ARG="${arg#*=}" ;;
+    --acesso=*) ACCESS_ARG="${arg#*=}" ;;
     --projects-dir=*) PROJECTS_DIR_ARG="${arg#*=}" ;;
     --terminal-user=*) TERMINAL_USER_ARG="${arg#*=}" ;;
     --root-mode=*) ROOT_MODE_ARG="${arg#*=}" ;;
@@ -241,6 +252,10 @@ port_owner() { # port_owner <porta>
 }
 
 # Porta publicada pelo PRÓPRIO painel (reinstalação não é conflito).
+port_is_own_caddy() { # port_is_own_caddy <porta> — o proxy do próprio painel (reinstalação)
+  docker ps --filter 'name=^/paas-caddy$' --format '{{.Ports}}' 2>/dev/null | grep -q ":$1->"
+}
+
 port_is_own_panel() { # port_is_own_panel <porta>
   docker ps --filter 'name=^/tws-panel$' --format '{{.Ports}}' 2>/dev/null | grep -q ":$1->"
 }
@@ -407,6 +422,8 @@ RESERVED_PORTS="80 443 25 465 587 143 993 8080"
 if [ -n "$PORT_PROBE" ]; then
   PORTS_IN_USE=""
   for p in $RESERVED_PORTS; do
+    # reinstalação: 80/443 ocupadas pelo proxy do PRÓPRIO painel não são conflito
+    port_is_own_caddy "$p" && continue
     port_in_use "$p" && PORTS_IN_USE="$PORTS_IN_USE $p"
   done
   if [ -n "$PORTS_IN_USE" ]; then
@@ -831,6 +848,42 @@ if [ "$TERMINAL_SOURCE" != "legado" ] && [ "$TERMINAL_USER" != "root" ] && user_
   fi
 fi
 
+# --- 1d0. Como o painel é acessado ------------------------------------------------
+# "https" (padrão): o proxy Caddy do painel publica https://<ip-com-hífens>.sslip.io
+# com certificado Let's Encrypt. O sslip.io é um DNS público e gratuito que só
+# traduz o nome para o IP (o tráfego NÃO passa por ele). Sem túnel, sem porta
+# para escolher: o painel escuta só dentro da VPS (127.0.0.1) e é o Caddy, nas
+# portas 80/443, que atende de fora.
+# "tunel": acesso só por túnel SSH — o painel fica invisível na internet.
+ACCESS_MODE="${ACCESS_ARG:-${PAAS_ACCESS:-$(env_value PAAS_ACCESS)}}"
+ACCESS_MODE="${ACCESS_MODE:-https}"
+case "$ACCESS_MODE" in
+  https|tunel) ;;
+  *) die "Modo de acesso inválido: \"$ACCESS_MODE\". Use --acesso=https (padrão) ou --acesso=tunel. Nada foi instalado ou alterado." ;;
+esac
+
+# IPv4 público desta VPS (o sslip.io monta o nome a partir dele).
+detect_public_ipv4() {
+  local ip=""
+  for url in https://api.ipify.org https://ifconfig.me/ip; do
+    ip="$(curl -4 -fsSL --max-time 5 "$url" 2>/dev/null || true)"
+    printf '%s' "$ip" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' && { printf '%s' "$ip"; return 0; }
+  done
+  return 1
+}
+
+PANEL_DOMAIN=""
+if [ "$ACCESS_MODE" = "https" ]; then
+  if HTTPS_IP="$(detect_public_ipv4)"; then
+    PANEL_DOMAIN="$(printf '%s' "$HTTPS_IP" | tr '.' '-').sslip.io"
+    info "Acesso ao painel: https://$PANEL_DOMAIN (certificado Let's Encrypt, sem túnel)."
+  else
+    warn "Não consegui descobrir o IP público desta VPS (sem internet ou bloqueio de saída)."
+    warn "Sem ele não dá para montar o endereço https://…sslip.io — o acesso será por túnel SSH."
+    ACCESS_MODE="tunel"
+  fi
+fi
+
 # --- 1d. Porta do painel NA VPS ---------------------------------------------------
 # São DUAS portas diferentes, e confundi-las é o erro clássico:
 #   • esta aqui é a porta DA VPS, onde o container publica o painel. O
@@ -918,6 +971,18 @@ if [ -n "$PORT_SOURCE" ]; then
   fi
 fi
 
+# Acesso por HTTPS: a porta é só interna (127.0.0.1), ninguém a digita — o
+# instalador escolhe sozinho a padrão ou a próxima livre, sem perguntar.
+if [ -z "$PORT_SOURCE" ] && [ "$ACCESS_MODE" = "https" ]; then
+  PORT="$DEFAULT_PORT"; PORT_SOURCE="auto"
+  if port_in_use "$PORT" && ! port_is_own_panel "$PORT"; then
+    PORT_ALT="$(suggest_free_port "$((DEFAULT_PORT + 1))")"
+    [ -n "$PORT_ALT" ] || die "Nenhuma porta livre a partir da $DEFAULT_PORT para o painel dentro da VPS. Informe uma com --port=<número>."
+    PORT="$PORT_ALT"
+  fi
+  info "Porta interna do painel: $PORT (só dentro da VPS — você não precisa dela)."
+fi
+
 # Sem escolha e sem ninguém para perguntar: fica no padrão, avisando se ele
 # não estiver livre (em automação, quem decide o que fazer é quem chamou).
 if [ -z "$PORT_SOURCE" ] && { [ "$FORCE" = "1" ] || [ "$INTERACTIVE" = "0" ]; }; then
@@ -1000,7 +1065,7 @@ if [ -n "$SSH_KEY" ] && ! valid_ssh_key_name "$SSH_KEY"; then
   warn "Nome de chave SSH ignorado (\"${SSH_KEY_ARG:-${PAAS_SSH_KEY:-}}\"): informe só o nome do arquivo em ~/.ssh, ex.: minha_vps."
   SSH_KEY=""
 fi
-if [ -z "${SSH_KEY_ARG:-${PAAS_SSH_KEY:-}}" ] && [ "$INTERACTIVE" = "1" ] && [ "$FORCE" = "0" ]; then
+if [ "$ACCESS_MODE" = "tunel" ] && [ -z "${SSH_KEY_ARG:-${PAAS_SSH_KEY:-}}" ] && [ "$INTERACTIVE" = "1" ] && [ "$FORCE" = "0" ]; then
   say ""
   say "--------------------------------------------------------------------------------"
   say "  🗝️  Última pergunta (opcional): qual chave SSH você usa para entrar nesta VPS?"
@@ -1208,7 +1273,13 @@ export PAAS_PORT="$PORT"
 if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
   chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
 fi
-log "Painel publicado na porta $PORT da VPS (gravado em .env; dentro do container continua 9000)"
+log "Painel publicado na porta $PORT da VPS, só para dentro dela (gravado em .env; dentro do container continua 9000)"
+
+# Modo de acesso e domínio do painel (lidos pelo docker-compose.yml). Exportados
+# pelo mesmo motivo da porta: o ambiente vence o .env no `docker compose`.
+env_set PAAS_ACCESS "$ACCESS_MODE"
+env_set PAAS_PANEL_DOMAIN "$PANEL_DOMAIN"
+export PAAS_ACCESS="$ACCESS_MODE" PAAS_PANEL_DOMAIN="$PANEL_DOMAIN"
 
 # --- 6. Build + subida ------------------------------------------------------------------
 log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
@@ -1226,8 +1297,33 @@ log "Ajustando dono do volume $VOLUME_NAME para tws (10001:10001)…"
 docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
   'chown -R 10001:10001 /data'
 
+# --- 6b. Acesso por HTTPS: espera o certificado ---------------------------------------
+# O painel sobe o Caddy com o site dele no boot e o Caddy pede o certificado ao
+# Let's Encrypt (ou, se ele recusar, ao ZeroSSL). Só mostramos a URL quando ela
+# responde de verdade — nunca um endereço que ainda não abre.
+HTTPS_OK=0
+if [ "$ACCESS_MODE" = "https" ]; then
+  log "Esperando o certificado HTTPS de $PANEL_DOMAIN (até 3 minutos)…"
+  for _ in $(seq 1 36); do
+    if curl -fsS --max-time 5 -o /dev/null "https://$PANEL_DOMAIN/api/healthz" 2>/dev/null; then
+      HTTPS_OK=1
+      break
+    fi
+    sleep 5
+  done
+  if [ "$HTTPS_OK" = "1" ]; then
+    log "HTTPS pronto: https://$PANEL_DOMAIN"
+  else
+    warn "O endereço https://$PANEL_DOMAIN não respondeu em 3 minutos."
+    warn "Causa mais comum: as portas 80 e 443 bloqueadas por um firewall do provedor (painel da"
+    warn "hospedagem). O certificado precisa que elas estejam abertas. Veja os detalhes com:"
+    warn "  sudo docker logs paas-caddy --tail 50"
+    warn "Enquanto isso, o acesso por túnel SSH abaixo funciona."
+  fi
+fi
+
 # --- 7. Resumo ---------------------------------------------------------------------------
-PUBLIC_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
+PUBLIC_IP="${HTTPS_IP:-$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')}"
 
 # Cores/ênfase (só se o terminal suportar).
 if [ -t 1 ]; then
@@ -1277,17 +1373,6 @@ ${CYAN}${BOLD}       ssh ${SSH_KEY_OPT}-L $LOCAL_ALT:localhost:$PORT $TUNNEL_USE
 
 ${CYAN}${BOLD}       http://localhost:$LOCAL_ALT/?token=$SETUP_TOKEN${RESET}"
 
-# No modo "senha", a senha do sudo passa pelo painel: pelo IP direto ela
-# trafegaria sem criptografia. Reforça isso exatamente onde o link aparece.
-DIRECT_NOTE=""
-if [ "$TERMINAL_SOURCE" != "legado" ] && [ "$ROOT_MODE" = "senha" ]; then
-  DIRECT_NOTE="${YELLOW}${BOLD}Você escolheu o modo \"senha\":${RESET} a senha do seu usuário vai ser digitada no
-terminal do painel. Pelo link do IP abaixo ela passaria pela internet sem
-criptografia — use o túnel acima.
-
-"
-fi
-
 if [ "$TERMINAL_SOURCE" = "legado" ]; then
   TERMINAL_SUMMARY="abre como root (nenhuma escolha feita na instalação)."
 elif [ "$TERMINAL_USER" = "root" ]; then
@@ -1329,6 +1414,12 @@ ${CYAN}${BOLD}      sudo gpasswd -d $TERMINAL_USER docker${RESET}
 " ;;
 esac
 
+if [ "$ACCESS_MODE" = "https" ]; then
+  ACCESS_SUMMARY="https://$PANEL_DOMAIN (o painel escuta só dentro da VPS, na porta $PORT; o Caddy atende de fora)."
+else
+  ACCESS_SUMMARY="túnel SSH — o painel escuta só dentro da VPS, na porta $PORT."
+fi
+
 # Toca o "bell" do terminal para chamar atenção ao fim da instalação.
 printf '\a'
 
@@ -1341,10 +1432,26 @@ ${GREEN}${BOLD}█████████████████████�
 ██████████████████████████████████████████████████████████████████████████████${RESET}
 
 ${BOLD}👉  PRÓXIMO PASSO: abra o painel no navegador${RESET}
+EOF
 
-${BOLD}Recomendado — acesse por túnel SSH.${RESET} A senha de administrador que você vai
-criar na última etapa do wizard é permanente: por túnel ela nunca trafega em texto
-claro pela internet.
+if [ "$ACCESS_MODE" = "https" ] && [ "$HTTPS_OK" = "1" ]; then
+cat <<EOF
+
+  Abra no navegador (de qualquer computador — não precisa de túnel nem de porta):
+
+${CYAN}${BOLD}      https://$PANEL_DOMAIN/?token=$SETUP_TOKEN${RESET}
+
+  A conexão é criptografada (HTTPS, certificado Let's Encrypt): a senha de
+  administrador que você vai criar e a senha do sudo, se o terminal pedir,
+  trafegam protegidas. O sslip.io só traduz o nome para o IP desta VPS — o
+  tráfego vai direto do seu navegador para cá.
+
+EOF
+else
+cat <<EOF
+
+${BOLD}Acesso por túnel SSH.${RESET} O painel escuta só dentro da VPS: de fora, ele só é
+alcançado pelo túnel — criptografado, e invisível para o resto da internet.
 
   1) Numa janela NOVA do terminal, no SEU COMPUTADOR (não na VPS), deixe aberto:
 
@@ -1366,11 +1473,10 @@ ${CYAN}${BOLD}      http://localhost:$PORT/?token=$SETUP_TOKEN${RESET}
      PuTTY, configure em Connection → SSH → Tunnels: Source port $PORT,
      Destination localhost:$PORT, Local.)
 
-${DIRECT_NOTE}${YELLOW}Direto pelo IP${RESET} — sem criptografia; use só em rede confiável ou ambiente de
-teste descartável:
+EOF
+fi
 
-${CYAN}      http://$PUBLIC_IP:$PORT/?token=$SETUP_TOKEN${RESET}
-
+cat <<EOF
 ${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
 │                            ⚑  SETUP TOKEN  ⚑                              │
 │                                                                          │
@@ -1386,8 +1492,8 @@ ${BOLD}Perdeu o token? Recupere a qualquer momento com:${RESET}
 
 O assistente vai diagnosticar o servidor e guiar o setup.
 
-${BOLD}Porta do painel na VPS:${RESET} $PORT (gravada no .env; dentro do container continua 9000).
-    Para trocar depois: ./scripts/install.sh --port=<número>
+${BOLD}Acesso ao painel:${RESET} $ACCESS_SUMMARY
+    Para trocar depois: ./scripts/install.sh --acesso=https  (ou --acesso=tunel)
 
 ${BOLD}Terminal do painel:${RESET} ${TERMINAL_SUMMARY}
     Para trocar depois: ./scripts/install.sh --reconfigure-terminal

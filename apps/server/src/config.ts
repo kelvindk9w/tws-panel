@@ -95,6 +95,11 @@ export interface ServerConfig {
    */
   terminalSudoPasswordTimeoutMs: number;
   /**
+   * Domínio do painel no Caddy central (PAAS_PANEL_DOMAIN): acesso por HTTPS
+   * com certificado Let's Encrypt. null = acesso por túnel SSH.
+   */
+  panelDomain: string | null;
+  /**
    * Usuário com que o terminal web abre na VPS (PAAS_TERMINAL_USER).
    *
    * null = variável ausente/vazia: comportamento LEGADO, idêntico ao de antes
@@ -194,6 +199,24 @@ export function resolveTerminalAccess(
  * que o mostrava. Valor que não é inteiro não-negativo impede o painel de
  * subir, com o nome da variável (antes virava NaN em silêncio).
  */
+/**
+ * Domínio do painel servido pelo Caddy central (acesso por HTTPS, gravado pelo
+ * instalador como <ip-com-hífens>.sslip.io). Vira um bloco do Caddyfile: só
+ * hostname válido passa. Vazio/ausente = acesso por túnel SSH (sem Caddy no
+ * boot). Mesma regra de SAFE_DOMAIN_RE (packages/deploy/src/caddy.ts).
+ */
+const PANEL_DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+function panelDomainFromEnv(): string | null {
+  const raw = process.env.PAAS_PANEL_DOMAIN;
+  if (raw === undefined || raw.trim() === "") return null;
+  const value = raw.trim().toLowerCase();
+  if (!PANEL_DOMAIN_RE.test(value)) {
+    throw new ConfigError(`PAAS_PANEL_DOMAIN=${JSON.stringify(raw)} não é um nome de domínio válido.`);
+  }
+  return value;
+}
+
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === "") return fallback;
@@ -239,6 +262,7 @@ export function loadConfig(): ServerConfig {
     dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
     terminalIdleTimeoutMs: envInt("PAAS_TERMINAL_IDLE_TIMEOUT_MS", 30 * 60_000),
     terminalSudoPasswordTimeoutMs: envInt("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", 0),
+    panelDomain: panelDomainFromEnv(),
     ...loadTerminalAccess(process.env),
   };
 }

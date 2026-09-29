@@ -236,3 +236,50 @@ describe("CaddyManager.apply — recarga", () => {
     expect(m.containerName).toBe("paas-caddy");
   });
 });
+
+/**
+ * Acesso ao painel por HTTPS: o Caddy alcança o painel pela rede paas-net.
+ * O docker-compose.yml NÃO declara essa rede (quem atualiza com git pull numa
+ * instalação que nunca fez deploy não tem a rede, e o `compose up` falharia):
+ * é o próprio apply que conecta o container do painel a ela.
+ */
+describe("CaddyManager — site do painel", () => {
+  const PANEL = { domain: "203-0-113-10.sslip.io", upstream: "tws-panel:9000" };
+  const running = { running: true, mounts: NEW };
+
+  function comRedes(redes: string) {
+    return daemon(running, (a) =>
+      a[0] === "inspect" && a[a.length - 1] === "tws-panel" ? ok(`${redes}\n`) : undefined,
+    );
+  }
+
+  it("conecta o painel à paas-net quando ele ainda não está nela", async () => {
+    responder = comRedes('{"tws-panel_default":{}}');
+    await new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL }).apply([]);
+    expect(calls).toContainEqual(["network", "connect", "paas-net", "tws-panel"]);
+    expect(String(copies.at(-1)!.files[0]!.content)).toContain("203-0-113-10.sslip.io {");
+  });
+
+  it("não reconecta quando o painel já está na paas-net", async () => {
+    responder = comRedes('{"paas-net":{},"tws-panel_default":{}}');
+    await new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL }).apply([]);
+    expect(calls.some((a) => a[0] === "network" && a[1] === "connect")).toBe(false);
+  });
+
+  it("falha ao conectar o painel é erro explícito (o painel ficaria sem endereço)", async () => {
+    responder = daemon(running, (a) => {
+      if (a[0] === "inspect" && a[a.length - 1] === "tws-panel") return ok("{}\n");
+      if (a[0] === "network" && a[1] === "connect") return fail("permission denied");
+      return undefined;
+    });
+    await expect(
+      new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL }).apply([]),
+    ).rejects.toThrow(/paas-net.*tws-panel|tws-panel.*paas-net/);
+  });
+
+  it("sem site do painel, não mexe em rede de container nenhum", async () => {
+    responder = daemon(running);
+    await manager().apply(alvo);
+    expect(calls.some((a) => a[0] === "network" && a[1] === "connect")).toBe(false);
+  });
+});
