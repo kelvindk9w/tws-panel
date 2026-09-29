@@ -98,3 +98,16 @@ describe("AccessTestAlert", () => {
     expect(screen.queryByTestId("access-test-command")).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Validação real: o operador deixou o prazo acabar e o alerta ficou parado em
+ * 0:00 com os botões ativos — sem dizer que o servidor estava desfazendo.
+ */
+describe("AccessTestAlert — prazo esgotado", () => {
+  it("em 0:00 diz que o servidor está desfazendo a fase e trava os botões", () => {
+    renderAlert({ deadline: new Date(Date.now() - 1_000).toISOString() });
+    expect(screen.getByTestId("access-test-alert")).toHaveTextContent(/prazo acabou.*desfazendo esta fase/i);
+    expect(screen.getByRole("button", { name: /Entrei — confirmar/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /desfazer agora/ })).toBeDisabled();
+  });
+});

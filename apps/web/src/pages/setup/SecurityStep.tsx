@@ -103,6 +103,9 @@ interface IndexSnapshot {
   source: string;
 }
 
+/** Intervalo das consultas ao servidor enquanto espera o teste de acesso. */
+const AWAITING_POLL_MS = 2_000;
+
 /** Nome da régua de uma nota, para a pessoa saber o que está comparando. */
 function scaleLabel(source: string): string {
   return source === "lynis" ? "Lynis" : "índice interno do painel";
@@ -245,7 +248,7 @@ export function SecurityStep({
   const [job, setJob] = useState<SecurityJob | null>(null);
   const [phaseUi, setPhaseUi] = useState<Partial<Record<SecurityPhaseId, PhaseUiState>>>({});
   const [expandedRunPhases, setExpandedRunPhases] = useState<Set<string>>(new Set());
-  const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const confirmResolver = useRef<((outcome: boolean | SecurityJob) => void) | null>(null);
 
   // resultado
   const [afterReport, setAfterReport] = useState<SecurityScanReport | null>(null);
@@ -408,12 +411,38 @@ export function SecurityStep({
         // ALERTA DE AÇÃO DO USUÁRIO — bloqueia a continuação até o operador
         // agir; o terminal embutido acende o alerta pulsante "olhe o terminal".
         window.dispatchEvent(new CustomEvent(TERMINAL_ATTENTION_EVENT, { detail: { phase } }));
-        const confirmed = await new Promise<boolean>((resolve) => {
-          confirmResolver.current = resolve;
+        const outcome = await new Promise<boolean | SecurityJob>((resolve) => {
+          const done = (v: boolean | SecurityJob) => resolve(v);
+          confirmResolver.current = done;
+          // Continua consultando o servidor enquanto espera o clique: se o
+          // prazo acabar, o servidor desfaz a fase e o job sai de
+          // "awaiting_confirmation". Antes a tela só esperava o clique e ficava
+          // parada em 0:00 (visto na validação real).
+          const watch = async () => {
+            while (confirmResolver.current === done) {
+              await new Promise((r) => setTimeout(r, AWAITING_POLL_MS));
+              if (confirmResolver.current !== done) return;
+              try {
+                const r = await apiFetch<{ job: SecurityJob }>(`/api/security/jobs/${id}`);
+                if (confirmResolver.current !== done) return;
+                if (r.job.status !== "awaiting_confirmation") done(r.job);
+              } catch {
+                // falha de rede momentânea: tenta de novo na próxima volta
+              }
+            }
+          };
+          void watch();
         });
         confirmResolver.current = null;
-        // a espera terminou (confirmou ou pediu para parar): apaga o alerta
+        // a espera terminou (confirmou, desfez, ou o prazo acabou): apaga o alerta
         clearTerminalAttention();
+        if (typeof outcome !== "boolean") {
+          // o servidor encerrou a espera sozinho (prazo esgotado → desfeita)
+          setJob(outcome);
+          updatePhaseUi(phase, { steps: outcome.steps, log: outcome.log, jobStatus: outcome.status });
+          return outcome;
+        }
+        const confirmed = outcome;
         if (!confirmed) {
           // desfeita pelo operador: o job devolvido pelo servidor já diz "rolled_back"
           const undone = undoneJob.current;
@@ -470,7 +499,7 @@ export function SecurityStep({
             finished.status === "rolled_back" && finished.log.includes("operador não conseguiu entrar")
               ? `Você desfez a fase "${finished.title}": a configuração anterior foi restaurada. Quando resolver o acesso, rode o hardening de novo.`
               : finished.status === "rolled_back"
-                ? `A fase "${finished.title}" foi revertida automaticamente (acesso não confirmado a tempo).`
+                ? `O prazo da fase "${finished.title}" acabou sem confirmação, e ela foi desfeita automaticamente: a configuração anterior voltou. Rode de novo quando puder testar o acesso.`
                 : `A fase "${finished.title}" falhou. O rollback foi executado — veja o log.`,
           );
           return false;

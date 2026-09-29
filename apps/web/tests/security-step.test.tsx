@@ -768,6 +768,54 @@ describe("SecurityStep — alerta de teste de acesso", () => {
     expect(screen.queryByTestId("access-test-alert")).not.toBeInTheDocument();
   });
 
+  /**
+   * Validação real: com o prazo esgotado, a tela parou de consultar o servidor
+   * (esperava só o clique) e ficou em 0:00; depois disse "falhou, o rollback
+   * foi executado" — quando na verdade a fase foi desfeita por falta de
+   * confirmação, como planejado.
+   */
+  it("prazo esgotado: a tela percebe que o servidor desfez a fase e diz isso", async () => {
+    detectedSudoUsers = ["kelvin"];
+    base = apiFetchMock.getMockImplementation()!;
+    const original = base;
+    let pollsAwaiting = 0;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/apply" || path.startsWith("/api/security/jobs/")) {
+        const expired = path.startsWith("/api/security/jobs/") && pollsAwaiting++ >= 2;
+        return {
+          job: {
+            id: "job-1",
+            phase: "01",
+            phaseKey: "user",
+            title: "Usuário não-root",
+            dryRun: false,
+            status: expired ? "rolled_back" : "awaiting_confirmation",
+            createdAt: "",
+            startedAt: null,
+            finishedAt: null,
+            steps: [],
+            log: expired ? "[executor] janela de confirmação expirada — o rollback agendado no alvo reverteu a configuração" : "",
+            rollbackScheduled: !expired,
+            rollbackDeadline: expired ? null : new Date(Date.now() + 1_000).toISOString(),
+            error: null,
+            sshUser: "kelvin",
+          },
+        };
+      }
+      return original(path, init);
+    });
+    render(<SecurityStep onNext={() => undefined} vpsAddress="203.0.113.10" />);
+    fireEvent.click(await screen.findByText("Iniciar verificação"));
+    fireEvent.click(await screen.findByText("Gerar plano de correção"));
+    await screen.findByText(/Fase 00 — Atualizações do sistema/);
+    fireEvent.click(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[1]!);
+    await screen.findByTestId("access-test-alert");
+    const quadro = await screen.findByTestId("run-failed", {}, { timeout: 8_000 });
+    expect(quadro).toHaveTextContent(/prazo.*acabou sem confirmação/i);
+    expect(quadro).not.toHaveTextContent(/falhou/i);
+    expect(screen.queryByTestId("access-test-alert")).not.toBeInTheDocument();
+  }, 15_000);
+
   it("sem o IP conhecido, pede para trocar pelo IP da VPS em vez de inventar", async () => {
     const alerta = await aguardandoConfirmacao("01", null);
     expect(alerta).toHaveTextContent("ssh kelvin@IP_DA_VPS");
