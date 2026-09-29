@@ -467,6 +467,9 @@ export function SecurityStep({
         updatePhaseUi(phase, { status: "done", steps: finished.steps, log: finished.log });
       } catch (err) {
         updatePhaseUi(phase, { status: "error" });
+        // A fase nem começou: o job na tela ainda é o da fase ANTERIOR, e o
+        // log dele ("concluído") fazia parecer que tudo seguia — tela travada.
+        setJob(null);
         const sudoMessage = sudoElevationFailure(err);
         if (sudoMessage !== null) {
           setElevationError({ context: "phase", title: phaseTitle(phase), message: sudoMessage });
@@ -502,6 +505,17 @@ export function SecurityStep({
     if (!dryOk) return;
     // 2) aplicação real exige confirmação explícita do operador
     setJob(null);
+  }
+
+  /** Refaz a simulação inteira do zero (depois de uma fase falhar). */
+  async function retryDryRun() {
+    setPhaseUi((prev) => {
+      const next = { ...prev };
+      for (const id of runQueue) next[id] = { ...INITIAL_PHASE_UI };
+      return next;
+    });
+    setJob(null);
+    await runPhases(runQueue, true);
   }
 
   async function startRealApply() {
@@ -541,6 +555,8 @@ export function SecurityStep({
   // -------------------------------------------------------------- render
   const phaseTitle = (id: string) => SECURITY_PHASES.find((p) => p.id === id)?.title ?? id;
   const phase01Selected = pendingPhases().includes("01");
+  // Fase da execução atual que falhou (a execução para nela).
+  const failedPhase = runQueue.find((id) => phaseUi[id]?.status === "error") ?? null;
   const sshUserOk = isValidSshUsername(sshUser.trim());
   const sshKeyEmpty = sshPublicKey.trim() === "";
   const sshKeyOk = isValidSshPublicKey(sshPublicKey);
@@ -965,8 +981,14 @@ export function SecurityStep({
                 {runDry ? "Dry-run (simulação)" : "Aplicando hardening"}
               </CardTitle>
               <CardDescription>
-                Fase {Math.min(runIndex + 1, runQueue.length)} de {runQueue.length}
-                {job ? ` — ${job.title}` : ""}
+                {failedPhase ? (
+                  <>Parou na Fase {failedPhase} — {phaseTitle(failedPhase)}</>
+                ) : (
+                  <>
+                    Fase {Math.min(runIndex + 1, runQueue.length)} de {runQueue.length}
+                    {job ? ` — ${job.title}` : ""}
+                  </>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -1041,6 +1063,40 @@ export function SecurityStep({
                 </div>
               )}
 
+              {/* Uma fase falhou: dizer ONDE parou, POR QUÊ e o que fazer —
+                  antes, a tela parecia travada (visto em campo). */}
+              {failedPhase && (
+                <div
+                  role="alert"
+                  data-testid="run-failed"
+                  className="flex flex-col gap-2 rounded-md border border-red-500/50 bg-red-500/10 p-4 text-sm"
+                >
+                  <p className="flex items-center gap-2 font-semibold text-red-300">
+                    <XCircle className="h-4 w-4 shrink-0" />
+                    {runDry ? "A simulação parou" : "A aplicação parou"} na Fase {failedPhase} —{" "}
+                    {phaseTitle(failedPhase)}
+                  </p>
+                  {(error ?? elevationError?.message) && (
+                    <p className="text-red-100/90">{error ?? elevationError?.message}</p>
+                  )}
+                  <p className="text-muted-foreground">
+                    {runDry
+                      ? "Nada foi alterado no servidor — era uma simulação. As fases seguintes não rodaram."
+                      : "As fases seguintes não rodaram. O log da fase (acima, se houver) mostra o que aconteceu."}
+                  </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {runDry && (
+                      <Button size="sm" onClick={() => void retryDryRun()}>
+                        Tentar a simulação de novo
+                      </Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => setStage("plan")}>
+                      Voltar ao plano
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {/* Dry-run concluído: pedir confirmação para aplicar de verdade */}
               {!job && !error && !elevationError && (
                 <div className="flex flex-col items-center gap-3 py-6 text-center">
@@ -1065,7 +1121,7 @@ export function SecurityStep({
             </CardContent>
           </Card>
 
-          {job && TERMINAL.includes(job.status) && (
+          {job && TERMINAL.includes(job.status) && !failedPhase && (
             <div className="flex justify-start">
               <Button variant="outline" onClick={() => setStage("plan")}>
                 Voltar ao plano

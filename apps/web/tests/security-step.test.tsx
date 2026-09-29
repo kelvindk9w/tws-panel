@@ -629,6 +629,92 @@ describe("SecurityStep — fase 02 recebe o usuário", () => {
 });
 
 /**
+ * Defeito de campo: a fase 02 foi recusada logo ao começar e a tela parecia
+ * travada — o cabeçalho seguia "Fase 2 de N", o log mostrava a fase anterior
+ * como "concluído" e o único sinal era uma faixa vermelha no topo.
+ */
+describe("SecurityStep — fase que falha na simulação", () => {
+  let original: Parameters<typeof apiFetchMock.mockImplementation>[0] | undefined;
+
+  afterEach(() => {
+    if (original) apiFetchMock.mockImplementation(original);
+    original = undefined;
+  });
+
+  async function simularComFalhaNa02() {
+    detectedSudoUsers = ["kelvin"];
+    original = apiFetchMock.getMockImplementation()!;
+    const base = original;
+    const { ApiRequestError } = await import("@/lib/api");
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/apply") {
+        const body = JSON.parse(String(init?.body)) as { phase: string };
+        if (body.phase === "02") throw new ApiRequestError(409, "Conflict", "o usuário só se aplica às fases 01 e 02");
+        return { job: { ...jobFor(body.phase), status: "running" } };
+      }
+      if (path.startsWith("/api/security/jobs/")) {
+        const phase = path.endsWith("-00") ? "00" : "01";
+        return { job: { ...jobFor(phase), status: "success", log: `log da fase ${phase} concluída` } };
+      }
+      return base(path, init);
+    });
+    await reachPlanStage();
+    fireEvent.click(screen.getByRole("button", { name: /Simular todas as fases pendentes/ }));
+    return screen.findByTestId("run-failed");
+  }
+
+  function jobFor(phase: string) {
+    return {
+      id: `job-${phase}`,
+      phase,
+      phaseKey: "x",
+      title: phase === "00" ? "Atualizações do sistema" : "Usuário não-root",
+      dryRun: true,
+      createdAt: "",
+      startedAt: null,
+      finishedAt: null,
+      steps: [],
+      log: "",
+      rollbackScheduled: false,
+      rollbackDeadline: null,
+      error: null,
+    };
+  }
+
+  it("diz em qual fase parou, por quê, e que nada foi alterado", async () => {
+    const quadro = await simularComFalhaNa02();
+    expect(quadro).toHaveTextContent(/simulação parou na Fase 02 — Hardening de SSH/i);
+    expect(quadro).toHaveTextContent(/o usuário só se aplica às fases 01 e 02/);
+    expect(quadro).toHaveTextContent(/Nada foi alterado no servidor/i);
+    expect(screen.getByText(/Parou na Fase 02/)).toBeInTheDocument();
+  });
+
+  it("não deixa o log da fase anterior na tela como se fosse o atual", async () => {
+    await simularComFalhaNa02();
+    expect(screen.queryByText(/Log em tempo real — Usuário não-root/)).not.toBeInTheDocument();
+  });
+
+  it("tentar de novo tira o quadro de falha e roda a simulação desde a primeira fase", async () => {
+    await simularComFalhaNa02();
+    const antes = apiFetchMock.mock.calls.filter(([p]) => p === "/api/security/apply").length;
+    fireEvent.click(screen.getByRole("button", { name: /Tentar a simulação de novo/ }));
+    await waitFor(() => {
+      const applies = apiFetchMock.mock.calls.filter(([p]) => p === "/api/security/apply").slice(antes);
+      expect(JSON.parse(String(applies[0]?.[1]?.body))).toMatchObject({ phase: "00", dryRun: true });
+    });
+    // falha de novo na 02 (o mock continua recusando) — e o quadro volta
+    expect(await screen.findByTestId("run-failed")).toBeInTheDocument();
+  });
+
+  it("oferece tentar de novo (a simulação inteira) e voltar ao plano", async () => {
+    await simularComFalhaNa02();
+    expect(screen.getByRole("button", { name: /Tentar a simulação de novo/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /Voltar ao plano/ }));
+    expect(await screen.findByText(/Plano de correção/)).toBeInTheDocument();
+  });
+});
+
+/**
  * "Executar dry-run de todas as fases pendentes" não se explicava a um leigo
  * ("isso executa todas as fases? se eu clicar, o que acontece?"). O rótulo e a
  * linha ao lado dele precisam responder isso sem jargão.

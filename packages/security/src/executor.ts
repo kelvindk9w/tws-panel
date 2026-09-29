@@ -160,8 +160,14 @@ export class SecurityExecutor {
     const phaseDef = SECURITY_PHASES.find((p) => p.id === phase);
     if (!phaseDef) throw new Error(`fase desconhecida: ${phase}`);
     if (this.busy) throw new Error("já existe um job de hardening em andamento");
-    if (params && phase !== "01") {
-      throw new Error("parâmetros de fase (usuário/chave SSH) só se aplicam à fase 01");
+    // Usuário: fases 01 (criar/validar) e 02 (PermitRootLogin no + AllowUsers).
+    // Chave pública: só a 01, que é quem a instala. Mesma regra da rota
+    // /api/security/apply — as duas camadas precisam concordar.
+    if (params?.sshPublicKey !== undefined && phase !== "01") {
+      throw new Error("a chave SSH só se aplica à fase 01");
+    }
+    if (params?.sshUser !== undefined && phase !== "01" && phase !== "02") {
+      throw new Error("o usuário só se aplica às fases 01 e 02");
     }
 
     const job: SecurityJob = {

@@ -278,6 +278,35 @@ describe("SecurityExecutor — execução destacada", () => {
   });
 });
 
+/**
+ * Defeito de campo (29/09/2026): a rota passou a aceitar o usuário na fase 02
+ * (PermitRootLogin no + AllowUsers), mas o executor ainda recusava "parâmetros
+ * só na fase 01" — a simulação parava na fase 02 com a tela parecendo travada.
+ * O teste da rota simulava o serviço e não viu a recusa daqui.
+ */
+describe("SecurityExecutor — parâmetros por fase", () => {
+  it("fase 02 aceita o usuário e o repassa ao script (--user)", async () => {
+    const host = detached();
+    const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts" });
+    const job = await executor.startJob("02", true, { sshUser: "kelvin" });
+    await flushMicrotasks();
+    expect(host.calls[0]).toContain("02-ssh.sh --dry-run --user kelvin");
+    expect(job.sshUser).toBe("kelvin");
+  });
+
+  it("chave pública continua só na fase 01", async () => {
+    const executor = new SecurityExecutor({ runner: detached().runner, scriptsDir: "/scripts" });
+    await expect(
+      executor.startJob("02", true, { sshUser: "kelvin", sshPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake x@y" }),
+    ).rejects.toThrow(/chave.*fase 01/i);
+  });
+
+  it("usuário fora das fases 01 e 02 continua recusado", async () => {
+    const executor = new SecurityExecutor({ runner: detached().runner, scriptsDir: "/scripts" });
+    await expect(executor.startJob("03", true, { sshUser: "kelvin" })).rejects.toThrow(/fases 01 e 02/);
+  });
+});
+
 describe("SecurityExecutor — parsing de steps", () => {
   it("marcadores :::PAAS_STEP/:::PAAS_FAIL viram passos com o status correto, na ordem", async () => {
     const host = detached({
