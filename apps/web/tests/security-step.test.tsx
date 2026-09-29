@@ -6,7 +6,7 @@
  *  - Fase 01: tutorial guiado de chave SSH presente (o que é, para que serve,
  *    comandos por SO) + validação "Sua chave parece válida ✅".
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecurityPlan, SecurityScanReport } from "@paas/core";
 
@@ -377,6 +377,118 @@ describe("SecurityStep — resultado conta a jornada inteira", () => {
     expect(jornada).toHaveTextContent("80");
     expect(screen.getByTestId("journey-drift")).toHaveTextContent(/atualizações de segurança/i);
     expect(screen.getByTestId("journey-drift")).toHaveTextContent(/86/);
+  });
+});
+
+/**
+ * Validação real: ao confirmar o acesso, a tela de resultado já mostrava
+ * "Hoje: 86" e "Última aplicação 86 → 86" — números da medição ANTERIOR,
+ * enquanto o Lynis ainda rodava. Parecia que a correção não tinha efeito.
+ */
+describe("SecurityStep — enquanto a verificação final roda, não mostra número velho", () => {
+  let original: Parameters<typeof apiFetchMock.mockImplementation>[0] | undefined;
+  afterEach(() => {
+    if (original) apiFetchMock.mockImplementation(original);
+    original = undefined;
+  });
+
+  it("mostra 'medindo' até a nota nova chegar; só então os números", async () => {
+    original = apiFetchMock.getMockImplementation()!;
+    const base = original;
+    let applied = false;
+    let releaseScan: (() => void) | null = null;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/history") {
+        return {
+          entries: [
+            { id: "h1", at: "2026-09-28T10:00:00Z", kind: "scan", hardeningIndex: 86, hardeningIndexSource: "lynis" },
+          ],
+          firstIndex: 86,
+          latestIndex: 86,
+          applied: { appliedAt: "2026-09-28T10:00:00Z", beforeIndex: 86, beforeIndexSource: "lynis", afterIndex: 86, afterIndexSource: "lynis" },
+        };
+      }
+      if (path === "/api/security/apply") {
+        const body = JSON.parse(String(init?.body)) as { phase: string; dryRun: boolean };
+        if (!body.dryRun) applied = true;
+        return { job: { id: `j-${body.phase}`, phase: body.phase, title: "Fase", status: "running", steps: [], log: "", dryRun: body.dryRun, rollbackScheduled: false, rollbackDeadline: null, error: null } };
+      }
+      if (path.startsWith("/api/security/jobs/")) {
+        return { job: { id: "j", phase: "00", title: "Fase", status: "success", steps: [], log: "", dryRun: true, rollbackScheduled: false, rollbackDeadline: null, error: null } };
+      }
+      if (path.startsWith("/api/security/scan") && applied) {
+        await new Promise<void>((r) => {
+          releaseScan = r;
+        });
+        return { report: { ...SCAN_REPORT, nonRootSudoUsers: ["kelvin"], hardeningIndex: 89, hardeningIndexSource: "lynis" }, cached: false };
+      }
+      if (path.startsWith("/api/security/scan")) {
+        return { report: { ...SCAN_REPORT, nonRootSudoUsers: ["kelvin"], hardeningIndex: 86, hardeningIndexSource: "lynis" }, cached: false };
+      }
+      return base(path, init);
+    });
+    // abre no resultado salvo (aplicação anterior) e o operador aplica de novo
+    render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
+    fireEvent.click(await screen.findByText("Gerar plano de correção"));
+    await screen.findByText(/Fase 00 — Atualizações do sistema/);
+    fireEvent.click(screen.getByRole("button", { name: /Simular todas as fases pendentes/ }));
+    await screen.findByRole("button", { name: /Aplicar de verdade/ });
+    await new Promise((r) => setTimeout(r, 50));
+    fireEvent.click(screen.getByRole("button", { name: /Aplicar de verdade/ }));
+
+    expect(await screen.findByTestId("final-scan-wait")).toBeInTheDocument();
+    expect(screen.queryByTestId("last-apply")).not.toBeInTheDocument();
+    expect(screen.getByTestId("journey")).not.toHaveTextContent(/Hoje.*86/);
+
+    act(() => releaseScan?.());
+    await waitFor(() => expect(screen.queryByTestId("final-scan-wait")).not.toBeInTheDocument());
+    expect(screen.getByTestId("journey")).toHaveTextContent("89");
+  });
+});
+
+/**
+ * Validação real: a fase 02 era aplicada, o item seguia reprovado (outro
+ * arquivo vencia a configuração) e o plano a recomendava de novo como se
+ * fosse nova — um círculo. Fase já aplicada com o item ainda reprovado é
+ * dita como tal, com o que continua errado.
+ */
+describe("SecurityStep — fase já aplicada cujo item continua reprovado", () => {
+  it("avisa que já foi aplicada e mostra o que continua errado", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/history") {
+        return {
+          entries: [{ id: "j2", at: "2026-09-29T20:00:00Z", kind: "job", phase: "02", dryRun: false, status: "success" }],
+          firstIndex: null,
+          latestIndex: null,
+          applied: null,
+        };
+      }
+      if (path.startsWith("/api/security/scan")) {
+        return {
+          report: {
+            ...SCAN_REPORT,
+            checks: [
+              { id: "ssh.root-login", phase: "02", title: "Autenticação SSH somente por chave", severity: "critical", status: "fail", detail: "PasswordAuthentication yes", description: "", remediation: "" },
+            ],
+          },
+          cached: false,
+        };
+      }
+      return base(path, init);
+    });
+    try {
+      await reachPlanStage();
+      const aviso = screen.getByTestId("already-applied-02");
+      expect(aviso).toHaveTextContent(/já foi aplicada/i);
+      expect(aviso).toHaveTextContent("Autenticação SSH somente por chave");
+      expect(aviso).toHaveTextContent("PasswordAuthentication yes");
+      expect(aviso).toHaveTextContent(/aplicar de novo provavelmente não resolve/i);
+      expect(screen.queryByTestId("already-applied-00")).not.toBeInTheDocument();
+    } finally {
+      apiFetchMock.mockImplementation(base);
+    }
   });
 });
 
