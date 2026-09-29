@@ -320,7 +320,7 @@ export function SecurityStep({
     } catch (err) {
       const sudoMessage = sudoElevationFailure(err);
       if (sudoMessage !== null) setElevationError({ context: "scan", message: sudoMessage });
-      else setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a varredura.");
+      else setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a verificação.");
       return null;
     } finally {
       setScanning(false);
@@ -371,7 +371,7 @@ export function SecurityStep({
         setPlan(p);
       }
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao revarrer.");
+      setError(err instanceof ApiRequestError ? err.message : "Falha ao verificar de novo.");
     } finally {
       setManualVerifying(false);
     }
@@ -598,8 +598,8 @@ export function SecurityStep({
         )}
         <h2 className="text-xl font-semibold tracking-tight">Segurança</h2>
         <p className="text-sm text-muted-foreground">
-          Varredura somente-leitura, plano de correção e hardening em fases — com dry-run, backups e
-          rollback automático.
+          Verificação que não altera nada, plano de correção e proteções em fases — com simulação, backup e
+          reversão automática.
         </p>
       </div>
 
@@ -620,7 +620,7 @@ export function SecurityStep({
           <p className="flex items-center gap-2 font-semibold text-amber-300">
             <KeyRound className="h-4 w-4 shrink-0" />
             {elevationError.context === "scan"
-              ? "A varredura não foi executada: o sudo não autorizou"
+              ? "A verificação não foi executada: o sudo não autorizou"
               : `A fase "${elevationError.title}" parou: o sudo não executou o script`}
           </p>
           <p>{capitalize(elevationError.message)}</p>
@@ -630,7 +630,7 @@ export function SecurityStep({
           {elevationError.context === "scan" && (
             <div>
               <Button size="sm" variant="outline" onClick={() => void runScan(true)} disabled={scanning}>
-                <RefreshCw className="h-3.5 w-3.5" /> Tentar a varredura de novo
+                <RefreshCw className="h-3.5 w-3.5" /> Tentar a verificação de novo
               </Button>
             </div>
           )}
@@ -646,7 +646,7 @@ export function SecurityStep({
                 <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
                   <ShieldCheck className="h-6 w-6" />
                 </div>
-                <CardTitle>Varredura de segurança</CardTitle>
+                <CardTitle>Verificação de segurança</CardTitle>
                 <CardDescription className="max-w-md">
                   Executa verificações somente-leitura (SSH, firewall, portas, pacotes, Docker) e, se
                   disponível, o Lynis — nada é alterado no servidor.
@@ -654,7 +654,7 @@ export function SecurityStep({
               </CardHeader>
               <CardContent className="flex justify-center">
                 <Button onClick={() => void runScan(true)}>
-                  <Play className="h-4 w-4" /> Iniciar varredura
+                  <Play className="h-4 w-4" /> Iniciar verificação
                 </Button>
               </CardContent>
             </Card>
@@ -780,7 +780,7 @@ export function SecurityStep({
 
               <div className="flex justify-between">
                 <Button variant="outline" onClick={() => void runScan(true)}>
-                  <RefreshCw className="h-4 w-4" /> Revarrer
+                  <RefreshCw className="h-4 w-4" /> Verificar de novo
                 </Button>
                 <Button onClick={() => void buildPlan()}>
                   Gerar plano de correção <ArrowRight className="h-4 w-4" />

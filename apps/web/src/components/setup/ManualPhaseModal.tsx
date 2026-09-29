@@ -44,7 +44,7 @@ export function ManualPhaseModal({ title, data, verifying, satisfied, onRescan, 
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
               Rode os comandos abaixo no servidor, na ordem (pelo SSH ou pelo terminal embutido do
-              painel). Depois clique em <strong>Já executei — revarrer</strong> para o painel validar
+              painel). Depois clique em <strong>Já executei — verificar de novo</strong> para o painel validar
               a fase.
             </p>
           </div>
@@ -55,7 +55,7 @@ export function ManualPhaseModal({ title, data, verifying, satisfied, onRescan, 
 
         {satisfied && (
           <p className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400">
-            ✅ Esta fase já está verificada como concluída no último scan.
+            ✅ Esta fase já aparece como concluída na última verificação.
           </p>
         )}
 
@@ -107,10 +107,10 @@ export function ManualPhaseModal({ title, data, verifying, satisfied, onRescan, 
           </Button>
           <Button onClick={onRescan} disabled={verifying || !data}>
             {verifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Já executei — revarrer
+            Já executei — verificar de novo
           </Button>
         </div>
-        {satisfied && <Badge variant="success" className="w-fit">✅ verificado no último scan</Badge>}
+        {satisfied && <Badge variant="success" className="w-fit">✅ confirmado na última verificação</Badge>}
       </div>
     </div>
   );

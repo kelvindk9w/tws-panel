@@ -53,14 +53,14 @@ function HardeningCard() {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Gauge className="h-4 w-4" /> Hardening Index
+          <Gauge className="h-4 w-4" /> Nota de segurança
           {scan?.refreshing && (
             <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> atualizando…
             </span>
           )}
         </CardTitle>
-        <CardDescription>Índice atual do alvo ({scan?.report.target ?? "…"}) e evolução.</CardDescription>
+        <CardDescription>Nota atual desta VPS e como ela evoluiu.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -84,7 +84,7 @@ function HardeningCard() {
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              {scan.report.summary.pass} checks OK · {scan.report.summary.fail} falhando · último scan{" "}
+              {scan.report.summary.pass} itens OK · {scan.report.summary.fail} com problema · última verificação{" "}
               {fmtDate(scan.report.scannedAt)}
             </p>
             {history && history.firstIndex !== null && history.latestIndex !== null && (
@@ -105,7 +105,7 @@ function HardeningCard() {
           </>
         )}
         <Button size="sm" variant="outline" className="mt-1 self-start" asChild>
-          <Link to="/security/hardening">Revisar e aplicar hardening</Link>
+          <Link to="/security/hardening">Verificar e aplicar proteções</Link>
         </Button>
       </CardContent>
     </Card>
@@ -153,10 +153,10 @@ function BaselineCard({ onUpdated }: { onUpdated: () => void }) {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Camera className="h-4 w-4" /> Baseline
+          <Camera className="h-4 w-4" /> Retrato de referência
         </CardTitle>
         <CardDescription>
-          Snapshot de pacotes, portas e arquivos críticos — referência do monitoramento.
+          Registro dos pacotes, portas e arquivos importantes desta VPS. O monitoramento compara com ele para avisar quando algo muda.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -177,13 +177,13 @@ function BaselineCard({ onUpdated }: { onUpdated: () => void }) {
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Nenhum baseline ainda. Crie um após o hardening para ativar a comparação contínua.
+            Ainda não há retrato de referência. Crie um depois de aplicar as proteções, para o monitoramento ter com o que comparar.
           </p>
         )}
         <div>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void create()}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {baseline ? "Atualizar baseline" : "Criar baseline"}
+            {baseline ? "Atualizar retrato de referência" : "Criar retrato de referência"}
           </Button>
         </div>
       </CardContent>
@@ -271,7 +271,7 @@ function MonitorCard({ refreshKey }: { refreshKey: number }) {
             </Badge>
           )}
         </div>
-        <CardDescription>Scan recorrente comparando o alvo com o baseline; diferenças viram alertas.</CardDescription>
+        <CardDescription>Verificação automática periódica: compara a VPS com o retrato de referência e avisa quando algo muda.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -295,11 +295,11 @@ function MonitorCard({ refreshKey }: { refreshKey: number }) {
               </Button>
               <Button size="sm" disabled={busy} onClick={() => void runNow()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                Rodar agora
+                Verificar agora
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Último scan: {fmtDate(state.lastRunAt)}
+              Última verificação: {fmtDate(state.lastRunAt)}
               {state.lastResult ? ` (${state.lastResult.durationMs}ms, ${state.lastResult.alertsCreated} alerta(s))` : ""}
             </p>
             {state.lastResult?.note && <p className="text-xs text-amber-400">{state.lastResult.note}</p>}
@@ -378,10 +378,10 @@ function BlacklistCard() {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
-          <MailWarning className="h-4 w-4" /> Blacklist de e-mail
+          <MailWarning className="h-4 w-4" /> Reputação do e-mail
         </CardTitle>
         <CardDescription>
-          IP público e domínios contra as principais DNSBLs (Spamhaus, SpamCop, Barracuda).
+          Confere se o IP e os domínios de e-mail estão em listas de bloqueio de spam (Spamhaus, SpamCop, Barracuda).
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -441,7 +441,7 @@ export function SecurityPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Segurança</h1>
         <p className="text-sm text-muted-foreground">
-          Hardening, baseline, monitoramento contínuo e reputação de e-mail.
+          Proteções da VPS, retrato de referência, monitoramento e reputação do e-mail.
         </p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">

@@ -92,7 +92,7 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
       setScan(result);
       onPublicIp?.(result.network.publicIp);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a varredura.");
+      setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a verificação.");
     } finally {
       setLoading(false);
     }
@@ -119,7 +119,7 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
         </div>
         <Button variant="outline" size="sm" onClick={() => void runScan()} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          Revarrer
+          Verificar de novo
         </Button>
       </div>
 
@@ -249,7 +249,7 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
                   <p className="text-muted-foreground">Pedida por: {scan.reboot.packages.join(", ")}</p>
                 )}
                 <p className="text-muted-foreground">
-                  Varredura em {new Date(scan.scannedAt).toLocaleString("pt-BR")}
+                  Verificado em {new Date(scan.scannedAt).toLocaleString("pt-BR")}
                 </p>
                 <CheckMessage check={scan.checks.reboot} />
               </CardContent>
