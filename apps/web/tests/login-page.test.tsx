@@ -55,7 +55,7 @@ describe("LoginPage", () => {
     renderLogin("/login", { from: "/security" });
 
     await user.type(screen.getByLabelText(/usuário/i), "admin");
-    await user.type(screen.getByLabelText(/senha/i), "MinhaSenha123");
+    await user.type(screen.getByLabelText(/^senha$/i), "MinhaSenha123");
     await user.click(screen.getByRole("button", { name: /^entrar$/i }));
 
     const [url, init] = fetchMock.mock.calls[0]!;
@@ -76,7 +76,7 @@ describe("LoginPage", () => {
     renderLogin();
 
     await user.type(screen.getByLabelText(/usuário/i), "admin");
-    await user.type(screen.getByLabelText(/senha/i), "errada");
+    await user.type(screen.getByLabelText(/^senha$/i), "errada");
     await user.click(screen.getByRole("button", { name: /^entrar$/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Credenciais inválidas.");
@@ -98,7 +98,7 @@ describe("LoginPage", () => {
     renderLogin();
 
     await user.type(screen.getByLabelText(/usuário/i), "admin");
-    await user.type(screen.getByLabelText(/senha/i), "errada");
+    await user.type(screen.getByLabelText(/^senha$/i), "errada");
     await user.click(screen.getByRole("button", { name: /^entrar$/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/muitas tentativas/i);
@@ -114,7 +114,7 @@ describe("LoginPage", () => {
     renderLogin();
 
     await user.type(screen.getByLabelText(/usuário/i), "admin");
-    await user.type(screen.getByLabelText(/senha/i), "MinhaSenha123");
+    await user.type(screen.getByLabelText(/^senha$/i), "MinhaSenha123");
     await user.click(screen.getByRole("button", { name: /^entrar$/i }));
 
     expect(await screen.findByRole("button", { name: /entrando/i })).toBeDisabled();

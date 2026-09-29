@@ -5,6 +5,7 @@ import { apiFetch, ApiRequestError, clearSetupToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Loader2, ShieldCheck } from "lucide-react";
 
 export function LoginPage() {
@@ -68,9 +69,8 @@ export function LoginPage() {
               <label htmlFor="login-password" className="text-sm font-medium">
                 Senha
               </label>
-              <Input
+              <PasswordInput
                 id="login-password"
-                type="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

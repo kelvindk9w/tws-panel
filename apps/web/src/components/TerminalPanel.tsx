@@ -131,6 +131,7 @@ import { getSetupToken } from "@/lib/api";
 import { pageLocation } from "@/lib/page-location";
 import { isInsecureTransport, localhostUrl, sshTunnelCommand } from "@/lib/terminal-info";
 import { CopyButton } from "@/components/CopyButton";
+import { PasswordInput } from "@/components/ui/password-input";
 import { ChevronDown, ChevronUp, Cog, Info, KeyRound, Lock, ShieldAlert, TerminalSquare } from "lucide-react";
 
 /** Evento disparado pela UI (ex.: fase aguardando confirmação) para acender
@@ -1062,16 +1063,16 @@ function SudoPasswordAlert({
             <label htmlFor="sudo-password-input" className="sr-only">
               Senha de {userName}
             </label>
-            <input
+            <PasswordInput
               id="sudo-password-input"
               ref={inputRef}
-              type="password"
               autoComplete="off"
               spellCheck={false}
               value={password}
               onChange={(ev) => setPassword(ev.target.value)}
               placeholder={`Senha de ${userName}`}
-              className="min-w-0 flex-1 rounded border border-amber-400/60 bg-black/60 px-2 py-1.5 font-mono text-sm text-amber-50 placeholder:text-amber-100/40 focus:outline-none focus:ring-2 focus:ring-amber-400"
+              containerClassName="min-w-0 flex-1"
+              className="h-auto rounded border-amber-400/60 bg-black/60 py-1.5 font-mono text-amber-50 placeholder:text-amber-100/40 focus-visible:ring-2 focus-visible:ring-amber-400"
             />
             <button
               type="submit"

@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -92,6 +93,11 @@ export function NewProjectPage() {
   const [ingestMode, setIngestMode] = useState<IngestMode>("upload");
   const [source, setSource] = useState("");
   const [branch, setBranch] = useState("main");
+  // repositório privado: token de LEITURA, entregue à credencial do projeto
+  // (cifrada no servidor) antes de o código ser baixado. Some da memória do
+  // componente assim que é enviado.
+  const [privateRepo, setPrivateRepo] = useState(false);
+  const [token, setToken] = useState("");
 
   // passo 2 — detecção
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -114,24 +120,45 @@ export function NewProjectPage() {
     return slug ? `${slug}.localhost` : "";
   }
 
+  /**
+   * Cria o projeto (ou, numa nova tentativa, atualiza o MESMO projeto — antes
+   * cada tentativa criava outro), cadastra o token de leitura se o repositório
+   * for privado e pede a detecção, que no modo git baixa o código primeiro.
+   */
   async function createAndDetect() {
     setBusy(true);
     setError(null);
     try {
+      let id = projectId;
       const dom = domain || defaultDomainFor(name);
-      const created = await apiFetch<ProjectResponse>("/api/projects", {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          ingestMode,
-          source,
-          branch: ingestMode === "git" ? branch : undefined,
-          domain: dom,
-        }),
-      });
-      setProjectId(created.project.id);
-      setDomain(created.project.domain);
-      const det = await apiFetch<DetectResponse>(`/api/projects/${created.project.id}/detect`, {
+      if (id === null) {
+        const created = await apiFetch<ProjectResponse>("/api/projects", {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            ingestMode,
+            source,
+            branch: ingestMode === "git" ? branch : undefined,
+            domain: dom,
+          }),
+        });
+        id = created.project.id;
+        setProjectId(id);
+        setDomain(created.project.domain);
+      } else {
+        await apiFetch<ProjectResponse>(`/api/projects/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ name, source, ...(ingestMode === "git" ? { branch } : {}) }),
+        });
+      }
+      if (ingestMode === "git" && privateRepo && token.trim() !== "") {
+        await apiFetch(`/api/projects/${id}/credential`, {
+          method: "PUT",
+          body: JSON.stringify({ token: token.trim() }),
+        });
+        setToken("");
+      }
+      const det = await apiFetch<DetectResponse>(`/api/projects/${id}/detect`, {
         method: "POST",
       });
       setDetection(det.detection);
@@ -179,7 +206,8 @@ export function NewProjectPage() {
     }
   }
 
-  const canNextStep0 = name.trim() !== "" && source.trim() !== "";
+  const canNextStep0 =
+    name.trim() !== "" && source.trim() !== "" && (!privateRepo || ingestMode !== "git" || token.trim() !== "" || projectId !== null);
 
   return (
     <div className="flex flex-col gap-6">
@@ -211,7 +239,11 @@ export function NewProjectPage() {
         ))}
       </ol>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <p data-testid="new-project-error" className="whitespace-pre-line text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       {step === 0 && (
         <Card>
@@ -237,12 +269,14 @@ export function NewProjectPage() {
                 <button
                   key={opt.mode}
                   type="button"
+                  // o tipo de fonte não muda depois que o projeto foi criado
+                  disabled={projectId !== null && opt.mode !== ingestMode}
                   onClick={() => setIngestMode(opt.mode)}
                   className={cn(
                     "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors",
                     ingestMode === opt.mode
                       ? "border-primary bg-primary/10"
-                      : "hover:border-foreground/30",
+                      : "hover:border-foreground/30 disabled:cursor-not-allowed disabled:opacity-50",
                   )}
                 >
                   <opt.icon className="h-5 w-5" />
@@ -272,10 +306,50 @@ export function NewProjectPage() {
               </label>
             )}
 
+            {ingestMode === "git" && (
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={privateRepo}
+                    onChange={(e) => setPrivateRepo(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Repositório privado
+                </label>
+                {privateRepo && (
+                  <div className="flex flex-col gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">
+                    <p className="text-emerald-800 dark:text-emerald-300">
+                      <strong>Acesso somente leitura.</strong> O painel só baixa o código — nunca escreve,
+                      commita nem faz push. No GitHub, crie um <em>fine-grained personal access token</em>{" "}
+                      com a permissão <code className="font-mono text-xs">Contents: Read</code> só para este
+                      repositório.
+                    </p>
+                    <label htmlFor="np-token" className="font-medium">
+                      Token de leitura
+                    </label>
+                    <PasswordInput
+                      id="np-token"
+                      revealLabel="token"
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="cole o token aqui"
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      Guardado cifrado no servidor. Depois de salvo, só a dica dos últimos caracteres
+                      volta a aparecer (na página do projeto, onde também dá para trocar ou remover).
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end">
               <Button disabled={!canNextStep0 || busy} onClick={() => void createAndDetect()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                Criar e detectar
+                {projectId === null ? "Criar e detectar" : "Tentar de novo"}
               </Button>
             </div>
           </CardContent>
