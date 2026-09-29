@@ -87,20 +87,40 @@ function HardeningCard() {
               {scan.report.summary.pass} itens OK · {scan.report.summary.fail} com problema · última verificação{" "}
               {fmtDate(scan.report.scannedAt)}
             </p>
-            {history && history.firstIndex !== null && history.latestIndex !== null && (
-              <p className="text-xs text-muted-foreground">
-                Evolução: {history.firstIndex} → {history.latestIndex}
-                {history.latestIndex > history.firstIndex ? " ▲" : history.latestIndex < history.firstIndex ? " ▼" : ""}
-              </p>
-            )}
+            {/* Evolução: seta só entre notas da MESMA régua — 42 (índice interno)
+                → 86 (Lynis) não é ganho de 44 pontos (visto em campo). */}
+            {(() => {
+              const withIndex = scans.filter((e) => typeof e.hardeningIndex === "number");
+              const first = withIndex[0];
+              const last = withIndex.at(-1);
+              if (!first || !last || first === last) return null;
+              const same = (first.hardeningIndexSource ?? "internal") === (last.hardeningIndexSource ?? "internal");
+              const a = first.hardeningIndex as number;
+              const b = last.hardeningIndex as number;
+              return (
+                <p data-testid="evolution" className="text-xs text-muted-foreground">
+                  {same
+                    ? `Evolução: ${a} → ${b}${b > a ? " ▲" : b < a ? " ▼" : ""}`
+                    : `Primeira verificação: ${a} (${first.hardeningIndexSource === "lynis" ? "Lynis" : "índice interno"}) · hoje: ${b} (${last.hardeningIndexSource === "lynis" ? "Lynis" : "índice interno"}) — réguas diferentes`}
+                </p>
+              );
+            })()}
             {scans.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {scans.slice(-8).map((s) => (
-                  <Badge key={s.id} variant="secondary" title={fmtDate(s.at)}>
+                  <Badge
+                    key={s.id}
+                    variant="secondary"
+                    title={`${fmtDate(s.at)} — ${s.hardeningIndexSource === "lynis" ? "Lynis" : "índice interno"}`}
+                  >
                     {s.hardeningIndex ?? "—"}
+                    {s.hardeningIndexSource === "lynis" ? "" : "*"}
                   </Badge>
                 ))}
               </div>
+            )}
+            {scans.some((e) => e.hardeningIndexSource !== "lynis") && (
+              <p className="text-[11px] text-muted-foreground">* índice interno do painel (antes de o Lynis existir na VPS)</p>
             )}
           </>
         )}

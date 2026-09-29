@@ -101,6 +101,11 @@ export interface SecurityScanReport {
    */
   nonRootSudoUsers?: string[];
   /**
+   * Por que a nota NÃO é do Lynis nesta verificação (não instalado, não
+   * concluiu, relatório sem nota). Ausente quando a nota é do Lynis.
+   */
+  lynisNote?: string;
+  /**
    * Por usuário de `nonRootSudoUsers`: tem senha utilizável e quantas chaves
    * SSH tem. A Fase 01 só trava a senha do root com chave E senha, e a tela
    * mostra esse estado antes de aplicar. Só entram os usuários cujo estado foi

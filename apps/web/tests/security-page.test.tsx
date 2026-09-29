@@ -33,14 +33,14 @@ const REPORT = {
   profileNote: null,
 };
 
-function mockSecurityFetch(scan: unknown) {
+function mockSecurityFetch(scan: unknown, history: unknown = { entries: [], firstIndex: null, latestIndex: null, applied: null }) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: RequestInfo | URL) => {
       const u = String(url);
       if (u.includes("/api/security/scan")) return jsonResponse(scan);
       if (u.includes("/api/security/history")) {
-        return jsonResponse({ entries: [], firstIndex: null, latestIndex: null, applied: null });
+        return jsonResponse(history);
       }
       if (u.includes("/api/security/baseline")) return jsonResponse({ baseline: null });
       if (u.includes("/api/security/monitor/last")) {
@@ -87,5 +87,57 @@ describe("SecurityPage — Hardening Index com refresh em andamento", () => {
 
     expect(await screen.findByText("75")).toBeInTheDocument();
     expect(screen.queryByText(/atualizando/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Validação real: "Evolução: 42 → 86 ▲" comparava o índice interno (42) com o
+ * Lynis (86). Seta e sentido só entre notas da mesma régua.
+ */
+describe("SecurityPage — evolução sem misturar réguas", () => {
+  const scan = (id: string, at: string, idx: number, src: "lynis" | "internal") => ({
+    id,
+    at,
+    kind: "scan",
+    hardeningIndex: idx,
+    hardeningIndexSource: src,
+  });
+
+  it("réguas diferentes: diz quais são e não desenha seta", async () => {
+    mockSecurityFetch(
+      { report: REPORT, cached: true, refreshing: false },
+      {
+        entries: [scan("a", "2026-09-28T10:00:00Z", 42, "internal"), scan("b", "2026-09-29T21:00:00Z", 80, "lynis")],
+        firstIndex: 42,
+        latestIndex: 80,
+        applied: null,
+      },
+    );
+    render(
+      <MemoryRouter>
+        <SecurityPage />
+      </MemoryRouter>,
+    );
+    const evo = await screen.findByTestId("evolution");
+    expect(evo).toHaveTextContent(/réguas diferentes/);
+    expect(evo).not.toHaveTextContent("▲");
+  });
+
+  it("mesma régua: seta com o sentido", async () => {
+    mockSecurityFetch(
+      { report: REPORT, cached: true, refreshing: false },
+      {
+        entries: [scan("a", "2026-09-28T10:00:00Z", 58, "lynis"), scan("b", "2026-09-29T21:00:00Z", 86, "lynis")],
+        firstIndex: 58,
+        latestIndex: 86,
+        applied: null,
+      },
+    );
+    render(
+      <MemoryRouter>
+        <SecurityPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("evolution")).toHaveTextContent("Evolução: 58 → 86 ▲");
   });
 });

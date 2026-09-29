@@ -103,6 +103,11 @@ interface IndexSnapshot {
   source: string;
 }
 
+/** Nome da régua de uma nota, para a pessoa saber o que está comparando. */
+function scaleLabel(source: string): string {
+  return source === "lynis" ? "Lynis" : "índice interno do painel";
+}
+
 // ---------------------------------------------------------------------------
 // Estado visual por fase durante a execução
 // ---------------------------------------------------------------------------
@@ -252,6 +257,8 @@ export function SecurityStep({
   // persistido no servidor, não de um novo scan/plano/apply.
   const [resumed, setResumed] = useState(false);
   const [resumedAfter, setResumedAfter] = useState<IndexSnapshot | null>(null);
+  /** Verificações do histórico do servidor, da mais antiga à mais recente. */
+  const [historyScans, setHistoryScans] = useState<IndexSnapshot[]>([]);
 
   // Ao montar: se o histórico server-side mostra um hardening já aplicado
   // com sucesso (último apply real = success), restaura direto a tela
@@ -261,7 +268,14 @@ export function SecurityStep({
     let cancelled = false;
     apiFetch<SecurityHistoryResponse>("/api/security/history")
       .then((h) => {
-        if (cancelled || !h.applied) return;
+        if (cancelled) return;
+        setHistoryScans(
+          h.entries
+            .filter((e) => e.kind === "scan" && typeof e.hardeningIndex === "number")
+            .sort((a, b) => a.at.localeCompare(b.at))
+            .map((e) => ({ index: e.hardeningIndex ?? null, source: e.hardeningIndexSource ?? "internal" })),
+        );
+        if (!h.applied) return;
         if (h.applied.beforeIndex !== null) {
           setBeforeSnapshot({ index: h.applied.beforeIndex, source: h.applied.beforeIndexSource ?? "internal" });
         }
@@ -595,11 +609,37 @@ export function SecurityStep({
     (report ? { index: report.hardeningIndex, source: report.hardeningIndexSource } : null);
   // Delta antes→depois da tela de resultado (celebra o ganho; null enquanto o
   // scan final não chegou ou o "antes" é desconhecido).
-  const doneAfterIndex = afterReport?.hardeningIndex ?? resumedAfter?.index ?? null;
+  // Jornada (validação real: a tela mostrava só a ÚLTIMA aplicação — o "antes"
+  // virou 79 quando era 42 — e o "depois" antigo mesmo com uma verificação
+  // mais nova dizendo outra coisa):
+  //  - "Quando a VPS chegou": a primeira verificação de todas;
+  //  - "Hoje": a verificação mais recente (a desta sessão, se houver);
+  //  - "Última aplicação": antes/depois da última execução, à parte.
+  // Diferença em pontos só entre notas da MESMA régua.
+  const lastApplyAfter: IndexSnapshot | null = afterReport
+    ? { index: afterReport.hardeningIndex, source: afterReport.hardeningIndexSource }
+    : resumedAfter;
+  const journeyFirst: IndexSnapshot | null = historyScans[0] ?? beforeView;
+  const journeyToday: IndexSnapshot | null = afterReport
+    ? lastApplyAfter
+    : (historyScans.at(-1) ?? lastApplyAfter);
+  const sameScale = (a: IndexSnapshot | null, b: IndexSnapshot | null) =>
+    a !== null && b !== null && a.index !== null && b.index !== null && a.source === b.source;
   const doneDelta =
-    stage === "done" && beforeView?.index != null && doneAfterIndex != null
-      ? doneAfterIndex - beforeView.index
+    stage === "done" && sameScale(journeyFirst, journeyToday)
+      ? (journeyToday!.index as number) - (journeyFirst!.index as number)
       : null;
+  const lastApplyDelta = sameScale(beforeView, lastApplyAfter)
+    ? (lastApplyAfter!.index as number) - (beforeView!.index as number)
+    : null;
+  const showLastApply =
+    beforeView?.index != null &&
+    lastApplyAfter?.index != null &&
+    (beforeView.index !== journeyFirst?.index || lastApplyAfter.index !== journeyToday?.index);
+  const drifted =
+    !afterReport &&
+    sameScale(lastApplyAfter, journeyToday) &&
+    (journeyToday!.index as number) < (lastApplyAfter!.index as number);
 
   return (
     <div className="flex animate-fade-in flex-col gap-6">
@@ -611,8 +651,8 @@ export function SecurityStep({
         )}
         <h2 className="text-xl font-semibold tracking-tight">Segurança</h2>
         <p className="text-sm text-muted-foreground">
-          Verificação que não altera nada, plano de correção e proteções em fases — com simulação, backup e
-          reversão automática.
+          Verificação da VPS, plano de correção e proteções em fases — com simulação, backup e reversão
+          automática.
         </p>
       </div>
 
@@ -661,8 +701,9 @@ export function SecurityStep({
                 </div>
                 <CardTitle>Verificação de segurança</CardTitle>
                 <CardDescription className="max-w-md">
-                  Executa verificações somente-leitura (SSH, firewall, portas, pacotes, Docker) e, se
-                  disponível, o Lynis — nada é alterado no servidor.
+                  Confere SSH, firewall, portas, pacotes e Docker e roda o Lynis, a ferramenta de auditoria
+                  de segurança. Se o Lynis ainda não estiver na VPS, ele é instalado do repositório oficial
+                  do Ubuntu — é a única coisa que a verificação altera. Leva de 2 a 5 minutos.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex justify-center">
@@ -675,7 +716,7 @@ export function SecurityStep({
 
           {scanning && (
             <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" /> Varrendo o servidor…
+              <Loader2 className="h-5 w-5 animate-spin" /> Verificando a VPS… (o Lynis leva de 2 a 5 minutos)
             </div>
           )}
 
@@ -683,7 +724,14 @@ export function SecurityStep({
             <>
               <Card>
                 <CardContent className="flex flex-col items-center gap-4 py-6 sm:flex-row sm:justify-around">
-                  <IndexGauge value={report.hardeningIndex} source={report.hardeningIndexSource} />
+                  <div className="flex flex-col items-center gap-2">
+                    <IndexGauge value={report.hardeningIndex} source={report.hardeningIndexSource} />
+                    {report.lynisNote && (
+                      <p data-testid="lynis-note" className="max-w-xs text-center text-xs text-amber-300">
+                        {report.lynisNote}
+                      </p>
+                    )}
+                  </div>
                   <div className="grid grid-cols-3 gap-6 text-center">
                     <div>
                       <p className="text-2xl font-bold text-emerald-400">{report.summary.pass}</p>
@@ -1125,28 +1173,28 @@ export function SecurityStep({
               </div>
               <CardTitle className="text-2xl tracking-tight">Proteções aplicadas</CardTitle>
               <CardDescription>
-                Comparação do índice de segurança antes e depois das correções.
-                {resumed && " (Estado restaurado do histórico do servidor após a reinicialização do painel.)"}
+                Como a VPS chegou e como ela está hoje.
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center sm:gap-12">
+            <CardContent
+              data-testid="journey"
+              className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center sm:gap-12"
+            >
               <div className="flex flex-col items-center gap-2.5">
                 <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-                  Antes
+                  Quando a VPS chegou
                 </span>
                 <div className="opacity-75">
-                  <IndexGauge value={beforeView?.index ?? null} source={beforeView?.source ?? "internal"} />
+                  <IndexGauge value={journeyFirst?.index ?? null} source={journeyFirst?.source ?? "internal"} />
                 </div>
               </div>
               <ArrowRight className="hidden h-6 w-6 text-muted-foreground sm:block" />
               <div className="flex flex-col items-center gap-2.5">
                 <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-                  Depois
+                  Hoje
                 </span>
-                {afterReport ? (
-                  <IndexGauge value={afterReport.hardeningIndex} source={afterReport.hardeningIndexSource} />
-                ) : resumed ? (
-                  <IndexGauge value={resumedAfter?.index ?? null} source={resumedAfter?.source ?? "internal"} />
+                {afterReport || resumed ? (
+                  <IndexGauge value={journeyToday?.index ?? null} source={journeyToday?.source ?? "internal"} />
                 ) : (
                   <div className="flex w-40 flex-col items-center gap-2">
                     <div className="flex h-28 w-28 items-center justify-center">
@@ -1160,6 +1208,30 @@ export function SecurityStep({
                 )}
               </div>
             </CardContent>
+            {journeyFirst?.index != null &&
+              journeyToday?.index != null &&
+              journeyFirst.source !== journeyToday.source && (
+                <p data-testid="journey-scales" className="px-6 pb-4 text-center text-xs text-muted-foreground">
+                  As duas notas usam réguas diferentes ({scaleLabel(journeyFirst.source)} e{" "}
+                  {scaleLabel(journeyToday.source)}) — por isso não mostramos a diferença em pontos. Nas
+                  instalações novas, a primeira verificação já usa o Lynis.
+                </p>
+              )}
+            {showLastApply && (
+              <p data-testid="last-apply" className="px-6 pb-2 text-center text-xs text-muted-foreground">
+                Última aplicação: {beforeView?.index} → {lastApplyAfter?.index} (
+                {lastApplyDelta !== null
+                  ? `${scaleLabel(lastApplyAfter?.source ?? "internal")}), ${lastApplyDelta >= 0 ? "+" : ""}${lastApplyDelta} pontos`
+                  : `${scaleLabel(beforeView?.source ?? "internal")} → ${scaleLabel(lastApplyAfter?.source ?? "internal")})`}
+              </p>
+            )}
+            {drifted && (
+              <p data-testid="journey-drift" className="px-6 pb-4 text-center text-xs text-amber-300">
+                A nota era {lastApplyAfter?.index} logo depois da última aplicação e hoje é {journeyToday?.index}. A
+                nota muda com o tempo: atualizações de segurança novas ainda não instaladas e um reinício pendente
+                tiram pontos até serem aplicados. Veja o relatório completo para saber o que mudou.
+              </p>
+            )}
             {doneDelta !== null && (
               <div className="flex justify-center pb-6">
                 {doneDelta > 0 ? (

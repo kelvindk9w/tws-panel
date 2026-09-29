@@ -6,6 +6,13 @@
  */
 import { describe, expect, it } from "vitest";
 import { runSecurityScan } from "../src/scanner.js";
+import {
+  LYNIS_CHECK_CMD,
+  LYNIS_INSTALL_CMD,
+  LYNIS_MTIME_CMD,
+  LYNIS_REPORT_CMD,
+  LYNIS_RUN_CMD,
+} from "../src/host-bridge.js";
 import { SECURITY_CHECKS } from "../src/checks.js";
 import { partitionChecksForProfile } from "../src/profiles.js";
 import type { ExecResult, TargetRunner } from "../src/runner.js";
@@ -133,5 +140,87 @@ describe("runSecurityScan — nonRootSudoUsers", () => {
       runnerWithSudoOutput("sudo-user Bad;Name 1000\nsudo-user deploy 1000\n"),
     );
     expect(report.nonRootSudoUsers).toEqual(["deploy"]);
+  });
+});
+
+/**
+ * Validação real: a nota do Lynis oscilou (86 → 79 → 86 → 80) e a tela
+ * mostrava 86 enquanto o relatório mais recente no disco dizia 80. O
+ * comando terminava em "|| true" e o painel lia /var/log/lynis-report.dat
+ * sem conferir se ELA tinha sido gravada por esta execução — um Lynis
+ * interrompido (ou recusado por já haver outro rodando) fazia o painel
+ * apresentar a nota ANTIGA como a de agora.
+ */
+describe("runSecurityScan — nota do Lynis", () => {
+  function hostRunner(opts: { installed: boolean; installWorks?: boolean; reportWritten: boolean; index?: number }) {
+    const calls: string[] = [];
+    let installed = opts.installed;
+    let mtime = 1000;
+    const runner: TargetRunner = {
+      label: "host",
+      profile: "host",
+      ensureReady: () => Promise.resolve(),
+      exec: (cmd: string) => {
+        calls.push(cmd);
+        const ok = (stdout = "") => Promise.resolve({ code: 0, stdout, stderr: "" });
+        if (cmd === LYNIS_INSTALL_CMD) {
+          if (opts.installWorks !== false) installed = true;
+          return ok();
+        }
+        if (cmd === LYNIS_CHECK_CMD) return Promise.resolve({ code: installed ? 0 : 1, stdout: "", stderr: "" });
+        if (cmd === LYNIS_MTIME_CMD) return ok(`${mtime}\n`);
+        if (cmd === LYNIS_RUN_CMD) {
+          if (opts.reportWritten) mtime += 60;
+          return ok();
+        }
+        if (cmd === LYNIS_REPORT_CMD) return ok(`hardening_index=${opts.index ?? 80}\n`);
+        return ok();
+      },
+      execStream: () => Promise.resolve(0),
+      uploadDir: () => Promise.resolve(),
+    };
+    return { runner, calls };
+  }
+
+  it("relatório gravado por esta execução: usa a nota do Lynis", async () => {
+    const { runner } = hostRunner({ installed: true, reportWritten: true, index: 80 });
+    const report = await runSecurityScan(runner);
+    expect(report.hardeningIndexSource).toBe("lynis");
+    expect(report.hardeningIndex).toBe(80);
+  });
+
+  it("relatório NÃO foi regravado (Lynis interrompido/recusado): nunca apresenta a nota antiga como atual", async () => {
+    const { runner } = hostRunner({ installed: true, reportWritten: false, index: 86 });
+    const report = await runSecurityScan(runner);
+    expect(report.hardeningIndexSource).toBe("internal");
+    expect(report.hardeningIndex).not.toBe(86);
+    expect(report.lynisNote).toMatch(/não concluiu/i);
+  });
+
+  it("Lynis ausente na VPS: a verificação o instala (repositório do Ubuntu) antes de rodar", async () => {
+    const { runner, calls } = hostRunner({ installed: false, reportWritten: true, index: 58 });
+    const report = await runSecurityScan(runner);
+    expect(calls.indexOf(LYNIS_INSTALL_CMD)).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf(LYNIS_INSTALL_CMD)).toBeLessThan(calls.indexOf(LYNIS_RUN_CMD));
+    expect(report.hardeningIndexSource).toBe("lynis");
+    expect(report.hardeningIndex).toBe(58);
+  });
+
+  it("instalação falhou: segue com o índice interno e diz o motivo", async () => {
+    const { runner } = hostRunner({ installed: false, installWorks: false, reportWritten: true });
+    const report = await runSecurityScan(runner);
+    expect(report.hardeningIndexSource).toBe("internal");
+    expect(report.lynisNote).toMatch(/não foi possível instalar/i);
+  });
+
+  it("alvo de desenvolvimento (container): não instala nada", async () => {
+    const calls: string[] = [];
+    await runSecurityScan(
+      fakeRunner((cmd: string) => {
+        calls.push(cmd);
+        return Promise.resolve({ code: cmd.startsWith("command -v lynis") ? 1 : 0, stdout: "", stderr: "" });
+      }),
+    );
+    expect(calls).not.toContain(LYNIS_INSTALL_CMD);
   });
 });
