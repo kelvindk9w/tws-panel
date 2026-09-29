@@ -30,6 +30,10 @@ describe("flags hostOnly do catálogo", () => {
       "audit.aide-baseline",
       "audit.rkhunter",
       "audit.recurring-scan",
+      "extra.login-defs",
+      "extra.kernel-hardening",
+      "extra.core-dumps",
+      "extra.accounting",
     ];
     const marked = SECURITY_CHECKS.filter((c) => c.hostOnly).map((c) => c.id);
     expect(marked.sort()).toEqual(expectedHostOnly.sort());

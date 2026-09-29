@@ -17,10 +17,12 @@ vi.mock("@/lib/api", async () => {
 
 import { ApiRequestError } from "@/lib/api";
 import {
+  VPS_ADDRESS_PLACEHOLDER,
   isInsecureTransport,
   isSudoJobError,
   sudoElevationFailure,
   useTerminalInfo,
+  vpsSshHost,
 } from "@/lib/terminal-info";
 
 const INFO = {
@@ -145,5 +147,25 @@ describe("sudoElevationFailure", () => {
     expect(isSudoJobError("terminal indisponível (x). No modo senha (PAAS_ROOT_MODE=senha) ...")).toBe(true);
     expect(isSudoJobError("script 02-ssh.sh saiu com código 1")).toBe(false);
     expect(isSudoJobError(null)).toBe(false);
+  });
+});
+
+/**
+ * Pelo túnel a página é "localhost", que no computador do operador é a
+ * própria máquina dele: o `ssh` de teste de acesso precisa do IP da VPS.
+ */
+describe("vpsSshHost", () => {
+  it("página aberta pelo IP ou domínio: usa o próprio endereço", () => {
+    expect(vpsSshHost({ protocol: "http:", hostname: "198.51.100.7" }, "203.0.113.10")).toBe("198.51.100.7");
+  });
+
+  it("pelo túnel (localhost/127.0.0.1): usa o IP público da VPS", () => {
+    expect(vpsSshHost({ protocol: "http:", hostname: "localhost" }, "203.0.113.10")).toBe("203.0.113.10");
+    expect(vpsSshHost({ protocol: "http:", hostname: "127.0.0.1" }, " 203.0.113.10 ")).toBe("203.0.113.10");
+  });
+
+  it("pelo túnel e sem IP conhecido: marcador explícito, nunca localhost", () => {
+    expect(vpsSshHost({ protocol: "http:", hostname: "localhost" }, null)).toBe(VPS_ADDRESS_PLACEHOLDER);
+    expect(vpsSshHost({ protocol: "http:", hostname: "localhost" }, "")).toBe(VPS_ADDRESS_PLACEHOLDER);
   });
 });

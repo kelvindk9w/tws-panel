@@ -313,6 +313,12 @@ export class SecurityService {
         ];
         notes.push("Sem chave SSH instalada, o script NÃO trava o root (proteção anti-lockout).");
       }
+      if (phase === "02") {
+        commands = [`sudo bash ${scriptPath} --user SEU_USUARIO`];
+        notes.push(
+          "Com --user, o root não entra por SSH e só SEU_USUARIO pode entrar. O script recusa se ele não tiver chave SSH (anti-lockout).",
+        );
+      }
       if (phase === "01" || phase === "02" || phase === "03") {
         commands.push(`sudo bash ${scriptPath} --confirm`);
         notes.push(

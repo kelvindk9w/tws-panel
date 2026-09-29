@@ -139,11 +139,16 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
     { schema: applySchema },
     async (request, reply) => {
       const { phase, dryRun, sshUser, sshPublicKey } = request.body;
-      // Parâmetros da Fase 01 (usuário não-root + chave pública do operador).
-      if ((sshUser !== undefined || sshPublicKey !== undefined) && phase !== "01") {
+      // Parâmetros por fase: usuário não-root nas fases 01 (criar/validar) e
+      // 02 (PermitRootLogin no + AllowUsers — sem ele o root seguia entrando
+      // com chave); chave pública só na 01.
+      if (
+        (sshUser !== undefined && phase !== "01" && phase !== "02") ||
+        (sshPublicKey !== undefined && phase !== "01")
+      ) {
         return reply.code(400).send({
           error: "invalid_params",
-          message: "sshUser/sshPublicKey só se aplicam à fase 01.",
+          message: "sshUser só se aplica às fases 01 e 02; sshPublicKey, só à fase 01.",
         });
       }
       if (sshUser !== undefined && !isValidSshUsername(sshUser)) {

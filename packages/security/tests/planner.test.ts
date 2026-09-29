@@ -117,7 +117,7 @@ describe("buildSecurityPlan", () => {
 
   it("scan vazio gera plano completo sem correções pendentes", () => {
     const plan = buildSecurityPlan(makeReport([]));
-    expect(plan.actions).toHaveLength(7);
+    expect(plan.actions).toHaveLength(8);
     expect(plan.actions.every((a) => a.fixesCheckIds.length === 0)).toBe(true);
     expect(plan.actions.every((a) => !a.preselected)).toBe(true);
   });

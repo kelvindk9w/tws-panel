@@ -9,6 +9,37 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 29/09/2026 (leia antes do resto)
+
+- **PRs #31, #32 e #33** depois do documento abaixo:
+  - **#31** — o pedido de senha era cancelado no mesmo instante: o compose repassava
+    `PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS` vazia e `Number("")` é 0. Agora: variável
+    numérica vazia vale o padrão; o painel **não desiste sozinho** da senha (padrão sem
+    prazo); campo de senha no alerta com Enviar/Cancelar; alerta sobrevive à queda do WS;
+    digitação com o WS caído é avisada; tela limpa ao reconectar.
+  - **#32** — Fase 01 só trava o root com chave **e** senha do usuário (usuário criado
+    pela fase nasce sem senha → ficaria sem sudo); a varredura informa senha/chaves de
+    cada usuário com sudo; card da Fase 01 curto, com quadro "o que vai acontecer".
+  - **#33** — Fase 02 com `AllowTcpForwarding local` (com `no` o túnel do README deixava
+    de abrir após a fase — visto em campo) e `TCPKeepAlive no`; o wizard passa `--user`
+    à Fase 02; **nova Fase 07** (recomendações do Lynis seguras de automatizar — lista do
+    que fica de fora e por quê em `seguranca/conceito-fases.json`); checks de Docker
+    reconhecem os containers do próprio painel como risco aceito; alerta de teste de
+    acesso usa o IP da VPS (não `localhost`) e não diz mais "criou o usuário";
+    aviso de que a nota final do Lynis leva 2–5 min.
+- **Validação real:** hardening 00–06 aplicado na VPS de teste; Lynis 76. O operador
+  corrigiu à mão o túnel (`AllowTcpForwarding local` em `10-local-override.conf`).
+  Próximo passo dele: **reinstalar o sistema** e refazer tudo pelo README, agora com a
+  Fase 07, cronometrando.
+- **Pendente:** o teste do PTY real ainda falha às vezes na CI (comando simples sem
+  resposta em 30 s; não reproduz localmente em 15 repetições). Proposta: o erro de
+  tempo esgotado passar a mostrar o fim da saída do terminal, para diagnóstico.
+  Decisão do produto ainda aberta: acesso ao painel por túnel ou por HTTPS
+  (`sslip.io` + Let's Encrypt) — hoje a porta do painel fica aberta na internet mesmo
+  com o UFW, porque o Docker publica portas por fora dele.
+
+---
+
 ## Onde tudo está
 
 | | |

@@ -45,7 +45,7 @@
       "chave": "ssh",
       "titulo": "Hardening de SSH",
       "script": "02-ssh.sh",
-      "oQueAplica": "Garante o OpenSSH server instalado; verifica pré-requisitos anti-lockout (usuário --user existe e tem chave SSH — senão recusa com die); agenda o rollback automático de 5 min ANTES de aplicar; escreve um drop-in de hardening (PermitRootLogin/PasswordAuthentication no, MaxAuthTries 3, forwardings desabilitados, crypto moderna); valida com 'sshd -t'; recarrega o SSH.",
+      "oQueAplica": "Garante o OpenSSH server instalado; verifica pré-requisitos anti-lockout (usuário --user existe e tem chave SSH — senão recusa com die); agenda o rollback automático de 5 min ANTES de aplicar; escreve um drop-in de hardening (PermitRootLogin/PasswordAuthentication no, MaxAuthTries 3, forwardings desabilitados, crypto moderna); valida com 'sshd -t'; recarrega o SSH. ATUALIZAÇÃO (29/09/2026): AllowTcpForwarding passou de 'no' para 'local' — o README manda acessar o painel por túnel SSH (ssh -L, encaminhamento local); com 'no' o túnel aberto antes seguia funcionando e o seguinte (inclusive após reboot) era recusado, e o operador perdia o acesso ao painel (visto em campo). 'local' libera só o -L; -R, agent e X11 seguem bloqueados. TCPKeepAlive no (o ClientAliveInterval cifrado detecta conexão morta). O wizard passa --user (o mesmo usuário da fase 01) — sem ele a fase aplicava PermitRootLogin prohibit-password e nenhum AllowUsers; a rota /api/security/apply aceita sshUser nas fases 01 e 02.",
       "corrigeChecks": [
         "ssh.root-login",
         "ssh.password-auth",
@@ -118,6 +118,23 @@
       ],
       "manualOuAutomatica": "ambas",
       "reversivel": "sim — --rollback remove o cron de varredura e restaura as regras de auditoria anteriores.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "07",
+      "chave": "extra",
+      "titulo": "Endurecimento adicional",
+      "script": "07-extra.sh",
+      "oQueAplica": "As recomendações do Lynis seguras de automatizar numa VPS em produção: instala libpam-tmpdir, debsums, apt-show-versions, acct, sysstat e libpam-pwquality (ativa acct e sysstat); desliga core dump (limits.d + coredump.conf.d); login.defs com UMASK 027, PASS_MIN_DAYS 1 e rodadas de hash SHA (valem para senhas/sessões novas); bloqueia os módulos usb-storage, dccp, sctp, rds e tipc (modprobe.d); sysctl complementar em /etc/sysctl.d/99-paas-extra.conf (lido depois do 99-paas-hardening.conf da fase 03; fora de propósito: ip_forward=0, que o Docker precisa, e modules_disabled=1); aviso legal em /etc/issue e /etc/issue.net; AIDE com sha512 (valida a config e refaz a baseline; se a config recusar, restaura a anterior); compiladores (as, cc, c++, gcc, g++, clang) com modo 750; permissões restritas em /etc/crontab (600), /etc/cron.* (700), /etc/ssh/sshd_config (600) e /boot/grub/grub.cfg (400). O rollback restaura cada arquivo pelo backup, remove os drop-ins criados e devolve as permissões originais guardadas em /etc/paas/extra-modes.txt (pacotes instalados permanecem). FORA de propósito (decisão do dono do produto, 29/09/2026): idade máxima/expiração de senha (a senha do usuário do terminal expiraria e o sudo do modo senha pararia), senha no GRUB (erro impede boot desatendido), troca da porta do SSH (quebra o túnel e o README), partições separadas (só na instalação), apt-listbugs (BTS do Debian, pode travar o apt), Lynis de repositório de terceiros, log remoto e remoção de contas travadas. Coberto por packages/security/tests/phase02-07-scripts.test.ts (aplica e desfaz num Ubuntu 24.04 em container).",
+      "corrigeChecks": [
+        "extra.login-defs",
+        "extra.kernel-hardening",
+        "extra.core-dumps",
+        "extra.accounting"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback restaura cada arquivo pelo backup, remove os drop-ins e devolve as permissões originais; os pacotes instalados permanecem.",
       "arriscada": false,
       "exigeConfirmacao": false
     }

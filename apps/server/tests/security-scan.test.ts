@@ -123,3 +123,29 @@ describe("SecurityService.scan — GET sem fresh nunca dispara scan novo", () =>
     expect(mockRunScan).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Modo manual (host): a fase 02 sem --user deixava o root entrar com chave e
+ * não restringia quem entra por SSH — o passo a passo precisa ensinar o --user.
+ */
+describe("SecurityService.manualCommands — fase 02 ensina o --user", () => {
+  it("o comando da fase 02 leva --user e a nota explica o que ele faz", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-sec-manual-"));
+    try {
+      const config = {
+        dataDir: dir,
+        securityTarget: "host",
+        securityTargetContainer: "paas-target-test",
+        hardeningScriptsDir: path.resolve(__dirname, "../../../scripts/hardening"),
+        hostHelperImage: "alpine:3",
+        hostRepoDir: "/opt/tws-panel",
+      } as ServerConfig;
+      const res = await new SecurityService(config).manualCommands("02");
+      expect(res.commands[0]).toBe("sudo bash /opt/tws-panel/scripts/hardening/02-ssh.sh --user SEU_USUARIO");
+      expect(res.commands).toContain("sudo bash /opt/tws-panel/scripts/hardening/02-ssh.sh --confirm");
+      expect(res.notes.join(" ")).toMatch(/root não entra por SSH/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

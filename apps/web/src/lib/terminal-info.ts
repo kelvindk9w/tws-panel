@@ -88,6 +88,19 @@ export interface PageLocationLike {
  * internet vai dentro do SSH, criptografado, mesmo com a página em http. */
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
+/**
+ * Endereço da VPS para um comando `ssh` digitado no computador do operador.
+ * Pelo túnel a página é "localhost" — que ali é o PRÓPRIO computador, não a
+ * VPS —, então vale o IP público lido pela tela de Saúde. Sem ele, um marcador
+ * explícito para a pessoa trocar (nunca um endereço inventado).
+ */
+export const VPS_ADDRESS_PLACEHOLDER = "IP_DA_VPS";
+
+export function vpsSshHost(loc: PageLocationLike, vpsAddress: string | null | undefined): string {
+  if (!LOOPBACK_HOSTS.has(loc.hostname)) return loc.hostname;
+  return vpsAddress && vpsAddress.trim() !== "" ? vpsAddress.trim() : VPS_ADDRESS_PLACEHOLDER;
+}
+
 export function isInsecureTransport(loc: PageLocationLike): boolean {
   if (loc.protocol === "https:") return false;
   return !LOOPBACK_HOSTS.has(loc.hostname.toLowerCase());

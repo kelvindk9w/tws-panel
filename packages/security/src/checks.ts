@@ -55,6 +55,19 @@ function firstLine(s: string): string {
 const DPKG_INSTALLED = (pkg: string) =>
   `dpkg-query -W -f='\${db:Status-Abbrev}' ${pkg} 2>/dev/null | grep -q '^ii '`;
 
+/**
+ * Containers do PRÓPRIO painel, que precisam do que os checks de Docker
+ * reprovam: o painel monta o socket (deploys) e os helpers são privilegiados
+ * (terminal e host bridge entram nos namespaces do host com nsenter). São
+ * risco aceito por design — reprová-los para sempre como "crítico pendente"
+ * assustava o operador sem ação possível. Nomes exatos (helpers com 8 hex),
+ * para um container qualquer não se passar por eles.
+ */
+const PANEL_PRIVILEGED_RE = /^\/paas-(?:terminal|terminal-check|host-exec|host-upload)-[0-9a-f]{8} /;
+const PANEL_SOCKET_RE = /^\/tws-panel /;
+const ACCEPTED_BY_DESIGN =
+  "aceito por design: o painel usa o Docker para deploys e o terminal/host bridge para administrar a VPS";
+
 /** Prefixo das linhas emitidas pelo check "user.non-root-sudo". */
 const SUDO_USER_PREFIX = "sudo-user";
 
@@ -279,7 +292,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     title: "Forwardings SSH desabilitados",
     severity: "info",
     description: "X11/agent/TCP forwarding ligados ampliam a superfície de movimento lateral.",
-    remediation: "Aplicar a fase 02 (X11Forwarding/AllowAgentForwarding/AllowTcpForwarding no).",
+    remediation: "Aplicar a fase 02 (X11Forwarding/AllowAgentForwarding no; AllowTcpForwarding local, para o túnel do painel).",
     fixable: true,
     hostOnly: true,
     command:
@@ -548,6 +561,73 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
         : { status: "fail", detail: "sem cron de varredura" },
   },
 
+  // ------------------------------------------------------------------ Fase 07
+  {
+    id: "extra.login-defs",
+    phase: "07",
+    title: "umask restritivo para novas sessões",
+    severity: "warning",
+    description: "UMASK 027 no /etc/login.defs: arquivos novos deixam de ser legíveis por qualquer usuário.",
+    remediation: "Aplicar a fase 07 (login.defs: umask 027, idade mínima de senha, rodadas de hash).",
+    fixable: true,
+    hostOnly: true,
+    command: "grep -E '^[[:space:]]*UMASK[[:space:]]' /etc/login.defs 2>/dev/null | tail -1",
+    evaluate: (r) =>
+      /^UMASK\s+027$/.test(firstLine(r.stdout).trim())
+        ? { status: "pass", detail: "UMASK 027" }
+        : { status: "fail", detail: firstLine(r.stdout).trim() || "UMASK não definido" },
+  },
+  {
+    id: "extra.kernel-hardening",
+    phase: "07",
+    title: "Módulos raros bloqueados e sysctl complementar",
+    severity: "warning",
+    description: "usb-storage, dccp, sctp, rds e tipc bloqueados; sysctl complementar do Lynis (ldisc, perf, redirects IPv6…).",
+    remediation: "Aplicar a fase 07 (modprobe.d + sysctl.d da fase).",
+    fixable: true,
+    hostOnly: true,
+    command:
+      "echo \"modprobe=$(test -f /etc/modprobe.d/99-paas-hardening.conf && echo present || echo absent) sysctl=$(test -f /etc/sysctl.d/99-paas-extra.conf && echo present || echo absent)\"",
+    evaluate: (r) => {
+      const out = firstLine(r.stdout).trim();
+      return out === "modprobe=present sysctl=present"
+        ? { status: "pass", detail: "módulos bloqueados e sysctl complementar presentes" }
+        : { status: "fail", detail: out || "sem leitura" };
+    },
+  },
+  {
+    id: "extra.core-dumps",
+    phase: "07",
+    title: "Core dumps desativados",
+    severity: "info",
+    description: "Core dump de um processo pode conter senhas e chaves em claro.",
+    remediation: "Aplicar a fase 07 (limits.d + coredump.conf.d).",
+    fixable: true,
+    hostOnly: true,
+    command: "test -f /etc/security/limits.d/99-paas-nocore.conf && echo present || echo absent",
+    evaluate: (r) =>
+      firstLine(r.stdout) === "present"
+        ? { status: "pass", detail: "core dumps desativados" }
+        : { status: "fail", detail: "core dumps permitidos" },
+  },
+  {
+    id: "extra.accounting",
+    phase: "07",
+    title: "Contabilidade de processos e histórico de uso",
+    severity: "info",
+    description: "acct registra os comandos executados; sysstat guarda o histórico de CPU/memória/disco (investigação pós-incidente).",
+    remediation: "Aplicar a fase 07 (acct + sysstat).",
+    fixable: true,
+    hostOnly: true,
+    command: `for p in acct sysstat; do ${DPKG_INSTALLED('"$p"')} && printf '%s ' "$p"; done; echo`,
+    evaluate: (r) => {
+      const found = firstLine(r.stdout).trim().split(/\s+/);
+      return found.includes("acct") && found.includes("sysstat")
+        ? { status: "pass", detail: "acct e sysstat instalados" }
+        : { status: "fail", detail: `instalados: ${found.filter(Boolean).join(", ") || "nenhum"}` };
+    },
+  },
+
   // ------------------------------------------------------- Docker (manual)
   // Os dois checks abaixo dependem do daemon Docker: se o dockerd estiver
   // ocupado (ex.: remoção forçada de helpers paas-* concorrente ao scan), o
@@ -569,9 +649,11 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
       const out = r.stdout.trim();
       if (out === "no-docker" || out === "") return { status: "unknown", detail: "Docker ausente ou sem containers" };
       const priv = out.split("\n").filter((l) => l.endsWith(" true"));
+      const foreign = priv.filter((l) => !PANEL_PRIVILEGED_RE.test(l));
+      if (foreign.length > 0) return { status: "fail", detail: foreign.join(" | ") };
       return priv.length === 0
         ? { status: "pass", detail: "nenhum container privilegiado" }
-        : { status: "fail", detail: priv.join(" | ") };
+        : { status: "pass", detail: `só helpers do próprio painel (${ACCEPTED_BY_DESIGN})` };
     },
   },
   {
@@ -587,7 +669,11 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     evaluate: (r) => {
       const out = r.stdout.trim();
       if (out === "no-docker" || out === "") return { status: "unknown", detail: "Docker ausente ou sem mounts de socket" };
-      return { status: "fail", detail: out.split("\n").join(" | ") };
+      const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
+      const foreign = lines.filter((l) => !PANEL_SOCKET_RE.test(`${l} `));
+      return foreign.length > 0
+        ? { status: "fail", detail: foreign.join(" | ") }
+        : { status: "pass", detail: `só o container do próprio painel (${ACCEPTED_BY_DESIGN})` };
     },
   },
 ];

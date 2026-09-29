@@ -24,7 +24,7 @@ describe("estrutura do catálogo", () => {
     const ids = SECURITY_CHECKS.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const c of SECURITY_CHECKS) {
-      expect(c.phase).toMatch(/^0[0-6]$/);
+      expect(c.phase).toMatch(/^0[0-7]$/);
       expect(c.command.length).toBeGreaterThan(0);
     }
   });
@@ -339,5 +339,53 @@ describe("docker (checks manuais)", () => {
     const fail = c.evaluate(exec("/portainer /var/run/docker.sock \n"));
     expect(fail.status).toBe("fail");
     expect(fail.detail).toContain("docker.sock");
+  });
+
+  /**
+   * O painel PRECISA do socket (deploys) e dos helpers privilegiados (terminal
+   * e host bridge via nsenter): marcá-los como "crítico pendente" para sempre
+   * assustava o operador sem ação possível. Eles viram risco aceito, explicado;
+   * qualquer OUTRO container continua reprovando.
+   */
+  it("docker.privileged-containers: helpers do próprio painel são risco aceito, os demais reprovam", () => {
+    const c = check("docker.privileged-containers");
+    const own = c.evaluate(exec("/paas-terminal-4b165899 true\n/paas-host-exec-0a1b2c3d true\n/tws-panel false\n"));
+    expect(own.status).toBe("pass");
+    expect(own.detail).toMatch(/aceito por design/);
+    const mixed = c.evaluate(exec("/paas-terminal-4b165899 true\n/evil true\n"));
+    expect(mixed.status).toBe("fail");
+    expect(mixed.detail).toContain("evil");
+    expect(mixed.detail).not.toContain("paas-terminal");
+    // nome parecido não passa por helper do painel
+    expect(c.evaluate(exec("/paas-terminal-custom true\n")).status).toBe("fail");
+  });
+
+  it("docker.sock-mounted: o socket no container do painel é risco aceito; em outro, reprova", () => {
+    const c = check("docker.sock-mounted");
+    const own = c.evaluate(exec("/tws-panel /var/lib/docker/volumes/paas_data/_data /var/run/docker.sock \n"));
+    expect(own.status).toBe("pass");
+    expect(own.detail).toMatch(/aceito por design/);
+    const other = c.evaluate(exec("/tws-panel /var/run/docker.sock \n/portainer /var/run/docker.sock \n"));
+    expect(other.status).toBe("fail");
+    expect(other.detail).toContain("portainer");
+  });
+
+  it("fase 07: login.defs, kernel, core dump e contabilidade", () => {
+    const umask = check("extra.login-defs");
+    expect(umask.phase).toBe("07");
+    expect(umask.evaluate(exec("UMASK 027\n")).status).toBe("pass");
+    expect(umask.evaluate(exec("UMASK 022\n")).status).toBe("fail");
+    expect(umask.evaluate(exec("")).status).toBe("fail");
+    const kernel = check("extra.kernel-hardening");
+    expect(kernel.evaluate(exec("modprobe=present sysctl=present\n")).status).toBe("pass");
+    expect(kernel.evaluate(exec("modprobe=absent sysctl=present\n")).status).toBe("fail");
+    const core = check("extra.core-dumps");
+    expect(core.evaluate(exec("present\n")).status).toBe("pass");
+    expect(core.evaluate(exec("absent\n")).status).toBe("fail");
+    expect(kernel.evaluate(exec("")).detail).toBe("sem leitura");
+    const acct = check("extra.accounting");
+    expect(acct.evaluate(exec("acct sysstat\n")).status).toBe("pass");
+    expect(acct.evaluate(exec("acct\n")).status).toBe("fail");
+    expect(acct.evaluate(exec("\n")).detail).toBe("instalados: nenhum");
   });
 });

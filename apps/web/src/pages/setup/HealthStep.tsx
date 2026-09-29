@@ -26,6 +26,8 @@ interface HealthStepProps {
   onNext: () => void;
   /** Navegação de volta no wizard (opcional — ex.: voltar às boas-vindas). */
   onBack?: () => void;
+  /** Avisa o wizard do IP público da VPS (usado nos comandos `ssh` de teste). */
+  onPublicIp?: (ip: string | null) => void;
 }
 
 /**
@@ -77,7 +79,7 @@ function CheckMessage({ check }: { check: HealthCheck }) {
   return <p className={`pt-1 ${MESSAGE_CLASS[check.level]}`}>{check.message}</p>;
 }
 
-export function HealthStep({ onNext, onBack }: HealthStepProps) {
+export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
   const [scan, setScan] = useState<HealthScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,7 +88,9 @@ export function HealthStep({ onNext, onBack }: HealthStepProps) {
     setLoading(true);
     setError(null);
     try {
-      setScan(await apiFetch<HealthScanResult>("/api/health/scan"));
+      const result = await apiFetch<HealthScanResult>("/api/health/scan");
+      setScan(result);
+      onPublicIp?.(result.network.publicIp);
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a varredura.");
     } finally {

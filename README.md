@@ -1074,18 +1074,19 @@ primeira vez é mantido sem perguntar de novo — para trocar, veja
 
 ### Como conduzir a etapa **Segurança** do wizard
 
-A etapa **Segurança** aplica o hardening em **sete fases**, uma de cada vez: aplique, confirme, só então
+A etapa **Segurança** aplica o hardening em **oito fases**, uma de cada vez: aplique, confirme, só então
 avance para a próxima. Nunca dispare uma fase nova com a anterior ainda pendente de confirmação.
 
 | Fase | O que faz | Pede confirmação? |
 |---|---|---|
 | 00 · Atualizações | `apt full-upgrade` + atualizações automáticas (**menos o Docker**) | Não |
 | 01 · Usuário não-root | Instala sua chave SSH e trava a senha do root | **Sim** |
-| 02 · SSH | Desliga login por senha e acesso root via SSH | **Sim** |
+| 02 · SSH | Desliga login por senha e o root via SSH; só o seu usuário entra. Mantém o túnel do painel (`ssh -L`) funcionando | **Sim** |
 | 03 · Firewall | Ativa o UFW (nega tudo, exceto o que for liberado antes) | **Sim** |
 | 04 · Prevenção de intrusão | fail2ban + AppArmor | Não |
 | 05 · Minimização | Remove pacotes desnecessários (ex.: snapd) | Não |
 | 06 · Auditoria | auditd, Lynis, AIDE, rkhunter — demorada | Não |
+| 07 · Endurecimento adicional | As recomendações do Lynis seguras de automatizar: core dump desligado, umask 027, módulos e ajustes de kernel, aviso legal no login, compiladores só para o root, contabilidade de processos | Não |
 
 > [!NOTE]
 > **A fase 00 não atualiza o Docker — de propósito.** As fases rodam num terminal que é mantido de
@@ -1467,7 +1468,16 @@ todas as rotas da API, logs com redação de segredos e auditoria de todas as a�
 >   (`snap install docker`), a fase detecta isso e preserva esse snap e o `snapd` — removê-los
 >   derrubaria o próprio painel —, removendo só os demais snaps e explicando no log.
 > - **Fase 06 (Auditoria)** demora vários minutos: ela cria a baseline do AIDE varrendo o sistema
->   de arquivos. Parece travada, mas não está.
+>   de arquivos. Parece travada, mas não está. A nota final (auditoria completa do Lynis, depois
+>   da última fase) também leva de 2 a 5 minutos.
+> - **Fase 07 (Endurecimento adicional)** não aplica tudo o que o Lynis sugere — de propósito.
+>   Ficam de fora: expiração de senha (a senha do seu usuário expiraria e o `sudo` do terminal
+>   pararia de funcionar), senha no GRUB (um erro impede a VPS de reiniciar sozinha), trocar a
+>   porta do SSH (quebra o túnel e este README), partições separadas (só na instalação do
+>   sistema) e o `apt-listbugs` (feito para o Debian, não para o Ubuntu). Por isso a nota do
+>   Lynis não chega a 100 — e não precisa: o que sobra são escolhas conscientes, explicadas acima.
+> - **Depois da última fase, reinicie a VPS** (`sudo reboot`), espere um minuto e abra o túnel de
+>   novo: o kernel atualizado pela fase 00 e os ajustes de kernel só valem depois do reboot.
 
 **Seja franco sobre o que isto exige.** Um PaaS precisa de acesso privilegiado ao host — não há
 como criar containers e configurar firewall sem ele. Duas consequências que você deve conhecer
