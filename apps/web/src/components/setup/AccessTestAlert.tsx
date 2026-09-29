@@ -22,12 +22,17 @@ function secondsUntil(deadline: string): number {
   return Math.max(0, Math.floor((new Date(deadline).getTime() - Date.now()) / 1000));
 }
 
-function Remaining({ deadline }: { deadline: string }) {
+/** Segundos que faltam para o prazo, atualizados a cada segundo. */
+function useSecondsUntil(deadline: string): number {
   const [remaining, setRemaining] = useState(() => secondsUntil(deadline));
   useEffect(() => {
     const t = setInterval(() => setRemaining(secondsUntil(deadline)), 1000);
     return () => clearInterval(t);
   }, [deadline]);
+  return remaining;
+}
+
+function Remaining({ remaining }: { remaining: number }) {
   return (
     <span className={`font-mono font-bold ${remaining < 60 ? "text-red-400" : "text-amber-300"}`}>
       {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}
@@ -69,6 +74,10 @@ export function AccessTestAlert({
   onUndo: () => void;
 }) {
   const [details, setDetails] = useState(false);
+  const remaining = useSecondsUntil(deadline);
+  // Prazo acabou: quem decide agora é o servidor (a reversão agendada roda lá).
+  // Os botões travam — confirmar a esta altura só daria erro.
+  const expired = remaining === 0;
   const command = user ? `ssh ${user}@${host}` : null;
 
   return (
@@ -117,16 +126,23 @@ export function AccessTestAlert({
         Por que testar agora: se der errado, desfazemos só esta fase — não todo o trabalho feito até aqui.
       </p>
 
-      <p className="flex items-center gap-2 text-sm">
-        <Clock className="h-4 w-4 shrink-0" /> Sem resposta, esta fase se desfaz sozinha em{" "}
-        <Remaining deadline={deadline} />.
-      </p>
+      {expired ? (
+        <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+          <Clock className="h-4 w-4 shrink-0" /> O prazo acabou sem confirmação: o servidor está desfazendo esta
+          fase. Em instantes a tela mostra o resultado.
+        </p>
+      ) : (
+        <p className="flex items-center gap-2 text-sm">
+          <Clock className="h-4 w-4 shrink-0" /> Sem resposta, esta fase se desfaz sozinha em{" "}
+          <Remaining remaining={remaining} />.
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-3">
-        <Button size="lg" onClick={onConfirm} disabled={busy} className="bg-amber-500 text-black hover:bg-amber-400">
+        <Button size="lg" onClick={onConfirm} disabled={busy || expired} className="bg-amber-500 text-black hover:bg-amber-400">
           ✅ Entrei — confirmar
         </Button>
-        <Button size="lg" variant="outline" onClick={onUndo} disabled={busy}>
+        <Button size="lg" variant="outline" onClick={onUndo} disabled={busy || expired}>
           Não consegui entrar — desfazer agora
         </Button>
       </div>
