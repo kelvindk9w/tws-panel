@@ -1166,12 +1166,28 @@ export function SecurityStep({
             )}
           </Card>
 
-          {afterReport && afterReport.summary.critical > 0 && (
-            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
-              ⚠️ Ainda há {afterReport.summary.critical} finding(s) crítico(s) — alguns exigem ação
-              manual (ex.: containers Docker). Revarra e revise o relatório.
-            </p>
-          )}
+          {/* Diz QUAL item crítico ficou — antes era só "ainda há 1 finding
+              crítico", e o operador tinha de caçar no relatório. */}
+          {afterReport &&
+            afterReport.checks.some((c) => c.severity === "critical" && c.status === "fail") && (
+              <div
+                data-testid="remaining-critical"
+                className="flex flex-col gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-400"
+              >
+                <p>⚠️ Ainda ficou reprovado (crítico):</p>
+                <ul className="list-disc pl-5">
+                  {afterReport.checks
+                    .filter((c) => c.severity === "critical" && c.status === "fail")
+                    .map((c) => (
+                      <li key={c.id}>
+                        <strong>{c.title}</strong>
+                        {c.detail ? ` — ${c.detail}` : ""}
+                        {c.remediation ? <span className="text-amber-200/80"> ({c.remediation})</span> : null}
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            )}
 
           <div className="flex justify-between">
             <Button variant="outline" onClick={() => setStage("scan")}>

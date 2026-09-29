@@ -25,6 +25,7 @@ import {
 import {
   DeployEngine,
   detectProject,
+  ingestCode,
   projectSrcDir,
   projectWorkDir,
   runGuardrails,
@@ -468,15 +469,21 @@ export class DeployService {
 
   async detect(id: string): Promise<DetectResult> {
     const project = await this.requireProject(id);
-    // Modo git/upload: o código só existe após o primeiro deploy; para detectar
-    // antes, usa a fonte original quando o src local ainda não existe.
-    const dir = this.sourceDirOf(project);
+    // Modo upload/existing: usa a fonte original quando o src local ainda não
+    // existe. Modo git: SEMPRE sincroniza agora com o repositório/branch
+    // configurados, pelo mesmo caminho do deploy (com a credencial de leitura,
+    // se houver) — clona na primeira vez, re-clona se a URL/branch mudou e só
+    // faz fetch quando nada mudou. Antes a detecção exigia um
+    // deploy anterior, e o assistente de novo projeto — que detecta logo após
+    // criar — travava em qualquer repositório git (visto na validação real).
+    let dir = project.ingestMode === "git" ? null : this.sourceDirOf(project);
     if (!dir) {
-      throw httpError(
-        409,
-        "source_missing",
-        "Código ainda não ingerido (modo git). Faça o primeiro deploy para clonar, ou use a detecção após o deploy.",
-      );
+      try {
+        dir = await ingestCode(this.engineCtx, project, () => undefined);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw httpError(422, "clone_failed", `Não foi possível baixar o código do repositório.\n\n${detail}`);
+      }
     }
     const detection = await detectProject(dir);
     project.detection = detection;

@@ -748,6 +748,65 @@ describe("SecurityStep — fase que falha na simulação", () => {
 });
 
 /**
+ * Validação real: o resultado dizia só "ainda há 1 finding crítico — alguns
+ * exigem ação manual (ex.: containers Docker)", sem dizer QUAL — e o exemplo
+ * já não valia (os containers do próprio painel passaram a ser risco aceito).
+ */
+describe("SecurityStep — resultado nomeia o que ficou crítico", () => {
+  let original: Parameters<typeof apiFetchMock.mockImplementation>[0] | undefined;
+
+  afterEach(() => {
+    if (original) apiFetchMock.mockImplementation(original);
+    original = undefined;
+  });
+
+  it("lista o título de cada item crítico que ficou reprovado", async () => {
+    detectedSudoUsers = ["kelvin"];
+    original = apiFetchMock.getMockImplementation()!;
+    const base = original;
+    let applied = false;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/apply") {
+        const body = JSON.parse(String(init?.body)) as { phase: string; dryRun: boolean };
+        if (!body.dryRun) applied = true;
+        return { job: { id: `j-${body.phase}`, phase: body.phase, title: "Fase", status: "running", steps: [], log: "", dryRun: body.dryRun, rollbackScheduled: false, rollbackDeadline: null, error: null } };
+      }
+      if (path.startsWith("/api/security/jobs/")) {
+        return { job: { id: "j", phase: "00", title: "Fase", status: "success", steps: [], log: "", dryRun: true, rollbackScheduled: false, rollbackDeadline: null, error: null } };
+      }
+      if (path.startsWith("/api/security/scan") && applied) {
+        return {
+          report: {
+            ...SCAN_REPORT,
+            hardeningIndex: 86,
+            hardeningIndexSource: "lynis",
+            checks: [
+              { id: "ssh.root-login", phase: "02", title: "Login de root via SSH desabilitado", severity: "critical", status: "fail", description: "", remediation: "" },
+              { id: "firewall.ufw-active", phase: "03", title: "UFW ativo", severity: "critical", status: "pass", description: "", remediation: "" },
+              { id: "audit.aide-baseline", phase: "06", title: "Baseline AIDE", severity: "warning", status: "fail", description: "", remediation: "" },
+            ],
+            summary: { total: 3, pass: 1, fail: 2, unknown: 0, critical: 1, warning: 1 },
+          },
+          cached: false,
+        };
+      }
+      return base(path, init);
+    });
+    await reachPlanStage();
+    fireEvent.click(screen.getByRole("button", { name: /Simular todas as fases pendentes/ }));
+    // o fim da simulação ainda re-renderiza o bloco: clicar no botão já estável
+    await screen.findByRole("button", { name: /Aplicar de verdade/ });
+    await new Promise((r) => setTimeout(r, 50));
+    fireEvent.click(screen.getByRole("button", { name: /Aplicar de verdade/ }));
+    const faixa = await screen.findByTestId("remaining-critical");
+    expect(faixa).toHaveTextContent("Login de root via SSH desabilitado");
+    expect(faixa).not.toHaveTextContent("UFW ativo");
+    expect(faixa).not.toHaveTextContent("Baseline AIDE");
+    expect(faixa).not.toHaveTextContent(/containers Docker/);
+  });
+});
+
+/**
  * "Executar dry-run de todas as fases pendentes" não se explicava a um leigo
  * ("isso executa todas as fases? se eu clicar, o que acontece?"). O rótulo e a
  * linha ao lado dele precisam responder isso sem jargão.

@@ -9,6 +9,7 @@ import { apiFetch, ApiRequestError, clearSetupToken } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { CheckCircle2, ChevronDown, Circle, KeyRound, Loader2, LogOut, UserRound, X } from "lucide-react";
 
 /** Modal de troca de senha (exige a senha atual; invalida as demais sessões). */
@@ -64,9 +65,8 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
           <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="cp-current" className="text-sm font-medium">Senha atual</label>
-              <Input
+              <PasswordInput
                 id="cp-current"
-                type="password"
                 autoComplete="current-password"
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
@@ -74,9 +74,8 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="cp-new" className="text-sm font-medium">Nova senha</label>
-              <Input
+              <PasswordInput
                 id="cp-new"
-                type="password"
                 autoComplete="new-password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}

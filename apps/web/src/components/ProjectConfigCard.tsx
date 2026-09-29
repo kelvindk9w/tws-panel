@@ -23,6 +23,7 @@ import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { AlertTriangle, Eye, KeyRound, Loader2, Settings, Trash2 } from "lucide-react";
 
 export interface ProjectConfigCardProps {
@@ -173,9 +174,9 @@ function CredencialSection({
               <label htmlFor="cfg-token" className="text-sm font-medium">
                 Token de leitura
               </label>
-              <Input
+              <PasswordInput
                 id="cfg-token"
-                type="password"
+                revealLabel="token"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 autoComplete="off"

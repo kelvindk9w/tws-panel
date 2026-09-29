@@ -12,6 +12,7 @@ import { IndexGauge } from "@/components/IndexGauge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { ArrowLeft, ArrowRight, CheckCircle2, Circle, Loader2, PartyPopper, UserRound } from "lucide-react";
 
 /** Checklist ao vivo das regras de senha (mesma validação do backend). */
@@ -168,9 +169,8 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
               <label htmlFor="admin-password" className="text-sm font-medium">
                 Senha
               </label>
-              <Input
+              <PasswordInput
                 id="admin-password"
-                type="password"
                 autoComplete="new-password"
                 placeholder="Senha forte"
                 value={password}
@@ -183,9 +183,8 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
               <label htmlFor="admin-confirm" className="text-sm font-medium">
                 Confirmar senha
               </label>
-              <Input
+              <PasswordInput
                 id="admin-confirm"
-                type="password"
                 autoComplete="new-password"
                 placeholder="Repita a senha"
                 value={confirm}
