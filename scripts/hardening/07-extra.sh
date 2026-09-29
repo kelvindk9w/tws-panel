@@ -45,8 +45,12 @@ MODES_FILE="${PAAS_STATE_DIR}/extra-modes.txt"
 
 if [ "$MODE" = "rollback" ]; then
   step "Restaurando configurações da fase 07"
-  for f in "$LOGIN_DEFS" "$SYSSTAT_DEFAULT" "$AIDE_CONF" "$ISSUE" "$ISSUE_NET" \
-           "$LIMITS_FILE" "$COREDUMP_FILE" "$MODPROBE_FILE" "$SYSCTL_FILE"; do
+  # arquivos DO SISTEMA: restaura se houver backup, senão mantém (nunca apaga)
+  for f in "$LOGIN_DEFS" "$SYSSTAT_DEFAULT" "$AIDE_CONF" "$ISSUE" "$ISSUE_NET"; do
+    restore_backup_or_keep "$f"
+  done
+  # arquivos que a fase CRIA: sem backup, saem
+  for f in "$LIMITS_FILE" "$COREDUMP_FILE" "$MODPROBE_FILE" "$SYSCTL_FILE"; do
     restore_latest_backup "$f"
   done
   if [ -f "$MODES_FILE" ]; then
@@ -209,7 +213,7 @@ if [ -f "$AIDE_CONF" ]; then
         fi
         info "AIDE passa a usar sha512"
       else
-        restore_latest_backup "$AIDE_CONF"
+        restore_backup_or_keep "$AIDE_CONF"
         warn "configuração do AIDE recusou sha512 — mantida a anterior"
       fi
     fi

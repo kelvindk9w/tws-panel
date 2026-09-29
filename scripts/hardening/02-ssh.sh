@@ -16,7 +16,13 @@ source "$(dirname "$(readlink -f "$0")")/lib.sh"
 MODE="apply"
 SSH_USER=""
 SSH_PORT=""
-DROPIN="/etc/ssh/sshd_config.d/99-paas-hardening.conf"
+# 40-: no sshd vale o PRIMEIRO valor encontrado, em ordem alfabética. Imagens
+# de nuvem (Contabo e outras) trazem 50-cloud-init.conf com
+# "PasswordAuthentication yes": com o nome antigo (99-) o painel perdia e o
+# login por senha seguia ligado (visto em campo). 40 vence o 50 e continua
+# perdendo para o 10-local-override.conf que o README ensina ao operador.
+DROPIN="/etc/ssh/sshd_config.d/40-paas-hardening.conf"
+OLD_DROPIN="/etc/ssh/sshd_config.d/99-paas-hardening.conf"
 REVERT_SCRIPT="${PAAS_STATE_DIR}/revert-ssh.sh"
 
 while [ $# -gt 0 ]; do
@@ -54,7 +60,8 @@ fi
 if [ "$MODE" = "rollback" ]; then
   step "Restaurando configuração anterior do SSH"
   restore_latest_backup "$DROPIN"
-  restore_latest_backup "/etc/ssh/sshd_config"
+  restore_latest_backup "$OLD_DROPIN"
+  restore_backup_or_keep "/etc/ssh/sshd_config"
   if has_systemd && [ -n "$(systemctl cat ssh.socket 2>/dev/null || true)" ]; then
     # remove override de socket activation, se existir
     run rm -rf /etc/systemd/system/ssh.socket.d
@@ -106,6 +113,7 @@ source "$(dirname "$(readlink -f "$0")")/lib.sh"
 echo "[paas-rollback] operador não confirmou acesso em ${PAAS_ROLLBACK_DELAY}s — revertendo SSH"
 PAAS_DRY_RUN=0
 restore_latest_backup "$DROPIN"
+restore_latest_backup "$OLD_DROPIN"
 rm -rf /etc/systemd/system/ssh.socket.d
 if [ -d /run/systemd/system ]; then
   systemctl daemon-reload || true
@@ -127,6 +135,12 @@ ok "Rollback automático agendado — cancele com '$0 --confirm' após testar no
 # libera só o -L; -R (remoto), agent e X11 continuam bloqueados.
 # TCPKeepAlive no: quem detecta conexão morta é o ClientAliveInterval, que
 # passa pelo canal cifrado (o keepalive TCP pode ser forjado).
+if [ -e "$OLD_DROPIN" ]; then
+  # instalação anterior do painel: o arquivo antigo sai (com backup — o
+  # desfazer o devolve), senão ficariam duas versões da configuração.
+  backup_file "$OLD_DROPIN"
+  run rm -f "$OLD_DROPIN"
+fi
 step "Aplicando drop-in de hardening ($DROPIN)"
 {
   echo "# Gerenciado pelo painel PaaS (02-ssh.sh). Spec: docs/security-research.md §2.3"
@@ -196,6 +210,21 @@ else
   fi
 fi
 ok "Configuração válida"
+
+step "Conferindo o que o SSH adotou de fato (sshd -T)"
+# Validar a sintaxe não basta: outro arquivo lido ANTES pode vencer o nosso.
+# A fase não pode dizer "concluída" com o login por senha ainda ligado.
+if [ "$PAAS_DRY_RUN" = "1" ]; then
+  echo "[dry-run] conferiria PasswordAuthentication efetivo = no"
+else
+  EFFECTIVE_PWAUTH="$(sshd -T 2>/dev/null | awk 'tolower($1)=="passwordauthentication"{print $2}')"
+  if [ "$EFFECTIVE_PWAUTH" != "no" ]; then
+    CULPRIT="$(grep -liE '^[[:space:]]*PasswordAuthentication[[:space:]]+yes' /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null | head -n 1 || true)"
+    die "PasswordAuthentication continua \"${EFFECTIVE_PWAUTH:-?}\": o arquivo ${CULPRIT:-(não identificado)} define \"yes\" e é lido antes do painel (no SSH vale o primeiro valor). Ajuste ou remova esse arquivo e rode a fase de novo."
+  fi
+  info "login por senha desligado de fato (sshd -T: passwordauthentication no)"
+fi
+ok "Configuração efetiva conferida"
 
 step "Recarregando SSH"
 svc_reload_or_restart ssh || svc_reload_or_restart sshd || true

@@ -82,6 +82,71 @@ describe.skipIf(!HAS_DOCKER)("fases 02 e 07 num Ubuntu real", () => {
     expect(r.out).not.toContain("sem --user");
   });
 
+  /**
+   * Validação real (Contabo): a imagem vem com /etc/ssh/sshd_config.d/
+   * 50-cloud-init.conf dizendo "PasswordAuthentication yes". No sshd vale o
+   * PRIMEIRO valor encontrado, em ordem alfabética: o nosso 99-paas-hardening
+   * perdia — a fase dizia "concluída", o login por senha seguia ligado, o
+   * check seguia crítico e a fase voltava ao plano em círculo.
+   */
+  it("fase 02 vence o 50-cloud-init.conf da imagem: o login por senha fica desligado de fato", () => {
+    const setup = sh(
+      [
+        "set -e",
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null",
+        "ssh-keygen -A >/dev/null",
+        "mkdir -p /run/sshd /etc/ssh/sshd_config.d",
+        "printf 'PasswordAuthentication yes\\n' > /etc/ssh/sshd_config.d/50-cloud-init.conf",
+        // instalação anterior do painel, com o nome antigo do arquivo
+        "printf '# antigo\\nPasswordAuthentication no\\n' > /etc/ssh/sshd_config.d/99-paas-hardening.conf",
+      ].join(" && "),
+    );
+    expect(setup.code, setup.out).toBe(0);
+
+    const r = sh("PAAS_ROLLBACK_DELAY=300 bash /opt/h/02-ssh.sh --user kelvin");
+    expect(r.code, r.out).toBe(0);
+    expect(sh("sshd -T 2>/dev/null | grep -i '^passwordauthentication'").out.trim()).toBe("passwordauthentication no");
+    expect(sh("sshd -T 2>/dev/null | grep -i '^allowusers'").out.trim()).toBe("allowusers kelvin");
+    expect(sh("test -e /etc/ssh/sshd_config.d/40-paas-hardening.conf").code).toBe(0);
+    expect(sh("test -e /etc/ssh/sshd_config.d/99-paas-hardening.conf").code).not.toBe(0); // nome antigo sai
+
+    // desfazer: volta exatamente ao que era (inclusive o arquivo antigo)
+    const back = sh("bash /opt/h/02-ssh.sh --rollback");
+    expect(back.code, back.out).toBe(0);
+    expect(sh("test -e /etc/ssh/sshd_config.d/40-paas-hardening.conf").code).not.toBe(0);
+    expect(sh("cat /etc/ssh/sshd_config.d/99-paas-hardening.conf").out).toContain("# antigo");
+  }, 300_000);
+
+  /**
+   * Achado grave (validação dos testes acima): o desfazer da fase 02 chamava
+   * a restauração "sem backup → apaga" também no /etc/ssh/sshd_config, que a
+   * fase nunca copia — o SSH perdia o arquivo principal e não subiria no
+   * próximo reinício (operador trancado para fora).
+   */
+  it("desfazer da fase 02 NUNCA apaga o /etc/ssh/sshd_config", () => {
+    expect(sh("test -f /etc/ssh/sshd_config").code).toBe(0);
+    const back = sh("bash /opt/h/02-ssh.sh --rollback");
+    expect(back.code, back.out).toBe(0);
+    expect(sh("test -f /etc/ssh/sshd_config").code).toBe(0);
+    expect(sh("sshd -t").code).toBe(0);
+  });
+
+  it("fase 02: se outro arquivo continuar vencendo, a fase FALHA dizendo qual (não diz 'concluída' sem efeito)", () => {
+    sh("rm -f /etc/ssh/sshd_config.d/99-paas-hardening.conf; printf 'PasswordAuthentication yes\\n' > /etc/ssh/sshd_config.d/10-local-override.conf");
+    const r = sh("PAAS_ROLLBACK_DELAY=300 bash /opt/h/02-ssh.sh --user kelvin");
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/PasswordAuthentication.*10-local-override\.conf/s);
+    sh("bash /opt/h/02-ssh.sh --rollback; rm -f /etc/ssh/sshd_config.d/10-local-override.conf");
+  }, 300_000);
+
+  it("desfazer da fase 07 sem aplicação anterior NUNCA apaga arquivos do sistema", () => {
+    // container limpo desta fase: sem nenhum backup da 07 ainda
+    const antes = sh("md5sum /etc/login.defs /etc/issue").out;
+    const back = sh("bash /opt/h/07-extra.sh --rollback");
+    expect(back.code, back.out).toBe(0);
+    expect(sh("md5sum /etc/login.defs /etc/issue").out).toBe(antes);
+  });
+
   it("fase 07: a simulação não altera nada", () => {
     const antes = sh("md5sum /etc/login.defs; stat -c %a /etc/crontab").out;
     const r = sh("bash /opt/h/07-extra.sh --dry-run");
