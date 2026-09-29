@@ -53,6 +53,11 @@ if [ "$MODE" = "rollback" ]; then
   restore_latest_backup "$SYSCTL_FILE"
   run_sh "sysctl --system >/dev/null 2>&1 || true"
   run rm -f "$REVERT_SCRIPT"
+  # Só depois de desfazer com sucesso (set -e): se algo acima falhou, a
+  # reversão agendada continua na fila como rede de segurança.
+  if cancel_scheduled_rollback "firewall"; then
+    info "reversão agendada cancelada — a configuração já foi desfeita agora"
+  fi
   ok "Rollback da fase 03 concluído"
   exit 0
 fi

@@ -1098,13 +1098,18 @@ necessária.
 > 2. **Não teste na janela que já está aberta.** Uma sessão SSH já conectada continua
 >    funcionando mesmo que a configuração nova esteja quebrada — ela não prova nada, porque não
 >    passou pela mudança que você acabou de aplicar.
-> 3. Abra uma **janela nova** de terminal (sem fechar a antiga) e conecte de novo:
+> 3. Abra o **terminal do seu computador** (não o navegador — no Windows, o PowerShell), numa
+>    janela nova, sem fechar a antiga, e rode o comando que o painel mostra (tem botão de copiar):
 >    ```bash
->    ssh SEU_USUARIO@SEU_IP
+>    ssh SEU_USUARIO@SEU-IP-COM-HÍFENS.sslip.io
 >    ```
-> 4. **Só depois que a janela nova conectar de verdade**, volte ao painel e confirme.
-> 5. Se a janela nova **não** conectar: **não confirme**. Deixe os 5 minutos passarem — o
->    servidor reverte sozinho a mudança, e você continua com o acesso da janela antiga.
+> 4. **Só depois que a janela nova conectar de verdade** (aparece `SEU_USUARIO@…$`), digite
+>    `exit` e clique em **Entrei — confirmar** no painel.
+> 5. Se a janela nova **não** conectar: clique em **Não consegui entrar — desfazer agora**. O
+>    servidor desfaz **só esta fase** na hora — as anteriores continuam valendo e as seguintes não
+>    rodam. É por isso que cada uma dessas fases tem o seu teste: se algo der errado, você sabe
+>    exatamente qual foi e perde só aquela parte. (Se você não fizer nada, ela também se desfaz
+>    sozinha quando o cronômetro acabar.)
 > 6. Mantenha a janela antiga aberta até o fim de toda a etapa Segurança, mesmo depois de confirmar cada
 >    fase.
 >

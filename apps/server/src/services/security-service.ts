@@ -349,6 +349,11 @@ export class SecurityService {
     return this.executor.confirmAccess(jobId);
   }
 
+  /** "Não consegui entrar": desfaz a fase agora (em vez de esperar a janela). */
+  async undoAccessChange(jobId: string): Promise<SecurityJob> {
+    return this.executor.undoNow(jobId);
+  }
+
   /** Histórico + comparação de índice antes/depois + resumo "aplicado". */
   async history(): Promise<{
     entries: SecurityHistoryEntry[];

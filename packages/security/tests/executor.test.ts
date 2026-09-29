@@ -445,6 +445,55 @@ describe("SecurityExecutor — fluxo de confirmação", () => {
   });
 });
 
+/**
+ * Validação real: o botão "Interromper" só parava a tela de esperar — a
+ * mudança seguia valendo até a janela de 5 min acabar. Quem NÃO conseguiu
+ * entrar precisa de uma saída efetiva: desfazer a fase agora.
+ */
+describe("SecurityExecutor — desfazer agora (não consegui entrar)", () => {
+  it("roda --rollback na hora, marca rolled_back e a janela expirando não mexe mais", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = detached();
+      const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+      const job = await executor.startJob("02", false, { sshUser: "kelvin" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executor.getJob(job.id)?.status).toBe("awaiting_confirmation");
+
+      const undone = await executor.undoNow(job.id);
+      expect(undone.status).toBe("rolled_back");
+      expect(undone.rollbackScheduled).toBe(false);
+      expect(undone.rollbackDeadline).toBeNull();
+      expect(host.calls.at(-1)).toContain("02-ssh.sh' --rollback");
+      expect(undone.log).toMatch(/operador não conseguiu entrar — desfazendo a fase agora/);
+
+      await vi.advanceTimersByTimeAsync(5_000 + 15_000);
+      expect(executor.getJob(job.id)?.status).toBe("rolled_back");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("se o desfazer falhar no alvo, avisa e a reversão agendada continua valendo", async () => {
+    const host = detached();
+    const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts" });
+    const job = await executor.startJob("03", false);
+    await flushMicrotasks();
+    host.directCode = 1;
+    await expect(executor.undoNow(job.id)).rejects.toThrow(/reversão agendada continua/);
+    expect(executor.getJob(job.id)?.status).toBe("awaiting_confirmation");
+  });
+
+  it("só vale para fase aguardando confirmação", async () => {
+    const host = detached();
+    const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts" });
+    const job = await executor.startJob("00", true);
+    await flushMicrotasks();
+    await expect(executor.undoNow(job.id)).rejects.toThrow(/não está aguardando confirmação/i);
+    await expect(executor.undoNow("nope")).rejects.toThrow(/não encontrado/i);
+  });
+});
+
 describe("SecurityExecutor — restoreJobs (persistência após restart do painel)", () => {
   function baseJob(overrides: Partial<SecurityJob>): SecurityJob {
     return {

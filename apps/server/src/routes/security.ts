@@ -223,6 +223,33 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // "Não consegui entrar — desfazer agora": roda o --rollback da fase na hora.
+  // Antes, o botão só parava a tela e a mudança seguia até a janela acabar.
+  app.post<{ Body: { jobId: string } }>(
+    "/api/security/undo-access",
+    { schema: confirmAccessSchema },
+    async (request, reply) => {
+      const { jobId } = request.body;
+      try {
+        const job = await service.undoAccessChange(jobId);
+        await app.auditService.record({
+          action: "hardening.undo",
+          target: job.phase,
+          detail: `Fase "${job.title}" desfeita pelo operador (não conseguiu entrar no teste de acesso).`,
+        });
+        const response: SecurityJobResponse = { job };
+        return reply.send(response);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Falha ao desfazer a fase.";
+        const notFound = message.includes("não encontrado");
+        return reply.code(notFound ? 404 : 409).send({
+          error: notFound ? "job_not_found" : "undo_failed",
+          message,
+        });
+      }
+    },
+  );
+
   // Modo manual: comandos exatos da fase + conteúdo do script (copiáveis).
   app.get<{ Params: { phase: SecurityPhaseId } }>(
     "/api/security/phases/:phase/manual",

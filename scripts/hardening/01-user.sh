@@ -72,6 +72,11 @@ if [ "$MODE" = "rollback" ]; then
   else
     info "nenhum usuário criado por este script; nada a remover"
   fi
+  # Só depois de desfazer com sucesso (set -e): se algo acima falhou, a
+  # reversão agendada continua na fila como rede de segurança.
+  if cancel_scheduled_rollback "user"; then
+    info "reversão agendada cancelada — a configuração já foi desfeita agora"
+  fi
   ok "Rollback da fase 01 concluído"
   exit 0
 fi

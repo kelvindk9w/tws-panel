@@ -13,7 +13,6 @@ import {
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import {
-  VPS_ADDRESS_PLACEHOLDER,
   capitalize,
   isSudoJobError,
   sudoElevationFailure,
@@ -25,6 +24,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { IndexGauge } from "@/components/IndexGauge";
 import { ManualPhaseModal } from "@/components/setup/ManualPhaseModal";
 import { Phase01Card } from "@/components/setup/Phase01Card";
+import { AccessTestAlert } from "@/components/setup/AccessTestAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,7 +37,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleHelp,
-  Clock,
   Eye,
   Hourglass,
   KeyRound,
@@ -164,26 +163,6 @@ function JobStatusBadge({ status }: { status: SecurityJob["status"] }) {
   }
 }
 
-/** Countdown regressivo até um deadline ISO. */
-function Countdown({ deadline }: { deadline: string }) {
-  const [remaining, setRemaining] = useState(() =>
-    Math.max(0, Math.floor((new Date(deadline).getTime() - Date.now()) / 1000)),
-  );
-  useEffect(() => {
-    const t = setInterval(() => {
-      setRemaining(Math.max(0, Math.floor((new Date(deadline).getTime() - Date.now()) / 1000)));
-    }, 1000);
-    return () => clearInterval(t);
-  }, [deadline]);
-  const min = Math.floor(remaining / 60);
-  const sec = remaining % 60;
-  return (
-    <span className={`font-mono text-lg font-bold ${remaining < 60 ? "text-red-400" : "text-amber-400"}`}>
-      {min}:{String(sec).padStart(2, "0")}
-    </span>
-  );
-}
-
 /** Lista de passos de uma fase (:::PAAS_STEP parseados pelo executor). */
 function StepList({ steps }: { steps: SecurityJobStep[] }) {
   if (steps.length === 0) return null;
@@ -246,6 +225,10 @@ export function SecurityStep({
   // execução
   const [runQueue, setRunQueue] = useState<SecurityPhaseId[]>([]);
   const [runIndex, setRunIndex] = useState(0);
+  /** Confirmando ou desfazendo o teste de acesso (trava os botões do alerta). */
+  const [accessBusy, setAccessBusy] = useState(false);
+  /** Job devolvido pelo "desfazer agora" (encerra a espera com o status real). */
+  const undoneJob = useRef<SecurityJob | null>(null);
   const [runDry, setRunDry] = useState(true);
   const [job, setJob] = useState<SecurityJob | null>(null);
   const [phaseUi, setPhaseUi] = useState<Partial<Record<SecurityPhaseId, PhaseUiState>>>({});
@@ -410,7 +393,12 @@ export function SecurityStep({
         confirmResolver.current = null;
         // a espera terminou (confirmou ou pediu para parar): apaga o alerta
         clearTerminalAttention();
-        if (!confirmed) return res.job; // usuário pediu para parar
+        if (!confirmed) {
+          // desfeita pelo operador: o job devolvido pelo servidor já diz "rolled_back"
+          const undone = undoneJob.current;
+          undoneJob.current = null;
+          return undone ?? res.job;
+        }
         continue; // re-poll após confirmação
       }
       if (TERMINAL.includes(res.job.status)) {
@@ -458,9 +446,11 @@ export function SecurityStep({
             return false;
           }
           setError(
-            finished.status === "rolled_back"
-              ? `A fase "${finished.title}" foi revertida automaticamente (acesso não confirmado a tempo).`
-              : `A fase "${finished.title}" falhou. O rollback foi executado — veja o log.`,
+            finished.status === "rolled_back" && finished.log.includes("operador não conseguiu entrar")
+              ? `Você desfez a fase "${finished.title}": a configuração anterior foi restaurada. Quando resolver o acesso, rode o hardening de novo.`
+              : finished.status === "rolled_back"
+                ? `A fase "${finished.title}" foi revertida automaticamente (acesso não confirmado a tempo).`
+                : `A fase "${finished.title}" falhou. O rollback foi executado — veja o log.`,
           );
           return false;
         }
@@ -533,8 +523,32 @@ export function SecurityStep({
     setAfterReport(after);
   }
 
+  /**
+   * "Não consegui entrar — desfazer agora": desfaz a fase NA HORA no servidor.
+   * Antes existia só "Interromper", que parava a tela e deixava a mudança
+   * valendo até a janela de 5 min acabar (visto na validação real).
+   */
+  async function undoAccess() {
+    if (!job) return;
+    setAccessBusy(true);
+    try {
+      const res = await apiFetch<{ job: SecurityJob }>("/api/security/undo-access", {
+        method: "POST",
+        body: JSON.stringify({ jobId: job.id }),
+      });
+      undoneJob.current = res.job;
+      setJob(res.job); // o alerta sai: a fase não está mais aguardando
+      confirmResolver.current?.(false);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Falha ao desfazer a fase.");
+    } finally {
+      setAccessBusy(false);
+    }
+  }
+
   async function confirmAccess() {
     if (!job) return;
+    setAccessBusy(true);
     try {
       await apiFetch("/api/security/confirm-access", {
         method: "POST",
@@ -544,12 +558,9 @@ export function SecurityStep({
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "Falha ao confirmar acesso.");
       confirmResolver.current?.(false);
+    } finally {
+      setAccessBusy(false);
     }
-  }
-
-  function abortExecution() {
-    clearTerminalAttention();
-    confirmResolver.current?.(false);
   }
 
   // -------------------------------------------------------------- render
@@ -922,56 +933,16 @@ export function SecurityStep({
         <>
           {/* ALERTA GRANDE DE AÇÃO DO USUÁRIO — bloqueia a continuação */}
           {job?.status === "awaiting_confirmation" && job.rollbackDeadline && (
-            <div className="flex animate-pulse flex-col items-center gap-4 rounded-xl border-4 border-amber-500 bg-amber-500/20 p-8 text-center shadow-[0_0_60px_rgba(245,158,11,0.35)]">
-              <AlertTriangle className="h-12 w-12 text-amber-400" />
-              <p className="text-2xl font-bold tracking-tight text-amber-300">
-                ⚠️ AÇÃO NECESSÁRIA — TESTE SEU ACESSO AGORA
-              </p>
-              {(() => {
-                const testUser = job.sshUser ?? (isValidSshUsername(sshUser.trim()) ? sshUser.trim() : null);
-                const host = vpsSshHost(pageLocation(), vpsAddress);
-                return (
-                  <div data-testid="access-test-alert" className="flex max-w-xl flex-col gap-2 text-base text-amber-100">
-                    {job.phase === "01" ? (
-                      <p>
-                        A fase <strong>{job.title}</strong> travou a senha do root. Antes de confirmar, abra{" "}
-                        <strong>outra janela</strong> no seu computador (sem fechar esta) e teste o login com{" "}
-                        <strong className="font-mono">{testUser ?? "o seu usuário"}</strong>:
-                      </p>
-                    ) : (
-                      <p>
-                        A fase <strong>{job.title}</strong> alterou o SSH/firewall. Antes de confirmar, abra uma{" "}
-                        <strong>nova sessão SSH</strong> no seu computador (sem fechar esta) e teste o login.
-                        Sem confirmação, a configuração anterior volta sozinha.
-                      </p>
-                    )}
-                    {testUser && (
-                      <code className="block rounded bg-black/60 px-3 py-2 font-mono text-sm text-emerald-300">
-                        ssh {testUser}@{host}
-                      </code>
-                    )}
-                    {testUser && host === VPS_ADDRESS_PLACEHOLDER && (
-                      <p className="text-sm text-amber-200/90">
-                        Troque {VPS_ADDRESS_PLACEHOLDER} pelo IP da sua VPS — o mesmo que você usa para entrar por SSH.
-                      </p>
-                    )}
-                  </div>
-                );
-              })()}
-              <div className="flex items-center gap-2 text-amber-200">
-                <Clock className="h-5 w-5" />
-                <span>Reversão automática em:</span>
-                <Countdown deadline={job.rollbackDeadline} />
-              </div>
-              <div className="flex gap-3">
-                <Button variant="outline" size="lg" onClick={abortExecution}>
-                  Interromper
-                </Button>
-                <Button size="lg" className="bg-amber-500 text-black hover:bg-amber-400" onClick={() => void confirmAccess()}>
-                  ✅ Testei o acesso — confirmar
-                </Button>
-              </div>
-            </div>
+            <AccessTestAlert
+              phase={job.phase}
+              phaseTitle={job.title}
+              user={job.sshUser ?? (isValidSshUsername(sshUser.trim()) ? sshUser.trim() : null)}
+              host={vpsSshHost(pageLocation(), vpsAddress)}
+              deadline={job.rollbackDeadline}
+              busy={accessBusy}
+              onConfirm={() => void confirmAccess()}
+              onUndo={() => void undoAccess()}
+            />
           )}
 
           <Card>

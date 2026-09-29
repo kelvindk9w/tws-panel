@@ -139,8 +139,14 @@ describe.skipIf(!HAS_DOCKER)("01-user.sh — só trava o root se o usuário tive
     expect(r.code).toBe(0);
     expect(r.out).toContain(":::PAAS_ROLLBACK_SCHEDULED");
     expect(rootStatus()).toBe("L");
-    // desfaz para não afetar outros testes
-    expect(fase01("--user comsenha --rollback").code).toBe(0);
+    // o timer de reversão ficou agendado (sem `at` no container: processo em background)
+    expect(sh("test -f /etc/paas/pending-rollback-user.pid").code).toBe(0);
+    // "Não consegui entrar — desfazer agora": desfaz NA HORA e cancela a
+    // reversão agendada (senão ela rodaria de novo minutos depois)
+    const undo = fase01("--user comsenha --rollback");
+    expect(undo.code).toBe(0);
     expect(rootStatus()).toBe("P");
+    expect(undo.out).toMatch(/reversão agendada cancelada/i);
+    expect(sh("test -f /etc/paas/pending-rollback-user.pid").code).not.toBe(0);
   });
 });

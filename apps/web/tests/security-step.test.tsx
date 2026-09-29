@@ -548,6 +548,26 @@ describe("SecurityStep — alerta de teste de acesso", () => {
     base = apiFetchMock.getMockImplementation()!;
     const original = base;
     apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/undo-access") {
+        return {
+          job: {
+            id: "job-1",
+            phase,
+            phaseKey: "user",
+            title: "Usuário não-root",
+            dryRun: false,
+            status: "rolled_back",
+            createdAt: "",
+            startedAt: null,
+            finishedAt: "",
+            steps: [],
+            log: "[executor] operador não conseguiu entrar — desfazendo a fase agora (--rollback)",
+            rollbackScheduled: false,
+            rollbackDeadline: null,
+            error: null,
+          },
+        };
+      }
       if (path === "/api/security/apply" || path.startsWith("/api/security/jobs/")) {
         return {
           job: {
@@ -594,7 +614,20 @@ describe("SecurityStep — alerta de teste de acesso", () => {
   it("não afirma que a fase criou o usuário", async () => {
     const alerta = await aguardandoConfirmacao("01", "203.0.113.10");
     expect(alerta).not.toHaveTextContent(/criou/i);
-    expect(alerta).toHaveTextContent(/travou a senha do root/i);
+    expect(alerta).toHaveTextContent(/senha do root foi desativada/i);
+  });
+
+  it("'Não consegui entrar' desfaz a fase no servidor e a tela diz o que aconteceu", async () => {
+    await aguardandoConfirmacao("01", "203.0.113.10");
+    fireEvent.click(screen.getByRole("button", { name: /Não consegui entrar — desfazer agora/ }));
+    await waitFor(() => {
+      const undo = apiFetchMock.mock.calls.find(([p]) => p === "/api/security/undo-access");
+      expect(JSON.parse(String(undo?.[1]?.body))).toEqual({ jobId: "job-1" });
+    });
+    const quadro = await screen.findByTestId("run-failed");
+    expect(quadro).toHaveTextContent(/Você desfez a fase "Usuário não-root"/);
+    expect(quadro).toHaveTextContent(/configuração anterior foi restaurada/);
+    expect(screen.queryByTestId("access-test-alert")).not.toBeInTheDocument();
   });
 
   it("sem o IP conhecido, pede para trocar pelo IP da VPS em vez de inventar", async () => {

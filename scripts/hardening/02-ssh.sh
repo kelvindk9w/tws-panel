@@ -62,6 +62,11 @@ if [ "$MODE" = "rollback" ]; then
   fi
   svc_reload_or_restart ssh || svc_reload_or_restart sshd || true
   run rm -f "$REVERT_SCRIPT"
+  # Só depois de desfazer com sucesso (set -e): se algo acima falhou, a
+  # reversão agendada continua na fila como rede de segurança.
+  if cancel_scheduled_rollback "ssh"; then
+    info "reversão agendada cancelada — a configuração já foi desfeita agora"
+  fi
   ok "Rollback da fase 02 concluído"
   exit 0
 fi
