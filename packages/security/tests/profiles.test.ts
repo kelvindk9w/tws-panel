@@ -34,6 +34,7 @@ describe("flags hostOnly do catálogo", () => {
       "extra.kernel-hardening",
       "extra.core-dumps",
       "extra.accounting",
+      "extra.apt-listchanges",
     ];
     const marked = SECURITY_CHECKS.filter((c) => c.hostOnly).map((c) => c.id);
     expect(marked.sort()).toEqual(expectedHostOnly.sort());

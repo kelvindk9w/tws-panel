@@ -379,6 +379,13 @@ describe("docker (checks manuais)", () => {
     const kernel = check("extra.kernel-hardening");
     expect(kernel.evaluate(exec("modprobe=present sysctl=present\n")).status).toBe("pass");
     expect(kernel.evaluate(exec("modprobe=absent sysctl=present\n")).status).toBe("fail");
+    // arquivo da versão anterior (/bin/false): o Lynis não reconhece — a fase precisa rodar de novo
+    expect(kernel.evaluate(exec("modprobe=outdated sysctl=present\n")).status).toBe("fail");
+    expect(kernel.command).toContain("install dccp /bin/true");
+    const listchanges = check("extra.apt-listchanges");
+    expect(listchanges.phase).toBe("07");
+    expect(listchanges.evaluate(exec("installed\n")).status).toBe("pass");
+    expect(listchanges.evaluate(exec("absent\n")).status).toBe("fail");
     const core = check("extra.core-dumps");
     expect(core.evaluate(exec("present\n")).status).toBe("pass");
     expect(core.evaluate(exec("absent\n")).status).toBe("fail");

@@ -586,8 +586,10 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     remediation: "Aplicar a fase 07 (modprobe.d + sysctl.d da fase).",
     fixable: true,
     hostOnly: true,
+    // "outdated": arquivo da versão anterior (install ... /bin/false), que o
+    // Lynis (NETW-3200) não reconhece — ele exige "install <protocolo> /bin/true".
     command:
-      "echo \"modprobe=$(test -f /etc/modprobe.d/99-paas-hardening.conf && echo present || echo absent) sysctl=$(test -f /etc/sysctl.d/99-paas-extra.conf && echo present || echo absent)\"",
+      "f=/etc/modprobe.d/99-paas-hardening.conf; if [ ! -f \"$f\" ]; then m=absent; elif grep -q '^install dccp /bin/true$' \"$f\"; then m=present; else m=outdated; fi; echo \"modprobe=$m sysctl=$(test -f /etc/sysctl.d/99-paas-extra.conf && echo present || echo absent)\"",
     evaluate: (r) => {
       const out = firstLine(r.stdout).trim();
       return out === "modprobe=present sysctl=present"
@@ -626,6 +628,22 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
         ? { status: "pass", detail: "acct e sysstat instalados" }
         : { status: "fail", detail: `instalados: ${found.filter(Boolean).join(", ") || "nenhum"}` };
     },
+  },
+
+  {
+    id: "extra.apt-listchanges",
+    phase: "07",
+    title: "apt-listchanges instalado",
+    severity: "info",
+    description: "Mostra as mudanças importantes de cada pacote antes de atualizar (recomendação DEB-0810 do Lynis).",
+    remediation: "Aplicar a fase 07 (instala o apt-listchanges).",
+    fixable: true,
+    hostOnly: true,
+    command: `${DPKG_INSTALLED("apt-listchanges")} && echo installed || echo absent`,
+    evaluate: (r) =>
+      firstLine(r.stdout) === "installed"
+        ? { status: "pass", detail: "apt-listchanges instalado" }
+        : { status: "fail", detail: "apt-listchanges ausente" },
   },
 
   // ------------------------------------------------------- Docker (manual)
