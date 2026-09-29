@@ -347,7 +347,11 @@ schedule_rollback() {
 }
 
 # confirm_rollback <id> — cancela o rollback agendado (operador confirmou acesso).
-confirm_rollback() {
+# cancel_scheduled_rollback <id> — tira a reversão agendada da fila (at/timer).
+# Devolve 0 se havia algo agendado. Usada pelo --confirm (acesso confirmado) e
+# pelo --rollback (o operador desfez AGORA: sem isso a reversão agendada rodaria
+# de novo minutos depois, sobre uma configuração já restaurada).
+cancel_scheduled_rollback() {
   local id="$1"
   local pidfile="${PAAS_STATE_DIR}/pending-rollback-${id}.pid"
   local jobfile="${PAAS_STATE_DIR}/pending-rollback-${id}.at"
@@ -374,10 +378,14 @@ confirm_rollback() {
     rm -f "$pidfile"
     cancelled=1
   fi
-  if [ "$cancelled" = "1" ]; then
-    info "rollback agendado CANCELADO ($id) — acesso confirmado pelo operador"
+  [ "$cancelled" = "1" ]
+}
+
+confirm_rollback() {
+  if cancel_scheduled_rollback "$1"; then
+    info "rollback agendado CANCELADO ($1) — acesso confirmado pelo operador"
   else
-    info "nenhum rollback pendente para $id"
+    info "nenhum rollback pendente para $1"
   fi
 }
 

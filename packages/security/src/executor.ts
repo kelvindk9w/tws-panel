@@ -196,8 +196,8 @@ export class SecurityExecutor {
     return job;
   }
 
-  /** Cancela o rollback agendado após o operador confirmar conectividade. */
-  async confirmAccess(jobId: string): Promise<SecurityJob> {
+  /** Job aguardando confirmação de acesso + a definição da fase dele. */
+  private awaitingJob(jobId: string): { job: SecurityJob; script: string } {
     const job = this.jobs.get(jobId);
     if (!job) throw new Error(`job não encontrado: ${jobId}`);
     if (job.status !== "awaiting_confirmation") {
@@ -205,10 +205,46 @@ export class SecurityExecutor {
     }
     const phaseDef = SECURITY_PHASES.find((p) => p.id === job.phase);
     if (!phaseDef) throw new Error(`fase desconhecida: ${job.phase}`);
+    return { job, script: phaseDef.script };
+  }
+
+  /**
+   * "Não consegui entrar — desfazer agora": roda o --rollback da fase NA HORA.
+   * O script cancela a reversão agendada no alvo só depois de desfazer com
+   * sucesso; se ele falhar, a reversão agendada continua como rede de
+   * segurança e o job segue aguardando (a janela ainda vale).
+   */
+  async undoNow(jobId: string): Promise<SecurityJob> {
+    const { job, script } = this.awaitingJob(jobId);
+    this.appendLog(job, `\n[executor] operador não conseguiu entrar — desfazendo a fase agora (--rollback)\n`);
+    const code = await this.runner.execStream(
+      buildPhaseScriptCommand({ remoteDir: this.remoteDir, script, rollback: true }),
+      (chunk) => this.appendLog(job, chunk),
+    );
+    if (code !== 0) {
+      throw new Error(
+        `falha ao desfazer a fase no servidor (exit ${code}) — a reversão agendada continua e desfaz sozinha quando a janela acabar`,
+      );
+    }
+    const timer = this.timers.get(job.id);
+    if (timer) clearTimeout(timer);
+    this.timers.delete(job.id);
+    job.rollbackScheduled = false;
+    job.rollbackDeadline = null;
+    job.status = "rolled_back";
+    job.finishedAt = new Date().toISOString();
+    this.appendLog(job, `[executor] fase desfeita — a configuração anterior foi restaurada\n`);
+    this.notify(job);
+    return job;
+  }
+
+  /** Cancela o rollback agendado após o operador confirmar conectividade. */
+  async confirmAccess(jobId: string): Promise<SecurityJob> {
+    const { job, script } = this.awaitingJob(jobId);
 
     this.appendLog(job, `\n[executor] operador confirmou acesso — cancelando rollback agendado\n`);
     const code = await this.runner.execStream(
-      buildPhaseScriptCommand({ remoteDir: this.remoteDir, script: phaseDef.script, confirm: true }),
+      buildPhaseScriptCommand({ remoteDir: this.remoteDir, script, confirm: true }),
       (chunk) => this.appendLog(job, chunk),
     );
     if (code !== 0) {

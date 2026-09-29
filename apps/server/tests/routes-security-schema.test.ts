@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   apply: vi.fn(),
   getJob: vi.fn(),
   confirmAccess: vi.fn(),
+  undoAccessChange: vi.fn(),
   manualCommands: vi.fn(),
   history: vi.fn(),
   // restoreJobsFromDisk() é chamado uma vez no registro da rota (restaura
@@ -84,6 +85,7 @@ beforeEach(async () => {
   mocks.apply.mockResolvedValue(JOB);
   mocks.getJob.mockReturnValue(JOB);
   mocks.confirmAccess.mockResolvedValue(JOB);
+  mocks.undoAccessChange.mockResolvedValue({ ...JOB, status: "rolled_back" });
   mocks.manualCommands.mockResolvedValue({
     phase: "00",
     phaseKey: "update",
@@ -279,6 +281,44 @@ describe("POST /api/security/confirm-access — schema", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(mocks.confirmAccess).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * "Não consegui entrar — desfazer agora": antes, o botão só parava a tela e a
+ * mudança seguia valendo até a janela de 5 min acabar.
+ */
+describe("POST /api/security/undo-access", () => {
+  it("desfaz a fase na hora e devolve o job revertido", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/security/undo-access",
+      headers: auth,
+      payload: { jobId: "job1" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mocks.undoAccessChange).toHaveBeenCalledWith("job1");
+    expect(res.json().job.status).toBe("rolled_back");
+  });
+
+  it("falha no alvo vira 409 com a mensagem (a reversão agendada continua)", async () => {
+    mocks.undoAccessChange.mockRejectedValueOnce(new Error("falha ao desfazer — a reversão agendada continua"));
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/security/undo-access",
+      headers: auth,
+      payload: { jobId: "job1" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toMatch(/reversão agendada continua/);
+  });
+
+  it("job inexistente → 404; corpo inválido → 400", async () => {
+    mocks.undoAccessChange.mockRejectedValueOnce(new Error("job não encontrado: x"));
+    const nf = await app.inject({ method: "POST", url: "/api/security/undo-access", headers: auth, payload: { jobId: "x" } });
+    expect(nf.statusCode).toBe(404);
+    const bad = await app.inject({ method: "POST", url: "/api/security/undo-access", headers: auth, payload: {} });
+    expect(bad.statusCode).toBe(400);
   });
 });
 
