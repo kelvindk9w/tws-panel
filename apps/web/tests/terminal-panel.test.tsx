@@ -127,7 +127,7 @@ vi.mock("@/lib/page-location", () => ({ pageLocation: () => fakeLocation }));
 import type { HostDockerAccess, TerminalElevation, TerminalInfoResponse, TerminalControlMessage } from "@paas/core";
 import { TERMINAL_SUDO_CANCEL_REQUEST, encodeTerminalControl } from "@paas/core";
 import { TerminalPanel, TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
-import { setSetupToken } from "@/lib/api";
+import { clearSetupToken, setSetupToken } from "@/lib/api";
 
 function lastWs(): MockWebSocket {
   const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
@@ -915,7 +915,7 @@ describe("TerminalPanel — contagem regressiva e aviso impossível de perder", 
     const alerta = screen.getByTestId("sudo-password-alert");
     expect(alerta).toHaveTextContent(/Tempo esgotado aguardando a senha/i);
     expect(alerta).toHaveTextContent(/nada foi executado como root/i);
-    expect(alerta).toHaveTextContent(/Tentar a varredura de novo/i);
+    expect(alerta).toHaveTextContent(/Tentar a verificação de novo/i);
     expect(screen.queryByTestId("sudo-countdown")).not.toBeInTheDocument();
     expect(screen.queryByTestId("sudo-password-banner")).not.toBeInTheDocument();
   });
@@ -1130,5 +1130,26 @@ describe("TerminalPanel — conexão caída e reconexão", () => {
     render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
     await waitFor(() => expect(lastWs().readyState).toBe(MockWebSocket.OPEN));
     expect(lastTerm().reset).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Depois do setup o token deixa de valer e o acesso é pela sessão de login.
+ * A tela de hardening fora do assistente não tinha terminal — no modo senha,
+ * a verificação pedia a senha num terminal invisível e ficava esperando.
+ */
+describe("TerminalPanel — depois do setup (sessão de login)", () => {
+  it("authMode=session conecta SEM setup token e sem token na URL", async () => {
+    clearSetupToken();
+    render(<TerminalPanel enabled={true} authMode="session" info={infoFor("senha")} />);
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    expect(lastWs().url).not.toContain("token=");
+  });
+
+  it("modo padrão (assistente) continua exigindo o setup token", async () => {
+    clearSetupToken();
+    render(<TerminalPanel enabled={true} info={infoFor("senha")} />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(MockWebSocket.instances).toHaveLength(0);
   });
 });

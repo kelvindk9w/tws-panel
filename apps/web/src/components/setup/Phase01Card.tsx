@@ -115,7 +115,7 @@ export function Phase01Card({
               <p data-testid="configured-user-not-detected" className="flex items-start gap-1 text-xs text-amber-400">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>
-                  A varredura <strong>não encontrou</strong>{" "}
+                  A verificação <strong>não encontrou</strong>{" "}
                   <strong className="font-mono">{configuredSshUser}</strong> com sudo neste servidor.
                   Confira o nome e, se preciso, rode como root:{" "}
                   <code className="font-mono">usermod -aG sudo {configuredSshUser}</code>
@@ -154,7 +154,7 @@ export function Phase01Card({
         <div data-testid="phase01-status" className="flex flex-col gap-1 rounded-md border border-border bg-secondary/20 p-3 text-sm">
           {outcome === null ? (
             <p className="text-muted-foreground">
-              Não deu para conferir {who} nesta varredura. A simulação mostra, antes de qualquer
+              Não deu para conferir {who} nesta verificação. A simulação mostra, antes de qualquer
               mudança, se a senha do root vai ser desativada.
             </p>
           ) : (
@@ -177,7 +177,7 @@ export function Phase01Card({
                 <p className="font-semibold text-amber-400">
                   Resultado: a senha do root não será desativada — sem senha, {user} ficaria sem sudo.
                   Para corrigir, rode <code className="font-mono">sudo passwd {user}</code> no terminal
-                  abaixo e revarra.
+                  abaixo e clique em “Verificar de novo”.
                 </p>
               ) : (
                 <p className="font-semibold text-amber-400">

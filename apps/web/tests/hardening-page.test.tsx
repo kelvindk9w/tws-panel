@@ -36,6 +36,19 @@ afterEach(() => {
   apiFetchMock.mockReset();
 });
 
+// O terminal real (xterm + WebSocket) não roda no jsdom: um dublê registra as props.
+const terminalProps = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
+vi.mock("@/components/TerminalPanel", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/components/TerminalPanel")>();
+  return {
+    ...real,
+    TerminalPanel: (props: Record<string, unknown>) => {
+      terminalProps.last = props;
+      return <div data-testid="terminal-panel" />;
+    },
+  };
+});
+
 describe("HardeningPage", () => {
   it("renderiza o fluxo de hardening fora do wizard de setup", async () => {
     const { HardeningPage } = await import("../src/pages/HardeningPage");
@@ -87,5 +100,26 @@ describe("SecurityPage", () => {
 
     const link = await screen.findByRole("link", { name: /hardening|revisar|aplicar/i });
     expect(link).toHaveAttribute("href", "/security/hardening");
+  });
+});
+
+/**
+ * Validação real: fora do assistente não havia terminal, e o terminal só
+ * conectava com o setup token (que deixa de valer depois do setup). No modo
+ * senha, a verificação pedia a senha do sudo num terminal invisível.
+ */
+describe("HardeningPage — terminal", () => {
+  it("mostra o terminal, conectando pela sessão de login", async () => {
+    const { HardeningPage } = await import("../src/pages/HardeningPage");
+    apiFetchMock.mockResolvedValue({ report: REPORT, entries: [], phases: [] });
+    render(
+      <MemoryRouter initialEntries={["/security/hardening"]}>
+        <Routes>
+          <Route path="/security/hardening" element={<HardeningPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("terminal-panel")).toBeInTheDocument();
+    expect(terminalProps.last).toMatchObject({ enabled: true, authMode: "session" });
   });
 });

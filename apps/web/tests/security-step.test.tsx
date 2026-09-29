@@ -2,7 +2,7 @@
  * security-step.test.tsx — plano de correção do wizard de segurança:
  *  - ação principal por fase: "Executar apenas esta fase";
  *  - ação secundária "Fazer manualmente" abre o MODAL com passo a passo
- *    copiável + botão "Já executei — revarrer";
+ *    copiável + botão "Já executei — verificar de novo";
  *  - Fase 01: tutorial guiado de chave SSH presente (o que é, para que serve,
  *    comandos por SO) + validação "Sua chave parece válida ✅".
  */
@@ -168,7 +168,7 @@ import { SecurityStep } from "@/pages/setup/SecurityStep";
 
 async function reachPlanStage() {
   render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
-  fireEvent.click(await screen.findByText("Iniciar varredura"));
+  fireEvent.click(await screen.findByText("Iniciar verificação"));
   fireEvent.click(await screen.findByText("Gerar plano de correção"));
   await screen.findByText(/Fase 00 — Atualizações do sistema/);
 }
@@ -220,9 +220,9 @@ describe("SecurityStep — retomada após restart do painel", () => {
     const onNext = vi.fn();
     render(<SecurityStep onNext={onNext} onBack={() => undefined} />);
 
-    // restaura a visão "Hardening aplicado" — NÃO a tela "Iniciar varredura"
+    // restaura a visão "Hardening aplicado" — NÃO a tela "Iniciar verificação"
     expect(await screen.findByText("Hardening aplicado")).toBeInTheDocument();
-    expect(screen.queryByText("Iniciar varredura")).not.toBeInTheDocument();
+    expect(screen.queryByText("Iniciar verificação")).not.toBeInTheDocument();
 
     // Antes/Depois estáveis, vindos do snapshot persistido
     expect(screen.getByText("Antes")).toBeInTheDocument();
@@ -235,9 +235,9 @@ describe("SecurityStep — retomada após restart do painel", () => {
     expect(onNext).toHaveBeenCalledTimes(1);
   });
 
-  it("histórico sem apply → fluxo normal ('Iniciar varredura')", async () => {
+  it("histórico sem apply → fluxo normal ('Iniciar verificação')", async () => {
     render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
-    expect(await screen.findByText("Iniciar varredura")).toBeInTheDocument();
+    expect(await screen.findByText("Iniciar verificação")).toBeInTheDocument();
     expect(screen.queryByText("Hardening aplicado")).not.toBeInTheDocument();
   });
 });
@@ -251,7 +251,7 @@ describe("SecurityStep — plano de correção", () => {
     expect(manual).toHaveLength(3);
   });
 
-  it("'Fazer manualmente' abre o modal com passo a passo copiável e 'Já executei — revarrer'", async () => {
+  it("'Fazer manualmente' abre o modal com passo a passo copiável e 'Já executei — verificar de novo'", async () => {
     await reachPlanStage();
     fireEvent.click(screen.getAllByRole("button", { name: /Fazer manualmente/ })[0]!);
 
@@ -259,18 +259,18 @@ describe("SecurityStep — plano de correção", () => {
     expect(modal).toHaveTextContent("Fazer manualmente — Fase 00");
     expect(await screen.findByText("sudo bash /opt/tws-panel/scripts/hardening/00-update.sh")).toBeInTheDocument();
     expect(screen.getByText(/Passo a passo — comandos exatos/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Já executei — revarrer/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Já executei — verificar de novo/ })).toBeInTheDocument();
 
     // fecha pelo botão Fechar
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("'Já executei — revarrer' dispara scan fresco + novo plano", async () => {
+  it("'Já executei — verificar de novo' dispara scan fresco + novo plano", async () => {
     await reachPlanStage();
     fireEvent.click(screen.getAllByRole("button", { name: /Fazer manualmente/ })[0]!);
     await screen.findByRole("dialog");
-    fireEvent.click(await screen.findByRole("button", { name: /Já executei — revarrer/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Já executei — verificar de novo/ }));
     await waitFor(() => {
       const calls = apiFetchMock.mock.calls.map(([p]) => String(p));
       expect(calls).toContain("/api/security/scan?fresh=1");
@@ -592,7 +592,7 @@ describe("SecurityStep — alerta de teste de acesso", () => {
       return original(path, init);
     });
     render(<SecurityStep onNext={() => undefined} vpsAddress={vpsAddress} />);
-    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Iniciar verificação"));
     fireEvent.click(await screen.findByText("Gerar plano de correção"));
     await screen.findByText(/Fase 00 — Atualizações do sistema/);
     const index = phase === "01" ? 1 : 2;
@@ -899,7 +899,7 @@ describe("SecurityStep — usuário não-root detectado pela varredura", () => {
     detectedSudoUsers = ["deploy"];
     fireEvent.click(screen.getAllByRole("button", { name: /Fazer manualmente/ })[0]!);
     await screen.findByRole("dialog");
-    fireEvent.click(await screen.findByRole("button", { name: /Já executei — revarrer/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Já executei — verificar de novo/ }));
     await waitFor(() => {
       const calls = apiFetchMock.mock.calls.map(([p]) => String(p));
       expect(calls).toContain("/api/security/scan?fresh=1");
@@ -912,7 +912,7 @@ describe("SecurityStep — usuário não-root detectado pela varredura", () => {
     detectedSudoUsers = ["deploy"];
     const onSshUserDetected = vi.fn();
     render(<SecurityStep onNext={() => undefined} onSshUserDetected={onSshUserDetected} />);
-    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Iniciar verificação"));
     fireEvent.click(await screen.findByText("Gerar plano de correção"));
     await screen.findByText(/Fase 00 — Atualizações do sistema/);
 
@@ -932,7 +932,7 @@ describe("SecurityStep — usuário configurado na instalação", () => {
 
   async function reachPlanWith(configuredUser: string | null) {
     render(<SecurityStep onNext={() => undefined} configuredUser={configuredUser} />);
-    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Iniciar verificação"));
     fireEvent.click(await screen.findByText("Gerar plano de correção"));
     await screen.findByText(/Fase 00 — Atualizações do sistema/);
   }
@@ -987,7 +987,7 @@ describe("SecurityStep — usuário configurado na instalação", () => {
 
   it("o que o operador digitou não é sobrescrito quando a configuração chega depois", async () => {
     const { rerender } = render(<SecurityStep onNext={() => undefined} configuredUser={null} />);
-    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Iniciar verificação"));
     fireEvent.click(await screen.findByText("Gerar plano de correção"));
     await screen.findByText(/Fase 00 — Atualizações do sistema/);
     fireEvent.change(campoUsuario(), { target: { value: "outro" } });
@@ -1021,16 +1021,16 @@ describe("SecurityStep — falha de elevação (sudo)", () => {
     });
     try {
       render(<SecurityStep onNext={() => undefined} />);
-      fireEvent.click(await screen.findByText("Iniciar varredura"));
+      fireEvent.click(await screen.findByText("Iniciar verificação"));
 
       const bloco = await screen.findByTestId("sudo-elevation-error");
       expect(bloco).toHaveTextContent(/O sudo recusou a senha 3 vezes/);
       expect(bloco).toHaveTextContent(/Nada foi executado como root/);
-      expect(bloco).toHaveTextContent(/varredura/i);
-      expect(screen.queryByText("Falha ao executar a varredura.")).not.toBeInTheDocument();
+      expect(bloco).toHaveTextContent(/verificação/i);
+      expect(screen.queryByText("Falha ao executar a verificação.")).not.toBeInTheDocument();
 
       falhar = false;
-      fireEvent.click(screen.getByRole("button", { name: /Tentar a varredura de novo/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Tentar a verificação de novo/ }));
       await screen.findByText("Gerar plano de correção");
       expect(screen.queryByTestId("sudo-elevation-error")).not.toBeInTheDocument();
     } finally {

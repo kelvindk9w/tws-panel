@@ -219,6 +219,14 @@ interface TerminalPanelProps {
   info?: TerminalInfoResponse | null;
   /** A consulta de /api/terminal/info falhou. */
   infoUnavailable?: boolean;
+  /**
+   * Como o WebSocket se autentica: "setup-token" (assistente de instalação,
+   * padrão) ou "session" (depois do setup: o token já não vale e o cookie da
+   * sessão de login vai sozinho no handshake). Sem o modo "session", a tela de
+   * hardening fora do assistente ficava sem terminal — e, no modo senha, o
+   * pedido de senha do sudo era invisível.
+   */
+  authMode?: "setup-token" | "session";
 }
 
 /** Desfechos do prompt do sudo que exigem explicação (não fecham sozinhos). */
@@ -259,7 +267,13 @@ const SUDO_EXPIRY_GRACE_MS = 2_000;
 /** Prefixo no título da aba enquanto a senha é esperada (aba em segundo plano). */
 const SUDO_TITLE_PREFIX = "⚠ senha necessária — ";
 
-export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: TerminalPanelProps) {
+export function TerminalPanel({
+  enabled,
+  sshUser,
+  info,
+  infoUnavailable,
+  authMode = "setup-token",
+}: TerminalPanelProps) {
   // Começa RECOLHIDO por padrão (o usuário expande se quiser acompanhar).
   const [open, setOpen] = useState(() => sessionStorage.getItem(STORAGE_KEY) === "1");
   const [attention, setAttention] = useState(false);
@@ -382,8 +396,9 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
     let disposed = false;
     const connect = () => {
       if (disposed) return;
-      // NUNCA conectar sem token: o servidor recusaria o upgrade (401).
-      if (!getSetupToken()) return;
+      // Assistente: NUNCA conectar sem token (o servidor recusaria, 401).
+      // Depois do setup ("session"): o cookie de sessão autentica o handshake.
+      if (authMode === "setup-token" && !getSetupToken()) return;
       setStatus("connecting");
       const ws = new WebSocket(terminalWsUrl());
       wsRef.current = ws;
@@ -450,7 +465,7 @@ export function TerminalPanel({ enabled, sshUser, info, infoUnavailable }: Termi
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [enabled]);
+  }, [enabled, authMode]);
 
   // ------------------------------------------------------ resize sincronizado
   useEffect(() => {
@@ -889,7 +904,7 @@ function SessionNote({
     case "senha":
       return (
         <span>
-          Esta sessão abre como <strong className={NAME}>{info.user}</strong>. Quando a varredura ou uma
+          Esta sessão abre como <strong className={NAME}>{info.user}</strong>. Quando a verificação ou uma
           fase precisa de root, o comando roda aqui mesmo com <strong>sudo</strong> e a senha de{" "}
           <strong className={NAME}>{info.user}</strong> é pedida neste terminal.
         </span>
@@ -898,7 +913,7 @@ function SessionNote({
       return (
         <span>
           Esta sessão abre como <strong className={NAME}>{info.user}</strong>. Os comandos que precisam
-          de root (varredura e fases) rodam em segundo plano como root, fora deste shell: a saída
+          de root (verificação e fases) rodam em segundo plano como root, fora deste shell: a saída
           deles aparece aqui só para visualização e cada comando fica registrado na <AuditLink /> (a
           página fica disponível depois de criar a conta de administrador).
         </span>
@@ -1185,7 +1200,7 @@ function SudoPasswordAlert({
           {alert.outcome === "exhausted" && (
             <p>
               A senha foi recusada 3 vezes e o sudo desistiu. Nada foi executado como root. Para
-              continuar, execute de novo a varredura ou a fase e digite a senha correta quando ela for
+              continuar, execute de novo a verificação ou a fase e digite a senha correta quando ela for
               pedida.
             </p>
           )}
@@ -1204,7 +1219,7 @@ function SudoPasswordAlert({
           {alert.outcome === "cancelled" && (
             <p>
               O pedido de senha foi encerrado a seu pedido e <strong>nada foi executado como root</strong>.
-              Quando quiser seguir, execute de novo a varredura ou a fase e envie a senha de {userLabel} no
+              Quando quiser seguir, execute de novo a verificação ou a fase e envie a senha de {userLabel} no
               alerta.
             </p>
           )}
@@ -1216,7 +1231,7 @@ function SudoPasswordAlert({
                 operação simplesmente não aconteceu.
               </p>
               <p>
-                Para seguir, clique em <strong>“Tentar a varredura de novo”</strong> (ou execute a fase
+                Para seguir, clique em <strong>“Tentar a verificação de novo”</strong> (ou execute a fase
                 outra vez) e, assim que o pedido aparecer aqui, digite a senha no terminal abaixo. Desta
                 vez o alerta mostra o tempo restante na faixa amarela no topo da página.
               </p>

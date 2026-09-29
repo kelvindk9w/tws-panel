@@ -217,9 +217,8 @@ cronometrando, como validação final.
 - **Suporte ao Ubuntu 26.04**: rodada dedicada depois de o 24.04 estar validado.
 
 ### Limitações e riscos conhecidos
-- `/security/hardening` (fora do wizard) não exibe terminal, e o terminal só
-  conecta com o setup token: no modo `senha`, varredura/fase disparada ali pede a
-  senha num terminal invisível e expira.
+- ~~`/security/hardening` sem terminal~~ — RESOLVIDO em 29/09/2026: a página mostra o
+  terminal, que conecta pela sessão de login (`TerminalPanel authMode="session"`).
 - Logs de execução das fases (`/etc/paas/runs`) são legíveis por qualquer usuário
   local (`umask 022`, para o usuário do terminal acompanhar sem senha).
   Restringir ao usuário do terminal.
