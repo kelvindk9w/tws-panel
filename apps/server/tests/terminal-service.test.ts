@@ -333,6 +333,32 @@ describe("TerminalService — runCommand (fases dentro do terminal)", () => {
     }
   });
 
+  /**
+   * O teste com PTY real falha às vezes na CI com "comando excedeu o tempo
+   * limite" e nada mais — impossível saber se o comando travou ou se o
+   * marcador de fim se perdeu. O erro passa a trazer o fim do que o terminal
+   * mostrou e o trecho retido esperando o marcador (serve também ao operador
+   * numa VPS real).
+   */
+  it("timeout diz o que o terminal mostrou e o que ficou retido esperando o marcador", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, next } = makeService();
+      const promise = service.runCommand("printf 'a b '", () => undefined, { timeoutMs: 1_000 });
+      const settled = promise.catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      next().emit("\x1b[32mprompt$\x1b[0m saida parcial\r\n:::PAAS_EX");
+      await vi.advanceTimersByTimeAsync(1_000 + 5_000);
+      const err = (await settled) as Error;
+      expect(err.message).toMatch(/tempo limite/);
+      expect(err.message).toContain("saida parcial");
+      expect(err.message).toContain("retido esperando o marcador: \":::PAAS_EX\"");
+      expect(err.message).not.toContain("\x1b["); // sem códigos de cor
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("timeout seguido de marcador tardio do Ctrl-C resolve normal (sem rejeitar)", async () => {
     vi.useFakeTimers();
     try {

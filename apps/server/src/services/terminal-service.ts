@@ -825,6 +825,15 @@ export class TerminalService {
   }
 
   private onCommandTimeout(waiter: CommandWaiter): void {
+    // Diagnóstico ANTES do Ctrl-C: o fim do que o terminal mostrou e o trecho
+    // retido esperando o marcador de fim. Sem isso, "excedeu o tempo limite"
+    // não diz se o comando travou ou se o marcador se perdeu (falha
+    // intermitente vista na CI; serve também ao operador numa VPS real).
+    const shown = this.scrollback.replace(ANSI_RE, "").slice(-300).trim();
+    const held = waiter.pending.replace(ANSI_RE, "");
+    const diagnostic =
+      ` — últimos caracteres na tela: ${JSON.stringify(shown)}` +
+      (held ? `; retido esperando o marcador: ${JSON.stringify(held)}` : "");
     // Timeout: interrompe com Ctrl-C e dá um grace curto pelo marcador.
     this.write("\x03");
     this.rejectAfterGrace(waiter, () => {
@@ -837,7 +846,7 @@ export class TerminalService {
       this.broadcast(
         "\r\n\x1b[33m[terminal] comando interrompido por tempo limite — a sessão continua ativa\x1b[0m\r\n",
       );
-      return new Error(`comando excedeu o tempo limite no terminal (${waiter.timeoutMs}ms)`);
+      return new Error(`comando excedeu o tempo limite no terminal (${waiter.timeoutMs}ms)${diagnostic}`);
     });
   }
 
