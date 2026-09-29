@@ -221,7 +221,7 @@ describe("SecurityStep — retomada após restart do painel", () => {
     render(<SecurityStep onNext={onNext} onBack={() => undefined} />);
 
     // restaura a visão "Hardening aplicado" — NÃO a tela "Iniciar verificação"
-    expect(await screen.findByText("Hardening aplicado")).toBeInTheDocument();
+    expect(await screen.findByText("Proteções aplicadas")).toBeInTheDocument();
     expect(screen.queryByText("Iniciar verificação")).not.toBeInTheDocument();
 
     // Antes/Depois estáveis, vindos do snapshot persistido
@@ -235,10 +235,58 @@ describe("SecurityStep — retomada após restart do painel", () => {
     expect(onNext).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Validação real: fora do assistente a tela abria no último resultado salvo,
+   * sem botão para verificar de novo — só "Continuar", que levava de volta; e
+   * o link dizia "Voltar para Saúde da máquina" (etapa do assistente).
+   */
+  it("fora do assistente: resultado salvo oferece 'Verificar de novo' e fala de Segurança, não do assistente", async () => {
+    apiFetchMock.mockImplementationOnce(async (path: string) => {
+      if (path === "/api/security/history") {
+        return {
+          entries: [],
+          firstIndex: 42,
+          latestIndex: 86,
+          applied: { appliedAt: "2026-09-29T10:20:00Z", beforeIndex: 42, beforeIndexSource: "internal", afterIndex: 86, afterIndexSource: "lynis" },
+        };
+      }
+      throw new Error(`chamada inesperada: GET ${path}`);
+    });
+    const onNext = vi.fn();
+    render(<SecurityStep mode="page" onNext={onNext} onBack={() => undefined} />);
+    expect(await screen.findByText("Proteções aplicadas")).toBeInTheDocument();
+    expect(screen.queryByText(/Saúde da máquina/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Continuar/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Voltar para Segurança/ }).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Verificar de novo/ }));
+    await waitFor(() => {
+      const calls = apiFetchMock.mock.calls.map(([p]) => String(p));
+      expect(calls).toContain("/api/security/scan?fresh=1");
+    });
+  });
+
+  it("no assistente o resultado salvo também oferece 'Verificar de novo'", async () => {
+    apiFetchMock.mockImplementationOnce(async (path: string) => {
+      if (path === "/api/security/history") {
+        return {
+          entries: [],
+          firstIndex: 39,
+          latestIndex: 75,
+          applied: { appliedAt: "2026-08-21T10:20:00Z", beforeIndex: 39, beforeIndexSource: "lynis", afterIndex: 75, afterIndexSource: "lynis" },
+        };
+      }
+      throw new Error(`chamada inesperada: GET ${path}`);
+    });
+    render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
+    expect(await screen.findByRole("button", { name: /Verificar de novo/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Voltar para Saúde da máquina/ })).toBeInTheDocument();
+  });
+
   it("histórico sem apply → fluxo normal ('Iniciar verificação')", async () => {
     render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
     expect(await screen.findByText("Iniciar verificação")).toBeInTheDocument();
-    expect(screen.queryByText("Hardening aplicado")).not.toBeInTheDocument();
+    expect(screen.queryByText("Proteções aplicadas")).not.toBeInTheDocument();
   });
 });
 
