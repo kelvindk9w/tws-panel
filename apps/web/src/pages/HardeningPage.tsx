@@ -32,6 +32,7 @@ export function HardeningPage() {
   return (
     <div className="flex flex-col gap-6">
       <SecurityStep
+        mode="page"
         onNext={voltar}
         onBack={voltar}
         onSshUserDetected={setSshUser}

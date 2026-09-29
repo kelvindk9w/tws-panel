@@ -77,6 +77,12 @@ interface SecurityStepProps {
    * que entra no comando `ssh` de teste de acesso.
    */
   vpsAddress?: string | null;
+  /**
+   * "wizard" (padrão): etapa do assistente de instalação. "page": tela de
+   * proteções depois do setup — os textos de navegação falam de Segurança, não
+   * das etapas do assistente ("Voltar para Saúde da máquina", "Continuar").
+   */
+  mode?: "wizard" | "page";
 }
 
 /** O sudo não executou nada (modo senha) — varredura ou fase interrompida. */
@@ -191,6 +197,7 @@ export function SecurityStep({
   onSshUserDetected,
   configuredUser,
   vpsAddress,
+  mode = "wizard",
 }: SecurityStepProps) {
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
@@ -497,6 +504,12 @@ export function SecurityStep({
     setJob(null);
   }
 
+  /** Nova verificação a partir do resultado salvo: volta ao relatório, atualizado. */
+  async function verifyAgain() {
+    setStage("scan");
+    await runScan(true);
+  }
+
   /** Refaz a simulação inteira do zero (depois de uma fase falhar). */
   async function retryDryRun() {
     setPhaseUi((prev) => {
@@ -593,7 +606,7 @@ export function SecurityStep({
       <div>
         {onBack && (
           <Button variant="ghost" size="sm" onClick={onBack} className="-ml-2 mb-1">
-            <ArrowLeft className="h-4 w-4" /> Voltar para Saúde da máquina
+            <ArrowLeft className="h-4 w-4" /> {mode === "page" ? "Voltar para Segurança" : "Voltar para Saúde da máquina"}
           </Button>
         )}
         <h2 className="text-xl font-semibold tracking-tight">Segurança</h2>
@@ -1110,7 +1123,7 @@ export function SecurityStep({
               <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 shadow-[0_0_32px_rgba(52,211,153,0.18)] ring-1 ring-emerald-500/30 motion-safe:animate-scale-in">
                 <ShieldCheck className="h-7 w-7 text-emerald-400" />
               </div>
-              <CardTitle className="text-2xl tracking-tight">Hardening aplicado</CardTitle>
+              <CardTitle className="text-2xl tracking-tight">Proteções aplicadas</CardTitle>
               <CardDescription>
                 Comparação do índice de segurança antes e depois das correções.
                 {resumed && " (Estado restaurado do histórico do servidor após a reinicialização do painel.)"}
@@ -1189,12 +1202,25 @@ export function SecurityStep({
               </div>
             )}
 
-          <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStage("scan")}>
-              Ver relatório completo
-            </Button>
+          <div className="flex flex-wrap justify-between gap-2">
+            <div className="flex flex-wrap gap-2">
+              {/* Fora do assistente a tela abre neste resultado salvo: sem este
+                  botão não havia como verificar de novo (visto em campo). */}
+              <Button variant="outline" onClick={() => void verifyAgain()} disabled={scanning}>
+                <RefreshCw className="h-4 w-4" /> Verificar de novo
+              </Button>
+              <Button variant="ghost" onClick={() => setStage("scan")}>
+                Ver relatório completo
+              </Button>
+            </div>
             <Button onClick={onNext}>
-              Continuar <ArrowRight className="h-4 w-4" />
+              {mode === "page" ? (
+                "Voltar para Segurança"
+              ) : (
+                <>
+                  Continuar <ArrowRight className="h-4 w-4" />
+                </>
+              )}
             </Button>
           </div>
         </>
