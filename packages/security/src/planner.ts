@@ -22,6 +22,7 @@ const PHASE_DESCRIPTIONS: Record<SecurityPhaseId, string> = {
   "04": "fail2ban com jails (sshd, nginx, recidive; e-mail com profile mail) e AppArmor em enforce.",
   "05": "remove snapd, serviços e clientes legados desnecessários; impede reinstalação de Recommends.",
   "06": "auditd com regras essenciais, baseline AIDE, rkhunter/chkrootkit, Lynis e cron de varreduras recorrentes.",
+  "07": "recomendações do Lynis seguras de automatizar: core dump desligado, umask 027, módulos e sysctl de kernel, aviso legal, compiladores só para root, contabilidade de processos.",
 };
 
 const PHASE_IMPACTS: Partial<Record<SecurityPhaseId, string>> = {

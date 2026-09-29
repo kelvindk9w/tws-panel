@@ -29,6 +29,8 @@ export function SetupPage() {
    * Segurança. Vive aqui porque o terminal é irmão dos passos, não filho
    * deles: o nome sobe da SecurityStep e desce para o TerminalPanel. */
   const [detectedSshUser, setDetectedSshUser] = useState<string | null>(null);
+  /** IP público da VPS lido pela tela de Saúde (comando `ssh` de teste de acesso). */
+  const [vpsAddress, setVpsAddress] = useState<string | null>(null);
   /** Usuário/modo do terminal definidos na instalação — consultado só com o
    * terminal liberado (mesma regra do WebSocket). Desce para o terminal
    * (cabeçalho por modo) e para a Segurança (usuário da Fase 01). */
@@ -106,7 +108,7 @@ export function SetupPage() {
         </div>
         {maxReached >= 1 && (
           <div className={step === 1 ? "animate-fade-in" : "hidden"}>
-            <HealthStep onNext={() => advance(2)} onBack={() => goTo(0)} />
+            <HealthStep onNext={() => advance(2)} onBack={() => goTo(0)} onPublicIp={setVpsAddress} />
           </div>
         )}
         {maxReached >= 2 && (
@@ -116,6 +118,7 @@ export function SetupPage() {
               onBack={() => goTo(1)}
               onSshUserDetected={setDetectedSshUser}
               configuredUser={terminalInfo.info?.configuredUser ?? null}
+              vpsAddress={vpsAddress}
             />
           </div>
         )}

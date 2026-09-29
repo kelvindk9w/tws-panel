@@ -189,6 +189,32 @@ describe("POST /api/security/apply — schema", () => {
     expect(res.json().error).toBe("invalid_params");
     expect(mocks.apply).not.toHaveBeenCalled();
   });
+
+  /**
+   * Visto em campo: sem --user, a fase 02 deixava o root entrar com chave
+   * (PermitRootLogin prohibit-password) e não restringia quem entra por SSH.
+   */
+  it("fase 02 aceita sshUser (PermitRootLogin no + AllowUsers)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/security/apply",
+      headers: auth,
+      payload: { phase: "02", dryRun: true, sshUser: "kelvin" },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(mocks.apply).toHaveBeenCalledWith("02", true, { sshUser: "kelvin" });
+  });
+
+  it("chave pública continua só na fase 01", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/security/apply",
+      headers: auth,
+      payload: { phase: "02", dryRun: true, sshUser: "kelvin", sshPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake x@y" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(mocks.apply).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /api/security/jobs/:id — schema", () => {

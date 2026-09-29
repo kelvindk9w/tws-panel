@@ -115,6 +115,13 @@ EOF
 fi
 ok "Rollback automático agendado — cancele com '$0 --confirm' após testar nova sessão"
 
+# AllowTcpForwarding local (e NÃO "no"): o README manda acessar o painel por
+# túnel SSH (`ssh -L`), que é encaminhamento LOCAL. Com "no", o túnel aberto
+# antes continuava funcionando e o próximo — inclusive depois do reboot — era
+# recusado: o operador perdia o acesso ao painel (visto em campo). "local"
+# libera só o -L; -R (remoto), agent e X11 continuam bloqueados.
+# TCPKeepAlive no: quem detecta conexão morta é o ClientAliveInterval, que
+# passa pelo canal cifrado (o keepalive TCP pode ser forjado).
 step "Aplicando drop-in de hardening ($DROPIN)"
 {
   echo "# Gerenciado pelo painel PaaS (02-ssh.sh). Spec: docs/security-research.md §2.3"
@@ -129,9 +136,10 @@ MaxSessions 2
 LoginGraceTime 30
 ClientAliveInterval 300
 ClientAliveCountMax 2
+TCPKeepAlive no
 X11Forwarding no
 AllowAgentForwarding no
-AllowTcpForwarding no
+AllowTcpForwarding local
 PermitTunnel no
 PermitUserEnvironment no
 HostbasedAuthentication no

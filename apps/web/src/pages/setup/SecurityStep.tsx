@@ -12,7 +12,14 @@ import {
   type SecurityScanReport,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
-import { capitalize, isSudoJobError, sudoElevationFailure } from "@/lib/terminal-info";
+import {
+  VPS_ADDRESS_PLACEHOLDER,
+  capitalize,
+  isSudoJobError,
+  sudoElevationFailure,
+  vpsSshHost,
+} from "@/lib/terminal-info";
+import { pageLocation } from "@/lib/page-location";
 import { TERMINAL_ATTENTION_CLEAR_EVENT, TERMINAL_ATTENTION_EVENT } from "@/components/TerminalPanel";
 import { CopyButton } from "@/components/CopyButton";
 import { IndexGauge } from "@/components/IndexGauge";
@@ -65,6 +72,12 @@ interface SecurityStepProps {
    * explícita vence a detecção da varredura, que fica como fallback.
    */
   configuredUser?: string | null;
+  /**
+   * IP público da VPS (lido pela tela de Saúde). Pelo túnel a página é
+   * "localhost", que no computador do operador NÃO é a VPS: é este endereço
+   * que entra no comando `ssh` de teste de acesso.
+   */
+  vpsAddress?: string | null;
 }
 
 /** O sudo não executou nada (modo senha) — varredura ou fase interrompida. */
@@ -193,7 +206,13 @@ function StepList({ steps }: { steps: SecurityJobStep[] }) {
 // Componente principal
 // ---------------------------------------------------------------------------
 
-export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser }: SecurityStepProps) {
+export function SecurityStep({
+  onNext,
+  onBack,
+  onSshUserDetected,
+  configuredUser,
+  vpsAddress,
+}: SecurityStepProps) {
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
   // Falha do sudo fica separada do erro genérico: a mensagem do servidor já
@@ -206,7 +225,7 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(new Set());
   const [skippedOpen, setSkippedOpen] = useState(false);
 
-  // plano — FASES OBRIGATÓRIAS: toda fase com pendência executa (00→06);
+  // plano — FASES OBRIGATÓRIAS: toda fase com pendência executa (00→07);
   // não há exclusão por checkbox. O modo manual por fase é a única
   // alternativa (o operador executa por conta própria e o painel valida).
   const [plan, setPlan] = useState<SecurityPlan | null>(null);
@@ -420,6 +439,10 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
           body["sshUser"] = sshUser.trim() || "deploy";
           if (sshPublicKey.trim() !== "") body["sshPublicKey"] = sshPublicKey.trim();
         }
+        // Fase 02 com o usuário: PermitRootLogin no + AllowUsers. Sem ele, o
+        // root seguia entrando com chave (visto em campo). Nome inválido ou
+        // vazio: a fase roda sem, como antes.
+        if (phase === "02" && isValidSshUsername(sshUser.trim())) body["sshUser"] = sshUser.trim();
         const res = await apiFetch<{ job: SecurityJob }>("/api/security/apply", {
           method: "POST",
           body: JSON.stringify(body),
@@ -888,24 +911,37 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
               <p className="text-2xl font-bold tracking-tight text-amber-300">
                 ⚠️ AÇÃO NECESSÁRIA — TESTE SEU ACESSO AGORA
               </p>
-              {job.phase === "01" ? (
-                <p className="max-w-xl text-base text-amber-100">
-                  A fase <strong>{job.title}</strong> criou o usuário{" "}
-                  <strong className="font-mono">{job.sshUser ?? sshUser}</strong> e{" "}
-                  <strong>travou a senha do root</strong>. Abra{" "}
-                  <strong>outra janela SSH</strong> e teste o login com o novo usuário{" "}
-                  <strong>ANTES de confirmar</strong>:
-                  <code className="mt-2 block rounded bg-black/60 px-3 py-2 font-mono text-sm text-emerald-300">
-                    ssh {job.sshUser ?? sshUser}@{window.location.hostname}
-                  </code>
-                </p>
-              ) : (
-                <p className="max-w-xl text-base text-amber-100">
-                  A fase <strong>{job.title}</strong> alterou SSH/firewall. Abra uma{" "}
-                  <strong>nova sessão SSH</strong> (sem fechar a atual) e confirme abaixo. Sem confirmação,
-                  a configuração anterior será restaurada automaticamente.
-                </p>
-              )}
+              {(() => {
+                const testUser = job.sshUser ?? (isValidSshUsername(sshUser.trim()) ? sshUser.trim() : null);
+                const host = vpsSshHost(pageLocation(), vpsAddress);
+                return (
+                  <div data-testid="access-test-alert" className="flex max-w-xl flex-col gap-2 text-base text-amber-100">
+                    {job.phase === "01" ? (
+                      <p>
+                        A fase <strong>{job.title}</strong> travou a senha do root. Antes de confirmar, abra{" "}
+                        <strong>outra janela</strong> no seu computador (sem fechar esta) e teste o login com{" "}
+                        <strong className="font-mono">{testUser ?? "o seu usuário"}</strong>:
+                      </p>
+                    ) : (
+                      <p>
+                        A fase <strong>{job.title}</strong> alterou o SSH/firewall. Antes de confirmar, abra uma{" "}
+                        <strong>nova sessão SSH</strong> no seu computador (sem fechar esta) e teste o login.
+                        Sem confirmação, a configuração anterior volta sozinha.
+                      </p>
+                    )}
+                    {testUser && (
+                      <code className="block rounded bg-black/60 px-3 py-2 font-mono text-sm text-emerald-300">
+                        ssh {testUser}@{host}
+                      </code>
+                    )}
+                    {testUser && host === VPS_ADDRESS_PLACEHOLDER && (
+                      <p className="text-sm text-amber-200/90">
+                        Troque {VPS_ADDRESS_PLACEHOLDER} pelo IP da sua VPS — o mesmo que você usa para entrar por SSH.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="flex items-center gap-2 text-amber-200">
                 <Clock className="h-5 w-5" />
                 <span>Reversão automática em:</span>
@@ -1072,8 +1108,14 @@ export function SecurityStep({ onNext, onBack, onSshUserDetected, configuredUser
                 ) : resumed ? (
                   <IndexGauge value={resumedAfter?.index ?? null} source={resumedAfter?.source ?? "internal"} />
                 ) : (
-                  <div className="flex h-28 w-28 items-center justify-center">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  <div className="flex w-40 flex-col items-center gap-2">
+                    <div className="flex h-28 w-28 items-center justify-center">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                    {/* Sem isto, alguns minutos parados pareciam travamento. */}
+                    <p data-testid="final-scan-wait" className="text-center text-xs text-muted-foreground">
+                      Auditoria completa com o Lynis em andamento — leva de 2 a 5 minutos.
+                    </p>
                   </div>
                 )}
               </div>

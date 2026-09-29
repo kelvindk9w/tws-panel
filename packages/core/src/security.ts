@@ -15,6 +15,7 @@ export const SECURITY_PHASES = [
   { id: "04", key: "intrusion", title: "Prevenção de intrusão", script: "04-intrusion.sh" },
   { id: "05", key: "minimal", title: "Minimização de pacotes", script: "05-minimal.sh" },
   { id: "06", key: "audit", title: "Auditoria e detecção", script: "06-audit.sh" },
+  { id: "07", key: "extra", title: "Endurecimento adicional", script: "07-extra.sh" },
 ] as const;
 
 export type SecurityPhaseId = (typeof SECURITY_PHASES)[number]["id"];
@@ -50,7 +51,7 @@ export interface SecuritySkippedCheck {
 export interface SecurityCheckResult {
   /** Identificador estável, ex.: "ssh.password-auth". */
   id: string;
-  /** Fase de hardening que remedia o check ("00".."06"). */
+  /** Fase de hardening que remedia o check ("00".."07"). */
   phase: SecurityPhaseId;
   title: string;
   severity: CheckSeverity;

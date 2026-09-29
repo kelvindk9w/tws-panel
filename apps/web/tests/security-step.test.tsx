@@ -70,6 +70,20 @@ const PLAN: SecurityPlan = {
       preselected: true,
       alreadySatisfied: false,
     },
+    {
+      id: "apply-02",
+      phase: "02",
+      phaseKey: "ssh",
+      title: "Hardening de SSH",
+      script: "02-ssh.sh",
+      description: "Drop-in de hardening do sshd.",
+      fixesCheckIds: ["ssh.root-login"],
+      requiresConfirmation: true,
+      hasRollback: true,
+      impact: "Senha e root são desabilitados no SSH.",
+      preselected: true,
+      alreadySatisfied: false,
+    },
   ],
 };
 
@@ -232,9 +246,9 @@ describe("SecurityStep — plano de correção", () => {
   it("cada fase pendente tem a ação principal 'Executar apenas esta fase' e a secundária 'Fazer manualmente'", async () => {
     await reachPlanStage();
     const executar = screen.getAllByRole("button", { name: /Executar apenas esta fase/ });
-    expect(executar).toHaveLength(2); // fases 00 e 01 pendentes
+    expect(executar).toHaveLength(3); // fases 00, 01 e 02 pendentes
     const manual = screen.getAllByRole("button", { name: /Fazer manualmente/ });
-    expect(manual).toHaveLength(2);
+    expect(manual).toHaveLength(3);
   });
 
   it("'Fazer manualmente' abre o modal com passo a passo copiável e 'Já executei — revarrer'", async () => {
@@ -517,6 +531,100 @@ describe("SecurityStep — Fase 01 mostra o que vai acontecer", () => {
     abrirDetalhes();
     expect(screen.getByText(/console da sua hospedagem/i).closest("p")).toHaveTextContent(/kelvin/);
     expect(screen.getByText(/nova janela SSH/i).closest("p")).toHaveTextContent(/5 minutos/);
+  });
+});
+
+/**
+ * Visto em campo: o alerta de "teste seu acesso" da Fase 01 dizia que a fase
+ * "criou o usuário kelvin" (ele já existia) e mandava testar com
+ * `ssh kelvin@localhost` — pelo túnel, "localhost" é o computador do
+ * operador, não a VPS. O comando de teste precisa apontar para a VPS.
+ */
+describe("SecurityStep — alerta de teste de acesso", () => {
+  let base: Parameters<typeof apiFetchMock.mockImplementation>[0] | undefined;
+
+  async function aguardandoConfirmacao(phase: "01" | "02", vpsAddress: string | null) {
+    detectedSudoUsers = ["kelvin"];
+    base = apiFetchMock.getMockImplementation()!;
+    const original = base;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/apply" || path.startsWith("/api/security/jobs/")) {
+        return {
+          job: {
+            id: "job-1",
+            phase,
+            phaseKey: phase === "01" ? "user" : "ssh",
+            title: phase === "01" ? "Usuário não-root" : "Hardening de SSH",
+            dryRun: false,
+            status: "awaiting_confirmation",
+            createdAt: "",
+            startedAt: null,
+            finishedAt: null,
+            steps: [],
+            log: "",
+            rollbackScheduled: true,
+            rollbackDeadline: new Date(Date.now() + 300_000).toISOString(),
+            error: null,
+            sshUser: "kelvin",
+          },
+        };
+      }
+      return original(path, init);
+    });
+    render(<SecurityStep onNext={() => undefined} vpsAddress={vpsAddress} />);
+    fireEvent.click(await screen.findByText("Iniciar varredura"));
+    fireEvent.click(await screen.findByText("Gerar plano de correção"));
+    await screen.findByText(/Fase 00 — Atualizações do sistema/);
+    const index = phase === "01" ? 1 : 2;
+    fireEvent.click(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[index]!);
+    return screen.findByTestId("access-test-alert");
+  }
+
+  afterEach(() => {
+    if (base) apiFetchMock.mockImplementation(base);
+    base = undefined;
+  });
+
+  it("pelo túnel: o comando de teste usa o IP da VPS, não localhost", async () => {
+    const alerta = await aguardandoConfirmacao("01", "203.0.113.10");
+    expect(alerta).toHaveTextContent("ssh kelvin@203.0.113.10");
+    expect(alerta).not.toHaveTextContent("@localhost");
+  });
+
+  it("não afirma que a fase criou o usuário", async () => {
+    const alerta = await aguardandoConfirmacao("01", "203.0.113.10");
+    expect(alerta).not.toHaveTextContent(/criou/i);
+    expect(alerta).toHaveTextContent(/travou a senha do root/i);
+  });
+
+  it("sem o IP conhecido, pede para trocar pelo IP da VPS em vez de inventar", async () => {
+    const alerta = await aguardandoConfirmacao("01", null);
+    expect(alerta).toHaveTextContent("ssh kelvin@IP_DA_VPS");
+    expect(alerta).toHaveTextContent(/troque IP_DA_VPS/i);
+  });
+
+  it("aberto pelo IP: usa o próprio endereço da página", async () => {
+    fakeLocation = { protocol: "http:", hostname: "198.51.100.7", port: "9001" };
+    const alerta = await aguardandoConfirmacao("01", null);
+    expect(alerta).toHaveTextContent("ssh kelvin@198.51.100.7");
+  });
+
+});
+
+/**
+ * Visto em campo: sem --user, a fase 02 deixava o root entrar com chave e não
+ * restringia quem entra por SSH. O wizard manda o mesmo usuário da fase 01.
+ */
+describe("SecurityStep — fase 02 recebe o usuário", () => {
+  it("executar a fase 02 envia o usuário não-root junto", async () => {
+    detectedSudoUsers = ["kelvin"];
+    await reachPlanStage();
+    fireEvent.click(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[2]!);
+    await waitFor(() => {
+      const apply = apiFetchMock.mock.calls.find(([p]) => p === "/api/security/apply");
+      expect(apply).toBeDefined();
+      expect(JSON.parse(String(apply![1]!.body))).toMatchObject({ phase: "02", sshUser: "kelvin" });
+    });
   });
 });
 

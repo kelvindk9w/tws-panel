@@ -69,8 +69,8 @@ describe("health limits", () => {
 });
 
 describe("security phases", () => {
-  it("define exatamente 7 fases na ordem segura da spec (00→06)", () => {
-    expect(SECURITY_PHASES.map((p) => p.id)).toEqual(["00", "01", "02", "03", "04", "05", "06"]);
+  it("define exatamente 8 fases na ordem segura da spec (00→07)", () => {
+    expect(SECURITY_PHASES.map((p) => p.id)).toEqual(["00", "01", "02", "03", "04", "05", "06", "07"]);
     expect(SECURITY_PHASES.map((p) => p.key)).toEqual([
       "update",
       "user",
@@ -79,6 +79,7 @@ describe("security phases", () => {
       "intrusion",
       "minimal",
       "audit",
+      "extra",
     ]);
   });
 
