@@ -42,6 +42,16 @@ pendente e por quê — informação que não está no código nem no git log.
   O aviso "main vs dev" saiu do README (é processo de quem publica, não do usuário).
   **Falta a validação real na VPS** (ACME de verdade, portas 80/443 da Contabo).
   Próximo recomendado: 2FA no login, já que o painel passa a estar na internet.
+- **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
+  tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
+  README ainda muda a cada rodada de teste). Escopo e ordem acordados:
+  1. Interface do painel: i18n no React (textos das telas, alertas, wizard, erros) +
+     mensagens do servidor exibidas ao usuário; seletor de idioma.
+  2. Instalador e scripts (`install.sh`, `uninstall.sh`, `show-token.sh`, logs das 8
+     fases): idioma escolhido na primeira pergunta do instalador.
+  3. README por último (`README.en.md`, `README.es.md`, seletor no topo), já refletindo
+     as telas traduzidas — traduzir tudo junto para o usuário estrangeiro não ficar
+     perdido no meio do caminho.
 
 ---
 
