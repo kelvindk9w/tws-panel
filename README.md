@@ -400,9 +400,11 @@ você está trabalhando.
 > **1 hora**. Para nunca desconectar por ociosidade, use `0` nos dois valores (não recomendamos).
 >
 > **O nome do arquivo não é decoração.** O painel grava a configuração dele em
-> `99-paas-hardening.conf`, e o SSH lê os arquivos dessa pasta em ordem alfabética valendo **o
+> `40-paas-hardening.conf`, e o SSH lê os arquivos dessa pasta em ordem alfabética valendo **o
 > primeiro valor que encontrar**. Um arquivo começando por `10-` é lido antes e por isso vence; um
-> `99-alguma-coisa` seria lido depois do painel e simplesmente não teria efeito nenhum.
+> `99-alguma-coisa` seria lido depois do painel e simplesmente não teria efeito nenhum. (É também
+> por isso que o painel usa `40-`: muitas imagens de VPS trazem um `50-cloud-init.conf` que liga o
+> login por senha, e ele precisa ser vencido.)
 >
 > As duas últimas linhas são a sua rede de proteção. O `sshd -t` confere o arquivo **antes** de
 > reiniciar — sem ele, um erro de digitação pode impedir o SSH de subir e te deixar sem acesso à

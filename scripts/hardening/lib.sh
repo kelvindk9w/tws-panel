@@ -122,6 +122,28 @@ restore_latest_backup() {
   info "restaurado: $latest -> $file"
 }
 
+# restore_backup_or_keep <arquivo> — para arquivos DO SISTEMA (sshd_config,
+# login.defs, issue…): restaura o backup mais recente se houver; SEM backup,
+# mantém o arquivo como está. Nunca apaga. restore_latest_backup apaga quando
+# não há backup (certo para os arquivos que o painel CRIA), e usada num
+# arquivo do sistema que a fase nunca copiou ela removia o /etc/ssh/sshd_config
+# — o SSH não subiria no próximo reinício (achado nos testes da fase 02).
+restore_backup_or_keep() {
+  local file="$1"
+  local latest
+  latest="$(ls -1t "${file}".paas-backup.* 2>/dev/null | head -n 1 || true)"
+  if [ -z "$latest" ]; then
+    info "sem backup de $file — mantido como está"
+    return 0
+  fi
+  if [ "$PAAS_DRY_RUN" = "1" ]; then
+    echo "[dry-run] restauraria $latest -> $file"
+    return 0
+  fi
+  cp -a "$latest" "$file"
+  info "restaurado: $latest -> $file"
+}
+
 # ---------------------------------------------------------------------------
 # Serviços (tolerante a ambientes sem systemd, ex.: containers)
 # ---------------------------------------------------------------------------

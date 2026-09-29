@@ -681,9 +681,17 @@ export class TerminalService {
       // continuação possa ser o marcador; o trecho anterior é exibido na hora.
       // Requer "::" no início do sufixo para NÃO prender prompts interativos
       // ("New password:" termina com ":" simples e aparece imediatamente).
+      // Nos comandos de CAPTURA (checks, não interativos) também segura um ":"
+      // solto no FIM do pedaço: o PTY pode quebrar a leitura logo depois do
+      // primeiro ":" do marcador ("a b :" | "::PAAS_EXIT…"), e o ":" exibido
+      // como texto fazia o resto não casar — o comando esperava até estourar o
+      // tempo (a falha intermitente do teste com PTY real). Nos comandos
+      // interativos (fases) segue exigindo "::", para um prompt que termina em
+      // ":" aparecer na hora.
       let glue = -1;
       for (let i = candidate.indexOf(":"); i !== -1; i = candidate.indexOf(":", i + 1)) {
-        if (!candidate.startsWith("::", i)) continue;
+        const trailingSingle = waiter.capture && i === candidate.length - 1;
+        if (!candidate.startsWith("::", i) && !trailingSingle) continue;
         const suffix = candidate.slice(i);
         // O sufixo pode ser o início do EXIT (sempre) ou do BEGIN (enquanto
         // a captura não ligou — BEGIN colado ao prompt E dividido entre
