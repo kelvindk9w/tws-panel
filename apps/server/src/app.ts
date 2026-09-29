@@ -83,6 +83,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     "deployService",
     new DeployService(config, { audit: app.auditService, alerts: app.alertsService }),
   );
+  // Acesso por HTTPS (PAAS_PANEL_DOMAIN): o Caddy central sobe JUNTO com o
+  // painel, já com o site dele — senão só subiria no primeiro deploy.
+  app.deployService.startPanelRoute({
+    info: (msg) => app.log.info(msg),
+    warn: (msg) => app.log.warn(msg),
+  });
   // Terminal web embutido: uma sessão de PTY no alvo (host via host bridge ou
   // container de dev), compartilhada entre o WS do painel e o executor de
   // hardening. Relay puro — input do usuário nunca é logado/auditado.

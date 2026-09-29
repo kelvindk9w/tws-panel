@@ -57,6 +57,17 @@ export interface CaddyManagerOptions {
   dataVolume?: string;
   /** Volume do autosave do Caddy (padrão paas_caddy_config). */
   configVolume?: string;
+  /**
+   * Site do PRÓPRIO painel (acesso por HTTPS, ex.: <ip-com-hífens>.sslip.io
+   * → tws-panel:9000). Entra em todo Caddyfile gerado — ver renderCaddyfile.
+   */
+  panelSite?: PanelSite;
+}
+
+/** Domínio do painel servido pelo Caddy central e o upstream dele na paas-net. */
+export interface PanelSite {
+  domain: string;
+  upstream: string;
 }
 
 /**
@@ -73,6 +84,7 @@ export class CaddyManager {
   private readonly network: string;
   private readonly dataVolume: string;
   private readonly configVolume: string;
+  private readonly panelSite: PanelSite | undefined;
 
   constructor(
     /** Diretório data/caddy (espelho do último Caddyfile aplicado, só para inspeção). */
@@ -86,6 +98,7 @@ export class CaddyManager {
     this.network = options.network ?? PAAS_NETWORK;
     this.dataVolume = options.dataVolume ?? "paas_caddy_data";
     this.configVolume = options.configVolume ?? "paas_caddy_config";
+    this.panelSite = options.panelSite;
   }
 
   get containerName(): string {
@@ -104,6 +117,27 @@ export class CaddyManager {
       this.network,
     ]);
     if (create.code !== 0) throw new Error(`falha ao criar a rede ${this.network}: ${create.stderr}`);
+  }
+
+  /**
+   * Garante `container` na rede do Caddy. O docker-compose.yml do painel NÃO
+   * declara a paas-net: numa instalação que nunca fez deploy a rede não existe,
+   * e um `compose up` com rede externa inexistente falharia na atualização.
+   */
+  async connectToNetwork(container: string): Promise<void> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", container]);
+    if (inspect.code === 0) {
+      try {
+        const networks = JSON.parse(inspect.stdout.trim() || "{}") as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(networks, this.network)) return;
+      } catch {
+        // saída inesperada: tenta conectar (o daemon recusa se já estiver)
+      }
+    }
+    const connect = await run("docker", ["network", "connect", this.network, container]);
+    if (connect.code !== 0) {
+      throw new Error(`falha ao conectar ${container} à rede ${this.network}: ${connect.stderr.trim()}`);
+    }
   }
 
   async isRunning(): Promise<boolean> {
@@ -191,8 +225,10 @@ export class CaddyManager {
 
   /** Gera o Caddyfile a partir dos alvos e recarrega o Caddy sem downtime. */
   async apply(targets: CaddyTarget[], onLog?: (chunk: string) => void): Promise<void> {
-    const content = renderCaddyfile(targets);
+    const content = renderCaddyfile(targets, this.panelSite);
     await this.ensureRunning(content);
+    // O Caddy alcança o painel pelo nome do container na paas-net.
+    if (this.panelSite) await this.connectToNetwork(this.panelSite.upstream.split(":")[0] ?? "");
     // Sempre regrava: se o container já estava rodando, ensureRunning não mexeu no arquivo.
     await this.pushCaddyfile(content);
     await this.writeMirror(content, onLog);
@@ -236,9 +272,22 @@ export function isSafeCaddyTarget(target: CaddyTarget): boolean {
   return SAFE_DOMAIN_RE.test(target.domain) && SAFE_UPSTREAM_RE.test(target.upstream);
 }
 
-/** Renderiza o Caddyfile completo (um bloco por alvo). */
-export function renderCaddyfile(allTargets: CaddyTarget[]): string {
-  const targets = allTargets.filter(isSafeCaddyTarget);
+/**
+ * Renderiza o Caddyfile completo (um bloco por alvo).
+ *
+ * `panel`: site do próprio painel (acesso por HTTPS). O Caddyfile é regenerado
+ * INTEIRO a cada deploy/remoção, então o bloco do painel entra sempre — um
+ * deploy nunca apaga o acesso ao painel — e um projeto com o mesmo domínio é
+ * descartado (não sequestra o acesso). flush_interval -1: o terminal ao vivo
+ * (WebSocket) e os logs em streaming não podem ficar presos em buffer.
+ */
+export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite): string {
+  const panelTarget =
+    panel && isSafeCaddyTarget({ ...panel, websocket: true }) ? { ...panel, websocket: true } : null;
+  const targets = [
+    ...(panelTarget ? [panelTarget] : []),
+    ...allTargets.filter((t) => isSafeCaddyTarget(t) && t.domain !== panelTarget?.domain),
+  ];
   const lines: string[] = [
     "# Gerado pelo painel PaaS — não editar manualmente.",
     `# Atualizado em ${new Date().toISOString()}`,

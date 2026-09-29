@@ -29,7 +29,11 @@ import {
   projectWorkDir,
   runGuardrails,
   type EngineContext,
+  type PanelSite,
 } from "@paas/deploy";
+
+/** Nome do container do painel no docker-compose.yml (container_name). */
+const PANEL_CONTAINER = "tws-panel";
 import type { ServerConfig } from "../config.js";
 import type { AlertsService } from "./alerts-service.js";
 import type { AuditService } from "./audit-service.js";
@@ -130,12 +134,18 @@ export class DeployService {
    * projeto.
    */
   private readonly credentials: CredentialVault;
+  /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
+  readonly panelSite: PanelSite | null;
   private projects: Project[] = [];
   private jobs: DeployJob[] = [];
   private loaded = false;
 
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
+    // Container do painel no compose (container_name) na rede paas-net.
+    this.panelSite = config.panelDomain
+      ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
+      : null;
     this.projectsDir = config.projectsDir;
     this.projectsFile = path.join(config.dataDir, "projects.json");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
@@ -151,8 +161,52 @@ export class DeployService {
       staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
       caddyHttpPort: config.caddyHttpPort,
       caddyHttpsPort: config.caddyHttpsPort,
+      ...(this.panelSite ? { panelSite: this.panelSite } : {}),
     };
     this.engine = new DeployEngine(this.engineCtx);
+  }
+
+  /**
+   * Garante o Caddy central no ar com o site do painel (acesso por HTTPS).
+   * Chamado no boot: sem isso, numa instalação nova o Caddy só subiria no
+   * primeiro deploy e o painel ficaria sem endereço. false = acesso por túnel.
+   */
+  async ensurePanelRoute(onLog?: (chunk: string) => void): Promise<boolean> {
+    if (!this.panelSite) return false;
+    await this.ensureLoaded();
+    await this.engine.syncCaddy(this.projects, onLog);
+    return true;
+  }
+
+  /**
+   * Boot: sobe o site do painel sem bloquear o início do servidor, tentando de
+   * novo se o Docker ainda estiver ocupado (ex.: logo depois do reboot da VPS).
+   */
+  startPanelRoute(
+    log: { info: (msg: string) => void; warn: (msg: string) => void },
+    opts: { attempts?: number; delayMs?: number } = {},
+  ): void {
+    if (!this.panelSite) return;
+    const attempts = opts.attempts ?? 10;
+    const delayMs = opts.delayMs ?? 30_000;
+    const url = `https://${this.panelSite.domain}`;
+    const attempt = (n: number): void => {
+      this.ensurePanelRoute().then(
+        () => log.info(`Painel publicado em ${url} (Caddy central, certificado Let's Encrypt).`),
+        (err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          if (n >= attempts) {
+            log.warn(
+              `Não foi possível publicar o painel em ${url} (${reason}); desistindo após ${n} tentativas — reinicie o painel (docker compose restart).`,
+            );
+            return;
+          }
+          log.warn(`Publicação do painel em ${url} falhou (${reason}); nova tentativa em ${delayMs / 1000}s.`);
+          setTimeout(() => attempt(n + 1), delayMs).unref();
+        },
+      );
+    };
+    attempt(1);
   }
 
   /**

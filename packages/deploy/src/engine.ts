@@ -21,7 +21,7 @@ import {
   type Project,
 } from "@paas/core";
 import { parse, stringify } from "yaml";
-import { CaddyManager, projectDomain } from "./caddy.js";
+import { CaddyManager, projectDomain, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { runGuardrails } from "./rules.js";
@@ -37,6 +37,8 @@ export interface EngineContext extends IngestContext {
   caddyHttpPort: number;
   /** Porta HTTPS do Caddy no host. */
   caddyHttpsPort: number;
+  /** Site do próprio painel no Caddy central (acesso por HTTPS); ausente = túnel. */
+  panelSite?: PanelSite;
   /**
    * Env vars extras por projeto (Fase 3 — injeção SMTP). Chamado no início de
    * cada deploy; o mapa é injetado no compose override (todos os serviços) ou
@@ -80,10 +82,12 @@ export class DeployEngine {
   readonly caddy: CaddyManager;
 
   constructor(private readonly ctx: EngineContext) {
-    this.caddy = new CaddyManager(ctx.caddyDir, undefined, {
-      http: ctx.caddyHttpPort,
-      https: ctx.caddyHttpsPort,
-    });
+    this.caddy = new CaddyManager(
+      ctx.caddyDir,
+      undefined,
+      { http: ctx.caddyHttpPort, https: ctx.caddyHttpsPort },
+      ctx.panelSite ? { panelSite: ctx.panelSite } : {},
+    );
   }
 
   // -------------------------------------------------------------------------

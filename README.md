@@ -712,86 +712,32 @@ cd /opt/tws-panel && git checkout main
 > **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
 > desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-> [!IMPORTANT]
-> **Confira que a `main` está em dia antes de instalar.** Já aconteceu de a `main` ficar 96
-> commits atrás enquanto este README mandava instalar a partir dela. Rode:
->
-> ```bash
-> git fetch origin && git diff --stat origin/main origin/dev
-> ```
->
-> Contar commits de diferença não funciona aqui: cada versão liberada para a `main` entra como
-> um único commit (squash), então a contagem sempre mostra dezenas de commits mesmo quando o
-> conteúdo das duas branches é idêntico. O que importa é o conteúdo — por isso comparamos os
-> arquivos, não o histórico. Interprete o resultado assim:
->
-> - **Nenhuma saída** — as branches têm o mesmo conteúdo. Pode instalar.
-> - **Poucos arquivos, e nenhum deles código do painel** — documentação (`README.md`, `docs/`,
->   `comoFuncionaSistema/`) ou testes (`*.test.ts`). É trabalho em andamento que não muda nada do
->   que roda na sua máquina. Pode instalar.
-> - **Arquivos dentro de `apps/` ou `packages/`** — há código de produção na `dev` que ainda não
->   foi promovido para a `main`. Aí sim, [abra uma issue](https://github.com/kelvindk9w/tws-panel/issues)
->   avisando, porque pode ser uma correção de segurança não publicada, e aguarde a promoção — a
->   `dev` é a branch de desenvolvimento e não passa pelo mesmo processo de validação da `main`.
-
-<a id="porta-livre-no-seu-computador"></a>
-
-> [!TIP]
-> **Antes de instalar: confira, no SEU computador, um número de porta livre.** Daqui a pouco o
-> instalador vai perguntar em qual porta o painel fica na VPS — e o comando de acesso que ele
-> imprime no final abre o túnel SSH usando **o mesmo número dos dois lados**
-> (`ssh -L 9000:localhost:9000`). Ou seja: **o número que você escolher aqui é o que vai ser
-> informado ao instalador**, e ele precisa estar livre nos dois lugares. Na VPS, o próprio
-> instalador confere e avisa; **no seu computador ele não tem como enxergar**, porque roda na VPS.
-> Por isso esta conferência é aqui, na sua máquina, antes de começar.
->
-> Comece testando a **9000** (o padrão). Se estiver ocupada, teste **9100**, depois **9200**, e
-> assim por diante — qualquer número alto e livre serve. Troque o `9000` do comando pelo número
-> que estiver testando.
->
-> **Linux e WSL:**
->
-> ```bash
-> ss -ltnH 'sport = :9000'
-> ```
->
-> **macOS:**
->
-> ```bash
-> lsof -nP -iTCP:9000 -sTCP:LISTEN
-> ```
->
-> **Windows (PowerShell):**
->
-> ```powershell
-> Get-NetTCPConnection -State Listen -LocalPort 9000 -ErrorAction SilentlyContinue
-> ```
->
-> **Como ler o resultado — vale para os três:**
->
-> - **Não apareceu nada** (o terminal só volta a mostrar o prompt, sem nenhuma linha): a porta
->   está **livre**. É esse número que você informa ao instalador no próximo passo.
-> - **Apareceu alguma linha**: já existe um programa ouvindo nessa porta no seu computador. Ela
->   está **ocupada** — escolha outro número e rode o comando de novo.
->
-> **Quer saber qual programa está ocupando?** No Linux e no WSL, acrescente `-p`
-> (`ss -ltnpH 'sport = :9000'`): sem administrador ele mostra só os seus próprios programas, então
-> use `sudo ss -ltnpH 'sport = :9000'` para ver todos. No macOS vale o mesmo: o `lsof` sem `sudo`
-> enxerga apenas os seus programas — se a porta parecer livre e mesmo assim o túnel reclamar,
-> repita com `sudo` na frente. No Windows, a coluna `OwningProcess` é o número do processo;
-> `Get-Process -Id <número>` diz o nome dele (abra o PowerShell como administrador se ele se
-> recusar a informar).
->
-> Não precisa fechar nada nem liberar a 9000: escolher outro número é mais simples e não quebra o
-> programa que já estava lá. Entenda as [duas portas do túnel](#duas-portas).
-
-**7. Rode o instalador** — ele instala o Docker se necessário, builda a imagem e sobe os containers.
-Tenha em mãos o número de porta que você [conferiu no seu computador](#porta-livre-no-seu-computador):
-é ele que você vai informar quando o instalador perguntar.
+**7. Rode o instalador** — ele instala o Docker se necessário, builda a imagem, sobe os containers
+e termina mostrando o **endereço do seu painel**, já com HTTPS:
+`https://SEU-IP-COM-HÍFENS.sslip.io` (ex.: `https://203-0-113-10.sslip.io`). Sem túnel e sem
+escolher porta.
 
 ```bash
 ./scripts/install.sh
 ```
+
+> [!NOTE]
+> **De onde vem o endereço `https://…sslip.io`.** O [sslip.io](https://sslip.io) é um serviço de
+> DNS público e gratuito: o nome `203-0-113-10.sslip.io` simplesmente aponta para o IP
+> `203.0.113.10`. Ele **só traduz o nome** — o tráfego vai direto do seu navegador para a sua VPS,
+> sem passar por ninguém no meio. Com esse nome, o proxy do painel (Caddy) consegue um
+> **certificado HTTPS gratuito e válido** do [Let's Encrypt](https://letsencrypt.org), e o
+> navegador abre o painel com o cadeado, sem aviso de "Não seguro". O painel em si escuta só
+> dentro da VPS: de fora, quem atende é o proxy, nas portas 80 e 443.
+>
+> Para o certificado sair, as portas **80 e 443 precisam estar abertas** para a internet. Na
+> Contabo (e na maioria das VPS) elas já vêm abertas. Se o seu provedor tiver um firewall no
+> painel da hospedagem, libere as duas antes de instalar. O instalador espera o certificado
+> ficar pronto (até 3 minutos) e, se ele não sair, diz o motivo mais provável e mostra o acesso
+> por túnel como alternativa.
+>
+> Prefere que o painel fique **invisível na internet**, acessível só por túnel SSH? Veja
+> [Acesso por túnel SSH](#acesso-por-tunel).
 
 > [!TIP]
 > **Ele pode parar logo no começo pedindo para reiniciar a VPS — é normal, ainda mais em VPS
@@ -882,8 +828,8 @@ Digite "continuar" para prosseguir:
 
 <a id="terminal-do-painel"></a>
 
-**Logo depois do pré-flight, o instalador faz quatro perguntas.** As duas primeiras decidem como o
-**terminal ao vivo do painel** trabalha — é nele que a varredura de segurança e o hardening rodam:
+**Logo depois do pré-flight, o instalador faz duas perguntas.** Elas decidem como o **terminal ao
+vivo do painel** trabalha — é nele que a varredura de segurança e o hardening rodam:
 
 1. **Com qual usuário o terminal abre.** Ele mostra os usuários da VPS que têm permissão de
    administrador, mas **quem digita o nome é você** — mesmo que só exista um. Digite o usuário
@@ -893,42 +839,11 @@ Digite "continuar" para prosseguir:
    precisar de administrador, o painel usa o `sudo` dentro do terminal e **você digita a sua
    senha ali**, como faria por SSH. A outra opção, `2` (segundo-plano), não pede senha: esses
    comandos rodam como root por trás, e você confere depois na tela de **Auditoria**.
-3. **Em qual porta da VPS o painel fica.** O padrão é **9000** e serve para quase todo mundo — é só
-   apertar Enter. O instalador **confere antes se essa porta está livre nesta VPS**: se já houver
-   algo nela, ele diz qual programa (ou qual container) está usando, oferece uma porta livre como
-   sugestão e pergunta de novo — mas quem escolhe é você, ele nunca troca sozinho. Algumas portas
-   são recusadas porque quebrariam o próprio produto: **22** (é por onde o SSH entra), **80** e
-   **443** (o proxy que publica os seus sites com SSL) e **25, 465, 587, 143, 993 e 8080** (o
-   servidor de e-mail). Essa é a porta **da VPS** — a porta do túnel no seu computador é outra
-   coisa, explicada [logo abaixo](#duas-portas). Informe aqui o número que você
-   [conferiu no seu computador](#porta-livre-no-seu-computador): assim o comando do túnel impresso
-   no final, que usa o mesmo número dos dois lados, funciona de primeira.
-4. **Qual chave SSH você usa** (opcional). Usou `id_ed25519` ou `id_rsa` no Passo 4? Só aperte
-   Enter. É só para o comando de acesso impresso no final já sair pronto para copiar.
 
-Se o usuário não servir (não existe, está sem senha, não tem `sudo`…), ou se a porta estiver
-ocupada, o instalador explica o que fazer e pergunta de novo. Nada é instalado antes de você
-responder.
+Se o usuário não servir (não existe, está sem senha, não tem `sudo`…), o instalador explica o que
+fazer e pergunta de novo. Nada é instalado antes de você responder. A porta do painel ele escolhe
+sozinho: ela é só interna, você nunca vai digitá-la.
 
-<details>
-<summary>🔌 <strong>Quero instalar sem responder nada (automação) — como escolho a porta?</strong></summary>
-
-Passe direto na linha de comando:
-
-```bash
-./scripts/install.sh --port=9500 --terminal-user=SEU_USUARIO --root-mode=senha
-```
-
-Vale também a variável de ambiente `PAAS_PORT=9500`. A ordem de prioridade é: `--port=` primeiro,
-depois `PAAS_PORT`, depois o valor já gravado no `.env` por uma instalação anterior, e só então a
-pergunta (padrão 9000).
-
-Sem terminal para responder (ou com `--force`), o instalador **não escolhe outra porta sozinho**:
-fica na 9000 e, se ela estiver ocupada, avisa em destaque que o painel provavelmente vai falhar ao
-subir — para você rodar de novo com `--port=`. Numa reinstalação, a porta que você escolheu da
-primeira vez é mantida sem perguntar de novo.
-
-</details>
 
 <details>
 <summary>🔑 <strong>Senha ou segundo plano? O que acontece em cada um, sem letras miúdas</strong></summary>
@@ -939,9 +854,8 @@ pede a sua senha — a mesma do `adduser`. Nada roda como administrador sem voc�
 
 - **O trade-off:** a senha sai do seu navegador, passa pelo painel e chega ao terminal da VPS. Ela
   não é gravada, registrada nem enviada a lugar nenhum — o projeto é open source e isso pode ser
-  conferido no código. Mas, justamente porque ela passa por ali, **abra o painel sempre pelo túnel
-  SSH** (explicado logo abaixo). Pelo link do IP direto, ela viajaria pela internet sem
-  criptografia.
+  conferido no código. No caminho entre o seu navegador e a VPS ela vai **criptografada**: o
+  painel é aberto por HTTPS (ou pelo túnel SSH, se você escolher esse acesso).
 - **Exige** que o usuário tenha senha e esteja no grupo `sudo` — o que o Passo 3 já fez.
 
 **Modo `segundo-plano`.** O terminal também abre como o seu usuário, mas os comandos que precisam de
@@ -996,33 +910,73 @@ primeira vez é mantido sem perguntar de novo — para trocar, veja
 > sessões novas. Confira com `groups` — `docker` não deve aparecer na lista. Em instalação sem
 > ninguém para responder, o instalador não mexe em grupos: só avisa em destaque no final.
 
-> [!IMPORTANT]
-> **Antes de abrir o painel: o link que o instalador imprime é HTTP puro, sem criptografia.**
-> O instalador termina mostrando algo como `http://SEU_IP:9000/?token=...`, e o navegador vai
-> marcar esse endereço como **"Não seguro"**. Não é alarme falso: é uma VPS com IP público, sem
-> TLS. Tudo que passa por ali — o setup token e, principalmente, a **senha da conta de
-> administrador** que você cria na última etapa do wizard — viajaria legível pela internet. Ao
-> contrário do token, essa senha não expira: é a credencial permanente de um painel com acesso
-> ao socket do Docker (equivalente a root na máquina).
+<a id="acesso-por-tunel"></a>
+
+<details>
+<summary>🔐 <strong>Opcional — acesso só por túnel SSH (o painel fica invisível na internet)</strong></summary>
+
+Por padrão o painel abre em `https://SEU-IP-COM-HÍFENS.sslip.io`. Se você preferir que ele **não
+tenha endereço nenhum na internet** — só quem tem SSH na VPS chega nele —, instale com:
+
+```bash
+./scripts/install.sh --acesso=tunel
+```
+
+Nesse modo o instalador pergunta em qual porta da VPS o painel fica e termina mostrando o comando
+do túnel SSH e o endereço `http://localhost:PORTA/?token=…`. O navegador vai mostrar "Não seguro"
+por ser `http://localhost` — e aqui não tem problema: o tráfego viaja criptografado dentro do túnel
+SSH. Para trocar de modo depois, rode o instalador de novo com `--acesso=https` ou `--acesso=tunel`.
+
+<a id="porta-livre-no-seu-computador"></a>
+
+> [!TIP]
+> **Antes de instalar: confira, no SEU computador, um número de porta livre.** Daqui a pouco o
+> instalador vai perguntar em qual porta o painel fica na VPS — e o comando de acesso que ele
+> imprime no final abre o túnel SSH usando **o mesmo número dos dois lados**
+> (`ssh -L 9000:localhost:9000`). Ou seja: **o número que você escolher aqui é o que vai ser
+> informado ao instalador**, e ele precisa estar livre nos dois lugares. Na VPS, o próprio
+> instalador confere e avisa; **no seu computador ele não tem como enxergar**, porque roda na VPS.
+> Por isso esta conferência é aqui, na sua máquina, antes de começar.
 >
-> **Recomendado — abra por túnel SSH.** Você já tem uma sessão SSH nesta VPS, então isso não
-> exige nada novo. No **seu computador** (não na VPS), abra uma **segunda janela** de terminal —
-> deixe a primeira aberta — e rode:
+> Comece testando a **9000** (o padrão). Se estiver ocupada, teste **9100**, depois **9200**, e
+> assim por diante — qualquer número alto e livre serve. Troque o `9000` do comando pelo número
+> que estiver testando.
+>
+> **Linux e WSL:**
 >
 > ```bash
-> ssh -L 9000:localhost:9000 SEU_USUARIO@SEU_IP
+> ss -ltnH 'sport = :9000'
 > ```
 >
-> Com essa janela aberta, acesse `http://localhost:9000/?token=SEU_TOKEN` no navegador. Ele
-> ainda vai mostrar **"Não seguro"** — é `http://localhost`, e dessa vez não tem problema: o
-> tráfego viaja criptografado dentro do túnel SSH e nada sai da sua máquina em texto claro.
+> **macOS:**
 >
-> No Windows 10/11, o PowerShell já vem com `ssh` nativo — o mesmo comando acima funciona sem
-> instalar nada. No PuTTY, o equivalente fica em Connection → SSH → Tunnels (Source port `9000`,
-> Destination `localhost:9000`, Local).
+> ```bash
+> lsof -nP -iTCP:9000 -sTCP:LISTEN
+> ```
 >
-> **Acesso direto pelo link do IP** só é tolerável em ambiente de teste descartável, cuja senha
-> de admin você não vai reaproveitar em lugar nenhum.
+> **Windows (PowerShell):**
+>
+> ```powershell
+> Get-NetTCPConnection -State Listen -LocalPort 9000 -ErrorAction SilentlyContinue
+> ```
+>
+> **Como ler o resultado — vale para os três:**
+>
+> - **Não apareceu nada** (o terminal só volta a mostrar o prompt, sem nenhuma linha): a porta
+>   está **livre**. É esse número que você informa ao instalador no próximo passo.
+> - **Apareceu alguma linha**: já existe um programa ouvindo nessa porta no seu computador. Ela
+>   está **ocupada** — escolha outro número e rode o comando de novo.
+>
+> **Quer saber qual programa está ocupando?** No Linux e no WSL, acrescente `-p`
+> (`ss -ltnpH 'sport = :9000'`): sem administrador ele mostra só os seus próprios programas, então
+> use `sudo ss -ltnpH 'sport = :9000'` para ver todos. No macOS vale o mesmo: o `lsof` sem `sudo`
+> enxerga apenas os seus programas — se a porta parecer livre e mesmo assim o túnel reclamar,
+> repita com `sudo` na frente. No Windows, a coluna `OwningProcess` é o número do processo;
+> `Get-Process -Id <número>` diz o nome dele (abra o PowerShell como administrador se ele se
+> recusar a informar).
+>
+> Não precisa fechar nada nem liberar a 9000: escolher outro número é mais simples e não quebra o
+> programa que já estava lá. Entenda as [duas portas do túnel](#duas-portas).
 
 <a id="duas-portas"></a>
 
@@ -1056,11 +1010,35 @@ primeira vez é mantido sem perguntar de novo — para trocar, veja
 > [conferir antes, no seu computador, qual porta está livre](#porta-livre-no-seu-computador) — e
 > informar esse mesmo número ao instalador, para que os dois lados batam.
 
-**8. Abra o painel** — pelo túnel SSH acima (recomendado) ou, se aceitar o risco descrito acima, direto em `http://SEU_IP:9000` (troque `9000` pela porta que você escolheu na instalação) — cole o **setup token** exibido no terminal e siga o wizard:
+**Erros comuns ao abrir o túnel:**
+
+- **`bind [127.0.0.1]:9000: Address already in use`** (ao abrir o túnel) — a porta ocupada é a
+  **do seu computador**, não a da VPS: o número da **esquerda** no `ssh -L`. Algum programa seu já
+  está usando a 9000 (é comum em quem programa). Troque só esse número e abra o navegador nele:
+  `ssh -L 9100:localhost:9000 SEU_USUARIO@SEU_IP`, depois `http://localhost:9100/?token=...`.
+  Qualquer número alto e livre serve — 9100, 9300, 12345. Entenda as
+  [duas portas do túnel](#duas-portas). Na próxima instalação, esse erro nem aparece se você
+  [conferir antes qual porta está livre no seu computador](#porta-livre-no-seu-computador) e
+  informar esse número ao instalador.
+- **"Não é possível acessar esse site"** no navegador, com o túnel aberto — o endereço está com o
+  número **errado**. O que vai no navegador é sempre o número da **esquerda** do seu `ssh -L`, que é
+  a porta do seu computador. Se o seu túnel é `ssh -L 9100:localhost:9001`, o endereço é
+  `http://localhost:9100/?token=...` — a `9001` é a porta da VPS e nunca aparece no navegador.
+  Confira qual número o seu túnel está escutando com `ss -ltnH 'sport = :9100'` (Linux/WSL).
+- **`channel 2: open failed: connect failed: Connection refused`** (o túnel abre, mas o navegador
+  diz que não conseguiu conectar) — aí é o outro lado: o número da **direita** não bate com a porta
+  em que o painel está na VPS. Confira com `sudo ./scripts/show-token.sh`, que imprime o comando
+  já com a porta certa.
+
+</details>
+
+**8. Abra o painel** — no endereço `https://…sslip.io` que o instalador mostrou no final (ele já
+leva o **setup token** no link; se precisar, o token também aparece em destaque no terminal) e siga
+o wizard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Assistente de configuração — http://SEU-IP:9000/?token=…   │
+│  Assistente — https://SEU-IP.sslip.io/?token=…              │
 ├─────────────────────────────────────────────────────────────┤
 │  1. Boas-vindas      → valida o setup token e libera o      │
 │                        terminal ao vivo do servidor         │
@@ -1165,34 +1143,14 @@ Quando a instalação termina, o terminal toca um "bip" e mostra um banner assim
 
 👉  PRÓXIMO PASSO: abra o painel no navegador
 
-Recomendado — acesse por túnel SSH.
+  Abra no navegador (de qualquer computador — não precisa de túnel nem de porta):
 
-  1) Numa janela NOVA do terminal, no SEU COMPUTADOR (não na VPS), deixe aberto:
+      https://203-0-113-10.sslip.io/?token=<seu-token-de-48-caracteres>
 
-      ssh -L 9000:localhost:9000 SEU_USUARIO@203.0.113.10
-
-     Se o ssh recusar com "bind [127.0.0.1]:9000: Address already in use", a porta
-     ocupada é a do SEU computador (o número da ESQUERDA, antes dos dois-pontos) —
-     não a da VPS. Troque só ele por outro qualquer, por exemplo:
-
-       ssh -L 9100:localhost:9000 SEU_USUARIO@203.0.113.10
-
-     e, no passo 2, use o endereço com ESSE número no lugar do que está lá:
-
-       http://localhost:9100/?token=<seu-token-de-48-caracteres>
-
-  2) Com essa janela aberta, abra no navegador:
-
-      http://localhost:9000/?token=<seu-token-de-48-caracteres>
-
-     O número aqui é o da ESQUERDA do comando do passo 1 — a porta do SEU
-     computador. Se você trocou aquele número, troque este também; o 9000 da
-     direita é a porta da VPS e não aparece no navegador.
-
-Direto pelo IP — sem criptografia; use só em rede confiável ou ambiente de
-teste descartável:
-
-      http://203.0.113.10:9000/?token=<seu-token-de-48-caracteres>
+  A conexão é criptografada (HTTPS, certificado Let's Encrypt): a senha de
+  administrador que você vai criar e a senha do sudo, se o terminal pedir,
+  trafegam protegidas. O sslip.io só traduz o nome para o IP desta VPS — o
+  tráfego vai direto do seu navegador para cá.
 
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                            ⚑  SETUP TOKEN  ⚑                              │
@@ -1204,10 +1162,10 @@ teste descartável:
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**O que fazer:** veja a explicação completa **acima** (túnel SSH recomendado). O link direto
-pelo IP funciona, mas trafega sem criptografia — copie o **link completo**
-(`http://SEU-IP:9000/?token=...` ou, pelo túnel, `http://localhost:9000/?token=...`) e cole no
-navegador. O link já leva o token embutido — não precisa digitar nada.
+**O que fazer:** copie o **link completo** (`https://…sslip.io/?token=...`) e cole no navegador.
+Ele já leva o token embutido — não precisa digitar nada. Instalou com `--acesso=tunel`? O banner
+mostra, no lugar dele, o comando do túnel e o endereço `http://localhost:…` (veja
+[Acesso por túnel SSH](#acesso-por-tunel)).
 
 **Fechou o terminal e perdeu o banner?** Sem pânico. Na VPS, rode qualquer um dos dois:
 
@@ -1218,23 +1176,13 @@ sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
 
 **Erros comuns:**
 
-- **`bind [127.0.0.1]:9000: Address already in use`** (ao abrir o túnel) — a porta ocupada é a
-  **do seu computador**, não a da VPS: o número da **esquerda** no `ssh -L`. Algum programa seu já
-  está usando a 9000 (é comum em quem programa). Troque só esse número e abra o navegador nele:
-  `ssh -L 9100:localhost:9000 SEU_USUARIO@SEU_IP`, depois `http://localhost:9100/?token=...`.
-  Qualquer número alto e livre serve — 9100, 9300, 12345. Entenda as
-  [duas portas do túnel](#duas-portas). Na próxima instalação, esse erro nem aparece se você
-  [conferir antes qual porta está livre no seu computador](#porta-livre-no-seu-computador) e
-  informar esse número ao instalador.
-- **"Não é possível acessar esse site"** no navegador, com o túnel aberto — o endereço está com o
-  número **errado**. O que vai no navegador é sempre o número da **esquerda** do seu `ssh -L`, que é
-  a porta do seu computador. Se o seu túnel é `ssh -L 9100:localhost:9001`, o endereço é
-  `http://localhost:9100/?token=...` — a `9001` é a porta da VPS e nunca aparece no navegador.
-  Confira qual número o seu túnel está escutando com `ss -ltnH 'sport = :9100'` (Linux/WSL).
-- **`channel 2: open failed: connect failed: Connection refused`** (o túnel abre, mas o navegador
-  diz que não conseguiu conectar) — aí é o outro lado: o número da **direita** não bate com a porta
-  em que o painel está na VPS. Confira com `sudo ./scripts/show-token.sh`, que imprime o comando
-  já com a porta certa.
+- **O instalador disse que o endereço `https://…sslip.io` não respondeu em 3 minutos** — o
+  certificado não saiu. A causa mais comum são as portas **80 e 443 bloqueadas** num firewall do
+  provedor (no painel da hospedagem): libere as duas e reinicie o painel com
+  `sudo docker compose restart`. Para ver o que o proxy diz: `sudo docker logs paas-caddy --tail 50`.
+  Enquanto isso, o acesso por túnel funciona (o banner mostra o comando).
+- **Erros ao abrir o túnel** (só no acesso por túnel) — estão explicados em
+  [Acesso por túnel SSH](#acesso-por-tunel).
 - **`permission denied while trying to connect to the Docker daemon socket`** — faltou o `sudo`
   na frente do comando. É de propósito: o painel não coloca ninguém no grupo docker (veja
   [o porquê](#grupo-docker)).
@@ -1318,9 +1266,13 @@ segura de sempre. Se preferir não responder nada, informe direto:
 
 ### Trocar a porta do painel na VPS
 
-A porta em que o painel atende **na VPS** é a que você escolheu na instalação (padrão `9000`) e
-fica gravada na linha `PAAS_PORT=` do `.env` de `/opt/tws-panel`. Para trocar, rode o instalador
-de novo informando a nova:
+**Só faz diferença no acesso por túnel.** No acesso por HTTPS (o padrão) essa porta é interna —
+o painel escuta só dentro da VPS e quem atende de fora é o proxy, nas portas 80/443 — e o instalador
+a escolhe sozinho.
+
+No acesso por túnel, a porta é a que você escolheu na instalação (padrão `9000`) e fica gravada na
+linha `PAAS_PORT=` do `.env` de `/opt/tws-panel`. Para trocar, rode o instalador de novo informando
+a nova:
 
 ```bash
 cd /opt/tws-panel
@@ -1333,13 +1285,28 @@ domínios, e-mail e a conta de administrador não são tocados.
 
 > [!NOTE]
 > Só a porta **de fora** muda. Dentro do container o painel continua atendendo na 9000 — é o
-> `docker-compose.yml` que faz a ligação (`"${PAAS_PORT:-9000}:9000"`). Por isso não adianta
+> `docker-compose.yml` que faz a ligação (`"127.0.0.1:${PAAS_PORT:-9000}:9000"` — só dentro da
+> VPS). Por isso não adianta
 > editar o `.env` e dar `restart`: um container só pega uma publicação de porta nova quando é
 > recriado (`sudo docker compose up -d`).
 
 > [!TIP]
 > Se o problema é a porta ocupada **no seu computador** na hora de abrir o túnel, não mexa aqui:
 > troque só o número da esquerda do `ssh -L`. Veja [as duas portas do túnel](#duas-portas).
+
+> [!IMPORTANT]
+> **Atualizando uma instalação anterior ao acesso por HTTPS?** Desde essa versão o painel escuta
+> **só dentro da VPS**: o endereço `http://SEU-IP:PORTA` deixa de abrir (ele deixava a porta aberta
+> na internet mesmo com o firewall). Depois do `git pull`, rode o instalador em vez do
+> `docker compose up`:
+>
+> ```bash
+> cd /opt/tws-panel && sudo git pull && ./scripts/install.sh
+> ```
+>
+> Ele mantém suas escolhas (usuário do terminal, projetos, contas), configura o endereço
+> `https://…sslip.io` e mostra o link no final. Prefere continuar só com túnel? Use
+> `./scripts/install.sh --acesso=tunel`.
 
 ### Comandos úteis (produção)
 
@@ -1476,8 +1443,9 @@ todas as rotas da API, logs com redação de segredos e auditoria de todas as a�
 >   porta do SSH (quebra o túnel e este README), partições separadas (só na instalação do
 >   sistema) e o `apt-listbugs` (feito para o Debian, não para o Ubuntu). Por isso a nota do
 >   Lynis não chega a 100 — e não precisa: o que sobra são escolhas conscientes, explicadas acima.
-> - **Depois da última fase, reinicie a VPS** (`sudo reboot`), espere um minuto e abra o túnel de
->   novo: o kernel atualizado pela fase 00 e os ajustes de kernel só valem depois do reboot.
+> - **Depois da última fase, reinicie a VPS** (`sudo reboot`), espere um minuto e abra o painel
+>   de novo (pelo mesmo endereço, ou pelo túnel se esse for o seu acesso): o kernel atualizado pela
+>   fase 00 e os ajustes de kernel só valem depois do reboot.
 
 **Seja franco sobre o que isto exige.** Um PaaS precisa de acesso privilegiado ao host — não há
 como criar containers e configurar firewall sem ele. Duas consequências que você deve conhecer

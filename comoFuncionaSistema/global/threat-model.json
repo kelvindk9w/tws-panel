@@ -2,7 +2,7 @@
   "id": "threat-model",
   "titulo": "Modelo de ameaças do TWS Panel",
   "versao": "1.0",
-  "atualizadoEm": "2026-08-24",
+  "atualizadoEm": "2026-09-29",
   "resumo": "Declaração explícita do que este sistema protege, do que não protege, e de quais privilégios ele exige para funcionar. Um painel PaaS precisa de acesso privilegiado ao host — não há como hospedar containers e configurar firewall sem isso. Este documento existe para que essa escolha seja informada, não descoberta depois.",
   "porQueEsteDocumentoExiste": [
     "Projetos desta categoria (Coolify, Dokploy, CapRover, Dokku, Portainer) publicam SECURITY.md, mas nenhum publica modelo de ameaças.",
@@ -184,7 +184,8 @@
       "severidade": "media",
       "descricao": "A única barreira entre a internet e um shell root é uma senha.",
       "planejado": "Segundo fator para a conta de administrador, e opção de desabilitar o terminal web por configuração."
-    }
+    },
+    "Painel acessível pela internet no modo de acesso padrão (https://<ip>.sslip.io): a proteção passa a ser o setup token (24 bytes, uso único) durante o wizard e, depois, o login (limite por IP com bloqueio progressivo, em memória). Não há 2FA — recomendado como próximo passo. O modo --acesso=tunel mantém o painel invisível na internet (só 127.0.0.1)."
   ],
   "comoReportarVulnerabilidade": {
     "referencia": "SECURITY.md na raiz do repositório",

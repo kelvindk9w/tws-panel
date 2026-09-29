@@ -97,6 +97,16 @@ declare module "fastify" {
   }
 }
 
+/** O Origin do navegador aponta para outro host que não o do painel? */
+export function isCrossOrigin(origin: string | undefined, host: string | undefined): boolean {
+  if (origin === undefined) return false;
+  try {
+    return new URL(origin).host !== (host ?? "");
+  } catch {
+    return true; // Origin malformado ("null", lixo): não é o painel
+  }
+}
+
 /** Código de fechamento quando o MESMO cliente reanexa por outra conexão. */
 export const WS_CLOSE_REPLACED = 4000;
 /** Código de fechamento quando a sessão já tem dono (outro clientId) — o
@@ -125,112 +135,129 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
   /** Dono atual da sessão de terminal (uma conexão por vez). */
   let owner: { clientId: string | null; socket: WebSocket } | null = null;
 
-  app.get("/api/terminal/ws", { websocket: true, schema: terminalWsSchema }, (socket, request) => {
-    const term = app.terminalService;
-    const clientId = (request.query as { clientId?: string }).clientId ?? null;
+  app.get(
+    "/api/terminal/ws",
+    {
+      websocket: true,
+      schema: terminalWsSchema,
+      // Só a origem do próprio painel abre o terminal. Com o acesso por HTTPS
+      // o painel está na internet, e uma página de outro site aberta no
+      // navegador do operador mandaria o cookie de sessão junto com o
+      // handshake. Navegador SEMPRE envia Origin em WebSocket; sem ele é um
+      // cliente que não é navegador (e a autenticação continua valendo).
+      preValidation: async (request, reply) => {
+        if (isCrossOrigin(request.headers.origin, request.headers.host)) {
+          return reply.code(403).send({ error: "forbidden_origin", message: "Origem não permitida." });
+        }
+      },
+    },
+    (socket, request) => {
+      const term = app.terminalService;
+      const clientId = (request.query as { clientId?: string }).clientId ?? null;
 
-    if (owner && owner.socket.readyState === owner.socket.OPEN) {
-      if (owner.clientId !== null && owner.clientId !== clientId) {
-        // Sessão em uso por OUTRO cliente: recusa a NOVA conexão sem tocar no
-        // dono. Sem auditoria aqui de propósito: um cliente teimoso geraria
-        // spam de eventos (a recusa em si já é o sinal para ele parar).
-        socket.close(WS_CLOSE_BUSY, "terminal em uso em outra aba/janela");
-        return;
+      if (owner && owner.socket.readyState === owner.socket.OPEN) {
+        if (owner.clientId !== null && owner.clientId !== clientId) {
+          // Sessão em uso por OUTRO cliente: recusa a NOVA conexão sem tocar no
+          // dono. Sem auditoria aqui de propósito: um cliente teimoso geraria
+          // spam de eventos (a recusa em si já é o sinal para ele parar).
+          socket.close(WS_CLOSE_BUSY, "terminal em uso em outra aba/janela");
+          return;
+        }
+        // Mesmo cliente reconectando (reload/queda de rede) ou cliente legado
+        // sem clientId: a conexão antiga sai de cena, a sessão permanece.
+        owner.socket.close(WS_CLOSE_REPLACED, "reattach do mesmo cliente");
       }
-      // Mesmo cliente reconectando (reload/queda de rede) ou cliente legado
-      // sem clientId: a conexão antiga sai de cena, a sessão permanece.
-      owner.socket.close(WS_CLOSE_REPLACED, "reattach do mesmo cliente");
-    }
-    owner = { clientId, socket };
+      owner = { clientId, socket };
 
-    void app.auditService.record({
-      action: "terminal.connect",
-      actor: request.session?.username ?? "setup",
-      detail: `Cliente conectado ao terminal web (ip ${request.ip}).`,
-    });
-
-    let unsubscribe: (() => void) | null = null;
-    // Bytes do terminal sem NUL: nenhum frame comum começa como controle.
-    const sendOutput = (chunk: string) => {
-      const clean = chunk.includes("\u0000") ? chunk.replace(/\u0000/g, "") : chunk;
-      if (clean.length > 0 && socket.readyState === socket.OPEN) socket.send(clean);
-    };
-
-    term
-      .connect()
-      .then(({ replay }) => {
-        if (socket.readyState !== socket.OPEN) return;
-        sendOutput(replay);
-        if (term.sudoPromptOpen) {
-          // O prazo (se houver) vai como o que AINDA FALTA (não o total): quem
-          // reconecta no meio da espera continua a contagem de onde ela está.
-          socket.send(encodeTerminalControl(term.sudoPasswordRequestedMessage()));
-        } else if (term.watchesSudoPrompt) {
-          // Nenhum pedido aberto: o navegador que caiu com o alerta na tela
-          // (e o manteve, porque a pessoa podia estar digitando) o fecha agora.
-          socket.send(encodeTerminalControl({ type: "sudo-password-idle" }));
-        }
-        const offOutput = term.onOutput(sendOutput);
-        const offControl = term.onControl((msg) => {
-          if (socket.readyState === socket.OPEN) socket.send(encodeTerminalControl(msg));
-        });
-        unsubscribe = () => {
-          offOutput();
-          offControl();
-        };
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : "terminal indisponível";
-        if (socket.readyState === socket.OPEN) {
-          socket.send(`\r\n\x1b[31m[terminal] ${message}\x1b[0m\r\n`);
-          socket.close(1011, "terminal unavailable");
-        }
+      void app.auditService.record({
+        action: "terminal.connect",
+        actor: request.session?.username ?? "setup",
+        detail: `Cliente conectado ao terminal web (ip ${request.ip}).`,
       });
 
-    socket.on("message", (raw: Buffer, isBinary: boolean) => {
-      // Frame de controle (JSON) — único desvio do relay puro.
-      if (!isBinary) {
-        const text = raw.toString("utf8");
-        if (text.startsWith("{")) {
-          try {
-            const msg = JSON.parse(text) as { type?: string; cols?: number; rows?: number };
-            if (msg.type === "resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
-              term.resize(msg.cols, msg.rows);
-              return;
-            }
-            if (msg.type === "sudo-cancel") {
-              // Botão "Cancelar" do alerta de senha: o servidor encerra o sudo
-              // (Ctrl-C) só se houver pedido aberto — nunca um Ctrl-C solto.
-              if (term.cancelSudoPrompt()) {
-                void app.auditService.record({
-                  action: "terminal.sudo-cancel",
-                  actor: request.session?.username ?? "setup",
-                  detail: "Operador cancelou o pedido de senha do sudo no painel. Nada rodou como root.",
-                });
+      let unsubscribe: (() => void) | null = null;
+      // Bytes do terminal sem NUL: nenhum frame comum começa como controle.
+      const sendOutput = (chunk: string) => {
+        const clean = chunk.includes("\u0000") ? chunk.replace(/\u0000/g, "") : chunk;
+        if (clean.length > 0 && socket.readyState === socket.OPEN) socket.send(clean);
+      };
+
+      term
+        .connect()
+        .then(({ replay }) => {
+          if (socket.readyState !== socket.OPEN) return;
+          sendOutput(replay);
+          if (term.sudoPromptOpen) {
+            // O prazo (se houver) vai como o que AINDA FALTA (não o total): quem
+            // reconecta no meio da espera continua a contagem de onde ela está.
+            socket.send(encodeTerminalControl(term.sudoPasswordRequestedMessage()));
+          } else if (term.watchesSudoPrompt) {
+            // Nenhum pedido aberto: o navegador que caiu com o alerta na tela
+            // (e o manteve, porque a pessoa podia estar digitando) o fecha agora.
+            socket.send(encodeTerminalControl({ type: "sudo-password-idle" }));
+          }
+          const offOutput = term.onOutput(sendOutput);
+          const offControl = term.onControl((msg) => {
+            if (socket.readyState === socket.OPEN) socket.send(encodeTerminalControl(msg));
+          });
+          unsubscribe = () => {
+            offOutput();
+            offControl();
+          };
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : "terminal indisponível";
+          if (socket.readyState === socket.OPEN) {
+            socket.send(`\r\n\x1b[31m[terminal] ${message}\x1b[0m\r\n`);
+            socket.close(1011, "terminal unavailable");
+          }
+        });
+
+      socket.on("message", (raw: Buffer, isBinary: boolean) => {
+        // Frame de controle (JSON) — único desvio do relay puro.
+        if (!isBinary) {
+          const text = raw.toString("utf8");
+          if (text.startsWith("{")) {
+            try {
+              const msg = JSON.parse(text) as { type?: string; cols?: number; rows?: number };
+              if (msg.type === "resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
+                term.resize(msg.cols, msg.rows);
+                return;
               }
-              return;
+              if (msg.type === "sudo-cancel") {
+                // Botão "Cancelar" do alerta de senha: o servidor encerra o sudo
+                // (Ctrl-C) só se houver pedido aberto — nunca um Ctrl-C solto.
+                if (term.cancelSudoPrompt()) {
+                  void app.auditService.record({
+                    action: "terminal.sudo-cancel",
+                    actor: request.session?.username ?? "setup",
+                    detail: "Operador cancelou o pedido de senha do sudo no painel. Nada rodou como root.",
+                  });
+                }
+                return;
+              }
+            } catch {
+              // não é controle válido: cai no relay como input comum
             }
-          } catch {
-            // não é controle válido: cai no relay como input comum
           }
         }
-      }
-      // RELAY PURO: input do usuário vai ao PTY sem ser lido/logado/auditado.
-      term.write(raw);
-    });
-
-    socket.on("close", () => {
-      unsubscribe?.();
-      // Sessão órfã: o PTY segue vivo no servidor (idle timeout) e qualquer
-      // cliente pode assumir na próxima conexão.
-      if (owner?.socket === socket) owner = null;
-      void app.auditService.record({
-        action: "terminal.disconnect",
-        actor: request.session?.username ?? "setup",
-        detail: "Cliente desconectado do terminal web.",
+        // RELAY PURO: input do usuário vai ao PTY sem ser lido/logado/auditado.
+        term.write(raw);
       });
-    });
-  });
+
+      socket.on("close", () => {
+        unsubscribe?.();
+        // Sessão órfã: o PTY segue vivo no servidor (idle timeout) e qualquer
+        // cliente pode assumir na próxima conexão.
+        if (owner?.socket === socket) owner = null;
+        void app.auditService.record({
+          action: "terminal.disconnect",
+          actor: request.session?.username ?? "setup",
+          detail: "Cliente desconectado do terminal web.",
+        });
+      });
+    },
+  );
 };
 
 export default terminalRoutes;

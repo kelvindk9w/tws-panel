@@ -19,13 +19,26 @@
     "scripts/hooks/pre-push (bash): roda `pnpm test` → `pnpm test:coverage` → `pnpm build` em sequência, abortando no primeiro erro e mostrando as últimas linhas de log. Bypass: `PAAS_SKIP_PREPUSH=1 git push`."
   ],
   "usadoPor": [
-    { "referencia": "scripts/install.sh (instalador de produção na VPS)", "arquivo": "scripts/install.sh", "doc": null },
-    { "referencia": "todo contribuidor que roda `pnpm install` na raiz", "arquivo": "package.json:11 (script prepare)", "doc": null },
-    { "referencia": "todo push/PR para main ou dev", "arquivo": ".github/workflows/ci.yml", "doc": null }
+    {
+      "referencia": "scripts/install.sh (instalador de produção na VPS)",
+      "arquivo": "scripts/install.sh",
+      "doc": null
+    },
+    {
+      "referencia": "todo contribuidor que roda `pnpm install` na raiz",
+      "arquivo": "package.json:11 (script prepare)",
+      "doc": null
+    },
+    {
+      "referencia": "todo push/PR para main ou dev",
+      "arquivo": ".github/workflows/ci.yml",
+      "doc": null
+    }
   ],
   "testes": [],
   "observacoes": [
     "CORRIGIDO nesta rodada: o scan de imagem (Trivy) bloqueia o merge para CVEs CRITICAL com fix disponível (exit-code 1) — só HIGH continua report-only (exit-code 0), decisão deliberada de política (severidade menor não trava o PR). `ignore-unfixed:true` já tira da mesa CVEs sem correção publicada; a allowlist em .trivyignore é só para o caso raro de CRITICAL COM fix disponível mas fora do controle do projeto (dependência interna da própria imagem base).",
-    "Não há job de deploy/publish automático da imagem no workflow atual — a imagem é construída no CI só para o scan, não é publicada em nenhum registry."
+    "Não há job de deploy/publish automático da imagem no workflow atual — a imagem é construída no CI só para o scan, não é publicada em nenhum registry.",
+    "Acesso ao painel por HTTPS (29/09/2026, padrão do install.sh): o instalador detecta o IPv4 público e grava PAAS_ACCESS=https e PAAS_PANEL_DOMAIN=<ip-com-hífens>.sslip.io no .env (sslip.io = DNS público gratuito que só traduz o nome para o IP; o tráfego não passa por ele). O docker-compose.yml publica o painel SÓ em 127.0.0.1:${PAAS_PORT} (antes 0.0.0.0 — portas publicadas pelo Docker passam por fora do UFW e o painel ficava aberto na internet); PAAS_BIND_ADDRESS existe só para teste. No boot, DeployService.startPanelRoute (até 10 tentativas, 30 s) chama ensurePanelRoute → engine.syncCaddy: o CaddyManager (opção panelSite) sobe o paas-caddy, conecta o container tws-panel à rede paas-net (connectToNetwork — o compose NÃO declara a paas-net para um git pull numa instalação sem deploy não quebrar o compose up) e grava o Caddyfile com o bloco FIXO do painel (reverse_proxy tws-panel:9000, flush_interval -1); renderCaddyfile sempre inclui esse bloco e descarta projeto com o mesmo domínio. O Caddy obtém o certificado sozinho (Let's Encrypt, com ZeroSSL como alternativa automática); o install.sh espera https://<domínio>/api/healthz responder (até 3 min) antes de mostrar a URL e, se falhar, explica (portas 80/443 bloqueadas no provedor) e mostra o túnel. --acesso=tunel mantém o fluxo antigo (pergunta de porta, túnel SSH). Smoke test com Docker real (domínio painel.localhost): Caddy subiu no boot, painel conectado à paas-net, /api/healthz via Caddy = 200, WS do terminal com Origin de outro site = 403 e da própria origem = 101."
   ]
 }

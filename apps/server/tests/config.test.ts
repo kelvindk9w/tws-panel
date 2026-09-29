@@ -30,6 +30,7 @@ const KEYS = [
   "PAAS_TERMINAL_USER",
   "PAAS_ROOT_MODE",
   "PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS",
+  "PAAS_PANEL_DOMAIN",
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -145,6 +146,24 @@ describe("loadConfig", () => {
     expect(config.caddyHttpPort).toBe(80);
     expect(config.mailPorts.smtp).toBe(MAIL_DEFAULT_PORTS.smtp);
     expect(config.monitorIntervalMs).toBe(MONITOR_DEFAULT_INTERVAL_MS);
+  });
+
+  /**
+   * Domínio do painel (acesso por HTTPS): vira um bloco do Caddyfile, então
+   * só um hostname válido passa — nada de `{`, espaço ou quebra de linha.
+   */
+  it("PAAS_PANEL_DOMAIN: ausente/vazio = acesso por túnel; hostname válido; inválido impede subir", () => {
+    expect(loadConfig().panelDomain).toBeNull();
+    setEnv("PAAS_PANEL_DOMAIN", "");
+    expect(loadConfig().panelDomain).toBeNull();
+    setEnv("PAAS_PANEL_DOMAIN", "203-0-113-10.sslip.io");
+    expect(loadConfig().panelDomain).toBe("203-0-113-10.sslip.io");
+    setEnv("PAAS_PANEL_DOMAIN", "  Painel.Exemplo.com ");
+    expect(loadConfig().panelDomain).toBe("painel.exemplo.com");
+    for (const invalido of ["x.com {", "a b.com", "-x.com", "x.com\nadmin"]) {
+      setEnv("PAAS_PANEL_DOMAIN", invalido);
+      expect(() => loadConfig()).toThrow(/PAAS_PANEL_DOMAIN/);
+    }
   });
 
   it("PAAS_TARGET só vira 'host' com o valor exato (default seguro)", () => {

@@ -34,9 +34,14 @@ pendente e por quê — informação que não está no código nem no git log.
 - **Pendente:** o teste do PTY real ainda falha às vezes na CI (comando simples sem
   resposta em 30 s; não reproduz localmente em 15 repetições). Proposta: o erro de
   tempo esgotado passar a mostrar o fim da saída do terminal, para diagnóstico.
-  Decisão do produto ainda aberta: acesso ao painel por túnel ou por HTTPS
-  (`sslip.io` + Let's Encrypt) — hoje a porta do painel fica aberta na internet mesmo
-  com o UFW, porque o Docker publica portas por fora dele.
+- **Acesso por HTTPS decidido e implementado (PR #34):** o instalador entrega
+  `https://<ip-com-hífens>.sslip.io` (Let's Encrypt, sem túnel, sem pergunta de porta nem
+  de chave SSH); o painel escuta só em 127.0.0.1; o Caddy sobe no boot com o bloco fixo
+  do painel e conecta o `tws-panel` à `paas-net`; o WS do terminal recusa outra origem;
+  `--acesso=tunel` mantém o fluxo antigo. Validado com smoke test Docker real (sem ACME).
+  O aviso "main vs dev" saiu do README (é processo de quem publica, não do usuário).
+  **Falta a validação real na VPS** (ACME de verdade, portas 80/443 da Contabo).
+  Próximo recomendado: 2FA no login, já que o painel passa a estar na internet.
 
 ---
 

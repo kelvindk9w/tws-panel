@@ -33,8 +33,14 @@ services:
     image: tws-panel:latest
     container_name: tws-panel
     restart: unless-stopped
+    # Só DENTRO da VPS (127.0.0.1). De fora, o painel é atendido pelo proxy
+    # Caddy em https://<ip-com-hífens>.sslip.io (acesso "https", o padrão) ou
+    # alcançado por túnel SSH (acesso "tunel"). Publicar em 0.0.0.0 deixava a
+    # porta aberta na internet mesmo com o firewall: portas publicadas pelo
+    # Docker passam por fora do UFW. PAAS_BIND_ADDRESS existe só como saída
+    # para ambiente de teste — não use 0.0.0.0 numa VPS de verdade.
     ports:
-      - "${PAAS_PORT:-9000}:9000"
+      - "${PAAS_BIND_ADDRESS:-127.0.0.1}:${PAAS_PORT:-9000}:9000"
     environment:
       NODE_ENV: production
       PORT: "9000"
@@ -62,6 +68,9 @@ services:
       # aberto até o operador enviar a senha ou clicar em "Cancelar" no painel.
       # Um valor positivo faz o painel cancelar sozinho ao fim do prazo.
       PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS: ${PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS:-}
+      # Domínio do painel no proxy Caddy (acesso "https"): gravado pelo
+      # install.sh como <ip-com-hífens>.sslip.io. Vazio = acesso por túnel.
+      PAAS_PANEL_DOMAIN: ${PAAS_PANEL_DOMAIN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     security_opt:
       - no-new-privileges:true

@@ -50,7 +50,6 @@ env_value() {
   sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 | tr -d '"'"'"
 }
 TERMINAL_USER="$(env_value PAAS_TERMINAL_USER)"
-ROOT_MODE="$(env_value PAAS_ROOT_MODE)"
 
 # Porta do painel NA VPS: a mesma fonte e a mesma precedência do usuário do
 # túnel — PAAS_PORT do ambiente > o que o instalador gravou no .env > 9000.
@@ -72,9 +71,8 @@ if [ -z "$PUBLIC_IP" ]; then
     || echo 'SEU-IP')"
 fi
 
-# No modo "senha" a senha do sudo também é digitada no terminal do painel.
-SUDO_NOTE=""
-[ "$ROOT_MODE" = "senha" ] && SUDO_NOTE=", assim como a senha do sudo que você digitar no terminal do painel"
+# Acesso por HTTPS (gravado pelo install.sh): o endereço pronto, sem túnel.
+PANEL_DOMAIN="${PAAS_PANEL_DOMAIN:-$(env_value PAAS_PANEL_DOMAIN)}"
 
 # Porta alternativa citada quando a ponta local do túnel estiver ocupada.
 LOCAL_ALT=9100
@@ -90,8 +88,23 @@ ${GREEN}${BOLD}█████████████████████�
 ██████████████████████████████████████████████████████████████████████████████${RESET}
 
 ${BOLD}👉  Abra o painel no navegador${RESET}
+EOF
 
-${BOLD}Recomendado — por túnel SSH.${RESET} Numa janela NOVA, no SEU COMPUTADOR, deixe aberto:
+if [ -n "$PANEL_DOMAIN" ]; then
+cat <<EOF
+
+  De qualquer computador, sem túnel (conexão criptografada, HTTPS):
+
+${CYAN}${BOLD}      https://$PANEL_DOMAIN/?token=$TOKEN${RESET}
+
+  Não abriu? Veja o que o proxy diz: sudo docker logs paas-caddy --tail 50
+  (causa mais comum: portas 80/443 bloqueadas no firewall do provedor).
+
+EOF
+else
+cat <<EOF
+
+${BOLD}Por túnel SSH.${RESET} Numa janela NOVA, no SEU COMPUTADOR, deixe aberto:
 
 ${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP${RESET}
 
@@ -107,11 +120,10 @@ troque aqui também):
 
 ${CYAN}${BOLD}      http://localhost:$PORT/?token=$TOKEN${RESET}
 
-${YELLOW}Direto pelo IP${RESET} — sem criptografia; o token e a senha de admin trafegam
-em texto claro${SUDO_NOTE}. Use só em rede confiável ou ambiente de teste descartável:
+EOF
+fi
 
-${CYAN}      http://$PUBLIC_IP:$PORT/?token=$TOKEN${RESET}
-
+cat <<EOF
 ${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
 │                            ⚑  SETUP TOKEN  ⚑                              │
 │                                                                          │

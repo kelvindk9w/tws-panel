@@ -8,6 +8,7 @@
  *    clientId diferente é recusado com 4009 SEM derrubar o dono;
  *  - integração: saída produzida no alvo aparece no stream do cliente.
  */
+import { request as httpRequest } from "node:http";
 import { Duplex } from "node:stream";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -171,6 +172,59 @@ describe("WS /api/terminal/ws — autenticação", () => {
     ctx = await buildTerminalTestApp();
     const res = await fetch(`${ctx.baseUrl.replace("ws://", "http://")}/api/terminal/ws`);
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * Com o acesso por HTTPS o painel fica na internet: uma página de OUTRO site
+ * aberta no navegador do operador não pode abrir o terminal dele (o navegador
+ * manda o cookie de sessão junto com o handshake). O navegador sempre envia o
+ * Origin num WebSocket; só a origem do próprio painel é aceita.
+ */
+describe("WS /api/terminal/ws — origem", () => {
+  function handshake(baseUrl: string, origin: string | null): Promise<number> {
+    const url = new URL(`${baseUrl.replace("ws://", "http://")}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({
+        host: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        headers: {
+          Connection: "Upgrade",
+          Upgrade: "websocket",
+          "Sec-WebSocket-Version": "13",
+          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+          ...(origin ? { Origin: origin } : {}),
+        },
+      });
+      req.on("upgrade", (res, socket) => {
+        socket.destroy();
+        resolve(res.statusCode ?? 101);
+      });
+      req.on("response", (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  it("origem de outro site → recusado (403), nenhum PTY aberto", async () => {
+    ctx = await buildTerminalTestApp();
+    expect(await handshake(ctx.baseUrl, "https://site-malicioso.example")).toBe(403);
+    expect(ctx.ptys).toHaveLength(0);
+  });
+
+  it("mesma origem do painel → aceito", async () => {
+    ctx = await buildTerminalTestApp();
+    const host = new URL(ctx.baseUrl).host;
+    expect(await handshake(ctx.baseUrl, `http://${host}`)).toBe(101);
+  });
+
+  it("sem Origin (cliente que não é navegador, com token) → aceito", async () => {
+    ctx = await buildTerminalTestApp();
+    expect(await handshake(ctx.baseUrl, null)).toBe(101);
   });
 });
 

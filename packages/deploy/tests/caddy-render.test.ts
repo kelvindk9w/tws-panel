@@ -39,3 +39,44 @@ describe("renderCaddyfile", () => {
     expect(out).not.toContain("invadido");
   });
 });
+
+/**
+ * Acesso ao painel por HTTPS (https://<ip-com-hífens>.sslip.io): o Caddy
+ * central atende também o painel. O bloco dele é FIXO — o Caddyfile é
+ * regenerado inteiro a cada deploy, e um deploy nunca pode apagar o acesso
+ * ao painel nem sequestrar o domínio dele.
+ */
+describe("renderCaddyfile — site do painel", () => {
+  const PANEL = { domain: "203-0-113-10.sslip.io", upstream: "tws-panel:9000" };
+
+  it("sem projetos: o painel é servido (em vez do 404 geral)", () => {
+    const out = renderCaddyfile([], PANEL);
+    expect(out).toContain("203-0-113-10.sslip.io {");
+    expect(out).toContain("reverse_proxy tws-panel:9000");
+    expect(out).not.toContain("respond 404");
+  });
+
+  it("com projetos: o painel continua presente junto deles", () => {
+    const out = renderCaddyfile([{ domain: "loja.example.com", upstream: "paas-loja:3000", websocket: false }], PANEL);
+    expect(out).toContain("203-0-113-10.sslip.io {");
+    expect(out).toContain("loja.example.com {");
+  });
+
+  it("terminal ao vivo: o bloco do painel não segura a saída em buffer", () => {
+    const out = renderCaddyfile([], PANEL);
+    const block = out.slice(out.indexOf("203-0-113-10.sslip.io {"));
+    expect(block).toContain("flush_interval -1");
+  });
+
+  it("projeto com o mesmo domínio do painel é descartado (não sequestra o acesso)", () => {
+    const out = renderCaddyfile([{ domain: PANEL.domain, upstream: "paas-intruso:80", websocket: false }], PANEL);
+    expect(out).not.toContain("paas-intruso");
+    expect(out.match(/203-0-113-10\.sslip\.io \{/g)).toHaveLength(1);
+  });
+
+  it("domínio do painel inválido é ignorado (defesa em profundidade)", () => {
+    const out = renderCaddyfile([], { domain: "x.com {\n respond hi\n}", upstream: "tws-panel:9000" });
+    expect(out).not.toContain("respond hi");
+    expect(out).toContain("respond 404");
+  });
+});
