@@ -33,6 +33,19 @@ export const HOST_HELPER_IMAGE_DEFAULT = "alpine:3";
 // ---------------------------------------------------------------------------
 
 export const LYNIS_CHECK_CMD = "command -v lynis >/dev/null 2>&1";
+/**
+ * Instala o Lynis do repositório oficial do Ubuntu quando ele ainda não está
+ * na VPS — ÚNICA alteração que a verificação faz, e só uma vez. Assim o
+ * "antes" (a VPS como chegou) e o "depois" ficam na MESMA régua; antes, o
+ * primeiro número era o índice interno e o Lynis só aparecia depois da fase 06.
+ */
+export const LYNIS_INSTALL_CMD =
+  "command -v lynis >/dev/null 2>&1 || { DEBIAN_FRONTEND=noninteractive apt-get install -y -qq lynis >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq lynis >/dev/null 2>&1; }; }";
+/**
+ * Data de modificação do relatório (segundos). Lida antes e depois de rodar o
+ * Lynis: se não mudou, o relatório é de uma execução ANTERIOR e não vale.
+ */
+export const LYNIS_MTIME_CMD = "stat -c %Y /var/log/lynis-report.dat 2>/dev/null || echo 0";
 export const LYNIS_RUN_CMD = "lynis audit system --quick >/dev/null 2>&1 || true";
 export const LYNIS_REPORT_CMD =
   "grep -E '^hardening_index=' /var/log/lynis-report.dat 2>/dev/null | tail -1";
@@ -43,6 +56,8 @@ export function fixedReadOnlyCommands(): Set<string> {
     ...SECURITY_CHECKS.map((c) => c.command),
     ...BASELINE_COMMANDS,
     LYNIS_CHECK_CMD,
+    LYNIS_INSTALL_CMD,
+    LYNIS_MTIME_CMD,
     LYNIS_RUN_CMD,
     LYNIS_REPORT_CMD,
   ]);

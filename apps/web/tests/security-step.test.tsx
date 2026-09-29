@@ -224,10 +224,10 @@ describe("SecurityStep — retomada após restart do painel", () => {
     expect(await screen.findByText("Proteções aplicadas")).toBeInTheDocument();
     expect(screen.queryByText("Iniciar verificação")).not.toBeInTheDocument();
 
-    // Antes/Depois estáveis, vindos do snapshot persistido
-    expect(screen.getByText("Antes")).toBeInTheDocument();
+    // sem verificações no histórico, a jornada usa a última aplicação
+    expect(screen.getByText("Quando a VPS chegou")).toBeInTheDocument();
     expect(screen.getByText("39")).toBeInTheDocument();
-    expect(screen.getByText("Depois")).toBeInTheDocument();
+    expect(screen.getByText("Hoje")).toBeInTheDocument();
     expect(screen.getByText("75")).toBeInTheDocument();
 
     // caminho para avançar ao passo 4 sem re-rodar plano/dry-run/apply
@@ -287,6 +287,96 @@ describe("SecurityStep — retomada após restart do painel", () => {
     render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
     expect(await screen.findByText("Iniciar verificação")).toBeInTheDocument();
     expect(screen.queryByText("Proteções aplicadas")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Validação real: a tela de resultado mostrava só a ÚLTIMA aplicação — depois
+ * de reaplicar a fase 07 o "antes" virou 79 (era 42), e o "depois" seguia 86
+ * enquanto a verificação mais recente dizia 80. Somado às réguas diferentes
+ * (42 era o índice interno; 79/86 são do Lynis), a tela perdia credibilidade.
+ */
+describe("SecurityStep — quando a nota não é do Lynis, a tela diz por quê", () => {
+  it("mostra o motivo junto da nota", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/security/scan")) {
+        return { report: { ...SCAN_REPORT, lynisNote: "O Lynis não concluiu nesta verificação" }, cached: false };
+      }
+      return base(path, init);
+    });
+    try {
+      render(<SecurityStep onNext={() => undefined} />);
+      fireEvent.click(await screen.findByText("Iniciar verificação"));
+      expect(await screen.findByTestId("lynis-note")).toHaveTextContent(/não concluiu/);
+    } finally {
+      apiFetchMock.mockImplementation(base);
+    }
+  });
+});
+
+describe("SecurityStep — resultado conta a jornada inteira", () => {
+  function historico(entries: Array<{ at: string; idx: number; src: "lynis" | "internal" }>, applied: { b: number; bs: "lynis" | "internal"; a: number; as: "lynis" | "internal" }) {
+    apiFetchMock.mockImplementationOnce(async (path: string) => {
+      if (path === "/api/security/history") {
+        return {
+          entries: entries.map((e, i) => ({ id: `s${i}`, at: e.at, kind: "scan", hardeningIndex: e.idx, hardeningIndexSource: e.src })),
+          firstIndex: entries[0]?.idx ?? null,
+          latestIndex: entries.at(-1)?.idx ?? null,
+          applied: { appliedAt: "2026-09-29T20:00:00Z", beforeIndex: applied.b, beforeIndexSource: applied.bs, afterIndex: applied.a, afterIndexSource: applied.as },
+        };
+      }
+      throw new Error(`chamada inesperada: GET ${path}`);
+    });
+  }
+
+  it("mostra como a VPS chegou e como está hoje; réguas diferentes não viram '+N pontos'", async () => {
+    historico(
+      [
+        { at: "2026-09-28T10:00:00Z", idx: 42, src: "internal" },
+        { at: "2026-09-29T18:00:00Z", idx: 79, src: "lynis" },
+        { at: "2026-09-29T20:30:00Z", idx: 86, src: "lynis" },
+      ],
+      { b: 79, bs: "lynis", a: 86, as: "lynis" },
+    );
+    render(<SecurityStep mode="page" onNext={() => undefined} onBack={() => undefined} />);
+    const jornada = await screen.findByTestId("journey");
+    expect(jornada).toHaveTextContent("Quando a VPS chegou");
+    expect(jornada).toHaveTextContent("42");
+    expect(jornada).toHaveTextContent("Hoje");
+    expect(jornada).toHaveTextContent("86");
+    expect(screen.queryByText(/\+44 pontos/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("journey-scales")).toHaveTextContent(/réguas diferentes/i);
+    expect(screen.getByTestId("last-apply")).toHaveTextContent(/Última aplicação: 79 → 86 \(Lynis\), \+7 pontos/);
+  });
+
+  it("mesma régua do começo ao fim: mostra o ganho em pontos", async () => {
+    historico(
+      [
+        { at: "2026-09-28T10:00:00Z", idx: 58, src: "lynis" },
+        { at: "2026-09-29T20:30:00Z", idx: 86, src: "lynis" },
+      ],
+      { b: 58, bs: "lynis", a: 86, as: "lynis" },
+    );
+    render(<SecurityStep mode="page" onNext={() => undefined} onBack={() => undefined} />);
+    expect(await screen.findByText(/\+28 pontos/)).toBeInTheDocument();
+    expect(screen.queryByTestId("journey-scales")).not.toBeInTheDocument();
+  });
+
+  it("'Hoje' é a verificação MAIS RECENTE — se a nota caiu, a tela diz e explica por quê", async () => {
+    historico(
+      [
+        { at: "2026-09-28T10:00:00Z", idx: 58, src: "lynis" },
+        { at: "2026-09-29T20:30:00Z", idx: 86, src: "lynis" },
+        { at: "2026-09-29T21:01:00Z", idx: 80, src: "lynis" },
+      ],
+      { b: 58, bs: "lynis", a: 86, as: "lynis" },
+    );
+    render(<SecurityStep mode="page" onNext={() => undefined} onBack={() => undefined} />);
+    const jornada = await screen.findByTestId("journey");
+    expect(jornada).toHaveTextContent("80");
+    expect(screen.getByTestId("journey-drift")).toHaveTextContent(/atualizações de segurança/i);
+    expect(screen.getByTestId("journey-drift")).toHaveTextContent(/86/);
   });
 });
 

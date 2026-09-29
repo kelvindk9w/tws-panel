@@ -6,7 +6,13 @@ import { randomUUID } from "node:crypto";
 import type { SecurityCheckResult, SecurityScanReport, SecurityScanSummary } from "@paas/core";
 import { stripAnsi } from "./ansi.js";
 import { parseSudoUsers, SECURITY_CHECKS } from "./checks.js";
-import { LYNIS_CHECK_CMD, LYNIS_REPORT_CMD, LYNIS_RUN_CMD } from "./host-bridge.js";
+import {
+  LYNIS_CHECK_CMD,
+  LYNIS_INSTALL_CMD,
+  LYNIS_MTIME_CMD,
+  LYNIS_REPORT_CMD,
+  LYNIS_RUN_CMD,
+} from "./host-bridge.js";
 import { partitionChecksForProfile, profileNote } from "./profiles.js";
 import type { TargetRunner } from "./runner.js";
 
@@ -40,15 +46,48 @@ function summarize(checks: SecurityCheckResult[]): SecurityScanSummary {
   return s;
 }
 
-/** Roda `lynis audit system --quick` e extrai o Hardening Index do relatório. */
-async function lynisIndex(runner: TargetRunner): Promise<number | null> {
+/** Nota do Lynis desta verificação, ou o motivo de não haver uma. */
+interface LynisResult {
+  index: number | null;
+  note: string | null;
+}
+
+/**
+ * Roda `lynis audit system --quick` e extrai a nota do relatório — SÓ se o
+ * relatório foi gravado por ESTA execução (data de modificação antes/depois).
+ * Validação real: um Lynis interrompido, ou recusado por já haver outro
+ * rodando, deixava o relatório anterior no disco, e o painel apresentava a
+ * nota antiga como a de agora (a tela disse 86 com o relatório mais novo em 80).
+ */
+async function lynisIndex(runner: TargetRunner): Promise<LynisResult> {
+  if (runner.profile === "host") {
+    await runner.exec(LYNIS_INSTALL_CMD, { timeoutMs: 300_000 }).catch(() => undefined);
+  }
   const available = await runner.exec(LYNIS_CHECK_CMD);
-  if (available.code !== 0) return null;
-  // --quick: sem prompts. Tolerante a falhas — o scan próprio já está pronto.
-  await runner.exec(LYNIS_RUN_CMD, { timeoutMs: 300_000 });
+  if (available.code !== 0) {
+    return {
+      index: null,
+      note:
+        runner.profile === "host"
+          ? "Não foi possível instalar o Lynis nesta verificação (apt ocupado ou sem acesso ao repositório); a nota mostrada é o índice interno do painel."
+          : null,
+    };
+  }
+  const before = await runner.exec(LYNIS_MTIME_CMD);
+  await runner.exec(LYNIS_RUN_CMD, { timeoutMs: 600_000 });
+  const after = await runner.exec(LYNIS_MTIME_CMD);
+  const mtime = (r: { stdout: string }) => Number.parseInt(r.stdout.trim(), 10) || 0;
+  if (mtime(after) <= mtime(before)) {
+    return {
+      index: null,
+      note: "O Lynis não concluiu nesta verificação (interrompido, ou outra execução dele já estava em andamento); a nota mostrada é o índice interno do painel. Verifique de novo em alguns minutos.",
+    };
+  }
   const report = await runner.exec(LYNIS_REPORT_CMD);
   const match = /hardening_index=(\d+)/.exec(report.stdout);
-  return match?.[1] !== undefined ? Number.parseInt(match[1], 10) : null;
+  return match?.[1] !== undefined
+    ? { index: Number.parseInt(match[1], 10), note: null }
+    : { index: null, note: "O relatório do Lynis não trouxe a nota; a nota mostrada é o índice interno do painel." };
 }
 
 export interface SecurityScanOptions {
@@ -124,7 +163,10 @@ export async function runSecurityScan(
     checks.push(result);
   }
 
-  const lynis = await lynisIndex(runner).catch(() => null);
+  const lynisResult = await lynisIndex(runner).catch(
+    (): LynisResult => ({ index: null, note: "O Lynis falhou nesta verificação; a nota mostrada é o índice interno do painel." }),
+  );
+  const lynis = lynisResult.index;
 
   return {
     id: randomUUID(),
@@ -134,6 +176,7 @@ export async function runSecurityScan(
     hardeningIndex: lynis ?? internalIndex(checks),
     hardeningIndexSource: lynis !== null ? "lynis" : "internal",
     lynisAvailable: lynis !== null,
+    ...(lynisResult.note ? { lynisNote: lynisResult.note } : {}),
     checks,
     summary: summarize(checks),
     profile: runner.profile,
