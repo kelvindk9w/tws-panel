@@ -31,9 +31,12 @@ pendente e por quê — informação que não está no código nem no git log.
   corrigiu à mão o túnel (`AllowTcpForwarding local` em `10-local-override.conf`).
   Próximo passo dele: **reinstalar o sistema** e refazer tudo pelo README, agora com a
   Fase 07, cronometrando.
-- **Pendente:** o teste do PTY real ainda falha às vezes na CI (comando simples sem
-  resposta em 30 s; não reproduz localmente em 15 repetições). Proposta: o erro de
-  tempo esgotado passar a mostrar o fim da saída do terminal, para diagnóstico.
+- **Resolvido (29/09):** a falha intermitente do teste do PTY real. O erro de tempo
+  esgotado passou a mostrar o fim da tela, e a primeira falha seguinte revelou a causa:
+  o PTY quebrava a leitura logo depois do PRIMEIRO ":" do marcador de fim
+  ("a b :" | "::PAAS_EXIT…"); a regra que segura um possível marcador exigia "::", o ":"
+  ia para a tela e o resto não casava. Nos comandos de captura, um ":" solto no fim do
+  pedaço agora também é segurado. Era um defeito real (podia travar um check numa VPS).
 - **Acesso por HTTPS decidido e implementado (PR #34):** o instalador entrega
   `https://<ip-com-hífens>.sslip.io` (Let's Encrypt, sem túnel, sem pergunta de porta nem
   de chave SSH); o painel escuta só em 127.0.0.1; o Caddy sobe no boot com o bloco fixo

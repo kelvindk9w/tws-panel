@@ -491,6 +491,41 @@ describe("TerminalService — runCommandCaptured (checks do scanner no terminal)
     await service.dispose();
   });
 
+  /**
+   * Causa da falha intermitente do teste com PTY real (achada pelo diagnóstico
+   * do tempo esgotado): o PTY quebrou a leitura logo depois do PRIMEIRO ":" do
+   * marcador ("a b :" | "::PAAS_EXIT…"). A regra que segura um possível início
+   * de marcador exigia "::", então o ":" solto era exibido como texto e o resto
+   * ("::PAAS_EXIT…") já não casava — o comando esperava até estourar o tempo.
+   */
+  it("marcador dividido logo depois do PRIMEIRO ':' ainda resolve (captura)", async () => {
+    const { service, next } = makeService();
+    const broadcasted: string[] = [];
+    service.onOutput((c) => broadcasted.push(c));
+    const promise = service.runCommandCaptured("printf 'a b '");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit("a b :");
+    next().emit(`::PAAS_EXIT_${nonce}:0\r\n`);
+    const result = await promise;
+    expect(result).toEqual({ code: 0, output: "a b " });
+    expect(broadcasted.join("")).not.toContain("PAAS_EXIT");
+    await service.dispose();
+  });
+
+  it("saída que termina de verdade em ':' não se perde quando o marcador vem depois", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("printf 'chave:'");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit("chave:");
+    next().emit(`:::PAAS_EXIT_${nonce}:0\r\n`);
+    expect(await promise).toEqual({ code: 0, output: "chave:" });
+    await service.dispose();
+  });
+
   it("marcador BEGIN COLADO ao prompt (sem newline) liga a captura e o prompt segue visível", async () => {
     const { service, next } = makeService();
     const broadcasted: string[] = [];
