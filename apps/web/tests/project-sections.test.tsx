@@ -56,6 +56,8 @@ describe("ProjectDomainsCard", () => {
     const guia = screen.getByTestId("dns-guide");
     expect(guia).toHaveTextContent("www.devlink.com.br");
     expect(guia).toHaveTextContent("203.0.113.10");
+    // Cloudflare: nuvem cinza (validação real — dúvida do dono do produto)
+    expect(within(guia).getByTestId("dns-guide-cloudflare")).toHaveTextContent(/nuvem .*cinza/i);
     fireEvent.click(screen.getByRole("button", { name: /Verificar DNS/ }));
     expect(await screen.findByText(/aponta para esta máquina/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^Conectar$/ }));

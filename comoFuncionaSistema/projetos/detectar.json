@@ -97,6 +97,6 @@
   "observacoes": [
     "Não há endpoint separado que exponha só o DetectResult.warnings sem rodar a detecção completa — o wizard usa esses warnings (regras de guardrails.ts, diferentes das de rules.ts) para o aviso mostrado no passo 2.",
     "A rota reexecuta a detecção do zero a cada chamada (sem cache); em projetos compose grandes isso relê e reparsa o YAML a cada clique.",
-    "Modo git (29/09/2026, validação real): a detecção SEMPRE sincroniza o código antes de detectar, via ingestCode (mesmo caminho do deploy, com a credencial de leitura por GIT_ASKPASS): clona na primeira vez, re-clona se URL/branch mudaram e só faz fetch quando nada mudou. Antes exigia um deploy anterior e respondia 409 source_missing — o assistente de novo projeto (que detecta logo após criar) travava em QUALQUER repositório git. Falha no download vira 422 clone_failed com a mensagem do git já filtrada (a orientação de repositório privado/token é preservada)."
+    "Modo git (29/09/2026, validação real): a detecção SEMPRE sincroniza o código antes de detectar, via ingestCode (mesmo caminho do deploy, com a credencial de leitura por credential helper em linha que lê variáveis de ambiente): clona na primeira vez, re-clona se URL/branch mudaram e só faz fetch quando nada mudou. Antes exigia um deploy anterior e respondia 409 source_missing — o assistente de novo projeto (que detecta logo após criar) travava em QUALQUER repositório git. Falha no download vira 422 clone_failed com a mensagem do git já filtrada (a orientação de repositório privado/token é preservada)."
   ]
 }

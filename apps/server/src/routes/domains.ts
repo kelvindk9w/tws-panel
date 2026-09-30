@@ -37,6 +37,27 @@ export function publicIpFromPanelDomain(panelDomain: string | null | undefined):
   return parts.every((n) => n <= 255) ? parts.join(".") : null;
 }
 
+/** Faixas IPv4 da Cloudflare (fonte: https://www.cloudflare.com/ips-v4, 30/09/2026). */
+const CLOUDFLARE_V4 = [
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18",
+  "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17",
+  "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+];
+
+function ipToInt(ip: string): number {
+  return ip.split(".").reduce((n, part) => (n << 8) + Number(part), 0) >>> 0;
+}
+
+/** O IP é do proxy da Cloudflare (registro com a nuvem laranja)? */
+export function isCloudflareIp(ip: string): boolean {
+  const n = ipToInt(ip);
+  return CLOUDFLARE_V4.some((cidr) => {
+    const [base, bits] = cidr.split("/") as [string, string];
+    const mask = bits === "0" ? 0 : (~0 << (32 - Number(bits))) >>> 0;
+    return (n & mask) === (ipToInt(base) & mask);
+  });
+}
+
 function panelDomainOf(app: FastifyInstance): string | null {
   return app.hasDecorator("config") ? (app.config.panelDomain ?? null) : null;
 }
@@ -99,8 +120,13 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
           : resolved.length === 0
             ? `O domínio ainda não aponta para lugar nenhum. No seu provedor de DNS, crie um registro do tipo A ` +
               `com o valor ${publicIp ?? "do IP desta máquina"}. A propagação costuma levar de minutos a algumas horas.`
-            : `O domínio aponta para ${resolved.join(", ")}, não para esta VPS. No seu provedor de DNS, troque o ` +
-              `registro A para ${publicIp ?? "o IP desta máquina"}.`,
+            : resolved.every(isCloudflareIp)
+              ? `O domínio está com o proxy da Cloudflare ligado (nuvem laranja): ele responde com os IPs da ` +
+                `Cloudflare, não com o da VPS, e o painel não consegue emitir o certificado sozinho. Na Cloudflare, ` +
+                `abra o registro e mude para a nuvem cinza ("Somente DNS"), com o valor ` +
+                `${publicIp ?? "do IP desta máquina"}.`
+              : `O domínio aponta para ${resolved.join(", ")}, não para esta VPS. No seu provedor de DNS, troque o ` +
+                `registro A para ${publicIp ?? "o IP desta máquina"}.`,
       };
       return reply.send(response);
     },

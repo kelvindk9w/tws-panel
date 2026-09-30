@@ -118,6 +118,12 @@ pendente e por quê — informação que não está no código nem no git log.
   público), Variáveis (cifradas, injetadas no deploy), E-mail, Configurações. Páginas de erro
   neutras no Caddy (projeto parado; domínio não configurado). Ver
   `projetos/conceito-pagina-do-projeto.json`. Sugestão pendente: seção Logs (app rodando).
+- **30/09 — repositório privado não clonava na VPS:** "cannot exec '/tmp/…/askpass.sh':
+  Permission denied" — o /tmp do container do painel não executa (hardening). O token agora
+  chega ao git por credential helper em linha (sem arquivo). Os testes de clone privado rodaram
+  também num container com /tmp noexec. E a mensagem culpava o token (errado). Cloudflare: o
+  guia de DNS pede a nuvem cinza, e o "Verificar DNS" reconhece os IPs da Cloudflare (nuvem
+  laranja) e explica.
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com
