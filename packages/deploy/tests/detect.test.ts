@@ -123,6 +123,34 @@ describe("static-node", () => {
   });
 });
 
+/**
+ * Site em HTML puro (só index.html): o primeiro teste de quase todo iniciante.
+ * Validação real: os repositórios públicos do dono do produto (devlinks,
+ * travelgram…) saíam como "configuração manual necessária".
+ */
+describe("static (HTML puro)", () => {
+  it("index.html na raiz, sem compose/Dockerfile/package.json → site estático, sem build", async () => {
+    await writeFile(path.join(dir, "index.html"), "<h1>oi</h1>");
+    await writeFile(path.join(dir, "style.css"), "h1{}");
+    const result = await detectProject(dir);
+    expect(result.type).toBe("static");
+    expect(result.buildCommand).toBeNull();
+    expect(result.details.join(" ")).toMatch(/index\.html/);
+  });
+
+  it("package.json sem build mas com index.html na raiz → site estático", async () => {
+    await writeJson("package.json", { scripts: { lint: "eslint ." } });
+    await writeFile(path.join(dir, "index.html"), "<h1>oi</h1>");
+    expect((await detectProject(dir)).type).toBe("static");
+  });
+
+  it("Dockerfile continua vencendo o index.html", async () => {
+    await writeFile(path.join(dir, "index.html"), "<h1>oi</h1>");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM nginx\nEXPOSE 80\n");
+    expect((await detectProject(dir)).type).toBe("dockerfile");
+  });
+});
+
 describe("compose", () => {
   const compose = [
     "services:",

@@ -13,6 +13,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { TokenGuide } from "@/components/TokenGuide";
+import { FolderUpload, uploadFolder, type PickedFolder } from "@/components/FolderUpload";
+import { ServerFolderBrowser } from "@/components/ServerFolderBrowser";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -44,14 +47,14 @@ const INGEST_OPTIONS: Array<{
   },
   {
     mode: "upload",
-    title: "Diretório local (upload)",
-    description: "Copia uma pasta desta máquina para o painel.",
+    title: "Enviar do meu computador",
+    description: "Escolha a pasta do projeto numa janela; os arquivos são enviados ao painel.",
     icon: FolderInput,
   },
   {
     mode: "existing",
-    title: "Caminho existente",
-    description: "Usa o código diretamente de onde ele já está (dev local).",
+    title: "Pasta que já está no servidor",
+    description: "Usa o código de uma pasta da pasta de projetos do servidor, sem copiar.",
     icon: FolderSymlink,
   },
 ];
@@ -90,8 +93,12 @@ export function NewProjectPage() {
 
   // passo 1 — fonte
   const [name, setName] = useState("");
-  const [ingestMode, setIngestMode] = useState<IngestMode>("upload");
-  const [source, setSource] = useState("");
+  const [ingestMode, setIngestMode] = useState<IngestMode>("git");
+  // "Enviar do meu computador": pasta escolhida na janela do navegador
+  const [folder, setFolder] = useState<PickedFolder | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const [sourceText, setSource] = useState("");
   const [branch, setBranch] = useState("main");
   // repositório privado: token de LEITURA, entregue à credencial do projeto
   // (cifrada no servidor) antes de o código ser baixado. Some da memória do
@@ -131,6 +138,14 @@ export function NewProjectPage() {
     try {
       let id = projectId;
       const dom = domain || defaultDomainFor(name);
+      // Envio da pasta: os arquivos sobem antes; a pasta do servidor que os
+      // recebeu vira a origem do projeto.
+      let source = sourceText;
+      if (ingestMode === "upload") {
+        if (!folder) throw new Error("Escolha a pasta do projeto.");
+        source = await uploadFolder(folder, (done, total) => setUploadProgress({ done, total }));
+        setUploadProgress(null);
+      }
       if (id === null) {
         const created = await apiFetch<ProjectResponse>("/api/projects", {
           method: "POST",
@@ -166,6 +181,7 @@ export function NewProjectPage() {
       setProxyPort(det.detection.proxyPort ? String(det.detection.proxyPort) : "");
       setStep(1);
     } catch (err) {
+      setUploadProgress(null);
       setError(err instanceof Error ? err.message : "Falha ao criar o projeto.");
     } finally {
       setBusy(false);
@@ -206,8 +222,9 @@ export function NewProjectPage() {
     }
   }
 
+  const hasSource = ingestMode === "upload" ? folder !== null && folder.files.length > 0 : sourceText.trim() !== "";
   const canNextStep0 =
-    name.trim() !== "" && source.trim() !== "" && (!privateRepo || ingestMode !== "git" || token.trim() !== "" || projectId !== null);
+    name.trim() !== "" && hasSource && (!privateRepo || ingestMode !== "git" || token.trim() !== "" || projectId !== null);
 
   return (
     <div className="flex flex-col gap-6">
@@ -271,7 +288,11 @@ export function NewProjectPage() {
                   type="button"
                   // o tipo de fonte não muda depois que o projeto foi criado
                   disabled={projectId !== null && opt.mode !== ingestMode}
-                  onClick={() => setIngestMode(opt.mode)}
+                  onClick={() => {
+                    // cada origem tem o seu campo: a URL do git não vira caminho de pasta
+                    if (opt.mode !== ingestMode) setSource("");
+                    setIngestMode(opt.mode);
+                  }}
                   className={cn(
                     "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors",
                     ingestMode === opt.mode
@@ -286,18 +307,50 @@ export function NewProjectPage() {
               ))}
             </div>
 
-            <label className="flex flex-col gap-1.5 text-sm">
-              {ingestMode === "git" ? "URL do repositório" : "Caminho local do diretório"}
-              <Input
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                placeholder={
-                  ingestMode === "git"
-                    ? "https://github.com/usuario/repo.git"
-                    : "/home/kelvin/projects/minha-app"
-                }
-              />
-            </label>
+            {ingestMode === "git" && (
+              <label className="flex flex-col gap-1.5 text-sm">
+                URL do repositório
+                <Input
+                  value={sourceText}
+                  onChange={(e) => setSource(e.target.value)}
+                  placeholder="https://github.com/usuario/repo.git"
+                />
+              </label>
+            )}
+
+            {ingestMode === "upload" && (
+              <FolderUpload folder={folder} onPick={setFolder} progress={uploadProgress} />
+            )}
+
+            {ingestMode === "existing" && (
+              <div className="flex flex-col gap-1.5 text-sm">
+                <label htmlFor="np-server-path">Caminho da pasta no servidor</label>
+                <div className="flex gap-2">
+                  <Input
+                    id="np-server-path"
+                    value={sourceText}
+                    onChange={(e) => setSource(e.target.value)}
+                    placeholder="/opt/tws-projects/meu-site"
+                    className="font-mono"
+                  />
+                  <Button type="button" variant="outline" onClick={() => setBrowsing(true)}>
+                    Procurar…
+                  </Button>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Só pastas dentro da pasta de projetos do servidor. O código é usado de onde está, sem cópia.
+                </span>
+                {browsing && (
+                  <ServerFolderBrowser
+                    onChoose={(p) => {
+                      setSource(p);
+                      setBrowsing(false);
+                    }}
+                    onClose={() => setBrowsing(false)}
+                  />
+                )}
+              </div>
+            )}
 
             {ingestMode === "git" && (
               <label className="flex flex-col gap-1.5 text-sm">
@@ -337,6 +390,7 @@ export function NewProjectPage() {
                       spellCheck={false}
                       placeholder="cole o token aqui"
                     />
+                    <TokenGuide url={sourceText} />
                     <span className="text-xs text-muted-foreground">
                       Guardado cifrado no servidor. Depois de salvo, só a dica dos últimos caracteres
                       volta a aparecer (na página do projeto, onde também dá para trocar ou remover).
@@ -371,11 +425,42 @@ export function NewProjectPage() {
             <ul className="flex flex-col gap-1.5 text-sm text-muted-foreground">
               {detection.details.map((d, i) => (
                 <li key={i} className="flex items-start gap-2">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                  {detection.type === "unknown" ? (
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                  ) : (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                  )}
                   {d}
                 </li>
               ))}
             </ul>
+
+            {detection.type === "unknown" && (
+              <div data-testid="unsupported-help" className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+                <p className="mb-1.5 font-medium text-amber-400">O painel ainda não sabe publicar este código.</p>
+                <p className="mb-1.5 text-muted-foreground">Ele publica projetos que tenham, na pasta principal:</p>
+                <ul className="flex list-disc flex-col gap-1 pl-5 text-muted-foreground">
+                  <li>
+                    um <code className="font-mono text-xs">index.html</code> — site em HTML puro, publicado como está;
+                  </li>
+                  <li>
+                    um <code className="font-mono text-xs">package.json</code> com o script{" "}
+                    <code className="font-mono text-xs">build</code> (<code className="font-mono text-xs">npm run build</code>)
+                    que gera um site (Vite, Next.js export…);
+                  </li>
+                  <li>
+                    um <code className="font-mono text-xs">Dockerfile</code> — qualquer linguagem;
+                  </li>
+                  <li>
+                    um arquivo <code className="font-mono text-xs">docker-compose.yml</code> (ou compose.yml) — vários
+                    serviços, como app + banco.
+                  </li>
+                </ul>
+                <p className="mt-1.5 text-muted-foreground">
+                  Um servidor Node/PHP/Python sem Dockerfile precisa de um Dockerfile para ser publicado.
+                </p>
+              </div>
+            )}
 
             {detection.warnings.length > 0 && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">

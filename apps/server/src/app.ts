@@ -27,6 +27,7 @@ import authRoutes from "./routes/auth.js";
 import setupRoutes from "./routes/setup.js";
 import healthRoutes from "./routes/health.js";
 import settingsRoutes from "./routes/settings.js";
+import uploadRoutes from "./routes/uploads.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
 import dockerRoutes from "./routes/docker.js";
@@ -184,6 +185,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(settingsRoutes);
+  await app.register(uploadRoutes);
   await app.register(securityRoutes);
   await app.register(projectsRoutes);
   await app.register(dockerRoutes);

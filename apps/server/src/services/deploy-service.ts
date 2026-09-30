@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isInsideProjectsDir } from "./projects-dir.js";
 import {
   DEFAULT_GIT_CREDENTIAL_USERNAME,
   DEPLOY_LOG_MAX_CHARS,
@@ -298,6 +299,20 @@ export class DeployService {
     // Modo git: a fonte vira argumento do `git clone`, então passa pela
     // allowlist de esquema. Modos upload/existing são caminhos locais.
     const source = req.ingestMode === "git" ? validateGitSource(rawSource) : rawSource;
+    // Só a pasta de projetos: é a única do computador que o painel enxerga, e
+    // qualquer outro caminho seria de dentro do container (inclusive /data,
+    // com as chaves do cofre e do 2FA). Conferido ANTES de o caminho existir:
+    // a resposta não revela o que há fora dela.
+    if (
+      (req.ingestMode === "upload" || req.ingestMode === "existing") &&
+      !(await isInsideProjectsDir(this.projectsDir, source))
+    ) {
+      throw httpError(
+        400,
+        "source_outside_projects_dir",
+        `A pasta precisa estar dentro da pasta de projetos (${this.projectsDir}).`,
+      );
+    }
     if ((req.ingestMode === "upload" || req.ingestMode === "existing") && !existsSync(path.resolve(source))) {
       throw httpError(400, "source_not_found", `Caminho não encontrado: ${source}`);
     }
@@ -348,8 +363,15 @@ export class DeployService {
       project.name = name;
     }
     if (req.source !== undefined) {
-      project.source =
-        project.ingestMode === "git" ? validateGitSource(req.source) : req.source.trim();
+      const source = project.ingestMode === "git" ? validateGitSource(req.source) : req.source.trim();
+      if (project.ingestMode !== "git" && !(await isInsideProjectsDir(this.projectsDir, source))) {
+        throw httpError(
+          400,
+          "source_outside_projects_dir",
+          `A pasta precisa estar dentro da pasta de projetos (${this.projectsDir}).`,
+        );
+      }
+      project.source = source;
     }
     if (req.branch !== undefined) {
       project.branch = validateBranch(req.branch);

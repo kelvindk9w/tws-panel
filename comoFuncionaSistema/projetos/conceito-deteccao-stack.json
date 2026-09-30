@@ -19,7 +19,8 @@
     "4) PACKAGE.JSON SEM SCRIPT DE BUILD — type continua 'unknown' com detalhe 'package.json sem script de build.'.",
     "5) NADA RECONHECIDO — sem compose, sem Dockerfile, sem package.json: type='unknown' com detalhe 'Nenhum compose, package.json ou Dockerfile encontrado — configuração manual necessária.'",
     "DIRETÓRIO INEXISTENTE: detectProject não lança — retorna imediatamente type='unknown' com detail 'Diretório não encontrado: <dir>'.",
-    "warnings do DetectResult vêm EXCLUSIVAMENTE de analyzeCompose()/guessProxyTarget() (só quando type=compose) — projetos static-node/dockerfile/unknown sempre têm warnings=[]."
+    "warnings do DetectResult vêm EXCLUSIVAMENTE de analyzeCompose()/guessProxyTarget() (só quando type=compose) — projetos static-node/dockerfile/unknown sempre têm warnings=[].",
+    "ATUALIZAÇÃO (30/09/2026): novo tipo 'static' — index.html na raiz sem compose, Dockerfile nem build (inclusive package.json sem script build). O site vai para o ar a partir de uma CÓPIA sem arquivos/pastas ocultos (packages/deploy/src/static-site.ts: sem .git, .env etc.; só .well-known é mantida) servida por nginx — servir a pasta do código exporia o .git (histórico inteiro, grave em repositório privado). Validação real: os repositórios públicos do dono do produto (HTML puro) saíam como 'configuração manual necessária'. Quando o tipo é 'unknown', o assistente explica o que o painel publica (index.html, npm run build, Dockerfile, compose)."
   ],
   "camposDetectResult": {
     "type": "'static-node' | 'compose' | 'dockerfile' | 'unknown'",

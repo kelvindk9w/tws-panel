@@ -24,6 +24,7 @@ import { parse, stringify } from "yaml";
 import { CaddyManager, projectDomain, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
+import { preparePublishDir } from "./static-site.js";
 import { runGuardrails } from "./rules.js";
 
 export interface EngineContext extends IngestContext {
@@ -160,6 +161,13 @@ export class DeployEngine {
 
     let upstream: string;
     switch (type) {
+      case "static":
+        onLog("\n=== Etapa 3/5 · Site estático (HTML, sem build) ===\n");
+        if (envKeys.length > 0) {
+          onLog("Nota: site estático não recebe env vars de runtime (injeção ignorada).\n");
+        }
+        upstream = await this.deployPlainStatic(project, src, onLog);
+        break;
       case "static-node":
         onLog("\n=== Etapa 3/5 · Build estático (container Node) ===\n");
         if (envKeys.length > 0) {
@@ -213,6 +221,46 @@ export class DeployEngine {
   }
 
   // -------------------------------------------------------------------------
+  // Pipeline: static (HTML puro, sem build)
+  // -------------------------------------------------------------------------
+
+  private async deployPlainStatic(project: Project, src: string, onLog: LogFn): Promise<string> {
+    // Nunca serve a pasta do código direto: .git e .env ficariam baixáveis.
+    const site = path.join(projectWorkDir(this.ctx, project), "site");
+    await preparePublishDir(src, site);
+    onLog("Arquivos copiados para a pasta de publicação (sem .git, .env nem outros ocultos).\n");
+    return this.serveStaticDir(project, site, "site", onLog);
+  }
+
+  /** Sobe (ou recria) o container nginx que serve `dir` na rede do painel. */
+  private async serveStaticDir(project: Project, dir: string, label: string, onLog: LogFn): Promise<string> {
+    const web = `${containerPrefix(project)}-web`;
+    await run("docker", ["rm", "-f", web]);
+    const runRes = await run("docker", [
+      "run",
+      "-d",
+      "--name",
+      web,
+      "--restart",
+      "unless-stopped",
+      "--network",
+      PAAS_NETWORK,
+      "--network-alias",
+      project.slug,
+      "-v",
+      `${dir}:/usr/share/nginx/html:ro`,
+      "--label",
+      `${PAAS_LABEL_MANAGED}=true`,
+      "--label",
+      `${PAAS_LABEL_PROJECT}=${project.slug}`,
+      this.ctx.staticImage,
+    ]);
+    if (runRes.code !== 0) throw new Error(`falha ao subir o servidor estático: ${runRes.stderr}`);
+    onLog(`Container ${web} servindo ${label}/ na rede ${PAAS_NETWORK}.\n`);
+    return `${project.slug}:80`;
+  }
+
+  // -------------------------------------------------------------------------
   // Pipeline: static-node
   // -------------------------------------------------------------------------
 
@@ -255,30 +303,7 @@ export class DeployEngine {
     );
     if (code !== 0) throw new Error(`build estático falhou (exit ${code}).`);
 
-    const web = `${containerPrefix(project)}-web`;
-    await run("docker", ["rm", "-f", web]);
-    const runRes = await run("docker", [
-      "run",
-      "-d",
-      "--name",
-      web,
-      "--restart",
-      "unless-stopped",
-      "--network",
-      PAAS_NETWORK,
-      "--network-alias",
-      project.slug,
-      "-v",
-      `${path.join(src, outputDir)}:/usr/share/nginx/html:ro`,
-      "--label",
-      `${PAAS_LABEL_MANAGED}=true`,
-      "--label",
-      `${PAAS_LABEL_PROJECT}=${project.slug}`,
-      this.ctx.staticImage,
-    ]);
-    if (runRes.code !== 0) throw new Error(`falha ao subir o servidor estático: ${runRes.stderr}`);
-    onLog(`Container ${web} servindo ${outputDir}/ na rede ${PAAS_NETWORK}.\n`);
-    return `${project.slug}:80`;
+    return this.serveStaticDir(project, path.join(src, outputDir), outputDir, onLog);
   }
 
   // -------------------------------------------------------------------------

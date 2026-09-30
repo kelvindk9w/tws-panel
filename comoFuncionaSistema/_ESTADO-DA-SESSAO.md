@@ -87,6 +87,14 @@ pendente e por quê — informação que não está no código nem no git log.
   login com senha), Segurança (senha + 2FA na página), Aparência, Notificações (frequência da
   verificação automática; aviso fora do painel ainda não existe — decisão pendente: canal
   e-mail/Telegram/outro). Cada seção com URL própria (`/settings/...`).
+- **30/09 — Novo Projeto:** tipo "site estático" (HTML puro; publicado sem .git/.env);
+  guia "Como gerar o token" (GitHub completo; outros, orientação geral); "Enviar do meu
+  computador" (janela de pasta; arquivos sobem para `_uploads/` da pasta de projetos);
+  "Pasta que já está no servidor" com navegador preso à pasta de projetos; caminhos locais
+  fora dela passam a ser recusados. Para testar deploy: `docker/welcome-to-docker` (Dockerfile)
+  e, com o tipo estático, o `devlinks` do dono do produto. Pendentes pedidos em 30/09:
+  conectar a conta do GitHub para listar repositórios; Setup concluído com "recomeçar do zero"
+  protegido por senha + 2FA (ou código por e-mail, que depende de configurar envio de e-mail).
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:
