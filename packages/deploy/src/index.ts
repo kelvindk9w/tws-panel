@@ -15,3 +15,4 @@ export {
   type LogFn,
 } from "./engine.js";
 export { run, runStream, type ExecResult } from "./exec.js";
+export { composeVariables, writeProjectDotenv, type ComposeVariable } from "./project-dotenv.js";

@@ -34,6 +34,8 @@ import {
   projectSrcDir,
   projectWorkDir,
   runGuardrails,
+  composeVariables,
+  type ComposeVariable,
   type EngineContext,
   type PanelSite,
 } from "@paas/deploy";
@@ -182,6 +184,9 @@ export class DeployService {
         ...((await this.mailEnv?.(project)) ?? {}),
         ...(await this.env.asRecord(project.id)),
       }),
+      // Em TODOS os serviços do compose, só as do e-mail (comportamento de
+      // sempre); as do operador vão pelo .env e o compose escolhe o destino.
+      injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
       // Em container, o health check fala com o Caddy pela rede interna
       // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
@@ -246,6 +251,19 @@ export class DeployService {
   async getEnv(id: string): Promise<EnvVar[]> {
     await this.requireProject(id);
     return this.env.get(id);
+  }
+
+  /** Variáveis que o compose do projeto interpola (seção Variáveis mostra o que falta). */
+  async composeVariablesFor(id: string): Promise<{ variables: ComposeVariable[]; usesEnvFile: boolean } | null> {
+    const project = await this.requireProject(id);
+    const file = project.detection?.type === "compose" ? project.detection.composeFile : null;
+    if (!file) return null;
+    try {
+      const content = await readFile(path.join(projectSrcDir({ projectsDir: this.projectsDir }, project), file), "utf8");
+      return composeVariables(content);
+    } catch {
+      return null;
+    }
   }
 
   async setEnv(id: string, vars: EnvVar[]): Promise<EnvVar[]> {
@@ -824,7 +842,33 @@ export class DeployService {
       throw httpError(404, "domain_not_found", `O domínio ${raw} não está conectado a este projeto.`);
     }
     project.aliases = (project.aliases ?? []).filter((d) => d !== domain);
+    if (project.domainPorts?.[domain] !== undefined) {
+      const { [domain]: _removida, ...resto } = project.domainPorts;
+      project.domainPorts = resto;
+    }
     return this.saveAndApplyDomains(project, "project.domain_removed", `Domínio ${domain} removido do projeto "${project.name}".`);
+  }
+
+  /**
+   * Porta própria de um domínio no serviço de entrada (null = a do projeto).
+   * Ex.: o site na 3200 e a carteira na 8009, no mesmo serviço.
+   */
+  async setDomainPort(id: string, raw: string, port: number | null): Promise<Project> {
+    const project = await this.requireProject(id);
+    const domain = normalizeDomain(raw);
+    if (domain !== project.domain && !(project.aliases ?? []).includes(domain)) {
+      throw httpError(404, "domain_not_found", `O domínio ${raw} não está conectado a este projeto.`);
+    }
+    if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      throw httpError(400, "invalid_port", "Porta inválida (de 1 a 65535).");
+    }
+    const { [domain]: _anterior, ...resto } = project.domainPorts ?? {};
+    project.domainPorts = port === null ? resto : { ...resto, [domain]: port };
+    return this.saveAndApplyDomains(
+      project,
+      "project.domain_port",
+      `Domínio ${domain} de "${project.name}": ${port === null ? "porta do projeto" : `porta ${port}`}.`,
+    );
   }
 
   /** Torna principal um domínio adicional; o antigo principal vira adicional. */

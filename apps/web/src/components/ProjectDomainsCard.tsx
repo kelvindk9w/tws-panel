@@ -26,12 +26,16 @@ function DomainRow({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasPort = project.detection?.type === "compose" || project.detection?.type === "dockerfile";
+  const defaultPort = project.proxyPort ?? project.detection?.proxyPort ?? null;
+  const currentPort = project.domainPorts?.[domain] ?? null;
+  const [port, setPort] = useState(currentPort ? String(currentPort) : "");
 
-  async function call(path: string, method: "POST" | "DELETE") {
+  async function call(path: string, method: "POST" | "DELETE" | "PUT", body?: unknown) {
     setBusy(true);
     setError(null);
     try {
-      await apiFetch<ProjectResponse>(path, { method });
+      await apiFetch<ProjectResponse>(path, { method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
       setConfirming(false);
       onChanged();
     } catch (err) {
@@ -84,6 +88,29 @@ function DomainRow({
           )}
         </div>
       </div>
+      {hasPort && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <label htmlFor={`port-${domain}`}>Porta</label>
+          <input
+            id={`port-${domain}`}
+            inputMode="numeric"
+            value={port}
+            onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))}
+            placeholder={defaultPort ? String(defaultPort) : "porta"}
+            className="h-7 w-20 rounded-md border bg-transparent px-2 font-mono text-foreground"
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7"
+            disabled={busy || port === (currentPort ? String(currentPort) : "")}
+            onClick={() => void call(`${base}/port`, "PUT", { port: port ? Number(port) : null })}
+          >
+            Salvar porta
+          </Button>
+          <span>{port ? "porta própria deste domínio" : `em branco = a do projeto (${defaultPort ?? "?"})`}</span>
+        </div>
+      )}
       {error && <p className="text-xs text-destructive">{error}</p>}
     </li>
   );

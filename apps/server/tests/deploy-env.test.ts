@@ -38,8 +38,12 @@ describe("variáveis do projeto no deploy", () => {
       { key: "SMTP_PORT", value: "2525" },
       { key: "DATABASE_URL", value: "postgres://x" },
     ]);
-    const ctx = (svc as unknown as { engineCtx: { envForProject: (p: unknown) => Promise<Record<string, string>> } }).engineCtx;
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; injectEnvForProject: Fn } }).engineCtx;
+    // tudo vai para o .env do projeto (e para o -e do Dockerfile)…
     expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "2525", DATABASE_URL: "postgres://x" });
+    // …mas só as do e-mail são injetadas em TODOS os serviços do compose
+    expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "587" });
   });
 
   it("auditoria só com os nomes, nunca os valores", async () => {
@@ -58,5 +62,27 @@ describe("variáveis do projeto no deploy", () => {
     await svc.deleteProject(p.id, false, () => undefined);
     const store = (svc as unknown as { env: { get: (id: string) => Promise<unknown[]> } }).env;
     expect(await store.get(p.id)).toEqual([]);
+  });
+});
+
+describe("variáveis que o compose espera", () => {
+  it("lê o compose do projeto e lista as variáveis (obrigatórias e com padrão)", async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const p = await projeto();
+    const src = path.join(dataDir, "projects", p.slug, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(src, "compose.prod.yaml"), "services:\n  db:\n    environment:\n      A: ${POSTGRES_USER:?defina}\n      B: ${SMTP_HOST:-mailpit}\n");
+    const proj = (await svc.getProject(p.id))!;
+    proj.detection = { type: "compose", composeFile: "compose.prod.yaml" } as never;
+    const r = await svc.composeVariablesFor(p.id);
+    expect(r?.variables).toEqual([
+      { name: "POSTGRES_USER", required: true, defaultValue: null },
+      { name: "SMTP_HOST", required: false, defaultValue: "mailpit" },
+    ]);
+  });
+
+  it("projeto que não é compose: null", async () => {
+    const p = await projeto();
+    expect(await svc.composeVariablesFor(p.id)).toBeNull();
   });
 });
