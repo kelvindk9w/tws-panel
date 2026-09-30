@@ -11,12 +11,14 @@ import { MailPage } from "@/pages/MailPage";
 import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
+import { HealthPage } from "@/pages/HealthPage";
 import { SecurityPage } from "@/pages/SecurityPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { ProfileSettings } from "@/pages/settings/ProfileSettings";
 import { SecuritySettings } from "@/pages/settings/SecuritySettings";
 import { AppearanceSettings } from "@/pages/settings/AppearanceSettings";
 import { NotificationSettings } from "@/pages/settings/NotificationSettings";
+import { IntegrationSettings } from "@/pages/settings/IntegrationSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 
@@ -37,6 +39,7 @@ const router = createBrowserRouter([
       { path: "/mail/:domain", element: <MailDomainPage /> },
       { path: "/security", element: <SecurityPage /> },
       { path: "/security/hardening", element: <HardeningPage /> },
+      { path: "/health", element: <HealthPage /> },
       { path: "/alerts", element: <AlertsPage /> },
       { path: "/audit", element: <AuditPage /> },
       {
@@ -48,6 +51,7 @@ const router = createBrowserRouter([
           { path: "security", element: <SecuritySettings /> },
           { path: "appearance", element: <AppearanceSettings /> },
           { path: "notifications", element: <NotificationSettings /> },
+          { path: "integrations", element: <IntegrationSettings /> },
         ],
       },
     ],

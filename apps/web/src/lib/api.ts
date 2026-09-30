@@ -56,7 +56,8 @@ export class ApiRequestError extends Error {
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
-  if (init?.body) headers.set("Content-Type", "application/json");
+  // JSON por padrão; quem envia outra coisa (arquivo cru) informa o tipo.
+  if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const token = getSetupToken();
   if (token) headers.set(SETUP_TOKEN_HEADER, token);
 
@@ -81,5 +82,6 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     }
     throw new ApiRequestError(response.status, code, message, data);
   }
+  if (response.status === 204) return undefined as T; // sem corpo
   return (await response.json()) as T;
 }

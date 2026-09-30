@@ -6,7 +6,7 @@
  * transporte `ext::` do git executa comando arbitrário e um domínio com `{`
  * ou quebra de linha injeta diretivas no Caddyfile.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -100,6 +100,7 @@ describe("DeployService.createProject — validação da fonte", () => {
     dataDir = await mkdtemp(path.join(tmpdir(), "paas-deploy-test-"));
     service = new DeployService({
       dataDir,
+      projectsDir: path.join(dataDir, "projects"),
       caddyHttpPort: 80,
       caddyHttpsPort: 443,
     } as unknown as ServerConfig);
@@ -147,13 +148,37 @@ describe("DeployService.createProject — validação da fonte", () => {
   });
 
   it("não valida esquema de URL nos modos upload/existing (são caminhos locais)", async () => {
+    const pasta = path.join(dataDir, "projects", "meu-site");
+    await mkdir(pasta, { recursive: true });
     const project = await service.createProject({
       name: "Local",
       ingestMode: "existing",
-      source: dataDir,
+      source: pasta,
       domain: "local.localhost",
     });
-    expect(project.source).toBe(dataDir);
+    expect(project.source).toBe(pasta);
+  });
+
+  /**
+   * O caminho local era qualquer pasta de dentro do container do painel —
+   * inclusive /data, onde ficam as chaves do cofre e do 2FA. Agora só pastas
+   * dentro da pasta de projetos (a única do computador que o painel enxerga).
+   */
+  it("editar o projeto também não aceita caminho fora da pasta de projetos", async () => {
+    const pasta = path.join(dataDir, "projects", "site-a");
+    await mkdir(pasta, { recursive: true });
+    const project = await service.createProject({ name: "A", ingestMode: "existing", source: pasta, domain: "a.localhost" });
+    await expect(service.updateProject(project.id, { source: "/etc" })).rejects.toMatchObject({
+      code: "source_outside_projects_dir",
+    });
+  });
+
+  it("caminho fora da pasta de projetos → 400 source_outside_projects_dir", async () => {
+    for (const source of [dataDir, "/etc", path.join(dataDir, "projects", "..", "segredos")]) {
+      await expect(
+        service.createProject({ name: "Fora", ingestMode: "existing", source, domain: "fora.localhost" }),
+      ).rejects.toMatchObject({ code: "source_outside_projects_dir" });
+    }
   });
 });
 

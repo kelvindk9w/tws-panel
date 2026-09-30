@@ -8,9 +8,10 @@
 // ---------------------------------------------------------------------------
 
 /** Tipo de pipeline detectado a partir do código-fonte. */
-export type ProjectType = "static-node" | "compose" | "dockerfile" | "unknown";
+export type ProjectType = "static" | "static-node" | "compose" | "dockerfile" | "unknown";
 
 export const PROJECT_TYPES: readonly ProjectType[] = [
+  "static",
   "static-node",
   "compose",
   "dockerfile",

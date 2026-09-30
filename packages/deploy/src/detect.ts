@@ -2,6 +2,7 @@
  * detect.ts — detecção automática do tipo de projeto a partir do código-fonte.
  *
  * Perfis (docs/projects-analysis.md):
+ *  - static:      HTML puro (index.html na raiz, sem build) — servido como está
  *  - static-node: package.json com build que gera pasta estática (bomb: Next export → out/)
  *  - compose:     tem arquivo compose (trader: compose.prod.yml → painel ADOTA)
  *  - dockerfile:  Dockerfile sem compose
@@ -99,6 +100,20 @@ async function findComposeFile(dir: string): Promise<string | null> {
 }
 
 /** Analisa um diretório de código-fonte e classifica o tipo de projeto. */
+async function hasRootIndexHtml(dir: string): Promise<boolean> {
+  return existsSync(path.join(dir, "index.html"));
+}
+
+/** HTML puro: servido como está, sem build (o primeiro teste de quase todo iniciante). */
+function staticSite(result: DetectResult, details: string[]): DetectResult {
+  result.type = "static";
+  details.push(
+    "index.html na raiz e nenhum build — site estático: os arquivos vão para o ar como estão " +
+      "(sem .git, .env nem outros arquivos ocultos).",
+  );
+  return result;
+}
+
 export async function detectProject(dir: string): Promise<DetectResult> {
   const warnings: GuardrailWarning[] = [];
   const details: string[] = [];
@@ -198,9 +213,12 @@ export async function detectProject(dir: string): Promise<DetectResult> {
         return result;
       }
     }
+    if (await hasRootIndexHtml(dir)) return staticSite(result, details);
     details.push("package.json sem script de build.");
     return result;
   }
+
+  if (await hasRootIndexHtml(dir)) return staticSite(result, details);
 
   // package.json ausente: Dockerfile sozinho já retornou acima — resta o caso
   // em que nada foi encontrado.

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { SetupStatusResponse } from "@paas/core";
+import { DEFAULT_USER_PREFERENCES, type AdminUser, type AuthMeResponse, type SetupStatusResponse, type UserPreferences } from "@paas/core";
 import { apiFetch, getSetupToken, initSetupToken, ApiRequestError } from "@/lib/api";
 import { useTerminalInfo } from "@/lib/terminal-info";
 import { Stepper } from "@/components/Stepper";
@@ -8,6 +8,9 @@ import { WelcomeStep } from "@/pages/setup/WelcomeStep";
 import { HealthStep } from "@/pages/setup/HealthStep";
 import { SecurityStep } from "@/pages/setup/SecurityStep";
 import { AdminStep } from "@/pages/setup/AdminStep";
+import { SetupDone } from "@/pages/setup/SetupDone";
+import { Layout } from "@/components/Layout";
+import { AuthContext } from "@/lib/auth";
 import { Progress } from "@/components/ui/progress";
 
 const FALLBACK_STEPS: SetupStatusResponse["steps"] = [
@@ -35,6 +38,20 @@ export function SetupPage() {
    * terminal liberado (mesma regra do WebSocket). Desce para o terminal
    * (cabeçalho por modo) e para a Segurança (usuário da Fase 01). */
   const terminalInfo = useTerminalInfo(terminalEnabled);
+  /** Conta logada = setup já concluído: mostra o resumo, não o assistente. */
+  const [doneUser, setDoneUser] = useState<AdminUser | null>(null);
+  const [donePrefs, setDonePrefs] = useState<UserPreferences>(DEFAULT_USER_PREFERENCES);
+
+  useEffect(() => {
+    apiFetch<AuthMeResponse>("/api/auth/me")
+      .then((me) => {
+        if (me?.user?.username) {
+          setDoneUser(me.user);
+          setDonePrefs({ ...DEFAULT_USER_PREFERENCES, ...me.preferences });
+        }
+      })
+      .catch(() => undefined); // sem sessão (ou setup em andamento): assistente
+  }, []);
 
   // Captura ?token= da URL na primeira renderização.
   useEffect(() => {
@@ -82,6 +99,19 @@ export function SetupPage() {
 
   const maxStep = steps.length - 1;
   const progress = (step / maxStep) * 100;
+
+  if (doneUser) {
+    // Com sessão, a página fica dentro do painel (menu e tudo).
+    return (
+      <AuthContext.Provider
+        value={{ user: doneUser, setUser: setDoneUser, preferences: donePrefs, setPreferences: setDonePrefs }}
+      >
+        <Layout>
+          <SetupDone user={doneUser} />
+        </Layout>
+      </AuthContext.Provider>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-background">

@@ -5,6 +5,7 @@ import type {
   ProjectListResponse,
   ProjectResponse,
   ProjectStatus,
+  ProjectType,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
@@ -36,7 +37,8 @@ export function StatusBadge({ status }: { status: ProjectStatus }) {
   }
 }
 
-export const TYPE_LABELS: Record<string, string> = {
+export const TYPE_LABELS: Record<ProjectType, string> = {
+  static: "site estático (HTML)",
   "static-node": "estático (Node)",
   compose: "compose adotado",
   dockerfile: "dockerfile",
