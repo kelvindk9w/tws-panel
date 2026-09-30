@@ -262,6 +262,12 @@ export function SecurityStep({
   const [resumedAfter, setResumedAfter] = useState<IndexSnapshot | null>(null);
   /** Verificações do histórico do servidor, da mais antiga à mais recente. */
   const [historyScans, setHistoryScans] = useState<IndexSnapshot[]>([]);
+  /**
+   * Última aplicação real bem-sucedida de cada fase (histórico + esta sessão).
+   * Validação real: a fase 02 era aplicada, o item seguia reprovado e o plano
+   * a recomendava de novo como se fosse nova — o operador andava em círculo.
+   */
+  const [appliedAtByPhase, setAppliedAtByPhase] = useState<Partial<Record<SecurityPhaseId, string>>>({});
 
   // Ao montar: se o histórico server-side mostra um hardening já aplicado
   // com sucesso (último apply real = success), restaura direto a tela
@@ -278,6 +284,12 @@ export function SecurityStep({
             .sort((a, b) => a.at.localeCompare(b.at))
             .map((e) => ({ index: e.hardeningIndex ?? null, source: e.hardeningIndexSource ?? "internal" })),
         );
+        const appliedAt: Partial<Record<SecurityPhaseId, string>> = {};
+        for (const e of h.entries) {
+          if (e.kind !== "job" || e.dryRun || e.status !== "success" || !e.phase) continue;
+          if (!appliedAt[e.phase] || e.at > appliedAt[e.phase]!) appliedAt[e.phase] = e.at;
+        }
+        setAppliedAtByPhase(appliedAt);
         if (!h.applied) return;
         if (h.applied.beforeIndex !== null) {
           setBeforeSnapshot({ index: h.applied.beforeIndex, source: h.applied.beforeIndexSource ?? "internal" });
@@ -573,7 +585,14 @@ export function SecurityStep({
     });
     const ok = await runPhases(runQueue, false);
     if (!ok) return;
-    // 3) scan final para comparação antes/depois
+    const now = new Date().toISOString();
+    setAppliedAtByPhase((prev) => ({ ...prev, ...Object.fromEntries(runQueue.map((id) => [id, now])) }));
+    // 3) scan final para comparação antes/depois. O resultado salvo de uma
+    // aplicação anterior sai de cena: sem isto, a tela mostrava a nota velha
+    // (86 → 86) enquanto o Lynis ainda media — parecia que nada tinha mudado.
+    setResumed(false);
+    setResumedAfter(null);
+    setAfterReport(null);
     setStage("done");
     const after = await runScan(true);
     setAfterReport(after);
@@ -917,6 +936,34 @@ export function SecurityStep({
                             <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {a.impact}
                           </p>
                         )}
+                        {(() => {
+                          const appliedAt = appliedAtByPhase[a.phase];
+                          const stillFailing = (report?.checks ?? []).filter(
+                            (c) => a.fixesCheckIds.includes(c.id) && c.status === "fail",
+                          );
+                          if (a.alreadySatisfied || !appliedAt || stillFailing.length === 0) return null;
+                          return (
+                            <div
+                              data-testid={`already-applied-${a.phase}`}
+                              className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
+                            >
+                              <p>
+                                Esta fase já foi aplicada com sucesso em{" "}
+                                {new Date(appliedAt).toLocaleString("pt-BR")}, mas o item abaixo continua
+                                reprovado — aplicar de novo provavelmente não resolve. Algo no servidor está
+                                desfazendo ou sobrepondo a correção:
+                              </p>
+                              <ul className="mt-1 list-disc pl-5">
+                                {stillFailing.map((c) => (
+                                  <li key={c.id}>
+                                    <strong>{c.title}</strong>
+                                    {c.detail ? ` — ${c.detail}` : ""}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     {/* Ações da fase: principal = executar só ela; secundária = manual */}

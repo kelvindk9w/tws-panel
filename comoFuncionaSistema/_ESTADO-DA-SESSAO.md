@@ -45,6 +45,15 @@ pendente e por quê — informação que não está no código nem no git log.
   O aviso "main vs dev" saiu do README (é processo de quem publica, não do usuário).
   **Falta a validação real na VPS** (ACME de verdade, portas 80/443 da Contabo).
   Próximo recomendado: 2FA no login, já que o painel passa a estar na internet.
+- **"Andando em círculo" (29/09, depois do PR #43):** duas causas na tela de hardening.
+  (1) Ao reaplicar a partir do resultado salvo, a tela final mostrava a nota antiga
+  ("Hoje 86", "Última aplicação 86 → 86") enquanto o Lynis ainda media — agora mostra
+  "medindo…" até a nota nova chegar. (2) Uma fase aplicada com sucesso cujo item
+  continuava reprovado (caso da Contabo, `50-cloud-init.conf` vencendo o drop-in) era
+  recomendada de novo como se fosse nova — agora o card da fase avisa que ela já foi
+  aplicada, em que data, qual item continua reprovado e que reaplicar provavelmente não
+  resolve. Ainda em aberto: por que o Lynis deu 80 numa medição e 86 em outra (pedir a
+  lista de sugestões do relatório ao operador).
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:
