@@ -211,6 +211,31 @@ describe.skipIf(!HAS_DOCKER)("fases 02 e 07 num Ubuntu real", () => {
     expect(sh("test -e /etc/ssh/sshd_config.d/40-paas-hardening.conf").code).not.toBe(0);
   }, 300_000);
 
+  /**
+   * Validação real: a reversão automática (sem --confirm) RECRIOU o
+   * 99-paas-hardening.conf — o nome antigo, que uma aplicação anterior já tinha
+   * removido — porque havia cópias antigas dele. O desfazer só devolve o
+   * arquivo antigo quando foi ESTA aplicação que o removeu.
+   */
+  it("desfazer (manual e automático) não recria o 99- antigo que já não existia", () => {
+    const antigo = "/etc/ssh/sshd_config.d/99-paas-hardening.conf";
+    // há cópias antigas do 99- (testes acima), mas o arquivo não existe mais
+    sh(`rm -f ${antigo}`);
+    expect(sh("ls /var/backups/paas/etc/ssh/sshd_config.d/ | grep -c '^99-paas-hardening'").out.trim()).not.toBe("0");
+
+    const r = sh("PAAS_ROLLBACK_DELAY=300 bash /opt/h/02-ssh.sh --user kelvin");
+    expect(r.code, r.out).toBe(0);
+    const auto = sh("bash /etc/paas/revert-ssh.sh");
+    expect(auto.code, auto.out).toBe(0);
+    expect(sh(`test -e ${antigo}`).code).not.toBe(0);
+
+    const r2 = sh("PAAS_ROLLBACK_DELAY=300 bash /opt/h/02-ssh.sh --user kelvin");
+    expect(r2.code, r2.out).toBe(0);
+    const manual = sh("bash /opt/h/02-ssh.sh --rollback");
+    expect(manual.code, manual.out).toBe(0);
+    expect(sh(`test -e ${antigo}`).code).not.toBe(0);
+  }, 300_000);
+
   it("desfazer da fase 07 sem aplicação anterior NUNCA apaga arquivos do sistema", () => {
     // container limpo desta fase: sem nenhum backup da 07 ainda
     const antes = sh("md5sum /etc/login.defs /etc/issue").out;

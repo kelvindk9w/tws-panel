@@ -28,6 +28,10 @@ TCP_FORWARDING="local"
 DROPIN="/etc/ssh/sshd_config.d/40-paas-hardening.conf"
 OLD_DROPIN="/etc/ssh/sshd_config.d/99-paas-hardening.conf"
 REVERT_SCRIPT="${PAAS_STATE_DIR}/revert-ssh.sh"
+# Marca que ESTA aplicação removeu o arquivo antigo: só então o desfazer o
+# devolve. Sem a marca, as cópias antigas faziam a reversão recriar um 99- que
+# já não existia antes da fase (visto em campo).
+OLD_DROPIN_MARK="${PAAS_STATE_DIR}/ssh-old-dropin-removed"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,7 +61,7 @@ fi
 if [ "$MODE" = "confirm" ]; then
   step "Confirmando acesso SSH do operador"
   confirm_rollback "ssh"
-  run rm -f "$REVERT_SCRIPT"
+  run rm -f "$REVERT_SCRIPT" "$OLD_DROPIN_MARK"
   ok "Acesso confirmado — configuração de SSH mantida definitivamente"
   exit 0
 fi
@@ -89,7 +93,10 @@ fi
 if [ "$MODE" = "rollback" ]; then
   step "Restaurando configuração anterior do SSH"
   restore_latest_backup "$DROPIN"
-  restore_latest_backup "$OLD_DROPIN"
+  if [ -e "$OLD_DROPIN_MARK" ]; then
+    restore_latest_backup "$OLD_DROPIN"
+    run rm -f "$OLD_DROPIN_MARK"
+  fi
   restore_backup_or_keep "/etc/ssh/sshd_config"
   if has_systemd && [ -n "$(systemctl cat ssh.socket 2>/dev/null || true)" ]; then
     # remove override de socket activation, se existir
@@ -142,7 +149,10 @@ source "$(dirname "$(readlink -f "$0")")/lib.sh"
 echo "[paas-rollback] operador não confirmou acesso em ${PAAS_ROLLBACK_DELAY}s — revertendo SSH"
 PAAS_DRY_RUN=0
 restore_latest_backup "$DROPIN"
-restore_latest_backup "$OLD_DROPIN"
+if [ -e "$OLD_DROPIN_MARK" ]; then
+  restore_latest_backup "$OLD_DROPIN"
+  rm -f "$OLD_DROPIN_MARK"
+fi
 rm -rf /etc/systemd/system/ssh.socket.d
 if [ -d /run/systemd/system ]; then
   systemctl daemon-reload || true
@@ -171,6 +181,9 @@ if [ -e "$OLD_DROPIN" ]; then
   # desfazer o devolve), senão ficariam duas versões da configuração.
   backup_file "$OLD_DROPIN"
   run rm -f "$OLD_DROPIN"
+  run touch "$OLD_DROPIN_MARK"
+else
+  run rm -f "$OLD_DROPIN_MARK"
 fi
 step "Aplicando drop-in de hardening ($DROPIN)"
 {

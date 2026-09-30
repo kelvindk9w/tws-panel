@@ -62,6 +62,17 @@ pendente e por quê — informação que não está no código nem no git log.
   grava `AllowTcpForwarding no` (SSH-7408); no modo túnel continua `local`, e o instalador
   com `--acesso=tunel` reabre o túnel (`02-ssh.sh --reopen-tunnel`). Na VPS de teste, que já
   tinha a Fase 02 aplicada, o operador reaplica a fase pelo modo manual.
+- **30/09 — ajustes rápidos:** o desfazer da Fase 02 só devolve o `99-paas-hardening.conf`
+  antigo quando foi a própria aplicação que o removeu (marca em
+  `/etc/paas/ssh-old-dropin-removed`; a reversão automática recriava o arquivo a partir de
+  cópias antigas — visto em campo); aviso "nova versão do painel — Recarregar" (a página
+  compara o arquivo principal carregado com o que o servidor entrega; confere a cada 60 s e
+  ao voltar à aba); `ip-address` 10.7.2 (Dependabot); "O que isso faz?" recolhido junto do
+  "Simular todas as fases pendentes"; botão "Aplicar de verdade" verde com "Agora a VPS será
+  alterada de verdade". O item "como instalar a minha chave" da Fase 01 já estava coberto
+  (o card diz que sem chave nada muda e a chave colada é instalada pela própria fase).
+  Ordem combinada a seguir: 2FA no login → configurações do painel e dos projetos →
+  validação do zero → tradução por último.
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:

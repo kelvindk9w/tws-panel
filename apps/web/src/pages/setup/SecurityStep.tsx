@@ -262,6 +262,8 @@ export function SecurityStep({
   const [resumedAfter, setResumedAfter] = useState<IndexSnapshot | null>(null);
   /** Verificações do histórico do servidor, da mais antiga à mais recente. */
   const [historyScans, setHistoryScans] = useState<IndexSnapshot[]>([]);
+  /** "O que isso faz?" do botão de simulação (pedido do dono do produto: recolhido). */
+  const [dryRunHelpOpen, setDryRunHelpOpen] = useState(false);
   /**
    * Última aplicação real bem-sucedida de cada fase (histórico + esta sessão).
    * Validação real: a fase 02 era aplicada, o item seguia reprovado e o plano
@@ -1044,15 +1046,28 @@ export function SecurityStep({
               {/* O rótulo antigo ("Executar dry-run…") não dizia a um leigo o
                   que o clique faz. A linha abaixo responde à pergunta literal
                   do dono do produto: "se eu clicar, o que acontece?". */}
-              <p
-                data-testid="dry-run-explicacao"
-                className="max-w-md text-right text-xs text-muted-foreground"
-              >
-                Roda a <strong>simulação</strong> de todas as fases pendentes, na ordem.{" "}
-                <strong>Nada é alterado no servidor</strong> — você acompanha tudo no terminal abaixo. No
-                modo senha, o sudo vai pedir a sua senha no terminal. Se a simulação passar, aparece
-                então o botão para aplicar de verdade.
+              <p data-testid="dry-run-resumo" className="max-w-md text-right text-xs text-muted-foreground">
+                <strong>Nada é alterado no servidor</strong> — é só uma simulação.{" "}
+                <button
+                  type="button"
+                  aria-expanded={dryRunHelpOpen}
+                  onClick={() => setDryRunHelpOpen((v) => !v)}
+                  className="font-medium text-sky-400 underline-offset-2 hover:underline"
+                >
+                  O que isso faz?
+                </button>
               </p>
+              {dryRunHelpOpen && (
+                <p
+                  data-testid="dry-run-explicacao"
+                  className="max-w-md text-right text-xs text-muted-foreground"
+                >
+                  Roda a <strong>simulação</strong> de todas as fases pendentes, na ordem.{" "}
+                  <strong>Nada é alterado no servidor</strong> — você acompanha tudo no terminal abaixo. No
+                  modo senha, o sudo vai pedir a sua senha no terminal. Se a simulação passar, aparece
+                  então o botão para aplicar de verdade.
+                </p>
+              )}
             </div>
           </div>
           {!sshFormValid && (
@@ -1221,7 +1236,10 @@ export function SecurityStep({
                     as fases de SSH/firewall entram com rollback automático de 5 minutos, revertendo
                     sozinhas se você não confirmar que ainda consegue acessar o servidor.
                   </p>
-                  <Button onClick={() => void startRealApply()}>
+                  <p data-testid="apply-for-real-warning" className="text-sm font-semibold text-emerald-300">
+                    Agora a VPS será alterada de verdade.
+                  </p>
+                  <Button className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => void startRealApply()}>
                     <ShieldCheck className="h-4 w-4" /> Aplicar de verdade
                   </Button>
                 </div>
