@@ -88,7 +88,7 @@ describe("GET /api/domains/check", () => {
     const body = res.json();
     expect(body.ok).toBe(false);
     expect(body.resolvedIps).toEqual(["198.51.100.99"]);
-    expect(body.message).toContain("não aponta para esta máquina");
+    expect(body.message).toMatch(/aponta para 198\.51\.100\.99, não para esta VPS.*registro A para 203\.0\.113\.10/);
   });
 
   it("domínio sem registro A (NXDOMAIN) → ok=false orientando criar o registro", async () => {
@@ -97,7 +97,7 @@ describe("GET /api/domains/check", () => {
     const body = res.json();
     expect(body.ok).toBe(false);
     expect(body.resolvedIps).toEqual([]);
-    expect(body.message).toContain("não resolveu nenhum registro A");
+    expect(body.message).toMatch(/ainda não aponta.*registro do tipo A.*203\.0\.113\.10/);
   });
 
   it("normaliza o domínio (maiúsculas) antes de consultar", async () => {

@@ -27,7 +27,7 @@ import authRoutes from "./routes/auth.js";
 import setupRoutes from "./routes/setup.js";
 import healthRoutes from "./routes/health.js";
 import settingsRoutes from "./routes/settings.js";
-import uploadRoutes from "./routes/uploads.js";
+import serverFolderRoutes from "./routes/server-folders.js";
 import integrationRoutes from "./routes/integrations.js";
 import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
@@ -187,7 +187,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(settingsRoutes);
-  await app.register(uploadRoutes);
+  await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(setupRestartRoutes);
   await app.register(securityRoutes);

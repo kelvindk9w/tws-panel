@@ -8,7 +8,7 @@
  *  - a mensagem de erro do servidor (várias linhas, com a orientação do git)
  *    aparecia espremida numa linha só.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -43,6 +43,7 @@ beforeEach(() => {
     if (path === "/api/projects" && method === "POST") return { project: PROJECT };
     if (path === "/api/projects/p1" && method === "PATCH") return { project: PROJECT };
     if (path === "/api/projects/p1/credential" && method === "PUT") return { credential: { configured: true } };
+    if (path.startsWith("/api/domains/suggest")) return { auto: "cassino.203-0-113-10.sslip.io", publicIp: "203.0.113.10" };
     if (path === "/api/projects/p1/detect") {
       if (detectFailures > 0) {
         detectFailures -= 1;
@@ -77,7 +78,8 @@ function preencherGit() {
 function chamadas(): string[] {
   return apiFetchMock.mock.calls
     .map(([p, init]) => `${(init as RequestInit | undefined)?.method ?? "GET"} ${p}`)
-    .filter((c) => !c.includes("/api/integrations/github")); // consulta da conta do GitHub (sem conexão nos testes)
+    // consultas de apoio (conta do GitHub, endereço automático) não entram na conta
+    .filter((c) => !c.includes("/api/integrations/github") && !c.includes("/api/domains/suggest"));
 }
 
 describe("NewProjectPage — repositório git", () => {
@@ -209,63 +211,6 @@ describe("NewProjectPage — tipo que o painel não sabe publicar", () => {
   });
 });
 
-/**
- * Código do computador de quem usa o painel. O modo antigo pedia um caminho
- * de DENTRO do servidor (inútil online). Agora: janela de pasta do navegador,
- * que envia os arquivos — sem node_modules e .git.
- */
-describe("NewProjectPage — enviar a pasta do meu computador", () => {
-  function arquivo(caminho: string, conteudo = "x"): File {
-    const f = new File([conteudo], caminho.split("/").pop()!, { type: "text/plain" });
-    Object.defineProperty(f, "webkitRelativePath", { value: caminho });
-    return f;
-  }
-
-  it("escolhe a pasta, mostra o resumo, envia cada arquivo e cria o projeto a partir do envio", async () => {
-    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (path === "/api/uploads" && method === "POST") return { id: "0123456789abcdef", dir: "/opt/tws-projects/_uploads/0123456789abcdef" };
-      if (path.startsWith("/api/uploads/0123456789abcdef/file") && method === "PUT") return undefined;
-      if (path === "/api/projects" && method === "POST") return { project: PROJECT };
-      if (path === "/api/projects/p1/detect") return { detection: { ...DETECTION, type: "static" } };
-      throw new Error(`chamada inesperada: ${method} ${path}`);
-    });
-    render(
-      <MemoryRouter>
-        <NewProjectPage />
-      </MemoryRouter>,
-    );
-    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "devlinks" } });
-    fireEvent.click(screen.getByRole("button", { name: /Enviar do meu computador/ }));
-    const input = screen.getByTestId("folder-input") as HTMLInputElement;
-    expect(input).toHaveAttribute("webkitdirectory");
-    fireEvent.change(input, {
-      target: {
-        files: [
-          arquivo("devlinks/index.html", "<h1>oi</h1>"),
-          arquivo("devlinks/assets/logo.svg"),
-          arquivo("devlinks/node_modules/pkg/index.js"),
-          arquivo("devlinks/.git/config"),
-        ],
-      },
-    });
-    expect(screen.getByTestId("folder-summary")).toHaveTextContent(/devlinks/);
-    expect(screen.getByTestId("folder-summary")).toHaveTextContent(/2 arquivos/);
-
-    fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
-    await screen.findByText(/Tipo detectado/);
-    const puts = apiFetchMock.mock.calls
-      .filter(([, i]) => (i as RequestInit | undefined)?.method === "PUT")
-      .map(([p]) => decodeURIComponent(String(p).split("path=")[1]!));
-    expect(puts.sort()).toEqual(["assets/logo.svg", "index.html"]);
-    const create = apiFetchMock.mock.calls.find(([p, i]) => p === "/api/projects" && (i as RequestInit).method === "POST");
-    expect(JSON.parse(String((create![1] as RequestInit).body))).toMatchObject({
-      ingestMode: "upload",
-      source: "/opt/tws-projects/_uploads/0123456789abcdef",
-    });
-  });
-});
-
 describe("NewProjectPage — pasta que já está no servidor", () => {
   it("\"Procurar…\" navega só dentro da pasta de projetos e preenche o caminho", async () => {
     apiFetchMock.mockImplementation(async (path: string) => {
@@ -305,4 +250,38 @@ it("trocar a origem não leva a URL do git para o campo da pasta", () => {
   });
   fireEvent.click(screen.getByRole("button", { name: /Pasta que já está no servidor/ }));
   expect(screen.getByLabelText(/Caminho da pasta no servidor/)).toHaveValue("");
+});
+
+/**
+ * Passo 3 — domínio. Validação real: o assistente sugeria "nome.localhost",
+ * que só funciona no computador de desenvolvimento. Agora: endereço automático
+ * (<projeto>.<ip>.sslip.io, HTTPS na hora) ou domínio próprio com o registro
+ * de DNS exato para criar.
+ */
+describe("NewProjectPage — domínio do projeto", () => {
+  async function ateOPasso3() {
+    preencherGit();
+    fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
+    await screen.findByText(/Tipo detectado/);
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  }
+
+  it("o projeto nasce com o endereço automático (não .localhost) e ele vem marcado", async () => {
+    await ateOPasso3();
+    const create = apiFetchMock.mock.calls.find(([p, i]) => p === "/api/projects" && (i as RequestInit).method === "POST");
+    expect(JSON.parse(String((create![1] as RequestInit).body)).domain).toBe("cassino.203-0-113-10.sslip.io");
+    expect(screen.getByRole("radio", { name: /Endereço automático/ })).toBeChecked();
+    expect(screen.getByTestId("auto-domain")).toHaveTextContent("https://cassino.203-0-113-10.sslip.io");
+  });
+
+  it("domínio próprio: mostra o registro de DNS exato a criar, com o IP da VPS", async () => {
+    await ateOPasso3();
+    fireEvent.click(screen.getByRole("radio", { name: /Meu domínio ou subdomínio/ }));
+    fireEvent.change(screen.getByLabelText(/Seu domínio/), { target: { value: "site.meusite.com.br" } });
+    const guia = screen.getByTestId("dns-guide");
+    expect(within(guia).getByRole("columnheader", { name: "Tipo" })).toBeInTheDocument();
+    expect(within(guia).getByRole("cell", { name: "A" })).toBeInTheDocument();
+    expect(guia).toHaveTextContent("site.meusite.com.br");
+    expect(guia).toHaveTextContent("203.0.113.10");
+  });
 });

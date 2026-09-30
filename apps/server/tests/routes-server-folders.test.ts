@@ -1,9 +1,8 @@
 /**
- * routes-uploads.test.ts — as rotas do envio de pasta pelo navegador e da
- * navegação de pastas do servidor: sessão obrigatória, arquivo cru no corpo
- * (sem biblioteca de upload), caminho relativo na query, limites.
+ * routes-server-folders.test.ts — rota da navegação de pastas do servidor:
+ * sessão obrigatória; fora da pasta de projetos → 400.
  */
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -11,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
 import authRoutes from "../src/routes/auth.js";
 import setupRoutes from "../src/routes/setup.js";
-import uploadRoutes from "../src/routes/uploads.js";
+import serverFolderRoutes from "../src/routes/server-folders.js";
 import { buildAuthTestApp, closeAuthTestApp, sessionCookieOf, type AuthTestContext } from "./test-utils.js";
 
 const TOKEN = "token-de-teste";
@@ -27,7 +26,7 @@ beforeEach(async () => {
   app.decorate("config", { projectsDir } as never);
   await app.register(authRoutes);
   await app.register(setupRoutes);
-  await app.register(uploadRoutes);
+  await app.register(serverFolderRoutes);
   await app.inject({
     method: "POST",
     url: "/api/setup/admin",
@@ -43,34 +42,7 @@ afterEach(async () => {
   await rm(projectsDir, { recursive: true, force: true });
 });
 
-describe("rotas de envio de pasta", () => {
-  it("abre o envio, recebe os arquivos crus e devolve a pasta para usar como origem do projeto", async () => {
-    const begin = await app.inject({ method: "POST", url: "/api/uploads", headers: { cookie } });
-    expect(begin.statusCode, begin.body).toBe(200);
-    const { id, dir } = begin.json() as { id: string; dir: string };
-    const put = await app.inject({
-      method: "PUT",
-      url: `/api/uploads/${id}/file?path=${encodeURIComponent("css/style.css")}`,
-      headers: { cookie, "content-type": "application/octet-stream" },
-      payload: Buffer.from("h1{color:red}"),
-    });
-    expect(put.statusCode, put.body).toBe(204);
-    expect(await readFile(path.join(dir, "css", "style.css"), "utf8")).toBe("h1{color:red}");
-  });
-
-  it("caminho que tenta escapar → 400; sem sessão → 401", async () => {
-    const { id } = (await app.inject({ method: "POST", url: "/api/uploads", headers: { cookie } })).json() as { id: string };
-    const fuga = await app.inject({
-      method: "PUT",
-      url: `/api/uploads/${id}/file?path=${encodeURIComponent("../../fora.txt")}`,
-      headers: { cookie, "content-type": "application/octet-stream" },
-      payload: Buffer.from("x"),
-    });
-    expect(fuga.statusCode).toBe(400);
-    const anon = await app.inject({ method: "POST", url: "/api/uploads" });
-    expect(anon.statusCode).toBe(401);
-  });
-
+describe("rota de pastas do servidor", () => {
   it("navegar nas pastas: raiz = pasta de projetos; fora dela → 400", async () => {
     await mkdir(path.join(projectsDir, "meu-site"), { recursive: true });
     const raiz = await app.inject({ method: "GET", url: "/api/fs/dirs", headers: { cookie } });
@@ -78,5 +50,6 @@ describe("rotas de envio de pasta", () => {
     expect((raiz.json() as { dirs: Array<{ name: string }> }).dirs.map((d) => d.name)).toEqual(["meu-site"]);
     const fora = await app.inject({ method: "GET", url: "/api/fs/dirs?path=%2Fetc", headers: { cookie } });
     expect(fora.statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/fs/dirs" })).statusCode).toBe(401);
   });
 });
