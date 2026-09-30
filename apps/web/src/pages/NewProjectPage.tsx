@@ -14,7 +14,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { TokenGuide } from "@/components/TokenGuide";
-import { FolderUpload, uploadFolder, type PickedFolder } from "@/components/FolderUpload";
 import { ServerFolderBrowser } from "@/components/ServerFolderBrowser";
 import { GithubRepoPicker } from "@/components/GithubRepoPicker";
 import {
@@ -22,7 +21,6 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  FolderInput,
   FolderSymlink,
   GitBranch,
   Globe,
@@ -45,12 +43,6 @@ const INGEST_OPTIONS: Array<{
     title: "Repositório Git",
     description: "Clona uma URL git com branch configurável.",
     icon: GitBranch,
-  },
-  {
-    mode: "upload",
-    title: "Enviar do meu computador",
-    description: "Escolha a pasta do projeto numa janela; os arquivos são enviados ao painel.",
-    icon: FolderInput,
   },
   {
     mode: "existing",
@@ -95,9 +87,6 @@ export function NewProjectPage() {
   // passo 1 — fonte
   const [name, setName] = useState("");
   const [ingestMode, setIngestMode] = useState<IngestMode>("git");
-  // "Enviar do meu computador": pasta escolhida na janela do navegador
-  const [folder, setFolder] = useState<PickedFolder | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [browsing, setBrowsing] = useState(false);
   // Repositório escolhido na lista da conta do GitHub conectada: se for
   // privado, o clone usa o token da conta — não pede outro.
@@ -120,6 +109,11 @@ export function NewProjectPage() {
   const [proxyService, setProxyService] = useState("");
   const [proxyPort, setProxyPort] = useState("");
   const [dnsCheck, setDnsCheck] = useState<DomainCheckResponse | null>(null);
+  // Endereço automático (<projeto>.<ip>.sslip.io) ou domínio próprio
+  const [autoDomain, setAutoDomain] = useState<string | null>(null);
+  const [publicIp, setPublicIp] = useState<string | null>(null);
+  const [domainMode, setDomainMode] = useState<"auto" | "own">("auto");
+  const [ownDomain, setOwnDomain] = useState("");
 
   function defaultDomainFor(projectName: string): string {
     const slug = projectName
@@ -141,15 +135,17 @@ export function NewProjectPage() {
     setError(null);
     try {
       let id = projectId;
-      const dom = domain || defaultDomainFor(name);
-      // Envio da pasta: os arquivos sobem antes; a pasta do servidor que os
-      // recebeu vira a origem do projeto.
-      let source = sourceText;
-      if (ingestMode === "upload") {
-        if (!folder) throw new Error("Escolha a pasta do projeto.");
-        source = await uploadFolder(folder, (done, total) => setUploadProgress({ done, total }));
-        setUploadProgress(null);
+      let dom = domain;
+      if (!dom) {
+        // endereço automático: funciona na hora, com HTTPS, sem configurar DNS
+        const sug = await apiFetch<{ auto: string; publicIp: string | null }>(
+          `/api/domains/suggest?name=${encodeURIComponent(name)}`,
+        ).catch(() => null);
+        dom = sug?.auto ?? defaultDomainFor(name);
+        setAutoDomain(dom);
+        setPublicIp(sug?.publicIp ?? null);
       }
+      const source = sourceText;
       if (id === null) {
         const created = await apiFetch<ProjectResponse>("/api/projects", {
           method: "POST",
@@ -185,7 +181,6 @@ export function NewProjectPage() {
       setProxyPort(det.detection.proxyPort ? String(det.detection.proxyPort) : "");
       setStep(1);
     } catch (err) {
-      setUploadProgress(null);
       setError(err instanceof Error ? err.message : "Falha ao criar o projeto.");
     } finally {
       setBusy(false);
@@ -196,7 +191,7 @@ export function NewProjectPage() {
     setBusy(true);
     setDnsCheck(null);
     try {
-      setDnsCheck(await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${domain}`));
+      setDnsCheck(await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(ownDomain.trim())}`));
     } catch {
       setDnsCheck(null);
     } finally {
@@ -212,7 +207,7 @@ export function NewProjectPage() {
       await apiFetch<ProjectResponse>(`/api/projects/${projectId}`, {
         method: "PATCH",
         body: JSON.stringify({
-          domain,
+          domain: chosenDomain,
           websocket,
           proxyService: proxyService || null,
           proxyPort: proxyPort ? Number(proxyPort) : null,
@@ -226,7 +221,8 @@ export function NewProjectPage() {
     }
   }
 
-  const hasSource = ingestMode === "upload" ? folder !== null && folder.files.length > 0 : sourceText.trim() !== "";
+  const hasSource = sourceText.trim() !== "";
+  const chosenDomain = domainMode === "auto" ? (autoDomain ?? domain) : ownDomain.trim().toLowerCase();
   const canNextStep0 =
     name.trim() !== "" && hasSource && (!privateRepo || ingestMode !== "git" || token.trim() !== "" || projectId !== null);
 
@@ -285,7 +281,7 @@ export function NewProjectPage() {
               />
             </label>
 
-            <div className="grid gap-2 sm:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2">
               {INGEST_OPTIONS.map((opt) => (
                 <button
                   key={opt.mode}
@@ -340,10 +336,6 @@ export function NewProjectPage() {
                   </p>
                 )}
               </div>
-            )}
-
-            {ingestMode === "upload" && (
-              <FolderUpload folder={folder} onPick={setFolder} progress={uploadProgress} />
             )}
 
             {ingestMode === "existing" && (
@@ -532,36 +524,117 @@ export function NewProjectPage() {
         <Card>
           <CardHeader>
             <CardTitle>Domínio e criação</CardTitle>
-            <CardDescription>
-              Em desenvolvimento local, use <code>.localhost</code> — o Caddy central resolve
-              automaticamente, sem DNS nem certificado.
-            </CardDescription>
+            <CardDescription>Em que endereço o projeto vai abrir.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <label className="flex flex-col gap-1.5 text-sm">
-              Domínio
-              <div className="flex gap-2">
-                <Input value={domain} onChange={(e) => setDomain(e.target.value)} />
-                <Button variant="outline" disabled={busy || !domain} onClick={() => void checkDns()}>
-                  <Globe className="h-4 w-4" /> Verificar DNS
-                </Button>
-              </div>
-            </label>
-
-            {dnsCheck && (
-              <p
+            <div role="radiogroup" aria-label="Domínio do projeto" className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={domainMode === "auto"}
+                aria-label="Endereço automático"
+                onClick={() => setDomainMode("auto")}
                 className={cn(
-                  "flex items-start gap-2 text-sm",
-                  dnsCheck.ok ? "text-emerald-400" : "text-amber-400",
+                  "flex flex-col gap-1 rounded-lg border p-3 text-left text-sm",
+                  domainMode === "auto" ? "border-primary bg-primary/10" : "hover:border-foreground/30",
                 )}
               >
-                {dnsCheck.ok ? (
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                ) : (
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="font-medium">Endereço automático</span>
+                <span className="text-xs text-muted-foreground">
+                  Funciona na hora, com HTTPS, sem configurar nada. Bom para testar e para começar.
+                </span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={domainMode === "own"}
+                aria-label="Meu domínio ou subdomínio"
+                onClick={() => setDomainMode("own")}
+                className={cn(
+                  "flex flex-col gap-1 rounded-lg border p-3 text-left text-sm",
+                  domainMode === "own" ? "border-primary bg-primary/10" : "hover:border-foreground/30",
                 )}
-                {dnsCheck.message}
+              >
+                <span className="font-medium">Meu domínio ou subdomínio</span>
+                <span className="text-xs text-muted-foreground">
+                  Ex.: meusite.com.br ou loja.meusite.com.br. Precisa criar um registro no seu provedor de DNS.
+                </span>
+              </button>
+            </div>
+
+            {domainMode === "auto" && (
+              <p data-testid="auto-domain" className="rounded-md border bg-secondary/30 px-3 py-2 font-mono text-sm">
+                {(autoDomain ?? domain).endsWith(".localhost") ? "http://" : "https://"}
+                {autoDomain ?? domain}
               </p>
+            )}
+
+            {domainMode === "own" && (
+              <div className="flex flex-col gap-3">
+                <label htmlFor="np-own-domain" className="flex flex-col gap-1.5 text-sm">
+                  Seu domínio
+                  <div className="flex gap-2">
+                    <Input
+                      id="np-own-domain"
+                      value={ownDomain}
+                      onChange={(e) => {
+                        setOwnDomain(e.target.value);
+                        setDnsCheck(null);
+                      }}
+                      placeholder="loja.meusite.com.br"
+                    />
+                    <Button variant="outline" disabled={busy || !ownDomain.trim()} onClick={() => void checkDns()}>
+                      <Globe className="h-4 w-4" /> Verificar DNS
+                    </Button>
+                  </div>
+                </label>
+                <div data-testid="dns-guide" className="flex flex-col gap-2 rounded-md border bg-secondary/20 p-3 text-xs text-muted-foreground">
+                  <p>
+                    No painel onde você comprou o domínio (Registro.br, Hostinger, Cloudflare, GoDaddy…), abra a
+                    área de <strong className="text-foreground">DNS</strong> e crie este registro:
+                  </p>
+                  <table className="w-full text-left font-mono">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="pr-3 font-normal">Tipo</th>
+                        <th className="pr-3 font-normal">Nome</th>
+                        <th className="font-normal">Valor</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-foreground">
+                      <tr>
+                        <td className="pr-3">A</td>
+                        <td className="break-all pr-3">{ownDomain.trim().toLowerCase() || "loja.meusite.com.br"}</td>
+                        <td>{publicIp ?? "IP da sua VPS"}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p>
+                    Em alguns provedores o "Nome" é só a parte antes do domínio (ex.: <code>loja</code>) — ou{" "}
+                    <code>@</code> para o domínio principal. A mudança costuma valer em minutos, mas pode levar
+                    algumas horas. Depois, clique em <strong className="text-foreground">Verificar DNS</strong>.
+                  </p>
+                </div>
+                {dnsCheck && (
+                  <p
+                    className={cn(
+                      "flex items-start gap-2 text-sm",
+                      dnsCheck.ok ? "text-emerald-400" : "text-amber-400",
+                    )}
+                  >
+                    {dnsCheck.ok ? (
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    )}
+                    {dnsCheck.message}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Dá para criar o projeto antes de o DNS propagar: o site passa a abrir (com HTTPS) assim que o
+                  registro apontar para a VPS.
+                </p>
+              </div>
             )}
 
             <label className="flex items-center gap-2 text-sm">
@@ -578,7 +651,7 @@ export function NewProjectPage() {
               <Button variant="outline" onClick={() => setStep(1)}>
                 <ArrowLeft className="h-4 w-4" /> Voltar
               </Button>
-              <Button disabled={!domain || busy} onClick={() => void finish()}>
+              <Button disabled={!chosenDomain || busy} onClick={() => void finish()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
                 Criar projeto
               </Button>

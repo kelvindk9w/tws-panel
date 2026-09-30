@@ -4,9 +4,10 @@
  */
 import dns from "node:dns/promises";
 import os from "node:os";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import type { DomainCheckResponse } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { slugify } from "../services/deploy-service.js";
 
 // Hostname RFC 1123 estrito: rótulos de 1–63 caracteres alfanuméricos/hífen
 // (sem hífen nas pontas), separados por ponto. Sem isso o valor bruto do
@@ -24,7 +25,27 @@ const checkDomainSchema = {
   },
 } as const;
 
-function machineIps(): string[] {
+/**
+ * IP público da VPS a partir do endereço sslip.io do painel (1-2-3-4.sslip.io
+ * → 1.2.3.4). De dentro do container, as interfaces só mostram o IP da rede do
+ * Docker (172.x): sem isto o "Verificar DNS" nunca reconhecia a própria VPS.
+ */
+export function publicIpFromPanelDomain(panelDomain: string | null | undefined): string | null {
+  const m = /^(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})\.sslip\.io$/.exec(panelDomain ?? "");
+  if (!m) return null;
+  const parts = m.slice(1, 5).map(Number);
+  return parts.every((n) => n <= 255) ? parts.join(".") : null;
+}
+
+function panelDomainOf(app: FastifyInstance): string | null {
+  return app.hasDecorator("config") ? (app.config.panelDomain ?? null) : null;
+}
+
+function publicIpOf(app: FastifyInstance): string | null {
+  return process.env.PAAS_PUBLIC_IP?.trim() || publicIpFromPanelDomain(panelDomainOf(app));
+}
+
+function machineIps(publicIp: string | null): string[] {
   const ips = new Set<string>();
   for (const infos of Object.values(os.networkInterfaces())) {
     for (const info of infos ?? []) {
@@ -32,7 +53,6 @@ function machineIps(): string[] {
     }
   }
   ips.add("127.0.0.1");
-  const publicIp = process.env.PAAS_PUBLIC_IP?.trim();
   if (publicIp) ips.add(publicIp);
   return [...ips];
 }
@@ -49,7 +69,8 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: "invalid_domain", message: "Informe ?domain=..." });
       }
 
-      const mine = machineIps();
+      const publicIp = publicIpOf(app);
+      const mine = machineIps(publicIp);
 
       // Modo dev local: *.localhost é automático (resolve para 127.0.0.1/::1).
       if (domain === "localhost" || domain.endsWith(".localhost")) {
@@ -76,10 +97,37 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
         message: ok
           ? "O domínio aponta para esta máquina — pronto para emissão de certificado."
           : resolved.length === 0
-            ? "O domínio não resolveu nenhum registro A. Crie um registro A apontando para o IP desta máquina."
-            : "O domínio não aponta para esta máquina. Ajuste o registro A no provedor de DNS antes de emitir o certificado.",
+            ? `O domínio ainda não aponta para lugar nenhum. No seu provedor de DNS, crie um registro do tipo A ` +
+              `com o valor ${publicIp ?? "do IP desta máquina"}. A propagação costuma levar de minutos a algumas horas.`
+            : `O domínio aponta para ${resolved.join(", ")}, não para esta VPS. No seu provedor de DNS, troque o ` +
+              `registro A para ${publicIp ?? "o IP desta máquina"}.`,
       };
       return reply.send(response);
+    },
+  );
+
+  /**
+   * Endereço automático do projeto: <projeto>.<ip-com-hífens>.sslip.io — o
+   * sslip.io resolve qualquer prefixo para o IP, então funciona na hora, com
+   * HTTPS, sem configurar DNS. Sem endereço público (dev local): .localhost.
+   */
+  app.get<{ Querystring: { name?: string } }>(
+    "/api/domains/suggest",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { name: { type: "string", minLength: 1, maxLength: 100 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const slug = slugify(request.query.name ?? "projeto");
+      const panelDomain = panelDomainOf(app);
+      const publicIp = publicIpOf(app);
+      const auto = panelDomain && publicIpFromPanelDomain(panelDomain) ? `${slug}.${panelDomain}` : `${slug}.localhost`;
+      return reply.send({ auto, publicIp });
     },
   );
 };

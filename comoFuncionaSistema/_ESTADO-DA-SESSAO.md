@@ -102,6 +102,11 @@ pendente e por quê — informação que não está no código nem no git log.
   digitar "recomeçar" (POST /api/settings/restart-setup; gera token de setup novo). Sem 2FA, o
   painel recusa e aponta o `reset-setup.sh --full` — o código por e-mail pedido pelo dono do
   produto depende de o painel enviar e-mail, que ainda não existe (decisão do canal pendente).
+- **30/09 — domínio no Novo Projeto:** endereço automático `<projeto>.<ip>.sslip.io` (HTTPS na
+  hora) ou domínio próprio com o registro A exato; "Verificar DNS" corrigido (usava o IP do
+  container). "Enviar do meu computador" removido a pedido (foco em git). Próximo combinado:
+  Configurações → Domínios (domínio próprio para o painel e domínio-base dos projetos com DNS
+  curinga, para subdomínio automático por projeto).
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:
