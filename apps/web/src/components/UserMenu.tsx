@@ -1,146 +1,19 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import {
-  PASSWORD_MIN_LENGTH,
-  validatePasswordStrength,
-  type ChangePasswordRequest,
-} from "@paas/core";
-import { apiFetch, ApiRequestError, clearSetupToken } from "@/lib/api";
+import { apiFetch, clearSetupToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { PasswordInput } from "@/components/ui/password-input";
-import { TwoFactorModal } from "@/components/TwoFactorModal";
-import { CheckCircle2, ChevronDown, Circle, KeyRound, Loader2, LogOut, ShieldCheck, UserRound, X } from "lucide-react";
-
-/** Modal de troca de senha (exige a senha atual; invalida as demais sessões). */
-function ChangePasswordModal({ onClose }: { onClose: () => void }) {
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-
-  const strength = validatePasswordStrength(newPassword);
-  const canSubmit =
-    currentPassword.length > 0 && strength.valid && confirm === newPassword && !loading;
-
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!canSubmit) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const payload: ChangePasswordRequest = { currentPassword, newPassword };
-      await apiFetch("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) });
-      setSuccess(true);
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível trocar a senha.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 font-semibold">
-            <KeyRound className="h-4 w-4" /> Trocar senha
-          </h2>
-          <button type="button" onClick={onClose} aria-label="Fechar" className="text-muted-foreground hover:text-foreground">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {success ? (
-          <div className="flex flex-col items-center gap-3 py-2 text-center">
-            <CheckCircle2 className="h-8 w-8 text-emerald-400" />
-            <p className="text-sm">
-              Senha alterada com sucesso. As outras sessões foram encerradas.
-            </p>
-            <Button onClick={onClose} className="mt-2">Fechar</Button>
-          </div>
-        ) : (
-          <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-3">
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="cp-current" className="text-sm font-medium">Senha atual</label>
-              <PasswordInput
-                id="cp-current"
-                autoComplete="current-password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="cp-new" className="text-sm font-medium">Nova senha</label>
-              <PasswordInput
-                id="cp-new"
-                autoComplete="new-password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-              />
-              {newPassword.length > 0 && (
-                <ul className="flex flex-col gap-1 text-xs">
-                  <li className={`flex items-center gap-1.5 ${strength.checks.minLength ? "text-emerald-400" : "text-muted-foreground"}`}>
-                    {strength.checks.minLength ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-                    Mínimo de {PASSWORD_MIN_LENGTH} caracteres
-                  </li>
-                  <li className={`flex items-center gap-1.5 ${strength.checks.hasUpper && strength.checks.hasLower ? "text-emerald-400" : "text-muted-foreground"}`}>
-                    {strength.checks.hasUpper && strength.checks.hasLower ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-                    Maiúsculas e minúsculas
-                  </li>
-                  <li className={`flex items-center gap-1.5 ${strength.checks.hasNumber ? "text-emerald-400" : "text-muted-foreground"}`}>
-                    {strength.checks.hasNumber ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-                    Ao menos um número
-                  </li>
-                </ul>
-              )}
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="cp-confirm" className="text-sm font-medium">Confirmar nova senha</label>
-              <Input
-                id="cp-confirm"
-                type="password"
-                autoComplete="new-password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-              {confirm.length > 0 && confirm !== newPassword && (
-                <p className="text-xs text-amber-400">As senhas não coincidem.</p>
-              )}
-            </div>
-
-            {error && (
-              <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {error}
-              </p>
-            )}
-
-            <Button type="submit" disabled={!canSubmit}>
-              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              {loading ? "Salvando…" : "Salvar nova senha"}
-            </Button>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
+import { ChevronDown, KeyRound, LogOut, Settings, ShieldCheck, UserRound } from "lucide-react";
 
 /**
- * Menu do usuário: troca de senha, verificação em duas etapas e logout.
- * No topo abre para baixo; na lateral (Configurações → menu na lateral), fica
- * no rodapé dela e abre para cima.
+ * Menu do usuário: atalhos para Configurações (a conta mora lá) e sair.
+ * No topo abre para baixo; na lateral (Configurações → Aparência), fica no
+ * rodapé dela e abre para cima.
  */
 export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-left" | "sidebar-right" }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [showChangePassword, setShowChangePassword] = useState(false);
-  const [showTwoFactor, setShowTwoFactor] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // fecha o menu ao clicar fora
@@ -165,10 +38,18 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
     navigate("/login");
   }
 
+  function go(to: string) {
+    setOpen(false);
+    navigate(to);
+  }
+
+  const item = "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent";
+
   return (
     <div ref={containerRef} className={placement === "top" ? "relative ml-auto" : "relative w-full"}>
       <button
         type="button"
+        aria-label={`Conta: ${user.displayName || user.username}`}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
@@ -176,7 +57,10 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
         )}
       >
         <UserRound className="h-4 w-4" />
-        <span className={cn("truncate", placement === "top" ? "max-w-32" : "flex-1 text-left")}>{user.username}</span>
+        {/* no topo, em tela de celular, só o ícone: o nome empurrava a página para o lado */}
+        <span className={cn("truncate", placement === "top" ? "hidden max-w-32 sm:inline" : "flex-1 text-left")}>
+          {user.displayName || user.username}
+        </span>
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
 
@@ -190,38 +74,20 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
             placement === "sidebar-right" && "bottom-full right-0 mb-1",
           )}
         >
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
-            onClick={() => {
-              setOpen(false);
-              setShowChangePassword(true);
-            }}
-          >
+          <button type="button" className={item} onClick={() => go("/settings")}>
+            <Settings className="h-4 w-4" /> Configurações
+          </button>
+          <button type="button" className={item} onClick={() => go("/settings/security")}>
             <KeyRound className="h-4 w-4" /> Trocar senha
           </button>
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
-            onClick={() => {
-              setOpen(false);
-              setShowTwoFactor(true);
-            }}
-          >
+          <button type="button" className={item} onClick={() => go("/settings/security#two-factor")}>
             <ShieldCheck className="h-4 w-4" /> Verificação em duas etapas
           </button>
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-red-400 hover:bg-accent"
-            onClick={() => void logout()}
-          >
+          <button type="button" className={cn(item, "text-red-400")} onClick={() => void logout()}>
             <LogOut className="h-4 w-4" /> Sair
           </button>
         </div>
       )}
-
-      {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
-      {showTwoFactor && <TwoFactorModal onClose={() => setShowTwoFactor(false)} />}
     </div>
   );
 }

@@ -11,7 +11,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { AlertTriangle, Download, Loader2, ShieldCheck, Smartphone, X } from "lucide-react";
+import { AlertTriangle, Download, Loader2, Smartphone } from "lucide-react";
 
 type Stage =
   | { kind: "loading" }
@@ -88,9 +88,9 @@ function ConfirmFields({
 /**
  * Verificação em duas etapas do login do painel: ativar (QR + confirmação) e
  * desativar. O painel fica na internet por HTTPS; com isto, a senha sozinha
- * não basta para entrar.
+ * não basta para entrar. Fica em Configurações → Segurança.
  */
-export function TwoFactorModal({ onClose }: { onClose: () => void }) {
+export function TwoFactorPanel() {
   const [stage, setStage] = useState<Stage>({ kind: "loading" });
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
@@ -155,18 +155,8 @@ export function TwoFactorModal({ onClose }: { onClose: () => void }) {
   const canConfirm = code.trim().length > 0 && password.length > 0 && !busy;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-6" role="dialog" aria-modal="true">
-      <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 font-semibold">
-            <ShieldCheck className="h-4 w-4" /> Verificação em duas etapas
-          </h2>
-          {stage.kind !== "codes" && (
-            <button type="button" onClick={onClose} aria-label="Fechar" className="text-muted-foreground hover:text-foreground">
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+    <div data-testid="two-factor-panel" className="max-w-md">
+      <div>
 
         {stage.kind === "loading" && (
           <div className="flex justify-center py-6">
@@ -264,7 +254,13 @@ export function TwoFactorModal({ onClose }: { onClose: () => void }) {
               <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
               Guardei os códigos em lugar seguro
             </label>
-            <Button onClick={onClose} disabled={!saved}>
+            <Button
+              onClick={() => {
+                setSaved(false);
+                setStage({ kind: "on", recoveryCodesLeft: stage.codes.length });
+              }}
+              disabled={!saved}
+            >
               Concluir
             </Button>
           </div>

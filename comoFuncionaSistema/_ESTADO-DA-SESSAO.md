@@ -83,6 +83,10 @@ pendente e por quê — informação que não está no código nem no git log.
   direita, salvo na conta (chega com `/api/auth/me`); celular sempre no topo, com botão
   "Menu"; caixa do menu do usuário ganhou fundo (faltava a cor `popover` no tema). Próximo
   combinado: configurações do painel e dos projetos. Ver `configuracoes/index.json`.
+- **30/09 — Configurações com menu próprio:** Perfil (nome de exibição, e-mail, usuário de
+  login com senha), Segurança (senha + 2FA na página), Aparência, Notificações (frequência da
+  verificação automática; aviso fora do painel ainda não existe — decisão pendente: canal
+  e-mail/Telegram/outro). Cada seção com URL própria (`/settings/...`).
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:

@@ -1,10 +1,10 @@
 {
   "modulo": "configuracoes",
   "titulo": "Configurações",
-  "resumo": "Página /settings do painel. Primeira seção: Aparência → onde fica o menu de navegação (topo, lateral esquerda ou lateral direita). Pedido do dono do produto em 30/09/2026: manter o formato de site (topo) e oferecer o formato de sistema/dashboard (lateral).",
+  "resumo": "Área /settings do painel, com menu próprio e um endereço por seção: Perfil (/settings/profile), Segurança (/settings/security), Aparência (/settings/appearance) e Notificações (/settings/notifications). /settings abre o Perfil. Pedido do dono do produto em 30/09/2026: centralizar as opções da conta num lugar só, com URL própria para cada uma.",
   "pontoDeEntrada": {
-    "api": "PUT /api/settings/preferences",
-    "web": "/settings"
+    "api": "PUT /api/settings/preferences, PUT /api/settings/profile",
+    "web": "/settings/*"
   },
   "comoFunciona": [
     "Preferências de interface são da CONTA, guardadas no servidor (StoredUser.preferences em data/users.json): valem em qualquer computador.",
@@ -12,12 +12,19 @@
     "PUT /api/settings/preferences recebe só os campos que mudam (schema: additionalProperties false, navLayout em NAV_LAYOUTS) e devolve as preferências completas.",
     "A página aplica a escolha na hora (AuthContext.setPreferences) e salva; se o servidor recusar, volta ao que era e diz por quê.",
     "Layout (apps/web/src/components/Layout.tsx): 'top' = barra no alto; 'left'/'right' = coluna de 240px com os itens empilhados e o menu do usuário no rodapé (a caixa abre para cima e, à direita, para dentro da tela). Em telas pequenas a lateral não cabe: o menu volta ao topo, com os itens atrás de um botão 'Menu'.",
-    "Correção junto (30/09/2026): o tema não definia a cor 'popover', e a caixa do menu do usuário ficava transparente sobre o conteúdo."
+    "Correção junto (30/09/2026): o tema não definia a cor 'popover', e a caixa do menu do usuário ficava transparente sobre o conteúdo.",
+    "Perfil: nome de exibição (aparece no menu do usuário; em branco mostra o usuário de login), e-mail de contato (validado; hoje o painel não envia e-mails) e usuário de login. Trocar o usuário de login exige a senha atual, mantém a sessão atual e fica na auditoria (auth.username_changed); nome/e-mail geram settings.profile_updated. Texto vazio apaga o campo. Resposta via publicUser (nunca hash nem segredos do 2FA).",
+    "Segurança: troca de senha (ChangePasswordForm) e verificação em duas etapas (TwoFactorPanel) na própria página — as janelas que abriam pelo menu do usuário deixaram de existir. O menu do usuário e o aviso do Dashboard levam a /settings/security (#two-factor rola até o card).",
+    "Notificações: só o que existe — alertas aparecem dentro do painel (badge de Alertas) e a frequência da verificação automática (mesma API de /api/security/monitor/config, 1 a 168 h). A tela diz que aviso fora do painel (e-mail ou outro canal) ainda não existe; o canal é decisão pendente do dono do produto.",
+    "Menu do usuário: Configurações, Trocar senha, Verificação em duas etapas e Sair. No topo, em tela de celular, mostra só o ícone (o nome empurrava a página para o lado)."
   ],
   "testes": [
     "apps/server/tests/settings-preferences.test.ts",
-    "apps/web/tests/settings-page.test.tsx",
-    "apps/web/tests/layout.test.tsx"
+    "apps/web/tests/settings-appearance.test.tsx",
+    "apps/web/tests/layout.test.tsx",
+    "apps/server/tests/settings-profile.test.ts",
+    "apps/web/tests/settings-sections.test.tsx",
+    "apps/web/tests/two-factor-panel.test.tsx"
   ],
   "proximos": "Próximas seções combinadas: configurações do painel e dos projetos."
 }

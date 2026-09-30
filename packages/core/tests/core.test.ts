@@ -41,6 +41,7 @@ import {
   passwordStrengthErrors,
   validatePasswordStrength,
   validateUsername,
+  validateEmail,
 } from "../src/index.js";
 
 describe("setup contract", () => {
@@ -219,5 +220,16 @@ describe("monitoring contract", () => {
     expect(MONITOR_DEFAULT_INTERVAL_MS).toBe(6 * 60 * 60 * 1000);
     expect(MONITOR_MIN_INTERVAL_MS).toBe(10_000);
     expect(MONITOR_MIN_INTERVAL_MS).toBeLessThan(MONITOR_DEFAULT_INTERVAL_MS);
+  });
+});
+
+describe("validateEmail (Configurações → Perfil)", () => {
+  it("aceita nome@dominio.tld e recusa o resto", () => {
+    expect(validateEmail("kelvin@exemplo.com")).toBe(true);
+    expect(validateEmail("a.b+c@sub.exemplo.com.br")).toBe(true);
+    expect(validateEmail("sem-arroba.com")).toBe(false);
+    expect(validateEmail("x@y")).toBe(false);
+    expect(validateEmail("com espaço@exemplo.com")).toBe(false);
+    expect(validateEmail(`${"a".repeat(250)}@x.com`)).toBe(false);
   });
 });

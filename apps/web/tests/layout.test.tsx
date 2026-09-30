@@ -22,7 +22,7 @@ function renderLayout(navLayout: NavLayout) {
   return render(
     <MemoryRouter>
       <AuthContext.Provider
-        value={{ user: { username: "admin", createdAt: "x" }, preferences: { navLayout }, setPreferences: () => undefined }}
+        value={{ user: { username: "admin", createdAt: "x" }, setUser: () => undefined, preferences: { navLayout }, setPreferences: () => undefined }}
       >
         <Layout>
           <p>conteúdo</p>
