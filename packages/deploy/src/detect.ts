@@ -14,8 +14,13 @@ import path from "node:path";
 import type { DetectResult, GuardrailWarning, PackageManager } from "@paas/core";
 import { analyzeCompose, guessProxyTarget, servicesWithCustomNetworks } from "./guardrails.js";
 
-/** Candidatos de arquivo compose, em ordem de prioridade (produção primeiro). */
+/**
+ * Candidatos de arquivo compose, em ordem de prioridade: o feito para rodar
+ * atrás do painel (compose.paas.*) primeiro, depois o de produção.
+ */
 const COMPOSE_CANDIDATES = [
+  "compose.paas.yml",
+  "compose.paas.yaml",
   "compose.prod.yml",
   "compose.prod.yaml",
   "compose.production.yml",
@@ -141,6 +146,9 @@ export async function detectProject(dir: string): Promise<DetectResult> {
     result.type = "compose";
     result.composeFile = composeFile;
     details.push(`Arquivo ${composeFile} encontrado — o painel adota o compose existente sem reescrevê-lo.`);
+    if (composeFile.startsWith("compose.paas.")) {
+      details.push("É o compose feito para o painel: tem prioridade sobre o de produção comum.");
+    }
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
       warnings.push(...analyzeCompose(content, composeFile));

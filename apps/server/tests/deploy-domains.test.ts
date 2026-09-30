@@ -86,3 +86,23 @@ describe("domínios do projeto", () => {
     expect(sync).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("porta por domínio", () => {
+  it("define e limpa a porta de um domínio; remover o domínio apaga a porta dele", async () => {
+    const p = await projeto();
+    await svc.addDomain(p.id, "carteira.tws.tec.br");
+    let up = await svc.setDomainPort(p.id, "carteira.tws.tec.br", 8009);
+    expect(up.domainPorts).toEqual({ "carteira.tws.tec.br": 8009 });
+    up = await svc.setDomainPort(p.id, "carteira.tws.tec.br", null);
+    expect(up.domainPorts).toEqual({});
+    await svc.setDomainPort(p.id, "carteira.tws.tec.br", 8009);
+    up = await svc.removeDomain(p.id, "carteira.tws.tec.br");
+    expect(up.domainPorts).toEqual({});
+  });
+
+  it("porta inválida ou domínio de fora do projeto → recusa", async () => {
+    const p = await projeto();
+    await expect(svc.setDomainPort(p.id, "devlink.203-0-113-10.sslip.io", 70000)).rejects.toMatchObject({ code: "invalid_port" });
+    await expect(svc.setDomainPort(p.id, "outro.com", 8009)).rejects.toMatchObject({ code: "domain_not_found" });
+  });
+});

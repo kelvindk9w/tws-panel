@@ -285,6 +285,25 @@ function analyzeComposeRules(content: string, fileName: string): GuardrailFindin
       }
     }
 
+    // proxy-port-conflict (block): 80/443 do host são do proxy do painel
+    // (Caddy central). Um compose que as publica falha no `up` com "porta já
+    // em uso" — ou tomaria o lugar do painel (visto no projeto cassino).
+    for (const port of publishedPorts(service.ports)) {
+      if (port.host.kind === "fixed" && (port.host.port === 80 || port.host.port === 443)) {
+        findings.push({
+          rule: "proxy-port-conflict",
+          level: "block",
+          title: `Porta ${port.host.port} do servidor publicada pelo projeto`,
+          evidence: `${fileName}: serviço "${name}" publica ${formatPortMapping(port)}`,
+          fix:
+            `As portas 80 e 443 são do proxy do painel, que recebe o tráfego de todos os projetos e cuida do HTTPS. ` +
+            `Tire a publicação de ${port.host.port} deste serviço (e o proxy/Caddy próprio do projeto, se houver): ` +
+            "o painel entrega o tráfego ao serviço web pela rede interna, na porta em que ele escuta.",
+          service: name,
+        });
+      }
+    }
+
     const image = asString(service.image) ?? "";
 
     // dev-service-in-prod (warn)
@@ -463,6 +482,7 @@ export interface GuardrailRuleInfo {
 /** Catálogo das regras (documentação/testes). */
 export const GUARDRAIL_RULES: readonly GuardrailRuleInfo[] = [
   { rule: "db-port-exposed", level: "block", title: "Porta de banco de dados publicada no host" },
+  { rule: "proxy-port-conflict", level: "block", title: "Projeto publica as portas 80/443 do proxy do painel" },
   { rule: "weak-credentials", level: "block", title: "Credenciais triviais no compose/env" },
   { rule: "privileged-container", level: "block", title: "Container privilegiado ou docker.sock montado" },
   { rule: "dev-service-in-prod", level: "warn", title: "Serviço de desenvolvimento em produção" },

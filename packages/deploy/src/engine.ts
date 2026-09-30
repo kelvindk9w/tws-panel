@@ -10,6 +10,7 @@
  *  - projetos compose adotados: compose project "paas-<slug>" + override gerado
  *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
  */
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -23,10 +24,11 @@ import {
   PAAS_CADDY_CONTAINER,
 } from "@paas/core";
 import { parse, stringify } from "yaml";
-import { CaddyManager, projectDomain, type PanelSite } from "./caddy.js";
+import { CaddyManager, projectDomain, type CaddyTarget, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir } from "./static-site.js";
+import { writeProjectDotenv } from "./project-dotenv.js";
 import { runGuardrails } from "./rules.js";
 
 export interface EngineContext extends IngestContext {
@@ -54,9 +56,39 @@ export interface EngineContext extends IngestContext {
    * via -e no pipeline dockerfile. undefined = nenhuma injeção.
    */
   envForProject?: (project: Project) => Promise<Record<string, string>>;
+  /**
+   * Variáveis injetadas em TODOS os serviços do compose (override) — hoje as
+   * do e-mail do painel. As demais (seção Variáveis) vão só para o `.env`: o
+   * compose decide qual serviço recebe cada uma (o cassino, por exemplo, não
+   * entrega segredos da carteira ao front de propósito).
+   */
+  injectEnvForProject?: (project: Project) => Promise<Record<string, string>>;
 }
 
 export type LogFn = (chunk: string) => void;
+
+/**
+ * Blocos do Caddyfile de um projeto. Domínios com porta própria
+ * (`domainPorts`) vão para o mesmo host na porta deles; os demais ficam num
+ * bloco só, com o upstream do projeto.
+ */
+export function projectCaddyTargets(project: Project, upstream: string): CaddyTarget[] {
+  const host = upstream.slice(0, upstream.lastIndexOf(":"));
+  const defaultPort = upstream.slice(upstream.lastIndexOf(":") + 1);
+  const ports = project.domainPorts ?? {};
+  const all = [projectDomain(project), ...(project.aliases ?? [])];
+  const byUpstream = new Map<string, string[]>();
+  for (const d of all) {
+    const target = ports[d] ? `${host}:${ports[d]}` : `${host}:${defaultPort}`;
+    byUpstream.set(target, [...(byUpstream.get(target) ?? []), d]);
+  }
+  return [...byUpstream.entries()].map(([up, domains]) => ({
+    domain: domains[0]!,
+    aliases: domains.slice(1),
+    upstream: up,
+    websocket: project.websocket,
+  }));
+}
 
 /** Onde o health check fala com o Caddy central (ver EngineContext.panelContainer). */
 export function healthCheckTarget(ctx: EngineContext): { host: string; httpPort: number; httpsPort: number } {
@@ -191,7 +223,13 @@ export class DeployEngine {
         break;
       case "compose":
         onLog("\n=== Etapa 3/5 · docker compose up (compose adotado) ===\n");
-        upstream = await this.deployCompose(project, src, onLog, extraEnv);
+        upstream = await this.deployCompose(
+          project,
+          src,
+          onLog,
+          extraEnv,
+          (await this.ctx.injectEnvForProject?.(project)) ?? {},
+        );
         break;
       case "dockerfile":
         onLog("\n=== Etapa 3/5 · docker build (Dockerfile) ===\n");
@@ -203,13 +241,8 @@ export class DeployEngine {
     const domain = projectDomain(project);
     const targets = allProjects
       .filter((p) => p.id !== project.id && p.lastDeployStatus === "success")
-      .map((p) => ({
-        domain: projectDomain(p),
-        aliases: p.aliases ?? [],
-        upstream: this.upstreamFor(p),
-        websocket: p.websocket,
-      }));
-    targets.push({ domain, aliases: project.aliases ?? [], upstream, websocket: project.websocket });
+      .flatMap((p) => projectCaddyTargets(p, this.upstreamFor(p)));
+    targets.push(...projectCaddyTargets(project, upstream));
     await this.caddy.apply(targets, onLog);
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
@@ -221,12 +254,7 @@ export class DeployEngine {
   async syncCaddy(projects: Project[], onLog?: LogFn): Promise<void> {
     const targets = projects
       .filter((p) => p.lastDeployStatus === "success")
-      .map((p) => ({
-        domain: projectDomain(p),
-        aliases: p.aliases ?? [],
-        upstream: this.upstreamFor(p),
-        websocket: p.websocket,
-      }));
+      .flatMap((p) => projectCaddyTargets(p, this.upstreamFor(p)));
     await this.caddy.apply(targets, onLog);
   }
 
@@ -333,6 +361,7 @@ export class DeployEngine {
     project: Project,
     src: string,
     onLog: LogFn,
+    dotenv: Record<string, string> = {},
     extraEnv: Record<string, string> = {},
   ): Promise<string> {
     const composeFile = project.detection?.composeFile;
@@ -373,6 +402,14 @@ export class DeployEngine {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);
     }
 
+    // Variáveis do projeto → .env do compose (interpolação ${VAR} e env_file).
+    const env = await writeProjectDotenv(src, workDir, dotenv);
+    const dotenvKeys = Object.keys(dotenv);
+    if (dotenvKeys.length > 0) {
+      onLog(`Variáveis gravadas no .env do projeto (${dotenvKeys.join(", ")}).\n`);
+    }
+    if (env.note) onLog(`Aviso: ${env.note}\n`);
+
     const args = this.composeArgs(project, src);
     const code = await runStream("docker", [...args, "up", "-d", "--build"], onLog);
     if (code !== 0) throw new Error(`docker compose up falhou (exit ${code}).`);
@@ -382,11 +419,16 @@ export class DeployEngine {
 
   private composeArgs(project: Project, src: string): string[] {
     const composeFile = project.detection?.composeFile ?? "compose.yml";
-    const overrideFile = path.join(projectWorkDir(this.ctx, project), "paas.override.yml");
+    const workDir = projectWorkDir(this.ctx, project);
+    const overrideFile = path.join(workDir, "paas.override.yml");
+    // .env versionado no repositório: as variáveis do painel ficam à parte
+    // (ver project-dotenv.ts) e todo comando do compose precisa delas.
+    const envFile = path.join(workDir, "paas.env");
     return [
       "compose",
       "-p",
       composeProjectName(project),
+      ...(existsSync(envFile) ? ["--env-file", envFile] : []),
       "--project-directory",
       src,
       "-f",

@@ -63,6 +63,7 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     setPrimaryDomain: vi.fn(async () => PROJECT),
     github: { repoVisibility: vi.fn(async () => "unknown") },
     getEnv: vi.fn(async () => [{ key: "A", value: "1" }]),
+    composeVariablesFor: vi.fn(async () => null),
     setEnv: vi.fn(async (_id: string, vars: unknown) => vars),
     ...overrides,
   };
@@ -503,7 +504,7 @@ describe("rotas de variáveis do projeto", () => {
   it("lê e salva a lista inteira", async () => {
     await build();
     const get = await app.inject({ method: "GET", url: "/api/projects/p1/env", headers: auth });
-    expect(get.json()).toEqual({ vars: [{ key: "A", value: "1" }] });
+    expect(get.json()).toEqual({ vars: [{ key: "A", value: "1" }], compose: null });
     const vars = [{ key: "DATABASE_URL", value: "postgres://x" }];
     const put = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
     expect(put.statusCode, put.body).toBe(200);

@@ -113,3 +113,56 @@ describe("ProjectEnvCard", () => {
     expect(await screen.findByTestId("env-static-note")).toBeInTheDocument();
   });
 });
+
+/**
+ * Validação real (cassino): o compose exige dezenas de variáveis; sem a lista,
+ * o operador descobriria uma de cada vez, a cada deploy que falha.
+ */
+describe("ProjectEnvCard — o que o compose espera", () => {
+  it("mostra definidas, obrigatórias que faltam e as com padrão; adiciona as que faltam", async () => {
+    apiFetchMock.mockImplementation(async () => ({
+      vars: [{ key: "POSTGRES_USER", value: "casa" }],
+      compose: {
+        usesEnvFile: true,
+        variables: [
+          { name: "POSTGRES_PASSWORD", required: true, defaultValue: null },
+          { name: "POSTGRES_USER", required: true, defaultValue: null },
+          { name: "SMTP_HOST", required: false, defaultValue: "mailpit" },
+        ],
+      },
+    }));
+    render(<ProjectEnvCard project={PROJECT} />);
+    const lista = await screen.findByTestId("compose-vars");
+    expect(within(lista).getByTestId("cv-POSTGRES_USER")).toHaveTextContent(/definida/);
+    expect(within(lista).getByTestId("cv-POSTGRES_PASSWORD")).toHaveTextContent(/obrigatória/);
+    expect(within(lista).getByTestId("cv-SMTP_HOST")).toHaveTextContent(/padrão: mailpit/);
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar as que faltam/ }));
+    expect(screen.getByDisplayValue("POSTGRES_PASSWORD")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("SMTP_HOST")).not.toBeInTheDocument(); // tem padrão: não é obrigatória
+  });
+});
+
+describe("ProjectDomainsCard — porta por domínio (compose/Dockerfile)", () => {
+  it("define a porta de um domínio; o padrão é a do projeto", async () => {
+    apiFetchMock.mockResolvedValue({ project: PROJECT });
+    const onChanged = vi.fn();
+    const p = { ...PROJECT, proxyPort: 3200, detection: { type: "compose", proxyPort: 3200 } } as unknown as Project;
+    render(<ProjectDomainsCard project={p} publicIp="203.0.113.10" onChanged={onChanged} />);
+    const extra = screen.getByTestId("domain-devlink.tws.tec.br");
+    const porta = within(extra).getByLabelText(/Porta/);
+    expect(porta).toHaveAttribute("placeholder", "3200");
+    fireEvent.change(porta, { target: { value: "8009" } });
+    fireEvent.click(within(extra).getByRole("button", { name: /Salvar porta/ }));
+    await waitFor(() =>
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        "/api/projects/p1/domains/devlink.tws.tec.br/port",
+        expect.objectContaining({ method: "PUT", body: JSON.stringify({ port: 8009 }) }),
+      ),
+    );
+  });
+
+  it("site estático: sem campo de porta", () => {
+    render(<ProjectDomainsCard project={{ ...PROJECT, detection: { type: "static" } } as unknown as Project} publicIp={null} onChanged={vi.fn()} />);
+    expect(screen.queryByLabelText(/Porta/)).not.toBeInTheDocument();
+  });
+});

@@ -153,6 +153,12 @@ function ProjectEmailCard({ projectId }: { projectId: string }) {
             <p className="text-xs text-muted-foreground">
               A senha (SMTP_PASS) fica mascarada aqui; o valor real é injetado no container no deploy.
             </p>
+            <p data-testid="email-other-names" className="text-xs text-muted-foreground">
+              Seu app usa outros nomes (ex.: <code>SMTP_PORTA</code>, <code>SMTP_SENHA</code>, <code>EMAIL_DE</code>)?
+              Num projeto com docker-compose, estas variáveis também valem no compose: escreva, por exemplo,{" "}
+              <code>SMTP_PORTA: ${"${SMTP_PORT}"}</code> e <code>SMTP_SENHA: ${"${SMTP_PASS}"}</code> no serviço que
+              envia e-mail.
+            </p>
             <div>
               <Button variant="outline" size="sm" disabled={busy} onClick={() => void toggle(false)}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

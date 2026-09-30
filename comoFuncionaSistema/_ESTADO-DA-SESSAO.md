@@ -124,6 +124,10 @@ pendente e por quê — informação que não está no código nem no git log.
   também num container com /tmp noexec. E a mensagem culpava o token (errado). Cloudflare: o
   guia de DNS pede a nuvem cinza, e o "Verificar DNS" reconhece os IPs da Cloudflare (nuvem
   laranja) e explica.
+- **30/09 — compose de verdade (cassino):** Variáveis → .env do projeto; lista do que o compose
+  exige; guardrail de 80/443; network_mode resolvido; porta por domínio; compose.paas.* com
+  prioridade. O cassino ganha um compose.paas.yaml (PR no repositório dele) para rodar atrás do
+  painel.
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

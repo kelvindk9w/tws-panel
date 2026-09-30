@@ -460,14 +460,41 @@ describe("relatório agregado", () => {
     expect(report.blockers).toBe(0);
   });
 
-  it("catálogo GUARDRAIL_RULES lista as 6 regras com níveis corretos", () => {
+  it("catálogo GUARDRAIL_RULES lista as 7 regras com níveis corretos", () => {
     expect(GUARDRAIL_RULES.map((r) => [r.rule, r.level])).toEqual([
       ["db-port-exposed", "block"],
+      ["proxy-port-conflict", "block"],
       ["weak-credentials", "block"],
       ["privileged-container", "block"],
       ["dev-service-in-prod", "warn"],
       ["secret-in-code", "warn"],
       ["latest-tag", "info"],
     ]);
+  });
+});
+
+/**
+ * Validação real (projeto cassino, 30/09/2026): o compose publicava 80:80 e
+ * 443:443 para o próprio Caddy. Na VPS, essas portas são do proxy do painel —
+ * o `docker compose up` falharia com "porta já em uso", e nada avisava antes.
+ */
+describe("proxy-port-conflict (block)", () => {
+  it("bloqueia serviço que publica 80 ou 443 do host", async () => {
+    await writeCompose(`  wallet:\n    image: app:1.0\n    ports:\n      - "80:80"\n      - "443:443"\n      - "127.0.0.1:8010:8010"`);
+    const report = await runGuardrails(dir);
+    const f = report.findings.filter((x) => x.rule === "proxy-port-conflict");
+    expect(f).toHaveLength(2);
+    expect(f[0]).toMatchObject({ level: "block", service: "wallet" });
+    expect(f[0]!.fix).toMatch(/proxy do painel/);
+  });
+
+  it("porta do CONTAINER 80 publicada em outra porta do host não conflita", async () => {
+    await writeCompose(`  web:\n    image: nginx:1.27\n    ports:\n      - "8081:80"`);
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((x) => x.rule === "proxy-port-conflict")).toBe(false);
+  });
+
+  it("aparece na lista de regras", () => {
+    expect(GUARDRAIL_RULES.some((r) => r.rule === "proxy-port-conflict" && r.level === "block")).toBe(true);
   });
 });

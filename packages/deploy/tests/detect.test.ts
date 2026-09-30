@@ -128,6 +128,16 @@ describe("static-node", () => {
  * Validação real: os repositórios públicos do dono do produto (devlinks,
  * travelgram…) saíam como "configuração manual necessária".
  */
+describe("build sem saída estática conhecida + Dockerfile", () => {
+  it("usa o pipeline docker, com a porta do EXPOSE", async () => {
+    await writeJson("package.json", { scripts: { build: "tsc" }, dependencies: { express: "4" } });
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node:22\nEXPOSE 3000\n");
+    const result = await detectProject(dir);
+    expect(result.type).toBe("dockerfile");
+    expect(result.proxyPort).toBe(3000);
+  });
+});
+
 describe("static (HTML puro)", () => {
   it("index.html na raiz, sem compose/Dockerfile/package.json → site estático, sem build", async () => {
     await writeFile(path.join(dir, "index.html"), "<h1>oi</h1>");
@@ -169,6 +179,14 @@ describe("compose", () => {
     const result = await detectProject(dir);
     expect(result.type).toBe("compose");
     expect(result.composeFile).toBe("docker-compose.yml");
+  });
+
+  it("compose.paas.yaml (feito para rodar atrás do painel) vence o compose.prod", async () => {
+    await writeFile(path.join(dir, "compose.prod.yaml"), "services:\n  app:\n    image: nginx:1.27\n");
+    await writeFile(path.join(dir, "compose.paas.yaml"), "services:\n  app:\n    image: nginx:1.27\n");
+    const result = await detectProject(dir);
+    expect(result.composeFile).toBe("compose.paas.yaml");
+    expect(result.details.join(" ")).toMatch(/feito para o painel/);
   });
 
   it("prefere compose.prod.yml ao docker-compose.yml", async () => {

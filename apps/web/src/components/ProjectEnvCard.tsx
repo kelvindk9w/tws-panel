@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Project } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,12 @@ interface EnvVar {
   value: string;
 }
 
+interface ComposeVariable {
+  name: string;
+  required: boolean;
+  defaultValue: string | null;
+}
+
 /**
  * Seção Variáveis: variáveis de ambiente do projeto (DATABASE_URL, chaves de
  * API…). Guardadas cifradas no servidor; valem a partir do próximo deploy.
@@ -19,13 +26,18 @@ interface EnvVar {
  */
 export function ProjectEnvCard({ project }: { project: Project }) {
   const [vars, setVars] = useState<EnvVar[] | null>(null);
+  // O que o compose do projeto interpola (null = não é compose)
+  const [composeVars, setComposeVars] = useState<ComposeVariable[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch<{ vars: EnvVar[] }>(`/api/projects/${project.id}/env`)
-      .then((r) => setVars(r.vars))
+    apiFetch<{ vars: EnvVar[]; compose?: { variables: ComposeVariable[] } | null }>(`/api/projects/${project.id}/env`)
+      .then((r) => {
+        setVars(r.vars);
+        setComposeVars(r.compose?.variables ?? null);
+      })
       .catch((err: unknown) => {
         setVars([]);
         setError(err instanceof ApiRequestError ? err.message : "Não foi possível carregar as variáveis.");
@@ -57,6 +69,17 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   }
 
   const staticSite = project.detection?.type === "static" || project.detection?.type === "static-node";
+  const defined = new Set((vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()));
+  const listed = new Set((vars ?? []).map((v) => v.key.trim()));
+  const missing = (composeVars ?? []).filter((v) => v.required && !defined.has(v.name));
+
+  function addMissing() {
+    setSaved(false);
+    setVars((prev) => [
+      ...(prev ?? []),
+      ...missing.filter((v) => !listed.has(v.name)).map((v) => ({ key: v.name, value: "" })),
+    ]);
+  }
 
   return (
     <Card>
@@ -76,6 +99,50 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             Este projeto é um site estático: não há servidor rodando para ler variáveis. Elas valem para projetos com
             Dockerfile ou docker-compose.
           </p>
+        )}
+        {composeVars && composeVars.length > 0 && (
+          <div data-testid="compose-vars" className="flex flex-col gap-2 rounded-md border bg-secondary/20 p-3 text-xs">
+            <p className="text-muted-foreground">
+              O compose deste projeto usa estas variáveis
+              {missing.length > 0 ? (
+                <>
+                  {" "}— <strong className="text-red-400">{missing.length} obrigatória(s) ainda sem valor</strong>: o deploy
+                  falha sem elas.
+                </>
+              ) : (
+                "."
+              )}
+            </p>
+            <ul className="flex flex-wrap gap-1.5">
+              {composeVars.map((v) => {
+                const ok = defined.has(v.name);
+                return (
+                  <li
+                    key={v.name}
+                    data-testid={`cv-${v.name}`}
+                    className={cn(
+                      "rounded border px-2 py-0.5 font-mono",
+                      ok
+                        ? "border-emerald-500/40 text-emerald-300"
+                        : v.required
+                          ? "border-red-500/40 text-red-300"
+                          : "text-muted-foreground",
+                    )}
+                  >
+                    {v.name}{" "}
+                    <span className="font-sans">
+                      {ok ? "· definida" : v.required ? "· obrigatória" : v.defaultValue !== null ? `· padrão: ${v.defaultValue || "vazio"}` : "· opcional"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            {missing.some((v) => !listed.has(v.name)) && (
+              <Button size="sm" variant="outline" className="self-start" onClick={addMissing}>
+                <Plus className="h-3.5 w-3.5" /> Adicionar as que faltam
+              </Button>
+            )}
+          </div>
         )}
         {vars === null ? (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

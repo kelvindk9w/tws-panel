@@ -73,6 +73,11 @@ export interface Project {
    * próprio além do endereço automático). Ausente em projetos antigos = [].
    */
   aliases?: string[];
+  /**
+   * Porta própria por domínio (no mesmo serviço de entrada) — ex.: o site na
+   * 3200 e a API/carteira na 8009. Domínio ausente daqui usa a porta do projeto.
+   */
+  domainPorts?: Record<string, number>;
   /** Projeto precisa de WebSocket/timeouts longos (ex.: Colyseus). */
   websocket: boolean;
   /** Última detecção conhecida (null = ainda não detectado). */

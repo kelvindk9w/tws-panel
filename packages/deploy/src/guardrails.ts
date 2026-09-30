@@ -201,6 +201,23 @@ export function guessProxyTarget(
   const WEB_NAME = /^(caddy|nginx|web|frontend|front|app|gateway|proxy|site)$/i;
   const WEB_PORTS = [80, 443, 3000, 8080, 8000, 4173, 5173];
 
+  // Serviço web dentro do namespace de rede de outro (`network_mode:
+  // service:X`, visto no projeto cassino): o compose recusa `networks` junto
+  // de network_mode, então quem entra na rede do painel é o dono do
+  // namespace (X), na porta em que o web escuta.
+  const resolveNamespace = (name: string, port: number | null) => {
+    const mode = asString(services[name]?.network_mode) ?? "";
+    const m = /^service:(.+)$/.exec(mode);
+    if (!m || !services[m[1]!]) return { service: name, port };
+    const envPort = envEntries(services[name]?.environment).find(([k]) => k === "PORT")?.[1];
+    const listen = envPort && /^\d+$/.test(envPort) ? Number(envPort) : port;
+    notes.push(
+      `Serviço "${name}" usa network_mode: service:${m[1]} — o painel liga o proxy a "${m[1]}" na porta ${listen ?? "?"}. ` +
+        `O "${name}" precisa escutar em 0.0.0.0 (não só em 127.0.0.1) para ser alcançado pela rede do painel.`,
+    );
+    return { service: m[1]!, port: listen };
+  };
+
   // 1) serviço com nome de proxy web (ex.: Caddy próprio do trader)
   for (const name of names) {
     const svc = services[name];
@@ -210,7 +227,7 @@ export function guessProxyTarget(
       const ports = publishedPorts(svc.ports);
       const containerPort = ports.find((p) => WEB_PORTS.includes(p.container))?.container ?? ports[0]?.container ?? null;
       notes.push(`Serviço "${name}" identificado como entrada web (nome/imagem de proxy).`);
-      return { service: name, port: containerPort ?? 80, notes };
+      return { ...resolveNamespace(name, containerPort ?? 80), notes };
     }
   }
 

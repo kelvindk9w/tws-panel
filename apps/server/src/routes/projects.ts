@@ -225,7 +225,11 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      return reply.send({ vars: await service.getEnv(request.params.id) });
+      const [vars, compose] = await Promise.all([
+        service.getEnv(request.params.id),
+        service.composeVariablesFor(request.params.id),
+      ]);
+      return reply.send({ vars, compose });
     } catch (err) {
       return sendError(reply, err);
     }
@@ -309,6 +313,30 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         return reply.send(await projectResponse(await service.removeDomain(request.params.id, request.params.domain)));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.put<{ Params: { id: string; domain: string }; Body: { port: number | null } }>(
+    "/api/projects/:id/domains/:domain/port",
+    {
+      schema: {
+        params: domainParams,
+        body: {
+          type: "object",
+          required: ["port"],
+          additionalProperties: false,
+          properties: { port: { type: ["integer", "null"], minimum: 1, maximum: 65535 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return reply.send(
+          await projectResponse(await service.setDomainPort(request.params.id, request.params.domain, request.body.port)),
+        );
       } catch (err) {
         return sendError(reply, err);
       }
