@@ -101,7 +101,7 @@ describe("CaddyManager — criação do container", () => {
     expect(ordem.indexOf("<cp>")).toBeLessThan(ordem.indexOf("start"));
     expect(copies[0]!.dest).toBe("/etc/caddy");
     expect(copies[0]!.files[0]!.name).toBe("Caddyfile");
-    expect(String(copies[0]!.files[0]!.content)).toContain("respond 404");
+    expect(String(copies[0]!.files[0]!.content)).toMatch(/http:\/\/ \{[\s\S]*` 404/);
   });
 
   it("aceita nome, rede e volumes configuráveis", async () => {

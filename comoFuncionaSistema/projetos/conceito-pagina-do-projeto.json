@@ -1,0 +1,25 @@
+{
+  "modulo": "projetos",
+  "id": "conceito-pagina-do-projeto",
+  "titulo": "Página do projeto: seções, domínios, variáveis e páginas de erro",
+  "resumo": "Pedido do dono do produto (30/09/2026): a página do projeto ganha menu lateral próprio, com uma seção por endereço — /projects/:id (Visão geral), /deploys, /domains, /git, /env (Variáveis), /email e /settings (Configurações).",
+  "comoFunciona": [
+    "Domínios: Project.domain é o principal (link 'Abrir site' e health check) e Project.aliases os adicionais, todos no mesmo bloco do Caddyfile ('a, b, c {'), cada um com certificado próprio. Rotas: POST /api/projects/:id/domains, DELETE /api/projects/:id/domains/:domain, POST /api/projects/:id/domains/:domain/primary. Um domínio não pode repetir (principal ou adicional de qualquer projeto, nem o do painel); o principal só sai depois de outro virar principal. Projeto publicado: a mudança recarrega o Caddy na hora. Auditoria: project.domain_added/_removed/_primary. O campo 'Domínio' saiu da configuração geral.",
+    "Git: repositório, branch, aviso do que está no ar e credencial de leitura. GET /api/projects/:id/repo-visibility pergunta ao GitHub SEM token se o repositório é público (cache de 10 min); público = o bloco de token some (a não ser que um já esteja cadastrado, para poder remover).",
+    "Variáveis: GET/PUT /api/projects/:id/env (lista inteira; nomes ^[A-Za-z_][A-Za-z0-9_]*$, até 200, valor até 32 KB). Cifradas em data/project-env.json com a chave data/project-env-key (AES-256-GCM). Injetadas no próximo deploy (Dockerfile: -e; compose: override) junto com as do e-mail — com o mesmo nome, a do operador vence. Auditoria project.env_updated só com os NOMES. Remover o projeto apaga as variáveis. Site estático: a tela avisa que não há servidor para lê-las.",
+    "Configurações: nome, slug fixo, WebSocket e a zona de perigo.",
+    "Páginas de erro do Caddy (caddy.ts): projeto parado/reiniciando (502/503/504) → página neutra 'Site temporariamente indisponível' (503); host desconhecido em HTTP → 'Domínio ainda não configurado' (404). O visitante é o cliente do dono do site: sem propaganda, só a linha discreta 'Servidor gerenciado com TWS Panel'. HTML sem chaves nem crases (o Caddy leria como variável/fim de texto). Validado com o Caddy real (caddy validate + respostas 503/404)."
+  ],
+  "testes": [
+    "packages/deploy/tests/caddy-render.test.ts",
+    "apps/server/tests/deploy-domains.test.ts",
+    "apps/server/tests/project-env.test.ts",
+    "apps/server/tests/deploy-env.test.ts",
+    "apps/server/tests/routes-projects.test.ts",
+    "apps/server/tests/github-integration.test.ts",
+    "apps/web/tests/project-sections.test.tsx",
+    "apps/web/tests/project-detail-page.test.tsx",
+    "apps/web/tests/project-config-card.test.tsx"
+  ],
+  "sugestaoPendente": "Seção Logs (saída ao vivo do app rodando, não só do deploy)."
+}

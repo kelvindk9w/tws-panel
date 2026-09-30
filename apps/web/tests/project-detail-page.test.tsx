@@ -48,16 +48,20 @@ beforeEach(() => {
       };
     }
     if (path === "/api/projects/p1/jobs") return { jobs: [] };
+    if (path === "/api/projects/p1/repo-visibility") return { visibility: "public" };
+    if (path.startsWith("/api/domains/suggest")) return { auto: "x", publicIp: "203.0.113.10" };
+    if (path === "/api/projects/p1/env") return { vars: [] };
     return {};
   });
 });
 afterEach(cleanup);
 
-function abrir() {
+function abrir(at = "/projects/p1") {
   render(
-    <MemoryRouter initialEntries={["/projects/p1"]}>
+    <MemoryRouter initialEntries={[at]}>
       <Routes>
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        <Route path="/projects/:id/:section" element={<ProjectDetailPage />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -75,5 +79,33 @@ describe("ProjectDetailPage — acesso ao site", () => {
     abrir();
     expect(await screen.findByText(/HTTPS automático/)).toBeInTheDocument();
     expect(screen.queryByText(/HTTP padrão/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Menu do projeto (pedido do dono do produto): Visão geral, Deploys, Domínios,
+ * Git, Variáveis, E-mail e Configurações — cada seção com o seu endereço.
+ */
+describe("ProjectDetailPage — menu do projeto", () => {
+  it("mostra as sete seções e abre a Visão geral por padrão", async () => {
+    abrir();
+    const nav = await screen.findByTestId("project-nav");
+    for (const s of ["Visão geral", "Deploys", "Domínios", "Git", "Variáveis", "E-mail", "Configurações"]) {
+      expect(nav).toHaveTextContent(s);
+    }
+    expect(screen.getByText(/HTTPS automático/)).toBeInTheDocument();
+    expect(screen.queryByText(/Zona de perigo/)).not.toBeInTheDocument();
+  });
+
+  it("cada seção pelo endereço: Domínios, Git (público, sem token) e Configurações (zona de perigo)", async () => {
+    abrir("/projects/p1/domains");
+    expect(await screen.findByRole("button", { name: /Conectar novo domínio/ })).toBeInTheDocument();
+    cleanup();
+    abrir("/projects/p1/git");
+    expect(await screen.findByText(/Repositório público/)).toBeInTheDocument();
+    expect(screen.queryByText(/Credencial do repositório privado/)).not.toBeInTheDocument();
+    cleanup();
+    abrir("/projects/p1/settings");
+    expect(await screen.findByText(/Zona de perigo/)).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, NavLink, useNavigate, useParams } from "react-router";
 import type {
   DeployJob,
   DeployJobListResponse,
@@ -12,6 +12,8 @@ import type {
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { ProjectConfigCard } from "@/components/ProjectConfigCard";
+import { ProjectDomainsCard } from "@/components/ProjectDomainsCard";
+import { ProjectEnvCard } from "@/components/ProjectEnvCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,14 +22,18 @@ import {
   ArrowLeft,
   CheckCircle2,
   ExternalLink,
+  GitBranch,
   Globe,
+  LayoutDashboard,
   Loader2,
   Mail,
   Play,
   Rocket,
+  Settings,
   ShieldAlert,
   Square,
   Trash2,
+  Variable,
   XCircle,
 } from "lucide-react";
 import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
@@ -251,8 +257,25 @@ export function GuardrailOverrideModal({
   );
 }
 
+/** Seções do projeto — cada uma com o seu endereço (/projects/:id/:seção). */
+const PROJECT_SECTIONS = [
+  { key: "overview", label: "Visão geral", icon: LayoutDashboard },
+  { key: "deploys", label: "Deploys", icon: Rocket },
+  { key: "domains", label: "Domínios", icon: Globe },
+  { key: "git", label: "Git", icon: GitBranch },
+  { key: "env", label: "Variáveis", icon: Variable },
+  { key: "email", label: "E-mail", icon: Mail },
+  { key: "settings", label: "Configurações", icon: Settings },
+] as const;
+type ProjectSectionKey = (typeof PROJECT_SECTIONS)[number]["key"];
+
 export function ProjectDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id, section: sectionParam } = useParams<{ id: string; section?: string }>();
+  const section: ProjectSectionKey = PROJECT_SECTIONS.some((s) => s.key === sectionParam)
+    ? (sectionParam as ProjectSectionKey)
+    : "overview";
+  const [publicIp, setPublicIp] = useState<string | null>(null);
+  const [repoVisibility, setRepoVisibility] = useState<"public" | "private" | "unknown">("unknown");
   const navigate = useNavigate();
   const [data, setData] = useState<ProjectResponse | null>(null);
   const [jobs, setJobs] = useState<DeployJob[]>([]);
@@ -309,6 +332,21 @@ export function ProjectDetailPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, refresh, activeJob?.id]);
+
+  // IP público da VPS (guia de DNS) e visibilidade do repositório (seção Git)
+  useEffect(() => {
+    if (section !== "domains" || publicIp) return;
+    apiFetch<{ publicIp: string | null }>("/api/domains/suggest?name=x")
+      .then((r) => setPublicIp(r.publicIp))
+      .catch(() => undefined);
+  }, [section, publicIp]);
+
+  useEffect(() => {
+    if (section !== "git" || !id) return;
+    apiFetch<{ visibility: "public" | "private" | "unknown" }>(`/api/projects/${id}/repo-visibility`)
+      .then((r) => setRepoVisibility(r.visibility))
+      .catch(() => setRepoVisibility("unknown"));
+  }, [section, id]);
 
   // auto-scroll do log
   useEffect(() => {
@@ -463,6 +501,33 @@ export function ProjectDetailPage() {
         />
       )}
 
+      <div className="flex flex-col gap-6 md:flex-row">
+        <nav
+          data-testid="project-nav"
+          aria-label="Seções do projeto"
+          className="flex shrink-0 gap-1 overflow-x-auto text-sm md:w-44 md:flex-col"
+        >
+          {PROJECT_SECTIONS.map(({ key, label, icon: Icon }) => (
+            <NavLink
+              key={key}
+              to={key === "overview" ? `/projects/${project.id}` : `/projects/${project.id}/${key}`}
+              end
+              className={() =>
+                cn(
+                  "flex items-center gap-2 whitespace-nowrap rounded-md px-3 py-1.5 transition-colors",
+                  section === key
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                )
+              }
+            >
+              <Icon className="h-4 w-4" /> {label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="flex min-w-0 flex-1 flex-col gap-6">
+      {section === "overview" && (
+        <>
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>
           <CardHeader className="pb-2">
@@ -543,9 +608,42 @@ export function ProjectDetailPage() {
         </Card>
       )}
 
-      <ProjectConfigCard project={project} credential={credential} onSaved={() => void refresh()} />
+      {jobs[0] && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-3 py-4 text-sm">
+            <span className="text-muted-foreground">Último deploy:</span>
+            <JobStatusBadge status={jobs[0].status} />
+            <span className="text-xs text-muted-foreground">{new Date(jobs[0].createdAt).toLocaleString("pt-BR")}</span>
+            <Link to={`/projects/${project.id}/deploys`} className="ml-auto text-xs text-sky-400 hover:underline">
+              Ver log e histórico
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+        </>
+      )}
 
-      <ProjectEmailCard projectId={project.id} />
+      {section === "domains" && (
+        <ProjectDomainsCard project={project} publicIp={publicIp} onChanged={() => void refresh()} />
+      )}
+
+      {section === "git" && (
+        <ProjectConfigCard
+          key={`git-${project.updatedAt}`}
+          section="git"
+          project={project}
+          credential={credential}
+          repoVisibility={repoVisibility}
+          onSaved={() => void refresh()}
+        />
+      )}
+
+      {section === "env" && <ProjectEnvCard project={project} />}
+
+      {section === "email" && <ProjectEmailCard projectId={project.id} />}
+
+      {section === "deploys" && (
+        <>
 
       {activeJob && (
         <Card>
@@ -610,6 +708,17 @@ export function ProjectDetailPage() {
         </CardContent>
       </Card>
 
+        </>
+      )}
+
+      {section === "settings" && (
+        <>
+      <ProjectConfigCard
+        key={`general-${project.updatedAt}`}
+        section="general"
+        project={project}
+        onSaved={() => void refresh()}
+      />
       <Card className="border-destructive/40">
         <CardHeader className="pb-2">
           <CardTitle className="text-base text-destructive">Zona de perigo</CardTitle>
@@ -657,6 +766,10 @@ export function ProjectDetailPage() {
           )}
         </CardContent>
       </Card>
+        </>
+      )}
+        </div>
+      </div>
     </div>
   );
 }

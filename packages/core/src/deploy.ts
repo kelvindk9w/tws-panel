@@ -66,7 +66,13 @@ export interface Project {
   /** URL git (modo git) ou caminho local (modos upload/existing). */
   source: string;
   branch: string | null;
+  /** Domínio principal (o do link "Abrir site" e do health check). */
   domain: string;
+  /**
+   * Outros domínios servidos pelo projeto ao mesmo tempo (ex.: o subdomínio
+   * próprio além do endereço automático). Ausente em projetos antigos = [].
+   */
+  aliases?: string[];
   /** Projeto precisa de WebSocket/timeouts longos (ex.: Colyseus). */
   websocket: boolean;
   /** Última detecção conhecida (null = ainda não detectado). */

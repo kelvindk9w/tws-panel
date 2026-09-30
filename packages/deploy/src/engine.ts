@@ -203,8 +203,13 @@ export class DeployEngine {
     const domain = projectDomain(project);
     const targets = allProjects
       .filter((p) => p.id !== project.id && p.lastDeployStatus === "success")
-      .map((p) => ({ domain: projectDomain(p), upstream: this.upstreamFor(p), websocket: p.websocket }));
-    targets.push({ domain, upstream, websocket: project.websocket });
+      .map((p) => ({
+        domain: projectDomain(p),
+        aliases: p.aliases ?? [],
+        upstream: this.upstreamFor(p),
+        websocket: p.websocket,
+      }));
+    targets.push({ domain, aliases: project.aliases ?? [], upstream, websocket: project.websocket });
     await this.caddy.apply(targets, onLog);
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
@@ -218,6 +223,7 @@ export class DeployEngine {
       .filter((p) => p.lastDeployStatus === "success")
       .map((p) => ({
         domain: projectDomain(p),
+        aliases: p.aliases ?? [],
         upstream: this.upstreamFor(p),
         websocket: p.websocket,
       }));

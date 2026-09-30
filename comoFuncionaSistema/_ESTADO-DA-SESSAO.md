@@ -113,6 +113,11 @@ pendente e por quê — informação que não está no código nem no git log.
   certificado de verdade (avisa sem falhar se ainda estiver sendo emitido). Link do projeto em
   https; botão "Abrir site"; card "HTTPS automático"; deploy que falhou não aparece mais como
   "nenhum deploy publicado".
+- **30/09 — página do projeto com menu próprio:** Visão geral, Deploys, Domínios (vários por
+  projeto: conectar/tornar principal/remover, valendo na hora), Git (token some com repositório
+  público), Variáveis (cifradas, injetadas no deploy), E-mail, Configurações. Páginas de erro
+  neutras no Caddy (projeto parado; domínio não configurado). Ver
+  `projetos/conceito-pagina-do-projeto.json`. Sugestão pendente: seção Logs (app rodando).
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:
