@@ -56,9 +56,29 @@ export interface LoginResponse {
   expiresAt: string;
 }
 
+/** Onde fica o menu de navegação do painel (Configurações → Aparência). */
+export type NavLayout = "top" | "left" | "right";
+export const NAV_LAYOUTS: readonly NavLayout[] = ["top", "left", "right"];
+
+/** Preferências de interface da conta — guardadas no servidor, valem em qualquer computador. */
+export interface UserPreferences {
+  navLayout: NavLayout;
+}
+
+export const DEFAULT_USER_PREFERENCES: UserPreferences = { navLayout: "top" };
+
+/** PUT /api/settings/preferences — só os campos que mudam. */
+export type UpdatePreferencesRequest = Partial<UserPreferences>;
+
+export interface UpdatePreferencesResponse {
+  preferences: UserPreferences;
+}
+
 export interface AuthMeResponse {
   user: AdminUser;
   session: { expiresAt: string };
+  /** Chegam junto com a sessão: o painel já é desenhado no formato escolhido. */
+  preferences: UserPreferences;
 }
 
 /** GET /api/auth/2fa */

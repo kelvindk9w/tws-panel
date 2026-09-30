@@ -78,6 +78,11 @@ pendente e por quê — informação que não está no código nem no git log.
   anti-reuso, desativar exige senha + código, aviso no Dashboard enquanto desligada, e
   `scripts/reset-2fa.sh` para quem perdeu celular e códigos. Detalhes em
   `autenticacao/verificacao-duas-etapas.json`. Falta validar na VPS real com um app de verdade.
+- **30/09 — 2FA validado na VPS real** (Google Authenticator; login de novo pediu o código).
+- **30/09 — página Configurações** (`/settings`): menu no topo, na lateral esquerda ou na
+  direita, salvo na conta (chega com `/api/auth/me`); celular sempre no topo, com botão
+  "Menu"; caixa do menu do usuário ganhou fundo (faltava a cor `popover` no tema). Próximo
+  combinado: configurações do painel e dos projetos. Ver `configuracoes/index.json`.
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:

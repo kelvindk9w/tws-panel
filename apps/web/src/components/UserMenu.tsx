@@ -6,6 +6,7 @@ import {
   type ChangePasswordRequest,
 } from "@paas/core";
 import { apiFetch, ApiRequestError, clearSetupToken } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -129,8 +130,12 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Menu do usuário no header: troca de senha, verificação em duas etapas e logout. */
-export function UserMenu() {
+/**
+ * Menu do usuário: troca de senha, verificação em duas etapas e logout.
+ * No topo abre para baixo; na lateral (Configurações → menu na lateral), fica
+ * no rodapé dela e abre para cima.
+ */
+export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-left" | "sidebar-right" }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -161,19 +166,30 @@ export function UserMenu() {
   }
 
   return (
-    <div ref={containerRef} className="relative ml-auto">
+    <div ref={containerRef} className={placement === "top" ? "relative ml-auto" : "relative w-full"}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className={cn(
+          "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          placement !== "top" && "w-full",
+        )}
       >
         <UserRound className="h-4 w-4" />
-        <span className="max-w-32 truncate">{user.username}</span>
+        <span className={cn("truncate", placement === "top" ? "max-w-32" : "flex-1 text-left")}>{user.username}</span>
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-1 w-64 rounded-md border bg-popover p-1 shadow-md">
+        <div
+          className={cn(
+            "absolute z-50 w-64 rounded-md border bg-popover p-1 text-popover-foreground shadow-lg",
+            placement === "top" && "right-0 top-full mt-1",
+            placement === "sidebar-left" && "bottom-full left-0 mb-1",
+            // à direita da tela a caixa abre para dentro, senão passaria da borda
+            placement === "sidebar-right" && "bottom-full right-0 mb-1",
+          )}
+        >
           <button
             type="button"
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"

@@ -1,0 +1,23 @@
+{
+  "modulo": "configuracoes",
+  "titulo": "Configurações",
+  "resumo": "Página /settings do painel. Primeira seção: Aparência → onde fica o menu de navegação (topo, lateral esquerda ou lateral direita). Pedido do dono do produto em 30/09/2026: manter o formato de site (topo) e oferecer o formato de sistema/dashboard (lateral).",
+  "pontoDeEntrada": {
+    "api": "PUT /api/settings/preferences",
+    "web": "/settings"
+  },
+  "comoFunciona": [
+    "Preferências de interface são da CONTA, guardadas no servidor (StoredUser.preferences em data/users.json): valem em qualquer computador.",
+    "GET /api/auth/me devolve 'preferences' (padrão { navLayout: 'top' }) junto com a sessão: o RequireAuth só desenha o painel depois disso, então ele já abre no formato escolhido, sem piscar.",
+    "PUT /api/settings/preferences recebe só os campos que mudam (schema: additionalProperties false, navLayout em NAV_LAYOUTS) e devolve as preferências completas.",
+    "A página aplica a escolha na hora (AuthContext.setPreferences) e salva; se o servidor recusar, volta ao que era e diz por quê.",
+    "Layout (apps/web/src/components/Layout.tsx): 'top' = barra no alto; 'left'/'right' = coluna de 240px com os itens empilhados e o menu do usuário no rodapé (a caixa abre para cima e, à direita, para dentro da tela). Em telas pequenas a lateral não cabe: o menu volta ao topo, com os itens atrás de um botão 'Menu'.",
+    "Correção junto (30/09/2026): o tema não definia a cor 'popover', e a caixa do menu do usuário ficava transparente sobre o conteúdo."
+  ],
+  "testes": [
+    "apps/server/tests/settings-preferences.test.ts",
+    "apps/web/tests/settings-page.test.tsx",
+    "apps/web/tests/layout.test.tsx"
+  ],
+  "proximos": "Próximas seções combinadas: configurações do painel e dos projetos."
+}

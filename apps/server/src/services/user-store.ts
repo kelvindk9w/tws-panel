@@ -12,6 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { UserPreferences } from "@paas/core";
 
 /**
  * Verificação em duas etapas (ver services/two-factor.ts). O segredo fica
@@ -37,6 +38,8 @@ export interface StoredUser {
   usernameLower: string;
   passwordHash: string;
   twoFactor?: StoredTwoFactor | null;
+  /** Preferências de interface (Configurações). Ausente = padrão. */
+  preferences?: Partial<UserPreferences>;
   createdAt: string;
   updatedAt: string;
 }
@@ -126,6 +129,22 @@ export class UserStore {
       const user: StoredUser = {
         ...atual,
         passwordHash,
+        updatedAt: new Date().toISOString(),
+      };
+      this.users = this.users.map((u) => (u.id === id ? user : u));
+      return user;
+    });
+  }
+
+  /** Mescla preferências de interface novas às atuais. */
+  async updatePreferences(id: string, changes: Partial<UserPreferences>): Promise<StoredUser | null> {
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const atual = this.users.find((u) => u.id === id);
+      if (!atual) return null;
+      const user: StoredUser = {
+        ...atual,
+        preferences: { ...atual.preferences, ...changes },
         updatedAt: new Date().toISOString(),
       };
       this.users = this.users.map((u) => (u.id === id ? user : u));

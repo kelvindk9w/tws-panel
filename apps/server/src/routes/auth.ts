@@ -21,6 +21,7 @@ import {
   SESSION_COOKIE,
   SESSION_TTL_MS,
   passwordStrengthErrors,
+  DEFAULT_USER_PREFERENCES,
   type AuthMeResponse,
   type ChangePasswordRequest,
   type LoginRequest,
@@ -251,6 +252,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     const response: AuthMeResponse = {
       user: { username: user.username, createdAt: user.createdAt },
       session: { expiresAt: session.expiresAt },
+      preferences: { ...DEFAULT_USER_PREFERENCES, ...user.preferences },
     };
     return reply.send(response);
   });

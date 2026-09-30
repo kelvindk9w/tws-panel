@@ -12,6 +12,7 @@ import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
 import { SecurityPage } from "@/pages/SecurityPage";
+import { SettingsPage } from "@/pages/SettingsPage";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 
@@ -34,6 +35,7 @@ const router = createBrowserRouter([
       { path: "/security/hardening", element: <HardeningPage /> },
       { path: "/alerts", element: <AlertsPage /> },
       { path: "/audit", element: <AuditPage /> },
+      { path: "/settings", element: <SettingsPage /> },
     ],
   },
   // wizard de setup e login ficam fora do layout/guard do dashboard
