@@ -218,10 +218,15 @@ export function guessProxyTarget(
     return { service: m[1]!, port: listen };
   };
 
-  // 1) serviço com nome de proxy web (ex.: Caddy próprio do trader)
-  for (const name of names) {
+  // 1) serviço com nome de proxy web (ex.: Caddy próprio do trader). Imagem
+  // de proxy (caddy/nginx/traefik) vem ANTES de um nome genérico ("web",
+  // "app"): quando o projeto tem proxy próprio, é ele a entrada (validação
+  // real: o cassino tem "web" e um Caddy interno que roteia site e carteira).
+  const isProxyImage = (n: string) => /^(caddy|nginx|traefik)/i.test(asString(services[n]?.image) ?? "");
+  const ordered = [...names.filter(isProxyImage), ...names.filter((n) => !isProxyImage(n))];
+  for (const name of ordered) {
     const svc = services[name];
-    if (svc && (WEB_NAME.test(name) || /^(caddy|nginx|traefik)/i.test(asString(svc.image) ?? ""))) {
+    if (svc && (WEB_NAME.test(name) || isProxyImage(name))) {
       // só a porta do container interessa (upstream na rede Docker); a do host,
       // que pode ser aleatória ou vir de variável, nunca é usada aqui
       const ports = publishedPorts(svc.ports);

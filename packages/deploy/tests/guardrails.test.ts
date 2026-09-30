@@ -502,3 +502,21 @@ describe("guessProxyTarget — serviço web dentro do namespace de outro", () =>
     expect(target.notes.join(" ")).toMatch(/0\.0\.0\.0/);
   });
 });
+
+describe("guessProxyTarget — proxy próprio do projeto tem prioridade sobre um serviço 'web'", () => {
+  it("Caddy interno (no namespace do wallet) vence o 'web': entrada em wallet:80", () => {
+    const target = guessProxyTarget(`services:
+  wallet:
+    image: wallet:1.0
+  web:
+    image: web:1.0
+    network_mode: service:wallet
+    environment:
+      PORT: "3200"
+  caddy:
+    image: caddy:2-alpine
+    network_mode: service:wallet
+`);
+    expect(target).toMatchObject({ service: "wallet", port: 80 });
+  });
+});
