@@ -29,7 +29,7 @@
     "@types/node": "^22.9.0",
     "@vitest/coverage-v8": "^4.1.11",
     "imapflow": "^1.0.164",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.0.9",
     "tsx": "^4.19.2",
     "vitest": "^4.1.11"
   }
