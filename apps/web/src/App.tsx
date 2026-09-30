@@ -17,6 +17,7 @@ import { ProfileSettings } from "@/pages/settings/ProfileSettings";
 import { SecuritySettings } from "@/pages/settings/SecuritySettings";
 import { AppearanceSettings } from "@/pages/settings/AppearanceSettings";
 import { NotificationSettings } from "@/pages/settings/NotificationSettings";
+import { IntegrationSettings } from "@/pages/settings/IntegrationSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 
@@ -48,6 +49,7 @@ const router = createBrowserRouter([
           { path: "security", element: <SecuritySettings /> },
           { path: "appearance", element: <AppearanceSettings /> },
           { path: "notifications", element: <NotificationSettings /> },
+          { path: "integrations", element: <IntegrationSettings /> },
         ],
       },
     ],

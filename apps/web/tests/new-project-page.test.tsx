@@ -75,7 +75,9 @@ function preencherGit() {
 }
 
 function chamadas(): string[] {
-  return apiFetchMock.mock.calls.map(([p, init]) => `${(init as RequestInit | undefined)?.method ?? "GET"} ${p}`);
+  return apiFetchMock.mock.calls
+    .map(([p, init]) => `${(init as RequestInit | undefined)?.method ?? "GET"} ${p}`)
+    .filter((c) => !c.includes("/api/integrations/github")); // consulta da conta do GitHub (sem conexão nos testes)
 }
 
 describe("NewProjectPage — repositório git", () => {

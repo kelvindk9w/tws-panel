@@ -19,10 +19,10 @@ const GITHUB_NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens
  * nome do repositório; em outros provedores, a orientação geral — sem prometer
  * telas que o painel não conferiu.
  */
-export function TokenGuide({ url }: { url: string }) {
+export function TokenGuide({ url = "", scope = "repo" }: { url?: string; scope?: "repo" | "account" }) {
   const [open, setOpen] = useState(false);
-  const repo = githubRepo(url);
-  const gitlab = !repo && isGitLab(url);
+  const repo = scope === "repo" ? githubRepo(url) : null;
+  const gitlab = scope === "repo" && !repo && isGitLab(url);
 
   return (
     <div className="flex flex-col gap-2">
@@ -57,11 +57,20 @@ export function TokenGuide({ url }: { url: string }) {
                   Em <strong className="text-foreground">Expiration</strong>, escolha uma validade (90 dias é um bom
                   equilíbrio). Quando vencer, gere outro e troque na página do projeto.
                 </li>
-                <li>
-                  Em <strong className="text-foreground">Repository access</strong>, marque{" "}
-                  <strong className="text-foreground">Only select repositories</strong> e escolha{" "}
-                  <strong className="font-mono text-foreground">{repo ?? "o repositório do projeto"}</strong>.
-                </li>
+                {scope === "account" ? (
+                  <li>
+                    Em <strong className="text-foreground">Repository access</strong>, marque{" "}
+                    <strong className="text-foreground">All repositories</strong> para o painel listar todos os seus
+                    repositórios — ou <strong className="text-foreground">Only select repositories</strong> para
+                    escolher quais ele pode ver.
+                  </li>
+                ) : (
+                  <li>
+                    Em <strong className="text-foreground">Repository access</strong>, marque{" "}
+                    <strong className="text-foreground">Only select repositories</strong> e escolha{" "}
+                    <strong className="font-mono text-foreground">{repo ?? "o repositório do projeto"}</strong>.
+                  </li>
+                )}
                 <li>
                   Em <strong className="text-foreground">Permissions → Repository permissions</strong>, procure{" "}
                   <strong className="text-foreground">Contents</strong> e escolha{" "}

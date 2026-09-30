@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { httpError } from "./deploy-service.js";
+import { httpError } from "./http-error.js";
 import { isInside } from "./projects-dir.js";
 
 /** Pasta das sessões de envio, dentro da pasta de projetos. */

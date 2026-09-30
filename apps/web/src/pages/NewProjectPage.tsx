@@ -16,6 +16,7 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { TokenGuide } from "@/components/TokenGuide";
 import { FolderUpload, uploadFolder, type PickedFolder } from "@/components/FolderUpload";
 import { ServerFolderBrowser } from "@/components/ServerFolderBrowser";
+import { GithubRepoPicker } from "@/components/GithubRepoPicker";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -98,6 +99,9 @@ export function NewProjectPage() {
   const [folder, setFolder] = useState<PickedFolder | null>(null);
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [browsing, setBrowsing] = useState(false);
+  // Repositório escolhido na lista da conta do GitHub conectada: se for
+  // privado, o clone usa o token da conta — não pede outro.
+  const [fromAccount, setFromAccount] = useState<{ fullName: string; private: boolean } | null>(null);
   const [sourceText, setSource] = useState("");
   const [branch, setBranch] = useState("main");
   // repositório privado: token de LEITURA, entregue à credencial do projeto
@@ -308,14 +312,34 @@ export function NewProjectPage() {
             </div>
 
             {ingestMode === "git" && (
-              <label className="flex flex-col gap-1.5 text-sm">
-                URL do repositório
-                <Input
-                  value={sourceText}
-                  onChange={(e) => setSource(e.target.value)}
-                  placeholder="https://github.com/usuario/repo.git"
+              <div className="flex flex-col gap-2">
+                <GithubRepoPicker
+                  onPick={(repo) => {
+                    setSource(repo.cloneUrl);
+                    setBranch(repo.defaultBranch);
+                    setPrivateRepo(false);
+                    setFromAccount({ fullName: repo.fullName, private: repo.private });
+                    if (!name.trim()) setName(repo.fullName.split("/")[1] ?? "");
+                  }}
                 />
-              </label>
+                <label className="flex flex-col gap-1.5 text-sm">
+                  URL do repositório
+                  <Input
+                    value={sourceText}
+                    onChange={(e) => {
+                      setSource(e.target.value);
+                      setFromAccount(null);
+                    }}
+                    placeholder="https://github.com/usuario/repo.git"
+                  />
+                </label>
+                {fromAccount?.private && (
+                  <p data-testid="uses-account-token" className="text-xs text-emerald-400">
+                    Repositório privado: o painel usa o token da conta do GitHub conectada (somente leitura) — não
+                    precisa de outro.
+                  </p>
+                )}
+              </div>
             )}
 
             {ingestMode === "upload" && (

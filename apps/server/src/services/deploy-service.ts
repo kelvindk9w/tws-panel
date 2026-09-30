@@ -8,6 +8,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isInsideProjectsDir } from "./projects-dir.js";
+import { httpError, type HttpError } from "./http-error.js";
+import { GithubIntegration } from "./github-integration.js";
 import {
   DEFAULT_GIT_CREDENTIAL_USERNAME,
   DEPLOY_LOG_MAX_CHARS,
@@ -16,6 +18,7 @@ import {
   type DeployJob,
   type DetectResult,
   type DockerContainerInfo,
+  type GitReadCredential,
   type GuardrailReport,
   type Project,
   type ProjectCredentialInfo,
@@ -136,6 +139,8 @@ export class DeployService {
    * projeto.
    */
   private readonly credentials: CredentialVault;
+  /** Conta do GitHub conectada (Configurações → Integrações). */
+  readonly github: GithubIntegration;
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
   readonly panelSite: PanelSite | null;
   private projects: Project[] = [];
@@ -153,11 +158,12 @@ export class DeployService {
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
     this.caddyHttpPort = config.caddyHttpPort;
     this.credentials = new CredentialVault(config.dataDir);
+    this.github = new GithubIntegration(this.credentials);
     this.engineCtx = {
       projectsDir: this.projectsDir,
       // A ingestão pede a credencial na hora do clone. O valor em claro só
       // existe em memória e no ambiente do processo git (ver ingest.ts).
-      credentialFor: (project: Project) => this.credentials.get(project.id),
+      credentialFor: (project: Project) => this.credentialFor(project),
       caddyDir: path.join(config.dataDir, "caddy"),
       nodeImage: process.env.PAAS_NODE_IMAGE ?? "node:22",
       staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
@@ -732,6 +738,16 @@ export class DeployService {
     return listContainers();
   }
 
+  /**
+   * Credencial de clone: a do próprio projeto; sem ela, num repositório do
+   * github.com, a da conta do GitHub conectada (ambas somente leitura).
+   */
+  async credentialFor(project: Project): Promise<GitReadCredential | null> {
+    const own = await this.credentials.get(project.id);
+    if (own) return own;
+    return project.ingestMode === "git" ? this.github.credentialForUrl(project.source) : null;
+  }
+
   // -------------------------------------------------------------------------
 
   private async requireProject(id: string): Promise<Project> {
@@ -741,16 +757,4 @@ export class DeployService {
   }
 }
 
-export interface HttpError extends Error {
-  statusCode: number;
-  code: string;
-  /** Payload extra (ex.: relatório de guardrails no erro guardrail_blocked). */
-  report?: GuardrailReport;
-}
-
-export function httpError(statusCode: number, code: string, message: string): HttpError {
-  const err = new Error(message) as HttpError;
-  err.statusCode = statusCode;
-  err.code = code;
-  return err;
-}
+export { httpError, type HttpError } from "./http-error.js";
