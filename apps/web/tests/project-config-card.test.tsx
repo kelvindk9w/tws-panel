@@ -314,3 +314,16 @@ describe("ProjectConfigCard — credencial de leitura", () => {
     expect(screen.queryByLabelText(/token de leitura/i)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Validação real: o deploy "falhou" (health check) e a tela dizia "Nenhum
+ * deploy publicado ainda" — como se nunca tivesse havido tentativa.
+ */
+describe("ProjectConfigCard — último deploy falhou", () => {
+  it("diz que o último deploy falhou e onde ver o motivo, não que nunca houve deploy", () => {
+    render(<ProjectConfigCard project={projeto({ lastDeployStatus: "failed", lastDeployAt: new Date().toISOString() })} onSaved={vi.fn()} />);
+    expect(screen.getByText(/último deploy falhou/i)).toBeInTheDocument();
+    expect(screen.getByText(/log/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Nenhum deploy publicado ainda/)).not.toBeInTheDocument();
+  });
+});

@@ -12,6 +12,7 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import {
   PAAS_LABEL_MANAGED,
@@ -19,6 +20,7 @@ import {
   PAAS_NETWORK,
   type GuardrailReport,
   type Project,
+  PAAS_CADDY_CONTAINER,
 } from "@paas/core";
 import { parse, stringify } from "yaml";
 import { CaddyManager, projectDomain, type PanelSite } from "./caddy.js";
@@ -41,6 +43,12 @@ export interface EngineContext extends IngestContext {
   /** Site do próprio painel no Caddy central (acesso por HTTPS); ausente = túnel. */
   panelSite?: PanelSite;
   /**
+   * Container do próprio painel, quando ele roda no Docker. O health check
+   * passa então pela rede interna (paas-caddy:80/443): de dentro do container,
+   * 127.0.0.1 não tem proxy nenhum. Ausente = painel fora de container (dev).
+   */
+  panelContainer?: string;
+  /**
    * Env vars extras por projeto (Fase 3 — injeção SMTP). Chamado no início de
    * cada deploy; o mapa é injetado no compose override (todos os serviços) ou
    * via -e no pipeline dockerfile. undefined = nenhuma injeção.
@@ -49,6 +57,12 @@ export interface EngineContext extends IngestContext {
 }
 
 export type LogFn = (chunk: string) => void;
+
+/** Onde o health check fala com o Caddy central (ver EngineContext.panelContainer). */
+export function healthCheckTarget(ctx: EngineContext): { host: string; httpPort: number; httpsPort: number } {
+  if (ctx.panelContainer) return { host: PAAS_CADDY_CONTAINER, httpPort: 80, httpsPort: 443 };
+  return { host: "127.0.0.1", httpPort: ctx.caddyHttpPort, httpsPort: ctx.caddyHttpsPort };
+}
 
 /**
  * Erro de domínio do engine: mesmo formato duck-typed que `httpError`
@@ -196,7 +210,6 @@ export class DeployEngine {
 
     onLog("\n=== Etapa 5/5 · Health check ===\n");
     await this.waitHealthy(domain, onLog);
-    onLog(`Health check OK — http://${domain} respondendo.\n`);
   }
 
   /** Recalcula o Caddyfile com TODOS os projetos ativos (chamado após cada mudança). */
@@ -506,16 +519,45 @@ export class DeployEngine {
   // -------------------------------------------------------------------------
 
   private async waitHealthy(domain: string, onLog: LogFn, timeoutMs = 60_000): Promise<void> {
+    const target = healthCheckTarget(this.ctx);
+    // O painel precisa estar na rede do Caddy para alcançá-lo pelo nome.
+    if (this.ctx.panelContainer) await this.caddy.connectToNetwork(this.ctx.panelContainer);
     const deadline = Date.now() + timeoutMs;
     let lastError = "";
+    let ok = false;
     while (Date.now() < deadline) {
-      const result = await httpGet(domain, this.ctx.caddyHttpPort);
-      if (result.ok) return;
+      const result = await httpGet(target.host, target.httpPort, domain);
+      if (result.ok) {
+        ok = true;
+        break;
+      }
       lastError = result.error ?? `HTTP ${result.status}`;
       await new Promise((r) => setTimeout(r, 2_000));
     }
-    onLog(`Última resposta do health check: ${lastError}\n`);
-    throw new Error(`health check falhou após ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
+    if (!ok) {
+      onLog(`Última resposta do health check: ${lastError}\n`);
+      throw new Error(`health check falhou após ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
+    }
+    onLog(`Health check OK — o proxy responde por ${domain}.\n`);
+    if (domain.endsWith(".localhost") || domain === "localhost") return;
+
+    // HTTPS: o Caddy emite o certificado na primeira visita (Let's Encrypt).
+    // Confere com o certificado de verdade; se ainda não saiu, avisa sem falhar.
+    const httpsDeadline = Date.now() + 90_000;
+    let httpsError = "";
+    while (Date.now() < httpsDeadline) {
+      const result = await httpsGet(target.host, target.httpsPort, domain);
+      if (result.ok) {
+        onLog(`HTTPS pronto (certificado válido) — o site está no ar em https://${domain}\n`);
+        return;
+      }
+      httpsError = result.error ?? `HTTP ${result.status}`;
+      await new Promise((r) => setTimeout(r, 3_000));
+    }
+    onLog(
+      `⚠ O site responde, mas o certificado HTTPS ainda não ficou pronto (${httpsError}). ` +
+        `Se o domínio acabou de ser apontado, o DNS pode estar propagando: o Caddy tenta de novo sozinho.\n`,
+    );
   }
 }
 
@@ -531,14 +573,39 @@ async function composeServiceNames(src: string, composeFile: string): Promise<st
   }
 }
 
-/** GET http://127.0.0.1:<port>/ com Host: <domain> (passa pelo Caddy central). */
+/** GET http://<host>:<port>/ com Host: <domain> (passa pelo Caddy central). */
 function httpGet(
-  domain: string,
+  host: string,
   port: number,
+  domain: string,
 ): Promise<{ ok: boolean; status?: number; error?: string }> {
   return new Promise((resolve) => {
     const req = http.request(
-      { host: "127.0.0.1", port, path: "/", method: "GET", headers: { Host: domain }, timeout: 5_000 },
+      { host, port, path: "/", method: "GET", headers: { Host: domain }, timeout: 5_000 },
+      (res) => {
+        res.resume();
+        const status = res.statusCode ?? 0;
+        resolve({ ok: status >= 200 && status < 400, status });
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ ok: false, error: "timeout" });
+    });
+    req.on("error", (err) => resolve({ ok: false, error: err.message }));
+    req.end();
+  });
+}
+
+/** GET https://<host>:<port>/ com SNI e Host = <domain>: exige o certificado válido do domínio. */
+function httpsGet(
+  host: string,
+  port: number,
+  domain: string,
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  return new Promise((resolve) => {
+    const req = https.request(
+      { host, port, path: "/", method: "GET", servername: domain, headers: { Host: domain }, timeout: 10_000 },
       (res) => {
         res.resume();
         const status = res.statusCode ?? 0;
