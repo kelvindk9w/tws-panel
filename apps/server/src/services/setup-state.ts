@@ -47,6 +47,11 @@ export class SetupStateStore {
   }
 
   /** Avança o passo atual (usado pelos endpoints do wizard). */
+  /** Volta ao passo 0, não concluído ("Recomeçar do zero"). */
+  async reset(): Promise<void> {
+    await this.save({ ...DEFAULT_STATE });
+  }
+
   async setStep(step: number): Promise<SetupState> {
     const state = await this.load();
     const next: SetupState = { ...state, currentStep: step };

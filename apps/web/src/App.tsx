@@ -11,6 +11,7 @@ import { MailPage } from "@/pages/MailPage";
 import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
+import { HealthPage } from "@/pages/HealthPage";
 import { SecurityPage } from "@/pages/SecurityPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { ProfileSettings } from "@/pages/settings/ProfileSettings";
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
       { path: "/mail/:domain", element: <MailDomainPage /> },
       { path: "/security", element: <SecurityPage /> },
       { path: "/security/hardening", element: <HardeningPage /> },
+      { path: "/health", element: <HealthPage /> },
       { path: "/alerts", element: <AlertsPage /> },
       { path: "/audit", element: <AuditPage /> },
       {

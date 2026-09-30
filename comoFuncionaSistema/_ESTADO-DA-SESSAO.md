@@ -95,6 +95,13 @@ pendente e por quê — informação que não está no código nem no git log.
   e, com o tipo estático, o `devlinks` do dono do produto. Pendentes pedidos em 30/09:
   conectar a conta do GitHub para listar repositórios; Setup concluído com "recomeçar do zero"
   protegido por senha + 2FA (ou código por e-mail, que depende de configurar envio de e-mail).
+- **30/09 — conta do GitHub e Setup concluído:** Configurações → Integrações conecta a conta
+  do GitHub (token somente leitura; clássico com escrita é recusado) e o Novo Projeto lista os
+  repositórios. `/setup` com sessão mostra "Configuração inicial concluída": saúde (`/health`) e
+  proteções sem apagar nada; "Recomeçar do zero" com orientação + senha + código do 2FA +
+  digitar "recomeçar" (POST /api/settings/restart-setup; gera token de setup novo). Sem 2FA, o
+  painel recusa e aponta o `reset-setup.sh --full` — o código por e-mail pedido pelo dono do
+  produto depende de o painel enviar e-mail, que ainda não existe (decisão do canal pendente).
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:

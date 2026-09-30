@@ -1524,6 +1524,11 @@ sudo ./scripts/show-token.sh
 O primeiro comando apaga a conta admin e todas as sessões (pede confirmação: digite `resetar`).
 O segundo mostra o setup token de novo, para você reabrir o wizard e criar uma conta nova.
 
+Ainda entra no painel e quer refazer o assistente? Em **Setup** (com o setup concluído) há
+**Recomeçar do zero**: pede a senha atual, o código da verificação em duas etapas e que você digite
+`recomeçar`; apaga a conta e as sessões e já abre o assistente com um token novo. Sem a
+verificação em duas etapas ativa, o painel não oferece esse botão — use o script acima.
+
 **Seus projetos, domínios, e-mail e histórico de segurança não são tocados.**
 
 ### Perdi o celular da verificação em duas etapas

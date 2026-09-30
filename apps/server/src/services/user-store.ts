@@ -166,6 +166,14 @@ export class UserStore {
     });
   }
 
+  /** Apaga todas as contas ("Recomeçar do zero" — o assistente cria outra). */
+  async removeAll(): Promise<void> {
+    await this.ensureLoaded();
+    await this.persist(() => {
+      if (this.users.length > 0) this.users = [];
+    });
+  }
+
   /** Mescla preferências de interface novas às atuais. */
   async updatePreferences(id: string, changes: Partial<UserPreferences>): Promise<StoredUser | null> {
     await this.ensureLoaded();

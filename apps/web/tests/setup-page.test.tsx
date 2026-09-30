@@ -9,6 +9,7 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
 
 // ---------------------------------------------------------------------------
 // Mocks de API e dos passos filhos (o foco é a orquestração do SetupPage)
@@ -251,5 +252,78 @@ describe("SetupPage", () => {
     await screen.findByTestId("step-health");
     expect(screen.queryByRole("button", { name: "Voltar para Segurança" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("step-security")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Setup concluído: o item "Setup" do menu abria o assistente do zero, pedindo
+ * um token que já não vale. Agora mostra o que foi feito, o que dá para
+ * refazer sem risco e, separado, "Recomeçar do zero" com confirmação forte.
+ */
+describe("SetupPage — setup já concluído (sessão válida)", () => {
+  function comSessao(twoFactor: boolean) {
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/auth/me") {
+        return { user: { username: "kelvin", createdAt: "2026-09-29T21:00:00Z", displayName: "Kelvin" }, session: { expiresAt: "x" }, preferences: { navLayout: "top" } };
+      }
+      if (path === "/api/auth/2fa") return { enabled: twoFactor, recoveryCodesLeft: 10 };
+      if (path === "/api/settings/restart-setup" && init?.method === "POST") return { setupUrl: "/setup?token=NOVO" };
+      if (path === "/api/terminal/info") return TERMINAL_INFO;
+      return {};
+    });
+  }
+
+  it("mostra que está concluído e os caminhos seguros, sem o assistente", async () => {
+    comSessao(true);
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("setup-done")).toHaveTextContent(/Configuração inicial concluída/);
+    expect(screen.getByRole("link", { name: /Verificar a saúde da máquina/ })).toHaveAttribute("href", "/health");
+    expect(screen.getByRole("link", { name: /proteções de segurança/ })).toHaveAttribute("href", "/security/hardening");
+    expect(screen.queryByTestId("step-welcome")).not.toBeInTheDocument();
+  });
+
+  it("recomeçar do zero: orientação primeiro; com 2FA, pede senha + código + digitar recomeçar", async () => {
+    comSessao(true);
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Recomeçar do zero/ }));
+    const zona = screen.getByTestId("restart-zone");
+    expect(zona).toHaveTextContent(/apaga/i);
+    expect(zona).toHaveTextContent(/projetos/i);
+    const botao = await screen.findByRole("button", { name: /Apagar e recomeçar/ });
+    expect(botao).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Sua senha atual/), { target: { value: "MinhaSenha123" } });
+    fireEvent.change(screen.getByLabelText(/Código da verificação em duas etapas/), { target: { value: "123456" } });
+    fireEvent.change(screen.getByLabelText(/Digite recomeçar/), { target: { value: "recomeçar" } });
+    expect(botao).toBeEnabled();
+    fireEvent.click(botao);
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/setup?token=NOVO"));
+    const body = JSON.parse(String(apiFetchMock.mock.calls.find((c) => c[0] === "/api/settings/restart-setup")![1].body));
+    expect(body).toEqual({ currentPassword: "MinhaSenha123", code: "123456", confirm: "recomeçar" });
+    vi.unstubAllGlobals();
+  });
+
+  it("sem 2FA ativo: não oferece o botão; explica que precisa ativar (ou usar o script na VPS)", async () => {
+    comSessao(false);
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Recomeçar do zero/ }));
+    const zona = screen.getByTestId("restart-zone");
+    await waitFor(() => expect(zona).toHaveTextContent(/ative a verificação em duas etapas/i));
+    expect(zona).toHaveTextContent(/reset-setup\.sh --full/);
+    expect(screen.getByRole("link", { name: /Configurações → Segurança/ })).toHaveAttribute("href", "/settings/security#two-factor");
+    expect(screen.queryByRole("button", { name: /Apagar e recomeçar/ })).not.toBeInTheDocument();
   });
 });

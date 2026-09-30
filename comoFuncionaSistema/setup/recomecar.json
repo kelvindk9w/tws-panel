@@ -1,0 +1,23 @@
+{
+  "id": "recomecar",
+  "modulo": "setup",
+  "metodo": "POST",
+  "url": "/api/settings/restart-setup",
+  "resumo": "'Recomeçar do zero' pelo painel, na tela /setup com o setup concluído. Mesmo efeito do scripts/reset-setup.sh --full: apaga a conta de administrador (e o 2FA dela), todas as sessões e o progresso do assistente; gera um token de setup NOVO (o antigo morre) e devolve { setupUrl: '/setup?token=…' } para continuar na hora. Projetos, domínios, e-mail, histórico de segurança e hardening ficam.",
+  "arquivoFonte": "apps/server/src/routes/setup-restart.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao + senha atual + código da verificação em duas etapas + digitar 'recomeçar'"
+  },
+  "porQue": "Pedido do dono do produto (30/09/2026): o item 'Setup' do menu abria o assistente do zero pedindo um token que já não valia; refazer pelo painel precisa de orientação e de confirmação forte ('não pode qualquer um fazer o reset').",
+  "comoFunciona": [
+    "Sem 2FA ativo: 409 two_factor_required, com a mensagem que aponta Configurações → Segurança e o script na VPS. O código por e-mail pedido pelo dono do produto depende de o painel enviar e-mail, que ainda não existe.",
+    "Auditoria setup.restarted gravada ANTES de apagar (o log de auditoria é um arquivo próprio e continua).",
+    "Token novo: 24 bytes aleatórios (base64url) gravados em SETUP_TOKEN_FILE (0600) e em app.setupToken. A rota é registrada com fastify-plugin para trocar o valor GLOBAL lido pelo plugin de auth e pelas rotas de setup. Se o container for iniciado com SETUP_TOKEN no ambiente, esse valor volta a valer depois de reiniciar (o arquivo só é usado sem a variável).",
+    "Interface: /setup com sessão mostra SetupDone dentro do layout do painel — resumo, 'Verificar a saúde da máquina' (/health, HealthStep com terminal pela sessão), 'Rever as proteções de segurança' (/security/hardening) e a área 'Recomeçar do zero' (orientação: o que acontece, o que fica, quando faz sentido)."
+  ],
+  "testes": [
+    "apps/server/tests/setup-restart.test.ts",
+    "apps/web/tests/setup-page.test.tsx"
+  ]
+}

@@ -149,6 +149,14 @@ export class SessionStore {
     });
   }
 
+  /** Encerra todas as sessões ("Recomeçar do zero"). */
+  async destroyAll(): Promise<void> {
+    await this.ensureLoaded();
+    await this.persist(() => {
+      if (this.sessions.length > 0) this.sessions = [];
+    });
+  }
+
   /** Invalida todas as sessões do usuário, exceto a atual (troca de senha). */
   async destroyOthersForUser(userId: string, keepSessionId: string): Promise<number> {
     await this.ensureLoaded();
