@@ -10,6 +10,7 @@ import path from "node:path";
 import { isInsideProjectsDir } from "./projects-dir.js";
 import { httpError, type HttpError } from "./http-error.js";
 import { GithubIntegration } from "./github-integration.js";
+import { ProjectEnvStore, type EnvVar } from "./project-env.js";
 import {
   DEFAULT_GIT_CREDENTIAL_USERNAME,
   DEPLOY_LOG_MAX_CHARS,
@@ -142,6 +143,10 @@ export class DeployService {
   private readonly credentials: CredentialVault;
   /** Conta do GitHub conectada (Configurações → Integrações). */
   readonly github: GithubIntegration;
+  /** Variáveis de ambiente dos projetos (seção Variáveis), cifradas. */
+  private readonly env: ProjectEnvStore;
+  /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
+  private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
   readonly panelSite: PanelSite | null;
   private projects: Project[] = [];
@@ -161,6 +166,7 @@ export class DeployService {
     this.caddyHttpsPort = config.caddyHttpsPort;
     this.credentials = new CredentialVault(config.dataDir);
     this.github = new GithubIntegration(this.credentials);
+    this.env = new ProjectEnvStore(config.dataDir);
     this.engineCtx = {
       projectsDir: this.projectsDir,
       // A ingestão pede a credencial na hora do clone. O valor em claro só
@@ -171,6 +177,11 @@ export class DeployService {
       staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
       caddyHttpPort: config.caddyHttpPort,
       caddyHttpsPort: config.caddyHttpsPort,
+      // E-mail (SMTP) + variáveis do projeto; com o mesmo nome, a do operador vence.
+      envForProject: async (project: Project) => ({
+        ...((await this.mailEnv?.(project)) ?? {}),
+        ...(await this.env.asRecord(project.id)),
+      }),
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
       // Em container, o health check fala com o Caddy pela rede interna
       // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
@@ -228,7 +239,25 @@ export class DeployService {
    * SMTP). Chamado pelo módulo de e-mail na inicialização das rotas.
    */
   setEnvProvider(provider: (project: Project) => Promise<Record<string, string>>): void {
-    this.engineCtx.envForProject = provider;
+    this.mailEnv = provider;
+  }
+
+  /** Variáveis de ambiente do projeto (valem a partir do próximo deploy). */
+  async getEnv(id: string): Promise<EnvVar[]> {
+    await this.requireProject(id);
+    return this.env.get(id);
+  }
+
+  async setEnv(id: string, vars: EnvVar[]): Promise<EnvVar[]> {
+    const project = await this.requireProject(id);
+    const saved = await this.env.set(id, vars);
+    await this.hooks.audit?.record({
+      action: "project.env_updated",
+      target: project.slug,
+      // só os NOMES: valores costumam ser segredos
+      detail: `Variáveis de "${project.name}" salvas (${saved.length}): ${saved.map((v) => v.key).join(", ") || "nenhuma"}.`,
+    });
+    return saved;
   }
 
   /**
@@ -340,7 +369,7 @@ export class DeployService {
 
     let slug = slugify(name);
     while (this.projects.some((p) => p.slug === slug)) slug = `${slug}-${randomBytes(2).toString("hex")}`;
-    if (this.projects.some((p) => p.domain === domain)) {
+    if (this.domainInUse(domain, null)) {
       throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso por outro projeto.`);
     }
 
@@ -397,7 +426,7 @@ export class DeployService {
     if (req.domain !== undefined) {
       const domain = normalizeDomain(req.domain);
       if (!domain) throw httpError(400, "invalid_domain", "Domínio inválido.");
-      if (this.projects.some((p) => p.id !== project.id && p.domain === domain)) {
+      if (domain !== project.domain && this.domainInUse(domain, project.id)) {
         throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
       }
       project.domain = domain;
@@ -425,6 +454,8 @@ export class DeployService {
     } catch {
       onLog("Aviso: não foi possível recarregar o Caddy após a remoção.\n");
     }
+    // As variáveis também são segredos do projeto: saem com ele.
+    await this.env.remove(project.id);
     // A credencial é um segredo com o mesmo ciclo de vida do projeto: sem
     // isto, o token sobreviveria ao projeto no disco — passivo, não recurso.
     if (await this.credentials.remove(project.id)) {
@@ -748,6 +779,66 @@ export class DeployService {
 
   async listContainers(): Promise<DockerContainerInfo[]> {
     return listContainers();
+  }
+
+  /**
+   * true se o domínio já é do painel, de outro projeto (principal ou
+   * adicional) ou — com `exceptProjectId` — um adicional do próprio projeto.
+   */
+  private domainInUse(domain: string, exceptProjectId: string | null): boolean {
+    if (this.panelSite?.domain === domain) return true;
+    return this.projects.some((p) =>
+      p.id === exceptProjectId ? (p.aliases ?? []).includes(domain) : p.domain === domain || (p.aliases ?? []).includes(domain),
+    );
+  }
+
+  /** Grava e, se o projeto já está no ar, aplica no Caddy na hora. */
+  private async saveAndApplyDomains(project: Project, action: string, detail: string): Promise<Project> {
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({ action, target: project.slug, detail });
+    if (project.lastDeployStatus === "success") await this.engine.syncCaddy(this.projects);
+    return project;
+  }
+
+  /** Conecta um domínio adicional ao projeto (o principal continua). */
+  async addDomain(id: string, raw: string): Promise<Project> {
+    const project = await this.requireProject(id);
+    const domain = normalizeDomain(raw);
+    if (!domain) throw httpError(400, "invalid_domain", "Domínio inválido. Exemplo: loja.meusite.com.br");
+    if (domain === project.domain || this.domainInUse(domain, null)) {
+      throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
+    }
+    project.aliases = [...(project.aliases ?? []), domain];
+    return this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`);
+  }
+
+  /** Remove um domínio adicional (o principal só sai depois de outro virar principal). */
+  async removeDomain(id: string, raw: string): Promise<Project> {
+    const project = await this.requireProject(id);
+    const domain = normalizeDomain(raw);
+    if (domain === project.domain) {
+      throw httpError(409, "primary_domain", "Este é o domínio principal. Torne outro domínio principal antes de removê-lo.");
+    }
+    if (!(project.aliases ?? []).includes(domain)) {
+      throw httpError(404, "domain_not_found", `O domínio ${raw} não está conectado a este projeto.`);
+    }
+    project.aliases = (project.aliases ?? []).filter((d) => d !== domain);
+    return this.saveAndApplyDomains(project, "project.domain_removed", `Domínio ${domain} removido do projeto "${project.name}".`);
+  }
+
+  /** Torna principal um domínio adicional; o antigo principal vira adicional. */
+  async setPrimaryDomain(id: string, raw: string): Promise<Project> {
+    const project = await this.requireProject(id);
+    const domain = normalizeDomain(raw);
+    if (domain === project.domain) return project;
+    if (!(project.aliases ?? []).includes(domain)) {
+      throw httpError(404, "domain_not_found", `O domínio ${raw} não está conectado a este projeto.`);
+    }
+    const old = project.domain;
+    project.domain = domain;
+    project.aliases = [old, ...(project.aliases ?? []).filter((d) => d !== domain)];
+    return this.saveAndApplyDomains(project, "project.domain_primary", `Domínio principal de "${project.name}": ${old} → ${domain}.`);
   }
 
   /**

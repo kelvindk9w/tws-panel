@@ -51,6 +51,15 @@ const projectIdParams = {
 
 const projectIdParamsSchema = { params: projectIdParams } as const;
 
+const domainParams = {
+  type: "object",
+  required: ["id", "domain"],
+  properties: {
+    id: { type: "string", minLength: 1, maxLength: 64 },
+    domain: { type: "string", minLength: 1, maxLength: 253 },
+  },
+} as const;
+
 const jobParamsSchema = {
   params: {
     type: "object",
@@ -210,6 +219,113 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           });
       }
       return reply.send(await projectResponse(project));
+    },
+  );
+
+  // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
+  app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
+    try {
+      return reply.send({ vars: await service.getEnv(request.params.id) });
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: { vars: Array<{ key: string; value: string }> } }>(
+    "/api/projects/:id/env",
+    {
+      schema: {
+        params: projectIdParams,
+        body: {
+          type: "object",
+          required: ["vars"],
+          additionalProperties: false,
+          properties: {
+            vars: {
+              type: "array",
+              maxItems: 200,
+              items: {
+                type: "object",
+                required: ["key", "value"],
+                additionalProperties: false,
+                properties: {
+                  key: { type: "string", minLength: 1, maxLength: 128 },
+                  value: { type: "string", maxLength: 32768 },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return reply.send({ vars: await service.setEnv(request.params.id, request.body.vars) });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Seção Git: o repositório é público? (esconde o bloco de token quando é)
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/repo-visibility",
+    { schema: projectIdParamsSchema },
+    async (request, reply) => {
+      const project = await service.getProject(request.params.id);
+      if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+      const visibility = project.ingestMode === "git" ? await service.github.repoVisibility(project.source) : "unknown";
+      return reply.send({ visibility });
+    },
+  );
+
+  // Domínios do projeto: o principal + quantos adicionais o operador quiser.
+  // Publicado, a mudança vale na hora (Caddy recarregado pelo serviço).
+  app.post<{ Params: { id: string }; Body: { domain: string } }>(
+    "/api/projects/:id/domains",
+    {
+      schema: {
+        params: projectIdParams,
+        body: {
+          type: "object",
+          required: ["domain"],
+          additionalProperties: false,
+          properties: { domain: { type: "string", minLength: 1, maxLength: 253 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return reply.send(await projectResponse(await service.addDomain(request.params.id, request.body.domain)));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string; domain: string } }>(
+    "/api/projects/:id/domains/:domain",
+    { schema: { params: domainParams } },
+    async (request, reply) => {
+      try {
+        return reply.send(await projectResponse(await service.removeDomain(request.params.id, request.params.domain)));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string; domain: string } }>(
+    "/api/projects/:id/domains/:domain/primary",
+    { schema: { params: domainParams } },
+    async (request, reply) => {
+      try {
+        return reply.send(
+          await projectResponse(await service.setPrimaryDomain(request.params.id, request.params.domain)),
+        );
+      } catch (err) {
+        return sendError(reply, err);
+      }
     },
   );
 

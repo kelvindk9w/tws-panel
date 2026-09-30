@@ -49,11 +49,11 @@ describe("renderCaddyfile", () => {
 describe("renderCaddyfile — site do painel", () => {
   const PANEL = { domain: "203-0-113-10.sslip.io", upstream: "tws-panel:9000" };
 
-  it("sem projetos: o painel é servido (em vez do 404 geral)", () => {
+  it("sem projetos: o painel é servido; outros hosts em HTTP caem na página de domínio não configurado", () => {
     const out = renderCaddyfile([], PANEL);
     expect(out).toContain("203-0-113-10.sslip.io {");
     expect(out).toContain("reverse_proxy tws-panel:9000");
-    expect(out).not.toContain("respond 404");
+    expect(out.indexOf("203-0-113-10.sslip.io {")).toBeLessThan(out.indexOf("http:// {"));
   });
 
   it("com projetos: o painel continua presente junto deles", () => {
@@ -77,6 +77,74 @@ describe("renderCaddyfile — site do painel", () => {
   it("domínio do painel inválido é ignorado (defesa em profundidade)", () => {
     const out = renderCaddyfile([], { domain: "x.com {\n respond hi\n}", upstream: "tws-panel:9000" });
     expect(out).not.toContain("respond hi");
-    expect(out).toContain("respond 404");
+    expect(out).toMatch(/http:\/\/ \{[\s\S]*` 404/);
+  });
+});
+
+/**
+ * Vários domínios no mesmo projeto (validação real, 30/09/2026): o endereço
+ * automático sslip.io e um subdomínio próprio (devlink.tws.tec.br) servidos
+ * juntos, cada um com o seu certificado.
+ */
+describe("renderCaddyfile — domínios adicionais do projeto", () => {
+  it("todos os domínios do projeto no mesmo bloco", () => {
+    const out = renderCaddyfile([
+      { domain: "devlink.203-0-113-10.sslip.io", aliases: ["devlink.tws.tec.br", "www.devlink.com"], upstream: "devlink:80", websocket: false },
+    ]);
+    expect(out).toContain("devlink.203-0-113-10.sslip.io, devlink.tws.tec.br, www.devlink.com {");
+  });
+
+  it("domínio adicional com caractere perigoso é descartado (o resto segue)", () => {
+    const out = renderCaddyfile([
+      { domain: "app.exemplo.com", aliases: ["ok.exemplo.com", "mal}.exemplo.com"], upstream: "app:80", websocket: false },
+    ]);
+    expect(out).toContain("app.exemplo.com, ok.exemplo.com {");
+    expect(out).not.toContain("mal}");
+  });
+
+  it("domínio adicional igual ao do painel não sequestra o acesso ao painel", () => {
+    const out = renderCaddyfile(
+      [{ domain: "app.exemplo.com", aliases: ["painel.exemplo.com"], upstream: "app:80", websocket: false }],
+      { domain: "painel.exemplo.com", upstream: "tws-panel:9000" },
+    );
+    expect(out).toContain("app.exemplo.com {");
+    expect(out.match(/painel\.exemplo\.com/g)).toHaveLength(1);
+  });
+});
+
+/**
+ * Páginas de erro (validação real, 30/09/2026): ao parar um projeto, o
+ * visitante via a página de erro crua do navegador/proxy. Agora: uma página
+ * neutra de "temporariamente indisponível" (o visitante é o cliente do dono do
+ * site — nada de propaganda; a TWS só numa linha discreta no rodapé) e, para
+ * domínio que aponta para o servidor sem estar em projeto nenhum, "domínio
+ * ainda não configurado".
+ */
+describe("renderCaddyfile — páginas de erro", () => {
+  const out = renderCaddyfile(
+    [{ domain: "site.exemplo.com", upstream: "site:80", websocket: false }],
+    { domain: "painel.exemplo.com", upstream: "tws-panel:9000" },
+  );
+
+  it("projeto fora do ar (502/503/504) → página de indisponível, status 503", () => {
+    const bloco = out.slice(out.indexOf("site.exemplo.com {"));
+    expect(bloco).toMatch(/handle_errors 502 503 504/);
+    expect(bloco).toContain("temporariamente indisponível");
+    expect(bloco).toMatch(/respond `[\s\S]*` 503/);
+  });
+
+  it("o bloco do painel não ganha a página de indisponível", () => {
+    const painel = out.slice(out.indexOf("painel.exemplo.com {"), out.indexOf("site.exemplo.com {"));
+    expect(painel).not.toContain("handle_errors");
+  });
+
+  it("domínio desconhecido em HTTP → página 'domínio ainda não configurado', status 404", () => {
+    expect(out).toMatch(/http:\/\/ \{[\s\S]*ainda não está configurado[\s\S]*404/);
+  });
+
+  it("o HTML das páginas não tem chaves nem crases (seriam lidos como variáveis/fim de texto pelo Caddy)", () => {
+    const corpos = [...out.matchAll(/respond `([\s\S]*?)`/g)].map((m) => m[1]!);
+    expect(corpos.length).toBeGreaterThanOrEqual(2);
+    for (const c of corpos) expect(c).not.toMatch(/[{}`]/);
   });
 });

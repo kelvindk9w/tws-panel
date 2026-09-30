@@ -1,8 +1,11 @@
 /**
- * Card de configuração do projeto.
+ * Card de configuração do projeto, em duas seções do menu do projeto:
+ *  - "git": repositório, branch, aviso do que está no ar e credencial de leitura
+ *    (escondida quando o repositório é público);
+ *  - "general": nome, slug fixo e WebSocket.
+ * O domínio mora na seção Domínios (vários domínios por projeto).
  *
- * Edita o que é seguro editar depois da criação: nome de exibição, URL do
- * repositório, branch e domínio. O slug NÃO é editável — ele nomeia o
+ * Edita o que é seguro editar depois da criação. O slug NÃO é editável — ele nomeia o
  * diretório do clone, a imagem, o compose project e os containers, então
  * alterá-lo seria uma migração de infraestrutura, não uma renomeação.
  *
@@ -24,10 +27,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { AlertTriangle, Eye, KeyRound, Loader2, Settings, Trash2 } from "lucide-react";
+import { AlertTriangle, Eye, GitBranch, KeyRound, Loader2, Settings, Trash2 } from "lucide-react";
 
 export interface ProjectConfigCardProps {
+  /** Seção do menu do projeto. */
+  section: "git" | "general";
   project: Project;
+  /** Seção Git: o repositório é público? (público = sem o bloco de token) */
+  repoVisibility?: "public" | "private" | "unknown";
   /**
    * Existência (nunca o valor) da credencial de leitura do repositório. Vem
    * junto de toda ProjectResponse. Opcional para quem ainda não a repassa.
@@ -308,24 +315,28 @@ function divergencia(project: Project): string | null {
   return `No ar: ${partes.join(" e ")} (deploy de ${quando}). Publique para aplicar as mudanças.`;
 }
 
-export function ProjectConfigCard({ project, credential, onSaved }: ProjectConfigCardProps) {
+export function ProjectConfigCard({ section, project, repoVisibility = "unknown", credential, onSaved }: ProjectConfigCardProps) {
   const [name, setName] = useState(project.name);
   const [source, setSource] = useState(project.source);
   const [branch, setBranch] = useState(project.branch ?? "");
-  const [domain, setDomain] = useState(project.domain);
+  const [websocket, setWebsocket] = useState(project.websocket);
+  const git = section === "git";
   const [busy, setBusy] = useState<"salvar" | "publicar" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const aviso = divergencia(project);
+  const aviso = git ? divergencia(project) : null;
+  const cred = credential ?? SEM_CREDENCIAL;
+  // Público: token não faz sentido — a não ser que um já esteja cadastrado (dá para remover).
+  const mostrarCredencial = repoVisibility !== "public" || cred.configured;
   const ehGit = project.ingestMode === "git";
 
   /** Só envia o que mudou — evita PATCH que reescreve campos sem necessidade. */
   function alteracoes(): UpdateProjectRequest {
     const req: UpdateProjectRequest = {};
-    if (name !== project.name) req.name = name;
-    if (ehGit && source !== project.source) req.source = source;
-    if (ehGit && branch !== (project.branch ?? "")) req.branch = branch;
-    if (domain !== project.domain) req.domain = domain;
+    if (!git && name !== project.name) req.name = name;
+    if (!git && websocket !== project.websocket) req.websocket = websocket;
+    if (git && ehGit && source !== project.source) req.source = source;
+    if (git && ehGit && branch !== (project.branch ?? "")) req.branch = branch;
     return req;
   }
 
@@ -361,11 +372,13 @@ export function ProjectConfigCard({ project, credential, onSaved }: ProjectConfi
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Settings className="h-4 w-4" /> Configuração
+          {git ? <GitBranch className="h-4 w-4" /> : <Settings className="h-4 w-4" />}
+          {git ? "Git" : "Configurações gerais"}
         </CardTitle>
         <CardDescription>
-          Nome, origem do código e domínio. Mudanças de repositório ou branch são aplicadas no
-          próximo deploy.
+          {git
+            ? "De onde o painel baixa o código. Mudanças de repositório ou branch valem no próximo deploy."
+            : "Nome de exibição e comportamento do projeto."}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -380,6 +393,7 @@ export function ProjectConfigCard({ project, credential, onSaved }: ProjectConfi
             </p>
           ) : null}
 
+          {!git && (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="cfg-nome" className="text-sm font-medium">
@@ -398,8 +412,27 @@ export function ProjectConfigCard({ project, credential, onSaved }: ProjectConfi
               </span>
             </div>
           </div>
+          )}
 
-          {ehGit ? (
+          {!git && (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={websocket}
+                onChange={(e) => setWebsocket(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Projeto usa WebSocket / conexões longas (ex.: chat, jogos, SSE)
+            </label>
+          )}
+
+          {git && !ehGit && (
+            <p className="text-sm text-muted-foreground">
+              Este projeto usa uma pasta do servidor ({project.source}), não um repositório git.
+            </p>
+          )}
+
+          {git && ehGit ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="cfg-repo" className="text-sm font-medium">
@@ -423,13 +456,6 @@ export function ProjectConfigCard({ project, credential, onSaved }: ProjectConfi
             </div>
           ) : null}
 
-          <div className="flex flex-col gap-1.5 sm:max-w-sm">
-            <label htmlFor="cfg-dominio" className="text-sm font-medium">
-              Domínio
-            </label>
-            <Input id="cfg-dominio" value={domain} onChange={(e) => setDomain(e.target.value)} />
-          </div>
-
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
           <div className="flex flex-wrap gap-2">
@@ -448,12 +474,13 @@ export function ProjectConfigCard({ project, credential, onSaved }: ProjectConfi
           Fora do <form> de propósito: Enter no campo do token não pode disparar
           o "Salvar" da configuração, e form aninhado não é HTML válido.
         */}
-        {ehGit ? (
-          <CredencialSection
-            projectId={project.id}
-            credential={credential ?? SEM_CREDENCIAL}
-            onSaved={onSaved}
-          />
+        {git && ehGit && mostrarCredencial ? (
+          <CredencialSection projectId={project.id} credential={cred} onSaved={onSaved} />
+        ) : null}
+        {git && ehGit && !mostrarCredencial ? (
+          <p className="mt-6 border-t pt-5 text-xs text-muted-foreground">
+            Repositório público: o painel baixa o código sem precisar de token.
+          </p>
         ) : null}
       </CardContent>
     </Card>

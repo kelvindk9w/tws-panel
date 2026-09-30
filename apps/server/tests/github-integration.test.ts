@@ -109,3 +109,31 @@ describe("credencial de clone", () => {
     expect(await gh.credentialForUrl("https://github.com.evil.example/kelvin/x.git")).toBeNull();
   });
 });
+
+/**
+ * Seção Git do projeto: com repositório público, o bloco "Credencial do
+ * repositório privado" não faz sentido (validação real). O GitHub diz, sem
+ * token, se um repositório é público.
+ */
+describe("visibilidade do repositório", () => {
+  it("público, privado (ou inexistente) e outro provedor", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === "https://api.github.com/repos/kelvin/site") return json({ private: false });
+      if (url === "https://api.github.com/repos/kelvin/secreto") return json({ message: "Not Found" }, 404);
+      return json({}, 500);
+    });
+    expect(await gh.repoVisibility("https://github.com/kelvin/site.git")).toBe("public");
+    expect(await gh.repoVisibility("https://github.com/kelvin/secreto")).toBe("private");
+    expect(await gh.repoVisibility("https://gitlab.com/kelvin/x.git")).toBe("unknown");
+    // a consulta vai SEM token (não depende da conta conectada)
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.stringify((init as RequestInit).headers ?? {})).not.toContain("Bearer");
+  });
+
+  it("guarda a resposta por alguns minutos (não consulta o GitHub a cada abertura da tela)", async () => {
+    fetchMock.mockImplementation(async () => json({ private: false }));
+    await gh.repoVisibility("https://github.com/kelvin/site");
+    await gh.repoVisibility("https://github.com/kelvin/site");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

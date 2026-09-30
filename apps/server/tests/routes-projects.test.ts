@@ -58,6 +58,12 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     stop: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
     deleteProject: vi.fn(async () => undefined),
+    addDomain: vi.fn(async () => PROJECT),
+    removeDomain: vi.fn(async () => PROJECT),
+    setPrimaryDomain: vi.fn(async () => PROJECT),
+    github: { repoVisibility: vi.fn(async () => "unknown") },
+    getEnv: vi.fn(async () => [{ key: "A", value: "1" }]),
+    setEnv: vi.fn(async (_id: string, vars: unknown) => vars),
     ...overrides,
   };
 }
@@ -443,5 +449,71 @@ describe("jobs e ciclo de vida (complementos)", () => {
     const res = await app.inject({ method: "DELETE", url: "/api/projects/p1", headers: auth });
     expect(res.statusCode).toBe(409);
     expect(service.deleteProject).toHaveBeenCalledWith("p1", false, expect.any(Function));
+  });
+});
+
+describe("rotas de domínios do projeto", () => {
+  it("conectar, tornar principal e remover chamam o serviço e devolvem o projeto", async () => {
+    await build({
+      addDomain: vi.fn(async () => ({ ...PROJECT, aliases: ["devlink.tws.tec.br"] })),
+      setPrimaryDomain: vi.fn(async () => PROJECT),
+      removeDomain: vi.fn(async () => PROJECT),
+    });
+    const add = await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "devlink.tws.tec.br" } });
+    expect(add.statusCode, add.body).toBe(200);
+    expect(add.json().project.aliases).toEqual(["devlink.tws.tec.br"]);
+    expect(service.addDomain).toHaveBeenCalledWith("p1", "devlink.tws.tec.br");
+    const prim = await app.inject({ method: "POST", url: "/api/projects/p1/domains/devlink.tws.tec.br/primary", headers: auth });
+    expect(prim.statusCode).toBe(200);
+    expect(service.setPrimaryDomain).toHaveBeenCalledWith("p1", "devlink.tws.tec.br");
+    const del = await app.inject({ method: "DELETE", url: "/api/projects/p1/domains/devlink.tws.tec.br", headers: auth });
+    expect(del.statusCode).toBe(200);
+    expect(service.removeDomain).toHaveBeenCalledWith("p1", "devlink.tws.tec.br");
+  });
+
+  it("erro do serviço vira a resposta dele (ex.: domínio em uso)", async () => {
+    await build({ addDomain: vi.fn(async () => { throw Object.assign(new Error("O domínio x já está em uso."), { statusCode: 409, code: "domain_in_use" }); }) });
+    const res = await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "x.com" } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("domain_in_use");
+  });
+});
+
+describe("GET /api/projects/:id/repo-visibility", () => {
+  it("pergunta ao GitHub (sem token) se o repositório do projeto é público", async () => {
+    const repoVisibility = vi.fn(async () => "public");
+    const git = { ...PROJECT, ingestMode: "git" as const, source: "https://github.com/kelvin/devLink" };
+    await build({ github: { repoVisibility }, getProject: vi.fn(async () => git) });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/repo-visibility", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ visibility: "public" });
+    expect(repoVisibility).toHaveBeenCalledWith("https://github.com/kelvin/devLink");
+  });
+
+  it("origem que não é git: \"unknown\", sem consultar ninguém", async () => {
+    const repoVisibility = vi.fn(async () => "public");
+    await build({ github: { repoVisibility } });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/repo-visibility", headers: auth });
+    expect(res.json()).toEqual({ visibility: "unknown" });
+    expect(repoVisibility).not.toHaveBeenCalled();
+  });
+});
+
+describe("rotas de variáveis do projeto", () => {
+  it("lê e salva a lista inteira", async () => {
+    await build();
+    const get = await app.inject({ method: "GET", url: "/api/projects/p1/env", headers: auth });
+    expect(get.json()).toEqual({ vars: [{ key: "A", value: "1" }] });
+    const vars = [{ key: "DATABASE_URL", value: "postgres://x" }];
+    const put = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
+    expect(put.statusCode, put.body).toBe(200);
+    expect(service.setEnv).toHaveBeenCalledWith("p1", vars);
+  });
+
+  it("corpo fora do formato → 400 antes de chegar ao serviço", async () => {
+    await build();
+    const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [{ key: "A" }] } });
+    expect(res.statusCode).toBe(400);
+    expect(service.setEnv).not.toHaveBeenCalled();
   });
 });

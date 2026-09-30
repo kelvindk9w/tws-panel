@@ -60,7 +60,19 @@ function isGithubUrl(url: string): boolean {
   }
 }
 
+export type RepoVisibility = "public" | "private" | "unknown";
+const VISIBILITY_TTL_MS = 10 * 60_000;
+
+/** "dono/repo" de uma URL https do github.com, ou null. */
+function githubPath(url: string): string | null {
+  if (!isGithubUrl(url)) return null;
+  const m = /^\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(new URL(url).pathname);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
 export class GithubIntegration {
+  private readonly visibilityCache = new Map<string, { value: RepoVisibility; expires: number }>();
+
   constructor(
     private readonly vault: CredentialVault,
     private readonly fetchImpl: typeof fetch = fetch,
@@ -150,6 +162,29 @@ export class GithubIntegration {
       if (batch.length < 100) break;
     }
     return all;
+  }
+
+  /**
+   * O repositório é público? Consulta SEM token (não depende da conta
+   * conectada). 404 = privado ou inexistente; outro provedor = "unknown".
+   */
+  async repoVisibility(url: string): Promise<RepoVisibility> {
+    const repo = githubPath(url);
+    if (!repo) return "unknown";
+    const cached = this.visibilityCache.get(repo);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    let value: RepoVisibility = "unknown";
+    try {
+      const res = await this.fetchImpl(`${API}/repos/${repo}`, {
+        headers: { Accept: "application/vnd.github+json", "User-Agent": "tws-panel" },
+      });
+      if (res.status === 404) value = "private";
+      else if (res.ok) value = ((await res.json()) as { private?: boolean }).private === false ? "public" : "private";
+    } catch {
+      value = "unknown";
+    }
+    this.visibilityCache.set(repo, { value, expires: Date.now() + VISIBILITY_TTL_MS });
+    return value;
   }
 
   /** Credencial de clone para uma URL do github.com (null para outros provedores). */

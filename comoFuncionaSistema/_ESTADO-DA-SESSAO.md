@@ -113,6 +113,19 @@ pendente e por quê — informação que não está no código nem no git log.
   certificado de verdade (avisa sem falhar se ainda estiver sendo emitido). Link do projeto em
   https; botão "Abrir site"; card "HTTPS automático"; deploy que falhou não aparece mais como
   "nenhum deploy publicado".
+- **30/09 — página do projeto com menu próprio:** Visão geral, Deploys, Domínios (vários por
+  projeto: conectar/tornar principal/remover, valendo na hora), Git (token some com repositório
+  público), Variáveis (cifradas, injetadas no deploy), E-mail, Configurações. Páginas de erro
+  neutras no Caddy (projeto parado; domínio não configurado). Ver
+  `projetos/conceito-pagina-do-projeto.json`. Sugestão pendente: seção Logs (app rodando).
+- **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
+  36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
+  (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com
+  `…echo ":::PAA\rAS_EXIT_<n>:$?"\r\n\rpronto:::PAAS_EXIT_<n>:0\r\n<prompt>`: o EXIT chegou
+  mas ficou VISÍVEL (não casou/não havia waiter), e a linha do BEGIN não aparece (foi consumida).
+  Hipóteses a verificar: saída chegando antes de o waiter existir; ou o eco da linha longa com
+  quebra do readline (`\r`) confundindo o parse. Próximo passo: diagnóstico com os bytes crus das
+  últimas linhas e o estado do waiter (capturing, pending) no erro de tempo esgotado.
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:

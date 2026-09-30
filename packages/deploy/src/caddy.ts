@@ -35,6 +35,8 @@ export const CADDYFILE_PATH = `${CADDY_CONFIG_DIR}/Caddyfile`;
 export interface CaddyTarget {
   /** Domínio do projeto (ex.: app.localhost ou app.exemplo.com). */
   domain: string;
+  /** Outros domínios servidos pelo mesmo projeto (ex.: o subdomínio próprio além do automático). */
+  aliases?: string[];
   /** Upstream na rede paas-net (ex.: "paas-app-web:80" ou alias do compose). */
   upstream: string;
   /** WebSocket/streaming: desativa buffer de resposta e timeouts curtos. */
@@ -273,6 +275,41 @@ export function isSafeCaddyTarget(target: CaddyTarget): boolean {
 }
 
 /**
+ * Páginas de erro servidas pelo próprio Caddy. O visitante é o cliente do dono
+ * do site: texto neutro, sem propaganda — a TWS aparece só numa linha discreta
+ * no rodapé. Sem chaves nem crases no HTML: o Caddy leria `{...}` como
+ * variável e a crase como fim do texto (estilos vão em atributos style).
+ */
+function errorPage(title: string, message: string): string {
+  const box =
+    "font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px;margin:15vh auto;" +
+    "padding:0 24px;color:#1f2937;line-height:1.6";
+  return [
+    "<!doctype html>",
+    '<html lang="pt-BR"><head><meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<meta name="robots" content="noindex">',
+    `<title>${title}</title></head>`,
+    `<body style="margin:0;background:#f9fafb"><main style="${box}">`,
+    `<h1 style="font-size:22px;margin:0 0 12px">${title}</h1>`,
+    `<p style="margin:0 0 32px;color:#4b5563">${message}</p>`,
+    '<p style="margin:0;font-size:12px;color:#9ca3af">Servidor gerenciado com TWS Panel</p>',
+    "</main></body></html>",
+  ].join("");
+}
+
+export const PROJECT_DOWN_PAGE = errorPage(
+  "Site temporariamente indisponível",
+  "Este site está passando por uma manutenção ou reiniciando. Tente de novo em alguns minutos.",
+);
+
+export const UNKNOWN_DOMAIN_PAGE = errorPage(
+  "Domínio ainda não configurado",
+  "Este domínio aponta para este servidor, mas ainda não está configurado em nenhum site. " +
+    "Se você administra o servidor, conecte o domínio a um projeto no painel (Projeto → Domínios).",
+);
+
+/**
  * Renderiza o Caddyfile completo (um bloco por alvo).
  *
  * `panel`: site do próprio painel (acesso por HTTPS). O Caddyfile é regenerado
@@ -284,22 +321,25 @@ export function isSafeCaddyTarget(target: CaddyTarget): boolean {
 export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite): string {
   const panelTarget =
     panel && isSafeCaddyTarget({ ...panel, websocket: true }) ? { ...panel, websocket: true } : null;
-  const targets = [
+  const targets: CaddyTarget[] = [
     ...(panelTarget ? [panelTarget] : []),
-    ...allTargets.filter((t) => isSafeCaddyTarget(t) && t.domain !== panelTarget?.domain),
+    ...allTargets
+      .filter((t) => isSafeCaddyTarget(t) && t.domain !== panelTarget?.domain)
+      // domínio adicional inválido ou igual ao do painel sai; o resto do projeto segue
+      .map((t) => ({
+        ...t,
+        aliases: (t.aliases ?? []).filter(
+          (a) => SAFE_DOMAIN_RE.test(a) && a !== panelTarget?.domain && a !== t.domain,
+        ),
+      })),
   ];
   const lines: string[] = [
     "# Gerado pelo painel PaaS — não editar manualmente.",
     `# Atualizado em ${new Date().toISOString()}`,
     "",
   ];
-  if (targets.length === 0) {
-    // Caddyfile válido sem sites: responde 404 em qualquer host.
-    lines.push("http:// {", "\trespond 404", "}", "");
-    return lines.join("\n");
-  }
   for (const target of targets) {
-    lines.push(`${siteAddress(target.domain)} {`);
+    lines.push(`${[target.domain, ...(target.aliases ?? [])].map(siteAddress).join(", ")} {`);
     if (target.websocket) {
       // WebSocket funciona nativamente; flush_interval -1 desativa buffer para
       // streaming/longs polls, e conexões hijacked (WS) não têm timeout de leitura.
@@ -307,8 +347,26 @@ export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite): s
     } else {
       lines.push(`\treverse_proxy ${target.upstream}`);
     }
+    if (target !== panelTarget) {
+      // projeto parado ou reiniciando: página neutra em vez do erro cru do proxy
+      lines.push(
+        "\thandle_errors 502 503 504 {",
+        '\t\theader Content-Type "text/html; charset=utf-8"',
+        `\t\trespond \`${PROJECT_DOWN_PAGE}\` 503`,
+        "\t}",
+      );
+    }
     lines.push("}", "");
   }
+  // Qualquer outro host em HTTP: domínio que aponta para cá sem estar em
+  // projeto nenhum (e o Caddyfile nunca fica sem site).
+  lines.push(
+    "http:// {",
+    '\theader Content-Type "text/html; charset=utf-8"',
+    `\trespond \`${UNKNOWN_DOMAIN_PAGE}\` 404`,
+    "}",
+    "",
+  );
   return lines.join("\n");
 }
 
