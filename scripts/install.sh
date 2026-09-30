@@ -1281,6 +1281,15 @@ env_set PAAS_ACCESS "$ACCESS_MODE"
 env_set PAAS_PANEL_DOMAIN "$PANEL_DOMAIN"
 export PAAS_ACCESS="$ACCESS_MODE" PAAS_PANEL_DOMAIN="$PANEL_DOMAIN"
 
+# Com o painel em HTTPS, a fase 02 fecha o túnel SSH (AllowTcpForwarding no).
+# Quem troca para --acesso=tunel depois disso ficaria sem como abrir o painel:
+# aqui o túnel volta a ser aceito (só essa linha do drop-in do painel muda).
+if [ "$ACCESS_MODE" = "tunel" ] && grep -qsE '^AllowTcpForwarding no$' /etc/ssh/sshd_config.d/40-paas-hardening.conf; then
+  log "Liberando o túnel SSH (a fase 02 o tinha fechado para o acesso por HTTPS)…"
+  bash "$APP_DIR/scripts/hardening/02-ssh.sh" --reopen-tunnel \
+    || die "Não foi possível liberar o túnel SSH. Rode: sudo bash $APP_DIR/scripts/hardening/02-ssh.sh --reopen-tunnel"
+fi
+
 # --- 6. Build + subida ------------------------------------------------------------------
 log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
 SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build

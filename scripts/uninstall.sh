@@ -47,7 +47,7 @@
 #     SSH (login por senha e de root desligados), firewall UFW, fail2ban,
 #     AppArmor, atualizações automáticas, pacotes removidos (ex.: snapd),
 #     auditd/AIDE/rkhunter e o agendamento /etc/cron.d/paas-security-scan,
-#     os backups *.paas-backup.* e o estado em /etc/paas;
+#     os backups *.paas-backup.* (e /var/backups/paas) e o estado em /etc/paas;
 #   • o seu usuário não-root e a chave SSH instalada nele. Se ele estiver no
 #     grupo docker (instaladores antigos faziam isso), essa entrada também
 #     fica — e ela equivale a root sem senha: remova com
@@ -214,7 +214,7 @@ ${BOLD}NÃO será desfeito:${RESET}
    • o hardening já aplicado — senha do root travada, SSH sem login por senha e
      sem root, firewall UFW, fail2ban, AppArmor, atualizações automáticas,
      pacotes removidos (ex.: snapd), auditd/AIDE/rkhunter, o agendamento
-     /etc/cron.d/paas-security-scan, os backups *.paas-backup.* e /etc/paas
+     /etc/cron.d/paas-security-scan, os backups *.paas-backup.*, /var/backups/paas e /etc/paas
    • o seu usuário não-root e a chave SSH dele
    • a entrada de algum usuário no grupo docker, se houver (instaladores antigos
      faziam isso) — ela equivale a root sem senha; confira com  groups  e

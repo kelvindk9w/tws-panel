@@ -83,9 +83,9 @@
       "conteudo": "Estado do rollback agendado por fase de risco (id = 'user'/'ssh'/'firewall'): pending-rollback-<id>.at guarda o número do job do `at`; pending-rollback-<id>.pid guarda o PID do timer em background (fallback sem `at`). Removidos por confirm_rollback (lib.sh) quando o operador confirma."
     },
     {
-      "arquivo": "<arquivo>.paas-backup.<timestamp>",
+      "arquivo": "<arquivo>.paas-backup.<timestamp> (ou /var/backups/paas/<caminho>.paas-backup.<timestamp> para arquivos de pastas *.d)",
       "formato": "cópia do arquivo original (no ALVO)",
-      "conteudo": "Backup de todo arquivo alterado por um script de fase (backup_file em lib.sh), criado antes de qualquer escrita. Usado por --rollback (restore_latest_backup) para reverter."
+      "conteudo": "Backup de todo arquivo alterado por um script de fase (backup_file em lib.sh), criado antes de qualquer escrita. Usado por --rollback (restore_latest_backup) para reverter. Arquivos de pastas *.d (apt.conf.d, sshd_config.d…) têm a cópia em /var/backups/paas espelhando o caminho — dentro da pasta, o apt mostrava 'N: Ignoring file' em todo comando (validação real, 29/09/2026); cópias antigas deixadas dentro de pastas *.d são movidas na próxima execução real de qualquer fase (migrate_dotd_backups), e latest_backup procura nos dois lugares."
     }
   ],
   "endpoints": [

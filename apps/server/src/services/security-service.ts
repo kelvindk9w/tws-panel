@@ -283,6 +283,12 @@ export class SecurityService {
 
   /** Inicia job de aplicação de uma fase (assíncrono). */
   async apply(phase: SecurityPhaseId, dryRun: boolean, params?: PhaseParams): Promise<SecurityJob> {
+    // Painel em HTTPS: o túnel SSH não é usado, e a fase 02 fecha também o
+    // encaminhamento local (Lynis SSH-7408). Decisão do servidor, pelo modo
+    // de acesso instalado — nunca do navegador.
+    if (phase === "02" && this.config.panelDomain) {
+      return this.executor.startJob(phase, dryRun, { ...params, noTunnel: true });
+    }
     return this.executor.startJob(phase, dryRun, params);
   }
 
@@ -314,10 +320,15 @@ export class SecurityService {
         notes.push("Sem chave SSH instalada, o script NÃO trava o root (proteção anti-lockout).");
       }
       if (phase === "02") {
-        commands = [`sudo bash ${scriptPath} --user SEU_USUARIO`];
+        commands = [`sudo bash ${scriptPath} --user SEU_USUARIO${this.config.panelDomain ? " --no-tunnel" : ""}`];
         notes.push(
           "Com --user, o root não entra por SSH e só SEU_USUARIO pode entrar. O script recusa se ele não tiver chave SSH (anti-lockout).",
         );
+        if (this.config.panelDomain) {
+          notes.push(
+            "Com --no-tunnel, o SSH deixa de aceitar túnel (ssh -L): o painel é aberto por HTTPS e o túnel não é usado. Quem instalou com --acesso=tunel deve tirar essa opção.",
+          );
+        }
       }
       if (phase === "01" || phase === "02" || phase === "03") {
         commands.push(`sudo bash ${scriptPath} --confirm`);
