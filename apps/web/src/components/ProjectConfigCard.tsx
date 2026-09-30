@@ -288,6 +288,10 @@ function CredencialSection({
 /** Descreve a divergência entre o configurado e o publicado, ou null se não há. */
 function divergencia(project: Project): string | null {
   if (project.deployedBranch === null && project.deployedSource === null) {
+    // Houve tentativa e ela falhou: dizer isso, não "nunca houve deploy".
+    if (project.lastDeployStatus === "failed") {
+      return "O último deploy falhou — o motivo está no log do deploy, mais abaixo. Corrija e clique em Deploy de novo.";
+    }
     return "Nenhum deploy publicado ainda — a configuração abaixo vale para o primeiro deploy.";
   }
   const partes: string[] = [];

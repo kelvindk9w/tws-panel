@@ -419,7 +419,12 @@ export function ProjectDetailPage() {
             </a>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button asChild size="sm" variant="outline">
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-4 w-4" /> Abrir site
+            </a>
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -491,13 +496,21 @@ export function ProjectDetailPage() {
           <CardHeader className="pb-2">
             <CardDescription>Configuração</CardDescription>
             <CardTitle className="text-base">
-              {project.websocket ? "WebSocket habilitado" : "HTTP padrão"}
+              {url.startsWith("https://") ? "HTTPS automático" : "HTTP (desenvolvimento local)"}
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-xs text-muted-foreground">
-            {project.lastDeployAt
-              ? `último deploy: ${new Date(project.lastDeployAt).toLocaleString("pt-BR")}`
-              : "nenhum deploy ainda"}
+          <CardContent className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+            <span>
+              {url.startsWith("https://")
+                ? "certificado Let's Encrypt, renovado sozinho"
+                : "domínio .localhost, sem certificado"}
+              {project.websocket ? " · WebSocket habilitado" : ""}
+            </span>
+            <span>
+              {project.lastDeployAt
+                ? `último deploy: ${new Date(project.lastDeployAt).toLocaleString("pt-BR")}`
+                : "nenhum deploy ainda"}
+            </span>
           </CardContent>
         </Card>
       </div>

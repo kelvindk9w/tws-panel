@@ -107,6 +107,12 @@ pendente e por quê — informação que não está no código nem no git log.
   container). "Enviar do meu computador" removido a pedido (foco em git). Próximo combinado:
   Configurações → Domínios (domínio próprio para o painel e domínio-base dos projetos com DNS
   curinga, para subdomínio automático por projeto).
+- **30/09 — primeiro deploy real (devLink, site estático):** o site subiu, mas o deploy saiu
+  "falhou": o health check batia em 127.0.0.1:80 de DENTRO do container do painel. Agora usa a
+  rede interna (paas-caddy:80/443, `EngineContext.panelContainer`) e confere também o HTTPS com o
+  certificado de verdade (avisa sem falhar se ainda estiver sendo emitido). Link do projeto em
+  https; botão "Abrir site"; card "HTTPS automático"; deploy que falhou não aparece mais como
+  "nenhum deploy publicado".
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:

@@ -131,6 +131,7 @@ export class DeployService {
   private readonly projectsFile: string;
   private readonly jobsFile: string;
   private readonly caddyHttpPort: number;
+  private readonly caddyHttpsPort: number;
   private readonly hooks: DeployHooks;
   /**
    * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
@@ -157,6 +158,7 @@ export class DeployService {
     this.projectsFile = path.join(config.dataDir, "projects.json");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
     this.caddyHttpPort = config.caddyHttpPort;
+    this.caddyHttpsPort = config.caddyHttpsPort;
     this.credentials = new CredentialVault(config.dataDir);
     this.github = new GithubIntegration(this.credentials);
     this.engineCtx = {
@@ -170,6 +172,10 @@ export class DeployService {
       caddyHttpPort: config.caddyHttpPort,
       caddyHttpsPort: config.caddyHttpsPort,
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
+      // Em container, o health check fala com o Caddy pela rede interna
+      // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
+      // "falhou" com o site no ar, visto em campo).
+      ...(existsSync("/.dockerenv") ? { panelContainer: PANEL_CONTAINER } : {}),
     };
     this.engine = new DeployEngine(this.engineCtx);
   }
@@ -225,11 +231,17 @@ export class DeployService {
     this.engineCtx.envForProject = provider;
   }
 
-  /** URL de acesso ao projeto (inclui porta do Caddy em dev quando ≠ 80). */
+  /**
+   * URL de acesso ao projeto. Domínio público: https (o Caddy emite o
+   * certificado sozinho). .localhost (desenvolvimento): http. A porta entra
+   * quando não é a padrão.
+   */
   projectUrl(project: Project): string {
-    return this.caddyHttpPort === 80
-      ? `http://${project.domain}`
-      : `http://${project.domain}:${this.caddyHttpPort}`;
+    const local = project.domain === "localhost" || project.domain.endsWith(".localhost");
+    if (local) {
+      return this.caddyHttpPort === 80 ? `http://${project.domain}` : `http://${project.domain}:${this.caddyHttpPort}`;
+    }
+    return this.caddyHttpsPort === 443 ? `https://${project.domain}` : `https://${project.domain}:${this.caddyHttpsPort}`;
   }
 
   // -------------------------------------------------------------------------
