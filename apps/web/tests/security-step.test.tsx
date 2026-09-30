@@ -7,7 +7,7 @@
  *    comandos por SO) + validação "Sua chave parece válida ✅".
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, onTestFinished } from "vitest";
 import type { SecurityPlan, SecurityScanReport } from "@paas/core";
 
 // ---------------------------------------------------------------------------
@@ -1109,12 +1109,48 @@ describe("SecurityStep — resultado nomeia o que ficou crítico", () => {
  * ("isso executa todas as fases? se eu clicar, o que acontece?"). O rótulo e a
  * linha ao lado dele precisam responder isso sem jargão.
  */
+/**
+ * Pedido do dono do produto: depois da simulação, o botão de aplicar é VERDE e
+ * diz sem rodeio que agora a VPS será alterada.
+ */
+describe("SecurityStep — botão de aplicar de verdade", () => {
+  it("é verde e diz que agora o servidor será alterado", async () => {
+    detectedSudoUsers = ["kelvin"];
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/apply") {
+        const body = JSON.parse(String(init?.body)) as { phase: string; dryRun: boolean };
+        return { job: { id: `j-${body.phase}`, phase: body.phase, title: "Fase", status: "running", steps: [], log: "", dryRun: body.dryRun, rollbackScheduled: false, rollbackDeadline: null, error: null } };
+      }
+      if (path.startsWith("/api/security/jobs/")) {
+        return { job: { id: "j", phase: "00", title: "Fase", status: "success", steps: [], log: "", dryRun: true, rollbackScheduled: false, rollbackDeadline: null, error: null } };
+      }
+      return base(path, init);
+    });
+    onTestFinished(() => {
+      apiFetchMock.mockImplementation(base);
+    });
+    await reachPlanStage();
+    fireEvent.click(screen.getByRole("button", { name: /Simular todas as fases pendentes/ }));
+    await screen.findByRole("button", { name: /Aplicar de verdade/ });
+    await new Promise((r) => setTimeout(r, 50));
+    const botao = screen.getByRole("button", { name: /Aplicar de verdade/ });
+    expect(botao.className).toMatch(/bg-emerald-600/);
+    expect(screen.getByTestId("apply-for-real-warning")).toHaveTextContent(/agora a VPS será alterada de verdade/i);
+  });
+});
+
 describe("SecurityStep — botão de simulação se explica", () => {
   it("rótulo sem jargão e explicação do que acontece ao clicar", async () => {
     await reachPlanStage();
     const botao = screen.getByRole("button", { name: /Simular todas as fases pendentes/ });
     expect(botao).toHaveTextContent(/dry-run/i); // o termo técnico fica entre parênteses
 
+    // Pedido do dono do produto: a explicação completa fica atrás de um
+    // "O que isso faz?" — à vista, só a frase que importa.
+    expect(screen.getByTestId("dry-run-resumo")).toHaveTextContent(/Nada é alterado no servidor/i);
+    expect(screen.queryByTestId("dry-run-explicacao")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /O que isso faz\?/ }));
     const explicacao = screen.getByTestId("dry-run-explicacao");
     expect(explicacao).toHaveTextContent(/simulação.*de todas as fases pendentes, na ordem/i);
     expect(explicacao).toHaveTextContent(/Nada é alterado no servidor/i);

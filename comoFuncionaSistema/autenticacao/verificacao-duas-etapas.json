@@ -1,0 +1,33 @@
+{
+  "id": "verificacao-duas-etapas",
+  "modulo": "autenticacao",
+  "metodo": "GET/POST",
+  "url": "/api/auth/2fa, /api/auth/2fa/setup, /api/auth/2fa/enable, /api/auth/2fa/disable (+ campo code em POST /api/auth/login)",
+  "resumo": "Verificação em duas etapas (TOTP, RFC 6238) do login do painel: com ela ativa, a senha certa não basta — o login exige também o código de 6 dígitos do app autenticador ou um código de recuperação de uso único.",
+  "arquivoFonte": "apps/server/src/routes/auth.ts, apps/server/src/services/two-factor.ts, apps/server/src/services/totp.ts",
+  "porQue": "Com o acesso por HTTPS (padrão da instalação desde 29/09/2026), o painel fica na internet e só a senha o protegia. Pedido do dono do produto em 30/09/2026.",
+  "comoFunciona": [
+    "TOTP implementado com node:crypto (HMAC-SHA1, 6 dígitos, passo de 30 s), conferido contra os vetores da RFC 6238 (apps/server/tests/totp.test.ts). Aceita 1 passo de diferença de relógio para cada lado.",
+    "Anti-reuso: o último passo aceito é gravado; um código igual ou mais antigo é recusado, mesmo dentro da janela.",
+    "Ativar: POST /api/auth/2fa/setup gera o segredo e a URI otpauth:// (QR code no navegador, biblioteca qrcode) e o guarda SÓ em memória por 10 min; nada muda no login até POST /api/auth/2fa/enable com a senha atual + um código válido. Aí o segredo é gravado cifrado e 10 códigos de recuperação são devolvidos UMA vez.",
+    "Em repouso: segredo cifrado com AES-256-GCM, chave em data/two-factor-key (0600, gerada no primeiro uso, arquivo próprio); códigos de recuperação só como hash SHA-256 (StoredUser.twoFactor em data/users.json).",
+    "Login: a senha é conferida primeiro. Senha certa sem código → 401 two_factor_required (a tela mostra o campo do código, sem apagar o que foi digitado). Código errado conta no limite de tentativas por IP e é auditado (auth.2fa_failed). Código de recuperação é consumido; a auditoria do login diz quantos restam.",
+    "Desativar: POST /api/auth/2fa/disable exige senha atual + código (sessão roubada com senha vazada não basta). Gerar códigos novos = desativar e ativar de novo.",
+    "Emergência (perdeu celular e códigos): scripts/reset-2fa.sh na VPS, com confirmação — para o container (o painel regravaria o users.json com o estado da memória), roda scripts/reset-2fa.mjs com a imagem do painel sobre o volume paas_data e sobe o painel de novo. Não toca em mais nada.",
+    "Interface: menu do usuário → Verificação em duas etapas (TwoFactorModal); aviso no Dashboard enquanto estiver desligada (TwoFactorNudge); o 'Concluir' após a ativação só libera depois de marcar que guardou os códigos."
+  ],
+  "auditoria": [
+    "auth.2fa_enabled",
+    "auth.2fa_disabled",
+    "auth.2fa_failed",
+    "auth.login (detalhe diz se foi com código de recuperação e quantos restam)"
+  ],
+  "testes": [
+    "apps/server/tests/totp.test.ts",
+    "apps/server/tests/auth-2fa.test.ts",
+    "apps/server/tests/reset-2fa-script.test.ts",
+    "apps/web/tests/login-page.test.tsx",
+    "apps/web/tests/two-factor-modal.test.tsx",
+    "apps/web/tests/two-factor-nudge.test.tsx"
+  ]
+}

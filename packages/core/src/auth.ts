@@ -42,6 +42,12 @@ export interface CreateAdminResponse {
 export interface LoginRequest {
   username: string;
   password: string;
+  /**
+   * Código do app autenticador (6 dígitos) ou código de recuperação — só
+   * quando a verificação em duas etapas está ativa. Sem ele, o login com a
+   * senha certa responde 401 `two_factor_required`.
+   */
+  code?: string;
 }
 
 export interface LoginResponse {
@@ -53,6 +59,30 @@ export interface LoginResponse {
 export interface AuthMeResponse {
   user: AdminUser;
   session: { expiresAt: string };
+}
+
+/** GET /api/auth/2fa */
+export interface TwoFactorStatusResponse {
+  enabled: boolean;
+  /** Códigos de recuperação ainda não usados. */
+  recoveryCodesLeft: number;
+}
+
+/** POST /api/auth/2fa/setup — segredo mostrado UMA vez, para o QR code. */
+export interface TwoFactorSetupResponse {
+  secret: string;
+  otpauthUri: string;
+}
+
+/** POST /api/auth/2fa/enable e /api/auth/2fa/disable */
+export interface TwoFactorConfirmRequest {
+  currentPassword: string;
+  code: string;
+}
+
+/** POST /api/auth/2fa/enable — códigos de recuperação, mostrados UMA vez. */
+export interface TwoFactorEnableResponse {
+  recoveryCodes: string[];
 }
 
 export interface ChangePasswordRequest {

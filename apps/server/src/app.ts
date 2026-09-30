@@ -9,6 +9,7 @@ import { loadConfig, resolveTerminalAccess, type ServerConfig } from "./config.j
 import { AJV_OPTIONS } from "./ajv-options.js";
 import { loadSetupToken } from "./services/setup-token.js";
 import { SetupStateStore } from "./services/setup-state.js";
+import { TwoFactorService } from "./services/two-factor.js";
 import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { DeployService } from "./services/deploy-service.js";
@@ -70,7 +71,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
 
   app.decorate("config", config);
   app.decorate("setupState", new SetupStateStore(config.dataDir));
-  app.decorate("userStore", new UserStore(config.dataDir));
+  const userStore = new UserStore(config.dataDir);
+  app.decorate("userStore", userStore);
+  app.decorate(
+    "twoFactor",
+    new TwoFactorService(config.dataDir, userStore, { accountSuffix: config.panelDomain }),
+  );
   const sessionStore = new SessionStore(config.dataDir);
   await sessionStore.init();
   app.decorate("sessionStore", sessionStore);

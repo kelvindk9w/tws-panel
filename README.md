@@ -1481,6 +1481,13 @@ diante todo acesso exige login (`/login`): as sessões são revogáveis, persist
 de 5 tentativas/minuto por IP com lockout progressivo, e trocar a senha invalida as demais sessões.
 Login, logout, falhas e criação da conta admin ficam registrados no log de auditoria.
 
+**Verificação em duas etapas (recomendada):** com o acesso por HTTPS o painel fica na internet, e
+a senha sozinha passa a ser a única barreira. No menu do seu usuário (canto superior direito),
+**Verificação em duas etapas** liga a exigência de um código de 6 dígitos do celular, gerado por
+um app autenticador gratuito (Google Authenticator, Microsoft Authenticator ou outro). Você lê um
+QR code, confirma com um código e recebe **10 códigos de recuperação** de uso único — guarde-os
+fora do celular. O Dashboard lembra você enquanto ela estiver desligada.
+
 ## Perdi o acesso — e agora?
 
 O hardening fecha portas de propósito, e isso corta caminhos de volta. Esta seção existe para
@@ -1489,6 +1496,8 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 | O que você perdeu | O que ainda funciona | Caminho de volta |
 |---|---|---|
 | Senha do **painel** (login web) | SSH na VPS | `sudo ./scripts/reset-setup.sh --full` |
+| **Celular** da verificação em duas etapas | Códigos de recuperação | No login, digite um código de recuperação no lugar do código do app |
+| **Celular** e os códigos de recuperação | SSH na VPS | `sudo ./scripts/reset-2fa.sh` |
 | Senha do **usuário Linux** (a do `sudo`) | SSH + painel | Terminal do painel (se ele abre como root) → `passwd SEU_USUARIO`; senão, console do provedor |
 | **Chave SSH** | Painel acessível | Terminal do painel (se ele abre com o seu usuário ou root) → recoloca a chave |
 | **Chave SSH** | Console do provedor | Login com usuário e senha → recoloca a chave |
@@ -1516,6 +1525,23 @@ O primeiro comando apaga a conta admin e todas as sessões (pede confirmação: 
 O segundo mostra o setup token de novo, para você reabrir o wizard e criar uma conta nova.
 
 **Seus projetos, domínios, e-mail e histórico de segurança não são tocados.**
+
+### Perdi o celular da verificação em duas etapas
+
+No login, digite um dos seus **códigos de recuperação** no campo do código (cada um vale uma
+vez). Já dentro do painel, desative e ative de novo a verificação para cadastrar o celular novo e
+receber códigos novos.
+
+Perdeu também os códigos? Com acesso SSH à VPS:
+
+```bash
+cd /opt/tws-panel
+sudo ./scripts/reset-2fa.sh
+```
+
+Ele pede confirmação (digite `desligar`), para o painel por alguns segundos, desliga a
+verificação em duas etapas e sobe o painel de novo. Entre só com usuário e senha e ative a
+verificação outra vez. **Nada mais é tocado.**
 
 ### Perdi a senha do usuário Linux
 

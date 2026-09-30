@@ -19,6 +19,7 @@ import cookie from "@fastify/cookie";
 import { SESSION_COOKIE, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY } from "@paas/core";
 import { tokenMatches } from "../services/setup-token.js";
 import type { Session, SessionStore } from "../services/session-store.js";
+import type { TwoFactorService } from "../services/two-factor.js";
 import type { UserStore } from "../services/user-store.js";
 import type { SetupStateStore } from "../services/setup-state.js";
 
@@ -27,6 +28,7 @@ declare module "fastify" {
     /** Setup token carregado na inicialização (null = não configurado). */
     setupToken: string | null;
     userStore: UserStore;
+    twoFactor: TwoFactorService;
     sessionStore: SessionStore;
     setupState: SetupStateStore;
   }

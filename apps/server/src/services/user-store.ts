@@ -13,12 +13,30 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+/**
+ * Verificação em duas etapas (ver services/two-factor.ts). O segredo fica
+ * CIFRADO (AES-256-GCM, chave em data/two-factor-key); os códigos de
+ * recuperação, só como hash.
+ */
+export interface StoredTwoFactor {
+  iv: string;
+  tag: string;
+  /** Segredo TOTP (base32) cifrado, em base64. */
+  data: string;
+  /** Último passo de 30 s aceito — o mesmo código não vale duas vezes. */
+  lastStep: number | null;
+  /** Hashes dos códigos de recuperação ainda não usados. */
+  recoveryHashes: string[];
+  enabledAt: string;
+}
+
 export interface StoredUser {
   id: string;
   username: string;
   /** username normalizado para busca case-insensitive. */
   usernameLower: string;
   passwordHash: string;
+  twoFactor?: StoredTwoFactor | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -110,6 +128,18 @@ export class UserStore {
         passwordHash,
         updatedAt: new Date().toISOString(),
       };
+      this.users = this.users.map((u) => (u.id === id ? user : u));
+      return user;
+    });
+  }
+
+  /** Grava (ou remove, com null) a verificação em duas etapas do usuário. */
+  async setTwoFactor(id: string, twoFactor: StoredTwoFactor | null): Promise<StoredUser | null> {
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const atual = this.users.find((u) => u.id === id);
+      if (!atual) return null;
+      const user: StoredUser = { ...atual, twoFactor, updatedAt: new Date().toISOString() };
       this.users = this.users.map((u) => (u.id === id ? user : u));
       return user;
     });
