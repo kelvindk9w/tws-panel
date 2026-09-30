@@ -31,6 +31,11 @@ export function DnsGuide({ domain, publicIp }: { domain: string; publicIp: strin
         domínio principal. A mudança costuma valer em minutos, mas pode levar algumas horas. Depois, clique em{" "}
         <strong className="text-foreground">Verificar DNS</strong>.
       </p>
+      <p data-testid="dns-guide-cloudflare">
+        <strong className="text-foreground">Usa a Cloudflare?</strong> Deixe a nuvem deste registro{" "}
+        <strong className="text-foreground">cinza ("Somente DNS")</strong>, não laranja. Com a laranja o tráfego passa
+        pelo proxy da Cloudflare, e o painel não consegue confirmar o DNS nem emitir o certificado sozinho.
+      </p>
     </div>
   );
 }

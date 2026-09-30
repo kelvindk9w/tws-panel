@@ -75,3 +75,20 @@ describe("Verificar DNS usa o IP público da VPS", () => {
     expect(res.json().message).toContain("203.0.113.10");
   });
 });
+
+/**
+ * Cloudflare com a nuvem LARANJA (proxy): o domínio resolve para os IPs da
+ * Cloudflare, não para a VPS. Antes a tela só dizia "não aponta"; agora diz a
+ * causa e o que fazer (nuvem cinza, "Somente DNS").
+ */
+describe("Verificar DNS — domínio atrás do proxy da Cloudflare", () => {
+  it("IPs da Cloudflare → explica a nuvem laranja e pede a cinza", async () => {
+    await montar("203-0-113-10.sslip.io");
+    resolve4.mockResolvedValue(["104.21.32.1", "172.67.150.2"]);
+    const res = await app.inject({ method: "GET", url: "/api/domains/check?domain=devlink.tws.tec.br", headers: auth });
+    expect(res.json().ok).toBe(false);
+    expect(res.json().message).toMatch(/Cloudflare/);
+    expect(res.json().message).toMatch(/cinza/);
+    expect(res.json().message).toContain("203.0.113.10");
+  });
+});

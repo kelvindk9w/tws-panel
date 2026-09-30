@@ -210,18 +210,25 @@ describe("ingestCode — repositório privado com credencial de leitura", () => 
     for (const pedaco of pedacos) expect(pedaco).not.toContain(TOKEN);
   }, 60_000);
 
-  it("remove o arquivo auxiliar do askpass ao terminar (sucesso e falha)", async () => {
+  /**
+   * Validação real (30/09/2026, VPS): "cannot exec '/tmp/paas-git-cred-…/askpass.sh':
+   * Permission denied". O container do painel monta /tmp sem permissão de
+   * execução (hardening), então o script auxiliar do GIT_ASKPASS nunca rodava e
+   * todo repositório privado falhava. O token agora chega ao git por um
+   * credential helper em linha que só LÊ variáveis de ambiente: nenhum arquivo
+   * é criado — nada a executar, nada a vazar no disco.
+   */
+  it("não cria arquivo auxiliar nenhum para entregar o token (o /tmp do container não executa)", async () => {
     const antes = new Set(await readdir(tmpdir()));
-    await ingestCode(
-      comCredencial({ username: "x-access-token", token: TOKEN }),
-      projeto(),
-      () => {},
-    );
+    await ingestCode(comCredencial({ username: "x-access-token", token: TOKEN }), projeto(), () => {});
     await expect(
       ingestCode(comCredencial({ username: "x-access-token", token: "errado" }), projeto({ slug: "outro" }), () => {}),
     ).rejects.toThrow();
-    const depois = (await readdir(tmpdir())).filter((n) => !antes.has(n));
-    expect(depois.filter((n) => n.startsWith("paas-git-cred-"))).toEqual([]);
+    const novos = (await readdir(tmpdir())).filter((n) => !antes.has(n) && n.startsWith("paas-git-cred-"));
+    expect(novos).toEqual([]);
+    const clone = chamadas.find((c) => c.args.includes("clone"))!;
+    expect(clone.args.join(" ")).toContain("credential.helper=");
+    expect(clone.args.join(" ")).not.toContain(TOKEN);
   }, 60_000);
 });
 
