@@ -1,8 +1,12 @@
 import { createContext, useContext } from "react";
-import type { AdminUser } from "@paas/core";
+import type { AdminUser, UserPreferences } from "@paas/core";
 
 export interface AuthContextValue {
   user: AdminUser;
+  /** Preferências de interface da conta (Configurações), vindas de /api/auth/me. */
+  preferences: UserPreferences;
+  /** Troca na hora, em todo o painel (quem salva no servidor é a página de Configurações). */
+  setPreferences: (preferences: UserPreferences) => void;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

@@ -1,12 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, useLocation } from "react-router";
-import type { AdminUser, AuthMeResponse } from "@paas/core";
+import { DEFAULT_USER_PREFERENCES, type AdminUser, type AuthMeResponse, type UserPreferences } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { AuthContext } from "@/lib/auth";
 
 type GuardState =
   | { status: "loading" }
-  | { status: "ok"; user: AdminUser }
+  | { status: "ok"; user: AdminUser; preferences: UserPreferences }
   | { status: "redirect"; to: "/login" | "/setup" };
 
 /**
@@ -22,7 +22,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     let cancelled = false;
     apiFetch<AuthMeResponse>("/api/auth/me")
       .then((me) => {
-        if (!cancelled) setState({ status: "ok", user: me.user });
+        if (!cancelled) {
+          setState({ status: "ok", user: me.user, preferences: { ...DEFAULT_USER_PREFERENCES, ...me.preferences } });
+        }
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -48,5 +50,11 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     // a captura principal acontece no carregamento do módulo em lib/api.ts).
     return <Navigate to={{ pathname: state.to, search: location.search }} replace state={{ from: location.pathname }} />;
   }
-  return <AuthContext.Provider value={{ user: state.user }}>{children}</AuthContext.Provider>;
+  const setPreferences = (preferences: UserPreferences) =>
+    setState((prev) => (prev.status === "ok" ? { ...prev, preferences } : prev));
+  return (
+    <AuthContext.Provider value={{ user: state.user, preferences: state.preferences, setPreferences }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
