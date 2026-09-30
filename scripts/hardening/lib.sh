@@ -4,7 +4,10 @@
 #
 # Convenções:
 #  - Idempotente: re-executar nunca quebra nem duplica configuração.
-#  - Backup de todo arquivo antes de alterar: <arquivo>.paas-backup.<TIMESTAMP>
+#  - Backup de todo arquivo antes de alterar: <arquivo>.paas-backup.<TIMESTAMP>;
+#    para arquivos de pastas "*.d" (apt.conf.d, sshd_config.d…), a cópia fica em
+#    /var/backups/paas/<mesmo caminho> — dentro da pasta, o programa a leria
+#    ou reclamaria dela (o apt mostrava "N: Ignoring file" em todo comando).
 #  - --dry-run: mostra o que faria sem alterar nada.
 #  - --rollback: restaura os backups mais recentes e desfaz o que for seguro desfazer.
 #  - Marcadores `:::PAAS_STEP/:::PAAS_OK/...` são parseados pelo executor (packages/security).
@@ -18,6 +21,7 @@
 PAAS_DRY_RUN="${PAAS_DRY_RUN:-0}"
 PAAS_BACKUP_TS="$(date +%Y%m%d-%H%M%S)"
 PAAS_STATE_DIR="/etc/paas"
+PAAS_BACKUP_ROOT="${PAAS_BACKUP_ROOT:-/var/backups/paas}"
 PAAS_ROLLBACK_DELAY="${PAAS_ROLLBACK_DELAY:-300}" # 5 min (alinhado a `at now +5 minutes`)
 
 # needrestart: NUNCA reiniciar serviços sozinho no meio de uma fase.
@@ -86,15 +90,52 @@ write_file() {
 # Backup / restore
 # ---------------------------------------------------------------------------
 
-# backup_file <arquivo> — copia para <arquivo>.paas-backup.<TS> (uma vez por execução).
+# backup_base <arquivo> — prefixo das cópias de segurança do arquivo: ao lado
+# dele, ou espelhado em $PAAS_BACKUP_ROOT quando ele está numa pasta "*.d".
+backup_base() {
+  local file="$1" dir
+  dir="$(dirname "$file")"
+  case "$dir" in
+    *.d) echo "${PAAS_BACKUP_ROOT}${dir}/$(basename "$file")" ;;
+    *)   echo "$file" ;;
+  esac
+}
+
+# migrate_dotd_backups — move para $PAAS_BACKUP_ROOT as cópias que versões
+# anteriores deixaram DENTRO de pastas "*.d" de /etc. Uma vez por execução,
+# nunca em dry-run; o desfazer continua achando cada cópia (latest_backup).
+PAAS_BACKUPS_MIGRATED=0
+migrate_dotd_backups() {
+  [ "$PAAS_DRY_RUN" = "1" ] && return 0
+  [ "$PAAS_BACKUPS_MIGRATED" = "1" ] && return 0
+  PAAS_BACKUPS_MIGRATED=1
+  local old new
+  while IFS= read -r old; do
+    [ -n "$old" ] || continue
+    new="$(backup_base "${old%%.paas-backup.*}").paas-backup.${old##*.paas-backup.}"
+    mkdir -p "$(dirname "$new")"
+    mv -f "$old" "$new" && info "backup movido para fora da pasta de configuração: $new"
+  done < <(find /etc -type f -path '*.d/*' -name '*.paas-backup.*' 2>/dev/null)
+}
+
+# latest_backup <arquivo> — caminho da cópia mais recente (vazio se não houver).
+latest_backup() {
+  local file="$1"
+  ls -1t "$(backup_base "$file")".paas-backup.* "${file}".paas-backup.* 2>/dev/null | head -n 1 || true
+}
+
+# backup_file <arquivo> — copia para <backup_base>.paas-backup.<TS> (uma vez por execução).
 backup_file() {
   local file="$1"
   [ -e "$file" ] || return 0
-  local dest="${file}.paas-backup.${PAAS_BACKUP_TS}"
+  local dest
+  dest="$(backup_base "$file").paas-backup.${PAAS_BACKUP_TS}"
   if [ "$PAAS_DRY_RUN" = "1" ]; then
     echo "[dry-run] backup: $file -> $dest"
     return 0
   fi
+  migrate_dotd_backups
+  mkdir -p "$(dirname "$dest")"
   cp -a "$file" "$dest"
   info "backup criado: $dest"
 }
@@ -103,7 +144,8 @@ backup_file() {
 restore_latest_backup() {
   local file="$1"
   local latest
-  latest="$(ls -1t "${file}".paas-backup.* 2>/dev/null | head -n 1 || true)"
+  migrate_dotd_backups
+  latest="$(latest_backup "$file")"
   if [ -z "$latest" ]; then
     if [ -e "$file" ]; then
       # sem backup: remove o arquivo que nós criamos (ex.: drop-ins novos)
@@ -131,7 +173,8 @@ restore_latest_backup() {
 restore_backup_or_keep() {
   local file="$1"
   local latest
-  latest="$(ls -1t "${file}".paas-backup.* 2>/dev/null | head -n 1 || true)"
+  migrate_dotd_backups
+  latest="$(latest_backup "$file")"
   if [ -z "$latest" ]; then
     info "sem backup de $file — mantido como está"
     return 0

@@ -8,7 +8,8 @@
 # anterior. O operador cancela com `--confirm` após comprovar que ainda consegue
 # abrir uma NOVA sessão SSH.
 #
-# Uso: ./02-ssh.sh [--user deploy] [--port 2222] [--dry-run] [--rollback] [--confirm]
+# Uso: ./02-ssh.sh [--user deploy] [--port 2222] [--no-tunnel] [--dry-run] [--rollback] [--confirm]
+#      ./02-ssh.sh --reopen-tunnel   (o instalador chama no modo --acesso=tunel)
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "$(readlink -f "$0")")/lib.sh"
@@ -16,6 +17,9 @@ source "$(dirname "$(readlink -f "$0")")/lib.sh"
 MODE="apply"
 SSH_USER=""
 SSH_PORT=""
+# "local" libera o túnel SSH (ssh -L) do modo --acesso=tunel; com o painel em
+# HTTPS o túnel não é usado e --no-tunnel fecha também o encaminhamento local.
+TCP_FORWARDING="local"
 # 40-: no sshd vale o PRIMEIRO valor encontrado, em ordem alfabética. Imagens
 # de nuvem (Contabo e outras) trazem 50-cloud-init.conf com
 # "PasswordAuthentication yes": com o nome antigo (99-) o painel perdia e o
@@ -29,11 +33,13 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --user)     SSH_USER="${2:?--user exige um nome}"; shift ;;
     --port)     SSH_PORT="${2:?--port exige um número}"; shift ;;
+    --no-tunnel) TCP_FORWARDING="no" ;;
     --dry-run)  PAAS_DRY_RUN=1 ;;
     --rollback) MODE="rollback" ;;
     --confirm)  MODE="confirm" ;;
+    --reopen-tunnel) MODE="reopen-tunnel" ;;
     -h|--help)
-      echo "Uso: $0 [--user NOME] [--port PORTA] [--dry-run] [--rollback] [--confirm]"
+      echo "Uso: $0 [--user NOME] [--port PORTA] [--no-tunnel] [--dry-run] [--rollback] [--confirm] | --reopen-tunnel"
       paas_usage_common; exit 0 ;;
     *) die "opção desconhecida: $1" ;;
   esac
@@ -53,6 +59,29 @@ if [ "$MODE" = "confirm" ]; then
   confirm_rollback "ssh"
   run rm -f "$REVERT_SCRIPT"
   ok "Acesso confirmado — configuração de SSH mantida definitivamente"
+  exit 0
+fi
+
+# --- Modo reopen-tunnel: libera de novo o túnel SSH (ssh -L) -----------------
+# Quem troca de HTTPS para túnel (instalador com --acesso=tunel) depois de a
+# fase ter gravado "AllowTcpForwarding no" ficaria sem como abrir o painel.
+# Só troca essa linha do nosso drop-in; sem a fase aplicada, não faz nada.
+if [ "$MODE" = "reopen-tunnel" ]; then
+  step "Liberando o túnel SSH do painel (AllowTcpForwarding local)"
+  if [ ! -f "$DROPIN" ] || ! grep -qE '^AllowTcpForwarding no$' "$DROPIN"; then
+    ok "Nada a mudar — o túnel SSH já é aceito"
+    exit 0
+  fi
+  # Sem backup_file de propósito: o desfazer da fase restaura a cópia MAIS
+  # RECENTE, e uma cópia feita aqui o faria devolver a versão endurecida em vez
+  # de desfazer a fase. A troca é de uma linha e é revertida se não validar.
+  run sed -i 's/^AllowTcpForwarding no$/AllowTcpForwarding local/' "$DROPIN"
+  if [ "$PAAS_DRY_RUN" != "1" ] && ! sshd -t; then
+    sed -i 's/^AllowTcpForwarding local$/AllowTcpForwarding no/' "$DROPIN"
+    die "a configuração do SSH não validou (sshd -t) — linha anterior restaurada"
+  fi
+  svc_reload_or_restart ssh || svc_reload_or_restart sshd || true
+  ok "Túnel SSH liberado"
   exit 0
 fi
 
@@ -128,11 +157,13 @@ EOF
 fi
 ok "Rollback automático agendado — cancele com '$0 --confirm' após testar nova sessão"
 
-# AllowTcpForwarding local (e NÃO "no"): o README manda acessar o painel por
-# túnel SSH (`ssh -L`), que é encaminhamento LOCAL. Com "no", o túnel aberto
-# antes continuava funcionando e o próximo — inclusive depois do reboot — era
+# AllowTcpForwarding: "local" por padrão — no modo túnel o painel é aberto por
+# `ssh -L`, que é encaminhamento LOCAL. Com "no", o túnel aberto antes
+# continuava funcionando e o próximo — inclusive depois do reboot — era
 # recusado: o operador perdia o acesso ao painel (visto em campo). "local"
-# libera só o -L; -R (remoto), agent e X11 continuam bloqueados.
+# libera só o -L; -R (remoto), agent e X11 continuam bloqueados. Com o painel
+# em HTTPS (padrão da instalação), o painel passa --no-tunnel e fica "no"
+# (recomendação SSH-7408 do Lynis).
 # TCPKeepAlive no: quem detecta conexão morta é o ClientAliveInterval, que
 # passa pelo canal cifrado (o keepalive TCP pode ser forjado).
 if [ -e "$OLD_DROPIN" ]; then
@@ -158,7 +189,6 @@ ClientAliveCountMax 2
 TCPKeepAlive no
 X11Forwarding no
 AllowAgentForwarding no
-AllowTcpForwarding local
 PermitTunnel no
 PermitUserEnvironment no
 HostbasedAuthentication no
@@ -168,6 +198,7 @@ KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sh
 Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
 MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
 EOF
+  echo "AllowTcpForwarding $TCP_FORWARDING"
   if [ -n "$SSH_USER" ]; then
     echo "PermitRootLogin no"
     echo "AllowUsers $SSH_USER"

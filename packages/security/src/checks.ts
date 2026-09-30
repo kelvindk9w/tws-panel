@@ -292,7 +292,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     title: "Forwardings SSH desabilitados",
     severity: "info",
     description: "X11/agent/TCP forwarding ligados ampliam a superfície de movimento lateral.",
-    remediation: "Aplicar a fase 02 (X11Forwarding/AllowAgentForwarding no; AllowTcpForwarding local, para o túnel do painel).",
+    remediation: "Aplicar a fase 02 (X11Forwarding/AllowAgentForwarding no; AllowTcpForwarding no com o painel em HTTPS; local no modo túnel).",
     fixable: true,
     hostOnly: true,
     command:

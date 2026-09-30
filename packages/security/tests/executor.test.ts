@@ -301,6 +301,19 @@ describe("SecurityExecutor — parâmetros por fase", () => {
     ).rejects.toThrow(/chave.*fase 01/i);
   });
 
+  it("fase 02 repassa --no-tunnel (acesso por HTTPS)", async () => {
+    const host = detached();
+    const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts" });
+    await executor.startJob("02", true, { sshUser: "kelvin", noTunnel: true });
+    await flushMicrotasks();
+    expect(host.calls[0]).toContain("02-ssh.sh --dry-run --user kelvin --no-tunnel");
+  });
+
+  it("--no-tunnel fora da fase 02 é recusado", async () => {
+    const executor = new SecurityExecutor({ runner: detached().runner, scriptsDir: "/scripts" });
+    await expect(executor.startJob("03", true, { noTunnel: true })).rejects.toThrow(/fase 02/);
+  });
+
   it("usuário fora das fases 01 e 02 continua recusado", async () => {
     const executor = new SecurityExecutor({ runner: detached().runner, scriptsDir: "/scripts" });
     await expect(executor.startJob("03", true, { sshUser: "kelvin" })).rejects.toThrow(/fases 01 e 02/);

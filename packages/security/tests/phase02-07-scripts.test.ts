@@ -75,6 +75,57 @@ describe.skipIf(!HAS_DOCKER)("fases 02 e 07 num Ubuntu real", () => {
     expect(r.out).toContain("TCPKeepAlive no");
   });
 
+  it("fase 02 com --no-tunnel (acesso por HTTPS) fecha também o encaminhamento local", () => {
+    const r = sh("bash /opt/h/02-ssh.sh --dry-run --user kelvin --no-tunnel");
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain("AllowTcpForwarding no");
+    expect(r.out).not.toContain("AllowTcpForwarding local");
+  });
+
+  /**
+   * Validação real: todo comando apt mostrava "N: Ignoring file
+   * '20auto-upgrades.paas-backup.…' in directory '/etc/apt/apt.conf.d/'" — a
+   * cópia de segurança ficava DENTRO da pasta que o apt lê. Arquivos de pastas
+   * "*.d" passam a ter a cópia em /var/backups/paas, espelhando o caminho.
+   */
+  it("cópia de segurança de arquivo em pasta *.d fica fora dela, e o desfazer a encontra", () => {
+    const r = sh(
+      [
+        "set -e",
+        "source /opt/h/lib.sh",
+        "printf '// original\\n' > /etc/apt/apt.conf.d/20teste",
+        "backup_file /etc/apt/apt.conf.d/20teste",
+        "printf '// alterado\\n' > /etc/apt/apt.conf.d/20teste",
+        "restore_latest_backup /etc/apt/apt.conf.d/20teste",
+        "cat /etc/apt/apt.conf.d/20teste",
+      ].join("; "),
+    );
+    expect(r.code, r.out).toBe(0);
+    expect(r.out.trim().split("\n").at(-1)).toBe("// original");
+    sh("rm -f /etc/apt/apt.conf.d/20teste");
+    expect(sh("ls /etc/apt/apt.conf.d | grep paas-backup").out).toBe("");
+    expect(sh("ls /var/backups/paas/etc/apt/apt.conf.d/").out).toMatch(/20teste\.paas-backup\./);
+  });
+
+  it("cópias antigas deixadas dentro de pastas *.d são movidas e continuam restauráveis", () => {
+    const r = sh(
+      [
+        "set -e",
+        "printf '// antigo\\n' > /etc/apt/apt.conf.d/20legado.paas-backup.20260101-000000",
+        "printf '// atual\\n' > /etc/apt/apt.conf.d/20legado",
+        "source /opt/h/lib.sh",
+        "restore_latest_backup /etc/apt/apt.conf.d/20legado",
+        "cat /etc/apt/apt.conf.d/20legado",
+      ].join("; "),
+    );
+    expect(r.code, r.out).toBe(0);
+    expect(r.out.trim().split("\n").at(-1)).toBe("// antigo");
+    expect(sh("ls /etc/apt/apt.conf.d | grep paas-backup").out).toBe("");
+    expect(sh("test -f /var/backups/paas/etc/apt/apt.conf.d/20legado.paas-backup.20260101-000000").code).toBe(0);
+    expect(sh("apt-get check 2>&1 | grep -c 'Ignoring file' || true").out.trim()).toBe("0");
+    sh("rm -f /etc/apt/apt.conf.d/20legado");
+  });
+
   it("fase 02 com --user bloqueia o root e restringe quem entra por SSH", () => {
     const r = sh("bash /opt/h/02-ssh.sh --dry-run --user kelvin");
     expect(r.out).toContain("PermitRootLogin no");
@@ -137,6 +188,27 @@ describe.skipIf(!HAS_DOCKER)("fases 02 e 07 num Ubuntu real", () => {
     expect(r.code).not.toBe(0);
     expect(r.out).toMatch(/PasswordAuthentication.*10-local-override\.conf/s);
     sh("bash /opt/h/02-ssh.sh --rollback; rm -f /etc/ssh/sshd_config.d/10-local-override.conf");
+  }, 300_000);
+
+  /**
+   * Trocar de HTTPS para túnel (instalador com --acesso=tunel) depois de a
+   * fase 02 ter fechado o encaminhamento: sem reabrir, o túnel seria recusado
+   * e o painel ficaria inacessível. O instalador chama --reopen-tunnel.
+   */
+  it("--reopen-tunnel volta o encaminhamento para local, e não mexe em nada sem a fase aplicada", () => {
+    const aplicada = sh("PAAS_ROLLBACK_DELAY=300 bash /opt/h/02-ssh.sh --user kelvin --no-tunnel && bash /opt/h/02-ssh.sh --confirm");
+    expect(aplicada.code, aplicada.out).toBe(0);
+    expect(sh("sshd -T 2>/dev/null | grep -i '^allowtcpforwarding'").out.trim()).toBe("allowtcpforwarding no");
+
+    const r = sh("bash /opt/h/02-ssh.sh --reopen-tunnel");
+    expect(r.code, r.out).toBe(0);
+    expect(sh("sshd -T 2>/dev/null | grep -i '^allowtcpforwarding'").out.trim()).toBe("allowtcpforwarding local");
+    expect(sh("grep -c '^AllowUsers kelvin' /etc/ssh/sshd_config.d/40-paas-hardening.conf").out.trim()).toBe("1");
+
+    sh("bash /opt/h/02-ssh.sh --rollback");
+    const semFase = sh("bash /opt/h/02-ssh.sh --reopen-tunnel");
+    expect(semFase.code, semFase.out).toBe(0);
+    expect(sh("test -e /etc/ssh/sshd_config.d/40-paas-hardening.conf").code).not.toBe(0);
   }, 300_000);
 
   it("desfazer da fase 07 sem aplicação anterior NUNCA apaga arquivos do sistema", () => {

@@ -202,6 +202,24 @@ describe("isAllowedHostCommand", () => {
   });
 });
 
+/**
+ * Acesso por HTTPS (padrão da instalação): o túnel SSH não é mais usado, e o
+ * Lynis (SSH-7408) pede AllowTcpForwarding no. O painel repassa --no-tunnel
+ * à fase 02 — e só a ela.
+ */
+describe("buildPhaseScriptCommand — --no-tunnel", () => {
+  it("fase 02 leva --no-tunnel e o comando passa na allowlist", () => {
+    const cmd = buildPhaseScriptCommand({ remoteDir: REMOTE, script: "02-ssh.sh", sshUser: "kelvin", noTunnel: true });
+    expect(cmd).toBe(`bash '${REMOTE}/02-ssh.sh' --user kelvin --no-tunnel`);
+    expect(isAllowedHostCommand(cmd, REMOTE)).toBe(true);
+  });
+
+  it("recusa --no-tunnel fora da fase 02 (no builder e na allowlist)", () => {
+    expect(() => buildPhaseScriptCommand({ remoteDir: REMOTE, script: "03-firewall.sh", noTunnel: true })).toThrow(/fase 02/);
+    expect(isAllowedHostCommand(`bash '${REMOTE}/03-firewall.sh' --no-tunnel`, REMOTE)).toBe(false);
+  });
+});
+
 describe("parsePhaseScriptCommand", () => {
   it("extrai script e args de comando bem formado", () => {
     const parsed = parsePhaseScriptCommand(

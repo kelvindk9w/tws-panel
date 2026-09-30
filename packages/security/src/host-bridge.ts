@@ -101,6 +101,8 @@ export interface PhaseScriptCommandOptions {
   sshUser?: string;
   /** Fase 01: chave pública SSH do operador. */
   sshPublicKey?: string;
+  /** Fase 02: painel em HTTPS — fecha também o encaminhamento local (sem túnel). */
+  noTunnel?: boolean;
   /**
    * Execução DESTACADA: id do run (`f<fase>-<16 hex>`, coerente com o script).
    * Com ele o comando montado não é mais `bash <fase>.sh`, e sim o lançador
@@ -150,6 +152,10 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
     // já garante ausência de aspas, backslashes e quebras de linha.
     if (!isValidSshPublicKey(opts.sshPublicKey)) throw new Error("chave pública SSH inválida");
     args += ` --pubkey '${opts.sshPublicKey.trim()}'`;
+  }
+  if (opts.noTunnel) {
+    if (opts.script !== "02-ssh.sh") throw new Error("--no-tunnel só se aplica à fase 02");
+    args += " --no-tunnel";
   }
 
   if (opts.runId !== undefined) {
@@ -322,11 +328,11 @@ function rebuild(fn: () => string): string | null {
  */
 function parsePhaseArgs(
   args: string,
-): Pick<PhaseScriptCommandOptions, "dryRun" | "rollback" | "confirm" | "sshUser" | "sshPublicKey"> | null {
+): Pick<PhaseScriptCommandOptions, "dryRun" | "rollback" | "confirm" | "sshUser" | "sshPublicKey" | "noTunnel"> | null {
   const tokens = args.trim().length > 0 ? (args.trim().match(/'[^']*'|\S+/g) ?? []) : [];
   const out: Pick<
     PhaseScriptCommandOptions,
-    "dryRun" | "rollback" | "confirm" | "sshUser" | "sshPublicKey"
+    "dryRun" | "rollback" | "confirm" | "sshUser" | "sshPublicKey" | "noTunnel"
   > = {};
   for (let i = 0; i < tokens.length; i += 1) {
     const t = tokens[i];
@@ -340,6 +346,10 @@ function parsePhaseArgs(
     }
     if (t === "--confirm") {
       out.confirm = true;
+      continue;
+    }
+    if (t === "--no-tunnel") {
+      out.noTunnel = true;
       continue;
     }
     if (t === "--user") {

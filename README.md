@@ -928,6 +928,8 @@ Nesse modo o instalador pergunta em qual porta da VPS o painel fica e termina mo
 do túnel SSH e o endereço `http://localhost:PORTA/?token=…`. O navegador vai mostrar "Não seguro"
 por ser `http://localhost` — e aqui não tem problema: o tráfego viaja criptografado dentro do túnel
 SSH. Para trocar de modo depois, rode o instalador de novo com `--acesso=https` ou `--acesso=tunel`.
+Com o painel em HTTPS, a Fase 02 fecha também o túnel SSH (não é usado); ao trocar para
+`--acesso=tunel`, o instalador libera o túnel de novo sozinho.
 
 <a id="porta-livre-no-seu-computador"></a>
 

@@ -128,6 +128,59 @@ describe("SecurityService.scan — GET sem fresh nunca dispara scan novo", () =>
  * Modo manual (host): a fase 02 sem --user deixava o root entrar com chave e
  * não restringia quem entra por SSH — o passo a passo precisa ensinar o --user.
  */
+/**
+ * Acesso por HTTPS: o túnel SSH não é usado, e a fase 02 fecha também o
+ * encaminhamento local (Lynis SSH-7408). O painel decide pelo próprio modo de
+ * acesso (domínio HTTPS configurado) — o navegador não escolhe isso.
+ */
+describe("SecurityService — fase 02 conforme o modo de acesso", () => {
+  async function withService(panelDomain: string | null, fn: (s: SecurityService) => Promise<void>) {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-sec-access-"));
+    try {
+      const config = {
+        dataDir: dir,
+        securityTarget: "host",
+        securityTargetContainer: "paas-target-test",
+        hardeningScriptsDir: path.resolve(__dirname, "../../../scripts/hardening"),
+        hostHelperImage: "alpine:3",
+        hostRepoDir: "/opt/tws-panel",
+        panelDomain,
+      } as ServerConfig;
+      await fn(new SecurityService(config));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("com HTTPS, a fase 02 vai com noTunnel; as outras não", async () => {
+    await withService("203-0-113-10.sslip.io", async (s) => {
+      const exec = (s as unknown as { executor: { startJob: (...a: unknown[]) => unknown } }).executor;
+      const spy = vi.spyOn(exec, "startJob").mockResolvedValue({ id: "j" } as never);
+      await s.apply("02", true, { sshUser: "kelvin" });
+      expect(spy).toHaveBeenLastCalledWith("02", true, { sshUser: "kelvin", noTunnel: true });
+      await s.apply("03", true);
+      expect(spy).toHaveBeenLastCalledWith("03", true, undefined);
+    });
+  });
+
+  it("no modo túnel, a fase 02 mantém o encaminhamento local", async () => {
+    await withService(null, async (s) => {
+      const exec = (s as unknown as { executor: { startJob: (...a: unknown[]) => unknown } }).executor;
+      const spy = vi.spyOn(exec, "startJob").mockResolvedValue({ id: "j" } as never);
+      await s.apply("02", true, { sshUser: "kelvin" });
+      expect(spy).toHaveBeenLastCalledWith("02", true, { sshUser: "kelvin" });
+    });
+  });
+
+  it("modo manual com HTTPS ensina o --no-tunnel", async () => {
+    await withService("203-0-113-10.sslip.io", async (s) => {
+      const res = await s.manualCommands("02");
+      expect(res.commands[0]).toBe("sudo bash /opt/tws-panel/scripts/hardening/02-ssh.sh --user SEU_USUARIO --no-tunnel");
+      expect(res.notes.join(" ")).toMatch(/--no-tunnel.*túnel/);
+    });
+  });
+});
+
 describe("SecurityService.manualCommands — fase 02 ensina o --user", () => {
   it("o comando da fase 02 leva --user e a nota explica o que ele faz", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "paas-sec-manual-"));

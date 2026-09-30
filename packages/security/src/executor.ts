@@ -81,6 +81,8 @@ function newScan(): OutputScan {
 export interface PhaseParams {
   sshUser?: string;
   sshPublicKey?: string;
+  /** Fase 02 com o painel em HTTPS: fecha também o encaminhamento local. */
+  noTunnel?: boolean;
 }
 
 export interface ExecutorOptions {
@@ -168,6 +170,9 @@ export class SecurityExecutor {
     }
     if (params?.sshUser !== undefined && phase !== "01" && phase !== "02") {
       throw new Error("o usuário só se aplica às fases 01 e 02");
+    }
+    if (params?.noTunnel && phase !== "02") {
+      throw new Error("--no-tunnel só se aplica à fase 02");
     }
 
     const job: SecurityJob = {
@@ -285,6 +290,7 @@ export class SecurityExecutor {
         rollbackDelaySec: delaySec,
         ...(params?.sshUser !== undefined ? { sshUser: params.sshUser } : {}),
         ...(params?.sshPublicKey !== undefined ? { sshPublicKey: params.sshPublicKey } : {}),
+        ...(params?.noTunnel ? { noTunnel: true } : {}),
       });
       this.appendLog(job, this.header(job, script, runId, delaySec));
       const scan = newScan();

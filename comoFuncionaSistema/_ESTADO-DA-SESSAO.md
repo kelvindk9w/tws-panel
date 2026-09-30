@@ -54,6 +54,14 @@ pendente e por quê — informação que não está no código nem no git log.
   aplicada, em que data, qual item continua reprovado e que reaplicar provavelmente não
   resolve. Ainda em aberto: por que o Lynis deu 80 numa medição e 86 em outra (pedir a
   lista de sugestões do relatório ao operador).
+- **Lynis 86 com tudo aprovado (29/09):** as 16 sugestões restantes estão na lista "não
+  automatizar" aprovada, exceto duas que viraram correção: (1) cópias de segurança de
+  arquivos em pastas `*.d` saem da pasta (o apt mostrava "N: Ignoring file
+  '20auto-upgrades.paas-backup…'" em todo comando) e vão para `/var/backups/paas`; as antigas
+  são movidas na próxima execução real de qualquer fase; (2) com o painel em HTTPS a Fase 02
+  grava `AllowTcpForwarding no` (SSH-7408); no modo túnel continua `local`, e o instalador
+  com `--acesso=tunel` reabre o túnel (`02-ssh.sh --reopen-tunnel`). Na VPS de teste, que já
+  tinha a Fase 02 aplicada, o operador reaplica a fase pelo modo manual.
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:
