@@ -34,6 +34,7 @@ import {
 import { hashPassword, verifyPasswordTimingSafe } from "../services/password.js";
 import { LoginLimiter } from "../services/login-limiter.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { publicUser } from "../services/public-user.js";
 import { TwoFactorError } from "../services/two-factor.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo
@@ -208,7 +209,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     });
     const response: LoginResponse = {
       ok: true,
-      user: { username: user.username, createdAt: user.createdAt },
+      user: publicUser(user),
       expiresAt: session.expiresAt,
     };
     return reply.send(response);
@@ -250,7 +251,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
     }
     const response: AuthMeResponse = {
-      user: { username: user.username, createdAt: user.createdAt },
+      user: publicUser(user),
       session: { expiresAt: session.expiresAt },
       preferences: { ...DEFAULT_USER_PREFERENCES, ...user.preferences },
     };

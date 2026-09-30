@@ -3,7 +3,8 @@
  * etapas estiver desligada: o painel fica na internet (HTTPS) e só a senha o
  * protege. Some quando ativa; e não aparece se não deu para saber.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiFetchMock = vi.fn();
@@ -20,18 +21,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("TwoFactorNudge", () => {
-  it("desligada: recomenda ativar e abre a configuração", async () => {
+  it("desligada: recomenda ativar e leva a Configurações → Segurança", async () => {
     apiFetchMock.mockResolvedValue({ enabled: false, recoveryCodesLeft: 0 });
-    render(<TwoFactorNudge />);
+    render(<TwoFactorNudge />, { wrapper: MemoryRouter });
     const aviso = await screen.findByTestId("two-factor-nudge");
     expect(aviso).toHaveTextContent(/só pela senha/i);
-    fireEvent.click(screen.getByRole("button", { name: /Ativar agora/ }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent(/Verificação em duas etapas/);
+    expect(screen.getByRole("link", { name: /Ativar agora/ })).toHaveAttribute("href", "/settings/security#two-factor");
   });
 
   it("ligada: nenhum aviso", async () => {
     apiFetchMock.mockResolvedValue({ enabled: true, recoveryCodesLeft: 10 });
-    render(<TwoFactorNudge />);
+    render(<TwoFactorNudge />, { wrapper: MemoryRouter });
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByTestId("two-factor-nudge")).not.toBeInTheDocument();
   });
@@ -40,7 +40,7 @@ describe("TwoFactorNudge", () => {
     apiFetchMock.mockImplementation(async () => {
       throw new Error("rede");
     });
-    render(<TwoFactorNudge />);
+    render(<TwoFactorNudge />, { wrapper: MemoryRouter });
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByTestId("two-factor-nudge")).not.toBeInTheDocument();
   });

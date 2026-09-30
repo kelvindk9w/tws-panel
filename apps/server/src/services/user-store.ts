@@ -38,6 +38,8 @@ export interface StoredUser {
   usernameLower: string;
   passwordHash: string;
   twoFactor?: StoredTwoFactor | null;
+  displayName?: string | null;
+  email?: string | null;
   /** Preferências de interface (Configurações). Ausente = padrão. */
   preferences?: Partial<UserPreferences>;
   createdAt: string;
@@ -133,6 +135,34 @@ export class UserStore {
       };
       this.users = this.users.map((u) => (u.id === id ? user : u));
       return user;
+    });
+  }
+
+  /**
+   * Atualiza o perfil. Troca de usuário de login: recusa ("username_taken")
+   * se outro usuário já usa o nome (comparação sem maiúsculas).
+   */
+  async updateProfile(
+    id: string,
+    changes: { displayName?: string | null; email?: string | null; username?: string },
+  ): Promise<StoredUser | null> {
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const atual = this.users.find((u) => u.id === id);
+      if (!atual) return null;
+      const next: StoredUser = { ...atual, updatedAt: new Date().toISOString() };
+      if (changes.displayName !== undefined) next.displayName = changes.displayName;
+      if (changes.email !== undefined) next.email = changes.email;
+      if (changes.username !== undefined) {
+        const lower = changes.username.toLowerCase();
+        if (this.users.some((u) => u.id !== id && u.usernameLower === lower)) {
+          throw new Error("username_taken");
+        }
+        next.username = changes.username;
+        next.usernameLower = lower;
+      }
+      this.users = this.users.map((u) => (u.id === id ? next : u));
+      return next;
     });
   }
 

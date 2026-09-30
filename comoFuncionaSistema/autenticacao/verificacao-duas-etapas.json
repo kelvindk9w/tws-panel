@@ -14,7 +14,7 @@
     "Login: a senha é conferida primeiro. Senha certa sem código → 401 two_factor_required (a tela mostra o campo do código, sem apagar o que foi digitado). Código errado conta no limite de tentativas por IP e é auditado (auth.2fa_failed). Código de recuperação é consumido; a auditoria do login diz quantos restam.",
     "Desativar: POST /api/auth/2fa/disable exige senha atual + código (sessão roubada com senha vazada não basta). Gerar códigos novos = desativar e ativar de novo.",
     "Emergência (perdeu celular e códigos): scripts/reset-2fa.sh na VPS, com confirmação — para o container (o painel regravaria o users.json com o estado da memória), roda scripts/reset-2fa.mjs com a imagem do painel sobre o volume paas_data e sobe o painel de novo. Não toca em mais nada.",
-    "Interface: menu do usuário → Verificação em duas etapas (TwoFactorModal); aviso no Dashboard enquanto estiver desligada (TwoFactorNudge); o 'Concluir' após a ativação só libera depois de marcar que guardou os códigos."
+    "Interface: Configurações → Segurança (TwoFactorPanel; o menu do usuário leva até lá); aviso no Dashboard enquanto estiver desligada (TwoFactorNudge); o 'Concluir' após a ativação só libera depois de marcar que guardou os códigos."
   ],
   "auditoria": [
     "auth.2fa_enabled",

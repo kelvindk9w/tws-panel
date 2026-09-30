@@ -35,10 +35,10 @@ function LayoutPreview({ value }: { value: NavLayout }) {
 }
 
 /**
- * Configurações do painel. Primeira seção: onde fica o menu de navegação.
- * A escolha vale na hora e fica salva na conta (vale em qualquer computador).
+ * Configurações → Aparência: onde fica o menu de navegação. A escolha vale na
+ * hora e fica salva na conta (vale em qualquer computador).
  */
-export function SettingsPage() {
+export function AppearanceSettings() {
   const { preferences, setPreferences } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -72,11 +72,6 @@ export function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Configurações</h1>
-        <p className="text-sm text-muted-foreground">Ajustes do painel. As escolhas ficam salvas na sua conta.</p>
-      </div>
-
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Aparência</CardTitle>

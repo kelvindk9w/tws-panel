@@ -52,8 +52,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
   const setPreferences = (preferences: UserPreferences) =>
     setState((prev) => (prev.status === "ok" ? { ...prev, preferences } : prev));
+  const setUser = (user: AdminUser) => setState((prev) => (prev.status === "ok" ? { ...prev, user } : prev));
   return (
-    <AuthContext.Provider value={{ user: state.user, preferences: state.preferences, setPreferences }}>
+    <AuthContext.Provider value={{ user: state.user, setUser, preferences: state.preferences, setPreferences }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,5 +1,5 @@
 /**
- * two-factor-modal.test.tsx — ativar e desativar a verificação em duas etapas.
+ * two-factor-panel.test.tsx — ativar e desativar a verificação em duas etapas.
  *
  * Para um leigo: dizer o que é e qual app instalar; QR code e a chave em texto
  * (para quem não consegue ler o QR); confirmar com o código + senha atual; os
@@ -25,7 +25,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { ApiRequestError } from "@/lib/api";
-import { TwoFactorModal } from "@/components/TwoFactorModal";
+import { TwoFactorPanel } from "@/components/settings/TwoFactorPanel";
 
 const CODES = ["abcde-fghij", "kmnpq-rstuv", "wxyz2-34567", "a2b3c-d4e5f", "g6h7j-k8m9n", "pqrst-uvwxy", "z2345-6789a", "bcdef-ghjkm", "npqrs-tuvwx", "yz234-56789"];
 
@@ -52,14 +52,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 async function ateOQr() {
-  render(<TwoFactorModal onClose={() => undefined} />);
+  render(<TwoFactorPanel />);
   fireEvent.click(await screen.findByRole("button", { name: /Começar/ }));
   await screen.findByTestId("two-factor-qr");
 }
 
-describe("TwoFactorModal — desligada", () => {
+describe("TwoFactorPanel — desligada", () => {
   it("explica o que é e quais apps servem, antes de qualquer mudança", async () => {
-    render(<TwoFactorModal onClose={() => undefined} />);
+    render(<TwoFactorPanel />);
     const intro = await screen.findByTestId("two-factor-intro");
     expect(intro).toHaveTextContent(/código de 6 dígitos/i);
     expect(intro).toHaveTextContent(/Google Authenticator/);
@@ -83,8 +83,7 @@ describe("TwoFactorModal — desligada", () => {
   });
 
   it("ativou: mostra os 10 códigos de recuperação e só deixa concluir depois de marcar que guardou", async () => {
-    const onClose = vi.fn();
-    render(<TwoFactorModal onClose={onClose} />);
+    render(<TwoFactorPanel />);
     fireEvent.click(await screen.findByRole("button", { name: /Começar/ }));
     await screen.findByTestId("two-factor-qr");
     fireEvent.change(screen.getByLabelText(/Código que aparece no app/), { target: { value: "123456" } });
@@ -100,16 +99,16 @@ describe("TwoFactorModal — desligada", () => {
     fireEvent.click(screen.getByLabelText(/Guardei os códigos/));
     expect(concluir).toBeEnabled();
     fireEvent.click(concluir);
-    expect(onClose).toHaveBeenCalled();
+    expect(screen.getByTestId("two-factor-on")).toHaveTextContent(/10 códigos de recuperação/);
     const body = JSON.parse(String(apiFetchMock.mock.calls.find((c) => c[0] === "/api/auth/2fa/enable")![1].body));
     expect(body).toEqual({ code: "123456", currentPassword: "MinhaSenha123" });
   });
 });
 
-describe("TwoFactorModal — ligada", () => {
+describe("TwoFactorPanel — ligada", () => {
   it("mostra o saldo de códigos (avisa quando está acabando) e desativa com senha + código", async () => {
     status = { enabled: true, recoveryCodesLeft: 2 };
-    render(<TwoFactorModal onClose={() => undefined} />);
+    render(<TwoFactorPanel />);
     expect(await screen.findByTestId("two-factor-on")).toHaveTextContent(/ativa/i);
     expect(screen.getByTestId("two-factor-on")).toHaveTextContent(/2 códigos de recuperação/);
     expect(screen.getByTestId("recovery-low")).toBeInTheDocument();

@@ -25,8 +25,34 @@ export const LOGIN_WINDOW_MS = 60 * 1000;
 
 /** Forma pública do usuário admin (nunca expõe o hash da senha). */
 export interface AdminUser {
+  /** O que se digita no login. */
   username: string;
   createdAt: string;
+  /** Nome mostrado no painel (Configurações → Perfil). null = mostra o usuário. */
+  displayName?: string | null;
+  /** E-mail de contato da conta (Configurações → Perfil). */
+  email?: string | null;
+}
+
+/** PUT /api/settings/profile — só os campos que mudam; texto vazio apaga. */
+export interface UpdateProfileRequest {
+  displayName?: string;
+  email?: string;
+  /** Trocar o usuário de login exige `currentPassword`. */
+  username?: string;
+  currentPassword?: string;
+}
+
+export interface UpdateProfileResponse {
+  user: AdminUser;
+}
+
+export const DISPLAY_NAME_MAX_LENGTH = 60;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Validação simples de e-mail (formato nome@dominio.tld). */
+export function validateEmail(email: string): boolean {
+  return email.length <= 254 && EMAIL_PATTERN.test(email);
 }
 
 export interface CreateAdminRequest {

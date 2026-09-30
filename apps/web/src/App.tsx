@@ -1,4 +1,4 @@
-import { createBrowserRouter, Outlet } from "react-router";
+import { createBrowserRouter, Navigate, Outlet } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { Layout } from "@/components/Layout";
 import { RequireAuth } from "@/components/RequireAuth";
@@ -12,7 +12,11 @@ import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
 import { SecurityPage } from "@/pages/SecurityPage";
-import { SettingsPage } from "@/pages/SettingsPage";
+import { SettingsLayout } from "@/pages/settings/SettingsLayout";
+import { ProfileSettings } from "@/pages/settings/ProfileSettings";
+import { SecuritySettings } from "@/pages/settings/SecuritySettings";
+import { AppearanceSettings } from "@/pages/settings/AppearanceSettings";
+import { NotificationSettings } from "@/pages/settings/NotificationSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 
@@ -35,7 +39,17 @@ const router = createBrowserRouter([
       { path: "/security/hardening", element: <HardeningPage /> },
       { path: "/alerts", element: <AlertsPage /> },
       { path: "/audit", element: <AuditPage /> },
-      { path: "/settings", element: <SettingsPage /> },
+      {
+        path: "/settings",
+        element: <SettingsLayout />,
+        children: [
+          { index: true, element: <Navigate to="/settings/profile" replace /> },
+          { path: "profile", element: <ProfileSettings /> },
+          { path: "security", element: <SecuritySettings /> },
+          { path: "appearance", element: <AppearanceSettings /> },
+          { path: "notifications", element: <NotificationSettings /> },
+        ],
+      },
     ],
   },
   // wizard de setup e login ficam fora do layout/guard do dashboard

@@ -13,6 +13,7 @@ import { tokenMatches } from "../services/setup-token.js";
 import { hashPassword } from "../services/password.js";
 import { SETUP_STEPS } from "../services/setup-state.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { publicUser } from "../services/public-user.js";
 
 // Passo máximo válido do wizard (usado no schema de /api/setup/advance).
 const MAX_STEP = Math.max(...SETUP_STEPS.map((s) => s.id));
@@ -185,7 +186,7 @@ const setupRoutes: FastifyPluginAsync = async (app) => {
 
     const response: CreateAdminResponse = {
       ok: true,
-      user: { username: user.username, createdAt: user.createdAt },
+      user: publicUser(user),
     };
     return reply.code(201).send(response);
     },
