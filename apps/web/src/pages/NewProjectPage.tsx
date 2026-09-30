@@ -200,6 +200,29 @@ export function NewProjectPage() {
     }
   }
 
+  /**
+   * Para onde ir depois de criar: o projeto, já pedindo o primeiro deploy — ou,
+   * se o compose exige variáveis ainda sem valor, a seção Variáveis (o deploy
+   * falharia sem elas).
+   */
+  async function firstDeployPath(id: string): Promise<string> {
+    if (detection?.type === "compose") {
+      try {
+        const env = await apiFetch<{
+          vars: Array<{ key: string; value: string }>;
+          compose?: { variables: Array<{ name: string; required: boolean }> } | null;
+        }>(`/api/projects/${id}/env`);
+        const defined = new Set(env.vars.filter((v) => v.value !== "").map((v) => v.key));
+        if ((env.compose?.variables ?? []).some((v) => v.required && !defined.has(v.name))) {
+          return `/projects/${id}/env?deploy=pending`;
+        }
+      } catch {
+        // sem a lista, o deploy segue e o log mostra o que faltar
+      }
+    }
+    return `/projects/${id}?deploy=1`;
+  }
+
   async function finish() {
     if (!projectId) return;
     setBusy(true);
@@ -214,7 +237,7 @@ export function NewProjectPage() {
           proxyPort: proxyPort ? Number(proxyPort) : null,
         }),
       });
-      navigate(`/projects/${projectId}`);
+      navigate(await firstDeployPath(projectId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao salvar o projeto.");
     } finally {

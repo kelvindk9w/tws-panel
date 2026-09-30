@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, NavLink, useNavigate, useParams } from "react-router";
+import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router";
 import type {
   DeployJob,
   DeployJobListResponse,
@@ -214,6 +214,9 @@ export function GuardrailOverrideModal({
   onConfirm: () => void;
 }) {
   const [accepted, setAccepted] = useState(false);
+  // 80/443 com proxy HTTPS próprio: forçar não adianta — o `up` falharia com
+  // "porta já em uso" (ou tomaria o lugar do proxy do painel)
+  const noOverride = report.findings.some((f) => f.level === "block" && f.rule === "proxy-port-conflict");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col gap-4 overflow-auto rounded-xl border border-red-500/40 bg-background p-6 shadow-2xl">
@@ -240,24 +243,40 @@ export function GuardrailOverrideModal({
             </li>
           ))}
         </ul>
-        <label className="flex items-center gap-2 text-sm font-medium text-amber-300">
-          <input
-            type="checkbox"
-            checked={accepted}
-            onChange={(e) => setAccepted(e.target.checked)}
-            className="h-4 w-4"
-          />
-          Entendo os riscos e quero fazer o deploy mesmo assim (override)
-        </label>
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>
-            Cancelar
-          </Button>
-          <Button variant="destructive" size="sm" disabled={!accepted || busy} onClick={onConfirm}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
-            Deploy com override
-          </Button>
-        </div>
+        {noOverride ? (
+          <>
+            <p data-testid="no-override" className="text-sm text-amber-300">
+              Este bloqueio não tem como forçar: as portas 80 e 443 da VPS são do proxy do painel, e o deploy falharia
+              com &quot;porta já em uso&quot;. Siga a orientação acima (💡) e faça o deploy de novo.
+            </p>
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={onCancel}>
+                Fechar
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <label className="flex items-center gap-2 text-sm font-medium text-amber-300">
+              <input
+                type="checkbox"
+                checked={accepted}
+                onChange={(e) => setAccepted(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Entendo os riscos e quero fazer o deploy mesmo assim (override)
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>
+                Cancelar
+              </Button>
+              <Button variant="destructive" size="sm" disabled={!accepted || busy} onClick={onConfirm}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
+                Deploy com override
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -291,6 +310,9 @@ export function ProjectDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteSource, setDeleteSource] = useState(false);
   const [guardrailReport, setGuardrailReport] = useState<GuardrailReport | null>(null);
+  // ?deploy=1 (vindo do assistente): o primeiro deploy começa sozinho, uma vez
+  const [searchParams, setSearchParams] = useSearchParams();
+  const autoDeployDone = useRef(false);
   const logRef = useRef<HTMLPreElement>(null);
 
   const refresh = useCallback(async () => {
@@ -402,6 +424,14 @@ export function ProjectDetailPage() {
     }
     await doDeploy(false);
   }
+
+  useEffect(() => {
+    if (!data || autoDeployDone.current || searchParams.get("deploy") !== "1") return;
+    autoDeployDone.current = true;
+    setSearchParams({}, { replace: true });
+    void deployWithGuardrails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, searchParams]);
 
   async function action(kind: "stop" | "start") {
     if (!id) return;
@@ -644,6 +674,16 @@ export function ProjectDetailPage() {
         />
       )}
 
+      {section === "env" && searchParams.get("deploy") === "pending" && (
+        <p
+          data-testid="deploy-pending"
+          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          O projeto foi criado, mas o compose exige variáveis obrigatórias que ainda não têm valor — o deploy falharia
+          sem elas. Preencha as que faltam, salve e clique em Deploy, no topo da página.
+        </p>
+      )}
       {section === "env" && <ProjectEnvCard project={project} />}
 
       {section === "email" && <ProjectEmailCard projectId={project.id} />}

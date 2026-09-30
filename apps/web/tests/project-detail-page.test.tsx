@@ -109,3 +109,35 @@ describe("ProjectDetailPage — menu do projeto", () => {
     expect(await screen.findByText(/Zona de perigo/)).toBeInTheDocument();
   });
 });
+
+describe("ProjectDetailPage — primeiro deploy automático", () => {
+  it("?deploy=1 dispara o deploy uma vez (após consultar os guardrails)", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/guardrails") return { report: null, note: null };
+      if (path === "/api/projects/p1/deploy") {
+        return { job: { id: "j1", projectId: "p1", status: "running", log: "", startedAt: "2026-09-30T10:00:00Z" } };
+      }
+      return base(path, init);
+    });
+    abrir("/projects/p1?deploy=1");
+    await vi.waitFor(() => {
+      const posts = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects/p1/deploy" && (i as RequestInit)?.method === "POST");
+      expect(posts).toHaveLength(1);
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const posts = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects/p1/deploy" && (i as RequestInit)?.method === "POST");
+    expect(posts).toHaveLength(1);
+  });
+
+  it("sem ?deploy=1 não faz deploy sozinho", async () => {
+    abrir();
+    await screen.findByRole("link", { name: /Abrir site/ });
+    expect(apiFetchMock.mock.calls.some(([p]) => p === "/api/projects/p1/deploy")).toBe(false);
+  });
+
+  it("?deploy=pending na seção Variáveis explica o que falta antes do primeiro deploy", async () => {
+    abrir("/projects/p1/env?deploy=pending");
+    expect(await screen.findByTestId("deploy-pending")).toHaveTextContent(/obrigatórias/);
+  });
+});

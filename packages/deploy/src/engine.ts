@@ -23,11 +23,12 @@ import {
   type Project,
   PAAS_CADDY_CONTAINER,
 } from "@paas/core";
-import { parse, stringify } from "yaml";
+import { parse } from "yaml";
 import { CaddyManager, projectDomain, type CaddyTarget, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir } from "./static-site.js";
+import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
 import { writeProjectDotenv } from "./project-dotenv.js";
 import { runGuardrails } from "./rules.js";
 
@@ -371,33 +372,32 @@ export class DeployEngine {
     const proxyPort = project.proxyPort ?? project.detection?.proxyPort;
     if (!proxyPort) throw new Error("Informe a porta do serviço web (proxyPort).");
 
-    // Override gerado pelo painel: NÃO reescreve o compose do usuário; apenas
-    // anexa o serviço web à rede paas-net com um alias estável para o Caddy e,
-    // quando há env vars extras (Fase 3 — SMTP), injeta em todos os serviços.
+    // Override gerado pelo painel (compose-override.ts): NÃO reescreve o
+    // compose do usuário; anexa o serviço web à rede paas-net, injeta env
+    // extra (Fase 3 — SMTP) e, em app comum, retira a publicação de 80/443.
     const envServices = Object.keys(extraEnv).length > 0 ? await composeServiceNames(src, composeFile) : [];
-    const overrideDoc: Record<string, unknown> = {
-      networks: { [PAAS_NETWORK]: { external: true } },
-      services: {
-        [proxyService]: {
-          networks: {
-            default: null,
-            [PAAS_NETWORK]: { aliases: [project.slug] },
-          },
-        },
-      },
-    };
-    const services = overrideDoc.services as Record<string, Record<string, unknown>>;
-    for (const name of envServices) {
-      services[name] = { ...(services[name] ?? {}), environment: { ...extraEnv } };
-      // o serviço web já tem a entrada de networks acima — preservada pelo spread
-    }
+    const composeContent = await readFile(path.join(src, composeFile), "utf8");
 
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
     const overrideFile = path.join(workDir, "paas.override.yml");
-    const header = "# Gerado pelo painel PaaS — não editar. Anexa o serviço web à rede do painel.\n";
-    await writeFile(overrideFile, header + stringify(overrideDoc), { encoding: "utf8", mode: 0o600 });
+    const overrideYaml = composeOverrideYaml({
+      compose: composeContent,
+      proxyService,
+      slug: project.slug,
+      network: PAAS_NETWORK,
+      env: extraEnv,
+      envServices,
+    });
+    await writeFile(overrideFile, overrideYaml, { encoding: "utf8", mode: 0o600 });
     onLog(`Override gerado em ${overrideFile} (serviço "${proxyService}" na ${PAAS_NETWORK}).\n`);
+    const stripped = strippedProxyPortServices(composeContent);
+    if (stripped.length > 0) {
+      onLog(
+        `Portas 80/443 do servidor retiradas de: ${stripped.join(", ")} — são do proxy do painel; ` +
+          "o tráfego chega pela rede interna (o repositório não foi alterado).\n",
+      );
+    }
     if (envServices.length > 0) {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);
     }
