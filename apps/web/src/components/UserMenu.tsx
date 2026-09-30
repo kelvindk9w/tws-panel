@@ -10,7 +10,8 @@ import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { CheckCircle2, ChevronDown, Circle, KeyRound, Loader2, LogOut, UserRound, X } from "lucide-react";
+import { TwoFactorModal } from "@/components/TwoFactorModal";
+import { CheckCircle2, ChevronDown, Circle, KeyRound, Loader2, LogOut, ShieldCheck, UserRound, X } from "lucide-react";
 
 /** Modal de troca de senha (exige a senha atual; invalida as demais sessões). */
 function ChangePasswordModal({ onClose }: { onClose: () => void }) {
@@ -128,12 +129,13 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Menu do usuário no header: troca de senha e logout. */
+/** Menu do usuário no header: troca de senha, verificação em duas etapas e logout. */
 export function UserMenu() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showTwoFactor, setShowTwoFactor] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // fecha o menu ao clicar fora
@@ -171,7 +173,7 @@ export function UserMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-1 w-48 rounded-md border bg-popover p-1 shadow-md">
+        <div className="absolute right-0 top-full z-40 mt-1 w-64 rounded-md border bg-popover p-1 shadow-md">
           <button
             type="button"
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
@@ -184,6 +186,16 @@ export function UserMenu() {
           </button>
           <button
             type="button"
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+            onClick={() => {
+              setOpen(false);
+              setShowTwoFactor(true);
+            }}
+          >
+            <ShieldCheck className="h-4 w-4" /> Verificação em duas etapas
+          </button>
+          <button
+            type="button"
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-red-400 hover:bg-accent"
             onClick={() => void logout()}
           >
@@ -193,6 +205,7 @@ export function UserMenu() {
       )}
 
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
+      {showTwoFactor && <TwoFactorModal onClose={() => setShowTwoFactor(false)} />}
     </div>
   );
 }

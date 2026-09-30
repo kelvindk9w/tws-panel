@@ -121,3 +121,58 @@ describe("LoginPage", () => {
     resolveFetch?.(jsonResponse({ ok: true, user: { username: "admin", createdAt: "x" }, expiresAt: "y" }));
   });
 });
+
+/**
+ * Verificação em duas etapas: a senha certa responde two_factor_required; a
+ * tela pede o código do app SEM apagar o que já foi digitado e reenvia tudo.
+ */
+describe("LoginPage — verificação em duas etapas", () => {
+  it("pede o código depois da senha e entra com ele", async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { code?: string };
+      if (!body.code) {
+        return jsonResponse({ error: "two_factor_required", message: "Digite o código de 6 dígitos do seu app autenticador." }, 401);
+      }
+      return jsonResponse({ ok: true, user: { username: "admin", createdAt: "x" }, expiresAt: "y" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderLogin("/login", { from: "/security" });
+
+    await user.type(screen.getByLabelText(/usuário/i), "admin");
+    await user.type(screen.getByLabelText(/^senha$/i), "MinhaSenha123");
+    await user.click(screen.getByRole("button", { name: /^entrar$/i }));
+
+    const campo = await screen.findByLabelText(/código de verificação/i);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(); // não é erro: é o próximo passo
+    expect(screen.getByText(/app autenticador/i)).toBeInTheDocument();
+    await user.type(campo, "123 456");
+    await user.click(screen.getByRole("button", { name: /^entrar$/i }));
+
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/security"));
+    const ultimo = JSON.parse(String((fetchMock.mock.calls.at(-1)![1] as RequestInit).body));
+    expect(ultimo).toEqual({ username: "admin", password: "MinhaSenha123", code: "123 456" });
+  });
+
+  it("código errado mostra o erro e mantém o campo do código", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { code?: string };
+        return body.code
+          ? jsonResponse({ error: "invalid_two_factor_code", message: "Código incorreto ou já usado." }, 401)
+          : jsonResponse({ error: "two_factor_required", message: "Digite o código." }, 401);
+      }),
+    );
+    const user = userEvent.setup();
+    renderLogin();
+    await user.type(screen.getByLabelText(/usuário/i), "admin");
+    await user.type(screen.getByLabelText(/^senha$/i), "MinhaSenha123");
+    await user.click(screen.getByRole("button", { name: /^entrar$/i }));
+    await user.type(await screen.findByLabelText(/código de verificação/i), "000000");
+    await user.click(screen.getByRole("button", { name: /^entrar$/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Código incorreto/);
+    expect(screen.getByLabelText(/código de verificação/i)).toBeInTheDocument();
+    expect(screen.getByText(/códigos? de recuperação/i)).toBeInTheDocument();
+  });
+});

@@ -4,6 +4,10 @@
  *  POST /api/auth/logout           (sessão)
  *  GET  /api/auth/me               (sessão)
  *  POST /api/auth/change-password  (sessão; invalida as demais sessões)
+ *  GET  /api/auth/2fa              (sessão; verificação em duas etapas: status)
+ *  POST /api/auth/2fa/setup        (sessão; segredo + QR, nada muda ainda)
+ *  POST /api/auth/2fa/enable       (sessão + senha atual + código do app)
+ *  POST /api/auth/2fa/disable      (sessão + senha atual + código)
  *
  * A senha NUNCA aparece em logs nem em respostas. Todas as respostas levam
  * Cache-Control: no-store (além dos headers do helmet).
@@ -12,7 +16,7 @@
  * desfazem a alteração em memória e rejeitam com `storage_write_failed`, e a
  * rota responde 500 dizendo o que NÃO foi feito — sem detalhe do disco.
  */
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import {
   SESSION_COOKIE,
   SESSION_TTL_MS,
@@ -21,10 +25,15 @@ import {
   type ChangePasswordRequest,
   type LoginRequest,
   type LoginResponse,
+  type TwoFactorConfirmRequest,
+  type TwoFactorEnableResponse,
+  type TwoFactorSetupResponse,
+  type TwoFactorStatusResponse,
 } from "@paas/core";
 import { hashPassword, verifyPasswordTimingSafe } from "../services/password.js";
 import { LoginLimiter } from "../services/login-limiter.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { TwoFactorError } from "../services/two-factor.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo
 // desconhecido no corpo. `maxLength` em toda string é defesa contra payload
@@ -37,6 +46,19 @@ const loginSchema = {
     properties: {
       username: { type: "string", minLength: 1, maxLength: 100 },
       password: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
+    },
+  },
+} as const;
+
+const twoFactorConfirmSchema = {
+  body: {
+    type: "object",
+    required: ["currentPassword", "code"],
+    additionalProperties: false,
+    properties: {
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
     },
   },
 } as const;
@@ -115,6 +137,45 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    // Verificação em duas etapas: a senha certa não basta. O código só é
+    // conferido DEPOIS da senha — quem não sabe a senha não chega até aqui.
+    let twoFactorNote = "";
+    if (user.twoFactor) {
+      const code = request.body.code;
+      if (code === undefined) {
+        return reply.code(401).send({
+          error: "two_factor_required",
+          message: "Digite o código de 6 dígitos do seu app autenticador.",
+        });
+      }
+      const check = await app.twoFactor.verify(user, code);
+      if (!check) {
+        const failure = limiter.onFailure(ip);
+        await app.auditService.record({
+          actor: "anon",
+          action: "auth.2fa_failed",
+          target: user.username,
+          detail: `Código de verificação em duas etapas incorreto, de ${ip}.`,
+        });
+        if (!failure.allowed) {
+          reply.header("retry-after", String(failure.retryAfterSec));
+          return reply.code(429).send({
+            error: "too_many_attempts",
+            message: `Muitas tentativas. Aguarde ${failure.retryAfterSec}s e tente novamente.`,
+            retryAfterSec: failure.retryAfterSec,
+          });
+        }
+        return reply.code(401).send({
+          error: "invalid_two_factor_code",
+          message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+        });
+      }
+      twoFactorNote =
+        check.method === "recovery"
+          ? ` Com código de recuperação (restam ${check.recoveryCodesLeft}).`
+          : " Com verificação em duas etapas.";
+    }
+
     limiter.onSuccess(ip);
     let created;
     try {
@@ -142,7 +203,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     await app.auditService.record({
       actor: user.username,
       action: "auth.login",
-      detail: `Login bem-sucedido de ${ip}.`,
+      detail: `Login bem-sucedido de ${ip}.${twoFactorNote}`,
     });
     const response: LoginResponse = {
       ok: true,
@@ -278,6 +339,107 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       detail: `Senha alterada; ${revoked} sessão(ões) anterior(es) invalidada(s).`,
     });
     return reply.send({ ok: true });
+    },
+  );
+
+  // ------------------------------------------------ verificação em duas etapas
+
+  /** Usuário da sessão; responde 401 (e encerra a sessão) se ele não existe mais. */
+  async function sessionUser(request: FastifyRequest, reply: FastifyReply) {
+    const session = request.session!;
+    const user = await app.userStore.findById(session.userId);
+    if (!user) {
+      await app.sessionStore.destroy(session.id);
+      await reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
+      return null;
+    }
+    return user;
+  }
+
+  function twoFactorFailure(reply: FastifyReply, err: unknown) {
+    if (!(err instanceof TwoFactorError)) throw err;
+    const status = err.code === "invalid_two_factor_code" ? 400 : 409;
+    return reply.code(status).send({ error: err.code, message: err.message });
+  }
+
+  app.get("/api/auth/2fa", async (request, reply) => {
+    const user = await sessionUser(request, reply);
+    if (!user) return reply;
+    const response: TwoFactorStatusResponse = app.twoFactor.status(user);
+    return reply.send(response);
+  });
+
+  app.post("/api/auth/2fa/setup", async (request, reply) => {
+    const user = await sessionUser(request, reply);
+    if (!user) return reply;
+    try {
+      const response: TwoFactorSetupResponse = app.twoFactor.beginSetup(user);
+      return reply.send(response);
+    } catch (err) {
+      return twoFactorFailure(reply, err);
+    }
+  });
+
+  app.post<{ Body: TwoFactorConfirmRequest }>(
+    "/api/auth/2fa/enable",
+    { schema: twoFactorConfirmSchema },
+    async (request, reply) => {
+      const user = await sessionUser(request, reply);
+      if (!user) return reply;
+      if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
+        return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
+      }
+      let recoveryCodes: string[];
+      try {
+        recoveryCodes = await app.twoFactor.enable(user, request.body.code);
+      } catch (err) {
+        if (isStorageWriteFailure(err)) {
+          request.log.error({ err }, "falha ao gravar a verificação em duas etapas");
+          return reply.code(500).send({
+            error: "storage_write_failed",
+            message: "Não foi possível salvar no servidor. Nada foi alterado: o login continua só com a senha.",
+          });
+        }
+        return twoFactorFailure(reply, err);
+      }
+      await app.auditService.record({
+        actor: user.username,
+        action: "auth.2fa_enabled",
+        detail: "Verificação em duas etapas ativada (10 códigos de recuperação gerados).",
+      });
+      const response: TwoFactorEnableResponse = { recoveryCodes };
+      return reply.send(response);
+    },
+  );
+
+  app.post<{ Body: TwoFactorConfirmRequest }>(
+    "/api/auth/2fa/disable",
+    { schema: twoFactorConfirmSchema },
+    async (request, reply) => {
+      const user = await sessionUser(request, reply);
+      if (!user) return reply;
+      if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
+        return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
+      }
+      if (!user.twoFactor) {
+        return reply.code(409).send({ error: "not_enabled", message: "A verificação em duas etapas não está ativa." });
+      }
+      // Sessão roubada + senha vazada não bastam: desligar exige o código.
+      const check = await app.twoFactor.verify(user, request.body.code);
+      if (!check) {
+        return reply.code(400).send({
+          error: "invalid_two_factor_code",
+          message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+        });
+      }
+      const fresh = (await app.userStore.findById(user.id)) ?? user;
+      await app.twoFactor.disable(fresh);
+      await app.auditService.record({
+        actor: user.username,
+        action: "auth.2fa_disabled",
+        detail: "Verificação em duas etapas desativada.",
+      });
+      return reply.send({ ok: true });
     },
   );
 };

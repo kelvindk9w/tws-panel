@@ -73,6 +73,11 @@ pendente e por quê — informação que não está no código nem no git log.
   (o card diz que sem chave nada muda e a chave colada é instalada pela própria fase).
   Ordem combinada a seguir: 2FA no login → configurações do painel e dos projetos →
   validação do zero → tradução por último.
+- **30/09 — verificação em duas etapas (2FA) no login:** TOTP próprio (node:crypto, vetores da
+  RFC 6238), segredo cifrado em `data/two-factor-key`, 10 códigos de recuperação de uso único,
+  anti-reuso, desativar exige senha + código, aviso no Dashboard enquanto desligada, e
+  `scripts/reset-2fa.sh` para quem perdeu celular e códigos. Detalhes em
+  `autenticacao/verificacao-duas-etapas.json`. Falta validar na VPS real com um app de verdade.
 - **PRÓXIMO ITEM COMBINADO — lembrar o dono do produto assim que a validação terminar:
   tradução para inglês e espanhol** (pedido de 29/09/2026, adiado de propósito porque o
   README ainda muda a cada rodada de teste). Escopo e ordem acordados:

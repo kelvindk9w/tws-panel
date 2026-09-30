@@ -9,7 +9,8 @@
     "GET /api/auth/me, POST /api/auth/logout e POST /api/auth/change-password exigem sessão válida (garantida pelo guard global antes de a rota rodar).",
     "Trocar a senha invalida todas as OUTRAS sessões do usuário (mantém a sessão atual) e força reautenticação nos demais dispositivos.",
     "Sessões são objetos revogáveis em data/sessions.json (não JWT stateless): logout, troca de senha ou expiração (TTL 12h) removem a sessão do arquivo.",
-    "O cookie carrega '<id>.<hmac>', assinado com um segredo gerado no primeiro boot e persistido em data/session-secret; sem esse segredo um cookie forjado é rejeitado por comparação em tempo constante."
+    "O cookie carrega '<id>.<hmac>', assinado com um segredo gerado no primeiro boot e persistido em data/session-secret; sem esse segredo um cookie forjado é rejeitado por comparação em tempo constante.",
+    "Verificação em duas etapas (TOTP) opcional e recomendada: com ela ativa, o login exige também o código do app autenticador ou um código de recuperação. Detalhes em verificacao-duas-etapas.json."
   ],
   "arquivosFonte": {
     "rotas": ["apps/server/src/routes/auth.ts"],

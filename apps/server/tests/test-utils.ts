@@ -11,6 +11,7 @@ import authPlugin from "../src/plugins/auth.js";
 import { AuditService } from "../src/services/audit-service.js";
 import { SessionStore } from "../src/services/session-store.js";
 import { SetupStateStore } from "../src/services/setup-state.js";
+import { TwoFactorService } from "../src/services/two-factor.js";
 import { UserStore } from "../src/services/user-store.js";
 
 export interface AuthTestContext {
@@ -20,10 +21,12 @@ export interface AuthTestContext {
   userStore: UserStore;
   sessionStore: SessionStore;
   auditService: AuditService;
+  twoFactor: TwoFactorService;
 }
 
 export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
+  opts: { now?: () => number } = {},
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
   // Mesmas opções de validação da produção (app.ts), para que os testes de
@@ -37,10 +40,12 @@ export async function buildAuthTestApp(
   app.decorate("setupToken", setupToken);
   app.decorate("setupState", setupState);
   app.decorate("userStore", userStore);
+  const twoFactor = new TwoFactorService(dir, userStore, opts.now ? { now: opts.now } : {});
+  app.decorate("twoFactor", twoFactor);
   app.decorate("sessionStore", sessionStore);
   app.decorate("auditService", auditService);
   await app.register(authPlugin);
-  return { app, dir, setupState, userStore, sessionStore, auditService };
+  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor };
 }
 
 export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {

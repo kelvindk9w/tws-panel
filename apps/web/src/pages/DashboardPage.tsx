@@ -7,6 +7,7 @@ import type {
   ProjectStatus,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { TwoFactorNudge } from "@/components/TwoFactorNudge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -141,6 +142,7 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      <TwoFactorNudge />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Projetos</h1>
