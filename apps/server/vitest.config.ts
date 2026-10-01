@@ -10,6 +10,8 @@ import { defineConfig } from "vitest/config";
 //  - src/routes/{docker,mail,monitoring,security}.ts (delegam aos serviços)
 //  - src/services/{docker-service,deploy-service,mail-service,
 //    monitor-service,security-service}.ts (engine/exec/runner de containers)
+//  - src/services/onboarding-sources.ts (estado do e-mail: consulta o Docker
+//    como mail-service.ts; a regra do passo fica em onboarding.ts, coberta)
 //  - src/services/docker-socket.ts (I/O crua com o docker.sock — validada por
 //    smoke/E2E com Docker real) e src/services/terminal-runner.ts (wrapper
 //    fino exercitado via terminal-service nos testes de rotas)
@@ -27,11 +29,13 @@ export default defineConfig({
         "src/routes/auth.ts",
         "src/routes/domains.ts",
         "src/routes/health.ts",
+        "src/routes/onboarding.ts",
         "src/routes/projects.ts",
         "src/routes/setup.ts",
         "src/services/alerts-service.ts",
         "src/services/audit-service.ts",
         "src/services/login-limiter.ts",
+        "src/services/onboarding.ts",
         "src/services/password.ts",
         "src/services/session-store.ts",
         "src/services/setup-state.ts",

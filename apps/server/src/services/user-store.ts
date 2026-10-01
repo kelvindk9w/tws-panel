@@ -12,7 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { UserPreferences } from "@paas/core";
+import type { OnboardingStepId, UserPreferences } from "@paas/core";
 
 /**
  * Verificação em duas etapas (ver services/two-factor.ts). O segredo fica
@@ -31,6 +31,17 @@ export interface StoredTwoFactor {
   enabledAt: string;
 }
 
+/**
+ * Roteiro "Deixe o painel pronto" (Dashboard): só o que é ESCOLHA da pessoa.
+ * O status de cada passo é calculado do estado real (services/onboarding.ts).
+ */
+export interface StoredOnboarding {
+  /** Quando a pessoa começou o roteiro — antes disso ele aparece aberto. */
+  startedAt: string | null;
+  /** Passos opcionais marcados como "Não vou usar". */
+  skipped: OnboardingStepId[];
+}
+
 export interface StoredUser {
   id: string;
   username: string;
@@ -42,6 +53,8 @@ export interface StoredUser {
   email?: string | null;
   /** Preferências de interface (Configurações). Ausente = padrão. */
   preferences?: Partial<UserPreferences>;
+  /** Progresso do roteiro de primeiros passos. Ausente = nunca começou. */
+  onboarding?: StoredOnboarding;
   createdAt: string;
   updatedAt: string;
 }
@@ -185,6 +198,26 @@ export class UserStore {
         preferences: { ...atual.preferences, ...changes },
         updatedAt: new Date().toISOString(),
       };
+      this.users = this.users.map((u) => (u.id === id ? user : u));
+      return user;
+    });
+  }
+
+  /**
+   * Altera o progresso do roteiro de primeiros passos. A função recebe o
+   * estado atual DENTRO da fila de gravações: dois cliques seguidos ("Não vou
+   * usar" em dois passos) nunca se sobrescrevem.
+   */
+  async updateOnboarding(
+    id: string,
+    change: (current: StoredOnboarding) => StoredOnboarding,
+  ): Promise<StoredUser | null> {
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const atual = this.users.find((u) => u.id === id);
+      if (!atual) return null;
+      const current: StoredOnboarding = atual.onboarding ?? { startedAt: null, skipped: [] };
+      const user: StoredUser = { ...atual, onboarding: change(current), updatedAt: new Date().toISOString() };
       this.users = this.users.map((u) => (u.id === id ? user : u));
       return user;
     });
