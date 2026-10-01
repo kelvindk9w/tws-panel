@@ -183,7 +183,7 @@ export function ProjectDomainsCard({
           {!live && (
             <>
               {" "}
-              Antes do primeiro deploy, o endereço já responde com a página &quot;Site em configuração&quot; (com HTTPS):
+              Antes do primeiro deploy, o endereço já responde com a página &quot;Site em manutenção&quot; (com HTTPS):
               dá para conferir o DNS enquanto o projeto é configurado.
             </>
           )}

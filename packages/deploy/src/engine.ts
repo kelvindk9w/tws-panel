@@ -96,7 +96,7 @@ export function projectCaddyTargets(project: Project, upstream: string): CaddyTa
 /**
  * Alvos do proxy central para TODOS os projetos. O que nunca foi publicado
  * entra também (`published: false`): o domínio responde com HTTPS e a página
- * "site em configuração". O que já esteve no ar continua nele mesmo que o
+ * "site em manutenção". O que já esteve no ar continua nele mesmo que o
  * último deploy tenha falhado — antes ele sumia do proxy no próximo ajuste,
  * com os containers antigos ainda rodando.
  */

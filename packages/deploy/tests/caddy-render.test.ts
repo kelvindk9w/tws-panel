@@ -161,16 +161,28 @@ describe("renderCaddyfile — projeto ainda não publicado", () => {
     { domain: "velho.exemplo.com", upstream: "velho:80", websocket: false, published: true },
   ]);
 
-  it("ainda não publicado → página 'site em configuração' (o domínio entra no Caddy, com HTTPS)", () => {
+  // Pedido do dono do produto: "em configuração" assusta o cliente de um site
+  // que está sendo migrado; o visitante vê "em manutenção", e o rodapé diz que
+  // o servidor é gerenciado com o TWS Panel.
+  it("ainda não publicado → página 'Site em manutenção' (o domínio entra no Caddy, com HTTPS)", () => {
     const bloco = out.slice(out.indexOf("novo.exemplo.com {"), out.indexOf("velho.exemplo.com {"));
-    expect(bloco).toContain("Site em configuração");
-    expect(bloco).toContain("Servidor gerenciado com TWS Panel");
+    expect(bloco).toContain("Site em manutenção");
+    expect(bloco).toContain("Gerenciado com TWS Panel");
     expect(bloco).not.toContain("temporariamente indisponível");
+    expect(bloco).not.toContain("configuração");
+  });
+
+  it("páginas de manutenção e indisponível se recarregam sozinhas (o site volta sem o visitante fazer nada)", () => {
+    const pendente = out.slice(out.indexOf("novo.exemplo.com {"), out.indexOf("velho.exemplo.com {"));
+    const fora = out.slice(out.indexOf("velho.exemplo.com {"), out.indexOf("http:// {"));
+    expect(pendente).toMatch(/http-equiv="refresh" content="60"/);
+    expect(fora).toMatch(/http-equiv="refresh" content="60"/);
+    expect(out.slice(out.indexOf("http:// {"))).not.toMatch(/http-equiv="refresh"/);
   });
 
   it("já publicado antes → continua a página de indisponível", () => {
     const bloco = out.slice(out.indexOf("velho.exemplo.com {"));
     expect(bloco).toContain("temporariamente indisponível");
-    expect(bloco).not.toContain("Site em configuração");
+    expect(bloco).not.toContain("Site em manutenção");
   });
 });
