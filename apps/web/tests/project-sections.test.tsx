@@ -119,26 +119,93 @@ describe("ProjectEnvCard", () => {
  * o operador descobriria uma de cada vez, a cada deploy que falha.
  */
 describe("ProjectEnvCard — o que o compose espera", () => {
-  it("mostra definidas, obrigatórias que faltam e as com padrão; adiciona as que faltam", async () => {
-    apiFetchMock.mockImplementation(async () => ({
-      vars: [{ key: "POSTGRES_USER", value: "casa" }],
-      compose: {
-        usesEnvFile: true,
-        variables: [
-          { name: "POSTGRES_PASSWORD", required: true, defaultValue: null },
-          { name: "POSTGRES_USER", required: true, defaultValue: null },
-          { name: "SMTP_HOST", required: false, defaultValue: "mailpit" },
-        ],
-      },
-    }));
+  const COMPOSE_ENV = {
+    vars: [{ key: "POSTGRES_USER", value: "casa" }],
+    compose: {
+      usesEnvFile: true,
+      variables: [
+        { name: "LOG_LEVEL", required: false, defaultValue: null },
+        { name: "POSTGRES_PASSWORD", required: true, defaultValue: null },
+        { name: "POSTGRES_USER", required: true, defaultValue: null },
+        { name: "SMTP_HOST", required: false, defaultValue: "mailpit" },
+      ],
+    },
+  };
+
+  function mockEnv() {
+    apiFetchMock.mockImplementation(async (_path: string, init?: RequestInit) =>
+      init?.method === "PUT" ? JSON.parse(String(init.body)) : COMPOSE_ENV,
+    );
+  }
+
+  it("ao abrir, cada variável do compose já é uma linha para preencher (obrigatórias primeiro)", async () => {
+    mockEnv();
     render(<ProjectEnvCard project={PROJECT} />);
-    const lista = await screen.findByTestId("compose-vars");
-    expect(within(lista).getByTestId("cv-POSTGRES_USER")).toHaveTextContent(/definida/);
-    expect(within(lista).getByTestId("cv-POSTGRES_PASSWORD")).toHaveTextContent(/obrigatória/);
-    expect(within(lista).getByTestId("cv-SMTP_HOST")).toHaveTextContent(/padrão: mailpit/);
-    fireEvent.click(screen.getByRole("button", { name: /Adicionar as que faltam/ }));
-    expect(screen.getByDisplayValue("POSTGRES_PASSWORD")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("SMTP_HOST")).not.toBeInTheDocument(); // tem padrão: não é obrigatória
+    await screen.findByDisplayValue("POSTGRES_PASSWORD");
+    const nomes = screen.getAllByPlaceholderText("NOME_DA_VARIAVEL").map((i) => (i as HTMLInputElement).value);
+    expect(nomes).toEqual(["POSTGRES_USER", "POSTGRES_PASSWORD", "LOG_LEVEL", "SMTP_HOST"]);
+    expect(screen.getByTestId("env-row-POSTGRES_PASSWORD")).toHaveTextContent(/obrigatória/);
+    expect(screen.getByTestId("env-row-SMTP_HOST")).toHaveTextContent(/padrão: mailpit/);
+    expect(screen.getByTestId("compose-vars")).toHaveTextContent(/1 obrigatória\(s\) ainda sem valor/);
+  });
+
+  it("salva o que foi preenchido; sugerida que ficou vazia não é salva (vale o padrão do compose)", async () => {
+    mockEnv();
+    render(<ProjectEnvCard project={PROJECT} />);
+    await screen.findByDisplayValue("POSTGRES_PASSWORD");
+    fireEvent.change(screen.getByLabelText("Valor da variável 2"), { target: { value: "s3nh@" } });
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await waitFor(() =>
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        "/api/projects/p1/env",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            vars: [
+              { key: "POSTGRES_USER", value: "casa" },
+              { key: "POSTGRES_PASSWORD", value: "s3nh@" },
+            ],
+          }),
+        }),
+      ),
+    );
+  });
+});
+
+/**
+ * Pedido do dono do produto (30/09/2026): subir o .env que já existe em vez de
+ * digitar dezenas de variáveis. O arquivo é lido no navegador; nada é gravado
+ * antes de "Salvar variáveis".
+ */
+describe("ProjectEnvCard — importar arquivo .env", () => {
+  function importar(conteudo: string, nome = ".env") {
+    const input = screen.getByTestId("env-file-input");
+    fireEvent.change(input, { target: { files: [new File([conteudo], nome, { type: "text/plain" })] } });
+  }
+
+  it("preenche a lista com nomes e valores (atualiza as que já existem), sem salvar sozinho", async () => {
+    apiFetchMock.mockImplementation(async () => ({ vars: [{ key: "NODE_ENV", value: "development" }] }));
+    render(<ProjectEnvCard project={PROJECT} />);
+    await screen.findByDisplayValue("NODE_ENV");
+    importar("# local\nNODE_ENV=production\nDATABASE_URL='postgres://u:p@db/x'\nlinha ruim\n");
+    expect(await screen.findByDisplayValue("DATABASE_URL")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("production")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("postgres://u:p@db/x")).toBeInTheDocument();
+    const aviso = screen.getByTestId("env-import-result");
+    expect(aviso).toHaveTextContent(/2 variáveis lidas/);
+    expect(aviso).toHaveTextContent(/1 atualizada/);
+    expect(aviso).toHaveTextContent(/1 nova/);
+    expect(aviso).toHaveTextContent(/linha 4 ignorada/i);
+    expect(aviso).toHaveTextContent(/Salvar variáveis/);
+    expect(apiFetchMock.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toBe(false);
+  });
+
+  it("recusa arquivo grande demais (não é um .env)", async () => {
+    apiFetchMock.mockImplementation(async () => ({ vars: [] }));
+    render(<ProjectEnvCard project={PROJECT} />);
+    await screen.findByText(/Nenhuma variável ainda/);
+    importar("A=".padEnd(300 * 1024, "x"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/grande demais/);
   });
 });
 
