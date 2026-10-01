@@ -283,3 +283,41 @@ export const PAAS_CADDY_CONTAINER = "paas-caddy";
 
 /** Limite do log de deploy persistido por job (mantém o início e o fim). */
 export const DEPLOY_LOG_MAX_CHARS = 400_000;
+
+/** Variável que o compose interpola (`${VAR}`), vista pela seção Variáveis. */
+export interface ComposeVariable {
+  name: string;
+  /** `${VAR:?…}` / `${VAR?…}`: o compose recusa subir sem ela. */
+  required: boolean;
+  /** `${VAR:-padrão}` / `${VAR-padrão}`. */
+  defaultValue: string | null;
+  /**
+   * Obrigatória só quando estas estão vazias: ela está no padrão delas
+   * (`${EMAIL_DE:-${MAIL_FROM:?…}}` → MAIL_FROM, alternativa EMAIL_DE).
+   */
+  alternatives?: string[];
+}
+
+/**
+ * Obrigatórias do compose ainda sem valor. `defined` = nomes com valor nas
+ * Variáveis do projeto MAIS os que o painel fornece (ex.: e-mail do projeto).
+ */
+export function missingComposeVariables(variables: ComposeVariable[], defined: ReadonlySet<string>): string[] {
+  return variables
+    .filter((v) => v.required && !defined.has(v.name) && !(v.alternatives ?? []).some((a) => defined.has(a)))
+    .map((v) => v.name);
+}
+
+/** Estado do certificado HTTPS de um domínio do projeto (Visão geral). */
+export interface DomainHttpsStatus {
+  domain: string;
+  ok: boolean;
+  /** Quem emitiu (ex.: "Let's Encrypt"). */
+  issuer: string | null;
+  validTo: string | null;
+  error: string | null;
+}
+
+export interface ProjectHttpsResponse {
+  domains: DomainHttpsStatus[];
+}

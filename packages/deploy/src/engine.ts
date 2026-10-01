@@ -19,6 +19,7 @@ import {
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
   PAAS_NETWORK,
+  type DomainHttpsStatus,
   type GuardrailReport,
   type Project,
   PAAS_CADDY_CONTAINER,
@@ -28,8 +29,9 @@ import { CaddyManager, projectDomain, type CaddyTarget, type PanelSite } from ".
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir } from "./static-site.js";
+import { certificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
-import { writeProjectDotenv } from "./project-dotenv.js";
+import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
 import { runGuardrails } from "./rules.js";
 
 export interface EngineContext extends IngestContext {
@@ -411,8 +413,24 @@ export class DeployEngine {
     if (env.note) onLog(`Aviso: ${env.note}\n`);
 
     const args = this.composeArgs(project, src);
-    const code = await runStream("docker", [...args, "up", "-d", "--build"], onLog);
-    if (code !== 0) throw new Error(`docker compose up falhou (exit ${code}).`);
+    let output = "";
+    const code = await runStream("docker", [...args, "up", "-d", "--build"], (chunk) => {
+      output += chunk;
+      onLog(chunk);
+    });
+    if (code !== 0) {
+      const missing = missingFromComposeOutput(output);
+      if (missing.length > 0) {
+        throw new Error(
+          `faltam variáveis obrigatórias do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto` +
+            (missing.some((m) => m.startsWith("SMTP_") || m === "MAIL_FROM")
+              ? " (SMTP_* e MAIL_FROM o painel preenche sozinho se você ativar a seção E-mail do projeto)"
+              : "") +
+            " e faça o deploy de novo.",
+        );
+      }
+      throw new Error(`docker compose up falhou (exit ${code}).`);
+    }
 
     return `${project.slug}:${proxyPort}`;
   }
@@ -560,6 +578,23 @@ export class DeployEngine {
       onLog(`${ids.length} container(es) removido(s).\n`);
     }
     await run("docker", ["image", "rm", "-f", `paas-${project.slug}:latest`]);
+  }
+
+  /**
+   * Certificado HTTPS de cada domínio do projeto, conferido pelo proxy central
+   * (o mesmo caminho do health check). Domínio .localhost não tem HTTPS.
+   */
+  async httpsStatus(project: Project): Promise<DomainHttpsStatus[]> {
+    const target = healthCheckTarget(this.ctx);
+    if (this.ctx.panelContainer) await this.caddy.connectToNetwork(this.ctx.panelContainer);
+    const domains = [project.domain, ...(project.aliases ?? [])];
+    return Promise.all(
+      domains.map(async (domain) =>
+        domain.endsWith(".localhost") || domain === "localhost"
+          ? { domain, ok: false, issuer: null, validTo: null, error: "domínio local (.localhost): sem HTTPS" }
+          : { domain, ...(await certificateStatus({ host: target.host, port: target.httpsPort, servername: domain })) },
+      ),
+    );
   }
 
   // -------------------------------------------------------------------------

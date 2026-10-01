@@ -5,6 +5,8 @@ export interface HttpError extends Error {
   code: string;
   /** Payload extra (ex.: relatório de guardrails no erro guardrail_blocked). */
   report?: GuardrailReport;
+  /** Variáveis obrigatórias sem valor (erro missing_env). */
+  missing?: string[];
 }
 
 export function httpError(statusCode: number, code: string, message: string): HttpError {

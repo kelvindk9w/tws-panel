@@ -8,6 +8,9 @@ export interface PasswordInputProps extends Omit<InputProps, "type"> {
   revealLabel?: string;
   /** Classes do contêiner (ex.: "min-w-0 flex-1" numa linha flexível). */
   containerClassName?: string;
+  /** Controle de fora (ex.: "Mostrar valores" de uma lista); sem ele, o olho decide sozinho. */
+  visible?: boolean;
+  onVisibleChange?: (visible: boolean) => void;
 }
 
 /**
@@ -18,8 +21,16 @@ export interface PasswordInputProps extends Omit<InputProps, "type"> {
  * é type="button" para nunca enviar o formulário.
  */
 const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
-  ({ className, containerClassName, revealLabel = "senha", disabled, ...props }, ref) => {
-    const [visible, setVisible] = React.useState(false);
+  (
+    { className, containerClassName, revealLabel = "senha", disabled, visible: visibleProp, onVisibleChange, ...props },
+    ref,
+  ) => {
+    const [visibleState, setVisibleState] = React.useState(false);
+    const visible = visibleProp ?? visibleState;
+    const setVisible = (v: boolean) => {
+      if (visibleProp === undefined) setVisibleState(v);
+      onVisibleChange?.(v);
+    };
     const label = `${visible ? "Ocultar" : "Mostrar"} ${revealLabel}`;
     return (
       <div className={cn("relative w-full", containerClassName)}>
@@ -36,7 +47,7 @@ const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
           aria-pressed={visible}
           title={label}
           disabled={disabled}
-          onClick={() => setVisible((v) => !v)}
+          onClick={() => setVisible(!visible)}
           className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
         >
           {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}

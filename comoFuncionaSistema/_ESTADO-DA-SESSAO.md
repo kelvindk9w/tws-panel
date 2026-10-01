@@ -141,6 +141,12 @@ pendente e por quê — informação que não está no código nem no git log.
   compose (sem compose.paas.*) e bloqueavam o cassino pelo compose.prod.yaml. Lista única em
   `packages/deploy/src/compose-files.ts`; os guardrails recebem o arquivo da detecção do projeto;
   a Visão geral mostra o compose em uso.
+- **01/10 — deploy do cassino falhou por variáveis:** o deploy rodava com 8 obrigatórias sem valor.
+  Agora é recusado antes (422 missing_env com a lista), conta o e-mail do projeto como fornecedor
+  de SMTP_*/MAIL_FROM e entende `${A:-${B:?}}`. Variáveis: mostrar/ocultar todas, copiar, apagar
+  todas, lista com rolagem e rodapé fixo. Visão geral nova (status, deploy em andamento com log,
+  domínios com certificado, e-mail, containers, código); Deploys = histórico + detalhe em janela;
+  botões com cor. Projeto `~/projects/social` criado (pesquisa e rascunhos de posts; fora deste repo).
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

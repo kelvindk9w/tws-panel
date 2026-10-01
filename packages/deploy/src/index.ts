@@ -15,4 +15,5 @@ export {
   type LogFn,
 } from "./engine.js";
 export { run, runStream, type ExecResult } from "./exec.js";
-export { composeVariables, writeProjectDotenv, type ComposeVariable } from "./project-dotenv.js";
+export { composeVariables, missingFromComposeOutput, writeProjectDotenv, type ComposeVariable } from "./project-dotenv.js";
+export { certificateStatus, type CertificateStatus } from "./tls-status.js";

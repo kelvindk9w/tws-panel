@@ -140,6 +140,7 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
     message: e.message ?? "Erro interno.",
     // relatório de guardrails quando o deploy é bloqueado (Fase 4)
     ...(e.report ? { report: e.report } : {}),
+    ...(e.missing ? { missing: e.missing } : {}),
   });
 }
 
@@ -225,11 +226,12 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      const [vars, compose] = await Promise.all([
+      const [vars, compose, provided] = await Promise.all([
         service.getEnv(request.params.id),
         service.composeVariablesFor(request.params.id),
+        service.providedEnvKeys(request.params.id),
       ]);
-      return reply.send({ vars, compose });
+      return reply.send({ vars, compose, provided });
     } catch (err) {
       return sendError(reply, err);
     }
@@ -282,6 +284,15 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ visibility });
     },
   );
+
+  // Visão geral: o certificado HTTPS de cada domínio está válido? (quem emitiu, até quando)
+  app.get<{ Params: { id: string } }>("/api/projects/:id/https", { schema: projectIdParamsSchema }, async (request, reply) => {
+    try {
+      return reply.send({ domains: await service.httpsStatus(request.params.id) });
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
 
   // Domínios do projeto: o principal + quantos adicionais o operador quiser.
   // Publicado, a mudança vale na hora (Caddy recarregado pelo serviço).

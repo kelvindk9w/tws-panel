@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { composeVariables, writeProjectDotenv } from "../src/project-dotenv.js";
+import { composeVariables, missingFromComposeOutput, writeProjectDotenv } from "../src/project-dotenv.js";
 
 let root: string;
 let src: string;
@@ -106,5 +106,49 @@ describe("composeVariables — o que o compose espera", () => {
       { name: "SMTP_HOST", required: false, defaultValue: "mailpit" },
     ]);
     expect(vars.usesEnvFile).toBe(true);
+  });
+});
+
+/**
+ * Validação real (cassino, 01/10/2026): `${EMAIL_DE:-${MAIL_FROM:?…}}` — o
+ * MAIL_FROM só é exigido se EMAIL_DE estiver vazia. A leitura antiga parava
+ * no primeiro "}" e não via o MAIL_FROM: o deploy falhava sem aviso prévio.
+ */
+describe("composeVariables — variável dentro do padrão de outra", () => {
+  it("obrigatória aninhada vale só se a de fora estiver vazia (alternatives)", () => {
+    const vars = composeVariables(`services:
+  wallet:
+    environment:
+      EMAIL_DE: \${EMAIL_DE:-\${MAIL_FROM:?defina EMAIL_DE nas Variaveis}}
+      SMTP_PORTA: \${SMTP_PORTA:-\${SMTP_PORT:-587}}
+      KYC: \${KYC_MODO:?defina KYC_MODO no .env (demonstracao ou producao)}
+`);
+    expect(vars.variables).toEqual([
+      { name: "EMAIL_DE", required: false, defaultValue: "${MAIL_FROM:?defina EMAIL_DE nas Variaveis}" },
+      { name: "KYC_MODO", required: true, defaultValue: null },
+      { name: "MAIL_FROM", required: true, defaultValue: null, alternatives: ["EMAIL_DE"] },
+      { name: "SMTP_PORT", required: false, defaultValue: "587" },
+      { name: "SMTP_PORTA", required: false, defaultValue: "${SMTP_PORT:-587}" },
+    ]);
+  });
+
+  it("usada também fora do padrão: vira obrigatória de verdade (sem alternativa)", () => {
+    const vars = composeVariables("a: ${A:-${B:?x}}\nb: ${B:?y}\n");
+    expect(vars.variables.find((v) => v.name === "B")).toEqual({ name: "B", required: true, defaultValue: null });
+  });
+});
+
+describe("missingFromComposeOutput — o que faltou, lido do erro do compose", () => {
+  it("extrai os nomes das linhas 'required variable X is missing a value', sem repetir", () => {
+    const out = [
+      "error while interpolating services.caddy.environment.SITE_HOST: required variable SITE_HOST is missing a value: defina SITE_HOST no .env",
+      "error while interpolating services.wallet.environment.EMAIL_DE: required variable MAIL_FROM is missing a value: defina EMAIL_DE",
+      "error while interpolating services.x.environment.SITE_HOST: required variable SITE_HOST is missing a value: defina",
+    ].join("\n");
+    expect(missingFromComposeOutput(out)).toEqual(["SITE_HOST", "MAIL_FROM"]);
+  });
+
+  it("nada a extrair: lista vazia", () => {
+    expect(missingFromComposeOutput("port is already allocated")).toEqual([]);
   });
 });

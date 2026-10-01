@@ -19,6 +19,7 @@ import {
   type DeployJob,
   type DetectResult,
   type DockerContainerInfo,
+  type DomainHttpsStatus,
   type GitReadCredential,
   type GuardrailReport,
   type Project,
@@ -26,6 +27,7 @@ import {
   type ProjectStatus,
   type SetProjectCredentialRequest,
   type UpdateProjectRequest,
+  missingComposeVariables,
 } from "@paas/core";
 import {
   DeployEngine,
@@ -264,6 +266,32 @@ export class DeployService {
     } catch {
       return null;
     }
+  }
+
+  /** Certificado HTTPS de cada domínio do projeto (Visão geral). */
+  async httpsStatus(id: string): Promise<DomainHttpsStatus[]> {
+    const project = await this.requireProject(id);
+    return this.engine.httpsStatus(project);
+  }
+
+  /** Variáveis que o painel fornece ao projeto sozinho (hoje: as do e-mail, se ativo). */
+  async providedEnvKeys(id: string): Promise<string[]> {
+    const project = await this.requireProject(id);
+    return Object.keys((await this.mailEnv?.(project)) ?? {}).sort();
+  }
+
+  /**
+   * Obrigatórias do compose ainda sem valor — nem nas Variáveis do projeto nem
+   * fornecidas pelo painel. Vazio quando não é compose ou o código não está aqui.
+   */
+  async missingEnvFor(id: string): Promise<string[]> {
+    const compose = await this.composeVariablesFor(id);
+    if (!compose) return [];
+    const defined = new Set([
+      ...(await this.env.get(id)).filter((v) => v.value !== "").map((v) => v.key),
+      ...(await this.providedEnvKeys(id)),
+    ]);
+    return missingComposeVariables(compose.variables, defined);
   }
 
   async setEnv(id: string, vars: EnvVar[]): Promise<EnvVar[]> {
@@ -604,6 +632,20 @@ export class DeployService {
         "unknown_type",
         "Tipo de projeto desconhecido. Rode a detecção e ajuste a configuração antes de deployar.",
       );
+    }
+
+    // Obrigatórias do compose sem valor: o `up` falharia — avisa antes, com a
+    // lista (validação real: o cassino morria no compose com 8 faltando).
+    const missing = await this.missingEnvFor(project.id);
+    if (missing.length > 0) {
+      const err = httpError(
+        422,
+        "missing_env",
+        `Faltam ${missing.length} variável(is) obrigatória(s) do compose: ${missing.join(", ")}. ` +
+          "Preencha na seção Variáveis do projeto e faça o deploy de novo.",
+      );
+      err.missing = missing;
+      throw err;
     }
 
     // Fase 4: guardrails de deploy. Findings "block" exigem override explícito

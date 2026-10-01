@@ -13,6 +13,12 @@ const buttonVariants = cva(
         outline: "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
         secondary: "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
+        // Ações com cor fixa, para reconhecer só de olhar (página do projeto):
+        // iniciar = verde, parar = vermelho, abrir = azul, deploy = violeta.
+        success: "bg-emerald-600 text-white shadow-sm hover:bg-emerald-500",
+        danger: "bg-red-600 text-white shadow-sm hover:bg-red-500",
+        info: "bg-sky-600 text-white shadow-sm hover:bg-sky-500",
+        deploy: "bg-violet-600 text-white shadow-sm hover:bg-violet-500",
       },
       size: {
         default: "h-9 px-4 py-2",
