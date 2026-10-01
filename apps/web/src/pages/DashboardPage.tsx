@@ -9,6 +9,7 @@ import type {
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
+import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -144,6 +145,7 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      <OnboardingChecklist variant="dashboard" />
       <TwoFactorNudge />
       <div className="flex items-center justify-between">
         <div>

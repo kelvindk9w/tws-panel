@@ -1,9 +1,9 @@
 {
   "modulo": "configuracoes",
   "titulo": "Configurações",
-  "resumo": "Área /settings do painel, com menu próprio e um endereço por seção: Perfil (/settings/profile), Segurança (/settings/security), Aparência (/settings/appearance) e Notificações (/settings/notifications). /settings abre o Perfil. Pedido do dono do produto em 30/09/2026: centralizar as opções da conta num lugar só, com URL própria para cada uma.",
+  "resumo": "Área /settings do painel, com menu próprio e um endereço por seção: Perfil (/settings/profile), Segurança (/settings/security), Aparência (/settings/appearance) Notificações (/settings/notifications), Integrações (/settings/integrations) e Primeiros passos (/settings/onboarding). /settings abre o Perfil. Pedido do dono do produto em 30/09/2026: centralizar as opções da conta num lugar só, com URL própria para cada uma.",
   "pontoDeEntrada": {
-    "api": "PUT /api/settings/preferences, PUT /api/settings/profile",
+    "api": "PUT /api/settings/preferences, PUT /api/settings/profile, GET /api/onboarding",
     "web": "/settings/*"
   },
   "comoFunciona": [
@@ -17,7 +17,8 @@
     "Segurança: troca de senha (ChangePasswordForm) e verificação em duas etapas (TwoFactorPanel) na própria página — as janelas que abriam pelo menu do usuário deixaram de existir. O menu do usuário e o aviso do Dashboard levam a /settings/security (#two-factor rola até o card).",
     "Notificações: só o que existe — alertas aparecem dentro do painel (badge de Alertas) e a frequência da verificação automática (mesma API de /api/security/monitor/config, 1 a 168 h). A tela diz que aviso fora do painel (e-mail ou outro canal) ainda não existe; o canal é decisão pendente do dono do produto.",
     "Menu do usuário: Configurações, Trocar senha, Verificação em duas etapas e Sair. No topo, em tela de celular, mostra só o ícone (o nome empurrava a página para o lado).",
-    "Integrações (/settings/integrations): conta do GitHub conectada com um token SOMENTE LEITURA (services/github-integration.ts). O token é conferido em GET https://api.github.com/user; token clássico com permissão de escrita (x-oauth-scopes com repo, public_repo, workflow, write:*, admin:*, delete_repo) é recusado (github_token_can_write). Guardado no cofre cifrado (credential-vault, chave 'integration:github'; username = login). Rotas: GET/PUT/DELETE /api/integrations/github e GET /api/integrations/github/repos (até 500, mais recentes primeiro). Auditoria: integration.github_connected / _disconnected (nunca o token). No Novo Projeto, 'Escolher dos meus repositórios' preenche URL e branch padrão; o clone de repositório do github.com usa o token do projeto e, sem ele, o da conta (DeployService.credentialFor). Clicar-e-autorizar (sem copiar token) exigiria registrar um GitHub App da TWS — decisão/ação do dono do produto."
+    "Integrações (/settings/integrations): conta do GitHub conectada com um token SOMENTE LEITURA (services/github-integration.ts). O token é conferido em GET https://api.github.com/user; token clássico com permissão de escrita (x-oauth-scopes com repo, public_repo, workflow, write:*, admin:*, delete_repo) é recusado (github_token_can_write). Guardado no cofre cifrado (credential-vault, chave 'integration:github'; username = login). Rotas: GET/PUT/DELETE /api/integrations/github e GET /api/integrations/github/repos (até 500, mais recentes primeiro). Auditoria: integration.github_connected / _disconnected (nunca o token). No Novo Projeto, 'Escolher dos meus repositórios' preenche URL e branch padrão; o clone de repositório do github.com usa o token do projeto e, sem ele, o da conta (DeployService.credentialFor). Clicar-e-autorizar (sem copiar token) exigiria registrar um GitHub App da TWS — decisão/ação do dono do produto.",
+    "Primeiros passos (/settings/onboarding) e Dashboard: roteiro \"Deixe o painel pronto\" (proteções da VPS, 2FA, domínio do painel — em breve, e-mail do servidor — opcional, notificações — em breve). Status calculado do estado real em GET /api/onboarding; 'Não vou usar' e 'roteiro iniciado' ficam em StoredUser.onboarding (data/users.json). No Dashboard: aberto até a pessoa começar, depois compacto (só o próximo passo + janela com todos); some quando tudo está resolvido. Detalhes em configuracoes/roteiro-primeiros-passos.json."
   ],
   "testes": [
     "apps/server/tests/settings-preferences.test.ts",
@@ -29,7 +30,20 @@
     "apps/server/tests/github-integration.test.ts",
     "apps/server/tests/routes-integrations.test.ts",
     "apps/server/tests/deploy-github-credential.test.ts",
-    "apps/web/tests/github-integration-ui.test.tsx"
+    "apps/web/tests/github-integration-ui.test.tsx",
+    "packages/core/tests/onboarding.test.ts",
+    "apps/server/tests/onboarding.test.ts",
+    "apps/server/tests/routes-onboarding.test.ts",
+    "apps/web/tests/onboarding-checklist.test.tsx"
   ],
-  "proximos": "Próximas seções combinadas: configurações do painel e dos projetos."
+  "proximos": "Próximas seções combinadas: configurações do painel e dos projetos.",
+  "endpoints": [
+    {
+      "id": "roteiro-primeiros-passos",
+      "metodo": "GET/POST/PUT",
+      "url": "/api/onboarding, /api/onboarding/start, /api/onboarding/steps/:id",
+      "resumo": "Roteiro 'Deixe o painel pronto': status real de cada passo e progresso da conta.",
+      "arquivo": "roteiro-primeiros-passos.json"
+    }
+  ]
 }

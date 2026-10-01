@@ -1,0 +1,109 @@
+{
+  "id": "roteiro-primeiros-passos",
+  "modulo": "configuracoes",
+  "metodo": "GET/POST/PUT",
+  "url": "/api/onboarding, /api/onboarding/start, /api/onboarding/steps/:id",
+  "resumo": "Roteiro \"Deixe o painel pronto\" no Dashboard: lista o que falta configurar depois da instalação (proteções da VPS, verificação em duas etapas, domínio do painel, e-mail do servidor, notificações), com o status de cada passo calculado do estado REAL do painel. Também fica em Configurações → Primeiros passos (/settings/onboarding).",
+  "porQue": "Pedido do dono do produto em 01/10/2026: depois da instalação o painel não dizia o que faltava; ele só descobriu que precisava configurar o e-mail do servidor por acaso, ao criar um projeto.",
+  "arquivoFonte": "apps/server/src/routes/onboarding.ts, apps/server/src/services/onboarding.ts, apps/server/src/services/onboarding-sources.ts, packages/core/src/onboarding.ts, apps/web/src/components/onboarding/OnboardingChecklist.tsx, apps/web/src/components/onboarding/steps-content.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). Conta da sessão que não existe mais → 401 e a sessão é apagada."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      { "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "só passos opcionais: email | notifications (enum no schema)", "descricao": "Passo de PUT /api/onboarding/steps/:id." }
+    ],
+    "query": [],
+    "body": [
+      { "nome": "skipped", "tipo": "boolean", "obrigatorio": true, "regras": "additionalProperties false", "descricao": "PUT /api/onboarding/steps/:id — true = \"Não vou usar\"; false = desfazer." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "As três rotas devolvem o roteiro inteiro, já com a escolha aplicada.",
+      "corpo": {
+        "steps": "OnboardingStep[] — { id, status: done|in_progress|pending|skipped|soon|unknown, optional, detail }, na ordem ONBOARDING_STEP_IDS",
+        "started": "boolean — a pessoa já começou o roteiro",
+        "complete": "boolean — nada mais pede ação (passos 'em breve' não seguram)",
+        "projectsDir": "string — pasta dos projetos na VPS (informativa)"
+      },
+      "exemplo": {
+        "steps": [
+          { "id": "hardening", "status": "in_progress", "optional": false, "detail": "6 de 8 fases resolvidas · nota do Lynis 76 · falta: Firewall (UFW), Endurecimento adicional." },
+          { "id": "two-factor", "status": "pending", "optional": false, "detail": "Desligada: o painel está na internet e protegido só pela senha." },
+          { "id": "panel-domain", "status": "soon", "optional": false, "detail": "Hoje o painel abre em https://203-0-113-10.sslip.io — o endereço atual tem o IP da VPS no nome." },
+          { "id": "email", "status": "pending", "optional": true, "detail": "Servidor de e-mail não iniciado e nenhum domínio de e-mail cadastrado." },
+          { "id": "notifications", "status": "soon", "optional": true, "detail": "Hoje os alertas aparecem só dentro do painel: com ele fechado, você não fica sabendo." }
+        ],
+        "started": false,
+        "complete": false,
+        "projectsDir": "/opt/tws-projects"
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "validation (FST_ERR_VALIDATION)", "quando": "PUT em passo obrigatório/inexistente, skipped não booleano ou campo a mais.", "mensagem": "Mensagem do Ajv pelo error handler global." },
+    { "status": 401, "codigo": "unauthorized", "quando": "Sem sessão, ou a conta da sessão não existe mais.", "mensagem": "Sessão inválida ou expirada." }
+  ],
+  "comoCadaStatusECalculado": {
+    "hardening": "services/onboarding.ts:hardeningState. Lê data/security-last-scan.json e data/security-history.json (loadLastSecurityReport / loadSecurityHistory, exportados de security-service.ts; NUNCA dispara varredura). Uma fase está resolvida se foi aplicada de verdade com sucesso (job dryRun=false, status success — conta mesmo com checagem ainda reprovada, caso Contabo) ou se o plano da última varredura (buildSecurityPlan) não aponta checagem corrigível reprovada nela. Sem varredura e sem fase aplicada → pending. Todas resolvidas → done; algumas → in_progress; nenhuma → pending. A frase traz 'X de 8 fases resolvidas', a nota (Lynis ou interna) e as fases que faltam.",
+    "two-factor": "twoFactorState: StoredUser.twoFactor da conta da sessão existe → done; senão pending.",
+    "panel-domain": "panelDomainState(config.panelDomain): domínio próprio (não *.sslip.io) em PAAS_PANEL_DOMAIN → done; *.sslip.io ou acesso por túnel (vazio) → soon, explicando que o endereço atual tem o IP da VPS no nome.",
+    "email": "emailState com os fatos de onboarding-sources.ts:mailFactsSource — uma instância NOVA de MailService por consulta (lê data/mail/mail.json na hora; só consulta o Docker se o servidor já foi criado, igual a GET /api/mail/status). Nada criado → pending; domínio sem servidor, servidor parado, ligado sem domínio ou sem nenhum domínio com DNS verificado (lastVerify ok === total) → in_progress; não deu para saber se está ligado → unknown; ligado com ao menos um domínio com DNS certo → done. Opcional: 'Não vou usar' vira skipped, mas e-mail configurado de verdade (done) vence o skipped.",
+    "notifications": "notificationsState: sempre soon (aviso fora do painel ainda não existe). Opcional."
+  },
+  "fluxo": [
+    "1. app.ts registra o plugin com createOnboardingChecks({ config, userStore, emailFacts: mailFactsSource(config) }) — uma conferência por passo.",
+    "2. GET: buildOnboardingResponse roda as cinco conferências em paralelo; uma que lança vira 'unknown' ('Não foi possível conferir agora') sem derrubar as outras.",
+    "3. Aplica as escolhas da conta (StoredUser.onboarding em data/users.json: { startedAt, skipped[] }): skipped só em passo opcional que não esteja done.",
+    "4. complete = isOnboardingComplete (core): todos done/skipped/soon.",
+    "5. POST /start grava startedAt (uma vez). PUT /steps/:id grava/remove o passo em skipped, também marca startedAt e audita settings.onboarding_step_skipped / _unskipped. A gravação usa UserStore.updateOnboarding, que recebe o estado atual DENTRO da fila de gravações."
+  ],
+  "interface": [
+    "OnboardingChecklist variant=dashboard (topo do Dashboard): roteiro não começado → ABERTO com os cinco passos, botão 'Recolher' e a pasta dos projetos; começado → COMPACTO (só o próximo passo, progresso 'X de Y resolvidos · N em breve no painel' e 'Ver todos os passos' numa janela, Esc/fora fecha); complete → não aparece. Falha ou resposta fora do formato → não aparece.",
+    "OnboardingChecklist variant=settings (/settings/onboarding): sempre a lista inteira, com 'Tudo pronto' quando complete; falha → mensagem de erro.",
+    "Cada passo: ícone de status, badge (feito, em andamento, a fazer, não vou usar, em breve, não confirmado), frase do servidor, 'Como fazer' (O que é, Por que importa, Passo a passo, observação e botão azul para a tela certa; passos em breve dizem 'Em breve no painel'), 'Não vou usar'/'Desfazer' nos opcionais.",
+    "Começar o roteiro: 'Recolher', clicar no botão de um passo ou 'Não vou usar'. 'Conferir de novo' busca o status outra vez (a pessoa faz o passo na outra tela e volta).",
+    "O aviso de 2FA do Dashboard (TwoFactorNudge) continua, abaixo do roteiro."
+  ],
+  "comoPlugarUmPassoEmBreve": [
+    "Servidor: em createOnboardingChecks (apps/server/src/services/onboarding.ts) troque a conferência do passo ('panel-domain' ou 'notifications') por uma que leia o estado novo e devolva done/in_progress/pending. Ex.: domínio do painel → done quando o domínio próprio estiver ativo; notificações → done quando houver ao menos um canal (Telegram ou e-mail) confirmado.",
+    "Se o estado novo morar num serviço criado dentro de outro plugin de rotas (encapsulado pelo Fastify), passe uma função de leitura pelas opções do plugin, como mailFactsSource faz para o e-mail.",
+    "Interface: em apps/web/src/components/onboarding/steps-content.ts troque o passo a passo e ponha a 'action' { label, to } com a tela nova. Nada mais muda: a ordem, o modo compacto e o 'Não vou usar' já tratam o passo.",
+    "Quando o passo deixar de ser 'soon', ele volta a contar como pendente e o cartão reaparece no Dashboard de quem já tinha concluído — de propósito: é a forma de avisar que há algo novo para configurar."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "UserStore.updateOnboarding / findById", "arquivo": "apps/server/src/services/user-store.ts", "papel": "Progresso da conta (startedAt, skipped) e 2FA." },
+    { "tipo": "servico", "nome": "loadLastSecurityReport / loadSecurityHistory", "arquivo": "apps/server/src/services/security-service.ts", "papel": "Estado de segurança persistido em data/." },
+    { "tipo": "pacote", "nome": "buildSecurityPlan", "arquivo": "packages/security/src/planner.ts", "papel": "Fases com checagem corrigível reprovada." },
+    { "tipo": "servico", "nome": "MailService.status / listDomains", "arquivo": "apps/server/src/services/mail-service.ts", "papel": "Servidor e domínios de e-mail (instância nova, só leitura)." },
+    { "tipo": "pacote", "nome": "ONBOARDING_STEP_IDS, nextOnboardingStep, isOnboardingComplete", "arquivo": "packages/core/src/onboarding.ts", "papel": "Ordem dos passos e regras compartilhadas entre servidor e interface." }
+  ],
+  "efeitosColaterais": [
+    "GET: nenhum (só leitura; o passo de e-mail pode rodar docker inspect/exec como GET /api/mail/status).",
+    "POST /start e PUT /steps/:id: gravam StoredUser.onboarding em data/users.json.",
+    "PUT /steps/:id: auditoria settings.onboarding_step_skipped / settings.onboarding_step_unskipped."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/onboarding/OnboardingChecklist.tsx",
+    "apps/web/src/pages/DashboardPage.tsx",
+    "apps/web/src/pages/settings/OnboardingSettings.tsx"
+  ],
+  "testes": [
+    "packages/core/tests/onboarding.test.ts",
+    "apps/server/tests/onboarding.test.ts",
+    "apps/server/tests/routes-onboarding.test.ts",
+    "apps/web/tests/onboarding-checklist.test.tsx",
+    "apps/web/tests/dashboard-page.test.tsx"
+  ],
+  "observacoes": [
+    "Fora do roteiro por decisão do dono do produto: backups.",
+    "A pasta dos projetos (config.projectsDir, PAAS_PROJECTS_DIR; /opt/tws-projects pelo instalador) é só informativa.",
+    "Achado lateral, não corrigido aqui: routes/monitoring.ts usa app.mailService no gancho de blacklist, mas o MailService é decorado dentro do plugin de e-mail (encapsulado) — no plugin de monitoramento app.mailService é undefined, então o check de blacklist do monitoramento agendado não roda. Conferido com um plugin irmão no Fastify 5 (decoração não visível)."
+  ]
+}

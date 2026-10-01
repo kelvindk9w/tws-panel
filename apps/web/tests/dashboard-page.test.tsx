@@ -117,3 +117,33 @@ describe("DashboardPage — polling com pausa em aba oculta", () => {
     }
   });
 });
+
+describe("DashboardPage — roteiro de primeiros passos", () => {
+  it("primeiro acesso: o roteiro aparece aberto no topo do Dashboard", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.includes("/api/onboarding")) {
+          return jsonResponse({
+            steps: [
+              { id: "hardening", status: "done", optional: false, detail: "Todas as 8 fases resolvidas." },
+              { id: "two-factor", status: "pending", optional: false, detail: "Desligada." },
+              { id: "panel-domain", status: "soon", optional: false, detail: "Em breve." },
+              { id: "email", status: "pending", optional: true, detail: "Não iniciado." },
+              { id: "notifications", status: "soon", optional: true, detail: "Em breve." },
+            ],
+            started: false,
+            complete: false,
+            projectsDir: "/opt/tws-projects",
+          });
+        }
+        if (u.includes("/api/projects")) return jsonResponse({ projects: [] });
+        return jsonResponse({ containers: [] });
+      }),
+    );
+    renderDashboard();
+    expect(await screen.findByText("Deixe o painel pronto")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^onboarding-step-/)).toHaveLength(5);
+  });
+});

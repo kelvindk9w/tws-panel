@@ -205,6 +205,12 @@ pendente e por quê — informação que não está no código nem no git log.
   botões com cor. Projeto `~/projects/social` criado (pesquisa e rascunhos de posts; fora deste repo).
 - **01/10 — domínio antes do primeiro deploy:** página "Site em manutenção" (com HTTPS) para
   projeto nunca publicado; site já publicado não some mais do proxy quando um redeploy falha.
+- **01/10 — roteiro "Deixe o painel pronto" (branch `feat/primeiros-passos`):** cartão no
+  Dashboard com proteções da VPS, 2FA, domínio do painel (em breve), e-mail do servidor
+  (opcional) e notificações (em breve), cada um com status calculado do estado real
+  (`GET /api/onboarding`); aberto no primeiro acesso, compacto depois, some quando tudo está
+  resolvido e continua em Configurações → Primeiros passos. Ver
+  `configuracoes/roteiro-primeiros-passos.json` e `_RELATORIO-primeiros-passos.md`.
 - **ABERTO (01/10) — e-mail do painel com app que confere certificado:** o Stalwart usa certificado
   autoassinado e o projeto conecta em `paas-stalwart:587`; apps com nodemailer padrão (o cassino:
   requireTLS, verificação ligada) recusam. Caminho proposto: Caddy emite o certificado de

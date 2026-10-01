@@ -27,6 +27,9 @@ import authRoutes from "./routes/auth.js";
 import setupRoutes from "./routes/setup.js";
 import healthRoutes from "./routes/health.js";
 import settingsRoutes from "./routes/settings.js";
+import onboardingRoutes from "./routes/onboarding.js";
+import { createOnboardingChecks } from "./services/onboarding.js";
+import { mailFactsSource } from "./services/onboarding-sources.js";
 import serverFolderRoutes from "./routes/server-folders.js";
 import integrationRoutes from "./routes/integrations.js";
 import setupRestartRoutes from "./routes/setup-restart.js";
@@ -187,6 +190,11 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(settingsRoutes);
+  // Roteiro "Deixe o painel pronto" (Dashboard): status de cada passo lido do
+  // estado real (segurança em data/, 2FA da conta, domínio do painel, e-mail).
+  await app.register(onboardingRoutes, {
+    checks: createOnboardingChecks({ config, userStore, emailFacts: mailFactsSource(config) }),
+  });
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(setupRestartRoutes);
