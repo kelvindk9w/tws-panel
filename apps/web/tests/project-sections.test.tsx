@@ -336,7 +336,7 @@ describe("ProjectEnvCard — o que o painel fornece e variável alternativa", ()
  * deploy e já conseguir conferir. O cartão diz o que aparece no endereço.
  */
 describe("ProjectDomainsCard — antes do primeiro deploy", () => {
-  it("explica que o domínio já responde com a página 'Site em configuração'", () => {
+  it("explica que o domínio já responde com a página 'Site em manutenção'", () => {
     render(
       <ProjectDomainsCard
         project={{ ...PROJECT, lastDeployStatus: null } as unknown as Project}
@@ -344,7 +344,7 @@ describe("ProjectDomainsCard — antes do primeiro deploy", () => {
         onChanged={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Site em configuração/)).toBeInTheDocument();
+    expect(screen.getByText(/Site em manutenção/)).toBeInTheDocument();
     expect(screen.queryByText(/a partir do primeiro deploy/)).not.toBeInTheDocument();
   });
 });

@@ -43,7 +43,7 @@ export interface CaddyTarget {
   websocket: boolean;
   /**
    * false = o projeto nunca foi publicado: sem resposta do app, a página diz
-   * "site em configuração" (o domínio já responde com HTTPS). Ausente/true =
+   * "site em manutenção" (o domínio já responde com HTTPS). Ausente/true =
    * já esteve no ar: "temporariamente indisponível".
    */
   published?: boolean;
@@ -280,46 +280,94 @@ export function isSafeCaddyTarget(target: CaddyTarget): boolean {
   return SAFE_DOMAIN_RE.test(target.domain) && SAFE_UPSTREAM_RE.test(target.upstream);
 }
 
+/** Ícones (traço, 24×24) das páginas servidas pelo Caddy. */
+const PAGE_ICONS = {
+  // chave de boca: manutenção
+  wrench:
+    '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  // setas girando: reiniciando
+  refresh:
+    '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>' +
+    '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  // globo: domínio
+  globe:
+    '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+} as const;
+
 /**
- * Páginas de erro servidas pelo próprio Caddy. O visitante é o cliente do dono
- * do site: texto neutro, sem propaganda — a TWS aparece só numa linha discreta
- * no rodapé. Sem chaves nem crases no HTML: o Caddy leria `{...}` como
- * variável e a crase como fim do texto (estilos vão em atributos style).
+ * Páginas servidas pelo próprio Caddy (o visitante é o cliente do dono do
+ * site): mensagem amigável, sem jargão, e um selo discreto "Gerenciado com
+ * TWS Panel". Sem chaves nem crases no HTML: o Caddy leria `{...}` como
+ * variável e a crase como fim do texto — por isso todo estilo vai em
+ * atributos style (sem bloco <style>). `refresh`: a página se recarrega a
+ * cada 60 s, e o site aparece sozinho quando volta.
  */
-function errorPage(title: string, message: string): string {
-  const box =
-    "font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px;margin:15vh auto;" +
-    "padding:0 24px;color:#1f2937;line-height:1.6";
+function sitePage(opts: {
+  title: string;
+  message: string;
+  hint: string;
+  icon: keyof typeof PAGE_ICONS;
+  refresh: boolean;
+}): string {
+  const font = "font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
   return [
     "<!doctype html>",
     '<html lang="pt-BR"><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="robots" content="noindex">',
-    `<title>${title}</title></head>`,
-    `<body style="margin:0;background:#f9fafb"><main style="${box}">`,
-    `<h1 style="font-size:22px;margin:0 0 12px">${title}</h1>`,
-    `<p style="margin:0 0 32px;color:#4b5563">${message}</p>`,
-    '<p style="margin:0;font-size:12px;color:#9ca3af">Servidor gerenciado com TWS Panel</p>',
+    opts.refresh ? '<meta http-equiv="refresh" content="60">' : "",
+    `<title>${opts.title}</title></head>`,
+    `<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;` +
+      `background:linear-gradient(160deg,#eef2ff 0%,#f8fafc 55%,#f5f3ff 100%);${font};color:#0f172a">`,
+    '<main style="box-sizing:border-box;width:100%;max-width:480px;margin:24px;padding:40px 32px;' +
+      'background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;' +
+      'box-shadow:0 20px 50px -20px rgba(79,70,229,0.25);text-align:center">',
+    '<div style="width:64px;height:64px;margin:0 auto 20px;border-radius:50%;background:#eef2ff;' +
+      'display:flex;align-items:center;justify-content:center">',
+    '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" ' +
+      `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PAGE_ICONS[opts.icon]}</svg>`,
+    "</div>",
+    `<h1 style="font-size:24px;line-height:1.3;margin:0 0 12px;font-weight:700">${opts.title}</h1>`,
+    `<p style="margin:0 0 8px;font-size:16px;line-height:1.6;color:#475569">${opts.message}</p>`,
+    `<p style="margin:0 0 28px;font-size:13px;line-height:1.5;color:#94a3b8">${opts.hint}</p>`,
+    '<a href="https://github.com/kelvindk9w/tws-panel" target="_blank" rel="noopener noreferrer" ' +
+      'style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;' +
+      'background:#f1f5f9;color:#64748b;font-size:12px;text-decoration:none">',
+    '<span style="width:6px;height:6px;border-radius:50%;background:#4f46e5;display:inline-block"></span>',
+    "Gerenciado com TWS Panel</a>",
     "</main></body></html>",
   ].join("");
 }
 
-export const PROJECT_DOWN_PAGE = errorPage(
-  "Site temporariamente indisponível",
-  "Este site está passando por uma manutenção ou reiniciando. Tente de novo em alguns minutos.",
-);
+/** Projeto que já esteve no ar e não responde (parado, reiniciando, redeploy). */
+export const PROJECT_DOWN_PAGE = sitePage({
+  title: "Site temporariamente indisponível",
+  message: "Este site está passando por uma manutenção rápida ou reiniciando. Volte em alguns minutos.",
+  hint: "Esta página se atualiza sozinha e o site aparece assim que voltar.",
+  icon: "refresh",
+  refresh: true,
+});
 
-export const PROJECT_PENDING_PAGE = errorPage(
-  "Site em configuração",
-  "Este domínio já está conectado a este servidor, com conexão segura (HTTPS). " +
-    "O site ainda está sendo configurado e aparece aqui assim que for publicado.",
-);
+/**
+ * Projeto ainda não publicado (domínio já conectado). "Manutenção", e não
+ * "em configuração": pode ser um site existente sendo migrado para cá, e o
+ * visitante não precisa saber disso (pedido do dono do produto).
+ */
+export const PROJECT_PENDING_PAGE = sitePage({
+  title: "Site em manutenção",
+  message: "Estamos preparando novidades. Este site está em manutenção e volta em breve.",
+  hint: "Esta página se atualiza sozinha e o site aparece assim que estiver pronto.",
+  icon: "wrench",
+  refresh: true,
+});
 
-export const UNKNOWN_DOMAIN_PAGE = errorPage(
-  "Domínio ainda não configurado",
-  "Este domínio aponta para este servidor, mas ainda não está configurado em nenhum site. " +
-    "Se você administra o servidor, conecte o domínio a um projeto no painel (Projeto → Domínios).",
-);
+export const UNKNOWN_DOMAIN_PAGE = sitePage({
+  title: "Domínio ainda não configurado",
+  message: "Este domínio aponta para este servidor, mas ainda não está configurado em nenhum site.",
+  hint: "Se você administra o servidor, conecte o domínio a um projeto no painel (Projeto → Domínios).",
+  icon: "globe",
+  refresh: false,
+});
 
 /**
  * Renderiza o Caddyfile completo (um bloco por alvo).
@@ -361,7 +409,7 @@ export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite): s
     }
     if (target !== panelTarget) {
       // sem resposta do app: página neutra em vez do erro cru do proxy —
-      // "em configuração" se nunca foi publicado, senão "indisponível"
+      // "em manutenção" se nunca foi publicado, senão "indisponível"
       const page = target.published === false ? PROJECT_PENDING_PAGE : PROJECT_DOWN_PAGE;
       lines.push(
         "\thandle_errors 502 503 504 {",
