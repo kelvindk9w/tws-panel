@@ -20,18 +20,16 @@ pendente e por quê — informação que não está no código nem no git log.
   - **#59:** deploy barrado por variável faltando; Visão geral, Deploys e Variáveis redesenhados; botões com cor.
   - **#60:** todo projeto entra no proxy; site publicado não some quando um redeploy falha.
   - **#61:** páginas "Site em manutenção" e "temporariamente indisponível" com visual amigável, recarregando a cada 60 s.
-- **Em andamento, em dois branches feitos por subagentes em worktrees isolados (sem PR):**
-  - `feat/email-tls`: certificado de verdade para `mail.<domínio>` no servidor de e-mail; o projeto conecta por `mail.<domínio>`; estado do certificado na página E-mail; aviso ao adicionar domínio que já tem MX em outro servidor. Relatório: `comoFuncionaSistema/_RELATORIO-email-tls.md`, dentro do branch.
-  - `feat/primeiros-passos`: roteiro "Deixe o painel pronto" no Dashboard. Relatório: `comoFuncionaSistema/_RELATORIO-primeiros-passos.md`, dentro do branch.
-  - **Para retomar:**
-    1. `git fetch` e ler os relatórios: `git show origin/<branch>:comoFuncionaSistema/_RELATORIO-....md`.
-    2. Revisar o diff de cada branch contra a `main`, rodar as suítes e conferir o visual.
-    3. Abrir um PR por branch. Os dois partem da `main` do #61; se ambos mexerem em `_ESTADO-DA-SESSAO.md`, resolver o conflito à mão.
-    4. Os worktrees ficam em `.claude/worktrees/` (ignorado pelo git). Removê-los só depois que o trabalho estiver no remoto.
+- **PR #62 (aberto, CI verde):** junta os dois branches feitos por subagentes em worktrees isolados, já revisados e testados na `dev`:
+  - `feat/primeiros-passos`: roteiro "Deixe o painel pronto" no Dashboard (`_RELATORIO-primeiros-passos.md`); o aviso de 2FA some enquanto o roteiro está na tela.
+  - `feat/email-tls`: certificado de verdade para `mail.<domínio>` (o Caddy emite e o painel copia para o Stalwart), `SMTP_HOST=mail.<domínio>`, estado do certificado e aviso de MX na página E-mail (`_RELATORIO-email-tls.md`, com o passo a passo na VPS).
+  - Mais: a porta 8080 do Stalwart passa a ser publicada só em 127.0.0.1.
+  - Os worktrees foram removidos depois do push.
+- **Falta validar na VPS:** emissão real do certificado de `mail.<domínio>`, reinício único do Stalwart, porta 25 de saída, DNS reverso e envio do cassino.
 
 ### Ordem combinada com o dono do produto
-1. **E-mail do servidor funcionando** (branch `feat/email-tls`), ANTES de voltar ao cassino.
-2. **Primeiros passos no Dashboard** (branch `feat/primeiros-passos`):
+1. **E-mail do servidor funcionando** (no PR #62; falta validar na VPS), ANTES de voltar ao cassino.
+2. **Primeiros passos no Dashboard** (no PR #62):
    - no primeiro acesso, aberto com todos os passos;
    - depois de começar, compacto, mostrando só o próximo passo, com botão para ver todos num modal;
    - cada passo com "Como fazer";
@@ -227,10 +225,9 @@ pendente e por quê — informação que não está no código nem no git log.
 - **ABERTO (01/10) — checagem de blacklist do e-mail nunca roda:** a rota do monitoramento agendado
   procura o serviço de e-mail, que não é visível para ela, e o erro some em silêncio (a checagem é
   tratada como opcional). Achado pelo subagente do roteiro de primeiros passos; não corrigido.
-- **ABERTO (01/10) — porta 8080 do Stalwart publicada em todas as interfaces:** o Docker publica
-  por cima do UFW, então a administração do servidor de e-mail fica na internet, protegida só pela
-  senha. Com a API indo por `paas-stalwart:8080` na paas-net, dá para parar de publicá-la (ou
-  limitar a 127.0.0.1). Alinhar também a Fase 03 (`--profile mail` nunca é passado pelo painel).
+- **01/10 — porta 8080 do Stalwart só em 127.0.0.1** (antes ficava na internet, porque o Docker
+  publica por cima do UFW). Vale para containers criados daqui em diante. Ainda ABERTO: alinhar a
+  Fase 03 (`--profile mail` nunca é passado pelo painel).
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

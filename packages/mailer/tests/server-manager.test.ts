@@ -107,6 +107,22 @@ describe("StalwartManager.start — criação", () => {
     expect(await readFile(path.join(dir, "stalwart", "config.toml"), "utf8")).toContain("mail.exemplo.com");
   });
 
+  /**
+   * A administração do Stalwart (8080) ficava publicada em todas as interfaces;
+   * como o Docker publica por cima do UFW, ela ficava na internet, protegida só
+   * pela senha. O painel fala com ela pela paas-net; no host, só 127.0.0.1 (túnel
+   * SSH para quem precisar da tela). As portas de e-mail continuam públicas.
+   */
+  it("administração (8080) só em 127.0.0.1; portas de e-mail públicas", async () => {
+    responder = daemon(null);
+    await manager().start();
+    const create = calls.find((a) => a[0] === "create")!;
+    const published = create.flatMap((a, i) => (create[i - 1] === "-p" ? [a] : []));
+    expect(published).toContain("127.0.0.1:8080:8080");
+    expect(published).not.toContain("8080:8080");
+    expect(published).toEqual(expect.arrayContaining(["25:25", "587:587", "465:465", "143:143", "993:993"]));
+  });
+
   it("aceita nome, rede e volume configuráveis", async () => {
     responder = daemon(null);
     await manager({ containerName: "x-stalwart", network: "x-net", dataVolume: "x_data" }).start();

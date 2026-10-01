@@ -243,8 +243,10 @@ export class StalwartManager {
       `${ports.imap}:143`,
       "-p",
       `${ports.imaps}:993`,
+      // administração só no host local: o Docker publica por cima do UFW, e
+      // o painel fala com ela pela paas-net (túnel SSH para ver a tela)
       "-p",
-      `${ports.http}:8080`,
+      `127.0.0.1:${ports.http}:8080`,
       "-v",
       `${this.opts.dataVolume ?? PAAS_STALWART_VOLUME}:${STALWART_BASE_DIR}/data`,
       "--label",

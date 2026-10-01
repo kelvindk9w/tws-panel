@@ -377,12 +377,11 @@ O painel renova o certificado sozinho. Não há nada a fazer a cada 60 dias.
 
 - **Validar na VPS** a emissão real (Let's Encrypt), o reinício único do Stalwart após a
   atualização e o envio do cassino.
-- **A porta 8080 do Stalwart (API e webadmin) é publicada no host em todas as
-  interfaces.** Isso já era assim antes desta entrega. Como as portas publicadas pelo
-  Docker passam na frente do UFW, ela fica acessível pela internet, protegida só pela
-  senha do fallback-admin. Agora que o painel em container fala com a API pela
-  `paas-net`, dá para deixar de publicar a 8080 (ou publicá-la só em `127.0.0.1`). Fica
-  como próximo passo, porque muda a criação do container e o fluxo de desenvolvimento.
+- **Resolvido depois da entrega:** a porta 8080 do Stalwart (API e webadmin) era publicada
+  em todas as interfaces e, como o Docker passa na frente do UFW, ficava na internet. Agora é
+  publicada só em `127.0.0.1` (o painel fala com a API pela `paas-net`; para ver a tela de
+  administração, túnel SSH). Vale para containers criados a partir de agora: um Stalwart já
+  criado mantém a publicação antiga até ser recriado.
 - **A Fase 03 do hardening** (UFW) só libera 25/465/587/993 com `--profile mail`, e o
   painel nunca passa essa opção. Hoje isso não bloqueia o e-mail, porque as portas
   publicadas pelo Docker passam na frente do UFW. Mesmo assim vale alinhar a fase com
