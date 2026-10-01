@@ -217,6 +217,9 @@ pendente e por quê — informação que não está no código nem no git log.
   `mail.<domínio>`, o Stalwart usa esse certificado, ganha o alias `mail.<domínio>` na paas-net e
   o painel injeta SMTP_HOST = `mail.<domínio>`. Aguardando o dono do produto decidir o caminho.
   Alerta dado: domínio de e-mail = domínio principal da empresa (MX) desviaria o e-mail dela.
+- **ABERTO (01/10) — checagem de blacklist do e-mail nunca roda:** a rota do monitoramento agendado
+  procura o serviço de e-mail, que não é visível para ela, e o erro some em silêncio (a checagem é
+  tratada como opcional). Achado pelo subagente do roteiro de primeiros passos; não corrigido.
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

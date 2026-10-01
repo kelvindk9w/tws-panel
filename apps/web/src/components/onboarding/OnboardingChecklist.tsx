@@ -234,7 +234,14 @@ function AllStepsModal({ children, onClose }: { children: ReactNode; onClose: ()
  *    pede ação. Sem resposta do servidor, não aparece.
  *  - Configurações: sempre a lista inteira, mesmo com tudo resolvido.
  */
-export function OnboardingChecklist({ variant }: { variant: "dashboard" | "settings" }) {
+export function OnboardingChecklist({
+  variant,
+  onVisibleChange,
+}: {
+  variant: "dashboard" | "settings";
+  /** Avisa se o roteiro ficou na tela (o Dashboard esconde o aviso de 2FA, que repetiria o passo 2). */
+  onVisibleChange?: (visible: boolean) => void;
+}) {
   const [data, setData] = useState<OnboardingResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -285,6 +292,12 @@ export function OnboardingChecklist({ variant }: { variant: "dashboard" | "setti
       setBusyId(null);
     }
   }
+
+  // só depois de saber (carregou ou falhou): enquanto carrega, não decide nada
+  useEffect(() => {
+    if (data === null && error === null) return;
+    onVisibleChange?.(variant === "dashboard" && data !== null && !data.complete);
+  }, [data, error, variant, onVisibleChange]);
 
   if (variant === "dashboard" && (!data || data.complete)) return null;
   if (!data) {
