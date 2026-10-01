@@ -23,7 +23,7 @@
       "exemplo": {
         "domain": "exemplo.com.br", "verifiedAt": "2026-08-24T12:00:00.000Z", "summary": { "ok": 4, "total": 6 },
         "records": [ { "id": "a", "type": "A", "name": "mail.exemplo.com.br", "expected": "203.0.113.10", "purpose": "...", "status": "found", "found": ["203.0.113.10"], "note": null } ],
-        "ptr": { "ip": "203.0.113.10", "expected": "mail.exemplo.com.br", "status": "action_required", "found": [], "ticketText": "Assunto: Solicitação de configuração de reverse DNS (PTR/rDNS)\n\nOlá,\n\nSolicito a configuração do registro de reverse DNS (PTR) do IP 203.0.113.10 para:\n\n    mail.exemplo.com.br\n\nAtualmente o IP não possui registro PTR.\npois este servidor hospeda um servidor de e-mail e o reverse DNS (FCrDNS) é\nexigido pelo Gmail, Yahoo e Microsoft para aceitar mensagens.\n\nObrigado!" },
+        "ptr": { "ip": "203.0.113.10", "expected": "mail.exemplo.com.br", "status": "generic", "found": ["vmi1234567.contaboserver.net"], "forwardConfirmed": true, "provider": { "id": "contabo", "name": "Contabo", "instructions": "Na Contabo você mesmo troca, sem chamado: no painel da Contabo (my.contabo.com), abra \"Reverse DNS Management\", edite o IP e coloque mail.exemplo.com.br." }, "ticketText": null },
         "suggestion": "Estágio de observação: SPF \"~all\" e DMARC \"p=none\"..."
       }
     }
@@ -34,22 +34,26 @@
   ],
   "fluxo": [
     "1. dnsChecklist(name): monta o checklist esperado local (mesmo helper de GET .../dns).",
-    "2. verifyDnsRecords(checklist, publicResolver()): resolver com servidores fixos 1.1.1.1/8.8.8.8 (independe do DNS local da VPS).",
+    "2. verifyDnsRecords(checklist, this.resolver()): o resolvedor injetado em MailServiceOptions.resolver (testes) ou, por padrão, publicResolver() com servidores fixos 1.1.1.1/8.8.8.8 (independe do DNS local da VPS). Antes de 01/10/2026 esta rota ignorava o resolvedor injetado.",
     "3. Para A/AAAA: resolve4/resolve6. Para MX: resolveMx, ordenado por prioridade, ponto final removido. Para TXT (SPF/DKIM/DMARC): resolveTxt — basta UM dos TXT do nome bater com o esperado (o nome pode ter outros TXT, ex.: google-site-verification).",
     "4. Comparação normalizada (trim, remove ponto final, colapsa espaços). SPF com IP certo mas mecanismo final (~all/-all) diferente vira 'mismatch' com nota explicativa específica (não falha silenciosa).",
     "5. Qualquer falha de consulta DNS (NXDOMAIN etc.) é tratada (função safe()) e vira found:[] → status 'missing', nunca derruba a rota.",
-    "6. PTR: reverse(ip); ausente → 'action_required' + ticketText pronto; presente mas diferente → 'mismatch' + ticketText citando o valor atual; igual ao esperado → 'found'.",
-    "7. domain.lastVerify = { at, ok, total } é PERSISTIDO em data/mail/mail.json (usado pelo badge agregado em MailPage).",
-    "8. Retorna summary { ok, total } = registros 'found' + (1 se PTR 'found')."
+    "6. PTR em três níveis (verifyPtr): reverse(ip) → nomes sem ponto final, em minúsculas. (a) algum nome é mail.<domínio> → 'found' (verde). (b) senão, resolve4 de cada nome; se algum volta para o mesmo IP (FCrDNS válido) → 'generic' (azul): envio liberado, Gmail/Yahoo/Microsoft aceitam, trocar o nome é opcional. (c) nome existe mas nenhum volta para o IP → 'mismatch' (amarelo). (d) sem nome reverso → 'action_required' (amarelo). forwardConfirmed = true/false nos casos (b)/(c), null nos demais.",
+    "6a. Provedor (detectPtrProvider): pelo sufixo do nome reverso — contaboserver.net (Contabo), your-server.de (Hetzner), vultrusercontent.com (Vultr). Com provedor conhecido, ptr.provider traz a instrução de onde a própria pessoa troca no painel dele e ticketText fica null. Só com provedor desconhecido (ou sem nome reverso) vem o ticketText de chamado. A DigitalOcean não é reconhecível pelo nome (o reverso segue o nome do droplet); a dica dela aparece na página junto do chamado.",
+    "7. domain.lastVerify = { at, ok, total } é PERSISTIDO em data/mail/mail.json (usado pelo badge agregado em MailPage e pelo passo 'e-mail do servidor' do roteiro de primeiros passos — onboarding-sources.ts considera o DNS ok quando ok === total).",
+    "8. Retorna summary { ok, total } = registros 'found' + (1 se PTR 'found' OU 'generic'). PTR genérico com FCrDNS válido NÃO deixa o domínio com pendências."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "MailService.verifyDomain", "arquivo": "apps/server/src/services/mail-service.ts:313", "papel": "Chama verifyDnsRecords e persiste lastVerify." },
-    { "tipo": "pacote", "nome": "verifyDnsRecords/publicResolver", "arquivo": "packages/mailer/src/dns-checklist.ts:183", "papel": "Consulta DNS real e compara com o esperado." }
+    { "tipo": "servico", "nome": "MailService.verifyDomain", "arquivo": "apps/server/src/services/mail-service.ts:662", "papel": "Chama verifyDnsRecords e persiste lastVerify." },
+    { "tipo": "pacote", "nome": "verifyDnsRecords/publicResolver", "arquivo": "packages/mailer/src/dns-checklist.ts:196", "papel": "Consulta DNS real e compara com o esperado." },
+    { "tipo": "pacote", "nome": "verifyPtr/detectPtrProvider", "arquivo": "packages/mailer/src/dns-checklist.ts:263", "papel": "PTR em três níveis e instrução por provedor (tabela PTR_PROVIDERS, dns-checklist.ts:321)." }
   ],
   "efeitosColaterais": ["Grava data/mail/mail.json (domain.lastVerify). Consultas DNS reais a 1.1.1.1/8.8.8.8."],
-  "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:217"],
-  "testes": ["packages/mailer/tests/dns-checklist.test.ts", "scripts/test-mail.mts (passo 3)"],
+  "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:322"],
+  "testes": ["packages/mailer/tests/dns-checklist.test.ts", "apps/server/tests/mail-ptr.test.ts", "apps/web/tests/mail-domain-page.test.tsx", "scripts/test-mail.mts (passo 3)"],
   "observacoes": [
+    "Motivo do PTR em três níveis (validação real, 01/10/2026): numa VPS da Contabo o IP tinha o nome reverso genérico vmiNNNNNNN.contaboserver.net, que volta para o mesmo IP. Isso já é o FCrDNS que o Gmail exige, mas o painel mostrava amarelo e mandava abrir chamado. Agora fica azul e conta como OK; o card do PTR (PtrCard, MailDomainPage.tsx:133) mostra a troca para mail.<domínio> como 'Opcional', recolhida.",
+    "Para acrescentar um provedor: um item em PTR_PROVIDERS (dns-checklist.ts) com o sufixo do nome reverso genérico e o caminho no painel dele.",
     "Não exige o servidor de e-mail (Stalwart) rodando — verifica DNS público, que existe independente do container estar de pé.",
     "MUDANÇA DE COMPORTAMENTO: :domain fora do padrão de hostname agora vira 400 invalid_request na borda, em vez de chegar ao handler e falhar em requireDomain() como 404 domain_not_found."
   ]

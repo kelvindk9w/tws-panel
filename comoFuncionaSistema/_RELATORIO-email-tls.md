@@ -336,11 +336,36 @@ minutos a algumas horas.
 
 ### Passo 5: DNS reverso (PTR), no painel do provedor da VPS
 
-O PTR não fica no Cloudflare: ele é configurado **no painel do provedor da VPS**. Na
-Contabo: *Customer Control Panel → Reverse DNS Management → editar o IP da VPS*. O
-valor é `mail.envio.suaempresa.com.br`, o mesmo hostname do registro A. Se o provedor
-não tiver essa opção, use o texto pronto de chamado que o painel mostra no card
-**Reverse DNS (PTR)**.
+O PTR é o "nome" que o IP da VPS informa a quem recebe o e-mail. Ele não fica no
+Cloudflare: é configurado **no painel do provedor da VPS**. Depois de clicar em
+**Verificar agora**, o card **Reverse DNS (PTR)** mostra uma de três cores
+(atualizado em 01/10/2026, depois da validação na VPS):
+
+- **Verde:** o nome reverso já é `mail.envio.suaempresa.com.br`. Nada a fazer.
+- **Azul:** o IP tem o nome genérico do provedor (na Contabo, algo como
+  `vmi1234567.contaboserver.net`) e esse nome aponta de volta para o mesmo IP. É isso
+  que o Gmail, o Yahoo e a Microsoft conferem: **o envio já está liberado** e o
+  domínio não fica com pendência. Trocar o nome para `mail.envio.suaempresa.com.br`
+  melhora um pouco a entrega, mas é **opcional**: o caminho aparece recolhido em
+  "Opcional: trocar o nome reverso".
+- **Amarelo:** o IP não tem nome reverso, ou o nome não aponta de volta para o IP.
+  Aí o Gmail, o Yahoo e a Microsoft podem recusar as mensagens: troque o nome.
+
+Onde trocar, quando o painel reconhece o provedor pelo nome reverso:
+
+- **Contabo** (sem chamado): no painel da Contabo (my.contabo.com), abra
+  **Reverse DNS Management**, edite o IP da VPS e coloque
+  `mail.envio.suaempresa.com.br`.
+- **Hetzner** (sem chamado): Hetzner Console → servidor → aba **Networking** → no IP,
+  opção **Reverse DNS**.
+- **Vultr** (sem chamado): painel → servidor → **Settings → IPv4** → campo
+  **Reverse DNS**.
+- **DigitalOcean**: o nome reverso segue o nome do droplet; renomeie o droplet para
+  `mail.envio.suaempresa.com.br`.
+- Outro provedor: o card mostra o texto pronto de chamado, com botão de copiar.
+
+Numa VPS de teste que você reinstala várias vezes, o azul basta: dá para seguir para o
+Passo 6 e para o e-mail de teste sem trocar nada.
 
 ### Passo 6: conferir o certificado
 
@@ -363,6 +388,13 @@ O painel renova o certificado sozinho. Não há nada a fazer a cada 60 dias.
 3. Clique em **Deploy**. O valor novo só chega ao app no deploy.
 4. Teste o envio pelo app (ex.: "esqueci a senha"). Com `requireTLS` e a verificação
    padrão, ele deve conectar sem configuração extra.
+
+### Conferir a entrega com o e-mail de teste (desde 01/10/2026)
+
+Na página do domínio (aba **Checklist DNS**), o card **Enviar e-mail de teste** manda
+uma mensagem simples de `postmaster@envio.suaempresa.com.br` para o endereço que você
+digitar e mostra o que o servidor do destinatário respondeu. O passo a passo está em
+`_RELATORIO-email-ptr-teste.md`.
 
 ### O que conferir se algo falhar
 

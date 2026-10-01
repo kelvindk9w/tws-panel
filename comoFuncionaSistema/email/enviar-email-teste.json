@@ -1,0 +1,88 @@
+{
+  "id": "enviar-email-teste",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/domains/:domain/test-email",
+  "resumo": "Envia um e-mail de teste simples de postmaster@<domínio> para UM endereço, pela submission do próprio Stalwart, e devolve o acompanhamento (estado inicial 'queued').",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:392",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP. Específico (MailService.takeTestSlot, mail-service.ts:931): no máximo 1 teste a cada 30 s e 20 por hora, por instância do painel (em memória). A tentativa conta mesmo se o envio falhar.",
+  "parametros": {
+    "path": [{ "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (MAIL_DOMAIN_SCHEMA).", "descricao": "Domínio de e-mail já cadastrado." }],
+    "query": [],
+    "body": [
+      {
+        "nome": "to",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "schema Fastify (sendTestEmailSchema, mail.ts): 3 a 254 caracteres, pattern de UM endereço (sem espaço, quebra de linha, vírgula, ponto e vírgula, <> ou aspas); additionalProperties false. O service confere de novo com isSingleEmailAddress (packages/mailer/src/smtp-send.ts) e normaliza para minúsculas.",
+        "descricao": "Endereço de destino (ex.: o Gmail da pessoa)."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 202,
+      "quando": "O Stalwart aceitou a mensagem para entrega (250 no DATA).",
+      "corpo": { "test": "MailTestStatus" },
+      "exemplo": {
+        "test": {
+          "id": "0123456789abcdef",
+          "domain": "envio.exemplo.com.br",
+          "from": "postmaster@envio.exemplo.com.br",
+          "to": "pessoa@gmail.com",
+          "sentAt": "2026-10-01T12:00:00.000Z",
+          "checkedAt": "2026-10-01T12:00:00.000Z",
+          "state": "queued",
+          "detail": null,
+          "nextRetryAt": null,
+          "confirmed": false,
+          "final": false
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema (sem 'to', mais de um endereço, quebra de linha, campo extra).", "mensagem": "Campo inválido: to." },
+    { "status": 400, "codigo": "invalid_recipient", "quando": "Endereço reprovado pelo service (defesa em profundidade).", "mensagem": "Informe um endereço de e-mail válido (um só destinatário)." },
+    { "status": 404, "codigo": "domain_not_found", "quando": "Domínio não cadastrado.", "mensagem": "Domínio {domínio} não encontrado." },
+    { "status": 409, "codigo": "test_mailbox_missing", "quando": "A caixa postmaster@<domínio> não está em data/mail/mail.json.", "mensagem": "A caixa postmaster@… não está registrada no painel, e é dela que o teste sai. …" },
+    { "status": 409, "codigo": "mail_server_stopped", "quando": "Servidor de e-mail parado.", "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar." },
+    { "status": 429, "codigo": "test_rate_limited", "quando": "Menos de 30 s desde o último teste, ou 20 testes na última hora.", "mensagem": "Aguarde N s para enviar outro e-mail de teste. | Limite de 20 testes por hora atingido. Tente de novo em N min." },
+    { "status": 502, "codigo": "test_send_failed", "quando": "Falha de conexão, tempo esgotado ou recusa do Stalwart (ex.: 535 na senha).", "mensagem": "O servidor de e-mail não aceitou o teste: …" }
+  ],
+  "fluxo": [
+    "1. requireDomain; valida e normaliza 'to'; pega a caixa postmaster@<domínio> (senha guardada em mail.json desde o cadastro do domínio).",
+    "2. requireRunning; takeTestSlot (limite de frequência).",
+    "3. id = 8 bytes aleatórios em hex; ENVID = tws-teste-<id>; Message-ID = <tws-teste-<id>@<domínio>>.",
+    "4. sendSmtpMail (packages/mailer/src/smtp-send.ts:194): TLS implícito na 465 — em container, host paas-stalwart pela paas-net; fora (desenvolvimento), 127.0.0.1 na porta publicada (mailPorts.submissions). SNI = mail.<domínio>. A verificação da cadeia fica DESLIGADA nesta conexão interna: o certificado ainda pode ser autoassinado e o teste não pode falhar por isso; o estado do certificado continua em GET /api/mail/tls.",
+    "5. Conversa SMTP: EHLO → AUTH PLAIN (postmaster@) → EHLO de novo (o Stalwart só anuncia DSN para sessão autenticada; o reset da sessão não mexe na autenticação) → MAIL FROM com RET=HDRS ENVID=<xtext> → RCPT TO com NOTIFY=SUCCESS,FAILURE,DELAY ORCPT=rfc822;<to> → DATA (cabeçalhos ASCII, assunto UTF-8 codificado, corpo text/plain em base64) → QUIT.",
+    "6. Guarda o acompanhamento em memória (Map por id, 1 hora) e devolve 202. A rota registra 'mail.test.send' na auditoria."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.sendTestEmail", "arquivo": "apps/server/src/services/mail-service.ts:786", "papel": "Valida, aplica o limite e envia." },
+    { "tipo": "pacote", "nome": "sendSmtpMail", "arquivo": "packages/mailer/src/smtp-send.ts:194", "papel": "Cliente SMTP mínimo (sem dependência nova), com pedido de aviso de entrega (DSN)." }
+  ],
+  "efeitosColaterais": [
+    "Uma mensagem real sai do servidor de e-mail da VPS para o endereço informado.",
+    "Auditoria: action 'mail.test.send', target = domínio, detail com remetente e destinatário.",
+    "O Stalwart deixa um aviso de entrega (DSN) na caixa postmaster@<domínio> quando a mensagem sai da fila (entregue ou recusada)."
+  ],
+  "chamadoPor": ["apps/web/src/components/mail/TestEmailCard.tsx:164"],
+  "testes": [
+    "apps/server/tests/routes-mail-test-email.test.ts",
+    "apps/server/tests/mail-test-email.test.ts",
+    "packages/mailer/tests/smtp-send.test.ts",
+    "apps/web/tests/test-email-card.test.tsx"
+  ],
+  "observacoes": [
+    "Pedido do dono do produto (01/10/2026): validar o e-mail numa VPS de teste que é reinstalada várias vezes, sem depender de chamado no provedor.",
+    "Por que postmaster@: o painel já guarda a senha dela (mail.json, 0600), e ela recebe o aviso de entrega. Não precisa de caixa técnica nova nem de segredo novo.",
+    "O acompanhamento fica só em memória: reiniciar o painel perde os testes em andamento (GET responde 404)."
+  ]
+}
