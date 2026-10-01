@@ -137,6 +137,10 @@ pendente e por quê — informação que não está no código nem no git log.
 - **30/09 — Variáveis:** cada variável do compose já aparece como linha para preencher
   (obrigatórias primeiro; sugerida vazia não é salva, vale o padrão). "Importar arquivo .env":
   lido no navegador (`apps/web/src/lib/dotenv.ts`), entra na lista e só é gravado ao salvar.
+- **01/10 — guardrails no compose errado:** os guardrails tinham lista própria de arquivos
+  compose (sem compose.paas.*) e bloqueavam o cassino pelo compose.prod.yaml. Lista única em
+  `packages/deploy/src/compose-files.ts`; os guardrails recebem o arquivo da detecção do projeto;
+  a Visão geral mostra o compose em uso.
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com
