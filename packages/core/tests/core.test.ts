@@ -5,6 +5,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  missingComposeVariables,
   ALERT_SEVERITIES,
   ALERT_SOURCES,
   ALERT_STATUSES,
@@ -231,5 +232,22 @@ describe("validateEmail (Configurações → Perfil)", () => {
     expect(validateEmail("x@y")).toBe(false);
     expect(validateEmail("com espaço@exemplo.com")).toBe(false);
     expect(validateEmail(`${"a".repeat(250)}@x.com`)).toBe(false);
+  });
+});
+
+describe("missingComposeVariables", () => {
+  const vars = [
+    { name: "KYC_MODO", required: true, defaultValue: null },
+    { name: "MAIL_FROM", required: true, defaultValue: null, alternatives: ["EMAIL_DE"] },
+    { name: "SMTP_HOST", required: true, defaultValue: null },
+    { name: "LOG", required: false, defaultValue: null },
+  ];
+
+  it("lista as obrigatórias sem valor", () => {
+    expect(missingComposeVariables(vars, new Set())).toEqual(["KYC_MODO", "MAIL_FROM", "SMTP_HOST"]);
+  });
+
+  it("alternativa definida satisfaz; definida pelo painel (ex.: e-mail) também", () => {
+    expect(missingComposeVariables(vars, new Set(["EMAIL_DE", "SMTP_HOST", "KYC_MODO"]))).toEqual([]);
   });
 });

@@ -64,6 +64,10 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     github: { repoVisibility: vi.fn(async () => "unknown") },
     getEnv: vi.fn(async () => [{ key: "A", value: "1" }]),
     composeVariablesFor: vi.fn(async () => null),
+    providedEnvKeys: vi.fn(async () => ["SMTP_HOST"]),
+    httpsStatus: vi.fn(async () => [
+      { domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
+    ]),
     setEnv: vi.fn(async (_id: string, vars: unknown) => vars),
     ...overrides,
   };
@@ -250,6 +254,19 @@ describe("POST /api/projects/:id/deploy", () => {
     expect(body.error).toBe("guardrail_blocked");
     expect(body.report.blockers).toBe(1);
     expect(body.report.findings[0].rule).toBe("db-port-exposed");
+  });
+
+  it("variáveis obrigatórias faltando → 422 missing_env COM a lista no corpo", async () => {
+    await build({
+      startDeploy: vi.fn(async () => {
+        const err = httpError(422, "missing_env", "Faltam 2 variáveis.");
+        err.missing = ["KYC_MODO", "PIX_CHAVE"];
+        throw err;
+      }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/projects/p1/deploy", headers: auth });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: "missing_env", missing: ["KYC_MODO", "PIX_CHAVE"] });
   });
 });
 
@@ -504,7 +521,7 @@ describe("rotas de variáveis do projeto", () => {
   it("lê e salva a lista inteira", async () => {
     await build();
     const get = await app.inject({ method: "GET", url: "/api/projects/p1/env", headers: auth });
-    expect(get.json()).toEqual({ vars: [{ key: "A", value: "1" }], compose: null });
+    expect(get.json()).toEqual({ vars: [{ key: "A", value: "1" }], compose: null, provided: ["SMTP_HOST"] });
     const vars = [{ key: "DATABASE_URL", value: "postgres://x" }];
     const put = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
     expect(put.statusCode, put.body).toBe(200);
@@ -516,5 +533,22 @@ describe("rotas de variáveis do projeto", () => {
     const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [{ key: "A" }] } });
     expect(res.statusCode).toBe(400);
     expect(service.setEnv).not.toHaveBeenCalled();
+  });
+});
+
+describe("HTTPS do projeto", () => {
+  it("GET /api/projects/:id/https devolve o estado do certificado de cada domínio", async () => {
+    await build();
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/https", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      domains: [{ domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null }],
+    });
+  });
+
+  it("exige login", async () => {
+    await build();
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/https" });
+    expect(res.statusCode).toBe(401);
   });
 });

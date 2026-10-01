@@ -233,3 +233,100 @@ describe("ProjectDomainsCard — porta por domínio (compose/Dockerfile)", () =>
     expect(screen.queryByLabelText(/Porta/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Pedidos do dono do produto (01/10/2026) para a seção Variáveis: mostrar
+ * todos os valores de uma vez, copiar um valor visível, apagar tudo para
+ * importar de novo; e reconhecer o que o painel já fornece (e-mail) e
+ * variável que só é exigida se outra estiver vazia.
+ */
+describe("ProjectEnvCard — mostrar, copiar e apagar tudo", () => {
+  const SAVED = { vars: [{ key: "API_KEY", value: "abc" }, { key: "DB_URL", value: "postgres://x" }] };
+
+  it("\"Mostrar valores\" revela todos; \"Ocultar valores\" esconde de novo", async () => {
+    apiFetchMock.mockImplementation(async () => SAVED);
+    render(<ProjectEnvCard project={PROJECT} />);
+    const v1 = (await screen.findByDisplayValue("abc")) as HTMLInputElement;
+    const v2 = screen.getByDisplayValue("postgres://x") as HTMLInputElement;
+    expect(v1.type).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
+    expect(v1.type).toBe("text");
+    expect(v2.type).toBe("text");
+    fireEvent.click(screen.getByRole("button", { name: /Ocultar valores/ }));
+    expect(v1.type).toBe("password");
+  });
+
+  it("o olho de uma linha continua valendo sozinho; valor visível ganha o botão de copiar", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    apiFetchMock.mockImplementation(async () => SAVED);
+    render(<ProjectEnvCard project={PROJECT} />);
+    await screen.findByDisplayValue("abc");
+    expect(screen.queryByRole("button", { name: /Copiar valor de API_KEY/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: /Mostrar valor/ })[0]!);
+    expect((screen.getByDisplayValue("abc") as HTMLInputElement).type).toBe("text");
+    expect((screen.getByDisplayValue("postgres://x") as HTMLInputElement).type).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: /Copiar valor de API_KEY/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("abc"));
+    expect(await screen.findByText(/copiado/i)).toBeInTheDocument();
+  });
+
+  it("\"Apagar todas\" pede confirmação, apaga no servidor e volta à lista do compose", async () => {
+    apiFetchMock.mockImplementation(async (_p: string, init?: RequestInit) =>
+      init?.method === "PUT"
+        ? { vars: [] }
+        : { ...SAVED, compose: { usesEnvFile: true, variables: [{ name: "KYC_MODO", required: true, defaultValue: null }] } },
+    );
+    render(<ProjectEnvCard project={PROJECT} />);
+    await screen.findByDisplayValue("abc");
+    fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
+    expect(apiFetchMock.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toBe(false);
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/2 variáveis salvas/);
+    fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
+    await waitFor(() =>
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        "/api/projects/p1/env",
+        expect.objectContaining({ method: "PUT", body: JSON.stringify({ vars: [] }) }),
+      ),
+    );
+    expect(screen.queryByDisplayValue("abc")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("KYC_MODO")).toBeInTheDocument();
+  });
+});
+
+describe("ProjectEnvCard — o que o painel fornece e variável alternativa", () => {
+  it("SMTP_HOST do e-mail do projeto e MAIL_FROM coberta por EMAIL_DE não contam como faltando", async () => {
+    apiFetchMock.mockImplementation(async () => ({
+      vars: [{ key: "EMAIL_DE", value: "contato@x.com" }],
+      provided: ["MAIL_FROM", "SMTP_HOST"],
+      compose: {
+        usesEnvFile: false,
+        variables: [
+          { name: "EMAIL_DE", required: false, defaultValue: "${MAIL_FROM:?x}" },
+          { name: "KYC_MODO", required: true, defaultValue: null },
+          { name: "MAIL_FROM", required: true, defaultValue: null, alternatives: ["EMAIL_DE"] },
+          { name: "SMTP_HOST", required: true, defaultValue: null },
+        ],
+      },
+    }));
+    render(<ProjectEnvCard project={PROJECT} />);
+    await screen.findByDisplayValue("SMTP_HOST");
+    expect(screen.getByTestId("env-row-SMTP_HOST")).toHaveTextContent(/fornecida pelo E-mail do projeto/);
+    expect(screen.getByTestId("env-row-MAIL_FROM")).toHaveTextContent(/fornecida pelo E-mail do projeto/);
+    expect(screen.getByTestId("env-row-EMAIL_DE")).toHaveTextContent(/se vazia, usa MAIL_FROM/);
+    expect(screen.getByTestId("compose-vars")).toHaveTextContent(/1 obrigatória\(s\) ainda sem valor/);
+  });
+
+  it("sem o e-mail: MAIL_FROM só é exigida se EMAIL_DE estiver vazia", async () => {
+    apiFetchMock.mockImplementation(async () => ({
+      vars: [],
+      compose: {
+        usesEnvFile: false,
+        variables: [{ name: "MAIL_FROM", required: true, defaultValue: null, alternatives: ["EMAIL_DE"] }],
+      },
+    }));
+    render(<ProjectEnvCard project={PROJECT} />);
+    await screen.findByDisplayValue("MAIL_FROM");
+    expect(screen.getByTestId("env-row-MAIL_FROM")).toHaveTextContent(/obrigatória se EMAIL_DE estiver vazia/);
+  });
+});

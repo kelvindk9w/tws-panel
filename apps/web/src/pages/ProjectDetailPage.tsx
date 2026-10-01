@@ -14,13 +14,16 @@ import { ApiRequestError, apiFetch } from "@/lib/api";
 import { ProjectConfigCard } from "@/components/ProjectConfigCard";
 import { ProjectDomainsCard } from "@/components/ProjectDomainsCard";
 import { ProjectEnvCard } from "@/components/ProjectEnvCard";
+import { DeployDetailModal } from "@/components/project/DeployDetailModal";
+import { DeployHistory } from "@/components/project/DeployHistory";
+import { MissingEnvModal } from "@/components/project/MissingEnvModal";
+import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertTriangle,
   ArrowLeft,
-  CheckCircle2,
   ExternalLink,
   GitBranch,
   Globe,
@@ -34,35 +37,9 @@ import {
   Square,
   Trash2,
   Variable,
-  XCircle,
 } from "lucide-react";
-import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
+import { StatusBadge } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
-
-function JobStatusBadge({ status }: { status: DeployJob["status"] }) {
-  switch (status) {
-    case "queued":
-    case "running":
-      return <Badge variant="warning">executando…</Badge>;
-    case "success":
-      return <Badge variant="success">sucesso</Badge>;
-    case "failed":
-      return <Badge variant="destructive">falhou</Badge>;
-  }
-}
-
-function StepIcon({ status }: { status: DeployJob["steps"][number]["status"] }) {
-  switch (status) {
-    case "done":
-      return <CheckCircle2 className="h-4 w-4 text-emerald-400" />;
-    case "running":
-      return <Loader2 className="h-4 w-4 animate-spin text-amber-400" />;
-    case "failed":
-      return <XCircle className="h-4 w-4 text-red-400" />;
-    case "skipped":
-      return <span className="inline-block h-4 w-4 rounded-full border border-muted" />;
-  }
-}
 
 /**
  * Card "E-mail do projeto" (Fase 3): ativa a caixa técnica <slug>@<domínio> e
@@ -313,7 +290,9 @@ export function ProjectDetailPage() {
   // ?deploy=1 (vindo do assistente): o primeiro deploy começa sozinho, uma vez
   const [searchParams, setSearchParams] = useSearchParams();
   const autoDeployDone = useRef(false);
-  const logRef = useRef<HTMLPreElement>(null);
+  // detalhe de um deploy (janela) e variáveis que faltam (deploy recusado)
+  const [openJobId, setOpenJobId] = useState<string | null>(null);
+  const [missingEnv, setMissingEnv] = useState<string[] | null>(null);
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -338,10 +317,9 @@ export function ProjectDetailPage() {
     let timer: ReturnType<typeof setTimeout>;
 
     async function tick() {
-      const latest = await refresh();
+      // o deploy mais recente, com o log (a Visão geral mostra o que acontece)
+      const current = await refresh();
       if (cancelled) return;
-      const running = jobs.find((j) => j.status === "running" || j.status === "queued");
-      const current = running ?? activeJob ?? latest;
       if (current && id) {
         try {
           const res = await apiFetch<DeployJobResponse>(`/api/projects/${id}/jobs/${current.id}`);
@@ -350,7 +328,10 @@ export function ProjectDetailPage() {
           /* job ainda não persistido */
         }
       }
-      timer = setTimeout(() => void tick(), current?.status === "running" ? 1_500 : 5_000);
+      timer = setTimeout(
+        () => void tick(),
+        current?.status === "running" || current?.status === "queued" ? 1_500 : 5_000,
+      );
     }
 
     void tick();
@@ -376,11 +357,6 @@ export function ProjectDetailPage() {
       .catch(() => setRepoVisibility("unknown"));
   }, [section, id]);
 
-  // auto-scroll do log
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [activeJob?.log]);
-
   /** Inicia o deploy; em 409 guardrail_blocked abre o modal de override. */
   async function doDeploy(override: boolean) {
     if (!id) return;
@@ -396,6 +372,9 @@ export function ProjectDetailPage() {
     } catch (err) {
       if (err instanceof ApiRequestError && err.code === "guardrail_blocked" && err.data?.report) {
         setGuardrailReport(err.data.report as GuardrailReport);
+      } else if (err instanceof ApiRequestError && err.code === "missing_env" && Array.isArray(err.data?.missing)) {
+        setGuardrailReport(null);
+        setMissingEnv(err.data.missing as string[]);
       } else {
         setError(err instanceof Error ? err.message : "Falha ao executar deploy.");
       }
@@ -472,50 +451,56 @@ export function ProjectDetailPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div className="flex min-w-0 items-center gap-3">
           <Button variant="ghost" size="icon" asChild>
             <Link to="/">
               <ArrowLeft className="h-4 w-4" />
             </Link>
           </Button>
-          <div>
-            <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+          <div className="min-w-0">
+            <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight">
               {project.name} <StatusBadge status={status} />
             </h1>
             <a
               href={url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline"
+              className="inline-flex max-w-full items-center gap-1 break-all text-sm text-muted-foreground hover:underline"
             >
-              <Globe className="h-3.5 w-3.5" /> {project.domain} <ExternalLink className="h-3 w-3" />
+              <Globe className="h-3.5 w-3.5 shrink-0" /> {project.domain} <ExternalLink className="h-3 w-3 shrink-0" />
             </a>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild size="sm" variant="outline">
+        {/* celular: duas colunas embaixo do nome; tela larga: em linha, à direita */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+          <Button asChild size="sm" variant="info">
             <a href={url} target="_blank" rel="noopener noreferrer">
               <ExternalLink className="h-4 w-4" /> Abrir site
             </a>
           </Button>
           <Button
-            variant="outline"
+            variant="danger"
             size="sm"
-            disabled={busy !== null || running || status === "created"}
+            disabled={busy !== null || running || status === "created" || status === "stopped"}
             onClick={() => void action("stop")}
           >
             <Square className="h-4 w-4" /> Parar
           </Button>
           <Button
-            variant="outline"
+            variant="success"
             size="sm"
             disabled={busy !== null || running || status === "running" || status === "created"}
             onClick={() => void action("start")}
           >
             <Play className="h-4 w-4" /> Iniciar
           </Button>
-          <Button size="sm" disabled={busy !== null || running} onClick={() => void deployWithGuardrails()}>
+          <Button
+            variant="deploy"
+            size="sm"
+            disabled={busy !== null || running}
+            onClick={() => void deployWithGuardrails()}
+          >
             {busy === "deploy" || running ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
@@ -535,6 +520,12 @@ export function ProjectDetailPage() {
           onCancel={() => setGuardrailReport(null)}
           onConfirm={() => void doDeploy(true)}
         />
+      )}
+      {missingEnv && (
+        <MissingEnvModal projectId={project.id} missing={missingEnv} onClose={() => setMissingEnv(null)} />
+      )}
+      {openJobId && (
+        <DeployDetailModal projectId={project.id} jobId={openJobId} onClose={() => setOpenJobId(null)} />
       )}
 
       <div className="flex flex-col gap-6 md:flex-row">
@@ -564,62 +555,14 @@ export function ProjectDetailPage() {
         <div className="flex min-w-0 flex-1 flex-col gap-6">
       {section === "overview" && (
         <>
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Tipo / pipeline</CardDescription>
-            <CardTitle className="text-base">
-              {project.detection ? TYPE_LABELS[project.detection.type] : "não detectado"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs text-muted-foreground">
-            ingestão: {project.ingestMode}
-            {project.branch ? ` · branch ${project.branch}` : ""}
-            {project.detection?.composeFile && (
-              <span data-testid="compose-file">
-                {" · "}arquivo <code>{project.detection.composeFile}</code>
-              </span>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Containers</CardDescription>
-            <CardTitle className="text-base">
-              {containers.filter((c) => c.state === "running").length}/{containers.length} ativos
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {containers.map((c) => (
-              <span key={c.id} className="font-mono">
-                {c.name} — {c.status}
-              </span>
-            ))}
-            {containers.length === 0 && <span>nenhum container ainda</span>}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Configuração</CardDescription>
-            <CardTitle className="text-base">
-              {url.startsWith("https://") ? "HTTPS automático" : "HTTP (desenvolvimento local)"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-            <span>
-              {url.startsWith("https://")
-                ? "certificado Let's Encrypt, renovado sozinho"
-                : "domínio .localhost, sem certificado"}
-              {project.websocket ? " · WebSocket habilitado" : ""}
-            </span>
-            <span>
-              {project.lastDeployAt
-                ? `último deploy: ${new Date(project.lastDeployAt).toLocaleString("pt-BR")}`
-                : "nenhum deploy ainda"}
-            </span>
-          </CardContent>
-        </Card>
-      </div>
+      <ProjectOverview
+        project={project}
+        status={status}
+        containers={containers}
+        jobs={jobs}
+        latestJob={activeJob && activeJob.id === jobs[0]?.id ? activeJob : null}
+        onOpenJob={setOpenJobId}
+      />
 
       {project.detection && project.detection.warnings.length > 0 && (
         <Card className="border-amber-500/40">
@@ -649,18 +592,6 @@ export function ProjectDetailPage() {
         </Card>
       )}
 
-      {jobs[0] && (
-        <Card>
-          <CardContent className="flex flex-wrap items-center gap-3 py-4 text-sm">
-            <span className="text-muted-foreground">Último deploy:</span>
-            <JobStatusBadge status={jobs[0].status} />
-            <span className="text-xs text-muted-foreground">{new Date(jobs[0].createdAt).toLocaleString("pt-BR")}</span>
-            <Link to={`/projects/${project.id}/deploys`} className="ml-auto text-xs text-sky-400 hover:underline">
-              Ver log e histórico
-            </Link>
-          </CardContent>
-        </Card>
-      )}
         </>
       )}
 
@@ -693,74 +624,7 @@ export function ProjectDetailPage() {
 
       {section === "email" && <ProjectEmailCard projectId={project.id} />}
 
-      {section === "deploys" && (
-        <>
-
-      {activeJob && (
-        <Card>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Deploy {activeJob.id.slice(0, 8)}</CardTitle>
-              <JobStatusBadge status={activeJob.status} />
-            </div>
-            <div className="flex flex-wrap gap-3 pt-1">
-              {activeJob.steps.map((step, i) => (
-                <span key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <StepIcon status={step.status} /> {step.name}
-                </span>
-              ))}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <pre
-              ref={logRef}
-              className="max-h-96 overflow-auto rounded-lg border bg-black/40 p-3 font-mono text-xs leading-relaxed text-emerald-100/90"
-            >
-              {activeJob.log || "aguardando log…"}
-            </pre>
-            {activeJob.error && (
-              <p className="pt-2 text-sm text-destructive">{activeJob.error}</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Histórico de deploys</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {jobs.length === 0 ? (
-            <p className="px-4 py-4 text-sm text-muted-foreground">Nenhum deploy ainda.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <tbody>
-                {jobs.map((job) => (
-                  <tr
-                    key={job.id}
-                    className={cn(
-                      "cursor-pointer border-b last:border-0 hover:bg-accent/50",
-                      activeJob?.id === job.id && "bg-accent/40",
-                    )}
-                    onClick={() => setActiveJob(job)}
-                  >
-                    <td className="px-4 py-2 font-mono text-xs">{job.id.slice(0, 8)}</td>
-                    <td className="px-4 py-2 text-xs text-muted-foreground">
-                      {new Date(job.createdAt).toLocaleString("pt-BR")}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      <JobStatusBadge status={job.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </CardContent>
-      </Card>
-
-        </>
-      )}
+      {section === "deploys" && <DeployHistory jobs={jobs} onOpen={setOpenJobId} />}
 
       {section === "settings" && (
         <>

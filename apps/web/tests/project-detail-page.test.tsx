@@ -3,7 +3,7 @@
  * havia botão para abrir o site, e o card dizia "HTTP padrão" com o Caddy
  * servindo HTTPS automático.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -154,5 +154,158 @@ describe("ProjectDetailPage — arquivo compose em uso", () => {
     });
     abrir();
     expect(await screen.findByTestId("compose-file")).toHaveTextContent("compose.paas.yaml");
+  });
+});
+
+const JOB_OK = {
+  id: "job-ok-1234",
+  projectId: "p1",
+  status: "success",
+  createdAt: "2026-10-01T10:00:00Z",
+  startedAt: "2026-10-01T10:00:00Z",
+  finishedAt: "2026-10-01T10:01:30Z",
+  steps: [{ name: "Ingestão", status: "done" }],
+  log: "=== Etapa 1/5 ===\nok\n",
+  error: null,
+};
+const JOB_RUNNING = {
+  ...JOB_OK,
+  id: "job-run-5678",
+  status: "running",
+  finishedAt: null,
+  steps: [{ name: "Ingestão", status: "done" }, { name: "Build", status: "running" }],
+  log: "=== Etapa 2/5 · Build ===\nlinha recente do build\n",
+};
+
+/** Mock da API com jobs, HTTPS e e-mail configuráveis. */
+function mockProject(opts: { jobs?: unknown[]; email?: unknown; https?: unknown; extra?: (p: string, i?: RequestInit) => unknown }) {
+  const base = apiFetchMock.getMockImplementation()!;
+  apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+    const extra = opts.extra?.(path, init);
+    if (extra !== undefined) return extra;
+    if (path === "/api/projects/p1/jobs") return { jobs: opts.jobs ?? [] };
+    const job = (opts.jobs ?? []).find((j) => path === `/api/projects/p1/jobs/${(j as { id: string }).id}`);
+    if (job) return { job };
+    if (path === "/api/projects/p1/https") return opts.https ?? { domains: [] };
+    if (path === "/api/projects/p1/email") {
+      return { email: opts.email ?? { enabled: false, domain: null, mailbox: null, mailFrom: null, env: {} } };
+    }
+    return base(path, init);
+  });
+}
+
+/**
+ * Validação real (cassino, 01/10/2026): o deploy rodava com variáveis
+ * obrigatórias faltando e morria no compose. Agora o servidor recusa antes
+ * (422 missing_env) e a página mostra o que falta e leva às Variáveis.
+ */
+describe("ProjectDetailPage — deploy com variáveis faltando", () => {
+  it("abre a janela com a lista, aponta o E-mail para SMTP_*/MAIL_FROM e leva às Variáveis", async () => {
+    const { ApiRequestError } = await import("@/lib/api");
+    mockProject({
+      extra: (p) => {
+        if (p === "/api/projects/p1/guardrails") return { report: null, note: null };
+        if (p === "/api/projects/p1/deploy") {
+          throw new ApiRequestError(422, "missing_env", "Faltam 3.", { missing: ["KYC_MODO", "MAIL_FROM", "SMTP_HOST"] });
+        }
+        return undefined;
+      },
+    });
+    abrir();
+    fireEvent.click(await screen.findByRole("button", { name: /^Deploy$/ }));
+    const janela = await screen.findByTestId("missing-env");
+    expect(janela).toHaveTextContent("KYC_MODO");
+    expect(janela).toHaveTextContent("SMTP_HOST");
+    expect(janela).toHaveTextContent(/E-mail do projeto/);
+    fireEvent.click(within(janela).getByRole("link", { name: /Ir para Variáveis/ }));
+    expect(await screen.findByTestId("env-list")).toBeInTheDocument();
+  });
+});
+
+/** Pedido do dono do produto: cada ação com a sua cor, para reconhecer só de olhar. */
+describe("ProjectDetailPage — cores das ações", () => {
+  it("Abrir site azul, Iniciar verde, Parar vermelho, Deploy violeta", async () => {
+    abrir();
+    expect((await screen.findByRole("link", { name: /Abrir site/ })).className).toMatch(/sky/);
+    expect(screen.getByRole("button", { name: /Iniciar/ }).className).toMatch(/emerald/);
+    expect(screen.getByRole("button", { name: /Parar/ }).className).toMatch(/red/);
+    expect(screen.getByRole("button", { name: /^Deploy$/ }).className).toMatch(/violet/);
+  });
+});
+
+/**
+ * Pedido do dono do produto: a Visão geral fala de tudo — status, domínio
+ * ativo com o HTTPS, e-mail, containers e o deploy (o que está acontecendo).
+ */
+describe("ProjectDetailPage — visão geral", () => {
+  it("domínios com o estado do certificado e o e-mail do projeto", async () => {
+    mockProject({
+      https: {
+        domains: [
+          { domain: "devlink.203-0-113-10.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
+          { domain: "devlink.tws.tec.br", ok: false, issuer: null, validTo: null, error: "unable to verify" },
+        ],
+      },
+      email: { enabled: true, domain: "tws.tec.br", mailbox: "devlink@tws.tec.br", mailFrom: "devlink@tws.tec.br", env: {} },
+      extra: (p) =>
+        p === "/api/projects/p1"
+          ? {
+              project: { ...PROJECT, aliases: ["devlink.tws.tec.br"] },
+              status: "running",
+              containers: [],
+              url: "https://devlink.203-0-113-10.sslip.io",
+              credential: { configured: false, hint: null, username: null, updatedAt: null },
+            }
+          : undefined,
+    });
+    abrir();
+    const dominios = await screen.findByTestId("overview-domains");
+    await waitFor(() => expect(dominios).toHaveTextContent(/Let's Encrypt/));
+    expect(dominios).toHaveTextContent(/30\/12\/2026/);
+    expect(within(dominios).getByTestId("https-devlink.tws.tec.br")).toHaveTextContent(/ainda sem certificado válido/);
+    expect(await screen.findByTestId("overview-email")).toHaveTextContent("devlink@tws.tec.br");
+  });
+
+  it("e-mail não ativado: diz e leva à seção E-mail", async () => {
+    mockProject({});
+    abrir();
+    const email = await screen.findByTestId("overview-email");
+    await waitFor(() => expect(email).toHaveTextContent(/não ativado/));
+    expect(within(email).getByRole("link", { name: /Ativar/ })).toHaveAttribute("href", "/projects/p1/email");
+  });
+
+  it("deploy em andamento: etapas e as últimas linhas do log na própria visão geral", async () => {
+    mockProject({ jobs: [JOB_RUNNING, JOB_OK] });
+    abrir();
+    const atual = await screen.findByTestId("overview-deploy");
+    await waitFor(() => expect(atual).toHaveTextContent(/em andamento/));
+    expect(atual).toHaveTextContent("linha recente do build");
+    expect(atual).toHaveTextContent("Build");
+  });
+
+  it("sem deploy rodando: resumo do último (status, duração) com link para os detalhes", async () => {
+    mockProject({ jobs: [JOB_OK] });
+    abrir();
+    const atual = await screen.findByTestId("overview-deploy");
+    await waitFor(() => expect(atual).toHaveTextContent(/sucesso/));
+    expect(atual).toHaveTextContent(/1min 30s/);
+    fireEvent.click(within(atual).getByRole("button", { name: /Ver detalhes/ }));
+    expect(await screen.findByTestId("deploy-detail")).toHaveTextContent("=== Etapa 1/5 ===");
+  });
+});
+
+/** Pedido do dono do produto: Deploys é o histórico; o detalhe abre numa janela. */
+describe("ProjectDetailPage — histórico de deploys", () => {
+  it("lista sem o log em cima; clicar num deploy abre o detalhe com etapas e log", async () => {
+    mockProject({ jobs: [JOB_OK] });
+    abrir("/projects/p1/deploys");
+    const linha = await screen.findByTestId("job-row-job-ok-1234");
+    expect(screen.queryByTestId("deploy-detail")).not.toBeInTheDocument();
+    expect(linha).toHaveTextContent(/1min 30s/);
+    fireEvent.click(linha);
+    const detalhe = await screen.findByTestId("deploy-detail");
+    expect(detalhe).toHaveTextContent("=== Etapa 1/5 ===");
+    fireEvent.click(within(detalhe).getByRole("button", { name: /Fechar/ }));
+    expect(screen.queryByTestId("deploy-detail")).not.toBeInTheDocument();
   });
 });

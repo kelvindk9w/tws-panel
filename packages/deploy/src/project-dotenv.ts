@@ -13,6 +13,9 @@ import { existsSync } from "node:fs";
 import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { ComposeVariable } from "@paas/core";
+
+export type { ComposeVariable };
 
 const execFileAsync = promisify(execFile);
 
@@ -84,12 +87,57 @@ export async function writeProjectDotenv(
   return { envFileArgs: [], note: null };
 }
 
-export interface ComposeVariable {
-  name: string;
-  /** `${VAR:?…}` / `${VAR?…}`: o compose recusa subir sem ela. */
-  required: boolean;
-  /** `${VAR:-padrão}` / `${VAR-padrão}`. */
-  defaultValue: string | null;
+/**
+ * Lê `${NOME…}` com chaves aninhadas: no padrão de outra variável
+ * (`${A:-${B:?…}}`) a obrigatória de dentro só vale com a de fora vazia.
+ */
+function scanVariables(text: string, found: Map<string, ComposeVariable>, outer: string[]): void {
+  let i = 0;
+  while (i < text.length) {
+    const start = text.indexOf("${", i);
+    if (start === -1) return;
+    const m = /^\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+])?/.exec(text.slice(start));
+    if (!m) {
+      i = start + 2;
+      continue;
+    }
+    // acha o "}" que fecha esta variável (contando as aninhadas)
+    let depth = 1;
+    let j = start + m[0].length;
+    while (j < text.length && depth > 0) {
+      if (text.startsWith("${", j)) {
+        depth++;
+        j += 2;
+        continue;
+      }
+      if (text[j] === "}") depth--;
+      j++;
+    }
+    const name = m[1]!;
+    const op = m[2];
+    const arg = op ? text.slice(start + m[0].length, j - 1) : null;
+    const required = Boolean(op?.includes("?"));
+    const prev = found.get(name);
+    const next: ComposeVariable = {
+      name,
+      required: required || (prev?.required ?? false),
+      defaultValue: op?.includes("-") ? (arg ?? "") : (prev?.defaultValue ?? null),
+    };
+    // alternativa só enquanto TODA ocorrência obrigatória estiver aninhada
+    const alternatives =
+      required && outer.length > 0
+        ? prev && prev.required && !prev.alternatives
+          ? undefined
+          : [...new Set([...(prev?.alternatives ?? []), ...outer])]
+        : required
+          ? undefined
+          : prev?.alternatives;
+    if (alternatives && alternatives.length > 0) next.alternatives = alternatives;
+    found.set(name, next);
+    // padrão (`:-`) pode trazer outras variáveis, valendo só com esta vazia
+    if (op?.includes("-") && arg) scanVariables(arg, found, [...outer, name]);
+    i = j;
+  }
 }
 
 /** Variáveis que o compose interpola (`${VAR}`, `$VAR`) e se ele usa `env_file: .env`. */
@@ -97,16 +145,15 @@ export function composeVariables(content: string): { variables: ComposeVariable[
   const found = new Map<string, ComposeVariable>();
   // $$ é "$" literal no compose: tira antes de procurar
   const text = content.replace(/\$\$/g, "");
-  for (const m of text.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([^}]*))?\}/g)) {
-    const [, name, op, arg] = m;
-    const prev = found.get(name!);
-    const required = Boolean(op?.includes("?")) || (prev?.required ?? false);
-    const defaultValue = op?.includes("-") ? (arg ?? "") : (prev?.defaultValue ?? null);
-    found.set(name!, { name: name!, required, defaultValue });
-  }
+  scanVariables(text, found, []);
   for (const m of text.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)) {
     if (!found.has(m[1]!)) found.set(m[1]!, { name: m[1]!, required: false, defaultValue: null });
   }
   const usesEnvFile = /env_file:\s*(?:\n\s*-\s*)?['"]?\.env['"]?/m.test(content);
   return { variables: [...found.values()].sort((a, b) => a.name.localeCompare(b.name)), usesEnvFile };
+}
+
+/** Nomes das variáveis que o `docker compose` disse faltar ("required variable X is missing a value"). */
+export function missingFromComposeOutput(output: string): string[] {
+  return [...new Set([...output.matchAll(/required variable ([A-Za-z_][A-Za-z0-9_]*) is missing a value/g)].map((m) => m[1]!))];
 }

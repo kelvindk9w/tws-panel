@@ -86,3 +86,41 @@ describe("variáveis que o compose espera", () => {
     expect(await svc.composeVariablesFor(p.id)).toBeNull();
   });
 });
+
+/**
+ * Validação real (cassino, 01/10/2026): o deploy rodava com 8 obrigatórias
+ * sem valor e morria no `docker compose up`. Agora nem começa: diz quais
+ * faltam. O que o painel fornece (e-mail do projeto) conta como preenchido.
+ */
+describe("deploy barrado antes de começar quando falta variável obrigatória", () => {
+  async function composeProject(compose: string) {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const p = await projeto();
+    const src = path.join(dataDir, "projects", p.slug, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(src, "compose.paas.yaml"), compose);
+    const proj = (await svc.getProject(p.id))!;
+    proj.detection = { type: "compose", composeFile: "compose.paas.yaml", proxyService: "web", proxyPort: 80, warnings: [], details: [] } as never;
+    return p;
+  }
+  const COMPOSE =
+    "services:\n  web:\n    image: nginx:1.27\n    environment:\n      K: ${KYC_MODO:?defina}\n      E: ${EMAIL_DE:-${MAIL_FROM:?defina}}\n      S: ${SMTP_HOST:?ative o e-mail}\n";
+
+  it("recusa com missing_env e a lista do que falta", async () => {
+    const p = await composeProject(COMPOSE);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({
+      statusCode: 422,
+      code: "missing_env",
+      missing: ["KYC_MODO", "MAIL_FROM", "SMTP_HOST"],
+    });
+  });
+
+  it("e-mail do projeto ativo conta como preenchido; o resto vem das Variáveis", async () => {
+    const p = await composeProject(COMPOSE);
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", MAIL_FROM: "no-reply@x.com" }));
+    await svc.setEnv(p.id, [{ key: "KYC_MODO", value: "demonstracao" }]);
+    expect(await svc.providedEnvKeys(p.id)).toEqual(["MAIL_FROM", "SMTP_HOST"]);
+    // (sem chamar startDeploy: ele dispararia o deploy de verdade em segundo plano)
+    expect(await svc.missingEnvFor(p.id)).toEqual([]);
+  });
+});
