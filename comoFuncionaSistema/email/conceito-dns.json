@@ -10,7 +10,7 @@
       "tipo": "A",
       "nome": "mail.<domínio>",
       "valorExemplo": "203.0.113.10",
-      "formato": "Igual a serverIp() do MailService: env PAAS_PUBLIC_IP OU a primeira interface IPv4 externa (não-loopback) da máquina do painel; fallback 127.0.0.1.",
+      "formato": "Igual a serverIp() do MailService: env PAAS_PUBLIC_IP, OU o IP do endereço <ip-com-hífens>.sslip.io do painel (PAAS_PANEL_DOMAIN), OU a primeira interface IPv4 externa (não-loopback) da máquina do painel; fallback 127.0.0.1.",
       "finalidade": "O hostname do servidor de e-mail (mail.<domínio>) precisa resolver para o IP público da VPS — é o hostname usado no HELO/banner SMTP e no certificado TLS.",
       "obrigatorio": true
     },

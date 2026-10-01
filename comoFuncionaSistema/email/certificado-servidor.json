@@ -1,0 +1,56 @@
+{
+  "id": "certificado-servidor",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/tls",
+  "resumo": "Estado do certificado TLS de cada hostname do servidor de e-mail (mail.<domínio>): válido, com emissor e validade, ou pendente, com o que falta. Antes de conferir, instala no Stalwart o que o Caddy já tiver emitido.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre que o serviço responde (inclusive servidor parado ou nunca iniciado: serverRunning false). Lista vazia de hosts = nenhum domínio cadastrado e sem PAAS_MAIL_HOSTNAME.",
+      "corpo": { "checkedAt": "ISO", "serverRunning": "boolean", "syncError": "string|null", "hosts": "MailTlsHostStatus[] { host, ok, issuer, validTo, error, issued, dns: { status: ok|missing|cloudflare|other_ip, resolved, expectedIp }, hint }" },
+      "exemplo": {
+        "checkedAt": "2026-10-01T20:00:00.000Z",
+        "serverRunning": true,
+        "syncError": null,
+        "hosts": [
+          { "host": "mail.exemplo.com.br", "ok": true, "issuer": "Let's Encrypt", "validTo": "2026-12-30T12:00:00.000Z", "error": null, "issued": true, "dns": { "status": "ok", "resolved": ["203.0.113.10"], "expectedIp": "203.0.113.10" }, "hint": null },
+          { "host": "mail.outro.com.br", "ok": false, "issuer": null, "validTo": null, "error": "self-signed certificate", "issued": false, "dns": { "status": "missing", "resolved": [], "expectedIp": "203.0.113.10" }, "hint": "Falta o registro A de mail.outro.com.br apontando para 203.0.113.10. Na Cloudflare, deixe a nuvem CINZA (\"Somente DNS\"): com a nuvem laranja o certificado não é emitido e o e-mail não chega à VPS." }
+        ]
+      }
+    }
+  ],
+  "erros": [
+    { "status": 500, "codigo": "internal_error", "quando": "Erro inesperado fora da sincronização (a falha da sincronização em si NÃO vira erro: vai para syncError).", "mensagem": "mensagem originada do erro." }
+  ],
+  "fluxo": [
+    "1. MailService.tlsStatus(): syncTls() em voo único (chamadas simultâneas compartilham a mesma) — lê os certificados no Caddy (readCaddyCertificate) e, se mudou algo, instala no Stalwart (recarga ou reinício; ver email/index.json). Falha → syncError.",
+    "2. Para cada host de e-mail, em paralelo: conferência TLS como um app faz (certificateStatus de packages/deploy/src/tls-status.ts, cadeia e nome validados, SNI = host) — com o painel em container, conecta em <host>:465 pela paas-net (o alias do Stalwart, mesmo caminho do projeto); fora de container, 127.0.0.1:<porta SMTPS publicada>. Servidor parado: não conecta.",
+    "3. Consulta o registro A do host nos resolvers públicos e classifica: ok (tem o IP da VPS), missing, cloudflare (todos os IPs são da Cloudflare — nuvem laranja; isCloudflareIp de routes/domains.ts) ou other_ip.",
+    "4. hint (pt-BR) quando não é válido: servidor parado → iniciar; não emitido + DNS ausente → criar o A com a nuvem CINZA; nuvem laranja → trocar para cinza; outro IP → qual trocar; DNS certo e não emitido → aguardar a emissão e conferir as portas 80/443; emitido mas ainda não apresentado → o painel instala em instantes."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.tlsStatus / syncTls", "arquivo": "apps/server/src/services/mail-service.ts", "papel": "Sincroniza o certificado e monta o estado." },
+    { "tipo": "pacote", "nome": "readCaddyCertificate / validateCertificatePair", "arquivo": "packages/mailer/src/tls-certificates.ts", "papel": "Lê o par no volume do Caddy (docker exec) e confere nome, validade e chave." },
+    { "tipo": "pacote", "nome": "StalwartManager.applyTls", "arquivo": "packages/mailer/src/server.ts", "papel": "Entrega certificado + config ao container, ajusta aliases, recarrega (/api/reload/certificate) ou reinicia." },
+    { "tipo": "pacote", "nome": "certificateStatus", "arquivo": "packages/deploy/src/tls-status.ts", "papel": "Conferência TLS com validação de cadeia e nome." }
+  ],
+  "efeitosColaterais": [
+    "Pode gravar certificado/config no container paas-stalwart e recarregá-lo ou reiniciá-lo (só quando o certificado mudou).",
+    "Grava data/mail/mail.json (campo tls) quando instala algo."
+  ],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx (card 'Certificado do servidor de e-mail', ao abrir a página e no botão 'Conferir de novo')"],
+  "testes": ["apps/server/tests/mail-tls.test.ts", "apps/server/tests/routes-mail-tls.test.ts", "apps/web/tests/mail-page.test.tsx"],
+  "observacoes": [
+    "A emissão de verdade (Let's Encrypt) só acontece na VPS, com o registro A público e as portas 80/443 abertas. Localmente o caminho inteiro (Caddy → painel → Stalwart → nodemailer) foi validado com a CA local do Caddy — ver _RELATORIO-email-tls.md.",
+    "issuer vem da organização (O) do emissor, ou do nome (CN) quando não há organização."
+  ]
+}

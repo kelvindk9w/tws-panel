@@ -22,7 +22,7 @@
       "status": 200,
       "quando": "Habilitado com sucesso (ou reafirmado, se já estava habilitado no mesmo domínio).",
       "corpo": { "email": "ProjectEmailConfig" },
-      "exemplo": { "email": { "enabled": true, "domain": "exemplo.com.br", "mailbox": "minha-loja@exemplo.com.br", "mailFrom": "minha-loja@exemplo.com.br", "env": { "SMTP_HOST": "paas-stalwart", "SMTP_PORT": "587", "SMTP_USER": "minha-loja@exemplo.com.br", "SMTP_PASS": "••••••••••••", "MAIL_FROM": "minha-loja@exemplo.com.br" } } }
+      "exemplo": { "email": { "enabled": true, "domain": "exemplo.com.br", "mailbox": "minha-loja@exemplo.com.br", "mailFrom": "minha-loja@exemplo.com.br", "env": { "SMTP_HOST": "mail.exemplo.com.br", "SMTP_PORT": "587", "SMTP_USER": "minha-loja@exemplo.com.br", "SMTP_PASS": "••••••••••••", "MAIL_FROM": "minha-loja@exemplo.com.br" } } }
     }
   ],
   "erros": [
