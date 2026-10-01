@@ -113,13 +113,46 @@ export interface DnsRecordCheck {
   note: string | null;
 }
 
+/**
+ * Estado do DNS reverso (PTR) do IP da VPS, em três níveis:
+ *  - found: o nome reverso é mail.<domínio> (o ideal);
+ *  - generic: o IP tem um nome reverso genérico do provedor (ex.:
+ *    vmi123.contaboserver.net) e esse nome volta para o mesmo IP. É o que o
+ *    Gmail, o Yahoo e a Microsoft exigem (FCrDNS): o envio está liberado.
+ *    Trocar para mail.<domínio> é opcional (melhora um pouco a reputação);
+ *  - mismatch: o IP tem nome reverso, mas ele não volta para o IP (FCrDNS
+ *    falha) — os grandes provedores podem recusar as mensagens;
+ *  - action_required: o IP não tem nome reverso nenhum.
+ */
+export type PtrCheckStatus = DnsCheckStatus | "generic";
+
+/** Provedor da VPS reconhecido pelo nome reverso atual, com o caminho para trocá-lo. */
+export interface PtrProvider {
+  /** Identificador estável (ex.: "contabo", "hetzner", "vultr"). */
+  id: string;
+  /** Nome para a pessoa (ex.: "Contabo"). */
+  name: string;
+  /** Onde clicar para trocar o nome reverso para mail.<domínio> (pt-BR). */
+  instructions: string;
+}
+
 export interface PtrCheck {
   ip: string;
   /** Hostname esperado no reverse DNS. */
   expected: string;
-  status: DnsCheckStatus;
+  status: PtrCheckStatus;
   found: string[];
-  /** Texto pronto para abrir chamado no provedor da VPS (quando ausente). */
+  /**
+   * Algum nome reverso encontrado volta (registro A) para o mesmo IP —
+   * FCrDNS válido. null = ainda não verificado ou não há nome reverso.
+   */
+  forwardConfirmed?: boolean | null;
+  /** Provedor reconhecido pelo nome reverso atual (null = desconhecido). */
+  provider?: PtrProvider | null;
+  /**
+   * Texto pronto para abrir chamado no provedor da VPS. Só vem quando o
+   * provedor é desconhecido e o nome reverso ainda não é mail.<domínio>.
+   */
   ticketText: string | null;
 }
 

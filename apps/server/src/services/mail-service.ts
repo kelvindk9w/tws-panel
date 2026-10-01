@@ -619,7 +619,8 @@ export class MailService {
 
   async verifyDomain(name: string): Promise<DnsVerifyResponse> {
     const checklist = await this.dnsChecklist(name);
-    const result = await verifyDnsRecords(checklist);
+    // O resolver injetado (testes) vale também aqui; o padrão segue sendo o público.
+    const result = await verifyDnsRecords(checklist, this.resolver());
     const domain = this.requireDomain(name);
     domain.lastVerify = {
       at: new Date().toISOString(),

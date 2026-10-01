@@ -32,6 +32,8 @@ export {
   verifyDnsRecords,
   publicResolver,
   ptrTicketText,
+  ptrIsOk,
+  detectPtrProvider,
   spfValue,
   dmarcValue,
   stageSuggestion,

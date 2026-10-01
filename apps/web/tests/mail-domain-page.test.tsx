@@ -46,12 +46,12 @@ const CHECKLIST: DnsChecklistResponse = {
   suggestion: "Endureça para p=quarantine.",
 };
 
-function mockApi(): void {
+function mockApi(checklist: DnsChecklistResponse = CHECKLIST): void {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const body = url.endsWith("/mailboxes") ? { mailboxes: [] } : CHECKLIST;
+      const body = url.endsWith("/mailboxes") ? { mailboxes: [] } : checklist;
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -117,6 +117,63 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
 
     // verify retorna o mesmo checklist: 1 registro found de 4 + PTR não resolvido = 1/5
     expect(await screen.findByText("1/5 OK")).toBeInTheDocument();
+  });
+
+  it("PTR genérico com FCrDNS válido (azul): envio liberado, troca opcional com o caminho da Contabo, sem chamado", async () => {
+    mockApi({
+      ...CHECKLIST,
+      records: [record("a", "found", { type: "A", name: "mail.exemplo.com.br", expected: "203.0.113.10" })],
+      ptr: {
+        ip: "203.0.113.10",
+        expected: "mail.exemplo.com.br",
+        status: "generic",
+        found: ["vmi1234567.contaboserver.net"],
+        forwardConfirmed: true,
+        provider: {
+          id: "contabo",
+          name: "Contabo",
+          instructions: "Na Contabo você mesmo troca, sem chamado: no painel da Contabo (my.contabo.com)…",
+        },
+        ticketText: null,
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText(/Envio liberado/)).toBeInTheDocument();
+    expect(screen.getByText(/Gmail, Yahoo e Microsoft aceitam/)).toBeInTheDocument();
+    expect(screen.getByText(/vmi1234567\.contaboserver\.net/)).toBeInTheDocument();
+    // não é o aviso amarelo, nem o chamado
+    expect(screen.queryByText(/podem recusar/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Copiar texto do chamado/)).not.toBeInTheDocument();
+    // instrução recolhida, marcada como opcional
+    const summary = screen.getByText(/Opcional: trocar o nome reverso/);
+    await user.click(summary);
+    expect(screen.getByText(/my\.contabo\.com/)).toBeVisible();
+
+    // conta como OK na contagem
+    await user.click(screen.getByRole("button", { name: /verificar agora/i }));
+    expect(await screen.findByText("2/2 OK")).toBeInTheDocument();
+  });
+
+  it("PTR que não volta para o IP (amarelo) na Contabo: aviso de recusa e o caminho no painel, sem chamado", async () => {
+    mockApi({
+      ...CHECKLIST,
+      ptr: {
+        ip: "203.0.113.10",
+        expected: "mail.exemplo.com.br",
+        status: "mismatch",
+        found: ["vmi1234567.contaboserver.net"],
+        forwardConfirmed: false,
+        provider: { id: "contabo", name: "Contabo", instructions: "Na Contabo você mesmo troca (my.contabo.com)." },
+        ticketText: null,
+      },
+    });
+    renderPage();
+    expect(await screen.findByText(/podem recusar/)).toBeInTheDocument();
+    expect(screen.getByText(/não volta para o IP/)).toBeInTheDocument();
+    expect(screen.getByText(/my\.contabo\.com/)).toBeInTheDocument();
+    expect(screen.queryByText(/Copiar texto do chamado/)).not.toBeInTheDocument();
   });
 
   it("erro ao carregar → mensagem em vez da tabela", async () => {
