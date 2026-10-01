@@ -7,6 +7,8 @@ export interface HttpError extends Error {
   report?: GuardrailReport;
   /** Variáveis obrigatórias sem valor (erro missing_env). */
   missing?: string[];
+  /** Campos extras devolvidos no corpo do erro (ex.: existingMail no domain_receives_mail). */
+  details?: Record<string, unknown>;
 }
 
 export function httpError(statusCode: number, code: string, message: string): HttpError {

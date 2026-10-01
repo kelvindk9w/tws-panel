@@ -211,15 +211,26 @@ pendente e por quê — informação que não está no código nem no git log.
   (`GET /api/onboarding`); aberto no primeiro acesso, compacto depois, some quando tudo está
   resolvido e continua em Configurações → Primeiros passos. Ver
   `configuracoes/roteiro-primeiros-passos.json` e `_RELATORIO-primeiros-passos.md`.
-- **ABERTO (01/10) — e-mail do painel com app que confere certificado:** o Stalwart usa certificado
-  autoassinado e o projeto conecta em `paas-stalwart:587`; apps com nodemailer padrão (o cassino:
-  requireTLS, verificação ligada) recusam. Caminho proposto: Caddy emite o certificado de
-  `mail.<domínio>`, o Stalwart usa esse certificado, ganha o alias `mail.<domínio>` na paas-net e
-  o painel injeta SMTP_HOST = `mail.<domínio>`. Aguardando o dono do produto decidir o caminho.
-  Alerta dado: domínio de e-mail = domínio principal da empresa (MX) desviaria o e-mail dela.
+- **IMPLEMENTADO (01/10, branch `feat/email-tls`) — e-mail do painel com app que confere
+  certificado:** o Caddy emite o certificado de `mail.<domínio>` (bloco com página simples), o painel
+  copia o par para o Stalwart e o renova (recarga sem reinício; reinício só quando aparece um nome
+  novo), o Stalwart ganha o alias `mail.<domínio>` na paas-net e o painel injeta
+  SMTP_HOST=`mail.<domínio>` (vale no próximo deploy). Página E-mail mostra o certificado (válido ou
+  o que falta). Cadastro de domínio que já recebe e-mail em outro servidor exige confirmação e
+  sugere `envio.<domínio>`. Validado localmente com Caddy e Stalwart reais (CA local do Caddy no
+  lugar do Let's Encrypt) e nodemailer com requireTLS. **Falta validar na VPS** (ACME real,
+  porta 25, PTR) — passo a passo em `_RELATORIO-email-tls.md`.
+  Lição: o reload do Stalwart v0.11.8 (`/api/reload` e `/api/reload/certificate`) NÃO relê o
+  `config.toml` local — só os arquivos das seções que já existiam; seção nova exige reinício.
+  Lição 2: com o painel em container, `127.0.0.1:8080` nunca foi o Stalwart (era o próprio
+  painel); a API agora vai por `paas-stalwart:8080` na paas-net.
 - **ABERTO (01/10) — checagem de blacklist do e-mail nunca roda:** a rota do monitoramento agendado
   procura o serviço de e-mail, que não é visível para ela, e o erro some em silêncio (a checagem é
   tratada como opcional). Achado pelo subagente do roteiro de primeiros passos; não corrigido.
+- **ABERTO (01/10) — porta 8080 do Stalwart publicada em todas as interfaces:** o Docker publica
+  por cima do UFW, então a administração do servidor de e-mail fica na internet, protegida só pela
+  senha. Com a API indo por `paas-stalwart:8080` na paas-net, dá para parar de publicá-la (ou
+  limitar a 127.0.0.1). Alinhar também a Fase 03 (`--profile mail` nunca é passado pelo painel).
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

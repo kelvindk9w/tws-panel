@@ -231,9 +231,12 @@ export class CaddyManager {
     }
   }
 
-  /** Gera o Caddyfile a partir dos alvos e recarrega o Caddy sem downtime. */
-  async apply(targets: CaddyTarget[], onLog?: (chunk: string) => void): Promise<void> {
-    const content = renderCaddyfile(targets, this.panelSite);
+  /**
+   * Gera o Caddyfile a partir dos alvos e recarrega o Caddy sem downtime.
+   * `mailHosts`: hostnames do servidor de e-mail (ver renderCaddyfile).
+   */
+  async apply(targets: CaddyTarget[], onLog?: (chunk: string) => void, mailHosts: string[] = []): Promise<void> {
+    const content = renderCaddyfile(targets, this.panelSite, mailHosts);
     await this.ensureRunning(content);
     // O Caddy alcança o painel pelo nome do container na paas-net.
     if (this.panelSite) await this.connectToNetwork(this.panelSite.upstream.split(":")[0] ?? "");
@@ -289,6 +292,8 @@ const PAGE_ICONS = {
   refresh:
     '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>' +
     '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  // envelope: servidor de e-mail
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
   // globo: domínio
   globe:
     '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
@@ -370,6 +375,20 @@ export const UNKNOWN_DOMAIN_PAGE = sitePage({
 });
 
 /**
+ * mail.<domínio>: endereço do servidor de e-mail. O bloco existe para o Caddy
+ * EMITIR o certificado desse nome (o painel o copia para o Stalwart — ver
+ * packages/mailer/src/tls-certificates.ts); quem abre o endereço no
+ * navegador vê só esta página.
+ */
+export const MAIL_HOST_PAGE = sitePage({
+  title: "Servidor de e-mail",
+  message: "Este endereço é o servidor de e-mail deste domínio. Não há site aqui.",
+  hint: "Para ler e enviar e-mails, use o seu programa ou aplicativo de e-mail.",
+  icon: "mail",
+  refresh: false,
+});
+
+/**
  * Renderiza o Caddyfile completo (um bloco por alvo).
  *
  * `panel`: site do próprio painel (acesso por HTTPS). O Caddyfile é regenerado
@@ -378,7 +397,7 @@ export const UNKNOWN_DOMAIN_PAGE = sitePage({
  * descartado (não sequestra o acesso). flush_interval -1: o terminal ao vivo
  * (WebSocket) e os logs em streaming não podem ficar presos em buffer.
  */
-export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite): string {
+export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite, mailHosts: string[] = []): string {
   const panelTarget =
     panel && isSafeCaddyTarget({ ...panel, websocket: true }) ? { ...panel, websocket: true } : null;
   const targets: CaddyTarget[] = [
@@ -419,6 +438,22 @@ export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite): s
       );
     }
     lines.push("}", "");
+  }
+  // Servidor de e-mail: só para o Caddy emitir o certificado de mail.<domínio>.
+  // Nome que já é de um site (ou do painel) sai — o bloco existente já emite
+  // o certificado, e dois blocos com o mesmo nome derrubariam o Caddyfile
+  // inteiro. .localhost não tem certificado público.
+  const taken = new Set(targets.flatMap((t) => [t.domain, ...(t.aliases ?? [])]));
+  for (const host of mailHosts) {
+    if (!SAFE_DOMAIN_RE.test(host) || host.endsWith(".localhost") || taken.has(host)) continue;
+    taken.add(host);
+    lines.push(
+      `${host} {`,
+      '\theader Content-Type "text/html; charset=utf-8"',
+      `\trespond \`${MAIL_HOST_PAGE}\` 200`,
+      "}",
+      "",
+    );
   }
   // Qualquer outro host em HTTP: domínio que aponta para cá sem estar em
   // projeto nenhum (e o Caddyfile nunca fica sem site).

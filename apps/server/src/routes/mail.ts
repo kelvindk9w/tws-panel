@@ -15,6 +15,7 @@ import type {
   MailboxResponse,
   MailServerActionResponse,
   MailServerStatus,
+  MailTlsStatusResponse,
   ProjectEmailResponse,
 } from "@paas/core";
 import { MailService } from "../services/mail-service.js";
@@ -60,7 +61,12 @@ const createMailDomainSchema = {
     type: "object",
     required: ["domain"],
     additionalProperties: false,
-    properties: { domain: MAIL_DOMAIN_SCHEMA },
+    properties: {
+      domain: MAIL_DOMAIN_SCHEMA,
+      // Confirmação explícita de que o domínio já recebe e-mail em outro
+      // servidor e o operador quer seguir mesmo assim (ver addDomain).
+      confirmExistingMail: { type: "boolean" },
+    },
   },
 } as const;
 
@@ -152,8 +158,12 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   return reply.code(e.statusCode ?? 500).send({
     error: e.code ?? "internal_error",
     message: e.message ?? "Erro interno.",
+    ...(e.details ?? {}),
   });
 }
+
+/** Intervalo da manutenção do certificado (emissão nova e renovação). */
+const TLS_MAINTENANCE_MS = 60 * 60 * 1000;
 
 const mailRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
@@ -165,6 +175,43 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
   app.deployService.setEnvProvider(service.envForProject);
+  // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
+  // que o Stalwart passa a usar (ver MailService.syncTls).
+  app.deployService.setMailHostsProvider(() => service.mailHosts());
+
+  /**
+   * Os hosts de e-mail mudaram (domínio novo/removido, servidor iniciado):
+   * recalcula o Caddyfile e instala o que já houver de certificado. Em
+   * segundo plano — a emissão leva de segundos a minutos e não pode prender
+   * a resposta; falha fica no log (e a página mostra o estado em /api/mail/tls).
+   */
+  let lastProxyHosts: string | null = null;
+  const refreshMailTls = async (opts: { force: boolean }): Promise<void> => {
+    const hosts = (await service.mailHosts()).join(",");
+    if (opts.force || hosts !== lastProxyHosts) {
+      await app.deployService.refreshProxy();
+      lastProxyHosts = hosts;
+    }
+    await service.syncTls();
+  };
+  const refreshInBackground = (opts: { force: boolean }): void => {
+    refreshMailTls(opts).catch((err: unknown) => {
+      app.log.warn(
+        `Certificado do servidor de e-mail: falha ao atualizar (${err instanceof Error ? err.message : String(err)}).`,
+      );
+    });
+  };
+  // Renovação: o Let's Encrypt renova o certificado a cada ~60 dias (o Caddy
+  // faz isso sozinho); a cada hora o painel confere e reinstala no Stalwart
+  // se mudou. A primeira rodada sai 1 min depois do boot.
+  const firstRun = setTimeout(() => refreshInBackground({ force: false }), 60_000);
+  firstRun.unref();
+  const maintenance = setInterval(() => refreshInBackground({ force: false }), TLS_MAINTENANCE_MS);
+  maintenance.unref();
+  app.addHook("onClose", async () => {
+    clearTimeout(firstRun);
+    clearInterval(maintenance);
+  });
 
   // -------------------------------------------------------------------------
   // Servidor Stalwart
@@ -182,6 +229,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/mail/server/start", async (_request, reply) => {
     try {
       const status = await service.startServer();
+      refreshInBackground({ force: true });
       const response: MailServerActionResponse = { ok: true, status };
       return reply.send(response);
     } catch (err) {
@@ -215,7 +263,11 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         const name = request.body?.domain ?? "";
-        const domain = await service.addDomain(name);
+        const domain = await service.addDomain(
+          name,
+          request.body?.confirmExistingMail ? { confirmExistingMail: true } : {},
+        );
+        refreshInBackground({ force: true });
         await app.auditService.record({
           action: "mail.domain.add",
           target: domain.name,
@@ -235,6 +287,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         await service.removeDomain(request.params.domain);
+        refreshInBackground({ force: true });
         await app.auditService.record({
           action: "mail.domain.remove",
           target: request.params.domain,
@@ -246,6 +299,16 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       }
     },
   );
+
+  // Certificado do servidor de e-mail (mail.<domínio>): válido ou o que falta.
+  app.get("/api/mail/tls", async (_request, reply) => {
+    try {
+      const response: MailTlsStatusResponse = await service.tlsStatus();
+      return reply.send(response);
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
 
   // Check de blacklist (Fase 4): IP público + domínios contra as DNSBLs.
   app.get("/api/mail/blacklist", async (_request, reply) => {

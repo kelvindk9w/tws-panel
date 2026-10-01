@@ -18,13 +18,22 @@
   Auth (`admin:<secret>` — secret forte gerado na 1ª inicialização e persistido
   em `data/mail/mail.json`, modo 0600). Não há fallback para CLI porque a imagem
   não inclui `stalwart-cli`.
-- **Container**: `paas-stalwart` na rede `paas-net` (alias `paas-stalwart`),
+- **Container**: `paas-stalwart` na rede `paas-net` (aliases `paas-stalwart` e
+  `mail.<domínio>` de cada domínio cadastrado),
   volume `paas_stalwart_data` → `/opt/stalwart-mail/data`, config renderizada em
   `data/mail/stalwart/config.toml` → `/opt/stalwart-mail/etc` (read-only).
 - **Bootstrap**: o painel renderiza o TOML completo (hostname, listeners
-  25/587/465/143/993/8080, fallback-admin, RocksDB) — sem wizard. TLS: sem seção
-  `[certificate.*]` o Stalwart gera um certificado **autoassinado** (rcgen) —
-  suficiente para dev; em produção, configurar ACME ou certificado real.
+  25/587/465/143/993/8080, fallback-admin, RocksDB) — sem wizard.
+- **TLS (desde 01/10/2026)**: o Caddy central serve `mail.<domínio>` (página
+  simples) e emite o certificado desse nome; o painel lê o par no volume do Caddy
+  (`docker exec paas-caddy`), confere nome/validade/chave e copia para
+  `/opt/stalwart-mail/etc/certs/` (seções `[certificate.<id>]` com
+  `cert = "%{file:...}%"`, escolhidas por SNI). Renovação: a cada hora o painel
+  compara a impressão digital; mudou → `GET /api/reload/certificate` (sem
+  derrubar conexão). Certificado de um nome novo → reinício do container (o
+  Stalwart não relê seção nova do `config.toml` sem reiniciar). Enquanto nada foi
+  emitido, o Stalwart usa o autoassinado. Detalhes e validação em
+  `comoFuncionaSistema/_RELATORIO-email-tls.md`.
 - **Caixas**: principals `individual` com `roles: ["user"]` — **obrigatório**:
   sem o papel, o Stalwart autentica mas nega SMTP/IMAP
   ("Your account is not authorized to use this service"). Descoberto empiricamente.
@@ -54,7 +63,8 @@ automaticamente (exigência das boas práticas).
 
 `POST /api/projects/:id/email {domain}` cria a caixa técnica `<slug>@<domínio>`
 (se necessário) e registra o vínculo. No próximo deploy, o engine injeta
-`SMTP_HOST=paas-stalwart`, `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS`,
+`SMTP_HOST=mail.<domínio>` (o nome do certificado; alias do Stalwart na
+`paas-net`, então a conexão fica dentro da rede Docker), `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS`,
 `MAIL_FROM` — no override compose (**todos os serviços**) ou via `-e` no
 pipeline Dockerfile. Estáticos não recebem (sem runtime). `DELETE` no mesmo
 endpoint desativa. Senhas são base64url (YAML/env-safe).
@@ -65,10 +75,10 @@ endpoint desativa. Senhas são base64url (YAML/env-safe).
 |---|---|---|
 | Portas publicadas | altas (ex.: 10125/10587/10465/10143/10993/18081) | padrão 25/587/465/143/993/8080 (defaults do config) |
 | `PAAS_PUBLIC_IP` | qualquer IP de teste | IP público real da VPS (checklist A/SPF/PTR) |
-| TLS | certificado autoassinado (rcgen) — clientes usam `rejectUnauthorized:false` | configurar ACME no Stalwart (`[acme.*]`) ou montar cert real em `[certificate.default]` |
+| TLS | autoassinado (sem domínio público o Caddy não emite) | certificado Let's Encrypt de `mail.<domínio>` emitido pelo Caddy e instalado pelo painel (renovação automática) |
 | DNS | domínios `.invalid`/exemplo → verify retorna missing | registros criados no provedor; verify deve fechar ✅ |
 | PTR | sempre `action_required` | abrir chamado no provedor da VPS (texto gerado pelo painel) |
-| SMTP interno dos projetos | `paas-stalwart:587` STARTTLS com cert autoassinado | mesmo endereço, cert válido — verificação estrita OK |
+| SMTP interno dos projetos | `mail.<domínio>:587` STARTTLS (autoassinado até haver certificado) | `mail.<domínio>:587`, cert válido — verificação estrita OK |
 | Porta 25 | bloqueada/indisponível em dev | liberar no provedor (muitos bloqueiam por padrão) + UFW |
 
 ⚠️ **Atenção (descoberto nos testes)**: a porta **10080 está na lista de

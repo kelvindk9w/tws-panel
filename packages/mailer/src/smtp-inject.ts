@@ -3,21 +3,28 @@
  * (plano §5.3: SMTP_HOST/PORT/USER/PASS/MAIL_FROM — trader/cachetaGrok quebram
  * sem isso).
  *
- * O host injetado é o alias do container Stalwart na rede paas-net
- * (paas-stalwart:587, STARTTLS), pois os projetos rodam na mesma rede Docker.
- * Em dev o certificado é autoassinado — aplicações devem desativar a verificação
- * estrita do cert (ex.: nodemailer `tls: { rejectUnauthorized: false }`); em
- * produção, com certificado ACME, a verificação funciona normalmente.
+ * O host injetado é mail.<domínio> (porta 587, STARTTLS) — o NOME DO
+ * CERTIFICADO que o Caddy central emite e o painel instala no Stalwart (ver
+ * tls-certificates.ts). O container do Stalwart tem esse nome como alias na
+ * paas-net, então o projeto conecta por dentro da rede Docker, sem sair pela
+ * internet, e a verificação padrão do certificado passa.
+ *
+ * Antes era o alias `paas-stalwart`. Validação real (01/10/2026): app que
+ * confere o certificado (nodemailer com requireTLS e verificação padrão, caso
+ * do cassino) recusava — nenhum certificado público tem esse nome. Projetos
+ * com e-mail ativo recebem o valor novo no próximo deploy.
  */
 import type { Project } from "@paas/core";
 
-/** Alias de rede do container Stalwart dentro da paas-net. */
+/** Alias de rede histórico do container Stalwart na paas-net (continua existindo). */
 export const STALWART_NETWORK_ALIAS = "paas-stalwart";
 
 /** Porta de submission usada na comunicação interna (rede Docker). */
 export const STALWART_INTERNAL_SMTP_PORT = 587;
 
 export interface SmtpEnvInput {
+  /** Hostname do servidor de e-mail do domínio da caixa (mail.<domínio>). */
+  host: string;
   mailbox: string;
   password: string;
   /** Endereço From padrão (geralmente igual à caixa técnica). */
@@ -27,7 +34,7 @@ export interface SmtpEnvInput {
 /** Monta o mapa de env vars para injeção no deploy do projeto. */
 export function buildSmtpEnv(input: SmtpEnvInput): Record<string, string> {
   return {
-    SMTP_HOST: STALWART_NETWORK_ALIAS,
+    SMTP_HOST: input.host,
     SMTP_PORT: String(STALWART_INTERNAL_SMTP_PORT),
     SMTP_USER: input.mailbox,
     SMTP_PASS: input.password,

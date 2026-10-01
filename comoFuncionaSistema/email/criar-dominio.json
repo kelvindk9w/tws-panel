@@ -15,7 +15,8 @@
     "path": [],
     "query": [],
     "body": [
-      { "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (createMailDomainSchema, mail.ts): minLength 1, maxLength 253, pattern MAIL_DOMAIN_PATTERN (mesmo alfabeto do service, mas aceitando as duas caixas — a normalização para minúsculas acontece depois, no service); additionalProperties:false no corpo. Depois, regra de negócio no service via normalizeMailDomain: trim + lowercase + remove pontos nas pontas e revalida contra o mesmo padrão em minúsculas.", "descricao": "Nome do domínio (ex.: exemplo.com.br)." }
+      { "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (createMailDomainSchema, mail.ts): minLength 1, maxLength 253, pattern MAIL_DOMAIN_PATTERN (mesmo alfabeto do service, mas aceitando as duas caixas — a normalização para minúsculas acontece depois, no service); additionalProperties:false no corpo. Depois, regra de negócio no service via normalizeMailDomain: trim + lowercase + remove pontos nas pontas e revalida contra o mesmo padrão em minúsculas.", "descricao": "Nome do domínio (ex.: exemplo.com.br)." },
+      { "nome": "confirmExistingMail", "tipo": "boolean", "obrigatorio": false, "regras": "schema Fastify: boolean.", "descricao": "Confirmação explícita de que o domínio já recebe e-mail em outro servidor (MX) e o operador quer seguir mesmo assim. Sem ela, o cadastro responde 409 domain_receives_mail." }
     ],
     "headers": []
   },
@@ -30,6 +31,7 @@
   "erros": [
     { "status": 400, "codigo": "invalid_request", "quando": "Corpo reprovado pelo schema Fastify (createMailDomainSchema) ANTES do handler: domain ausente, vazio, maior que 253 chars, fora do padrão de domínio, ou corpo com campo desconhecido.", "mensagem": "Campo obrigatório ausente: domain. / Campo inválido: domain." },
     { "status": 400, "codigo": "invalid_domain", "quando": "domain passou pelo schema mas normalizeMailDomain ainda reprova (ex.: só espaços, ou dessincronia entre o pattern do schema — que aceita maiúsculas — e o do service).", "mensagem": "Domínio inválido: {valor informado}." },
+    { "status": 409, "codigo": "domain_receives_mail", "quando": "Sem confirmExistingMail, o MX do domínio aponta para outro servidor (status elsewhere) ou a consulta ao MX falhou (status unknown). Corpo traz existingMail {status, servers, suggestedDomain}. Nada é provisionado.", "mensagem": "O domínio {domínio} já recebe e-mail em {servidores}. Seguir o checklist (apontar o MX para esta VPS) desviaria todo o e-mail que hoje chega em {servidor}. Recomendado: use um subdomínio só para o envio, como envio.{domínio}." },
     { "status": 409, "codigo": "domain_exists", "quando": "Domínio (já normalizado) já está em data.domains.", "mensagem": "O domínio {domínio} já está cadastrado." },
     { "status": 409, "codigo": "mail_server_stopped", "quando": "requireRunning(): o container do Stalwart não está rodando.", "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar." },
     { "status": 409, "codigo": "mail_not_initialized", "quando": "adminSecret ainda não existe (servidor nunca iniciado) — manager()/client() lançam antes mesmo do requireRunning.", "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro." },
@@ -38,6 +40,7 @@
   "fluxo": [
     "1. normalizeMailDomain(name): valida/normaliza; 400 invalid_domain se inválido.",
     "2. Verifica duplicidade em data.domains; 409 domain_exists se já existe.",
+    "2b. Sem confirmExistingMail: checkExistingMail (packages/mailer/src/mx-guard.ts) consulta o MX nos resolvers públicos; elsewhere/unknown → 409 domain_receives_mail com existingMail. Motivo real (01/10/2026): o dono do produto ia cadastrar o domínio principal da empresa, com e-mail em outro provedor.",
     "3. requireRunning(): consulta manager().status(); 409 mail_server_stopped se não estiver rodando.",
     "4. client().createDomain(domain): POST /api/principal {type:'domain', name}.",
     "5. client().createDkimSignature(domain, 'paas'): POST /api/dkim {algorithm:'Rsa', domain, selector:'paas', id:'rsa-<domínio>'} — se já existir (400 do Stalwart), segue com o id existente (idempotente).",
@@ -45,7 +48,8 @@
     "7. Persiste o StoredDomain (dkimSelector, dkimPublicKey, dkimKeyBits:2048, dmarcStage:'none', createdAt, lastVerify:null) em data.domains.",
     "8. Gera senha e cria a caixa postmaster@<domínio> no Stalwart com alias abuse@<domínio> (client().createMailbox); persiste como StoredMailbox kind:'system'.",
     "9. save() → grava data/mail/mail.json.",
-    "10. Rota grava auditoria mail.domain.add (target = nome do domínio, detail com dkimKeyBits) e responde 201."
+    "10. Rota grava auditoria mail.domain.add (target = nome do domínio, detail com dkimKeyBits) e responde 201.",
+    "11. Em segundo plano: DeployService.refreshProxy() (o Caddyfile ganha o bloco mail.<domínio> e o Caddy emite o certificado) e MailService.syncTls() (instala no Stalwart o que já tiver sido emitido, ajusta os aliases na paas-net). Falha só vai para o log."
   ],
   "dependencias": [
     { "tipo": "servico", "nome": "MailService.addDomain", "arquivo": "apps/server/src/services/mail-service.ts:231", "papel": "Orquestra criação do domínio + DKIM + postmaster@." },

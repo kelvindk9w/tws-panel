@@ -234,6 +234,59 @@ export interface MailDomainResponse {
 
 export interface CreateMailDomainRequest {
   domain: string;
+  /**
+   * O domínio já recebe e-mail em outro servidor (MX) e o operador confirmou
+   * que quer seguir mesmo assim. Sem isto, o cadastro responde 409
+   * `domain_receives_mail` com `existingMail`.
+   */
+  confirmExistingMail?: boolean;
+}
+
+/** Quem recebe o e-mail do domínio hoje (consulta ao MX antes do cadastro). */
+export interface ExistingMailInfo {
+  /** none = não recebe; here = já aponta para cá; elsewhere = outro servidor; unknown = consulta falhou. */
+  status: "none" | "here" | "elsewhere" | "unknown";
+  /** Servidores MX atuais, por prioridade. */
+  servers: string[];
+  /** Subdomínio sugerido para o envio (ex.: envio.exemplo.com.br). */
+  suggestedDomain: string;
+}
+
+// ---------------------------------------------------------------------------
+// Certificado do servidor de e-mail (mail.<domínio>)
+// ---------------------------------------------------------------------------
+
+/**
+ * O registro A de mail.<domínio>: ok = aponta para esta VPS; missing = não
+ * existe; cloudflare = proxy da Cloudflare ligado (nuvem laranja); other_ip =
+ * aponta para outro lugar.
+ */
+export type MailTlsDnsStatus = "ok" | "missing" | "cloudflare" | "other_ip";
+
+export interface MailTlsHostStatus {
+  /** mail.<domínio> (ou PAAS_MAIL_HOSTNAME). */
+  host: string;
+  /** O servidor de e-mail apresenta um certificado válido para este nome. */
+  ok: boolean;
+  /** Emissor do certificado apresentado (quando válido). */
+  issuer: string | null;
+  /** Fim da validade (ISO, quando válido). */
+  validTo: string | null;
+  /** Erro da conexão TLS (quando não é válido). */
+  error: string | null;
+  /** O proxy (Caddy) já emitiu o certificado deste nome. */
+  issued: boolean;
+  dns: { status: MailTlsDnsStatus; resolved: string[]; expectedIp: string };
+  /** O que falta, em pt-BR (null quando válido). */
+  hint: string | null;
+}
+
+export interface MailTlsStatusResponse {
+  checkedAt: string;
+  serverRunning: boolean;
+  hosts: MailTlsHostStatus[];
+  /** Falha ao instalar o certificado no servidor de e-mail (null = ok). */
+  syncError: string | null;
 }
 
 export interface MailboxResponse {
