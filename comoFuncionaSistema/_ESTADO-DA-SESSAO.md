@@ -1,4 +1,4 @@
-# Estado da sessão — 28/09/2026 (atualizado ao fim da sessão)
+# Estado da sessão — atualizado em 01/10/2026
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
@@ -8,6 +8,62 @@ pendente e por quê — informação que não está no código nem no git log.
 > senhas nem nomes de clientes.
 
 ---
+
+## Atualização de 01/10/2026 (leia antes do resto)
+
+### Onde paramos
+- **Tudo mesclado até o PR #61** (`main` = `dev` em conteúdo). Do #55 ao #61, nesta ordem:
+  - **#55:** compose de verdade (variáveis no `.env`, portas 80/443, porta por domínio).
+  - **#56:** o painel retira 80/443 de app comum; o primeiro deploy começa sozinho.
+  - **#57:** variáveis do compose prontas para preencher; importar `.env`.
+  - **#58:** os guardrails analisam o mesmo compose que o deploy usa.
+  - **#59:** deploy barrado por variável faltando; Visão geral, Deploys e Variáveis redesenhados; botões com cor.
+  - **#60:** todo projeto entra no proxy; site publicado não some quando um redeploy falha.
+  - **#61:** páginas "Site em manutenção" e "temporariamente indisponível" com visual amigável, recarregando a cada 60 s.
+- **Em andamento, em dois branches feitos por subagentes em worktrees isolados (sem PR):**
+  - `feat/email-tls`: certificado de verdade para `mail.<domínio>` no servidor de e-mail; o projeto conecta por `mail.<domínio>`; estado do certificado na página E-mail; aviso ao adicionar domínio que já tem MX em outro servidor. Relatório: `comoFuncionaSistema/_RELATORIO-email-tls.md`, dentro do branch.
+  - `feat/primeiros-passos`: roteiro "Deixe o painel pronto" no Dashboard. Relatório: `comoFuncionaSistema/_RELATORIO-primeiros-passos.md`, dentro do branch.
+  - **Para retomar:**
+    1. `git fetch` e ler os relatórios: `git show origin/<branch>:comoFuncionaSistema/_RELATORIO-....md`.
+    2. Revisar o diff de cada branch contra a `main`, rodar as suítes e conferir o visual.
+    3. Abrir um PR por branch. Os dois partem da `main` do #61; se ambos mexerem em `_ESTADO-DA-SESSAO.md`, resolver o conflito à mão.
+    4. Os worktrees ficam em `.claude/worktrees/` (ignorado pelo git). Removê-los só depois que o trabalho estiver no remoto.
+
+### Ordem combinada com o dono do produto
+1. **E-mail do servidor funcionando** (branch `feat/email-tls`), ANTES de voltar ao cassino.
+2. **Primeiros passos no Dashboard** (branch `feat/primeiros-passos`):
+   - no primeiro acesso, aberto com todos os passos;
+   - depois de começar, compacto, mostrando só o próximo passo, com botão para ver todos num modal;
+   - cada passo com "Como fazer";
+   - passos opcionais com "Não vou usar".
+   Ordem dos passos: proteções da VPS → 2FA → domínio do painel → e-mail do servidor → notificações.
+3. **Domínio do painel** (ainda não existe), em Configurações → Domínio do painel:
+   - DNS e verificação;
+   - certificado;
+   - botão "Desativar o acesso pelo IP", liberado só depois de abrir o painel pelo domínio novo, para não trancar ninguém fora;
+   - comando de SSH documentado para reverter.
+   Observação: o `…sslip.io` NÃO é o túnel; é o acesso HTTPS pelo IP.
+4. **Notificações:** Telegram primeiro (bot do @BotFather, botão "Enviar teste"); depois e-mail. A pessoa escolhe um, outro ou ambos. Também destrava o "código por e-mail" para recomeçar o setup.
+5. **Backups:** depois (decisão do dono). Hoje NÃO existe backup de projetos.
+- **Login continua senha + código (2FA).** O dono concordou em não fazer login só com código, que viraria um fator. Ideias para depois: "lembrar este navegador por 30 dias" e passkey.
+
+### Cassino (projeto real do dono, primeiro compose grande)
+- Domínio principal conectado; o deploy ainda não passou.
+- Faltavam: `KYC_MODO`, `PIX_CHAVE`, `PIX_CIDADE`, `PIX_NOME`, `SITE_HOST`, `CARTEIRA_HOST`, `SMTP_HOST` e `MAIL_FROM`. Estas duas o painel fornece com o E-mail do projeto ativo.
+- O cassino exige TLS e confere o certificado (nodemailer com `requireTLS`). Por isso o e-mail do painel precisa da correção do branch `feat/email-tls`.
+- No modo demonstração, ele recusa SMTP vazio, local ou Mailpit; `paas-stalwart` passa.
+- Próximo passo com o dono, depois do e-mail:
+  1. E-mail do servidor com um SUBDOMÍNIO dedicado. NÃO usar `tws.tec.br` puro: o MX desviaria o e-mail da empresa. Ainda não sabemos onde fica o e-mail de `tws.tec.br`; perguntado, sem resposta.
+  2. E-mail do projeto.
+  3. Variáveis restantes.
+  4. Domínios: `SITE_HOST` como principal e `CARTEIRA_HOST` como adicional, porta em branco.
+  5. Deploy.
+
+### Preferências do dono do produto, confirmadas nesta sessão
+- **Instrução completa:** caminho exato, comandos na ordem, onde clicar e como conferir.
+- **Atualizar o painel na VPS** com UMA linha: `cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build`. O `sudo git pull` é necessário porque arquivos do `.git` ficaram do root.
+- **Visual:** simples, responsivo e com cor nos botões (Abrir site azul, Iniciar verde, Parar vermelho, Deploy violeta).
+- **Projeto de postagens:** separado, em `~/projects/social` (pesquisa, guias de boas práticas para X e Instagram, `CLAUDE.md` do agente de conteúdo, rascunho do post de continuação sobre o TWS Panel e o devLink). Sem commit; o dono decide. Alerta: o endereço `…sslip.io` contém o IP da VPS e precisa ser borrado em prints e vídeos.
 
 ## Atualização de 29/09/2026 (leia antes do resto)
 

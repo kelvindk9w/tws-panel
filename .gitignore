@@ -30,3 +30,6 @@ logs/
 
 # saída do Playwright MCP (snapshots de página, logs de console)
 .playwright-mcp/
+
+# worktrees isolados de subagentes do Claude Code
+.claude/worktrees/
