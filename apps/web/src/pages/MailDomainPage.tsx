@@ -462,8 +462,10 @@ export function MailDomainPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <table className="w-full text-sm">
-                <thead>
+              {/* No celular cada registro vira um bloco empilhado (status, tipo e copiar
+                  na primeira linha; nome e valor embaixo); a partir de sm, tabela. */}
+              <table className="block w-full text-sm sm:table">
+                <thead className="hidden sm:table-header-group">
                   <tr className="border-b text-left text-xs text-muted-foreground">
                     <th className="px-4 py-2 font-medium">Status</th>
                     <th className="px-4 py-2 font-medium">Tipo</th>
@@ -472,18 +474,21 @@ export function MailDomainPage() {
                     <th className="px-4 py-2 font-medium"></th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="block sm:table-row-group">
                   {records.map((record) => (
-                    <tr key={record.id} className="border-b last:border-0">
-                      <td className="px-4 py-2">
+                    <tr
+                      key={record.id}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3 last:border-0 sm:table-row sm:p-0"
+                    >
+                      <td className="order-1 sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
                         <span className="flex items-center gap-1.5 text-xs">
                           <StatusIcon status={record.status} />
                           {statusLabel(record.status)}
                         </span>
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs">{record.type}</td>
-                      <td className="px-4 py-2 font-mono text-xs">{record.name}</td>
-                      <td className="max-w-md px-4 py-2">
+                      <td className="order-2 font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">{record.type}</td>
+                      <td className="order-4 basis-full break-all font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">{record.name}</td>
+                      <td className="order-5 min-w-0 basis-full sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto sm:max-w-md">
                         <p className="break-all font-mono text-xs">{record.expected}</p>
                         <p className="text-xs text-muted-foreground">{record.purpose}</p>
                         {record.note && <p className="text-xs text-amber-400">{record.note}</p>}
@@ -493,7 +498,7 @@ export function MailDomainPage() {
                           </p>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-right">
+                      <td className="order-3 ml-auto text-right sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
                         <CopyButton text={`${record.name}  ${record.type}  ${record.expected}`} />
                       </td>
                     </tr>
