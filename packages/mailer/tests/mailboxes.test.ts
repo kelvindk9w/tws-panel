@@ -59,14 +59,20 @@ describe("buildCredentials", () => {
 });
 
 describe("smtp-inject", () => {
-  it("env vars apontam para o alias interno do Stalwart na paas-net", () => {
+  // Validação real (01/10/2026): com SMTP_HOST=paas-stalwart, app que confere
+  // o certificado (nodemailer com requireTLS) recusa — nenhum certificado
+  // público tem esse nome. O host injetado é o nome do certificado,
+  // mail.<domínio>, que o Stalwart também tem como alias na paas-net.
+  it("SMTP_HOST é o nome do certificado (mail.<domínio>), não o alias interno", () => {
     const env = buildSmtpEnv({
+      host: "mail.exemplo.com.br",
       mailbox: "loja@exemplo.com.br",
       password: "segredo",
       mailFrom: "loja@exemplo.com.br",
     });
+    expect(env.SMTP_HOST).not.toBe(STALWART_NETWORK_ALIAS);
     expect(env).toEqual({
-      SMTP_HOST: STALWART_NETWORK_ALIAS,
+      SMTP_HOST: "mail.exemplo.com.br",
       SMTP_PORT: String(STALWART_INTERNAL_SMTP_PORT),
       SMTP_USER: "loja@exemplo.com.br",
       SMTP_PASS: "segredo",
@@ -75,11 +81,11 @@ describe("smtp-inject", () => {
   });
 
   it("maskEnv esconde apenas a senha", () => {
-    const env = buildSmtpEnv({ mailbox: "a@b.com", password: "segredo", mailFrom: "a@b.com" });
+    const env = buildSmtpEnv({ host: "mail.b.com", mailbox: "a@b.com", password: "segredo", mailFrom: "a@b.com" });
     const masked = maskEnv(env);
     expect(masked.SMTP_PASS).not.toContain("segredo");
     expect(masked.SMTP_USER).toBe("a@b.com");
-    expect(masked.SMTP_HOST).toBe(STALWART_NETWORK_ALIAS);
+    expect(masked.SMTP_HOST).toBe("mail.b.com");
   });
 
   it("endereço da caixa técnica usa o slug do projeto", () => {

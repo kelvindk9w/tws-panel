@@ -27,6 +27,7 @@ import {
   parseContainerInspect,
 } from "./container-files.js";
 import { run } from "./exec.js";
+import { certificateId, type MailCertificate } from "./tls-certificates.js";
 
 export const STALWART_IMAGE = "stalwartlabs/mail-server:v0.11.8";
 
@@ -38,6 +39,11 @@ export const STALWART_IMAGE = "stalwartlabs/mail-server:v0.11.8";
 export const STALWART_BASE_DIR = "/opt/stalwart-mail";
 /** Diretório lido pelo entrypoint da imagem (`--config etc/config.toml`). */
 export const STALWART_ETC_DIR = `${STALWART_BASE_DIR}/etc`;
+/** Certificados copiados do Caddy (ver tls-certificates.ts). */
+export const STALWART_CERTS_DIR = `${STALWART_ETC_DIR}/certs`;
+
+/** Par certificado + chave entregue ao Stalwart. */
+export type StalwartCertificate = Pick<MailCertificate, "host" | "cert" | "key">;
 
 export interface StalwartManagerOptions {
   /**
@@ -57,6 +63,19 @@ export interface StalwartManagerOptions {
   network?: string;
   /** Volume nomeado dos dados (padrão paas_stalwart_data). */
   dataVolume?: string;
+  /**
+   * Nomes extras do container na rede (mail.<domínio>): o projeto conecta
+   * pelo nome do certificado e a conexão fica dentro da rede Docker.
+   */
+  aliases?: string[];
+  /** Certificados emitidos pelo Caddy para os mail.<domínio> (ausente = autoassinado). */
+  certificates?: StalwartCertificate[];
+  /**
+   * Onde a API HTTP do Stalwart responde. Padrão: 127.0.0.1:<porta http>
+   * (painel fora de container). Com o painel em container, 127.0.0.1 é o
+   * próprio painel — o MailService passa http://paas-stalwart:8080.
+   */
+  apiBaseUrl?: string;
 }
 
 export class StalwartManager {
@@ -88,11 +107,28 @@ export class StalwartManager {
   async writeConfig(): Promise<string> {
     await mkdir(this.opts.configDir, { recursive: true });
     const file = path.join(this.opts.configDir, "config.toml");
-    await writeFile(file, renderConfigToml(this.opts.hostname, this.opts.adminSecret), {
+    await writeFile(file, this.renderConfig(), {
       encoding: "utf8",
       mode: 0o600,
     });
     return file;
+  }
+
+  private certificates(): StalwartCertificate[] {
+    return this.opts.certificates ?? [];
+  }
+
+  private renderConfig(): string {
+    return renderConfigToml(
+      this.opts.hostname,
+      this.opts.adminSecret,
+      this.certificates().map((c) => c.host),
+    );
+  }
+
+  /** Base da API HTTP do Stalwart (ver StalwartManagerOptions.apiBaseUrl). */
+  apiBaseUrl(): string {
+    return this.opts.apiBaseUrl ?? `http://127.0.0.1:${this.opts.ports.http}`;
   }
 
   async status(): Promise<MailServerStatus> {
@@ -135,15 +171,21 @@ export class StalwartManager {
     };
   }
 
-  /** Entrega o config.toml ao container (parado ou rodando) pelo daemon. */
+  /**
+   * Entrega o config.toml (e os certificados) ao container, parado ou
+   * rodando, pelo daemon. A chave privada só existe aqui e dentro do
+   * container (0600) — nunca no espelho local do config.
+   */
   private async pushConfig(): Promise<void> {
+    const certs = this.certificates();
     const cp = await copyFilesToContainer(this.containerName, STALWART_BASE_DIR, [
       { name: "etc/", mode: 0o755 },
-      {
-        name: "etc/config.toml",
-        content: renderConfigToml(this.opts.hostname, this.opts.adminSecret),
-        mode: 0o600,
-      },
+      { name: "etc/config.toml", content: this.renderConfig(), mode: 0o600 },
+      ...(certs.length > 0 ? [{ name: "etc/certs/", mode: 0o700 }] : []),
+      ...certs.flatMap((c) => [
+        { name: `etc/certs/${certificateId(c.host)}.crt`, content: c.cert, mode: 0o600 },
+        { name: `etc/certs/${certificateId(c.host)}.key`, content: c.key, mode: 0o600 },
+      ]),
     ]);
     if (cp.code !== 0) {
       throw new Error(`falha ao gravar a configuração em ${this.containerName}: ${cp.stderr.trim()}`);
@@ -172,6 +214,7 @@ export class StalwartManager {
       } else {
         // Rodando: o arquivo novo vale a partir do próximo restart (como antes).
         await this.pushConfig();
+        await this.ensureAliases();
         if (running) return;
         const start = await run("docker", ["start", this.containerName]);
         if (start.code === 0 || /already in use/i.test(start.stderr)) return;
@@ -189,8 +232,7 @@ export class StalwartManager {
       "unless-stopped",
       "--network",
       this.network,
-      "--network-alias",
-      "paas-stalwart",
+      ...this.allAliases().flatMap((a) => ["--network-alias", a]),
       "-p",
       `${ports.smtp}:25`,
       "-p",
@@ -221,6 +263,101 @@ export class StalwartManager {
     }
   }
 
+  private allAliases(): string[] {
+    return [...new Set(["paas-stalwart", ...(this.opts.aliases ?? [])])];
+  }
+
+  /**
+   * Garante os aliases mail.<domínio> num container que já existe (criado
+   * antes deles, ou antes de um domínio novo). O Docker não acrescenta alias
+   * a uma conexão existente: desconecta e reconecta com a lista completa
+   * (segundos sem rede interna; as portas publicadas no host não caem).
+   */
+  private async ensureAliases(): Promise<void> {
+    const wanted = this.allAliases();
+    if (wanted.length === 1) return;
+    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", this.containerName]);
+    let current: string[] | null = null;
+    try {
+      const networks = JSON.parse(inspect.stdout.trim() || "{}") as Record<string, { Aliases?: string[] | null }>;
+      const net = networks[this.network];
+      current = net ? (net.Aliases ?? []) : null;
+    } catch {
+      current = null;
+    }
+    if (current && wanted.every((a) => current.includes(a))) return;
+    if (current) await run("docker", ["network", "disconnect", this.network, this.containerName]);
+    const connect = await run("docker", [
+      "network",
+      "connect",
+      ...wanted.flatMap((a) => ["--alias", a]),
+      this.network,
+      this.containerName,
+    ]);
+    if (connect.code !== 0) {
+      throw new Error(
+        `falha ao conectar ${this.containerName} à rede ${this.network} com os aliases: ${connect.stderr.trim()}`,
+      );
+    }
+  }
+
+  /**
+   * Liga outro container (o do painel) à rede do Stalwart — de dentro dele é
+   * por ela que a API e o TLS do servidor de e-mail são alcançados.
+   */
+  async connectContainer(container: string): Promise<void> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", container]);
+    if (inspect.code === 0) {
+      try {
+        const networks = JSON.parse(inspect.stdout.trim() || "{}") as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(networks, this.network)) return;
+      } catch {
+        // saída inesperada: tenta conectar
+      }
+    }
+    const connect = await run("docker", ["network", "connect", this.network, container]);
+    if (connect.code !== 0) {
+      throw new Error(`falha ao conectar ${container} à rede ${this.network}: ${connect.stderr.trim()}`);
+    }
+  }
+
+  /**
+   * Instala os certificados atuais no container que está rodando.
+   *
+   * Comportamento conferido no Stalwart v0.11.8 real (01/10/2026):
+   *  - `GET /api/reload/certificate` relê os ARQUIVOS das seções que já
+   *    existiam (o `%{file:...}%` é avaliado de novo): troca o certificado
+   *    renovado sem derrubar conexão nenhuma;
+   *  - nem ele nem `GET /api/reload` releem o config.toml local: uma seção
+   *    [certificate.*] nova (primeiro certificado de um domínio) ou outro
+   *    `server.hostname` só valem depois de reiniciar o container.
+   * `restart: true` cobre o segundo caso; no primeiro, se a API falhar, o
+   * container é reiniciado do mesmo jeito (o certificado novo precisa valer).
+   */
+  async applyTls(opts: { restart: boolean }): Promise<"reloaded" | "restarted"> {
+    await this.pushConfig();
+    await this.ensureAliases();
+    if (!opts.restart && (await this.reloadCertificates())) return "reloaded";
+    const restart = await run("docker", ["restart", this.containerName], { timeoutMs: 60_000 });
+    if (restart.code !== 0) {
+      throw new Error(`falha ao reiniciar ${this.containerName}: ${restart.stderr.trim()}`);
+    }
+    return "restarted";
+  }
+
+  private async reloadCertificates(): Promise<boolean> {
+    try {
+      const auth = Buffer.from(`admin:${this.opts.adminSecret}`).toString("base64");
+      const res = await fetch(`${this.apiBaseUrl()}/api/reload/certificate`, {
+        headers: { Authorization: `Basic ${auth}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async stop(): Promise<void> {
     const stop = await run("docker", ["stop", this.containerName], { timeoutMs: 60_000 });
     if (stop.code !== 0 && !/no such container/i.test(stop.stderr)) {
@@ -229,12 +366,12 @@ export class StalwartManager {
   }
 
   /** Espera a API HTTP do Stalwart responder (pós-start). */
-  async waitReady(httpPort: number, timeoutMs = 60_000): Promise<void> {
+  async waitReady(timeoutMs = 60_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     let lastError = "sem resposta";
     while (Date.now() < deadline) {
       try {
-        const res = await fetch(`http://127.0.0.1:${httpPort}/api/principal?limit=1`, {
+        const res = await fetch(`${this.apiBaseUrl()}/api/principal?limit=1`, {
           signal: AbortSignal.timeout(3_000),
         });
         // 401 = API no ar aguardando auth; 200 = ok
@@ -245,12 +382,39 @@ export class StalwartManager {
       }
       await new Promise((r) => setTimeout(r, 1_500));
     }
-    throw new Error(`Stalwart não respondeu na porta ${httpPort} após ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
+    throw new Error(`Stalwart não respondeu em ${this.apiBaseUrl()} após ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
   }
 }
 
+/**
+ * Seções [certificate.<id>] lidas de arquivo (sintaxe `%{file:...}%`,
+ * conferida no Stalwart v0.11.8 real). O Stalwart escolhe o certificado pelo
+ * nome pedido na conexão (SNI), a partir dos nomes do próprio certificado; o
+ * marcado `default` atende quem não manda SNI — o do hostname do servidor.
+ */
+function certificateSections(hostname: string, hosts: string[]): string[] {
+  if (hosts.length === 0) {
+    return [
+      "# Sem certificado emitido ainda: o Stalwart gera um autoassinado. O painel",
+      "# instala o certificado de mail.<domínio> assim que o Caddy o emitir.",
+      "",
+    ];
+  }
+  const defaultHost = hosts.includes(hostname) ? hostname : hosts[0];
+  return hosts.flatMap((host) => {
+    const id = certificateId(host);
+    return [
+      `[certificate.${id}]`,
+      `cert = "%{file:${STALWART_CERTS_DIR}/${id}.crt}%"`,
+      `private-key = "%{file:${STALWART_CERTS_DIR}/${id}.key}%"`,
+      ...(host === defaultHost ? ["default = true"] : []),
+      "",
+    ];
+  });
+}
+
 /** Config TOML mínimo e determinístico (bootstrap sem wizard). */
-export function renderConfigToml(hostname: string, adminSecret: string): string {
+export function renderConfigToml(hostname: string, adminSecret: string, certificateHosts: string[] = []): string {
   return [
     "# Gerado pelo painel PaaS — não editar manualmente.",
     `server.hostname = "${hostname}"`,
@@ -281,9 +445,7 @@ export function renderConfigToml(hostname: string, adminSecret: string): string 
     'bind = ["[::]:8080"]',
     'protocol = "http"',
     "",
-    "# Sem seção [certificate.*]: o Stalwart gera um certificado autoassinado",
-    "# automaticamente (dev). Em produção, configurar ACME ou certificado real.",
-    "",
+    ...certificateSections(hostname, certificateHosts),
     "[authentication.fallback-admin]",
     'user = "admin"',
     `secret = "${adminSecret}"`,

@@ -151,6 +151,8 @@ export class DeployService {
   private readonly env: ProjectEnvStore;
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
+  /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
+  private mailHostsProvider: (() => Promise<string[]>) | null = null;
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
   readonly panelSite: PanelSite | null;
   private projects: Project[] = [];
@@ -189,6 +191,8 @@ export class DeployService {
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
       injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
+      // O Caddy serve mail.<domínio> para emitir o certificado do Stalwart.
+      mailHosts: async () => (await this.mailHostsProvider?.()) ?? [],
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
       // Em container, o health check fala com o Caddy pela rede interna
       // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
@@ -247,6 +251,17 @@ export class DeployService {
    */
   setEnvProvider(provider: (project: Project) => Promise<Record<string, string>>): void {
     this.mailEnv = provider;
+  }
+
+  /** Registra quem informa os hosts de e-mail que o proxy central precisa servir. */
+  setMailHostsProvider(provider: () => Promise<string[]>): void {
+    this.mailHostsProvider = provider;
+  }
+
+  /** Recalcula o Caddyfile com todos os projetos (e os hosts de e-mail) e recarrega. */
+  async refreshProxy(onLog?: (chunk: string) => void): Promise<void> {
+    await this.ensureLoaded();
+    await this.engine.syncCaddy(this.projects, onLog);
   }
 
   /** Variáveis de ambiente do projeto (valem a partir do próximo deploy). */

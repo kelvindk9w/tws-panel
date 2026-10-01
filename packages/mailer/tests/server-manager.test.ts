@@ -175,3 +175,165 @@ describe("StalwartManager.start — container existente", () => {
     expect(calls.find((a) => a[0] === "rm")).toEqual(["rm", "-f", "-v", "paas-stalwart"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Certificado de verdade e alias mail.<domínio> (validação real, 01/10/2026:
+// o app do projeto recusava o autoassinado e o nome paas-stalwart).
+// ---------------------------------------------------------------------------
+
+const CERT = { host: "mail.exemplo.com", cert: "CERT-PEM", key: "CHAVE-PEM" };
+const CERT2 = { host: "mail.outro.com", cert: "CERT2-PEM", key: "CHAVE2-PEM" };
+const ALL_ALIASES = JSON.stringify({ "paas-net": { Aliases: ["paas-stalwart", "mail.exemplo.com", "mail.outro.com"] } });
+const isNetworksInspect = (a: string[]) => a[0] === "inspect" && (a[2] ?? "").includes("Networks");
+
+const tlsManager = (extra: Record<string, unknown> = {}) =>
+  new StalwartManager({
+    configDir: path.join(dir, "stalwart"),
+    hostname: "mail.exemplo.com",
+    adminSecret: "s3gredo",
+    ports,
+    aliases: ["mail.exemplo.com", "mail.outro.com"],
+    certificates: [CERT2, CERT],
+    ...extra,
+  });
+
+describe("renderConfigToml — certificados", () => {
+  it("sem certificado: nenhuma seção [certificate.*] (Stalwart gera o autoassinado)", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    expect(renderConfigToml("mail.exemplo.com", "s")).not.toContain("[certificate.");
+  });
+
+  it("uma seção por certificado, lida de arquivo; o do hostname do servidor é o padrão", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    const toml = renderConfigToml("mail.exemplo.com", "s", ["mail.outro.com", "mail.exemplo.com"]);
+    expect(toml).toContain(
+      [
+        "[certificate.mail-exemplo-com]",
+        'cert = "%{file:/opt/stalwart-mail/etc/certs/mail-exemplo-com.crt}%"',
+        'private-key = "%{file:/opt/stalwart-mail/etc/certs/mail-exemplo-com.key}%"',
+        "default = true",
+      ].join("\n"),
+    );
+    expect(toml).toContain("[certificate.mail-outro-com]");
+    expect(toml.match(/default = true/g)).toHaveLength(1);
+  });
+
+  it("hostname do servidor sem certificado: o primeiro vira o padrão", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    const toml = renderConfigToml("mail.localhost", "s", ["mail.outro.com"]);
+    expect(toml).toMatch(/\[certificate\.mail-outro-com\][^[]*default = true/);
+  });
+});
+
+describe("StalwartManager — certificados e alias", () => {
+  it("cria com o alias paas-stalwart E os mail.<domínio>; entrega certificado e chave com modo 0600", async () => {
+    responder = daemon(null);
+    await tlsManager().start();
+    const create = calls.find((a) => a[0] === "create")!;
+    const aliases = create.flatMap((a, i) => (create[i - 1] === "--network-alias" ? [a] : []));
+    expect(aliases).toEqual(["paas-stalwart", "mail.exemplo.com", "mail.outro.com"]);
+
+    const files = copies[0]!.files;
+    expect(files.map((f) => f.name)).toEqual([
+      "etc/",
+      "etc/config.toml",
+      "etc/certs/",
+      "etc/certs/mail-outro-com.crt",
+      "etc/certs/mail-outro-com.key",
+      "etc/certs/mail-exemplo-com.crt",
+      "etc/certs/mail-exemplo-com.key",
+    ]);
+    expect(files.find((f) => f.name === "etc/certs/")!.mode).toBe(0o700);
+    expect(files.find((f) => f.name === "etc/certs/mail-exemplo-com.key")).toMatchObject({ content: "CHAVE-PEM", mode: 0o600 });
+    expect(files.find((f) => f.name === "etc/certs/mail-exemplo-com.crt")).toMatchObject({ content: "CERT-PEM", mode: 0o600 });
+    expect(String(files[1]!.content)).toContain("[certificate.mail-exemplo-com]");
+    // o espelho local nunca guarda chave privada
+    expect(await readFile(path.join(dir, "stalwart", "config.toml"), "utf8")).not.toContain("CHAVE-PEM");
+  });
+
+  it("container existente sem o alias novo: reconecta à rede com todos os aliases", async () => {
+    const networks = JSON.stringify({ "paas-net": { Aliases: ["paas-stalwart", "abc123"] } });
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok(networks) : undefined));
+    await tlsManager().start();
+    expect(calls).toContainEqual(["network", "disconnect", "paas-net", "paas-stalwart"]);
+    expect(calls).toContainEqual([
+      "network", "connect",
+      "--alias", "paas-stalwart", "--alias", "mail.exemplo.com", "--alias", "mail.outro.com",
+      "paas-net", "paas-stalwart",
+    ]);
+  });
+
+  it("container existente já com os aliases: não mexe na rede", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok(ALL_ALIASES) : undefined));
+    await tlsManager().start();
+    expect(calls.some((a) => a[0] === "network" && (a[1] === "connect" || a[1] === "disconnect"))).toBe(false);
+  });
+
+  it("container fora da rede: conecta sem desconectar; falha ao conectar é erro claro", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok("{}") : undefined));
+    await tlsManager().start();
+    expect(calls.some((a) => a[1] === "disconnect")).toBe(false);
+    expect(calls.some((a) => a[1] === "connect")).toBe(true);
+
+    responder = daemon({ running: true, mounts: NEW }, (a) =>
+      isNetworksInspect(a) ? ok("não é json") : a[1] === "connect" ? fail("negado") : undefined,
+    );
+    await expect(tlsManager().start()).rejects.toThrow(/falha ao conectar paas-stalwart à rede paas-net com os aliases: negado/);
+  });
+
+  it("applyTls com troca de certificado: entrega os arquivos e recarrega pela API, sem reiniciar", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok(ALL_ALIASES) : undefined));
+    const fetchMock = vi.fn(async () => new Response('{"data":{}}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await tlsManager({ apiBaseUrl: "http://paas-stalwart:8080" }).applyTls({ restart: false });
+      expect(result).toBe("reloaded");
+      expect(copies).toHaveLength(1);
+      expect(calls.some((a) => a[0] === "restart")).toBe(false);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe("http://paas-stalwart:8080/api/reload/certificate");
+      expect((init.headers as Record<string, string>).Authorization).toBe(
+        `Basic ${Buffer.from("admin:s3gredo").toString("base64")}`,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("applyTls: API de recarga falha → reinicia o container (o certificado novo precisa valer)", async () => {
+    responder = daemon({ running: true, mounts: NEW });
+    try {
+      vi.stubGlobal("fetch", vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      }));
+      expect(await manager().applyTls({ restart: false })).toBe("restarted");
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 401 })));
+      expect(await manager().applyTls({ restart: false })).toBe("restarted");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(calls.filter((a) => a[0] === "restart")).toEqual([["restart", "paas-stalwart"], ["restart", "paas-stalwart"]]);
+  });
+
+  it("applyTls com seção nova (primeiro certificado, hostname mudou): reinicia — o reload do Stalwart não relê o config.toml", async () => {
+    responder = daemon({ running: true, mounts: NEW });
+    expect(await manager().applyTls({ restart: true })).toBe("restarted");
+    expect(ordem()).toEqual(["<cp>", "restart"]);
+
+    responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "restart" ? fail("sem container") : undefined));
+    await expect(manager().applyTls({ restart: true })).rejects.toThrow(/falha ao reiniciar paas-stalwart: sem container/);
+  });
+
+  it("connectContainer: liga o painel à rede do Stalwart (idempotente)", async () => {
+    responder = daemon(null, (a) => (a[0] === "inspect" ? ok(JSON.stringify({ "paas-net": {} })) : undefined));
+    await manager().connectContainer("tws-panel");
+    expect(calls.some((a) => a[1] === "connect")).toBe(false);
+
+    responder = daemon(null, (a) => (a[0] === "inspect" ? ok("{}") : undefined));
+    await manager().connectContainer("tws-panel");
+    expect(calls).toContainEqual(["network", "connect", "paas-net", "tws-panel"]);
+
+    responder = daemon(null, (a) => (a[0] === "inspect" ? fail("x") : a[1] === "connect" ? fail("negado") : undefined));
+    await expect(manager().connectContainer("tws-panel")).rejects.toThrow(/falha ao conectar tws-panel à rede paas-net: negado/);
+  });
+});

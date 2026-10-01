@@ -66,6 +66,12 @@ export interface EngineContext extends IngestContext {
    * entrega segredos da carteira ao front de propósito).
    */
   injectEnvForProject?: (project: Project) => Promise<Record<string, string>>;
+  /**
+   * Hostnames do servidor de e-mail (mail.<domínio>) que o Caddy central
+   * precisa servir para emitir o certificado deles. Consultado a cada
+   * sincronização do proxy; ausente = nenhum.
+   */
+  mailHosts?: () => Promise<string[]>;
 }
 
 export type LogFn = (chunk: string) => void;
@@ -265,7 +271,7 @@ export class DeployEngine {
       (p) => this.upstreamFor(p),
     );
     targets.push(...projectCaddyTargets(project, upstream).map((t) => ({ ...t, published: wasPublished(project) })));
-    await this.caddy.apply(targets, onLog);
+    await this.caddy.apply(targets, onLog, await this.mailHosts(onLog));
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
     onLog("\n=== Etapa 5/5 · Health check ===\n");
@@ -274,7 +280,17 @@ export class DeployEngine {
 
   /** Recalcula o Caddyfile com TODOS os projetos (chamado após cada mudança). */
   async syncCaddy(projects: Project[], onLog?: LogFn): Promise<void> {
-    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog);
+    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, await this.mailHosts(onLog));
+  }
+
+  /** Hosts de e-mail; falha aqui não pode derrubar o proxy dos sites. */
+  private async mailHosts(onLog?: LogFn): Promise<string[]> {
+    try {
+      return (await this.ctx.mailHosts?.()) ?? [];
+    } catch (err) {
+      onLog?.(`aviso: hosts do servidor de e-mail indisponíveis (${err instanceof Error ? err.message : String(err)}).\n`);
+      return [];
+    }
   }
 
   /** Upstream (host:porta na rede paas-net) conforme o tipo do projeto. */

@@ -4,11 +4,15 @@
  * Persistência JSON em data/mail/mail.json (modo 0600 — guarda segredos),
  * seguindo o padrão das fases 0–2.
  */
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
   DKIM_SELECTOR,
+  PAAS_STALWART_CONTAINER,
+  type MailTlsHostStatus,
+  type MailTlsStatusResponse,
   type BlacklistCheckResponse,
   type DnsChecklistResponse,
   type DnsVerifyResponse,
@@ -20,21 +24,43 @@ import {
   type ProjectEmailConfig,
   type Project,
 } from "@paas/core";
+import { certificateStatus, type CertificateStatus } from "@paas/deploy";
 import {
   buildCredentials,
   buildDnsChecklist,
   buildSmtpEnv,
   checkDomainBlacklists,
+  checkExistingMail,
   checkIpBlacklists,
   generatePassword,
+  mailHostFor,
   maskEnv,
   projectMailboxAddress,
+  publicResolver,
+  readCaddyCertificate,
   StalwartClient,
   StalwartManager,
   verifyDnsRecords,
+  type DnsResolverLike,
+  type MailCertificate,
 } from "@paas/mailer";
 import type { ServerConfig } from "../config.js";
+import { isCloudflareIp, publicIpFromPanelDomain } from "../routes/domains.js";
 import { httpError } from "./deploy-service.js";
+
+/** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
+const PANEL_CONTAINER = "tws-panel";
+
+/**
+ * Certificados instalados no Stalwart na última sincronização (sem a chave):
+ * é o que decide entre não fazer nada, recarregar ou reiniciar (syncTls).
+ */
+interface AppliedTls {
+  hostname: string;
+  aliases: string[];
+  /** host → impressão digital do certificado instalado. */
+  certificates: Record<string, string>;
+}
 
 interface StoredDomain extends MailDomain {
   lastVerify: { at: string; ok: number; total: number } | null;
@@ -57,6 +83,7 @@ interface MailFile {
   domains: Record<string, StoredDomain>;
   mailboxes: Record<string, StoredMailbox>;
   projects: Record<string, StoredProjectEmail>;
+  tls?: AppliedTls | null;
 }
 
 const EMPTY_FILE: MailFile = {
@@ -65,6 +92,7 @@ const EMPTY_FILE: MailFile = {
   domains: {},
   mailboxes: {},
   projects: {},
+  tls: null,
 };
 
 /** Sink de auditoria mínimo — compatível com AuditService.record sem acoplar
@@ -88,7 +116,21 @@ export interface MailServiceOptions {
    * sem registro local). Default: console.warn.
    */
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  /**
+   * O painel roda em container (produção)? Então 127.0.0.1 é ele mesmo: a
+   * API e o TLS do Stalwart são alcançados pela paas-net (paas-stalwart:8080
+   * e mail.<domínio>:465), com o painel ligado a ela. Padrão: /.dockerenv.
+   */
+  inContainer?: boolean;
+  /** Lê o certificado de um host no Caddy (padrão: readCaddyCertificate). */
+  readCertificate?: (host: string) => Promise<MailCertificate | null>;
+  /** Conferência TLS como a de um app (padrão: certificateStatus). */
+  checkCertificate?: typeof certificateStatus;
+  /** Resolver DNS (padrão: servidores públicos). */
+  resolver?: DnsResolverLike;
 }
+
+export type TlsSyncResult = "none" | "reloaded" | "restarted";
 
 /** Resultado de removeDomain: caixas cuja remoção REMOTA falhou (a remoção
  * do domínio prossegue mesmo assim — ver removeDomain). */
@@ -101,8 +143,14 @@ export class MailService {
   private readonly mailFile: string;
   private readonly audit: MailAuditSink | undefined;
   private readonly log: (message: string, meta?: Record<string, unknown>) => void;
+  private readonly inContainer: boolean;
+  private readonly readCertificate: (host: string) => Promise<MailCertificate | null>;
+  private readonly checkCertificate: typeof certificateStatus;
+  private readonly resolverOverride: DnsResolverLike | undefined;
   private data: MailFile = structuredClone(EMPTY_FILE);
   private loaded = false;
+  private syncing: Promise<{ result: TlsSyncResult; certificates: MailCertificate[] }> | null = null;
+  private networkReady: Promise<void> | null = null;
 
   constructor(
     private readonly config: ServerConfig,
@@ -112,6 +160,30 @@ export class MailService {
     this.mailFile = path.join(this.mailDir, "mail.json");
     this.audit = opts.audit;
     this.log = opts.log ?? ((message, meta) => console.warn(message, meta ?? {}));
+    this.inContainer = opts.inContainer ?? existsSync("/.dockerenv");
+    this.readCertificate = opts.readCertificate ?? ((host) => readCaddyCertificate(host));
+    this.checkCertificate = opts.checkCertificate ?? certificateStatus;
+    this.resolverOverride = opts.resolver;
+  }
+
+  /**
+   * Em container, o painel só alcança a API e o TLS do Stalwart pela
+   * paas-net. Depois de uma atualização (`docker compose up --build`
+   * recria o painel) ele volta fora dela — reconecta uma vez por processo.
+   */
+  private async ensureNetworkAccess(): Promise<void> {
+    if (!this.inContainer || !this.data.adminSecret) return;
+    this.networkReady ??= this.manager()
+      .connectContainer(PANEL_CONTAINER)
+      .catch((err: unknown) => {
+        this.networkReady = null;
+        throw err;
+      });
+    await this.networkReady;
+  }
+
+  private resolver(): DnsResolverLike {
+    return this.resolverOverride ?? publicResolver();
   }
 
   // -------------------------------------------------------------------------
@@ -143,12 +215,34 @@ export class MailService {
 
   /** Hostname do servidor: env PAAS_MAIL_HOSTNAME → mail.<1º domínio> → mail.localhost. */
   private hostname(): string {
-    return this.config.mailHostname ?? this.data.hostname ?? "mail.localhost";
+    const first = Object.keys(this.data.domains)[0];
+    return this.config.mailHostname ?? this.data.hostname ?? (first ? mailHostFor(first) : "mail.localhost");
   }
 
-  /** IPv4 usado no checklist DNS (PAAS_PUBLIC_IP ou primeira interface externa). */
+  /**
+   * Nomes do servidor de e-mail: o hostname dele e o mail.<domínio> de cada
+   * domínio (é o nome do registro A e do MX no checklist). Cada um ganha
+   * certificado (Caddy), alias na paas-net e vira o SMTP_HOST dos projetos.
+   */
+  private hostList(): string[] {
+    const hosts = [this.hostname(), ...Object.keys(this.data.domains).map(mailHostFor)];
+    return [...new Set(hosts)].filter((h) => h !== "localhost" && !h.endsWith(".localhost"));
+  }
+
+  async mailHosts(): Promise<string[]> {
+    await this.ensureLoaded();
+    return this.hostList();
+  }
+
+  /**
+   * IPv4 usado no checklist DNS: PAAS_PUBLIC_IP, o IP do endereço sslip.io do
+   * painel ou a primeira interface externa (esta última só serve fora de
+   * container: dentro dele a interface é a da rede do Docker).
+   */
   private serverIp(): string {
     if (this.config.publicIp) return this.config.publicIp;
+    const fromPanel = publicIpFromPanelDomain(this.config.panelDomain);
+    if (fromPanel) return fromPanel;
     for (const infos of Object.values(os.networkInterfaces())) {
       for (const info of infos ?? []) {
         if (info.family === "IPv4" && !info.internal) return info.address;
@@ -157,7 +251,12 @@ export class MailService {
     return "127.0.0.1";
   }
 
-  private manager(): StalwartManager {
+  /** Em container, a API do Stalwart pela paas-net (porta do container, não a do host). */
+  private apiBaseUrl(): string {
+    return this.inContainer ? `http://${PAAS_STALWART_CONTAINER}:8080` : `http://127.0.0.1:${this.config.mailPorts.http}`;
+  }
+
+  private manager(certificates: MailCertificate[] = []): StalwartManager {
     if (!this.data.adminSecret) {
       throw httpError(409, "mail_not_initialized", "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro.");
     }
@@ -166,6 +265,9 @@ export class MailService {
       hostname: this.hostname(),
       adminSecret: this.data.adminSecret,
       ports: this.config.mailPorts,
+      aliases: this.hostList(),
+      certificates,
+      ...(this.inContainer ? { apiBaseUrl: this.apiBaseUrl() } : {}),
     });
   }
 
@@ -173,11 +275,7 @@ export class MailService {
     if (!this.data.adminSecret) {
       throw httpError(409, "mail_not_initialized", "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro.");
     }
-    return new StalwartClient(
-      `http://127.0.0.1:${this.config.mailPorts.http}`,
-      "admin",
-      this.data.adminSecret,
-    );
+    return new StalwartClient(this.apiBaseUrl(), "admin", this.data.adminSecret);
   }
 
   // -------------------------------------------------------------------------
@@ -206,10 +304,145 @@ export class MailService {
     await this.ensureLoaded();
     this.data.adminSecret ??= generatePassword(24);
     await this.save();
-    const manager = this.manager();
+    // Já sobe com os certificados que o Caddy tiver emitido.
+    const certificates = await this.currentCertificates();
+    const manager = this.manager(certificates);
+    // Já rodando, start() só regrava os arquivos — seção nova não vale até
+    // reiniciar. Aí o estado aplicado fica como estava, e a sincronização
+    // seguinte (syncTls) decide o reinício.
+    const wasRunning = (await manager.status()).running;
     await manager.start();
-    await manager.waitReady(this.config.mailPorts.http);
+    if (this.inContainer) await manager.connectContainer(PANEL_CONTAINER);
+    await manager.waitReady();
+    if (!wasRunning) {
+      this.data.tls = this.tlsState(certificates);
+      await this.save();
+    }
     return manager.status();
+  }
+
+  // -------------------------------------------------------------------------
+  // Certificado do servidor de e-mail (mail.<domínio>)
+  // -------------------------------------------------------------------------
+
+  /** Certificados já emitidos pelo Caddy para os hosts de e-mail. */
+  private async currentCertificates(): Promise<MailCertificate[]> {
+    const found = await Promise.all(this.hostList().map((h) => this.readCertificate(h)));
+    return found.filter((c): c is MailCertificate => c !== null);
+  }
+
+  private tlsState(certificates: MailCertificate[]): AppliedTls {
+    return {
+      hostname: this.hostname(),
+      aliases: this.hostList(),
+      certificates: Object.fromEntries(certificates.map((c) => [c.host, c.fingerprint])),
+    };
+  }
+
+  /**
+   * Instala no Stalwart os certificados que o Caddy emitiu — e os renovados
+   * (o Let's Encrypt renova a cada ~60 dias; o painel chama isto a cada hora
+   * e ao abrir a página E-mail). Compara com o que foi instalado da última
+   * vez: nada mudou → nada; só o conteúdo (renovação) ou os aliases → entrega
+   * e recarrega sem derrubar conexão; certificado de um nome novo ou outro
+   * hostname → entrega e reinicia (o Stalwart não relê seção nova do
+   * config.toml sem reiniciar — conferido na v0.11.8 real).
+   */
+  async syncTls(): Promise<TlsSyncResult> {
+    return (await this.syncOnce()).result;
+  }
+
+  private syncOnce(): Promise<{ result: TlsSyncResult; certificates: MailCertificate[] }> {
+    this.syncing ??= this.doSyncTls().finally(() => {
+      this.syncing = null;
+    });
+    return this.syncing;
+  }
+
+  private async doSyncTls(): Promise<{ result: TlsSyncResult; certificates: MailCertificate[] }> {
+    await this.ensureLoaded();
+    if (!this.data.adminSecret) return { result: "none", certificates: [] };
+    await this.ensureNetworkAccess();
+    const certificates = await this.currentCertificates();
+    if (!(await this.manager().status()).running) return { result: "none", certificates };
+
+    const wanted = this.tlsState(certificates);
+    const applied = this.data.tls ?? null;
+    const sameNames =
+      applied !== null &&
+      applied.hostname === wanted.hostname &&
+      Object.keys(applied.certificates).sort().join(",") === Object.keys(wanted.certificates).sort().join(",");
+    const sameContent =
+      sameNames &&
+      Object.entries(wanted.certificates).every(([h, fp]) => applied.certificates[h] === fp) &&
+      applied.aliases.join(",") === wanted.aliases.join(",");
+    if (sameContent) return { result: "none", certificates };
+
+    const result = await this.manager(certificates).applyTls({ restart: !sameNames });
+    this.data.tls = wanted;
+    await this.save();
+    return { result, certificates };
+  }
+
+  /**
+   * Estado do certificado de cada host de e-mail, conferido como um app
+   * confere (TLS com SNI = mail.<domínio>, cadeia e nome validados), e o que
+   * falta quando ainda não está válido.
+   */
+  async tlsStatus(): Promise<MailTlsStatusResponse> {
+    await this.ensureLoaded();
+    let syncError: string | null = null;
+    let certificates: MailCertificate[] = [];
+    try {
+      certificates = (await this.syncOnce()).certificates;
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : String(err);
+    }
+    const serverRunning = this.data.adminSecret ? (await this.manager().status()).running : false;
+    const expectedIp = this.serverIp();
+    const hosts = await Promise.all(
+      this.hostList().map(async (host): Promise<MailTlsHostStatus> => {
+        const issued = certificates.some((c) => c.host === host);
+        const [tls, dns] = await Promise.all([
+          serverRunning
+            ? this.checkCertificate({
+                // Em container, pelo alias na paas-net — o mesmo caminho do app.
+                host: this.inContainer ? host : "127.0.0.1",
+                port: this.inContainer ? 465 : this.config.mailPorts.submissions,
+                servername: host,
+                timeoutMs: 5_000,
+              })
+            : Promise.resolve<CertificateStatus>({ ok: false, issuer: null, validTo: null, error: null }),
+          this.dnsOf(host, expectedIp),
+        ]);
+        return {
+          host,
+          ok: tls.ok,
+          issuer: tls.ok ? tls.issuer : null,
+          validTo: tls.ok ? tls.validTo : null,
+          error: tls.ok ? null : tls.error,
+          issued,
+          dns,
+          hint: tls.ok ? null : tlsHint(host, { serverRunning, issued, dns }),
+        };
+      }),
+    );
+    return { checkedAt: new Date().toISOString(), serverRunning, hosts, syncError };
+  }
+
+  private async dnsOf(host: string, expectedIp: string): Promise<MailTlsHostStatus["dns"]> {
+    const resolved = await this.resolver()
+      .resolve4(host)
+      .catch(() => [] as string[]);
+    const status =
+      resolved.length === 0
+        ? "missing"
+        : resolved.includes(expectedIp)
+          ? "ok"
+          : resolved.every(isCloudflareIp)
+            ? "cloudflare"
+            : "other_ip";
+    return { status, resolved, expectedIp };
   }
 
   async stopServer(): Promise<MailServerStatus> {
@@ -264,11 +497,33 @@ export class MailService {
     return { ...domain, mailboxCount };
   }
 
-  async addDomain(name: string): Promise<MailDomainSummary> {
+  async addDomain(name: string, opts: { confirmExistingMail?: boolean } = {}): Promise<MailDomainSummary> {
     await this.ensureLoaded();
     const domain = normalizeMailDomain(name);
     if (this.data.domains[domain]) {
       throw httpError(409, "domain_exists", `O domínio ${domain} já está cadastrado.`);
+    }
+    // Motivo real (01/10/2026): o dono do produto ia cadastrar o domínio
+    // principal da empresa, que recebe e-mail em outro provedor. O checklist
+    // manda apontar o MX para esta VPS — seguir isso desviaria o e-mail
+    // dela. Sem confirmação explícita, o cadastro para aqui.
+    if (!opts.confirmExistingMail) {
+      const existing = await checkExistingMail(domain, [mailHostFor(domain), this.hostname()], this.resolver());
+      if (existing.status === "elsewhere" || existing.status === "unknown") {
+        const err = httpError(
+          409,
+          "domain_receives_mail",
+          existing.status === "elsewhere"
+            ? `O domínio ${domain} já recebe e-mail em ${existing.servers.join(", ")}. Seguir o checklist ` +
+                `(apontar o MX para esta VPS) desviaria todo o e-mail que hoje chega em ${existing.servers[0]}. ` +
+                `Recomendado: use um subdomínio só para o envio, como ${existing.suggestedDomain}.`
+            : `Não foi possível consultar quem recebe o e-mail de ${domain} hoje (registro MX). Se o domínio ` +
+                `já tem e-mail funcionando em outro provedor, apontar o MX para esta VPS desviaria esse e-mail. ` +
+                `Recomendado: use um subdomínio só para o envio, como ${existing.suggestedDomain}.`,
+        );
+        err.details = { existingMail: existing };
+        throw err;
+      }
     }
     await this.requireRunning();
 
@@ -521,6 +776,7 @@ export class MailService {
       return { enabled: false, domain: null, mailbox: null, mailFrom: null, env: {} };
     }
     const env = buildSmtpEnv({
+      host: mailHostFor(stored.domain),
       mailbox: mailbox.id,
       password: mailbox.password,
       mailFrom: mailbox.id,
@@ -544,7 +800,12 @@ export class MailService {
     if (!stored) return {};
     const mailbox = this.data.mailboxes[stored.mailbox];
     if (!mailbox) return {};
-    return buildSmtpEnv({ mailbox: mailbox.id, password: mailbox.password, mailFrom: mailbox.id });
+    return buildSmtpEnv({
+      host: mailHostFor(stored.domain),
+      mailbox: mailbox.id,
+      password: mailbox.password,
+      mailFrom: mailbox.id,
+    });
   };
 
   // -------------------------------------------------------------------------
@@ -558,11 +819,47 @@ export class MailService {
   }
 
   private async requireRunning(): Promise<void> {
+    await this.ensureNetworkAccess();
     const status = await this.manager().status();
     if (!status.running) {
       throw httpError(409, "mail_server_stopped", "O servidor de e-mail está parado. Inicie-o antes de continuar.");
     }
   }
+}
+
+/** O que falta para o certificado de `host` valer (pt-BR, para o operador). */
+function tlsHint(
+  host: string,
+  s: { serverRunning: boolean; issued: boolean; dns: MailTlsHostStatus["dns"] },
+): string {
+  if (!s.serverRunning) return "O servidor de e-mail está parado. Inicie-o para conferir o certificado.";
+  const { dns } = s;
+  if (!s.issued) {
+    if (dns.status === "missing") {
+      return (
+        `Falta o registro A de ${host} apontando para ${dns.expectedIp}. Na Cloudflare, deixe a nuvem ` +
+        `CINZA ("Somente DNS"): com a nuvem laranja o certificado não é emitido e o e-mail não chega à VPS.`
+      );
+    }
+    if (dns.status === "cloudflare") {
+      return (
+        `${host} está com o proxy da Cloudflare ligado (nuvem laranja): responde com os IPs da Cloudflare, ` +
+        `não com o da VPS. Na Cloudflare, abra o registro A e mude para a nuvem CINZA ("Somente DNS"), ` +
+        `com o valor ${dns.expectedIp}.`
+      );
+    }
+    if (dns.status === "other_ip") {
+      return `${host} aponta para ${dns.resolved.join(", ")}, não para esta VPS. Troque o registro A para ${dns.expectedIp}.`;
+    }
+    return (
+      `O DNS de ${host} já aponta para esta VPS; o certificado está sendo emitido (costuma levar alguns ` +
+      `minutos). Se demorar, confira se as portas 80 e 443 estão liberadas no firewall do provedor.`
+    );
+  }
+  return (
+    `O certificado de ${host} já foi emitido, mas o servidor de e-mail ainda apresenta outro. O painel o ` +
+    `instala sozinho em instantes; clique em "Conferir de novo".`
+  );
 }
 
 export function normalizeMailDomain(name: string): string {

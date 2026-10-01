@@ -98,3 +98,25 @@ describe("DeployService.startPanelRoute — tenta de novo no boot", () => {
     expect(ensure).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Certificado do servidor de e-mail (validação real, 01/10/2026): o Caddy
+ * central serve mail.<domínio> para emitir o certificado que o Stalwart usa.
+ * O módulo de e-mail informa os hosts; refreshProxy recalcula o Caddyfile.
+ */
+describe("DeployService — hosts do servidor de e-mail no proxy", () => {
+  it("refreshProxy sincroniza o Caddy mesmo no modo túnel (o certificado de e-mail precisa do proxy)", async () => {
+    const sync = vi.spyOn(DeployEngine.prototype, "syncCaddy").mockResolvedValue(undefined);
+    const svc = servico(null);
+    await svc.refreshProxy();
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it("o motor recebe os hosts do provedor registrado; sem provedor, lista vazia", async () => {
+    const svc = servico(null);
+    const ctx = (svc as unknown as { engineCtx: { mailHosts: () => Promise<string[]> } }).engineCtx;
+    await expect(ctx.mailHosts()).resolves.toEqual([]);
+    svc.setMailHostsProvider(async () => ["mail.exemplo.com"]);
+    await expect(ctx.mailHosts()).resolves.toEqual(["mail.exemplo.com"]);
+  });
+});
