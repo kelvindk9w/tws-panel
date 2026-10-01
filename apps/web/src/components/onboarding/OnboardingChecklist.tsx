@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
-  isOnboardingStepResolved,
+  isOnboardingFirstVisit,
   nextOnboardingStep,
   type OnboardingResponse,
   type OnboardingStep,
@@ -15,6 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
   ArrowRight,
+  Check,
   ChevronDown,
   ChevronUp,
   CircleAlert,
@@ -26,9 +27,9 @@ import {
   FolderOpen,
   ListChecks,
   Loader2,
+  Minus,
   RefreshCw,
   Sparkles,
-  X,
 } from "lucide-react";
 import { ONBOARDING_CONTENT } from "./steps-content";
 
@@ -79,14 +80,17 @@ function StepItem({
   busy,
   onSkip,
   onGo,
+  defaultOpen = false,
 }: {
   step: OnboardingStep;
   number: number;
   busy: boolean;
   onSkip: (skipped: boolean) => void;
   onGo: () => void;
+  /** No compacto, a orientação do passo mostrado já vem aberta. */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const content = ONBOARDING_CONTENT[step.id];
   const Icon = content.icon;
   const muted = step.status === "soon" || step.status === "skipped";
@@ -172,18 +176,21 @@ function StepList({
   busyId,
   onSkip,
   onGo,
+  defaultOpen,
 }: {
   steps: OnboardingStep[];
   all: OnboardingStep[];
   busyId: string | null;
   onSkip: (step: OnboardingStep, skipped: boolean) => void;
   onGo: () => void;
+  defaultOpen?: boolean;
 }) {
   return (
     <ul className="flex flex-col divide-y">
       {steps.map((step) => (
         <StepItem
           key={step.id}
+          defaultOpen={defaultOpen}
           step={step}
           number={all.indexOf(step) + 1}
           busy={busyId === step.id}
@@ -195,42 +202,117 @@ function StepList({
   );
 }
 
-function AllStepsModal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+/** Bolinha numerada do compacto: feito com check verde, o passo mostrado destacado, o resto aguardando. */
+function StepDot({ step, number, selected }: { step: OnboardingStep; number: number; selected: boolean }) {
+  const base = "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors";
+  if (step.status === "done")
+    return (
+      <span className={cn(base, "border-emerald-500 bg-emerald-500/15 text-emerald-400", selected && "ring-2 ring-emerald-400/50 ring-offset-2 ring-offset-background")}>
+        <Check className="h-4 w-4" />
+      </span>
+    );
+  if (step.status === "skipped")
+    return (
+      <span className={cn(base, "border-dashed text-muted-foreground", selected && "ring-2 ring-sky-400/50 ring-offset-2 ring-offset-background")}>
+        <Minus className="h-4 w-4" />
+      </span>
+    );
+  const attention = step.status === "in_progress" || step.status === "unknown";
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <span
+      className={cn(
+        base,
+        step.status === "soon" ? "border-dashed text-muted-foreground" : "text-muted-foreground",
+        attention && "border-amber-500/60 text-amber-400",
+        selected && "border-sky-400 bg-sky-500/15 text-sky-300 ring-2 ring-sky-400/40 ring-offset-2 ring-offset-background",
+      )}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Deixe o painel pronto — todos os passos"
-        className="flex max-h-[90dvh] w-full max-w-2xl flex-col gap-4 overflow-y-auto rounded-xl border bg-background p-4 shadow-2xl sm:p-6"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold">Deixe o painel pronto</h2>
-            <p className="text-sm text-muted-foreground">Todos os passos, na ordem recomendada.</p>
-          </div>
-          <Button variant="ghost" size="icon" aria-label="Fechar" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-        {children}
-      </div>
-    </div>
+      {number}
+    </span>
   );
+}
+
+function Stepper({
+  steps,
+  selectedId,
+  currentId,
+  onSelect,
+}: {
+  steps: OnboardingStep[];
+  selectedId: string | null;
+  currentId: string | null;
+  onSelect: (id: OnboardingStep["id"]) => void;
+}) {
+  return (
+    <ol data-testid="onboarding-stepper" className="flex items-start">
+      {steps.map((step, i) => {
+        const title = ONBOARDING_CONTENT[step.id].title;
+        const selected = step.id === selectedId;
+        return (
+          <li key={step.id} className="flex min-w-0 flex-1 items-start last:flex-none">
+            <button
+              type="button"
+              aria-label={`${i + 1}. ${title}: ${STATUS_LABEL[step.status]}`}
+              aria-current={step.id === currentId ? "step" : undefined}
+              aria-pressed={selected}
+              title={`${title} — ${STATUS_LABEL[step.status]}`}
+              onClick={() => onSelect(step.id)}
+              className="flex w-8 flex-col items-center gap-1 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:w-20"
+            >
+              <StepDot step={step} number={i + 1} selected={selected} />
+              <span
+                className={cn(
+                  "hidden text-center text-[11px] leading-tight sm:block",
+                  selected ? "font-medium text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {title}
+              </span>
+            </button>
+            {i < steps.length - 1 && (
+              <span
+                aria-hidden
+                className={cn("mt-4 h-px min-w-2 flex-1", step.status === "done" ? "bg-emerald-500/60" : "bg-border")}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ProjectsDirNote({ dir }: { dir: string }) {
+  return (
+    <p className="flex items-start gap-2 border-t pt-3 text-xs text-muted-foreground">
+      <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 break-words">
+        Pasta dos projetos na VPS: <code className="text-foreground">{dir}</code> — definida na instalação, nada a
+        fazer.
+      </span>
+    </p>
+  );
+}
+
+function summary(steps: OnboardingStep[]): string {
+  const count = (pred: (s: OnboardingStep) => boolean) => steps.filter(pred).length;
+  const done = count((s) => s.status === "done");
+  const skipped = count((s) => s.status === "skipped");
+  const soon = count((s) => s.status === "soon");
+  const todo = steps.length - done - skipped - soon;
+  const parts = [`${done} ${done === 1 ? "feito" : "feitos"}`];
+  if (skipped) parts.push(`${skipped} não vou usar`);
+  if (todo) parts.push(`${todo} a fazer`);
+  if (soon) parts.push(`${soon} em breve no painel`);
+  return parts.join(" · ");
 }
 
 /**
  * Roteiro "Deixe o painel pronto".
- *  - Dashboard: aberto até a pessoa começar; depois, compacto (só o próximo
- *    passo, com "Ver todos os passos" numa janela); some quando nada mais
+ *  - Dashboard: aberto só no primeiro acesso (isOnboardingFirstVisit);
+ *    depois, compacto: números 1 a 5 com a situação de cada passo e a
+ *    orientação só do passo atual (ou do número clicado); "Ver todos os
+ *    passos" expande a lista no próprio cartão; some quando nada mais
  *    pede ação. Sem resposta do servidor, não aparece.
  *  - Configurações: sempre a lista inteira, mesmo com tudo resolvido.
  */
@@ -247,6 +329,8 @@ export function OnboardingChecklist({
   const [checking, setChecking] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  /** Passo escolhido nos números do compacto (null = o próximo que pede algo). */
+  const [selectedId, setSelectedId] = useState<OnboardingStep["id"] | null>(null);
 
   const load = useCallback(async () => {
     setChecking(true);
@@ -311,11 +395,11 @@ export function OnboardingChecklist({
   }
 
   const actionable = data.steps.filter((s) => s.status !== "soon");
-  const resolved = actionable.filter((s) => isOnboardingStepResolved(s.status)).length;
-  const soonCount = data.steps.length - actionable.length;
-  const compact = variant === "dashboard" && data.started;
+  const resolved = actionable.filter((s) => s.status === "done" || s.status === "skipped").length;
+  const compact = variant === "dashboard" && !isOnboardingFirstVisit(data);
   const next = nextOnboardingStep(data.steps);
-  const visible = compact && next ? [next] : data.steps;
+  const shown = data.steps.find((s) => s.id === selectedId) ?? next;
+  const listAll = !compact || showAll || !shown;
   const listProps = { all: data.steps, busyId, onSkip: (s: OnboardingStep, v: boolean) => void skip(s, v), onGo: () => void start() };
 
   return (
@@ -329,7 +413,7 @@ export function OnboardingChecklist({
             <h2 className="font-semibold tracking-tight">Deixe o painel pronto</h2>
             <p className="text-sm text-muted-foreground">
               {compact
-                ? "Próximo passo para deixar o painel seguro e completo."
+                ? summary(data.steps)
                 : "O que falta configurar depois da instalação, na ordem recomendada. O painel confere sozinho o que já está feito."}
             </p>
           </div>
@@ -343,21 +427,31 @@ export function OnboardingChecklist({
               <ChevronUp className="h-4 w-4" /> Recolher
             </Button>
           )}
-          {compact && (
-            <Button variant="outline" size="sm" onClick={() => setShowAll(true)}>
-              <ListChecks className="h-4 w-4" /> Ver todos os passos
+          {compact && shown && (
+            <Button variant="outline" size="sm" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
+              {showAll ? <ChevronUp className="h-4 w-4" /> : <ListChecks className="h-4 w-4" />}
+              {showAll ? "Mostrar só o próximo" : "Ver todos os passos"}
             </Button>
           )}
         </div>
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <Progress value={actionable.length ? (resolved / actionable.length) * 100 : 100} className="h-1.5" />
-        <p className="text-xs text-muted-foreground">
-          {resolved} de {actionable.length} resolvidos
-          {soonCount > 0 && ` · ${soonCount} em breve no painel`}
-        </p>
-      </div>
+      {compact ? (
+        <Stepper
+          steps={data.steps}
+          selectedId={listAll ? null : (shown?.id ?? null)}
+          currentId={next?.id ?? null}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setShowAll(false);
+          }}
+        />
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          <Progress value={actionable.length ? (resolved / actionable.length) * 100 : 100} className="h-1.5" />
+          <p className="text-xs text-muted-foreground">{summary(data.steps)}</p>
+        </div>
+      )}
 
       {data.complete && (
         <p className="flex items-center gap-2 text-sm text-emerald-400">
@@ -365,35 +459,19 @@ export function OnboardingChecklist({
         </p>
       )}
 
-      <StepList steps={visible} {...listProps} />
-
-      {!compact && (
-        <p className="flex items-start gap-2 border-t pt-3 text-xs text-muted-foreground">
-          <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 break-words">
-            Pasta dos projetos na VPS: <code className="text-foreground">{data.projectsDir}</code> — definida na
-            instalação, nada a fazer.
-          </span>
-        </p>
+      {listAll ? (
+        <>
+          <StepList steps={data.steps} {...listProps} />
+          <ProjectsDirNote dir={data.projectsDir} />
+        </>
+      ) : (
+        <StepList key={shown!.id} steps={[shown!]} defaultOpen {...listProps} />
       )}
 
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
-      )}
-
-      {showAll && (
-        <AllStepsModal onClose={() => setShowAll(false)}>
-          <StepList steps={data.steps} {...listProps} />
-          <p className="flex items-start gap-2 border-t pt-3 text-xs text-muted-foreground">
-            <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 break-words">
-              Pasta dos projetos na VPS: <code className="text-foreground">{data.projectsDir}</code> — definida na
-              instalação, nada a fazer.
-            </span>
-          </p>
-        </AllStepsModal>
       )}
     </Card>
   );

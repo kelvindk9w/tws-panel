@@ -3,8 +3,9 @@
  * Pedido do dono do produto (01/10/2026): depois da instalação, o painel não
  * dizia o que faltava configurar.
  *  - primeiro acesso (roteiro não começado): ABERTO, com todos os passos;
- *  - depois de começar: COMPACTO, só o próximo passo, e "Ver todos os passos"
- *    abre uma janela com a lista inteira;
+ *  - depois de começar (ou já com algo feito além das proteções): COMPACTO,
+ *    com os números 1 a 5 e a orientação só do passo atual; "Ver todos os
+ *    passos" expande a lista inteira no cartão;
  *  - cada passo tem "Como fazer" (o que é, por que importa, passo a passo e o
  *    botão que leva à tela certa);
  *  - tudo resolvido: some do Dashboard e continua em Configurações;
@@ -134,31 +135,68 @@ describe("primeiro acesso", () => {
 });
 
 describe("depois de começar (compacto)", () => {
-  it("mostra só o próximo passo e o progresso; 'Ver todos os passos' abre a janela com a lista inteira", async () => {
+  // Pedido do dono do produto (01/10/2026): depois do primeiro acesso, só os
+  // números 1 a 5 no topo (feitos com check verde, o atual destacado, os que
+  // faltam aguardando) e a orientação do passo atual; "Ver todos os passos"
+  // expande a lista inteira no próprio cartão.
+  it("números 1 a 5 com a situação de cada passo, e só a orientação do passo atual", async () => {
     serve(response({ started: true }));
     renderChecklist();
     const card = await screen.findByTestId("onboarding-card");
+    const stepper = within(card).getByTestId("onboarding-stepper");
+    const dots = within(stepper).getAllByRole("button");
+    expect(dots).toHaveLength(5);
+    expect(dots[0]).toHaveAccessibleName(/1\. Proteções da VPS: feito/);
+    expect(dots[1]).toHaveAccessibleName(/2\. Verificação em duas etapas: a fazer/);
+    expect(dots[1]).toHaveAttribute("aria-current", "step");
+    expect(dots[2]).toHaveAccessibleName(/3\. Domínio do painel: em breve/);
     expect(within(card).getAllByTestId(/^onboarding-step-/)).toHaveLength(1);
-    expect(within(card).getByTestId("onboarding-step-two-factor")).toBeInTheDocument();
-    // 1 de 3 que dá para fazer hoje (os "em breve" ficam de fora da conta).
-    expect(within(card).getByText(/1 de 3 resolvidos/)).toBeInTheDocument();
+    // a orientação do passo atual já vem aberta
+    const item = within(card).getByTestId("onboarding-step-two-factor");
+    expect(within(item).getByText("Passo a passo")).toBeInTheDocument();
+    expect(within(card).getByText(/1 feito · 2 a fazer · 2 em breve no painel/)).toBeInTheDocument();
+    // a pasta dos projetos fica só na lista inteira
+    expect(within(card).queryByText("/opt/tws-projects")).not.toBeInTheDocument();
+  });
 
+  it("já com algo feito além das proteções, abre compacto mesmo sem ter clicado em nada", async () => {
+    serve(response({ started: false }, { "two-factor": "done" }));
+    renderChecklist();
+    const card = await screen.findByTestId("onboarding-card");
+    expect(within(card).getAllByTestId(/^onboarding-step-/)).toHaveLength(1);
+    expect(within(card).getByTestId("onboarding-step-email")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /4\. E-mail do servidor/ })).toHaveAttribute("aria-current", "step");
+  });
+
+  it("clicar num número mostra a orientação daquele passo", async () => {
+    serve(response({ started: true }));
+    renderChecklist();
+    const card = await screen.findByTestId("onboarding-card");
+    fireEvent.click(within(card).getByRole("button", { name: /3\. Domínio do painel/ }));
+    expect(within(card).getByTestId("onboarding-step-panel-domain")).toBeInTheDocument();
+    expect(within(card).queryByTestId("onboarding-step-two-factor")).not.toBeInTheDocument();
+  });
+
+  it("'Ver todos os passos' expande a lista inteira no cartão; 'Mostrar só o próximo' volta", async () => {
+    serve(response({ started: true }));
+    renderChecklist();
+    const card = await screen.findByTestId("onboarding-card");
     fireEvent.click(within(card).getByRole("button", { name: /Ver todos os passos/ }));
-    const dialog = await screen.findByRole("dialog", { name: /Deixe o painel pronto/ });
-    expect(within(dialog).getAllByTestId(/^onboarding-step-/)).toHaveLength(5);
-    fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(within(card).getAllByTestId(/^onboarding-step-/)).toHaveLength(5);
+    expect(within(card).getByText("/opt/tws-projects")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /Mostrar só o próximo/ }));
+    expect(within(card).getAllByTestId(/^onboarding-step-/)).toHaveLength(1);
   });
 
   it("'Como fazer' explica o que é, por que importa e o passo a passo, com o botão para a tela certa", async () => {
     serve(response({ started: true }));
     renderChecklist();
     const item = await screen.findByTestId("onboarding-step-two-factor");
-    expect(within(item).queryByText("O que é")).not.toBeInTheDocument();
-    fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
     expect(within(item).getByText("O que é")).toBeInTheDocument();
     expect(within(item).getByText("Por que importa")).toBeInTheDocument();
-    expect(within(item).getByText("Passo a passo")).toBeInTheDocument();
+    fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
+    expect(within(item).queryByText("O que é")).not.toBeInTheDocument();
+    fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
     fireEvent.click(within(item).getByRole("link", { name: /Ativar a verificação/ }));
     await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/settings/security#two-factor"));
   });
@@ -176,7 +214,6 @@ describe("e-mail do servidor (opcional)", () => {
     serve(response({ started: true }, { "two-factor": "done" }));
     renderChecklist();
     const item = await screen.findByTestId("onboarding-step-email");
-    fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
     expect(within(item).getByText(/envio\.exemplo\.com\.br/)).toBeInTheDocument();
     expect(within(item).getByText(/desviaria o e-mail/)).toBeInTheDocument();
     expect(within(item).getByRole("link", { name: /Abrir E-mail/ })).toHaveAttribute("href", "/mail");
@@ -211,6 +248,9 @@ describe("passos em breve", () => {
     const item = await screen.findByTestId("onboarding-step-panel-domain");
     fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
     expect(within(item).getByText(/IP da VPS no nome/)).toBeInTheDocument();
+    // diz o que já dá para adiantar e manda seguir para o próximo passo
+    expect(within(item).getByText(/já pode adiantar/)).toBeInTheDocument();
+    expect(within(item).getByText(/nuvem cinza/)).toBeInTheDocument();
     expect(within(item).queryByRole("link")).not.toBeInTheDocument();
   });
 
