@@ -71,3 +71,13 @@ export function nextOnboardingStep(steps: readonly OnboardingStep[]): Onboarding
 export function isOnboardingComplete(steps: readonly OnboardingStep[]): boolean {
   return nextOnboardingStep(steps) === null;
 }
+
+/**
+ * Primeiro acesso: o roteiro ainda não foi começado e a pessoa não fez nada
+ * nele além das proteções da VPS (que vêm do assistente da instalação). Só
+ * nesse caso o Dashboard mostra os passos todos abertos; depois, compacto.
+ */
+export function isOnboardingFirstVisit(res: Pick<OnboardingResponse, "started" | "steps">): boolean {
+  if (res.started) return false;
+  return res.steps.every((s) => s.id === "hardening" || s.status === "pending" || s.status === "soon" || s.status === "unknown");
+}

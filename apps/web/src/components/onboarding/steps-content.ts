@@ -58,8 +58,9 @@ export const ONBOARDING_CONTENT: Record<OnboardingStepId, OnboardingStepContent>
       "Um endereço seu para abrir o painel, como painel.exemplo.com.br, no lugar do endereço automático criado na instalação.",
     why: "O endereço atual tem o IP da VPS no nome: entrega onde o seu servidor está e é difícil de lembrar. Um domínio seu é mais discreto e fácil de guardar.",
     howTo: [
-      "Esta opção ainda não existe no painel — está em preparação.",
-      "Quando chegar: você cria no seu provedor de DNS um registro A apontando para o IP da VPS, informa o domínio aqui e o painel emite o certificado HTTPS sozinho.",
+      "Esta opção ainda não existe no painel: chega numa próxima versão. Por enquanto, siga para o próximo passo.",
+      "O que você já pode adiantar: escolha um subdomínio para o painel (ex.: painel.exemplo.com.br) e crie no seu provedor de DNS um registro do tipo A com esse nome, apontando para o IP da VPS. No Cloudflare, deixe a nuvem cinza (“Somente DNS”).",
+      "Quando a opção chegar: você informa o domínio em Configurações, o painel emite o certificado HTTPS sozinho e, depois de abrir o painel pelo endereço novo, você pode desligar o acesso pelo IP.",
     ],
   },
   email: {

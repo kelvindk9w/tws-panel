@@ -8,6 +8,7 @@ import {
   ONBOARDING_STEP_IDS,
   OPTIONAL_ONBOARDING_STEPS,
   isOnboardingComplete,
+  isOnboardingFirstVisit,
   isOnboardingStepResolved,
   nextOnboardingStep,
   type OnboardingStep,
@@ -60,5 +61,17 @@ describe("roteiro de primeiros passos", () => {
     expect(nextOnboardingStep(steps)).toBeNull();
     expect(isOnboardingComplete(steps)).toBe(true);
     expect(isOnboardingComplete([...steps.slice(0, 4), step("notifications", "pending")])).toBe(false);
+  });
+
+  // Pedido do dono do produto (01/10/2026): com 2FA ligado e projeto rodando,
+  // o roteiro aberto com os 5 passos não fazia sentido. Aberto só no primeiro
+  // acesso; as proteções contam como "instalação" (vêm do assistente inicial).
+  it("primeiro acesso: roteiro não começado e nada feito além das proteções da VPS", () => {
+    const fresh = [step("hardening", "done"), step("two-factor", "pending"), step("panel-domain", "soon"), step("email", "pending")];
+    expect(isOnboardingFirstVisit({ started: false, steps: fresh })).toBe(true);
+    expect(isOnboardingFirstVisit({ started: true, steps: fresh })).toBe(false);
+    expect(isOnboardingFirstVisit({ started: false, steps: [step("hardening", "done"), step("two-factor", "done")] })).toBe(false);
+    expect(isOnboardingFirstVisit({ started: false, steps: [step("two-factor", "pending"), step("email", "skipped")] })).toBe(false);
+    expect(isOnboardingFirstVisit({ started: false, steps: [step("two-factor", "pending"), step("email", "in_progress")] })).toBe(false);
   });
 });
