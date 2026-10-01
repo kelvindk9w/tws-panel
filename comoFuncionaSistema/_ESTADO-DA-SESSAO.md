@@ -134,6 +134,9 @@ pendente e por quê — informação que não está no código nem no git log.
   proxy HTTPS próprio (Caddy/Traefik) continua bloqueado, agora SEM a opção de forçar (falharia
   igual) — o caminho é o compose.paas.yaml. "Criar projeto" já dispara o primeiro deploy; se o
   compose exige variáveis sem valor, leva à seção Variáveis com o aviso.
+- **30/09 — Variáveis:** cada variável do compose já aparece como linha para preencher
+  (obrigatórias primeiro; sugerida vazia não é salva, vale o padrão). "Importar arquivo .env":
+  lido no navegador (`apps/web/src/lib/dotenv.ts`), entra na lista e só é gravado ao salvar.
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com
