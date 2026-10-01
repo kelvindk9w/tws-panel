@@ -82,7 +82,7 @@ function makeConfig(dir: string): ServerConfig {
 
 let ctx: AuthTestContext;
 let app: FastifyInstance;
-let deployService: { setEnvProvider: ReturnType<typeof vi.fn>; getProject: ReturnType<typeof vi.fn> };
+let deployService: Record<string, ReturnType<typeof vi.fn>>;
 let spies: MockInstance[];
 
 beforeEach(async () => {
@@ -91,6 +91,8 @@ beforeEach(async () => {
   app.decorate("config", makeConfig(ctx.dir));
   deployService = {
     setEnvProvider: vi.fn(),
+    setMailHostsProvider: vi.fn(),
+    refreshProxy: vi.fn(async () => undefined),
     getProject: vi.fn(async () => PROJECT),
   };
   app.decorate("deployService", deployService as unknown as FastifyInstance["deployService"]);

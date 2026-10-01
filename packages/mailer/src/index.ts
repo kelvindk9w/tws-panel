@@ -3,7 +3,29 @@
  * Stalwart Mail Server em container, DKIM 2048, checklist DNS, caixas de
  * e-mail e injeção de SMTP nos projetos. Spec: docs/email-deliverability.md.
  */
-export { StalwartManager, renderConfigToml, STALWART_IMAGE, type StalwartManagerOptions } from "./server.js";
+export {
+  StalwartManager,
+  renderConfigToml,
+  STALWART_IMAGE,
+  type StalwartCertificate,
+  type StalwartManagerOptions,
+} from "./server.js";
+export {
+  CADDY_CERTIFICATES_DIR,
+  certificateId,
+  mailHostFor,
+  pickNewest,
+  readCaddyCertificate,
+  validateCertificatePair,
+  type MailCertificate,
+} from "./tls-certificates.js";
+export {
+  assessExistingMail,
+  checkExistingMail,
+  suggestedSendingDomain,
+  type ExistingMailAssessment,
+  type ExistingMailStatus,
+} from "./mx-guard.js";
 export { StalwartClient, StalwartApiError } from "./client.js";
 export {
   buildDnsChecklist,

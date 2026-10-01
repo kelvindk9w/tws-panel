@@ -39,6 +39,38 @@ interface HistoryFile {
   entries: SecurityHistoryEntry[];
 }
 
+/** Arquivos do estado de segurança em data/ (o roteiro do Dashboard lê os mesmos). */
+const HISTORY_FILE = "security-history.json";
+const LAST_REPORT_FILE = "security-last-scan.json";
+
+/**
+ * Histórico de varreduras e fases (data/security-history.json). Ausente ou
+ * corrompido = vazio. Exportado para o roteiro de primeiros passos ler o
+ * estado real sem precisar da instância do serviço (que fica encapsulada no
+ * plugin de rotas de segurança).
+ */
+export async function loadSecurityHistory(dataDir: string): Promise<SecurityHistoryEntry[]> {
+  try {
+    const raw = await readFile(path.join(dataDir, HISTORY_FILE), "utf8");
+    const parsed = JSON.parse(raw) as Partial<HistoryFile>;
+    return Array.isArray(parsed.entries) ? parsed.entries : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Último relatório de varredura persistido (data/security-last-scan.json), ou null. */
+export async function loadLastSecurityReport(dataDir: string): Promise<SecurityScanReport | null> {
+  try {
+    const raw = await readFile(path.join(dataDir, LAST_REPORT_FILE), "utf8");
+    const parsed = JSON.parse(raw) as Partial<SecurityScanReport>;
+    if (typeof parsed.id !== "string" || typeof parsed.scannedAt !== "string") return null;
+    return parsed as SecurityScanReport;
+  } catch {
+    return null;
+  }
+}
+
 interface JobsFile {
   jobs: SecurityJob[];
   /**
@@ -177,8 +209,8 @@ export class SecurityService {
     }
     // O PTY do modo dev (container alvo) precisa do container de pé.
     opts?.terminal?.setEnsureTarget(() => baseRunner.ensureReady());
-    this.historyFile = path.join(config.dataDir, "security-history.json");
-    this.lastReportFile = path.join(config.dataDir, "security-last-scan.json");
+    this.historyFile = path.join(config.dataDir, HISTORY_FILE);
+    this.lastReportFile = path.join(config.dataDir, LAST_REPORT_FILE);
     this.jobsFile = path.join(config.dataDir, "security-jobs.json");
     this.executor = new SecurityExecutor({
       runner: this.runner,
@@ -387,13 +419,7 @@ export class SecurityService {
   // -------------------------------------------------------------------------
 
   private async loadHistory(): Promise<SecurityHistoryEntry[]> {
-    try {
-      const raw = await readFile(this.historyFile, "utf8");
-      const parsed = JSON.parse(raw) as Partial<HistoryFile>;
-      return Array.isArray(parsed.entries) ? parsed.entries : [];
-    } catch {
-      return [];
-    }
+    return loadSecurityHistory(this.config.dataDir);
   }
 
   private async appendHistory(entry: SecurityHistoryEntry): Promise<void> {
@@ -436,15 +462,9 @@ export class SecurityService {
 
   /** Carrega o último relatório persistido (primeiro acesso após restart). */
   private async loadLastReport(): Promise<SecurityScanReport | null> {
-    try {
-      const raw = await readFile(this.lastReportFile, "utf8");
-      const parsed = JSON.parse(raw) as Partial<SecurityScanReport>;
-      if (typeof parsed.id !== "string" || typeof parsed.scannedAt !== "string") return null;
-      this.lastScan = parsed as SecurityScanReport;
-      return this.lastScan;
-    } catch {
-      return null;
-    }
+    const report = await loadLastSecurityReport(this.config.dataDir);
+    if (report) this.lastScan = report;
+    return report;
   }
 
   private async recordJob(job: SecurityJob): Promise<void> {

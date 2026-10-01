@@ -44,6 +44,13 @@ afterEach(() => {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 
+/** Só as chamadas da atualização periódica (projetos e containers); consultas únicas ficam de fora. */
+function pollCalls(): number {
+  return vi
+    .mocked(fetch)
+    .mock.calls.filter(([u]) => /\/api\/(projects|docker\/containers)/.test(String(u))).length;
+}
+
 function setVisibility(state: "visible" | "hidden") {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
   document.dispatchEvent(new Event("visibilitychange"));
@@ -82,14 +89,13 @@ describe("DashboardPage — polling com pausa em aba oculta", () => {
       renderDashboard();
       expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
 
-      const fetchMock = vi.mocked(fetch);
       // shouldAdvanceTime faz o relógio fake andar alguns ms em tempo real,
       // então a asserção é por janela cheia: 1 ciclo a cada 15s (5s dariam +6).
-      const initial = fetchMock.mock.calls.length; // 2: /api/projects + /api/docker/containers
+      const initial = pollCalls(); // 2: /api/projects + /api/docker/containers
       await act(async () => vi.advanceTimersByTimeAsync(15_000));
-      expect(fetchMock.mock.calls.length).toBe(initial + 2);
+      expect(pollCalls()).toBe(initial + 2);
       await act(async () => vi.advanceTimersByTimeAsync(15_000));
-      expect(fetchMock.mock.calls.length).toBe(initial + 4);
+      expect(pollCalls()).toBe(initial + 4);
     } finally {
       vi.useRealTimers();
     }
@@ -102,18 +108,87 @@ describe("DashboardPage — polling com pausa em aba oculta", () => {
       renderDashboard();
       expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
 
-      const fetchMock = vi.mocked(fetch);
       act(() => setVisibility("hidden"));
-      const before = fetchMock.mock.calls.length;
+      const before = pollCalls();
       await act(async () => vi.advanceTimersByTimeAsync(120_000));
-      expect(fetchMock.mock.calls.length).toBe(before); // NENHUM poll com a aba oculta
+      expect(pollCalls()).toBe(before); // NENHUM poll com a aba oculta
 
       act(() => setVisibility("visible")); // refresh imediato ao voltar
-      expect(fetchMock.mock.calls.length).toBe(before + 2);
+      expect(pollCalls()).toBe(before + 2);
       await act(async () => vi.advanceTimersByTimeAsync(15_000)); // intervalo retomado
-      expect(fetchMock.mock.calls.length).toBe(before + 4);
+      expect(pollCalls()).toBe(before + 4);
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("DashboardPage — roteiro de primeiros passos", () => {
+  it("primeiro acesso: o roteiro aparece aberto no topo do Dashboard", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.includes("/api/onboarding")) {
+          return jsonResponse({
+            steps: [
+              { id: "hardening", status: "done", optional: false, detail: "Todas as 8 fases resolvidas." },
+              { id: "two-factor", status: "pending", optional: false, detail: "Desligada." },
+              { id: "panel-domain", status: "soon", optional: false, detail: "Em breve." },
+              { id: "email", status: "pending", optional: true, detail: "Não iniciado." },
+              { id: "notifications", status: "soon", optional: true, detail: "Em breve." },
+            ],
+            started: false,
+            complete: false,
+            projectsDir: "/opt/tws-projects",
+          });
+        }
+        if (u.includes("/api/projects")) return jsonResponse({ projects: [] });
+        return jsonResponse({ containers: [] });
+      }),
+    );
+    renderDashboard();
+    expect(await screen.findByText("Deixe o painel pronto")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^onboarding-step-/)).toHaveLength(5);
+  });
+});
+
+/**
+ * Com o roteiro na tela, o aviso amarelo de 2FA repetia o passo 2 dele. O
+ * aviso só aparece quando o roteiro não está no Dashboard (concluído ou fora
+ * do ar), para o 2FA desligado nunca passar sem aviso.
+ */
+describe("DashboardPage — aviso de 2FA e roteiro", () => {
+  function mockWith(onboarding: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.includes("/api/onboarding")) return onboarding instanceof Response ? onboarding : jsonResponse(onboarding);
+        if (u.includes("/api/auth/2fa")) return jsonResponse({ enabled: false });
+        if (u.includes("/api/projects")) return jsonResponse({ projects: [] });
+        return jsonResponse({ containers: [] });
+      }),
+    );
+  }
+  const STEPS = [
+    { id: "hardening", status: "done", optional: false, detail: "ok" },
+    { id: "two-factor", status: "pending", optional: false, detail: "Desligada." },
+  ];
+
+  it("roteiro na tela: o aviso de 2FA não aparece (o passo 2 já fala disso)", async () => {
+    mockWith({ steps: STEPS, started: false, complete: false, projectsDir: "/opt/tws-projects" });
+    renderDashboard();
+    expect(await screen.findByText("Deixe o painel pronto")).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.queryByTestId("two-factor-nudge")).not.toBeInTheDocument();
+  });
+
+  it("roteiro fora do ar (erro): o aviso de 2FA aparece", async () => {
+    mockWith(jsonResponse({ error: "x", message: "falhou" }, 500));
+    renderDashboard();
+    expect(await screen.findByTestId("two-factor-nudge")).toBeInTheDocument();
   });
 });

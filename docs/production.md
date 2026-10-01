@@ -64,9 +64,9 @@ errado.
 
 - **Sites dos projetos**: o Caddy central emite certificados automaticamente via ACME assim que
   o DNS do domínio aponta para a VPS. Domínios `.localhost` são servidos em HTTP puro (só dev).
-- **E-mail (Stalwart)**: em dev usa certificado autoassinado; em produção configure ACME na
-  seção `[acme.*]` do `config.toml` do Stalwart ou monte um certificado real em
-  `[certificate.default]`. Detalhes em [fase-3-email.md](fase-3-email.md) §4.
+- **E-mail (Stalwart)**: o Caddy central emite o certificado de `mail.<domínio>` (basta o
+  registro A apontar para a VPS, nuvem cinza na Cloudflare) e o painel o instala e renova no
+  Stalwart. Estado na página E-mail. Detalhes em [fase-3-email.md](fase-3-email.md) §1.
 
 ### 1.4 PTR (rDNS)
 

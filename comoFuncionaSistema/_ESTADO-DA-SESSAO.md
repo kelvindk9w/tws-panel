@@ -1,4 +1,4 @@
-# Estado da sessão — 28/09/2026 (atualizado ao fim da sessão)
+# Estado da sessão — atualizado em 01/10/2026
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
@@ -8,6 +8,60 @@ pendente e por quê — informação que não está no código nem no git log.
 > senhas nem nomes de clientes.
 
 ---
+
+## Atualização de 01/10/2026 (leia antes do resto)
+
+### Onde paramos
+- **Tudo mesclado até o PR #61** (`main` = `dev` em conteúdo). Do #55 ao #61, nesta ordem:
+  - **#55:** compose de verdade (variáveis no `.env`, portas 80/443, porta por domínio).
+  - **#56:** o painel retira 80/443 de app comum; o primeiro deploy começa sozinho.
+  - **#57:** variáveis do compose prontas para preencher; importar `.env`.
+  - **#58:** os guardrails analisam o mesmo compose que o deploy usa.
+  - **#59:** deploy barrado por variável faltando; Visão geral, Deploys e Variáveis redesenhados; botões com cor.
+  - **#60:** todo projeto entra no proxy; site publicado não some quando um redeploy falha.
+  - **#61:** páginas "Site em manutenção" e "temporariamente indisponível" com visual amigável, recarregando a cada 60 s.
+- **PR #62 (aberto, CI verde):** junta os dois branches feitos por subagentes em worktrees isolados, já revisados e testados na `dev`:
+  - `feat/primeiros-passos`: roteiro "Deixe o painel pronto" no Dashboard (`_RELATORIO-primeiros-passos.md`); o aviso de 2FA some enquanto o roteiro está na tela.
+  - `feat/email-tls`: certificado de verdade para `mail.<domínio>` (o Caddy emite e o painel copia para o Stalwart), `SMTP_HOST=mail.<domínio>`, estado do certificado e aviso de MX na página E-mail (`_RELATORIO-email-tls.md`, com o passo a passo na VPS).
+  - Mais: a porta 8080 do Stalwart passa a ser publicada só em 127.0.0.1.
+  - Os worktrees foram removidos depois do push.
+- **Falta validar na VPS:** emissão real do certificado de `mail.<domínio>`, reinício único do Stalwart, porta 25 de saída, DNS reverso e envio do cassino.
+
+### Ordem combinada com o dono do produto
+1. **E-mail do servidor funcionando** (no PR #62; falta validar na VPS), ANTES de voltar ao cassino.
+2. **Primeiros passos no Dashboard** (no PR #62):
+   - no primeiro acesso, aberto com todos os passos;
+   - depois de começar, compacto, mostrando só o próximo passo, com botão para ver todos num modal;
+   - cada passo com "Como fazer";
+   - passos opcionais com "Não vou usar".
+   Ordem dos passos: proteções da VPS → 2FA → domínio do painel → e-mail do servidor → notificações.
+3. **Domínio do painel** (ainda não existe), em Configurações → Domínio do painel:
+   - DNS e verificação;
+   - certificado;
+   - botão "Desativar o acesso pelo IP", liberado só depois de abrir o painel pelo domínio novo, para não trancar ninguém fora;
+   - comando de SSH documentado para reverter.
+   Observação: o `…sslip.io` NÃO é o túnel; é o acesso HTTPS pelo IP.
+4. **Notificações:** Telegram primeiro (bot do @BotFather, botão "Enviar teste"); depois e-mail. A pessoa escolhe um, outro ou ambos. Também destrava o "código por e-mail" para recomeçar o setup.
+5. **Backups:** depois (decisão do dono). Hoje NÃO existe backup de projetos.
+- **Login continua senha + código (2FA).** O dono concordou em não fazer login só com código, que viraria um fator. Ideias para depois: "lembrar este navegador por 30 dias" e passkey.
+
+### Cassino (projeto real do dono, primeiro compose grande)
+- Domínio principal conectado; o deploy ainda não passou.
+- Faltavam: `KYC_MODO`, `PIX_CHAVE`, `PIX_CIDADE`, `PIX_NOME`, `SITE_HOST`, `CARTEIRA_HOST`, `SMTP_HOST` e `MAIL_FROM`. Estas duas o painel fornece com o E-mail do projeto ativo.
+- O cassino exige TLS e confere o certificado (nodemailer com `requireTLS`). Por isso o e-mail do painel precisa da correção do branch `feat/email-tls`.
+- No modo demonstração, ele recusa SMTP vazio, local ou Mailpit; `paas-stalwart` passa.
+- Próximo passo com o dono, depois do e-mail:
+  1. E-mail do servidor com um SUBDOMÍNIO dedicado. NÃO usar `tws.tec.br` puro: o MX desviaria o e-mail da empresa. Ainda não sabemos onde fica o e-mail de `tws.tec.br`; perguntado, sem resposta.
+  2. E-mail do projeto.
+  3. Variáveis restantes.
+  4. Domínios: `SITE_HOST` como principal e `CARTEIRA_HOST` como adicional, porta em branco.
+  5. Deploy.
+
+### Preferências do dono do produto, confirmadas nesta sessão
+- **Instrução completa:** caminho exato, comandos na ordem, onde clicar e como conferir.
+- **Atualizar o painel na VPS** com UMA linha: `cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build`. O `sudo git pull` é necessário porque arquivos do `.git` ficaram do root.
+- **Visual:** simples, responsivo e com cor nos botões (Abrir site azul, Iniciar verde, Parar vermelho, Deploy violeta).
+- **Projeto de postagens:** separado, em `~/projects/social` (pesquisa, guias de boas práticas para X e Instagram, `CLAUDE.md` do agente de conteúdo, rascunho do post de continuação sobre o TWS Panel e o devLink). Sem commit; o dono decide. Alerta: o endereço `…sslip.io` contém o IP da VPS e precisa ser borrado em prints e vídeos.
 
 ## Atualização de 29/09/2026 (leia antes do resto)
 
@@ -149,12 +203,31 @@ pendente e por quê — informação que não está no código nem no git log.
   botões com cor. Projeto `~/projects/social` criado (pesquisa e rascunhos de posts; fora deste repo).
 - **01/10 — domínio antes do primeiro deploy:** página "Site em manutenção" (com HTTPS) para
   projeto nunca publicado; site já publicado não some mais do proxy quando um redeploy falha.
-- **ABERTO (01/10) — e-mail do painel com app que confere certificado:** o Stalwart usa certificado
-  autoassinado e o projeto conecta em `paas-stalwart:587`; apps com nodemailer padrão (o cassino:
-  requireTLS, verificação ligada) recusam. Caminho proposto: Caddy emite o certificado de
-  `mail.<domínio>`, o Stalwart usa esse certificado, ganha o alias `mail.<domínio>` na paas-net e
-  o painel injeta SMTP_HOST = `mail.<domínio>`. Aguardando o dono do produto decidir o caminho.
-  Alerta dado: domínio de e-mail = domínio principal da empresa (MX) desviaria o e-mail dela.
+- **01/10 — roteiro "Deixe o painel pronto" (branch `feat/primeiros-passos`):** cartão no
+  Dashboard com proteções da VPS, 2FA, domínio do painel (em breve), e-mail do servidor
+  (opcional) e notificações (em breve), cada um com status calculado do estado real
+  (`GET /api/onboarding`); aberto no primeiro acesso, compacto depois, some quando tudo está
+  resolvido e continua em Configurações → Primeiros passos. Ver
+  `configuracoes/roteiro-primeiros-passos.json` e `_RELATORIO-primeiros-passos.md`.
+- **IMPLEMENTADO (01/10, branch `feat/email-tls`) — e-mail do painel com app que confere
+  certificado:** o Caddy emite o certificado de `mail.<domínio>` (bloco com página simples), o painel
+  copia o par para o Stalwart e o renova (recarga sem reinício; reinício só quando aparece um nome
+  novo), o Stalwart ganha o alias `mail.<domínio>` na paas-net e o painel injeta
+  SMTP_HOST=`mail.<domínio>` (vale no próximo deploy). Página E-mail mostra o certificado (válido ou
+  o que falta). Cadastro de domínio que já recebe e-mail em outro servidor exige confirmação e
+  sugere `envio.<domínio>`. Validado localmente com Caddy e Stalwart reais (CA local do Caddy no
+  lugar do Let's Encrypt) e nodemailer com requireTLS. **Falta validar na VPS** (ACME real,
+  porta 25, PTR) — passo a passo em `_RELATORIO-email-tls.md`.
+  Lição: o reload do Stalwart v0.11.8 (`/api/reload` e `/api/reload/certificate`) NÃO relê o
+  `config.toml` local — só os arquivos das seções que já existiam; seção nova exige reinício.
+  Lição 2: com o painel em container, `127.0.0.1:8080` nunca foi o Stalwart (era o próprio
+  painel); a API agora vai por `paas-stalwart:8080` na paas-net.
+- **ABERTO (01/10) — checagem de blacklist do e-mail nunca roda:** a rota do monitoramento agendado
+  procura o serviço de e-mail, que não é visível para ela, e o erro some em silêncio (a checagem é
+  tratada como opcional). Achado pelo subagente do roteiro de primeiros passos; não corrigido.
+- **01/10 — porta 8080 do Stalwart só em 127.0.0.1** (antes ficava na internet, porque o Docker
+  publica por cima do UFW). Vale para containers criados daqui em diante. Ainda ABERTO: alinhar a
+  Fase 03 (`--profile mail` nunca é passado pelo painel).
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

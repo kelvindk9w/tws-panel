@@ -1,28 +1,166 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import type {
+  ExistingMailInfo,
   MailDomainListResponse,
   MailDomainSummary,
   MailServerActionResponse,
   MailServerStatus,
+  MailTlsStatusResponse,
 } from "@paas/core";
-import { apiFetch } from "@/lib/api";
+import { ApiRequestError, apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronRight,
   Globe,
   Loader2,
+  Lock,
   Mail,
   MailPlus,
   Play,
+  RefreshCw,
   Server,
   Square,
   Trash2,
 } from "lucide-react";
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("pt-BR", { timeZone: "UTC" });
+}
+
+/**
+ * Certificado do servidor de e-mail (mail.<domínio>). Validação real
+ * (01/10/2026): com o autoassinado, o app do projeto (nodemailer com
+ * verificação padrão) recusaria a conexão. O painel instala o certificado
+ * que o proxy emite; aqui o operador vê se já vale ou o que falta.
+ */
+function MailTlsCard({ tls, busy, onRecheck }: { tls: MailTlsStatusResponse | null; busy: boolean; onRecheck: () => void }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Lock className="h-4 w-4" /> Certificado do servidor de e-mail
+          </CardTitle>
+          <Button variant="outline" size="sm" disabled={busy} onClick={onRecheck}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Conferir de novo
+          </Button>
+        </div>
+        <CardDescription>
+          Os projetos enviam e-mail por mail.&lt;domínio&gt;, porta 587. Apps que conferem o certificado (o padrão
+          do nodemailer, por exemplo) só conectam com ele válido. O painel emite e renova sozinho.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {!tls && <p className="text-sm text-muted-foreground">conferindo…</p>}
+        {tls?.syncError && (
+          <p className="text-sm text-destructive">Falha ao instalar o certificado no servidor de e-mail: {tls.syncError}</p>
+        )}
+        {tls?.hosts.map((h) => (
+          <div key={h.host} className="flex flex-col gap-1 rounded-lg border px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-sm">{h.host}</span>
+              {h.ok ? <Badge variant="success">válido</Badge> : <Badge variant="warning">pendente</Badge>}
+            </div>
+            {h.ok ? (
+              <p className="text-xs text-muted-foreground">
+                Emitido por {h.issuer ?? "—"}
+                {h.validTo ? ` · válido até ${formatDate(h.validTo)} (renovado automaticamente)` : ""}
+              </p>
+            ) : (
+              <>
+                {h.hint && <p className="text-sm text-amber-400">{h.hint}</p>}
+                {h.error && <p className="text-xs text-muted-foreground">Resposta do servidor: {h.error}</p>}
+              </>
+            )}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Motivo real (01/10/2026): o dono do produto ia cadastrar o domínio
+ * principal da empresa, que recebe e-mail em outro provedor. Seguir o
+ * checklist (MX → esta VPS) desviaria todo esse e-mail. O aviso tem de ser
+ * impossível de ignorar e seguir exige marcar a confirmação.
+ */
+function ExistingMailWarning({
+  domain,
+  info,
+  busy,
+  onUseSuggested,
+  onConfirm,
+  onCancel,
+}: {
+  domain: string;
+  info: ExistingMailInfo;
+  busy: boolean;
+  onUseSuggested: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const [understood, setUnderstood] = useState(false);
+  const current = info.servers[0];
+  return (
+    <div role="alert" className="flex flex-col gap-3 rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm">
+      <p className="flex items-center gap-2 font-semibold text-red-400">
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        {info.status === "elsewhere"
+          ? "Este domínio já recebe e-mail em outro servidor"
+          : "Não foi possível confirmar quem recebe o e-mail deste domínio"}
+      </p>
+      {info.status === "elsewhere" ? (
+        <>
+          <p>
+            Hoje o e-mail de <strong>{domain}</strong> chega em <strong>{current}</strong>. Seguindo o checklist,
+            apontar o MX para esta VPS desviaria todo o e-mail que hoje chega em {current} — caixas da empresa
+            deixariam de receber mensagens.
+          </p>
+          <p className="text-xs text-muted-foreground">Servidores atuais (MX): {info.servers.join(", ")}</p>
+        </>
+      ) : (
+        <p>
+          A consulta ao registro MX de <strong>{domain}</strong> falhou. Se o domínio já tem e-mail funcionando em
+          outro provedor, apontar o MX para esta VPS desviaria esse e-mail.
+        </p>
+      )}
+      <p>
+        <strong>Recomendado:</strong> use um subdomínio só para o envio, como <strong>{info.suggestedDomain}</strong>.
+        Ele não mexe no e-mail que a empresa já recebe.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy} onClick={onUseSuggested}>
+          Usar {info.suggestedDomain} (recomendado)
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
+          Cancelar
+        </Button>
+      </div>
+      <label className="flex items-start gap-2 text-xs">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={understood}
+          onChange={(e) => setUnderstood(e.target.checked)}
+        />
+        Entendo que, se eu apontar o MX de {domain} para esta VPS, o e-mail deixa de chegar no servidor atual.
+      </label>
+      <div>
+        <Button variant="destructive" size="sm" disabled={!understood || busy} onClick={onConfirm}>
+          Seguir com {domain} mesmo assim
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function DnsAggregateBadge({ domain }: { domain: MailDomainSummary }) {
   if (!domain.lastVerify) {
@@ -49,6 +187,20 @@ export function MailPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [newDomain, setNewDomain] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [tls, setTls] = useState<MailTlsStatusResponse | null>(null);
+  const [tlsBusy, setTlsBusy] = useState(false);
+  const [existingMail, setExistingMail] = useState<{ domain: string; info: ExistingMailInfo } | null>(null);
+
+  const loadTls = useCallback(async () => {
+    setTlsBusy(true);
+    try {
+      setTls(await apiFetch<MailTlsStatusResponse>("/api/mail/tls"));
+    } catch {
+      setTls(null);
+    } finally {
+      setTlsBusy(false);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -68,6 +220,11 @@ export function MailPage() {
     void refresh();
   }, [refresh]);
 
+  const showTls = Boolean(status?.running) && domains.length > 0;
+  useEffect(() => {
+    if (showTls) void loadTls();
+  }, [showTls, loadTls]);
+
   async function serverAction(action: "start" | "stop") {
     setBusy(action);
     setError(null);
@@ -83,20 +240,27 @@ export function MailPage() {
     }
   }
 
-  async function addDomain() {
-    const name = newDomain.trim();
+  async function addDomain(name = newDomain.trim(), confirmExistingMail = false) {
     if (!name) return;
     setBusy("add");
     setError(null);
     try {
       await apiFetch("/api/mail/domains", {
         method: "POST",
-        body: JSON.stringify({ domain: name }),
+        body: JSON.stringify(confirmExistingMail ? { domain: name, confirmExistingMail: true } : { domain: name }),
       });
       setNewDomain("");
+      setExistingMail(null);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao adicionar o domínio.");
+      const info = err instanceof ApiRequestError && err.code === "domain_receives_mail"
+        ? (err.data?.existingMail as ExistingMailInfo | undefined)
+        : undefined;
+      if (info) {
+        setExistingMail({ domain: name, info });
+      } else {
+        setError(err instanceof Error ? err.message : "Falha ao adicionar o domínio.");
+      }
     } finally {
       setBusy(null);
     }
@@ -190,7 +354,9 @@ export function MailPage() {
             <ol className="flex flex-col gap-2 text-sm text-muted-foreground">
               <li className="flex items-start gap-2">
                 <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs">1</span>
-                Adicione o domínio abaixo — o painel provisiona no Stalwart e gera a chave DKIM (RSA 2048).
+                Adicione o domínio abaixo — o painel provisiona no Stalwart e gera a chave DKIM (RSA 2048). Se o
+                domínio já tem e-mail funcionando em outro provedor, use um subdomínio só para o envio (ex.:
+                envio.seudominio.com.br): apontar o MX do domínio principal para cá desviaria o e-mail da empresa.
               </li>
               <li className="flex items-start gap-2">
                 <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs">2</span>
@@ -208,6 +374,8 @@ export function MailPage() {
           </CardContent>
         </Card>
       ) : null}
+
+      {showTls && <MailTlsCard tls={tls} busy={tlsBusy} onRecheck={() => void loadTls()} />}
 
       <Card>
         <CardHeader className="pb-2">
@@ -233,6 +401,17 @@ export function MailPage() {
           </div>
           {!status?.running && (
             <p className="text-xs text-muted-foreground">Inicie o servidor de e-mail para adicionar domínios.</p>
+          )}
+          {existingMail && (
+            <ExistingMailWarning
+              key={existingMail.domain}
+              domain={existingMail.domain}
+              info={existingMail.info}
+              busy={busy !== null}
+              onUseSuggested={() => void addDomain(existingMail.info.suggestedDomain)}
+              onConfirm={() => void addDomain(existingMail.domain, true)}
+              onCancel={() => setExistingMail(null)}
+            />
           )}
 
           {domains.length > 0 && (

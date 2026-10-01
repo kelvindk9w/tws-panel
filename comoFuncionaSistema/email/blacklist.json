@@ -33,7 +33,7 @@
     { "status": 500, "codigo": "internal_error", "quando": "Erro inesperado fora das consultas DNS individuais (essas já retornam status:'unknown' em vez de lançar).", "mensagem": "Erro interno." }
   ],
   "fluxo": [
-    "1. serverIp(): usa PAAS_PUBLIC_IP (config) ou a primeira interface IPv4 externa (não-loopback) da máquina; fallback 127.0.0.1.",
+    "1. serverIp(): usa PAAS_PUBLIC_IP (config), o IP do endereço sslip.io do painel ou a primeira interface IPv4 externa (não-loopback) da máquina; fallback 127.0.0.1.",
     "2. checkIpBlacklists(ip): para cada DNSBL de IP (spamhaus-zen, spamcop, barracuda), inverte os octetos do IP e consulta <ip-invertido>.<zona> via resolve4; resposta 127.x.x.x (exceto 127.255.255.x) = listed; NXDOMAIN/ENODATA = clean; 127.255.255.x = unknown (zona recusou a consulta); outro erro de rede = unknown.",
     "3. Em paralelo, checkDomainBlacklists(domínio) para cada domínio cadastrado, na zona spamhaus-dbl (<domínio>.dbl.spamhaus.org).",
     "4. listedCount soma quantos resultados (IP + todos os domínios) têm status 'listed'."

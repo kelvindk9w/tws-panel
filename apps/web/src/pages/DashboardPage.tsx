@@ -9,6 +9,7 @@ import type {
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
+import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -90,6 +91,8 @@ export function DashboardPage() {
   const [containers, setContainers] = useState<DockerContainersResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // o roteiro "Deixe o painel pronto" está na tela? (null = ainda não sabe)
+  const [checklistShown, setChecklistShown] = useState<boolean | null>(null);
 
   async function refresh() {
     try {
@@ -144,7 +147,9 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <TwoFactorNudge />
+      <OnboardingChecklist variant="dashboard" onVisibleChange={setChecklistShown} />
+      {/* com o roteiro na tela, o passo 2 dele já fala do 2FA */}
+      {checklistShown === false && <TwoFactorNudge />}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Projetos</h1>

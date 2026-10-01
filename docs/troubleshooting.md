@@ -43,12 +43,14 @@ Gmail e Outlook).
 
 **Sintomas:** clientes de e-mail avisam "certificado não confiável" ao conectar.
 
-**Causa:** sem certificado configurado, o Stalwart usa um autoassinado (padrão em dev).
+**Causa:** o certificado de `mail.<domínio>` ainda não foi emitido — enquanto isso o
+Stalwart usa um autoassinado. Quase sempre falta o registro A de `mail.<domínio>`
+apontando para a VPS, ou ele está com a nuvem laranja na Cloudflare.
 
-**Solução:** configure ACME (`[acme.*]`) ou monte um certificado real
-(`[certificate.default]`) no `config.toml` do Stalwart — ver
-[fase-3-email.md](fase-3-email.md) §4. Depois disso, os clientes podem usar verificação
-estrita de TLS.
+**Solução:** abra **E-mail** no painel: o card "Certificado do servidor de e-mail" diz o
+que falta. Crie o registro A de `mail.<domínio>` com o IP da VPS (na Cloudflare, nuvem
+**cinza**), confira as portas 80 e 443 liberadas e clique em "Conferir de novo". O painel
+instala e renova o certificado sozinho.
 
 ---
 

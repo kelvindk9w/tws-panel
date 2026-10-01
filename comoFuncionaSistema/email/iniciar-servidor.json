@@ -27,8 +27,8 @@
     "1. ensureLoaded(); se data.adminSecret é null, gera um novo com generatePassword(24) (base64url, 192 bits de entropia) e salva IMEDIATAMENTE em data/mail/mail.json (0600) — antes mesmo do container subir.",
     "2. manager().start(): garante a rede Docker paas-net (cria se não existir, idempotente); renderiza/sobrescreve data/mail/stalwart/config.toml com o hostname e o adminSecret atuais.",
     "3. Se o container já existe: tenta 'docker start'; se falhar por motivo diferente de 'already in use', remove o container (docker rm -f) e recria do zero com a config atual (garante que mudanças de porta/hostname sejam aplicadas).",
-    "4. Se não existe: 'docker run -d --restart unless-stopped --network paas-net --network-alias paas-stalwart' publicando as 6 portas configuradas (smtp/submission/submissions/imap/imaps/http), com o volume nomeado paas_stalwart_data e o config.toml montado read-only.",
-    "5. manager.waitReady(httpPort): faz polling (a cada 1.5s, até 60s) em GET http://127.0.0.1:<porta-http>/api/principal?limit=1 — 200 ou 401 = pronto; estoura Error se o timeout vencer.",
+    "4. Se não existe: 'docker create --restart unless-stopped --network paas-net --network-alias paas-stalwart --network-alias mail.<cada domínio>' publicando as 6 portas configuradas (smtp/submission/submissions/imap/imaps/http), com o volume nomeado paas_stalwart_data e o config.toml montado read-only.",
+    "5. manager.waitReady(httpPort): faz polling (a cada 1.5s, até 60s) em GET <apiBaseUrl>/api/principal?limit=1 (127.0.0.1:<porta-http> em dev; paas-stalwart:8080 com o painel em container, que antes é ligado à paas-net) — 200 ou 401 = pronto; estoura Error se o timeout vencer.",
     "6. Retorna manager.status() (mesmo formato de GET /api/mail/status)."
   ],
   "dependencias": [
