@@ -79,4 +79,27 @@ describe("GuardrailOverrideModal", () => {
     expect(screen.getByRole("button", { name: /cancelar/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /deploy com override/i })).toBeDisabled();
   });
+
+  it("porta 80/443 com proxy HTTPS próprio: sem override (o deploy falharia igual) e com o caminho a seguir", () => {
+    const report: GuardrailReport = {
+      ...REPORT,
+      findings: [
+        {
+          rule: "proxy-port-conflict",
+          level: "block",
+          title: "Porta 443 do servidor publicada pelo projeto",
+          evidence: 'compose.prod.yaml: serviço "wallet" publica 443:443',
+          fix: "Crie no repositório um compose.paas.yaml.",
+          service: "wallet",
+        },
+      ],
+      blockers: 1,
+      warnings: 0,
+    };
+    render(<GuardrailOverrideModal report={report} busy={false} onCancel={() => undefined} onConfirm={() => undefined} />);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /deploy com override/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("no-override")).toHaveTextContent(/não tem como forçar/);
+    expect(screen.getByRole("button", { name: /Fechar/ })).toBeInTheDocument();
+  });
 });

@@ -9,7 +9,7 @@
  *    aparecia espremida numa linha só.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
@@ -283,5 +283,70 @@ describe("NewProjectPage — domínio do projeto", () => {
     expect(within(guia).getByRole("cell", { name: "A" })).toBeInTheDocument();
     expect(guia).toHaveTextContent("site.meusite.com.br");
     expect(guia).toHaveTextContent("203.0.113.10");
+  });
+});
+
+/**
+ * Validação real (30/09/2026): ao chegar na página do projeto nada acontecia —
+ * o operador precisava achar o botão Deploy. Agora o primeiro deploy começa
+ * sozinho; se o compose exige variáveis ainda sem valor, o assistente leva à
+ * seção Variáveis em vez de disparar um deploy que falharia.
+ */
+describe("NewProjectPage — depois de \"Criar projeto\"", () => {
+  function Onde() {
+    const loc = useLocation();
+    return <p data-testid="onde">{loc.pathname + loc.search}</p>;
+  }
+
+  async function criar(detection: Record<string, unknown>, env?: unknown) {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/detect") return { detection };
+      if (path === "/api/projects/p1/env") return env;
+      return base(path, init);
+    });
+    render(
+      <MemoryRouter initialEntries={["/new"]}>
+        <Routes>
+          <Route path="/new" element={<NewProjectPage />} />
+          <Route path="*" element={<Onde />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "cassino" } });
+    fireEvent.click(screen.getByRole("button", { name: /Repositório Git/ }));
+    fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
+      target: { value: "https://github.com/usuario/cassino" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
+    await screen.findByText(/Tipo detectado/);
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Criar projeto/ }));
+    return screen.findByTestId("onde");
+  }
+
+  it("vai para o projeto já pedindo o primeiro deploy", async () => {
+    expect(await criar(DETECTION)).toHaveTextContent("/projects/p1?deploy=1");
+  });
+
+  it("compose com variáveis obrigatórias sem valor: vai para Variáveis, sem deploy", async () => {
+    const compose = { ...DETECTION, type: "compose", composeFile: "compose.paas.yaml", proxyService: "web" };
+    const env = {
+      vars: [{ key: "SITE_HOST", value: "x" }],
+      compose: {
+        variables: [
+          { name: "SITE_HOST", required: true, defaultValue: null },
+          { name: "POSTGRES_PASSWORD", required: true, defaultValue: null },
+          { name: "LOG_LEVEL", required: false, defaultValue: "info" },
+        ],
+      },
+    };
+    expect(await criar(compose, env)).toHaveTextContent("/projects/p1/env?deploy=pending");
+  });
+
+  it("compose com tudo preenchido: deploy direto", async () => {
+    const compose = { ...DETECTION, type: "compose", composeFile: "compose.yml", proxyService: "web" };
+    const env = { vars: [], compose: { variables: [{ name: "LOG_LEVEL", required: false, defaultValue: "info" }] } };
+    expect(await criar(compose, env)).toHaveTextContent("/projects/p1?deploy=1");
   });
 });

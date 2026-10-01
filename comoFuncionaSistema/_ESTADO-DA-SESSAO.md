@@ -128,6 +128,12 @@ pendente e por quê — informação que não está no código nem no git log.
   exige; guardrail de 80/443; network_mode resolvido; porta por domínio; compose.paas.* com
   prioridade. O cassino ganha um compose.paas.yaml (PR no repositório dele) para rodar atrás do
   painel.
+- **30/09 — portas 80/443 e primeiro deploy:** app comum que publica 80/443 deixa de ser
+  bloqueado: o painel retira essas portas no `paas.override.yml` (`ports: !override`, testado
+  com o docker compose real) sem mexer no repositório, e o guardrail vira aviso. Projeto com
+  proxy HTTPS próprio (Caddy/Traefik) continua bloqueado, agora SEM a opção de forçar (falharia
+  igual) — o caminho é o compose.paas.yaml. "Criar projeto" já dispara o primeiro deploy; se o
+  compose exige variáveis sem valor, leva à seção Variáveis com o aviso.
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

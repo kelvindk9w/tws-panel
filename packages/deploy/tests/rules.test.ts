@@ -478,14 +478,28 @@ describe("relatório agregado", () => {
  * 443:443 para o próprio Caddy. Na VPS, essas portas são do proxy do painel —
  * o `docker compose up` falharia com "porta já em uso", e nada avisava antes.
  */
-describe("proxy-port-conflict (block)", () => {
-  it("bloqueia serviço que publica 80 ou 443 do host", async () => {
-    await writeCompose(`  wallet:\n    image: app:1.0\n    ports:\n      - "80:80"\n      - "443:443"\n      - "127.0.0.1:8010:8010"`);
+describe("proxy-port-conflict", () => {
+  it("bloqueia 80/443 publicadas por projeto com proxy HTTPS próprio (Caddy no namespace, como o cassino)", async () => {
+    await writeCompose(
+      `  wallet:\n    image: app:1.0\n    ports:\n      - "80:80"\n      - "443:443"\n      - "127.0.0.1:8010:8010"\n` +
+        `  caddy:\n    image: caddy:2.8-alpine\n    network_mode: service:wallet`,
+    );
     const report = await runGuardrails(dir);
     const f = report.findings.filter((x) => x.rule === "proxy-port-conflict");
     expect(f).toHaveLength(2);
     expect(f[0]).toMatchObject({ level: "block", service: "wallet" });
     expect(f[0]!.fix).toMatch(/proxy do painel/);
+    expect(f[0]!.fix).toMatch(/compose\.paas/);
+  });
+
+  it("app comum que publica 80/443: só aviso — o painel retira a publicação no deploy", async () => {
+    await writeCompose(`  web:\n    image: nginx:1.27\n    ports:\n      - "80:80"`);
+    const report = await runGuardrails(dir);
+    const f = report.findings.filter((x) => x.rule === "proxy-port-conflict");
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ level: "warn", service: "web" });
+    expect(f[0]!.fix).toMatch(/sem mexer no repositório/);
+    expect(report.blockers).toBe(0);
   });
 
   it("porta do CONTAINER 80 publicada em outra porta do host não conflita", async () => {

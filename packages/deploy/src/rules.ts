@@ -23,6 +23,7 @@ import path from "node:path";
 import type { GuardrailFinding, GuardrailLevel, GuardrailReport } from "@paas/core";
 import { parse } from "yaml";
 import { DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
+import { hasOwnHttpsProxy } from "./proxy-ports.js";
 
 // ---------------------------------------------------------------------------
 // Constantes das regras
@@ -285,20 +286,27 @@ function analyzeComposeRules(content: string, fileName: string): GuardrailFindin
       }
     }
 
-    // proxy-port-conflict (block): 80/443 do host são do proxy do painel
-    // (Caddy central). Um compose que as publica falha no `up` com "porta já
-    // em uso" — ou tomaria o lugar do painel (visto no projeto cassino).
+    // proxy-port-conflict: 80/443 do host são do proxy do painel (Caddy
+    // central). Um compose que as publica falha no `up` com "porta já em uso".
+    // App comum: o painel retira a publicação no override (proxy-ports.ts) e
+    // só avisa. Proxy HTTPS próprio (visto no cassino): bloqueia — sem as
+    // portas o HTTPS dele briga com o do painel; o caminho é um compose.paas.
+    const ownProxy = hasOwnHttpsProxy(content, name);
     for (const port of publishedPorts(service.ports)) {
       if (port.host.kind === "fixed" && (port.host.port === 80 || port.host.port === 443)) {
         findings.push({
           rule: "proxy-port-conflict",
-          level: "block",
+          level: ownProxy ? "block" : "warn",
           title: `Porta ${port.host.port} do servidor publicada pelo projeto`,
           evidence: `${fileName}: serviço "${name}" publica ${formatPortMapping(port)}`,
-          fix:
-            `As portas 80 e 443 são do proxy do painel, que recebe o tráfego de todos os projetos e cuida do HTTPS. ` +
-            `Tire a publicação de ${port.host.port} deste serviço (e o proxy/Caddy próprio do projeto, se houver): ` +
-            "o painel entrega o tráfego ao serviço web pela rede interna, na porta em que ele escuta.",
+          fix: ownProxy
+            ? "As portas 80 e 443 são do proxy do painel, que recebe o tráfego de todos os projetos e cuida do HTTPS. " +
+              "Este projeto tem um proxy HTTPS próprio (Caddy/Traefik): o painel não pode só retirar as portas, porque os " +
+              "dois disputariam o HTTPS do mesmo domínio. Crie no repositório um compose.paas.yaml (o painel dá " +
+              "prioridade a ele) sem as portas 80/443 e com o proxy do projeto em HTTP, atrás do painel."
+            : "As portas 80 e 443 são do proxy do painel, que recebe o tráfego de todos os projetos e cuida do HTTPS. " +
+              `No deploy o painel retira a publicação de ${port.host.port} deste serviço, sem mexer no repositório: ` +
+              "o tráfego chega a ele pela rede interna, na porta em que ele escuta.",
           service: name,
         });
       }
