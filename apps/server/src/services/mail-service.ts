@@ -4,6 +4,7 @@
  * Persistência JSON em data/mail/mail.json (modo 0600 — guarda segredos),
  * seguindo o padrão das fases 0–2.
  */
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import {
   type DnsVerifyResponse,
   type MailDomain,
   type MailDomainSummary,
+  type MailTestStatus,
   type Mailbox,
   type MailboxCredentials,
   type MailServerStatus,
@@ -32,17 +34,22 @@ import {
   checkDomainBlacklists,
   checkExistingMail,
   checkIpBlacklists,
+  deliveryFromQueue,
+  findDeliveryReport,
   generatePassword,
+  isSingleEmailAddress,
   mailHostFor,
   maskEnv,
   projectMailboxAddress,
   publicResolver,
   readCaddyCertificate,
+  sendSmtpMail,
   StalwartClient,
   StalwartManager,
   verifyDnsRecords,
   type DnsResolverLike,
   type MailCertificate,
+  type QueuedMessage,
 } from "@paas/mailer";
 import type { ServerConfig } from "../config.js";
 import { isCloudflareIp, publicIpFromPanelDomain } from "../routes/domains.js";
@@ -128,7 +135,33 @@ export interface MailServiceOptions {
   checkCertificate?: typeof certificateStatus;
   /** Resolver DNS (padrão: servidores públicos). */
   resolver?: DnsResolverLike;
+  /** Envio SMTP do e-mail de teste (padrão: sendSmtpMail). */
+  sendMail?: typeof sendSmtpMail;
+  /** Leitura do aviso de entrega na caixa do remetente (padrão: findDeliveryReport). */
+  findReport?: typeof findDeliveryReport;
+  /** Relógio (ms) — limite de frequência e espera do e-mail de teste. */
+  now?: () => number;
 }
+
+/** E-mail de teste em acompanhamento (só em memória: some ao reiniciar o painel). */
+interface TestEmailRecord {
+  status: MailTestStatus;
+  envId: string;
+  /** Quando a mensagem deixou de aparecer na fila sem aviso de entrega (ms). */
+  goneSince: number | null;
+}
+
+/** No máximo 1 e-mail de teste a cada 30 s e 20 por hora (por instância do painel). */
+const TEST_MIN_INTERVAL_MS = 30_000;
+const TEST_MAX_PER_HOUR = 20;
+/**
+ * Espera pelo aviso de entrega depois que a mensagem sai da fila. O Stalwart
+ * enfileira o aviso ANTES de remover a mensagem e a entrega local é imediata;
+ * se nada chegar nesse tempo, "saiu da fila sem erro" vale como entregue.
+ */
+const TEST_REPORT_GRACE_MS = 20_000;
+/** Testes acompanhados ficam guardados por 1 hora. */
+const TEST_KEEP_MS = 60 * 60 * 1000;
 
 export type TlsSyncResult = "none" | "reloaded" | "restarted";
 
@@ -147,6 +180,12 @@ export class MailService {
   private readonly readCertificate: (host: string) => Promise<MailCertificate | null>;
   private readonly checkCertificate: typeof certificateStatus;
   private readonly resolverOverride: DnsResolverLike | undefined;
+  private readonly sendMail: typeof sendSmtpMail;
+  private readonly findReport: typeof findDeliveryReport;
+  private readonly now: () => number;
+  private readonly tests = new Map<string, TestEmailRecord>();
+  /** Horário (ms) de cada tentativa de envio de teste na última hora. */
+  private testAttempts: number[] = [];
   private data: MailFile = structuredClone(EMPTY_FILE);
   private loaded = false;
   private syncing: Promise<{ result: TlsSyncResult; certificates: MailCertificate[] }> | null = null;
@@ -164,6 +203,9 @@ export class MailService {
     this.readCertificate = opts.readCertificate ?? ((host) => readCaddyCertificate(host));
     this.checkCertificate = opts.checkCertificate ?? certificateStatus;
     this.resolverOverride = opts.resolver;
+    this.sendMail = opts.sendMail ?? sendSmtpMail;
+    this.findReport = opts.findReport ?? findDeliveryReport;
+    this.now = opts.now ?? Date.now;
   }
 
   /**
@@ -619,7 +661,8 @@ export class MailService {
 
   async verifyDomain(name: string): Promise<DnsVerifyResponse> {
     const checklist = await this.dnsChecklist(name);
-    const result = await verifyDnsRecords(checklist);
+    // O resolver injetado (testes) vale também aqui; o padrão segue sendo o público.
+    const result = await verifyDnsRecords(checklist, this.resolver());
     const domain = this.requireDomain(name);
     domain.lastVerify = {
       at: new Date().toISOString(),
@@ -726,6 +769,193 @@ export class MailService {
   }
 
   // -------------------------------------------------------------------------
+  // E-mail de teste (página do domínio)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Envia um e-mail de teste simples a partir de postmaster@<domínio>, pela
+   * submission do próprio Stalwart (465, TLS), como os projetos fazem.
+   *
+   * Por que postmaster@: o painel cria essa caixa ao cadastrar o domínio e
+   * já guarda a senha dela (mail.json, 0600) — a mesma que as credenciais e
+   * a injeção SMTP usam. Não precisa de caixa nova nem de segredo novo. Ela
+   * também recebe o aviso de entrega (DSN) que o Stalwart manda ao
+   * remetente, e é por ele que o painel sabe se a mensagem foi aceita ou
+   * recusada (testEmailStatus).
+   */
+  async sendTestEmail(domainName: string, recipient: string): Promise<MailTestStatus> {
+    await this.ensureLoaded();
+    const domain = this.requireDomain(domainName);
+    const to = (recipient ?? "").trim().toLowerCase();
+    if (!isSingleEmailAddress(to)) {
+      throw httpError(400, "invalid_recipient", "Informe um endereço de e-mail válido (um só destinatário).");
+    }
+    const from = `postmaster@${domain.name}`;
+    const mailbox = this.data.mailboxes[from];
+    if (!mailbox) {
+      throw httpError(
+        409,
+        "test_mailbox_missing",
+        `A caixa ${from} não está registrada no painel, e é dela que o teste sai. Remova e cadastre o domínio de novo para recriá-la.`,
+      );
+    }
+    await this.requireRunning();
+    this.takeTestSlot();
+
+    const id = randomBytes(8).toString("hex");
+    const envId = `tws-teste-${id}`;
+    const sentAt = new Date(this.now());
+    try {
+      await this.sendMail({
+        // Pela paas-net, o nome do container; fora de container, a porta publicada.
+        host: this.inContainer ? PAAS_STALWART_CONTAINER : "127.0.0.1",
+        port: this.inContainer ? 465 : this.config.mailPorts.submissions,
+        servername: mailHostFor(domain.name),
+        username: mailbox.id,
+        password: mailbox.password,
+        from,
+        to,
+        subject: "Teste do TWS Panel",
+        text: testEmailText(domain.name, from, id, sentAt),
+        envId,
+        messageId: `<${envId}@${domain.name}>`,
+        date: sentAt,
+      });
+    } catch (err) {
+      throw httpError(
+        502,
+        "test_send_failed",
+        `O servidor de e-mail não aceitou o teste: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    const status: MailTestStatus = {
+      id,
+      domain: domain.name,
+      from,
+      to,
+      sentAt: sentAt.toISOString(),
+      checkedAt: sentAt.toISOString(),
+      state: "queued",
+      detail: null,
+      nextRetryAt: null,
+      confirmed: false,
+      final: false,
+    };
+    this.forgetOldTests();
+    this.tests.set(id, { status, envId, goneSince: null });
+    return { ...status };
+  }
+
+  /**
+   * Destino do e-mail de teste: enquanto está na fila, o estado vem da API
+   * de administração (/api/queue/messages); quando sai, do aviso de entrega
+   * na caixa postmaster@. Sem aviso depois de TEST_REPORT_GRACE_MS, conta
+   * como entregue sem recibo (o Stalwart remove a mensagem da fila ao
+   * concluir, e a recusa definitiva SEMPRE gera aviso ao remetente).
+   */
+  async testEmailStatus(domainName: string, id: string): Promise<MailTestStatus> {
+    await this.ensureLoaded();
+    const record = this.tests.get(id);
+    if (!record || record.status.domain !== normalizeMailDomain(domainName)) {
+      throw httpError(404, "test_not_found", "Teste não encontrado (o painel guarda os testes por 1 hora).");
+    }
+    const { status } = record;
+    if (status.final) return { ...status };
+
+    const now = this.now();
+    let queued: QueuedMessage | undefined;
+    try {
+      await this.ensureNetworkAccess();
+      queued = (await this.client().listQueuedMessages(status.to)).find((m) => m.env_id === record.envId);
+    } catch (err) {
+      throw httpError(
+        502,
+        "mail_queue_unavailable",
+        `Não foi possível consultar a fila do servidor de e-mail: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (queued) {
+      record.goneSince = null;
+      const info = deliveryFromQueue(queued, status.to);
+      Object.assign(status, info, {
+        confirmed: info.state !== "queued",
+        final: info.state === "delivered" || info.state === "bounced",
+      });
+    } else {
+      const report = await this.readDeliveryReport(status);
+      if (report && report.state !== "deferred") {
+        Object.assign(status, { state: report.state, detail: report.detail, nextRetryAt: null, confirmed: true, final: true });
+      } else {
+        record.goneSince ??= now;
+        if (now - record.goneSince >= TEST_REPORT_GRACE_MS) {
+          Object.assign(status, {
+            state: "delivered",
+            detail: "A mensagem saiu da fila sem erro registrado, mas o servidor não mandou o recibo de entrega.",
+            nextRetryAt: null,
+            confirmed: false,
+            final: true,
+          });
+        } else {
+          Object.assign(status, { state: "queued", detail: null, nextRetryAt: null });
+        }
+      }
+    }
+    status.checkedAt = new Date(now).toISOString();
+    return { ...status };
+  }
+
+  /** Aviso de entrega na caixa do remetente; falha na leitura conta como "sem aviso". */
+  private async readDeliveryReport(status: MailTestStatus): Promise<Awaited<ReturnType<typeof findDeliveryReport>>> {
+    const mailbox = this.data.mailboxes[status.from];
+    if (!mailbox) return null;
+    try {
+      return await this.findReport({
+        baseUrl: this.apiBaseUrl(),
+        username: mailbox.id,
+        password: mailbox.password,
+        to: status.to,
+        // folga para diferença de relógio entre o painel e o Stalwart
+        since: new Date(Date.parse(status.sentAt) - 60_000),
+      });
+    } catch (err) {
+      this.log("e-mail de teste: falha ao ler o aviso de entrega", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /** Limite de frequência do e-mail de teste (a tentativa conta mesmo se o envio falhar). */
+  private takeTestSlot(): void {
+    const now = this.now();
+    const hour = 60 * 60 * 1000;
+    this.testAttempts = this.testAttempts.filter((t) => now - t < hour);
+    const last = this.testAttempts.at(-1);
+    if (last !== undefined && now - last < TEST_MIN_INTERVAL_MS) {
+      const wait = Math.ceil((TEST_MIN_INTERVAL_MS - (now - last)) / 1000);
+      throw httpError(429, "test_rate_limited", `Aguarde ${wait} s para enviar outro e-mail de teste.`);
+    }
+    if (this.testAttempts.length >= TEST_MAX_PER_HOUR) {
+      const wait = Math.ceil((this.testAttempts[0]! + hour - now) / 60_000);
+      throw httpError(
+        429,
+        "test_rate_limited",
+        `Limite de ${TEST_MAX_PER_HOUR} testes por hora atingido. Tente de novo em ${wait} min.`,
+      );
+    }
+    this.testAttempts.push(now);
+  }
+
+  private forgetOldTests(): void {
+    const now = this.now();
+    for (const [id, record] of this.tests) {
+      if (now - Date.parse(record.status.sentAt) > TEST_KEEP_MS) this.tests.delete(id);
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // E-mail de projeto (injeção SMTP no deploy)
   // -------------------------------------------------------------------------
 
@@ -825,6 +1055,24 @@ export class MailService {
       throw httpError(409, "mail_server_stopped", "O servidor de e-mail está parado. Inicie-o antes de continuar.");
     }
   }
+}
+
+/** Corpo do e-mail de teste (texto simples, para leigo). */
+function testEmailText(domain: string, from: string, id: string, sentAt: Date): string {
+  const when = sentAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  return [
+    "Olá!",
+    "",
+    "Este é um e-mail de teste do TWS Panel.",
+    "",
+    `Ele saiu do servidor de e-mail da sua VPS, pela caixa ${from}, para conferir se as mensagens do domínio ${domain} chegam até você.`,
+    "",
+    'Se ele caiu na pasta Spam, marque como "Não é spam": isso ajuda a reputação do domínio nas próximas mensagens.',
+    "",
+    "Não é preciso responder.",
+    "",
+    `Enviado em ${when} (horário de Brasília). Código do teste: ${id}.`,
+  ].join("\n");
 }
 
 /** O que falta para o certificado de `host` valer (pt-BR, para o operador). */

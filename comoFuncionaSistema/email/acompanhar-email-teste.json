@@ -1,0 +1,72 @@
+{
+  "id": "acompanhar-email-teste",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/domains/:domain/test-email/:id",
+  "resumo": "Destino atual do e-mail de teste: na fila, entregue ao servidor do destinatário, recusado ou adiado. A página consulta a cada 3 s por até 2 min.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:412",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (a página faz no máximo ~20 consultas por minuto).",
+  "parametros": {
+    "path": [
+      { "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (MAIL_DOMAIN_SCHEMA).", "descricao": "Domínio do teste." },
+      { "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "^[a-f0-9]{16}$ (testEmailStatusSchema).", "descricao": "Id devolvido pelo POST." }
+    ],
+    "query": [], "body": [], "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Teste conhecido.",
+      "corpo": { "test": "MailTestStatus — state: 'queued' | 'delivered' | 'bounced' | 'deferred'; detail: resposta/motivo do servidor do destinatário; nextRetryAt: ISO quando adiada; confirmed: o resultado veio do aviso de entrega; final: não muda mais" },
+      "exemplo": {
+        "test": {
+          "id": "0123456789abcdef",
+          "domain": "envio.exemplo.com.br",
+          "from": "postmaster@envio.exemplo.com.br",
+          "to": "pessoa@gmail.com",
+          "sentAt": "2026-10-01T12:00:00.000Z",
+          "checkedAt": "2026-10-01T12:00:06.000Z",
+          "state": "delivered",
+          "detail": "delivered to 'gmail-smtp-in.l.google.com' with code 250 (2.0.0) 'OK …'",
+          "nextRetryAt": null,
+          "confirmed": true,
+          "final": true
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "id fora do formato.", "mensagem": "Campo inválido: id." },
+    { "status": 404, "codigo": "test_not_found", "quando": "Id desconhecido, de outro domínio, com mais de 1 hora, ou o painel reiniciou.", "mensagem": "Teste não encontrado (o painel guarda os testes por 1 hora)." },
+    { "status": 502, "codigo": "mail_queue_unavailable", "quando": "A API de administração do Stalwart não respondeu.", "mensagem": "Não foi possível consultar a fila do servidor de e-mail: …" }
+  ],
+  "fluxo": [
+    "1. Resultado já definitivo (final) → devolve sem consultar nada.",
+    "2. Fila: StalwartClient.listQueuedMessages(to) → GET /api/queue/messages?values=1&text=<to em minúsculas> (admin, Basic). Formato (v0.11.8, crates/jmap/src/api/management/queue.rs; conferido também num Stalwart real): { data: { items: Message[], total, status } }, Message = { id, return_path, domains[], created, size, env_id?, blob_hash }, Domain = { name, status, recipients[], retry_num, next_retry, next_notify, expires }, Recipient = { address, status, orcpt? }. status = \"scheduled\" ou { completed | temp_fail | perm_fail: texto }. A mensagem do teste é achada pelo env_id (ENVID tws-teste-<id>).",
+    "3. Na fila → deliveryFromQueue (packages/mailer/src/delivery-status.ts:90): status do destinatário; se ainda 'scheduled', vale o do domínio (falha de conexão antes do RCPT). completed → delivered; perm_fail → bounced; temp_fail → deferred com next_retry; scheduled → queued. A resposta 'Code: 550, Enhanced code: 5.7.1, Message: X' vira '550 5.7.1 X'.",
+    "4. Fora da fila → o Stalwart remove a mensagem quando nada mais está pendente, TANTO na entrega quanto na recusa definitiva (crates/smtp/src/outbound/delivery.rs). Por isso o painel lê o aviso de entrega (DSN) que o Stalwart manda ao remetente ANTES de remover (crates/smtp/src/queue/dsn.rs): findDeliveryReport (delivery-status.ts:159) entra por JMAP na caixa postmaster@ (GET /.well-known/jmap, POST /jmap/, Email/query desde o envio menos 60 s + Email/get com o texto) e interpreta o assunto fixo ('Successfully delivered message' → delivered; 'Failed to deliver message' → bounced) e a linha '<destinatário> (…)' como detalhe.",
+    "5. Sem aviso: espera 20 s (TEST_REPORT_GRACE_MS) mostrando 'queued'; depois trata como entregue sem recibo (confirmed false). Falha ao ler o aviso conta como 'sem aviso' (fica no log)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.testEmailStatus", "arquivo": "apps/server/src/services/mail-service.ts:857", "papel": "Combina fila e aviso de entrega." },
+    { "tipo": "pacote", "nome": "StalwartClient.listQueuedMessages", "arquivo": "packages/mailer/src/client.ts:158", "papel": "Fila de saída pela API de administração." },
+    { "tipo": "pacote", "nome": "deliveryFromQueue / findDeliveryReport", "arquivo": "packages/mailer/src/delivery-status.ts", "papel": "Interpretação da fila e leitura do aviso por JMAP." }
+  ],
+  "efeitosColaterais": ["Nenhum além de leituras (fila e caixa postmaster@). Os avisos de entrega ficam na caixa postmaster@ (não são apagados)."],
+  "chamadoPor": ["apps/web/src/components/mail/TestEmailCard.tsx:137"],
+  "testes": [
+    "apps/server/tests/routes-mail-test-email.test.ts",
+    "apps/server/tests/mail-test-email.test.ts",
+    "packages/mailer/tests/delivery-status.test.ts",
+    "apps/web/tests/test-email-card.test.tsx"
+  ],
+  "observacoes": [
+    "Na tela (TestEmailCard): azul 'Na fila / tentando entregar…'; verde 'Entregue ao servidor do destinatário (aceito pelo Gmail)' + 'Confira também a pasta Spam'; vermelho 'Recusado: <motivo>'; amarelo 'Adiada: <motivo>, nova tentativa às HH:MM'. Depois de 2 min sem resultado definitivo, para de consultar e oferece 'Conferir de novo'.",
+    "Validado localmente com Stalwart v0.11.8 real (01/10/2026): DSN aceito após o EHLO pós-AUTH; recusa (domínio inexistente) e entrega local lidas pelo aviso via JMAP. Entrega real para o Gmail e o estado 'adiada' só se confirmam na VPS."
+  ]
+}

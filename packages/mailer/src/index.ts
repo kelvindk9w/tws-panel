@@ -32,6 +32,8 @@ export {
   verifyDnsRecords,
   publicResolver,
   ptrTicketText,
+  ptrIsOk,
+  detectPtrProvider,
   spfValue,
   dmarcValue,
   stageSuggestion,
@@ -39,6 +41,28 @@ export {
   type DnsResolverLike,
   type VerifyResult,
 } from "./dns-checklist.js";
+export {
+  sendSmtpMail,
+  buildTestMessage,
+  isSingleEmailAddress,
+  xtext,
+  SmtpSendError,
+  type SmtpSendOptions,
+  type SmtpSendResult,
+  type SmtpConnectOptions,
+} from "./smtp-send.js";
+export {
+  cleanSmtpResponse,
+  deliveryFromQueue,
+  findDeliveryReport,
+  interpretDeliveryReport,
+  type DeliveryInfo,
+  type FindDeliveryReportOptions,
+  type QueueStatus,
+  type QueuedDomain,
+  type QueuedMessage,
+  type QueuedRecipient,
+} from "./delivery-status.js";
 export { generatePassword, buildCredentials, type CredentialsInput } from "./mailboxes.js";
 export {
   checkIpBlacklists,
