@@ -147,6 +147,14 @@ pendente e por quê — informação que não está no código nem no git log.
   todas, lista com rolagem e rodapé fixo. Visão geral nova (status, deploy em andamento com log,
   domínios com certificado, e-mail, containers, código); Deploys = histórico + detalhe em janela;
   botões com cor. Projeto `~/projects/social` criado (pesquisa e rascunhos de posts; fora deste repo).
+- **01/10 — domínio antes do primeiro deploy:** página "Site em configuração" (com HTTPS) para
+  projeto nunca publicado; site já publicado não some mais do proxy quando um redeploy falha.
+- **ABERTO (01/10) — e-mail do painel com app que confere certificado:** o Stalwart usa certificado
+  autoassinado e o projeto conecta em `paas-stalwart:587`; apps com nodemailer padrão (o cassino:
+  requireTLS, verificação ligada) recusam. Caminho proposto: Caddy emite o certificado de
+  `mail.<domínio>`, o Stalwart usa esse certificado, ganha o alias `mail.<domínio>` na paas-net e
+  o painel injeta SMTP_HOST = `mail.<domínio>`. Aguardando o dono do produto decidir o caminho.
+  Alerta dado: domínio de e-mail = domínio principal da empresa (MX) desviaria o e-mail dela.
 - **ABERTO (30/09) — nova falha intermitente do teste do PTY real** (CI do PR #53, run
   36760343943; não reproduziu localmente em 6 execuções). Foi no AQUECIMENTO
   (`printf 'pronto'` de `abrirTerminalPronto`), não no comando testado. A tela terminou com

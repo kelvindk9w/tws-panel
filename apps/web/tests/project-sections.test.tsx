@@ -330,3 +330,21 @@ describe("ProjectEnvCard — o que o painel fornece e variável alternativa", ()
     expect(screen.getByTestId("env-row-MAIL_FROM")).toHaveTextContent(/obrigatória se EMAIL_DE estiver vazia/);
   });
 });
+
+/**
+ * Pedido do dono do produto (01/10/2026): conectar o domínio antes do primeiro
+ * deploy e já conseguir conferir. O cartão diz o que aparece no endereço.
+ */
+describe("ProjectDomainsCard — antes do primeiro deploy", () => {
+  it("explica que o domínio já responde com a página 'Site em configuração'", () => {
+    render(
+      <ProjectDomainsCard
+        project={{ ...PROJECT, lastDeployStatus: null } as unknown as Project}
+        publicIp={null}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/Site em configuração/)).toBeInTheDocument();
+    expect(screen.queryByText(/a partir do primeiro deploy/)).not.toBeInTheDocument();
+  });
+});

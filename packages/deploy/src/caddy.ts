@@ -41,6 +41,12 @@ export interface CaddyTarget {
   upstream: string;
   /** WebSocket/streaming: desativa buffer de resposta e timeouts curtos. */
   websocket: boolean;
+  /**
+   * false = o projeto nunca foi publicado: sem resposta do app, a página diz
+   * "site em configuração" (o domínio já responde com HTTPS). Ausente/true =
+   * já esteve no ar: "temporariamente indisponível".
+   */
+  published?: boolean;
 }
 
 export interface CaddyPorts {
@@ -303,6 +309,12 @@ export const PROJECT_DOWN_PAGE = errorPage(
   "Este site está passando por uma manutenção ou reiniciando. Tente de novo em alguns minutos.",
 );
 
+export const PROJECT_PENDING_PAGE = errorPage(
+  "Site em configuração",
+  "Este domínio já está conectado a este servidor, com conexão segura (HTTPS). " +
+    "O site ainda está sendo configurado e aparece aqui assim que for publicado.",
+);
+
 export const UNKNOWN_DOMAIN_PAGE = errorPage(
   "Domínio ainda não configurado",
   "Este domínio aponta para este servidor, mas ainda não está configurado em nenhum site. " +
@@ -348,11 +360,13 @@ export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite): s
       lines.push(`\treverse_proxy ${target.upstream}`);
     }
     if (target !== panelTarget) {
-      // projeto parado ou reiniciando: página neutra em vez do erro cru do proxy
+      // sem resposta do app: página neutra em vez do erro cru do proxy —
+      // "em configuração" se nunca foi publicado, senão "indisponível"
+      const page = target.published === false ? PROJECT_PENDING_PAGE : PROJECT_DOWN_PAGE;
       lines.push(
         "\thandle_errors 502 503 504 {",
         '\t\theader Content-Type "text/html; charset=utf-8"',
-        `\t\trespond \`${PROJECT_DOWN_PAGE}\` 503`,
+        `\t\trespond \`${page}\` 503`,
         "\t}",
       );
     }
