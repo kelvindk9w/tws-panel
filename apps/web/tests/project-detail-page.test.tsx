@@ -141,3 +141,18 @@ describe("ProjectDetailPage — primeiro deploy automático", () => {
     expect(await screen.findByTestId("deploy-pending")).toHaveTextContent(/obrigatórias/);
   });
 });
+
+describe("ProjectDetailPage — arquivo compose em uso", () => {
+  it("a visão geral mostra qual compose o deploy usa", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      const r = await base(path, init);
+      if (path === "/api/projects/p1") {
+        return { ...r, project: { ...r.project, detection: { ...r.project.detection, type: "compose", composeFile: "compose.paas.yaml" } } };
+      }
+      return r;
+    });
+    abrir();
+    expect(await screen.findByTestId("compose-file")).toHaveTextContent("compose.paas.yaml");
+  });
+});

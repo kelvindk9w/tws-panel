@@ -23,6 +23,7 @@ import path from "node:path";
 import type { GuardrailFinding, GuardrailLevel, GuardrailReport } from "@paas/core";
 import { parse } from "yaml";
 import { DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
+import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
 
 // ---------------------------------------------------------------------------
@@ -76,20 +77,6 @@ const WEAK_VALUES = new Set([
   "dev",
   "test",
 ]);
-
-/** Candidatos de arquivo compose (mesma prioridade da detecção). */
-const COMPOSE_CANDIDATES = [
-  "compose.prod.yml",
-  "compose.prod.yaml",
-  "compose.production.yml",
-  "docker-compose.prod.yml",
-  "docker-compose.prod.yaml",
-  "docker-compose.production.yml",
-  "compose.yml",
-  "compose.yaml",
-  "docker-compose.yml",
-  "docker-compose.yaml",
-];
 
 // ---------------------------------------------------------------------------
 // Scan de secrets no código-fonte (regexes conservadoras)
@@ -514,12 +501,15 @@ function summarize(findings: GuardrailFinding[]): { blockers: number; warnings: 
  * Executa todos os guardrails sobre um diretório de código-fonte.
  * Tolerante: compose inválido vira finding "block" (YAML quebrado não deve deployar).
  */
-export async function runGuardrails(dir: string): Promise<GuardrailReport> {
+export async function runGuardrails(dir: string, projectComposeFile?: string | null): Promise<GuardrailReport> {
   const findings: GuardrailFinding[] = [];
 
-  // Compose (regras de infra)
+  // Compose (regras de infra): o arquivo que o deploy usa (o da detecção do
+  // projeto); sem ele, a mesma ordem da detecção. Nome com caminho é ignorado.
   let composeFile: string | null = null;
-  for (const candidate of COMPOSE_CANDIDATES) {
+  const preferred =
+    projectComposeFile && path.basename(projectComposeFile) === projectComposeFile ? [projectComposeFile] : [];
+  for (const candidate of [...preferred, ...COMPOSE_CANDIDATES]) {
     try {
       await readFile(path.join(dir, candidate));
       composeFile = candidate;

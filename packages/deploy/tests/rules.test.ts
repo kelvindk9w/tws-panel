@@ -512,3 +512,37 @@ describe("proxy-port-conflict", () => {
     expect(GUARDRAIL_RULES.some((r) => r.rule === "proxy-port-conflict" && r.level === "block")).toBe(true);
   });
 });
+
+/**
+ * Validação real (cassino, 30/09/2026): o repositório tem compose.prod.yaml
+ * (com 80/443 e Mailpit) e compose.paas.yaml (feito para o painel). A detecção
+ * escolhia o compose.paas, mas os guardrails tinham uma lista própria, sem ele,
+ * e bloqueavam o deploy analisando o arquivo errado.
+ */
+describe("runGuardrails — qual compose é analisado", () => {
+  const PROD = `  wallet:\n    image: app:1.0\n    ports:\n      - "80:80"\n  caddy:\n    image: caddy:2.8\n    network_mode: service:wallet\n  mailpit:\n    image: axllent/mailpit:v1.30.7`;
+  const PAAS = `  wallet:\n    image: app:1.0\n  caddy:\n    image: caddy:2.8\n    network_mode: service:wallet`;
+
+  it("sem indicação: segue a mesma ordem da detecção (compose.paas.* primeiro)", async () => {
+    await writeCompose(PROD, "compose.prod.yaml");
+    await writeCompose(PAAS, "compose.paas.yaml");
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule !== "secret-in-code").map((f) => f.evidence).join("\n")).not.toMatch(
+      /compose\.prod\.yaml/,
+    );
+    expect(report.blockers).toBe(0);
+  });
+
+  it("com o arquivo do projeto: analisa exatamente esse", async () => {
+    await writeCompose(PROD, "compose.prod.yaml");
+    await writeCompose(PAAS, "compose.paas.yaml");
+    const report = await runGuardrails(dir, "compose.prod.yaml");
+    expect(report.findings.some((f) => f.rule === "proxy-port-conflict" && f.evidence.startsWith("compose.prod.yaml"))).toBe(true);
+  });
+
+  it("arquivo indicado que não existe: cai na ordem da detecção", async () => {
+    await writeCompose(PAAS, "compose.paas.yaml");
+    const report = await runGuardrails(dir, "../fora.yml");
+    expect(report.blockers).toBe(0);
+  });
+});
