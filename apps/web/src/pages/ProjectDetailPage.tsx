@@ -575,6 +575,11 @@ export function ProjectDetailPage() {
           <CardContent className="text-xs text-muted-foreground">
             ingestão: {project.ingestMode}
             {project.branch ? ` · branch ${project.branch}` : ""}
+            {project.detection?.composeFile && (
+              <span data-testid="compose-file">
+                {" · "}arquivo <code>{project.detection.composeFile}</code>
+              </span>
+            )}
           </CardContent>
         </Card>
         <Card>

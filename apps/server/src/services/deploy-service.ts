@@ -553,7 +553,7 @@ export class DeployService {
         note: "Código ainda não ingerido (modo git). Os guardrails rodarão automaticamente no deploy, após o clone.",
       };
     }
-    return { report: await runGuardrails(dir), note: null };
+    return { report: await runGuardrails(dir, project.detection?.composeFile), note: null };
   }
 
   async detect(id: string): Promise<DetectResult> {
@@ -616,7 +616,7 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir);
+      const report = await runGuardrails(srcDir, project.detection?.composeFile);
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",

@@ -12,26 +12,8 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { DetectResult, GuardrailWarning, PackageManager } from "@paas/core";
+import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { analyzeCompose, guessProxyTarget, servicesWithCustomNetworks } from "./guardrails.js";
-
-/**
- * Candidatos de arquivo compose, em ordem de prioridade: o feito para rodar
- * atrás do painel (compose.paas.*) primeiro, depois o de produção.
- */
-const COMPOSE_CANDIDATES = [
-  "compose.paas.yml",
-  "compose.paas.yaml",
-  "compose.prod.yml",
-  "compose.prod.yaml",
-  "compose.production.yml",
-  "docker-compose.prod.yml",
-  "docker-compose.prod.yaml",
-  "docker-compose.production.yml",
-  "compose.yml",
-  "compose.yaml",
-  "docker-compose.yml",
-  "docker-compose.yaml",
-];
 
 /** Pastas de saída estática conhecidas, em ordem de prioridade. */
 const STATIC_OUTPUT_DIRS = ["out", "dist", "build"];
