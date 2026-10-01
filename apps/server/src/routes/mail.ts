@@ -15,8 +15,10 @@ import type {
   MailboxResponse,
   MailServerActionResponse,
   MailServerStatus,
+  MailTestResponse,
   MailTlsStatusResponse,
   ProjectEmailResponse,
+  SendTestEmailRequest,
 } from "@paas/core";
 import { MailService } from "../services/mail-service.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
@@ -150,6 +152,39 @@ const enableProjectEmailSchema = {
     required: ["domain"],
     additionalProperties: false,
     properties: { domain: MAIL_DOMAIN_SCHEMA },
+  },
+} as const;
+
+// E-mail de teste: UM destinatário. O valor vira argumento de comando SMTP
+// (RCPT TO), então nada de espaço, quebra de linha, vírgula, ponto e vírgula
+// ou <> — mesma regra de isSingleEmailAddress (@paas/mailer), que o service
+// confere de novo.
+const sendTestEmailSchema = {
+  params: domainParamSchema.params,
+  body: {
+    type: "object",
+    required: ["to"],
+    additionalProperties: false,
+    properties: {
+      to: {
+        type: "string",
+        minLength: 3,
+        maxLength: 254,
+        pattern:
+          "^[^\\s@<>(),;:\"\\[\\]\\\\]+@[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$",
+      },
+    },
+  },
+} as const;
+
+const testEmailStatusSchema = {
+  params: {
+    type: "object",
+    required: ["domain", "id"],
+    properties: {
+      domain: MAIL_DOMAIN_SCHEMA,
+      id: { type: "string", pattern: "^[a-f0-9]{16}$" },
+    },
   },
 } as const;
 
@@ -339,6 +374,47 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         const response: DnsVerifyResponse = await service.verifyDomain(request.params.domain);
+        return reply.send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // E-mail de teste (página do domínio)
+  // -------------------------------------------------------------------------
+
+  // Envia uma mensagem simples de postmaster@<domínio> para o endereço
+  // informado. Limite de frequência no service (1 a cada 30 s, 20 por hora)
+  // para o botão não virar fonte de spam.
+  app.post<{ Params: { domain: string }; Body: SendTestEmailRequest }>(
+    "/api/mail/domains/:domain/test-email",
+    { schema: sendTestEmailSchema },
+    async (request, reply) => {
+      try {
+        const test = await service.sendTestEmail(request.params.domain, request.body.to);
+        await app.auditService.record({
+          action: "mail.test.send",
+          target: test.domain,
+          detail: `E-mail de teste enviado de ${test.from} para ${test.to}.`,
+        });
+        const response: MailTestResponse = { test };
+        return reply.code(202).send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Destino do e-mail de teste (a página consulta a cada poucos segundos).
+  app.get<{ Params: { domain: string; id: string } }>(
+    "/api/mail/domains/:domain/test-email/:id",
+    { schema: testEmailStatusSchema },
+    async (request, reply) => {
+      try {
+        const test = await service.testEmailStatus(request.params.domain, request.params.id);
+        const response: MailTestResponse = { test };
         return reply.send(response);
       } catch (err) {
         return sendError(reply, err);

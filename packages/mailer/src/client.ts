@@ -9,9 +9,13 @@
  *  - DELETE /api/principal/{nome}   remove
  *  - POST   /api/dkim               gera par de chaves ({"algorithm":"Rsa"} → RSA 2048)
  *  - GET    /api/dkim/{id}          chave pública (base64 do parâmetro p=)
+ *  - GET    /api/queue/messages?values=1&text=…
+ *                                   fila de saída, com o estado de cada
+ *                                   destinatário (formato em delivery-status.ts)
  * Auth: HTTP Basic com o fallback-admin (admin:<secret>).
  */
 import { DKIM_SELECTOR } from "@paas/core";
+import type { QueuedMessage } from "./delivery-status.js";
 
 export class StalwartApiError extends Error {
   constructor(
@@ -140,5 +144,22 @@ export class StalwartClient {
     return (data?.items ?? [])
       .map((item) => item.name ?? "")
       .filter((name) => name.endsWith(`@${domain}`));
+  }
+
+  // -------------------------------------------------------------------------
+  // Fila de saída
+  // -------------------------------------------------------------------------
+
+  /**
+   * Mensagens na fila cujo remetente ou destinatário contém `text`. O
+   * Stalwart compara com o endereço do destinatário em minúsculas
+   * (`address_lcase.contains`), por isso o texto vai em minúsculas.
+   */
+  async listQueuedMessages(text: string): Promise<QueuedMessage[]> {
+    const data = (await this.request(
+      "GET",
+      `/queue/messages?values=1&text=${encodeURIComponent(text.toLowerCase())}`,
+    )) as { items?: unknown[] } | null;
+    return (data?.items ?? []).filter((item): item is QueuedMessage => typeof item === "object" && item !== null);
   }
 }

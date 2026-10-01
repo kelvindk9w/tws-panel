@@ -312,6 +312,20 @@ describe("PTR em três níveis (verde, azul, amarelo)", () => {
     expect(result.ptr.ticketText).toContain("não possui registro PTR");
   });
 
+  it("nome confirmado de provedor desconhecido, outro nome da Contabo: usa a instrução da Contabo", async () => {
+    const result = await verifyDnsRecords(
+      buildDnsChecklist(BASE_INPUT),
+      allGreenExceptPtr({
+        reverse: async () => ["srv42.provedor-qualquer.net", CONTABO_PTR],
+        resolve4: async (name) =>
+          name === "mail.exemplo.com.br" || name === "srv42.provedor-qualquer.net" ? ["203.0.113.10"] : [],
+      }),
+    );
+    expect(result.ptr.status).toBe("generic");
+    expect(result.ptr.provider?.id).toBe("contabo");
+    expect(result.ptr.ticketText).toBeNull();
+  });
+
   it("basta UM dos nomes reversos voltar para o IP", async () => {
     const result = await verifyDnsRecords(
       buildDnsChecklist(BASE_INPUT),
@@ -340,6 +354,7 @@ describe("detectPtrProvider", () => {
 
   it("aceita ponto final e maiúsculas; não confunde sufixo parcial", () => {
     expect(detectPtrProvider("VMI1.CONTABOSERVER.NET.", "mail.x.com")?.id).toBe("contabo");
+    expect(detectPtrProvider("contaboserver.net", "mail.x.com")?.id).toBe("contabo");
     expect(detectPtrProvider("host.falsocontaboserver.net", "mail.x.com")).toBeNull();
     expect(detectPtrProvider("host.provedor-qualquer.net", "mail.x.com")).toBeNull();
   });

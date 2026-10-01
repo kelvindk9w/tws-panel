@@ -176,6 +176,13 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
     expect(screen.queryByText(/Copiar texto do chamado/)).not.toBeInTheDocument();
   });
 
+  it("aba do checklist traz o card 'Enviar e-mail de teste' do domínio", async () => {
+    mockApi();
+    renderPage();
+    expect(await screen.findByText("Enviar e-mail de teste")).toBeInTheDocument();
+    expect(screen.getByText("postmaster@exemplo.com.br")).toBeInTheDocument();
+  });
+
   it("erro ao carregar → mensagem em vez da tabela", async () => {
     vi.stubGlobal(
       "fetch",

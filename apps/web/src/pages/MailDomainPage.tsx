@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { TestEmailCard } from "@/components/mail/TestEmailCard";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -503,6 +504,8 @@ export function MailDomainPage() {
           </Card>
 
           <PtrCard ptr={ptr} />
+
+          <TestEmailCard domain={checklist.domain} />
 
           {checklist.suggestion && (
             <Card>

@@ -322,6 +322,50 @@ export interface MailTlsStatusResponse {
   syncError: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// E-mail de teste (página do domínio)
+// ---------------------------------------------------------------------------
+
+/**
+ * Destino de um e-mail de teste:
+ *  - queued: na fila do servidor de e-mail, tentando entregar;
+ *  - delivered: o servidor do destinatário aceitou (ex.: Gmail);
+ *  - bounced: o servidor do destinatário recusou de vez;
+ *  - deferred: adiada (recusa temporária ou falha de conexão), nova tentativa marcada.
+ */
+export type MailTestState = "queued" | "delivered" | "bounced" | "deferred";
+
+export interface MailTestStatus {
+  id: string;
+  domain: string;
+  /** Caixa que enviou (postmaster@<domínio>). */
+  from: string;
+  to: string;
+  sentAt: string;
+  checkedAt: string;
+  state: MailTestState;
+  /** Resposta ou motivo devolvido pelo servidor do destinatário (quando houver). */
+  detail: string | null;
+  /** Próxima tentativa (ISO) quando adiada. */
+  nextRetryAt: string | null;
+  /**
+   * true = o resultado veio do aviso de entrega do servidor de e-mail; false
+   * = a mensagem só saiu da fila sem erro registrado (entregue, sem recibo).
+   */
+  confirmed: boolean;
+  /** Resultado definitivo (entregue ou recusado): não precisa mais consultar. */
+  final: boolean;
+}
+
+export interface SendTestEmailRequest {
+  /** Um endereço de destino só (ex.: o Gmail da pessoa). */
+  to: string;
+}
+
+export interface MailTestResponse {
+  test: MailTestStatus;
+}
+
 export interface MailboxResponse {
   mailbox: Mailbox;
   /** Senha (retornada apenas na criação — depois só via /credentials). */
