@@ -155,7 +155,9 @@ try {
 
   // -------------------------------------------------------------------------
   step("2. Domínio de exemplo → DKIM 2048 + postmaster@");
-  await api("POST", "/api/mail/domains", { domain: DOMAIN });
+  // confirmExistingMail: o cadastro consulta o MX real; sem rede (ou com o
+  // resolver lento) a consulta falha e o painel pede confirmação.
+  await api("POST", "/api/mail/domains", { domain: DOMAIN, confirmExistingMail: true });
   const dns = await api<{
     records: Array<{ id: string; type: string; name: string; expected: string }>;
     mailHostname: string;
@@ -343,7 +345,8 @@ try {
   assert.equal(emailCfg.email.enabled, true);
   assert.equal(emailCfg.email.mailbox, `app-email-e2e@${DOMAIN}`);
   assert.equal(emailCfg.email.env.SMTP_PASS, "••••••••••••", "senha mascarada na API");
-  assert.equal(emailCfg.email.env.SMTP_HOST, "paas-stalwart");
+  // nome do certificado (mail.<domínio>), não o alias interno paas-stalwart
+  assert.equal(emailCfg.email.env.SMTP_HOST, `mail.${DOMAIN}`);
   ok(`caixa técnica ${emailCfg.email.mailbox} criada; env vars retornadas mascaradas`);
 
   const dep2 = await api<{ job: { id: string } }>("POST", `/api/projects/${project.id}/deploy`, {
@@ -370,7 +373,7 @@ try {
       return [l.slice(0, i), l.slice(i + 1)];
     }),
   );
-  assert.equal(envMap.SMTP_HOST, "paas-stalwart");
+  assert.equal(envMap.SMTP_HOST, `mail.${DOMAIN}`);
   assert.equal(envMap.SMTP_PORT, "587");
   assert.equal(envMap.SMTP_USER, `app-email-e2e@${DOMAIN}`);
   assert.equal(envMap.MAIL_FROM, `app-email-e2e@${DOMAIN}`);
@@ -383,10 +386,10 @@ try {
     apiContainer,
     "node",
     "-e",
-    `const s=require("net").connect({host:"paas-stalwart",port:587,timeout:5000});s.on("data",d=>{console.log(d.toString().slice(0,3));process.exit(0)});s.on("timeout",()=>process.exit(2));s.on("error",e=>{console.error(e.message);process.exit(1)});`,
+    `const s=require("net").connect({host:"mail.${DOMAIN}",port:587,timeout:5000});s.on("data",d=>{console.log(d.toString().slice(0,3));process.exit(0)});s.on("timeout",()=>process.exit(2));s.on("error",e=>{console.error(e.message);process.exit(1)});`,
   ]);
   assert.match(probe.stdout, /^220/, `banner SMTP inesperado: ${probe.stdout} ${probe.stderr}`);
-  ok("container alcança paas-stalwart:587 na rede paas-net (banner 220)");
+  ok(`container alcança mail.${DOMAIN}:587 (alias do Stalwart na paas-net, banner 220)`);
 
   // -------------------------------------------------------------------------
   step("7. Limpeza");
