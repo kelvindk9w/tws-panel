@@ -75,15 +75,40 @@ describe("domínios do projeto", () => {
     expect(up.aliases).toEqual([]);
   });
 
-  it("projeto publicado: cada mudança recarrega o Caddy na hora; não publicado: só grava", async () => {
+  /**
+   * Pedido do dono do produto (01/10/2026): domínio conectado antes do primeiro
+   * deploy precisa responder ("site em configuração", com HTTPS) para dar para
+   * conferir o DNS. Então toda mudança recarrega o Caddy, publicado ou não.
+   */
+  it("cada mudança de domínio recarrega o Caddy na hora, mesmo antes do primeiro deploy", async () => {
     const p = await projeto();
+    sync.mockClear();
     await svc.addDomain(p.id, "a.tws.tec.br");
-    expect(sync).not.toHaveBeenCalled();
-    (await svc.getProject(p.id))!.lastDeployStatus = "success";
     await svc.addDomain(p.id, "b.tws.tec.br");
     await svc.setPrimaryDomain(p.id, "b.tws.tec.br");
     await svc.removeDomain(p.id, "a.tws.tec.br");
-    expect(sync).toHaveBeenCalledTimes(3);
+    expect(sync).toHaveBeenCalledTimes(4);
+  });
+
+  it("trocar o domínio principal na edição do projeto (o assistente faz isso) recarrega o Caddy", async () => {
+    const p = await projeto();
+    sync.mockClear();
+    await svc.updateProject(p.id, { websocket: true });
+    expect(sync).not.toHaveBeenCalled();
+    await svc.updateProject(p.id, { domain: "cassp.tws.tec.br" });
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it("criar o projeto já coloca o endereço dele no Caddy", async () => {
+    await projeto();
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it("falha ao recarregar o Caddy não desfaz a mudança gravada", async () => {
+    const p = await projeto();
+    sync.mockRejectedValueOnce(new Error("caddy fora do ar"));
+    const up = await svc.addDomain(p.id, "c.tws.tec.br");
+    expect(up.aliases).toEqual(["c.tws.tec.br"]);
   });
 });
 

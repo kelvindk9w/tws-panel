@@ -148,3 +148,29 @@ describe("renderCaddyfile — páginas de erro", () => {
     for (const c of corpos) expect(c).not.toMatch(/[{}`]/);
   });
 });
+
+/**
+ * Pedido do dono do produto (01/10/2026): domínio conectado a um projeto que
+ * ainda não foi publicado não respondia nada — não dava para conferir que o DNS
+ * e o HTTPS funcionam enquanto o projeto é configurado. Agora mostra "site em
+ * configuração" (com HTTPS), e o rodapé discreto indica o painel.
+ */
+describe("renderCaddyfile — projeto ainda não publicado", () => {
+  const out = renderCaddyfile([
+    { domain: "novo.exemplo.com", upstream: "novo:80", websocket: false, published: false },
+    { domain: "velho.exemplo.com", upstream: "velho:80", websocket: false, published: true },
+  ]);
+
+  it("ainda não publicado → página 'site em configuração' (o domínio entra no Caddy, com HTTPS)", () => {
+    const bloco = out.slice(out.indexOf("novo.exemplo.com {"), out.indexOf("velho.exemplo.com {"));
+    expect(bloco).toContain("Site em configuração");
+    expect(bloco).toContain("Servidor gerenciado com TWS Panel");
+    expect(bloco).not.toContain("temporariamente indisponível");
+  });
+
+  it("já publicado antes → continua a página de indisponível", () => {
+    const bloco = out.slice(out.indexOf("velho.exemplo.com {"));
+    expect(bloco).toContain("temporariamente indisponível");
+    expect(bloco).not.toContain("Site em configuração");
+  });
+});

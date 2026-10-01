@@ -93,6 +93,24 @@ export function projectCaddyTargets(project: Project, upstream: string): CaddyTa
   }));
 }
 
+/**
+ * Alvos do proxy central para TODOS os projetos. O que nunca foi publicado
+ * entra também (`published: false`): o domínio responde com HTTPS e a página
+ * "site em configuração". O que já esteve no ar continua nele mesmo que o
+ * último deploy tenha falhado — antes ele sumia do proxy no próximo ajuste,
+ * com os containers antigos ainda rodando.
+ */
+export function caddyTargetsFor(projects: Project[], upstreamFor: (p: Project) => string): CaddyTarget[] {
+  return projects.flatMap((p) =>
+    projectCaddyTargets(p, upstreamFor(p)).map((t) => ({ ...t, published: wasPublished(p) })),
+  );
+}
+
+/** Já esteve no ar: último deploy ok ou o registro do que foi publicado. */
+function wasPublished(p: Project): boolean {
+  return p.lastDeployStatus === "success" || (p.deployedSource ?? null) !== null;
+}
+
 /** Onde o health check fala com o Caddy central (ver EngineContext.panelContainer). */
 export function healthCheckTarget(ctx: EngineContext): { host: string; httpPort: number; httpsPort: number } {
   if (ctx.panelContainer) return { host: PAAS_CADDY_CONTAINER, httpPort: 80, httpsPort: 443 };
@@ -242,10 +260,11 @@ export class DeployEngine {
 
     onLog("\n=== Etapa 4/5 · Proxy reverso (Caddy central) ===\n");
     const domain = projectDomain(project);
-    const targets = allProjects
-      .filter((p) => p.id !== project.id && p.lastDeployStatus === "success")
-      .flatMap((p) => projectCaddyTargets(p, this.upstreamFor(p)));
-    targets.push(...projectCaddyTargets(project, upstream));
+    const targets = caddyTargetsFor(
+      allProjects.filter((p) => p.id !== project.id),
+      (p) => this.upstreamFor(p),
+    );
+    targets.push(...projectCaddyTargets(project, upstream).map((t) => ({ ...t, published: wasPublished(project) })));
     await this.caddy.apply(targets, onLog);
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
@@ -253,12 +272,9 @@ export class DeployEngine {
     await this.waitHealthy(domain, onLog);
   }
 
-  /** Recalcula o Caddyfile com TODOS os projetos ativos (chamado após cada mudança). */
+  /** Recalcula o Caddyfile com TODOS os projetos (chamado após cada mudança). */
   async syncCaddy(projects: Project[], onLog?: LogFn): Promise<void> {
-    const targets = projects
-      .filter((p) => p.lastDeployStatus === "success")
-      .flatMap((p) => projectCaddyTargets(p, this.upstreamFor(p)));
-    await this.caddy.apply(targets, onLog);
+    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog);
   }
 
   /** Upstream (host:porta na rede paas-net) conforme o tipo do projeto. */

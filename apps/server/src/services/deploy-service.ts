@@ -441,7 +441,21 @@ export class DeployService {
     };
     this.projects.push(project);
     await this.saveProjects();
+    // o endereço já responde ("site em configuração", com HTTPS) antes do deploy
+    await this.applyProxy();
     return project;
+  }
+
+  /**
+   * Recarrega o Caddy com todos os projetos. Falha aqui não desfaz o que foi
+   * gravado: o próximo ajuste (ou deploy) tenta de novo.
+   */
+  private async applyProxy(): Promise<void> {
+    try {
+      await this.engine.syncCaddy(this.projects);
+    } catch {
+      // Caddy fora do ar: a configuração gravada vale no próximo ajuste
+    }
   }
 
   async updateProject(id: string, req: UpdateProjectRequest): Promise<Project> {
@@ -469,12 +483,14 @@ export class DeployService {
     if (req.branch !== undefined) {
       project.branch = validateBranch(req.branch);
     }
+    let domainChanged = false;
     if (req.domain !== undefined) {
       const domain = normalizeDomain(req.domain);
       if (!domain) throw httpError(400, "invalid_domain", "Domínio inválido.");
       if (domain !== project.domain && this.domainInUse(domain, project.id)) {
         throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
       }
+      domainChanged = domain !== project.domain;
       project.domain = domain;
     }
     if (req.websocket !== undefined) project.websocket = Boolean(req.websocket);
@@ -482,6 +498,7 @@ export class DeployService {
     if (req.proxyPort !== undefined) project.proxyPort = req.proxyPort;
     project.updatedAt = new Date().toISOString();
     await this.saveProjects();
+    if (domainChanged) await this.applyProxy();
     return project;
   }
 
@@ -758,6 +775,9 @@ export class DeployService {
         project.deployedSource = project.source;
         // persiste detecção feita durante o deploy
         project.updatedAt = new Date().toISOString();
+        // primeira publicação: sem resposta do app, a página passa de
+        // "em configuração" para "temporariamente indisponível"
+        await this.applyProxy();
       } catch (err) {
         job.status = "failed";
         job.error = err instanceof Error ? err.message : String(err);
@@ -852,12 +872,15 @@ export class DeployService {
     );
   }
 
-  /** Grava e, se o projeto já está no ar, aplica no Caddy na hora. */
+  /**
+   * Grava e aplica no Caddy na hora — também antes do primeiro deploy: o
+   * domínio passa a responder com a página "site em configuração".
+   */
   private async saveAndApplyDomains(project: Project, action: string, detail: string): Promise<Project> {
     project.updatedAt = new Date().toISOString();
     await this.saveProjects();
     await this.hooks.audit?.record({ action, target: project.slug, detail });
-    if (project.lastDeployStatus === "success") await this.engine.syncCaddy(this.projects);
+    await this.applyProxy();
     return project;
   }
 

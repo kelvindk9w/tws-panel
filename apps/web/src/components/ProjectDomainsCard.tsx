@@ -169,7 +169,8 @@ export function ProjectDomainsCard({
     }
   }
 
-  const live = project.lastDeployStatus === "success";
+  // já esteve no ar (mesma regra do proxy: último deploy ok ou algo já publicado)
+  const live = project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
 
   return (
     <Card>
@@ -178,8 +179,14 @@ export function ProjectDomainsCard({
           <Globe className="h-4 w-4" /> Domínios
         </CardTitle>
         <CardDescription>
-          Todos abrem o mesmo site, cada um com o seu certificado HTTPS.{" "}
-          {live ? "As mudanças valem na hora." : "As mudanças valem a partir do primeiro deploy."}
+          Todos abrem o mesmo site, cada um com o seu certificado HTTPS. As mudanças valem na hora.
+          {!live && (
+            <>
+              {" "}
+              Antes do primeiro deploy, o endereço já responde com a página &quot;Site em configuração&quot; (com HTTPS):
+              dá para conferir o DNS enquanto o projeto é configurado.
+            </>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
