@@ -131,6 +131,11 @@ export interface MailServiceOptions {
   inContainer?: boolean;
   /** Lê o certificado de um host no Caddy (padrão: readCaddyCertificate). */
   readCertificate?: (host: string) => Promise<MailCertificate | null>;
+  /**
+   * Certificado MANUAL do host (página Certificados), com preferência sobre o
+   * do Caddy. Ausente = só o automático.
+   */
+  manualCertificate?: (host: string) => Promise<MailCertificate | null>;
   /** Conferência TLS como a de um app (padrão: certificateStatus). */
   checkCertificate?: typeof certificateStatus;
   /** Resolver DNS (padrão: servidores públicos). */
@@ -179,6 +184,7 @@ export class MailService {
   private readonly inContainer: boolean;
   private readonly readCertificate: (host: string) => Promise<MailCertificate | null>;
   private readonly checkCertificate: typeof certificateStatus;
+  private readonly manualCertificate: ((host: string) => Promise<MailCertificate | null>) | undefined;
   private readonly resolverOverride: DnsResolverLike | undefined;
   private readonly sendMail: typeof sendSmtpMail;
   private readonly findReport: typeof findDeliveryReport;
@@ -202,6 +208,7 @@ export class MailService {
     this.inContainer = opts.inContainer ?? existsSync("/.dockerenv");
     this.readCertificate = opts.readCertificate ?? ((host) => readCaddyCertificate(host));
     this.checkCertificate = opts.checkCertificate ?? certificateStatus;
+    this.manualCertificate = opts.manualCertificate;
     this.resolverOverride = opts.resolver;
     this.sendMail = opts.sendMail ?? sendSmtpMail;
     this.findReport = opts.findReport ?? findDeliveryReport;
@@ -367,9 +374,16 @@ export class MailService {
   // Certificado do servidor de e-mail (mail.<domínio>)
   // -------------------------------------------------------------------------
 
-  /** Certificados já emitidos pelo Caddy para os hosts de e-mail. */
+  /**
+   * Certificado de cada host de e-mail: o manual (página Certificados), se
+   * houver, senão o que o Caddy emitiu.
+   */
   private async currentCertificates(): Promise<MailCertificate[]> {
-    const found = await Promise.all(this.hostList().map((h) => this.readCertificate(h)));
+    const found = await Promise.all(
+      this.hostList().map(
+        async (h) => (await this.manualCertificate?.(h).catch(() => null)) ?? this.readCertificate(h),
+      ),
+    );
     return found.filter((c): c is MailCertificate => c !== null);
   }
 

@@ -205,7 +205,13 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // O sink de auditoria precisa ser injetado aqui: sem ele, deleteMailbox
   // remove a caixa sem deixar registro na trilha, ao contrário de criar
   // domínio e criar caixa.
-  const service = new MailService(app.config, { audit: app.auditService });
+  const service = new MailService(app.config, {
+    audit: app.auditService,
+    // Certificado manual de mail.<domínio> (página Certificados) vence o do Caddy.
+    ...(app.hasDecorator("certificateStore")
+      ? { manualCertificate: (host: string) => app.certificateStore.forHost(host) }
+      : {}),
+  });
   app.decorate("mailService", service);
 
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
@@ -213,6 +219,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
   // que o Stalwart passa a usar (ver MailService.syncTls).
   app.deployService.setMailHostsProvider(() => service.mailHosts());
+  // A página Certificados instala no Stalwart na hora em que mail.<domínio> fica válido.
+  app.deployService.setMailTlsSync?.(() => service.syncTls());
 
   /**
    * Os hosts de e-mail mudaram (domínio novo/removido, servidor iniciado):
