@@ -11,6 +11,7 @@ import type {
   MailboxListResponse,
   MailboxResponse,
   PtrCheck,
+  PtrCheckStatus,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -18,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { TestEmailCard } from "@/components/mail/TestEmailCard";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -26,6 +28,7 @@ import {
   Copy,
   Eye,
   Inbox,
+  Info,
   Loader2,
   MailPlus,
   RefreshCw,
@@ -63,10 +66,12 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 
-function StatusIcon({ status }: { status: DnsCheckStatus }) {
+function StatusIcon({ status }: { status: DnsCheckStatus | PtrCheckStatus }) {
   switch (status) {
     case "found":
       return <CheckCircle2 className="h-4 w-4 text-emerald-400" />;
+    case "generic":
+      return <Info className="h-4 w-4 text-sky-400" />;
     case "missing":
       return <XCircle className="h-4 w-4 text-red-400" />;
     case "mismatch":
@@ -90,6 +95,105 @@ function statusLabel(status: DnsCheckStatus): string {
     case "pending":
       return "não verificado";
   }
+}
+
+/** PTR verde (mail.<domínio>) ou azul (genérico com FCrDNS válido) conta como OK. */
+function ptrIsOk(status: PtrCheckStatus): boolean {
+  return status === "found" || status === "generic";
+}
+
+// ---------------------------------------------------------------------------
+// Card do DNS reverso (PTR) — verde, azul ou amarelo
+// ---------------------------------------------------------------------------
+
+/** Como trocar o nome reverso: o caminho no painel do provedor ou o texto de chamado. */
+function PtrHowTo({ ptr }: { ptr: PtrCheck }) {
+  if (ptr.provider) {
+    return <p className="text-sm">{ptr.provider.instructions}</p>;
+  }
+  if (!ptr.ticketText) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm text-muted-foreground">
+        Em vários provedores você mesmo troca o nome reverso no painel (procure por "Reverse DNS" ou
+        "rDNS"). Na DigitalOcean o nome reverso segue o nome do droplet: renomeie o droplet para{" "}
+        <code className="text-xs">{ptr.expected}</code>. Se não achar a opção, abra um chamado no
+        provedor da VPS com o texto abaixo:
+      </p>
+      <pre className="whitespace-pre-wrap rounded-lg border bg-black/40 p-3 font-mono text-xs">
+        {ptr.ticketText}
+      </pre>
+      <div>
+        <CopyButton text={ptr.ticketText} label="Copiar texto do chamado" />
+      </div>
+    </div>
+  );
+}
+
+function PtrCard({ ptr }: { ptr: PtrCheck }) {
+  const current = ptr.found.join(", ");
+  return (
+    <Card
+      className={cn(
+        ptr.status === "generic" && "border-sky-500/40",
+        ptr.status !== "found" && ptr.status !== "generic" && "border-amber-500/40",
+      )}
+    >
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <StatusIcon status={ptr.status} /> Reverse DNS (PTR) — {ptr.ip}
+        </CardTitle>
+        <CardDescription>
+          O nome reverso é o "nome" que o IP da VPS informa a quem recebe o e-mail. Ideal:{" "}
+          <code className="text-xs">{ptr.expected}</code>. Ele é configurado no provedor da VPS, não
+          no DNS do domínio.
+          {ptr.status !== "generic" && current && ` Encontrado: ${current}.`}
+        </CardDescription>
+      </CardHeader>
+
+      {ptr.status === "found" && (
+        <CardContent>
+          <p className="text-sm text-emerald-400">Tudo certo: o nome reverso do IP é {ptr.expected}.</p>
+        </CardContent>
+      )}
+
+      {ptr.status === "generic" && (
+        <CardContent className="flex flex-col gap-2">
+          <p className="text-sm text-sky-400">
+            Envio liberado. O IP tem o nome reverso <code className="text-xs">{current}</code>, e esse
+            nome aponta de volta para o mesmo IP. Essa ida e volta (FCrDNS) é o que os grandes
+            provedores conferem: Gmail, Yahoo e Microsoft aceitam suas mensagens.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Trocar o nome reverso para {ptr.expected} melhora um pouco a entrega, mas é opcional.
+          </p>
+          {(ptr.provider || ptr.ticketText) && (
+            <details className="rounded-lg border px-3 py-2">
+              <summary className="cursor-pointer text-sm text-muted-foreground">
+                Opcional: trocar o nome reverso para {ptr.expected}
+                {ptr.provider ? ` (${ptr.provider.name})` : ""}
+              </summary>
+              <div className="pt-2">
+                <PtrHowTo ptr={ptr} />
+              </div>
+            </details>
+          )}
+        </CardContent>
+      )}
+
+      {(ptr.status === "mismatch" || ptr.status === "action_required" || ptr.status === "missing") && (
+        <CardContent className="flex flex-col gap-2">
+          <p className="text-sm text-amber-400">
+            {ptr.status === "mismatch"
+              ? `O IP tem o nome reverso ${current}, mas esse nome não volta para o IP. `
+              : "O IP da VPS não tem nome reverso. "}
+            Sem um PTR válido (FCrDNS), o Gmail, o Yahoo e a Microsoft podem recusar suas mensagens.
+          </p>
+          <PtrHowTo ptr={ptr} />
+        </CardContent>
+      )}
+    </Card>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +394,7 @@ export function MailDomainPage() {
 
   const records: DnsRecordCheck[] = checklist.records;
   const ptr: PtrCheck = checklist.ptr;
-  const okCount = records.filter((r) => r.status === "found").length + (ptr.status === "found" ? 1 : 0);
+  const okCount = records.filter((r) => r.status === "found").length + (ptrIsOk(ptr.status) ? 1 : 0);
   const total = records.length + 1;
 
   return (
@@ -358,8 +462,10 @@ export function MailDomainPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <table className="w-full text-sm">
-                <thead>
+              {/* No celular cada registro vira um bloco empilhado (status, tipo e copiar
+                  na primeira linha; nome e valor embaixo); a partir de sm, tabela. */}
+              <table className="block w-full text-sm sm:table">
+                <thead className="hidden sm:table-header-group">
                   <tr className="border-b text-left text-xs text-muted-foreground">
                     <th className="px-4 py-2 font-medium">Status</th>
                     <th className="px-4 py-2 font-medium">Tipo</th>
@@ -368,18 +474,21 @@ export function MailDomainPage() {
                     <th className="px-4 py-2 font-medium"></th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="block sm:table-row-group">
                   {records.map((record) => (
-                    <tr key={record.id} className="border-b last:border-0">
-                      <td className="px-4 py-2">
+                    <tr
+                      key={record.id}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3 last:border-0 sm:table-row sm:p-0"
+                    >
+                      <td className="order-1 sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
                         <span className="flex items-center gap-1.5 text-xs">
                           <StatusIcon status={record.status} />
                           {statusLabel(record.status)}
                         </span>
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs">{record.type}</td>
-                      <td className="px-4 py-2 font-mono text-xs">{record.name}</td>
-                      <td className="max-w-md px-4 py-2">
+                      <td className="order-2 font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">{record.type}</td>
+                      <td className="order-4 basis-full break-all font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">{record.name}</td>
+                      <td className="order-5 min-w-0 basis-full sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto sm:max-w-md">
                         <p className="break-all font-mono text-xs">{record.expected}</p>
                         <p className="text-xs text-muted-foreground">{record.purpose}</p>
                         {record.note && <p className="text-xs text-amber-400">{record.note}</p>}
@@ -389,7 +498,7 @@ export function MailDomainPage() {
                           </p>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-right">
+                      <td className="order-3 ml-auto text-right sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
                         <CopyButton text={`${record.name}  ${record.type}  ${record.expected}`} />
                       </td>
                     </tr>
@@ -399,32 +508,9 @@ export function MailDomainPage() {
             </CardContent>
           </Card>
 
-          <Card className={cn(ptr.status === "found" ? "" : "border-amber-500/40")}>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <StatusIcon status={ptr.status} /> Reverse DNS (PTR) — {ptr.ip}
-              </CardTitle>
-              <CardDescription>
-                Esperado: <code className="text-xs">{ptr.expected}</code>. O PTR só pode ser
-                configurado pelo provedor da VPS — não é um registro do DNS do domínio.
-                {ptr.found.length > 0 && ` Encontrado: ${ptr.found.join(", ")}.`}
-              </CardDescription>
-            </CardHeader>
-            {ptr.ticketText && (
-              <CardContent className="flex flex-col gap-2">
-                <p className="text-sm text-amber-400">
-                  Sem PTR válido o Gmail, Yahoo e Microsoft podem rejeitar suas mensagens (FCrDNS
-                  obrigatório). Abra um chamado no provedor da VPS com o texto abaixo:
-                </p>
-                <pre className="whitespace-pre-wrap rounded-lg border bg-black/40 p-3 font-mono text-xs">
-                  {ptr.ticketText}
-                </pre>
-                <div>
-                  <CopyButton text={ptr.ticketText} label="Copiar texto do chamado" />
-                </div>
-              </CardContent>
-            )}
-          </Card>
+          <PtrCard ptr={ptr} />
+
+          <TestEmailCard domain={checklist.domain} />
 
           {checklist.suggestion && (
             <Card>

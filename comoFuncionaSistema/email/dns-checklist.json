@@ -29,7 +29,7 @@
           { "id": "dkim", "type": "TXT", "name": "paas._domainkey.exemplo.com.br", "expected": "v=DKIM1; k=rsa; p=MIIBIjANBg...", "purpose": "DKIM (RSA 2048): assinatura criptográfica de toda mensagem enviada.", "status": "pending", "found": [], "note": null },
           { "id": "dmarc", "type": "TXT", "name": "_dmarc.exemplo.com.br", "expected": "v=DMARC1; p=none; rua=mailto:dmarc@exemplo.com.br", "purpose": "DMARC: política de autenticação + relatórios (evoluir none → quarantine → reject).", "status": "pending", "found": [], "note": null }
         ],
-        "ptr": { "ip": "203.0.113.10", "expected": "mail.exemplo.com.br", "status": "pending", "found": [], "ticketText": null },
+        "ptr": { "ip": "203.0.113.10", "expected": "mail.exemplo.com.br", "status": "pending", "found": [], "forwardConfirmed": null, "provider": null, "ticketText": null },
         "suggestion": "Estágio de observação: SPF \"~all\" e DMARC \"p=none\". Após 2–4 semanas monitorando os relatórios (rua) sem falsos positivos, endureça para p=quarantine e SPF \"-all\"."
       }
     }

@@ -4,7 +4,17 @@
  *
  * Registros: A/AAAA (mail.<domínio>), MX, SPF (progressivo ~all → -all),
  * DKIM (RSA 2048, seletor "paas"), DMARC (progressivo none → quarantine →
- * reject) e PTR (fora do nosso controle — gera texto de chamado quando ausente).
+ * reject) e PTR (configurado no provedor da VPS, não no DNS do domínio).
+ *
+ * PTR em três níveis (validação real, 01/10/2026): numa VPS da Contabo o IP
+ * tinha o nome reverso genérico vmiNNNNNNN.contaboserver.net, que volta para o
+ * mesmo IP. Isso já é o FCrDNS que o Gmail, o Yahoo e a Microsoft exigem; o
+ * painel mostrava amarelo e mandava abrir chamado sem necessidade. Agora:
+ * verde = mail.<domínio>; azul = nome genérico com FCrDNS válido (conta como
+ * OK, trocar é opcional); amarelo = sem PTR ou nome que não volta para o IP.
+ * Quando o provedor é conhecido pelo nome reverso, a instrução diz onde a
+ * própria pessoa troca no painel dele; o texto de chamado fica só para
+ * provedor desconhecido.
  *
  * A verificação usa um resolver público (1.1.1.1/8.8.8.8) para não depender do
  * resolver local; o resolvedor é injetável para permitir testes com mock.
@@ -15,6 +25,7 @@ import type {
   DnsChecklistResponse,
   DnsRecordCheck,
   PtrCheck,
+  PtrProvider,
 } from "@paas/core";
 
 export interface ChecklistInput {
@@ -135,6 +146,8 @@ export function buildDnsChecklist(input: ChecklistInput): DnsChecklistResponse {
       expected: mailHostname,
       status: "pending",
       found: [],
+      forwardConfirmed: null,
+      provider: null,
       ticketText: null,
     },
     suggestion: stageSuggestion(dmarcStage),
@@ -225,30 +238,122 @@ export async function verifyDnsRecords(
     records.push(checked);
   }
 
-  // PTR: reverse DNS do IP (só o provedor da VPS configura).
-  const ptrNames = (await safe(resolver.reverse(checklist.ptr.ip), [])).map((n) =>
-    n.replace(/\.$/, ""),
-  );
-  const ptr: PtrCheck = {
-    ...checklist.ptr,
-    found: ptrNames,
-    status:
-      ptrNames.length === 0
-        ? "action_required"
-        : ptrNames.includes(checklist.ptr.expected)
-          ? "found"
-          : "mismatch",
-    ticketText: null,
-  };
-  if (ptr.status === "action_required") {
-    ptr.ticketText = ptrTicketText(ptr.ip, ptr.expected);
-  } else if (ptr.status === "mismatch") {
-    ptr.ticketText = ptrTicketText(ptr.ip, ptr.expected, ptrNames[0]);
-  }
+  const ptr = await verifyPtr(checklist.ptr, resolver);
 
   const total = records.length + 1;
-  const ok = records.filter((r) => r.status === "found").length + (ptr.status === "found" ? 1 : 0);
+  const ok = records.filter((r) => r.status === "found").length + (ptrIsOk(ptr.status) ? 1 : 0);
   return { records, ptr, summary: { ok, total } };
+}
+
+/** PTR verde (mail.<domínio>) ou azul (genérico com FCrDNS válido) conta como OK. */
+export function ptrIsOk(status: PtrCheck["status"]): boolean {
+  return status === "found" || status === "generic";
+}
+
+/** Normaliza um nome DNS: minúsculas e sem o ponto final. */
+function normalizeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\.$/, "");
+}
+
+/**
+ * DNS reverso do IP: o nome reverso é mail.<domínio> (found)? Senão, algum
+ * nome reverso volta para o mesmo IP (generic, FCrDNS válido)? Senão,
+ * mismatch; sem nome reverso nenhum, action_required.
+ */
+async function verifyPtr(expectedPtr: PtrCheck, resolver: DnsResolverLike): Promise<PtrCheck> {
+  const names = (await safe(resolver.reverse(expectedPtr.ip), [])).map(normalizeName);
+  const expected = normalizeName(expectedPtr.expected);
+  const base: PtrCheck = { ...expectedPtr, found: names, forwardConfirmed: null, provider: null, ticketText: null };
+
+  if (names.length === 0) {
+    return { ...base, status: "action_required", ticketText: ptrTicketText(base.ip, base.expected) };
+  }
+  if (names.includes(expected)) {
+    return { ...base, status: "found" };
+  }
+
+  // FCrDNS: algum nome reverso resolve (A) de volta para o mesmo IP.
+  let confirmedName: string | null = null;
+  for (const name of names) {
+    const addresses = await safe(resolver.resolve4(name), []);
+    if (addresses.includes(base.ip)) {
+      confirmedName = name;
+      break;
+    }
+  }
+  const current = confirmedName ?? names[0]!;
+  const provider = detectPtrProvider(current, base.expected) ?? firstProvider(names, base.expected);
+  return {
+    ...base,
+    status: confirmedName ? "generic" : "mismatch",
+    forwardConfirmed: confirmedName !== null,
+    provider,
+    // Provedor conhecido: a instrução diz onde trocar sem chamado.
+    ticketText: provider ? null : ptrTicketText(base.ip, base.expected, current),
+  };
+}
+
+function firstProvider(names: string[], mailHostname: string): PtrProvider | null {
+  for (const name of names) {
+    const provider = detectPtrProvider(name, mailHostname);
+    if (provider) return provider;
+  }
+  return null;
+}
+
+interface PtrProviderRule {
+  id: string;
+  name: string;
+  /** Sufixos do nome reverso genérico que o provedor atribui aos IPs. */
+  suffixes: string[];
+  instructions: (mailHostname: string) => string;
+}
+
+/**
+ * Provedores reconhecidos pelo nome reverso genérico. Para acrescentar um:
+ * o sufixo do nome que o provedor dá ao IP e o caminho no painel dele.
+ *
+ * Fora da lista, de propósito: a DigitalOcean não tem nome genérico — o
+ * reverso segue o NOME do droplet (ex.: "ubuntu-s-1vcpu-1gb-01"), então não
+ * dá para reconhecê-la pelo nome. A dica dela aparece na página do domínio
+ * junto do texto de chamado (provedor desconhecido).
+ */
+const PTR_PROVIDERS: PtrProviderRule[] = [
+  {
+    id: "contabo",
+    name: "Contabo",
+    suffixes: ["contaboserver.net"],
+    instructions: (host) =>
+      `Na Contabo você mesmo troca, sem chamado: no painel da Contabo (my.contabo.com), abra ` +
+      `"Reverse DNS Management", edite o IP e coloque ${host}.`,
+  },
+  {
+    id: "hetzner",
+    name: "Hetzner",
+    suffixes: ["your-server.de"],
+    instructions: (host) =>
+      `Na Hetzner você mesmo troca, sem chamado: no Hetzner Console (console.hetzner.com), abra o ` +
+      `servidor, vá na aba "Networking" e, no IP, use a opção "Reverse DNS" para colocar ${host}.`,
+  },
+  {
+    id: "vultr",
+    name: "Vultr",
+    suffixes: ["vultrusercontent.com"],
+    instructions: (host) =>
+      `Na Vultr você mesmo troca, sem chamado: no painel da Vultr (my.vultr.com), abra o servidor, ` +
+      `vá em Settings → IPv4, edite o campo "Reverse DNS" do IP e coloque ${host}.`,
+  },
+];
+
+/** Reconhece o provedor da VPS pelo sufixo do nome reverso atual. */
+export function detectPtrProvider(ptrName: string, mailHostname: string): PtrProvider | null {
+  const name = normalizeName(ptrName);
+  for (const rule of PTR_PROVIDERS) {
+    if (rule.suffixes.some((suffix) => name === suffix || name.endsWith(`.${suffix}`))) {
+      return { id: rule.id, name: rule.name, instructions: rule.instructions(mailHostname) };
+    }
+  }
+  return null;
 }
 
 /** Texto pronto para abrir chamado no provedor da VPS (registro PTR). */

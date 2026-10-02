@@ -1,0 +1,271 @@
+/**
+ * smtp-send.ts — envio do "e-mail de teste" do painel pela submission do
+ * próprio Stalwart, autenticado com a caixa postmaster@<domínio>.
+ *
+ * Cliente SMTP mínimo (sem dependência nova): TLS implícito na porta 465,
+ * EHLO, AUTH PLAIN, EHLO de novo, MAIL/RCPT/DATA, QUIT. Uma mensagem, um
+ * destinatário.
+ *
+ * Aviso de entrega (DSN, RFC 3461): quando o servidor anuncia DSN — o
+ * Stalwart v0.11.8 anuncia para sessões autenticadas
+ * (`session.extensions.dsn`, padrão `!is_empty(authenticated_as)`) — o envio
+ * pede NOTIFY=SUCCESS,FAILURE,DELAY e um ENVID. Assim o Stalwart deixa um
+ * aviso ("Successfully delivered message" ou "Failed to deliver message") na
+ * caixa postmaster@ quando a mensagem sai da fila, e o painel consegue dizer
+ * se ela foi aceita ou recusada pelo servidor do destinatário (ver
+ * delivery-report.ts). Sem isso, "saiu da fila" não diz nada: o Stalwart
+ * remove a mensagem da fila tanto na entrega quanto na recusa definitiva.
+ *
+ * Certificado: a conexão é do painel com o próprio servidor de e-mail, por
+ * dentro da rede Docker (paas-net). O certificado ainda pode ser
+ * autoassinado (antes de o Caddy emitir o de mail.<domínio>), e o teste não
+ * pode falhar só por isso — a verificação da cadeia fica desligada AQUI. O
+ * estado do certificado continua conferido à parte (MailService.tlsStatus),
+ * como um app confere.
+ */
+import tls from "node:tls";
+import type { Duplex } from "node:stream";
+
+export interface SmtpConnectOptions {
+  host: string;
+  port: number;
+  servername: string;
+}
+
+export interface SmtpSendOptions extends SmtpConnectOptions {
+  username: string;
+  password: string;
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  /** Identificador do envio (ENVID do DSN). */
+  envId: string;
+  messageId: string;
+  date?: Date;
+  /** Tempo máximo de espera por cada resposta do servidor (padrão 15 s). */
+  timeoutMs?: number;
+  /** Abre a conexão (padrão: TLS implícito sem verificar a cadeia). Injetável em testes. */
+  connect?: (opts: SmtpConnectOptions) => Duplex;
+}
+
+export interface SmtpSendResult {
+  /** Resposta final do servidor ao DATA (ex.: "250 2.0.0 Message queued for delivery."). */
+  response: string;
+  /** O servidor aceitou o pedido de aviso de entrega (DSN). */
+  dsn: boolean;
+}
+
+export class SmtpSendError extends Error {
+  constructor(
+    /** Código SMTP da resposta (0 = falha de conexão ou tempo esgotado). */
+    public readonly code: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "SmtpSendError";
+  }
+}
+
+/** Um endereço só, sem espaço, vírgula, ponto e vírgula, <> nem quebra de linha. */
+const ADDRESS_RE = /^[^\s@<>(),;:"[\]\\]+@[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/;
+
+export function isSingleEmailAddress(value: string): boolean {
+  return value.length <= 254 && ADDRESS_RE.test(value);
+}
+
+/** Codificação xtext (RFC 3461 §4) para ENVID e ORCPT. */
+export function xtext(value: string): string {
+  let out = "";
+  for (const ch of Buffer.from(value, "utf8")) {
+    out += ch >= 33 && ch <= 126 && ch !== 43 && ch !== 61 ? String.fromCharCode(ch) : `+${ch.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  return out;
+}
+
+function encodeHeader(value: string): string {
+  return /^[\x20-\x7e]*$/.test(value) ? value : `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+/** Mensagem de texto simples, 100% ASCII no fio (corpo em base64). */
+export function buildTestMessage(input: {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  messageId: string;
+  date: Date;
+}): string {
+  const body = Buffer.from(input.text.replace(/\r?\n/g, "\r\n"), "utf8")
+    .toString("base64")
+    .replace(/.{1,76}/g, "$&\r\n")
+    .trimEnd();
+  return [
+    `From: ${input.from}`,
+    `To: ${input.to}`,
+    `Subject: ${encodeHeader(input.subject)}`,
+    `Date: ${input.date.toUTCString().replace("GMT", "+0000")}`,
+    `Message-ID: ${input.messageId}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "Auto-Submitted: auto-generated",
+    "",
+    body,
+  ].join("\r\n");
+}
+
+function defaultConnect(opts: SmtpConnectOptions): Duplex {
+  return tls.connect({
+    host: opts.host,
+    port: opts.port,
+    servername: opts.servername,
+    // Conexão interna com o próprio servidor (ver o comentário do arquivo).
+    rejectUnauthorized: false,
+  });
+}
+
+/** Lê respostas SMTP (uma ou várias linhas) de um socket. */
+class ResponseReader {
+  private buffer = "";
+  private lines: string[] = [];
+  private waiting: { resolve: (r: string) => void; reject: (e: Error) => void } | null = null;
+  private ready: string[] = [];
+  private failure: Error | null = null;
+
+  constructor(socket: Duplex) {
+    socket.on("data", (chunk: Buffer) => {
+      this.buffer += chunk.toString("utf8");
+      let idx: number;
+      while ((idx = this.buffer.indexOf("\n")) >= 0) {
+        const line = this.buffer.slice(0, idx).replace(/\r$/, "");
+        this.buffer = this.buffer.slice(idx + 1);
+        this.lines.push(line);
+        if (/^\d{3}(?: |$)/.test(line)) {
+          this.ready.push(this.lines.join("\n"));
+          this.lines = [];
+          this.flush();
+        }
+      }
+    });
+  }
+
+  fail(err: Error): void {
+    this.failure ??= err;
+    this.flush();
+  }
+
+  private flush(): void {
+    if (!this.waiting) return;
+    const next = this.ready.shift();
+    if (next !== undefined) {
+      const w = this.waiting;
+      this.waiting = null;
+      w.resolve(next);
+    } else if (this.failure) {
+      const w = this.waiting;
+      this.waiting = null;
+      w.reject(this.failure);
+    }
+  }
+
+  next(): Promise<string> {
+    return new Promise((resolve, reject) => {
+      this.waiting = { resolve, reject };
+      this.flush();
+    });
+  }
+}
+
+function codeOf(response: string): number {
+  const last = response.split("\n").at(-1) ?? "";
+  return Number(last.slice(0, 3)) || 0;
+}
+
+/** Texto da resposta sem os códigos (para mensagens de erro). */
+function textOf(response: string): string {
+  return response
+    .split("\n")
+    .map((l) => l.slice(4))
+    .join(" ")
+    .trim();
+}
+
+export async function sendSmtpMail(opts: SmtpSendOptions): Promise<SmtpSendResult> {
+  if (!isSingleEmailAddress(opts.to) || !isSingleEmailAddress(opts.from)) {
+    throw new SmtpSendError(0, "Endereço de e-mail inválido.");
+  }
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const socket = (opts.connect ?? defaultConnect)({ host: opts.host, port: opts.port, servername: opts.servername });
+  const reader = new ResponseReader(socket);
+  socket.on("error", (err: Error) => {
+    reader.fail(
+      new SmtpSendError(
+        0,
+        `Não foi possível conectar ao servidor de e-mail (${opts.host}:${opts.port}): ${err.message}.`,
+      ),
+    );
+  });
+  socket.on("close", () => reader.fail(new SmtpSendError(0, "O servidor de e-mail fechou a conexão.")));
+
+  const read = async (): Promise<string> => {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new SmtpSendError(0, "O servidor de e-mail não respondeu a tempo (tempo esgotado).")),
+        timeoutMs,
+      );
+    });
+    try {
+      return await Promise.race([reader.next(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const expect = async (command: string | null, okCodes: number[]): Promise<string> => {
+    if (command !== null) socket.write(`${command}\r\n`);
+    const response = await read();
+    const code = codeOf(response);
+    if (!okCodes.includes(code)) {
+      const label = command === null ? "conexão" : command.split(" ")[0];
+      throw new SmtpSendError(code, `O servidor de e-mail recusou (${label}): ${code} ${textOf(response)}`);
+    }
+    return response;
+  };
+
+  try {
+    await expect(null, [220]);
+    await expect("EHLO tws-panel", [250]);
+    const plain = Buffer.from(`\0${opts.username}\0${opts.password}`, "utf8").toString("base64");
+    await expect(`AUTH PLAIN ${plain}`, [235]);
+    // O Stalwart só anuncia DSN para sessão autenticada, e a lista do EHLO é
+    // calculada na hora do EHLO. Um EHLO novo depois do AUTH mantém a
+    // autenticação (o reset da sessão não mexe nela — conferido na v0.11.8)
+    // e devolve a lista certa. Visto na validação local com o Stalwart real.
+    const ehlo = await expect("EHLO tws-panel", [250]);
+    const dsn = ehlo
+      .split("\n")
+      .map((l) => l.slice(4).toUpperCase())
+      .includes("DSN");
+    await expect(`MAIL FROM:<${opts.from}>${dsn ? ` RET=HDRS ENVID=${xtext(opts.envId)}` : ""}`, [250]);
+    await expect(
+      `RCPT TO:<${opts.to}>${dsn ? ` NOTIFY=SUCCESS,FAILURE,DELAY ORCPT=rfc822;${xtext(opts.to)}` : ""}`,
+      [250, 251],
+    );
+    await expect("DATA", [354]);
+    const raw = buildTestMessage({
+      from: opts.from,
+      to: opts.to,
+      subject: opts.subject,
+      text: opts.text,
+      messageId: opts.messageId,
+      date: opts.date ?? new Date(),
+    });
+    const response = await expect(`${raw}\r\n.`, [250]);
+    socket.write("QUIT\r\n");
+    return { response: `${codeOf(response)} ${textOf(response)}`.trim(), dsn };
+  } finally {
+    // QUIT já foi enviado no sucesso; em qualquer caso, encerra sem esperar.
+    setTimeout(() => socket.destroy(), 50).unref();
+  }
+}
