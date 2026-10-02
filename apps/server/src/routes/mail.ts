@@ -161,7 +161,15 @@ const enableProjectEmailSchema = {
 // E-mail de teste: UM destinatário. O valor vira argumento de comando SMTP
 // (RCPT TO), então nada de espaço, quebra de linha, vírgula, ponto e vírgula
 // ou <> — mesma regra de isSingleEmailAddress (@paas/mailer), que o service
-// confere de novo.
+// confere de novo. O remetente (opcional) segue a mesma regra.
+const SINGLE_EMAIL_SCHEMA = {
+  type: "string",
+  minLength: 3,
+  maxLength: 254,
+  pattern:
+    "^[^\\s@<>(),;:\"\\[\\]\\\\]+@[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$",
+} as const;
+
 const sendTestEmailSchema = {
   params: domainParamSchema.params,
   body: {
@@ -169,13 +177,8 @@ const sendTestEmailSchema = {
     required: ["to"],
     additionalProperties: false,
     properties: {
-      to: {
-        type: "string",
-        minLength: 3,
-        maxLength: 254,
-        pattern:
-          "^[^\\s@<>(),;:\"\\[\\]\\\\]+@[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$",
-      },
+      to: SINGLE_EMAIL_SCHEMA,
+      from: SINGLE_EMAIL_SCHEMA,
     },
   },
 } as const;
@@ -404,7 +407,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     { schema: sendTestEmailSchema },
     async (request, reply) => {
       try {
-        const test = await service.sendTestEmail(request.params.domain, request.body.to);
+        const test = await service.sendTestEmail(request.params.domain, request.body.to, request.body.from);
         await app.auditService.record({
           action: "mail.test.send",
           target: test.domain,

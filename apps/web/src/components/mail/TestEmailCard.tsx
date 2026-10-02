@@ -1,8 +1,14 @@
 /**
- * TestEmailCard — "Enviar e-mail de teste" na página do domínio de e-mail.
+ * E-mail de teste da página do domínio de e-mail.
  *
- * A pessoa digita um endereço (ex.: o Gmail dela) e o painel envia uma
- * mensagem simples de postmaster@<domínio>. Depois consulta o destino da
+ *  - TestEmailForm: a pessoa digita um endereço (ex.: o Gmail dela) e o painel
+ *    envia uma mensagem simples a partir da caixa `from`;
+ *  - TestEmailModal: o formulário num modal, aberto por qualquer botão
+ *    (o card do checklist ou "Testar envio" de cada caixa — pedido do dono do
+ *    produto, 02/10/2026, para testar logo depois de trocar uma senha);
+ *  - TestEmailCard: o card do checklist, com o botão que abre o modal.
+ *
+ * Depois de enviar, consulta o destino da
  * mensagem a cada poucos segundos (padrão: 3 s, por até 2 min) e mostra o
  * resultado com cor: entregue (verde), recusado (vermelho), adiado (amarelo).
  */
@@ -13,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { AlertTriangle, CheckCircle2, Clock, Loader2, Send, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Loader2, Send, X, XCircle } from "lucide-react";
 
 /** "pelo Gmail", "pela Microsoft (Outlook)"… a partir do domínio do destinatário. */
 function acceptedBy(to: string): string {
@@ -98,12 +104,15 @@ function StatusBox({ test, stopped, onRetry }: { test: MailTestStatus; stopped: 
   );
 }
 
-export function TestEmailCard({
+export function TestEmailForm({
   domain,
+  from,
   pollMs = 3_000,
   maxPollMs = 120_000,
 }: {
   domain: string;
+  /** Caixa do domínio que envia o teste. */
+  from: string;
   /** Intervalo entre consultas do destino da mensagem. */
   pollMs?: number;
   /** Tempo máximo de consulta automática antes de oferecer "Conferir de novo". */
@@ -161,7 +170,7 @@ export function TestEmailCard({
     setSending(true);
     setError(null);
     try {
-      const res = await apiFetch<MailTestResponse>(base, { method: "POST", body: JSON.stringify({ to: address }) });
+      const res = await apiFetch<MailTestResponse>(base, { method: "POST", body: JSON.stringify({ to: address, from }) });
       setPollStart(Date.now());
       setStopped(false);
       setTest(res.test);
@@ -173,43 +182,88 @@ export function TestEmailCard({
   }
 
   return (
+    <div className="flex flex-col gap-3">
+      <p className="text-sm text-muted-foreground">
+        Manda uma mensagem simples de <code className="text-xs text-foreground">{from}</code> para o endereço que
+        você digitar (por exemplo, o seu Gmail) e mostra o que o servidor do destinatário respondeu. O painel
+        entra na caixa com a senha atual dela: se a mensagem sair, a senha está certa.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Input
+          type="email"
+          placeholder="voce@gmail.com"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void send()}
+          className="min-w-0 flex-1 sm:max-w-xs"
+          aria-label="Endereço de destino do teste"
+        />
+        <Button variant="deploy" size="sm" disabled={sending || !to.trim()} onClick={() => void send()}>
+          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          Enviar
+        </Button>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {test && <StatusBox test={test} stopped={stopped} onRetry={retry} />}
+      <p className="text-xs text-muted-foreground">
+        O teste fala com o servidor de e-mail por dentro da VPS, então funciona mesmo antes de o certificado de
+        mail.{domain} ficar pronto.
+      </p>
+    </div>
+  );
+}
+
+/** O formulário de teste num modal (Esc ou clique fora fecham). */
+export function TestEmailModal({ domain, from, onClose }: { domain: string; from: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Enviar e-mail de teste — ${from}`}
+        className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-lg border bg-background p-4 shadow-lg sm:p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-2">
+          <h2 className="flex min-w-0 items-center gap-2 break-all text-lg font-semibold">
+            <Send className="h-4 w-4 shrink-0" /> Enviar e-mail de teste
+          </h2>
+          <Button variant="ghost" size="icon" aria-label="Fechar" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <TestEmailForm domain={domain} from={from} />
+      </div>
+    </div>
+  );
+}
+
+/** Card do checklist: explica e abre o modal com postmaster@<domínio>. */
+export function TestEmailCard({ domain }: { domain: string }) {
+  const [open, setOpen] = useState(false);
+  return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Send className="h-4 w-4" /> Enviar e-mail de teste
+          <Send className="h-4 w-4" /> E-mail de teste
         </CardTitle>
         <CardDescription>
-          Manda uma mensagem simples de <code className="text-xs">postmaster@{domain}</code> para o endereço que
-          você digitar (por exemplo, o seu Gmail) e mostra o que o servidor do destinatário respondeu. O teste
-          fala com o servidor de e-mail por dentro da VPS, então funciona mesmo antes de o certificado de
-          mail.{domain} ficar pronto; o estado do certificado continua no card "Certificado do servidor de
-          e-mail", na página E-mail.
+          Confira se o servidor entrega de verdade: o painel manda uma mensagem para o endereço que você escolher e
+          mostra o que o servidor do destinatário respondeu. Para testar outra caixa, use "Testar envio" na aba
+          Caixas.
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div className="flex flex-wrap gap-2">
-          <Input
-            type="email"
-            placeholder="voce@gmail.com"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void send()}
-            className="max-w-xs"
-            aria-label="Endereço de destino do teste"
-          />
-          <Button
-            size="sm"
-            className="bg-violet-600 text-white hover:bg-violet-700"
-            disabled={sending || !to.trim()}
-            onClick={() => void send()}
-          >
-            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            Enviar
-          </Button>
-        </div>
-        {error && <p className="text-sm text-destructive">{error}</p>}
-        {test && <StatusBox test={test} stopped={stopped} onRetry={retry} />}
+      <CardContent>
+        <Button variant="deploy" size="sm" onClick={() => setOpen(true)}>
+          <Send className="h-4 w-4" /> Enviar e-mail de teste
+        </Button>
       </CardContent>
+      {open && <TestEmailModal domain={domain} from={`postmaster@${domain}`} onClose={() => setOpen(false)} />}
     </Card>
   );
 }

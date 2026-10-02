@@ -823,14 +823,22 @@ export class MailService {
    * remetente, e é por ele que o painel sabe se a mensagem foi aceita ou
    * recusada (testEmailStatus).
    */
-  async sendTestEmail(domainName: string, recipient: string): Promise<MailTestStatus> {
+  async sendTestEmail(domainName: string, recipient: string, sender?: string): Promise<MailTestStatus> {
     await this.ensureLoaded();
     const domain = this.requireDomain(domainName);
     const to = (recipient ?? "").trim().toLowerCase();
     if (!isSingleEmailAddress(to)) {
       throw httpError(400, "invalid_recipient", "Informe um endereço de e-mail válido (um só destinatário).");
     }
-    const from = `postmaster@${domain.name}`;
+    // Qualquer caixa do domínio pode testar (ex.: logo depois de trocar a senha
+    // dela); sem escolha, postmaster@.
+    if (sender !== undefined) {
+      const chosen = this.data.mailboxes[sender.trim().toLowerCase()];
+      if (!chosen || chosen.domain !== domain.name) {
+        throw httpError(404, "mailbox_not_found", `Caixa ${sender} não encontrada em ${domain.name}.`);
+      }
+    }
+    const from = sender !== undefined ? sender.trim().toLowerCase() : `postmaster@${domain.name}`;
     const mailbox = this.data.mailboxes[from];
     if (!mailbox) {
       throw httpError(

@@ -371,6 +371,8 @@ export interface MailTestStatus {
 export interface SendTestEmailRequest {
   /** Um endereço de destino só (ex.: o Gmail da pessoa). */
   to: string;
+  /** Caixa do domínio que envia (padrão: postmaster@<domínio>). */
+  from?: string;
 }
 
 export interface MailTestResponse {

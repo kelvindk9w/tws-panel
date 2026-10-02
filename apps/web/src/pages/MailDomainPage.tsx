@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { TestEmailCard } from "@/components/mail/TestEmailCard";
+import { TestEmailCard, TestEmailModal } from "@/components/mail/TestEmailCard";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -29,6 +29,7 @@ import {
   Copy,
   Inbox,
   KeyRound,
+  Send,
   Settings2,
   Info,
   Loader2,
@@ -408,6 +409,10 @@ export function MailDomainPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<MailboxCredentials | null>(null);
   const [changingPassword, setChangingPassword] = useState<string | null>(null);
+  /** Caixa cujo envio está sendo testado (modal). */
+  const [testingFrom, setTestingFrom] = useState<string | null>(null);
+  /** Caixa da senha recém-trocada: o aviso oferece testar o envio dela. */
+  const [changedMailbox, setChangedMailbox] = useState<string | null>(null);
   const autoVerified = useRef(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
@@ -471,6 +476,7 @@ export function MailDomainPage() {
       setNewMailbox("");
       setNewPassword("");
       setNewPasswordConfirm("");
+      setChangedMailbox(null);
       setNotice(`Caixa ${res.mailbox.id} criada. Use a senha que você definiu (o painel não mostra senhas).`);
       await refresh();
     } catch (err) {
@@ -545,8 +551,8 @@ export function MailDomainPage() {
       <div className="flex gap-1 border-b">
         {(
           [
-            ["dns", "Checklist DNS"],
             ["mailboxes", `Caixas (${mailboxes.length})`],
+            ["dns", "Checklist DNS"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -715,8 +721,23 @@ export function MailDomainPage() {
 
             {notice && (
               <div className="flex items-start justify-between gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm">
-                <span className="min-w-0 break-words">{notice}</span>
-                <Button variant="ghost" size="icon" aria-label="Fechar aviso" onClick={() => setNotice(null)}>
+                <div className="flex min-w-0 flex-col items-start gap-2">
+                  <span className="break-words">{notice}</span>
+                  {changedMailbox && (
+                    <Button variant="deploy" size="sm" onClick={() => setTestingFrom(changedMailbox)}>
+                      <Send className="h-4 w-4" /> Enviar e-mail de teste
+                    </Button>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Fechar aviso"
+                  onClick={() => {
+                    setNotice(null);
+                    setChangedMailbox(null);
+                  }}
+                >
                   <X className="h-4 w-4" />
                 </Button>
               </div>
@@ -752,6 +773,14 @@ export function MailDomainPage() {
                         <Settings2 className="h-4 w-4" />
                       )}
                       Configurar no app
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy !== null}
+                      onClick={() => setTestingFrom(mailbox.id)}
+                    >
+                      <Send className="h-4 w-4" /> Testar envio
                     </Button>
                     {mailbox.kind !== "project" && (
                       <Button
@@ -808,10 +837,14 @@ export function MailDomainPage() {
           onClose={() => setChangingPassword(null)}
           onDone={(email) => {
             setChangingPassword(null);
-            setNotice(`Senha de ${email} trocada. Atualize a senha no app de e-mail onde a caixa estiver configurada.`);
+            setChangedMailbox(email);
+            setNotice(
+              `Senha de ${email} trocada. Atualize a senha no app de e-mail onde a caixa estiver configurada. Para confirmar, envie um e-mail de teste a partir dela.`,
+            );
           }}
         />
       )}
+      {testingFrom && <TestEmailModal domain={checklist.domain} from={testingFrom} onClose={() => setTestingFrom(null)} />}
     </div>
   );
 }
