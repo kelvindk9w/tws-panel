@@ -25,11 +25,11 @@ import {
   PAAS_CADDY_CONTAINER,
 } from "@paas/core";
 import { parse } from "yaml";
-import { CaddyManager, projectDomain, type CaddyTarget, type PanelSite } from "./caddy.js";
+import { CaddyManager, projectDomain, type CaddyTarget, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir } from "./static-site.js";
-import { certificateStatus } from "./tls-status.js";
+import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
 import { runGuardrails } from "./rules.js";
@@ -72,6 +72,11 @@ export interface EngineContext extends IngestContext {
    * sincronização do proxy; ausente = nenhum.
    */
   mailHosts?: () => Promise<string[]>;
+  /**
+   * Certificados manuais em vigor (página Certificados). Consultado a cada
+   * sincronização do proxy; ausente = todos os nomes no automático.
+   */
+  manualCertificates?: () => Promise<ManualCaddyCertificate[]>;
 }
 
 export type LogFn = (chunk: string) => void;
@@ -271,16 +276,45 @@ export class DeployEngine {
       (p) => this.upstreamFor(p),
     );
     targets.push(...projectCaddyTargets(project, upstream).map((t) => ({ ...t, published: wasPublished(project) })));
-    await this.caddy.apply(targets, onLog, await this.mailHosts(onLog));
+    await this.caddy.apply(targets, onLog, await this.mailHosts(onLog), {
+      manual: await this.manualCertificates(onLog),
+      force: false,
+    });
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
     onLog("\n=== Etapa 5/5 · Health check ===\n");
     await this.waitHealthy(domain, onLog);
   }
 
-  /** Recalcula o Caddyfile com TODOS os projetos (chamado após cada mudança). */
-  async syncCaddy(projects: Project[], onLog?: LogFn): Promise<void> {
-    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, await this.mailHosts(onLog));
+  /**
+   * Recalcula o Caddyfile com TODOS os projetos (chamado após cada mudança).
+   * `force`: recarrega mesmo sem mudança ("Tentar emitir agora").
+   */
+  async syncCaddy(projects: Project[], onLog?: LogFn, opts: { force?: boolean } = {}): Promise<void> {
+    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, await this.mailHosts(onLog), {
+      manual: await this.manualCertificates(onLog),
+      force: opts.force ?? false,
+    });
+  }
+
+  /** Certificados manuais; falha aqui não pode derrubar o proxy dos sites. */
+  private async manualCertificates(onLog?: LogFn): Promise<ManualCaddyCertificate[]> {
+    try {
+      return (await this.ctx.manualCertificates?.()) ?? [];
+    } catch (err) {
+      onLog?.(`aviso: certificados manuais indisponíveis (${err instanceof Error ? err.message : String(err)}).\n`);
+      return [];
+    }
+  }
+
+  /**
+   * Certificado que o proxy central serve para `host`, conferido como um
+   * navegador confere (TLS com SNI, cadeia e nome) — página Certificados.
+   */
+  async servedCertificate(host: string): Promise<CertificateStatus> {
+    const target = healthCheckTarget(this.ctx);
+    if (this.ctx.panelContainer) await this.caddy.connectToNetwork(this.ctx.panelContainer);
+    return certificateStatus({ host: target.host, port: target.httpsPort, servername: host, timeoutMs: 5_000 });
   }
 
   /** Hosts de e-mail; falha aqui não pode derrubar o proxy dos sites. */

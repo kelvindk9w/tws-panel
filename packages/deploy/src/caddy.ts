@@ -49,6 +49,46 @@ export interface CaddyTarget {
   published?: boolean;
 }
 
+/**
+ * Certificado manual de um nome (página Certificados): o par vai para dentro
+ * do container do Caddy em /etc/caddy/certs e o bloco do nome ganha
+ * `tls <cert> <key>`. A chave nunca vai para log nem para o espelho local.
+ */
+export interface ManualCaddyCertificate {
+  host: string;
+  /** PEM do certificado, com a cadeia. */
+  cert: string;
+  /** PEM da chave privada. */
+  key: string;
+}
+
+export interface CaddyApplyOptions {
+  /** Certificados manuais em vigor (os demais nomes ficam no automático). */
+  manual?: ManualCaddyCertificate[];
+  /**
+   * `caddy reload --force`: recarrega mesmo com a configuração igual. O
+   * certmagic cancela as tentativas em espera da configuração antiga e
+   * recomeça a emissão dos nomes sem certificado na hora (o primeiro
+   * pedido de um "obtain" não espera). Certificados já válidos ficam como
+   * estão — nada é apagado nem renovado à força.
+   */
+  force?: boolean;
+}
+
+/** Pasta dos certificados manuais dentro do container do Caddy. */
+export const CADDY_MANUAL_CERTS_DIR = "/etc/caddy/certs";
+
+/** Nome de arquivo seguro para um host (mesma regra do Stalwart: certificateId). */
+function fileIdOf(host: string): string {
+  return host.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+}
+
+/** Onde ficam (dentro do container do Caddy) o certificado e a chave manuais de `host`. */
+export function manualCertificatePaths(host: string): { cert: string; key: string } {
+  const id = fileIdOf(host);
+  return { cert: `${CADDY_MANUAL_CERTS_DIR}/${id}.crt`, key: `${CADDY_MANUAL_CERTS_DIR}/${id}.key` };
+}
+
 export interface CaddyPorts {
   /** Porta do host publicada para o HTTP do Caddy (padrão 80). */
   http: number;
@@ -93,6 +133,8 @@ export class CaddyManager {
   private readonly dataVolume: string;
   private readonly configVolume: string;
   private readonly panelSite: PanelSite | undefined;
+  /** Certificados manuais da última aplicação: vão junto em toda gravação do Caddyfile. */
+  private manual: ManualCaddyCertificate[] = [];
 
   constructor(
     /** Diretório data/caddy (espelho do último Caddyfile aplicado, só para inspeção). */
@@ -211,10 +253,24 @@ export class CaddyManager {
     if (start.code !== 0) throw new Error(`falha ao iniciar ${this.name}: ${start.stderr}`);
   }
 
-  /** Grava o Caddyfile dentro do container (parado ou rodando) pelo daemon. */
+  /**
+   * Grava o Caddyfile dentro do container (parado ou rodando) pelo daemon —
+   * com os certificados manuais na mesma cópia (pasta certs/ 0700, arquivos
+   * 0600): um container recriado já sobe com eles, senão o Caddy recusaria
+   * o Caddyfile por arquivo ausente.
+   */
   private async pushCaddyfile(content: string): Promise<void> {
+    const manual = this.manual.filter((m) => SAFE_DOMAIN_RE.test(m.host));
+    const certFiles = manual.flatMap((m) => {
+      const id = fileIdOf(m.host);
+      return [
+        { name: `certs/${id}.crt`, content: m.cert, mode: 0o600 },
+        { name: `certs/${id}.key`, content: m.key, mode: 0o600 },
+      ];
+    });
     const cp = await copyFilesToContainer(this.name, CADDY_CONFIG_DIR, [
       { name: "Caddyfile", content, mode: 0o644 },
+      ...(certFiles.length ? [{ name: "certs/", mode: 0o700 }, ...certFiles] : []),
     ]);
     if (cp.code !== 0) {
       throw new Error(`falha ao gravar o Caddyfile em ${this.name}: ${cp.stderr.trim()}`);
@@ -235,8 +291,19 @@ export class CaddyManager {
    * Gera o Caddyfile a partir dos alvos e recarrega o Caddy sem downtime.
    * `mailHosts`: hostnames do servidor de e-mail (ver renderCaddyfile).
    */
-  async apply(targets: CaddyTarget[], onLog?: (chunk: string) => void, mailHosts: string[] = []): Promise<void> {
-    const content = renderCaddyfile(targets, this.panelSite, mailHosts);
+  async apply(
+    targets: CaddyTarget[],
+    onLog?: (chunk: string) => void,
+    mailHosts: string[] = [],
+    opts: CaddyApplyOptions = {},
+  ): Promise<void> {
+    this.manual = (opts.manual ?? []).filter((m) => SAFE_DOMAIN_RE.test(m.host));
+    const content = renderCaddyfile(
+      targets,
+      this.panelSite,
+      mailHosts,
+      this.manual.map((m) => m.host),
+    );
     await this.ensureRunning(content);
     // O Caddy alcança o painel pelo nome do container na paas-net.
     if (this.panelSite) await this.connectToNetwork(this.panelSite.upstream.split(":")[0] ?? "");
@@ -253,6 +320,7 @@ export class CaddyManager {
       CADDYFILE_PATH,
       "--adapter",
       "caddyfile",
+      ...(opts.force ? ["--force"] : []),
     ]);
     if (reload.code !== 0) {
       onLog?.(`caddy reload falhou (${reload.stderr.trim()}); reiniciando o container…\n`);
@@ -262,6 +330,26 @@ export class CaddyManager {
       }
     }
     onLog?.(`Caddyfile aplicado com ${targets.length} domínio(s).\n`);
+  }
+
+  /**
+   * Volta para o automático: apaga de dentro do container o par manual de
+   * `host`. Chamado depois do apply que já tirou o `tls` do bloco.
+   */
+  async removeManualFiles(host: string): Promise<void> {
+    if (!SAFE_DOMAIN_RE.test(host)) throw new Error(`nome inválido: ${JSON.stringify(host)}`);
+    const p = manualCertificatePaths(host);
+    await run("docker", ["exec", this.name, "rm", "-f", p.cert, p.key]);
+  }
+
+  /**
+   * Log das últimas 24 h do Caddy (o Caddy escreve no stderr; junta os dois).
+   * Texto não confiável — ver caddy-log.ts. Vazio se o container não existe.
+   */
+  async recentLogs(): Promise<string> {
+    const r = await run("docker", ["logs", "--since", "24h", "--tail", "20000", this.name]);
+    if (r.code !== 0) return "";
+    return `${r.stdout}\n${r.stderr}`;
   }
 }
 
@@ -388,6 +476,28 @@ export const MAIL_HOST_PAGE = sitePage({
   refresh: false,
 });
 
+/** Corpo de um bloco de site: proxy para o app e página amigável quando ele não responde. */
+function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): void {
+  if (target.websocket) {
+    // WebSocket funciona nativamente; flush_interval -1 desativa buffer para
+    // streaming/longs polls, e conexões hijacked (WS) não têm timeout de leitura.
+    lines.push(`\treverse_proxy ${target.upstream} {`, "\t\tflush_interval -1", "}");
+  } else {
+    lines.push(`\treverse_proxy ${target.upstream}`);
+  }
+  if (!isPanel) {
+    // sem resposta do app: página neutra em vez do erro cru do proxy —
+    // "em manutenção" se nunca foi publicado, senão "indisponível"
+    const page = target.published === false ? PROJECT_PENDING_PAGE : PROJECT_DOWN_PAGE;
+    lines.push(
+      "\thandle_errors 502 503 504 {",
+      '\t\theader Content-Type "text/html; charset=utf-8"',
+      `\t\trespond \`${page}\` 503`,
+      "\t}",
+    );
+  }
+}
+
 /**
  * Renderiza o Caddyfile completo (um bloco por alvo).
  *
@@ -397,7 +507,14 @@ export const MAIL_HOST_PAGE = sitePage({
  * descartado (não sequestra o acesso). flush_interval -1: o terminal ao vivo
  * (WebSocket) e os logs em streaming não podem ficar presos em buffer.
  */
-export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite, mailHosts: string[] = []): string {
+export function renderCaddyfile(
+  allTargets: CaddyTarget[],
+  panel?: PanelSite,
+  mailHosts: string[] = [],
+  /** Nomes com certificado manual: bloco próprio com `tls <cert> <key>`. */
+  manualHosts: string[] = [],
+): string {
+  const manual = new Set(manualHosts.filter((h) => SAFE_DOMAIN_RE.test(h)));
   const panelTarget =
     panel && isSafeCaddyTarget({ ...panel, websocket: true }) ? { ...panel, websocket: true } : null;
   const targets: CaddyTarget[] = [
@@ -418,26 +535,23 @@ export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite, ma
     "",
   ];
   for (const target of targets) {
-    lines.push(`${[target.domain, ...(target.aliases ?? [])].map(siteAddress).join(", ")} {`);
-    if (target.websocket) {
-      // WebSocket funciona nativamente; flush_interval -1 desativa buffer para
-      // streaming/longs polls, e conexões hijacked (WS) não têm timeout de leitura.
-      lines.push(`\treverse_proxy ${target.upstream} {`, "\t\tflush_interval -1", "}");
-    } else {
-      lines.push(`\treverse_proxy ${target.upstream}`);
+    // Nome com certificado manual sai do bloco automático e ganha bloco
+    // próprio (a diretiva tls vale para o bloco inteiro).
+    const names = [target.domain, ...(target.aliases ?? [])];
+    const auto = names.filter((n) => !manual.has(n));
+    const groups: { names: string[]; tls: string | null }[] = [
+      ...(auto.length ? [{ names: auto, tls: null }] : []),
+      ...names.filter((n) => manual.has(n)).map((n) => {
+        const p = manualCertificatePaths(n);
+        return { names: [n], tls: `${p.cert} ${p.key}` };
+      }),
+    ];
+    for (const group of groups) {
+      lines.push(`${group.names.map(siteAddress).join(", ")} {`);
+      if (group.tls) lines.push(`\ttls ${group.tls}`);
+      pushSiteBody(lines, target, target === panelTarget);
+      lines.push("}", "");
     }
-    if (target !== panelTarget) {
-      // sem resposta do app: página neutra em vez do erro cru do proxy —
-      // "em manutenção" se nunca foi publicado, senão "indisponível"
-      const page = target.published === false ? PROJECT_PENDING_PAGE : PROJECT_DOWN_PAGE;
-      lines.push(
-        "\thandle_errors 502 503 504 {",
-        '\t\theader Content-Type "text/html; charset=utf-8"',
-        `\t\trespond \`${page}\` 503`,
-        "\t}",
-      );
-    }
-    lines.push("}", "");
   }
   // Servidor de e-mail: só para o Caddy emitir o certificado de mail.<domínio>.
   // Nome que já é de um site (ou do painel) sai — o bloco existente já emite
@@ -447,8 +561,10 @@ export function renderCaddyfile(allTargets: CaddyTarget[], panel?: PanelSite, ma
   for (const host of mailHosts) {
     if (!SAFE_DOMAIN_RE.test(host) || host.endsWith(".localhost") || taken.has(host)) continue;
     taken.add(host);
+    const p = manualCertificatePaths(host);
     lines.push(
       `${host} {`,
+      ...(manual.has(host) ? [`\ttls ${p.cert} ${p.key}`] : []),
       '\theader Content-Type "text/html; charset=utf-8"',
       `\trespond \`${MAIL_HOST_PAGE}\` 200`,
       "}",

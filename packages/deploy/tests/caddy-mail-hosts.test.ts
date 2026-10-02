@@ -80,7 +80,7 @@ describe("CaddyManager.apply / DeployEngine.syncCaddy — hosts de e-mail", () =
     };
     await new DeployEngine(ctx).syncCaddy([] as Project[]);
     expect(mailHosts).toHaveBeenCalledTimes(1);
-    expect(apply).toHaveBeenCalledWith([], undefined, ["mail.exemplo.com.br"]);
+    expect(apply).toHaveBeenCalledWith([], undefined, ["mail.exemplo.com.br"], { manual: [], force: false });
   });
 
   it("provedor de hosts que falha não derruba o proxy dos sites (segue sem o bloco de e-mail)", async () => {
