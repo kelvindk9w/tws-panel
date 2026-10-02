@@ -83,6 +83,10 @@ interface StoredProjectEmail {
   domain: string;
   mailbox: string;
   enabledAt: string;
+  /** Endereço de envio escolhido (alias da caixa técnica); ausente = a própria caixa. */
+  fromAddress?: string | null;
+  /** Nome de exibição; ausente = nome do projeto na época da ativação. */
+  fromName?: string | null;
 }
 
 interface MailFile {
@@ -1007,13 +1011,25 @@ export class MailService {
   // E-mail de projeto (injeção SMTP no deploy)
   // -------------------------------------------------------------------------
 
-  /** Ativa e-mail para o projeto: cria caixa técnica <slug>@<domínio> se preciso. */
-  async enableProjectEmail(project: Project, domainName: string): Promise<ProjectEmailConfig> {
+  /**
+   * Ativa ou atualiza o e-mail do projeto: cria a caixa técnica
+   * <slug>@<domínio> se preciso e, com `fromLocalPart`, põe o endereço de
+   * envio escolhido como endereço extra (alias) dela — o Stalwart só deixa a
+   * caixa autenticada enviar como endereços que são dela.
+   */
+  async enableProjectEmail(
+    project: Project,
+    domainName: string,
+    opts: { fromLocalPart?: string; fromName?: string } = {},
+  ): Promise<ProjectEmailConfig> {
     await this.ensureLoaded();
     const domain = this.requireDomain(domainName);
+    const address = projectMailboxAddress(project, domain.name);
+    const fromAddress = opts.fromLocalPart ? `${normalizeLocalPart(opts.fromLocalPart)}@${domain.name}` : null;
+    const chosenAlias = fromAddress && fromAddress !== address ? fromAddress : null;
+    if (chosenAlias) this.requireFreeAddress(chosenAlias, project.id);
     await this.requireRunning();
 
-    const address = projectMailboxAddress(project, domain.name);
     if (!this.data.mailboxes[address]) {
       const password = generatePassword();
       await this.client().createMailbox(address, password);
@@ -1026,17 +1042,41 @@ export class MailService {
         password,
       };
     }
+    const previous = this.data.projects[project.id];
+    const previousAlias = previous?.fromAddress ?? null;
+    if (previousAlias && (previousAlias !== chosenAlias || previous!.mailbox !== address)) {
+      await this.client().removeMailboxAlias(previous!.mailbox, previousAlias);
+    }
+    if (chosenAlias && (chosenAlias !== previousAlias || previous?.mailbox !== address)) {
+      await this.client().addMailboxAlias(address, chosenAlias);
+    }
     this.data.projects[project.id] = {
       domain: domain.name,
       mailbox: address,
-      enabledAt: new Date().toISOString(),
+      enabledAt: previous?.enabledAt ?? new Date().toISOString(),
+      fromAddress: chosenAlias,
+      fromName: opts.fromName?.trim() || project.name,
     };
     await this.save();
     return this.projectEmailConfig(project.id);
   }
 
+  /** O endereço não pode ser de outra caixa nem o endereço de envio de outro projeto. */
+  private requireFreeAddress(address: string, projectId: string): void {
+    const takenByOther = Object.entries(this.data.projects).some(
+      ([id, p]) => id !== projectId && (p.fromAddress === address || p.mailbox === address),
+    );
+    if (this.data.mailboxes[address] || takenByOther) {
+      throw httpError(409, "address_in_use", `O endereço ${address} já é de outra caixa ou de outro projeto.`);
+    }
+  }
+
   async disableProjectEmail(projectId: string): Promise<ProjectEmailConfig> {
     await this.ensureLoaded();
+    const stored = this.data.projects[projectId];
+    if (stored?.fromAddress) {
+      await this.client().removeMailboxAlias(stored.mailbox, stored.fromAddress);
+    }
     delete this.data.projects[projectId];
     await this.save();
     return this.projectEmailConfig(projectId);
@@ -1053,17 +1093,13 @@ export class MailService {
     if (!mailbox) {
       return { enabled: false, domain: null, mailbox: null, mailFrom: null, env: {} };
     }
-    const env = buildSmtpEnv({
-      host: mailHostFor(stored.domain),
-      mailbox: mailbox.id,
-      password: mailbox.password,
-      mailFrom: mailbox.id,
-    });
+    const env = this.smtpEnvOf(stored, mailbox);
     return {
       enabled: true,
       domain: stored.domain,
       mailbox: stored.mailbox,
-      mailFrom: mailbox.id,
+      mailFrom: env.MAIL_FROM ?? mailbox.id,
+      fromName: stored.fromName ?? null,
       env: maskEnv(env),
     };
   }
@@ -1078,13 +1114,19 @@ export class MailService {
     if (!stored) return {};
     const mailbox = this.data.mailboxes[stored.mailbox];
     if (!mailbox) return {};
+    return this.smtpEnvOf(stored, mailbox, project.name);
+  };
+
+  private smtpEnvOf(stored: StoredProjectEmail, mailbox: StoredMailbox, projectName?: string): Record<string, string> {
+    const name = stored.fromName ?? projectName;
     return buildSmtpEnv({
       host: mailHostFor(stored.domain),
       mailbox: mailbox.id,
       password: mailbox.password,
-      mailFrom: mailbox.id,
+      mailFrom: stored.fromAddress ?? mailbox.id,
+      ...(name ? { mailFromName: name } : {}),
     });
-  };
+  }
 
   // -------------------------------------------------------------------------
 

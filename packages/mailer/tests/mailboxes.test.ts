@@ -81,6 +81,19 @@ describe("smtp-inject", () => {
     });
   });
 
+  it("com nome de exibição: MAIL_FROM_NAME junto do MAIL_FROM (endereço puro, aceito por qualquer app)", () => {
+    const env = buildSmtpEnv({
+      host: "mail.exemplo.com.br",
+      mailbox: "loja@exemplo.com.br",
+      password: "segredo",
+      mailFrom: "nao-responda@exemplo.com.br",
+      mailFromName: "Loja Exemplo",
+    });
+    expect(env.MAIL_FROM).toBe("nao-responda@exemplo.com.br");
+    expect(env.MAIL_FROM_NAME).toBe("Loja Exemplo");
+    expect(env.SMTP_USER).toBe("loja@exemplo.com.br");
+  });
+
   it("maskEnv esconde apenas a senha", () => {
     const env = buildSmtpEnv({ host: "mail.b.com", mailbox: "a@b.com", password: "segredo", mailFrom: "a@b.com" });
     const masked = maskEnv(env);

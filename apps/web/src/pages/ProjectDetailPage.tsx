@@ -6,8 +6,6 @@ import type {
   DeployJobResponse,
   GuardrailReport,
   GuardrailReportResponse,
-  MailDomainListResponse,
-  ProjectEmailResponse,
   ProjectResponse,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
@@ -17,10 +15,11 @@ import { ProjectEnvCard } from "@/components/ProjectEnvCard";
 import { DeployDetailModal } from "@/components/project/DeployDetailModal";
 import { DeployHistory } from "@/components/project/DeployHistory";
 import { MissingEnvModal } from "@/components/project/MissingEnvModal";
+import { ProjectEmailCard } from "@/components/project/ProjectEmailCard";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -40,140 +39,6 @@ import {
 } from "lucide-react";
 import { StatusBadge } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
-
-/**
- * Card "E-mail do projeto" (Fase 3): ativa a caixa técnica <slug>@<domínio> e
- * mostra as env vars SMTP que serão injetadas no próximo deploy (mascaradas).
- */
-function ProjectEmailCard({ projectId }: { projectId: string }) {
-  const [email, setEmail] = useState<ProjectEmailResponse["email"] | null>(null);
-  const [domains, setDomains] = useState<string[]>([]);
-  const [selectedDomain, setSelectedDomain] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const res = await apiFetch<ProjectEmailResponse>(`/api/projects/${projectId}/email`);
-      setEmail(res.email);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar o e-mail do projeto.");
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void refresh();
-    apiFetch<MailDomainListResponse>("/api/mail/domains")
-      .then((res) => {
-        const names = res.domains.map((d) => d.name);
-        setDomains(names);
-        setSelectedDomain((prev) => prev || names[0] || "");
-      })
-      .catch(() => undefined);
-  }, [refresh]);
-
-  async function toggle(enable: boolean) {
-    setBusy(true);
-    setError(null);
-    try {
-      if (enable) {
-        await apiFetch<ProjectEmailResponse>(`/api/projects/${projectId}/email`, {
-          method: "POST",
-          body: JSON.stringify({ domain: selectedDomain }),
-        });
-      } else {
-        await apiFetch<ProjectEmailResponse>(`/api/projects/${projectId}/email`, {
-          method: "DELETE",
-        });
-      }
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao atualizar o e-mail do projeto.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!email) return null;
-
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Mail className="h-4 w-4" /> E-mail do projeto
-          </CardTitle>
-          <Badge variant={email.enabled ? "success" : "secondary"}>
-            {email.enabled ? "habilitado" : "desabilitado"}
-          </Badge>
-        </div>
-        <CardDescription>
-          Caixa técnica + env vars SMTP injetadas automaticamente no próximo deploy.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {error && <p className="text-sm text-destructive">{error}</p>}
-        {email.enabled ? (
-          <>
-            <p className="text-sm">
-              Caixa técnica: <code className="rounded bg-secondary px-1.5 py-0.5 text-xs">{email.mailbox}</code>
-            </p>
-            <div className="rounded-lg border bg-black/40 p-3 font-mono text-xs">
-              {Object.entries(email.env).map(([key, value]) => (
-                <div key={key} className="flex justify-between gap-4">
-                  <span className="text-emerald-300">{key}</span>
-                  <span className="break-all text-muted-foreground">{value}</span>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              A senha (SMTP_PASS) fica mascarada aqui; o valor real é injetado no container no deploy.
-            </p>
-            <p data-testid="email-other-names" className="text-xs text-muted-foreground">
-              Seu app usa outros nomes (ex.: <code>SMTP_PORTA</code>, <code>SMTP_SENHA</code>, <code>EMAIL_DE</code>)?
-              Num projeto com docker-compose, estas variáveis também valem no compose: escreva, por exemplo,{" "}
-              <code>SMTP_PORTA: ${"${SMTP_PORT}"}</code> e <code>SMTP_SENHA: ${"${SMTP_PASS}"}</code> no serviço que
-              envia e-mail.
-            </p>
-            <div>
-              <Button variant="outline" size="sm" disabled={busy} onClick={() => void toggle(false)}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Desativar e-mail
-              </Button>
-            </div>
-          </>
-        ) : domains.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Nenhum domínio de e-mail configurado. Cadastre um na página{" "}
-            <Link to="/mail" className="underline">
-              E-mail
-            </Link>{" "}
-            para habilitar o envio pelo projeto.
-          </p>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={selectedDomain}
-              onChange={(e) => setSelectedDomain(e.target.value)}
-              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-            >
-              {domains.map((d) => (
-                <option key={d} value={d} className="bg-background">
-                  {d}
-                </option>
-              ))}
-            </select>
-            <Button size="sm" disabled={busy || !selectedDomain} onClick={() => void toggle(true)}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-              Ativar e-mail
-            </Button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
 
 /**
  * Modal de bloqueio de guardrails (Fase 4): exibido quando o deploy tem
@@ -622,7 +487,9 @@ export function ProjectDetailPage() {
       )}
       {section === "env" && <ProjectEnvCard project={project} />}
 
-      {section === "email" && <ProjectEmailCard projectId={project.id} />}
+      {section === "email" && (
+        <ProjectEmailCard projectId={project.id} projectName={project.name} projectSlug={project.slug} />
+      )}
 
       {section === "deploys" && <DeployHistory jobs={jobs} onOpen={setOpenJobId} />}
 

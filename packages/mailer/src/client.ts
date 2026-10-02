@@ -138,6 +138,23 @@ export class StalwartClient {
     ]);
   }
 
+  /**
+   * Endereço extra da caixa (alias). O Stalwart só deixa a caixa autenticada
+   * enviar como endereços que são dela — é assim que o projeto envia como
+   * "nao-responda@" usando a caixa técnica.
+   */
+  async addMailboxAlias(email: string, alias: string): Promise<void> {
+    await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
+      { action: "addItem", field: "emails", value: alias },
+    ]);
+  }
+
+  async removeMailboxAlias(email: string, alias: string): Promise<void> {
+    await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
+      { action: "removeItem", field: "emails", value: alias },
+    ]);
+  }
+
   async deleteMailbox(email: string): Promise<void> {
     await this.request("DELETE", `/principal/${encodeURIComponent(email)}`);
   }
