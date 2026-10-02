@@ -299,3 +299,38 @@ describe("StalwartClient.setMailboxPassword", () => {
     ]);
   });
 });
+
+describe("StalwartClient — aliases da caixa (endereço de envio do projeto)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function capture() {
+    const calls: { url: string; method: string | undefined; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method, body: JSON.parse(String(init?.body)) });
+        return Response.json({ data: null });
+      }),
+    );
+    return calls;
+  }
+
+  it("adiciona e remove um endereço da caixa (campo emails)", async () => {
+    const calls = capture();
+    const client = new StalwartClient("http://paas-stalwart:8080", "admin", "s");
+    await client.addMailboxAlias("loja@exemplo.com.br", "nao-responda@exemplo.com.br");
+    await client.removeMailboxAlias("loja@exemplo.com.br", "nao-responda@exemplo.com.br");
+    expect(calls).toEqual([
+      {
+        url: "http://paas-stalwart:8080/api/principal/loja%40exemplo.com.br",
+        method: "PATCH",
+        body: [{ action: "addItem", field: "emails", value: "nao-responda@exemplo.com.br" }],
+      },
+      {
+        url: "http://paas-stalwart:8080/api/principal/loja%40exemplo.com.br",
+        method: "PATCH",
+        body: [{ action: "removeItem", field: "emails", value: "nao-responda@exemplo.com.br" }],
+      },
+    ]);
+  });
+});

@@ -18,7 +18,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAIL_DEFAULT_PORTS } from "@paas/core";
+import { MAIL_DEFAULT_PORTS, type Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 
 // -----------------------------------------------------------------------
@@ -30,6 +30,7 @@ const deletedDomainCalls: string[] = [];
 let deleteMailboxImpl: (email: string) => Promise<void> = async () => undefined;
 const passwordCalls: { email: string; password: string }[] = [];
 const createdMailboxCalls: { email: string; password: string }[] = [];
+const aliasCalls: string[] = [];
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
@@ -60,6 +61,12 @@ vi.mock("@paas/mailer", async (importOriginal) => {
     }
     async createMailbox(email: string, password: string) {
       createdMailboxCalls.push({ email, password });
+    }
+    async addMailboxAlias(email: string, alias: string) {
+      aliasCalls.push(`+ ${email} ${alias}`);
+    }
+    async removeMailboxAlias(email: string, alias: string) {
+      aliasCalls.push(`- ${email} ${alias}`);
     }
   }
   return { ...actual, StalwartManager: FakeStalwartManager, StalwartClient: FakeStalwartClient };
@@ -108,6 +115,7 @@ beforeEach(async () => {
   deletedDomainCalls.length = 0;
   passwordCalls.length = 0;
   createdMailboxCalls.length = 0;
+  aliasCalls.length = 0;
   deleteMailboxImpl = async () => undefined;
   config = {
     dataDir: dir,
@@ -301,5 +309,73 @@ describe("MailService — senha das caixas nunca volta", () => {
     const res = await svc.createMailbox("exemplo.com", "vendas", "senha-forte-da-pessoa");
     expect(res).not.toHaveProperty("password");
     expect(createdMailboxCalls).toEqual([{ email: "vendas@exemplo.com", password: "senha-forte-da-pessoa" }]);
+  });
+});
+
+/**
+ * Pedido do dono do produto (02/10/2026): cada projeto escolhe o endereço de
+ * envio (ex.: nao-responda@) e o nome que aparece para quem recebe.
+ */
+describe("MailService — remetente do projeto", () => {
+  const project = { id: "p1", slug: "cassino", name: "Cassino Royal" } as unknown as Project;
+
+  async function seedDomain(extra: Record<string, unknown> = {}) {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, extra);
+  }
+
+  it("padrão: envia como a caixa técnica, com o nome do projeto", async () => {
+    await seedDomain();
+    const svc = new MailService(config);
+    const cfg = await svc.enableProjectEmail(project, "exemplo.com");
+    expect(cfg).toMatchObject({ mailbox: "cassino@exemplo.com", mailFrom: "cassino@exemplo.com", fromName: "Cassino Royal" });
+    expect(aliasCalls).toEqual([]);
+    const env = await svc.envForProject(project);
+    expect(env).toMatchObject({ SMTP_USER: "cassino@exemplo.com", MAIL_FROM: "cassino@exemplo.com", MAIL_FROM_NAME: "Cassino Royal" });
+  });
+
+  it("endereço escolhido vira endereço extra da caixa técnica; o projeto entra com a caixa e envia como ele", async () => {
+    await seedDomain();
+    const svc = new MailService(config);
+    const cfg = await svc.enableProjectEmail(project, "exemplo.com", { fromLocalPart: "Nao-Responda", fromName: "Cassino" });
+    expect(cfg).toMatchObject({ mailbox: "cassino@exemplo.com", mailFrom: "nao-responda@exemplo.com", fromName: "Cassino" });
+    expect(aliasCalls).toEqual(["+ cassino@exemplo.com nao-responda@exemplo.com"]);
+    expect(await svc.envForProject(project)).toMatchObject({
+      SMTP_USER: "cassino@exemplo.com",
+      MAIL_FROM: "nao-responda@exemplo.com",
+      MAIL_FROM_NAME: "Cassino",
+    });
+  });
+
+  it("trocar o endereço tira o antigo da caixa; voltar ao padrão também", async () => {
+    await seedDomain();
+    const svc = new MailService(config);
+    await svc.enableProjectEmail(project, "exemplo.com", { fromLocalPart: "nao-responda" });
+    await svc.enableProjectEmail(project, "exemplo.com", { fromLocalPart: "avisos" });
+    await svc.enableProjectEmail(project, "exemplo.com", {});
+    expect(aliasCalls).toEqual([
+      "+ cassino@exemplo.com nao-responda@exemplo.com",
+      "- cassino@exemplo.com nao-responda@exemplo.com",
+      "+ cassino@exemplo.com avisos@exemplo.com",
+      "- cassino@exemplo.com avisos@exemplo.com",
+    ]);
+    expect((await svc.projectEmailConfig("p1")).mailFrom).toBe("cassino@exemplo.com");
+  });
+
+  it("endereço que já é de outra caixa: recusa (409)", async () => {
+    await seedDomain({ "contato@exemplo.com": mailboxFixture("contato@exemplo.com", "exemplo.com", "user") });
+    const svc = new MailService(config);
+    await expect(svc.enableProjectEmail(project, "exemplo.com", { fromLocalPart: "contato" })).rejects.toMatchObject({
+      statusCode: 409,
+      code: "address_in_use",
+    });
+  });
+
+  it("desativar tira o endereço extra da caixa", async () => {
+    await seedDomain();
+    const svc = new MailService(config);
+    await svc.enableProjectEmail(project, "exemplo.com", { fromLocalPart: "nao-responda" });
+    await svc.disableProjectEmail("p1");
+    expect(aliasCalls.at(-1)).toBe("- cassino@exemplo.com nao-responda@exemplo.com");
+    expect(await svc.envForProject(project)).toEqual({});
   });
 });

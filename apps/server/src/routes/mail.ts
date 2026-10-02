@@ -154,7 +154,12 @@ const enableProjectEmailSchema = {
     type: "object",
     required: ["domain"],
     additionalProperties: false,
-    properties: { domain: MAIL_DOMAIN_SCHEMA },
+    properties: {
+      domain: MAIL_DOMAIN_SCHEMA,
+      fromLocalPart: MAILBOX_LOCAL_PART_SCHEMA,
+      // Vai para o cabeçalho From: sem quebra de linha, < > nem aspas.
+      fromName: { type: "string", minLength: 1, maxLength: 80, pattern: '^[^\\r\\n<>"\\\\]+$' },
+    },
   },
 } as const;
 
@@ -561,7 +566,11 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         if (!project) {
           throw httpError(404, "project_not_found", "Projeto não encontrado.");
         }
-        const email = await service.enableProjectEmail(project, request.body?.domain ?? "");
+        const { domain, fromLocalPart, fromName } = request.body;
+        const email = await service.enableProjectEmail(project, domain, {
+          ...(fromLocalPart ? { fromLocalPart } : {}),
+          ...(fromName ? { fromName } : {}),
+        });
         const response: ProjectEmailResponse = { email };
         return reply.send(response);
       } catch (err) {

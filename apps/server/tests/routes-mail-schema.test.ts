@@ -476,3 +476,43 @@ describe("PUT /api/mail/mailboxes/:id/password — trocar senha", () => {
     expect(change).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/projects/:id/email — remetente escolhido", () => {
+  it("repassa endereço e nome de exibição ao serviço", async () => {
+    const enable = spyOn("enableProjectEmail").mockResolvedValue({
+      enabled: true,
+      domain: "exemplo.com",
+      mailbox: "loja@exemplo.com",
+      mailFrom: "nao-responda@exemplo.com",
+      fromName: "Loja Exemplo",
+      env: {},
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", fromLocalPart: "nao-responda", fromName: "Loja Exemplo" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(enable).toHaveBeenCalledWith(expect.anything(), "exemplo.com", { fromLocalPart: "nao-responda", fromName: "Loja Exemplo" });
+  });
+
+  it.each([
+    ["nome com quebra de linha (injeção de cabeçalho)", { fromName: "Loja\r\nBcc: x@y.com" }],
+    ["nome com < >", { fromName: "Loja <x@y.com>" }],
+    ["nome com aspas", { fromName: 'Loja "X"' }],
+    ["nome longo demais", { fromName: "x".repeat(81) }],
+    ["endereço com @", { fromLocalPart: "a@b" }],
+    ["endereço com espaço", { fromLocalPart: "nao responda" }],
+  ])("%s: 400 e nada muda", async (_label, extra) => {
+    const enable = spyOn("enableProjectEmail");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", ...extra },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(enable).not.toHaveBeenCalled();
+  });
+});

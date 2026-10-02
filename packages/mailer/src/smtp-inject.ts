@@ -27,8 +27,10 @@ export interface SmtpEnvInput {
   host: string;
   mailbox: string;
   password: string;
-  /** Endereço From padrão (geralmente igual à caixa técnica). */
+  /** Endereço From (a caixa técnica ou um endereço de envio escolhido, alias dela). */
   mailFrom: string;
+  /** Nome de exibição do remetente (vira MAIL_FROM_NAME). */
+  mailFromName?: string;
 }
 
 /** Monta o mapa de env vars para injeção no deploy do projeto. */
@@ -39,6 +41,9 @@ export function buildSmtpEnv(input: SmtpEnvInput): Record<string, string> {
     SMTP_USER: input.mailbox,
     SMTP_PASS: input.password,
     MAIL_FROM: input.mailFrom,
+    // MAIL_FROM continua sendo o endereço puro (qualquer app aceita); o nome
+    // vai separado para o app montar "Nome <endereço>" se quiser.
+    ...(input.mailFromName ? { MAIL_FROM_NAME: input.mailFromName } : {}),
   };
 }
 

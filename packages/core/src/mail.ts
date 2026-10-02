@@ -249,8 +249,12 @@ export interface MailboxCredentialsResponse {
 export interface ProjectEmailConfig {
   enabled: boolean;
   domain: string | null;
+  /** Caixa técnica <slug>@<domínio> (o projeto entra com ela). */
   mailbox: string | null;
+  /** Endereço de envio: a caixa técnica ou um escolhido (alias dela). */
   mailFrom: string | null;
+  /** Nome de exibição do remetente (MAIL_FROM_NAME). */
+  fromName?: string | null;
   /** Env vars que serão injetadas no próximo deploy (valores mascarados na API). */
   env: Record<string, string>;
 }
@@ -259,8 +263,17 @@ export interface ProjectEmailResponse {
   email: ProjectEmailConfig;
 }
 
+/**
+ * POST /api/projects/:id/email — ativa ou atualiza o e-mail do projeto.
+ * Sem fromLocalPart, envia como a caixa técnica (<slug>@<domínio>); sem
+ * fromName, usa o nome do projeto.
+ */
 export interface EnableProjectEmailRequest {
   domain: string;
+  /** Parte antes do @ do endereço de envio (ex.: "nao-responda"). */
+  fromLocalPart?: string;
+  /** Nome que aparece para quem recebe (ex.: "Loja Exemplo"). */
+  fromName?: string;
 }
 
 // ---------------------------------------------------------------------------
