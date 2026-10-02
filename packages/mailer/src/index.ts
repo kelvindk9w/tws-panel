@@ -17,6 +17,10 @@ export {
   pickNewest,
   readCaddyCertificate,
   validateCertificatePair,
+  inspectCertificatePair,
+  type CertificatePairInspection,
+  type CertificatePairProblem,
+  type InspectedCertificate,
   type MailCertificate,
 } from "./tls-certificates.js";
 export {

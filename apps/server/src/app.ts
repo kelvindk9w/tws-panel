@@ -38,6 +38,8 @@ import projectsRoutes from "./routes/projects.js";
 import dockerRoutes from "./routes/docker.js";
 import domainsRoutes from "./routes/domains.js";
 import mailRoutes from "./routes/mail.js";
+import certificatesRoutes from "./routes/certificates.js";
+import { ManualCertificateStore } from "./services/certificate-store.js";
 import monitoringRoutes from "./routes/monitoring.js";
 import terminalRoutes from "./routes/terminal.js";
 
@@ -96,6 +98,11 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     "deployService",
     new DeployService(config, { audit: app.auditService, alerts: app.alertsService }),
   );
+  // Certificados manuais (página Certificados): no escopo raiz porque o
+  // proxy (Caddyfile com `tls`) e o e-mail (Stalwart) usam o mesmo par.
+  const certificateStore = new ManualCertificateStore(config.dataDir);
+  app.decorate("certificateStore", certificateStore);
+  app.deployService.setManualCertificatesProvider(() => certificateStore.pairs());
   // Acesso por HTTPS (PAAS_PANEL_DOMAIN): o Caddy central sobe JUNTO com o
   // painel, já com o site dele — senão só subiria no primeiro deploy.
   app.deployService.startPanelRoute({
@@ -203,6 +210,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(dockerRoutes);
   await app.register(domainsRoutes);
   await app.register(mailRoutes);
+  // Página Certificados: depois do e-mail (que registra no deployService os
+  // hosts mail.<domínio> e a instalação do certificado no Stalwart).
+  await app.register(certificatesRoutes);
   // Fase 4 — por último: consome mailService (hook de blacklist no scan).
   await app.register(monitoringRoutes);
   await app.register(terminalRoutes);

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
+import { MAILBOX_PASSWORD_MIN } from "@paas/core";
 import type {
   DnsChecklistResponse,
   DnsCheckStatus,
@@ -26,8 +27,9 @@ import {
   Check,
   CheckCircle2,
   Copy,
-  Eye,
   Inbox,
+  KeyRound,
+  Settings2,
   Info,
   Loader2,
   MailPlus,
@@ -212,34 +214,135 @@ function CredentialRow({ label, value, mono = true }: { label: string; value: st
   );
 }
 
-function CredentialsModal({
-  credentials,
-  onClose,
-}: {
-  credentials: MailboxCredentials;
-  onClose: () => void;
-}) {
+/**
+ * Senha nova (criar caixa ou trocar): a pessoa define e repete. Os campos
+ * são de senha (nunca mostram o texto) e o painel nunca devolve a senha.
+ */
+function passwordProblem(password: string, confirm: string): string | null {
+  if (password.length > 0 && password.trim().length < MAILBOX_PASSWORD_MIN) {
+    return `A senha deve ter pelo menos ${MAILBOX_PASSWORD_MIN} caracteres.`;
+  }
+  if (confirm.length > 0 && confirm !== password) return "As senhas não conferem.";
+  return null;
+}
+
+function passwordReady(password: string, confirm: string): boolean {
+  return password.trim().length >= MAILBOX_PASSWORD_MIN && password === confirm;
+}
+
+function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-lg border bg-background p-6 shadow-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-lg border bg-background p-4 shadow-lg sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Credenciais — {credentials.email}</h2>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+        <div className="mb-4 flex items-start justify-between gap-2">
+          <h2 className="min-w-0 break-words text-lg font-semibold">{title}</h2>
+          <Button variant="ghost" size="icon" aria-label="Fechar" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>
+        {children}
+      </div>
+    </div>
+  );
+}
 
+function ChangePasswordModal({
+  email,
+  onClose,
+  onDone,
+}: {
+  email: string;
+  onClose: () => void;
+  onDone: (email: string) => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const problem = passwordProblem(password, confirm);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      await apiFetch<MailboxResponse>(`/api/mail/mailboxes/${encodeURIComponent(email)}/password`, {
+        method: "PUT",
+        body: JSON.stringify({ password }),
+      });
+      onDone(email);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível trocar a senha.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalShell title={`Trocar senha — ${email}`} onClose={onClose}>
+      <div className="flex flex-col gap-3 text-sm">
+        <p className="text-muted-foreground">
+          Defina uma senha nova. Por segurança o painel nunca mostra a senha: guarde-a no seu gerenciador de senhas.
+          Depois, atualize a senha no app de e-mail onde a caixa estiver configurada.
+        </p>
+        <label className="flex flex-col gap-1">
+          <span>Nova senha</span>
+          <Input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span>Repita a nova senha</span>
+          <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        </label>
+        {(problem || error) && <p className="text-destructive">{problem ?? error}</p>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button variant="success" disabled={saving || !passwordReady(password, confirm)} onClick={() => void save()}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+            Salvar nova senha
+          </Button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+function CredentialsModal({
+  credentials,
+  canChangePassword,
+  onChangePassword,
+  onClose,
+}: {
+  credentials: MailboxCredentials;
+  canChangePassword: boolean;
+  onChangePassword: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <ModalShell title={`Configurar no app de e-mail — ${credentials.email}`} onClose={onClose}>
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conta</p>
             <CredentialRow label="Usuário" value={credentials.username} />
-            <CredentialRow label="Senha" value={credentials.password} />
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span className="text-muted-foreground">Senha</span>
+              <span className="text-right text-xs text-muted-foreground">
+                a que você definiu ao criar a caixa (o painel não mostra senhas)
+              </span>
+            </div>
+            {canChangePassword && (
+              <div>
+                <Button variant="outline" size="sm" onClick={onChangePassword}>
+                  <KeyRound className="h-4 w-4" /> Trocar senha
+                </Button>
+              </div>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -269,8 +372,7 @@ function CredentialsModal({
             ))}
           </ul>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -287,12 +389,17 @@ export function MailDomainPage() {
   const [error, setError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [lastVerify, setLastVerify] = useState<DnsVerifyResponse | null>(null);
-  const [tab, setTab] = useState<"dns" | "mailboxes">("dns");
+  // abre em Caixas (pedido do dono do produto, 02/10/2026)
+  const [tab, setTab] = useState<"dns" | "mailboxes">("mailboxes");
 
   const [newMailbox, setNewMailbox] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [createdPassword, setCreatedPassword] = useState<{ email: string; password: string } | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<MailboxCredentials | null>(null);
+  const [changingPassword, setChangingPassword] = useState<string | null>(null);
+  const autoVerified = useRef(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -333,18 +440,29 @@ export function MailDomainPage() {
     }
   }
 
+  // Ao abrir, confere o DNS de verdade: a lista de domínios mostra o resultado
+  // da última verificação, e o detalhe não pode dizer "não verificado".
+  useEffect(() => {
+    if (!checklist || autoVerified.current) return;
+    autoVerified.current = true;
+    void verify();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checklist]);
+
   async function addMailbox() {
     const local = newMailbox.trim();
-    if (!local) return;
+    if (!local || !passwordReady(newPassword, newPasswordConfirm)) return;
     setBusy("add");
     setError(null);
     try {
       const res = await apiFetch<MailboxResponse>(
         `/api/mail/domains/${encodeURIComponent(name)}/mailboxes`,
-        { method: "POST", body: JSON.stringify({ localPart: local }) },
+        { method: "POST", body: JSON.stringify({ localPart: local, password: newPassword }) },
       );
       setNewMailbox("");
-      setCreatedPassword({ email: res.mailbox.id, password: res.password });
+      setNewPassword("");
+      setNewPasswordConfirm("");
+      setNotice(`Caixa ${res.mailbox.id} criada. Use a senha que você definiu (o painel não mostra senhas).`);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao criar a caixa.");
@@ -530,41 +648,68 @@ export function MailDomainPage() {
               <Inbox className="h-4 w-4" /> Caixas de e-mail
             </CardTitle>
             <CardDescription>
-              Credenciais prontas para Outlook, Gmail e Thunderbird (botão "ver credenciais").
+              Você define a senha de cada caixa; o painel nunca a mostra. Esqueceu? Use "Trocar senha". Para Outlook,
+              Gmail ou Thunderbird, veja "Configurar no app".
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div className="flex gap-2">
-              <div className="flex max-w-xs flex-1 items-center">
+            <div className="flex flex-col gap-2 rounded-lg border p-3 sm:p-4">
+              <p className="text-sm font-medium">Nova caixa</p>
+              <div className="flex min-w-0 max-w-md items-center">
                 <Input
                   placeholder="contato"
                   value={newMailbox}
                   onChange={(e) => setNewMailbox(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && void addMailbox()}
-                  className="rounded-r-none"
+                  className="w-28 shrink-0 rounded-r-none sm:w-auto sm:flex-1"
                 />
-                <span className="flex h-9 items-center rounded-r-md border border-l-0 bg-secondary px-3 text-sm text-muted-foreground">
+                <span className="flex h-9 min-w-0 items-center truncate rounded-r-md border border-l-0 bg-secondary px-3 text-sm text-muted-foreground">
                   @{checklist.domain}
                 </span>
               </div>
-              <Button size="sm" disabled={busy !== null || !newMailbox.trim()} onClick={() => void addMailbox()}>
-                {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailPlus className="h-4 w-4" />}
-                Criar caixa
-              </Button>
+              <div className="grid max-w-md gap-2 sm:grid-cols-2">
+                <label className="flex flex-col gap-1 text-sm">
+                  <span>Senha da caixa</span>
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span>Repita a senha</span>
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    value={newPasswordConfirm}
+                    onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && void addMailbox()}
+                  />
+                </label>
+              </div>
+              <p className={cn("text-xs", passwordProblem(newPassword, newPasswordConfirm) ? "text-destructive" : "text-muted-foreground")}>
+                {passwordProblem(newPassword, newPasswordConfirm) ??
+                  `Mínimo de ${MAILBOX_PASSWORD_MIN} caracteres. Guarde a senha no seu gerenciador: o painel não a mostra depois.`}
+              </p>
+              <div>
+                <Button
+                  size="sm"
+                  disabled={busy !== null || !newMailbox.trim() || !passwordReady(newPassword, newPasswordConfirm)}
+                  onClick={() => void addMailbox()}
+                >
+                  {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailPlus className="h-4 w-4" />}
+                  Criar caixa
+                </Button>
+              </div>
             </div>
 
-            {createdPassword && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm">
-                <span>
-                  Caixa <strong>{createdPassword.email}</strong> criada. Senha gerada:{" "}
-                  <code className="rounded bg-secondary px-1.5 py-0.5 text-xs">{createdPassword.password}</code>
-                </span>
-                <div className="flex items-center gap-1">
-                  <CopyButton text={createdPassword.password} />
-                  <Button variant="ghost" size="icon" onClick={() => setCreatedPassword(null)}>
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
+            {notice && (
+              <div className="flex items-start justify-between gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm">
+                <span className="min-w-0 break-words">{notice}</span>
+                <Button variant="ghost" size="icon" aria-label="Fechar aviso" onClick={() => setNotice(null)}>
+                  <X className="h-4 w-4" />
+                </Button>
               </div>
             )}
 
@@ -573,10 +718,11 @@ export function MailDomainPage() {
             ) : (
               <div className="flex flex-col divide-y rounded-lg border">
                 {mailboxes.map((mailbox) => (
-                  <div key={mailbox.id} className="flex items-center gap-3 px-4 py-3">
+                  <div key={mailbox.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
                     <Inbox className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium">{mailbox.id}</p>
+                    {/* no celular o endereço ocupa a linha e os botões descem */}
+                    <div className="min-w-0 flex-1 basis-[calc(100%-1.75rem)] sm:basis-0">
+                      <p className="break-all font-medium">{mailbox.id}</p>
                       <p className="text-xs text-muted-foreground">
                         {mailbox.kind === "system"
                           ? "sistema (postmaster/abuse)"
@@ -594,10 +740,20 @@ export function MailDomainPage() {
                       {busy === `cred-${mailbox.id}` ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
-                        <Eye className="h-4 w-4" />
+                        <Settings2 className="h-4 w-4" />
                       )}
-                      Ver credenciais
+                      Configurar no app
                     </Button>
+                    {mailbox.kind !== "project" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => setChangingPassword(mailbox.id)}
+                      >
+                        <KeyRound className="h-4 w-4" /> Trocar senha
+                      </Button>
+                    )}
                     {mailbox.kind === "user" &&
                       (confirmRemove === mailbox.id ? (
                         <div className="flex items-center gap-1">
@@ -626,7 +782,27 @@ export function MailDomainPage() {
         </Card>
       )}
 
-      {credentials && <CredentialsModal credentials={credentials} onClose={() => setCredentials(null)} />}
+      {credentials && (
+        <CredentialsModal
+          credentials={credentials}
+          canChangePassword={mailboxes.find((m) => m.id === credentials.email)?.kind !== "project"}
+          onChangePassword={() => {
+            setChangingPassword(credentials.email);
+            setCredentials(null);
+          }}
+          onClose={() => setCredentials(null)}
+        />
+      )}
+      {changingPassword && (
+        <ChangePasswordModal
+          email={changingPassword}
+          onClose={() => setChangingPassword(null)}
+          onDone={(email) => {
+            setChangingPassword(null);
+            setNotice(`Senha de ${email} trocada. Atualize a senha no app de e-mail onde a caixa estiver configurada.`);
+          }}
+        />
+      )}
     </div>
   );
 }

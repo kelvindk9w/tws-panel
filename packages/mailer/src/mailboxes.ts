@@ -16,25 +16,28 @@ export function generatePassword(bytes = 18): string {
 
 export interface CredentialsInput {
   email: string;
-  password: string;
   /** Hostname público do servidor de e-mail (mail.<domínio>). */
   host: string;
   ports: MailServerPorts;
 }
 
-/** Monta o bloco de credenciais completo para configurar um cliente de e-mail. */
+/**
+ * Monta o bloco de configuração para um cliente de e-mail. SEM a senha:
+ * ela nunca aparece na tela (pedido do dono do produto, 02/10/2026) — a
+ * pessoa usa a senha que definiu e, se esqueceu, troca.
+ */
 export function buildCredentials(input: CredentialsInput): MailboxCredentials {
-  const { email, password, host, ports } = input;
+  const { email, host, ports } = input;
   return {
     email,
     username: email,
-    password,
     imap: { host, port: ports.imaps, security: "ssl" },
     imapAlt: { host, port: ports.imap, security: "starttls" },
     smtp: { host, port: ports.submission, security: "starttls" },
     smtpAlt: { host, port: ports.submissions, security: "ssl" },
     notes: [
       "Usuário = endereço de e-mail completo (não apenas a parte antes do @).",
+      "Senha = a que você definiu ao criar a caixa. Esqueceu? Use \"Trocar senha\" na lista de caixas.",
       "Recebimento (IMAP): prefira SSL na porta " + ports.imaps + ".",
       "Envio (SMTP): porta " + ports.submission + " com STARTTLS (padrão) ou " + ports.submissions + " com SSL.",
       "No Gmail: Configurações → Contas → 'Adicionar outro endereço de e-mail' (envio) e 'Verificar e-mails de outras contas' (recebimento).",

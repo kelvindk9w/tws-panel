@@ -6,7 +6,23 @@ export { detectProject } from "./detect.js";
 export { analyzeCompose, guessProxyTarget } from "./guardrails.js";
 export { runGuardrails, GUARDRAIL_RULES, type GuardrailRuleInfo } from "./rules.js";
 export { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
-export { CaddyManager, renderCaddyfile, projectDomain, type CaddyTarget, type PanelSite } from "./caddy.js";
+export {
+  CaddyManager,
+  renderCaddyfile,
+  projectDomain,
+  manualCertificatePaths,
+  type CaddyApplyOptions,
+  type CaddyTarget,
+  type ManualCaddyCertificate,
+  type PanelSite,
+} from "./caddy.js";
+export {
+  explainIssueError,
+  parseCaddyCertificateLog,
+  sanitizeLogText,
+  type CaddyCertEvent,
+  type CaddyCertEventKind,
+} from "./caddy-log.js";
 export {
   DeployEngine,
   composeProjectName,

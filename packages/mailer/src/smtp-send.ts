@@ -177,9 +177,9 @@ class ResponseReader {
   }
 }
 
+/** Código da última linha (a resposta já passou pela leitura, que exige os 3 dígitos). */
 function codeOf(response: string): number {
-  const last = response.split("\n").at(-1) ?? "";
-  return Number(last.slice(0, 3)) || 0;
+  return Number(response.slice(response.lastIndexOf("\n") + 1, response.lastIndexOf("\n") + 4));
 }
 
 /** Texto da resposta sem os códigos (para mensagens de erro). */

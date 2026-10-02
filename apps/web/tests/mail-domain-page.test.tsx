@@ -3,7 +3,7 @@
  * registro (encontrado/ausente/divergente/não verificado) e o resumo
  * encontrado/total após a verificação.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -60,7 +60,8 @@ function mockApi(checklist: DnsChecklistResponse = CHECKLIST): void {
   );
 }
 
-function renderPage(): void {
+/** A página abre na aba Caixas; os testes do checklist abrem a aba DNS. */
+async function renderPage({ openDns = true }: { openDns?: boolean } = {}): Promise<void> {
   render(
     <MemoryRouter initialEntries={["/mail/exemplo.com.br"]}>
       <Routes>
@@ -68,6 +69,7 @@ function renderPage(): void {
       </Routes>
     </MemoryRouter>,
   );
+  if (openDns) fireEvent.click(await screen.findByRole("button", { name: /Checklist DNS/ }));
 }
 
 afterEach(() => {
@@ -78,7 +80,7 @@ afterEach(() => {
 describe("MailDomainPage — tabela de checklist DNS", () => {
   it("exibe um badge correto por status: ✅ encontrado, ❌ ausente, ⚠️ divergente, não verificado", async () => {
     mockApi();
-    renderPage();
+    await renderPage();
 
     const table = (await screen.findByRole("table"));
     const rows = within(table).getAllByRole("row");
@@ -92,7 +94,7 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
 
   it("registro divergente mostra a nota e o valor encontrado no DNS", async () => {
     mockApi();
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText(/mecanismo final difere/)).toBeInTheDocument();
     expect(screen.getByText(/v=spf1 ip4:203.0.113.10 ~all/)).toBeInTheDocument();
@@ -100,7 +102,7 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
 
   it("PTR com ação necessária exibe o card de reverse DNS com o texto do chamado", async () => {
     mockApi();
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText(/Reverse DNS \(PTR\)/)).toBeInTheDocument();
     expect(screen.getByText(/FCrDNS/)).toBeInTheDocument();
@@ -110,7 +112,7 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
   it("após 'Verificar agora', exibe o resumo encontrado/total (1/5 OK)", async () => {
     mockApi();
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: /verificar agora/i }));
@@ -138,7 +140,7 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
       },
     });
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText(/Envio liberado/)).toBeInTheDocument();
     expect(screen.getByText(/Gmail, Yahoo e Microsoft aceitam/)).toBeInTheDocument();
@@ -169,7 +171,7 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
         ticketText: null,
       },
     });
-    renderPage();
+    await renderPage();
     expect(await screen.findByText(/podem recusar/)).toBeInTheDocument();
     expect(screen.getByText(/não volta para o IP/)).toBeInTheDocument();
     expect(screen.getByText(/my\.contabo\.com/)).toBeInTheDocument();
@@ -178,7 +180,7 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
 
   it("aba do checklist traz o card 'Enviar e-mail de teste' do domínio", async () => {
     mockApi();
-    renderPage();
+    await renderPage();
     expect(await screen.findByText("Enviar e-mail de teste")).toBeInTheDocument();
     expect(screen.getByText("postmaster@exemplo.com.br")).toBeInTheDocument();
   });
@@ -193,8 +195,153 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
         }),
       ),
     );
-    renderPage();
+    await renderPage({ openDns: false });
     expect(await screen.findByText("Domínio não encontrado.")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pedido do dono do produto (02/10/2026): a lista mostrava "6/6 registros OK"
+// e o detalhe "não verificado"; o certo é abrir em Caixas; e a senha de uma
+// caixa nunca fica visível — quem esqueceu troca.
+// ---------------------------------------------------------------------------
+
+type Call = { url: string; method: string; body: unknown };
+
+function mockMailboxApi(mailboxes: unknown[] = []): Call[] {
+  const calls: Call[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
+      let body: unknown = CHECKLIST;
+      if (url.endsWith("/verify")) {
+        body = {
+          domain: "exemplo.com.br",
+          records: CHECKLIST.records.map((r) => ({ ...r, status: "found" })),
+          ptr: { ...CHECKLIST.ptr, status: "found" },
+          summary: { ok: 5, total: 5 },
+          verifiedAt: "2026-10-02T12:00:00.000Z",
+          suggestion: null,
+        };
+      } else if (url.endsWith("/mailboxes") && method === "GET") body = { mailboxes };
+      else if (url.endsWith("/mailboxes") && method === "POST") {
+        body = { mailbox: { id: "vendas@exemplo.com.br", localPart: "vendas", domain: "exemplo.com.br", kind: "user", createdAt: "2026-10-02T12:00:00.000Z" } };
+      } else if (url.endsWith("/password")) body = { mailbox: mailboxes[0] };
+      else if (url.endsWith("/credentials")) {
+        body = {
+          credentials: {
+            email: "vendas@exemplo.com.br",
+            username: "vendas@exemplo.com.br",
+            imap: { host: "mail.exemplo.com.br", port: 993, security: "ssl" },
+            imapAlt: { host: "mail.exemplo.com.br", port: 143, security: "starttls" },
+            smtp: { host: "mail.exemplo.com.br", port: 587, security: "starttls" },
+            smtpAlt: { host: "mail.exemplo.com.br", port: 465, security: "ssl" },
+            notes: [],
+          },
+        };
+      }
+      return new Response(JSON.stringify(body), { status: method === "POST" && url.endsWith("/mailboxes") ? 201 : 200, headers: { "Content-Type": "application/json" } });
+    }),
+  );
+  return calls;
+}
+
+const USER_BOX = { id: "vendas@exemplo.com.br", localPart: "vendas", domain: "exemplo.com.br", kind: "user", createdAt: "2026-10-01T12:00:00.000Z" };
+const PROJECT_BOX = { id: "loja@exemplo.com.br", localPart: "loja", domain: "exemplo.com.br", kind: "project", createdAt: "2026-10-01T12:00:00.000Z" };
+
+describe("MailDomainPage — abre em Caixas e confere o DNS sozinha", () => {
+  it("abre na aba Caixas", async () => {
+    mockMailboxApi([USER_BOX]);
+    await renderPage({ openDns: false });
+    expect(await screen.findByText("Caixas de e-mail")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("ao abrir, verifica o DNS: a aba DNS já mostra o resultado (igual à lista de domínios)", async () => {
+    const calls = mockMailboxApi();
+    await renderPage();
+    expect(await screen.findByText("5/5 OK")).toBeInTheDocument();
+    expect(calls.filter((c) => c.url.endsWith("/verify") && c.method === "POST")).toHaveLength(1);
+    expect(screen.queryByText("não verificado")).not.toBeInTheDocument();
+  });
+});
+
+describe("MailDomainPage — senha das caixas nunca visível", () => {
+  it("criar caixa: a pessoa define a senha (com confirmação) e ela não aparece depois", async () => {
+    const calls = mockMailboxApi();
+    const user = userEvent.setup();
+    await renderPage({ openDns: false });
+    await user.type(await screen.findByPlaceholderText("contato"), "vendas");
+    const create = screen.getByRole("button", { name: /Criar caixa/ });
+    expect(create).toBeDisabled();
+    await user.type(screen.getByLabelText("Senha da caixa"), "senha-forte-da-pessoa");
+    await user.type(screen.getByLabelText("Repita a senha"), "senha-diferente-xx");
+    expect(screen.getByText(/As senhas não conferem/)).toBeInTheDocument();
+    expect(create).toBeDisabled();
+    await user.clear(screen.getByLabelText("Repita a senha"));
+    await user.type(screen.getByLabelText("Repita a senha"), "senha-forte-da-pessoa");
+    await user.click(create);
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "POST" && c.url.endsWith("/mailboxes"))?.body).toEqual({
+        localPart: "vendas",
+        password: "senha-forte-da-pessoa",
+      }),
+    );
+    expect(await screen.findByText(/criada/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("senha-forte-da-pessoa");
+    expect(screen.getByLabelText("Senha da caixa")).toHaveAttribute("type", "password");
+  });
+
+  it("senha curta não habilita o botão", async () => {
+    mockMailboxApi();
+    const user = userEvent.setup();
+    await renderPage({ openDns: false });
+    await user.type(await screen.findByPlaceholderText("contato"), "vendas");
+    await user.type(screen.getByLabelText("Senha da caixa"), "curta");
+    await user.type(screen.getByLabelText("Repita a senha"), "curta");
+    expect(screen.getByRole("button", { name: /Criar caixa/ })).toBeDisabled();
+    expect(screen.getByText(/pelo menos 12 caracteres/)).toBeInTheDocument();
+  });
+
+  it("configuração para app de e-mail: sem senha, com o caminho para trocar", async () => {
+    mockMailboxApi([USER_BOX]);
+    const user = userEvent.setup();
+    await renderPage({ openDns: false });
+    await user.click(await screen.findByRole("button", { name: /Configurar no app/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByText("mail.exemplo.com.br", { selector: "code" }).length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/a que você definiu/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /Trocar senha/ })).toBeInTheDocument();
+  });
+
+  it("trocar senha: nova senha com confirmação, PUT e aviso de sucesso, sem mostrar a senha", async () => {
+    const calls = mockMailboxApi([USER_BOX]);
+    const user = userEvent.setup();
+    await renderPage({ openDns: false });
+    await user.click(await screen.findByRole("button", { name: /Trocar senha/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Nova senha"), "nova-senha-forte-123");
+    await user.type(within(dialog).getByLabelText("Repita a nova senha"), "nova-senha-forte-123");
+    await user.click(within(dialog).getByRole("button", { name: /Salvar nova senha/ }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "PUT")).toEqual({
+        url: "/api/mail/mailboxes/vendas%40exemplo.com.br/password",
+        method: "PUT",
+        body: { password: "nova-senha-forte-123" },
+      }),
+    );
+    expect(await screen.findByText(/Senha de vendas@exemplo.com.br trocada/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("nova-senha-forte-123");
+  });
+
+  it("caixa técnica de projeto não oferece trocar senha (o painel cuida dela)", async () => {
+    mockMailboxApi([PROJECT_BOX]);
+    await renderPage({ openDns: false });
+    expect(await screen.findByText("loja@exemplo.com.br")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Trocar senha/ })).not.toBeInTheDocument();
   });
 });

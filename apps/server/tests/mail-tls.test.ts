@@ -219,6 +219,20 @@ describe("syncTls — instala e renova o certificado do Caddy no Stalwart", () =
     expect(stored).not.toContain("CHAVE");
   });
 
+  it("certificado MANUAL do nome (página Certificados) tem preferência sobre o do Caddy", async () => {
+    await seed({ domains: { "a.com": domain("a.com") } });
+    const readCertificate = vi.fn(async (h: string) => cert(h, "CA:DD:Y"));
+    const service = new MailService(config, {
+      inContainer: false,
+      readCertificate,
+      manualCertificate: async (h) => (h === "mail.a.com" ? cert(h, "MA:NU:AL") : null),
+    });
+    expect(await service.syncTls()).toBe("restarted");
+    const apply = managerCalls.find((c) => c.method === "applyTls")!;
+    expect(apply.opts.certificates).toEqual([cert("mail.a.com", "MA:NU:AL")]);
+    expect(readCertificate).not.toHaveBeenCalledWith("mail.a.com");
+  });
+
   it("renovação (mesmo nome, certificado novo): recarrega sem reiniciar", async () => {
     await seed({ domains: { "a.com": domain("a.com") } });
     let fp = "AA:BB";

@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -81,6 +82,8 @@ function MailTlsCard({ tls, busy, onRecheck }: { tls: MailTlsStatusResponse | nu
             )}
           </div>
         ))}
+        {/* Modo (automático/manual), ações e histórico ficam na página Certificados. */}
+        <CertificateSummary query="kind=mail" />
       </CardContent>
     </Card>
   );

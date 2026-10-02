@@ -233,16 +233,30 @@ describe("POST /api/mail/domains/:domain/mailboxes — schema", () => {
   it("aceita corpo válido", async () => {
     const createMailbox = spyOn("createMailbox").mockResolvedValue({
       mailbox: { id: "vendas@exemplo.com", localPart: "vendas", domain: "exemplo.com", kind: "user", createdAt: new Date().toISOString() },
-      password: "senha-gerada-123",
     });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/mail/domains/exemplo.com/mailboxes",
+      headers: auth,
+      payload: { localPart: "vendas", password: "senha-forte-de-teste" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(createMailbox).toHaveBeenCalledOnce();
+    // a senha nunca volta pela API (pedido do dono do produto, 02/10/2026)
+    expect(res.body).not.toContain("senha-forte-de-teste");
+    expect(res.json()).not.toHaveProperty("password");
+  });
+
+  it("recusa criar caixa sem senha: a pessoa define a senha (o painel não mostra senha gerada)", async () => {
+    const createMailbox = spyOn("createMailbox");
     const res = await app.inject({
       method: "POST",
       url: "/api/mail/domains/exemplo.com/mailboxes",
       headers: auth,
       payload: { localPart: "vendas" },
     });
-    expect(res.statusCode).toBe(201);
-    expect(createMailbox).toHaveBeenCalledOnce();
+    expect(res.statusCode).toBe(400);
+    expect(createMailbox).not.toHaveBeenCalled();
   });
 
   it("recusa corpo sem localPart", async () => {
@@ -257,13 +271,13 @@ describe("POST /api/mail/domains/:domain/mailboxes — schema", () => {
     expect(createMailbox).not.toHaveBeenCalled();
   });
 
-  it("recusa senha curta demais (abaixo do mínimo exigido pelo service)", async () => {
+  it("recusa senha com menos de 12 caracteres", async () => {
     const createMailbox = spyOn("createMailbox");
     const res = await app.inject({
       method: "POST",
       url: "/api/mail/domains/exemplo.com/mailboxes",
       headers: auth,
-      payload: { localPart: "vendas", password: "1234567" },
+      payload: { localPart: "vendas", password: "12345678901" },
     });
     expect(res.statusCode).toBe(400);
     expect(createMailbox).not.toHaveBeenCalled();
@@ -272,7 +286,6 @@ describe("POST /api/mail/domains/:domain/mailboxes — schema", () => {
   it("aceita senha longa (>= 200 chars)", async () => {
     const createMailbox = spyOn("createMailbox").mockResolvedValue({
       mailbox: { id: "vendas@exemplo.com", localPart: "vendas", domain: "exemplo.com", kind: "user", createdAt: new Date().toISOString() },
-      password: "x".repeat(200),
     });
     const res = await app.inject({
       method: "POST",
@@ -290,7 +303,7 @@ describe("POST /api/mail/domains/:domain/mailboxes — schema", () => {
       method: "POST",
       url: "/api/mail/domains/exemplo.com/mailboxes",
       headers: auth,
-      payload: { localPart: "vendas", admin: true },
+      payload: { localPart: "vendas", password: "senha-forte-de-teste", admin: true },
     });
     expect(res.statusCode).toBe(400);
     expect(createMailbox).not.toHaveBeenCalled();
@@ -315,7 +328,6 @@ describe("GET /api/mail/mailboxes/:id/credentials — schema", () => {
     const mailboxCredentials = spyOn("mailboxCredentials").mockResolvedValue({
       email: "vendas@exemplo.com",
       username: "vendas@exemplo.com",
-      password: "senha",
       imap: { host: "mail.exemplo.com", port: 993, security: "ssl" },
       imapAlt: { host: "mail.exemplo.com", port: 143, security: "starttls" },
       smtp: { host: "mail.exemplo.com", port: 587, security: "starttls" },
@@ -427,5 +439,40 @@ describe("DELETE /api/projects/:id/email — schema", () => {
     expect(res.statusCode).toBe(400);
     expect(deployService.getProject).not.toHaveBeenCalled();
     expect(disableProjectEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /api/mail/mailboxes/:id/password — trocar senha", () => {
+  it("troca com senha forte, registra auditoria sem a senha e não devolve a senha", async () => {
+    const change = spyOn("changeMailboxPassword").mockResolvedValue({
+      id: "vendas@exemplo.com",
+      localPart: "vendas",
+      domain: "exemplo.com",
+      kind: "user",
+      createdAt: new Date().toISOString(),
+    });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/mail/mailboxes/vendas%40exemplo.com/password",
+      headers: auth,
+      payload: { password: "nova-senha-forte-123" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(change).toHaveBeenCalledWith("vendas@exemplo.com", "nova-senha-forte-123");
+    expect(res.body).not.toContain("nova-senha-forte-123");
+  });
+
+  it("recusa senha curta, ausente ou com campo extra", async () => {
+    const change = spyOn("changeMailboxPassword");
+    for (const payload of [{ password: "curta" }, {}, { password: "nova-senha-forte-123", x: 1 }]) {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/mail/mailboxes/vendas%40exemplo.com/password",
+        headers: auth,
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(change).not.toHaveBeenCalled();
   });
 });

@@ -275,3 +275,27 @@ describe("StalwartClient.listQueuedMessages", () => {
     await expect(client.listQueuedMessages("a@b.com")).resolves.toEqual([]);
   });
 });
+
+describe("StalwartClient.setMailboxPassword", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("PATCH /api/principal/<caixa> trocando a senha (campo secrets)", async () => {
+    const calls: { url: string; method: string | undefined; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method, body: JSON.parse(String(init?.body)) });
+        return Response.json({ data: null });
+      }),
+    );
+    const client = new StalwartClient("http://paas-stalwart:8080", "admin", "s");
+    await client.setMailboxPassword("vendas@exemplo.com.br", "nova-senha-forte-123");
+    expect(calls).toEqual([
+      {
+        url: "http://paas-stalwart:8080/api/principal/vendas%40exemplo.com.br",
+        method: "PATCH",
+        body: [{ action: "set", field: "secrets", value: ["nova-senha-forte-123"] }],
+      },
+    ]);
+  });
+});

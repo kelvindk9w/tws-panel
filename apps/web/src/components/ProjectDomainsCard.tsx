@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { DnsGuide } from "@/components/DnsGuide";
+import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, CheckCircle2, ExternalLink, Globe, Loader2, Plus, Star, Trash2 } from "lucide-react";
 
@@ -195,6 +196,8 @@ export function ProjectDomainsCard({
             <DomainRow key={d} project={project} domain={d} primary={d === project.domain} onChanged={onChanged} />
           ))}
         </ul>
+
+        <CertificateSummary query={`project=${encodeURIComponent(project.id)}`} />
 
         {!adding && (
           <Button variant="outline" className="self-start" onClick={() => setAdding(true)}>

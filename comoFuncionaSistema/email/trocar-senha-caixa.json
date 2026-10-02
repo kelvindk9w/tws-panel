@@ -1,0 +1,115 @@
+{
+  "id": "trocar-senha-caixa",
+  "modulo": "email",
+  "metodo": "PUT",
+  "url": "/api/mail/mailboxes/:id/password",
+  "resumo": "Troca a senha de uma caixa de e-mail. É o caminho para quem esqueceu a senha, que nunca é mostrada.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts)."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "mailboxIdParamSchema: minLength 1, maxLength 90.",
+        "descricao": "Endereço completo da caixa, URL-encoded."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "password",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "minLength 12 (MAILBOX_PASSWORD_MIN), maxLength 200; additionalProperties:false.",
+        "descricao": "Nova senha definida pela pessoa (a tela pede duas vezes)."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Senha trocada.",
+      "corpo": {
+        "mailbox": "Mailbox (sem senha)"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Senha ausente, curta, longa demais ou campo extra (schema).",
+      "mensagem": "Campo inválido: password."
+    },
+    {
+      "status": 400,
+      "codigo": "weak_password",
+      "quando": "Sem os espaços das pontas fica abaixo de 12 caracteres.",
+      "mensagem": "A senha deve ter pelo menos 12 caracteres."
+    },
+    {
+      "status": 404,
+      "codigo": "mailbox_not_found",
+      "quando": "Caixa não existe.",
+      "mensagem": "Caixa {email} não encontrada."
+    },
+    {
+      "status": 409,
+      "codigo": "mailbox_managed",
+      "quando": "Caixa técnica de projeto: o painel gerencia a senha e a entrega ao projeto no deploy.",
+      "mensagem": "Esta é a caixa técnica de um projeto: o painel cuida da senha e a entrega ao projeto no deploy."
+    },
+    {
+      "status": 409,
+      "codigo": "mail_server_stopped",
+      "quando": "Servidor de e-mail parado.",
+      "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar."
+    }
+  ],
+  "fluxo": [
+    "1. Acha a caixa (404) e recusa caixa de projeto (409 mailbox_managed).",
+    "2. requireStrongPassword; requireRunning.",
+    "3. StalwartClient.setMailboxPassword: PATCH /api/principal/{email} com [{action:'set', field:'secrets', value:[senha]}].",
+    "4. Atualiza a senha guardada em data/mail/mail.json (o e-mail de teste de postmaster@ passa a usar a nova) e save().",
+    "5. Auditoria mail.mailbox.password (só o endereço, nunca a senha); resposta { mailbox } sem senha."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "MailService.changeMailboxPassword",
+      "arquivo": "apps/server/src/services/mail-service.ts",
+      "papel": "Valida, troca no Stalwart e persiste."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "StalwartClient.setMailboxPassword",
+      "arquivo": "packages/mailer/src/client.ts",
+      "papel": "PATCH /api/principal."
+    }
+  ],
+  "efeitosColaterais": [
+    "A senha antiga deixa de funcionar no IMAP/SMTP: apps de e-mail configurados precisam da senha nova.",
+    "Auditoria: mail.mailbox.password."
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/MailDomainPage.tsx (ChangePasswordModal)"
+  ],
+  "testes": [
+    "apps/server/tests/mail-service.test.ts",
+    "apps/server/tests/routes-mail-schema.test.ts",
+    "apps/web/tests/mail-domain-page.test.tsx",
+    "packages/mailer/tests/delivery-status.test.ts (setMailboxPassword)"
+  ],
+  "observacoes": [
+    "Pedido do dono do produto (02/10/2026): a senha nunca fica visível; quem esqueceu troca.",
+    "O formato do PATCH segue a API de administração do Stalwart 0.11 (lista de ações set/addItem/removeItem); validar na VPS real."
+  ]
+}

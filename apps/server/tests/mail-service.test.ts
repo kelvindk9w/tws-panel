@@ -28,6 +28,8 @@ import type { ServerConfig } from "../src/config.js";
 const deletedMailboxCalls: string[] = [];
 const deletedDomainCalls: string[] = [];
 let deleteMailboxImpl: (email: string) => Promise<void> = async () => undefined;
+const passwordCalls: { email: string; password: string }[] = [];
+const createdMailboxCalls: { email: string; password: string }[] = [];
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
@@ -52,6 +54,12 @@ vi.mock("@paas/mailer", async (importOriginal) => {
     async deleteMailbox(email: string) {
       deletedMailboxCalls.push(email);
       await deleteMailboxImpl(email);
+    }
+    async setMailboxPassword(email: string, password: string) {
+      passwordCalls.push({ email, password });
+    }
+    async createMailbox(email: string, password: string) {
+      createdMailboxCalls.push({ email, password });
     }
   }
   return { ...actual, StalwartManager: FakeStalwartManager, StalwartClient: FakeStalwartClient };
@@ -98,6 +106,8 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-mail-test-"));
   deletedMailboxCalls.length = 0;
   deletedDomainCalls.length = 0;
+  passwordCalls.length = 0;
+  createdMailboxCalls.length = 0;
   deleteMailboxImpl = async () => undefined;
   config = {
     dataDir: dir,
@@ -220,5 +230,76 @@ describe("MailService.deleteMailbox — auditoria", () => {
     );
     const service = new MailService(config);
     await expect(service.deleteMailbox("example.com", "c@example.com")).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Pedido do dono do produto (02/10/2026): a senha de uma caixa nunca aparece
+ * na tela. A pessoa define a senha ao criar; se esqueceu, troca.
+ */
+describe("MailService — senha das caixas nunca volta", () => {
+  async function storedPassword(email: string): Promise<string> {
+    const raw = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8"));
+    return raw.mailboxes[email].password;
+  }
+
+  it("trocar senha: muda no servidor de e-mail e no que o painel guarda", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {
+      "vendas@exemplo.com": mailboxFixture("vendas@exemplo.com", "exemplo.com", "user"),
+    });
+    const svc = new MailService(config);
+    const mailbox = await svc.changeMailboxPassword("vendas%40exemplo.com", "nova-senha-forte-123");
+    expect(mailbox).not.toHaveProperty("password");
+    expect(passwordCalls).toEqual([{ email: "vendas@exemplo.com", password: "nova-senha-forte-123" }]);
+    expect(await storedPassword("vendas@exemplo.com")).toBe("nova-senha-forte-123");
+  });
+
+  it("postmaster@ (sistema) também pode trocar: o e-mail de teste passa a usar a nova", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {
+      "postmaster@exemplo.com": mailboxFixture("postmaster@exemplo.com", "exemplo.com", "system"),
+    });
+    const svc = new MailService(config);
+    await svc.changeMailboxPassword("postmaster@exemplo.com", "nova-senha-forte-123");
+    expect(await storedPassword("postmaster@exemplo.com")).toBe("nova-senha-forte-123");
+  });
+
+  it("caixa técnica de projeto: recusa (o painel gerencia e entrega ao projeto)", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {
+      "loja@exemplo.com": { ...mailboxFixture("loja@exemplo.com", "exemplo.com", "user"), kind: "project" },
+    });
+    const svc = new MailService(config);
+    await expect(svc.changeMailboxPassword("loja@exemplo.com", "nova-senha-forte-123")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "mailbox_managed",
+    });
+    expect(passwordCalls).toEqual([]);
+  });
+
+  it("senha curta ou caixa inexistente: recusa", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {
+      "vendas@exemplo.com": mailboxFixture("vendas@exemplo.com", "exemplo.com", "user"),
+    });
+    const svc = new MailService(config);
+    await expect(svc.changeMailboxPassword("vendas@exemplo.com", "curta")).rejects.toMatchObject({ code: "weak_password" });
+    await expect(svc.changeMailboxPassword("nada@exemplo.com", "nova-senha-forte-123")).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it("configuração para cliente de e-mail não traz a senha", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {
+      "vendas@exemplo.com": mailboxFixture("vendas@exemplo.com", "exemplo.com", "user", "segredo-guardado"),
+    });
+    const creds = await new MailService(config).mailboxCredentials("vendas@exemplo.com");
+    expect(JSON.stringify(creds)).not.toContain("segredo-guardado");
+  });
+
+  it("criar caixa exige a senha da pessoa (mínimo 12) e não a devolve", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {});
+    const svc = new MailService(config);
+    await expect(svc.createMailbox("exemplo.com", "vendas", "curta")).rejects.toMatchObject({ code: "weak_password" });
+    const res = await svc.createMailbox("exemplo.com", "vendas", "senha-forte-da-pessoa");
+    expect(res).not.toHaveProperty("password");
+    expect(createdMailboxCalls).toEqual([{ email: "vendas@exemplo.com", password: "senha-forte-da-pessoa" }]);
   });
 });

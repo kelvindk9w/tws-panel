@@ -2,7 +2,9 @@
  * mail.ts — rotas do módulo de e-mail (Fase 3, plano §5.3).
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import { MAILBOX_PASSWORD_MIN } from "@paas/core";
 import type {
+  ChangeMailboxPasswordRequest,
   CreateMailDomainRequest,
   CreateMailboxRequest,
   DnsChecklistResponse,
@@ -85,9 +87,10 @@ const MAILBOX_LOCAL_PART_SCHEMA = {
 // Senha de caixa: o service (createMailbox) recusa senha com menos de 8
 // caracteres — mesmo mínimo aqui, para recusar já na borda. maxLength alto
 // (200) para não impedir senhas geradas por gerenciadores externos.
+// A pessoa define a senha (o painel nunca a mostra de volta).
 const MAILBOX_PASSWORD_SCHEMA = {
   type: "string",
-  minLength: 8,
+  minLength: MAILBOX_PASSWORD_MIN,
   maxLength: 200,
 } as const;
 
@@ -108,7 +111,7 @@ const createMailboxSchema = {
   },
   body: {
     type: "object",
-    required: ["localPart"],
+    required: ["localPart", "password"],
     additionalProperties: false,
     properties: {
       localPart: MAILBOX_LOCAL_PART_SCHEMA,
@@ -205,7 +208,13 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // O sink de auditoria precisa ser injetado aqui: sem ele, deleteMailbox
   // remove a caixa sem deixar registro na trilha, ao contrário de criar
   // domínio e criar caixa.
-  const service = new MailService(app.config, { audit: app.auditService });
+  const service = new MailService(app.config, {
+    audit: app.auditService,
+    // Certificado manual de mail.<domínio> (página Certificados) vence o do Caddy.
+    ...(app.hasDecorator("certificateStore")
+      ? { manualCertificate: (host: string) => app.certificateStore.forHost(host) }
+      : {}),
+  });
   app.decorate("mailService", service);
 
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
@@ -213,6 +222,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
   // que o Stalwart passa a usar (ver MailService.syncTls).
   app.deployService.setMailHostsProvider(() => service.mailHosts());
+  // A página Certificados instala no Stalwart na hora em que mail.<domínio> fica válido.
+  app.deployService.setMailTlsSync?.(() => service.syncTls());
 
   /**
    * Os hosts de e-mail mudaram (domínio novo/removido, servidor iniciado):
@@ -445,17 +456,17 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     { schema: createMailboxSchema },
     async (request, reply) => {
       try {
-        const { mailbox, password } = await service.createMailbox(
+        const { mailbox } = await service.createMailbox(
           request.params.domain,
           request.body?.localPart ?? "",
-          request.body?.password,
+          request.body?.password ?? "",
         );
         await app.auditService.record({
           action: "mail.mailbox.create",
           target: `${mailbox.localPart}@${request.params.domain}`,
           detail: `Caixa de e-mail ${mailbox.localPart}@${request.params.domain} criada.`,
         });
-        const response: MailboxResponse = { mailbox, password };
+        const response: MailboxResponse = { mailbox };
         return reply.code(201).send(response);
       } catch (err) {
         return sendError(reply, err);
@@ -470,6 +481,36 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       try {
         await service.deleteMailbox(request.params.domain, request.params.id);
         return reply.send({ ok: true });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Trocar a senha (quem esqueceu troca: a senha nunca é mostrada).
+  app.put<{ Params: { id: string }; Body: ChangeMailboxPasswordRequest }>(
+    "/api/mail/mailboxes/:id/password",
+    {
+      schema: {
+        ...mailboxIdParamSchema,
+        body: {
+          type: "object",
+          required: ["password"],
+          additionalProperties: false,
+          properties: { password: MAILBOX_PASSWORD_SCHEMA },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const mailbox = await service.changeMailboxPassword(request.params.id, request.body.password);
+        await app.auditService.record({
+          action: "mail.mailbox.password",
+          target: mailbox.id,
+          detail: `Senha da caixa de e-mail ${mailbox.id} trocada.`,
+        });
+        const response: MailboxResponse = { mailbox };
+        return reply.send(response);
       } catch (err) {
         return sendError(reply, err);
       }
