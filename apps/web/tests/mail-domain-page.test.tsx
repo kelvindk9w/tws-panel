@@ -178,6 +178,13 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
     expect(screen.queryByText(/Copiar texto do chamado/)).not.toBeInTheDocument();
   });
 
+  it("PTR não conferido porque o DNS demorou: explica sem alarmar (sem 'podem recusar')", async () => {
+    mockApi({ ...CHECKLIST, ptr: { ip: "203.0.113.10", expected: "mail.exemplo.com.br", status: "pending", found: [], forwardConfirmed: null, provider: null, ticketText: null } });
+    await renderPage();
+    expect(await screen.findByText(/o DNS demorou a responder/)).toBeInTheDocument();
+    expect(screen.queryByText(/podem recusar/)).not.toBeInTheDocument();
+  });
+
   it("aba do checklist traz o card 'Enviar e-mail de teste' do domínio", async () => {
     mockApi();
     await renderPage();

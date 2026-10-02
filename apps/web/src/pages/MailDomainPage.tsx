@@ -138,7 +138,7 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
     <Card
       className={cn(
         ptr.status === "generic" && "border-sky-500/40",
-        ptr.status !== "found" && ptr.status !== "generic" && "border-amber-500/40",
+        ptr.status !== "found" && ptr.status !== "generic" && ptr.status !== "pending" && "border-amber-500/40",
       )}
     >
       <CardHeader className="pb-2">
@@ -180,6 +180,15 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
               </div>
             </details>
           )}
+        </CardContent>
+      )}
+
+      {ptr.status === "pending" && (
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Não deu para conferir agora: o DNS demorou a responder. Isso não indica problema no envio. Clique em
+            "Verificar agora" daqui a pouco.
+          </p>
         </CardContent>
       )}
 
