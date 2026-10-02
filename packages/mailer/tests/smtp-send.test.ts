@@ -204,6 +204,12 @@ describe("sendSmtpMail", () => {
     expect(server.commands).toContain("MAIL FROM:<postmaster@exemplo.com.br> RET=HDRS ENVID=tws-teste-abc123");
   });
 
+  it("sem data informada, a mensagem sai com a hora atual no cabeçalho Date", async () => {
+    const server = await fakeSmtp();
+    await sendSmtpMail(options(server.port, { date: undefined }));
+    expect(server.data).toMatch(/^Date: .+\d{4} \d{2}:\d{2}:\d{2}/m);
+  });
+
   it("sem DSN anunciado, envia sem os parâmetros de aviso", async () => {
     const server = await fakeSmtp({ ehlo: ["AUTH PLAIN"] });
     const result = await sendSmtpMail(options(server.port));

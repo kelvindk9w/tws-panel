@@ -130,6 +130,14 @@ describe("verificação contra o DNS real (resolver mockado)", () => {
     expect(result.summary).toEqual({ ok: 0, total: 6 });
   });
 
+  it("registro de tipo sem consulta direta (PTR) não é procurado no DNS do domínio: fica faltando", async () => {
+    const base = buildDnsChecklist(BASE_INPUT);
+    const checklist = { ...base, records: [{ ...base.records[0]!, id: "ptr", type: "PTR" as const }] };
+    const result = await verifyDnsRecords(checklist, mockResolver());
+    expect(result.records[0]?.status).toBe("missing");
+    expect(result.records[0]?.found).toEqual([]);
+  });
+
   it("valor divergente → mismatch com nota explicativa", async () => {
     const checklist = buildDnsChecklist(BASE_INPUT);
     const resolver = mockResolver({ resolve4: async () => ["198.51.100.99"] });

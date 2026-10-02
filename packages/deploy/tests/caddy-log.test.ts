@@ -197,3 +197,50 @@ describe("explainIssueError — causa provável em linguagem de leigo", () => {
     expect(e.detail).toBe("algo estranho");
   });
 });
+
+describe("parseCaddyCertificateLog — formatos menos comuns", () => {
+  const line = (o: Record<string, unknown>) => JSON.stringify(o);
+
+  it("hora em texto (ISO) é aceita; texto inválido ou ausente vira null", () => {
+    const log = [
+      line({ ts: "2026-10-01T23:37:59Z", msg: "certificate obtained successfully", identifier: "a.exemplo.com.br" }),
+      line({ ts: "ontem", msg: "certificate obtained successfully", identifier: "b.exemplo.com.br" }),
+      line({ ts: { x: 1 }, msg: "certificate obtained successfully", identifier: "c.exemplo.com.br" }),
+    ].join("\n");
+    const events = parseCaddyCertificateLog(log);
+    expect(events.get("a.exemplo.com.br")?.at).toBe("2026-10-01T23:37:59.000Z");
+    expect(events.get("b.exemplo.com.br")?.at).toBeNull();
+    expect(events.get("c.exemplo.com.br")?.at).toBeNull();
+  });
+
+  it("depois de uma falha, a tentativa seguinte não apaga o erro até haver resultado", () => {
+    const log = [
+      line({ msg: "could not get certificate from issuer", identifier: "a.exemplo.com.br", error: "falhou" }),
+      line({ msg: "obtaining certificate", identifier: "a.exemplo.com.br" }),
+    ].join("\n");
+    expect(parseCaddyCertificateLog(log).get("a.exemplo.com.br")?.kind).toBe("error");
+  });
+
+  it("erro sem texto aproveitável: problem fora do formato e error que não é texto", () => {
+    const log = [
+      line({ msg: "challenge failed", identifier: "a.exemplo.com.br", problem: ["x"], error: 42 }),
+      line({ msg: "challenge failed", identifier: "b.exemplo.com.br", problem: { type: 1, detail: "só o detalhe" } }),
+      line({ msg: "will retry", error: "sem colchetes no começo" }),
+    ].join("\n");
+    const events = parseCaddyCertificateLog(log);
+    expect(events.get("a.exemplo.com.br")?.detail).toBeNull();
+    expect(events.get("b.exemplo.com.br")?.detail).toBe("só o detalhe");
+    expect(events.size).toBe(2);
+  });
+});
+
+describe("explainIssueError — limite já vencido", () => {
+  it("data do limite no passado: pode tentar de novo", () => {
+    const r = explainIssueError(
+      "429 urn:ietf:params:acme:error:rateLimited - too many failed authorizations, retry after 2026-09-01 10:00:00 UTC",
+      new Date("2026-10-01T00:00:00Z"),
+    );
+    expect(r.cause).toBe("rate_limit");
+    expect(r.message).toContain("já passou");
+  });
+});

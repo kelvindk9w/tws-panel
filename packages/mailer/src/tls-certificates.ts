@@ -160,13 +160,8 @@ export function inspectCertificatePair(
   if (validFrom.getTime() > now.getTime()) {
     return fail("not_yet_valid", `Este certificado só começa a valer em ${formatDay(validFrom)}.`);
   }
-  let matches = false;
-  try {
-    matches = x509.checkPrivateKey(privateKey);
-  } catch {
-    matches = false;
-  }
-  if (!matches) {
+  // chave de outro tipo (EC ou Ed25519 com certificado RSA) devolve false, não lança
+  if (!x509.checkPrivateKey(privateKey)) {
     return fail("key_mismatch", "A chave privada não é a deste certificado. Confira se os dois arquivos são do mesmo pedido.");
   }
   const issuer = /^O=(.*)$/m.exec(x509.issuer)?.[1] ?? /^CN=(.*)$/m.exec(x509.issuer)?.[1] ?? null;
