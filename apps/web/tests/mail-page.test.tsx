@@ -123,6 +123,12 @@ describe("MailPage — certificado do servidor de e-mail", () => {
     expect(screen.getByText(/30\/12\/2026/)).toBeInTheDocument();
   });
 
+  it("o card do certificado leva à página Certificados", async () => {
+    mockApi({ tls: TLS_OK });
+    renderPage();
+    expect(await screen.findByRole("link", { name: /Ver em Certificados/ })).toHaveAttribute("href", "/certificates");
+  });
+
   it("'Conferir de novo' consulta outra vez", async () => {
     let calls = 0;
     mockApi({

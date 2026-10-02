@@ -78,6 +78,37 @@ describe("ProjectDomainsCard", () => {
     // o principal não tem "Remover"
     expect(within(screen.getByTestId("domain-devlink.203-0-113-10.sslip.io")).queryByRole("button", { name: /Remover/ })).not.toBeInTheDocument();
   });
+
+  it("resumo dos certificados dos domínios, com o link 'Ver em Certificados' (mesmo endpoint da página)", async () => {
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/certificates?project=p1") {
+        return {
+          checkedAt: "x",
+          proxyRunning: true,
+          items: [
+            {
+              host: "devlink.tws.tec.br",
+              owner: { kind: "project", projectId: "p1", projectName: "devLink" },
+              mode: "automatic",
+              coveredBy: null,
+              state: "issuing",
+              issuer: null,
+              validTo: null,
+              renewsAround: null,
+              lastError: null,
+              manual: null,
+              canRetry: true,
+            },
+          ],
+        };
+      }
+      throw new Error(path);
+    });
+    render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={vi.fn()} />);
+    const resumo = await screen.findByTestId("certificate-summary");
+    expect(await within(resumo).findByText("Emitindo")).toBeInTheDocument();
+    expect(within(resumo).getByRole("link", { name: /Ver em Certificados/ })).toHaveAttribute("href", "/certificates");
+  });
 });
 
 describe("ProjectEnvCard", () => {
