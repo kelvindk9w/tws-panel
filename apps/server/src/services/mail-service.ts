@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
+  MAILBOX_PASSWORD_MIN,
   DKIM_SELECTOR,
   PAAS_STALWART_CONTAINER,
   type MailTlsHostStatus,
@@ -706,11 +707,12 @@ export class MailService {
       .map(({ password: _password, ...mailbox }) => mailbox);
   }
 
-  async createMailbox(
-    domainName: string,
-    localPart: string,
-    password?: string,
-  ): Promise<{ mailbox: Mailbox; password: string }> {
+  /**
+   * Cria a caixa com a senha que a PESSOA definiu. O painel guarda a senha
+   * (precisa dela para o e-mail de teste e para os projetos), mas nunca a
+   * devolve pela API: quem esqueceu troca (changeMailboxPassword).
+   */
+  async createMailbox(domainName: string, localPart: string, password: string): Promise<{ mailbox: Mailbox }> {
     await this.ensureLoaded();
     const domain = this.requireDomain(domainName);
     const local = normalizeLocalPart(localPart);
@@ -720,10 +722,7 @@ export class MailService {
     }
     await this.requireRunning();
 
-    const finalPassword = password?.trim() || generatePassword();
-    if (finalPassword.length < 8) {
-      throw httpError(400, "weak_password", "A senha deve ter pelo menos 8 caracteres.");
-    }
+    const finalPassword = requireStrongPassword(password);
     await this.client().createMailbox(email, finalPassword);
 
     const stored: StoredMailbox = {
@@ -737,7 +736,35 @@ export class MailService {
     this.data.mailboxes[email] = stored;
     await this.save();
     const { password: _p, ...mailbox } = stored;
-    return { mailbox, password: finalPassword };
+    return { mailbox };
+  }
+
+  /**
+   * Troca a senha de uma caixa (quem esqueceu a senha troca — ela nunca é
+   * mostrada). Caixa técnica de projeto fica de fora: o painel a gerencia e
+   * entrega a senha ao projeto no deploy.
+   */
+  async changeMailboxPassword(id: string, password: string): Promise<Mailbox> {
+    await this.ensureLoaded();
+    const email = decodeURIComponent(id).toLowerCase();
+    const stored = this.data.mailboxes[email];
+    if (!stored) {
+      throw httpError(404, "mailbox_not_found", `Caixa ${email} não encontrada.`);
+    }
+    if (stored.kind === "project") {
+      throw httpError(
+        409,
+        "mailbox_managed",
+        "Esta é a caixa técnica de um projeto: o painel cuida da senha e a entrega ao projeto no deploy.",
+      );
+    }
+    const finalPassword = requireStrongPassword(password);
+    await this.requireRunning();
+    await this.client().setMailboxPassword(email, finalPassword);
+    stored.password = finalPassword;
+    await this.save();
+    const { password: _p, ...mailbox } = stored;
+    return mailbox;
   }
 
   async deleteMailbox(domainName: string, id: string): Promise<void> {
@@ -776,7 +803,6 @@ export class MailService {
     }
     return buildCredentials({
       email: stored.id,
-      password: stored.password,
       host: `mail.${stored.domain}`,
       ports: this.config.mailPorts,
     });
@@ -1138,4 +1164,13 @@ function normalizeLocalPart(localPart: string): string {
     throw httpError(400, "invalid_mailbox", `Nome de caixa inválido: ${localPart}`);
   }
   return local;
+}
+
+/** Senha definida pela pessoa para uma caixa: mínimo MAILBOX_PASSWORD_MIN caracteres. */
+function requireStrongPassword(password: string | undefined): string {
+  const value = password ?? "";
+  if (value.trim().length < MAILBOX_PASSWORD_MIN) {
+    throw httpError(400, "weak_password", `A senha deve ter pelo menos ${MAILBOX_PASSWORD_MIN} caracteres.`);
+  }
+  return value;
 }

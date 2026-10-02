@@ -40,14 +40,15 @@ describe("buildCredentials", () => {
   it("monta o bloco completo: IMAP SSL primário, SMTP STARTTLS primário", () => {
     const creds = buildCredentials({
       email: "suporte@exemplo.com.br",
-      password: "senha-forte-123",
       host: "mail.exemplo.com.br",
       ports: MAIL_DEFAULT_PORTS,
     });
+    // Pedido do dono do produto (02/10/2026): a senha nunca aparece na tela;
+    // quem esqueceu troca. O bloco de configuração não carrega senha.
+    expect(creds).not.toHaveProperty("password");
     expect(creds).toMatchObject({
       email: "suporte@exemplo.com.br",
       username: "suporte@exemplo.com.br",
-      password: "senha-forte-123",
       imap: { host: "mail.exemplo.com.br", port: 993, security: "ssl" },
       imapAlt: { host: "mail.exemplo.com.br", port: 143, security: "starttls" },
       smtp: { host: "mail.exemplo.com.br", port: 587, security: "starttls" },

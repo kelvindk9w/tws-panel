@@ -131,6 +131,13 @@ export class StalwartClient {
     });
   }
 
+  /** Troca a senha da caixa (o Stalwart guarda só o hash). */
+  async setMailboxPassword(email: string, password: string): Promise<void> {
+    await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
+      { action: "set", field: "secrets", value: [password] },
+    ]);
+  }
+
   async deleteMailbox(email: string): Promise<void> {
     await this.request("DELETE", `/principal/${encodeURIComponent(email)}`);
   }

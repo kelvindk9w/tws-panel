@@ -96,7 +96,8 @@
     { "id": "listar-caixas", "metodo": "GET", "url": "/api/mail/domains/:domain/mailboxes", "resumo": "Lista as caixas de e-mail do domínio (sem senha).", "arquivo": "listar-caixas.json" },
     { "id": "criar-caixa", "metodo": "POST", "url": "/api/mail/domains/:domain/mailboxes", "resumo": "Cria uma caixa de e-mail (IMAP/SMTP) no domínio.", "arquivo": "criar-caixa.json" },
     { "id": "remover-caixa", "metodo": "DELETE", "url": "/api/mail/domains/:domain/mailboxes/:id", "resumo": "Remove uma caixa de e-mail do tipo 'user'.", "arquivo": "remover-caixa.json" },
-    { "id": "credenciais-caixa", "metodo": "GET", "url": "/api/mail/mailboxes/:id/credentials", "resumo": "Bloco de credenciais IMAP/SMTP pronto para cliente externo.", "arquivo": "credenciais-caixa.json" },
+    { "id": "credenciais-caixa", "metodo": "GET", "url": "/api/mail/mailboxes/:id/credentials", "resumo": "Configuração IMAP/SMTP para app de e-mail, sem a senha.", "arquivo": "credenciais-caixa.json" },
+    { "id": "trocar-senha-caixa", "metodo": "PUT", "url": "/api/mail/mailboxes/:id/password", "resumo": "Troca a senha de uma caixa (a senha nunca é mostrada).", "arquivo": "trocar-senha-caixa.json" },
     { "id": "email-projeto", "metodo": "GET", "url": "/api/projects/:id/email", "resumo": "Configuração de e-mail atual de um projeto (env mascaradas).", "arquivo": "email-projeto.json" },
     { "id": "habilitar-email-projeto", "metodo": "POST", "url": "/api/projects/:id/email", "resumo": "Ativa e-mail para o projeto (cria caixa técnica e liga a injeção SMTP).", "arquivo": "habilitar-email-projeto.json" },
     { "id": "desabilitar-email-projeto", "metodo": "DELETE", "url": "/api/projects/:id/email", "resumo": "Desativa a injeção SMTP no próximo deploy do projeto.", "arquivo": "desabilitar-email-projeto.json" }

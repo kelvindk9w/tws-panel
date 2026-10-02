@@ -236,21 +236,18 @@ try {
 
   // -------------------------------------------------------------------------
   step("4. Envio SMTP + recebimento IMAP end-to-end (interno)");
-  await api("POST", `/api/mail/domains/${DOMAIN}/mailboxes`, { localPart: "caixa1" });
-  const box2 = await api<{ password: string }>("POST", `/api/mail/domains/${DOMAIN}/mailboxes`, {
-    localPart: "caixa2",
-  });
-  const cred1 = await api<{ credentials: { password: string } }>(
-    "GET",
-    `/api/mail/mailboxes/${encodeURIComponent(`caixa1@${DOMAIN}`)}/credentials`,
-  );
+  // A pessoa define a senha; a API nunca a devolve (02/10/2026).
+  const pass1 = `senha-caixa1-${Date.now()}`;
+  const pass2 = `senha-caixa2-${Date.now()}`;
+  await api("POST", `/api/mail/domains/${DOMAIN}/mailboxes`, { localPart: "caixa1", password: pass1 });
+  await api("POST", `/api/mail/domains/${DOMAIN}/mailboxes`, { localPart: "caixa2", password: pass2 });
 
   const subject = `fase3-e2e-${Date.now()}`;
   const smtp = nodemailer.createTransport({
     host: "127.0.0.1",
     port: PORTS.submission,
     secure: false,
-    auth: { user: `caixa1@${DOMAIN}`, pass: cred1.credentials.password },
+    auth: { user: `caixa1@${DOMAIN}`, pass: pass1 },
     tls: { rejectUnauthorized: false },
   });
   const sent = await smtp.sendMail({
@@ -266,7 +263,7 @@ try {
     host: "127.0.0.1",
     port: PORTS.imaps,
     secure: true,
-    auth: { user: `caixa2@${DOMAIN}`, pass: box2.password },
+    auth: { user: `caixa2@${DOMAIN}`, pass: pass2 },
     tls: { rejectUnauthorized: false },
     logger: false,
   });
@@ -289,7 +286,6 @@ try {
   const creds = await api<{
     credentials: {
       username: string;
-      password: string;
       imap: { host: string; port: number; security: string };
       smtp: { host: string; port: number; security: string };
       smtpAlt: { port: number };
@@ -301,7 +297,7 @@ try {
   assert.equal(creds.credentials.imap.port, PORTS.imaps);
   assert.equal(creds.credentials.smtp.port, PORTS.submission);
   assert.equal(creds.credentials.smtpAlt.port, PORTS.submissions);
-  assert.ok(creds.credentials.password.length >= 16);
+  assert.ok(!("password" in creds.credentials), "a senha nunca volta pela API");
   ok(`credenciais completas: IMAP ${creds.credentials.imap.host}:${creds.credentials.imap.port} SSL, SMTP :${creds.credentials.smtp.port} STARTTLS`);
 
   // -------------------------------------------------------------------------

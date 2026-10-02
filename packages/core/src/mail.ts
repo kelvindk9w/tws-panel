@@ -193,17 +193,28 @@ export interface MailboxListResponse {
   mailboxes: Mailbox[];
 }
 
+/** Tamanho mínimo da senha que a pessoa define para uma caixa. */
+export const MAILBOX_PASSWORD_MIN = 12;
+
 export interface CreateMailboxRequest {
   localPart: string;
-  /** Senha informada pelo usuário; se ausente, o painel gera uma forte. */
-  password?: string;
+  /**
+   * Senha definida pela pessoa (mínimo MAILBOX_PASSWORD_MIN). O painel nunca
+   * a mostra de volta: quem esqueceu troca (ChangeMailboxPasswordRequest).
+   */
+  password: string;
+}
+
+/** PUT /api/mail/mailboxes/:id/password — nova senha definida pela pessoa. */
+export interface ChangeMailboxPasswordRequest {
+  password: string;
 }
 
 /** Bloco de credenciais pronto para cliente externo (Outlook/Gmail/Thunderbird). */
+/** Configuração para cliente externo. Sem senha: ela nunca volta pela API. */
 export interface MailboxCredentials {
   email: string;
   username: string;
-  password: string;
   imap: {
     host: string;
     port: number;
@@ -368,8 +379,6 @@ export interface MailTestResponse {
 
 export interface MailboxResponse {
   mailbox: Mailbox;
-  /** Senha (retornada apenas na criação — depois só via /credentials). */
-  password: string;
 }
 
 // ---------------------------------------------------------------------------
