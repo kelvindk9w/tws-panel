@@ -1,4 +1,4 @@
-# Estado da sessão — atualizado em 01/10/2026
+# Estado da sessão — atualizado em 02/10/2026
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
@@ -8,6 +8,41 @@ pendente e por quê — informação que não está no código nem no git log.
 > senhas nem nomes de clientes.
 
 ---
+
+## Atualização de 02/10/2026 (leia antes do resto)
+
+### Onde paramos
+- **Mesclado até o PR #66.** E-mail do servidor validado na VPS real:
+  - o certificado de `mail.<domínio>` foi emitido pelo Caddy;
+  - o e-mail de teste foi entregue ao Gmail (caiu no Spam no 1º envio, o esperado para servidor novo);
+  - o PTR está azul, com o nome genérico do provedor voltando para o IP.
+- **O que entrou:**
+  - **#63:** roteiro compacto. Aberto só no 1º acesso; depois, números 1 a 5 e a orientação do passo atual.
+  - **#64:** PTR em três níveis (verde, azul, amarelo) e botão "Enviar e-mail de teste", que acompanha a fila e o aviso de entrega.
+  - **#65:**
+    - página **Certificados**: lista única, motivo da falha lido do log do Caddy, "Tentar emitir agora" e certificado próprio com alertas de vencimento;
+    - caixas de e-mail sem senha visível: a pessoa define a senha e, se esquecer, troca;
+    - página do domínio abrindo em Caixas e conferindo o DNS ao abrir.
+  - **#66:**
+    - PTR sem falso alarme quando o DNS só demora (tenta de novo; sem resposta, fica "pendente");
+    - e-mail de teste em modal, a partir de qualquer caixa ("Testar envio", e no aviso de senha trocada);
+    - aba Caixas antes de Checklist DNS.
+- **Página Certificados:** o dono viu a página, mas ainda não testou "Tentar emitir agora" nem o certificado próprio.
+- **Regra nova:** antes de abrir PR, rodar `pnpm -r --workspace-concurrency=1 --no-bail run test:coverage`. O CI reprova por cobertura mínima de ramos (mailer 98%, deploy 95%…), e isso já derrubou o #65 duas vezes.
+- **Post no X sobre o e-mail:** rascunho em `~/projects/social/projetos/tws-panel/post-email.md` (fora do repositório). O dono vai refazer os prints com 6/6 verde.
+
+### Próximos passos (ordem combinada)
+1. **Cassino:** ativar o e-mail do projeto, preencher as variáveis (KYC_MODO, PIX_*, SITE_HOST, CARTEIRA_HOST), conectar os domínios (SITE_HOST principal, CARTEIRA_HOST adicional) e fazer o deploy.
+2. **Domínio do painel** (ainda não existe; passo 3 do roteiro, "em breve"):
+   - DNS e verificação;
+   - certificado;
+   - botão "Desativar o acesso pelo IP", liberado só depois de abrir pelo domínio novo;
+   - comando de SSH documentado para reverter.
+3. **Notificações:** Telegram primeiro, depois e-mail.
+4. **Backups.**
+5. **Validação do zero:** reinstalar a VPS e seguir o README, cronometrando.
+6. **Tradução EN/ES.**
+- Pendências antigas: a checagem de blacklist do e-mail nunca roda; a Fase 03 não usa `--profile mail`.
 
 ## Atualização de 01/10/2026 (leia antes do resto)
 
