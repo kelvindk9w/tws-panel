@@ -151,6 +151,21 @@
       ]
     },
     {
+      "id": "certificados",
+      "titulo": "Certificados",
+      "resumo": "O cadeado HTTPS de todos os endereços do painel (painel, domínios dos projetos, mail.<domínio>): estado conferido de verdade, causa da falha para leigo, 'Tentar emitir agora' (reload forçado do Caddy) e certificado próprio (manual) com alertas de vencimento.",
+      "pontoDeEntrada": {
+        "api": "GET /api/certificates",
+        "web": "/certificates"
+      },
+      "indice": "certificados/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/certificates.ts",
+        "apps/server/src/services/certificate-service.ts",
+        "packages/deploy/src/caddy-log.ts"
+      ]
+    },
+    {
       "id": "seguranca",
       "titulo": "Segurança",
       "resumo": "Scan de hardening da VPS (checks próprios + Lynis), plano de correção por fase, aplicação assíncrona com dry-run/rollback, confirmação de acesso do operador nas fases de risco (SSH/firewall) e histórico persistido.",

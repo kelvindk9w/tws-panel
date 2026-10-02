@@ -160,3 +160,4 @@ export * from "./mail";
 export * from "./monitoring";
 export * from "./terminal";
 export * from "./onboarding";
+export * from "./certificates";

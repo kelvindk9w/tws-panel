@@ -8,6 +8,7 @@ import { AuditPage } from "@/pages/AuditPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { MailDomainPage } from "@/pages/MailDomainPage";
 import { MailPage } from "@/pages/MailPage";
+import { CertificatesPage } from "@/pages/CertificatesPage";
 import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
@@ -39,6 +40,7 @@ const router = createBrowserRouter([
       { path: "/projects/:id/:section", element: <ProjectDetailPage /> },
       { path: "/mail", element: <MailPage /> },
       { path: "/mail/:domain", element: <MailDomainPage /> },
+      { path: "/certificates", element: <CertificatesPage /> },
       { path: "/security", element: <SecurityPage /> },
       { path: "/security/hardening", element: <HardeningPage /> },
       { path: "/health", element: <HealthPage /> },

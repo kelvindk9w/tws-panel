@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/projects/new", label: "Novo Projeto" },
   { to: "/mail", label: "E-mail" },
+  { to: "/certificates", label: "Certificados" },
   { to: "/security", label: "Segurança" },
   { to: "/alerts", label: "Alertas" },
   { to: "/audit", label: "Auditoria" },

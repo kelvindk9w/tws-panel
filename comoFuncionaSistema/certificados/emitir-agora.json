@@ -1,0 +1,59 @@
+{
+  "id": "emitir-agora",
+  "modulo": "certificados",
+  "metodo": "POST",
+  "url": "/api/certificates/:host/retry",
+  "resumo": "'Tentar emitir agora': faz o Caddy recomeçar na hora a emissão dos nomes sem certificado, sem esperar o intervalo crescente entre tentativas. Não mexe em certificado válido.",
+  "arquivoFonte": "apps/server/src/routes/certificates.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts)."
+  },
+  "rateLimit": "1 pedido a cada 60 s por nome (em memória, CertificateService) + o global de 200 req/min por IP.",
+  "parametros": {
+    "path": [{ "nome": "host", "tipo": "hostname (mesma regra do Caddyfile, até 253)", "obrigatorio": true, "descricao": "Nome que o painel serve por HTTPS." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 202,
+      "quando": "Pedido aceito: o Caddy foi recarregado com --force.",
+      "corpo": { "host": "string", "message": "string (pt-BR)" },
+      "exemplo": { "host": "mail.exemplo.com.br", "message": "Pedimos ao proxy que tente emitir o certificado de mail.exemplo.com.br agora. Costuma levar de alguns segundos a 2 minutos." }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "host fora do formato (recusado na borda HTTP).", "mensagem": "Nome do campo recusado." },
+    { "status": 404, "codigo": "unknown_host", "quando": "O painel não serve esse nome.", "mensagem": "O painel não serve o nome <host> por HTTPS." },
+    { "status": 409, "codigo": "manual_mode", "quando": "O nome usa certificado manual (próprio ou wildcard de outro nome).", "mensagem": "Explica que é preciso 'Voltar para automático'." },
+    { "status": 409, "codigo": "already_valid", "quando": "O certificado servido já é válido.", "mensagem": "Não é preciso emitir de novo — o painel renova sozinho; pedir repetido pode bater no limite do Let's Encrypt (5 iguais por semana)." },
+    { "status": 409, "codigo": "issuer_rate_limited", "quando": "O último erro do nome é o limite do Let's Encrypt com 'retry after' no futuro.", "mensagem": "Diz a partir de quando dá para tentar (campo extra retryAfter, ISO)." },
+    { "status": 429, "codigo": "retry_too_soon", "quando": "Já houve pedido para o nome há menos de 60 s.", "mensagem": "Tente de novo em N s (campo extra retryAfterSeconds)." }
+  ],
+  "fluxo": [
+    "1. Confere que o painel serve o nome e que ele não está no modo manual.",
+    "2. Limite de 1 por minuto por nome.",
+    "3. Confere o certificado servido: válido → 409 already_valid (nada é recarregado).",
+    "4. Último evento do log: limite do Let's Encrypt ainda valendo → 409 issuer_rate_limited.",
+    "5. Guarda o horário do pedido e chama DeployService.refreshProxy(undefined, { force: true }) → engine.syncCaddy → CaddyManager.apply(..., { force: true }) → `docker exec paas-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile --force`.",
+    "6. No Caddy: a configuração nova sobe antes de a antiga parar; o certmagic enfileira um 'obtain' novo para cada nome sem certificado (sem nome de job, de propósito, para não ser descartado pelo job antigo ainda vivo) e a primeira tentativa não espera. As tentativas em espera da configuração antiga são canceladas junto com o contexto dela.",
+    "7. Auditoria 'certificate.retry' (só o nome). A tela acompanha por até 2 min (GET /api/certificates?host=<nome> a cada 10 s): o nome aparece como 'Emitindo' até haver evento novo no log ou certificado servido."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "CertificateService.retry", "arquivo": "apps/server/src/services/certificate-service.ts", "papel": "Regras e limite." },
+    { "tipo": "pacote", "nome": "CaddyManager.apply (force)", "arquivo": "packages/deploy/src/caddy.ts", "papel": "Reload forçado." }
+  ],
+  "efeitosColaterais": [
+    "Recarrega o Caddy (sem queda de conexão). Recomeça a emissão de TODOS os nomes ainda sem certificado, não só do clicado.",
+    "Registro na auditoria."
+  ],
+  "chamadoPor": ["apps/web/src/pages/CertificatesPage.tsx (botão azul 'Tentar emitir agora')"],
+  "testes": ["apps/server/tests/certificate-service.test.ts", "apps/server/tests/routes-certificates.test.ts", "packages/deploy/tests/caddy-manual-tls.test.ts", "apps/web/tests/certificates-page.test.tsx"],
+  "observacoes": [
+    "Fontes: documentação do comando `caddy reload` (--force recarrega mesmo com a config igual) e da emissão automática (tentativas com espera crescente, até 1 dia entre elas, por até 30 dias); código do certmagic: async.go (doWithRetry: intervalos 1 min, 2 min, … até 6 h; para no ctx.Done) e config.go (manageOne: obtain assíncrono sem nome de job).",
+    "'Renovar agora?' num certificado válido NÃO chama este endpoint: a tela só explica que não é preciso."
+  ]
+}

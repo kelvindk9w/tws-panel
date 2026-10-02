@@ -37,8 +37,10 @@ import {
   projectWorkDir,
   runGuardrails,
   composeVariables,
+  type CertificateStatus,
   type ComposeVariable,
   type EngineContext,
+  type ManualCaddyCertificate,
   type PanelSite,
 } from "@paas/deploy";
 
@@ -153,6 +155,10 @@ export class DeployService {
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
   private mailHostsProvider: (() => Promise<string[]>) | null = null;
+  /** Certificados manuais em vigor (página Certificados), registrados no boot. */
+  private manualCertificatesProvider: (() => Promise<ManualCaddyCertificate[]>) | null = null;
+  /** Instala no Stalwart o certificado de mail.<domínio>, registrado pela rota de e-mail. */
+  private mailTlsSync: (() => Promise<unknown>) | null = null;
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
   readonly panelSite: PanelSite | null;
   private projects: Project[] = [];
@@ -193,6 +199,8 @@ export class DeployService {
       injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
       // O Caddy serve mail.<domínio> para emitir o certificado do Stalwart.
       mailHosts: async () => (await this.mailHostsProvider?.()) ?? [],
+      // Certificado manual: o Caddy usa o par enviado (`tls`) para o nome.
+      manualCertificates: async () => (await this.manualCertificatesProvider?.()) ?? [],
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
       // Em container, o health check fala com o Caddy pela rede interna
       // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
@@ -258,10 +266,54 @@ export class DeployService {
     this.mailHostsProvider = provider;
   }
 
-  /** Recalcula o Caddyfile com todos os projetos (e os hosts de e-mail) e recarrega. */
-  async refreshProxy(onLog?: (chunk: string) => void): Promise<void> {
+  /** Hostnames do servidor de e-mail (vazio sem o módulo de e-mail). */
+  async mailHosts(): Promise<string[]> {
+    return (await this.mailHostsProvider?.()) ?? [];
+  }
+
+  /** Registra quem instala no servidor de e-mail o certificado atual de mail.<domínio>. */
+  setMailTlsSync(sync: () => Promise<unknown>): void {
+    this.mailTlsSync = sync;
+  }
+
+  /** Instala no servidor de e-mail o certificado atual (nada sem o módulo de e-mail). */
+  async syncMailTls(): Promise<void> {
+    await this.mailTlsSync?.();
+  }
+
+  /** Registra quem informa os certificados manuais (página Certificados). */
+  setManualCertificatesProvider(provider: () => Promise<ManualCaddyCertificate[]>): void {
+    this.manualCertificatesProvider = provider;
+  }
+
+  /**
+   * Recalcula o Caddyfile com todos os projetos (e os hosts de e-mail) e
+   * recarrega. `force`: recarrega mesmo sem mudança — o Caddy recomeça na
+   * hora a emissão dos nomes ainda sem certificado ("Tentar emitir agora").
+   */
+  async refreshProxy(onLog?: (chunk: string) => void, opts: { force?: boolean } = {}): Promise<void> {
     await this.ensureLoaded();
-    await this.engine.syncCaddy(this.projects, onLog);
+    await this.engine.syncCaddy(this.projects, onLog, opts);
+  }
+
+  /** O proxy central (Caddy) está rodando? */
+  async proxyRunning(): Promise<boolean> {
+    return this.engine.caddy.isRunning();
+  }
+
+  /** Certificado que o proxy central serve para o nome (como um navegador vê). */
+  async servedCertificate(host: string): Promise<CertificateStatus> {
+    return this.engine.servedCertificate(host);
+  }
+
+  /** Log das últimas 24 h do proxy central (texto não confiável — ver caddy-log.ts). */
+  async proxyLogs(): Promise<string> {
+    return this.engine.caddy.recentLogs();
+  }
+
+  /** Apaga de dentro do container do proxy o par manual do nome. */
+  async removeManualCertificateFiles(host: string): Promise<void> {
+    await this.engine.caddy.removeManualFiles(host);
   }
 
   /** Variáveis de ambiente do projeto (valem a partir do próximo deploy). */

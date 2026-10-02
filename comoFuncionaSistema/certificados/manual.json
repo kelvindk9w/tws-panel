@@ -1,0 +1,69 @@
+{
+  "id": "manual",
+  "modulo": "certificados",
+  "metodo": "PUT / DELETE",
+  "url": "/api/certificates/:host/manual",
+  "resumo": "PUT instala um certificado próprio (comprado, wildcard da empresa) para o nome; DELETE ('Voltar para automático') apaga o par e o Caddy volta a emitir. Manual não renova sozinho: alertas a 30 e 7 dias do fim.",
+  "arquivoFonte": "apps/server/src/routes/certificates.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts)."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [{ "nome": "host", "tipo": "hostname (até 253)", "obrigatorio": true, "descricao": "Nome que o painel serve por HTTPS." }],
+    "query": [],
+    "body": [
+      { "nome": "certificate", "tipo": "string (PEM, até 65 536 caracteres)", "obrigatorio": "só no PUT", "descricao": "Certificado com a cadeia (intermediários)." },
+      { "nome": "privateKey", "tipo": "string (PEM, até 16 384 caracteres)", "obrigatorio": "só no PUT", "descricao": "Chave privada sem senha. Nunca volta pela API." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "PUT: par conferido, gravado e entregue ao proxy. DELETE: par removido, nome de volta ao automático.",
+      "corpo": { "item": "CertificateItem (sem a chave)" },
+      "exemplo": {
+        "item": { "host": "loja.exemplo.com.br", "owner": { "kind": "project", "projectId": "p1", "projectName": "Loja" }, "mode": "manual", "coveredBy": null, "state": "valid", "issuer": "Empresa Exemplo CA", "validTo": "2027-09-30T12:00:00.000Z", "renewsAround": null, "lastError": null, "manual": { "issuer": "Empresa Exemplo CA", "validFrom": "2026-09-30T12:00:00.000Z", "validTo": "2027-09-30T12:00:00.000Z", "names": ["*.exemplo.com.br"], "installedAt": "2026-10-01T20:00:00.000Z" }, "canRetry": false }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Campo faltando, campo extra, texto acima do limite ou host fora do formato. A resposta não ecoa o conteúdo enviado.", "mensagem": "Nome do campo recusado." },
+    { "status": 400, "codigo": "invalid_certificate", "quando": "Certificado ilegível ou com a chave colada no mesmo campo.", "mensagem": "O que colar e onde." },
+    { "status": 400, "codigo": "invalid_key", "quando": "Chave ilegível.", "mensagem": "O que colar." },
+    { "status": 400, "codigo": "encrypted_key", "quando": "Chave protegida por senha.", "mensagem": "Como gerar a chave sem senha (openssl pkey)." },
+    { "status": 400, "codigo": "wrong_name", "quando": "O certificado não cobre o nome (wildcard de um nível vale).", "mensagem": "Lista os nomes que o certificado cobre." },
+    { "status": 400, "codigo": "expired / not_yet_valid", "quando": "Fora da validade.", "mensagem": "Com a data." },
+    { "status": 400, "codigo": "key_mismatch", "quando": "A chave não é a do certificado.", "mensagem": "A chave privada não é a deste certificado." },
+    { "status": 404, "codigo": "unknown_host", "quando": "O painel não serve o nome.", "mensagem": "O painel não serve o nome <host> por HTTPS." },
+    { "status": 404, "codigo": "no_manual_certificate", "quando": "DELETE sem certificado manual para o nome.", "mensagem": "<host> não tem certificado manual." }
+  ],
+  "fluxo": [
+    "PUT 1. inspectCertificatePair(host, cert, key): recusa com motivo; nada é gravado nem recarregado.",
+    "PUT 2. ManualCertificateStore.install: data/certificates/<id>.crt e .key (0600, pasta 0700) e o índice manual.json (sem a chave).",
+    "PUT 3. DeployService.refreshProxy → CaddyManager.apply com os manuais: o Caddyfile tira o nome do bloco automático e cria um bloco só dele com `tls /etc/caddy/certs/<id>.crt /etc/caddy/certs/<id>.key`; os arquivos vão na mesma cópia do Caddyfile (docker cp para /etc/caddy); `caddy reload`.",
+    "PUT 4. mail.<domínio>: MailService.syncTls instala o par no Stalwart (currentCertificates prefere o manual).",
+    "PUT 5. Auditoria 'certificate.manual_install' (nome, emissor, validade) e conferência dos alertas de vencimento.",
+    "DELETE 1. Remove o par e a entrada do índice; refreshProxy (o bloco volta ao automático); `docker exec paas-caddy rm -f /etc/caddy/certs/<id>.crt <id>.key`; syncTls para mail.<domínio>; auditoria 'certificate.manual_remove'. O Caddy começa a emitir o automático na hora (o nome não tem certificado gerenciado em armazenamento)."
+  ],
+  "dependencias": [
+    { "tipo": "pacote", "nome": "inspectCertificatePair", "arquivo": "packages/mailer/src/tls-certificates.ts", "papel": "Conferência com motivo." },
+    { "tipo": "servico", "nome": "ManualCertificateStore", "arquivo": "apps/server/src/services/certificate-store.ts", "papel": "Arquivos e índice." },
+    { "tipo": "pacote", "nome": "renderCaddyfile / CaddyManager", "arquivo": "packages/deploy/src/caddy.ts", "papel": "Bloco com tls e cópia dos arquivos ao container." },
+    { "tipo": "servico", "nome": "AlertsService", "arquivo": "apps/server/src/services/alerts-service.ts", "papel": "Alertas de 30 e 7 dias (origem 'certificate')." }
+  ],
+  "efeitosColaterais": [
+    "Grava/apaga data/certificates/*; regrava o Caddyfile e /etc/caddy/certs no container paas-caddy; recarrega o Caddy.",
+    "Para mail.<domínio>: grava o certificado no Stalwart (recarrega ou reinicia, ver email/certificado-servidor.json).",
+    "Auditoria e, perto do vencimento, alerta."
+  ],
+  "chamadoPor": ["apps/web/src/pages/CertificatesPage.tsx ('Usar certificado próprio' / 'Trocar certificado' → 'Instalar certificado' verde; 'Voltar para automático' vermelho, com confirmação)"],
+  "testes": ["apps/server/tests/certificate-service.test.ts", "apps/server/tests/routes-certificates.test.ts", "packages/mailer/tests/certificate-pair.test.ts", "packages/deploy/tests/caddy-manual-tls.test.ts", "apps/server/tests/mail-tls.test.ts", "apps/web/tests/certificates-page.test.tsx"],
+  "observacoes": [
+    "Um wildcard manual também passa a valer para os outros nomes que ele cobre (cache de certificados do Caddy é compartilhado): esses nomes aparecem como 'Manual' com coveredBy e o Caddy não emite automático para eles.",
+    "Remover só o manual 'coberto' não é possível: é preciso voltar o nome dono do wildcard para o automático."
+  ]
+}
