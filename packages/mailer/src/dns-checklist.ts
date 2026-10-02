@@ -174,6 +174,26 @@ export function publicResolver(): DnsResolverLike {
   return resolver;
 }
 
+/** Consulta que não teve resposta (demora, erro do servidor de DNS) — diferente de "não existe". */
+const UNAVAILABLE = Symbol("dns-indisponivel");
+/** Respostas definitivas de "não há registro". */
+const NO_RECORD = new Set(["ENOTFOUND", "ENODATA", "NOTFOUND", "NODATA"]);
+
+/**
+ * Consulta com uma nova tentativa quando o DNS não responde. "Não existe"
+ * vira lista vazia; sem resposta depois de duas tentativas, UNAVAILABLE.
+ */
+async function lookup(query: () => Promise<string[]>): Promise<string[] | typeof UNAVAILABLE> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await query();
+    } catch (err) {
+      if (NO_RECORD.has(String((err as { code?: unknown }).code))) return [];
+    }
+  }
+  return UNAVAILABLE;
+}
+
 async function safe<T>(promise: Promise<T>, fallback: T): Promise<T> {
   try {
     return await promise;
@@ -261,9 +281,12 @@ function normalizeName(name: string): string {
  * mismatch; sem nome reverso nenhum, action_required.
  */
 async function verifyPtr(expectedPtr: PtrCheck, resolver: DnsResolverLike): Promise<PtrCheck> {
-  const names = (await safe(resolver.reverse(expectedPtr.ip), [])).map(normalizeName);
+  const reverse = await lookup(() => resolver.reverse(expectedPtr.ip));
+  const empty: PtrCheck = { ...expectedPtr, found: [], forwardConfirmed: null, provider: null, ticketText: null };
+  if (reverse === UNAVAILABLE) return { ...empty, status: "pending" };
+  const names = reverse.map(normalizeName);
   const expected = normalizeName(expectedPtr.expected);
-  const base: PtrCheck = { ...expectedPtr, found: names, forwardConfirmed: null, provider: null, ticketText: null };
+  const base: PtrCheck = { ...empty, found: names };
 
   if (names.length === 0) {
     return { ...base, status: "action_required", ticketText: ptrTicketText(base.ip, base.expected) };
@@ -274,13 +297,20 @@ async function verifyPtr(expectedPtr: PtrCheck, resolver: DnsResolverLike): Prom
 
   // FCrDNS: algum nome reverso resolve (A) de volta para o mesmo IP.
   let confirmedName: string | null = null;
+  let unavailable = false;
   for (const name of names) {
-    const addresses = await safe(resolver.resolve4(name), []);
+    const addresses = await lookup(() => resolver.resolve4(name));
+    if (addresses === UNAVAILABLE) {
+      unavailable = true;
+      continue;
+    }
     if (addresses.includes(base.ip)) {
       confirmedName = name;
       break;
     }
   }
+  // Sem confirmação porque o DNS não respondeu: não é "não volta para o IP".
+  if (!confirmedName && unavailable) return { ...base, status: "pending" };
   const current = confirmedName ?? names[0]!;
   const provider = detectPtrProvider(current, base.expected) ?? firstProvider(names, base.expected);
   return {

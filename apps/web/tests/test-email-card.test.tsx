@@ -8,7 +8,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MailTestStatus } from "@paas/core";
-import { TestEmailCard } from "../src/components/mail/TestEmailCard";
+import { TestEmailCard, TestEmailForm } from "../src/components/mail/TestEmailCard";
 
 const DOMAIN = "envio.exemplo.com.br";
 
@@ -76,7 +76,7 @@ describe("TestEmailCard", () => {
       }),
     ]);
     const user = userEvent.setup();
-    render(<TestEmailCard domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
 
     expect(screen.getByText(/postmaster@envio\.exemplo\.com\.br/)).toBeInTheDocument();
     await send(user);
@@ -84,7 +84,7 @@ describe("TestEmailCard", () => {
     expect(calls[0]).toEqual({
       method: "POST",
       url: `/api/mail/domains/${DOMAIN}/test-email`,
-      body: { to: "pessoa@gmail.com" },
+      body: { to: "pessoa@gmail.com", from: `postmaster@${DOMAIN}` },
     });
     const ok = await screen.findByText(/Entregue ao servidor do destinatário \(aceito pelo Gmail\)/);
     expect(ok.closest("[data-state]")).toHaveAttribute("data-state", "delivered");
@@ -101,7 +101,7 @@ describe("TestEmailCard", () => {
   it("enquanto está na fila, mostra 'Na fila / tentando entregar'", async () => {
     mockApi(status(), [status()]);
     const user = userEvent.setup();
-    render(<TestEmailCard domain={DOMAIN} pollMs={5_000} maxPollMs={60_000} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} pollMs={5_000} maxPollMs={60_000} />);
     await send(user);
     const queued = await screen.findByText(/Na fila \/ tentando entregar/);
     expect(queued.closest("[data-state]")).toHaveAttribute("data-state", "queued");
@@ -112,7 +112,7 @@ describe("TestEmailCard", () => {
       status({ state: "bounced", final: true, confirmed: true, detail: "550 5.7.1 Our system has detected an unusual rate" }),
     ]);
     const user = userEvent.setup();
-    render(<TestEmailCard domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
     await send(user);
     const bounced = await screen.findByText(/Recusado: 550 5\.7\.1 Our system has detected an unusual rate/);
     expect(bounced.closest("[data-state]")).toHaveAttribute("data-state", "bounced");
@@ -125,7 +125,7 @@ describe("TestEmailCard", () => {
       status({ state: "deferred", detail: "Connection to 'gmail-smtp-in.l.google.com' failed: timed out", nextRetryAt }),
     ]);
     const user = userEvent.setup();
-    render(<TestEmailCard domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
     await send(user);
     const deferred = await screen.findByText(new RegExp(`Adiada: Connection to .* failed: timed out, nova tentativa às ${hhmm}`));
     expect(deferred.closest("[data-state]")).toHaveAttribute("data-state", "deferred");
@@ -137,7 +137,7 @@ describe("TestEmailCard", () => {
       status({ to, state: "delivered", final: true, confirmed: false, detail: "A mensagem saiu da fila sem erro registrado." }),
     ]);
     const user = userEvent.setup();
-    render(<TestEmailCard domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
     await send(user, "alguem@outlook.com");
     expect(await screen.findByText(/aceito pela Microsoft \(Outlook\)/)).toBeInTheDocument();
     expect(screen.getByText(/saiu da fila sem erro/)).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("TestEmailCard", () => {
   it("depois do tempo máximo para de consultar e oferece 'Conferir de novo'", async () => {
     const calls = mockApi(status(), [status()]);
     const user = userEvent.setup();
-    render(<TestEmailCard domain={DOMAIN} pollMs={5} maxPollMs={30} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} pollMs={5} maxPollMs={30} />);
     await send(user);
     const again = await screen.findByRole("button", { name: /conferir de novo/i });
     expect(screen.getByText(/continua tentando/)).toBeInTheDocument();
@@ -158,14 +158,42 @@ describe("TestEmailCard", () => {
   it("erro do servidor (ex.: limite de frequência) aparece na tela", async () => {
     mockApi({ status: 429, body: { error: "test_rate_limited", message: "Aguarde 20 s para enviar outro e-mail de teste." } });
     const user = userEvent.setup();
-    render(<TestEmailCard domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} pollMs={5} maxPollMs={5_000} />);
     await send(user);
     expect(await screen.findByText("Aguarde 20 s para enviar outro e-mail de teste.")).toBeInTheDocument();
   });
 
   it("botão desabilitado sem endereço", () => {
     mockApi(status());
-    render(<TestEmailCard domain={DOMAIN} />);
+    render(<TestEmailForm from={`postmaster@${DOMAIN}`} domain={DOMAIN} />);
     expect(screen.getByRole("button", { name: /enviar/i })).toBeDisabled();
+  });
+});
+
+/**
+ * Pedido do dono do produto (02/10/2026): o teste vira um modal reutilizável,
+ * aberto por um botão; recebe a caixa que envia, e os textos falam dela.
+ */
+describe("TestEmailCard — botão que abre o modal", () => {
+  it("o card só tem o botão; o modal abre com o formulário de postmaster@", async () => {
+    mockApi(status());
+    const user = userEvent.setup();
+    render(<TestEmailCard domain={DOMAIN} />);
+    expect(screen.queryByPlaceholderText(/gmail/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Enviar e-mail de teste/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(`postmaster@${DOMAIN}`);
+    expect(screen.getByPlaceholderText(/gmail/i)).toBeInTheDocument();
+  });
+});
+
+describe("TestEmailForm — caixa escolhida", () => {
+  it("fala da caixa escolhida e manda o remetente na requisição", async () => {
+    const calls = mockApi(status({ from: `vendas@${DOMAIN}`, state: "delivered", final: true, confirmed: true }));
+    const user = userEvent.setup();
+    render(<TestEmailForm domain={DOMAIN} from={`vendas@${DOMAIN}`} />);
+    expect(screen.getByText(`vendas@${DOMAIN}`)).toBeInTheDocument();
+    await send(user);
+    expect(calls[0]).toMatchObject({ method: "POST", body: { to: "pessoa@gmail.com", from: `vendas@${DOMAIN}` } });
   });
 });

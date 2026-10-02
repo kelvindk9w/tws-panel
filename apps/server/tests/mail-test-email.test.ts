@@ -340,3 +340,33 @@ describe("testEmailStatus — destino da mensagem", () => {
     await expect(s.testEmailStatus("outro.com.br", test.id)).rejects.toMatchObject({ statusCode: 404 });
   });
 });
+
+/**
+ * Pedido do dono do produto (02/10/2026): testar o envio a partir de qualquer
+ * caixa do domínio (ex.: logo depois de trocar a senha dela), num modal
+ * aberto pela própria caixa.
+ */
+describe("sendTestEmail — a partir de outra caixa do domínio", () => {
+  const vendas = () => ({
+    id: `vendas@${DOMAIN}`,
+    localPart: "vendas",
+    domain: DOMAIN,
+    kind: "user",
+    createdAt: new Date(0).toISOString(),
+    password: "senha-de-vendas-nova",
+  });
+
+  it("autentica como a caixa escolhida, com a senha que o painel guarda (a recém-trocada)", async () => {
+    await seed({ [`postmaster@${DOMAIN}`]: postmaster(), [`vendas@${DOMAIN}`]: vendas() });
+    const test = await service().sendTestEmail(DOMAIN, TO, `Vendas@${DOMAIN}`);
+    expect(sent[0]).toMatchObject({ username: `vendas@${DOMAIN}`, password: "senha-de-vendas-nova", from: `vendas@${DOMAIN}` });
+    expect(test.from).toBe(`vendas@${DOMAIN}`);
+  });
+
+  it("caixa que não existe ou de outro domínio: 404, nada é enviado", async () => {
+    await seed({ [`postmaster@${DOMAIN}`]: postmaster(), "x@outro.com.br": { ...vendas(), id: "x@outro.com.br", domain: "outro.com.br" } });
+    await expect(service().sendTestEmail(DOMAIN, TO, `nada@${DOMAIN}`)).rejects.toMatchObject({ statusCode: 404, code: "mailbox_not_found" });
+    await expect(service().sendTestEmail(DOMAIN, TO, "x@outro.com.br")).rejects.toMatchObject({ statusCode: 404 });
+    expect(sent).toHaveLength(0);
+  });
+});

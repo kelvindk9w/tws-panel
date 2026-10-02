@@ -178,11 +178,18 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
     expect(screen.queryByText(/Copiar texto do chamado/)).not.toBeInTheDocument();
   });
 
-  it("aba do checklist traz o card 'Enviar e-mail de teste' do domínio", async () => {
+  it("PTR não conferido porque o DNS demorou: explica sem alarmar (sem 'podem recusar')", async () => {
+    mockApi({ ...CHECKLIST, ptr: { ip: "203.0.113.10", expected: "mail.exemplo.com.br", status: "pending", found: [], forwardConfirmed: null, provider: null, ticketText: null } });
+    await renderPage();
+    expect(await screen.findByText(/o DNS demorou a responder/)).toBeInTheDocument();
+    expect(screen.queryByText(/podem recusar/)).not.toBeInTheDocument();
+  });
+
+  it("aba do checklist traz o card de e-mail de teste; o botão abre o modal de postmaster@", async () => {
     mockApi();
     await renderPage();
-    expect(await screen.findByText("Enviar e-mail de teste")).toBeInTheDocument();
-    expect(screen.getByText("postmaster@exemplo.com.br")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /Enviar e-mail de teste/ }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("postmaster@exemplo.com.br");
   });
 
   it("erro ao carregar → mensagem em vez da tabela", async () => {
@@ -254,11 +261,13 @@ const USER_BOX = { id: "vendas@exemplo.com.br", localPart: "vendas", domain: "ex
 const PROJECT_BOX = { id: "loja@exemplo.com.br", localPart: "loja", domain: "exemplo.com.br", kind: "project", createdAt: "2026-10-01T12:00:00.000Z" };
 
 describe("MailDomainPage — abre em Caixas e confere o DNS sozinha", () => {
-  it("abre na aba Caixas", async () => {
+  it("abre na aba Caixas, que vem primeiro", async () => {
     mockMailboxApi([USER_BOX]);
     await renderPage({ openDns: false });
     expect(await screen.findByText("Caixas de e-mail")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    const tabs = screen.getAllByRole("button", { name: /^(Caixas|Checklist DNS)/ });
+    expect(tabs.map((t) => t.textContent)).toEqual(["Caixas (1)", "Checklist DNS"]);
   });
 
   it("ao abrir, verifica o DNS: a aba DNS já mostra o resultado (igual à lista de domínios)", async () => {
@@ -336,6 +345,19 @@ describe("MailDomainPage — senha das caixas nunca visível", () => {
     );
     expect(await screen.findByText(/Senha de vendas@exemplo.com.br trocada/)).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("nova-senha-forte-123");
+    // logo ali, o teste de envio a partir dessa caixa (confirma a senha nova)
+    await user.click(screen.getByRole("button", { name: /Enviar e-mail de teste/ }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("vendas@exemplo.com.br");
+  });
+
+  it("'Testar envio' em cada caixa abre o modal com aquela caixa como remetente", async () => {
+    mockMailboxApi([USER_BOX]);
+    const user = userEvent.setup();
+    await renderPage({ openDns: false });
+    await user.click(await screen.findByRole("button", { name: /Testar envio/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAccessibleName(/vendas@exemplo\.com\.br/);
+    expect(within(dialog).getByPlaceholderText(/gmail/i)).toBeInTheDocument();
   });
 
   it("caixa técnica de projeto não oferece trocar senha (o painel cuida dela)", async () => {

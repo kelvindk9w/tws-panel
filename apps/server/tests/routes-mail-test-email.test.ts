@@ -79,7 +79,7 @@ describe("POST /api/mail/domains/:domain/test-email", () => {
     });
     expect(res.statusCode).toBe(202);
     expect(res.json()).toEqual({ test: STATUS });
-    expect(send).toHaveBeenCalledWith(DOMAIN, "pessoa@gmail.com");
+    expect(send).toHaveBeenCalledWith(DOMAIN, "pessoa@gmail.com", undefined);
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ action: "mail.test.send", target: DOMAIN, detail: expect.stringContaining("pessoa@gmail.com") }),
     );
@@ -95,6 +95,30 @@ describe("POST /api/mail/domains/:domain/test-email", () => {
   ])("%s: 400 e nada é enviado", async (_label, payload) => {
     const send = spyOn("sendTestEmail");
     const res = await app.inject({ method: "POST", url: `/api/mail/domains/${DOMAIN}/test-email`, headers: auth, payload });
+    expect(res.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a partir de uma caixa escolhida: repassa o remetente", async () => {
+    const send = spyOn("sendTestEmail").mockResolvedValue({ ...STATUS, from: `vendas@${DOMAIN}` });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/mail/domains/${DOMAIN}/test-email`,
+      headers: auth,
+      payload: { to: "pessoa@gmail.com", from: `vendas@${DOMAIN}` },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(send).toHaveBeenCalledWith(DOMAIN, "pessoa@gmail.com", `vendas@${DOMAIN}`);
+  });
+
+  it("remetente fora do formato: 400 e nada é enviado", async () => {
+    const send = spyOn("sendTestEmail");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/mail/domains/${DOMAIN}/test-email`,
+      headers: auth,
+      payload: { to: "pessoa@gmail.com", from: "a@b.com\r\nX" },
+    });
     expect(res.statusCode).toBe(400);
     expect(send).not.toHaveBeenCalled();
   });

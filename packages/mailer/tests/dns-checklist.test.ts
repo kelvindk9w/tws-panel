@@ -381,3 +381,56 @@ describe("ptrTicketText", () => {
     expect(text).toContain('resolve para "old.host.com"');
   });
 });
+
+/**
+ * Validação real (02/10/2026): o PTR da VPS estava azul (nome do provedor que
+ * volta para o IP) e, numa verificação seguinte, ficou amarelo com "esse nome
+ * não volta para o IP" — mas o DNS respondia certo. Consulta que falha por
+ * demora ou erro do servidor de DNS não é resposta "não": tenta de novo e,
+ * se continuar falhando, diz que não deu para conferir em vez de alarmar.
+ */
+describe("PTR com DNS instável", () => {
+  const BASE = buildDnsChecklist(BASE_INPUT);
+  const ip = BASE.ptr.ip;
+  const timeout = () => Promise.reject(Object.assign(new Error("ETIMEOUT"), { code: "ETIMEOUT" }));
+
+  it("a volta do nome (A) falha uma vez por demora: tenta de novo e fica azul", async () => {
+    let calls = 0;
+    const resolver = mockResolver({
+      reverse: async () => ["vmi1234567.contaboserver.net"],
+      resolve4: async (name) => {
+        if (name !== "vmi1234567.contaboserver.net") throw Object.assign(new Error("x"), { code: "ENOTFOUND" });
+        calls += 1;
+        if (calls === 1) return timeout();
+        return [ip];
+      },
+    });
+    const result = await verifyDnsRecords(BASE, resolver);
+    expect(result.ptr.status).toBe("generic");
+    expect(calls).toBe(2);
+  });
+
+  it("a volta do nome continua falhando: 'não deu para conferir' (pendente), sem dizer que o Gmail recusa", async () => {
+    const resolver = mockResolver({
+      reverse: async () => ["vmi1234567.contaboserver.net"],
+      resolve4: async (name) => (name === "vmi1234567.contaboserver.net" ? timeout() : Promise.reject(Object.assign(new Error("x"), { code: "ENOTFOUND" }))),
+    });
+    const result = await verifyDnsRecords(BASE, resolver);
+    expect(result.ptr.status).toBe("pending");
+    expect(result.ptr.forwardConfirmed).toBeNull();
+    expect(result.ptr.ticketText).toBeNull();
+  });
+
+  it("a consulta reversa falha por demora: pendente, não 'IP sem nome reverso'", async () => {
+    const resolver = mockResolver({ reverse: timeout });
+    const result = await verifyDnsRecords(BASE, resolver);
+    expect(result.ptr.status).toBe("pending");
+    expect(result.ptr.ticketText).toBeNull();
+  });
+
+  it("resposta definitiva 'não existe' continua sendo amarelo", async () => {
+    const resolver = mockResolver({ reverse: async () => ["vmi1234567.contaboserver.net"] });
+    const result = await verifyDnsRecords(BASE, resolver);
+    expect(result.ptr.status).toBe("mismatch");
+  });
+});
