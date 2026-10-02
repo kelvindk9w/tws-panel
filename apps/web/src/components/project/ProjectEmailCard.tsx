@@ -8,17 +8,21 @@
  *  - o endereço de envio (ex.: nao-responda@) — vira endereço extra da caixa
  *    técnica no servidor de e-mail; em branco, envia como a própria caixa;
  *  - o nome que aparece para quem recebe (padrão: o nome do projeto).
+ * E pode cadastrar ali mesmo o domínio do projeto ("Usar um domínio meu"),
+ * com o aviso de MX e o próximo passo (registros DNS e verificar).
  */
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { MailDomainListResponse, MailDomainSummary, ProjectEmailConfig, ProjectEmailResponse } from "@paas/core";
-import { apiFetch } from "@/lib/api";
+import type { ExistingMailInfo } from "@paas/core";
+import { ApiRequestError, apiFetch } from "@/lib/api";
+import { ExistingMailWarning } from "@/components/mail/ExistingMailWarning";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { TestEmailModal } from "@/components/mail/TestEmailCard";
-import { AlertTriangle, Loader2, Mail, Pencil, Rocket, Send } from "lucide-react";
+import { AlertTriangle, ExternalLink, Globe, Loader2, Mail, Pencil, Plus, RefreshCw, Rocket, Send } from "lucide-react";
 
 function dnsReady(domain: MailDomainSummary | undefined): boolean {
   return Boolean(domain?.lastVerify && domain.lastVerify.ok >= domain.lastVerify.total);
@@ -33,10 +37,13 @@ export function ProjectEmailCard({
   projectId,
   projectName,
   projectSlug,
+  projectDomain,
 }: {
   projectId: string;
   projectName: string;
   projectSlug: string;
+  /** Domínio do site do projeto: sugestão para o domínio de e-mail. */
+  projectDomain?: string;
 }) {
   const [email, setEmail] = useState<ProjectEmailConfig | null>(null);
   const [domains, setDomains] = useState<MailDomainSummary[]>([]);
@@ -48,6 +55,13 @@ export function ProjectEmailCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // cadastro do domínio do próprio projeto
+  const [adding, setAdding] = useState(false);
+  const [newDomain, setNewDomain] = useState("");
+  const [existingMail, setExistingMail] = useState<{ domain: string; info: ExistingMailInfo } | null>(null);
+  /** Domínio recém-cadastrado aqui: mostra o próximo passo (DNS e verificar). */
+  const [justAdded, setJustAdded] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -59,15 +73,59 @@ export function ProjectEmailCard({
     }
   }, [projectId]);
 
+  const loadDomains = useCallback(async (select?: string) => {
+    try {
+      const res = await apiFetch<MailDomainListResponse>("/api/mail/domains");
+      setDomains(res.domains);
+      setSelectedDomain((prev) => select ?? (prev || res.domains[0]?.name || ""));
+    } catch {
+      // sem a lista, o card mostra só o cadastro
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
-    apiFetch<MailDomainListResponse>("/api/mail/domains")
-      .then((res) => {
-        setDomains(res.domains);
-        setSelectedDomain((prev) => prev || res.domains[0]?.name || "");
-      })
-      .catch(() => undefined);
-  }, [refresh]);
+    void loadDomains();
+  }, [refresh, loadDomains]);
+
+  async function addDomain(name = newDomain.trim().toLowerCase(), confirmExistingMail = false) {
+    if (!name) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch("/api/mail/domains", {
+        method: "POST",
+        body: JSON.stringify(confirmExistingMail ? { domain: name, confirmExistingMail: true } : { domain: name }),
+      });
+      setExistingMail(null);
+      setAdding(false);
+      setNewDomain("");
+      setJustAdded(name);
+      await loadDomains(name);
+    } catch (err) {
+      const info =
+        err instanceof ApiRequestError && err.code === "domain_receives_mail"
+          ? (err.data?.existingMail as ExistingMailInfo | undefined)
+          : undefined;
+      if (info) setExistingMail({ domain: name, info });
+      else setError(err instanceof Error ? err.message : "Falha ao cadastrar o domínio.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyDomain(name: string) {
+    setVerifying(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/mail/domains/${encodeURIComponent(name)}/verify`, { method: "POST" });
+      await loadDomains(name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao verificar o DNS.");
+    } finally {
+      setVerifying(false);
+    }
+  }
 
   function startEditing(current: ProjectEmailConfig) {
     setSelectedDomain(current.domain ?? selectedDomain);
@@ -138,20 +196,55 @@ export function ProjectEmailCard({
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         {showForm && domains.length === 0 && (
-          <div className="flex flex-col gap-2 text-sm">
-            <p className="text-muted-foreground">Nenhum domínio de e-mail cadastrado ainda. Para o projeto enviar e-mail:</p>
-            <ol className="ml-5 list-decimal space-y-1 text-muted-foreground">
-              <li>
-                Abra{" "}
-                <Link to="/mail" className="text-foreground underline">
-                  E-mail
-                </Link>
-                , inicie o servidor e cadastre o domínio (se ele já recebe e-mail em outro lugar, use um subdomínio,
-                como envio.seudominio.com.br).
-              </li>
-              <li>Crie no DNS os registros que o painel mostrar e verifique até ficar tudo verde.</li>
-              <li>Volte aqui, escolha o domínio e ative.</li>
-            </ol>
+          <p className="text-sm text-muted-foreground">
+            Nenhum domínio de e-mail cadastrado ainda. Cadastre abaixo o domínio do projeto (o servidor de e-mail
+            precisa estar iniciado, na página{" "}
+            <Link to="/mail" className="text-foreground underline">
+              E-mail
+            </Link>
+            ).
+          </p>
+        )}
+
+        {showForm && (adding || domains.length === 0) && (
+          <div className="flex flex-col gap-2 rounded-lg border border-sky-500/30 p-3 sm:p-4">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <Globe className="h-4 w-4" /> Usar um domínio seu (ex.: contato@seudominio.com.br)
+            </p>
+            <p className="text-xs text-muted-foreground">
+              O painel cadastra o domínio no servidor de e-mail, gera a assinatura (DKIM) e mostra os registros DNS para
+              você criar. Se o domínio já recebe e-mail em outro lugar, o painel avisa e sugere um subdomínio só para
+              envio.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                aria-label="Seu domínio"
+                placeholder={projectDomain || "seudominio.com.br"}
+                value={newDomain}
+                onChange={(e) => setNewDomain(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void addDomain()}
+                className="min-w-0 flex-1 sm:max-w-xs"
+              />
+              <Button variant="info" size="sm" disabled={busy || !newDomain.trim()} onClick={() => void addDomain()}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                Cadastrar domínio
+              </Button>
+              {domains.length > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
+                  Cancelar
+                </Button>
+              )}
+            </div>
+            {existingMail && (
+              <ExistingMailWarning
+                domain={existingMail.domain}
+                info={existingMail.info}
+                busy={busy}
+                onUseSuggested={() => void addDomain(existingMail.info.suggestedDomain)}
+                onConfirm={() => void addDomain(existingMail.domain, true)}
+                onCancel={() => setExistingMail(null)}
+              />
+            )}
           </div>
         )}
 
@@ -171,7 +264,34 @@ export function ProjectEmailCard({
                 ))}
               </select>
             </label>
-            {domain && !dnsReady(domain) && (
+            {!adding && (
+              <div>
+                <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+                  <Plus className="h-4 w-4" /> Usar um domínio meu
+                </Button>
+              </div>
+            )}
+            {domain && justAdded === domain.name && !dnsReady(domain) && (
+              <div className="flex flex-col gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm [overflow-wrap:anywhere]">
+                <p className="font-medium">Domínio {domain.name} cadastrado. Próximo passo: o DNS.</p>
+                <p className="text-muted-foreground">
+                  Crie no provedor de DNS os registros que o painel mostra (o A de mail.{domain.name} com a nuvem cinza,
+                  no Cloudflare). Depois clique em Verificar agora até ficar 6/6.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="info" size="sm" asChild>
+                    <Link to={`/mail/${encodeURIComponent(domain.name)}?aba=dns`}>
+                      <ExternalLink className="h-4 w-4" /> Ver os registros DNS
+                    </Link>
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={verifying} onClick={() => void verifyDomain(domain.name)}>
+                    {verifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    Verificar agora
+                  </Button>
+                </div>
+              </div>
+            )}
+            {domain && justAdded !== domain.name && !dnsReady(domain) && (
               <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>

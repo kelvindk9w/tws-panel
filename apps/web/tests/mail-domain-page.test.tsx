@@ -367,3 +367,17 @@ describe("MailDomainPage — senha das caixas nunca visível", () => {
     expect(screen.queryByRole("button", { name: /Trocar senha/ })).not.toBeInTheDocument();
   });
 });
+
+describe("MailDomainPage — endereço com ?aba=dns", () => {
+  it("abre direto no Checklist DNS (link do e-mail do projeto)", async () => {
+    mockMailboxApi();
+    render(
+      <MemoryRouter initialEntries={["/mail/exemplo.com.br?aba=dns"]}>
+        <Routes>
+          <Route path="/mail/:domain" element={<MailDomainPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+  });
+});
