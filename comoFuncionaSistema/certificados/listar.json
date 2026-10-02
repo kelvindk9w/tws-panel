@@ -1,0 +1,66 @@
+{
+  "id": "listar",
+  "modulo": "certificados",
+  "metodo": "GET",
+  "url": "/api/certificates",
+  "resumo": "Lista todos os nomes que o painel serve por HTTPS (painel, domínios dos projetos, mail.<domínio>) com dono, modo (automático/manual), estado conferido no certificado servido, emissor, validade, data aproximada da renovação e, sem certificado, o último erro do Caddy explicado.",
+  "arquivoFonte": "apps/server/src/routes/certificates.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [],
+    "query": [
+      { "nome": "kind", "tipo": "panel | project | mail", "obrigatorio": false, "descricao": "Só os nomes de um dono (o card do e-mail usa kind=mail)." },
+      { "nome": "project", "tipo": "string ([A-Za-z0-9_-], até 64)", "obrigatorio": false, "descricao": "Só os domínios de um projeto (seção Domínios do projeto)." },
+      { "nome": "host", "tipo": "hostname", "obrigatorio": false, "descricao": "Um nome só (a tela usa para acompanhar depois de 'Tentar emitir agora')." }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre que o serviço responde. proxyRunning false: todos os itens com state 'unknown' e nenhuma conexão TLS feita.",
+      "corpo": {
+        "checkedAt": "ISO",
+        "proxyRunning": "boolean",
+        "items": "CertificateItem[] { host, owner: { kind, projectId, projectName }, mode: automatic|manual, coveredBy: string|null, state: valid|issuing|failed|expiring|expired|unknown, issuer, validTo, renewsAround, lastError: { cause: dns|cloudflare|firewall|rate_limit|caa|unknown, message, detail, at, retryAfter } | null, manual: { issuer, validFrom, validTo, names, installedAt } | null, canRetry }"
+      },
+      "exemplo": {
+        "checkedAt": "2026-10-01T20:00:00.000Z",
+        "proxyRunning": true,
+        "items": [
+          { "host": "painel.exemplo.com.br", "owner": { "kind": "panel", "projectId": null, "projectName": null }, "mode": "automatic", "coveredBy": null, "state": "valid", "issuer": "Let's Encrypt", "validTo": "2026-12-30T12:00:00.000Z", "renewsAround": "2026-11-30T12:00:00.000Z", "lastError": null, "manual": null, "canRetry": false },
+          { "host": "mail.exemplo.com.br", "owner": { "kind": "mail", "projectId": null, "projectName": null }, "mode": "automatic", "coveredBy": null, "state": "failed", "issuer": null, "validTo": null, "renewsAround": null, "lastError": { "cause": "cloudflare", "message": "A Cloudflare está na frente deste nome (nuvem laranja) e atende no lugar da VPS. No painel da Cloudflare, deixe a nuvem CINZA (\"Somente DNS\") neste registro e tente de novo.", "detail": "HTTP 403 urn:ietf:params:acme:error:unauthorized - …: 521", "at": "2026-10-01T19:58:00.000Z", "retryAfter": null }, "manual": null, "canRetry": true }
+        ]
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Filtro fora do schema (kind desconhecido, host fora do formato, parâmetro extra).", "mensagem": "Nome do campo recusado (sem jargão do validador)." },
+    { "status": 500, "codigo": "internal_error", "quando": "Erro inesperado (ex.: projects.json ilegível).", "mensagem": "Erro interno ao tratar o certificado." }
+  ],
+  "fluxo": [
+    "1. Nomes: domínio do painel (PAAS_PANEL_DOMAIN) → domínio e adicionais de cada projeto → mail.<domínio> (DeployService.mailHosts, registrado pelas rotas de e-mail). Sem .localhost; repetido fica com o primeiro dono; filtros aplicados.",
+    "2. Proxy rodando? (docker inspect paas-caddy). Não: tudo 'unknown'.",
+    "3. Lê o índice dos manuais (data/certificates/manual.json) e o log do Caddy das últimas 24 h, que vira o último evento de emissão por nome (caddy-log.ts).",
+    "4. Para cada nome, em paralelo: TLS com SNI pelo proxy central (certificateStatus, timeout 5 s). Válido → valid/expiring (+ renewsAround = validade − 30 dias no automático). Erro 'expired' → expired. Sem certificado: 'Tentar emitir agora' nos últimos 3 min e sem evento mais novo → issuing; último evento de erro → failed com explainIssueError (+ refinamento pelo DNS: todos os IPs da Cloudflare → cloudflare); senão → issuing.",
+    "5. Algum mail.<domínio> com certificado servido: dispara o syncTls do e-mail em segundo plano (instala no Stalwart se mudou)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "CertificateService.list", "arquivo": "apps/server/src/services/certificate-service.ts", "papel": "Monta a lista e o estado." },
+    { "tipo": "pacote", "nome": "parseCaddyCertificateLog / explainIssueError", "arquivo": "packages/deploy/src/caddy-log.ts", "papel": "Último evento por nome e causa provável para leigo." },
+    { "tipo": "pacote", "nome": "DeployEngine.servedCertificate / CaddyManager.recentLogs", "arquivo": "packages/deploy/src/engine.ts, packages/deploy/src/caddy.ts", "papel": "Conferência TLS pelo proxy e leitura do log." }
+  ],
+  "efeitosColaterais": ["Pode disparar MailService.syncTls (grava o certificado no Stalwart só se mudou)."],
+  "chamadoPor": [
+    "apps/web/src/pages/CertificatesPage.tsx (ao abrir, 'Conferir de novo' e o acompanhamento depois de 'Tentar emitir agora')",
+    "apps/web/src/components/certificates/CertificateSummary.tsx (card do e-mail e Domínios do projeto)"
+  ],
+  "testes": ["apps/server/tests/certificate-service.test.ts", "apps/server/tests/routes-certificates.test.ts", "apps/web/tests/certificates-page.test.tsx"],
+  "observacoes": ["Cada chamada abre uma conexão TLS por nome e lê até 20 000 linhas de log: as telas de resumo usam filtro para conferir só o que mostram."]
+}

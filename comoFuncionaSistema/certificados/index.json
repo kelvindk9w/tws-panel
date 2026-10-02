@@ -1,0 +1,72 @@
+{
+  "modulo": "certificados",
+  "titulo": "Certificados",
+  "resumo": "Um lugar só para o cadeado HTTPS de todos os endereços que o painel serve: o domínio do painel, cada domínio (principal e adicionais) de cada projeto e cada mail.<domínio> do e-mail. Mostra o estado conferido de verdade e permite agir com um clique: 'Tentar emitir agora' no automático (Caddy + Let's Encrypt) ou usar um certificado próprio (manual), com 'Voltar para automático'. Todas as rotas exigem sessão (guard global de auth).",
+  "pontoDeEntrada": { "api": "GET /api/certificates", "web": "/certificates (menu principal, entre 'E-mail' e 'Segurança')" },
+  "comoFunciona": [
+    "Pedido do dono do produto (01/10/2026): validando na VPS, viu o card do e-mail 'pendente' por um tempo e não tinha onde ver o estado de todos os certificados nem um botão para agir.",
+    "Lista: CertificateService.list junta os nomes (painel → projetos → e-mail; um nome repetido aparece uma vez, com o primeiro dono). Domínios .localhost ficam de fora (não têm HTTPS).",
+    "Estado: para cada nome, o painel abre uma conexão TLS com SNI pelo proxy central (paas-caddy:443 em produção; 127.0.0.1:<porta https> em desenvolvimento), validando cadeia e nome como um navegador (certificateStatus, packages/deploy/src/tls-status.ts). Certificado servido válido → 'Válido' (ou 'Vence em breve': manual a 30 dias do fim; automático que não renovou até 20 dias do fim). Servido mas vencido → 'Vencido'. Sem certificado → olha o último evento do Caddy para o nome: erro → 'Falhou' com a causa traduzida; senão → 'Emitindo'. Proxy parado → 'Não conferido'.",
+    "Log do Caddy: `docker logs paas-caddy --since 24h --tail 20000` (stdout + stderr; o Caddy loga no stderr). Uma linha JSON por evento (logger zap). packages/deploy/src/caddy-log.ts extrai só campos conhecidos: msg, ts, identifier / identifiers[] / server_name (ou o nome entre colchetes no começo de error, caso do 'will retry'), error, problem{type,detail}, retrying_in. Mensagens do certmagic usadas: 'obtaining certificate', 'certificate obtained successfully', 'could not get certificate from issuer', 'will retry', 'final attempt; giving up', 'job failed'; do cliente ACME: 'trying to solve challenge', 'challenge failed'. Log é dado não confiável: linha acima de 64 KiB é descartada, o nome precisa ter formato de domínio, o texto mostrado tem no máximo 300 caracteres e sem caracteres de controle; nada é executado a partir dele.",
+    "Causa da falha, para leigo (explainIssueError): rateLimited → limite do Let's Encrypt, com a data de 'retry after' quando o erro informa; CAA → registro CAA proibindo o emissor; Cloudflare (resposta 52x, IPv6 da Cloudflare, 'acme-tls/1', ou o DNS do nome todo em IPs da Cloudflare) → nuvem laranja; timeout/conexão recusada → portas 80/443 fechadas; dns/NXDOMAIN/unauthorized → DNS não aponta para a VPS; senão → genérico com o detalhe técnico.",
+    "Automático: 'renova sozinho por volta de <validade − 30 dias>' (aproximado: o certmagic renova quando falta cerca de 1/3 da validade, ~30 dias num certificado de 90).",
+    "Tentar emitir agora: `caddy reload --force` (CaddyManager.apply com force). Pela documentação oficial, --force recarrega mesmo com a configuração igual; no código do certmagic (config.go, manageOne), o 'obtain' assíncrono é enfileirado SEM nome de job justamente porque o Caddy chama ManageAsync antes de parar a configuração antiga — então a emissão recomeça na hora com o contexto novo (o primeiro pedido de doWithRetry não espera) e as tentativas em espera da configuração antiga são canceladas. Certificado válido continua no armazenamento e não é reemitido. O reload vale para todos os nomes sem certificado, não só o clicado.",
+    "Manual: o par é conferido por inspectCertificatePair (packages/mailer/src/tls-certificates.ts — mesma regra de validateCertificatePair: nome certo, wildcard de um nível vale, dentro da validade, chave do mesmo par; recusa chave com senha e chave colada no campo do certificado), guardado em data/certificates e entregue ao Caddy: o nome sai do bloco automático e ganha bloco próprio com `tls /etc/caddy/certs/<id>.crt /etc/caddy/certs/<id>.key`. Os arquivos chegam ao container pelo MESMO caminho do Caddyfile (docker cp de um tar para /etc/caddy, na camada gravável do container — sem bind mount), pasta certs/ 0700 e arquivos 0600, regravados a cada sincronização do proxy e junto com o Caddyfile quando o container é recriado.",
+    "Certificado carregado manualmente entra no cache do Caddy compartilhado por todos os sites: um wildcard também passa a ser usado para os outros nomes que ele cobre, e o Caddy não gerencia esses nomes (documentação da diretiva tls). Por isso a lista mostra esses nomes como 'Manual' com 'coveredBy' (coberto pelo certificado de X) e sem o botão de emitir.",
+    "E-mail: para mail.<domínio>, MailService.currentCertificates prefere o certificado manual (o próprio ou um wildcard que o cubra — ManualCertificateStore.forHost) ao do Caddy. Instalar ou remover o manual chama o syncTls na hora; e, a cada GET /api/certificates em que um mail.<domínio> aparece com certificado, o syncTls é disparado em segundo plano (ele só mexe no Stalwart se o certificado mudou). É assim que, depois de 'Tentar emitir agora', o Stalwart recebe o certificado enquanto a tela acompanha.",
+    "Alertas: o certificado manual não renova sozinho. A cada 6 h (primeira rodada 1 min após o boot) e a cada instalação, CertificateService.checkExpiryAlerts cria no sistema de alertas (origem 'certificate'): aviso a 30 dias do fim, crítico a 7 dias e crítico quando vence. Título fixo por faixa → o alerta aberto é atualizado em vez de duplicado.",
+    "Auditoria: 'certificate.retry' (nome), 'certificate.manual_install' e 'certificate.manual_remove' (nome, emissor e validade). Nunca o certificado nem a chave.",
+    "Resumo em outras telas: o card 'Certificado do servidor de e-mail' (MailPage) e a seção Domínios do projeto (ProjectDomainsCard) mostram CertificateSummary, que usa o mesmo GET /api/certificates com filtro (kind=mail / project=<id>) e o link 'Ver em Certificados'. O card do e-mail continua com o estado próprio dele (GET /api/mail/tls, porta 465 do Stalwart)."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/certificates.ts"],
+    "servicos": ["apps/server/src/services/certificate-service.ts", "apps/server/src/services/certificate-store.ts", "apps/server/src/services/deploy-service.ts", "apps/server/src/services/mail-service.ts"],
+    "pacotes": ["packages/core/src/certificates.ts", "packages/deploy/src/caddy.ts", "packages/deploy/src/caddy-log.ts", "packages/deploy/src/engine.ts", "packages/deploy/src/tls-status.ts", "packages/mailer/src/tls-certificates.ts"],
+    "web": ["apps/web/src/pages/CertificatesPage.tsx", "apps/web/src/components/certificates/CertificateSummary.tsx", "apps/web/src/lib/certificates.ts", "apps/web/src/pages/MailPage.tsx", "apps/web/src/components/ProjectDomainsCard.tsx"],
+    "testes": [
+      "packages/deploy/tests/caddy-log.test.ts",
+      "packages/deploy/tests/caddy-manual-tls.test.ts",
+      "packages/mailer/tests/certificate-pair.test.ts",
+      "apps/server/tests/certificate-service.test.ts",
+      "apps/server/tests/routes-certificates.test.ts",
+      "apps/server/tests/mail-tls.test.ts",
+      "apps/web/tests/certificates-page.test.tsx",
+      "apps/web/tests/mail-page.test.tsx",
+      "apps/web/tests/project-sections.test.tsx"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/certificates/manual.json",
+      "formato": "json (chmod 0600; pasta data/certificates 0700)",
+      "conteudo": "{ certificates: [{ host, issuer, validFrom, validTo, names, fingerprint, installedAt }] } — índice dos certificados manuais, SEM a chave."
+    },
+    {
+      "arquivo": "data/certificates/<id>.crt e <id>.key",
+      "formato": "PEM (chmod 0600). <id> = nome com tudo que não é letra/número trocado por '-' (ex.: loja-exemplo-com-br)",
+      "conteudo": "O par enviado pela pessoa. A chave só sai daqui para o container do Caddy (/etc/caddy/certs) e, para mail.<domínio>, para o Stalwart."
+    },
+    {
+      "arquivo": "container paas-caddy: /etc/caddy/certs/<id>.crt|.key",
+      "formato": "PEM (0600, pasta 0700), na camada gravável do container",
+      "conteudo": "Cópia do par manual, regravada a cada sincronização do proxy. 'Voltar para automático' apaga com docker exec rm -f."
+    },
+    {
+      "arquivo": "memória do processo",
+      "formato": "Map host → horário",
+      "conteudo": "Último 'Tentar emitir agora' de cada nome (limite de 1 por minuto e estado 'Emitindo' por até 3 min). Some ao reiniciar o painel."
+    }
+  ],
+  "endpoints": [
+    { "id": "listar", "metodo": "GET", "url": "/api/certificates", "resumo": "Todos os nomes servidos por HTTPS, com dono, modo, estado e último erro.", "arquivo": "listar.json" },
+    { "id": "emitir-agora", "metodo": "POST", "url": "/api/certificates/:host/retry", "resumo": "Tentar emitir agora (reload forçado do Caddy), 1 por minuto por nome.", "arquivo": "emitir-agora.json" },
+    { "id": "manual", "metodo": "PUT / DELETE", "url": "/api/certificates/:host/manual", "resumo": "Instala certificado próprio / volta para o automático.", "arquivo": "manual.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "A emissão real (Let's Encrypt) e o formato exato das linhas de erro do Caddy só dão para confirmar na VPS. Os testes usam as duas linhas reais conhecidas ('certificate obtained successfully' e 'trying to solve challenge') e exemplos de erro montados pelo formato documentado do certmagic/ACME.",
+    "'Tentar emitir agora' recarrega o Caddy inteiro (sem queda — é um reload) e recomeça a emissão de TODOS os nomes sem certificado. O limite de 1 por minuto é por nome; o servidor também recusa quando o certificado já é válido e quando o limite do Let's Encrypt (rateLimited com 'retry after') ainda vale.",
+    "Manual com wildcard cobre os outros nomes do mesmo nível: o Caddy deixa de emitir automático para eles enquanto o manual existir.",
+    "O certificado servido para mail.<domínio> na página Certificados é o do Caddy (porta 443). O que o Stalwart apresenta nas portas de e-mail aparece no card do e-mail (GET /api/mail/tls)."
+  ]
+}
