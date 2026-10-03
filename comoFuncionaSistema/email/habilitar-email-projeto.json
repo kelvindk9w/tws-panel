@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "POST",
   "url": "/api/projects/:id/email",
-  "resumo": "Ativa ou atualiza o e-mail do projeto: domínio, endereço de envio (alias da caixa técnica) e nome de exibição. Os valores chegam ao projeto no próximo deploy.",
+  "resumo": "Ativa ou atualiza o e-mail do projeto: domínio, endereço de envio (que É a caixa do projeto, com senha) e nome de exibição. Os valores chegam ao projeto no próximo deploy.",
   "arquivoFonte": "apps/server/src/routes/mail.ts:229",
   "autenticacao": {
     "exigida": true,
@@ -34,8 +34,8 @@
         "nome": "fromLocalPart",
         "tipo": "string",
         "obrigatorio": false,
-        "regras": "MAILBOX_LOCAL_PART_SCHEMA (mesmo da criação de caixa); normalizado em minúsculas. Não pode ser de outra caixa nem o endereço de envio de outro projeto (409 address_in_use).",
-        "descricao": "Parte antes do @ do endereço de envio (ex.: 'nao-responda'). Vira endereço extra (alias) da caixa técnica no Stalwart — ele só deixa a caixa autenticada enviar como endereços que são dela. Ausente: envia como a própria caixa técnica (<slug>@<domínio>)."
+        "regras": "MAILBOX_LOCAL_PART_SCHEMA (mesmo da criação de caixa); normalizado em minúsculas. Não pode ser de outra caixa (salvo caixa de projeto sem uso ou a do próprio projeto), de outro projeto, nem postmaster/abuse (409 address_in_use).",
+        "descricao": "Parte antes do @ do endereço de envio (ex.: 'contato'). O endereço vira a CAIXA do projeto no Stalwart (SMTP_USER = MAIL_FROM = ele). Ausente: <slug>@<domínio>."
       },
       {
         "nome": "fromName",
@@ -43,6 +43,20 @@
         "obrigatorio": false,
         "regras": "1 a 80 caracteres, sem quebra de linha, < >, aspas ou barra invertida (vai para o cabeçalho From).",
         "descricao": "Nome que aparece para quem recebe (MAIL_FROM_NAME). Ausente: nome do projeto."
+      },
+      {
+        "nome": "password",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "MAILBOX_PASSWORD_SCHEMA: 12 a 200 caracteres. Obrigatória (ou generatePassword) quando a caixa é nova: ativação, endereço trocado, registro antigo com alias migrando, ou caixa de projeto sem uso sendo reaproveitada. Com o mesmo endereço, opcional (se vier, troca a senha).",
+        "descricao": "Senha da caixa digitada pela pessoa (a tela pede duas vezes). Nunca volta pela API."
+      },
+      {
+        "nome": "generatePassword",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "Tem preferência sobre password.",
+        "descricao": "O painel gera uma senha forte (generateStrongPassword: 24 caracteres com maiúscula, minúscula, número e um dos especiais - _ .) e a devolve UMA vez em generatedPassword."
       }
     ],
     "headers": []
@@ -50,24 +64,30 @@
   "respostas": [
     {
       "status": 200,
-      "quando": "Habilitado com sucesso (ou reafirmado, se já estava habilitado no mesmo domínio).",
+      "quando": "Ativado ou atualizado.",
       "corpo": {
-        "email": "ProjectEmailConfig"
+        "email": "ProjectEmailConfig",
+        "generatedPassword": "string (só com generatePassword:true; cabeçalho cache-control: no-store)"
       },
       "exemplo": {
         "email": {
           "enabled": true,
           "domain": "exemplo.com.br",
-          "mailbox": "minha-loja@exemplo.com.br",
-          "mailFrom": "minha-loja@exemplo.com.br",
+          "mailbox": "contato@exemplo.com.br",
+          "mailFrom": "contato@exemplo.com.br",
+          "fromName": "Contato Loja",
           "env": {
             "SMTP_HOST": "mail.exemplo.com.br",
             "SMTP_PORT": "587",
-            "SMTP_USER": "minha-loja@exemplo.com.br",
+            "SMTP_USER": "contato@exemplo.com.br",
             "SMTP_PASS": "••••••••••••",
-            "MAIL_FROM": "minha-loja@exemplo.com.br"
-          }
-        }
+            "MAIL_FROM": "contato@exemplo.com.br",
+            "MAIL_FROM_NAME": "Contato Loja"
+          },
+          "envLinks": {},
+          "legacyAlias": false
+        },
+        "generatedPassword": "(senha gerada, mostrada uma vez)"
       }
     }
   ],
@@ -77,6 +97,18 @@
       "codigo": "invalid_request",
       "quando": "Corpo/params reprovados pelo schema Fastify (enableProjectEmailSchema) ANTES do handler: id maior que 64 chars, domain ausente/vazio/fora do padrão/maior que 253 chars, ou corpo com campo desconhecido.",
       "mensagem": "Campo obrigatório ausente: domain. / Campo inválido: domain."
+    },
+    {
+      "status": 400,
+      "codigo": "password_required",
+      "quando": "Caixa nova sem password nem generatePassword.",
+      "mensagem": "Defina a senha da caixa {endereço} (mínimo 12 caracteres) ou peça uma senha forte gerada pelo painel."
+    },
+    {
+      "status": 400,
+      "codigo": "weak_password",
+      "quando": "password com menos de 12 caracteres (o schema já recusa antes; o service confere de novo).",
+      "mensagem": "A senha deve ter pelo menos 12 caracteres."
     },
     {
       "status": 404,
@@ -111,12 +143,14 @@
   ],
   "fluxo": [
     "1. app.deployService.getProject(id); 404 project_not_found se ausente.",
-    "2. requireDomain(domainName); requireRunning().",
-    "3. address = projectMailboxAddress(project, domain.name) = '<project.slug>@<domínio>'.",
-    "4. Se essa caixa AINDA NÃO existe em data.mailboxes: gera senha e client().createMailbox(address, password) no Stalwart, persiste como StoredMailbox kind:'project'. Se já existe (reuso — ex.: reabilitar depois de desabilitar), NÃO gera senha nova, reaproveita a caixa técnica existente.",
-    "5. data.projects[project.id] = { domain: domain.name, mailbox: address, enabledAt: now }.",
-    "6. save() e retorna projectEmailConfig(project.id) (env já mascarada).",
-    "7. (Efeito indireto, fora desta rota): a partir daqui, todo deploy do projeto passa a chamar service.envForProject(project) — registrado no boot do módulo via app.deployService.setEnvProvider(service.envForProject) em mail.ts:42 — e o engine de deploy injeta SMTP_HOST/PORT/USER/PASS/MAIL_FROM (packages/deploy/src/engine.ts:124-127) nas variáveis de ambiente do container: em TODOS os serviços do compose.yml (deploy tipo compose) ou via -e no build (tipo dockerfile); sites estáticos ignoram a injeção (log de aviso)."
+    "2. requireDomain(domainName); endereço = (fromLocalPart ou slug)@domínio; requireFreeAddress (409 address_in_use).",
+    "3. Senha: generatePassword → generateStrongPassword(); senão password (mínimo 12). Se a caixa não é a atual do projeto e não veio senha → 400 password_required.",
+    "4. requireRunning(). Registro antigo com fromAddress (alias): removeMailboxAlias(caixa técnica, alias) ANTES de criar a caixa — o Stalwart não deixa o mesmo endereço em duas caixas.",
+    "5. Caixa não existe: client().createMailbox(endereço, senha), StoredMailbox kind:'project'. Existe (a atual ou uma caixa de projeto sem uso) e veio senha: setMailboxPassword.",
+    "6. data.projects[id] = { domain, mailbox: endereço, enabledAt, fromName, envLinks (mantido) } — sem fromAddress. save().",
+    "7. Endereço trocado: dropUnusedProjectMailbox(caixa antiga) — remove no Stalwart e do registro se nenhum projeto a usa; falha no Stalwart vai para o log e a caixa fica na lista do domínio.",
+    "8. Retorna { email: projectEmailConfig(id), generatedPassword? }.",
+    "9. (Efeito indireto): todo deploy chama envForProject (SMTP_* + MAIL_FROM/MAIL_FROM_NAME, em todos os serviços do compose e no .env) e linkedEnvForProject (variáveis ligadas, só no .env)."
   ],
   "dependencias": [
     {
@@ -129,7 +163,7 @@
       "tipo": "pacote",
       "nome": "projectMailboxAddress",
       "arquivo": "packages/mailer/src/smtp-inject.ts:39",
-      "papel": "Deriva o endereço da caixa técnica a partir do slug do projeto."
+      "papel": "Não é mais usado pelo service (o endereço vem do fromLocalPart ou do slug); continua exportado."
     },
     {
       "tipo": "servico",
@@ -142,22 +176,36 @@
       "nome": "buildEngine (extraEnv)",
       "arquivo": "packages/deploy/src/engine.ts:124",
       "papel": "No deploy seguinte, chama envForProject(project) e injeta as env vars no container."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "generateStrongPassword",
+      "arquivo": "packages/mailer/src/mailboxes.ts",
+      "papel": "Senha forte gerada pelo painel, com os quatro tipos de caractere e especiais seguros para .env/YAML/shell/URL (- _ .)."
     }
   ],
   "efeitosColaterais": [
-    "Pode criar uma nova caixa no Stalwart (kind 'project') com senha em texto plano persistida.",
-    "Grava data/mail/mail.json (nova entrada em data.projects e, se nova, em data.mailboxes).",
-    "A partir do próximo deploy do projeto, injeta as 5 env vars SMTP no(s) container(es) — não afeta containers já rodando até o próximo deploy."
+    "Pode criar a caixa do projeto no Stalwart (kind 'project'); a senha fica em data/mail/mail.json (0600) — o painel precisa dela para injetar SMTP_PASS — e nunca volta pela API, salvo a gerada, uma vez.",
+    "Trocar o endereço remove a caixa antiga do projeto (com as mensagens) se nenhum outro projeto a usa.",
+    "Registro antigo: remove o alias da caixa técnica e, ao trocar para outro endereço, remove a caixa técnica.",
+    "Só vale no projeto a partir do próximo deploy."
   ],
   "chamadoPor": [
-    "apps/web/src/pages/ProjectDetailPage.tsx:97 (componente ProjectEmailCard, botão de habilitar)"
+    "apps/web/src/components/project/ProjectEmailCard.tsx (Ativar e-mail / Alterar remetente → Salvar)"
   ],
   "testes": [
+    "apps/server/tests/mail-service.test.ts (o endereço de envio é a caixa do projeto; migração do alias)",
+    "apps/server/tests/routes-mail-schema.test.ts",
+    "apps/web/tests/project-email-card.test.tsx",
     "scripts/test-mail.mts (passo 6)"
   ],
   "observacoes": [
-    "Não há endpoint para TROCAR o domínio de um projeto já habilitado sem antes desabilitar — chamar de novo com outro domain criaria uma segunda caixa técnica no novo domínio e sobrescreveria data.projects[id], deixando a caixa antiga órfã (ainda existente no Stalwart, sem 'mailbox_in_use' pois não está mais referenciada).",
     "02/10/2026 (pedido do dono do produto): cada projeto escolhe o endereço de envio e o nome de exibição. POST serve para ativar e para alterar: trocar o endereço tira o alias antigo da caixa (removeItem) e põe o novo (addItem); desativar também tira o alias. MAIL_FROM continua sendo o endereço puro (qualquer app aceita); o nome vai em MAIL_FROM_NAME. Tela: components/project/ProjectEmailCard.tsx — domínio com o estado do DNS, prévia 'Nome <endereço>', aviso de novo deploy e 'Enviar e-mail de teste' (pela caixa técnica).",
-    "02/10/2026 (validação real): o card do e-mail do projeto só listava domínios já cadastrados. Agora tem 'Usar um domínio meu': cadastra o domínio ali mesmo (POST /api/mail/domains, com o aviso de MX e a sugestão envio.<domínio>), seleciona-o e mostra o próximo passo — 'Ver os registros DNS' (/mail/<domínio>?aba=dns) e 'Verificar agora' (POST /api/mail/domains/:domain/verify)."
+    "02/10/2026 (validação real): o card do e-mail do projeto só listava domínios já cadastrados. Agora tem 'Usar um domínio meu': cadastra o domínio ali mesmo (POST /api/mail/domains, com o aviso de MX e a sugestão envio.<domínio>), seleciona-o e mostra o próximo passo — 'Ver os registros DNS' (/mail/<domínio>?aba=dns) e 'Verificar agora' (POST /api/mail/domains/:domain/verify).",
+    "02/10/2026 (validação real do dono): o endereço de envio era só um alias de uma caixa técnica <slug>@ cuja senha nunca aparece — não dava para ler as respostas, e o teste chegava no Gmail como 'cassino'. Agora o endereço É a caixa do projeto, com senha digitada ou gerada (mostrada uma vez: 'Guarde agora: o painel não mostra de novo. Esqueceu? Use Trocar senha.').",
+    "Compatibilidade: registros gravados antes (fromAddress = alias) continuam funcionando sem mudança (SMTP_USER = caixa técnica, MAIL_FROM = alias) e a resposta traz legacyAlias:true; a tela explica e, ao salvar de novo, pede a senha e aplica o modelo novo.",
+    "Trocar o domínio de um projeto já ativado segue a mesma regra de troca de endereço: cria a caixa no domínio novo e remove a antiga sem uso.",
+    "Desativar não apaga a caixa (as mensagens ficam); ela pode ser removida na página do domínio. Reativar no mesmo endereço reaproveita a caixa, pedindo senha.",
+    "Tela: o campo 'Seu domínio' de 'Usar um domínio meu' já vem preenchido com o domínio do projeto (editável)."
   ]
 }

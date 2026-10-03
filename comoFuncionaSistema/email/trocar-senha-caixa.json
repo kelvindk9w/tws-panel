@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "PUT",
   "url": "/api/mail/mailboxes/:id/password",
-  "resumo": "Troca a senha de uma caixa de e-mail. É o caminho para quem esqueceu a senha, que nunca é mostrada.",
+  "resumo": "Troca a senha de uma caixa de e-mail — inclusive a caixa de um projeto. A pessoa digita a nova ou pede uma forte gerada pelo painel (devolvida uma única vez). É o caminho para quem esqueceu a senha, que nunca é mostrada.",
   "arquivoFonte": "apps/server/src/routes/mail.ts",
   "autenticacao": {
     "exigida": true,
@@ -26,9 +26,16 @@
       {
         "nome": "password",
         "tipo": "string",
-        "obrigatorio": true,
-        "regras": "minLength 12 (MAILBOX_PASSWORD_MIN), maxLength 200; additionalProperties:false.",
+        "obrigatorio": false,
+        "regras": "minLength 12 (MAILBOX_PASSWORD_MIN), maxLength 200; additionalProperties:false. O corpo precisa de password OU generate (anyOf).",
         "descricao": "Nova senha definida pela pessoa (a tela pede duas vezes)."
+      },
+      {
+        "nome": "generate",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "const true (generate:false sem senha → 400).",
+        "descricao": "O painel gera uma senha forte (generateStrongPassword) e a devolve em generatedPassword, uma única vez (cache-control: no-store)."
       }
     ],
     "headers": []
@@ -36,9 +43,10 @@
   "respostas": [
     {
       "status": 200,
-      "quando": "Senha trocada.",
+      "quando": "Senha trocada no Stalwart e no mail.json.",
       "corpo": {
-        "mailbox": "Mailbox (sem senha)"
+        "mailbox": "Mailbox (sem senha)",
+        "generatedPassword": "string (só com generate:true)"
       }
     }
   ],
@@ -60,12 +68,6 @@
       "codigo": "mailbox_not_found",
       "quando": "Caixa não existe.",
       "mensagem": "Caixa {email} não encontrada."
-    },
-    {
-      "status": 409,
-      "codigo": "mailbox_managed",
-      "quando": "Caixa técnica de projeto: o painel gerencia a senha e a entrega ao projeto no deploy.",
-      "mensagem": "Esta é a caixa técnica de um projeto: o painel cuida da senha e a entrega ao projeto no deploy."
     },
     {
       "status": 409,
@@ -100,7 +102,8 @@
     "Auditoria: mail.mailbox.password."
   ],
   "chamadoPor": [
-    "apps/web/src/pages/MailDomainPage.tsx (ChangePasswordModal)"
+    "apps/web/src/pages/MailDomainPage.tsx (ChangePasswordModal)",
+    "apps/web/src/components/project/ProjectEmailCard.tsx (Trocar senha da caixa do projeto)"
   ],
   "testes": [
     "apps/server/tests/mail-service.test.ts",
@@ -110,6 +113,7 @@
   ],
   "observacoes": [
     "Pedido do dono do produto (02/10/2026): a senha nunca fica visível; quem esqueceu troca.",
-    "O formato do PATCH segue a API de administração do Stalwart 0.11 (lista de ações set/addItem/removeItem); validar na VPS real."
+    "O formato do PATCH segue a API de administração do Stalwart 0.11 (lista de ações set/addItem/removeItem); validar na VPS real.",
+    "02/10/2026 (caixa do projeto): a recusa 409 mailbox_managed para caixas de projeto deixou de existir — a caixa do projeto agora é a do endereço de envio, que a pessoa abre num app de e-mail. Depois da troca, o projeto só recebe a senha nova no próximo deploy (inclusive nas variáveis ligadas, ex.: SMTP_SENHA). Tela: card do e-mail do projeto ('Trocar senha'). Na página do domínio (MailDomainPage), o modal 'Configurar no app' ainda esconde 'Trocar senha' para caixas kind 'project' — pendente (fora do escopo desta mudança)."
   ]
 }

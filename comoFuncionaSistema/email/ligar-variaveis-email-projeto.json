@@ -1,0 +1,118 @@
+{
+  "id": "ligar-variaveis-email-projeto",
+  "modulo": "email",
+  "metodo": "PUT",
+  "url": "/api/projects/:id/email/links",
+  "resumo": "Liga variáveis do app do projeto (ex.: SMTP_SENHA, EMAIL_DE) a valores do e-mail do projeto. O painel guarda só o mapeamento e, no deploy, entrega o valor atual também com esses nomes.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts (PUT /api/projects/:id/email/links)",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts)."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1 a 64 caracteres.",
+        "descricao": "ID do projeto."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "links",
+        "tipo": "objeto",
+        "obrigatorio": true,
+        "regras": "Até 30 entradas. Chave = nome da variável (padrão das Variáveis: ^[A-Za-z_][A-Za-z0-9_]{0,127}$); valor = um de SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM, MAIL_FROM_NAME. O service recusa ainda (envLinkNameProblem, packages/core/src/mail.ts): os próprios nomes do e-mail e nomes reservados — COMPOSE_*, DOCKER_* (mudam o próprio compose quando estão no .env), PATH, HOME, HOSTNAME, PWD, SHELL, USER. Objeto vazio apaga tudo.",
+        "descricao": "Mapa variável do app → valor do e-mail, ex.: { \"SMTP_SENHA\": \"SMTP_PASS\", \"EMAIL_DE\": \"MAIL_FROM\" }."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Mapeamento salvo.",
+      "corpo": {
+        "email": "ProjectEmailConfig (com envLinks)"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Schema: nome fora do padrão, valor que não é do e-mail, mais de 30, campo extra."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_env_key",
+      "quando": "Nome reservado ou um dos próprios valores do e-mail."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_env_link",
+      "quando": "Valor de origem desconhecido (segunda barreira)."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Projeto não existe."
+    },
+    {
+      "status": 409,
+      "codigo": "email_not_enabled",
+      "quando": "O e-mail do projeto não está ativo."
+    }
+  ],
+  "fluxo": [
+    "1. getProject(id) → 404 se ausente.",
+    "2. MailService.setProjectEmailLinks: valida e grava envLinks em data/mail/mail.json (data.projects[id]).",
+    "3. Auditoria mail.project.links com os NOMES (nunca valores).",
+    "4. No deploy: DeployService.envForProject = e-mail (SMTP_*) + linkedEnvForProject (valor atual de cada ligação) + Variáveis do operador (a do operador vence). As ligadas vão para o .env (como as Variáveis), não para todos os serviços do compose; só os SMTP_* padrão continuam injetados em todos os serviços.",
+    "5. providedEnvKeys inclui as ligadas: contam como preenchidas para o aviso de variáveis faltando (missingEnvFor) e aparecem na seção Variáveis como 'fornecidas pelo e-mail do projeto', só com o nome."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "MailService.setProjectEmailLinks / linkedEnvForProject",
+      "arquivo": "apps/server/src/services/mail-service.ts",
+      "papel": "Guarda o mapeamento e resolve o valor atual."
+    },
+    {
+      "tipo": "servico",
+      "nome": "DeployService.setLinkedEnvProvider / providedEnvKeys",
+      "arquivo": "apps/server/src/services/deploy-service.ts",
+      "papel": "Entrega no deploy e conta como fornecida."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "envLinkNameProblem / PROJECT_EMAIL_VALUE_KEYS",
+      "arquivo": "packages/core/src/mail.ts",
+      "papel": "Regra de nome compartilhada por servidor e tela."
+    }
+  ],
+  "efeitosColaterais": [
+    "Grava data/mail/mail.json. Nenhum valor é copiado para as Variáveis do projeto: trocar a senha da caixa chega às variáveis ligadas no próximo deploy.",
+    "Desativar o e-mail do projeto apaga o mapeamento junto."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/EmailLinksModal.tsx (botão 'Ligar às variáveis do projeto' no card do e-mail do projeto)"
+  ],
+  "testes": [
+    "apps/server/tests/mail-service.test.ts (ligar valores do e-mail às variáveis)",
+    "apps/server/tests/routes-mail-schema.test.ts",
+    "apps/server/tests/deploy-env.test.ts",
+    "apps/web/tests/project-email-card.test.tsx",
+    "apps/web/tests/combobox.test.tsx",
+    "packages/core/tests/email-links.test.ts"
+  ],
+  "observacoes": [
+    "Pedido do dono do produto (02/10/2026): o app do projeto usa outros nomes de variável; ele queria levar os valores do e-mail para as Variáveis sem copiar a senha.",
+    "Tela: modal com uma linha por valor e um seletor com busca (components/ui/combobox.tsx) cujas opções são as variáveis do compose, as já cadastradas em Variáveis, 'mesmo nome (padrão)' e um nome novo digitado. Avisa quando a variável escolhida já tem valor em Variáveis (o de lá vence)."
+  ]
+}

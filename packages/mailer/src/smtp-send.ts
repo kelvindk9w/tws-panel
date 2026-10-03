@@ -36,6 +36,8 @@ export interface SmtpSendOptions extends SmtpConnectOptions {
   username: string;
   password: string;
   from: string;
+  /** Nome de exibição no cabeçalho From (caixa de um projeto). */
+  fromName?: string;
   to: string;
   subject: string;
   text: string;
@@ -87,9 +89,40 @@ function encodeHeader(value: string): string {
   return /^[\x20-\x7e]*$/.test(value) ? value : `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 
+/**
+ * Cabeçalho From com nome de exibição (RFC 5322 §3.4). Nome ASCII vai entre
+ * aspas, com `"` e `\` escapados; com acento, vira palavras codificadas
+ * UTF-8/base64 (RFC 2047) de até 75 caracteres cada, cortadas entre letras
+ * (nunca no meio de um caractere), uma por linha dobrada. Quebras de linha
+ * são removidas antes de tudo: o nome nunca abre um cabeçalho novo (o schema
+ * da rota já recusa \r, \n, < > e aspas — isto é a segunda barreira).
+ */
+export function formatFromHeader(address: string, name?: string): string {
+  const clean = (name ?? "").replace(/[\r\n]+/g, "").trim();
+  if (!clean) return `From: ${address}`;
+  if (/^[\x20-\x7e]*$/.test(clean)) {
+    return `From: "${clean.replace(/[\\"]/g, "\\$&")}" <${address}>`;
+  }
+  // 45 bytes de UTF-8 → 60 de base64 + 12 de "=?UTF-8?B?" e "?=" = 72 (≤ 75).
+  const words: string[] = [];
+  let chunk = "";
+  for (const ch of clean) {
+    if (Buffer.byteLength(chunk + ch, "utf8") > 45) {
+      words.push(chunk);
+      chunk = "";
+    }
+    chunk += ch;
+  }
+  words.push(chunk);
+  const encoded = words.map((w) => `=?UTF-8?B?${Buffer.from(w, "utf8").toString("base64")}?=`);
+  return `From: ${encoded.join("\r\n ")}\r\n <${address}>`;
+}
+
 /** Mensagem de texto simples, 100% ASCII no fio (corpo em base64). */
 export function buildTestMessage(input: {
   from: string;
+  /** Nome de exibição do remetente (caixa de um projeto); ausente = só o endereço. */
+  fromName?: string;
   to: string;
   subject: string;
   text: string;
@@ -101,7 +134,7 @@ export function buildTestMessage(input: {
     .replace(/.{1,76}/g, "$&\r\n")
     .trimEnd();
   return [
-    `From: ${input.from}`,
+    formatFromHeader(input.from, input.fromName),
     `To: ${input.to}`,
     `Subject: ${encodeHeader(input.subject)}`,
     `Date: ${input.date.toUTCString().replace("GMT", "+0000")}`,
@@ -255,6 +288,7 @@ export async function sendSmtpMail(opts: SmtpSendOptions): Promise<SmtpSendResul
     await expect("DATA", [354]);
     const raw = buildTestMessage({
       from: opts.from,
+      ...(opts.fromName ? { fromName: opts.fromName } : {}),
       to: opts.to,
       subject: opts.subject,
       text: opts.text,

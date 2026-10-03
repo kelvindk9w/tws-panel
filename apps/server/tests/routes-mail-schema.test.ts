@@ -375,11 +375,7 @@ describe("GET /api/projects/:id/email — schema", () => {
 describe("POST /api/projects/:id/email — schema", () => {
   it("aceita corpo válido", async () => {
     const enableProjectEmail = spyOn("enableProjectEmail").mockResolvedValue({
-      enabled: true,
-      domain: "exemplo.com",
-      mailbox: "loja@exemplo.com",
-      mailFrom: "loja@exemplo.com",
-      env: {},
+      email: { enabled: true, domain: "exemplo.com", mailbox: "loja@exemplo.com", mailFrom: "loja@exemplo.com", env: {} },
     });
     const res = await app.inject({
       method: "POST",
@@ -442,15 +438,43 @@ describe("DELETE /api/projects/:id/email — schema", () => {
   });
 });
 
+const VENDAS = {
+  id: "vendas@exemplo.com",
+  localPart: "vendas",
+  domain: "exemplo.com",
+  kind: "user" as const,
+  createdAt: new Date().toISOString(),
+};
+
 describe("PUT /api/mail/mailboxes/:id/password — trocar senha", () => {
-  it("troca com senha forte, registra auditoria sem a senha e não devolve a senha", async () => {
-    const change = spyOn("changeMailboxPassword").mockResolvedValue({
-      id: "vendas@exemplo.com",
-      localPart: "vendas",
-      domain: "exemplo.com",
-      kind: "user",
-      createdAt: new Date().toISOString(),
+  it("'gerar senha forte': repassa ao serviço e devolve a senha gerada UMA vez (sem guardar em cache)", async () => {
+    const change = spyOn("changeMailboxPassword").mockResolvedValue({ mailbox: VENDAS, generatedPassword: "Gerada-Forte_123abcXYZ.9" });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/mail/mailboxes/vendas%40exemplo.com/password",
+      headers: auth,
+      payload: { generate: true },
     });
+    expect(res.statusCode).toBe(200);
+    expect(change).toHaveBeenCalledWith("vendas@exemplo.com", undefined, { generate: true });
+    expect(res.json()).toMatchObject({ mailbox: { id: "vendas@exemplo.com" }, generatedPassword: "Gerada-Forte_123abcXYZ.9" });
+    expect(res.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("recusa generate=false sem senha", async () => {
+    const change = spyOn("changeMailboxPassword");
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/mail/mailboxes/vendas%40exemplo.com/password",
+      headers: auth,
+      payload: { generate: false },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(change).not.toHaveBeenCalled();
+  });
+
+  it("troca com senha forte, registra auditoria sem a senha e não devolve a senha", async () => {
+    const change = spyOn("changeMailboxPassword").mockResolvedValue({ mailbox: VENDAS });
     const res = await app.inject({
       method: "PUT",
       url: "/api/mail/mailboxes/vendas%40exemplo.com/password",
@@ -480,12 +504,14 @@ describe("PUT /api/mail/mailboxes/:id/password — trocar senha", () => {
 describe("POST /api/projects/:id/email — remetente escolhido", () => {
   it("repassa endereço e nome de exibição ao serviço", async () => {
     const enable = spyOn("enableProjectEmail").mockResolvedValue({
-      enabled: true,
-      domain: "exemplo.com",
-      mailbox: "loja@exemplo.com",
-      mailFrom: "nao-responda@exemplo.com",
-      fromName: "Loja Exemplo",
-      env: {},
+      email: {
+        enabled: true,
+        domain: "exemplo.com",
+        mailbox: "nao-responda@exemplo.com",
+        mailFrom: "nao-responda@exemplo.com",
+        fromName: "Loja Exemplo",
+        env: {},
+      },
     });
     const res = await app.inject({
       method: "POST",
@@ -504,6 +530,9 @@ describe("POST /api/projects/:id/email — remetente escolhido", () => {
     ["nome longo demais", { fromName: "x".repeat(81) }],
     ["endereço com @", { fromLocalPart: "a@b" }],
     ["endereço com espaço", { fromLocalPart: "nao responda" }],
+    ["senha curta", { password: "curta" }],
+    ["senha longa demais", { password: "x".repeat(201) }],
+    ["generatePassword que não é booleano", { generatePassword: "sim" }],
   ])("%s: 400 e nada muda", async (_label, extra) => {
     const enable = spyOn("enableProjectEmail");
     const res = await app.inject({
@@ -514,5 +543,95 @@ describe("POST /api/projects/:id/email — remetente escolhido", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(enable).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Caixa do projeto com senha (02/10/2026): a senha digitada ou "gerar uma
+ * forte" chega ao serviço; a gerada volta UMA vez na resposta.
+ */
+describe("POST /api/projects/:id/email — senha da caixa do projeto", () => {
+  it("repassa a senha digitada", async () => {
+    const enable = spyOn("enableProjectEmail").mockResolvedValue({
+      email: { enabled: true, domain: "exemplo.com", mailbox: "loja@exemplo.com", mailFrom: "loja@exemplo.com", env: {} },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", password: "senha-forte-da-pessoa" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(enable).toHaveBeenCalledWith(expect.anything(), "exemplo.com", { password: "senha-forte-da-pessoa" });
+    expect(res.body).not.toContain("senha-forte-da-pessoa");
+  });
+
+  it("'gerar senha forte': devolve a gerada uma vez, sem cache", async () => {
+    const enable = spyOn("enableProjectEmail").mockResolvedValue({
+      email: { enabled: true, domain: "exemplo.com", mailbox: "loja@exemplo.com", mailFrom: "loja@exemplo.com", env: {} },
+      generatedPassword: "Gerada-Forte_123abcXYZ.9",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", generatePassword: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(enable).toHaveBeenCalledWith(expect.anything(), "exemplo.com", { generatePassword: true });
+    expect(res.json()).toMatchObject({ email: { mailbox: "loja@exemplo.com" }, generatedPassword: "Gerada-Forte_123abcXYZ.9" });
+    expect(res.headers["cache-control"]).toBe("no-store");
+  });
+});
+
+/**
+ * Ligar valores do e-mail às variáveis do app (02/10/2026): o painel guarda
+ * só o mapeamento (nome da variável → valor do e-mail).
+ */
+describe("PUT /api/projects/:id/email/links", () => {
+  it("repassa o mapeamento ao serviço", async () => {
+    const set = spyOn("setProjectEmailLinks").mockResolvedValue({
+      enabled: true,
+      domain: "exemplo.com",
+      mailbox: "loja@exemplo.com",
+      mailFrom: "loja@exemplo.com",
+      env: {},
+      envLinks: { SMTP_SENHA: "SMTP_PASS" },
+    });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/projects/p1/email/links",
+      headers: auth,
+      payload: { links: { SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(set).toHaveBeenCalledWith("p1", { SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" });
+    expect(res.json()).toMatchObject({ email: { envLinks: { SMTP_SENHA: "SMTP_PASS" } } });
+  });
+
+  it.each([
+    ["valor que não é do e-mail", { links: { SENHA: "ADMIN_SECRET" } }],
+    ["nome com hífen", { links: { "SMTP-SENHA": "SMTP_PASS" } }],
+    ["nome começando com número", { links: { "1X": "SMTP_PASS" } }],
+    ["sem links", {}],
+    ["campo extra", { links: {}, x: 1 }],
+  ])("%s: 400 e nada muda", async (_label, payload) => {
+    const set = spyOn("setProjectEmailLinks");
+    const res = await app.inject({ method: "PUT", url: "/api/projects/p1/email/links", headers: auth, payload });
+    expect(res.statusCode).toBe(400);
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("projeto inexistente: 404", async () => {
+    deployService.getProject!.mockResolvedValueOnce(null);
+    const set = spyOn("setProjectEmailLinks");
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/projects/nada/email/links",
+      headers: auth,
+      payload: { links: {} },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(set).not.toHaveBeenCalled();
   });
 });

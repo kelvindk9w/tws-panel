@@ -52,6 +52,7 @@ export {
 export {
   sendSmtpMail,
   buildTestMessage,
+  formatFromHeader,
   isSingleEmailAddress,
   xtext,
   SmtpSendError,
@@ -71,7 +72,13 @@ export {
   type QueuedMessage,
   type QueuedRecipient,
 } from "./delivery-status.js";
-export { generatePassword, buildCredentials, type CredentialsInput } from "./mailboxes.js";
+export {
+  generatePassword,
+  generateStrongPassword,
+  STRONG_PASSWORD_SPECIALS,
+  buildCredentials,
+  type CredentialsInput,
+} from "./mailboxes.js";
 export {
   checkIpBlacklists,
   checkDomainBlacklists,
