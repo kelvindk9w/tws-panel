@@ -93,6 +93,18 @@ describe("variáveis do projeto no deploy", () => {
     expect(env.KYC_MODO).toBe("demonstracao");
   });
 
+  it("nome padrão salvo VAZIO nas Variáveis não apaga o valor do e-mail", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", MAIL_FROM: "contato@x.com" }));
+    await svc.setEnv(p.id, [
+      { key: "SMTP_HOST", value: "" },
+      { key: "OUTRA", value: "" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn } }).engineCtx;
+    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", MAIL_FROM: "contato@x.com", OUTRA: "" });
+  });
+
   /**
    * Validação real (03/10/2026): a seção Variáveis mostrava as fornecidas
    * pelo e-mail só como "fornecida pelo painel", sem valor. Agora a API

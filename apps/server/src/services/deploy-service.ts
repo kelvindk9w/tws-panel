@@ -201,11 +201,12 @@ export class DeployService {
       // ligada (EMAIL_DE ← MAIL_FROM): a ligação vence o valor salvo nas
       // Variáveis — validação real (03/10/2026): EMAIL_DE salva antes da
       // ligação, com o endereço de exemplo, ia no lugar do endereço da caixa.
-      envForProject: async (project: Project) => ({
-        ...((await this.mailEnv?.(project)) ?? {}),
-        ...(await this.env.asRecord(project.id)),
-        ...((await this.linkedMailEnv?.(project)) ?? {}),
-      }),
+      // Salva VAZIA nas Variáveis não apaga o valor do e-mail.
+      envForProject: async (project: Project) => {
+        const mail = (await this.mailEnv?.(project)) ?? {};
+        const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
+        return { ...mail, ...Object.fromEntries(own), ...((await this.linkedMailEnv?.(project)) ?? {}) };
+      },
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
       injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
