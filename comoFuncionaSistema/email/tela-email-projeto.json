@@ -1,0 +1,64 @@
+{
+  "id": "tela-email-projeto",
+  "modulo": "email",
+  "tipo": "tela",
+  "rota": "/projects/:id/email",
+  "resumo": "Seção E-mail da página do projeto. Desativado: formulário de ativação (domínio, endereço, nome, senha) e cadastro do domínio do projeto. Ativado: três abas — Remetente, Caixas e DNS — para conferir e configurar o e-mail do projeto sem sair dele.",
+  "atualizadoEm": "2026-10-03",
+  "arquivosFonte": [
+    "apps/web/src/components/project/ProjectEmailCard.tsx",
+    "apps/web/src/components/mail/MailboxesPanel.tsx",
+    "apps/web/src/components/mail/DnsChecklistPanel.tsx",
+    "apps/web/src/components/mail/CopyButton.tsx",
+    "apps/web/src/pages/MailDomainPage.tsx"
+  ],
+  "comportamento": {
+    "desativado": "O card mostra o formulário de ativação e, se preciso, o cadastro do domínio ('Usar um domínio meu'). Não há abas, mesmo que o endereço traga ?email=caixas ou ?email=dns.",
+    "ativado": "Aparecem as abas Remetente, Caixas e DNS, todas do domínio escolhido para o projeto. Ao lado das abas, um link discreto 'Abrir na página E-mail' leva ao domínio em /mail/<domínio> (na aba DNS, direto no checklist: ?aba=dns).",
+    "abas": [
+      {
+        "aba": "Remetente",
+        "endereco": "/projects/:id/email",
+        "oQueMostra": "O conteúdo de sempre: remetente 'Nome <endereço>', a caixa do projeto, as variáveis entregues no deploy (com copiar, menos a senha), Enviar e-mail de teste, Ligar às variáveis do projeto, Configurar no app, Trocar senha, Alterar remetente e Desativar e-mail."
+      },
+      {
+        "aba": "Caixas",
+        "endereco": "/projects/:id/email?email=caixas",
+        "oQueMostra": "Todas as caixas do domínio do projeto, com a caixa do projeto destacada ('deste projeto'). Dá para criar outra caixa no mesmo domínio (ex.: suporte@), com a senha digitada duas vezes (mínimo de 12 caracteres), e em cada caixa: Configurar no app, Testar envio, Trocar senha e, nas caixas criadas pela pessoa, remover. É o mesmo painel da aba Caixas da página do domínio.",
+        "carrega": "GET /api/mail/domains/:domain/mailboxes, só quando a aba é aberta."
+      },
+      {
+        "aba": "DNS",
+        "endereco": "/projects/:id/email?email=dns",
+        "oQueMostra": "O checklist DNS do domínio: tabela copiável campo a campo (nome e valor; o MX em Servidor de e-mail e Prioridade; o lembrete da nuvem cinza no A de mail.<domínio>), o resumo 'x/y OK', Verificar agora, o card do nome reverso (PTR), o aviso de certificado pedido pela verificação, o card de e-mail de teste e a evolução do DMARC. É o mesmo painel da aba Checklist DNS da página do domínio.",
+        "carrega": "GET /api/mail/domains/:domain/dns ao abrir a aba e, logo em seguida, POST /api/mail/domains/:domain/verify (a conferência de verdade). Abrir a aba de novo confere de novo."
+      }
+    ],
+    "enderecoDasAbas": "Trocar de aba troca o ?email= da URL sem criar entrada nova no histórico (replace); outros parâmetros da URL são mantidos. Remetente não tem parâmetro. Um valor desconhecido abre em Remetente.",
+    "celular": "As três abas cabem lado a lado a 390 px; o link 'Abrir na página E-mail' desce para a linha de baixo. Nos painéis, cada registro DNS vira um bloco empilhado e, nas caixas, o endereço ocupa a linha e os botões descem. Conferido no navegador sem rolagem lateral."
+  },
+  "paineisReutilizaveis": [
+    {
+      "componente": "MailboxesPanel",
+      "arquivo": "apps/web/src/components/mail/MailboxesPanel.tsx",
+      "props": "domain (obrigatório); highlight (endereço a destacar, a caixa do projeto); onMailboxesChange (avisa a cada carga — a página do domínio usa para 'Caixas (n)').",
+      "usadoPor": ["apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"]
+    },
+    {
+      "componente": "DnsChecklistPanel",
+      "arquivo": "apps/web/src/components/mail/DnsChecklistPanel.tsx",
+      "props": "domain (obrigatório); onVerified (avisa a cada verificação); showCertificateNotice (padrão true; a página do domínio passa false e mostra o aviso no topo, acima das abas, com CertificateRetryNotice).",
+      "usadoPor": ["apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"]
+    }
+  ],
+  "paginaDoDominio": "Em /mail/:domain a página carrega o checklist só para o cabeçalho (servidor e IP) e mantém os dois painéis montados, escondendo o inativo: ao abrir, o DNS é conferido e a aba Caixas já mostra a contagem, qualquer que seja a aba. As abas Caixas/Checklist DNS e o ?aba=dns continuam como antes.",
+  "testes": [
+    "apps/web/tests/project-email-card.test.tsx",
+    "apps/web/tests/mail-panels.test.tsx",
+    "apps/web/tests/mail-domain-page.test.tsx"
+  ],
+  "observacoes": [
+    "03/10/2026 (validação real do dono do produto): ele precisava das partes Caixas e DNS do domínio dentro da seção E-mail do projeto, para conferir e configurar depois sem sair do projeto e criar novas caixas (ex.: suporte@ do mesmo domínio).",
+    "Na aba Caixas, a troca de senha é a do painel do domínio (digitada duas vezes). A troca pela aba Remetente continua oferecendo 'Gerar uma senha forte para mim'."
+  ]
+}
