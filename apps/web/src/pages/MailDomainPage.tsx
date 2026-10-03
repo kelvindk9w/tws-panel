@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { MAILBOX_PASSWORD_MIN } from "@paas/core";
 import type {
   DnsChecklistResponse,
@@ -399,8 +399,10 @@ export function MailDomainPage() {
   const [error, setError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [lastVerify, setLastVerify] = useState<DnsVerifyResponse | null>(null);
-  // abre em Caixas (pedido do dono do produto, 02/10/2026)
-  const [tab, setTab] = useState<"dns" | "mailboxes">("mailboxes");
+  // abre em Caixas (pedido do dono do produto, 02/10/2026); ?aba=dns abre no
+  // checklist (link do e-mail do projeto, logo depois de cadastrar o domínio)
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<"dns" | "mailboxes">(searchParams.get("aba") === "dns" ? "dns" : "mailboxes");
 
   const [newMailbox, setNewMailbox] = useState("");
   const [busy, setBusy] = useState<string | null>(null);

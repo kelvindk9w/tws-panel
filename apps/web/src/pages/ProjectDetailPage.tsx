@@ -488,7 +488,12 @@ export function ProjectDetailPage() {
       {section === "env" && <ProjectEnvCard project={project} />}
 
       {section === "email" && (
-        <ProjectEmailCard projectId={project.id} projectName={project.name} projectSlug={project.slug} />
+        <ProjectEmailCard
+          projectId={project.id}
+          projectName={project.name}
+          projectSlug={project.slug}
+          projectDomain={project.domain ?? undefined}
+        />
       )}
 
       {section === "deploys" && <DeployHistory jobs={jobs} onOpen={setOpenJobId} />}
