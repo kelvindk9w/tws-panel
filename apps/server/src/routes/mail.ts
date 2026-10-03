@@ -12,6 +12,7 @@ import type {
   EnableProjectEmailRequest,
   MailDomainListResponse,
   MailDomainResponse,
+  Mailbox,
   MailboxCredentialsResponse,
   MailboxListResponse,
   MailboxResponse,
@@ -104,6 +105,19 @@ const MAILBOX_ID_SCHEMA = {
   maxLength: 90,
 } as const;
 
+// Id de projeto: mesmo limite usado em projects.ts (updateProjectSchema).
+const PROJECT_ID_SCHEMA = { type: "string", minLength: 1, maxLength: 64 } as const;
+
+// Listagem das caixas; com ?projectId=, só as daquele projeto.
+const listMailboxesSchema = {
+  params: domainParamSchema.params,
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: { projectId: PROJECT_ID_SCHEMA },
+  },
+} as const;
+
 const createMailboxSchema = {
   params: {
     type: "object",
@@ -118,6 +132,8 @@ const createMailboxSchema = {
       localPart: MAILBOX_LOCAL_PART_SCHEMA,
       password: MAILBOX_PASSWORD_SCHEMA,
       generatePassword: { type: "boolean" },
+      // criada pela aba Caixas do e-mail do projeto: a caixa fica sendo dele
+      projectId: PROJECT_ID_SCHEMA,
     },
     // a senha da pessoa OU "gere uma forte para mim"
     anyOf: [
@@ -146,12 +162,11 @@ const mailboxIdParamSchema = {
   },
 } as const;
 
-// Id de projeto: mesmo limite usado em projects.ts (updateProjectSchema).
 const projectIdParamSchema = {
   params: {
     type: "object",
     required: ["id"],
-    properties: { id: { type: "string", minLength: 1, maxLength: 64 } },
+    properties: { id: PROJECT_ID_SCHEMA },
   },
 } as const;
 
@@ -510,12 +525,27 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // Caixas de e-mail
   // -------------------------------------------------------------------------
 
-  app.get<{ Params: { domain: string } }>(
+  /** Põe o nome do projeto dono em cada caixa (projeto que não existe mais: sem nome). */
+  async function withProjectNames(mailboxes: Mailbox[]): Promise<Mailbox[]> {
+    const names = new Map<string, string | null>();
+    for (const id of new Set(mailboxes.flatMap((m) => (m.projectId ? [m.projectId] : [])))) {
+      names.set(id, (await app.deployService.getProject(id))?.name ?? null);
+    }
+    return mailboxes.map((m) => {
+      const name = m.projectId ? names.get(m.projectId) : null;
+      return name ? { ...m, projectName: name } : m;
+    });
+  }
+
+  app.get<{ Params: { domain: string }; Querystring: { projectId?: string } }>(
     "/api/mail/domains/:domain/mailboxes",
-    { schema: domainParamSchema },
+    { schema: listMailboxesSchema },
     async (request, reply) => {
       try {
-        const mailboxes = await service.listMailboxes(request.params.domain);
+        const { projectId } = request.query;
+        const mailboxes = await withProjectNames(
+          await service.listMailboxes(request.params.domain, projectId ? { projectId } : {}),
+        );
         const response: MailboxListResponse = { mailboxes };
         return reply.send(response);
       } catch (err) {
@@ -530,11 +560,17 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         const generate = request.body?.generatePassword === true;
+        const projectId = request.body?.projectId;
+        // criada pela aba do projeto: o projeto precisa existir
+        if (projectId && !(await app.deployService.getProject(projectId))) {
+          throw httpError(404, "project_not_found", "Projeto não encontrado.");
+        }
+        const opts = { ...(generate ? { generate: true } : {}), ...(projectId ? { projectId } : {}) };
         const { mailbox, generatedPassword } = await service.createMailbox(
           request.params.domain,
           request.body?.localPart ?? "",
           generate ? undefined : request.body?.password,
-          ...(generate ? [{ generate: true }] : []),
+          ...(Object.keys(opts).length > 0 ? [opts] : []),
         );
         await app.auditService.record({
           action: "mail.mailbox.create",

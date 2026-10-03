@@ -205,6 +205,15 @@ export interface Mailbox {
   /** Caixa técnica criada automaticamente para um projeto (slug) ou sistema. */
   kind: "user" | "project" | "system";
   createdAt: string;
+  /**
+   * Projeto dono da caixa: a caixa de envio do projeto e as criadas pela aba
+   * Caixas do e-mail dele. Ausente = de nenhum projeto (ex.: criada na página
+   * do domínio). Caixa antiga sem dono gravado: a de envio de um projeto
+   * aparece como dele.
+   */
+  projectId?: string;
+  /** Só nas listagens: nome do projeto dono (ausente se o projeto não existe mais). */
+  projectName?: string;
 }
 
 export interface MailboxListResponse {
@@ -224,6 +233,8 @@ export interface CreateMailboxRequest {
    */
   password?: string;
   generatePassword?: boolean;
+  /** Criada pela aba Caixas do e-mail do projeto: a caixa fica sendo dele. */
+  projectId?: string;
 }
 
 /**

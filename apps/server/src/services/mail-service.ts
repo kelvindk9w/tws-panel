@@ -727,12 +727,22 @@ export class MailService {
   // Caixas de e-mail
   // -------------------------------------------------------------------------
 
-  async listMailboxes(domainName: string): Promise<Mailbox[]> {
+  /**
+   * Caixas do domínio, cada uma com o projeto dono quando tem. Com
+   * `projectId`, só as daquele projeto (aba Caixas do e-mail do projeto).
+   * Caixa antiga sem dono gravado: a de envio de um projeto conta como dele.
+   */
+  async listMailboxes(domainName: string, opts: { projectId?: string } = {}): Promise<Mailbox[]> {
     await this.ensureLoaded();
     const domain = normalizeMailDomain(domainName);
+    const senderOf = new Map(Object.entries(this.data.projects).map(([id, p]) => [p.mailbox, id]));
     return Object.values(this.data.mailboxes)
       .filter((m) => m.domain === domain)
-      .map(({ password: _password, ...mailbox }) => mailbox);
+      .map(({ password: _password, ...mailbox }): Mailbox => {
+        const owner = mailbox.projectId ?? senderOf.get(mailbox.id);
+        return owner ? { ...mailbox, projectId: owner } : mailbox;
+      })
+      .filter((m) => opts.projectId === undefined || m.projectId === opts.projectId);
   }
 
   /**
@@ -744,7 +754,7 @@ export class MailService {
     domainName: string,
     localPart: string,
     password: string | undefined,
-    opts: { generate?: boolean } = {},
+    opts: { generate?: boolean; projectId?: string } = {},
   ): Promise<{ mailbox: Mailbox; generatedPassword?: string }> {
     await this.ensureLoaded();
     const domain = this.requireDomain(domainName);
@@ -765,6 +775,8 @@ export class MailService {
       domain: domain.name,
       kind: "user",
       createdAt: new Date().toISOString(),
+      // criada pela aba Caixas do e-mail do projeto: a caixa é dele
+      ...(opts.projectId ? { projectId: opts.projectId } : {}),
       password: finalPassword,
     };
     this.data.mailboxes[email] = stored;
@@ -1099,6 +1111,7 @@ export class MailService {
         domain: domain.name,
         kind: "project",
         createdAt: new Date().toISOString(),
+        projectId: project.id,
         password: newPassword!,
       };
     } else if (newPassword !== undefined) {
