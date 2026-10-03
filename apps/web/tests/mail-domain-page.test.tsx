@@ -236,8 +236,15 @@ function mockMailboxApi(mailboxes: unknown[] = []): Call[] {
         };
       } else if (url.endsWith("/mailboxes") && method === "GET") body = { mailboxes };
       else if (url.endsWith("/mailboxes") && method === "POST") {
-        body = { mailbox: { id: "vendas@exemplo.com.br", localPart: "vendas", domain: "exemplo.com.br", kind: "user", createdAt: "2026-10-02T12:00:00.000Z" } };
-      } else if (url.endsWith("/password")) body = { mailbox: mailboxes[0] };
+        const req = JSON.parse(String(init?.body)) as { generatePassword?: boolean };
+        body = {
+          mailbox: { id: "vendas@exemplo.com.br", localPart: "vendas", domain: "exemplo.com.br", kind: "user", createdAt: "2026-10-02T12:00:00.000Z" },
+          ...(req.generatePassword ? { generatedPassword: "Gerada-Forte_123.abcXYZ" } : {}),
+        };
+      } else if (url.endsWith("/password")) {
+        const req = JSON.parse(String(init?.body)) as { generate?: boolean };
+        body = { mailbox: mailboxes[0], ...(req.generate ? { generatedPassword: "Nova-Gerada_456.defUVW" } : {}) };
+      }
       else if (url.endsWith("/credentials")) {
         body = {
           credentials: {
@@ -289,7 +296,7 @@ describe("MailDomainPage — senha das caixas nunca visível", () => {
     expect(create).toBeDisabled();
     await user.type(screen.getByLabelText("Senha da caixa"), "senha-forte-da-pessoa");
     await user.type(screen.getByLabelText("Repita a senha"), "senha-diferente-xx");
-    expect(screen.getByText(/As senhas não conferem/)).toBeInTheDocument();
+    expect(screen.getByText(/As duas senhas não são iguais/)).toBeInTheDocument();
     expect(create).toBeDisabled();
     await user.clear(screen.getByLabelText("Repita a senha"));
     await user.type(screen.getByLabelText("Repita a senha"), "senha-forte-da-pessoa");
@@ -334,7 +341,7 @@ describe("MailDomainPage — senha das caixas nunca visível", () => {
     await user.click(await screen.findByRole("button", { name: /Trocar senha/ }));
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("Nova senha"), "nova-senha-forte-123");
-    await user.type(within(dialog).getByLabelText("Repita a nova senha"), "nova-senha-forte-123");
+    await user.type(within(dialog).getByLabelText("Repita a senha"), "nova-senha-forte-123");
     await user.click(within(dialog).getByRole("button", { name: /Salvar nova senha/ }));
     await waitFor(() =>
       expect(calls.find((c) => c.method === "PUT")).toEqual({
@@ -546,5 +553,42 @@ describe("MailDomainPage — endereço com ?aba=dns", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByRole("table")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Pedido do dono do produto (02/10/2026): digitar a senha OU pedir uma forte
+ * ao painel, mostrada uma única vez — ao criar e ao trocar, também na aba
+ * Caixas (antes só o e-mail do projeto oferecia).
+ */
+describe("Caixas — senha gerada pelo painel", () => {
+  it("criar com 'Gerar uma senha forte para mim': pede ao servidor e mostra a senha uma única vez", async () => {
+    const calls = mockMailboxApi();
+    const user = userEvent.setup();
+    await renderPage({ openDns: false });
+    await user.type(await screen.findByPlaceholderText("contato"), "vendas");
+    await user.click(screen.getByLabelText("Gerar uma senha forte para mim"));
+    await user.click(screen.getByRole("button", { name: /Criar caixa/ }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "POST" && c.url.endsWith("/mailboxes"))?.body).toEqual({
+        localPart: "vendas",
+        generatePassword: true,
+      }),
+    );
+    expect(await screen.findByTestId("generated-password")).toHaveTextContent("Gerada-Forte_123.abcXYZ");
+    await user.click(screen.getByRole("button", { name: /Já guardei/ }));
+    expect(document.body.textContent).not.toContain("Gerada-Forte_123.abcXYZ");
+  });
+
+  it("trocar com senha gerada: PUT com generate e a senha nova aparece uma vez", async () => {
+    const calls = mockMailboxApi([USER_BOX]);
+    const user = userEvent.setup();
+    await renderPage({ openDns: false });
+    await user.click(await screen.findByRole("button", { name: /Trocar senha/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByLabelText("Gerar uma senha forte para mim"));
+    await user.click(within(dialog).getByRole("button", { name: /Salvar nova senha/ }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ generate: true }));
+    expect(await screen.findByTestId("generated-password")).toHaveTextContent("Nova-Gerada_456.defUVW");
   });
 });

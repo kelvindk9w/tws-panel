@@ -112,12 +112,18 @@ const createMailboxSchema = {
   },
   body: {
     type: "object",
-    required: ["localPart", "password"],
+    required: ["localPart"],
     additionalProperties: false,
     properties: {
       localPart: MAILBOX_LOCAL_PART_SCHEMA,
       password: MAILBOX_PASSWORD_SCHEMA,
+      generatePassword: { type: "boolean" },
     },
+    // a senha da pessoa OU "gere uma forte para mim"
+    anyOf: [
+      { required: ["password"] },
+      { required: ["generatePassword"], properties: { generatePassword: { const: true } } },
+    ],
   },
 } as const;
 
@@ -283,6 +289,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   app.deployService.setEnvProvider(service.envForProject);
   // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…).
   app.deployService.setLinkedEnvProvider?.(service.linkedEnvForProject);
+  // …e de onde vem cada uma (só nomes), para a seção Variáveis.
+  app.deployService.setEnvLinkSourcesProvider?.(service.envLinksForProject);
   // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
   // que o Stalwart passa a usar (ver MailService.syncTls).
   app.deployService.setMailHostsProvider(() => service.mailHosts());
@@ -521,17 +529,20 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     { schema: createMailboxSchema },
     async (request, reply) => {
       try {
-        const { mailbox } = await service.createMailbox(
+        const generate = request.body?.generatePassword === true;
+        const { mailbox, generatedPassword } = await service.createMailbox(
           request.params.domain,
           request.body?.localPart ?? "",
-          request.body?.password ?? "",
+          generate ? undefined : request.body?.password,
+          ...(generate ? [{ generate: true }] : []),
         );
         await app.auditService.record({
           action: "mail.mailbox.create",
           target: `${mailbox.localPart}@${request.params.domain}`,
           detail: `Caixa de e-mail ${mailbox.localPart}@${request.params.domain} criada.`,
         });
-        const response: MailboxResponse = { mailbox };
+        // a senha gerada sai só nesta resposta (nunca vai para a auditoria)
+        const response: MailboxResponse = generatedPassword ? { mailbox, generatedPassword } : { mailbox };
         return reply.code(201).send(response);
       } catch (err) {
         return sendError(reply, err);

@@ -635,3 +635,33 @@ describe("PUT /api/projects/:id/email/links", () => {
     expect(set).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/mail/domains/:domain/mailboxes — senha gerada", () => {
+  it("aceita generatePassword sem senha e devolve a senha gerada só nesta resposta", async () => {
+    const create = spyOn("createMailbox").mockResolvedValue({
+      mailbox: { id: "vendas@exemplo.com", localPart: "vendas", domain: "exemplo.com", kind: "user", createdAt: new Date().toISOString() },
+      generatedPassword: "Gerada-Forte_123.abcXYZ",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/mail/domains/exemplo.com/mailboxes",
+      headers: auth,
+      payload: { localPart: "vendas", generatePassword: true },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(create).toHaveBeenCalledWith("exemplo.com", "vendas", undefined, { generate: true });
+    expect(res.json().generatedPassword).toBe("Gerada-Forte_123.abcXYZ");
+  });
+
+  it("sem senha e sem generatePassword: 400", async () => {
+    const create = spyOn("createMailbox");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/mail/domains/exemplo.com/mailboxes",
+      headers: auth,
+      payload: { localPart: "vendas" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+  });
+});

@@ -174,4 +174,92 @@ describe("Combobox", () => {
     await user.click(screen.getByRole("combobox"));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
+
+  /**
+   * Validação real (03/10/2026): o dono procurou MAIL_FROM_NAME e não achou —
+   * os nomes que o painel já entrega sumiam da lista. Agora aparecem
+   * desabilitados, com o motivo, e não podem ser escolhidos.
+   */
+  describe("opção desabilitada", () => {
+    const WITH_DISABLED: ComboboxOption[] = [
+      { value: "", label: "mesmo nome (padrão)" },
+      { value: "MAIL_FROM_NAME", label: "MAIL_FROM_NAME", hint: "o painel já entrega com este nome", disabled: true },
+      { value: "SMTP_SENHA", label: "SMTP_SENHA", hint: "do .env.example" },
+      { value: "SMTP_HOST", label: "SMTP_HOST", hint: "o painel já entrega com este nome", disabled: true },
+      { value: "SMTP_USUARIO", label: "SMTP_USUARIO", hint: "do .env.example" },
+    ];
+
+    function Disabled({ onChange }: { onChange: (v: string) => void }) {
+      return (
+        <Combobox aria-label="x" options={WITH_DISABLED} value="" onChange={onChange} allowCreate createLabel={(q) => `Usar o nome novo ${q}`} />
+      );
+    }
+
+    it("aparece com aria-disabled e o motivo; clicar não escolhe nem fecha", async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<Disabled onChange={onChange} />);
+      await user.click(screen.getByRole("combobox"));
+      await user.type(screen.getByRole("combobox"), "mail_from");
+      const opt = screen.getByRole("option", { name: /MAIL_FROM_NAME/ });
+      expect(opt).toHaveAttribute("aria-disabled", "true");
+      expect(opt).toHaveTextContent("o painel já entrega com este nome");
+      // não oferece "usar o nome novo" para um nome que está na lista
+      expect(screen.queryByRole("option", { name: /Usar o nome novo/ })).toBeInTheDocument();
+      await user.click(opt);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+      await user.clear(screen.getByRole("combobox"));
+      await user.type(screen.getByRole("combobox"), "MAIL_FROM_NAME");
+      expect(screen.queryByRole("option", { name: /Usar o nome novo/ })).not.toBeInTheDocument();
+    });
+
+    it("teclado pula as desabilitadas; Enter nunca escolhe uma delas", async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<Disabled onChange={onChange} />);
+      const input = screen.getByRole("combobox");
+      await user.click(input);
+      await user.type(input, "smtp");
+      // primeira ativa é a primeira habilitada (SMTP_SENHA), não SMTP_HOST
+      const ids = () => screen.getAllByRole("option").map((o) => o.id);
+      const label = (id: string | null) => document.getElementById(id ?? "")?.textContent ?? "";
+      expect(label(input.getAttribute("aria-activedescendant"))).toMatch(/^SMTP_SENHA/);
+      await user.keyboard("{ArrowDown}");
+      expect(label(input.getAttribute("aria-activedescendant"))).toMatch(/^SMTP_USUARIO/);
+      await user.keyboard("{ArrowDown}");
+      expect(label(input.getAttribute("aria-activedescendant"))).toBe("Usar o nome novo smtp");
+      await user.keyboard("{ArrowDown}");
+      // dá a volta
+      expect(label(input.getAttribute("aria-activedescendant"))).toMatch(/^SMTP_SENHA/);
+      await user.keyboard("{ArrowUp}{ArrowUp}");
+      // para cima também pula SMTP_HOST
+      expect(label(input.getAttribute("aria-activedescendant"))).toMatch(/^SMTP_USUARIO/);
+      expect(ids()).toHaveLength(4);
+      await user.keyboard("{Enter}");
+      expect(onChange).toHaveBeenCalledWith("SMTP_USUARIO");
+    });
+
+    it("só desabilitadas na busca: nenhuma fica ativa e Enter não faz nada", async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<Combobox aria-label="x" options={WITH_DISABLED} value="" onChange={onChange} />);
+      const input = screen.getByRole("combobox");
+      await user.click(input);
+      await user.type(input, "host");
+      expect(screen.getByRole("option", { name: /SMTP_HOST/ })).toHaveAttribute("aria-disabled", "true");
+      expect(input).not.toHaveAttribute("aria-activedescendant");
+      await user.keyboard("{ArrowDown}{ArrowUp}{Enter}");
+      expect(input).not.toHaveAttribute("aria-activedescendant");
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("lista longa rola por dentro (no máximo ~8 itens à vista)", async () => {
+      const user = userEvent.setup();
+      render(<Disabled onChange={vi.fn()} />);
+      await user.click(screen.getByRole("combobox"));
+      expect(screen.getByRole("listbox").className).toMatch(/max-h-\[17rem\]/);
+      expect(screen.getByRole("listbox").className).toMatch(/overflow-y-auto/);
+    });
+  });
 });

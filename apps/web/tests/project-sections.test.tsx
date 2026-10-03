@@ -341,7 +341,11 @@ describe("ProjectEnvCard — o que o painel fornece e variável alternativa", ()
         ],
       },
     }));
-    render(<ProjectEnvCard project={PROJECT} />);
+    render(
+      <MemoryRouter>
+        <ProjectEnvCard project={PROJECT} />
+      </MemoryRouter>,
+    );
     await screen.findByDisplayValue("SMTP_HOST");
     expect(screen.getByTestId("env-row-SMTP_HOST")).toHaveTextContent(/fornecida pelo E-mail do projeto/);
     expect(screen.getByTestId("env-row-MAIL_FROM")).toHaveTextContent(/fornecida pelo E-mail do projeto/);
@@ -353,7 +357,7 @@ describe("ProjectEnvCard — o que o painel fornece e variável alternativa", ()
    * Variáveis ligadas ao e-mail do projeto (02/10/2026): o painel entrega no
    * deploy; aparecem na seção como fornecidas, sem valor (a senha nunca).
    */
-  it("fornecidas que não estão na lista aparecem à parte, só com o nome, e levam ao e-mail do projeto", async () => {
+  it("fornecidas que não estão na lista aparecem nela só com o nome; o aviso leva ao e-mail do projeto", async () => {
     apiFetchMock.mockImplementation(async () => ({
       vars: [{ key: "SMTP_HOST", value: "" }],
       provided: ["MAIL_FROM", "SMTP_HOST", "SMTP_PASS", "SMTP_SENHA"],
@@ -365,11 +369,14 @@ describe("ProjectEnvCard — o que o painel fornece e variável alternativa", ()
       </MemoryRouter>,
     );
     const box = await screen.findByTestId("env-provided");
-    expect(box).toHaveTextContent(/fornecidas pelo e-mail do projeto/i);
-    for (const name of ["MAIL_FROM", "SMTP_PASS", "SMTP_SENHA"]) expect(box).toHaveTextContent(name);
-    // SMTP_HOST já é uma linha da lista: não repete
-    expect(box).not.toHaveTextContent("SMTP_HOST");
+    expect(box).toHaveTextContent(/O e-mail do projeto entrega estas variáveis no deploy: SMTP_HOST, SMTP_PASS, MAIL_FROM\./);
     expect(box.querySelector("a")).toHaveAttribute("href", "/projects/p1/email");
+    // as que não são linhas da lista aparecem nela só com o nome
+    for (const name of ["MAIL_FROM", "SMTP_PASS", "SMTP_SENHA"]) {
+      expect(screen.getByTestId(`env-panel-${name}`)).toHaveTextContent(/fornecida pelo e-mail do projeto/);
+    }
+    // SMTP_HOST já é uma linha da lista: não repete
+    expect(screen.queryByTestId("env-panel-SMTP_HOST")).not.toBeInTheDocument();
   });
 
   it("sem o e-mail: MAIL_FROM só é exigida se EMAIL_DE estiver vazia", async () => {

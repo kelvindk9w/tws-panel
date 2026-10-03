@@ -22,8 +22,10 @@ import {
   type DomainHttpsStatus,
   type GitReadCredential,
   type GuardrailReport,
+  type EnvExampleVariable,
   type Project,
   type ProjectCredentialInfo,
+  type ProjectEmailValueKey,
   type ProjectStatus,
   type SetProjectCredentialRequest,
   type UpdateProjectRequest,
@@ -37,6 +39,7 @@ import {
   projectWorkDir,
   runGuardrails,
   composeVariables,
+  readEnvExamples,
   type CertificateStatus,
   type ComposeVariable,
   type EngineContext,
@@ -155,6 +158,8 @@ export class DeployService {
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…). */
   private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
+  /** De onde vem cada variável ligada (nome → valor do e-mail), só nomes. */
+  private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
   /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
   private mailHostsProvider: (() => Promise<string[]>) | null = null;
   /** Certificados manuais em vigor (página Certificados), registrados no boot. */
@@ -274,6 +279,11 @@ export class DeployService {
     this.linkedMailEnv = provider;
   }
 
+  /** Registra quem informa de onde vem cada variável ligada ao e-mail (SMTP_SENHA ← SMTP_PASS). */
+  setEnvLinkSourcesProvider(provider: (project: Project) => Promise<Record<string, ProjectEmailValueKey>>): void {
+    this.envLinkSourcesProvider = provider;
+  }
+
   /** Registra quem informa os hosts de e-mail que o proxy central precisa servir. */
   setMailHostsProvider(provider: () => Promise<string[]>): void {
     this.mailHostsProvider = provider;
@@ -346,6 +356,28 @@ export class DeployService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Nomes citados nos arquivos de exemplo do código (`.env.example` e
+   * variações), na raiz e na pasta do compose — o app pode ler variáveis
+   * por `env_file` sem citá-las no compose. Só nomes; null = nenhum arquivo.
+   */
+  async envExampleFor(id: string): Promise<{ files: string[]; variables: EnvExampleVariable[] } | null> {
+    const project = await this.requireProject(id);
+    const composeFile = project.detection?.type === "compose" ? project.detection.composeFile : null;
+    const dirs = ["", ...(composeFile ? [path.posix.dirname(composeFile).replace(/^\.$/, "")] : [])];
+    try {
+      return await readEnvExamples(projectSrcDir({ projectsDir: this.projectsDir }, project), dirs);
+    } catch {
+      return null; // código ainda não baixado
+    }
+  }
+
+  /** Variáveis ligadas ao e-mail do projeto: nome → valor de origem (só nomes). */
+  async envLinkSources(id: string): Promise<Record<string, ProjectEmailValueKey>> {
+    const project = await this.requireProject(id);
+    return (await this.envLinkSourcesProvider?.(project)) ?? {};
   }
 
   /** Certificado HTTPS de cada domínio do projeto (Visão geral). */

@@ -26,8 +26,8 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-async function projeto() {
-  return svc.createProject({ name: "api", ingestMode: "git", source: "https://github.com/k/api", branch: "main", domain: "api.localhost" });
+async function projeto(name = "api") {
+  return svc.createProject({ name, ingestMode: "git", source: `https://github.com/k/${name}`, branch: "main", domain: `${name}.localhost` });
 }
 
 describe("variáveis do projeto no deploy", () => {
@@ -139,5 +139,65 @@ describe("deploy barrado antes de começar quando falta variável obrigatória",
     expect(await svc.providedEnvKeys(p.id)).toEqual(["MAIL_FROM", "SMTP_HOST"]);
     // (sem chamar startDeploy: ele dispararia o deploy de verdade em segundo plano)
     expect(await svc.missingEnvFor(p.id)).toEqual([]);
+  });
+});
+
+/**
+ * Validação real (cassino, 03/10/2026): SMTP_USUARIO e SMTP_SENHA chegam ao
+ * app por `env_file: .env`, sem `${...}` no compose; só o `.env.example` do
+ * repositório as cita. A tela passa a oferecer esses nomes (nunca os valores).
+ */
+describe("nomes do .env.example do código", () => {
+  async function comCodigo(files: Record<string, string>, composeFile?: string, name = "api") {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const p = await projeto(name);
+    const src = path.join(dataDir, "projects", p.slug, "src");
+    for (const [rel, content] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(src, rel)), { recursive: true });
+      await writeFile(path.join(src, rel), content);
+    }
+    if (composeFile) {
+      const proj = (await svc.getProject(p.id))!;
+      proj.detection = { type: "compose", composeFile } as never;
+    }
+    return p;
+  }
+
+  it("lê o da raiz e o da pasta do compose; só nomes, com o arquivo de origem", async () => {
+    const p = await comCodigo(
+      {
+        ".env.example": "SMTP_HOST=mail\nSMTP_USUARIO=fulano\nSMTP_SENHA=troque-me\n",
+        "deploy/compose.prod.yaml": "services: {}\n",
+        "deploy/.env.sample": "EMAIL_DE=a@b.c\n",
+      },
+      "deploy/compose.prod.yaml",
+    );
+    const r = await svc.envExampleFor(p.id);
+    expect(r).toEqual({
+      files: [".env.example", "deploy/.env.sample"],
+      variables: [
+        { name: "SMTP_HOST", file: ".env.example" },
+        { name: "SMTP_USUARIO", file: ".env.example" },
+        { name: "SMTP_SENHA", file: ".env.example" },
+        { name: "EMAIL_DE", file: "deploy/.env.sample" },
+      ],
+    });
+    expect(JSON.stringify(r)).not.toContain("troque-me");
+  });
+
+  it("projeto com Dockerfile também; sem arquivo de exemplo ou sem código: null", async () => {
+    const p = await comCodigo({ ".env.template": "API_KEY=\n" });
+    expect((await svc.envExampleFor(p.id))?.variables).toEqual([{ name: "API_KEY", file: ".env.template" }]);
+    const vazio = await comCodigo({ "README.md": "oi" }, undefined, "vazio");
+    expect(await svc.envExampleFor(vazio.id)).toBeNull();
+    const semCodigo = await projeto("semcodigo");
+    expect(await svc.envExampleFor(semCodigo.id)).toBeNull();
+  });
+
+  it("ligações ao e-mail: nome → valor de origem, vindo do módulo de e-mail", async () => {
+    const p = await projeto();
+    expect(await svc.envLinkSources(p.id)).toEqual({});
+    svc.setEnvLinkSourcesProvider(async () => ({ SMTP_SENHA: "SMTP_PASS" }));
+    expect(await svc.envLinkSources(p.id)).toEqual({ SMTP_SENHA: "SMTP_PASS" });
   });
 });

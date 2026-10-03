@@ -12,9 +12,15 @@
  * Também: cadastrar ali mesmo o domínio do projeto ("Usar um domínio meu",
  * já preenchido), copiar cada valor e ligar os valores a outras variáveis
  * do app ("Ligar às variáveis do projeto").
+ *
+ * Com o e-mail ativado, o card tem abas (pedido do dono do produto,
+ * 03/10/2026): Remetente (o conteúdo acima), Caixas e DNS do domínio do
+ * projeto — os mesmos painéis da página do domínio, para conferir,
+ * configurar e criar caixas (ex.: suporte@) sem sair do projeto. Cada aba
+ * tem endereço próprio: ?email=caixas e ?email=dns.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import type {
   MailboxResponse,
   MailDomainListResponse,
@@ -33,13 +39,16 @@ import {
   PasswordChoice,
   passwordChoiceProblem,
   type PasswordChoiceState,
-} from "@/components/project/MailboxPasswordChoice";
+} from "@/components/mail/MailboxPasswordChoice";
 import { ExistingMailWarning } from "@/components/mail/ExistingMailWarning";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { TestEmailModal } from "@/components/mail/TestEmailCard";
+import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
+import { DnsChecklistPanel } from "@/components/mail/DnsChecklistPanel";
+import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
   Check,
@@ -58,6 +67,18 @@ import {
   Send,
   Smartphone,
 } from "lucide-react";
+
+/** Abas do e-mail ativado; o valor vai na URL (?email=caixas, ?email=dns). */
+type EmailTab = "remetente" | "caixas" | "dns";
+const EMAIL_TABS: ReadonlyArray<readonly [EmailTab, string]> = [
+  ["remetente", "Remetente"],
+  ["caixas", "Caixas"],
+  ["dns", "DNS"],
+];
+
+function tabFromParam(value: string | null): EmailTab {
+  return value === "caixas" || value === "dns" ? value : "remetente";
+}
 
 function dnsReady(domain: MailDomainSummary | undefined): boolean {
   return Boolean(domain?.lastVerify && domain.lastVerify.ok >= domain.lastVerify.total);
@@ -106,6 +127,20 @@ export function ProjectEmailCard({
   /** Domínio recém-cadastrado aqui: mostra o próximo passo (DNS e verificar). */
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = tabFromParam(searchParams.get("email"));
+
+  function openTab(next: EmailTab) {
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev);
+        if (next === "remetente") params.delete("email");
+        else params.set("email", next);
+        return params;
+      },
+      { replace: true },
+    );
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -261,7 +296,11 @@ export function ProjectEmailCard({
   const domain = domains.find((d) => d.name === selectedDomain);
   const previewAddress = `${fromLocal.trim().toLowerCase() || projectSlug}@${selectedDomain}`;
   const previewName = fromName.trim() || projectName;
-  const showForm = !email.enabled || editing;
+  // e-mail ativado: abas Remetente, Caixas e DNS do domínio do projeto
+  const tabbed = email.enabled && Boolean(email.domain);
+  const activeTab: EmailTab = tabbed ? tab : "remetente";
+  const onSender = activeTab === "remetente";
+  const showForm = onSender && (!email.enabled || editing);
   // Caixa nova (ativação, endereço trocado ou registro antigo com alias) pede a senha.
   const needsPassword = !email.enabled || previewAddress !== email.mailbox;
   const passwordProblem = needsPassword ? passwordChoiceProblem(passwordChoice) : null;
@@ -285,6 +324,53 @@ export function ProjectEmailCard({
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         {generated && <GeneratedPasswordNotice password={generated} onDone={() => setGenerated(null)} />}
+
+        {tabbed && email.domain && (
+          <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1 border-b">
+            <div role="tablist" aria-label="Partes do e-mail do projeto" className="flex gap-1">
+              {EMAIL_TABS.map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  id={`email-tab-${key}`}
+                  aria-selected={activeTab === key}
+                  onClick={() => openTab(key)}
+                  className={cn(
+                    "-mb-px border-b-2 px-3 py-2 text-sm transition-colors sm:px-4",
+                    activeTab === key
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Link
+              to={`/mail/${encodeURIComponent(email.domain)}${activeTab === "dns" ? "?aba=dns" : ""}`}
+              className="mb-2 flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              <ExternalLink className="h-3 w-3" /> Abrir na página E-mail
+            </Link>
+          </div>
+        )}
+
+        {tabbed && email.domain && activeTab === "caixas" && (
+          <div role="tabpanel" aria-labelledby="email-tab-caixas" className="flex flex-col gap-4">
+            <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              Caixas do domínio {email.domain}. A destacada é a caixa do projeto; você pode criar outras no mesmo
+              domínio (ex.: suporte@{email.domain}).
+            </p>
+            <MailboxesPanel domain={email.domain} highlight={email.mailbox} />
+          </div>
+        )}
+
+        {tabbed && email.domain && activeTab === "dns" && (
+          <div role="tabpanel" aria-labelledby="email-tab-dns" className="flex flex-col gap-4">
+            <DnsChecklistPanel domain={email.domain} />
+          </div>
+        )}
 
         {showForm && domains.length === 0 && (
           <p className="text-sm text-muted-foreground">
@@ -460,7 +546,7 @@ export function ProjectEmailCard({
           </div>
         )}
 
-        {email.enabled && !editing && (
+        {onSender && email.enabled && !editing && (
           <>
             <div className="flex flex-col gap-1 text-sm">
               <p className="text-muted-foreground">Remetente</p>

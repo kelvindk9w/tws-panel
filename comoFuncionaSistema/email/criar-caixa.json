@@ -33,9 +33,16 @@
       {
         "nome": "password",
         "tipo": "string",
-        "obrigatorio": true,
-        "regras": "schema Fastify: obrigatória, minLength MAILBOX_PASSWORD_MIN (12, @paas/core), maxLength 200. No service, requireStrongPassword confere de novo (trim ≥ 12).",
+        "obrigatorio": false,
+        "regras": "Obrigatória, a não ser que generatePassword seja true (anyOf no schema). minLength 12 (MAILBOX_PASSWORD_MIN), maxLength 200.",
         "descricao": "Senha definida pela pessoa (a tela pede duas vezes, em campos de senha)."
+      },
+      {
+        "nome": "generatePassword",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "true = o painel gera uma senha forte (generateStrongPassword: 24 caracteres com maiúscula, minúscula, número e - _ .).",
+        "descricao": "A senha gerada volta UMA única vez em generatedPassword, nesta resposta; nunca vai para a auditoria nem volta depois."
       }
     ],
     "headers": []
@@ -144,6 +151,7 @@
   ],
   "observacoes": [
     "Pedido do dono do produto (02/10/2026): a senha de uma caixa nunca fica visível. Antes o painel gerava uma senha e a mostrava na criação e em 'Ver credenciais'; agora a pessoa define a senha e, se esquecer, troca (trocar-senha-caixa.json).",
-    "A senha continua guardada em data/mail/mail.json, porque o painel precisa dela para o e-mail de teste e para entregar SMTP_PASS às caixas técnicas dos projetos; risco caso o arquivo ou um backup vaze."
+    "A senha continua guardada em data/mail/mail.json, porque o painel precisa dela para o e-mail de teste e para entregar SMTP_PASS às caixas técnicas dos projetos; risco caso o arquivo ou um backup vaze.",
+    "03/10/2026 (pedido do dono do produto): na aba Caixas (componente compartilhado components/mail/MailboxesPanel.tsx, usado na página do domínio e no e-mail do projeto) a pessoa escolhe 'Digitar uma senha' ou 'Gerar uma senha forte para mim' (components/mail/MailboxPasswordChoice.tsx). A gerada aparece uma vez, com copiar e 'Já guardei'. O mesmo vale para 'Trocar senha' (PUT /api/mail/mailboxes/:id/password com generate: true)."
   ]
 }

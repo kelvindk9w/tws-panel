@@ -219,8 +219,11 @@ export interface CreateMailboxRequest {
   /**
    * Senha definida pela pessoa (mínimo MAILBOX_PASSWORD_MIN). O painel nunca
    * a mostra de volta: quem esqueceu troca (ChangeMailboxPasswordRequest).
+   * Ausente com `generatePassword: true`: o painel gera uma forte e a devolve
+   * uma única vez em MailboxResponse.generatedPassword.
    */
-  password: string;
+  password?: string;
+  generatePassword?: boolean;
 }
 
 /**

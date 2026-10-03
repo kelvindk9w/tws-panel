@@ -41,7 +41,7 @@
       "packages/core/src/mail.ts",
       "packages/deploy/src/engine.ts"
     ],
-    "web": ["apps/web/src/pages/MailPage.tsx", "apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/mail/TestEmailCard.tsx"],
+    "web": ["apps/web/src/pages/MailPage.tsx", "apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/mail/TestEmailCard.tsx", "apps/web/src/components/mail/MailboxesPanel.tsx", "apps/web/src/components/mail/DnsChecklistPanel.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"],
     "testes": [
       "packages/mailer/tests/mailboxes.test.ts",
       "packages/mailer/tests/blacklist.test.ts",
@@ -60,6 +60,8 @@
       "packages/mailer/tests/smtp-send.test.ts",
       "packages/mailer/tests/delivery-status.test.ts",
       "apps/web/tests/test-email-card.test.tsx",
+      "apps/web/tests/mail-panels.test.tsx",
+      "apps/web/tests/project-email-card.test.tsx",
       "scripts/test-mail.mts"
     ]
   },
@@ -102,6 +104,9 @@
     { "id": "habilitar-email-projeto", "metodo": "POST", "url": "/api/projects/:id/email", "resumo": "Ativa ou altera o e-mail do projeto: o endereço de envio vira a caixa do projeto, com senha (liga a injeção SMTP).", "arquivo": "habilitar-email-projeto.json" },
     { "id": "desabilitar-email-projeto", "metodo": "DELETE", "url": "/api/projects/:id/email", "resumo": "Desativa a injeção SMTP no próximo deploy do projeto.", "arquivo": "desabilitar-email-projeto.json" },
     { "id": "ligar-variaveis-email-projeto", "metodo": "PUT", "url": "/api/projects/:id/email/links", "resumo": "Liga variáveis do app a valores do e-mail do projeto (guarda só o mapeamento; o deploy entrega o valor atual).", "arquivo": "ligar-variaveis-email-projeto.json" }
+  ],
+  "telas": [
+    { "id": "tela-email-projeto", "rota": "/projects/:id/email", "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente, Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).", "arquivo": "tela-email-projeto.json" }
   ],
   "dependenciasGlobais": ["global/auth-plugin.json"],
   "pontosDeAtencao": [
