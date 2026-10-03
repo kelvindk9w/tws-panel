@@ -46,6 +46,23 @@ describe("variáveis do projeto no deploy", () => {
     expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "587" });
   });
 
+  /**
+   * Variáveis do app ligadas a valores do e-mail (02/10/2026): vão para o
+   * .env como as do operador (o compose escolhe o destino), não para todos
+   * os serviços; contam como fornecidas; a do operador continua vencendo.
+   */
+  it("ligadas ao e-mail: entram no .env, contam como fornecidas e não vão para todos os serviços", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PASS: "segredo" }));
+    svc.setLinkedEnvProvider(async () => ({ SMTP_SENHA: "segredo", EMAIL_HOST: "mail" }));
+    await svc.setEnv(p.id, [{ key: "EMAIL_HOST", value: "outro" }]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; injectEnvForProject: Fn } }).engineCtx;
+    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PASS: "segredo", SMTP_SENHA: "segredo", EMAIL_HOST: "outro" });
+    expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PASS: "segredo" });
+    expect(await svc.providedEnvKeys(p.id)).toEqual(["EMAIL_HOST", "SMTP_HOST", "SMTP_PASS", "SMTP_SENHA"]);
+  });
+
   it("auditoria só com os nomes, nunca os valores", async () => {
     const p = await projeto();
     await svc.setEnv(p.id, [{ key: "API_KEY", value: "valor-super-secreto" }]);

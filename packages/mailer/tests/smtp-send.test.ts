@@ -277,6 +277,74 @@ describe("buildTestMessage", () => {
   });
 });
 
+/**
+ * E-mail de teste da caixa de um projeto (02/10/2026): no Gmail aparecia só
+ * "cassino" — o teste saía sem nome de exibição. Agora vai "Nome" <endereço>,
+ * com acentos codificados (RFC 2047) e sem brecha para cabeçalho extra.
+ */
+describe("buildTestMessage — nome de exibição", () => {
+  const base = {
+    from: "contato@exemplo.com.br",
+    to: "c@d.com",
+    subject: "S",
+    text: "x",
+    messageId: "<m@b.com>",
+    date: new Date(0),
+  };
+  /** Linha From e as continuações dela (começam com espaço). */
+  function fromLines(raw: string): string[] {
+    const lines = raw.split("\r\n");
+    const start = lines.findIndex((l) => l.startsWith("From:"));
+    const out = [lines[start]!];
+    for (let i = start + 1; lines[i]!.startsWith(" "); i += 1) out.push(lines[i]!);
+    return out;
+  }
+  function decodeWords(lines: string[]): { words: string[]; text: string } {
+    const words = lines.join("").match(/=\?UTF-8\?B\?[^?]+\?=/g) ?? [];
+    return { words, text: words.map((w) => Buffer.from(w.slice(10, -2), "base64").toString("utf8")).join("") };
+  }
+
+  it("ASCII: nome entre aspas antes do endereço", () => {
+    expect(buildTestMessage({ ...base, fromName: "Contato Loja" })).toContain(
+      'From: "Contato Loja" <contato@exemplo.com.br>\r\n',
+    );
+  });
+
+  it("acentos: palavra codificada UTF-8 (RFC 2047), tudo ASCII no fio", () => {
+    const raw = buildTestMessage({ ...base, fromName: "Contato - Cassino Ação" });
+    expect(/^[\x00-\x7f]*$/.test(raw)).toBe(true);
+    const lines = fromLines(raw);
+    expect(decodeWords(lines).text).toBe("Contato - Cassino Ação");
+    expect(lines.at(-1)).toMatch(/ <contato@exemplo\.com\.br>$/);
+  });
+
+  it("nome longo com acentos: várias palavras de até 75 caracteres, sem cortar letra ao meio", () => {
+    const name = "Ação ".repeat(16).trim();
+    const lines = fromLines(buildTestMessage({ ...base, fromName: name }));
+    expect(lines.length).toBeGreaterThan(1);
+    const { words, text } = decodeWords(lines);
+    for (const w of words) expect(w.length).toBeLessThanOrEqual(75);
+    expect(text).toBe(name);
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(78);
+  });
+
+  it("aspas e barra no nome são escapadas; quebra de linha é removida (sem injeção de cabeçalho)", () => {
+    const raw = buildTestMessage({ ...base, fromName: 'A "B" \\ C\r\nBcc: x@y.com' });
+    expect(raw).toContain('From: "A \\"B\\" \\\\ CBcc: x@y.com" <contato@exemplo.com.br>\r\n');
+    expect(raw.split("\r\n").some((l) => l.startsWith("Bcc:"))).toBe(false);
+  });
+
+  it("nome vazio ou só espaços: só o endereço", () => {
+    expect(buildTestMessage({ ...base, fromName: "  " })).toContain("From: contato@exemplo.com.br\r\n");
+  });
+
+  it("sendSmtpMail repassa o nome ao cabeçalho From", async () => {
+    const server = await fakeSmtp();
+    await sendSmtpMail({ ...options(server.port), fromName: "Loja Exemplo" });
+    expect(server.data).toContain('From: "Loja Exemplo" <');
+  });
+});
+
 describe("xtext", () => {
   it("codifica +, = e caracteres fora do ASCII visível (RFC 3461)", () => {
     expect(xtext("tws-teste-abc")).toBe("tws-teste-abc");

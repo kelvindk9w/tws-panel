@@ -153,6 +153,8 @@ export class DeployService {
   private readonly env: ProjectEnvStore;
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
+  /** Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…). */
+  private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
   private mailHostsProvider: (() => Promise<string[]>) | null = null;
   /** Certificados manuais em vigor (página Certificados), registrados no boot. */
@@ -189,9 +191,11 @@ export class DeployService {
       staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
       caddyHttpPort: config.caddyHttpPort,
       caddyHttpsPort: config.caddyHttpsPort,
-      // E-mail (SMTP) + variáveis do projeto; com o mesmo nome, a do operador vence.
+      // E-mail (SMTP), variáveis ligadas a ele e as do projeto; com o mesmo
+      // nome, a do operador vence.
       envForProject: async (project: Project) => ({
         ...((await this.mailEnv?.(project)) ?? {}),
+        ...((await this.linkedMailEnv?.(project)) ?? {}),
         ...(await this.env.asRecord(project.id)),
       }),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
@@ -259,6 +263,15 @@ export class DeployService {
    */
   setEnvProvider(provider: (project: Project) => Promise<Record<string, string>>): void {
     this.mailEnv = provider;
+  }
+
+  /**
+   * Registra o provedor das variáveis do app ligadas a valores do e-mail
+   * (com o valor atual). Vão para o `.env` como as Variáveis do projeto —
+   * não para todos os serviços do compose — e contam como fornecidas.
+   */
+  setLinkedEnvProvider(provider: (project: Project) => Promise<Record<string, string>>): void {
+    this.linkedMailEnv = provider;
   }
 
   /** Registra quem informa os hosts de e-mail que o proxy central precisa servir. */
@@ -341,10 +354,14 @@ export class DeployService {
     return this.engine.httpsStatus(project);
   }
 
-  /** Variáveis que o painel fornece ao projeto sozinho (hoje: as do e-mail, se ativo). */
+  /** Variáveis que o painel fornece ao projeto sozinho: as do e-mail, se ativo, e as ligadas a ele. */
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
-    return Object.keys((await this.mailEnv?.(project)) ?? {}).sort();
+    const keys = new Set([
+      ...Object.keys((await this.mailEnv?.(project)) ?? {}),
+      ...Object.keys((await this.linkedMailEnv?.(project)) ?? {}),
+    ]);
+    return [...keys].sort();
   }
 
   /**

@@ -183,6 +183,44 @@ describe("sendTestEmail — envio", () => {
     expect(test.id).toMatch(/^[a-f0-9]{16}$/);
   });
 
+  /**
+   * Validação real (02/10/2026): o teste da caixa do projeto chegou no Gmail
+   * como "cassino" — saía sem nome. Da caixa de um projeto, vai com o nome
+   * de exibição dele; das outras caixas, sem nome.
+   */
+  it("da caixa de um projeto: From com o nome de exibição do projeto; postmaster@ sem nome", async () => {
+    const contato = `contato@${DOMAIN}`;
+    await writeFile(
+      path.join(dir, "mail", "mail.json"),
+      JSON.stringify({
+        adminSecret: "s",
+        hostname: null,
+        domains: {
+          [DOMAIN]: {
+            name: DOMAIN,
+            dkimSelector: "paas",
+            dkimPublicKey: "x".repeat(120),
+            dkimKeyBits: 2048,
+            dmarcStage: "none",
+            createdAt: new Date(0).toISOString(),
+            lastVerify: null,
+          },
+        },
+        mailboxes: {
+          [`postmaster@${DOMAIN}`]: postmaster(),
+          [contato]: { ...postmaster(), id: contato, localPart: "contato", kind: "project", password: "senha-da-caixa-do-projeto" },
+        },
+        projects: { p1: { domain: DOMAIN, mailbox: contato, enabledAt: new Date(0).toISOString(), fromName: "Contato - Cassino" } },
+      }),
+    );
+    const s = service();
+    await s.sendTestEmail(DOMAIN, TO, contato);
+    expect(sent[0]).toMatchObject({ from: contato, username: contato, fromName: "Contato - Cassino" });
+    clock += 60_000;
+    await s.sendTestEmail(DOMAIN, TO);
+    expect(sent[1]!.fromName).toBeUndefined();
+  });
+
   it("fora de container (desenvolvimento): 127.0.0.1 na porta publicada da 465", async () => {
     await service(false).sendTestEmail(DOMAIN, TO);
     expect(sent[0]).toMatchObject({ host: "127.0.0.1", port: 4650 });
