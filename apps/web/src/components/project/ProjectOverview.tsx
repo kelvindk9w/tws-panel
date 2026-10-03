@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Rocket } from "lucide-react";
+import { ComposeServicesCard } from "./ComposeServices";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
 import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
 
@@ -64,6 +65,7 @@ export function ProjectOverview({
   jobs,
   latestJob,
   onOpenJob,
+  onChanged,
 }: {
   project: Project;
   status: ProjectStatus;
@@ -72,6 +74,8 @@ export function ProjectOverview({
   /** O deploy mais recente com o log (atualizado enquanto roda). */
   latestJob: DeployJob | null;
   onOpenJob: (jobId: string) => void;
+  /** Algo do projeto mudou aqui (entrada do compose, nova leitura): recarregar. */
+  onChanged?: () => void;
 }) {
   const [https, setHttps] = useState<DomainHttpsStatus[] | null>(null);
   const [email, setEmail] = useState<ProjectEmailResponse["email"] | null>(null);
@@ -146,6 +150,10 @@ export function ProjectOverview({
           {job && !active && job.error && <p className="text-sm text-destructive">{job.error}</p>}
         </CardContent>
       </Card>
+
+      {project.detection?.type === "compose" && (
+        <ComposeServicesCard project={project} containers={containers} onChanged={() => onChanged?.()} />
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card data-testid="overview-domains">

@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
+import { ComposeEntryPicker, ComposeServicesList, validPortText } from "@/components/project/ComposeServices";
 
 const INGEST_OPTIONS: Array<{
   mode: IngestMode;
@@ -515,7 +516,25 @@ export function NewProjectPage() {
               </div>
             )}
 
-            {detection.type === "compose" && (
+            {detection.type === "compose" && detection.services && detection.services.length > 0 && (
+              <div data-testid="wizard-compose-services" className="flex flex-col gap-3">
+                <p className="text-sm font-medium">Serviços do compose ({detection.services.length})</p>
+                <ComposeServicesList
+                  services={detection.services}
+                  entryService={proxyService || null}
+                  entryPort={validPortText(proxyPort) ? Number(proxyPort) : null}
+                />
+                <ComposeEntryPicker
+                  services={detection.services}
+                  service={proxyService}
+                  port={proxyPort}
+                  onServiceChange={setProxyService}
+                  onPortChange={setProxyPort}
+                />
+              </div>
+            )}
+
+            {detection.type === "compose" && !(detection.services && detection.services.length > 0) && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1.5 text-sm">
                   Serviço web (upstream do proxy)
@@ -536,7 +555,13 @@ export function NewProjectPage() {
               <Button variant="outline" onClick={() => setStep(0)}>
                 <ArrowLeft className="h-4 w-4" /> Voltar
               </Button>
-              <Button disabled={detection.type === "unknown"} onClick={() => setStep(2)}>
+              <Button
+                disabled={
+                  detection.type === "unknown" ||
+                  (detection.type === "compose" && proxyPort.trim() !== "" && !validPortText(proxyPort))
+                }
+                onClick={() => setStep(2)}
+              >
                 Continuar <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
