@@ -437,7 +437,7 @@ describe("ProjectEmailCard — ligar às variáveis do projeto", () => {
     expect(within(dialog).getByRole("button", { name: /Salvar ligações/ })).toBeDisabled();
   });
 
-  it("variável já preenchida em Variáveis: avisa que o valor de lá vence", async () => {
+  it("variável já salva em Variáveis: avisa que, com a ligação, o valor de lá é ignorado", async () => {
     serve(ON, { envList: { ...ENV_LIST, vars: [{ key: "EMAIL_DE", value: "x@y.com" }] } });
     const user = userEvent.setup();
     renderCard();
@@ -446,7 +446,7 @@ describe("ProjectEmailCard — ligar às variáveis do projeto", () => {
     const from = within(dialog).getByRole("combobox", { name: "Variável que recebe MAIL_FROM" });
     await user.click(from);
     await user.click(within(dialog).getByRole("option", { name: /EMAIL_DE/ }));
-    expect(within(dialog).getByText(/EMAIL_DE já tem valor em Variáveis/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/EMAIL_DE também está salva em Variáveis: com a ligação, o deploy usa o valor do e-mail e ignora o de lá/)).toBeInTheDocument();
   });
 
   it("abre com as ligações salvas; Esc fecha", async () => {

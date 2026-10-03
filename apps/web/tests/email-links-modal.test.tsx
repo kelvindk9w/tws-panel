@@ -147,3 +147,46 @@ describe("EmailLinksModal — opções do seletor", () => {
     ]);
   });
 });
+
+/**
+ * Validação real (cassino, 03/10/2026): SMTP_PORTA, SMTP_USUARIO e SMTP_SENHA
+ * chegaram ao app, mas MAIL_FROM → EMAIL_DE não. O fluxo inteiro, com os
+ * nomes reais: o modal manda as quatro ligações; EMAIL_DE já estava salva nas
+ * Variáveis (é obrigatória no compose) e o deploy usava o valor de lá — agora
+ * a ligação vence, e o modal diz isso.
+ */
+describe("EmailLinksModal — fluxo do cassino (MAIL_FROM → EMAIL_DE)", () => {
+  it("manda as quatro ligações, EMAIL_DE inclusive, e avisa que o valor salvo em Variáveis passa a ser ignorado", async () => {
+    const saved = { ...EMAIL, envLinks: { SMTP_PORTA: "SMTP_PORT", SMTP_USUARIO: "SMTP_USER", SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" } };
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/env") return { ...ENV, vars: [...ENV.vars, { key: "EMAIL_DE", value: "remetente@example.com" }] };
+      if (path === "/api/projects/p1/email/links" && init?.method === "PUT") return { email: saved };
+      throw new Error(path);
+    });
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<EmailLinksModal projectId="p1" email={EMAIL} onClose={vi.fn()} onSaved={onSaved} />);
+    const dialog = await screen.findByRole("dialog");
+    await vi.waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/env", undefined));
+    const pick = async (key: string, name: string) => {
+      const box = within(dialog).getByRole("combobox", { name: `Variável que recebe ${key}` });
+      await user.click(box);
+      await user.type(box, name);
+      await user.click(option(name));
+      expect(box).toHaveValue(name);
+    };
+    await pick("SMTP_PORT", "SMTP_PORTA");
+    await pick("SMTP_USER", "SMTP_USUARIO");
+    await pick("SMTP_PASS", "SMTP_SENHA");
+    await pick("MAIL_FROM", "EMAIL_DE");
+    expect(
+      within(dialog).getByText(/EMAIL_DE também está salva em Variáveis: com a ligação, o deploy usa o valor do e-mail e ignora o de lá/),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /Salvar ligações/ }));
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(saved));
+    const put = apiFetchMock.mock.calls.find(([p, init]) => p === "/api/projects/p1/email/links" && init?.method === "PUT")!;
+    expect(JSON.parse(String(put[1].body))).toEqual({
+      links: { SMTP_PORTA: "SMTP_PORT", SMTP_USUARIO: "SMTP_USER", SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" },
+    });
+  });
+});
