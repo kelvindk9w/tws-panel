@@ -612,6 +612,8 @@ describe("MailService — ligar valores do e-mail às variáveis do projeto", ()
     });
     await svc.changeMailboxPassword("contato@exemplo.com", "senha-nova-forte-1");
     expect((await svc.linkedEnvForProject(project)).SMTP_SENHA).toBe("senha-nova-forte-1");
+    // a seção Variáveis mostra de onde vem cada ligada (só nomes)
+    expect(await svc.envLinksForProject(project)).toEqual({ SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM", NOME_DE: "MAIL_FROM_NAME" });
     // o arquivo guarda o mapeamento, não uma cópia da senha no projeto
     const file = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8"));
     expect(file.projects.p1.envLinks).toEqual({ SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM", NOME_DE: "MAIL_FROM_NAME" });
@@ -640,5 +642,15 @@ describe("MailService — ligar valores do e-mail às variáveis do projeto", ()
   it("sem e-mail ativo, nada é entregue", async () => {
     await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {});
     expect(await new MailService(config).linkedEnvForProject(project)).toEqual({});
+    expect(await new MailService(config).envLinksForProject(project)).toEqual({});
+  });
+
+  it("ligação a um valor que não existe (MAIL_FROM_NAME sem nome) fica de fora", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {});
+    const svc = new MailService(config);
+    const semNome = { ...project, name: "" } as Project;
+    await svc.enableProjectEmail(semNome, "exemplo.com", { fromLocalPart: "contato", password: "senha-forte-da-pessoa" });
+    await svc.setProjectEmailLinks("p1", { NOME_DE: "MAIL_FROM_NAME", SMTP_SENHA: "SMTP_PASS" });
+    expect(await svc.envLinksForProject(semNome)).toEqual({ SMTP_SENHA: "SMTP_PASS" });
   });
 });

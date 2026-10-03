@@ -299,6 +299,16 @@ export interface ComposeVariable {
 }
 
 /**
+ * Nome citado num arquivo de exemplo do repositório (`.env.example`…). Só o
+ * nome: o valor de exemplo nunca sai do servidor.
+ */
+export interface EnvExampleVariable {
+  name: string;
+  /** Arquivo onde o nome aparece, relativo ao código (ex.: ".env.example"). */
+  file: string;
+}
+
+/**
  * Obrigatórias do compose ainda sem valor. `defined` = nomes com valor nas
  * Variáveis do projeto MAIS os que o painel fornece (ex.: e-mail do projeto).
  */

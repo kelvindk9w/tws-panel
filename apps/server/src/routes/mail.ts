@@ -283,6 +283,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   app.deployService.setEnvProvider(service.envForProject);
   // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…).
   app.deployService.setLinkedEnvProvider?.(service.linkedEnvForProject);
+  // …e de onde vem cada uma (só nomes), para a seção Variáveis.
+  app.deployService.setEnvLinkSourcesProvider?.(service.envLinksForProject);
   // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
   // que o Stalwart passa a usar (ver MailService.syncTls).
   app.deployService.setMailHostsProvider(() => service.mailHosts());

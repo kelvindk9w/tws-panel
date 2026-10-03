@@ -1239,10 +1239,22 @@ export class MailService {
    */
   linkedEnvForProject = async (project: Project): Promise<Record<string, string>> => {
     const env = await this.envForProject(project);
-    const links = this.data.projects[project.id]?.envLinks ?? {};
     const out: Record<string, string> = {};
+    for (const [name, source] of Object.entries(await this.envLinksForProject(project))) out[name] = env[source]!;
+    return out;
+  };
+
+  /**
+   * Ligações em vigor (nome do app → valor do e-mail), só com os NOMES: a
+   * seção Variáveis mostra "SMTP_SENHA ← SMTP_PASS". Mesma regra da entrega:
+   * ligação a um valor que não existe fica de fora.
+   */
+  envLinksForProject = async (project: Project): Promise<Record<string, ProjectEmailValueKey>> => {
+    const env = await this.envForProject(project);
+    const links = this.data.projects[project.id]?.envLinks ?? {};
+    const out: Record<string, ProjectEmailValueKey> = {};
     for (const [name, source] of Object.entries(links)) {
-      if (env[source] !== undefined) out[name] = env[source];
+      if (env[source] !== undefined) out[name] = source;
     }
     return out;
   };
