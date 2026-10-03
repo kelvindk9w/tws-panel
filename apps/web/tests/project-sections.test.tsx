@@ -9,6 +9,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
+import { MemoryRouter } from "react-router";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -346,6 +347,29 @@ describe("ProjectEnvCard — o que o painel fornece e variável alternativa", ()
     expect(screen.getByTestId("env-row-MAIL_FROM")).toHaveTextContent(/fornecida pelo E-mail do projeto/);
     expect(screen.getByTestId("env-row-EMAIL_DE")).toHaveTextContent(/se vazia, usa MAIL_FROM/);
     expect(screen.getByTestId("compose-vars")).toHaveTextContent(/1 obrigatória\(s\) ainda sem valor/);
+  });
+
+  /**
+   * Variáveis ligadas ao e-mail do projeto (02/10/2026): o painel entrega no
+   * deploy; aparecem na seção como fornecidas, sem valor (a senha nunca).
+   */
+  it("fornecidas que não estão na lista aparecem à parte, só com o nome, e levam ao e-mail do projeto", async () => {
+    apiFetchMock.mockImplementation(async () => ({
+      vars: [{ key: "SMTP_HOST", value: "" }],
+      provided: ["MAIL_FROM", "SMTP_HOST", "SMTP_PASS", "SMTP_SENHA"],
+      compose: null,
+    }));
+    render(
+      <MemoryRouter>
+        <ProjectEnvCard project={PROJECT} />
+      </MemoryRouter>,
+    );
+    const box = await screen.findByTestId("env-provided");
+    expect(box).toHaveTextContent(/fornecidas pelo e-mail do projeto/i);
+    for (const name of ["MAIL_FROM", "SMTP_PASS", "SMTP_SENHA"]) expect(box).toHaveTextContent(name);
+    // SMTP_HOST já é uma linha da lista: não repete
+    expect(box).not.toHaveTextContent("SMTP_HOST");
+    expect(box.querySelector("a")).toHaveAttribute("href", "/projects/p1/email");
   });
 
   it("sem o e-mail: MAIL_FROM só é exigida se EMAIL_DE estiver vazia", async () => {

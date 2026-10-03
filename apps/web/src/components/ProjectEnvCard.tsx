@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { missingComposeVariables, type ComposeVariable, type Project } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { Check, CheckCircle2, Copy, Eye, EyeOff, FileUp, Info, Loader2, Plus, Trash2, Variable } from "lucide-react";
+import { Check, CheckCircle2, Copy, Eye, EyeOff, FileUp, Info, Loader2, Mail, Plus, Trash2, Variable } from "lucide-react";
 
 interface EnvVar {
   key: string;
@@ -226,6 +227,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     ...provided,
   ]);
   const missing = missingComposeVariables(composeVars ?? [], defined);
+  // Fornecidas pelo e-mail do projeto que não são linhas da lista: só o nome
+  // (o valor — a senha, inclusive — nunca aparece aqui).
+  const listedNames = new Set((vars ?? []).map((v) => v.key.trim()));
+  const providedOnly = provided.filter((name) => !listedNames.has(name));
   const allVisible = (vars ?? []).length > 0 && (vars ?? []).every((v) => visible.has(v.id));
 
   return (
@@ -259,6 +264,28 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               " Todas as obrigatórias têm valor."
             )}
           </p>
+        )}
+        {providedOnly.length > 0 && (
+          <div data-testid="env-provided" className="mt-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs">
+            <p className="flex items-center gap-2 text-emerald-300">
+              <Mail className="h-3.5 w-3.5 shrink-0" /> Fornecidas pelo e-mail do projeto no deploy (o valor não aparece
+              aqui):
+            </p>
+            <ul className="mt-2 flex flex-wrap gap-1.5">
+              {providedOnly.map((name) => (
+                <li key={name} className="rounded border border-emerald-500/30 px-2 py-0.5 font-mono text-emerald-200">
+                  {name}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-muted-foreground">
+              Para mudar quais variáveis recebem esses valores, use{" "}
+              <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
+                Ligar às variáveis do projeto
+              </Link>{" "}
+              no E-mail do projeto. Uma variável com o mesmo nome preenchida aqui substitui o valor do e-mail.
+            </p>
+          </div>
         )}
       </CardHeader>
       <CardContent className="flex min-h-0 flex-col gap-0 p-0">
