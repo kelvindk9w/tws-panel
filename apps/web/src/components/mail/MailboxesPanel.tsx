@@ -7,6 +7,11 @@
  * da seção E-mail do projeto, que passa `highlight` com a caixa do projeto
  * (pedido do dono do produto, 03/10/2026). Carrega os próprios dados a
  * partir de `domain`.
+ *
+ * Com `projectId` (seção E-mail do projeto), mostra só as caixas daquele
+ * projeto — a de envio e as criadas por ali — e a caixa criada fica sendo
+ * dele. Sem `projectId` (página do domínio), mostra todas, com o projeto
+ * dono de cada uma.
  */
 import { useCallback, useEffect, useState } from "react";
 import { MAILBOX_PASSWORD_MIN } from "@paas/core";
@@ -210,11 +215,14 @@ function CredentialsModal({
 
 export function MailboxesPanel({
   domain,
+  projectId,
   highlight,
   onMailboxesChange,
 }: {
   /** Domínio de e-mail cujas caixas o painel mostra. */
   domain: string;
+  /** Só as caixas deste projeto; a caixa criada aqui fica sendo dele. */
+  projectId?: string;
   /** Endereço a destacar (a caixa do projeto, na seção E-mail do projeto). */
   highlight?: string | null;
   /** Avisa quem usa o painel a cada carga (a página mostra "Caixas (n)"). */
@@ -240,7 +248,8 @@ export function MailboxesPanel({
   const refresh = useCallback(async () => {
     if (!name) return;
     try {
-      const res = await apiFetch<MailboxListResponse>(`/api/mail/domains/${encodeURIComponent(name)}/mailboxes`);
+      const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+      const res = await apiFetch<MailboxListResponse>(`/api/mail/domains/${encodeURIComponent(name)}/mailboxes${query}`);
       setMailboxes(res.mailboxes);
       onMailboxesChange?.(res.mailboxes);
       setError(null);
@@ -248,7 +257,7 @@ export function MailboxesPanel({
       setError(err instanceof Error ? err.message : "Falha ao carregar as caixas.");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name]);
+  }, [name, projectId]);
 
   useEffect(() => {
     void refresh();
@@ -264,11 +273,11 @@ export function MailboxesPanel({
         `/api/mail/domains/${encodeURIComponent(name)}/mailboxes`,
         {
           method: "POST",
-          body: JSON.stringify(
-            newChoice.mode === "generate"
-              ? { localPart: local, generatePassword: true }
-              : { localPart: local, password: newChoice.password },
-          ),
+          body: JSON.stringify({
+            localPart: local,
+            ...(newChoice.mode === "generate" ? { generatePassword: true } : { password: newChoice.password }),
+            ...(projectId ? { projectId } : {}),
+          }),
         },
       );
       setNewMailbox("");
@@ -335,6 +344,8 @@ export function MailboxesPanel({
             <Inbox className="h-4 w-4" /> Caixas de e-mail
           </CardTitle>
           <CardDescription>
+            {projectId &&
+              "Caixas deste projeto: a de envio e as criadas aqui. As outras caixas do domínio ficam na página E-mail. "}
             Você define a senha de cada caixa; o painel nunca a mostra. Esqueceu? Use "Trocar senha". Para Outlook,
             Gmail ou Thunderbird, veja "Configurar no app".
           </CardDescription>
@@ -405,7 +416,9 @@ export function MailboxesPanel({
           )}
 
           {mailboxes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nenhuma caixa neste domínio ainda.</p>
+            <p className="text-sm text-muted-foreground">
+              {projectId ? "Nenhuma caixa deste projeto ainda." : "Nenhuma caixa neste domínio ainda."}
+            </p>
           ) : (
             <div className="flex flex-col divide-y rounded-lg border">
               {mailboxes.map((mailbox) => (
@@ -428,6 +441,12 @@ export function MailboxesPanel({
                     {mailbox.id === highlight && (
                       <Badge variant="outline" className="mt-0.5 border-sky-500/40 text-sky-300">
                         deste projeto
+                      </Badge>
+                    )}
+                    {/* página do domínio: de qual projeto a caixa é */}
+                    {!projectId && mailbox.projectId && (
+                      <Badge variant="outline" className="mt-0.5 max-w-full whitespace-normal break-words">
+                        {mailbox.projectName ? `do projeto ${mailbox.projectName}` : "de um projeto removido"}
                       </Badge>
                     )}
                     <p className="text-xs text-muted-foreground">

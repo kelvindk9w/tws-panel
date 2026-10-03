@@ -88,9 +88,14 @@ function mockApi({
           suggestion: null,
           ...verify,
         };
-      } else if (url.endsWith("/mailboxes") && method === "GET") res = { mailboxes: boxes };
+      } else if (url.split("?")[0]!.endsWith("/mailboxes") && method === "GET") res = { mailboxes: boxes };
       else if (url.endsWith("/mailboxes") && method === "POST") {
-        const created: Mailbox = { ...USER_BOX, id: `${body.localPart}@exemplo.com.br`, localPart: body.localPart };
+        const created: Mailbox = {
+          ...USER_BOX,
+          id: `${body.localPart}@exemplo.com.br`,
+          localPart: body.localPart,
+          ...(body.projectId ? { projectId: body.projectId } : {}),
+        };
         boxes = [...boxes, created];
         res = { mailbox: created };
       }
@@ -155,6 +160,66 @@ describe("MailboxesPanel", () => {
       }),
     );
     expect(await screen.findByText("suporte@exemplo.com.br")).toBeInTheDocument();
+  });
+
+  /**
+   * Pedido do dono do produto (03/10/2026): no projeto, só as caixas DELE (a
+   * de envio e as criadas pela aba Caixas do projeto); na página do domínio,
+   * todas, dizendo de qual projeto cada uma é.
+   */
+  it("no projeto: pede só as caixas dele e a caixa criada fica sendo dele", async () => {
+    const calls = mockApi({ mailboxes: [{ ...PROJECT_BOX, projectId: "p1", projectName: "Loja" }] });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <MailboxesPanel domain="exemplo.com.br" projectId="p1" highlight="loja@exemplo.com.br" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("loja@exemplo.com.br")).toBeInTheDocument();
+    expect(calls[0]).toMatchObject({ url: "/api/mail/domains/exemplo.com.br/mailboxes?projectId=p1", method: "GET" });
+    expect(screen.getByText(/Caixas deste projeto/)).toBeInTheDocument();
+    // no próprio projeto não repete "do projeto Loja"
+    expect(screen.queryByText(/do projeto Loja/)).not.toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("contato"), "suporte");
+    await user.click(screen.getByRole("radio", { name: /Gerar uma senha forte/ }));
+    await user.click(screen.getByRole("button", { name: /Criar caixa/ }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "POST")).toMatchObject({
+        url: "/api/mail/domains/exemplo.com.br/mailboxes",
+        body: { localPart: "suporte", generatePassword: true, projectId: "p1" },
+      }),
+    );
+  });
+
+  it("no projeto sem caixas: diz que o projeto ainda não tem caixa", async () => {
+    mockApi({ mailboxes: [] });
+    render(
+      <MemoryRouter>
+        <MailboxesPanel domain="exemplo.com.br" projectId="p1" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/Nenhuma caixa deste projeto ainda/)).toBeInTheDocument();
+  });
+
+  it("página do domínio: todas, com o projeto dono de cada uma", async () => {
+    mockApi({
+      mailboxes: [
+        USER_BOX,
+        { ...PROJECT_BOX, projectId: "p1", projectName: "Loja" },
+        { ...USER_BOX, id: "velha@exemplo.com.br", localPart: "velha", projectId: "sumiu" },
+      ],
+    });
+    render(
+      <MemoryRouter>
+        <MailboxesPanel domain="exemplo.com.br" />
+      </MemoryRouter>,
+    );
+    const loja = (await screen.findByText("loja@exemplo.com.br")).closest("[data-mailbox]") as HTMLElement;
+    expect(within(loja).getByText("do projeto Loja")).toBeInTheDocument();
+    const velha = screen.getByText("velha@exemplo.com.br").closest("[data-mailbox]") as HTMLElement;
+    expect(within(velha).getByText("de um projeto removido")).toBeInTheDocument();
+    const vendas = screen.getByText("vendas@exemplo.com.br").closest("[data-mailbox]") as HTMLElement;
+    expect(within(vendas).queryByText(/projeto/)).not.toBeInTheDocument();
   });
 
   it("falha ao carregar: mostra a mensagem", async () => {
