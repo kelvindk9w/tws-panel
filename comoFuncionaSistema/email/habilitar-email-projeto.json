@@ -146,7 +146,7 @@
     "2. requireDomain(domainName); endereço = (fromLocalPart ou slug)@domínio; requireFreeAddress (409 address_in_use).",
     "3. Senha: generatePassword → generateStrongPassword(); senão password (mínimo 12). Se a caixa não é a atual do projeto e não veio senha → 400 password_required.",
     "4. requireRunning(). Registro antigo com fromAddress (alias): removeMailboxAlias(caixa técnica, alias) ANTES de criar a caixa — o Stalwart não deixa o mesmo endereço em duas caixas.",
-    "5. Caixa não existe: client().createMailbox(endereço, senha), StoredMailbox kind:'project'. Existe (a atual ou uma caixa de projeto sem uso) e veio senha: setMailboxPassword.",
+    "5. Caixa não existe: client().createMailbox(endereço, senha), StoredMailbox kind:'project' com projectId = o projeto (a aba Caixas do e-mail do projeto lista as caixas dele). Existe (a atual ou uma caixa de projeto sem uso) e veio senha: setMailboxPassword.",
     "6. data.projects[id] = { domain, mailbox: endereço, enabledAt, fromName, envLinks (mantido) } — sem fromAddress. save().",
     "7. Endereço trocado: dropUnusedProjectMailbox(caixa antiga) — remove no Stalwart e do registro se nenhum projeto a usa; falha no Stalwart vai para o log e a caixa fica na lista do domínio.",
     "8. Retorna { email: projectEmailConfig(id), generatedPassword? }.",

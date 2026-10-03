@@ -196,13 +196,17 @@ export class DeployService {
       staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
       caddyHttpPort: config.caddyHttpPort,
       caddyHttpsPort: config.caddyHttpsPort,
-      // E-mail (SMTP), variáveis ligadas a ele e as do projeto; com o mesmo
-      // nome, a do operador vence.
-      envForProject: async (project: Project) => ({
-        ...((await this.mailEnv?.(project)) ?? {}),
-        ...((await this.linkedMailEnv?.(project)) ?? {}),
-        ...(await this.env.asRecord(project.id)),
-      }),
+      // E-mail (SMTP), as Variáveis do projeto e as ligadas ao e-mail. Nome
+      // padrão do e-mail (SMTP_HOST…): a das Variáveis substitui. Variável
+      // ligada (EMAIL_DE ← MAIL_FROM): a ligação vence o valor salvo nas
+      // Variáveis — validação real (03/10/2026): EMAIL_DE salva antes da
+      // ligação, com o endereço de exemplo, ia no lugar do endereço da caixa.
+      // Salva VAZIA nas Variáveis não apaga o valor do e-mail.
+      envForProject: async (project: Project) => {
+        const mail = (await this.mailEnv?.(project)) ?? {};
+        const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
+        return { ...mail, ...Object.fromEntries(own), ...((await this.linkedMailEnv?.(project)) ?? {}) };
+      },
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
       injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
@@ -394,6 +398,27 @@ export class DeployService {
       ...Object.keys((await this.linkedMailEnv?.(project)) ?? {}),
     ]);
     return [...keys].sort();
+  }
+
+  /**
+   * Valores que o painel fornece, para a seção Variáveis mostrar (com o olho).
+   * A senha da caixa NUNCA sai: nem SMTP_PASS, nem as variáveis ligadas a
+   * ela, nem qualquer outra com o mesmo valor (regra do dono do produto:
+   * senha de caixa não fica visível; quem esqueceu troca).
+   */
+  async providedEnvValues(id: string): Promise<Record<string, string>> {
+    const project = await this.requireProject(id);
+    const mail = (await this.mailEnv?.(project)) ?? {};
+    const linked = (await this.linkedMailEnv?.(project)) ?? {};
+    const sources = (await this.envLinkSourcesProvider?.(project)) ?? {};
+    const password = mail.SMTP_PASS;
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries({ ...mail, ...linked })) {
+      if (name === "SMTP_PASS" || sources[name] === "SMTP_PASS") continue;
+      if (password && value === password) continue;
+      out[name] = value;
+    }
+    return out;
   }
 
   /**
