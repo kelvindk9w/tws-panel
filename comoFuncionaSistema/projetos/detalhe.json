@@ -39,6 +39,6 @@
     "apps/web/src/pages/ProjectDetailPage.tsx (refresh, polling contínuo — 1.5s com job rodando, 5s parado)",
     "apps/web/src/pages/NewProjectPage.tsx (indiretamente, via criar+detect)"
   ],
-  "testes": ["apps/server/tests/routes-projects.test.ts"],
-  "observacoes": ["A rota aceita tanto o id (hex) quanto o slug como parâmetro :id — não há endpoint separado para busca por slug."]
+  "testes": ["apps/server/tests/routes-projects.test.ts", "apps/server/tests/status-during-deploy.test.ts"],
+  "observacoes": ["A rota aceita tanto o id (hex) quanto o slug como parâmetro :id — não há endpoint separado para busca por slug.", "03/10/2026 — durante um deploy em andamento, se o Docker não responder à listagem de containers (ocupado recriando a stack), statusOf devolve status 'deploying' com containers [] em vez de erro — antes a página recebia um erro a cada consulta. Fora do deploy, a falha continua aparecendo."]
 }
