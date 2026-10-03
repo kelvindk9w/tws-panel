@@ -185,6 +185,12 @@ export interface DnsVerifyResponse {
   records: DnsRecordCheck[];
   ptr: PtrCheck;
   suggestion: string | null;
+  /**
+   * O registro A de mail.<domínio> aponta para a VPS e o certificado dele
+   * ainda não é válido: a verificação pediu a emissão (o mesmo "Tentar
+   * emitir agora" da página Certificados). Ausente = nada foi pedido.
+   */
+  certificateRetry?: { host: string; message: string };
 }
 
 // ---------------------------------------------------------------------------

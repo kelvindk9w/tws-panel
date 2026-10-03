@@ -225,6 +225,36 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   });
   app.decorate("mailService", service);
 
+  /**
+   * Validação real (02/10/2026): o domínio foi cadastrado antes de existir o
+   * registro A de mail.<domínio>; o Caddy falhou e ficou esperando, e só o
+   * "Tentar emitir agora" da página Certificados resolveu. Quando a
+   * verificação encontra o registro A apontando para a VPS, faz o mesmo
+   * pedido (o recarregamento do proxy roda em segundo plano). As regras da
+   * página Certificados valem: certificado já válido, modo manual ou limite
+   * do Let's Encrypt recusam, e a recusa não atrapalha a verificação. O
+   * serviço de certificados fica no escopo raiz (app.ts); sem ele, nada é pedido.
+   */
+  async function requestMailCertificate(
+    verify: DnsVerifyResponse,
+    log: { info: (msg: string) => void },
+  ): Promise<DnsVerifyResponse["certificateRetry"]> {
+    const a = verify.records.find((r) => r.id === "a");
+    if (a?.status !== "found" || !app.hasDecorator("certificateService")) return undefined;
+    try {
+      const { host, message } = await app.certificateService.retry(a.name, { background: true });
+      return { host, message };
+    } catch (err) {
+      const e = err as Partial<HttpError>;
+      // Pedido de há pouco (limite de 1 por minuto): a emissão já está pedida.
+      if (e.code === "retry_too_soon") {
+        return { host: a.name, message: `A emissão do certificado de ${a.name} já foi pedida há pouco.` };
+      }
+      log.info(`E-mail: certificado de ${a.name} não pedido na verificação (${e.code ?? e.message ?? String(err)}).`);
+      return undefined;
+    }
+  }
+
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
   app.deployService.setEnvProvider(service.envForProject);
   // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
@@ -393,7 +423,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         const response: DnsVerifyResponse = await service.verifyDomain(request.params.domain);
-        return reply.send(response);
+        const certificateRetry = await requestMailCertificate(response, request.log);
+        return reply.send(certificateRetry ? { ...response, certificateRetry } : response);
       } catch (err) {
         return sendError(reply, err);
       }
