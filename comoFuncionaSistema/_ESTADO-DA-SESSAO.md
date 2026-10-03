@@ -31,6 +31,32 @@ pendente e por quê — informação que não está no código nem no git log.
 - **Regra nova:** antes de abrir PR, rodar `pnpm -r --workspace-concurrency=1 --no-bail run test:coverage`. O CI reprova por cobertura mínima de ramos (mailer 98%, deploy 95%…), e isso já derrubou o #65 duas vezes.
 - **Post no X sobre o e-mail:** rascunho em `~/projects/social/projetos/tws-panel/post-email.md` (fora do repositório). O dono vai refazer os prints com 6/6 verde.
 
+### Mais tarde em 02/10/2026 (PRs #67, #68 e o PR seguinte)
+- **#67:** o projeto escolhe o endereço de envio e o nome de exibição.
+- **#68:** cadastro do domínio do próprio projeto no card do e-mail do projeto.
+- **PR seguinte**, a pedido do dono depois de testar na VPS:
+  - **Caixa de verdade:** o endereço de envio é a própria caixa do projeto, com senha digitada ou gerada (mostrada uma única vez). Dá para trocar a senha pelo card do projeto e pela página do domínio.
+  - **E-mail de teste:** sai com o nome de exibição.
+  - **Variáveis:** cada valor tem botão de copiar (menos a senha). "Ligar às variáveis do projeto" guarda só o mapeamento e entrega o valor atual no deploy, usando o seletor com busca reutilizável (`components/ui/combobox.tsx`).
+  - **Checklist DNS:** copiar por campo; MX separado em servidor e prioridade; aviso da nuvem cinza.
+  - **PTR:** usa o DNS do sistema quando o público não responde.
+  - **Certificado:** "Verificar agora" pede o certificado de `mail.<domínio>` sozinho.
+  - Relatórios: `_RELATORIO-email-projeto-caixa.md` e `email/_PESQUISA-entregabilidade.md`.
+- **Validado na VPS:**
+  - "Tentar emitir agora" da página Certificados (o certificado de `mail.<domínio>` falhou porque o domínio foi cadastrado antes do registro A; o botão resolveu);
+  - envio a partir do domínio do projeto (chega no Spam: falta reputação).
+- **Entregabilidade, ordem sugerida ao dono** (aguardando o ok dele):
+  1. Corrigir três defeitos baratos:
+     - `Message-ID`/`Date` na submissão (`session.data.add-headers.*`);
+     - `rua` do DMARC para uma caixa que existe;
+     - um PTR único, igual ao HELO, e não um por domínio.
+  2. Aquecimento guiado (`queue.limiter.outbound`), blacklist diária e nota de entregabilidade.
+  3. Relay externo opcional.
+  4. PTR genérico passa de "opcional" para "recomendado" (o Yahoo pede PTR não genérico).
+- **Pendências novas:**
+  - o teste do terminal com PTY real voltou a falhar de vez em quando no CI (passou ao rodar de novo);
+  - a checagem de blacklist nunca roda, provavelmente porque as rotas de monitoramento não enxergam o serviço de e-mail (plugins isolados).
+
 ### Próximos passos (ordem combinada)
 1. **Cassino:** ativar o e-mail do projeto, preencher as variáveis (KYC_MODO, PIX_*, SITE_HOST, CARTEIRA_HOST), conectar os domínios (SITE_HOST principal, CARTEIRA_HOST adicional) e fazer o deploy.
 2. **Domínio do painel** (ainda não existe; passo 3 do roteiro, "em breve"):
