@@ -11,9 +11,9 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MailDomainSummary, ProjectEmailConfig } from "@paas/core";
+import type { DnsChecklistResponse, Mailbox, MailDomainSummary, ProjectEmailConfig } from "@paas/core";
 
 const apiFetchMock = vi.fn();
 vi.mock("@/lib/api", () => ({
@@ -78,7 +78,28 @@ interface ServeOpts {
   domains?: MailDomainSummary[];
   generated?: string;
   envList?: { vars: { key: string; value: string }[]; compose: unknown; provided?: string[] };
+  mailboxes?: Mailbox[];
 }
+
+const DNS_CHECKLIST: DnsChecklistResponse = {
+  domain: "envio.exemplo.com.br",
+  mailHostname: "mail.envio.exemplo.com.br",
+  serverIp: "203.0.113.10",
+  records: [
+    {
+      id: "a",
+      type: "A",
+      name: "mail.envio.exemplo.com.br",
+      expected: "203.0.113.10",
+      purpose: "servidor",
+      status: "found",
+      found: ["203.0.113.10"],
+      note: null,
+    },
+  ],
+  ptr: { ip: "203.0.113.10", expected: "mail.envio.exemplo.com.br", status: "missing", found: [], ticketText: "chamado…" },
+  suggestion: null,
+};
 
 function serve(email: ProjectEmailConfig, opts: ServeOpts = {}) {
   let current = email;
@@ -102,6 +123,14 @@ function serve(email: ProjectEmailConfig, opts: ServeOpts = {}) {
     }
     if (path === "/api/projects/p1/env") {
       return opts.envList ?? { vars: [], compose: null, provided: [] };
+    }
+    // abas Caixas e DNS (domínio do projeto)
+    if (path === "/api/mail/domains/envio.exemplo.com.br/mailboxes" && method === "GET") {
+      return { mailboxes: opts.mailboxes ?? [] };
+    }
+    if (path === "/api/mail/domains/envio.exemplo.com.br/dns") return DNS_CHECKLIST;
+    if (path === "/api/mail/domains/envio.exemplo.com.br/verify" && method === "POST") {
+      return { ...DNS_CHECKLIST, summary: { ok: 1, total: 2 }, verifiedAt: "2026-10-03T12:00:00.000Z" };
     }
     if (path.startsWith("/api/mail/mailboxes/") && path.endsWith("/password")) {
       const body = JSON.parse(String(init?.body)) as { generate?: boolean };
@@ -529,5 +558,117 @@ describe("ProjectEmailCard — cadastrar o domínio do próprio projeto", () => 
     });
     renderCard();
     expect(await screen.findByLabelText("Seu domínio")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pedido do dono do produto (03/10/2026): na seção E-mail do projeto, além do
+// remetente, as caixas e o DNS do domínio do projeto — para conferir,
+// configurar e criar caixas (ex.: suporte@) sem sair do projeto.
+// ---------------------------------------------------------------------------
+
+function Where() {
+  const location = useLocation();
+  return <p data-testid="where">{`${location.pathname}${location.search}`}</p>;
+}
+
+function renderAt(url: string) {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      <ProjectEmailCard projectId="p1" projectName="Cassino Royal" projectSlug="cassino" projectDomain="cassino.com.br" />
+      <Where />
+    </MemoryRouter>,
+  );
+}
+
+const PROJECT_BOX: Mailbox = {
+  id: "contato@envio.exemplo.com.br",
+  localPart: "contato",
+  domain: "envio.exemplo.com.br",
+  kind: "project",
+  createdAt: "2026-10-01T12:00:00.000Z",
+};
+const POSTMASTER: Mailbox = { ...PROJECT_BOX, id: "postmaster@envio.exemplo.com.br", localPart: "postmaster", kind: "system" };
+
+describe("ProjectEmailCard — abas Remetente, Caixas e DNS", () => {
+  it("ativado: três abas, abre em Remetente com o conteúdo de sempre", async () => {
+    serve(ON);
+    renderAt("/projects/p1/email");
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual(["Remetente", "Caixas", "DNS"]);
+    expect(screen.getByRole("tab", { name: "Remetente" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Contato - Cassino <contato@envio.exemplo.com.br>")).toBeInTheDocument();
+    // as outras abas só carregam quando abertas
+    expect(apiFetchMock.mock.calls.some(([p]) => String(p).endsWith("/mailboxes"))).toBe(false);
+    expect(apiFetchMock.mock.calls.some(([p]) => String(p).endsWith("/verify"))).toBe(false);
+  });
+
+  it("aba Caixas: lista as caixas do domínio, destaca a do projeto e põe ?email=caixas no endereço", async () => {
+    serve(ON, { mailboxes: [POSTMASTER, PROJECT_BOX] });
+    const user = userEvent.setup();
+    renderAt("/projects/p1/email");
+    await user.click(await screen.findByRole("tab", { name: "Caixas" }));
+    expect(screen.getByRole("tab", { name: "Caixas" })).toHaveAttribute("aria-selected", "true");
+    const row = (await screen.findByText("contato@envio.exemplo.com.br", { selector: "p" })).closest(
+      "[data-mailbox]",
+    ) as HTMLElement;
+    expect(row).toHaveAttribute("data-highlight", "true");
+    expect(within(row).getByText("deste projeto")).toBeInTheDocument();
+    expect(screen.getByText("postmaster@envio.exemplo.com.br")).toBeInTheDocument();
+    // dá para criar outra caixa no mesmo domínio
+    expect(screen.getByRole("button", { name: /Criar caixa/ })).toBeInTheDocument();
+    expect(screen.getByText("@envio.exemplo.com.br")).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent("/projects/p1/email?email=caixas");
+    // o conteúdo do Remetente sai da tela
+    expect(screen.queryByText("Contato - Cassino <contato@envio.exemplo.com.br>")).not.toBeInTheDocument();
+  });
+
+  it("aba DNS: checklist do domínio, conferido ao abrir, e ?email=dns no endereço", async () => {
+    serve(ON);
+    const user = userEvent.setup();
+    renderAt("/projects/p1/email");
+    await user.click(await screen.findByRole("tab", { name: "DNS" }));
+    expect(await screen.findByText("1/2 OK")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByText(/Reverse DNS \(PTR\)/)).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent("/projects/p1/email?email=dns");
+    // volta ao Remetente: o endereço perde o ?email
+    await user.click(screen.getByRole("tab", { name: "Remetente" }));
+    expect(screen.getByTestId("where")).toHaveTextContent(/^\/projects\/p1\/email$/);
+  });
+
+  it("endereço com ?email=dns ou ?email=caixas abre direto na aba", async () => {
+    serve(ON);
+    renderAt("/projects/p1/email?email=dns");
+    expect(await screen.findByRole("tab", { name: "DNS" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    cleanup();
+    serve(ON, { mailboxes: [PROJECT_BOX] });
+    renderAt("/projects/p1/email?email=caixas");
+    expect(await screen.findByRole("tab", { name: "Caixas" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("Caixas de e-mail")).toBeInTheDocument();
+  });
+
+  it("link discreto 'Abrir na página E-mail' leva ao domínio (no DNS, já na aba do checklist)", async () => {
+    serve(ON);
+    const user = userEvent.setup();
+    renderAt("/projects/p1/email");
+    expect(await screen.findByRole("link", { name: /Abrir na página E-mail/ })).toHaveAttribute(
+      "href",
+      "/mail/envio.exemplo.com.br",
+    );
+    await user.click(screen.getByRole("tab", { name: "DNS" }));
+    expect(screen.getByRole("link", { name: /Abrir na página E-mail/ })).toHaveAttribute(
+      "href",
+      "/mail/envio.exemplo.com.br?aba=dns",
+    );
+  });
+
+  it("desativado: sem abas, só o formulário de ativação (mesmo com ?email=dns)", async () => {
+    serve(OFF);
+    renderAt("/projects/p1/email?email=dns");
+    expect(await screen.findByRole("button", { name: /Ativar e-mail/ })).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Abrir na página E-mail/ })).not.toBeInTheDocument();
   });
 });
