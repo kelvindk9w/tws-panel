@@ -360,11 +360,14 @@ describe("MailDomainPage — senha das caixas nunca visível", () => {
     expect(within(dialog).getByPlaceholderText(/gmail/i)).toBeInTheDocument();
   });
 
-  it("caixa técnica de projeto não oferece trocar senha (o painel cuida dela)", async () => {
+  it("caixa do projeto: pode trocar a senha, e o texto diz que o projeto usa a caixa e recebe a senha no próximo deploy", async () => {
     mockMailboxApi([PROJECT_BOX]);
+    const user = userEvent.setup();
     await renderPage({ openDns: false });
     expect(await screen.findByText("loja@exemplo.com.br")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Trocar senha/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/caixa do projeto/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Trocar senha/ }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(/próximo deploy/);
   });
 });
 

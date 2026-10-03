@@ -325,10 +325,13 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
 
 function ChangePasswordModal({
   email,
+  projectMailbox = false,
   onClose,
   onDone,
 }: {
   email: string;
+  /** Caixa usada por um projeto: a senha nova só chega a ele no próximo deploy. */
+  projectMailbox?: boolean;
   onClose: () => void;
   onDone: (email: string) => void;
 }) {
@@ -360,6 +363,7 @@ function ChangePasswordModal({
         <p className="text-muted-foreground">
           Defina uma senha nova. Por segurança o painel nunca mostra a senha: guarde-a no seu gerenciador de senhas.
           Depois, atualize a senha no app de e-mail onde a caixa estiver configurada.
+          {projectMailbox && " O projeto que envia por esta caixa só recebe a senha nova no próximo deploy."}
         </p>
         <label className="flex flex-col gap-1">
           <span>Nova senha</span>
@@ -834,7 +838,7 @@ export function MailDomainPage() {
                         {mailbox.kind === "system"
                           ? "sistema (postmaster/abuse)"
                           : mailbox.kind === "project"
-                            ? "caixa técnica de projeto"
+                            ? "caixa do projeto (o projeto envia por ela)"
                             : `criada em ${new Date(mailbox.createdAt).toLocaleString("pt-BR")}`}
                       </p>
                     </div>
@@ -859,16 +863,14 @@ export function MailDomainPage() {
                     >
                       <Send className="h-4 w-4" /> Testar envio
                     </Button>
-                    {mailbox.kind !== "project" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy !== null}
-                        onClick={() => setChangingPassword(mailbox.id)}
-                      >
-                        <KeyRound className="h-4 w-4" /> Trocar senha
-                      </Button>
-                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy !== null}
+                      onClick={() => setChangingPassword(mailbox.id)}
+                    >
+                      <KeyRound className="h-4 w-4" /> Trocar senha
+                    </Button>
                     {mailbox.kind === "user" &&
                       (confirmRemove === mailbox.id ? (
                         <div className="flex items-center gap-1">
@@ -900,7 +902,7 @@ export function MailDomainPage() {
       {credentials && (
         <CredentialsModal
           credentials={credentials}
-          canChangePassword={mailboxes.find((m) => m.id === credentials.email)?.kind !== "project"}
+          canChangePassword
           onChangePassword={() => {
             setChangingPassword(credentials.email);
             setCredentials(null);
@@ -911,6 +913,7 @@ export function MailDomainPage() {
       {changingPassword && (
         <ChangePasswordModal
           email={changingPassword}
+          projectMailbox={mailboxes.find((m) => m.id === changingPassword)?.kind === "project"}
           onClose={() => setChangingPassword(null)}
           onDone={(email) => {
             setChangingPassword(null);
