@@ -31,16 +31,18 @@
     "proxyService": "serviço compose sugerido como upstream, ou null",
     "proxyPort": "porta sugerida (compose/dockerfile), ou null",
     "warnings": "GuardrailWarning[] — só populado para type=compose",
-    "details": "string[] — notas legíveis em pt-BR explicando a decisão"
+    "details": "string[] — notas legíveis em pt-BR explicando a decisão",
+    "services": "ComposeServiceInfo[] — só em type=compose (e ausente em detecções antigas): todos os serviços com imagem/build, portas publicadas (e o que o painel faz com 80/443), portas internas conhecidas, network_mode service:X, depends_on e healthcheck (ver projetos/detectar.json)"
   },
   "usadoPor": [
     { "referencia": "POST /api/projects/:id/detect", "arquivo": "apps/server/src/services/deploy-service.ts:305", "doc": "projetos/detectar.json" },
     { "referencia": "POST /api/projects/:id/deploy", "arquivo": "apps/server/src/services/deploy-service.ts:326", "doc": "projetos/deploy.json", "nota": "re-roda a detecção se project.detection ainda for null no momento do deploy" }
   ],
-  "testes": ["packages/deploy/tests/detect.test.ts"],
+  "testes": ["packages/deploy/tests/detect.test.ts", "packages/deploy/tests/compose-services.test.ts", "packages/deploy/tests/fixtures/cassino-like.ts"],
   "observacoes": [
     "A heurística de output estático é uma lista fechada (Next export → out/, Vite → dist/, pasta já commitada) — frameworks estáticos que não sejam Next/Vite (ex.: Astro, Hugo via npm wrapper, Gatsby) caem no fallback 'assume dist/' se não houver Dockerfile, o que pode estar ERRADO e só é percebido no build/health-check.",
     "A prioridade compose > tudo é intencional (ver docs/projects-analysis.md, perfil 'trader'): mesmo que o projeto tenha package.json com build E Dockerfile, um compose.yml presente sempre vence — o painel nunca tenta 'adivinhar' ao redor de um compose existente.",
-    "detectStaticOutput() olha only next.config.{js,mjs,cjs,ts} — não cobre next.config.mts nem configuração dentro de package.json (campo 'next')."
+    "detectStaticOutput() olha only next.config.{js,mjs,cjs,ts} — não cobre next.config.mts nem configuração dentro de package.json (campo 'next').",
+    "03/10/2026 — entrada HTTP com network_mode (estrutura do cassino): guessProxyTarget escolhe o caddy (imagem de proxy) e, como ele usa network_mode: service:wallet, a entrada vira wallet na porta em que o caddy escuta (80). A tela explica isso a partir de detection.services ('o caddy atende dentro do wallet, por isso a entrada é wallet:80')."
   ]
 }

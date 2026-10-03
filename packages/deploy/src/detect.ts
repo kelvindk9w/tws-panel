@@ -13,6 +13,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { DetectResult, GuardrailWarning, PackageManager } from "@paas/core";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
+import { describeComposeServices } from "./compose-services.js";
 import { analyzeCompose, guessProxyTarget, servicesWithCustomNetworks } from "./guardrails.js";
 
 /** Pastas de saída estática conhecidas, em ordem de prioridade. */
@@ -142,6 +143,8 @@ export async function detectProject(dir: string): Promise<DetectResult> {
       });
       return result;
     }
+    // Todos os serviços (o painel mostra o que sobe, não só a entrada HTTP).
+    result.services = await describeComposeServices(dir, content);
     const guess = guessProxyTarget(content);
     result.proxyService = guess.service;
     result.proxyPort = guess.port;

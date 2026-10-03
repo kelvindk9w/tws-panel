@@ -19,6 +19,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import { NewProjectPage } from "@/pages/NewProjectPage";
+import { CASSINO_SERVICES } from "./fixtures/compose-services";
 
 const PROJECT = { id: "p1", domain: "cassino.localhost", name: "cassino" };
 const DETECTION = {
@@ -342,6 +343,51 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
       },
     };
     expect(await criar(compose, env)).toHaveTextContent("/projects/p1/env?deploy=pending");
+  });
+
+  it("compose com vários serviços: lista todos, explica a entrada e salva a escolhida", async () => {
+    const compose = {
+      ...DETECTION,
+      type: "compose",
+      composeFile: "compose.prod.yaml",
+      proxyService: "wallet",
+      proxyPort: 80,
+      services: CASSINO_SERVICES,
+    };
+    const env = { vars: [], compose: { variables: [] } };
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/detect") return { detection: compose };
+      if (path === "/api/projects/p1/env") return env;
+      return base(path, init);
+    });
+    render(
+      <MemoryRouter>
+        <NewProjectPage />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "cassino" } });
+    fireEvent.click(screen.getByRole("button", { name: /Repositório Git/ }));
+    fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
+      target: { value: "https://github.com/usuario/cassino" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
+    await screen.findByText(/Tipo detectado/);
+    for (const name of ["db", "redis", "wallet", "web", "caddy"]) {
+      expect(screen.getByTestId(`compose-service-${name}`)).toBeInTheDocument();
+    }
+    expect(screen.getByTestId("compose-entry")).toHaveTextContent(/caddy atende dentro do wallet/);
+    fireEvent.change(screen.getByLabelText(/Porta interna/i), { target: { value: "0" } });
+    expect(screen.getByRole("button", { name: /Continuar/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "8009" }));
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => {
+      const patch = apiFetchMock.mock.calls.find(
+        ([p, init]) => p === "/api/projects/p1" && (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toMatchObject({ proxyService: "wallet", proxyPort: 8009 });
+    });
   });
 
   it("compose com tudo preenchido: deploy direto", async () => {

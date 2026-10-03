@@ -635,7 +635,11 @@ export class DeployService {
       project.domain = domain;
     }
     if (req.websocket !== undefined) project.websocket = Boolean(req.websocket);
-    if (req.proxyService !== undefined) project.proxyService = req.proxyService?.trim() || null;
+    if (req.proxyService !== undefined) {
+      const service = req.proxyService?.trim() || null;
+      if (service) validateComposeEntry(project, service);
+      project.proxyService = service;
+    }
     if (req.proxyPort !== undefined) project.proxyPort = req.proxyPort;
     project.updatedAt = new Date().toISOString();
     await this.saveProjects();
@@ -985,11 +989,19 @@ export class DeployService {
     project: Project,
     containers?: DockerContainerInfo[],
   ): Promise<{ status: ProjectStatus; containers: DockerContainerInfo[] }> {
-    const all = containers ?? (await listContainers());
-    const mine = all.filter((c) => c.projectSlug === project.slug);
     const deploying = this.jobs.some(
       (j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"),
     );
+    let all: DockerContainerInfo[];
+    try {
+      all = containers ?? (await listContainers());
+    } catch (err) {
+      // Durante o deploy o Docker pode demorar a responder enquanto recria os
+      // containers: é estado normal ("deploying"), não erro para a página.
+      if (deploying) return { status: "deploying", containers: [] };
+      throw err;
+    }
+    const mine = all.filter((c) => c.projectSlug === project.slug);
     let status: ProjectStatus;
     if (deploying) status = "deploying";
     else if (mine.length === 0) status = project.lastDeployStatus === "failed" ? "error" : "created";
@@ -1111,3 +1123,30 @@ export class DeployService {
 }
 
 export { httpError, type HttpError } from "./http-error.js";
+
+/**
+ * Entrada HTTP de um compose: o serviço tem de existir no compose detectado e
+ * não pode usar a rede de outro (`network_mode: service:X`) — esse não entra
+ * na rede do painel; a entrada certa é o X, na porta em que ele escuta.
+ * Detecção antiga (sem a lista de serviços): aceita como antes.
+ */
+function validateComposeEntry(project: Project, service: string): void {
+  const services = project.detection?.type === "compose" ? project.detection.services : undefined;
+  if (!services || services.length === 0) return;
+  const found = services.find((s) => s.name === service);
+  if (!found) {
+    throw httpError(
+      400,
+      "invalid_proxy_service",
+      `O serviço "${service}" não existe no compose. Serviços: ${services.map((s) => s.name).join(", ")}.`,
+    );
+  }
+  if (found.networkModeService) {
+    throw httpError(
+      400,
+      "invalid_proxy_service",
+      `O serviço "${service}" usa a rede do "${found.networkModeService}" (network_mode) e não entra na rede do painel: ` +
+        `escolha "${found.networkModeService}" como entrada, na porta em que o "${service}" escuta.`,
+    );
+  }
+}
