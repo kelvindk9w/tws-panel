@@ -50,10 +50,11 @@
     "Recarrega o Caddy (sem queda de conexão). Recomeça a emissão de TODOS os nomes ainda sem certificado, não só do clicado.",
     "Registro na auditoria."
   ],
-  "chamadoPor": ["apps/web/src/pages/CertificatesPage.tsx (botão azul 'Tentar emitir agora')"],
-  "testes": ["apps/server/tests/certificate-service.test.ts", "apps/server/tests/routes-certificates.test.ts", "packages/deploy/tests/caddy-manual-tls.test.ts", "apps/web/tests/certificates-page.test.tsx"],
+  "chamadoPor": ["apps/web/src/pages/CertificatesPage.tsx (botão azul 'Tentar emitir agora')", "POST /api/mail/domains/:domain/verify (apps/server/src/routes/mail.ts): quando o registro A de mail.<domínio> aponta para a VPS, chama CertificateService.retry(host, { background: true }) direto, sem passar por esta rota (ver email/verificar-dns.json, passo 9)"],
+  "testes": ["apps/server/tests/certificate-service.test.ts", "apps/server/tests/routes-certificates.test.ts", "apps/server/tests/routes-mail-verify-certificate.test.ts", "packages/deploy/tests/caddy-manual-tls.test.ts", "apps/web/tests/certificates-page.test.tsx"],
   "observacoes": [
     "Fontes: documentação do comando `caddy reload` (--force recarrega mesmo com a config igual) e da emissão automática (tentativas com espera crescente, até 1 dia entre elas, por até 30 dias); código do certmagic: async.go (doWithRetry: intervalos 1 min, 2 min, … até 6 h; para no ctx.Done) e config.go (manageOne: obtain assíncrono sem nome de job).",
+    "Modo em segundo plano (02/10/2026): retry(host, { background: true }) faz as mesmas conferências e pode recusar igual, mas não espera o recarregamento do Caddy; falha dele vai para o log ('Certificados: falha ao pedir a emissão de <nome> (...)'). Usado pela verificação de DNS do e-mail. O limite de 1 por minuto é o MESMO para o botão e para a verificação, porque o serviço é um só: nasce no escopo raiz em app.ts (buildCertificateService) e as rotas desta página usam o que já existe.",
     "'Renovar agora?' num certificado válido NÃO chama este endpoint: a tela só explica que não é preciso."
   ]
 }

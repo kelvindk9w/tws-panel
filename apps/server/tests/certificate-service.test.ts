@@ -265,6 +265,36 @@ describe("Tentar emitir agora", () => {
     await service.installManual("loja.exemplo.com.br", pem.loja!.cert, pem.loja!.key);
     await expect(service.retry("loja.exemplo.com.br")).rejects.toMatchObject({ statusCode: 409, code: "manual_mode" });
   });
+
+  // Pedido da verificação de DNS do e-mail (02/10/2026): o registro A de
+  // mail.<domínio> ficou certo depois do cadastro; o painel pede a emissão
+  // sozinho, sem prender a resposta enquanto o Caddy recarrega.
+  it("em segundo plano: responde sem esperar o recarregamento do proxy, com as mesmas regras", async () => {
+    let finish: () => void = () => {};
+    deps.refreshProxy.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
+    const r = await service.retry("mail.exemplo.com.br", { background: true });
+    expect(r.host).toBe("mail.exemplo.com.br");
+    expect(deps.refreshProxy).toHaveBeenCalledWith({ force: true });
+    finish();
+    // o limite de 1 por minuto vale igual
+    await expect(service.retry("mail.exemplo.com.br", { background: true })).rejects.toMatchObject({ code: "retry_too_soon" });
+  });
+
+  it("em segundo plano: falha ao recarregar o proxy vai para o log, sem derrubar quem pediu", async () => {
+    const log = vi.fn();
+    service = new CertificateService(store, deps as unknown as CertificateDeps, { audit, alerts, now: () => now, log });
+    deps.refreshProxy.mockRejectedValue(new Error("docker fora do ar"));
+    await expect(service.retry("mail.exemplo.com.br", { background: true })).resolves.toMatchObject({ host: "mail.exemplo.com.br" });
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("docker fora do ar")));
+  });
+
+  it("em segundo plano: erro que não é Error também vai para o log", async () => {
+    const log = vi.fn();
+    service = new CertificateService(store, deps as unknown as CertificateDeps, { audit, alerts, now: () => now, log });
+    deps.refreshProxy.mockRejectedValue("sem resposta");
+    await service.retry("mail.exemplo.com.br", { background: true });
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("sem resposta")));
+  });
 });
 
 describe("certificado manual", () => {

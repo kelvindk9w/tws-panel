@@ -111,6 +111,13 @@ export interface DnsRecordCheck {
   found: string[];
   /** Observação adicional (ex.: explicar um mismatch). */
   note: string | null;
+  /**
+   * Só no MX: a prioridade e o servidor separados. O Cloudflare (e outros)
+   * pedem os dois em campos diferentes; `expected` continua "10 mail…",
+   * que é o que a verificação compara.
+   */
+  priority?: number;
+  target?: string;
 }
 
 /**
@@ -154,6 +161,11 @@ export interface PtrCheck {
    * provedor é desconhecido e o nome reverso ainda não é mail.<domínio>.
    */
   ticketText: string | null;
+  /**
+   * Só quando não deu para conferir (status "pending"): qual consulta ficou
+   * sem resposta e em qual DNS (público e do sistema), para diagnóstico.
+   */
+  diagnostic?: string | null;
 }
 
 export interface DnsChecklistResponse {
@@ -173,6 +185,12 @@ export interface DnsVerifyResponse {
   records: DnsRecordCheck[];
   ptr: PtrCheck;
   suggestion: string | null;
+  /**
+   * O registro A de mail.<domínio> aponta para a VPS e o certificado dele
+   * ainda não é válido: a verificação pediu a emissão (o mesmo "Tentar
+   * emitir agora" da página Certificados). Ausente = nada foi pedido.
+   */
+  certificateRetry?: { host: string; message: string };
 }
 
 // ---------------------------------------------------------------------------

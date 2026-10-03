@@ -9,8 +9,10 @@ import {
   detectPtrProvider,
   dmarcValue,
   ptrTicketText,
+  PUBLIC_DNS_OPTIONS,
   publicResolver,
   spfValue,
+  systemResolver,
   stageSuggestion,
   verifyDnsRecords,
   type ChecklistInput,
@@ -92,6 +94,23 @@ describe("geração dos registros esperados", () => {
   });
 });
 
+describe("MX em campos separados (Cloudflare tem Servidor de e-mail e Prioridade)", () => {
+  it("o MX traz a prioridade e o servidor separados; o valor esperado continua '10 mail…'", () => {
+    const mx = buildDnsChecklist(BASE_INPUT).records.find((r) => r.id === "mx");
+    expect(mx).toMatchObject({ expected: "10 mail.exemplo.com.br", priority: 10, target: "mail.exemplo.com.br" });
+  });
+
+  it("os outros registros não ganham prioridade nem servidor", () => {
+    const others = buildDnsChecklist(BASE_INPUT).records.filter((r) => r.id !== "mx");
+    expect(others.every((r) => r.priority === undefined && r.target === undefined)).toBe(true);
+  });
+
+  it("a verificação preserva os campos separados do MX", async () => {
+    const result = await verifyDnsRecords(buildDnsChecklist(BASE_INPUT), mockResolver(), { fallback: null });
+    expect(result.records.find((r) => r.id === "mx")).toMatchObject({ priority: 10, target: "mail.exemplo.com.br" });
+  });
+});
+
 describe("publicResolver", () => {
   it("fixa servidores públicos (1.1.1.1/8.8.8.8) independentes do resolver da VPS", () => {
     const resolver = publicResolver();
@@ -99,6 +118,21 @@ describe("publicResolver", () => {
     expect(typeof resolver.resolve4).toBe("function");
     expect(typeof resolver.resolveTxt).toBe("function");
     expect((resolver as { getServers?: () => string[] }).getServers?.()).toContain("1.1.1.1");
+  });
+
+  it("tem prazo e número de tentativas explícitos (sem eles, uma consulta presa demora demais)", () => {
+    expect(PUBLIC_DNS_OPTIONS.timeout).toBeGreaterThanOrEqual(1_000);
+    expect(PUBLIC_DNS_OPTIONS.timeout).toBeLessThanOrEqual(5_000);
+    expect(PUBLIC_DNS_OPTIONS.tries).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("systemResolver", () => {
+  it("usa o DNS do sistema (no container, o do Docker) com a mesma interface", () => {
+    const resolver = systemResolver();
+    for (const fn of ["resolve4", "resolve6", "resolveMx", "resolveTxt", "reverse"] as const) {
+      expect(typeof resolver[fn]).toBe("function");
+    }
   });
 });
 
@@ -432,5 +466,104 @@ describe("PTR com DNS instável", () => {
     const resolver = mockResolver({ reverse: async () => ["vmi1234567.contaboserver.net"] });
     const result = await verifyDnsRecords(BASE, resolver);
     expect(result.ptr.status).toBe("mismatch");
+  });
+});
+
+/**
+ * Validação real (02/10/2026): o PTR ficou várias vezes "não deu para
+ * conferir" com o DNS público respondendo certo de outro lugar. Agora, quando
+ * 1.1.1.1/8.8.8.8 não respondem, a consulta passa para o DNS do sistema (no
+ * container, o do Docker) antes de desistir, e o resultado diz qual caminho
+ * falhou.
+ */
+describe("DNS do sistema como segunda opção", () => {
+  const BASE = buildDnsChecklist(BASE_INPUT);
+  const ip = BASE.ptr.ip;
+  const CONTABO_PTR = "vmi1234567.contaboserver.net";
+  const timeout = () => Promise.reject(Object.assign(new Error("queryPtr ETIMEOUT"), { code: "ETIMEOUT" }));
+  const refused = () => Promise.reject(Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
+
+  it("DNS público sem resposta no reverso: o do sistema responde e o PTR fica azul", async () => {
+    const primary = mockResolver({ reverse: timeout, resolve4: timeout });
+    const fallback = mockResolver({
+      reverse: async () => [`${CONTABO_PTR}.`],
+      resolve4: async (name) => (name === CONTABO_PTR ? [ip] : []),
+    });
+    const logs: string[] = [];
+    const result = await verifyDnsRecords(BASE, primary, { fallback, log: (m) => logs.push(m) });
+    expect(result.ptr.status).toBe("generic");
+    expect(result.ptr.diagnostic).toBeNull();
+    // o caminho que falhou fica no log, para diagnóstico
+    expect(logs.some((m) => m.includes("DNS público") && m.includes("ETIMEOUT"))).toBe(true);
+  });
+
+  it("os dois sem resposta: pendente, com o diagnóstico dos dois caminhos", async () => {
+    const primary = mockResolver({ reverse: timeout });
+    const fallback = mockResolver({ reverse: refused });
+    const result = await verifyDnsRecords(BASE, primary, { fallback });
+    expect(result.ptr.status).toBe("pending");
+    expect(result.ptr.diagnostic).toMatch(/DNS público \(1\.1\.1\.1, 8\.8\.8\.8\): sem resposta \(ETIMEOUT\)/);
+    expect(result.ptr.diagnostic).toMatch(/DNS do sistema: sem resposta \(ECONNREFUSED\)/);
+    expect(result.ptr.diagnostic).toContain(ip);
+  });
+
+  it("volta do nome (A) sem resposta nos dois: pendente, diagnóstico cita o nome", async () => {
+    const primary = mockResolver({ reverse: async () => [CONTABO_PTR], resolve4: timeout });
+    const fallback = mockResolver({ resolve4: timeout });
+    const result = await verifyDnsRecords(BASE, primary, { fallback });
+    expect(result.ptr.status).toBe("pending");
+    expect(result.ptr.diagnostic).toContain(CONTABO_PTR);
+  });
+
+  it("sem segunda opção (fallback null): continua pendente, diagnóstico só do público", async () => {
+    const primary = mockResolver({ reverse: timeout });
+    const result = await verifyDnsRecords(BASE, primary, { fallback: null });
+    expect(result.ptr.status).toBe("pending");
+    expect(result.ptr.diagnostic).toMatch(/DNS público/);
+    expect(result.ptr.diagnostic).not.toMatch(/DNS do sistema/);
+  });
+
+  it("erro sem código também conta como 'sem resposta'", async () => {
+    const primary = mockResolver({ reverse: () => Promise.reject(new Error("falhou")) });
+    const result = await verifyDnsRecords(BASE, primary, { fallback: null });
+    expect(result.ptr.diagnostic).toMatch(/sem resposta \(falhou\)/);
+  });
+
+  it("falha que nem é um Error aparece como texto no diagnóstico", async () => {
+    const primary = mockResolver({ reverse: () => Promise.reject("conexão recusada") });
+    const result = await verifyDnsRecords(BASE, primary, { fallback: null });
+    expect(result.ptr.diagnostic).toMatch(/sem resposta \(conexão recusada\)/);
+  });
+
+  it("'não existe' do DNS público é definitivo: não consulta o do sistema", async () => {
+    let fallbackCalls = 0;
+    const fallback = mockResolver({
+      reverse: async () => {
+        fallbackCalls += 1;
+        return [];
+      },
+    });
+    const result = await verifyDnsRecords(BASE, mockResolver(), { fallback });
+    expect(result.ptr.status).toBe("action_required");
+    expect(fallbackCalls).toBe(0);
+  });
+
+  it("registros do domínio também usam a segunda opção quando o público não responde", async () => {
+    const primary = mockResolver({ resolve4: timeout, resolveMx: timeout, resolveTxt: timeout, resolve6: timeout });
+    const fallback = mockResolver({
+      resolve4: async () => [ip],
+      resolveMx: async () => [{ exchange: "mail.exemplo.com.br.", priority: 10 }],
+      resolveTxt: async () => [["v=spf1 ip4:203.0.113.10 ~all"]],
+    });
+    const checklist = buildDnsChecklist({ ...BASE_INPUT, serverIpv6: "2001:db8::10" });
+    const result = await verifyDnsRecords(checklist, primary, { fallback });
+    const byId = Object.fromEntries(result.records.map((r) => [r.id, r.status]));
+    expect(byId).toMatchObject({ a: "found", mx: "found", spf: "found", aaaa: "missing" });
+  });
+
+  it("PTR verde não tem diagnóstico", async () => {
+    const resolver = mockResolver({ reverse: async () => ["mail.exemplo.com.br"] });
+    const result = await verifyDnsRecords(BASE, resolver, { fallback: null });
+    expect(result.ptr).toMatchObject({ status: "found", diagnostic: null });
   });
 });

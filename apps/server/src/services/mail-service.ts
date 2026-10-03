@@ -43,6 +43,7 @@ import {
   maskEnv,
   projectMailboxAddress,
   publicResolver,
+  systemResolver,
   readCaddyCertificate,
   sendSmtpMail,
   StalwartClient,
@@ -145,6 +146,12 @@ export interface MailServiceOptions {
   checkCertificate?: typeof certificateStatus;
   /** Resolver DNS (padrão: servidores públicos). */
   resolver?: DnsResolverLike;
+  /**
+   * Segunda opção da verificação de DNS quando o resolver não responde.
+   * Padrão: o DNS do sistema (no container, o do Docker) — mas só quando o
+   * resolver também é o padrão; com resolver injetado (testes), nenhum.
+   */
+  fallbackResolver?: DnsResolverLike | null;
   /** Envio SMTP do e-mail de teste (padrão: sendSmtpMail). */
   sendMail?: typeof sendSmtpMail;
   /** Leitura do aviso de entrega na caixa do remetente (padrão: findDeliveryReport). */
@@ -191,6 +198,7 @@ export class MailService {
   private readonly checkCertificate: typeof certificateStatus;
   private readonly manualCertificate: ((host: string) => Promise<MailCertificate | null>) | undefined;
   private readonly resolverOverride: DnsResolverLike | undefined;
+  private readonly fallbackOverride: DnsResolverLike | null | undefined;
   private readonly sendMail: typeof sendSmtpMail;
   private readonly findReport: typeof findDeliveryReport;
   private readonly now: () => number;
@@ -215,6 +223,7 @@ export class MailService {
     this.checkCertificate = opts.checkCertificate ?? certificateStatus;
     this.manualCertificate = opts.manualCertificate;
     this.resolverOverride = opts.resolver;
+    this.fallbackOverride = opts.fallbackResolver;
     this.sendMail = opts.sendMail ?? sendSmtpMail;
     this.findReport = opts.findReport ?? findDeliveryReport;
     this.now = opts.now ?? Date.now;
@@ -680,8 +689,11 @@ export class MailService {
 
   async verifyDomain(name: string): Promise<DnsVerifyResponse> {
     const checklist = await this.dnsChecklist(name);
-    // O resolver injetado (testes) vale também aqui; o padrão segue sendo o público.
-    const result = await verifyDnsRecords(checklist, this.resolver());
+    // O resolver injetado (testes) vale também aqui; o padrão segue sendo o
+    // público, com o DNS do sistema como segunda opção quando ele não responde.
+    const fallback =
+      this.fallbackOverride !== undefined ? this.fallbackOverride : this.resolverOverride ? null : systemResolver();
+    const result = await verifyDnsRecords(checklist, this.resolver(), { fallback, log: (m) => this.log(m) });
     const domain = this.requireDomain(name);
     domain.lastVerify = {
       at: new Date().toISOString(),

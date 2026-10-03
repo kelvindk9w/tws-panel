@@ -264,7 +264,14 @@ export class CertificateService {
   }
 
   /** "Tentar emitir agora". */
-  async retry(hostRaw: string): Promise<CertificateRetryResponse> {
+  /**
+   * "Tentar emitir agora". Com `background`, as conferências (nome, modo
+   * manual, limite, certificado já válido, limite do Let's Encrypt) são as
+   * mesmas e continuam podendo recusar, mas o recarregamento do proxy não
+   * prende quem pediu: falha dele vai para o log. Usado pela verificação de
+   * DNS do e-mail, quando o registro A de mail.<domínio> fica certo.
+   */
+  async retry(hostRaw: string, opts: { background?: boolean } = {}): Promise<CertificateRetryResponse> {
     const { host } = await this.findName(hostRaw);
     const manual = await this.store.list();
     if (manual.some((m) => m.host === host || covers(m.names, host))) {
@@ -300,7 +307,14 @@ export class CertificateService {
       }
     }
     this.retries.set(host, this.now());
-    await this.deps.refreshProxy({ force: true });
+    const reload = this.deps.refreshProxy({ force: true });
+    if (opts.background) {
+      reload.catch((err: unknown) =>
+        this.log(`Certificados: falha ao pedir a emissão de ${host} (${err instanceof Error ? err.message : String(err)}).`),
+      );
+    } else {
+      await reload;
+    }
     void this.audit?.record({ action: "certificate.retry", target: host, detail: `Emissão do certificado de ${host} pedida de novo.` });
     return {
       host,

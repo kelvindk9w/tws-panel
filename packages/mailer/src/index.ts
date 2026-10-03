@@ -35,6 +35,9 @@ export {
   buildDnsChecklist,
   verifyDnsRecords,
   publicResolver,
+  systemResolver,
+  PUBLIC_DNS_OPTIONS,
+  PUBLIC_DNS_SERVERS,
   ptrTicketText,
   ptrIsOk,
   detectPtrProvider,
@@ -44,6 +47,7 @@ export {
   type ChecklistInput,
   type DnsResolverLike,
   type VerifyResult,
+  type VerifyOptions,
 } from "./dns-checklist.js";
 export {
   sendSmtpMail,

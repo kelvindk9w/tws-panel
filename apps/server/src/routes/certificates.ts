@@ -8,7 +8,7 @@
  *
  * Regras em services/certificate-service.ts.
  */
-import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify";
 import type {
   CertificateItemResponse,
   CertificateListResponse,
@@ -91,7 +91,10 @@ export interface CertificatesRoutesOptions {
 
 const certificatesRoutes: FastifyPluginAsync<CertificatesRoutesOptions> = async (app, opts) => {
   registerErrorHandler(app);
-  const service = opts.service ?? buildService(app);
+  // Em produção o serviço nasce no escopo raiz (app.ts): a verificação de DNS
+  // do e-mail pede a emissão por ele, com o mesmo limite de 1 por minuto.
+  const service =
+    opts.service ?? (app.hasDecorator("certificateService") ? app.certificateService : buildCertificateService(app));
   if (!app.hasDecorator("certificateService")) app.decorate("certificateService", service);
 
   const runExpiryCheck = () => {
@@ -168,7 +171,7 @@ const certificatesRoutes: FastifyPluginAsync<CertificatesRoutesOptions> = async 
 };
 
 /** Liga o serviço ao proxy e ao e-mail (os dois pelo deployService). */
-function buildService(app: Parameters<FastifyPluginAsync>[0]): CertificateService {
+export function buildCertificateService(app: FastifyInstance): CertificateService {
   const store = app.hasDecorator("certificateStore") ? app.certificateStore : new ManualCertificateStore(app.config.dataDir);
   // O e-mail chega pelo deployService (escopo raiz): o mailService fica
   // encapsulado no plugin das rotas de e-mail.

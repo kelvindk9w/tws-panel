@@ -368,6 +368,170 @@ describe("MailDomainPage — senha das caixas nunca visível", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Validação real na VPS (02/10/2026): o botão de copiar levava "nome  tipo
+// valor" juntos, e a pessoa colava tudo num campo só do Cloudflare. Agora cada
+// campo tem o seu botão; o MX aparece em Servidor de e-mail e Prioridade.
+// ---------------------------------------------------------------------------
+
+function mockClipboard(): ReturnType<typeof vi.fn> {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  return writeText;
+}
+
+function rowOf(name: string, type: string): HTMLElement {
+  const rows = within(screen.getByRole("table")).getAllByRole("row");
+  const row = rows.find((r) => within(r).queryByText(type, { exact: true }) && r.textContent?.includes(name));
+  if (!row) throw new Error(`linha ${type} ${name} não encontrada`);
+  return row;
+}
+
+const CLOUDFLARE_CHECKLIST: DnsChecklistResponse = {
+  ...CHECKLIST,
+  records: [
+    record("a", "missing", { type: "A", name: "mail.exemplo.com.br", expected: "203.0.113.10" }),
+    record("mx", "missing", {
+      type: "MX",
+      name: "exemplo.com.br",
+      expected: "10 mail.exemplo.com.br",
+      priority: 10,
+      target: "mail.exemplo.com.br",
+    }),
+    record("spf", "missing", { name: "exemplo.com.br", expected: "v=spf1 ip4:203.0.113.10 ~all" }),
+  ],
+};
+
+describe("MailDomainPage — checklist DNS copiável por campo", () => {
+  it("cada registro tem um botão para o nome e outro para o valor, cada um copiando só aquele campo", async () => {
+    const writeText = mockClipboard();
+    mockApi(CLOUDFLARE_CHECKLIST);
+    await renderPage();
+    await screen.findByRole("table");
+
+    const a = rowOf("mail.exemplo.com.br", "A");
+    fireEvent.click(within(a).getByRole("button", { name: "Copiar nome de mail.exemplo.com.br" }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("mail.exemplo.com.br"));
+    fireEvent.click(within(a).getByRole("button", { name: "Copiar valor de mail.exemplo.com.br" }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("203.0.113.10"));
+
+    const spf = rowOf("exemplo.com.br", "TXT");
+    fireEvent.click(within(spf).getByRole("button", { name: "Copiar valor de exemplo.com.br" }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("v=spf1 ip4:203.0.113.10 ~all"));
+
+    // nenhum botão junta nome, tipo e valor
+    for (const [text] of writeText.mock.calls as unknown as Array<[string]>) {
+      expect(text).not.toMatch(/\s{2}/);
+    }
+  });
+
+  it("o ícone vira 'copiado' por um instante e depois volta", async () => {
+    mockClipboard();
+    mockApi(CLOUDFLARE_CHECKLIST);
+    await renderPage();
+    await screen.findByRole("table");
+    const button = within(rowOf("mail.exemplo.com.br", "A")).getByRole("button", {
+      name: "Copiar nome de mail.exemplo.com.br",
+    });
+    fireEvent.click(button);
+    await waitFor(() => expect(button.querySelector(".lucide-check")).not.toBeNull());
+    await waitFor(() => expect(button.querySelector(".lucide-check")).toBeNull(), { timeout: 3_000 });
+  });
+
+  it("MX em dois campos, como no Cloudflare: Servidor de e-mail e Prioridade, cada um com o seu copiar", async () => {
+    const writeText = mockClipboard();
+    mockApi(CLOUDFLARE_CHECKLIST);
+    await renderPage();
+    await screen.findByRole("table");
+
+    const mx = rowOf("exemplo.com.br", "MX");
+    expect(within(mx).getByText("Servidor de e-mail:")).toBeInTheDocument();
+    expect(within(mx).getByText("Prioridade:")).toBeInTheDocument();
+    expect(within(mx).getByText(/No Cloudflare, o MX tem dois campos: Servidor de e-mail e Prioridade\./)).toBeInTheDocument();
+    // o valor junto ("10 mail…") não aparece para a pessoa copiar de uma vez
+    expect(mx.textContent).not.toContain("10 mail.exemplo.com.br");
+
+    fireEvent.click(within(mx).getByRole("button", { name: "Copiar servidor de e-mail de exemplo.com.br" }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("mail.exemplo.com.br"));
+    fireEvent.click(within(mx).getByRole("button", { name: "Copiar prioridade de exemplo.com.br" }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("10"));
+    fireEvent.click(within(mx).getByRole("button", { name: "Copiar nome de exemplo.com.br" }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("exemplo.com.br"));
+  });
+
+  it("MX de um servidor antigo (sem os campos separados): separa a partir do valor", async () => {
+    mockClipboard();
+    mockApi();
+    await renderPage();
+    await screen.findByRole("table");
+    const mx = rowOf("mx.exemplo.com.br", "MX");
+    expect(within(mx).getByText("Servidor de e-mail:")).toBeInTheDocument();
+    expect(within(mx).getByRole("button", { name: "Copiar prioridade de mx.exemplo.com.br" })).toBeInTheDocument();
+    expect(mx.textContent).toContain("mail.exemplo.com.br");
+  });
+
+  it("registro A de mail.<domínio>: lembra de deixar o proxy do Cloudflare desligado", async () => {
+    mockApi(CLOUDFLARE_CHECKLIST);
+    await renderPage();
+    await screen.findByRole("table");
+    expect(within(rowOf("mail.exemplo.com.br", "A")).getByText("No Cloudflare: Proxy desligado (nuvem cinza)")).toBeInTheDocument();
+    expect(within(rowOf("exemplo.com.br", "TXT")).queryByText(/nuvem cinza/)).not.toBeInTheDocument();
+  });
+});
+
+describe("MailDomainPage — certificado pedido pela verificação", () => {
+  it("o registro A ficou certo e a verificação pediu o certificado: avisa com link para Certificados", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith("/mailboxes")
+          ? { mailboxes: [] }
+          : url.endsWith("/verify")
+            ? {
+                ...CHECKLIST,
+                verifiedAt: "2026-10-02T12:00:00.000Z",
+                summary: { ok: 1, total: 5 },
+                certificateRetry: { host: "mail.exemplo.com.br", message: "Pedimos ao proxy…" },
+              }
+            : CHECKLIST;
+        return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    await renderPage();
+    expect(
+      await screen.findByText(/Certificado de mail\.exemplo\.com\.br: emissão pedida — confira em/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Certificados" })).toHaveAttribute("href", "/certificates");
+  });
+
+  it("sem pedido de certificado, sem aviso", async () => {
+    mockApi();
+    await renderPage();
+    await screen.findByText("1/5 OK");
+    expect(screen.queryByText(/emissão pedida/)).not.toBeInTheDocument();
+  });
+});
+
+describe("MailDomainPage — PTR pendente com detalhe técnico", () => {
+  it("mostra qual consulta ficou sem resposta e onde", async () => {
+    mockApi({
+      ...CHECKLIST,
+      ptr: {
+        ip: "203.0.113.10",
+        expected: "mail.exemplo.com.br",
+        status: "pending",
+        found: [],
+        ticketText: null,
+        diagnostic: "reverso de 203.0.113.10 — DNS público (1.1.1.1, 8.8.8.8): sem resposta (ETIMEOUT)",
+      },
+    });
+    await renderPage();
+    expect(await screen.findByText(/Detalhe técnico/)).toBeInTheDocument();
+    expect(screen.getByText(/sem resposta \(ETIMEOUT\)/)).toBeInTheDocument();
+  });
+});
+
 describe("MailDomainPage — endereço com ?aba=dns", () => {
   it("abre direto no Checklist DNS (link do e-mail do projeto)", async () => {
     mockMailboxApi();
