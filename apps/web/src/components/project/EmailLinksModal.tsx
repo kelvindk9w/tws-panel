@@ -11,6 +11,7 @@ import {
   PROJECT_EMAIL_VALUE_KEYS,
   envLinkNameProblem,
   type ComposeVariable,
+  type EnvExampleVariable,
   type ProjectEmailConfig,
   type ProjectEmailResponse,
   type ProjectEmailValueKey,
@@ -32,6 +33,42 @@ const DESCRIPTION: Record<ProjectEmailValueKey, string> = {
 interface EnvListResponse {
   vars: { key: string; value: string }[];
   compose?: { variables: ComposeVariable[] } | null;
+  /** Nomes do .env.example (e variações) do código — o app pode lê-los por env_file. */
+  example?: { files: string[]; variables: EnvExampleVariable[] } | null;
+}
+
+const PANEL_HINT = "o painel já entrega com este nome";
+
+/**
+ * Opções do seletor: as variáveis do compose, do .env.example e das
+ * Variáveis, com a origem como dica. Nomes que o painel já entrega e nomes
+ * reservados aparecem DESABILITADOS com o motivo (sumir confundia: "digitei
+ * MAIL_FROM_NAME e não achou"). Escolhíveis primeiro, em ordem alfabética.
+ */
+function linkOptions(env: EnvListResponse | null, delivered: readonly string[]): ComboboxOption[] {
+  const hints = new Map<string, string[]>();
+  const add = (name: string, hint: string) => {
+    const list = hints.get(name) ?? [];
+    if (!list.includes(hint)) hints.set(name, [...list, hint]);
+  };
+  for (const v of env?.compose?.variables ?? []) add(v.name, "do compose");
+  for (const v of env?.example?.variables ?? []) add(v.name, `do ${v.file}`);
+  for (const v of env?.vars ?? []) add(v.key, "nas Variáveis");
+  for (const name of delivered) if (!hints.has(name)) hints.set(name, []);
+  const enabled: ComboboxOption[] = [];
+  const disabled: ComboboxOption[] = [];
+  for (const [name, h] of [...hints.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const problem = envLinkNameProblem(name);
+    if (problem === null) {
+      enabled.push({ value: name, label: name, hint: h.join(" · ") });
+    } else if ((PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(name.toUpperCase())) {
+      disabled.push({ value: name, label: name, hint: [...h, PANEL_HINT].join(" · "), disabled: true });
+    } else if (/reservado/.test(problem)) {
+      disabled.push({ value: name, label: name, hint: "nome reservado (compose, Docker ou sistema)", disabled: true });
+    }
+    // nome fora do padrão (não deveria vir de nenhuma fonte): não entra
+  }
+  return [{ value: "", label: "mesmo nome (padrão)" }, ...enabled, ...disabled];
 }
 
 /** Valor do e-mail → variável escolhida ("" = só o nome padrão). */
@@ -73,21 +110,8 @@ export function EmailLinksModal({
 
   const keys = PROJECT_EMAIL_VALUE_KEYS.filter((k) => email.env[k] !== undefined);
 
-  const options: ComboboxOption[] = useMemo(() => {
-    const hints = new Map<string, string[]>();
-    const add = (name: string, hint: string) => {
-      if (envLinkNameProblem(name) !== null) return;
-      hints.set(name, [...(hints.get(name) ?? []), hint]);
-    };
-    for (const v of env?.compose?.variables ?? []) add(v.name, "do compose");
-    for (const v of env?.vars ?? []) add(v.key, "nas Variáveis");
-    return [
-      { value: "", label: "mesmo nome (padrão)" },
-      ...[...hints.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([name, h]) => ({ value: name, label: name, hint: h.join(" · ") })),
-    ];
-  }, [env]);
+  const delivered = keys.join(",");
+  const options: ComboboxOption[] = useMemo(() => linkOptions(env, delivered.split(",")), [env, delivered]);
 
   const filled = new Set((env?.vars ?? []).filter((v) => v.value !== "").map((v) => v.key));
   const counts = new Map<string, number>();
