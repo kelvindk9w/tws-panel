@@ -39,7 +39,7 @@ import {
   PasswordChoice,
   passwordChoiceProblem,
   type PasswordChoiceState,
-} from "@/components/project/MailboxPasswordChoice";
+} from "@/components/mail/MailboxPasswordChoice";
 import { ExistingMailWarning } from "@/components/mail/ExistingMailWarning";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

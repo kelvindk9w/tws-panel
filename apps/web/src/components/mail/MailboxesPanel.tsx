@@ -25,6 +25,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { TestEmailModal } from "@/components/mail/TestEmailCard";
+import {
+  EMPTY_PASSWORD_CHOICE,
+  GeneratedPasswordNotice,
+  PasswordChoice,
+  passwordChoiceProblem,
+  type PasswordChoiceState,
+} from "@/components/mail/MailboxPasswordChoice";
 import { Inbox, KeyRound, Loader2, MailPlus, Send, Settings2, Trash2, X } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -41,22 +48,6 @@ function CredentialRow({ label, value, mono = true }: { label: string; value: st
       </span>
     </div>
   );
-}
-
-/**
- * Senha nova (criar caixa ou trocar): a pessoa define e repete. Os campos
- * são de senha (nunca mostram o texto) e o painel nunca devolve a senha.
- */
-function passwordProblem(password: string, confirm: string): string | null {
-  if (password.length > 0 && password.trim().length < MAILBOX_PASSWORD_MIN) {
-    return `A senha deve ter pelo menos ${MAILBOX_PASSWORD_MIN} caracteres.`;
-  }
-  if (confirm.length > 0 && confirm !== password) return "As senhas não conferem.";
-  return null;
-}
-
-function passwordReady(password: string, confirm: string): boolean {
-  return password.trim().length >= MAILBOX_PASSWORD_MIN && password === confirm;
 }
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
@@ -93,21 +84,22 @@ function ChangePasswordModal({
   onClose: () => void;
   onDone: (email: string) => void;
 }) {
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
+  const [choice, setChoice] = useState<PasswordChoiceState>(EMPTY_PASSWORD_CHOICE);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const problem = passwordProblem(password, confirm);
+  /** Senha gerada pelo painel: mostrada uma única vez, até "Já guardei". */
+  const [generated, setGenerated] = useState<string | null>(null);
 
   async function save() {
     setSaving(true);
     setError(null);
     try {
-      await apiFetch<MailboxResponse>(`/api/mail/mailboxes/${encodeURIComponent(email)}/password`, {
+      const res = await apiFetch<MailboxResponse>(`/api/mail/mailboxes/${encodeURIComponent(email)}/password`, {
         method: "PUT",
-        body: JSON.stringify({ password }),
+        body: JSON.stringify(choice.mode === "generate" ? { generate: true } : { password: choice.password }),
       });
-      onDone(email);
+      if (res.generatedPassword) setGenerated(res.generatedPassword);
+      else onDone(email);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível trocar a senha.");
     } finally {
@@ -123,24 +115,27 @@ function ChangePasswordModal({
           Depois, atualize a senha no app de e-mail onde a caixa estiver configurada.
           {projectMailbox && " O projeto que envia por esta caixa só recebe a senha nova no próximo deploy."}
         </p>
-        <label className="flex flex-col gap-1">
-          <span>Nova senha</span>
-          <Input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span>Repita a nova senha</span>
-          <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-        </label>
-        {(problem || error) && <p className="text-destructive">{problem ?? error}</p>}
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button variant="success" disabled={saving || !passwordReady(password, confirm)} onClick={() => void save()}>
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-            Salvar nova senha
-          </Button>
-        </div>
+        {generated ? (
+          <GeneratedPasswordNotice password={generated} onDone={() => onDone(email)} />
+        ) : (
+          <>
+            <PasswordChoice value={choice} onChange={setChoice} passwordLabel="Nova senha" />
+            {error && <p className="text-destructive">{error}</p>}
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" onClick={onClose}>
+                Cancelar
+              </Button>
+              <Button
+                variant="success"
+                disabled={saving || passwordChoiceProblem(choice) !== null}
+                onClick={() => void save()}
+              >
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+                Salvar nova senha
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </ModalShell>
   );
@@ -230,8 +225,9 @@ export function MailboxesPanel({
   const [error, setError] = useState<string | null>(null);
   const [newMailbox, setNewMailbox] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [newPassword, setNewPassword] = useState("");
-  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [newChoice, setNewChoice] = useState<PasswordChoiceState>(EMPTY_PASSWORD_CHOICE);
+  /** Senha gerada na criação: mostrada uma única vez, até "Já guardei". */
+  const [generated, setGenerated] = useState<{ email: string; password: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<MailboxCredentials | null>(null);
   const [changingPassword, setChangingPassword] = useState<string | null>(null);
@@ -260,19 +256,30 @@ export function MailboxesPanel({
 
   async function addMailbox() {
     const local = newMailbox.trim();
-    if (!local || !passwordReady(newPassword, newPasswordConfirm)) return;
+    if (!local || passwordChoiceProblem(newChoice) !== null) return;
     setBusy("add");
     setError(null);
     try {
       const res = await apiFetch<MailboxResponse>(
         `/api/mail/domains/${encodeURIComponent(name)}/mailboxes`,
-        { method: "POST", body: JSON.stringify({ localPart: local, password: newPassword }) },
+        {
+          method: "POST",
+          body: JSON.stringify(
+            newChoice.mode === "generate"
+              ? { localPart: local, generatePassword: true }
+              : { localPart: local, password: newChoice.password },
+          ),
+        },
       );
       setNewMailbox("");
-      setNewPassword("");
-      setNewPasswordConfirm("");
+      setNewChoice(EMPTY_PASSWORD_CHOICE);
       setChangedMailbox(null);
-      setNotice(`Caixa ${res.mailbox.id} criada. Use a senha que você definiu (o painel não mostra senhas).`);
+      if (res.generatedPassword) {
+        setGenerated({ email: res.mailbox.id, password: res.generatedPassword });
+        setNotice(`Caixa ${res.mailbox.id} criada.`);
+      } else {
+        setNotice(`Caixa ${res.mailbox.id} criada. Use a senha que você definiu (o painel não mostra senhas).`);
+      }
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao criar a caixa.");
@@ -348,35 +355,19 @@ export function MailboxesPanel({
                 @{domain}
               </span>
             </div>
-            <div className="grid max-w-md gap-2 sm:grid-cols-2">
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Senha da caixa</span>
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Repita a senha</span>
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  value={newPasswordConfirm}
-                  onChange={(e) => setNewPasswordConfirm(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && void addMailbox()}
-                />
-              </label>
+            <div className="max-w-md">
+              <PasswordChoice value={newChoice} onChange={setNewChoice} />
             </div>
-            <p className={cn("text-xs", passwordProblem(newPassword, newPasswordConfirm) ? "text-destructive" : "text-muted-foreground")}>
-              {passwordProblem(newPassword, newPasswordConfirm) ??
-                `Mínimo de ${MAILBOX_PASSWORD_MIN} caracteres. Guarde a senha no seu gerenciador: o painel não a mostra depois.`}
-            </p>
+            {newChoice.mode === "type" && (
+              <p className="text-xs text-muted-foreground">
+                Mínimo de {MAILBOX_PASSWORD_MIN} caracteres. Guarde a senha no seu gerenciador: o painel não a mostra
+                depois.
+              </p>
+            )}
             <div>
               <Button
                 size="sm"
-                disabled={busy !== null || !newMailbox.trim() || !passwordReady(newPassword, newPasswordConfirm)}
+                disabled={busy !== null || !newMailbox.trim() || passwordChoiceProblem(newChoice) !== null}
                 onClick={() => void addMailbox()}
               >
                 {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailPlus className="h-4 w-4" />}
@@ -384,6 +375,10 @@ export function MailboxesPanel({
               </Button>
             </div>
           </div>
+
+          {generated && (
+            <GeneratedPasswordNotice password={generated.password} onDone={() => setGenerated(null)} />
+          )}
 
           {notice && (
             <div className="flex items-start justify-between gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm">

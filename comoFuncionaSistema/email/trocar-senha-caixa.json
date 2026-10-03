@@ -114,6 +114,7 @@
   "observacoes": [
     "Pedido do dono do produto (02/10/2026): a senha nunca fica visível; quem esqueceu troca.",
     "O formato do PATCH segue a API de administração do Stalwart 0.11 (lista de ações set/addItem/removeItem); validar na VPS real.",
-    "02/10/2026 (caixa do projeto): a recusa 409 mailbox_managed para caixas de projeto deixou de existir — a caixa do projeto agora é a do endereço de envio, que a pessoa abre num app de e-mail. Depois da troca, o projeto só recebe a senha nova no próximo deploy (inclusive nas variáveis ligadas, ex.: SMTP_SENHA). Tela: card do e-mail do projeto ('Trocar senha'). Na página do domínio (MailDomainPage), o modal 'Configurar no app' ainda esconde 'Trocar senha' para caixas kind 'project' — pendente (fora do escopo desta mudança)."
+    "02/10/2026 (caixa do projeto): a recusa 409 mailbox_managed para caixas de projeto deixou de existir — a caixa do projeto agora é a do endereço de envio, que a pessoa abre num app de e-mail. Depois da troca, o projeto só recebe a senha nova no próximo deploy (inclusive nas variáveis ligadas, ex.: SMTP_SENHA). Tela: card do e-mail do projeto ('Trocar senha'). Na página do domínio (MailDomainPage), o modal 'Configurar no app' ainda esconde 'Trocar senha' para caixas kind 'project' — pendente (fora do escopo desta mudança).",
+    "03/10/2026: o modal de troca da aba Caixas também oferece 'Gerar uma senha forte para mim' (generate: true); a senha gerada aparece uma única vez dentro do modal."
   ]
 }

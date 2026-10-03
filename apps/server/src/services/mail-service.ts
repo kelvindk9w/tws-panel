@@ -740,7 +740,12 @@ export class MailService {
    * (precisa dela para o e-mail de teste e para os projetos), mas nunca a
    * devolve pela API: quem esqueceu troca (changeMailboxPassword).
    */
-  async createMailbox(domainName: string, localPart: string, password: string): Promise<{ mailbox: Mailbox }> {
+  async createMailbox(
+    domainName: string,
+    localPart: string,
+    password: string | undefined,
+    opts: { generate?: boolean } = {},
+  ): Promise<{ mailbox: Mailbox; generatedPassword?: string }> {
     await this.ensureLoaded();
     const domain = this.requireDomain(domainName);
     const local = normalizeLocalPart(localPart);
@@ -748,9 +753,10 @@ export class MailService {
     if (this.data.mailboxes[email]) {
       throw httpError(409, "mailbox_exists", `A caixa ${email} já existe.`);
     }
+    // senha da pessoa ou, com `generate`, uma forte devolvida uma única vez
+    const generated = opts.generate ? generateStrongPassword() : undefined;
+    const finalPassword = generated ?? requireStrongPassword(password);
     await this.requireRunning();
-
-    const finalPassword = requireStrongPassword(password);
     await this.client().createMailbox(email, finalPassword);
 
     const stored: StoredMailbox = {
@@ -764,7 +770,7 @@ export class MailService {
     this.data.mailboxes[email] = stored;
     await this.save();
     const { password: _p, ...mailbox } = stored;
-    return { mailbox };
+    return generated ? { mailbox, generatedPassword: generated } : { mailbox };
   }
 
   /**

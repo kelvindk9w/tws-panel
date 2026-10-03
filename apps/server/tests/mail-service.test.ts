@@ -642,3 +642,28 @@ describe("MailService — ligar valores do e-mail às variáveis do projeto", ()
     expect(await new MailService(config).linkedEnvForProject(project)).toEqual({});
   });
 });
+
+/**
+ * Pedido do dono do produto (02/10/2026): ao criar uma caixa, digitar a senha
+ * OU pedir ao painel uma senha forte, mostrada uma única vez.
+ */
+describe("MailService.createMailbox — senha gerada", () => {
+  it("com generate: cria com senha forte (maiúscula, minúscula, número e especial) e a devolve uma vez", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {});
+    const svc = new MailService(config);
+    const res = await svc.createMailbox("exemplo.com", "suporte", undefined, { generate: true });
+    expect(res.generatedPassword).toMatch(/[A-Z]/);
+    expect(res.generatedPassword).toMatch(/[a-z]/);
+    expect(res.generatedPassword).toMatch(/[0-9]/);
+    expect(res.generatedPassword).toMatch(/[-_.]/);
+    expect(createdMailboxCalls).toEqual([{ email: "suporte@exemplo.com", password: res.generatedPassword }]);
+    expect(res.mailbox).not.toHaveProperty("password");
+  });
+
+  it("sem generate e sem senha: recusa (weak_password)", async () => {
+    await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {});
+    await expect(new MailService(config).createMailbox("exemplo.com", "suporte", undefined)).rejects.toMatchObject({
+      code: "weak_password",
+    });
+  });
+});
