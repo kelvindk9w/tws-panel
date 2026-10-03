@@ -192,3 +192,22 @@ describe("PUT/DELETE /api/certificates/:host/manual", () => {
     expect(again.statusCode).toBe(404);
   });
 });
+
+// A verificação de DNS do e-mail pede a emissão pelo MESMO serviço (mesmo
+// limite de 1 por minuto). Por isso ele nasce no escopo raiz (app.ts) e as
+// rotas da página Certificados usam o que já existe.
+describe("serviço no escopo raiz", () => {
+  it("sem serviço nas opções, as rotas usam o que a app já tem", async () => {
+    const root = await buildAuthTestApp(TOKEN);
+    try {
+      const retry = vi.fn(async (host: string) => ({ host, message: "pedido" }));
+      root.app.decorate("certificateService", { retry } as unknown as FastifyInstance["certificateService"]);
+      await root.app.register(certificatesRoutes);
+      const res = await root.app.inject({ method: "POST", url: "/api/certificates/mail.exemplo.com.br/retry", headers: auth });
+      expect(res.statusCode).toBe(202);
+      expect(retry).toHaveBeenCalledWith("mail.exemplo.com.br");
+    } finally {
+      await closeAuthTestApp(root);
+    }
+  });
+});

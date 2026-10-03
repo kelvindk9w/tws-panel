@@ -111,6 +111,13 @@ export interface DnsRecordCheck {
   found: string[];
   /** Observação adicional (ex.: explicar um mismatch). */
   note: string | null;
+  /**
+   * Só no MX: a prioridade e o servidor separados. O Cloudflare (e outros)
+   * pedem os dois em campos diferentes; `expected` continua "10 mail…",
+   * que é o que a verificação compara.
+   */
+  priority?: number;
+  target?: string;
 }
 
 /**
@@ -154,6 +161,11 @@ export interface PtrCheck {
    * provedor é desconhecido e o nome reverso ainda não é mail.<domínio>.
    */
   ticketText: string | null;
+  /**
+   * Só quando não deu para conferir (status "pending"): qual consulta ficou
+   * sem resposta e em qual DNS (público e do sistema), para diagnóstico.
+   */
+  diagnostic?: string | null;
 }
 
 export interface DnsChecklistResponse {
@@ -173,6 +185,12 @@ export interface DnsVerifyResponse {
   records: DnsRecordCheck[];
   ptr: PtrCheck;
   suggestion: string | null;
+  /**
+   * O registro A de mail.<domínio> aponta para a VPS e o certificado dele
+   * ainda não é válido: a verificação pediu a emissão (o mesmo "Tentar
+   * emitir agora" da página Certificados). Ausente = nada foi pedido.
+   */
+  certificateRetry?: { host: string; message: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -205,9 +223,14 @@ export interface CreateMailboxRequest {
   password: string;
 }
 
-/** PUT /api/mail/mailboxes/:id/password — nova senha definida pela pessoa. */
+/**
+ * PUT /api/mail/mailboxes/:id/password — nova senha definida pela pessoa, ou
+ * `generate: true` para o painel gerar uma forte (devolvida uma vez em
+ * MailboxResponse.generatedPassword).
+ */
 export interface ChangeMailboxPasswordRequest {
-  password: string;
+  password?: string;
+  generate?: boolean;
 }
 
 /** Bloco de credenciais pronto para cliente externo (Outlook/Gmail/Thunderbird). */
@@ -246,34 +269,101 @@ export interface MailboxCredentialsResponse {
 // E-mail de projeto (injeção SMTP)
 // ---------------------------------------------------------------------------
 
+/**
+ * Valores que o e-mail do projeto entrega ao app no deploy, na ordem da tela.
+ * MAIL_FROM_NAME só existe quando há nome de exibição.
+ */
+export const PROJECT_EMAIL_VALUE_KEYS = [
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_USER",
+  "SMTP_PASS",
+  "MAIL_FROM",
+  "MAIL_FROM_NAME",
+] as const;
+export type ProjectEmailValueKey = (typeof PROJECT_EMAIL_VALUE_KEYS)[number];
+
+/** Mesmo padrão das Variáveis do projeto (apps/server/src/services/project-env.ts). */
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+/** Nomes que mudam o compose, o Docker ou o próprio sistema do container. */
+const RESERVED_ENV_NAMES = new Set(["PATH", "HOME", "HOSTNAME", "PWD", "SHELL", "USER"]);
+const RESERVED_ENV_PREFIXES = ["COMPOSE_", "DOCKER_"];
+
+/**
+ * Por que um nome não pode receber um valor do e-mail do projeto (null = pode).
+ * Recusa: fora do padrão de variável; um dos próprios valores do e-mail
+ * (SMTP_PASS → SMTP_USER confundiria o app); e nomes reservados — no `.env`
+ * do compose, COMPOSE_* e DOCKER_* mudam o próprio compose, e PATH/HOME
+ * quebrariam o container.
+ */
+export function envLinkNameProblem(name: string): string | null {
+  if (!ENV_NAME_RE.test(name)) {
+    return `Nome inválido: "${name.slice(0, 60)}". Use letras, números e _ (sem começar com número), ex.: SMTP_SENHA.`;
+  }
+  const upper = name.toUpperCase();
+  if ((PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(upper)) {
+    return `${name} já é um valor do e-mail do projeto: escolha "mesmo nome (padrão)".`;
+  }
+  if (RESERVED_ENV_NAMES.has(upper) || RESERVED_ENV_PREFIXES.some((p) => upper.startsWith(p))) {
+    return `${name} é um nome reservado (muda o funcionamento do compose, do Docker ou do sistema).`;
+  }
+  return null;
+}
+
 export interface ProjectEmailConfig {
   enabled: boolean;
   domain: string | null;
-  /** Caixa técnica <slug>@<domínio> (o projeto entra com ela). */
+  /**
+   * Caixa do projeto: o próprio endereço de envio (o projeto entra com ela e
+   * a pessoa pode abri-la num app de e-mail). Em registros antigos, a caixa
+   * técnica <slug>@<domínio>, com o endereço de envio como alias.
+   */
   mailbox: string | null;
-  /** Endereço de envio: a caixa técnica ou um escolhido (alias dela). */
+  /** Endereço de envio (MAIL_FROM). */
   mailFrom: string | null;
   /** Nome de exibição do remetente (MAIL_FROM_NAME). */
   fromName?: string | null;
   /** Env vars que serão injetadas no próximo deploy (valores mascarados na API). */
   env: Record<string, string>;
+  /**
+   * Variáveis do app ligadas a valores do e-mail (nome da variável → valor de
+   * origem, ex.: { SMTP_SENHA: "SMTP_PASS" }). O deploy entrega o valor atual.
+   */
+  envLinks?: Record<string, ProjectEmailValueKey>;
+  /** Registro antigo (endereço de envio como alias da caixa técnica): salvar de novo migra. */
+  legacyAlias?: boolean;
 }
 
 export interface ProjectEmailResponse {
   email: ProjectEmailConfig;
+  /**
+   * Senha gerada pelo painel ("Gerar uma senha forte para mim"). Vem UMA vez,
+   * na resposta que a criou; nunca mais volta pela API.
+   */
+  generatedPassword?: string;
 }
 
 /**
  * POST /api/projects/:id/email — ativa ou atualiza o e-mail do projeto.
- * Sem fromLocalPart, envia como a caixa técnica (<slug>@<domínio>); sem
- * fromName, usa o nome do projeto.
+ * O endereço de envio vira a caixa do projeto (padrão: <slug>@<domínio>);
+ * sem fromName, usa o nome do projeto. Caixa nova pede a senha: `password`
+ * (mínimo MAILBOX_PASSWORD_MIN) ou `generatePassword: true`.
  */
 export interface EnableProjectEmailRequest {
   domain: string;
-  /** Parte antes do @ do endereço de envio (ex.: "nao-responda"). */
+  /** Parte antes do @ do endereço de envio (ex.: "contato"). */
   fromLocalPart?: string;
   /** Nome que aparece para quem recebe (ex.: "Loja Exemplo"). */
   fromName?: string;
+  /** Senha da caixa, digitada pela pessoa. */
+  password?: string;
+  /** O painel gera uma senha forte e a devolve uma única vez. */
+  generatePassword?: boolean;
+}
+
+/** PUT /api/projects/:id/email/links — liga variáveis do app a valores do e-mail. */
+export interface SetProjectEmailLinksRequest {
+  links: Record<string, ProjectEmailValueKey>;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +484,8 @@ export interface MailTestResponse {
 
 export interface MailboxResponse {
   mailbox: Mailbox;
+  /** Só na troca com `generate: true`: a senha nova, mostrada uma única vez. */
+  generatedPassword?: string;
 }
 
 // ---------------------------------------------------------------------------

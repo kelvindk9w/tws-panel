@@ -35,6 +35,9 @@ export {
   buildDnsChecklist,
   verifyDnsRecords,
   publicResolver,
+  systemResolver,
+  PUBLIC_DNS_OPTIONS,
+  PUBLIC_DNS_SERVERS,
   ptrTicketText,
   ptrIsOk,
   detectPtrProvider,
@@ -44,10 +47,12 @@ export {
   type ChecklistInput,
   type DnsResolverLike,
   type VerifyResult,
+  type VerifyOptions,
 } from "./dns-checklist.js";
 export {
   sendSmtpMail,
   buildTestMessage,
+  formatFromHeader,
   isSingleEmailAddress,
   xtext,
   SmtpSendError,
@@ -67,7 +72,13 @@ export {
   type QueuedMessage,
   type QueuedRecipient,
 } from "./delivery-status.js";
-export { generatePassword, buildCredentials, type CredentialsInput } from "./mailboxes.js";
+export {
+  generatePassword,
+  generateStrongPassword,
+  STRONG_PASSWORD_SPECIALS,
+  buildCredentials,
+  type CredentialsInput,
+} from "./mailboxes.js";
 export {
   checkIpBlacklists,
   checkDomainBlacklists,

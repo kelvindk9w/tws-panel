@@ -2,7 +2,7 @@
  * mail.ts — rotas do módulo de e-mail (Fase 3, plano §5.3).
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { MAILBOX_PASSWORD_MIN } from "@paas/core";
+import { MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
 import type {
   ChangeMailboxPasswordRequest,
   CreateMailDomainRequest,
@@ -21,6 +21,7 @@ import type {
   MailTlsStatusResponse,
   ProjectEmailResponse,
   SendTestEmailRequest,
+  SetProjectEmailLinksRequest,
 } from "@paas/core";
 import { MailService } from "../services/mail-service.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
@@ -159,6 +160,29 @@ const enableProjectEmailSchema = {
       fromLocalPart: MAILBOX_LOCAL_PART_SCHEMA,
       // Vai para o cabeçalho From: sem quebra de linha, < > nem aspas.
       fromName: { type: "string", minLength: 1, maxLength: 80, pattern: '^[^\\r\\n<>"\\\\]+$' },
+      // Senha da caixa do projeto: digitada pela pessoa ou gerada pelo painel.
+      password: MAILBOX_PASSWORD_SCHEMA,
+      generatePassword: { type: "boolean" },
+    },
+  },
+} as const;
+
+// Ligação de variáveis do app a valores do e-mail: nome no padrão das
+// Variáveis do projeto (o service confere também os nomes reservados) →
+// um dos valores que o e-mail do projeto fornece.
+const projectEmailLinksSchema = {
+  params: projectIdParamSchema.params,
+  body: {
+    type: "object",
+    required: ["links"],
+    additionalProperties: false,
+    properties: {
+      links: {
+        type: "object",
+        maxProperties: 30,
+        propertyNames: { pattern: "^[A-Za-z_][A-Za-z0-9_]{0,127}$" },
+        additionalProperties: { type: "string", enum: [...PROJECT_EMAIL_VALUE_KEYS] },
+      },
     },
   },
 } as const;
@@ -225,8 +249,40 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   });
   app.decorate("mailService", service);
 
+  /**
+   * Validação real (02/10/2026): o domínio foi cadastrado antes de existir o
+   * registro A de mail.<domínio>; o Caddy falhou e ficou esperando, e só o
+   * "Tentar emitir agora" da página Certificados resolveu. Quando a
+   * verificação encontra o registro A apontando para a VPS, faz o mesmo
+   * pedido (o recarregamento do proxy roda em segundo plano). As regras da
+   * página Certificados valem: certificado já válido, modo manual ou limite
+   * do Let's Encrypt recusam, e a recusa não atrapalha a verificação. O
+   * serviço de certificados fica no escopo raiz (app.ts); sem ele, nada é pedido.
+   */
+  async function requestMailCertificate(
+    verify: DnsVerifyResponse,
+    log: { info: (msg: string) => void },
+  ): Promise<DnsVerifyResponse["certificateRetry"]> {
+    const a = verify.records.find((r) => r.id === "a");
+    if (a?.status !== "found" || !app.hasDecorator("certificateService")) return undefined;
+    try {
+      const { host, message } = await app.certificateService.retry(a.name, { background: true });
+      return { host, message };
+    } catch (err) {
+      const e = err as Partial<HttpError>;
+      // Pedido de há pouco (limite de 1 por minuto): a emissão já está pedida.
+      if (e.code === "retry_too_soon") {
+        return { host: a.name, message: `A emissão do certificado de ${a.name} já foi pedida há pouco.` };
+      }
+      log.info(`E-mail: certificado de ${a.name} não pedido na verificação (${e.code ?? e.message ?? String(err)}).`);
+      return undefined;
+    }
+  }
+
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
   app.deployService.setEnvProvider(service.envForProject);
+  // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…).
+  app.deployService.setLinkedEnvProvider?.(service.linkedEnvForProject);
   // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
   // que o Stalwart passa a usar (ver MailService.syncTls).
   app.deployService.setMailHostsProvider(() => service.mailHosts());
@@ -393,7 +449,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         const response: DnsVerifyResponse = await service.verifyDomain(request.params.domain);
-        return reply.send(response);
+        const certificateRetry = await requestMailCertificate(response, request.log);
+        return reply.send(certificateRetry ? { ...response, certificateRetry } : response);
       } catch (err) {
         return sendError(reply, err);
       }
@@ -495,7 +552,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // Trocar a senha (quem esqueceu troca: a senha nunca é mostrada).
+  // Trocar a senha (quem esqueceu troca: a senha nunca é mostrada). Com
+  // `generate: true`, o painel gera uma forte e a devolve só nesta resposta.
   app.put<{ Params: { id: string }; Body: ChangeMailboxPasswordRequest }>(
     "/api/mail/mailboxes/:id/password",
     {
@@ -503,21 +561,25 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         ...mailboxIdParamSchema,
         body: {
           type: "object",
-          required: ["password"],
           additionalProperties: false,
-          properties: { password: MAILBOX_PASSWORD_SCHEMA },
+          anyOf: [{ required: ["password"] }, { required: ["generate"] }],
+          properties: { password: MAILBOX_PASSWORD_SCHEMA, generate: { type: "boolean", const: true } },
         },
       },
     },
     async (request, reply) => {
       try {
-        const mailbox = await service.changeMailboxPassword(request.params.id, request.body.password);
+        const { mailbox, generatedPassword } = request.body.generate
+          ? await service.changeMailboxPassword(request.params.id, undefined, { generate: true })
+          : await service.changeMailboxPassword(request.params.id, request.body.password);
         await app.auditService.record({
           action: "mail.mailbox.password",
           target: mailbox.id,
-          detail: `Senha da caixa de e-mail ${mailbox.id} trocada.`,
+          detail: `Senha da caixa de e-mail ${mailbox.id} trocada${generatedPassword ? " (gerada pelo painel)" : ""}.`,
         });
-        const response: MailboxResponse = { mailbox };
+        const response: MailboxResponse = generatedPassword ? { mailbox, generatedPassword } : { mailbox };
+        // A senha gerada aparece uma única vez: nada de cache no caminho.
+        if (generatedPassword) reply.header("cache-control", "no-store");
         return reply.send(response);
       } catch (err) {
         return sendError(reply, err);
@@ -566,10 +628,40 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         if (!project) {
           throw httpError(404, "project_not_found", "Projeto não encontrado.");
         }
-        const { domain, fromLocalPart, fromName } = request.body;
-        const email = await service.enableProjectEmail(project, domain, {
+        const { domain, fromLocalPart, fromName, password, generatePassword } = request.body;
+        const { email, generatedPassword } = await service.enableProjectEmail(project, domain, {
           ...(fromLocalPart ? { fromLocalPart } : {}),
           ...(fromName ? { fromName } : {}),
+          ...(password !== undefined ? { password } : {}),
+          ...(generatePassword ? { generatePassword: true } : {}),
+        });
+        const response: ProjectEmailResponse = generatedPassword ? { email, generatedPassword } : { email };
+        // A senha gerada aparece uma única vez: nada de cache no caminho.
+        if (generatedPassword) reply.header("cache-control", "no-store");
+        return reply.send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Liga variáveis do app a valores do e-mail (guarda só o mapeamento; o
+  // deploy entrega o valor atual).
+  app.put<{ Params: { id: string }; Body: SetProjectEmailLinksRequest }>(
+    "/api/projects/:id/email/links",
+    { schema: projectEmailLinksSchema },
+    async (request, reply) => {
+      try {
+        const project = await app.deployService.getProject(request.params.id);
+        if (!project) {
+          throw httpError(404, "project_not_found", "Projeto não encontrado.");
+        }
+        const email = await service.setProjectEmailLinks(project.id, request.body.links);
+        await app.auditService.record({
+          action: "mail.project.links",
+          target: project.slug,
+          // só os nomes: o valor (a senha, inclusive) nunca vai para a auditoria
+          detail: `Variáveis ligadas ao e-mail do projeto: ${Object.keys(request.body.links).join(", ") || "nenhuma"}.`,
         });
         const response: ProjectEmailResponse = { email };
         return reply.send(response);

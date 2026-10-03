@@ -15,6 +15,7 @@ import type {
   PtrCheckStatus,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,28 +45,85 @@ import {
 // Utilitários
 // ---------------------------------------------------------------------------
 
-function CopyButton({ text, label }: { text: string; label?: string }) {
+/**
+ * Botão de copiar. Copia exatamente `text`; o ícone vira um "copiado" (✓)
+ * por 1,5 s. `ariaLabel` diz o que é copiado para quem usa leitor de tela.
+ */
+function CopyButton({ text, label, ariaLabel }: { text: string; label?: string; ariaLabel?: string }) {
   const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // fallback para contextos sem clipboard API (http)
-      const area = document.createElement("textarea");
-      area.value = text;
-      document.body.appendChild(area);
-      area.select();
-      document.execCommand("copy");
-      area.remove();
-    }
+    await copyText(text);
     setCopied(true);
-    setTimeout(() => setCopied(false), 1_500);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1_500);
   }
   return (
-    <Button variant="ghost" size="sm" onClick={() => void copy()} title={label ?? "Copiar"}>
+    <Button
+      variant="ghost"
+      size="sm"
+      className={cn(!label && "h-7 w-7 shrink-0 p-0")}
+      onClick={() => void copy()}
+      title={copied ? "Copiado" : (ariaLabel ?? label ?? "Copiar")}
+      aria-label={ariaLabel}
+    >
       {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
       {label}
     </Button>
+  );
+}
+
+/** Um campo do registro DNS (nome, valor, servidor do MX…) com o seu botão de copiar. */
+function CopyField({ value, ariaLabel, label }: { value: string; ariaLabel: string; label?: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      {label && <span className="shrink-0 text-xs text-muted-foreground">{label}</span>}
+      <code className="min-w-0 break-all font-mono text-xs">{value}</code>
+      <CopyButton text={value} ariaLabel={ariaLabel} />
+    </span>
+  );
+}
+
+/**
+ * MX em dois campos, como o Cloudflare pede (Servidor de e-mail e
+ * Prioridade). Servidor antigo sem os campos separados: tira do valor
+ * "10 mail.exemplo.com.br".
+ */
+function mxParts(record: DnsRecordCheck): { priority: string; target: string } | null {
+  if (record.priority !== undefined && record.target) {
+    return { priority: String(record.priority), target: record.target };
+  }
+  const match = /^(\d+)\s+(\S+)$/.exec(record.expected.trim());
+  return match ? { priority: match[1]!, target: match[2]! } : null;
+}
+
+/** Valor esperado do registro, pronto para copiar campo a campo. */
+function RecordValue({ record, mailHostname }: { record: DnsRecordCheck; mailHostname: string }) {
+  const mx = record.type === "MX" ? mxParts(record) : null;
+  if (mx) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <CopyField
+          label="Servidor de e-mail:"
+          value={mx.target}
+          ariaLabel={`Copiar servidor de e-mail de ${record.name}`}
+        />
+        <CopyField label="Prioridade:" value={mx.priority} ariaLabel={`Copiar prioridade de ${record.name}`} />
+        <p className="text-xs text-muted-foreground">
+          No Cloudflare, o MX tem dois campos: Servidor de e-mail e Prioridade.
+        </p>
+      </div>
+    );
+  }
+  const isMailHost = (record.type === "A" || record.type === "AAAA") && record.name === mailHostname;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <CopyField value={record.expected} ariaLabel={`Copiar valor de ${record.name}`} />
+      {isMailHost && <p className="text-xs text-amber-400">No Cloudflare: Proxy desligado (nuvem cinza)</p>}
+    </div>
   );
 }
 
@@ -190,6 +248,9 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
             Não deu para conferir agora: o DNS demorou a responder. Isso não indica problema no envio. Clique em
             "Verificar agora" daqui a pouco.
           </p>
+          {ptr.diagnostic && (
+            <p className="mt-2 break-words text-xs text-muted-foreground">Detalhe técnico: {ptr.diagnostic}</p>
+          )}
         </CardContent>
       )}
 
@@ -264,10 +325,13 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
 
 function ChangePasswordModal({
   email,
+  projectMailbox = false,
   onClose,
   onDone,
 }: {
   email: string;
+  /** Caixa usada por um projeto: a senha nova só chega a ele no próximo deploy. */
+  projectMailbox?: boolean;
   onClose: () => void;
   onDone: (email: string) => void;
 }) {
@@ -299,6 +363,7 @@ function ChangePasswordModal({
         <p className="text-muted-foreground">
           Defina uma senha nova. Por segurança o painel nunca mostra a senha: guarde-a no seu gerenciador de senhas.
           Depois, atualize a senha no app de e-mail onde a caixa estiver configurada.
+          {projectMailbox && " O projeto que envia por esta caixa só recebe a senha nova no próximo deploy."}
         </p>
         <label className="flex flex-col gap-1">
           <span>Nova senha</span>
@@ -550,6 +615,21 @@ export function MailDomainPage() {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
+      {/* O registro A de mail.<domínio> ficou certo e o certificado ainda não
+          era válido: a verificação pediu a emissão sozinha. */}
+      {lastVerify?.certificateRetry && (
+        <p className="flex items-start gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
+          <span className="min-w-0 break-words">
+            Certificado de {lastVerify.certificateRetry.host}: emissão pedida — confira em{" "}
+            <Link to="/certificates" className="underline underline-offset-2">
+              Certificados
+            </Link>
+            .
+          </span>
+        </p>
+      )}
+
       <div className="flex gap-1 border-b">
         {(
           [
@@ -597,8 +677,9 @@ export function MailDomainPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              {/* No celular cada registro vira um bloco empilhado (status, tipo e copiar
-                  na primeira linha; nome e valor embaixo); a partir de sm, tabela. */}
+              {/* No celular cada registro vira um bloco empilhado (status e tipo na
+                  primeira linha; nome e valor embaixo, cada um com o seu botão de
+                  copiar); a partir de sm, tabela. */}
               <table className="block w-full text-sm sm:table">
                 <thead className="hidden sm:table-header-group">
                   <tr className="border-b text-left text-xs text-muted-foreground">
@@ -606,7 +687,6 @@ export function MailDomainPage() {
                     <th className="px-4 py-2 font-medium">Tipo</th>
                     <th className="px-4 py-2 font-medium">Nome</th>
                     <th className="px-4 py-2 font-medium">Valor esperado</th>
-                    <th className="px-4 py-2 font-medium"></th>
                   </tr>
                 </thead>
                 <tbody className="block sm:table-row-group">
@@ -622,19 +702,18 @@ export function MailDomainPage() {
                         </span>
                       </td>
                       <td className="order-2 font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">{record.type}</td>
-                      <td className="order-4 basis-full break-all font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">{record.name}</td>
+                      <td className="order-4 min-w-0 basis-full sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
+                        <CopyField value={record.name} ariaLabel={`Copiar nome de ${record.name}`} />
+                      </td>
                       <td className="order-5 min-w-0 basis-full sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto sm:max-w-md">
-                        <p className="break-all font-mono text-xs">{record.expected}</p>
-                        <p className="text-xs text-muted-foreground">{record.purpose}</p>
+                        <RecordValue record={record} mailHostname={checklist.mailHostname} />
+                        <p className="mt-1 text-xs text-muted-foreground">{record.purpose}</p>
                         {record.note && <p className="text-xs text-amber-400">{record.note}</p>}
                         {record.found.length > 0 && record.status !== "found" && (
                           <p className="break-all text-xs text-muted-foreground">
                             encontrado: {record.found.join(" | ")}
                           </p>
                         )}
-                      </td>
-                      <td className="order-3 ml-auto text-right sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
-                        <CopyButton text={`${record.name}  ${record.type}  ${record.expected}`} />
                       </td>
                     </tr>
                   ))}
@@ -759,7 +838,7 @@ export function MailDomainPage() {
                         {mailbox.kind === "system"
                           ? "sistema (postmaster/abuse)"
                           : mailbox.kind === "project"
-                            ? "caixa técnica de projeto"
+                            ? "caixa do projeto (o projeto envia por ela)"
                             : `criada em ${new Date(mailbox.createdAt).toLocaleString("pt-BR")}`}
                       </p>
                     </div>
@@ -784,16 +863,14 @@ export function MailDomainPage() {
                     >
                       <Send className="h-4 w-4" /> Testar envio
                     </Button>
-                    {mailbox.kind !== "project" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy !== null}
-                        onClick={() => setChangingPassword(mailbox.id)}
-                      >
-                        <KeyRound className="h-4 w-4" /> Trocar senha
-                      </Button>
-                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy !== null}
+                      onClick={() => setChangingPassword(mailbox.id)}
+                    >
+                      <KeyRound className="h-4 w-4" /> Trocar senha
+                    </Button>
                     {mailbox.kind === "user" &&
                       (confirmRemove === mailbox.id ? (
                         <div className="flex items-center gap-1">
@@ -825,7 +902,7 @@ export function MailDomainPage() {
       {credentials && (
         <CredentialsModal
           credentials={credentials}
-          canChangePassword={mailboxes.find((m) => m.id === credentials.email)?.kind !== "project"}
+          canChangePassword
           onChangePassword={() => {
             setChangingPassword(credentials.email);
             setCredentials(null);
@@ -836,6 +913,7 @@ export function MailDomainPage() {
       {changingPassword && (
         <ChangePasswordModal
           email={changingPassword}
+          projectMailbox={mailboxes.find((m) => m.id === changingPassword)?.kind === "project"}
           onClose={() => setChangingPassword(null)}
           onDone={(email) => {
             setChangingPassword(null);

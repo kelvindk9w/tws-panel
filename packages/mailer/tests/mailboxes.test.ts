@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
-import { buildCredentials, generatePassword } from "../src/mailboxes.js";
+import { buildCredentials, generatePassword, generateStrongPassword, STRONG_PASSWORD_SPECIALS } from "../src/mailboxes.js";
 import {
   buildSmtpEnv,
   maskEnv,
@@ -33,6 +33,46 @@ describe("generatePassword", () => {
 
   it("respeita o parâmetro de bytes", () => {
     expect(generatePassword(9)).toHaveLength(12);
+  });
+});
+
+/**
+ * Senha da caixa do projeto gerada pelo painel (02/10/2026): mostrada uma vez
+ * à pessoa e injetada como variável de ambiente — precisa ter os quatro tipos
+ * de caractere e nada que quebre .env, YAML, shell ou URL smtp://.
+ */
+describe("generateStrongPassword", () => {
+  it("tem maiúscula, minúscula, número e especial, no tamanho pedido", () => {
+    for (let i = 0; i < 200; i += 1) {
+      const p = generateStrongPassword();
+      expect(p).toHaveLength(24);
+      expect(p).toMatch(/[A-Z]/);
+      expect(p).toMatch(/[a-z]/);
+      expect(p).toMatch(/[0-9]/);
+      expect(p).toMatch(/[-_.]/);
+    }
+    expect(generateStrongPassword(16)).toHaveLength(16);
+  });
+
+  it("só usa caracteres seguros (sem $, #, aspas, espaço, barra, :, @, %…) e começa com letra ou número", () => {
+    expect(STRONG_PASSWORD_SPECIALS).toBe("-_.");
+    for (let i = 0; i < 200; i += 1) {
+      expect(generateStrongPassword()).toMatch(/^[A-Za-z0-9][A-Za-z0-9_.-]+$/);
+    }
+  });
+
+  it("não repete e recusa tamanho menor que 12", () => {
+    expect(new Set(Array.from({ length: 100 }, () => generateStrongPassword())).size).toBe(100);
+    expect(() => generateStrongPassword(8)).toThrow(RangeError);
+  });
+
+  it("com o especial sorteado na primeira posição, troca de lugar com uma letra ou número", () => {
+    // sorteio determinístico: sem trocas no embaralhamento, exceto a do 4º
+    // caractere (o especial) com o 1º — o especial acaba no início
+    const p = generateStrongPassword(12, (n) => (n === 4 ? 0 : n - 1));
+    expect(p).toMatch(/^[A-Za-z0-9]/);
+    expect(p).toMatch(/[-_.]/);
+    expect(p).toHaveLength(12);
   });
 });
 

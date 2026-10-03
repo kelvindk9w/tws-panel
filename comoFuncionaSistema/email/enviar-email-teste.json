@@ -154,6 +154,7 @@
     "Pedido do dono do produto (01/10/2026): validar o e-mail numa VPS de teste que é reinstalada várias vezes, sem depender de chamado no provedor.",
     "Por que postmaster@: o painel já guarda a senha dela (mail.json, 0600), e ela recebe o aviso de entrega. Não precisa de caixa técnica nova nem de segredo novo.",
     "O acompanhamento fica só em memória: reiniciar o painel perde os testes em andamento (GET responde 404).",
-    "Tela (02/10/2026): o formulário virou um modal reutilizável (TestEmailModal, com TestEmailForm dentro). Abre pelo card 'E-mail de teste' do checklist (postmaster@), pelo botão 'Testar envio' de cada caixa e pelo aviso de senha trocada."
+    "Tela (02/10/2026): o formulário virou um modal reutilizável (TestEmailModal, com TestEmailForm dentro). Abre pelo card 'E-mail de teste' do checklist (postmaster@), pelo botão 'Testar envio' de cada caixa e pelo aviso de senha trocada.",
+    "02/10/2026 (validação real: o teste da caixa do projeto chegou no Gmail como 'cassino'): quando o remetente é a caixa de um projeto, o cabeçalho From leva o nome de exibição dele — \"Nome\" <endereço> em ASCII, ou palavras codificadas UTF-8/base64 (RFC 2047, até 75 caracteres cada, sem cortar caractere) com acento. Quebras de linha são removidas e aspas/barra escapadas (formatFromHeader, packages/mailer/src/smtp-send.ts); o schema já recusa \\r \\n < > \" no nome. Caixas comuns e postmaster@: só o endereço."
   ]
 }
