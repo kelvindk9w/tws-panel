@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "DELETE",
   "url": "/api/projects/:id/email",
-  "resumo": "Desativa a injeção SMTP do projeto (remove a associação projeto→caixa); a caixa técnica em si NÃO é apagada.",
+  "resumo": "Desativa a injeção SMTP do projeto (remove a associação projeto→caixa e as variáveis ligadas); a caixa do projeto em si NÃO é apagada (as mensagens ficam).",
   "arquivoFonte": "apps/server/src/routes/mail.ts:246",
   "autenticacao": {
     "exigida": true,
@@ -93,6 +93,7 @@
   "testes": [],
   "observacoes": [
     "Deixa a caixa técnica órfã (ainda existe no Stalwart e em data/mail/mail.json) — não há limpeza automática nem aviso na UI; é preciso ir à página do domínio e remover a caixa manualmente (DELETE .../mailboxes/:id) se não for mais usá-la, e mailbox_in_use só bloqueia enquanto a associação em data.projects existir.",
-    "02/10/2026: ao desativar, o endereço de envio escolhido (alias) sai da caixa técnica no Stalwart."
+    "02/10/2026: ao desativar, o endereço de envio escolhido (alias) sai da caixa técnica no Stalwart.",
+    "02/10/2026 (caixa do projeto): a caixa agora é o endereço de envio, com senha que a pessoa conhece — continua existindo depois de desativar (dá para ler as mensagens antigas ou removê-la na página do domínio). Reativar no mesmo endereço reaproveita a caixa e pede uma senha. O mapeamento de variáveis ligadas (envLinks) é apagado junto. Só registros antigos têm alias para tirar."
   ]
 }

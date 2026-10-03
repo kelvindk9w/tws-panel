@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "GET",
   "url": "/api/projects/:id/email",
-  "resumo": "Configuração de e-mail atual do projeto: se está habilitado, qual caixa técnica usa, e as env vars SMTP que serão injetadas (senha mascarada).",
+  "resumo": "Configuração de e-mail atual do projeto: se está ativo, qual é a caixa do projeto (o próprio endereço de envio), as env vars que serão injetadas (senha mascarada), as variáveis ligadas e se o registro ainda é do modelo antigo (alias).",
   "arquivoFonte": "apps/server/src/routes/mail.ts:219",
   "autenticacao": {
     "exigida": true,
@@ -122,6 +122,7 @@
   ],
   "observacoes": [
     "Consumido pelo card 'E-mail do projeto' na página de detalhe do projeto (não nas páginas de e-mail MailPage/MailDomainPage) — é o painel de projetos que decide habilitar e-mail, escolhendo entre os domínios listados via GET /api/mail/domains.",
-    "02/10/2026: a resposta traz também fromName, mailFrom passa a ser o endereço de envio escolhido (ou a caixa técnica), e env inclui MAIL_FROM_NAME."
+    "02/10/2026: a resposta traz também fromName, mailFrom passa a ser o endereço de envio escolhido (ou a caixa técnica), e env inclui MAIL_FROM_NAME.",
+    "02/10/2026 (caixa do projeto): mailbox passa a ser o próprio endereço de envio (antes: caixa técnica <slug>@). Novos campos: envLinks (variável do app → valor do e-mail, ex.: { SMTP_SENHA: 'SMTP_PASS' }) e legacyAlias (true = registro antigo com o endereço como alias; salvar de novo migra). A senha nunca vem — env.SMTP_PASS é mascarada."
   ]
 }
