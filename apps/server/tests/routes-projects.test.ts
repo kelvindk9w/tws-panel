@@ -65,6 +65,8 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     getEnv: vi.fn(async () => [{ key: "A", value: "1" }]),
     composeVariablesFor: vi.fn(async () => null),
     providedEnvKeys: vi.fn(async () => ["SMTP_HOST"]),
+    envLinkSources: vi.fn(async () => ({ SMTP_SENHA: "SMTP_PASS" })),
+    envExampleFor: vi.fn(async () => ({ files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] })),
     httpsStatus: vi.fn(async () => [
       { domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
     ]),
@@ -521,7 +523,13 @@ describe("rotas de variáveis do projeto", () => {
   it("lê e salva a lista inteira", async () => {
     await build();
     const get = await app.inject({ method: "GET", url: "/api/projects/p1/env", headers: auth });
-    expect(get.json()).toEqual({ vars: [{ key: "A", value: "1" }], compose: null, provided: ["SMTP_HOST"] });
+    expect(get.json()).toEqual({
+      vars: [{ key: "A", value: "1" }],
+      compose: null,
+      provided: ["SMTP_HOST"],
+      links: { SMTP_SENHA: "SMTP_PASS" },
+      example: { files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] },
+    });
     const vars = [{ key: "DATABASE_URL", value: "postgres://x" }];
     const put = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
     expect(put.statusCode, put.body).toBe(200);

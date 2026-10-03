@@ -394,12 +394,12 @@ describe("ProjectEmailCard — ligar às variáveis do projeto", () => {
     }
     const pass = within(dialog).getByRole("combobox", { name: "Variável que recebe SMTP_PASS" });
     await user.click(pass);
-    // opções: padrão, as do compose e as já cadastradas (sem os nomes do próprio e-mail)
+    // opções: padrão, as do compose e as já cadastradas; os nomes do próprio e-mail aparecem desabilitados
     const names = within(dialog).getAllByRole("option").map((o) => o.textContent);
     expect(names.some((n) => n?.startsWith("mesmo nome (padrão)"))).toBe(true);
     expect(names.some((n) => n?.startsWith("SMTP_SENHA"))).toBe(true);
     expect(names.some((n) => n?.startsWith("EMAIL_DE"))).toBe(true);
-    expect(names.some((n) => n?.startsWith("SMTP_HOST"))).toBe(false);
+    expect(within(dialog).getAllByRole("option").find((o) => o.textContent?.startsWith("SMTP_HOST"))).toHaveAttribute("aria-disabled", "true");
     await user.type(pass, "senha");
     await user.click(within(dialog).getByRole("option", { name: /SMTP_SENHA/ }));
     // nome novo digitado

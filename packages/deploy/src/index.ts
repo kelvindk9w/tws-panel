@@ -32,4 +32,5 @@ export {
 } from "./engine.js";
 export { run, runStream, type ExecResult } from "./exec.js";
 export { composeVariables, missingFromComposeOutput, writeProjectDotenv, type ComposeVariable } from "./project-dotenv.js";
+export { ENV_EXAMPLE_FILES, envExampleNames, readEnvExamples, type EnvExampleVariable } from "./env-example.js";
 export { certificateStatus, type CertificateStatus } from "./tls-status.js";

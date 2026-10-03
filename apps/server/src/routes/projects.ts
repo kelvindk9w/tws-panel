@@ -226,12 +226,15 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      const [vars, compose, provided] = await Promise.all([
+      const [vars, compose, provided, links, example] = await Promise.all([
         service.getEnv(request.params.id),
         service.composeVariablesFor(request.params.id),
         service.providedEnvKeys(request.params.id),
+        // ligadas ao e-mail (SMTP_SENHA ← SMTP_PASS) e nomes do .env.example: só nomes
+        service.envLinkSources(request.params.id),
+        service.envExampleFor(request.params.id),
       ]);
-      return reply.send({ vars, compose, provided });
+      return reply.send({ vars, compose, provided, links, example });
     } catch (err) {
       return sendError(reply, err);
     }
