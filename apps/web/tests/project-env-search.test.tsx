@@ -1,0 +1,269 @@
+/**
+ * Seção Variáveis — pesquisa, filtros rápidos, densidade e o que o e-mail do
+ * projeto entrega. Validação real (03/10/2026): com ~70 variáveis o dono
+ * pediu uma barra de pesquisa no topo e poder alternar a exibição; e não
+ * entendeu o aviso "Fornecidas pelo e-mail do projeto no deploy: …".
+ */
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Project } from "@paas/core";
+import { MemoryRouter } from "react-router";
+import { COMPOSE_NAMES } from "./fixtures/cassino-env-names";
+
+const apiFetchMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/api", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/lib/api")>();
+  return { ...real, apiFetch: apiFetchMock };
+});
+
+import { ProjectEnvCard } from "@/components/ProjectEnvCard";
+
+const PROJECT = { id: "p1", name: "cassino", slug: "cassino", detection: { type: "compose" } } as unknown as Project;
+const DELIVERED = ["MAIL_FROM", "MAIL_FROM_NAME", "SMTP_HOST", "SMTP_PASS", "SMTP_PORT", "SMTP_USER"];
+
+/** Projeto parecido com o real: compose com dezenas de variáveis, algumas preenchidas. */
+function cassino(extra: Record<string, unknown> = {}) {
+  return {
+    vars: [
+      { key: "AMBIENTE", value: "producao" },
+      { key: "KYC_MODO", value: "demonstracao" },
+      { key: "PIX_CHAVE", value: "chave-pix-exemplo" },
+      { key: "SITE_HOST", value: "site.exemplo.com" },
+    ],
+    compose: {
+      usesEnvFile: true,
+      variables: COMPOSE_NAMES.map((name) => ({ name, required: name.startsWith("CASA_") || name === "POSTGRES_PASSWORD", defaultValue: null })),
+    },
+    provided: [...DELIVERED, "SMTP_SENHA"].sort(),
+    links: { SMTP_SENHA: "SMTP_PASS" },
+    ...extra,
+  };
+}
+
+function serve(data: Record<string, unknown>) {
+  apiFetchMock.mockImplementation(async (_path: string, init?: RequestInit) =>
+    init?.method === "PUT" ? JSON.parse(String(init.body)) : data,
+  );
+}
+
+function renderCard() {
+  return render(
+    <MemoryRouter>
+      <ProjectEnvCard project={PROJECT} />
+    </MemoryRouter>,
+  );
+}
+
+const search = () => screen.getByRole("searchbox", { name: "Pesquisar variáveis" });
+const rowNames = () =>
+  screen
+    .getAllByRole("listitem")
+    .map((li) => li.getAttribute("data-testid"))
+    .filter((id): id is string => !!id?.startsWith("env-row-") || !!id?.startsWith("env-panel-"))
+    .map((id) => id.replace(/^env-(row|panel)-/, ""));
+
+beforeEach(() => {
+  apiFetchMock.mockReset();
+  window.localStorage.clear();
+});
+afterEach(cleanup);
+
+describe("Variáveis — o que o e-mail do projeto entrega", () => {
+  it("aviso claro com os nomes, o que fazer se o app usa outros nomes e o link para o E-mail", async () => {
+    serve(cassino());
+    renderCard();
+    const box = await screen.findByTestId("env-provided");
+    expect(box).toHaveTextContent(
+      "O e-mail do projeto entrega estas variáveis no deploy: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM, MAIL_FROM_NAME.",
+    );
+    expect(box).toHaveTextContent(/Se o seu app usa outros nomes \(ex\.: SMTP_SENHA\), ligue em E-mail → Ligar às variáveis do projeto/);
+    expect(box).toHaveTextContent("SMTP_SENHA ← SMTP_PASS");
+    expect(within(box).getByRole("link", { name: /E-mail → Ligar às variáveis do projeto/ })).toHaveAttribute(
+      "href",
+      "/projects/p1/email",
+    );
+  });
+
+  it("as entregues e as ligadas que não são linhas aparecem na lista, só com o nome, como fornecidas", async () => {
+    serve(cassino());
+    renderCard();
+    const senha = await screen.findByTestId("env-panel-SMTP_SENHA");
+    expect(senha).toHaveTextContent("SMTP_SENHA ← SMTP_PASS");
+    expect(senha).toHaveTextContent(/fornecida pelo e-mail do projeto/);
+    // nenhum campo de valor: o valor (a senha) nunca aparece aqui
+    expect(within(senha).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("env-panel-MAIL_FROM_NAME")).toHaveTextContent(/fornecida pelo e-mail do projeto/);
+    // SMTP_HOST é do compose: já é uma linha (pode ser substituída), não repete
+    expect(screen.queryByTestId("env-panel-SMTP_HOST")).not.toBeInTheDocument();
+    expect(screen.getByTestId("env-row-SMTP_HOST")).toHaveTextContent(/fornecida pelo E-mail do projeto/);
+  });
+
+  it("linha ligada ao e-mail diz de onde vem", async () => {
+    serve(cassino({ vars: [{ key: "SMTP_SENHA", value: "" }] }));
+    renderCard();
+    expect(await screen.findByTestId("env-row-SMTP_SENHA")).toHaveTextContent(/fornecida pelo E-mail do projeto \(← SMTP_PASS\)/);
+  });
+});
+
+describe("Variáveis — pesquisa", () => {
+  it("filtra por qualquer parte do nome, sem diferenciar maiúsculas, e mostra N de M", async () => {
+    serve(cassino());
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    const total = rowNames().length;
+    expect(screen.getByTestId("env-count")).toHaveTextContent(`${total} variáveis`);
+    fireEvent.change(search(), { target: { value: "smtp" } });
+    expect(rowNames().sort()).toEqual(["SMTP_HOST", "SMTP_PASS", "SMTP_PORT", "SMTP_PORTA", "SMTP_SENHA", "SMTP_USER"]);
+    expect(screen.getByTestId("env-count")).toHaveTextContent(`6 de ${total} variáveis`);
+    fireEvent.change(search(), { target: { value: "Host" } });
+    expect(rowNames().sort()).toEqual(["CARTEIRA_HOST", "SITE_HOST", "SMTP_HOST"]);
+  });
+
+  it("procura no valor só quando ele está à mostra e o nome não parece segredo", async () => {
+    serve({ vars: [{ key: "NODE_ENV", value: "production" }, { key: "API_KEY", value: "production-key" }], compose: null });
+    renderCard();
+    await screen.findByDisplayValue("production");
+    fireEvent.change(search(), { target: { value: "production" } });
+    // valores ocultos: nada
+    expect(screen.getByText(/Nenhuma variável corresponde/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Limpar pesquisa" }));
+    expect(search()).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
+    fireEvent.change(search(), { target: { value: "PRODUCTION" } });
+    // NODE_ENV acha pelo valor; API_KEY tem nome de segredo — o valor não é pesquisado
+    expect(rowNames()).toEqual(["NODE_ENV"]);
+  });
+
+  it("a seta do e-mail também acha: 'pass' encontra SMTP_SENHA ← SMTP_PASS", async () => {
+    serve(cassino());
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    fireEvent.change(search(), { target: { value: "pass" } });
+    expect(rowNames().sort()).toEqual(["POSTGRES_PASSWORD", "SMTP_PASS", "SMTP_SENHA"]);
+  });
+
+  it("linha nova e linha editada continuam à vista com a pesquisa ativa", async () => {
+    serve({ vars: [{ key: "NODE_ENV", value: "production" }, { key: "PORT", value: "3000" }], compose: null });
+    renderCard();
+    await screen.findByDisplayValue("production");
+    fireEvent.change(search(), { target: { value: "node" } });
+    expect(rowNames()).toEqual(["NODE_ENV"]);
+    // renomear a linha não a faz sumir no meio da digitação
+    fireEvent.change(screen.getByDisplayValue("NODE_ENV"), { target: { value: "AMBIENTE" } });
+    expect(screen.getByDisplayValue("AMBIENTE")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
+    expect(screen.getAllByPlaceholderText("NOME_DA_VARIAVEL")).toHaveLength(2);
+    // salvar vale para todas, inclusive a que a pesquisa esconde
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await waitFor(() =>
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        "/api/projects/p1/env",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ vars: [{ key: "AMBIENTE", value: "production" }, { key: "PORT", value: "3000" }] }),
+        }),
+      ),
+    );
+  });
+});
+
+describe("Variáveis — filtros rápidos", () => {
+  it("Faltando, Preenchidas e Do painel, com a contagem; Todas volta", async () => {
+    serve(cassino());
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    const missing = COMPOSE_NAMES.filter((n) => n.startsWith("CASA_") || n === "POSTGRES_PASSWORD");
+    fireEvent.click(screen.getByRole("button", { name: `Faltando (${missing.length})` }));
+    expect(screen.getByRole("button", { name: `Faltando (${missing.length})` })).toHaveAttribute("aria-pressed", "true");
+    expect(rowNames().sort()).toEqual([...missing].sort());
+    fireEvent.click(screen.getByRole("button", { name: "Preenchidas (4)" }));
+    expect(rowNames().sort()).toEqual(["AMBIENTE", "KYC_MODO", "PIX_CHAVE", "SITE_HOST"]);
+    fireEvent.click(screen.getByRole("button", { name: /^Do painel/ }));
+    expect(rowNames().sort()).toEqual([...DELIVERED, "SMTP_SENHA"].sort());
+    // filtro e pesquisa juntos
+    fireEvent.change(search(), { target: { value: "mail" } });
+    expect(rowNames().sort()).toEqual(["MAIL_FROM", "MAIL_FROM_NAME"]);
+    fireEvent.click(screen.getByRole("button", { name: /^Todas/ }));
+    expect(rowNames()).toContain("ALARME_EMAIL");
+  });
+
+  it("muitas obrigatórias faltando: o aviso do topo não lista dezenas de nomes, leva ao filtro Faltando", async () => {
+    serve(cassino());
+    renderCard();
+    const aviso = await screen.findByTestId("compose-vars");
+    expect(aviso).not.toHaveTextContent("CASA_CNPJ");
+    fireEvent.click(within(aviso).getByRole("button", { name: /Ver as 29 em Faltando/ }));
+    expect(screen.getByRole("button", { name: "Faltando (29)" })).toHaveAttribute("aria-pressed", "true");
+    expect(rowNames()).toHaveLength(29);
+  });
+});
+
+describe("Variáveis — botões do rodapé com a pesquisa ativa", () => {
+  const DATA = { vars: [{ key: "API_KEY", value: "abc" }, { key: "DB_URL", value: "postgres://x" }], compose: null };
+
+  it("'Mostrar valores' vale só para as mostradas, e a tela avisa", async () => {
+    serve(DATA);
+    renderCard();
+    await screen.findByDisplayValue("abc");
+    fireEvent.change(search(), { target: { value: "api" } });
+    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/“Mostrar valores” vale só para as mostradas \(1 de 2\)/);
+    fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
+    fireEvent.change(search(), { target: { value: "" } });
+    expect((screen.getByDisplayValue("abc") as HTMLInputElement).type).toBe("text");
+    expect((screen.getByDisplayValue("postgres://x") as HTMLInputElement).type).toBe("password");
+    expect(screen.queryByTestId("env-filter-note")).not.toBeInTheDocument();
+  });
+
+  it("'Apagar todas' apaga TODAS e a confirmação diz que inclui as escondidas pela pesquisa", async () => {
+    serve(DATA);
+    renderCard();
+    await screen.findByDisplayValue("abc");
+    fireEvent.change(search(), { target: { value: "api" } });
+    fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/inclusive 1 que a pesquisa está escondendo/);
+    fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
+    await waitFor(() =>
+      expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/env", expect.objectContaining({ method: "PUT", body: JSON.stringify({ vars: [] }) })),
+    );
+  });
+});
+
+describe("Variáveis — densidade", () => {
+  it("Lista / Compacta; a escolha fica guardada no navegador", async () => {
+    serve(cassino({ vars: [{ key: "AMBIENTE", value: "producao" }] }));
+    const { unmount } = renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    expect(screen.getByRole("button", { name: "Lista" })).toHaveAttribute("aria-pressed", "true");
+    // lista: o rótulo de cada linha aparece
+    expect(screen.getByTestId("env-row-ALARME_EMAIL")).toHaveTextContent(/opcional/);
+    fireEvent.click(screen.getByRole("button", { name: "Compacta" }));
+    expect(screen.getByTestId("env-list")).toHaveAttribute("data-density", "compact");
+    // compacta: rótulo vira dica (title); obrigatória sem valor continua avisando
+    expect(screen.getByTestId("env-row-ALARME_EMAIL")).not.toHaveTextContent(/opcional/);
+    expect(screen.getByTestId("env-row-ALARME_EMAIL")).toHaveAttribute("title", expect.stringMatching(/opcional/));
+    expect(screen.getByTestId("env-row-CASA_CNPJ")).toHaveTextContent(/obrigatória/);
+    unmount();
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    expect(screen.getByRole("button", { name: "Compacta" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("navegador sem armazenamento (modo privado): funciona do mesmo jeito", async () => {
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("bloqueado");
+    });
+    const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("bloqueado");
+    });
+    try {
+      serve({ vars: [{ key: "A", value: "1" }], compose: null });
+      renderCard();
+      await screen.findByDisplayValue("1");
+      fireEvent.click(screen.getByRole("button", { name: "Compacta" }));
+      expect(screen.getByRole("button", { name: "Compacta" })).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
+  });
+});

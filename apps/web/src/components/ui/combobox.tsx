@@ -207,7 +207,7 @@ export function Combobox({
                 onClick={() => choose(item)}
                 onMouseEnter={() => !isDisabled && setActive(i)}
                 className={cn(
-                  "flex items-center gap-2 rounded px-2 py-1.5 text-sm [overflow-wrap:anywhere]",
+                  "flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded px-2 py-1.5 text-sm [overflow-wrap:anywhere]",
                   isDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
                   isActive && "bg-accent text-accent-foreground",
                 )}
@@ -220,8 +220,8 @@ export function Combobox({
                 ) : (
                   <>
                     <Check className={cn("h-4 w-4 shrink-0", isSelected ? "opacity-100" : "opacity-0")} />
-                    <span className="min-w-0 flex-1 font-mono">{item.option.label}</span>
-                    {item.option.hint && <span className="shrink-0 text-xs text-muted-foreground">{item.option.hint}</span>}
+                    <span className="min-w-0 max-w-[calc(100%-1.5rem)] flex-[1_0_auto] font-mono">{item.option.label}</span>
+                    {item.option.hint && <span className="ml-auto text-right text-xs text-muted-foreground">{item.option.hint}</span>}
                   </>
                 )}
               </li>
