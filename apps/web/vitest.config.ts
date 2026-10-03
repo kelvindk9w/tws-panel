@@ -20,6 +20,8 @@ export default defineConfig({
       include: [
         "src/pages/setup/**",
         "src/pages/MailDomainPage.tsx",
+        "src/components/mail/MailboxesPanel.tsx",
+        "src/components/mail/DnsChecklistPanel.tsx",
         "src/pages/ProjectDetailPage.tsx",
         "src/components/TerminalPanel.tsx",
         "src/components/onboarding/**",

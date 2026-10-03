@@ -323,7 +323,7 @@ export function MailboxesPanel({
   return (
     <>
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="px-4 pb-2 sm:px-6">
           <CardTitle className="flex items-center gap-2 text-base">
             <Inbox className="h-4 w-4" /> Caixas de e-mail
           </CardTitle>
@@ -332,7 +332,7 @@ export function MailboxesPanel({
             Gmail ou Thunderbird, veja "Configurar no app".
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent className="flex flex-col gap-4 px-4 sm:px-6">
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="flex flex-col gap-2 rounded-lg border p-3 sm:p-4">
             <p className="text-sm font-medium">Nova caixa</p>
@@ -342,9 +342,9 @@ export function MailboxesPanel({
                 value={newMailbox}
                 onChange={(e) => setNewMailbox(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void addMailbox()}
-                className="w-28 shrink-0 rounded-r-none sm:w-auto sm:flex-1"
+                className="min-w-[4.5rem] flex-1 rounded-r-none"
               />
-              <span className="flex h-9 min-w-0 items-center truncate rounded-r-md border border-l-0 bg-secondary px-3 text-sm text-muted-foreground">
+              <span className="flex h-9 min-w-0 max-w-[75%] shrink-0 items-center overflow-hidden whitespace-nowrap rounded-r-md border border-l-0 bg-secondary px-3 text-sm text-muted-foreground" title={`@${domain}`}>
                 @{domain}
               </span>
             </div>
@@ -426,8 +426,9 @@ export function MailboxesPanel({
                   <Inbox
                     className={cn("h-4 w-4 shrink-0", mailbox.id === highlight ? "text-sky-400" : "text-muted-foreground")}
                   />
-                  {/* no celular o endereço ocupa a linha e os botões descem */}
-                  <div className="min-w-0 flex-1 basis-[calc(100%-1.75rem)] sm:basis-0">
+                  {/* no celular (ou num espaço estreito, como no card do projeto) o endereço
+                      ocupa a linha e os botões descem */}
+                  <div className="min-w-0 flex-1 basis-[calc(100%-1.75rem)] sm:min-w-[16rem] sm:basis-0">
                     <p className="break-all font-medium">{mailbox.id}</p>
                     {mailbox.id === highlight && (
                       <Badge variant="outline" className="mt-0.5 border-sky-500/40 text-sky-300">

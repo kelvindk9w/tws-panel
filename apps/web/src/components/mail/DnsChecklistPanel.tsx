@@ -153,7 +153,7 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
         ptr.status !== "found" && ptr.status !== "generic" && ptr.status !== "pending" && "border-amber-500/40",
       )}
     >
-      <CardHeader className="pb-2">
+      <CardHeader className="px-4 pb-2 sm:px-6">
         <CardTitle className="flex items-center gap-2 text-base">
           <StatusIcon status={ptr.status} /> Reverse DNS (PTR) — {ptr.ip}
         </CardTitle>
@@ -166,13 +166,13 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
       </CardHeader>
 
       {ptr.status === "found" && (
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           <p className="text-sm text-emerald-400">Tudo certo: o nome reverso do IP é {ptr.expected}.</p>
         </CardContent>
       )}
 
       {ptr.status === "generic" && (
-        <CardContent className="flex flex-col gap-2">
+        <CardContent className="flex flex-col gap-2 px-4 sm:px-6">
           <p className="text-sm text-sky-400">
             Envio liberado. O IP tem o nome reverso <code className="text-xs">{current}</code>, e esse
             nome aponta de volta para o mesmo IP. Essa ida e volta (FCrDNS) é o que os grandes
@@ -196,7 +196,7 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
       )}
 
       {ptr.status === "pending" && (
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           <p className="text-sm text-muted-foreground">
             Não deu para conferir agora: o DNS demorou a responder. Isso não indica problema no envio. Clique em
             "Verificar agora" daqui a pouco.
@@ -208,7 +208,7 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
       )}
 
       {(ptr.status === "mismatch" || ptr.status === "action_required" || ptr.status === "missing") && (
-        <CardContent className="flex flex-col gap-2">
+        <CardContent className="flex flex-col gap-2 px-4 sm:px-6">
           <p className="text-sm text-amber-400">
             {ptr.status === "mismatch"
               ? `O IP tem o nome reverso ${current}, mas esse nome não volta para o IP. `
@@ -330,7 +330,7 @@ export function DnsChecklistPanel({
       {showCertificateNotice && <CertificateRetryNotice verify={lastVerify} />}
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="px-4 pb-2 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base">Registros DNS esperados</CardTitle>
             <div className="flex items-center gap-2">
@@ -403,10 +403,10 @@ export function DnsChecklistPanel({
 
       {checklist.suggestion && (
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader className="px-4 pb-2 sm:px-6">
             <CardTitle className="text-base">Evolução da política (DMARC progressivo)</CardTitle>
           </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">{checklist.suggestion}</CardContent>
+          <CardContent className="px-4 text-sm text-muted-foreground sm:px-6">{checklist.suggestion}</CardContent>
         </Card>
       )}
     </>
