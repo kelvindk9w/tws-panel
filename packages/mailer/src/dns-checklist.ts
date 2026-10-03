@@ -18,6 +18,13 @@
  *
  * A verificação usa um resolver público (1.1.1.1/8.8.8.8) para não depender do
  * resolver local; o resolvedor é injetável para permitir testes com mock.
+ *
+ * DNS público que não responde (validação real, 02/10/2026): o PTR ficou
+ * várias vezes "não deu para conferir" com o DNS público respondendo certo
+ * de outro lugar. Agora o resolver público tem prazo e tentativas explícitos
+ * e, quando mesmo assim fica sem resposta, a consulta passa para o DNS do
+ * sistema (dentro do container, o do Docker) antes de desistir. O que falhou
+ * vai para o log e, no PTR pendente, para o campo `diagnostic`.
  */
 import dns from "node:dns/promises";
 import type {
@@ -63,6 +70,9 @@ export function stageSuggestion(stage: DmarcStage): string | null {
   }
 }
 
+/** Prioridade do MX (um servidor só, qualquer número serve; 10 é o costume). */
+const MX_PRIORITY = 10;
+
 /** Monta a lista completa de registros esperados para o domínio. */
 export function buildDnsChecklist(input: ChecklistInput): DnsChecklistResponse {
   const { domain, mailHostname, serverIp, serverIpv6, dkimSelector, dkimPublicKey, dmarcStage } = input;
@@ -98,7 +108,9 @@ export function buildDnsChecklist(input: ChecklistInput): DnsChecklistResponse {
       id: "mx",
       type: "MX",
       name: domain,
-      expected: `10 ${mailHostname}`,
+      expected: `${MX_PRIORITY} ${mailHostname}`,
+      priority: MX_PRIORITY,
+      target: mailHostname,
       purpose: "Recebimento de e-mail — aponta para o hostname, nunca para IP.",
       status: "pending",
       found: [],
@@ -167,43 +179,118 @@ export interface DnsResolverLike {
   reverse(ip: string): Promise<string[]>;
 }
 
-/** Resolver padrão: servidores públicos (independe do resolver local da VPS). */
+/** Servidores do resolver público (independem do resolver local da VPS). */
+export const PUBLIC_DNS_SERVERS = ["1.1.1.1", "8.8.8.8"] as const;
+
+/**
+ * Prazo e tentativas do resolver público (opções de `new dns.Resolver()` do
+ * Node). Sem elas valem os padrões do c-ares, e uma consulta presa pode
+ * passar de dez segundos. Cada tentativa pergunta aos dois servidores.
+ */
+export const PUBLIC_DNS_OPTIONS = { timeout: 2_000, tries: 2 } as const;
+
+/** Resolver padrão: servidores públicos, com prazo e tentativas explícitos. */
 export function publicResolver(): DnsResolverLike {
-  const resolver = new dns.Resolver();
-  resolver.setServers(["1.1.1.1", "8.8.8.8"]);
+  const resolver = new dns.Resolver({ ...PUBLIC_DNS_OPTIONS });
+  resolver.setServers([...PUBLIC_DNS_SERVERS]);
   return resolver;
 }
+
+/**
+ * Resolver do sistema (/etc/resolv.conf). Dentro do container é o DNS do
+ * Docker, que pergunta ao DNS da própria VPS: segunda opção quando o
+ * público não responde.
+ */
+export function systemResolver(): DnsResolverLike {
+  return dns;
+}
+
+const PUBLIC_LABEL = `DNS público (${PUBLIC_DNS_SERVERS.join(", ")})`;
+const SYSTEM_LABEL = "DNS do sistema";
 
 /** Consulta que não teve resposta (demora, erro do servidor de DNS) — diferente de "não existe". */
 const UNAVAILABLE = Symbol("dns-indisponivel");
 /** Respostas definitivas de "não há registro". */
 const NO_RECORD = new Set(["ENOTFOUND", "ENODATA", "NOTFOUND", "NODATA"]);
 
-/**
- * Consulta com uma nova tentativa quando o DNS não responde. "Não existe"
- * vira lista vazia; sem resposta depois de duas tentativas, UNAVAILABLE.
- */
-async function lookup(query: () => Promise<string[]>): Promise<string[] | typeof UNAVAILABLE> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await query();
-    } catch (err) {
-      if (NO_RECORD.has(String((err as { code?: unknown }).code))) return [];
-    }
-  }
-  return UNAVAILABLE;
+/** Código do erro de DNS (ex.: ETIMEOUT) ou, sem código, a mensagem. */
+function failureReason(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const code = (err as NodeJS.ErrnoException).code;
+  return typeof code === "string" ? code : err.message;
 }
 
-async function safe<T>(promise: Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await promise;
-  } catch {
-    return fallback;
+type Attempt<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+/**
+ * Consulta num resolvedor, com uma nova tentativa quando o DNS não responde.
+ * "Não existe" é resposta: vira o valor vazio.
+ */
+async function ask<T>(resolver: DnsResolverLike, query: (r: DnsResolverLike) => Promise<T>, empty: T): Promise<Attempt<T>> {
+  let reason = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return { ok: true, value: await query(resolver) };
+    } catch (err) {
+      reason = failureReason(err);
+      if (NO_RECORD.has(reason)) return { ok: true, value: empty };
+    }
+  }
+  return { ok: false, reason };
+}
+
+/**
+ * Consultas de uma verificação: primeiro o DNS público; sem resposta, o do
+ * sistema. Guarda (e manda para o log) o caminho que falhou.
+ */
+class Lookups {
+  /** Consultas que ficaram sem resposta nos dois caminhos. */
+  readonly failures: string[] = [];
+
+  constructor(
+    private readonly primary: DnsResolverLike,
+    private readonly fallback: DnsResolverLike | null,
+    private readonly log: (message: string) => void,
+  ) {}
+
+  async run<T>(what: string, query: (r: DnsResolverLike) => Promise<T>, empty: T): Promise<T | typeof UNAVAILABLE> {
+    const first = await ask(this.primary, query, empty);
+    if (first.ok) return first.value;
+    const paths = [`${PUBLIC_LABEL}: sem resposta (${first.reason})`];
+    if (this.fallback) {
+      const second = await ask(this.fallback, query, empty);
+      if (second.ok) {
+        this.log(`DNS: ${what} — ${paths[0]}; respondida pelo ${SYSTEM_LABEL}.`);
+        return second.value;
+      }
+      paths.push(`${SYSTEM_LABEL}: sem resposta (${second.reason})`);
+    }
+    const failure = `${what} — ${paths.join("; ")}`;
+    this.log(`DNS: ${failure}.`);
+    this.failures.push(failure);
+    return UNAVAILABLE;
+  }
+
+  /** Igual a run(), mas sem resposta vira o valor vazio (registro "ausente"). */
+  async orEmpty<T>(what: string, query: (r: DnsResolverLike) => Promise<T>, empty: T): Promise<T> {
+    const value = await this.run(what, query, empty);
+    return value === UNAVAILABLE ? empty : value;
   }
 }
 
 function normalizeTxt(chunks: string[][]): string[] {
   return chunks.map((parts) => parts.join(""));
+}
+
+export interface VerifyOptions {
+  /**
+   * Segunda opção quando o resolvedor principal não responde. Padrão: o DNS
+   * do sistema quando o principal é o público padrão; nenhum quando um
+   * resolvedor foi injetado (testes não saem para a rede). null = nenhum.
+   */
+  fallback?: DnsResolverLike | null;
+  /** Para onde vai o caminho que falhou (diagnóstico). Padrão: nenhum. */
+  log?: (message: string) => void;
 }
 
 export interface VerifyResult {
@@ -215,24 +302,28 @@ export interface VerifyResult {
 /** Verifica cada registro do checklist no DNS real. */
 export async function verifyDnsRecords(
   checklist: DnsChecklistResponse,
-  resolver: DnsResolverLike = publicResolver(),
+  resolver?: DnsResolverLike,
+  options: VerifyOptions = {},
 ): Promise<VerifyResult> {
+  const fallback = options.fallback !== undefined ? options.fallback : resolver ? null : systemResolver();
+  const lookups = new Lookups(resolver ?? publicResolver(), fallback, options.log ?? (() => {}));
   const records: DnsRecordCheck[] = [];
 
   for (const record of checklist.records) {
     const checked: DnsRecordCheck = { ...record, found: [], status: "missing", note: null };
 
+    const what = `${record.type} de ${record.name}`;
     if (record.type === "A") {
-      checked.found = await safe(resolver.resolve4(record.name), []);
+      checked.found = await lookups.orEmpty(what, (r) => r.resolve4(record.name), []);
     } else if (record.type === "AAAA") {
-      checked.found = await safe(resolver.resolve6(record.name), []);
+      checked.found = await lookups.orEmpty(what, (r) => r.resolve6(record.name), []);
     } else if (record.type === "MX") {
-      const mx = await safe(resolver.resolveMx(record.name), []);
+      const mx = await lookups.orEmpty(what, (r) => r.resolveMx(record.name), []);
       checked.found = mx
         .sort((a, b) => a.priority - b.priority)
         .map((m) => `${m.priority} ${m.exchange.replace(/\.$/, "")}`);
     } else if (record.type === "TXT") {
-      checked.found = normalizeTxt(await safe(resolver.resolveTxt(record.name), []));
+      checked.found = normalizeTxt(await lookups.orEmpty(what, (r) => r.resolveTxt(record.name), []));
     }
 
     if (checked.found.length > 0) {
@@ -258,7 +349,7 @@ export async function verifyDnsRecords(
     records.push(checked);
   }
 
-  const ptr = await verifyPtr(checklist.ptr, resolver);
+  const ptr = await verifyPtr(checklist.ptr, lookups);
 
   const total = records.length + 1;
   const ok = records.filter((r) => r.status === "found").length + (ptrIsOk(ptr.status) ? 1 : 0);
@@ -280,10 +371,20 @@ function normalizeName(name: string): string {
  * nome reverso volta para o mesmo IP (generic, FCrDNS válido)? Senão,
  * mismatch; sem nome reverso nenhum, action_required.
  */
-async function verifyPtr(expectedPtr: PtrCheck, resolver: DnsResolverLike): Promise<PtrCheck> {
-  const reverse = await lookup(() => resolver.reverse(expectedPtr.ip));
-  const empty: PtrCheck = { ...expectedPtr, found: [], forwardConfirmed: null, provider: null, ticketText: null };
-  if (reverse === UNAVAILABLE) return { ...empty, status: "pending" };
+async function verifyPtr(expectedPtr: PtrCheck, lookups: Lookups): Promise<PtrCheck> {
+  const before = lookups.failures.length;
+  /** Pendente: diz quais consultas do PTR ficaram sem resposta, e onde. */
+  const diagnostic = () => lookups.failures.slice(before).join(" · ");
+  const reverse = await lookups.run(`reverso de ${expectedPtr.ip}`, (r) => r.reverse(expectedPtr.ip), [] as string[]);
+  const empty: PtrCheck = {
+    ...expectedPtr,
+    found: [],
+    forwardConfirmed: null,
+    provider: null,
+    ticketText: null,
+    diagnostic: null,
+  };
+  if (reverse === UNAVAILABLE) return { ...empty, status: "pending", diagnostic: diagnostic() };
   const names = reverse.map(normalizeName);
   const expected = normalizeName(expectedPtr.expected);
   const base: PtrCheck = { ...empty, found: names };
@@ -299,7 +400,7 @@ async function verifyPtr(expectedPtr: PtrCheck, resolver: DnsResolverLike): Prom
   let confirmedName: string | null = null;
   let unavailable = false;
   for (const name of names) {
-    const addresses = await lookup(() => resolver.resolve4(name));
+    const addresses = await lookups.run(`A de ${name}`, (r) => r.resolve4(name), [] as string[]);
     if (addresses === UNAVAILABLE) {
       unavailable = true;
       continue;
@@ -310,7 +411,7 @@ async function verifyPtr(expectedPtr: PtrCheck, resolver: DnsResolverLike): Prom
     }
   }
   // Sem confirmação porque o DNS não respondeu: não é "não volta para o IP".
-  if (!confirmedName && unavailable) return { ...base, status: "pending" };
+  if (!confirmedName && unavailable) return { ...base, status: "pending", diagnostic: diagnostic() };
   const current = confirmedName ?? names[0]!;
   const provider = detectPtrProvider(current, base.expected) ?? firstProvider(names, base.expected);
   return {

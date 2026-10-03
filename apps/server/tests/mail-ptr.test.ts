@@ -114,3 +114,40 @@ describe("verificação do domínio com o PTR genérico do provedor", () => {
     expect(result.summary).toEqual({ ok: 5, total: 6 });
   });
 });
+
+/**
+ * Validação real (02/10/2026): o PTR ficava "não deu para conferir" porque o
+ * DNS público não respondia de dentro do container. Agora o DNS do sistema
+ * (o do Docker) é a segunda opção, e o caminho que falhou vai para o log.
+ */
+describe("DNS público sem resposta", () => {
+  const timeout = () => Promise.reject(Object.assign(new Error("ETIMEOUT"), { code: "ETIMEOUT" }));
+  const answers = {
+    "mail.envio.exemplo.com.br": ["203.0.113.10"],
+    "vmi1234567.contaboserver.net": ["203.0.113.10"],
+  };
+
+  it("o DNS do sistema responde: o PTR fica azul e o log diz que o público falhou", async () => {
+    const log = vi.fn();
+    const service = new MailService(config, {
+      inContainer: false,
+      log,
+      resolver: { ...resolver([], answers), reverse: timeout },
+      fallbackResolver: resolver(["vmi1234567.contaboserver.net"], answers),
+    });
+    const result = await service.verifyDomain("envio.exemplo.com.br");
+    expect(result.ptr.status).toBe("generic");
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/DNS público.*ETIMEOUT.*DNS do sistema/));
+  });
+
+  it("resolvedor injetado sem segunda opção: pendente, com o diagnóstico (testes não saem para a rede)", async () => {
+    const service = new MailService(config, {
+      inContainer: false,
+      log: () => {},
+      resolver: { ...resolver([], answers), reverse: timeout },
+    });
+    const result = await service.verifyDomain("envio.exemplo.com.br");
+    expect(result.ptr.status).toBe("pending");
+    expect(result.ptr.diagnostic).toMatch(/reverso de 203\.0\.113\.10 — DNS público/);
+  });
+});
