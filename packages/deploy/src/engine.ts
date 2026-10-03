@@ -31,6 +31,7 @@ import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from ".
 import { preparePublishDir } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
+import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
 import { runGuardrails } from "./rules.js";
 
@@ -495,7 +496,12 @@ export class DeployEngine {
             " e faça o deploy de novo.",
         );
       }
-      throw new Error(`docker compose up falhou (exit ${code}).`);
+      // Por que falhou: estado de cada serviço, fim do log e healthcheck de
+      // quem ficou unhealthy/parou (validação real: "wallet is unhealthy"
+      // sem nenhuma linha do wallet no log do painel).
+      onLog("\n=== Diagnóstico: estado dos serviços depois da falha ===\n");
+      const summary = await diagnoseComposeFailure(args, startableServices(composeContent), onLog, run);
+      throw new Error(summary ? `docker compose up falhou: ${summary}.` : `docker compose up falhou (exit ${code}).`);
     }
 
     return `${project.slug}:${proxyPort}`;

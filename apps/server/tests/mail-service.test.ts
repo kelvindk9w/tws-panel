@@ -679,3 +679,80 @@ describe("MailService.createMailbox — senha gerada", () => {
     });
   });
 });
+
+/**
+ * Validação real do dono do produto (03/10/2026): a aba Caixas do e-mail do
+ * projeto listava TODAS as caixas do domínio. Agora cada caixa guarda o
+ * projeto dono: a caixa de envio do projeto e as criadas pela aba Caixas
+ * dele. Caixas antigas sem dono: a caixa de envio de um projeto conta como
+ * dele; as outras não são de projeto nenhum.
+ */
+describe("MailService — caixas do projeto (dono)", () => {
+  const project = { id: "p1", slug: "cassino", name: "Cassino Royal" } as unknown as Project;
+  const SENHA = "senha-forte-da-pessoa";
+
+  async function seed(mailboxes: Record<string, unknown> = {}, projects: Record<string, unknown> = {}) {
+    const mailDir = path.join(dir, "mail");
+    await mkdir(mailDir, { recursive: true });
+    await writeFile(
+      path.join(mailDir, "mail.json"),
+      JSON.stringify({ adminSecret: "s", hostname: "mail.test", domains: { "exemplo.com": domainFixture("exemplo.com") }, mailboxes, projects }),
+      "utf8",
+    );
+  }
+
+  it("criar pela aba do projeto guarda o dono; a lista do projeto traz só as dele", async () => {
+    await seed({
+      "postmaster@exemplo.com": mailboxFixture("postmaster@exemplo.com", "exemplo.com", "system"),
+      "vendas@exemplo.com": mailboxFixture("vendas@exemplo.com", "exemplo.com", "user"),
+    });
+    const svc = new MailService(config);
+    await svc.enableProjectEmail(project, "exemplo.com", { fromLocalPart: "contato", password: SENHA });
+    const { mailbox } = await svc.createMailbox("exemplo.com", "suporte", SENHA, { projectId: "p1" });
+    expect(mailbox).toMatchObject({ id: "suporte@exemplo.com", kind: "user", projectId: "p1" });
+    expect(mailbox).not.toHaveProperty("password");
+
+    const doProjeto = await svc.listMailboxes("exemplo.com", { projectId: "p1" });
+    expect(doProjeto.map((m) => m.id).sort()).toEqual(["contato@exemplo.com", "suporte@exemplo.com"]);
+    expect(doProjeto.every((m) => m.projectId === "p1")).toBe(true);
+    expect(await svc.listMailboxes("exemplo.com", { projectId: "p2" })).toEqual([]);
+
+    // a página do domínio continua listando todas, cada uma com o dono (se tiver)
+    const todas = await svc.listMailboxes("exemplo.com");
+    expect(todas.map((m) => [m.id, m.projectId ?? null])).toEqual([
+      ["postmaster@exemplo.com", null],
+      ["vendas@exemplo.com", null],
+      ["contato@exemplo.com", "p1"],
+      ["suporte@exemplo.com", "p1"],
+    ]);
+    const file = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8"));
+    expect(file.mailboxes["suporte@exemplo.com"].projectId).toBe("p1");
+    expect(file.mailboxes["contato@exemplo.com"].projectId).toBe("p1");
+  });
+
+  it("caixas antigas sem dono: a de envio do projeto conta como dele; as outras, de ninguém", async () => {
+    await seed(
+      {
+        "loja@exemplo.com": { ...mailboxFixture("loja@exemplo.com", "exemplo.com", "user"), kind: "project" },
+        "sobra@exemplo.com": { ...mailboxFixture("sobra@exemplo.com", "exemplo.com", "user"), kind: "project" },
+        "vendas@exemplo.com": mailboxFixture("vendas@exemplo.com", "exemplo.com", "user"),
+      },
+      { p1: { domain: "exemplo.com", mailbox: "loja@exemplo.com", enabledAt: new Date(0).toISOString() } },
+    );
+    const svc = new MailService(config);
+    expect((await svc.listMailboxes("exemplo.com", { projectId: "p1" })).map((m) => m.id)).toEqual(["loja@exemplo.com"]);
+    const todas = await svc.listMailboxes("exemplo.com");
+    expect(todas.find((m) => m.id === "loja@exemplo.com")?.projectId).toBe("p1");
+    expect(todas.find((m) => m.id === "sobra@exemplo.com")).not.toHaveProperty("projectId");
+  });
+
+  it("remover e trocar a senha de uma caixa do projeto continuam funcionando", async () => {
+    await seed();
+    const svc = new MailService(config);
+    await svc.createMailbox("exemplo.com", "suporte", SENHA, { projectId: "p1" });
+    await svc.changeMailboxPassword("suporte@exemplo.com", "outra-senha-forte-1");
+    expect(passwordCalls).toEqual([{ email: "suporte@exemplo.com", password: "outra-senha-forte-1" }]);
+    await svc.deleteMailbox("exemplo.com", "suporte@exemplo.com");
+    expect(await svc.listMailboxes("exemplo.com", { projectId: "p1" })).toEqual([]);
+  });
+});

@@ -125,8 +125,23 @@ export async function listContainers(
       `não foi possível listar containers via Docker (socket ${dockerSocketPath}): ${r.stderr.trim() || "erro desconhecido"}`,
     );
   }
+  return containersFromPs(r.stdout);
+}
+
+const COMPOSE_SERVICE_LABEL = "com.docker.compose.service";
+
+/** Saúde do healthcheck lida do status do `docker ps` ("Up 2 minutes (healthy)"). */
+export function healthFromStatus(status: string): DockerContainerInfo["health"] {
+  if (/\(unhealthy\)/.test(status)) return "unhealthy";
+  if (/\(healthy\)/.test(status)) return "healthy";
+  if (/\(health: starting\)/.test(status)) return "starting";
+  return null;
+}
+
+/** Saída de `docker ps -a --format '{{json .}}'` → containers (gerenciados primeiro). */
+export function containersFromPs(stdout: string): DockerContainerInfo[] {
   const containers: DockerContainerInfo[] = [];
-  for (const line of r.stdout.split("\n").filter(Boolean)) {
+  for (const line of stdout.split("\n").filter(Boolean)) {
     let parsed: PsJson;
     try {
       parsed = JSON.parse(line) as PsJson;
@@ -144,6 +159,8 @@ export async function listContainers(
       managed,
       projectSlug,
       composeProject,
+      service: labels.get(COMPOSE_SERVICE_LABEL) ?? null,
+      health: healthFromStatus(parsed.Status ?? ""),
       ports: (parsed.Ports ?? "").split(",").map((p) => p.trim()).filter(Boolean),
     });
   }

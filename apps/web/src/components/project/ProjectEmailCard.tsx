@@ -362,7 +362,7 @@ export function ProjectEmailCard({
               Caixas do domínio {email.domain}. A destacada é a caixa do projeto; você pode criar outras no mesmo
               domínio (ex.: suporte@{email.domain}).
             </p>
-            <MailboxesPanel domain={email.domain} highlight={email.mailbox} />
+            <MailboxesPanel domain={email.domain} projectId={projectId} highlight={email.mailbox} />
           </div>
         )}
 

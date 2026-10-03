@@ -73,13 +73,15 @@
   "testes": [
     "apps/server/tests/routes-docker.test.ts (NOVO nesta rodada — cobre o 503 docker_unavailable e o 200 normal)",
     "apps/server/tests/docker-service.test.ts (NOVO nesta rodada — listContainers com socket default e com socket explícito)",
-    "apps/server/tests/docker-socket.test.ts cobre removeOrphanTerminalHelpers (reaper do terminal) — não relacionado a este endpoint."
+    "apps/server/tests/docker-socket.test.ts cobre removeOrphanTerminalHelpers (reaper do terminal) — não relacionado a este endpoint.",
+    "apps/server/tests/docker-ps-parse.test.ts"
   ],
   "observacoes": [
     "CORRIGIDO nesta rodada: se `docker` não estiver no PATH ou o socket estiver inacessível, listContainers() agora lança DockerUnavailableError e a rota responde 503 docker_unavailable, em vez de 200 com containers:[] (que era indistinguível de 'não há containers na máquina').",
     "CORRIGIDO nesta rodada: DOCKER_SOCKET_PATH agora vale também para esta listagem — listContainers() roda `docker` via subprocesso com DOCKER_HOST derivado do socket configurado (dockerHostFromSocketPath), igual ao que já valia para o terminal (docker-socket.ts). Antes só o terminal respeitava a variável.",
     "Esta rota usa a CLI `docker` (subprocesso via execFile), NÃO o cliente HTTP sobre unix socket de docker-socket.ts — embora ambos, no fim, falem com o mesmo /var/run/docker.sock montado no container do painel (docker-compose.yml:57).",
     "Sem paginação/filtros: a resposta cresce linearmente com o número de containers na máquina.",
-    "docker.ts chama registerErrorHandler(app) (apps/server/src/plugins/error-handler.ts) no início do plugin, igual às demais rotas — mas esta rota não tem nenhum schema de entrada (sem path/query/body), então não há nenhum comportamento novo de validação a documentar; verificado em apps/server/tests/routes-misc-schema.test.ts ('responde normalmente — error handler padronizado registrado não interfere')."
+    "docker.ts chama registerErrorHandler(app) (apps/server/src/plugins/error-handler.ts) no início do plugin, igual às demais rotas — mas esta rota não tem nenhum schema de entrada (sem path/query/body), então não há nenhum comportamento novo de validação a documentar; verificado em apps/server/tests/routes-misc-schema.test.ts ('responde normalmente — error handler padronizado registrado não interfere').",
+    "03/10/2026 — cada container ganha service (label com.docker.compose.service; null fora do compose) e health ('healthy' | 'unhealthy' | 'starting' | null), lida do status do docker ps ('Up 2 minutes (unhealthy)'). A leitura saiu para containersFromPs()/healthFromStatus() em apps/server/src/services/docker-service.ts. É o que a Visão geral usa para dizer, por serviço do compose: rodando, saudável, não saudável, iniciando, reiniciando, parado, não iniciou ou sem container."
   ]
 }

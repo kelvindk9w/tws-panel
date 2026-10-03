@@ -9,6 +9,16 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 03/10/2026 — branch `feat/compose-servicos` (subagente, worktree isolado)
+- Contexto: o primeiro deploy do cassino falhou com "wallet is unhealthy", e o log do painel não mostrava o motivo.
+- O que entrou:
+  - **"Por que falhou" no log:** fim do log e healthcheck de cada serviço com problema; a mensagem final diz qual serviço falhou.
+  - **Todos os serviços do compose:** no assistente e na Visão geral, com o estado de cada container e a explicação do network_mode ("o caddy atende dentro do wallet, por isso a entrada é wallet:80").
+  - **Entrada HTTP:** escolha do serviço e da porta, validada no servidor.
+  - **Texto vermelho que piscava acima do menu do projeto:** era o erro da consulta periódica; agora é um aviso âmbar estável.
+- Detalhes, decisões e o que validar na VPS: `_RELATORIO-compose-servicos.md`.
+- Sem push nem PR: o agente principal decide.
+
 ## Atualização de 02/10/2026 (leia antes do resto)
 
 ### Onde paramos

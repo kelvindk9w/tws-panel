@@ -65,6 +65,7 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     getEnv: vi.fn(async () => [{ key: "A", value: "1" }]),
     composeVariablesFor: vi.fn(async () => null),
     providedEnvKeys: vi.fn(async () => ["SMTP_HOST"]),
+    providedEnvValues: vi.fn(async () => ({ SMTP_HOST: "mail.exemplo.com" })),
     envLinkSources: vi.fn(async () => ({ SMTP_SENHA: "SMTP_PASS" })),
     envExampleFor: vi.fn(async () => ({ files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] })),
     httpsStatus: vi.fn(async () => [
@@ -527,6 +528,8 @@ describe("rotas de variáveis do projeto", () => {
       vars: [{ key: "A", value: "1" }],
       compose: null,
       provided: ["SMTP_HOST"],
+      // valores do que o painel fornece (a senha nunca vem: providedEnvValues a tira)
+      providedValues: { SMTP_HOST: "mail.exemplo.com" },
       links: { SMTP_SENHA: "SMTP_PASS" },
       example: { files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] },
     });

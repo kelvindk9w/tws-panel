@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 import { MemoryRouter } from "react-router";
-import { COMPOSE_NAMES } from "./fixtures/cassino-env-names";
+import { COMPOSE_NAMES, ENV_EXAMPLE_NAMES } from "./fixtures/cassino-env-names";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -84,24 +84,27 @@ describe("Variáveis — o que o e-mail do projeto entrega", () => {
     );
   });
 
-  it("as entregues e as ligadas que não são linhas aparecem na lista, só com o nome, como fornecidas", async () => {
+  it("as entregues e as ligadas aparecem na lista como linhas do painel; a senha nunca", async () => {
     serve(cassino());
     renderCard();
     const senha = await screen.findByTestId("env-panel-SMTP_SENHA");
     expect(senha).toHaveTextContent("SMTP_SENHA ← SMTP_PASS");
-    expect(senha).toHaveTextContent(/fornecida pelo e-mail do projeto/);
+    expect(senha).toHaveTextContent("preenchida (senha da caixa — não é exibida; troque em E-mail → Caixas)");
     // nenhum campo de valor: o valor (a senha) nunca aparece aqui
-    expect(within(senha).queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.getByTestId("env-panel-MAIL_FROM_NAME")).toHaveTextContent(/fornecida pelo e-mail do projeto/);
-    // SMTP_HOST é do compose: já é uma linha (pode ser substituída), não repete
-    expect(screen.queryByTestId("env-panel-SMTP_HOST")).not.toBeInTheDocument();
-    expect(screen.getByTestId("env-row-SMTP_HOST")).toHaveTextContent(/fornecida pelo E-mail do projeto/);
+    expect(senha.querySelector("input")).toBeNull();
+    expect(screen.getByTestId("env-panel-MAIL_FROM_NAME")).toHaveTextContent(/vem do E-mail do projeto/);
+    // SMTP_HOST é do compose e o e-mail entrega: linha do painel, não um campo vazio
+    expect(screen.getByTestId("env-panel-SMTP_HOST")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-row-SMTP_HOST")).not.toBeInTheDocument();
   });
 
-  it("linha ligada ao e-mail diz de onde vem", async () => {
+  it("ligada ao e-mail e também salva nas Variáveis: a linha salva avisa que é ignorada no deploy", async () => {
     serve(cassino({ vars: [{ key: "SMTP_SENHA", value: "" }] }));
     renderCard();
-    expect(await screen.findByTestId("env-row-SMTP_SENHA")).toHaveTextContent(/fornecida pelo E-mail do projeto \(← SMTP_PASS\)/);
+    expect(await screen.findByTestId("env-row-SMTP_SENHA")).toHaveTextContent(
+      /ignorada no deploy: SMTP_SENHA está ligada ao E-mail do projeto \(← SMTP_PASS\)/,
+    );
+    expect(screen.getByTestId("env-panel-SMTP_SENHA")).toBeInTheDocument();
   });
 });
 
@@ -176,8 +179,9 @@ describe("Variáveis — filtros rápidos", () => {
     fireEvent.click(screen.getByRole("button", { name: `Faltando (${missing.length})` }));
     expect(screen.getByRole("button", { name: `Faltando (${missing.length})` })).toHaveAttribute("aria-pressed", "true");
     expect(rowNames().sort()).toEqual([...missing].sort());
-    fireEvent.click(screen.getByRole("button", { name: "Preenchidas (4)" }));
-    expect(rowNames().sort()).toEqual(["AMBIENTE", "KYC_MODO", "PIX_CHAVE", "SITE_HOST"]);
+    // preenchidas: as salvas com valor e as que o painel fornece
+    fireEvent.click(screen.getByRole("button", { name: "Preenchidas (11)" }));
+    expect(rowNames().sort()).toEqual(["AMBIENTE", "KYC_MODO", "PIX_CHAVE", "SITE_HOST", ...DELIVERED, "SMTP_SENHA"].sort());
     fireEvent.click(screen.getByRole("button", { name: /^Do painel/ }));
     expect(rowNames().sort()).toEqual([...DELIVERED, "SMTP_SENHA"].sort());
     // filtro e pesquisa juntos
@@ -265,5 +269,160 @@ describe("Variáveis — densidade", () => {
       get.mockRestore();
       set.mockRestore();
     }
+  });
+});
+
+/**
+ * Validação real (03/10/2026): as fornecidas pelo e-mail do projeto e as
+ * ligadas apareciam só como "fornecida pelo painel", sem valor — o dono
+ * precisava VER que estavam preenchidas. Agora: campo mascarado com o olho,
+ * como as outras, mas não editável (o valor vem do E-mail). A senha da
+ * caixa nunca aparece, com nome nenhum.
+ */
+describe("Variáveis — valores do que o e-mail do projeto fornece", () => {
+  const VALUES = {
+    SMTP_HOST: "mail.envio.exemplo.com.br",
+    SMTP_PORT: "587",
+    SMTP_USER: "contato@envio.exemplo.com.br",
+    MAIL_FROM: "contato@envio.exemplo.com.br",
+    MAIL_FROM_NAME: "Contato",
+    EMAIL_DE: "contato@envio.exemplo.com.br",
+  };
+  const withValues = (extra: Record<string, unknown> = {}) =>
+    cassino({
+      provided: [...DELIVERED, "SMTP_SENHA", "EMAIL_DE"].sort(),
+      links: { SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" },
+      providedValues: VALUES,
+      ...extra,
+    });
+
+  it("campo mascarado com o olho, não editável, e o link para a seção E-mail", async () => {
+    serve(withValues());
+    renderCard();
+    const line = await screen.findByTestId("env-panel-EMAIL_DE");
+    expect(line).toHaveTextContent("EMAIL_DE ← MAIL_FROM");
+    const input = within(line).getByLabelText("Valor de EMAIL_DE") as HTMLInputElement;
+    expect(input).toHaveValue("contato@envio.exemplo.com.br");
+    expect(input.type).toBe("password");
+    expect(input).toHaveAttribute("readonly");
+    fireEvent.click(within(line).getByRole("button", { name: "Mostrar valor" }));
+    expect(input.type).toBe("text");
+    expect(within(line).getByRole("button", { name: "Copiar valor de EMAIL_DE" })).toBeInTheDocument();
+    expect(within(line).getByRole("link", { name: "E-mail do projeto" })).toHaveAttribute("href", "/projects/p1/email");
+  });
+
+  it("a senha: 'preenchida', nunca o valor, com o caminho para trocar", async () => {
+    serve(withValues());
+    renderCard();
+    for (const name of ["SMTP_PASS", "SMTP_SENHA"]) {
+      const line = await screen.findByTestId(`env-panel-${name}`);
+      expect(line).toHaveTextContent("preenchida (senha da caixa — não é exibida; troque em E-mail → Caixas)");
+      expect(line.querySelector("input")).toBeNull();
+      expect(within(line).getByRole("link", { name: "E-mail → Caixas" })).toHaveAttribute(
+        "href",
+        "/projects/p1/email?email=caixas",
+      );
+    }
+  });
+
+  it("'Mostrar valores' revela também as do e-mail (menos a senha)", async () => {
+    serve(withValues());
+    renderCard();
+    await screen.findByTestId("env-panel-MAIL_FROM");
+    fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
+    const input = within(screen.getByTestId("env-panel-MAIL_FROM")).getByLabelText("Valor de MAIL_FROM") as HTMLInputElement;
+    expect(input.type).toBe("text");
+  });
+
+  it("variável ligada e salva nas Variáveis: a salva é ignorada no deploy", async () => {
+    serve(withValues({ vars: [{ key: "EMAIL_DE", value: "remetente@example.com" }] }));
+    renderCard();
+    expect(await screen.findByTestId("env-row-EMAIL_DE")).toHaveTextContent(/ignorada no deploy/);
+    expect(within(screen.getByTestId("env-panel-EMAIL_DE")).getByLabelText("Valor de EMAIL_DE")).toHaveValue(
+      "contato@envio.exemplo.com.br",
+    );
+  });
+
+  it("nome padrão com valor nas Variáveis: a linha salva substitui (sem linha do painel repetida)", async () => {
+    serve(withValues({ vars: [{ key: "SMTP_HOST", value: "smtp.outro.com" }] }));
+    renderCard();
+    expect(await screen.findByTestId("env-row-SMTP_HOST")).toHaveTextContent(/preencher aqui substitui/);
+    expect(screen.queryByTestId("env-panel-SMTP_HOST")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Validação real (cassino, 03/10/2026): o serviço `wallet` lê `env_file: .env`
+ * e precisa de NICEAPI_*, IDENTIDADE_CHAVE etc., que não aparecem como ${...}
+ * no compose. O filtro Faltando passa a incluir os nomes do .env.example sem
+ * valor (aviso; não bloqueia o deploy).
+ */
+describe("Variáveis — o que falta do .env.example", () => {
+  const SAVED = ["AMBIENTE", "KYC_MODO", "PIX_CHAVE", "SITE_HOST"];
+  const PROVIDED = [...DELIVERED, "SMTP_SENHA"];
+  const exampleMissing = [...new Set(ENV_EXAMPLE_NAMES)].filter(
+    (n) => !COMPOSE_NAMES.includes(n) && !PROVIDED.includes(n) && !SAVED.includes(n),
+  );
+  const requiredMissing = COMPOSE_NAMES.filter((n) => n.startsWith("CASA_") || n === "POSTGRES_PASSWORD");
+  const withExample = (extra: Record<string, unknown> = {}) =>
+    cassino({
+      example: { files: [".env.example"], variables: ENV_EXAMPLE_NAMES.map((name) => ({ name, file: ".env.example" })) },
+      ...extra,
+    });
+
+  it("Faltando inclui os do .env.example sem valor, marcados; o deploy continua dependendo só das obrigatórias", async () => {
+    serve(withExample());
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    const total = requiredMissing.length + exampleMissing.length;
+    fireEvent.click(screen.getByRole("button", { name: `Faltando (${total})` }));
+    expect(rowNames().sort()).toEqual([...requiredMissing, ...exampleMissing].sort());
+    expect(screen.getByTestId("env-row-NICEAPI_API_TOKEN")).toHaveTextContent("do .env.example (o app pode ler por env_file)");
+    expect(screen.getByTestId("env-row-IDENTIDADE_CHAVE")).toHaveTextContent("do .env.example (o app pode ler por env_file)");
+    fireEvent.click(screen.getByRole("button", { name: /^Todas/ }));
+    // nome do .env.example que o compose também usa segue a regra do compose
+    expect(screen.getByTestId("env-row-SMTP_PORTA")).not.toHaveTextContent(/env_file/);
+    // o aviso das obrigatórias não muda: as do .env.example não bloqueiam
+    expect(screen.getByTestId("compose-vars")).toHaveTextContent(`${requiredMissing.length} obrigatória(s) ainda sem valor`);
+  });
+
+  it("aviso no topo com o número, 'Ver em Faltando' e a sugestão de importar o .env", async () => {
+    serve(withExample());
+    renderCard();
+    const aviso = await screen.findByTestId("env-example-missing");
+    expect(aviso).toHaveTextContent(`${exampleMissing.length} variáveis do .env.example estão sem valor`);
+    expect(aviso).toHaveTextContent(/não bloqueiam o deploy/);
+    expect(aviso).toHaveTextContent(/Importar arquivo \.env/);
+    fireEvent.click(within(aviso).getByRole("button", { name: "Ver em Faltando" }));
+    expect(screen.getByRole("button", { name: /^Faltando/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("preenchida: sai da contagem do aviso; a vazia não é salva", async () => {
+    serve(withExample());
+    renderCard();
+    const row = await screen.findByTestId("env-row-NICEAPI_API_TOKEN");
+    expect(screen.getByTestId("env-example-missing")).toHaveTextContent(`${exampleMissing.length} variáveis`);
+    fireEvent.change(within(row).getByLabelText(/Valor da variável/), { target: { value: "token" } });
+    expect(screen.getByTestId("env-example-missing")).toHaveTextContent(`${exampleMissing.length - 1} variáveis`);
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    const put = () => apiFetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+    await waitFor(() => expect(put()).toBeDefined());
+    const sent = JSON.parse(String((put()![1] as RequestInit).body)) as { vars: { key: string; value: string }[] };
+    // as sugeridas do .env.example deixadas vazias não vão para o servidor
+    expect(sent.vars.map((v) => v.key)).toEqual([...SAVED, "NICEAPI_API_TOKEN"]);
+    expect(sent.vars.at(-1)).toEqual({ key: "NICEAPI_API_TOKEN", value: "token" });
+  });
+
+  it("um só faltando: frase no singular", async () => {
+    serve(cassino({ example: { files: [".env.example"], variables: [{ name: "IDENTIDADE_CHAVE", file: ".env.example" }] } }));
+    renderCard();
+    expect(await screen.findByTestId("env-example-missing")).toHaveTextContent("1 variável do .env.example está sem valor");
+  });
+
+  it("sem nada faltando do .env.example: sem aviso", async () => {
+    serve(cassino({ example: { files: [".env.example"], variables: [{ name: "AMBIENTE", file: ".env.example" }] } }));
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();
   });
 });

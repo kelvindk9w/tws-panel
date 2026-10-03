@@ -4,6 +4,7 @@ import {
   PROJECT_EMAIL_VALUE_KEYS,
   missingComposeVariables,
   type ComposeVariable,
+  type EnvExampleVariable,
   type Project,
   type ProjectEmailValueKey,
 } from "@paas/core";
@@ -39,7 +40,7 @@ interface EnvVar {
   value: string;
 }
 
-/** Linha do formulário; `suggested` = veio da lista do compose, ainda não salva. */
+/** Linha do formulário; `suggested` = veio da lista do compose (ou do .env.example), ainda não salva. */
 interface EnvRow extends EnvVar {
   id: number;
   suggested?: boolean;
@@ -51,18 +52,30 @@ const MAX_ENV_FILE = 256 * 1024;
 let nextRowId = 1;
 const row = (v: EnvVar, suggested = false): EnvRow => ({ id: nextRowId++, ...v, ...(suggested ? { suggested } : {}) });
 
+/** O que, além das salvas, vira linha sugerida: o compose e o .env.example, menos o que o painel fornece. */
+interface Suggestions {
+  compose: ComposeVariable[] | null;
+  example: EnvExampleVariable[];
+  provided: ReadonlySet<string>;
+}
+
 /**
- * Linhas da tela: as salvas e, em seguida, cada variável do compose que ainda
- * não está na lista (obrigatórias primeiro) — prontas para receber o valor.
+ * Linhas da tela: as salvas; cada variável do compose que ainda não está na
+ * lista (obrigatórias primeiro); e os nomes do .env.example que o compose não
+ * cita (o app pode lê-los por env_file) — prontas para receber o valor. O que
+ * o e-mail do projeto fornece não vira campo vazio: aparece como linha do painel.
  */
-function buildRows(saved: EnvVar[], compose: ComposeVariable[] | null): EnvRow[] {
-  const listed = new Set(saved.map((v) => v.key));
+function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions): EnvRow[] {
+  const listed = new Set([...saved.map((v) => v.key), ...provided]);
   const pending = (compose ?? []).filter((v) => !listed.has(v.name));
+  const inCompose = new Set((compose ?? []).map((v) => v.name));
+  const fromExample = [...new Set(example.map((v) => v.name))].filter((n) => !listed.has(n) && !inCompose.has(n));
   return [
     ...saved.map((v) => row(v)),
     ...[...pending.filter((v) => v.required), ...pending.filter((v) => !v.required)].map((v) =>
       row({ key: v.name, value: "" }, true),
     ),
+    ...fromExample.map((name) => row({ key: name, value: "" }, true)),
   ];
 }
 
@@ -75,18 +88,32 @@ function namesIn(text: string): string[] {
   return [...text.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!);
 }
 
-/** O que a linha significa para o compose (rótulo e placeholder). `linkedTo` = valor do e-mail ligado a ela. */
+/**
+ * O que a linha significa (rótulo e placeholder). `linkedTo` = valor do e-mail
+ * ligado a ela; `exampleFile` = o .env.example que a cita (quando o compose não cita).
+ */
 function describe(
+  name: string,
   cv: ComposeVariable | undefined,
   provided: boolean,
   linkedTo?: string,
+  exampleFile?: string,
 ): { label: string; placeholder: string } | null {
-  if (provided) {
-    const from = linkedTo ? ` (← ${linkedTo})` : "";
+  if (linkedTo) {
+    // a ligação vence o valor salvo aqui (deploy-service.ts, envForProject)
     return {
-      label: `fornecida pelo E-mail do projeto${from} — preencher aqui substitui`,
+      label: `ignorada no deploy: ${name} está ligada ao E-mail do projeto (← ${linkedTo}) e a ligação vence. Apague esta linha ou desfaça a ligação no E-mail.`,
+      placeholder: "ignorada: vem do E-mail do projeto",
+    };
+  }
+  if (provided) {
+    return {
+      label: "fornecida pelo E-mail do projeto — preencher aqui substitui",
       placeholder: "fornecida pelo painel",
     };
+  }
+  if (!cv && exampleFile) {
+    return { label: `do ${exampleFile} (o app pode ler por env_file)`, placeholder: `do ${exampleFile}` };
   }
   if (!cv) return null;
   if (cv.required && cv.alternatives?.length) {
@@ -130,8 +157,16 @@ function saveDensity(d: Density) {
 /** Nome com cara de segredo: o valor nunca entra na pesquisa, mesmo à mostra. */
 const SECRET_NAME = /PASS|SENHA|SECRET|TOKEN|KEY|CHAVE|PRIVATE|CREDENTIAL|AUTH|CERT/i;
 
-/** Linha da lista: uma variável editável ou uma que o painel entrega (só o nome). */
-type Line = { kind: "row"; row: EnvRow; index: number } | { kind: "panel"; name: string; source?: string };
+/**
+ * Linha da lista: uma variável editável ou uma que o e-mail do projeto entrega
+ * (não editável; `value` null = a senha da caixa, que nunca aparece;
+ * ausente = servidor antigo, que não manda os valores).
+ */
+type Line =
+  | { kind: "row"; row: EnvRow; index: number }
+  | { kind: "panel"; name: string; source?: string; value?: string | null };
+
+const PASSWORD_TEXT = "preenchida (senha da caixa — não é exibida; troque em ";
 
 const lineName = (l: Line) => (l.kind === "row" ? l.row.key.trim() : l.name);
 
@@ -149,7 +184,9 @@ const lineName = (l: Line) => (l.kind === "row" ? l.row.key.trim() : l.name);
  * pesquisa ativa, "Mostrar valores" vale só para as mostradas (revela menos)
  * e "Apagar todas"/"Salvar" continuam valendo para todas — a tela avisa.
  * O que o e-mail do projeto entrega (e o que está ligado a ele) aparece na
- * lista só com o nome.
+ * lista já preenchido, com o olho e sem edição (o valor muda no E-mail); a
+ * senha da caixa nunca aparece. Faltando inclui os nomes do .env.example sem
+ * valor (o app pode lê-los por env_file): aviso, não bloqueia o deploy.
  */
 export function ProjectEnvCard({ project }: { project: Project }) {
   const [vars, setVars] = useState<EnvRow[] | null>(null);
@@ -159,6 +196,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [provided, setProvided] = useState<string[]>([]);
   // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA → SMTP_PASS)
   const [links, setLinks] = useState<Record<string, ProjectEmailValueKey>>({});
+  // Valores do que o painel fornece (sem a senha da caixa, que nunca vem)
+  const [providedValues, setProvidedValues] = useState<Record<string, string>>({});
+  // Nomes do .env.example do código (o app pode lê-los por env_file)
+  const [example, setExample] = useState<EnvExampleVariable[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [density, setDensity] = useState<Density>(readDensity);
@@ -166,7 +207,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [pinned, setPinned] = useState<Set<number>>(new Set());
   const [savedCount, setSavedCount] = useState(0);
   const [visible, setVisible] = useState<Set<number>>(new Set());
-  const [copied, setCopied] = useState<number | null>(null);
+  // olho das linhas do e-mail do projeto (por nome)
+  const [visiblePanel, setVisiblePanel] = useState<Set<string>>(new Set());
+  const [copied, setCopied] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -179,15 +222,20 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       vars: EnvVar[];
       compose?: { variables: ComposeVariable[] } | null;
       provided?: string[];
+      providedValues?: Record<string, string>;
       links?: Record<string, ProjectEmailValueKey>;
+      example?: { files: string[]; variables: EnvExampleVariable[] } | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
+        const exampleVars = r.example?.variables ?? [];
         setComposeVars(compose);
         setProvided(r.provided ?? []);
+        setProvidedValues(r.providedValues ?? {});
         setLinks(r.links ?? {});
+        setExample(exampleVars);
         setSavedCount(r.vars.length);
-        setVars(buildRows(r.vars, compose));
+        setVars(buildRows(r.vars, { compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
       })
       .catch((err: unknown) => {
         setVars([]);
@@ -220,10 +268,20 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     });
   }
 
-  async function copy(r: EnvRow) {
-    if (await copyText(r.value)) {
-      setCopied(r.id);
-      setTimeout(() => setCopied((c) => (c === r.id ? null : c)), 1500);
+  function setPanelVisible(name: string, show: boolean) {
+    setVisiblePanel((prev) => {
+      const next = new Set(prev);
+      if (show) next.add(name);
+      else next.delete(name);
+      return next;
+    });
+  }
+
+  /** `key`: "row:<id>" ou "panel:<nome>" — onde mostrar o "copiado". */
+  async function copy(key: string, value: string) {
+    if (await copyText(value)) {
+      setCopied(key);
+      setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
     }
   }
 
@@ -233,7 +291,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       body: JSON.stringify({ vars: list }),
     });
     setSavedCount(res.vars.length);
-    setVars(buildRows(res.vars, composeVars));
+    setVars(buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) }));
     setVisible(new Set());
     setImported(null);
     return res.vars;
@@ -319,23 +377,41 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const delivered = PROJECT_EMAIL_VALUE_KEYS.filter((k) => providedSet.has(k));
   // …e as variáveis do app ligadas a ele (SMTP_SENHA ← SMTP_PASS)
   const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n));
-  // Fornecidas que não são linhas da lista entram nela só com o nome
-  // (o valor — a senha, inclusive — nunca aparece aqui).
-  const listedNames = new Set((vars ?? []).map((v) => v.key.trim()));
+  // O que o e-mail fornece vira linha do painel, com o valor (a senha, nunca).
+  // Nome padrão com valor salvo aqui: a linha salva substitui o e-mail no
+  // deploy, e a do painel não aparece. Ligada: a ligação vence sempre.
+  const overridden = new Set((vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()));
+  const isSecret = (name: string) => name === "SMTP_PASS" || links[name] === "SMTP_PASS";
   const lines: Line[] = [
     ...(vars ?? []).map((row, index): Line => ({ kind: "row", row, index })),
     ...[...delivered, ...linked]
-      .filter((name) => !listedNames.has(name))
-      .map((name): Line => ({ kind: "panel", name, ...(links[name] ? { source: links[name] } : {}) })),
+      .filter((name) => links[name] !== undefined || !overridden.has(name))
+      .map(
+        (name): Line => ({
+          kind: "panel",
+          name,
+          ...(links[name] ? { source: links[name] } : {}),
+          value: isSecret(name) ? null : providedValues[name],
+        }),
+      ),
   ];
 
+  // Nomes do .env.example que o compose não cita: o app pode lê-los por env_file
+  const exampleFile = new Map<string, string>();
+  for (const v of example) if (!exampleFile.has(v.name)) exampleFile.set(v.name, v.file);
   const isMissing = (r: EnvRow) => {
     const name = r.key.trim();
     return r.value === "" && !providedSet.has(name) && missingSet.has(name);
   };
+  /** Do .env.example, sem valor nem fornecida pelo painel: aviso (não bloqueia o deploy). */
+  const isExampleMissing = (r: EnvRow) => {
+    const name = r.key.trim();
+    return r.value === "" && exampleFile.has(name) && !composeByName.has(name) && !providedSet.has(name);
+  };
+  const exampleMissingCount = (vars ?? []).filter(isExampleMissing).length;
   const inFilter = (l: Line, f: Filter) => {
-    if (f === "missing") return l.kind === "row" && isMissing(l.row);
-    if (f === "filled") return l.kind === "row" && l.row.value !== "";
+    if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
+    if (f === "filled") return l.kind === "panel" || l.row.value !== "";
     if (f === "panel") return providedSet.has(lineName(l));
     return true;
   };
@@ -344,7 +420,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     if (!q) return true;
     const name = lineName(l);
     if (name.toLowerCase().includes(q)) return true;
-    if (l.kind === "panel") return (l.source ?? "").toLowerCase().includes(q);
+    if (l.kind === "panel") {
+      if ((l.source ?? "").toLowerCase().includes(q)) return true;
+      return visiblePanel.has(name) && !SECRET_NAME.test(name) && (l.value ?? "").toLowerCase().includes(q);
+    }
     // valor: só o que já está à mostra, e nunca o de nome com cara de segredo
     return visible.has(l.row.id) && !SECRET_NAME.test(name) && l.row.value.toLowerCase().includes(q);
   };
@@ -361,8 +440,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     filled: lines.filter((l) => inFilter(l, "filled")).length,
     panel: lines.filter((l) => inFilter(l, "panel")).length,
   };
+  // linhas do e-mail com valor que dá para mostrar (a senha fica de fora)
+  const shownPanel = shownLines.flatMap((l) => (l.kind === "panel" && typeof l.value === "string" ? [l.name] : []));
   // "Mostrar valores" vale para as mostradas: com a pesquisa ativa, revela menos
-  const allVisible = shownRows.length > 0 && shownRows.every((v) => visible.has(v.id));
+  const allVisible =
+    shownRows.length + shownPanel.length > 0 &&
+    shownRows.every((v) => visible.has(v.id)) &&
+    shownPanel.every((n) => visiblePanel.has(n));
   const compact = density === "compact";
 
   return (
@@ -436,9 +520,28 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
                 E-mail → Ligar às variáveis do projeto
               </Link>
-              . Os valores não aparecem aqui (a senha, nunca). Preencher aqui uma variável com o mesmo nome substitui o
-              valor do e-mail.
+              . Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da
+              caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Uma variável salva aqui com o nome padrão (ex.:
+              SMTP_HOST) substitui o valor do e-mail; as ligadas vêm sempre do e-mail.
             </p>
+          </div>
+        )}
+        {exampleMissingCount > 0 && (
+          <div
+            data-testid="env-example-missing"
+            className="mt-2 flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200"
+          >
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              {exampleMissingCount === 1
+                ? "1 variável do .env.example está sem valor."
+                : `${exampleMissingCount} variáveis do .env.example estão sem valor.`}{" "}
+              O app pode lê-las pelo env_file (sem aparecerem no compose). Elas não bloqueiam o deploy, mas o app pode
+              precisar delas. Tem o .env no seu computador? Use “Importar arquivo .env”, aqui embaixo.{" "}
+              <button type="button" className="text-sky-400 underline" onClick={() => search("", "missing")}>
+                Ver em Faltando
+              </button>
+            </span>
           </div>
         )}
       </CardHeader>
@@ -559,26 +662,92 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                         key={`panel:${line.name}`}
                         data-testid={`env-panel-${line.name}`}
                         className={cn(
-                          "flex flex-col gap-0.5 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 sm:flex-row sm:items-center sm:gap-3",
+                          "flex flex-col gap-1 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3",
                           compact ? "py-1" : "py-2",
                         )}
                       >
-                        <span className="font-mono text-sm text-emerald-200 [overflow-wrap:anywhere] sm:w-64 sm:shrink-0">
-                          {line.name}
-                          {line.source && <span className="text-muted-foreground"> ← {line.source}</span>}
-                        </span>
-                        <span className="text-xs text-emerald-300/80">
-                          fornecida pelo e-mail do projeto no deploy (o valor não aparece aqui)
-                        </span>
+                        <div className={cn("flex sm:flex-row sm:items-center", compact ? "flex-row gap-1" : "flex-col gap-2")}>
+                          <span
+                            className={cn(
+                              "font-mono text-sm text-emerald-200 [overflow-wrap:anywhere] sm:w-64 sm:shrink-0",
+                              compact && "w-2/5 shrink-0 text-xs",
+                            )}
+                          >
+                            {line.name}
+                            {line.source && <span className="text-muted-foreground"> ← {line.source}</span>}
+                          </span>
+                          <div className="flex min-w-0 flex-1 items-center gap-1">
+                            {line.value === null ? (
+                              // a senha da caixa nunca aparece: quem esqueceu troca
+                              <span className="text-xs text-emerald-300">
+                                {PASSWORD_TEXT}
+                                <Link to={`/projects/${project.id}/email?email=caixas`} className="text-sky-400 underline">
+                                  E-mail → Caixas
+                                </Link>
+                                )
+                              </span>
+                            ) : line.value === undefined ? (
+                              <span className="text-xs text-emerald-300/80">fornecida pelo e-mail do projeto no deploy</span>
+                            ) : (
+                              <>
+                                <PasswordInput
+                                  value={line.value}
+                                  readOnly
+                                  revealLabel="valor"
+                                  visible={visiblePanel.has(line.name)}
+                                  onVisibleChange={(show) => setPanelVisible(line.name, show)}
+                                  className={cn("cursor-default font-mono", compact && "h-8 text-xs")}
+                                  containerClassName="flex-1"
+                                  aria-label={`Valor de ${line.name}`}
+                                />
+                                {visiblePanel.has(line.name) && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    aria-label={`Copiar valor de ${line.name}`}
+                                    title="Copiar valor"
+                                    className={cn(compact && "h-8 w-8")}
+                                    onClick={() => void copy(`panel:${line.name}`, line.value!)}
+                                  >
+                                    {copied === `panel:${line.name}` ? (
+                                      <Check className="h-4 w-4 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        {(!compact || copied === `panel:${line.name}`) && (
+                          <span className="text-xs text-emerald-300/80">
+                            {!compact && (
+                              <>
+                                vem do{" "}
+                                <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
+                                  E-mail do projeto
+                                </Link>{" "}
+                                — não se edita aqui
+                              </>
+                            )}
+                            {copied === `panel:${line.name}` && (
+                              <span className="text-emerald-400">{compact ? "" : " · "}copiado</span>
+                            )}
+                          </span>
+                        )}
                       </li>
                     );
                   }
                   const { row: v, index: i } = line;
                   const name = v.key.trim();
-                  const info = describe(composeByName.get(name), providedSet.has(name), links[name]);
+                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name));
                   const shown = visible.has(v.id);
                   const urgent = isMissing(v);
-                  const labelText = info && (!compact || urgent) ? info.label : null;
+                  const fromExample = isExampleMissing(v);
+                  const ignored = links[name] !== undefined;
+                  const labelText = info && (!compact || urgent || fromExample || ignored) ? info.label : null;
+                  const copyKey = `row:${v.id}`;
                   return (
                     <li
                       key={v.id}
@@ -615,9 +784,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                               aria-label={`Copiar valor de ${name || "variável"}`}
                               title="Copiar valor"
                               className={cn(compact && "h-8 w-8")}
-                              onClick={() => void copy(v)}
+                              onClick={() => void copy(copyKey, v.value)}
                             >
-                              {copied === v.id ? (
+                              {copied === copyKey ? (
                                 <Check className="h-4 w-4 text-emerald-400" />
                               ) : (
                                 <Copy className="h-4 w-4" />
@@ -638,15 +807,21 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                           </Button>
                         </div>
                       </div>
-                      {(labelText || copied === v.id) && (
+                      {(labelText || copied === copyKey) && (
                         <span
                           className={cn(
                             "text-xs",
-                            urgent ? "text-red-300" : providedSet.has(name) ? "text-emerald-300/80" : "text-muted-foreground",
+                            urgent
+                              ? "text-red-300"
+                              : fromExample || ignored
+                                ? "text-amber-300"
+                                : providedSet.has(name)
+                                  ? "text-emerald-300/80"
+                                  : "text-muted-foreground",
                           )}
                         >
                           {labelText}
-                          {copied === v.id && <span className="text-emerald-400">{labelText ? " · " : ""}copiado</span>}
+                          {copied === copyKey && <span className="text-emerald-400">{labelText ? " · " : ""}copiado</span>}
                         </span>
                       )}
                     </li>
@@ -703,8 +878,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={shownRows.length === 0}
-                  onClick={() =>
+                  disabled={shownRows.length + shownPanel.length === 0}
+                  onClick={() => {
                     setVisible((prev) => {
                       const next = new Set(prev);
                       for (const r of shownRows) {
@@ -712,8 +887,17 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                         else next.add(r.id);
                       }
                       return next;
-                    })
-                  }
+                    });
+                    // as do e-mail também (a senha não tem valor para mostrar)
+                    setVisiblePanel((prev) => {
+                      const next = new Set(prev);
+                      for (const n of shownPanel) {
+                        if (allVisible) next.delete(n);
+                        else next.add(n);
+                      }
+                      return next;
+                    });
+                  }}
                 >
                   {allVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   {allVisible ? "Ocultar valores" : "Mostrar valores"}

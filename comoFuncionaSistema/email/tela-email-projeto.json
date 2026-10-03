@@ -24,8 +24,8 @@
       {
         "aba": "Caixas",
         "endereco": "/projects/:id/email?email=caixas",
-        "oQueMostra": "Todas as caixas do domínio do projeto, com a caixa do projeto destacada ('deste projeto'). Dá para criar outra caixa no mesmo domínio (ex.: suporte@), com a senha digitada duas vezes (mínimo de 12 caracteres), e em cada caixa: Configurar no app, Testar envio, Trocar senha e, nas caixas criadas pela pessoa, remover. É o mesmo painel da aba Caixas da página do domínio.",
-        "carrega": "GET /api/mail/domains/:domain/mailboxes, só quando a aba é aberta."
+        "oQueMostra": "Só as caixas DESTE projeto (desde 03/10/2026): a caixa de envio dele, destacada ('deste projeto'), e as criadas por esta aba. As outras caixas do domínio ficam na página E-mail (o texto do cartão avisa). Dá para criar outra caixa no mesmo domínio (ex.: suporte@), com a senha digitada duas vezes (mínimo de 12 caracteres) ou gerada pelo painel; a caixa criada aqui fica sendo do projeto. Em cada caixa: Configurar no app, Testar envio, Trocar senha e, nas caixas criadas pela pessoa, remover. Sem caixas: 'Nenhuma caixa deste projeto ainda.' É o mesmo painel da aba Caixas da página do domínio, com projectId.",
+        "carrega": "GET /api/mail/domains/:domain/mailboxes?projectId=<id>, só quando a aba é aberta. Criar manda projectId no POST (o servidor confere que o projeto existe)."
       },
       {
         "aba": "DNS",
@@ -41,7 +41,7 @@
     {
       "componente": "MailboxesPanel",
       "arquivo": "apps/web/src/components/mail/MailboxesPanel.tsx",
-      "props": "domain (obrigatório); highlight (endereço a destacar, a caixa do projeto); onMailboxesChange (avisa a cada carga — a página do domínio usa para 'Caixas (n)').",
+      "props": "domain (obrigatório); projectId (só as caixas daquele projeto, e a caixa criada fica sendo dele — seção E-mail do projeto); highlight (endereço a destacar, a caixa do projeto); onMailboxesChange (avisa a cada carga — a página do domínio usa para 'Caixas (n)'). Sem projectId (página do domínio): todas as caixas, cada uma com 'do projeto X' (ou 'de um projeto removido') quando tem dono.",
       "usadoPor": ["apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"]
     },
     {
@@ -59,6 +59,7 @@
   ],
   "observacoes": [
     "03/10/2026 (validação real do dono do produto): ele precisava das partes Caixas e DNS do domínio dentro da seção E-mail do projeto, para conferir e configurar depois sem sair do projeto e criar novas caixas (ex.: suporte@ do mesmo domínio).",
-    "Na aba Caixas, a troca de senha é a do painel do domínio (digitada duas vezes). A troca pela aba Remetente continua oferecendo 'Gerar uma senha forte para mim'."
+    "Na aba Caixas, a troca de senha é a do painel do domínio (digitada duas vezes). A troca pela aba Remetente continua oferecendo 'Gerar uma senha forte para mim'.",
+    "03/10/2026 (validação real do dono do produto): a aba Caixas do projeto listava todas as caixas do domínio. 'Caixa do projeto' passou a ser a de envio dele e as criadas pela aba Caixas dele (projectId gravado na caixa). Caixas antigas sem dono: no projeto aparece só a de envio dele; na página do domínio, como antes. Remover e trocar senha continuam iguais."
   ]
 }
