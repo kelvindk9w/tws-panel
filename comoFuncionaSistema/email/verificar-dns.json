@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "POST",
   "url": "/api/mail/domains/:domain/verify",
-  "resumo": "Consulta o DNS real (resolver público) e compara com o checklist esperado; verifica também o reverse DNS (PTR) do IP.",
+  "resumo": "Consulta o DNS real (resolver público, com o DNS do sistema como segunda opção) e compara com o checklist esperado; verifica também o reverse DNS (PTR) do IP. Se o registro A de mail.<domínio> já aponta para a VPS e o certificado dele ainda não é válido, pede a emissão sozinho (o mesmo 'Tentar emitir agora' da página Certificados).",
   "arquivoFonte": "apps/server/src/routes/mail.ts:139",
   "autenticacao": {
     "exigida": true,
@@ -19,7 +19,7 @@
     {
       "status": 200,
       "quando": "Verificação concluída (mesmo que registros estejam ausentes/divergentes — isso não é erro).",
-      "corpo": { "domain": "string", "verifiedAt": "string (ISO)", "summary": { "ok": "number", "total": "number" }, "records": "DnsRecordCheck[]", "ptr": "PtrCheck", "suggestion": "string|null" },
+      "corpo": { "domain": "string", "verifiedAt": "string (ISO)", "summary": { "ok": "number", "total": "number" }, "records": "DnsRecordCheck[] (o MX traz também priority e target separados)", "ptr": "PtrCheck (com diagnostic quando pendente)", "suggestion": "string|null", "certificateRetry": "{ host, message } — opcional, só quando a emissão do certificado de mail.<domínio> foi pedida" },
       "exemplo": {
         "domain": "exemplo.com.br", "verifiedAt": "2026-08-24T12:00:00.000Z", "summary": { "ok": 4, "total": 6 },
         "records": [ { "id": "a", "type": "A", "name": "mail.exemplo.com.br", "expected": "203.0.113.10", "purpose": "...", "status": "found", "found": ["203.0.113.10"], "note": null } ],
@@ -34,25 +34,31 @@
   ],
   "fluxo": [
     "1. dnsChecklist(name): monta o checklist esperado local (mesmo helper de GET .../dns).",
-    "2. verifyDnsRecords(checklist, this.resolver()): o resolvedor injetado em MailServiceOptions.resolver (testes) ou, por padrão, publicResolver() com servidores fixos 1.1.1.1/8.8.8.8 (independe do DNS local da VPS). Antes de 01/10/2026 esta rota ignorava o resolvedor injetado.",
+    "2. verifyDnsRecords(checklist, this.resolver(), { fallback, log }): o resolvedor injetado em MailServiceOptions.resolver (testes) ou, por padrão, publicResolver() com servidores fixos 1.1.1.1/8.8.8.8 (independe do DNS local da VPS), prazo de 2 s e 2 tentativas por consulta (PUBLIC_DNS_OPTIONS, opções timeout/tries de new dns.Resolver do Node). Antes de 01/10/2026 esta rota ignorava o resolvedor injetado.",
+    "2a. Segunda opção (02/10/2026): toda consulta (registros e PTR) que fica sem resposta no DNS público, depois de tentar de novo, é repetida no DNS do sistema (systemResolver = dns.promises padrão; dentro do container é o DNS do Docker). Resposta 'não existe' do público é definitiva e não passa para o do sistema. O MailService usa o DNS do sistema só quando o resolver também é o padrão; com resolver injetado (testes) não há segunda opção, a menos que MailServiceOptions.fallbackResolver seja informado. Cada caminho que falhou vai para o log do MailService (ex.: 'DNS: reverso de 203.0.113.10 — DNS público (1.1.1.1, 8.8.8.8): sem resposta (ETIMEOUT); respondida pelo DNS do sistema.').",
     "3. Para A/AAAA: resolve4/resolve6. Para MX: resolveMx, ordenado por prioridade, ponto final removido. Para TXT (SPF/DKIM/DMARC): resolveTxt — basta UM dos TXT do nome bater com o esperado (o nome pode ter outros TXT, ex.: google-site-verification).",
     "4. Comparação normalizada (trim, remove ponto final, colapsa espaços). SPF com IP certo mas mecanismo final (~all/-all) diferente vira 'mismatch' com nota explicativa específica (não falha silenciosa).",
-    "5. Qualquer falha de consulta DNS (NXDOMAIN etc.) é tratada (função safe()) e vira found:[] → status 'missing', nunca derruba a rota.",
+    "5. Qualquer falha de consulta DNS é tratada e vira found:[] → status 'missing', nunca derruba a rota. 'Não existe' (NXDOMAIN/NODATA) é resposta definitiva; demora ou erro do servidor de DNS tenta de novo e depois passa para o DNS do sistema (passo 2a).",
     "6. PTR em três níveis (verifyPtr): reverse(ip) → nomes sem ponto final, em minúsculas. (a) algum nome é mail.<domínio> → 'found' (verde). (b) senão, resolve4 de cada nome; se algum volta para o mesmo IP (FCrDNS válido) → 'generic' (azul): envio liberado, Gmail/Yahoo/Microsoft aceitam, trocar o nome é opcional. (c) nome existe mas nenhum volta para o IP → 'mismatch' (amarelo). (d) sem nome reverso → 'action_required' (amarelo). forwardConfirmed = true/false nos casos (b)/(c), null nos demais.",
     "6a. Provedor (detectPtrProvider): pelo sufixo do nome reverso — contaboserver.net (Contabo), your-server.de (Hetzner), vultrusercontent.com (Vultr). Com provedor conhecido, ptr.provider traz a instrução de onde a própria pessoa troca no painel dele e ticketText fica null. Só com provedor desconhecido (ou sem nome reverso) vem o ticketText de chamado. A DigitalOcean não é reconhecível pelo nome (o reverso segue o nome do droplet); a dica dela aparece na página junto do chamado.",
     "7. domain.lastVerify = { at, ok, total } é PERSISTIDO em data/mail/mail.json (usado pelo badge agregado em MailPage e pelo passo 'e-mail do servidor' do roteiro de primeiros passos — onboarding-sources.ts considera o DNS ok quando ok === total).",
-    "8. Retorna summary { ok, total } = registros 'found' + (1 se PTR 'found' OU 'generic'). PTR genérico com FCrDNS válido NÃO deixa o domínio com pendências."
+    "6b. PTR 'pending' (não deu para conferir): só quando nem o DNS público nem o do sistema responderam. Nesse caso ptr.diagnostic diz qual consulta ficou sem resposta e em qual DNS (ex.: 'reverso de 203.0.113.10 — DNS público (1.1.1.1, 8.8.8.8): sem resposta (ETIMEOUT); DNS do sistema: sem resposta (ECONNREFUSED)'); a página mostra como 'Detalhe técnico'. Nos outros estados diagnostic é null.",
+    "8. Retorna summary { ok, total } = registros 'found' + (1 se PTR 'found' OU 'generic'). PTR genérico com FCrDNS válido NÃO deixa o domínio com pendências.",
+    "9. Certificado de mail.<domínio> (02/10/2026): se o registro A ('a') ficou 'found' e o serviço de certificados existe, a rota chama CertificateService.retry(mail.<domínio>, { background: true }) — as mesmas regras da página Certificados (nome servido pelo painel, modo manual, certificado já válido, limite do Let's Encrypt, 1 pedido por minuto por nome), mas o recarregamento do Caddy roda em segundo plano (falha vai para o log). Aceito → a resposta ganha certificateRetry { host, message } e a página do domínio mostra 'Certificado de mail.<domínio>: emissão pedida — confira em Certificados' com link. Recusa 429 retry_too_soon (pedido de há pouco) também devolve certificateRetry, porque a emissão já está pedida. Qualquer outra recusa (já válido, manual, nome desconhecido, erro do proxy) só vai para o log da requisição: a verificação responde normal, sem o campo. Sem o serviço de certificados (testes), nada é pedido."
   ],
   "dependencias": [
     { "tipo": "servico", "nome": "MailService.verifyDomain", "arquivo": "apps/server/src/services/mail-service.ts:662", "papel": "Chama verifyDnsRecords e persiste lastVerify." },
     { "tipo": "pacote", "nome": "verifyDnsRecords/publicResolver", "arquivo": "packages/mailer/src/dns-checklist.ts:196", "papel": "Consulta DNS real e compara com o esperado." },
+    { "tipo": "servico", "nome": "CertificateService.retry (background)", "arquivo": "apps/server/src/services/certificate-service.ts", "papel": "Pede a emissão do certificado de mail.<domínio> quando o registro A fica certo. O serviço nasce no escopo raiz (app.ts, buildCertificateService) para as rotas de e-mail o alcançarem." },
     { "tipo": "pacote", "nome": "verifyPtr/detectPtrProvider", "arquivo": "packages/mailer/src/dns-checklist.ts:263", "papel": "PTR em três níveis e instrução por provedor (tabela PTR_PROVIDERS, dns-checklist.ts:321)." }
   ],
-  "efeitosColaterais": ["Grava data/mail/mail.json (domain.lastVerify). Consultas DNS reais a 1.1.1.1/8.8.8.8."],
+  "efeitosColaterais": ["Grava data/mail/mail.json (domain.lastVerify). Consultas DNS reais a 1.1.1.1/8.8.8.8 e, quando eles não respondem, ao DNS do sistema.", "Com o registro A de mail.<domínio> certo e o certificado ainda não válido: recarrega o Caddy com --force em segundo plano (no máximo 1 vez por minuto por nome) e registra 'certificate.retry' na auditoria."],
   "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:322"],
-  "testes": ["packages/mailer/tests/dns-checklist.test.ts", "apps/server/tests/mail-ptr.test.ts", "apps/web/tests/mail-domain-page.test.tsx", "scripts/test-mail.mts (passo 3)"],
+  "testes": ["packages/mailer/tests/dns-checklist.test.ts", "packages/mailer/tests/dns-checklist-default-resolvers.test.ts", "apps/server/tests/mail-ptr.test.ts", "apps/server/tests/routes-mail-verify-certificate.test.ts", "apps/web/tests/mail-domain-page.test.tsx", "scripts/test-mail.mts (passo 3)"],
   "observacoes": [
     "Motivo do PTR em três níveis (validação real, 01/10/2026): numa VPS da Contabo o IP tinha o nome reverso genérico vmiNNNNNNN.contaboserver.net, que volta para o mesmo IP. Isso já é o FCrDNS que o Gmail exige, mas o painel mostrava amarelo e mandava abrir chamado. Agora fica azul e conta como OK; o card do PTR (PtrCard, MailDomainPage.tsx:133) mostra a troca para mail.<domínio> como 'Opcional', recolhida.",
+    "Motivo da segunda opção de DNS (validação real, 02/10/2026): o PTR ficou várias vezes 'Não deu para conferir agora: o DNS demorou a responder' mesmo com o DNS público respondendo certo quando consultado de fora (o nome genérico do provedor voltava para o IP). A consulta de dentro do container a 1.1.1.1/8.8.8.8 não respondia a tempo; o DNS do Docker é o caminho que o resto do sistema já usa.",
+    "Motivo do pedido automático de certificado (validação real, 02/10/2026): o domínio foi cadastrado antes de existir o registro A de mail.<domínio>; o Caddy falhou e ficou esperando o intervalo crescente entre tentativas. A página Certificados mostrou o motivo certo e 'Tentar emitir agora' resolveu. Agora 'Verificar agora' (e a verificação automática ao abrir a página do domínio) faz esse pedido sozinha.",
     "Para acrescentar um provedor: um item em PTR_PROVIDERS (dns-checklist.ts) com o sufixo do nome reverso genérico e o caminho no painel dele.",
     "Não exige o servidor de e-mail (Stalwart) rodando — verifica DNS público, que existe independente do container estar de pé.",
     "MUDANÇA DE COMPORTAMENTO: :domain fora do padrão de hostname agora vira 400 invalid_request na borda, em vez de chegar ao handler e falhar em requireDomain() como 404 domain_not_found."
