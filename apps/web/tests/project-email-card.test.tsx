@@ -125,7 +125,7 @@ function serve(email: ProjectEmailConfig, opts: ServeOpts = {}) {
       return opts.envList ?? { vars: [], compose: null, provided: [] };
     }
     // abas Caixas e DNS (domínio do projeto)
-    if (path === "/api/mail/domains/envio.exemplo.com.br/mailboxes" && method === "GET") {
+    if (path === "/api/mail/domains/envio.exemplo.com.br/mailboxes?projectId=p1" && method === "GET") {
       return { mailboxes: opts.mailboxes ?? [] };
     }
     if (path === "/api/mail/domains/envio.exemplo.com.br/dns") return DNS_CHECKLIST;
@@ -437,7 +437,7 @@ describe("ProjectEmailCard — ligar às variáveis do projeto", () => {
     expect(within(dialog).getByRole("button", { name: /Salvar ligações/ })).toBeDisabled();
   });
 
-  it("variável já preenchida em Variáveis: avisa que o valor de lá vence", async () => {
+  it("variável já salva em Variáveis: avisa que, com a ligação, o valor de lá é ignorado", async () => {
     serve(ON, { envList: { ...ENV_LIST, vars: [{ key: "EMAIL_DE", value: "x@y.com" }] } });
     const user = userEvent.setup();
     renderCard();
@@ -446,7 +446,7 @@ describe("ProjectEmailCard — ligar às variáveis do projeto", () => {
     const from = within(dialog).getByRole("combobox", { name: "Variável que recebe MAIL_FROM" });
     await user.click(from);
     await user.click(within(dialog).getByRole("option", { name: /EMAIL_DE/ }));
-    expect(within(dialog).getByText(/EMAIL_DE já tem valor em Variáveis/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/EMAIL_DE também está salva em Variáveis: com a ligação, o deploy usa o valor do e-mail e ignora o de lá/)).toBeInTheDocument();
   });
 
   it("abre com as ligações salvas; Esc fecha", async () => {
@@ -588,7 +588,6 @@ const PROJECT_BOX: Mailbox = {
   kind: "project",
   createdAt: "2026-10-01T12:00:00.000Z",
 };
-const POSTMASTER: Mailbox = { ...PROJECT_BOX, id: "postmaster@envio.exemplo.com.br", localPart: "postmaster", kind: "system" };
 
 describe("ProjectEmailCard — abas Remetente, Caixas e DNS", () => {
   it("ativado: três abas, abre em Remetente com o conteúdo de sempre", async () => {
@@ -603,8 +602,9 @@ describe("ProjectEmailCard — abas Remetente, Caixas e DNS", () => {
     expect(apiFetchMock.mock.calls.some(([p]) => String(p).endsWith("/verify"))).toBe(false);
   });
 
-  it("aba Caixas: lista as caixas do domínio, destaca a do projeto e põe ?email=caixas no endereço", async () => {
-    serve(ON, { mailboxes: [POSTMASTER, PROJECT_BOX] });
+  it("aba Caixas: lista só as caixas do projeto, destaca a de envio e põe ?email=caixas no endereço", async () => {
+    // o servidor filtra (?projectId=p1): o postmaster@ do domínio não vem
+    serve(ON, { mailboxes: [PROJECT_BOX, { ...PROJECT_BOX, id: "suporte@envio.exemplo.com.br", localPart: "suporte", kind: "user" }] });
     const user = userEvent.setup();
     renderAt("/projects/p1/email");
     await user.click(await screen.findByRole("tab", { name: "Caixas" }));
@@ -614,7 +614,8 @@ describe("ProjectEmailCard — abas Remetente, Caixas e DNS", () => {
     ) as HTMLElement;
     expect(row).toHaveAttribute("data-highlight", "true");
     expect(within(row).getByText("deste projeto")).toBeInTheDocument();
-    expect(screen.getByText("postmaster@envio.exemplo.com.br")).toBeInTheDocument();
+    expect(screen.getByText("suporte@envio.exemplo.com.br")).toBeInTheDocument();
+    expect(apiFetchMock).toHaveBeenCalledWith("/api/mail/domains/envio.exemplo.com.br/mailboxes?projectId=p1", undefined);
     // dá para criar outra caixa no mesmo domínio
     expect(screen.getByRole("button", { name: /Criar caixa/ })).toBeInTheDocument();
     expect(screen.getByText("@envio.exemplo.com.br")).toBeInTheDocument();

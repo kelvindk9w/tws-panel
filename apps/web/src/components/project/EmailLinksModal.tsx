@@ -113,7 +113,8 @@ export function EmailLinksModal({
   const delivered = keys.join(",");
   const options: ComboboxOption[] = useMemo(() => linkOptions(env, delivered.split(",")), [env, delivered]);
 
-  const filled = new Set((env?.vars ?? []).filter((v) => v.value !== "").map((v) => v.key));
+  // Já salvas em Variáveis (com valor ou vazias): com a ligação, o deploy ignora o valor de lá
+  const saved = new Set((env?.vars ?? []).map((v) => v.key));
   const counts = new Map<string, number>();
   for (const k of keys) {
     const t = rows[k];
@@ -189,9 +190,10 @@ export function EmailLinksModal({
                     placeholder="mesmo nome (padrão)"
                   />
                   {problems[k] && <p className="text-xs text-red-300">{problems[k]}</p>}
-                  {!problems[k] && target && filled.has(target) && (
+                  {!problems[k] && target && saved.has(target) && (
                     <p className="text-xs text-amber-300">
-                      {target} já tem valor em Variáveis: o valor de lá vence. Apague-o lá para usar o do e-mail.
+                      {target} também está salva em Variáveis: com a ligação, o deploy usa o valor do e-mail e ignora o
+                      de lá. Se quiser, apague-a lá.
                     </p>
                   )}
                 </div>

@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "GET",
   "url": "/api/mail/domains/:domain/mailboxes",
-  "resumo": "Lista as caixas de e-mail de um domínio (sem a senha).",
+  "resumo": "Lista as caixas de e-mail de um domínio (sem a senha), cada uma com o projeto dono quando tem. Com ?projectId=, só as daquele projeto (aba Caixas do e-mail do projeto).",
   "arquivoFonte": "apps/server/src/routes/mail.ts:155",
   "autenticacao": {
     "exigida": true,
@@ -13,13 +13,13 @@
   "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
   "parametros": {
     "path": [{ "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (domainParamSchema, mail.ts): minLength 1, maxLength 253, pattern de domínio (MAIL_DOMAIN_SCHEMA) — NOVO: antes qualquer string era aceita (a rota nem valida existência, só filtra); agora um :domain fora do padrão de hostname é recusado antes do handler.", "descricao": "Nome do domínio (não precisa EXISTIR — se não existir, apenas retorna lista vazia — mas agora precisa ter FORMATO de domínio válido)." }],
-    "query": [], "body": [], "headers": []
+    "query": [{ "nome": "projectId", "tipo": "string", "obrigatorio": false, "regras": "1 a 64 caracteres (listMailboxesSchema); outro parâmetro de query é recusado.", "descricao": "Só as caixas deste projeto: a de envio dele e as criadas pela aba Caixas do e-mail dele (03/10/2026)." }], "body": [], "headers": []
   },
   "respostas": [
     {
       "status": 200,
       "quando": "Sempre — lê apenas o arquivo local, não consulta o Stalwart nem exige o servidor rodando.",
-      "corpo": { "mailboxes": "Mailbox[] (sem o campo password)" },
+      "corpo": { "mailboxes": "Mailbox[] (sem o campo password; projectId = projeto dono, quando tem; projectName = nome dele, ausente se o projeto não existe mais)" },
       "exemplo": { "mailboxes": [
         { "id": "postmaster@exemplo.com.br", "localPart": "postmaster", "domain": "exemplo.com.br", "kind": "system", "createdAt": "2026-08-01T12:00:00.000Z" },
         { "id": "contato@exemplo.com.br", "localPart": "contato", "domain": "exemplo.com.br", "kind": "user", "createdAt": "2026-08-10T09:30:00.000Z" }
@@ -31,16 +31,19 @@
   ],
   "fluxo": [
     "1. normalizeMailDomain(domainName) (não valida existência do domínio, só normaliza).",
-    "2. Filtra data.mailboxes por domain === o normalizado e remove o campo password de cada item antes de devolver."
+    "2. Filtra data.mailboxes por domain === o normalizado e remove o campo password de cada item antes de devolver.",
+    "3. Dono de cada caixa: o projectId gravado nela; caixa antiga sem dono que é a caixa de envio de um projeto (data.projects[id].mailbox) aparece como dele. Com ?projectId=, só as daquele dono.",
+    "4. A rota põe projectName (DeployService.getProject) em cada caixa com dono que ainda existe."
   ],
   "dependencias": [
     { "tipo": "servico", "nome": "MailService.listMailboxes", "arquivo": "apps/server/src/services/mail-service.ts:337", "papel": "Filtra e mascara (remove password) as caixas do domínio." }
   ],
   "efeitosColaterais": ["Nenhum (somente leitura)."],
-  "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:199"],
-  "testes": ["scripts/test-mail.mts"],
+  "chamadoPor": ["apps/web/src/components/mail/MailboxesPanel.tsx (página do domínio, sem filtro; seção E-mail do projeto, com ?projectId=)"],
+  "testes": ["scripts/test-mail.mts", "apps/server/tests/mail-service.test.ts (caixas do projeto)", "apps/server/tests/routes-mail-schema.test.ts (caixas do projeto)", "apps/web/tests/mail-panels.test.tsx"],
   "observacoes": [
     "Diferente da maioria das outras rotas de domínio, esta NÃO retorna 404 domain_not_found se o domínio não existir — apenas devolve uma lista vazia, pois normalizeMailDomain só valida o formato, não a existência.",
+    "Pedido do dono do produto (03/10/2026): a aba Caixas do e-mail do projeto listava TODAS as caixas do domínio; agora pede ?projectId= e mostra só as do projeto. A página do domínio continua com todas, cada uma com 'do projeto X' (ou 'de um projeto removido').",
     "MUDANÇA DE COMPORTAMENTO: antes desta rota tolerar qualquer string em :domain (mesmo fora do formato de domínio, já que só filtra em memória sem exigir existência), agora o schema Fastify recusa formato inválido com 400 invalid_request antes de chegar ao handler."
   ]
 }

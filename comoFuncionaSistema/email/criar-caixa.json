@@ -43,6 +43,13 @@
         "obrigatorio": false,
         "regras": "true = o painel gera uma senha forte (generateStrongPassword: 24 caracteres com maiúscula, minúscula, número e - _ .).",
         "descricao": "A senha gerada volta UMA única vez em generatedPassword, nesta resposta; nunca vai para a auditoria nem volta depois."
+      },
+      {
+        "nome": "projectId",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "1 a 64 caracteres. A rota confere que o projeto existe (DeployService.getProject); não existe → 404 project_not_found, sem criar nada.",
+        "descricao": "Criada pela aba Caixas do e-mail do projeto: a caixa fica sendo daquele projeto (projectId gravado na caixa) e aparece só na aba Caixas dele (03/10/2026)."
       }
     ],
     "headers": []
@@ -66,6 +73,12 @@
     }
   ],
   "erros": [
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Veio projectId de um projeto que não existe (conferido na rota, antes de criar).",
+      "mensagem": "Projeto não encontrado."
+    },
     {
       "status": 400,
       "codigo": "invalid_request",
@@ -115,7 +128,7 @@
     "3. requireRunning().",
     "4. requireStrongPassword(password): mínimo 12 caracteres.",
     "5. client().createMailbox(email, senha): POST /api/principal {type:'individual', name:email, secrets:[senha], emails:[email], quota:0, roles:['user']}.",
-    "6. Persiste StoredMailbox (kind:'user', password) e save() — o painel guarda a senha porque o e-mail de teste (postmaster@) e a injeção SMTP dos projetos precisam dela.",
+    "6. Persiste StoredMailbox (kind:'user', password e, se veio, projectId) e save() — o painel guarda a senha porque o e-mail de teste (postmaster@) e a injeção SMTP dos projetos precisam dela.",
     "7. Rota grava auditoria mail.mailbox.create e responde 201 com { mailbox } — SEM senha."
   ],
   "dependencias": [
@@ -144,10 +157,13 @@
     "Auditoria: mail.mailbox.create."
   ],
   "chamadoPor": [
-    "apps/web/src/pages/MailDomainPage.tsx:238"
+    "apps/web/src/components/mail/MailboxesPanel.tsx (página do domínio, sem projectId; seção E-mail do projeto, com projectId)"
   ],
   "testes": [
-    "scripts/test-mail.mts (passo 4)"
+    "scripts/test-mail.mts (passo 4)",
+    "apps/server/tests/mail-service.test.ts (caixas do projeto)",
+    "apps/server/tests/routes-mail-schema.test.ts (caixas do projeto)",
+    "apps/web/tests/mail-panels.test.tsx"
   ],
   "observacoes": [
     "Pedido do dono do produto (02/10/2026): a senha de uma caixa nunca fica visível. Antes o painel gerava uma senha e a mostrava na criação e em 'Ver credenciais'; agora a pessoa define a senha e, se esquecer, troca (trocar-senha-caixa.json).",

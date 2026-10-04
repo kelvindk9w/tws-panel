@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectProject } from "../src/detect.js";
+import { CASSINO_LIKE } from "./fixtures/cassino-like.js";
 
 let dir: string;
 
@@ -204,6 +205,22 @@ describe("compose", () => {
     expect(result.proxyPort).toBe(80);
   });
 
+  it("lista todos os serviços; YAML inválido não tem lista", async () => {
+    await writeFile(path.join(dir, "compose.yml"), compose);
+    const result = await detectProject(dir);
+    expect(result.services?.map((s) => s.name)).toEqual(["web", "db"]);
+    expect(result.services?.[0]?.publishedPorts[0]).toMatchObject({ mapping: "8080:80", panel: null });
+  });
+
+  it("estrutura do cassino: entrada wallet:80, com o caddy atendendo dentro do wallet", async () => {
+    await writeFile(path.join(dir, "compose.prod.yaml"), CASSINO_LIKE);
+    const result = await detectProject(dir);
+    expect(result.proxyService).toBe("wallet");
+    expect(result.proxyPort).toBe(80);
+    expect(result.services?.map((s) => s.name)).toEqual(["db", "redis", "wallet", "web", "caddy"]);
+    expect(result.services?.find((s) => s.name === "caddy")?.networkModeService).toBe("wallet");
+  });
+
   it("agrega os warnings dos guardrails de compose (banco exposto)", async () => {
     const risky = [
       "services:",
@@ -223,6 +240,7 @@ describe("compose", () => {
     expect(result.type).toBe("compose");
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toMatchObject({ id: "compose.invalid-yaml", severity: "critical" });
+    expect(result.services).toBeUndefined();
   });
 
   it("serviço com redes próprias gera warning informativo", async () => {

@@ -665,3 +665,82 @@ describe("POST /api/mail/domains/:domain/mailboxes — senha gerada", () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Pedido do dono do produto (03/10/2026): a aba Caixas do e-mail do projeto
+ * mostra só as caixas daquele projeto; a página do domínio mostra todas,
+ * com o projeto dono de cada uma.
+ */
+describe("caixas do projeto — /api/mail/domains/:domain/mailboxes", () => {
+  const box = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    localPart: id.split("@")[0]!,
+    domain: "exemplo.com",
+    kind: "user" as const,
+    createdAt: new Date(0).toISOString(),
+    ...extra,
+  });
+
+  it("criar pela aba do projeto: confere que o projeto existe e grava o dono", async () => {
+    const create = spyOn("createMailbox").mockResolvedValue({ mailbox: box("suporte@exemplo.com", { projectId: "p1" }) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/mail/domains/exemplo.com/mailboxes",
+      headers: auth,
+      payload: { localPart: "suporte", password: "senha-forte-de-teste", projectId: "p1" },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(deployService.getProject).toHaveBeenCalledWith("p1");
+    expect(create).toHaveBeenCalledWith("exemplo.com", "suporte", "senha-forte-de-teste", { projectId: "p1" });
+  });
+
+  it("projeto que não existe: 404, sem criar a caixa", async () => {
+    deployService.getProject!.mockResolvedValueOnce(null);
+    const create = spyOn("createMailbox");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/mail/domains/exemplo.com/mailboxes",
+      headers: auth,
+      payload: { localPart: "suporte", generatePassword: true, projectId: "nao-existe" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("project_not_found");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("projectId fora do formato: 400", async () => {
+    const create = spyOn("createMailbox");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/mail/domains/exemplo.com/mailboxes",
+      headers: auth,
+      payload: { localPart: "suporte", generatePassword: true, projectId: "x".repeat(65) },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("listar com ?projectId= pede só as do projeto; a lista traz o nome do projeto dono", async () => {
+    const list = spyOn("listMailboxes").mockResolvedValue([box("contato@exemplo.com", { kind: "project", projectId: "p1" })]);
+    const res = await app.inject({ method: "GET", url: "/api/mail/domains/exemplo.com/mailboxes?projectId=p1", headers: auth });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(list).toHaveBeenCalledWith("exemplo.com", { projectId: "p1" });
+    expect(res.json().mailboxes).toEqual([expect.objectContaining({ id: "contato@exemplo.com", projectId: "p1", projectName: "Loja" })]);
+  });
+
+  it("sem filtro: todas; dono que não existe mais fica sem nome", async () => {
+    deployService.getProject!.mockImplementation(async (id: string) => (id === "p1" ? PROJECT : null));
+    const list = spyOn("listMailboxes").mockResolvedValue([
+      box("vendas@exemplo.com"),
+      box("contato@exemplo.com", { projectId: "p1" }),
+      box("velha@exemplo.com", { projectId: "removido" }),
+    ]);
+    const res = await app.inject({ method: "GET", url: "/api/mail/domains/exemplo.com/mailboxes", headers: auth });
+    expect(list).toHaveBeenCalledWith("exemplo.com", {});
+    const boxes = res.json().mailboxes as Record<string, unknown>[];
+    expect(boxes[0]).not.toHaveProperty("projectName");
+    expect(boxes[1]).toMatchObject({ projectName: "Loja" });
+    expect(boxes[2]).toMatchObject({ projectId: "removido" });
+    expect(boxes[2]).not.toHaveProperty("projectName");
+  });
+});

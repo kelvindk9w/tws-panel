@@ -55,12 +55,77 @@ describe("variáveis do projeto no deploy", () => {
     const p = await projeto();
     svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PASS: "segredo" }));
     svc.setLinkedEnvProvider(async () => ({ SMTP_SENHA: "segredo", EMAIL_HOST: "mail" }));
-    await svc.setEnv(p.id, [{ key: "EMAIL_HOST", value: "outro" }]);
     type Fn = (p: unknown) => Promise<Record<string, string>>;
     const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; injectEnvForProject: Fn } }).engineCtx;
-    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PASS: "segredo", SMTP_SENHA: "segredo", EMAIL_HOST: "outro" });
+    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PASS: "segredo", SMTP_SENHA: "segredo", EMAIL_HOST: "mail" });
     expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PASS: "segredo" });
     expect(await svc.providedEnvKeys(p.id)).toEqual(["EMAIL_HOST", "SMTP_HOST", "SMTP_PASS", "SMTP_SENHA"]);
+  });
+
+  /**
+   * Validação real (cassino, 03/10/2026): MAIL_FROM → EMAIL_DE não chegava ao
+   * app. EMAIL_DE é obrigatória no compose (${EMAIL_DE:?…}) e já estava
+   * salva nas Variáveis (com o endereço de exemplo do .env.example) desde
+   * antes de existir a ligação; a regra antiga "a do operador vence" mandava
+   * esse valor no deploy, e o app recusava o remetente. A ligação é uma
+   * escolha explícita e mais recente: ela vence o valor salvo — vazio
+   * inclusive. Os nomes padrão do e-mail (SMTP_HOST…) continuam podendo ser
+   * substituídos nas Variáveis.
+   */
+  it("ligação vence o valor salvo nas Variáveis com o mesmo nome (mesmo vazio)", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PORT: "587", SMTP_PASS: "segredo", MAIL_FROM: "contato@x.com" }));
+    svc.setLinkedEnvProvider(async () => ({ SMTP_PORTA: "587", SMTP_SENHA: "segredo", EMAIL_DE: "contato@x.com" }));
+    await svc.setEnv(p.id, [
+      { key: "EMAIL_DE", value: "remetente@example.com" },
+      { key: "SMTP_SENHA", value: "" },
+      { key: "SMTP_HOST", value: "smtp.outro" },
+      { key: "KYC_MODO", value: "demonstracao" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn } }).engineCtx;
+    const env = await ctx.envForProject(p);
+    expect(env.EMAIL_DE).toBe("contato@x.com");
+    expect(env.SMTP_SENHA).toBe("segredo");
+    expect(env.SMTP_PORTA).toBe("587");
+    // nome padrão do e-mail: o valor das Variáveis continua substituindo
+    expect(env.SMTP_HOST).toBe("smtp.outro");
+    expect(env.KYC_MODO).toBe("demonstracao");
+  });
+
+  it("nome padrão salvo VAZIO nas Variáveis não apaga o valor do e-mail", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", MAIL_FROM: "contato@x.com" }));
+    await svc.setEnv(p.id, [
+      { key: "SMTP_HOST", value: "" },
+      { key: "OUTRA", value: "" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn } }).engineCtx;
+    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", MAIL_FROM: "contato@x.com", OUTRA: "" });
+  });
+
+  /**
+   * Validação real (03/10/2026): a seção Variáveis mostrava as fornecidas
+   * pelo e-mail só como "fornecida pelo painel", sem valor. Agora a API
+   * devolve os valores — menos a senha da caixa, com qualquer nome.
+   */
+  it("valores fornecidos pelo painel para a tela: tudo menos a senha (SMTP_PASS e as ligadas a ela)", async () => {
+    const p = await projeto();
+    expect(await svc.providedEnvValues(p.id)).toEqual({});
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PORT: "587", SMTP_PASS: "segredo-da-caixa", MAIL_FROM: "contato@x.com" }));
+    svc.setLinkedEnvProvider(async () => ({ SMTP_SENHA: "segredo-da-caixa", SENHA_2: "segredo-da-caixa", EMAIL_DE: "contato@x.com" }));
+    svc.setEnvLinkSourcesProvider(async () => ({ SMTP_SENHA: "SMTP_PASS", SENHA_2: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" }));
+    const values = await svc.providedEnvValues(p.id);
+    expect(values).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "587", MAIL_FROM: "contato@x.com", EMAIL_DE: "contato@x.com" });
+    expect(JSON.stringify(values)).not.toContain("segredo-da-caixa");
+  });
+
+  it("senha nunca sai, mesmo se a ligação não disser de onde vem", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_PASS: "segredo-da-caixa", MAIL_FROM: "contato@x.com" }));
+    svc.setLinkedEnvProvider(async () => ({ OUTRA: "segredo-da-caixa" }));
+    expect(await svc.providedEnvValues(p.id)).toEqual({ MAIL_FROM: "contato@x.com" });
   });
 
   it("auditoria só com os nomes, nunca os valores", async () => {

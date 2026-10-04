@@ -36,6 +36,7 @@ import {
   Square,
   Trash2,
   Variable,
+  X,
 } from "lucide-react";
 import { StatusBadge } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
@@ -124,6 +125,30 @@ export function GuardrailOverrideModal({
   );
 }
 
+/**
+ * Texto do aviso quando a consulta periódica falha seguidas vezes. Validação
+ * real (cassino, 03/10/2026): durante o deploy aparecia um texto vermelho
+ * acima do menu do projeto, que sumia na consulta seguinte — ninguém
+ * conseguia ler. As causas esperadas viram frase simples; durante o deploy, é
+ * estado normal.
+ */
+function pollProblemText(err: unknown, deploying: boolean): string {
+  if (err instanceof ApiRequestError && err.status === 429) {
+    return (
+      "O painel recebeu consultas demais desta página em pouco tempo e pediu uma pausa. A página continua " +
+      "tentando sozinha — o que aparece abaixo pode estar alguns segundos atrasado."
+    );
+  }
+  if (deploying) {
+    return "O deploy está recriando os containers e o painel demorou a responder — é normal nesta etapa. A página continua acompanhando.";
+  }
+  if (err instanceof ApiRequestError && err.status === 0) {
+    return "Sem conexão com o painel agora (ele pode estar reiniciando). Tentando de novo a cada poucos segundos.";
+  }
+  const detail = err instanceof Error ? err.message : String(err);
+  return `Não consegui atualizar o estado do projeto: ${detail} Tentando de novo a cada poucos segundos.`;
+}
+
 /** Seções do projeto — cada uma com o seu endereço (/projects/:id/:seção). */
 const PROJECT_SECTIONS = [
   { key: "overview", label: "Visão geral", icon: LayoutDashboard },
@@ -147,7 +172,14 @@ export function ProjectDetailPage() {
   const [data, setData] = useState<ProjectResponse | null>(null);
   const [jobs, setJobs] = useState<DeployJob[]>([]);
   const [activeJob, setActiveJob] = useState<DeployJob | null>(null);
+  // erro de uma AÇÃO (deploy, parar, iniciar, remover): fica até ser fechado
   const [error, setError] = useState<string | null>(null);
+  // problema da consulta periódica: só aparece depois de falhas seguidas e
+  // some sozinho quando a consulta volta (antes piscava em vermelho a cada 1,5 s)
+  const [pollProblem, setPollProblem] = useState<string | null>(null);
+  const pollFailures = useRef(0);
+  const deployingRef = useRef(false);
+  const loadedRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteSource, setDeleteSource] = useState(false);
@@ -159,8 +191,8 @@ export function ProjectDetailPage() {
   const [openJobId, setOpenJobId] = useState<string | null>(null);
   const [missingEnv, setMissingEnv] = useState<string[] | null>(null);
 
-  const refresh = useCallback(async () => {
-    if (!id) return;
+  const refresh = useCallback(async (): Promise<{ job: DeployJob | null; rateLimited: boolean }> => {
+    if (!id) return { job: null, rateLimited: false };
     try {
       const [project, jobList] = await Promise.all([
         apiFetch<ProjectResponse>(`/api/projects/${id}`),
@@ -168,11 +200,17 @@ export function ProjectDetailPage() {
       ]);
       setData(project);
       setJobs(jobList.jobs);
-      setError(null);
-      return jobList.jobs[0] ?? null;
+      pollFailures.current = 0;
+      deployingRef.current = project.status === "deploying";
+      loadedRef.current = true;
+      setPollProblem(null);
+      return { job: jobList.jobs[0] ?? null, rateLimited: false };
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar o projeto.");
-      return null;
+      pollFailures.current += 1;
+      // uma falha isolada não vira aviso (a próxima consulta costuma passar);
+      // na primeira carga, sem nada na tela, o motivo aparece logo
+      if (pollFailures.current >= 2 || !loadedRef.current) setPollProblem(pollProblemText(err, deployingRef.current));
+      return { job: null, rateLimited: err instanceof ApiRequestError && err.status === 429 };
     }
   }, [id]);
 
@@ -182,20 +220,15 @@ export function ProjectDetailPage() {
     let timer: ReturnType<typeof setTimeout>;
 
     async function tick() {
-      // o deploy mais recente, com o log (a Visão geral mostra o que acontece)
-      const current = await refresh();
+      // o deploy mais recente já vem com o log na lista (a Visão geral mostra
+      // o que acontece) — uma consulta a menos por ciclo
+      const { job: current, rateLimited } = await refresh();
       if (cancelled) return;
-      if (current && id) {
-        try {
-          const res = await apiFetch<DeployJobResponse>(`/api/projects/${id}/jobs/${current.id}`);
-          if (!cancelled) setActiveJob(res.job);
-        } catch {
-          /* job ainda não persistido */
-        }
-      }
+      if (current) setActiveJob(current);
+      // "consultas demais" (limite do servidor por minuto): espera mais
       timer = setTimeout(
         () => void tick(),
-        current?.status === "running" || current?.status === "queued" ? 1_500 : 5_000,
+        rateLimited ? 15_000 : current?.status === "running" || current?.status === "queued" ? 1_500 : 5_000,
       );
     }
 
@@ -306,7 +339,7 @@ export function ProjectDetailPage() {
   if (!data) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> {error ?? "Carregando…"}
+        <Loader2 className="h-4 w-4 animate-spin" /> {pollProblem ?? error ?? "Carregando…"}
       </p>
     );
   }
@@ -376,7 +409,29 @@ export function ProjectDetailPage() {
         </div>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <div
+          role="alert"
+          data-testid="action-error"
+          className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          <span className="min-w-0 flex-1 whitespace-pre-line break-words">{error}</span>
+          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" aria-label="Fechar aviso" onClick={() => setError(null)}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+      {pollProblem && (
+        <p
+          role="status"
+          data-testid="poll-problem"
+          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
+        >
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+          <span className="min-w-0 break-words">{pollProblem}</span>
+        </p>
+      )}
 
       {guardrailReport && (
         <GuardrailOverrideModal
@@ -427,6 +482,7 @@ export function ProjectDetailPage() {
         jobs={jobs}
         latestJob={activeJob && activeJob.id === jobs[0]?.id ? activeJob : null}
         onOpenJob={setOpenJobId}
+        onChanged={() => void refresh()}
       />
 
       {project.detection && project.detection.warnings.length > 0 && (

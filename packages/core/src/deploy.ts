@@ -38,6 +38,45 @@ export interface GuardrailWarning {
 
 export type PackageManager = "npm" | "pnpm" | "yarn";
 
+/** Porta publicada no host por um serviço do compose. */
+export interface ComposePublishedPort {
+  /** Como está escrita, normalizada (ex.: "127.0.0.1:8010:8010"). */
+  mapping: string;
+  /** Porta do container. */
+  containerPort: number;
+  /** Porta do host quando fixa; null = aleatória, faixa ou variável. */
+  hostPort: number | null;
+  /**
+   * O que o painel faz com ela: "removed" = 80/443 retiradas no deploy (são
+   * do proxy do painel); "conflict" = 80/443 de um proxy HTTPS próprio, que o
+   * painel não retira e que bloqueiam o deploy; null = publicada como está.
+   */
+  panel: "removed" | "conflict" | null;
+}
+
+/** Porta em que o serviço escuta dentro da rede Docker (não publicada). */
+export interface ComposeInternalPort {
+  port: number;
+  /** De onde veio: expose do compose, EXPOSE do Dockerfile, URL do healthcheck ou variável PORT. */
+  source: "expose" | "dockerfile" | "healthcheck" | "environment";
+}
+
+/** Um serviço do compose, como o painel o entende (detecção). */
+export interface ComposeServiceInfo {
+  name: string;
+  /** Imagem pronta (ex.: postgres:18-alpine); null quando só tem build. */
+  image: string | null;
+  /** Construído do repositório (build); null = só imagem. */
+  build: { context: string; dockerfile: string } | null;
+  publishedPorts: ComposePublishedPort[];
+  internalPorts: ComposeInternalPort[];
+  /** `network_mode: service:X` → "X" (usa a rede do serviço X). */
+  networkModeService: string | null;
+  dependsOn: Array<{ service: string; condition: string | null }>;
+  /** Onde está o healthcheck: no compose, no Dockerfile, desligado ou nenhum. */
+  healthcheck: "compose" | "dockerfile" | "disabled" | null;
+}
+
 /** Resultado da detecção automática de tipo de projeto. */
 export interface DetectResult {
   type: ProjectType;
@@ -51,6 +90,11 @@ export interface DetectResult {
   /** Serviço/porta sugeridos para o proxy reverso (compose/dockerfile). */
   proxyService: string | null;
   proxyPort: number | null;
+  /**
+   * Todos os serviços do compose (type=compose). Ausente em detecções antigas
+   * (anteriores a 03/10/2026) — a tela pede para ler o compose de novo.
+   */
+  services?: ComposeServiceInfo[];
   /** Guardrails de segurança (prévia da Fase 4). */
   warnings: GuardrailWarning[];
   /** Notas legíveis sobre a detecção (pt-BR). */
@@ -189,6 +233,10 @@ export interface DockerContainerInfo {
   projectSlug: string | null;
   /** Projeto docker-compose de origem (label com.docker.compose.project). */
   composeProject: string | null;
+  /** Serviço do compose (label com.docker.compose.service); null fora do compose. Ausente em respostas antigas. */
+  service?: string | null;
+  /** Saúde do healthcheck, lida do status do docker ps; null = sem healthcheck. */
+  health?: "healthy" | "unhealthy" | "starting" | null;
   ports: string[];
 }
 

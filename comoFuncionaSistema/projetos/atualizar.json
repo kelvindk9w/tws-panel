@@ -37,7 +37,8 @@
     { "status": 400, "codigo": "invalid_branch", "quando": "branch foi enviado e não bate com a allowlist de validateBranch (regex + proibição de '..')", "mensagem": "Nome de branch inválido." },
     { "status": 400, "codigo": "invalid_domain", "quando": "domain passou pelo schema (string 1-253 chars) mas ficou vazio após normalizeDomain() — inclui reprovação pelo padrão estrito de hostname.", "mensagem": "Domínio inválido." },
     { "status": 409, "codigo": "domain_in_use", "quando": "o novo domínio já pertence a outro projeto", "mensagem": "O domínio <domain> já está em uso." },
-    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado não tratado", "mensagem": "Erro interno." }
+    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado não tratado", "mensagem": "Erro interno." },
+    {"status": 400, "codigo": "invalid_proxy_service", "quando": "Projeto compose com detection.services e proxyService que não existe no compose, ou que usa a rede de outro serviço (network_mode: service:X — ele não entra na rede do painel; a entrada é o X). Detecção antiga sem a lista: aceita como antes. null volta ao automático. A porta continua validada pelo schema (inteiro 1–65535).", "mensagem": "O serviço \"x\" não existe no compose. Serviços: a, b, c. / O serviço \"caddy\" usa a rede do \"wallet\" (network_mode) e não entra na rede do painel: escolha \"wallet\" como entrada, na porta em que o \"caddy\" escuta."}
   ],
   "fluxo": [
     "1. requireProject(id) — 404 se não existir.",
@@ -56,9 +57,10 @@
   "efeitosColaterais": ["grava data/projects.json"],
   "chamadoPor": [
     "apps/web/src/pages/NewProjectPage.tsx (finish(), passo 3 do wizard — grava domínio final + websocket + proxyService/proxyPort detectados)",
-    "apps/web/src/components/ProjectConfigCard.tsx (salvar()/salvar(true, ...) — edição pós-criação de nome/repositório/branch/domínio, opcionalmente seguida de POST .../deploy)"
+    "apps/web/src/components/ProjectConfigCard.tsx (salvar()/salvar(true, ...) — edição pós-criação de nome/repositório/branch/domínio, opcionalmente seguida de POST .../deploy)",
+    "apps/web/src/components/project/ComposeServices.tsx (ComposeServicesCard → 'Salvar entrada' na Visão geral: { proxyService, proxyPort })"
   ],
-  "testes": ["apps/server/tests/routes-projects.test.ts", "apps/server/tests/deploy-validation.test.ts"],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "apps/server/tests/deploy-validation.test.ts", "apps/server/tests/compose-entry.test.ts"],
   "observacoes": [
     "GARANTIA: o slug de um projeto nunca muda depois de criado, nem editando o nome. O slug nomeia o diretório do clone (data/projects/<slug>/src), o compose project, a imagem (paas-<slug>:latest), o alias de rede e os containers — trocá-lo seria uma migração de infraestrutura, não uma renomeação. Coberto por teste ('NUNCA altera o slug ao renomear' em deploy-validation.test.ts).",
     "Trocar source ou branch aqui é DIFERIDO: nada acontece no disco/Docker no momento do PATCH. Na próxima vez que o projeto for deployado, ingestGit() (packages/deploy/src/ingest.ts) compara a URL/branch atuais do clone existente com o que está configurado; se qualquer um dos dois mudou, o clone inteiro é refeito do zero em vez de um fetch+checkout incremental — necessário porque o clone é --single-branch (a branch nova simplesmente não existe localmente) e porque um fetch contra um repositório trocado buscaria do repositório ANTIGO sem erro nenhum (falha silenciosa). Ver projetos/deploy.json e packages/deploy/tests/ingest-branch.test.ts.",
