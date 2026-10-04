@@ -3,7 +3,7 @@
   "modulo": "projetos",
   "metodo": "GET",
   "url": "/api/projects/:id/ports",
-  "resumo": "Abre o modal Portas: as portas do projeto (por serviço: estado, portas internas, portas publicadas com a troca do painel aplicada, se já está no ar, e a entrada HTTP) e, na mesma resposta, todas as portas do servidor — uma consulta ao Docker por abertura do modal.",
+  "resumo": "Abre o modal Portas: as portas do projeto (por serviço: estado, portas internas, portas publicadas com a troca do painel aplicada e as publicações adicionadas no painel, se já está no ar, e a entrada HTTP) e, na mesma resposta, todas as portas do servidor — uma consulta ao Docker por abertura do modal.",
   "arquivoFonte": "apps/server/src/routes/projects.ts:406",
   "autenticacao": {
     "exigida": true,
@@ -50,7 +50,7 @@
               "livePorts": "LivePort[] (publicadas no ar)",
               "ports": [
                 {
-                  "original": "chave: como está no compose",
+                  "original": "chave: como está no compose; nas adicionadas no painel, '+127.0.0.1:15432:5432'",
                   "containerPort": "number",
                   "protocol": "string",
                   "composeHost": "lado do servidor como o compose pede",
@@ -60,9 +60,13 @@
                   "override": "PortOverride|null",
                   "panel": "removed|conflict|null (80/443)",
                   "applied": "boolean|null",
-                  "changeable": "boolean"
+                  "changeable": "boolean",
+                  "added": "boolean — publicação adicionada no painel (não está no compose)",
+                  "composeHostPort": "number|null — porta do servidor que o compose pede (null = não é número fixo; null nas adicionadas)",
+                  "composeHostIp": "string|null — endereço que o compose pede (null = todos; null nas adicionadas)"
                 }
-              ]
+              ],
+              "publishBlocked": "string|null — por que o serviço não pode publicar porta própria (network_mode service:X / container:X / host / none), lido do compose; null = pode"
             }
           ]
         }
@@ -81,14 +85,16 @@
     "1. requireProject(id).",
     "2. portsInput() (uma listagem do Docker).",
     "3. projectPortsView: compose com código → um item por serviço do compose; sem compose (ou sem o código) → um item por container do projeto, só com as portas no ar.",
-    "4. applied: container rodando e a porta no ar igual à configurada (removida = nenhuma publicação daquela porta interna). Parado ou Docker fora = null."
+    "4. applied: container rodando e a porta no ar igual à configurada (removida = nenhuma publicação daquela porta interna). Parado ou Docker fora = null.",
+    "5. Publicações adicionadas no painel (PortOverride.added) entram no fim da lista do serviço, com added=true; uma porta no ar que é de outra publicação do mesmo serviço não faz a removida parecer 'ainda no ar'.",
+    "6. publishBlocked vem do network_mode lido do compose (composeNetworkModes); sem ele, da detecção (networkModeService)."
   ],
   "dependencias": [
     {
       "tipo": "servico",
       "nome": "DeployService.portsInput",
       "arquivo": "apps/server/src/services/deploy-service.ts:1053",
-      "papel": "UMA listagem do Docker (listContainers; falha = containers null, docker=false) + o compose de cada projeto compose lido do código no servidor (composePortEntries)."
+      "papel": "UMA listagem do Docker (listContainers; falha = containers null, docker=false) + o compose de cada projeto compose lido do código no servidor (composePortEntries). Também lê o network_mode de cada serviço (composeNetworkModes) para o publishBlocked."
     },
     {
       "tipo": "servico",
@@ -107,12 +113,14 @@
     "nenhum (só leitura)"
   ],
   "chamadoPor": [
-    "apps/web/src/components/project/PortsModal.tsx (botão 'Portas' do cartão Containers da Visão geral, ProjectOverview.tsx)"
+    "apps/web/src/components/project/PortsModal.tsx (botão 'Portas' do cartão Containers da Visão geral, ProjectOverview.tsx); o mesmo modal usa a resposta para 'Publicar uma porta' e 'Editar em lote'"
   ],
   "testes": [
     "apps/server/tests/routes-ports.test.ts",
     "apps/server/tests/deploy-ports.test.ts",
-    "apps/web/tests/ports-modal.test.tsx"
+    "apps/web/tests/ports-modal.test.tsx",
+    "apps/server/tests/port-map.test.ts",
+    "apps/web/tests/ports-batch-modal.test.tsx"
   ],
   "observacoes": [
     "Porta interna é informativa: só muda no código do app."
