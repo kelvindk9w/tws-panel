@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import { ExistingMailWarning } from "@/components/mail/ExistingMailWarning";
+import { WebmailCard } from "@/components/mail/WebmailCard";
 import {
   CheckCircle2,
   ChevronRight,
@@ -303,6 +304,9 @@ export function MailPage() {
       ) : null}
 
       {showTls && <MailTlsCard tls={tls} busy={tlsBusy} onRecheck={() => void loadTls()} />}
+
+      {/* Webmail: com pelo menos um domínio (é ele que dá o endereço mail.<domínio>). */}
+      {domains.length > 0 && <WebmailCard refreshKey={`${status?.running ?? false}-${domains.length}`} />}
 
       <Card>
         <CardHeader className="pb-2">

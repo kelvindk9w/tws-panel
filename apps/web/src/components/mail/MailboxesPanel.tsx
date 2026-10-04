@@ -1,7 +1,8 @@
 /**
  * Caixas de um domínio de e-mail: lista, criar caixa (a pessoa define a
  * senha e repete; mínimo de MAILBOX_PASSWORD_MIN), "Configurar no app",
- * "Testar envio", "Trocar senha" e remover.
+ * "Testar envio", "Trocar senha", "Abrir webmail" (com o webmail ativado) e
+ * remover.
  *
  * Usado na aba Caixas da página do domínio (/mail/:domain) e na aba Caixas
  * da seção E-mail do projeto, que passa `highlight` com a caixa do projeto
@@ -14,13 +15,14 @@
  * dono de cada uma.
  */
 import { useCallback, useEffect, useState } from "react";
-import { MAILBOX_PASSWORD_MIN } from "@paas/core";
+import { MAILBOX_PASSWORD_MIN, webmailUrl } from "@paas/core";
 import type {
   Mailbox,
   MailboxCredentials,
   MailboxCredentialsResponse,
   MailboxListResponse,
   MailboxResponse,
+  WebmailStatus,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -37,7 +39,7 @@ import {
   passwordChoiceProblem,
   type PasswordChoiceState,
 } from "@/components/mail/MailboxPasswordChoice";
-import { Inbox, KeyRound, Loader2, MailPlus, Send, Settings2, Trash2, X } from "lucide-react";
+import { ExternalLink, Inbox, KeyRound, Loader2, MailPlus, Send, Settings2, Trash2, X } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Modais (credenciais e troca de senha)
@@ -244,6 +246,9 @@ export function MailboxesPanel({
   /** Caixa da senha recém-trocada: o aviso oferece testar o envio dela. */
   const [changedMailbox, setChangedMailbox] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  /** mail.<domínio> do webmail, quando ativado e no ar (botão "Abrir webmail" de cada caixa). */
+  const [webmailHost, setWebmailHost] = useState<string | null>(null);
+
 
   const refresh = useCallback(async () => {
     if (!name) return;
@@ -262,6 +267,21 @@ export function MailboxesPanel({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch<WebmailStatus>("/api/mail/webmail")
+      .then((webmail) => {
+        const link = webmail.enabled && webmail.running ? webmail.links?.find((l) => l.domain === name) : undefined;
+        if (alive) setWebmailHost(link?.host ?? null);
+      })
+      .catch(() => {
+        if (alive) setWebmailHost(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [name]);
 
   async function addMailbox() {
     const local = newMailbox.trim();
@@ -486,6 +506,14 @@ export function MailboxesPanel({
                   >
                     <KeyRound className="h-4 w-4" /> Trocar senha
                   </Button>
+                  {webmailHost && (
+                    // usuário preenchido pela URL; a senha a pessoa digita (nunca vai na URL)
+                    <Button variant="info" size="sm" asChild>
+                      <a href={webmailUrl(webmailHost, mailbox.id)} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="h-4 w-4" /> Abrir webmail
+                      </a>
+                    </Button>
+                  )}
                   {mailbox.kind === "user" &&
                     (confirmRemove === mailbox.id ? (
                       <div className="flex items-center gap-1">
