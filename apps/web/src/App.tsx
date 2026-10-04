@@ -8,6 +8,7 @@ import { AuditPage } from "@/pages/AuditPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { MailDomainPage } from "@/pages/MailDomainPage";
 import { MailPage } from "@/pages/MailPage";
+import { MailEnviosPage } from "@/pages/MailEnviosPage";
 import { CertificatesPage } from "@/pages/CertificatesPage";
 import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
@@ -39,6 +40,8 @@ const router = createBrowserRouter([
       { path: "/projects/:id", element: <ProjectDetailPage /> },
       { path: "/projects/:id/:section", element: <ProjectDetailPage /> },
       { path: "/mail", element: <MailPage /> },
+      // Antes de /mail/:domain: rota fixa (e "envios" não é nome de domínio, que tem ponto).
+      { path: "/mail/envios", element: <MailEnviosPage /> },
       { path: "/mail/:domain", element: <MailDomainPage /> },
       { path: "/certificates", element: <CertificatesPage /> },
       { path: "/security", element: <SecurityPage /> },
