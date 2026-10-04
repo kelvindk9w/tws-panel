@@ -1,0 +1,182 @@
+{
+  "id": "trocar-porta",
+  "modulo": "projetos",
+  "metodo": "PUT",
+  "url": "/api/projects/:id/ports",
+  "resumo": "Troca a porta do SERVIDOR de uma porta publicada do compose (porta e endereço de escuta), remove a publicação ou volta ao que o compose pede. Guarda em Project.portOverrides; vale no próximo deploy, pelo paas.override.yml (ports: !override). Auditoria: project.port_changed.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:416",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global; setup token enquanto o setup não foi concluído."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      }
+    ],
+    "query": [],
+    "headers": [],
+    "body": [
+      {
+        "nome": "service",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Serviço do compose."
+      },
+      {
+        "nome": "original",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Chave da porta (ProjectPortEntry.original), ex.: 127.0.0.1:8010:8010."
+      },
+      {
+        "nome": "action",
+        "tipo": "change | remove | reset",
+        "obrigatorio": true,
+        "descricao": "change = nova porta/endereço; remove = tirar a publicação; reset = como no compose."
+      },
+      {
+        "nome": "hostPort",
+        "tipo": "integer 1024–65535",
+        "obrigatorio": false,
+        "descricao": "Nova porta do servidor; ausente = manter a atual."
+      },
+      {
+        "nome": "hostIp",
+        "tipo": "127.0.0.1 | 0.0.0.0",
+        "obrigatorio": false,
+        "descricao": "Endereço de escuta; padrão 127.0.0.1."
+      }
+    ]
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "troca válida e gravada",
+      "corpo": "o mesmo de GET /api/projects/:id/ports, já com a troca"
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "FST_ERR_VALIDATION",
+      "quando": "corpo fora do schema (porta <1024 ou >65535, endereço diferente dos dois, ação desconhecida, campo extra)",
+      "mensagem": "(Fastify)"
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_service",
+      "quando": "serviço não está no compose",
+      "mensagem": "O serviço \"x\" não existe no compose. Serviços: ..."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_port_entry",
+      "quando": "a porta não está no compose do serviço",
+      "mensagem": "A porta X não está no compose do serviço Y."
+    },
+    {
+      "status": 400,
+      "codigo": "proxy_port",
+      "quando": "tentar trocar 80/443",
+      "mensagem": "As portas 80 e 443 são do painel ..."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_port",
+      "quando": "manter a porta quando o compose não tem número fixo (variável, faixa, aleatória)",
+      "mensagem": "Informe a nova porta do servidor ..."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "id/slug não existe",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 409,
+      "codigo": "not_compose",
+      "quando": "projeto não é compose",
+      "mensagem": "Trocar a porta pelo painel só vale para projetos compose."
+    },
+    {
+      "status": 409,
+      "codigo": "code_unavailable",
+      "quando": "compose sem o código no servidor (antes do primeiro deploy, modo git)",
+      "mensagem": "O código do projeto ainda não está no servidor. ..."
+    },
+    {
+      "status": 409,
+      "codigo": "port_in_use",
+      "quando": "porta reservada ao painel ou usada por outro container/projeto (no ar ou configurada)",
+      "mensagem": "A porta N do servidor já é usada por <quem>. Escolha outra."
+    }
+  ],
+  "fluxo": [
+    "1. requireProject + portsInput (uma listagem do Docker).",
+    "2. checkPortChange valida e devolve as trocas novas; trocar para exatamente o que o compose pede apaga a troca.",
+    "3. A porta no ar do próprio serviço (mesma porta interna) não conta como conflito.",
+    "4. Grava projects.json, registra auditoria ('Projeto \"X\", serviço s: de → para.') e responde com o mapa novo.",
+    "5. No deploy: compose-override.ts aplica a lista final (compose sem 80/443 de app comum, com as trocas) em ports: !override; o log mostra cada troca e avisa troca que não vale mais (porta sumiu do compose).",
+    "6. Guardrails (runGuardrails) usam a mesma lista: banco com publicação removida no painel não bloqueia mais o deploy."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService.portsInput",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1053",
+      "papel": "UMA listagem do Docker (listContainers; falha = containers null, docker=false) + o compose de cada projeto compose lido do código no servidor (composePortEntries)."
+    },
+    {
+      "tipo": "servico",
+      "nome": "port-map.ts",
+      "arquivo": "apps/server/src/services/port-map.ts",
+      "papel": "Lógica pura: parseDockerPorts (coluna Ports do docker ps), buildPortRows (linhas + conflitos), projectPortsView (aba Este projeto), checkPortChange (validação da troca)."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "composePortEntries / effectiveServicePorts",
+      "arquivo": "packages/deploy/src/port-overrides.ts",
+      "papel": "Portas publicadas do compose com chave estável e a lista final com as trocas aplicadas (a mesma usada no paas.override.yml e nos guardrails)."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "composeOverrideYaml",
+      "arquivo": "packages/deploy/src/compose-override.ts",
+      "papel": "Escreve a lista final no paas.override.yml."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "runGuardrails",
+      "arquivo": "packages/deploy/src/rules.ts",
+      "papel": "Recebe portOverrides."
+    }
+  ],
+  "efeitosColaterais": [
+    "grava Project.portOverrides em data/projects.json",
+    "auditoria project.port_changed",
+    "nada muda no Docker até o próximo deploy"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/PortsModal.tsx (Trocar → Salvar troca / Remover publicação / Voltar ao compose)"
+  ],
+  "testes": [
+    "apps/server/tests/routes-ports.test.ts",
+    "apps/server/tests/port-map.test.ts",
+    "apps/server/tests/deploy-ports.test.ts",
+    "packages/deploy/tests/port-overrides.test.ts",
+    "packages/deploy/tests/compose-override.test.ts",
+    "packages/deploy/tests/rules.test.ts"
+  ],
+  "observacoes": [
+    "Nunca muda a porta interna.",
+    "Endereço 0.0.0.0: o modal avisa que a porta fica aberta para a internet e que, na maioria das VPS, o Docker publica por fora do UFW.",
+    "Processos fora do Docker não entram na checagem de porta livre: o docker compose up falharia com 'port is already allocated' e o diagnóstico do deploy mostra."
+  ]
+}

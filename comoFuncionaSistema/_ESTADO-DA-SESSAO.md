@@ -9,6 +9,19 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 03/10/2026 — branch `feat/portas` (subagente, worktree isolado)
+- Pedido do dono depois de colocar o cassino no ar: ver e trocar as portas dos containers pelo painel.
+- O que entrou:
+  - **Botão "Portas"** no cartão Containers da Visão geral. O modal tem duas abas:
+    - **Este projeto:** portas internas, publicadas e a entrada HTTP;
+    - **Todos os projetos:** tabela ordenável, com busca e conflitos marcados; no celular, lista.
+  - **Trocar a porta do servidor** (só compose): porta nova, 127.0.0.1 ou 0.0.0.0, remover a publicação ou voltar ao compose.
+    - Vale no próximo deploy, pelo `ports: !override`.
+    - A Auditoria registra cada troca.
+    - Os guardrails usam a lista com as trocas: banco sem publicação não bloqueia mais.
+- Detalhes, decisões e o que validar na VPS: `_RELATORIO-portas.md`.
+- Sem push nem PR: o agente principal decide.
+
 ## Atualização de 03/10/2026 — branch `feat/compose-servicos` (subagente, worktree isolado)
 - Contexto: o primeiro deploy do cassino falhou com "wallet is unhealthy", e o log do painel não mostrava o motivo.
 - O que entrou:

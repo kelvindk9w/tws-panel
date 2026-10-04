@@ -168,6 +168,27 @@
       "url": "/api/projects/:id",
       "resumo": "Remove containers/imagem/domínio do projeto; opcionalmente apaga o código-fonte copiado.",
       "arquivo": "remover.json"
+    },
+    {
+      "id": "portas-servidor",
+      "metodo": "GET",
+      "url": "/api/ports",
+      "resumo": "Todas as portas do servidor (aba 'Todos os projetos' do modal Portas): cada container do docker ps com as portas publicadas, mais as portas que projetos compose do painel vão usar (parados ou com troca ainda não aplicada), com conflitos marcados. Somente leitura, sem segredos.",
+      "arquivo": "portas-servidor.json"
+    },
+    {
+      "id": "portas",
+      "metodo": "GET",
+      "url": "/api/projects/:id/ports",
+      "resumo": "Abre o modal Portas: as portas do projeto (por serviço: estado, portas internas, portas publicadas com a troca do painel aplicada, se já está no ar, e a entrada HTTP) e, na mesma resposta, todas as portas do servidor — uma consulta ao Docker por abertura do modal.",
+      "arquivo": "portas.json"
+    },
+    {
+      "id": "trocar-porta",
+      "metodo": "PUT",
+      "url": "/api/projects/:id/ports",
+      "resumo": "Troca a porta do SERVIDOR de uma porta publicada do compose (porta e endereço de escuta), remove a publicação ou volta ao que o compose pede. Guarda em Project.portOverrides; vale no próximo deploy, pelo paas.override.yml (ports: !override). Auditoria: project.port_changed.",
+      "arquivo": "trocar-porta.json"
     }
   ],
   "conceitos": [

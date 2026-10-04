@@ -20,10 +20,11 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { GuardrailFinding, GuardrailLevel, GuardrailReport } from "@paas/core";
+import type { GuardrailFinding, GuardrailLevel, GuardrailReport, PortOverride } from "@paas/core";
 import { parse } from "yaml";
 import { DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
+import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
 
 // ---------------------------------------------------------------------------
@@ -248,18 +249,26 @@ export function mountsDockerSock(volumes: unknown): boolean {
 // Regras sobre o compose
 // ---------------------------------------------------------------------------
 
-function analyzeComposeRules(content: string, fileName: string): GuardrailFinding[] {
+function analyzeComposeRules(
+  content: string,
+  fileName: string,
+  portOverrides?: Record<string, PortOverride[]>,
+): GuardrailFinding[] {
   const findings: GuardrailFinding[] = [];
   const doc = parse(content) as ComposeFile;
   const services = doc.services ?? {};
+  // As trocas de porta do painel (modal Portas) valem também aqui: banco com a
+  // publicação removida no painel não fica mais exposto no deploy.
+  const changed = portOverrides ? effectiveServicePorts(content, portOverrides, { stripProxyPorts: false }).ports : {};
 
   for (const [name, service] of Object.entries(services)) {
+    const ports = changed[name] ?? service.ports;
     // db-port-exposed (block)
     // Decide pela porta do CONTAINER: porta do host aleatória ou vinda de
     // variável também expõe o banco (o Docker publica por cima do UFW).
     // Política atual: o endereço (port.hostIp) não é considerado — publicar
     // só em 127.0.0.1 também bloqueia.
-    for (const port of publishedPorts(service.ports)) {
+    for (const port of publishedPorts(ports)) {
       const db = DATABASE_PORTS.get(port.container);
       if (db) {
         findings.push({
@@ -267,7 +276,7 @@ function analyzeComposeRules(content: string, fileName: string): GuardrailFindin
           level: "block",
           title: `Porta de banco de dados publicada no host (${db})`,
           evidence: `${fileName}: serviço "${name}" publica ${formatPortMapping(port)}`,
-          fix: "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH.",
+          fix: "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
         });
       }
@@ -279,7 +288,7 @@ function analyzeComposeRules(content: string, fileName: string): GuardrailFindin
     // só avisa. Proxy HTTPS próprio (visto no cassino): bloqueia — sem as
     // portas o HTTPS dele briga com o do painel; o caminho é um compose.paas.
     const ownProxy = hasOwnHttpsProxy(content, name);
-    for (const port of publishedPorts(service.ports)) {
+    for (const port of publishedPorts(ports)) {
       if (port.host.kind === "fixed" && (port.host.port === 80 || port.host.port === 443)) {
         findings.push({
           rule: "proxy-port-conflict",
@@ -501,7 +510,11 @@ function summarize(findings: GuardrailFinding[]): { blockers: number; warnings: 
  * Executa todos os guardrails sobre um diretório de código-fonte.
  * Tolerante: compose inválido vira finding "block" (YAML quebrado não deve deployar).
  */
-export async function runGuardrails(dir: string, projectComposeFile?: string | null): Promise<GuardrailReport> {
+export async function runGuardrails(
+  dir: string,
+  projectComposeFile?: string | null,
+  portOverrides?: Record<string, PortOverride[]>,
+): Promise<GuardrailReport> {
   const findings: GuardrailFinding[] = [];
 
   // Compose (regras de infra): o arquivo que o deploy usa (o da detecção do
@@ -521,7 +534,7 @@ export async function runGuardrails(dir: string, projectComposeFile?: string | n
   if (composeFile) {
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
-      findings.push(...analyzeComposeRules(content, composeFile));
+      findings.push(...analyzeComposeRules(content, composeFile, portOverrides));
     } catch {
       findings.push({
         rule: "invalid-compose",

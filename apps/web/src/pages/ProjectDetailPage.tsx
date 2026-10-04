@@ -483,6 +483,7 @@ export function ProjectDetailPage() {
         latestJob={activeJob && activeJob.id === jobs[0]?.id ? activeJob : null}
         onOpenJob={setOpenJobId}
         onChanged={() => void refresh()}
+        onDeploy={() => void deployWithGuardrails()}
       />
 
       {project.detection && project.detection.warnings.length > 0 && (

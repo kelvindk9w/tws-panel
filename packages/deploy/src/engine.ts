@@ -31,6 +31,7 @@ import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from ".
 import { preparePublishDir } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
+import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
 import { runGuardrails } from "./rules.js";
@@ -202,7 +203,7 @@ export class DeployEngine {
     // vez antes de criar o job. Quando o modo de ingestão garante que o
     // diretório não mudou desde então (ver comentário no chamador), ele passa
     // esse resultado pronto aqui em vez de escanear a árvore de novo.
-    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile));
+    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides));
     if (opts?.precomputedGuardrailReport) {
       onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
     }
@@ -457,6 +458,7 @@ export class DeployEngine {
       network: PAAS_NETWORK,
       env: extraEnv,
       envServices,
+      ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
     });
     await writeFile(overrideFile, overrideYaml, { encoding: "utf8", mode: 0o600 });
     onLog(`Override gerado em ${overrideFile} (serviço "${proxyService}" na ${PAAS_NETWORK}).\n`);
@@ -466,6 +468,14 @@ export class DeployEngine {
         `Portas 80/443 do servidor retiradas de: ${stripped.join(", ")} — são do proxy do painel; ` +
           "o tráfego chega pela rede interna (o repositório não foi alterado).\n",
       );
+    }
+    // Trocas da porta do servidor feitas no painel (modal Portas).
+    const portChanges = effectiveServicePorts(composeContent, project.portOverrides, { stripProxyPorts: true });
+    for (const c of portChanges.changes) {
+      onLog(`Porta do servidor (${c.service}): ${c.from} → ${c.to ?? "publicação removida"} — troca feita no painel.\n`);
+    }
+    for (const s of portChanges.stale) {
+      onLog(`Aviso: a troca da porta ${s.original} do serviço ${s.service} não vale mais — essa porta não está no compose (ou é 80/443).\n`);
     }
     if (envServices.length > 0) {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);

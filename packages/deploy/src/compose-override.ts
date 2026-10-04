@@ -4,9 +4,13 @@
  *  - anexa o serviço web à rede do painel com um alias estável para o Caddy;
  *  - injeta env extra (ex.: SMTP do painel) nos serviços indicados;
  *  - em app comum, troca a lista de portas por uma sem 80/443 do host
- *    (`ports: !override`, ver proxy-ports.ts).
+ *    (`ports: !override`, ver proxy-ports.ts);
+ *  - aplica as trocas da porta do servidor feitas no painel (modal Portas,
+ *    ver port-overrides.ts), na mesma lista `!override`.
  */
 import { Document } from "yaml";
+import type { PortOverride } from "@paas/core";
+import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy, portsWithoutProxyPorts } from "./proxy-ports.js";
 
 export interface ComposeOverrideOptions {
@@ -17,6 +21,8 @@ export interface ComposeOverrideOptions {
   network: string;
   env?: Record<string, string>;
   envServices?: string[];
+  /** Trocas da porta do servidor por serviço (Project.portOverrides). */
+  portOverrides?: Record<string, PortOverride[]>;
 }
 
 export const OVERRIDE_HEADER = "# Gerado pelo painel PaaS — não editar. Anexa o serviço web à rede do painel.\n";
@@ -40,9 +46,9 @@ export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
   }
 
   const doc = new Document({ networks: { [opts.network]: { external: true } }, services });
-  const remaining = portsWithoutProxyPorts(opts.compose);
-  for (const name of strippedProxyPortServices(opts.compose)) {
-    const node = doc.createNode(remaining[name]);
+  const { ports } = effectiveServicePorts(opts.compose, opts.portOverrides, { stripProxyPorts: true });
+  for (const [name, list] of Object.entries(ports)) {
+    const node = doc.createNode(list);
     node.tag = "!override";
     doc.setIn(["services", name, "ports"], node);
   }

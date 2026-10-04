@@ -467,3 +467,37 @@ describe("ProjectDetailPage — histórico de deploys", () => {
     expect(screen.queryByTestId("deploy-detail")).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Botão "Portas" (pedido do dono, 03/10/2026): no cartão Containers da Visão
+ * geral; abre o modal e o "Fazer deploy agora" usa o mesmo deploy do topo.
+ */
+describe("ProjectDetailPage — portas", () => {
+  it("o botão Portas abre o modal e o deploy de lá passa pelos guardrails", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/ports") {
+        return {
+          docker: true,
+          reserved: [80, 443],
+          rows: [],
+          project: { projectId: "p1", projectName: "devLink", type: "compose", canChange: true, entry: null, pendingDeploy: true, services: [] },
+        };
+      }
+      if (path === "/api/projects/p1/guardrails") return { report: null, note: null };
+      if (path === "/api/projects/p1/deploy") {
+        return { job: { id: "j1", projectId: "p1", status: "running", log: "", startedAt: "2026-09-30T10:00:00Z" } };
+      }
+      return base(path, init);
+    });
+    abrir();
+    fireEvent.click(await screen.findByRole("button", { name: /^Portas$/ }));
+    expect(await screen.findByTestId("ports-modal")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /fazer deploy agora/i }));
+    await waitFor(() => expect(screen.queryByTestId("ports-modal")).not.toBeInTheDocument());
+    await vi.waitFor(() => {
+      const posts = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects/p1/deploy" && (i as RequestInit)?.method === "POST");
+      expect(posts).toHaveLength(1);
+    });
+  });
+});

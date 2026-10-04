@@ -10,6 +10,7 @@ import type {
   ProjectCredentialResponse,
   ProjectListResponse,
   ProjectResponse,
+  SetPortRequest,
   SetProjectCredentialRequest,
   UpdateProjectRequest,
 } from "@paas/core";
@@ -129,6 +130,25 @@ const setCredentialSchema = {
     properties: {
       token: { type: "string", minLength: 1, maxLength: 500 },
       username: { type: "string", minLength: 1, maxLength: 100 },
+    },
+  },
+} as const;
+
+// Troca da porta do SERVIDOR (modal Portas). Só 1024–65535 (abaixo é do
+// sistema; 80/443 são do painel) e só os dois endereços que o painel oferece:
+// 127.0.0.1 (só no servidor) ou 0.0.0.0 (todos). A porta interna não entra.
+const setPortSchema = {
+  params: projectIdParams,
+  body: {
+    type: "object",
+    required: ["service", "original", "action"],
+    additionalProperties: false,
+    properties: {
+      service: { type: "string", minLength: 1, maxLength: 100 },
+      original: { type: "string", minLength: 1, maxLength: 200 },
+      action: { type: "string", enum: ["change", "remove", "reset"] },
+      hostPort: { type: "integer", minimum: 1024, maximum: 65535 },
+      hostIp: { type: "string", enum: ["127.0.0.1", "0.0.0.0"] },
     },
   },
 } as const;
@@ -367,6 +387,37 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         return reply.send(
           await projectResponse(await service.setPrimaryDomain(request.params.id, request.params.domain)),
         );
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Portas (modal "Portas"): somente leitura, sem segredos — o que está no ar
+  // (docker ps, uma listagem por consulta) e o que cada projeto vai publicar.
+  app.get("/api/ports", async (_request, reply) => {
+    try {
+      return reply.send(await service.portsOverview());
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/projects/:id/ports", { schema: projectIdParamsSchema }, async (request, reply) => {
+    try {
+      return reply.send(await service.projectPorts(request.params.id));
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  // Troca a porta do servidor (vale no próximo deploy; registrada na auditoria).
+  app.put<{ Params: { id: string }; Body: SetPortRequest }>(
+    "/api/projects/:id/ports",
+    { schema: setPortSchema },
+    async (request, reply) => {
+      try {
+        return reply.send(await service.setPort(request.params.id, request.body));
       } catch (err) {
         return sendError(reply, err);
       }
