@@ -25,6 +25,8 @@ import type {
   SetProjectEmailLinksRequest,
 } from "@paas/core";
 import { MailService } from "../services/mail-service.js";
+import { WebmailService } from "../services/webmail-service.js";
+import webmailRoutes from "./webmail.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
@@ -269,6 +271,14 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       : {}),
   });
   app.decorate("mailService", service);
+  // Webmail (Roundcube em https://mail.<domínio>/): acompanha o servidor de
+  // e-mail e conta ao proxy se os blocos mail.<domínio> abrem o webmail.
+  const webmail = new WebmailService(app.config, service, {
+    audit: app.auditService,
+    log: (message) => app.log.warn(message),
+  });
+  app.deployService.setWebmailProvider?.(() => webmail.proxyState());
+  await app.register(webmailRoutes, { webmail });
 
   /**
    * Validação real (02/10/2026): o domínio foi cadastrado antes de existir o
@@ -326,6 +336,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       lastProxyHosts = hosts;
     }
     await service.syncTls();
+    // domínio novo, certificado instalado, servidor iniciado: o webmail acompanha
+    await webmail.sync();
   };
   const refreshInBackground = (opts: { force: boolean }): void => {
     refreshMailTls(opts).catch((err: unknown) => {
@@ -373,6 +385,9 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/mail/server/stop", async (_request, reply) => {
     try {
       const status = await service.stopServer();
+      webmail.followMailServer(false).catch((err: unknown) => {
+        app.log.warn(`Webmail: falha ao parar junto com o servidor (${err instanceof Error ? err.message : String(err)}).`);
+      });
       const response: MailServerActionResponse = { ok: true, status };
       return reply.send(response);
     } catch (err) {

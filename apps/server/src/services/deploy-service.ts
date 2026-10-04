@@ -48,6 +48,7 @@ import {
   type ComposePortEntry,
   type ComposeVariable,
   type EngineContext,
+  type CaddyWebmail,
   type ManualCaddyCertificate,
   type PanelSite,
 } from "@paas/deploy";
@@ -170,6 +171,8 @@ export class DeployService {
   private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
   /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
   private mailHostsProvider: (() => Promise<string[]>) | null = null;
+  /** Webmail ativado (upstream e IPs bloqueados), registrado pela rota de e-mail. */
+  private webmailProvider: (() => Promise<CaddyWebmail | null>) | null = null;
   /** Certificados manuais em vigor (página Certificados), registrados no boot. */
   private manualCertificatesProvider: (() => Promise<ManualCaddyCertificate[]>) | null = null;
   /** Instala no Stalwart o certificado de mail.<domínio>, registrado pela rota de e-mail. */
@@ -233,6 +236,8 @@ export class DeployService {
       mailHosts: async () => (await this.mailHostsProvider?.()) ?? [],
       // Certificado manual: o Caddy usa o par enviado (`tls`) para o nome.
       manualCertificates: async () => (await this.manualCertificatesProvider?.()) ?? [],
+      // Webmail ativado: os blocos mail.<domínio> encaminham para ele.
+      webmail: async () => (await this.webmailProvider?.()) ?? null,
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
       // Em container, o health check fala com o Caddy pela rede interna
       // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
@@ -325,6 +330,11 @@ export class DeployService {
   /** Instala no servidor de e-mail o certificado atual (nada sem o módulo de e-mail). */
   async syncMailTls(): Promise<void> {
     await this.mailTlsSync?.();
+  }
+
+  /** Registra quem informa se o webmail está ativado (e os IPs bloqueados nele). */
+  setWebmailProvider(provider: () => Promise<CaddyWebmail | null>): void {
+    this.webmailProvider = provider;
   }
 
   /** Registra quem informa os certificados manuais (página Certificados). */
