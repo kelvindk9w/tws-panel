@@ -121,7 +121,22 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
     expect(await screen.findByText("1/5 OK")).toBeInTheDocument();
   });
 
-  it("PTR genérico com FCrDNS válido (azul): envio liberado, troca opcional com o caminho da Contabo, sem chamado", async () => {
+  it("PTR único: explica que o nome reverso é um só para o servidor e deve ser o nome com que ele se apresenta", async () => {
+    // segundo domínio do servidor: o PTR esperado é o do servidor, não mail.exemplo.com.br
+    mockApi({
+      ...CHECKLIST,
+      ptr: { ip: "203.0.113.10", expected: "mail.principal.com.br", status: "found", found: ["mail.principal.com.br"], forwardConfirmed: null, provider: null, ticketText: null },
+    });
+    await renderPage();
+    expect(
+      await screen.findByText(
+        /O nome reverso do IP é um só para o servidor inteiro; ele deve ser mail\.principal\.com\.br, o nome com que este servidor se apresenta\./,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Tudo certo: o nome reverso do IP é mail\.principal\.com\.br/)).toBeInTheDocument();
+  });
+
+  it("PTR genérico com FCrDNS válido (azul): envio liberado, troca recomendada com o caminho da Contabo, sem chamado", async () => {
     mockApi({
       ...CHECKLIST,
       records: [record("a", "found", { type: "A", name: "mail.exemplo.com.br", expected: "203.0.113.10" })],
@@ -148,8 +163,15 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
     // não é o aviso amarelo, nem o chamado
     expect(screen.queryByText(/podem recusar/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Copiar texto do chamado/)).not.toBeInTheDocument();
-    // instrução recolhida, marcada como opcional
-    const summary = screen.getByText(/Opcional: trocar o nome reverso/);
+    // funciona, mas a troca é recomendada (o Yahoo pede nome que reflita o domínio)
+    expect(
+      screen.getByText(
+        "Funciona, mas troque: o Yahoo e os filtros de reputação preferem um nome reverso que reflita o seu domínio.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/opcional/i)).not.toBeInTheDocument();
+    // instrução recolhida, marcada como recomendada
+    const summary = screen.getByText(/Recomendado: trocar o nome reverso para mail\.exemplo\.com\.br/);
     await user.click(summary);
     expect(screen.getByText(/my\.contabo\.com/)).toBeVisible();
 

@@ -290,6 +290,11 @@ describe("PTR em três níveis (verde, azul, amarelo)", () => {
     expect(result.ptr.status).toBe("found");
   });
 
+  it("DMARC diz onde os relatórios chegam (dmarc@ é endereço da postmaster@)", () => {
+    const dmarc = buildDnsChecklist(BASE_INPUT).records.find((r) => r.id === "dmarc")!;
+    expect(dmarc.purpose).toContain("chegam na caixa postmaster@exemplo.com.br");
+  });
+
   it("sem o nome do servidor informado, vale mail.<domínio> (compatível)", () => {
     expect(buildDnsChecklist(BASE_INPUT).ptr.expected).toBe("mail.exemplo.com.br");
   });

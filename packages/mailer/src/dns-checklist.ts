@@ -153,7 +153,7 @@ export function buildDnsChecklist(input: ChecklistInput): DnsChecklistResponse {
       type: "TXT",
       name: `_dmarc.${domain}`,
       expected: dmarcValue(domain, dmarcStage),
-      purpose: "DMARC: política de autenticação + relatórios (evoluir none → quarantine → reject).",
+      purpose: `DMARC: política de autenticação + relatórios, que chegam na caixa postmaster@${domain} pelo endereço dmarc@ (evoluir none → quarantine → reject).`,
       status: "pending",
       found: [],
       note: null,
