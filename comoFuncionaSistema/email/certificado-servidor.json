@@ -50,6 +50,7 @@
   "chamadoPor": ["apps/web/src/pages/MailPage.tsx (card 'Certificado do servidor de e-mail', ao abrir a página e no botão 'Conferir de novo')"],
   "testes": ["apps/server/tests/mail-tls.test.ts", "apps/server/tests/routes-mail-tls.test.ts", "apps/web/tests/mail-page.test.tsx"],
   "observacoes": [
+    "Configuração nova (04/10/2026): a sincronização também compara a impressão digital do config.toml gerado (tls.config no mail.json, sha256 sem o segredo do administrador). Diferente — painel atualizado com chave nova no config, ou report.domain mudou — conta como nome novo: entrega e REINICIA uma vez (o reload do Stalwart não relê o config.toml). Estado gravado por versão anterior (sem tls.config) também reinicia uma vez. Antes de comparar, acrescenta dmarc@ à postmaster@ dos domínios antigos (ver criar-dominio.json).",
     "A emissão de verdade (Let's Encrypt) só acontece na VPS, com o registro A público e as portas 80/443 abertas. Localmente o caminho inteiro (Caddy → painel → Stalwart → nodemailer) foi validado com a CA local do Caddy — ver _RELATORIO-email-tls.md.",
     "issuer vem da organização (O) do emissor, ou do nome (CN) quando não há organização."
   ]

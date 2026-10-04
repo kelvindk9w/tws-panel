@@ -124,7 +124,7 @@
   ],
   "fluxo": [
     "1. requireDomain(domainName); normalizeLocalPart(localPart).",
-    "2. Monta o e-mail completo; 409 mailbox_exists se já existir.",
+    "2. Monta o e-mail completo; 409 mailbox_exists se já existir — e também para postmaster@, abuse@ e dmarc@, endereços que o painel põe na caixa postmaster@ ao cadastrar o domínio (04/10/2026).",
     "3. requireRunning().",
     "4. requireStrongPassword(password): mínimo 12 caracteres.",
     "5. client().createMailbox(email, senha): POST /api/principal {type:'individual', name:email, secrets:[senha], emails:[email], quota:0, roles:['user']}.",
