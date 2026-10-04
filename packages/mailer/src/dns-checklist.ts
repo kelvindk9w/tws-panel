@@ -10,8 +10,13 @@
  * tinha o nome reverso genérico vmiNNNNNNN.contaboserver.net, que volta para o
  * mesmo IP. Isso já é o FCrDNS que o Gmail, o Yahoo e a Microsoft exigem; o
  * painel mostrava amarelo e mandava abrir chamado sem necessidade. Agora:
- * verde = mail.<domínio>; azul = nome genérico com FCrDNS válido (conta como
- * OK, trocar é opcional); amarelo = sem PTR ou nome que não volta para o IP.
+ * verde = nome do servidor; azul = nome genérico com FCrDNS válido (conta como
+ * OK, trocar é recomendado); amarelo = sem PTR ou nome que não volta para o IP.
+ *
+ * PTR único (04/10/2026): o esperado era mail.<domínio> em cada checklist, o
+ * que com dois domínios ou mais nunca fecha (um IP tem um nome reverso só).
+ * Agora é o nome com que o servidor se apresenta (HELO = server.hostname),
+ * igual para todos os domínios.
  * Quando o provedor é conhecido pelo nome reverso, a instrução diz onde a
  * própria pessoa troca no painel dele; o texto de chamado fica só para
  * provedor desconhecido.
@@ -39,6 +44,12 @@ export interface ChecklistInput {
   domain: string;
   /** Hostname do servidor de e-mail (mail.<domínio>). */
   mailHostname: string;
+  /**
+   * Nome com que o servidor se apresenta (HELO = server.hostname). É o PTR
+   * esperado: um IP tem um nome reverso só, o mesmo para todos os domínios.
+   * Ausente = mailHostname.
+   */
+  serverHostname?: string;
   /** IPv4 público da máquina. */
   serverIp: string;
   /** IPv6 público (opcional — se existir, Gmail exige que esteja correto). */
@@ -76,6 +87,7 @@ const MX_PRIORITY = 10;
 /** Monta a lista completa de registros esperados para o domínio. */
 export function buildDnsChecklist(input: ChecklistInput): DnsChecklistResponse {
   const { domain, mailHostname, serverIp, serverIpv6, dkimSelector, dkimPublicKey, dmarcStage } = input;
+  const ptrHostname = input.serverHostname ?? mailHostname;
 
   const records: DnsRecordCheck[] = [
     {
@@ -155,7 +167,7 @@ export function buildDnsChecklist(input: ChecklistInput): DnsChecklistResponse {
     records,
     ptr: {
       ip: serverIp,
-      expected: mailHostname,
+      expected: ptrHostname,
       status: "pending",
       found: [],
       forwardConfirmed: null,
@@ -356,7 +368,7 @@ export async function verifyDnsRecords(
   return { records, ptr, summary: { ok, total } };
 }
 
-/** PTR verde (mail.<domínio>) ou azul (genérico com FCrDNS válido) conta como OK. */
+/** PTR verde (nome do servidor) ou azul (genérico com FCrDNS válido) conta como OK. */
 export function ptrIsOk(status: PtrCheck["status"]): boolean {
   return status === "found" || status === "generic";
 }
@@ -367,7 +379,7 @@ function normalizeName(name: string): string {
 }
 
 /**
- * DNS reverso do IP: o nome reverso é mail.<domínio> (found)? Senão, algum
+ * DNS reverso do IP: o nome reverso é o nome do servidor (found)? Senão, algum
  * nome reverso volta para o mesmo IP (generic, FCrDNS válido)? Senão,
  * mismatch; sem nome reverso nenhum, action_required.
  */
