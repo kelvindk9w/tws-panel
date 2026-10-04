@@ -1,0 +1,98 @@
+{
+  "id": "portas-servidor",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/ports",
+  "resumo": "Todas as portas do servidor (aba 'Todos os projetos' do modal Portas): cada container do docker ps com as portas publicadas, mais as portas que projetos compose do painel vão usar (parados ou com troca ainda não aplicada), com conflitos marcados. Somente leitura, sem segredos.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:398",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global; setup token enquanto o setup não foi concluído."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre que o painel responde (Docker fora do ar = docker:false e só as configuradas)",
+      "corpo": {
+        "docker": "boolean",
+        "rows": [
+          {
+            "owner": "project | panel | external",
+            "projectId": "string|null",
+            "projectName": "string|null",
+            "container": "string|null",
+            "service": "string|null",
+            "image": "string|null",
+            "state": "string|null",
+            "hostIp": "string|null (null = todos os endereços)",
+            "hostPort": "number|null",
+            "containerPort": "number|null",
+            "protocol": "tcp|udp|sctp",
+            "source": "live | configured",
+            "conflict": "boolean",
+            "conflictWith": "string|null"
+          }
+        ],
+        "reserved": "number[] (80, 443, 2019, portas do Caddy, porta do painel, portas do e-mail)"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 500,
+      "codigo": "internal_error",
+      "quando": "falha inesperada",
+      "mensagem": "Erro interno."
+    }
+  ],
+  "fluxo": [
+    "1. portsInput(): uma listagem do Docker; lê o compose de cada projeto compose com código no servidor.",
+    "2. Dono de cada container: projeto do painel (projectSlug de um projeto existente), painel (managed sem projeto, ou tws-panel) ou externo.",
+    "3. IPv4 e IPv6 de 'todos os endereços' (0.0.0.0 e ::) viram uma linha só; faixas viram uma linha por porta.",
+    "4. Portas configuradas dos projetos compose (compose + trocas, sem as 80/443 retiradas) entram como source=configured quando não estão no ar exatamente assim.",
+    "5. Conflito: mesma porta+protocolo com endereços que se sobrepõem (iguais, ou um deles 'todos') e donos diferentes; ou porta reservada usada por quem não é o painel."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService.portsInput",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1053",
+      "papel": "UMA listagem do Docker (listContainers; falha = containers null, docker=false) + o compose de cada projeto compose lido do código no servidor (composePortEntries)."
+    },
+    {
+      "tipo": "servico",
+      "nome": "port-map.ts",
+      "arquivo": "apps/server/src/services/port-map.ts",
+      "papel": "Lógica pura: parseDockerPorts (coluna Ports do docker ps), buildPortRows (linhas + conflitos), projectPortsView (aba Este projeto), checkPortChange (validação da troca)."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "composePortEntries / effectiveServicePorts",
+      "arquivo": "packages/deploy/src/port-overrides.ts",
+      "papel": "Portas publicadas do compose com chave estável e a lista final com as trocas aplicadas (a mesma usada no paas.override.yml e nos guardrails)."
+    }
+  ],
+  "efeitosColaterais": [
+    "nenhum (só leitura)"
+  ],
+  "chamadoPor": [
+    "nenhuma tela hoje — o modal usa GET /api/projects/:id/ports, que já traz as mesmas linhas"
+  ],
+  "testes": [
+    "apps/server/tests/routes-ports.test.ts",
+    "apps/server/tests/port-map.test.ts",
+    "apps/server/tests/deploy-ports.test.ts"
+  ],
+  "observacoes": [
+    "Containers parados não mostram portas no docker ps: conflito com um container externo parado não aparece.",
+    "Processos fora do Docker (algo escutando direto na VPS) não aparecem."
+  ]
+}

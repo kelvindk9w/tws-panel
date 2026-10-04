@@ -429,7 +429,7 @@ function AllTab({ rows }: { rows: PortUsageRow[] }) {
         <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input
           className="pl-8"
-          placeholder="Buscar projeto, container, imagem ou porta"
+          placeholder="Buscar por projeto, container ou porta"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
