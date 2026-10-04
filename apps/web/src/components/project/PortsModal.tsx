@@ -631,7 +631,7 @@ function BatchEditor({
               key={r.id}
               data-testid="batch-row"
               className={cn(
-                "grid min-w-0 grid-cols-2 gap-2 rounded-lg border p-2 text-sm sm:grid-cols-[minmax(0,1fr)_6rem_7rem_minmax(0,12rem)_auto] sm:items-end",
+                "grid min-w-0 grid-cols-2 gap-2 rounded-lg border p-2 text-sm lg:grid-cols-[minmax(0,1fr)_6rem_7rem_12rem_14rem] lg:items-end",
                 error && "border-red-500/50 bg-red-500/10",
               )}
             >
@@ -713,7 +713,7 @@ function BatchEditor({
                   )}
                 </select>
               </label>
-              <div className="col-span-2 flex flex-wrap gap-1 sm:col-span-1 sm:justify-end">
+              <div className="col-span-2 flex flex-wrap gap-1 lg:col-span-1 lg:justify-end">
                 {r.original === null ? (
                   <Button size="sm" variant="danger" onClick={() => change(rows.filter((x) => x.id !== r.id))}>
                     Remover
@@ -739,7 +739,7 @@ function BatchEditor({
                   </Button>
                 )}
               </div>
-              <div className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-5">
+              <div className="col-span-2 flex flex-col gap-1 text-xs lg:col-span-5">
                 {r.original === null && <span className="text-muted-foreground">adicionada no painel</span>}
                 {r.removed && <span className="text-muted-foreground">publicação removida — o app continua acessível pelo painel</span>}
                 {differs && !r.removed && <span className="text-muted-foreground">no compose: {composeText(r)}</span>}
