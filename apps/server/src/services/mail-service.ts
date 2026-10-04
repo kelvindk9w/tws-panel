@@ -56,6 +56,7 @@ import {
   type DnsResolverLike,
   type MailCertificate,
   type QueuedMessage,
+  type QueueMessageRaw,
 } from "@paas/mailer";
 import type { ServerConfig } from "../config.js";
 import { isCloudflareIp, publicIpFromPanelDomain } from "../routes/domains.js";
@@ -653,6 +654,101 @@ export class MailService {
       domains: domainResults,
       listedCount,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Página Envios (fila, remetentes, listas de bloqueio, nota). Só leitura do
+  // estado e repasse ao cliente do Stalwart; a regra fica nos serviços
+  // mail-envios-service.ts e mail-reputation-service.ts.
+  // -------------------------------------------------------------------------
+
+  /** O servidor de e-mail já foi criado (há senha de administrador)? */
+  async enviosServerCreated(): Promise<boolean> {
+    await this.ensureLoaded();
+    return Boolean(this.data.adminSecret);
+  }
+
+  /** A fila do Stalwart (até `limit` mensagens), com o id como texto. */
+  async enviosQueue(limit = 200): Promise<{ items: QueueMessageRaw[]; total: number }> {
+    await this.ensureLoaded();
+    await this.ensureNetworkAccess();
+    return this.client().listQueue(limit);
+  }
+
+  /** "Tentar agora" (ver StalwartClient.retryQueuedMessage: é a última tentativa). */
+  async enviosRetry(id: string): Promise<boolean> {
+    await this.ensureLoaded();
+    await this.ensureNetworkAccess();
+    return this.client().retryQueuedMessage(id);
+  }
+
+  /** "Cancelar": tira a mensagem da fila. */
+  async enviosCancel(id: string): Promise<boolean> {
+    await this.ensureLoaded();
+    await this.ensureNetworkAccess();
+    return this.client().cancelQueuedMessage(id);
+  }
+
+  /**
+   * Endereços que enviam por este servidor → caixa e projeto. Inclui os
+   * endereços extras que o painel cria: abuse@ e dmarc@ (da postmaster@) e o
+   * endereço de envio antigo de projeto (alias da caixa técnica).
+   */
+  async enviosSenders(): Promise<Array<{ address: string; mailbox: string; projectId: string | null; system: boolean }>> {
+    await this.ensureLoaded();
+    const senderOf = new Map(Object.entries(this.data.projects).map(([id, p]) => [p.mailbox, id]));
+    const out: Array<{ address: string; mailbox: string; projectId: string | null; system: boolean }> = [];
+    for (const m of Object.values(this.data.mailboxes)) {
+      const projectId = m.projectId ?? senderOf.get(m.id) ?? null;
+      const system = m.kind === "system";
+      out.push({ address: m.id, mailbox: m.id, projectId, system });
+      if (system && m.localPart === "postmaster") {
+        for (const extra of ["abuse", "dmarc"]) {
+          out.push({ address: `${extra}@${m.domain}`, mailbox: m.id, projectId: null, system: true });
+        }
+      }
+    }
+    for (const [projectId, p] of Object.entries(this.data.projects)) {
+      if (p.fromAddress && p.fromAddress !== p.mailbox) {
+        out.push({ address: p.fromAddress, mailbox: p.mailbox, projectId, system: false });
+      }
+    }
+    return out;
+  }
+
+  /** O que conferir nas listas de bloqueio: o IP público e os domínios. */
+  async enviosBlacklistTargets(): Promise<{ ip: string; domains: string[] }> {
+    await this.ensureLoaded();
+    return { ip: this.serverIp(), domains: Object.keys(this.data.domains) };
+  }
+
+  /**
+   * Fatos para a nota de entregabilidade: a verificação de DNS de cada
+   * domínio (com o PTR) e o certificado do servidor. O que falhar fica como
+   * "não verificado" (null), nunca como certo.
+   */
+  async enviosDeliverabilityFacts(): Promise<{
+    domains: Array<{ name: string; dnsOk: number | null; dnsTotal: number | null; ptr: DnsVerifyResponse["ptr"]["status"] | null }>;
+    tls: { ok: number; total: number } | null;
+  }> {
+    await this.ensureLoaded();
+    const domains = [];
+    for (const name of Object.keys(this.data.domains)) {
+      try {
+        const v = await this.verifyDomain(name);
+        domains.push({ name, dnsOk: v.summary.ok, dnsTotal: v.summary.total, ptr: v.ptr.status });
+      } catch {
+        domains.push({ name, dnsOk: null, dnsTotal: null, ptr: null });
+      }
+    }
+    let tls: { ok: number; total: number } | null = null;
+    try {
+      const status = await this.tlsStatus();
+      tls = { ok: status.hosts.filter((h) => h.ok).length, total: status.hosts.length };
+    } catch {
+      tls = null;
+    }
+    return { domains, tls };
   }
 
   private summaryOf(domain: StoredDomain): MailDomainSummary {

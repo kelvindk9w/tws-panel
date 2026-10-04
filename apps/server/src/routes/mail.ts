@@ -25,6 +25,10 @@ import type {
   SetProjectEmailLinksRequest,
 } from "@paas/core";
 import { MailService } from "../services/mail-service.js";
+import { MailEnviosService } from "../services/mail-envios-service.js";
+import { MailReputationService } from "../services/mail-reputation-service.js";
+import { readStalwartLogs } from "../services/stalwart-logs.js";
+import { mailEnviosRoutes } from "./mail-envios.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
@@ -347,6 +351,47 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // -------------------------------------------------------------------------
+  // Página Envios: fila, histórico (registro do Stalwart a cada 5 min),
+  // volume, listas de bloqueio (uma vez por dia) e a nota. Fica AQUI porque
+  // só este plugin enxerga o MailService (ver mail-reputation-service.ts).
+  // -------------------------------------------------------------------------
+  const envios = new MailEnviosService({
+    dataDir: app.config.dataDir,
+    serverCreated: () => service.enviosServerCreated(),
+    listQueue: () => service.enviosQueue(),
+    retry: (id) => service.enviosRetry(id),
+    cancel: (id) => service.enviosCancel(id),
+    senders: () => service.enviosSenders(),
+    projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
+    readLogs: (since, onLine) => readStalwartLogs(since, onLine),
+  });
+  const reputation = new MailReputationService({
+    dataDir: app.config.dataDir,
+    targets: () => service.enviosBlacklistTargets(),
+    facts: () => service.enviosDeliverabilityFacts(),
+    onListed: async (lines) => {
+      if (!app.hasDecorator("alertsService")) return;
+      await app.alertsService.create({
+        severity: "critical",
+        source: "blacklist",
+        title: "E-mail: IP ou domínio listado em blacklist",
+        detail: lines.join("\n"),
+      });
+    },
+  });
+  mailEnviosRoutes(app, {
+    envios,
+    reputation,
+    domainNames: async () => (await service.listDomains()).map((d) => d.name),
+  });
+  envios.start();
+  reputation.start();
+  app.addHook("onClose", async () => {
+    envios.stop();
+    reputation.stop();
+  });
+
+  // -------------------------------------------------------------------------
   // Servidor Stalwart
   // -------------------------------------------------------------------------
 
@@ -443,10 +488,13 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // Check de blacklist (Fase 4): IP público + domínios contra as DNSBLs.
+  // Check de blacklist (card da página Segurança): a mesma conferência da
+  // página Envios (com a chave DQS e o resultado guardado). Sem domínio
+  // cadastrado, confere só o IP, como antes.
   app.get("/api/mail/blacklist", async (_request, reply) => {
     try {
-      const response = await service.checkBlacklists();
+      const state = await reputation.check({ manual: false });
+      const response = state.lastCheck ?? (await service.checkBlacklists());
       return reply.send(response);
     } catch (err) {
       return sendError(reply, err);
