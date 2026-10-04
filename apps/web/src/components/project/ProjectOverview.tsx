@@ -14,8 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Rocket } from "lucide-react";
+import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Plug, Rocket } from "lucide-react";
 import { ComposeServicesCard } from "./ComposeServices";
+import { PortsModal } from "./PortsModal";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
 import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
 
@@ -66,6 +67,7 @@ export function ProjectOverview({
   latestJob,
   onOpenJob,
   onChanged,
+  onDeploy,
 }: {
   project: Project;
   status: ProjectStatus;
@@ -76,9 +78,12 @@ export function ProjectOverview({
   onOpenJob: (jobId: string) => void;
   /** Algo do projeto mudou aqui (entrada do compose, nova leitura): recarregar. */
   onChanged?: () => void;
+  /** Deploy pelo caminho de sempre (guardrails) — "Fazer deploy agora" do modal Portas. */
+  onDeploy?: () => void;
 }) {
   const [https, setHttps] = useState<DomainHttpsStatus[] | null>(null);
   const [email, setEmail] = useState<ProjectEmailResponse["email"] | null>(null);
+  const [portsOpen, setPortsOpen] = useState(false);
   const domains = [project.domain, ...(project.aliases ?? [])];
   const domainsKey = domains.join(",");
 
@@ -105,6 +110,7 @@ export function ProjectOverview({
 
   return (
     <div className="flex flex-col gap-4">
+      {portsOpen && <PortsModal projectId={project.id} onClose={() => setPortsOpen(false)} {...(onDeploy ? { onDeploy } : {})} />}
       {/* deploy rodando: o cartão de baixo já conta o que acontece */}
       {status !== "deploying" && (
         <Card data-testid="overview-status">
@@ -219,14 +225,22 @@ export function ProjectOverview({
           </CardContent>
         </Card>
 
-        <Card>
+        <Card data-testid="overview-containers">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5">
-              <Box className="h-3.5 w-3.5" /> Containers
-            </CardDescription>
-            <CardTitle className="text-base">
-              {runningContainers}/{containers.length} rodando
-            </CardTitle>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex flex-col gap-1.5">
+                <CardDescription className="flex items-center gap-1.5">
+                  <Box className="h-3.5 w-3.5" /> Containers
+                </CardDescription>
+                <CardTitle className="text-base">
+                  {runningContainers}/{containers.length} rodando
+                </CardTitle>
+              </div>
+              {/* portas deste projeto e de todo o servidor; trocar a publicada */}
+              <Button variant="secondary" size="sm" onClick={() => setPortsOpen(true)}>
+                <Plug className="h-4 w-4" /> Portas
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-1 text-xs text-muted-foreground">
             {containers.map((c) => (

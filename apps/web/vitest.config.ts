@@ -24,6 +24,7 @@ export default defineConfig({
         "src/components/mail/DnsChecklistPanel.tsx",
         "src/pages/ProjectDetailPage.tsx",
         "src/components/TerminalPanel.tsx",
+        "src/components/project/PortsModal.tsx",
         "src/components/onboarding/**",
         "src/lib/**",
       ],

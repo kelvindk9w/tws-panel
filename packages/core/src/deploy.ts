@@ -142,6 +142,28 @@ export interface Project {
    */
   deployedBranch: string | null;
   deployedSource: string | null;
+  /**
+   * Trocas da porta do SERVIDOR feitas no painel, por serviço do compose
+   * (aba Portas). Nunca mexem na porta interna. Valem no próximo deploy, pelo
+   * paas.override.yml. Ausente = tudo como está no compose.
+   */
+  portOverrides?: Record<string, PortOverride[]>;
+}
+
+/** Endereço de escuta de uma porta publicada que o painel aceita escolher. */
+export type PortBindAddress = "127.0.0.1" | "0.0.0.0";
+
+/**
+ * Troca de uma porta publicada do compose: só o lado do servidor (porta e
+ * endereço de escuta) ou a remoção da publicação.
+ */
+export interface PortOverride {
+  /** A porta como está no compose (chave estável), ex.: "127.0.0.1:8010:8010", "5353:53/udp". */
+  original: string;
+  /** Nova porta do servidor; null = a publicação foi removida. */
+  hostPort: number | null;
+  /** Endereço de escuta; null quando a publicação foi removida. */
+  hostIp: PortBindAddress | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +335,117 @@ export interface DeployJobListResponse {
 
 export interface DockerContainersResponse {
   containers: DockerContainerInfo[];
+}
+
+// ---------------------------------------------------------------------------
+// Portas (modal "Portas" da página do projeto)
+// ---------------------------------------------------------------------------
+
+/** Porta de um container no ar, lida do docker ps. */
+export interface LivePort {
+  /** Endereço de escuta; null = todos (0.0.0.0 / ::). */
+  hostIp: string | null;
+  /** Porta do servidor; null = só exposta (interna, sem publicação). */
+  hostPort: number | null;
+  containerPort: number;
+  protocol: string;
+}
+
+/** Uma porta publicada do compose, com a troca do painel aplicada. */
+export interface ProjectPortEntry {
+  /** Chave estável: como está no compose. */
+  original: string;
+  containerPort: number;
+  protocol: string;
+  /** Lado do servidor como o compose pede, em texto ("127.0.0.1:8010", "${P}", "aleatória"). */
+  composeHost: string;
+  /** Como o painel vai publicar: false = não publica (removida ou 80/443 retiradas). */
+  published: boolean;
+  /** Endereço de escuta configurado; null = todos. */
+  hostIp: string | null;
+  /** Porta do servidor configurada; null = aleatória, faixa ou variável. */
+  hostPort: number | null;
+  /** Troca feita no painel; null = como está no compose. */
+  override: PortOverride | null;
+  /** 80/443: "removed" = o painel retira; "conflict" = proxy HTTPS próprio. */
+  panel: "removed" | "conflict" | null;
+  /** O que está no ar já é isso? null = não dá para saber (parado, Docker fora). */
+  applied: boolean | null;
+  /** O painel pode trocar esta porta. */
+  changeable: boolean;
+}
+
+export interface ProjectPortService {
+  name: string;
+  /** Container do serviço (null = sem container). */
+  container: string | null;
+  state: string | null;
+  health: DockerContainerInfo["health"];
+  /** Portas onde o app escuta dentro do container (informativo). */
+  internalPorts: number[];
+  /** Portas publicadas do compose (vazio fora do compose). */
+  ports: ProjectPortEntry[];
+  /** Portas publicadas no ar que não vêm do compose (ex.: projeto Dockerfile). */
+  livePorts: LivePort[];
+  /** `network_mode: service:X` → "X". */
+  networkModeService: string | null;
+}
+
+export interface ProjectPortsView {
+  projectId: string;
+  projectName: string;
+  type: ProjectType | null;
+  /** O painel troca portas deste projeto (compose com o código disponível). */
+  canChange: boolean;
+  /** Entrada HTTP do painel (serviço:porta). */
+  entry: { service: string | null; port: number | null } | null;
+  services: ProjectPortService[];
+  /** Há troca salva que ainda não está no ar (vale no próximo deploy). */
+  pendingDeploy: boolean;
+}
+
+/** Uma linha da aba "Todos os projetos". */
+export interface PortUsageRow {
+  owner: "project" | "panel" | "external";
+  projectId: string | null;
+  projectName: string | null;
+  container: string | null;
+  service: string | null;
+  image: string | null;
+  state: string | null;
+  hostIp: string | null;
+  hostPort: number | null;
+  containerPort: number | null;
+  protocol: string;
+  /** "live" = no ar agora; "configured" = o projeto vai usar no próximo deploy ou ao iniciar. */
+  source: "live" | "configured";
+  /** Outra coisa quer a mesma porta do servidor. */
+  conflict: boolean;
+  /** Com quem conflita (frase curta), quando conflict. */
+  conflictWith: string | null;
+}
+
+export interface PortsResponse {
+  /** false = o Docker não respondeu; só o que está configurado aparece. */
+  docker: boolean;
+  rows: PortUsageRow[];
+  /** Portas do servidor reservadas ao painel (80, 443, 2019…). */
+  reserved: number[];
+}
+
+export interface ProjectPortsResponse extends PortsResponse {
+  project: ProjectPortsView;
+}
+
+export interface SetPortRequest {
+  service: string;
+  /** Chave da porta (ProjectPortEntry.original). */
+  original: string;
+  /** change = nova porta/endereço; remove = tirar a publicação; reset = como no compose. */
+  action: "change" | "remove" | "reset";
+  /** Nova porta do servidor (1024–65535); ausente = manter a mesma. */
+  hostPort?: number;
+  hostIp?: PortBindAddress;
 }
 
 // ---------------------------------------------------------------------------

@@ -56,6 +56,30 @@ describe("composeOverrideYaml", () => {
     expect(doc.services.web.networks["paas-net"]).toEqual({ aliases: ["loja"] });
   });
 
+  it("aplica as trocas de porta do painel junto com a retirada de 80/443", () => {
+    const out = composeOverrideYaml({
+      compose: APP,
+      proxyService: "web",
+      slug: "loja",
+      network: "paas-net",
+      portOverrides: { web: [{ original: "127.0.0.1:8010:8010", hostPort: 18010, hostIp: "0.0.0.0" }] },
+    });
+    expect(out).toMatch(/ports: !override\n\s+- 0\.0\.0\.0:18010:8010/);
+    expect(out).not.toContain("127.0.0.1:8010:8010");
+  });
+
+  it("publicação removida vira lista vazia com !override", () => {
+    const compose = `services:\n  web:\n    image: a\n  db:\n    image: postgres:16\n    ports: ["5432:5432"]\n`;
+    const out = composeOverrideYaml({
+      compose,
+      proxyService: "web",
+      slug: "loja",
+      network: "paas-net",
+      portOverrides: { db: [{ original: "5432:5432", hostPort: null, hostIp: null }] },
+    });
+    expect(out).toMatch(/db:\n\s+ports: !override \[\]/);
+  });
+
   it("o docker compose aceita o resultado e fica só com a porta local", () => {
     let hasCompose = true;
     try {

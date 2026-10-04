@@ -1,0 +1,120 @@
+{
+  "id": "portas",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/:id/ports",
+  "resumo": "Abre o modal Portas: as portas do projeto (por serviço: estado, portas internas, portas publicadas com a troca do painel aplicada, se já está no ar, e a entrada HTTP) e, na mesma resposta, todas as portas do servidor — uma consulta ao Docker por abertura do modal.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:406",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global; setup token enquanto o setup não foi concluído."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "projeto existe",
+      "corpo": {
+        "docker": "boolean",
+        "rows": "PortUsageRow[] (ver portas-servidor.json)",
+        "reserved": "number[]",
+        "project": {
+          "projectId": "string",
+          "projectName": "string",
+          "type": "ProjectType|null",
+          "canChange": "boolean (compose com o código no servidor)",
+          "entry": "{service: string|null, port: number|null} | null",
+          "pendingDeploy": "boolean (há troca salva que ainda não está no ar)",
+          "services": [
+            {
+              "name": "string",
+              "container": "string|null",
+              "state": "string|null",
+              "health": "healthy|unhealthy|starting|null",
+              "internalPorts": "number[] (expose, EXPOSE, healthcheck, PORT, portas do container no docker ps e as do compose)",
+              "networkModeService": "string|null",
+              "livePorts": "LivePort[] (publicadas no ar)",
+              "ports": [
+                {
+                  "original": "chave: como está no compose",
+                  "containerPort": "number",
+                  "protocol": "string",
+                  "composeHost": "lado do servidor como o compose pede",
+                  "published": "boolean",
+                  "hostIp": "string|null",
+                  "hostPort": "number|null",
+                  "override": "PortOverride|null",
+                  "panel": "removed|conflict|null (80/443)",
+                  "applied": "boolean|null",
+                  "changeable": "boolean"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "id/slug não existe",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. requireProject(id).",
+    "2. portsInput() (uma listagem do Docker).",
+    "3. projectPortsView: compose com código → um item por serviço do compose; sem compose (ou sem o código) → um item por container do projeto, só com as portas no ar.",
+    "4. applied: container rodando e a porta no ar igual à configurada (removida = nenhuma publicação daquela porta interna). Parado ou Docker fora = null."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService.portsInput",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1053",
+      "papel": "UMA listagem do Docker (listContainers; falha = containers null, docker=false) + o compose de cada projeto compose lido do código no servidor (composePortEntries)."
+    },
+    {
+      "tipo": "servico",
+      "nome": "port-map.ts",
+      "arquivo": "apps/server/src/services/port-map.ts",
+      "papel": "Lógica pura: parseDockerPorts (coluna Ports do docker ps), buildPortRows (linhas + conflitos), projectPortsView (aba Este projeto), checkPortChange (validação da troca)."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "composePortEntries / effectiveServicePorts",
+      "arquivo": "packages/deploy/src/port-overrides.ts",
+      "papel": "Portas publicadas do compose com chave estável e a lista final com as trocas aplicadas (a mesma usada no paas.override.yml e nos guardrails)."
+    }
+  ],
+  "efeitosColaterais": [
+    "nenhum (só leitura)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/PortsModal.tsx (botão 'Portas' do cartão Containers da Visão geral, ProjectOverview.tsx)"
+  ],
+  "testes": [
+    "apps/server/tests/routes-ports.test.ts",
+    "apps/server/tests/deploy-ports.test.ts",
+    "apps/web/tests/ports-modal.test.tsx"
+  ],
+  "observacoes": [
+    "Porta interna é informativa: só muda no código do app."
+  ]
+}
