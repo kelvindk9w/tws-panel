@@ -189,6 +189,13 @@
       "url": "/api/projects/:id/ports",
       "resumo": "Troca a porta do SERVIDOR de uma porta publicada do compose (porta e endereço de escuta), remove a publicação ou volta ao que o compose pede. Guarda em Project.portOverrides; vale no próximo deploy, pelo paas.override.yml (ports: !override). Auditoria: project.port_changed.",
       "arquivo": "trocar-porta.json"
+    },
+    {
+      "id": "trocar-portas-lote",
+      "metodo": "PUT",
+      "url": "/api/projects/:id/ports/batch",
+      "resumo": "Grava a lista COMPLETA de trocas e publicações adicionadas do projeto numa chamada só (modal Portas: 'Editar em lote' e 'Publicar uma porta'). As linhas são conferidas juntas; qualquer linha com problema recusa tudo e o erro volta por linha. Porta do compose fora da lista = como o compose pede. Vale no próximo deploy. Auditoria: project.ports_batch.",
+      "arquivo": "trocar-portas-lote.json"
     }
   ],
   "conceitos": [

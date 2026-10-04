@@ -6,7 +6,14 @@
  */
 import { describe, expect, it } from "vitest";
 import type { PortOverride } from "@paas/core";
-import { composePortEntries, effectiveServicePorts, portEntryText } from "../src/port-overrides.js";
+import {
+  addedPortKey,
+  composeNetworkModes,
+  composePortEntries,
+  effectiveServicePorts,
+  networkModeBlock,
+  portEntryText,
+} from "../src/port-overrides.js";
 import { CASSINO_LIKE } from "./fixtures/cassino-like.js";
 
 const APP = `services:
@@ -172,5 +179,82 @@ describe("effectiveServicePorts", () => {
 
   it("compose inválido: nada muda", () => {
     expect(effectiveServicePorts("::", { a: [change("1:1", 2000)] }, { stripProxyPorts: true }).ports).toEqual({});
+  });
+});
+
+/** Publicação adicionada no painel (a porta não está no compose). */
+const added = (
+  containerPort: number,
+  hostPort: number,
+  hostIp: "127.0.0.1" | "0.0.0.0" = "127.0.0.1",
+  protocol: "tcp" | "udp" = "tcp",
+): PortOverride => ({
+  original: addedPortKey(hostIp, hostPort, containerPort, protocol),
+  hostPort,
+  hostIp,
+  added: { containerPort, protocol },
+});
+
+describe("publicações adicionadas no painel", () => {
+  it("a chave da adicionada começa com + e tem a forma curta", () => {
+    expect(addedPortKey("127.0.0.1", 15432, 5432, "tcp")).toBe("+127.0.0.1:15432:5432");
+    expect(addedPortKey("0.0.0.0", 5353, 53, "udp")).toBe("+0.0.0.0:5353:53/udp");
+  });
+
+  it("serviço sem ports no compose: a lista passa a ter só a adicionada", () => {
+    const r = effectiveServicePorts(APP, { worker: [added(9000, 19000)] }, { stripProxyPorts: true });
+    expect(r.ports.worker).toEqual(["127.0.0.1:19000:9000"]);
+    expect(r.changes).toContainEqual({ service: "worker", from: null, to: "127.0.0.1:19000:9000" });
+    expect(r.stale).toEqual([]);
+  });
+
+  it("serviço com ports: a adicionada entra no fim, junto com a troca e a retirada de 80/443", () => {
+    const r = effectiveServicePorts(
+      APP,
+      { web: [change("127.0.0.1:8010:8010", 18010), added(9090, 19090, "0.0.0.0"), added(53, 15353, "127.0.0.1", "udp")] },
+      { stripProxyPorts: true },
+    );
+    expect(r.ports.web).toEqual(["127.0.0.1:18010:8010", "5353:53/udp", "0.0.0.0:19090:9090", "127.0.0.1:15353:53/udp"]);
+  });
+
+  it("banco com a publicação adicionada (túnel SSH): entra também na lista dos guardrails", () => {
+    const r = effectiveServicePorts(APP, { db: [change("5432:5432", null), added(5432, 15432)] }, { stripProxyPorts: false });
+    expect(r.ports.db).toEqual(["127.0.0.1:15432:5432"]);
+  });
+
+  it("serviço na rede de outro (network_mode): a adicionada não vale e é avisada", () => {
+    const r = effectiveServicePorts(CASSINO_LIKE, { web: [added(3200, 13200)] }, { stripProxyPorts: true });
+    expect(r.ports.web).toBeUndefined();
+    expect(r.stale).toEqual([{ service: "web", original: "+127.0.0.1:13200:3200" }]);
+  });
+
+  it("adicionada num serviço que sumiu do compose: avisada", () => {
+    const r = effectiveServicePorts(APP, { sumiu: [added(1, 2000)] }, { stripProxyPorts: true });
+    expect(r.stale).toEqual([{ service: "sumiu", original: "+127.0.0.1:2000:1" }]);
+  });
+});
+
+describe("composeNetworkModes / networkModeBlock", () => {
+  it("lê o network_mode de cada serviço (null = rede própria)", () => {
+    expect(composeNetworkModes(CASSINO_LIKE)).toEqual({
+      db: null,
+      redis: null,
+      wallet: null,
+      web: "service:wallet",
+      caddy: "service:wallet",
+    });
+    expect(composeNetworkModes("services:\n  a: null\n  b:\n    network_mode: 3\n")).toEqual({ a: null, b: null });
+    expect(composeNetworkModes("::")).toEqual({});
+  });
+
+  it("explica para leigo por que não dá para publicar porta própria", () => {
+    expect(networkModeBlock(null)).toBeNull();
+    expect(networkModeBlock("bridge")).toBeNull();
+    expect(networkModeBlock("default")).toBeNull();
+    expect(networkModeBlock("service:wallet")).toBe("Usa a rede do wallet — publique a porta no wallet.");
+    expect(networkModeBlock("container:abc")).toBe("Usa a rede do container abc — publique a porta nele.");
+    expect(networkModeBlock("host")).toMatch(/rede do próprio servidor/);
+    expect(networkModeBlock("none")).toMatch(/sem rede/);
+    expect(networkModeBlock("minha-rede")).toBeNull();
   });
 });

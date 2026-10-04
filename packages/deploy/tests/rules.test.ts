@@ -61,12 +61,43 @@ describe("db-port-exposed com as trocas de porta do painel (modal Portas)", () =
     expect(report.findings.filter((f) => f.rule === "db-port-exposed")).toHaveLength(0);
   });
 
-  it("porta do banco só trocada continua bloqueando, com a porta nova na evidência", async () => {
+  it("porta do banco trocada para todos os endereços continua bloqueando, com a porta nova na evidência", async () => {
     await writeCompose('  db:\n    image: postgres:16\n    ports: ["5432:5432"]');
-    const report = await runGuardrails(dir, null, { db: [{ original: "5432:5432", hostPort: 15432, hostIp: "127.0.0.1" }] });
+    const report = await runGuardrails(dir, null, { db: [{ original: "5432:5432", hostPort: 15432, hostIp: "0.0.0.0" }] });
     const hit = report.findings.find((f) => f.rule === "db-port-exposed");
-    expect(hit?.evidence).toContain("127.0.0.1:15432:5432");
+    expect(hit?.level).toBe("block");
+    expect(hit?.evidence).toContain("0.0.0.0:15432:5432");
     expect(hit?.fix).toContain("Remover publicação");
+  });
+
+  it("banco publicado no painel só no servidor (127.0.0.1, túnel SSH): avisa, não bloqueia", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n  cache:\n    image: redis:8\n    ports: ["6379:6379"]');
+    const report = await runGuardrails(dir, null, {
+      db: [{ original: "+127.0.0.1:15432:5432", hostPort: 15432, hostIp: "127.0.0.1", added: { containerPort: 5432, protocol: "tcp" } }],
+      cache: [{ original: "6379:6379", hostPort: 16379, hostIp: "127.0.0.1" }],
+    });
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits.map((h) => [h.service, h.level])).toEqual([
+      ["db", "warn"],
+      ["cache", "warn"],
+    ]);
+    expect(hits[0]!.title).toMatch(/só no servidor/);
+    expect(hits[0]!.evidence).toContain("127.0.0.1:15432:5432");
+    expect(report.blockers).toBe(0);
+  });
+
+  it("banco publicado pelo painel em todos os endereços: bloqueia", async () => {
+    await writeCompose("  db:\n    image: postgres:16");
+    const report = await runGuardrails(dir, null, {
+      db: [{ original: "+0.0.0.0:15432:5432", hostPort: 15432, hostIp: "0.0.0.0", added: { containerPort: 5432, protocol: "tcp" } }],
+    });
+    expect(report.findings.find((f) => f.rule === "db-port-exposed")?.level).toBe("block");
+  });
+
+  it("127.0.0.1 escrito no próprio compose continua bloqueando (a política do compose não muda)", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["127.0.0.1:5432:5432"]');
+    const report = await runGuardrails(dir, null, { db: [] });
+    expect(report.findings.find((f) => f.rule === "db-port-exposed")?.level).toBe("block");
   });
 });
 

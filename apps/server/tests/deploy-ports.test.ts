@@ -139,6 +139,52 @@ describe("DeployService — portas", () => {
     expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ action: "project.port_changed" }));
   });
 
+  it("setPorts grava o lote numa chamada, audita o resumo e os guardrails só avisam do banco local", async () => {
+    const p = await lojaComCodigo();
+    const r = await svc.setPorts(p.id, {
+      ports: [
+        { service: "db", original: "5432:5432", hostPort: null },
+        { service: "db", containerPort: 5432, hostPort: 15432, hostIp: "127.0.0.1" },
+      ],
+    });
+    expect(docker.list).toHaveBeenCalledTimes(1);
+    expect(r.project.services[1]!.ports.map((e) => [e.original, e.published, e.added])).toEqual([
+      ["5432:5432", false, false],
+      ["+127.0.0.1:15432:5432", true, true],
+    ]);
+    expect(audit).toHaveBeenCalledWith({
+      action: "project.ports_batch",
+      target: "loja",
+      detail: 'Projeto "Loja", portas em lote — db: 5432:5432 → 127.0.0.1:15432:5432.',
+    });
+    const g = await svc.guardrailsForProject(p.id);
+    expect(g.report!.findings.filter((f) => f.rule === "db-port-exposed").map((f) => f.level)).toEqual(["warn"]);
+
+    await svc.setPorts(p.id, { ports: [] });
+    expect((await svc.getProject(p.id))!.portOverrides).toBeUndefined();
+  });
+
+  it("setPorts com erro numa linha não grava nada", async () => {
+    const p = await lojaComCodigo();
+    await expect(
+      svc.setPorts(p.id, { ports: [{ service: "db", containerPort: 5432, hostPort: 8010 }] }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "invalid_ports", details: { errors: [{ index: 0 }] } });
+    expect((await svc.getProject(p.id))!.portOverrides).toBeUndefined();
+  });
+
+  it("serviço na rede de outro (lido do compose): não publica porta própria", async () => {
+    const p = await lojaComCodigo();
+    await writeFile(
+      path.join(dataDir, "projects", "loja", "src", "compose.yaml"),
+      COMPOSE + "  web:\n    image: web:1\n    network_mode: service:api\n",
+    );
+    const view = await svc.projectPorts(p.id);
+    expect(view.project.services.find((s) => s.name === "web")!.publishBlocked).toBe("Usa a rede do api — publique a porta no api.");
+    await expect(svc.setPorts(p.id, { ports: [{ service: "web", containerPort: 3000, hostPort: 13000 }] })).rejects.toMatchObject({
+      code: "invalid_ports",
+    });
+  });
+
   it("projeto inexistente: 404", async () => {
     await expect(svc.projectPorts("nada")).rejects.toMatchObject({ statusCode: 404 });
   });

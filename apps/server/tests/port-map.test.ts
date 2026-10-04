@@ -9,6 +9,7 @@ import { composePortEntries } from "@paas/deploy";
 import {
   buildPortRows,
   checkPortChange,
+  checkPortsBatch,
   parseDockerPorts,
   projectPortsView,
   type PortsInput,
@@ -357,5 +358,205 @@ describe("checkPortChange (Trocar / Remover publicação)", () => {
     expect(() => checkPortChange(loja(), semCodigo, { service: "api", original: "x", action: "remove" })).toThrow(
       /código do projeto/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Publicar porta por container e edição em lote (pedido de 04/10/2026)
+// ---------------------------------------------------------------------------
+
+const addedDb = {
+  original: "+127.0.0.1:15432:5432",
+  hostPort: 15432,
+  hostIp: "127.0.0.1" as const,
+  added: { containerPort: 5432, protocol: "tcp" as const },
+};
+
+describe("projectPortsView — publicações adicionadas e rede de outro serviço", () => {
+  it("a adicionada aparece no serviço, marcada, e as do compose trazem o que o compose pede", () => {
+    const i = input();
+    i.projects[0]!.portOverrides = { worker: [{ ...addedDb, original: "+127.0.0.1:19000:9000", hostPort: 19000, added: { containerPort: 9000, protocol: "tcp" } }] };
+    const view = projectPortsView(i.projects[0]!, i);
+    const worker = view.services.find((s) => s.name === "worker")!;
+    expect(worker.ports).toEqual([
+      expect.objectContaining({
+        original: "+127.0.0.1:19000:9000",
+        added: true,
+        published: true,
+        hostIp: "127.0.0.1",
+        hostPort: 19000,
+        containerPort: 9000,
+        composeHostPort: null,
+        changeable: true,
+        applied: false,
+      }),
+    ]);
+    expect(worker.internalPorts).toContain(9000);
+    expect(view.pendingDeploy).toBe(true);
+    const api = view.services[0]!;
+    expect(api.ports[0]).toMatchObject({ added: false, composeHostPort: 8010, composeHostIp: "127.0.0.1" });
+    expect(api.publishBlocked).toBeNull();
+  });
+
+  it("adicionada já no ar: aplicada", () => {
+    const i = input({ containers: [lojaC("db", ["127.0.0.1:15432->5432/tcp"])] });
+    i.projects[0]!.portOverrides = { db: [{ original: "5432:5432", hostPort: null, hostIp: null }, addedDb] };
+    const db = projectPortsView(i.projects[0]!, i).services.find((s) => s.name === "db")!;
+    expect(db.ports.map((p) => [p.original, p.applied])).toEqual([
+      ["5432:5432", true],
+      ["+127.0.0.1:15432:5432", true],
+    ]);
+  });
+
+  it("serviço na rede de outro: diz por que não publica (do compose ou, sem ele, da detecção)", () => {
+    const i = input({ networkModes: new Map([["p1", { api: null, db: null, worker: "service:api", edge: null }]]) });
+    const view = projectPortsView(i.projects[0]!, i);
+    expect(view.services.find((s) => s.name === "worker")!.publishBlocked).toBe("Usa a rede do api — publique a porta no api.");
+
+    const j = input();
+    j.projects[0]!.detection!.services![0]!.networkModeService = "edge";
+    expect(projectPortsView(j.projects[0]!, j).services[0]!.publishBlocked).toBe("Usa a rede do edge — publique a porta no edge.");
+  });
+
+  it("a aba Todos mostra a adicionada como configurada, com conflito", () => {
+    const i = input();
+    i.projects[1]!.portOverrides = { web: [{ ...addedDb, original: "+0.0.0.0:8010:80", hostPort: 8010, hostIp: "0.0.0.0", added: { containerPort: 80, protocol: "tcp" } }] };
+    const row = buildPortRows(i).find((r) => r.projectId === "p2" && r.hostPort === 8010)!;
+    expect(row).toMatchObject({ source: "configured", service: "web", containerPort: 80, conflict: true, conflictWith: "Loja · api" });
+  });
+});
+
+describe("checkPortsBatch (Editar em lote / Publicar uma porta)", () => {
+  it("grava trocas, remoção e adicionadas de vários serviços numa chamada, com o resumo de/para", () => {
+    const i = input();
+    const r = checkPortsBatch(i.projects[0]!, i, {
+      ports: [
+        { service: "api", original: "127.0.0.1:8010:8010", hostPort: 18010, hostIp: "0.0.0.0" },
+        { service: "db", original: "5432:5432", hostPort: null },
+        { service: "db", containerPort: 5432, hostPort: 15432, hostIp: "127.0.0.1" },
+        { service: "worker", containerPort: 9000, protocol: "udp", hostPort: 19000 },
+      ],
+    });
+    expect(r.portOverrides).toEqual({
+      api: [{ original: "127.0.0.1:8010:8010", hostPort: 18010, hostIp: "0.0.0.0" }],
+      db: [{ original: "5432:5432", hostPort: null, hostIp: null }, addedDb],
+      worker: [{ original: "+127.0.0.1:19000:9000/udp", hostPort: 19000, hostIp: "127.0.0.1", added: { containerPort: 9000, protocol: "udp" } }],
+    });
+    expect(r.detail).toBe(
+      'Projeto "Loja", portas em lote — api: 127.0.0.1:8010:8010 → 0.0.0.0:18010:8010; ' +
+        "db: 5432:5432 → 127.0.0.1:15432:5432; worker: nenhuma → 127.0.0.1:19000:9000/udp.",
+    );
+  });
+
+  it("lista vazia volta tudo ao compose; igual ao compose não vira troca", () => {
+    const i = input();
+    i.projects[0]!.portOverrides = { api: [{ original: "127.0.0.1:8010:8010", hostPort: 18010, hostIp: "127.0.0.1" }], db: [addedDb] };
+    const back = checkPortsBatch(i.projects[0]!, i, { ports: [] });
+    expect(back.portOverrides).toBeUndefined();
+    expect(back.detail).toBe(
+      'Projeto "Loja", portas em lote — api: 127.0.0.1:18010:8010 → 127.0.0.1:8010:8010; db: 5432:5432, 127.0.0.1:15432:5432 → 5432:5432.',
+    );
+    const same = checkPortsBatch(i.projects[0]!, i, { ports: [{ service: "api", original: "127.0.0.1:8010:8010", hostPort: 8010, hostIp: "127.0.0.1" }] });
+    expect(same.portOverrides).toBeUndefined();
+  });
+
+  it("sem mudança nenhuma: o resumo diz isso", () => {
+    const i = input();
+    expect(checkPortsBatch(i.projects[0]!, i, { ports: [] }).detail).toBe('Projeto "Loja", portas em lote — nenhuma mudança.');
+  });
+
+  it("a porta no ar do próprio projeto não conta: dá para passar a 5432 do db para outro serviço", () => {
+    const i = input();
+    const r = checkPortsBatch(i.projects[0]!, i, {
+      ports: [
+        { service: "db", original: "5432:5432", hostPort: null },
+        { service: "worker", containerPort: 5432, hostPort: 5432, hostIp: "0.0.0.0" },
+      ],
+    });
+    expect(r.portOverrides?.worker?.[0]).toMatchObject({ hostPort: 5432, hostIp: "0.0.0.0" });
+  });
+
+  it("mostra o erro em cada linha: conflito entre si, com o compose, com outros e com o painel", () => {
+    const i = input();
+    let err: unknown;
+    try {
+      checkPortsBatch(i.projects[0]!, i, {
+        ports: [
+          { service: "worker", containerPort: 9000, hostPort: 19000 },
+          { service: "edge", containerPort: 9001, hostPort: 19000, hostIp: "0.0.0.0" },
+          { service: "worker", containerPort: 5432, hostPort: 5432 },
+          { service: "worker", containerPort: 8020, hostPort: 8020 },
+          { service: "worker", containerPort: 9000, hostPort: 9000 },
+          { service: "worker", containerPort: 2019, hostPort: 2019 },
+          { service: "worker", containerPort: 1, hostPort: 20001, protocol: "udp" },
+        ],
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toMatchObject({ statusCode: 400, code: "invalid_ports" });
+    const errors = (err as { details: { errors: Array<{ index: number; message: string }> } }).details.errors;
+    expect(errors.map((e) => e.index)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(errors[0]!.message).toBe("A porta 19000 do servidor também está na linha de edge (→ 9001).");
+    expect(errors[1]!.message).toBe("A porta 19000 do servidor também está na linha de worker (→ 9000).");
+    expect(errors[2]!.message).toBe("A porta 5432 do servidor também está na linha de db (→ 5432).");
+    expect(errors[3]!.message).toMatch(/A porta 8020 do servidor já é usada por (Blog · web|container outro-app)/);
+    expect(errors[4]!.message).toBe("A porta 9000 do servidor é reservada ao painel. Escolha outra.");
+    expect((err as Error).message).toBe("6 portas com problema. A primeira: A porta 19000 do servidor também está na linha de edge (→ 9001).");
+  });
+
+  it("endereços diferentes só conflitam quando um deles é todos os endereços", () => {
+    const i = input();
+    const r = checkPortsBatch(i.projects[0]!, i, {
+      ports: [
+        { service: "worker", containerPort: 9000, hostPort: 19000, hostIp: "127.0.0.1" },
+        { service: "worker", containerPort: 9000, hostPort: 19000, protocol: "udp" },
+      ],
+    });
+    expect(r.portOverrides?.worker).toHaveLength(2);
+  });
+
+  it("recusa linhas inválidas, cada uma com a explicação", () => {
+    const i = input({ networkModes: new Map([["p1", { api: null, db: null, worker: "service:api", edge: null }]]) });
+    const p = i.projects[0]!;
+    const rowError = (row: Record<string, unknown>) => {
+      try {
+        checkPortsBatch(p, i, { ports: [row as never] });
+      } catch (e) {
+        return (e as { details: { errors: Array<{ message: string }> } }).details.errors[0]!.message;
+      }
+      return null;
+    };
+    expect(rowError({ service: "nada", containerPort: 1, hostPort: 2000 })).toMatch(/não existe no compose/);
+    expect(rowError({ service: "api", original: "1:1", hostPort: 2000 })).toMatch(/não está no compose/);
+    expect(rowError({ service: "api", original: "80:80", hostPort: 2000 })).toMatch(/80 e 443/);
+    expect(rowError({ service: "worker", containerPort: 9000, hostPort: 19000 })).toBe("Usa a rede do api — publique a porta no api.");
+    expect(rowError({ service: "db", hostPort: 2000 })).toMatch(/porta interna/);
+    expect(rowError({ service: "db", containerPort: 70000, hostPort: 2000 })).toMatch(/porta interna/);
+    expect(rowError({ service: "db", containerPort: 5432, hostPort: null })).toMatch(/Informe a porta do servidor/);
+    expect(rowError({ service: "db", original: "5432:5432", hostPort: 443 })).toMatch(/80 e 443/);
+    expect(rowError({ service: "db", original: "5432:5432", hostPort: 500 })).toMatch(/1024 a 65535/);
+    expect(rowError({ service: "edge", original: "${EDGE_PORT}:7000", hostIp: "127.0.0.1" })).toMatch(/Informe a porta do servidor/);
+    const dup = (() => {
+      try {
+        checkPortsBatch(p, i, {
+          ports: [
+            { service: "db", original: "5432:5432", hostPort: null },
+            { service: "db", original: "5432:5432", hostPort: 15432 },
+          ],
+        });
+      } catch (e) {
+        return (e as { details: { errors: Array<{ index: number; message: string }> } }).details.errors;
+      }
+      return [];
+    })();
+    expect(dup).toEqual([{ index: 1, message: "Esta porta do compose aparece duas vezes na lista." }]);
+  });
+
+  it("só projeto compose com o código no servidor", () => {
+    const i = input();
+    const site = project("p3", "Site", { detection: { ...i.projects[0]!.detection!, type: "dockerfile" } });
+    expect(() => checkPortsBatch(site, i, { ports: [] })).toThrow(/compose/);
+    expect(() => checkPortsBatch(i.projects[0]!, input({ composePorts: new Map() }), { ports: [] })).toThrow(/código do projeto/);
   });
 });

@@ -259,24 +259,37 @@ function analyzeComposeRules(
   const services = doc.services ?? {};
   // As trocas de porta do painel (modal Portas) valem também aqui: banco com a
   // publicação removida no painel não fica mais exposto no deploy.
-  const changed = portOverrides ? effectiveServicePorts(content, portOverrides, { stripProxyPorts: false }).ports : {};
+  const effective = portOverrides ? effectiveServicePorts(content, portOverrides, { stripProxyPorts: false }) : null;
+  const changed = effective?.ports ?? {};
+  // Publicações que o próprio painel fez (troca ou adicionada), como texto.
+  const panelMade = new Set((effective?.changes ?? []).filter((c) => c.to !== null).map((c) => `${c.service}\n${c.to}`));
 
   for (const [name, service] of Object.entries(services)) {
     const ports = changed[name] ?? service.ports;
     // db-port-exposed (block)
     // Decide pela porta do CONTAINER: porta do host aleatória ou vinda de
     // variável também expõe o banco (o Docker publica por cima do UFW).
-    // Política atual: o endereço (port.hostIp) não é considerado — publicar
-    // só em 127.0.0.1 também bloqueia.
-    for (const port of publishedPorts(ports)) {
-      const db = DATABASE_PORTS.get(port.container);
-      if (db) {
+    // Política do compose: o endereço (port.hostIp) não é considerado —
+    // publicar só em 127.0.0.1 no compose também bloqueia.
+    // Exceção (pedido de 04/10/2026, acessar o banco por túnel SSH): a
+    // publicação feita NO PAINEL só em 127.0.0.1 é uma escolha explícita do
+    // dono — vira aviso. Em 0.0.0.0 continua bloqueando.
+    const entries = Array.isArray(ports) ? (ports as unknown[]) : [];
+    for (const entry of entries) {
+      const local = typeof entry === "string" && panelMade.has(`${name}\n${entry}`) && entry.startsWith("127.0.0.1:");
+      for (const port of publishedPorts([entry])) {
+        const db = DATABASE_PORTS.get(port.container);
+        if (!db) continue;
         findings.push({
           rule: "db-port-exposed",
-          level: "block",
-          title: `Porta de banco de dados publicada no host (${db})`,
+          level: local ? "warn" : "block",
+          title: local
+            ? `Porta de banco de dados publicada só no servidor (${db}, 127.0.0.1)`
+            : `Porta de banco de dados publicada no host (${db})`,
           evidence: `${fileName}: serviço "${name}" publica ${formatPortMapping(port)}`,
-          fix: "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
+          fix: local
+            ? "Publicada pelo painel só em 127.0.0.1: só programas da própria VPS e quem entra por túnel SSH chegam no banco. Quando não precisar mais, Visão geral do projeto → Portas → Remover publicação."
+            : "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
         });
       }

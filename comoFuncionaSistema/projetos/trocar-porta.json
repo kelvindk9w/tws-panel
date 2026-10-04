@@ -124,7 +124,7 @@
     "3. A porta no ar do próprio serviço (mesma porta interna) não conta como conflito.",
     "4. Grava projects.json, registra auditoria ('Projeto \"X\", serviço s: de → para.') e responde com o mapa novo.",
     "5. No deploy: compose-override.ts aplica a lista final (compose sem 80/443 de app comum, com as trocas) em ports: !override; o log mostra cada troca e avisa troca que não vale mais (porta sumiu do compose).",
-    "6. Guardrails (runGuardrails) usam a mesma lista: banco com publicação removida no painel não bloqueia mais o deploy."
+    "6. Guardrails (runGuardrails) usam a mesma lista: banco com publicação removida no painel não bloqueia mais o deploy; banco publicado pelo painel só em 127.0.0.1 vira aviso."
   ],
   "dependencias": [
     {
@@ -177,6 +177,8 @@
   "observacoes": [
     "Nunca muda a porta interna.",
     "Endereço 0.0.0.0: o modal avisa que a porta fica aberta para a internet e que, na maioria das VPS, o Docker publica por fora do UFW.",
-    "Processos fora do Docker não entram na checagem de porta livre: o docker compose up falharia com 'port is already allocated' e o diagnóstico do deploy mostra."
+    "Processos fora do Docker não entram na checagem de porta livre: o docker compose up falharia com 'port is already allocated' e o diagnóstico do deploy mostra.",
+    "Só vale para as portas que já estão no compose. Publicar porta nova num serviço (ou mexer em várias de uma vez) usa PUT /api/projects/:id/ports/batch (trocar-portas-lote.json); uma troca feita aqui não apaga as publicações adicionadas.",
+    "Guardrails (desde 04/10/2026): banco publicado pelo painel só em 127.0.0.1 (troca ou adicionada) vira aviso, não bloqueio; em 0.0.0.0 continua bloqueando. 127.0.0.1 escrito no próprio compose continua bloqueando."
   ]
 }

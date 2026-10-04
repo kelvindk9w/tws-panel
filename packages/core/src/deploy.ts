@@ -164,7 +164,16 @@ export interface PortOverride {
   hostPort: number | null;
   /** Endereço de escuta; null quando a publicação foi removida. */
   hostIp: PortBindAddress | null;
+  /**
+   * Publicação ADICIONADA no painel (a porta não está no compose): a porta
+   * interna e o protocolo. Nesse caso `original` é só um identificador
+   * ("+127.0.0.1:15432:5432") e hostPort/hostIp nunca são null.
+   */
+  added?: { containerPort: number; protocol: PortProtocol };
 }
+
+/** Protocolo de uma porta publicada pelo painel. */
+export type PortProtocol = "tcp" | "udp";
 
 // ---------------------------------------------------------------------------
 // Credencial de LEITURA de repositório privado
@@ -373,6 +382,11 @@ export interface ProjectPortEntry {
   applied: boolean | null;
   /** O painel pode trocar esta porta. */
   changeable: boolean;
+  /** Publicação adicionada no painel (não está no compose). */
+  added?: boolean;
+  /** Lado do servidor como o compose pede (null = não é número fixo; nas adicionadas, null). */
+  composeHostPort?: number | null;
+  composeHostIp?: string | null;
 }
 
 export interface ProjectPortService {
@@ -389,6 +403,8 @@ export interface ProjectPortService {
   livePorts: LivePort[];
   /** `network_mode: service:X` → "X". */
   networkModeService: string | null;
+  /** Por que o painel não pode publicar porta própria neste serviço (null = pode). */
+  publishBlocked?: string | null;
 }
 
 export interface ProjectPortsView {
@@ -446,6 +462,36 @@ export interface SetPortRequest {
   /** Nova porta do servidor (1024–65535); ausente = manter a mesma. */
   hostPort?: number;
   hostIp?: PortBindAddress;
+}
+
+/**
+ * Uma publicação na edição em lote. Com `original`, é uma porta do compose
+ * (troca, ou remoção com hostPort null); sem, é uma publicação adicionada no
+ * painel (containerPort obrigatório).
+ */
+export interface PortPublicationInput {
+  service: string;
+  original?: string;
+  containerPort?: number;
+  protocol?: PortProtocol;
+  /** Porta do servidor (1024–65535); null = remover a publicação do compose. */
+  hostPort: number | null;
+  /** Endereço de escuta; padrão 127.0.0.1. */
+  hostIp?: PortBindAddress;
+}
+
+/**
+ * Edição em lote: a lista COMPLETA de trocas e publicações adicionadas do
+ * projeto. Substitui a atual; porta do compose fora da lista = como no compose.
+ */
+export interface SetPortsRequest {
+  ports: PortPublicationInput[];
+}
+
+/** Erro de uma linha da edição em lote (índice na lista enviada). */
+export interface PortRowError {
+  index: number;
+  message: string;
 }
 
 // ---------------------------------------------------------------------------
