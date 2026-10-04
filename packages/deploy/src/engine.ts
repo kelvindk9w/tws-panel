@@ -472,10 +472,14 @@ export class DeployEngine {
     // Trocas da porta do servidor feitas no painel (modal Portas).
     const portChanges = effectiveServicePorts(composeContent, project.portOverrides, { stripProxyPorts: true });
     for (const c of portChanges.changes) {
-      onLog(`Porta do servidor (${c.service}): ${c.from} → ${c.to ?? "publicação removida"} — troca feita no painel.\n`);
+      onLog(
+        c.from === null
+          ? `Porta do servidor (${c.service}): ${c.to} — publicação adicionada no painel.\n`
+          : `Porta do servidor (${c.service}): ${c.from} → ${c.to ?? "publicação removida"} — troca feita no painel.\n`,
+      );
     }
     for (const s of portChanges.stale) {
-      onLog(`Aviso: a troca da porta ${s.original} do serviço ${s.service} não vale mais — essa porta não está no compose (ou é 80/443).\n`);
+      onLog(`Aviso: a troca da porta ${s.original} do serviço ${s.service} não vale mais — essa porta não está no compose (ou é 80/443, ou o serviço usa a rede de outro).\n`);
     }
     if (envServices.length > 0) {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);

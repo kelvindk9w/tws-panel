@@ -4,7 +4,15 @@
  */
 export { detectProject } from "./detect.js";
 export { describeComposeServices } from "./compose-services.js";
-export { composePortEntries, effectiveServicePorts, portEntryText, type ComposePortEntry } from "./port-overrides.js";
+export {
+  addedPortKey,
+  composeNetworkModes,
+  composePortEntries,
+  effectiveServicePorts,
+  networkModeBlock,
+  portEntryText,
+  type ComposePortEntry,
+} from "./port-overrides.js";
 export { analyzeCompose, guessProxyTarget } from "./guardrails.js";
 export { runGuardrails, GUARDRAIL_RULES, type GuardrailRuleInfo } from "./rules.js";
 export { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";

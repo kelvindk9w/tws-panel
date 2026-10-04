@@ -80,6 +80,41 @@ describe("composeOverrideYaml", () => {
     expect(out).toMatch(/db:\n\s+ports: !override \[\]/);
   });
 
+  it("publicação adicionada no painel: entra na lista !override do serviço, mesmo sem ports no compose", () => {
+    const compose = `services:\n  web:\n    image: a\n  db:\n    image: postgres:16\n`;
+    const doc = parse(
+      composeOverrideYaml({
+        compose,
+        proxyService: "web",
+        slug: "loja",
+        network: "paas-net",
+        portOverrides: {
+          db: [{ original: "+127.0.0.1:15432:5432", hostPort: 15432, hostIp: "127.0.0.1", added: { containerPort: 5432, protocol: "tcp" } }],
+        },
+      }),
+    );
+    expect(doc.services.db.ports).toEqual(["127.0.0.1:15432:5432"]);
+  });
+
+  it("lote: trocas, remoção e adicionadas de vários serviços no mesmo arquivo", () => {
+    const out = composeOverrideYaml({
+      compose: APP,
+      proxyService: "web",
+      slug: "loja",
+      network: "paas-net",
+      portOverrides: {
+        web: [
+          { original: "127.0.0.1:8010:8010", hostPort: null, hostIp: null },
+          { original: "+0.0.0.0:18080:8080", hostPort: 18080, hostIp: "0.0.0.0", added: { containerPort: 8080, protocol: "tcp" } },
+        ],
+        worker: [{ original: "+127.0.0.1:19000:9000", hostPort: 19000, hostIp: "127.0.0.1", added: { containerPort: 9000, protocol: "tcp" } }],
+      },
+    });
+    expect(out).toMatch(/web:[\s\S]*ports: !override\n\s+- 0\.0\.0\.0:18080:8080\n/);
+    expect(out).toMatch(/worker:\n\s+ports: !override\n\s+- 127\.0\.0\.1:19000:9000/);
+    expect(out).not.toContain("8010:8010");
+  });
+
   it("o docker compose aceita o resultado e fica só com a porta local", () => {
     let hasCompose = true;
     try {
