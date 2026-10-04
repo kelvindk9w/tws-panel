@@ -37,6 +37,7 @@ export default defineConfig({
         "src/services/login-limiter.ts",
         "src/services/onboarding.ts",
         "src/services/password.ts",
+        "src/services/port-map.ts",
         "src/services/session-store.ts",
         "src/services/setup-state.ts",
         "src/services/setup-token.ts",

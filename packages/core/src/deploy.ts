@@ -398,7 +398,7 @@ export interface ProjectPortsView {
   /** O painel troca portas deste projeto (compose com o código disponível). */
   canChange: boolean;
   /** Entrada HTTP do painel (serviço:porta). */
-  entry: { service: string; port: number | null } | null;
+  entry: { service: string | null; port: number | null } | null;
   services: ProjectPortService[];
   /** Há troca salva que ainda não está no ar (vale no próximo deploy). */
   pendingDeploy: boolean;

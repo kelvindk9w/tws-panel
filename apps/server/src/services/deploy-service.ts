@@ -27,6 +27,9 @@ import {
   type ProjectCredentialInfo,
   type ProjectEmailValueKey,
   type ProjectStatus,
+  type PortsResponse,
+  type ProjectPortsResponse,
+  type SetPortRequest,
   type SetProjectCredentialRequest,
   type UpdateProjectRequest,
   missingComposeVariables,
@@ -39,8 +42,10 @@ import {
   projectWorkDir,
   runGuardrails,
   composeVariables,
+  composePortEntries,
   readEnvExamples,
   type CertificateStatus,
+  type ComposePortEntry,
   type ComposeVariable,
   type EngineContext,
   type ManualCaddyCertificate,
@@ -54,6 +59,7 @@ import type { AlertsService } from "./alerts-service.js";
 import type { AuditService } from "./audit-service.js";
 import { CredentialVault } from "./credential-vault.js";
 import { listContainers } from "./docker-service.js";
+import { buildPortRows, checkPortChange, projectPortsView, type PortsInput } from "./port-map.js";
 
 const MAX_JOBS = 100;
 
@@ -142,6 +148,8 @@ export class DeployService {
   private readonly jobsFile: string;
   private readonly caddyHttpPort: number;
   private readonly caddyHttpsPort: number;
+  /** Portas do servidor que são do painel (Caddy, admin do Caddy, painel, e-mail). */
+  private readonly reservedPorts: number[];
   private readonly hooks: DeployHooks;
   /**
    * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
@@ -183,6 +191,17 @@ export class DeployService {
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
     this.caddyHttpPort = config.caddyHttpPort;
     this.caddyHttpsPort = config.caddyHttpsPort;
+    this.reservedPorts = [
+      ...new Set([
+        80,
+        443,
+        2019,
+        config.caddyHttpPort,
+        config.caddyHttpsPort,
+        config.port,
+        ...(config.mailPorts ? Object.values(config.mailPorts) : []),
+      ]),
+    ].sort((a, b) => a - b);
     this.credentials = new CredentialVault(config.dataDir);
     this.github = new GithubIntegration(this.credentials);
     this.env = new ProjectEnvStore(config.dataDir);
@@ -743,7 +762,7 @@ export class DeployService {
         note: "Código ainda não ingerido (modo git). Os guardrails rodarão automaticamente no deploy, após o clone.",
       };
     }
-    return { report: await runGuardrails(dir, project.detection?.composeFile), note: null };
+    return { report: await runGuardrails(dir, project.detection?.composeFile, project.portOverrides), note: null };
   }
 
   async detect(id: string): Promise<DetectResult> {
@@ -820,7 +839,7 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir, project.detection?.composeFile);
+      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides);
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",
@@ -1012,6 +1031,69 @@ export class DeployService {
 
   async listContainers(): Promise<DockerContainerInfo[]> {
     return listContainers();
+  }
+
+  // -------------------------------------------------------------------------
+  // Portas (modal "Portas" da página do projeto)
+  // -------------------------------------------------------------------------
+
+  /** Portas publicadas do compose do projeto, lidas do código no servidor. */
+  private async composePortsOf(project: Project): Promise<Record<string, ComposePortEntry[]> | null> {
+    const file = project.detection?.type === "compose" ? project.detection.composeFile : null;
+    const dir = file ? this.sourceDirOf(project) : null;
+    if (!file || !dir) return null;
+    try {
+      return composePortEntries(await readFile(path.join(dir, file), "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Tudo o que o mapa de portas precisa, com UMA listagem do Docker. */
+  private async portsInput(): Promise<PortsInput> {
+    await this.ensureLoaded();
+    let containers: DockerContainerInfo[] | null;
+    try {
+      containers = await listContainers();
+    } catch {
+      // Docker fora do ar: o modal mostra o que está configurado
+      containers = null;
+    }
+    const composePorts = new Map<string, Record<string, ComposePortEntry[]> | null>();
+    for (const p of this.projects) composePorts.set(p.id, await this.composePortsOf(p));
+    return { projects: this.projects, composePorts, containers, reserved: this.reservedPorts };
+  }
+
+  private portsResponse(input: PortsInput): PortsResponse {
+    return { docker: input.containers !== null, rows: buildPortRows(input), reserved: input.reserved };
+  }
+
+  /** Todas as portas do servidor (somente leitura). */
+  async portsOverview(): Promise<PortsResponse> {
+    return this.portsResponse(await this.portsInput());
+  }
+
+  /** As portas do projeto e as de todo o servidor (somente leitura). */
+  async projectPorts(id: string): Promise<ProjectPortsResponse> {
+    const project = await this.requireProject(id);
+    const input = await this.portsInput();
+    return { ...this.portsResponse(input), project: projectPortsView(project, input) };
+  }
+
+  /**
+   * Troca a porta do SERVIDOR de uma porta publicada do compose (ou remove a
+   * publicação, ou volta ao compose). Vale no próximo deploy.
+   */
+  async setPort(id: string, req: SetPortRequest): Promise<ProjectPortsResponse> {
+    const project = await this.requireProject(id);
+    const input = await this.portsInput();
+    const { portOverrides, detail } = checkPortChange(project, input, req);
+    if (portOverrides) project.portOverrides = portOverrides;
+    else delete project.portOverrides;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({ action: "project.port_changed", target: project.slug, detail });
+    return { ...this.portsResponse(input), project: projectPortsView(project, input) };
   }
 
   /**
