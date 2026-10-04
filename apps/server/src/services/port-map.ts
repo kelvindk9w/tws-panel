@@ -12,6 +12,11 @@
  *
  * Lógica pura (testada sem Docker). Valida a troca: porta 1024–65535, fora das
  * reservadas ao painel e sem disputa com outro container ou projeto.
+ *
+ * Pedido de 04/10/2026 ("não consigo trocar de cada container ou em lote?"):
+ * publicar porta num serviço que não tem (publicação ADICIONADA, guardada em
+ * portOverrides com `added`) e a edição em lote — a lista completa validada de
+ * uma vez, com o erro de cada linha (checkPortsBatch).
  */
 import type {
   DockerContainerInfo,
@@ -22,9 +27,12 @@ import type {
   ProjectPortEntry,
   ProjectPortService,
   ProjectPortsView,
+  PortPublicationInput,
+  PortRowError,
   SetPortRequest,
+  SetPortsRequest,
 } from "@paas/core";
-import { portEntryText, type ComposePortEntry } from "@paas/deploy";
+import { addedPortKey, networkModeBlock, portEntryText, type ComposePortEntry } from "@paas/deploy";
 import { httpError } from "./http-error.js";
 
 const PANEL_CONTAINER = "tws-panel";
@@ -37,6 +45,8 @@ export interface PortsInput {
   containers: DockerContainerInfo[] | null;
   /** Portas do servidor reservadas ao painel. */
   reserved: number[];
+  /** network_mode de cada serviço, lido do compose (ausente = usa a detecção). */
+  networkModes?: Map<string, Record<string, string | null>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +126,33 @@ function effective(entry: ComposePortEntry, override: PortOverride | undefined) 
   return { published: true, hostIp: normalizeIp(entry.hostIp), hostPort: entry.hostPort };
 }
 
+/** Publicações adicionadas no painel de um serviço, no formato das do compose. */
+function addedEntries(project: Project, service: string): ComposePortEntry[] {
+  return (project.portOverrides?.[service] ?? []).flatMap((o) =>
+    o.added && o.hostPort !== null
+      ? [
+          {
+            key: o.original,
+            containerPort: o.added.containerPort,
+            protocol: o.added.protocol,
+            hostIp: o.hostIp,
+            hostPort: o.hostPort,
+            composeHost: "",
+            panel: null,
+          },
+        ]
+      : [],
+  );
+}
+
+/** Por que o serviço não pode publicar porta própria (rede de outro), ou null. */
+function publishBlockOf(project: Project, input: PortsInput, service: string): string | null {
+  const modes = input.networkModes?.get(project.id);
+  if (modes && service in modes) return networkModeBlock(modes[service] ?? null);
+  const other = project.detection?.services?.find((s) => s.name === service)?.networkModeService;
+  return other ? networkModeBlock(`service:${other}`) : null;
+}
+
 interface Want {
   owner: PortUsageRow["owner"];
   /** Quem é o dono (o mesmo serviço no ar e configurado é um dono só). */
@@ -162,7 +199,7 @@ function configuredWants(input: PortsInput, live: Want[]): Want[] {
     for (const [service, list] of Object.entries(entries)) {
       const ownerKey = `p:${project.id}:${service}`;
       const container = input.containers ? (containerOfService(project, service, input.containers) ?? null) : null;
-      for (const entry of list) {
+      for (const entry of [...list, ...addedEntries(project, service)]) {
         const eff = effective(entry, project.portOverrides?.[service]?.find((o) => o.original === entry.key));
         if (!eff.published || eff.hostPort === null) continue;
         const already = live.some(
@@ -251,14 +288,26 @@ function sameBinding(live: LivePort, hostIp: string | null, hostPort: number, co
   return live.hostPort === hostPort && live.hostIp === hostIp && live.containerPort === containerPort && live.protocol === protocol;
 }
 
-function entryView(entry: ComposePortEntry, override: PortOverride | undefined, container: DockerContainerInfo | undefined): ProjectPortEntry {
+function entryView(
+  entry: ComposePortEntry,
+  override: PortOverride | undefined,
+  container: DockerContainerInfo | undefined,
+  /** As outras publicações do serviço (uma porta no ar que é delas não conta para a removida). */
+  siblings: Array<{ hostIp: string | null; hostPort: number | null; containerPort: number; protocol: string }> = [],
+): ProjectPortEntry {
   const eff = effective(entry, override);
   const running = container?.state === "running";
   const live = container ? parseDockerPorts(container.ports) : [];
   let applied: boolean | null = null;
   if (running) {
     if (!eff.published) {
-      applied = !live.some((l) => l.hostPort !== null && l.containerPort === entry.containerPort && l.protocol === entry.protocol);
+      applied = !live.some(
+        (l) =>
+          l.hostPort !== null &&
+          l.containerPort === entry.containerPort &&
+          l.protocol === entry.protocol &&
+          !siblings.some((o) => o.hostPort !== null && sameBinding(l, o.hostIp, o.hostPort, o.containerPort, o.protocol)),
+      );
     } else if (eff.hostPort !== null) {
       applied = live.some((l) => sameBinding(l, eff.hostIp, eff.hostPort!, entry.containerPort, entry.protocol));
     }
@@ -275,6 +324,9 @@ function entryView(entry: ComposePortEntry, override: PortOverride | undefined, 
     panel: entry.panel,
     applied,
     changeable: entry.panel === null,
+    added: Boolean(override?.added),
+    composeHostPort: override?.added ? null : entry.hostPort,
+    composeHostIp: override?.added ? null : normalizeIp(entry.hostIp),
   };
 }
 
@@ -293,6 +345,7 @@ export function projectPortsView(project: Project, input: PortsInput): ProjectPo
       const container = containerOfService(project, name, containers);
       const live = container ? parseDockerPorts(container.ports) : [];
       const info = detection?.services?.find((s) => s.name === name);
+      const added = addedEntries(project, name);
       return {
         name,
         container: container?.name ?? null,
@@ -302,10 +355,19 @@ export function projectPortsView(project: Project, input: PortsInput): ProjectPo
           ...(info?.internalPorts ?? []).map((p) => p.port),
           ...live.map((p) => p.containerPort),
           ...list.map((e) => e.containerPort),
+          ...added.map((e) => e.containerPort),
         ]),
-        ports: list.map((e) => entryView(e, project.portOverrides?.[name]?.find((o) => o.original === e.key), container)),
+        ports: [...list, ...added].map((e, _i, all) => {
+          const overrideOf = (x: ComposePortEntry) => project.portOverrides?.[name]?.find((o) => o.original === x.key);
+          const siblings = all
+            .filter((x) => x !== e)
+            .map((x) => ({ ...effective(x, overrideOf(x)), containerPort: x.containerPort, protocol: x.protocol }))
+            .filter((x) => x.published);
+          return entryView(e, overrideOf(e), container, siblings);
+        }),
         livePorts: live.filter((p) => p.hostPort !== null),
         networkModeService: info?.networkModeService ?? null,
+        publishBlocked: publishBlockOf(project, input, name),
       };
     });
   } else {
@@ -322,6 +384,7 @@ export function projectPortsView(project: Project, input: PortsInput): ProjectPo
           ports: [],
           livePorts: live.filter((p) => p.hostPort !== null),
           networkModeService: null,
+          publishBlocked: null,
         };
       });
   }
@@ -347,15 +410,8 @@ function text(hostIp: string | null, hostPort: number, containerPort: number, pr
   return portEntryText(hostIp, hostPort, containerPort, protocol);
 }
 
-/**
- * Valida uma troca e devolve as trocas do projeto já atualizadas (undefined =
- * nenhuma) e a frase da auditoria. Lança erro HTTP com a explicação.
- */
-export function checkPortChange(
-  project: Project,
-  input: PortsInput,
-  req: SetPortRequest,
-): { portOverrides: Record<string, PortOverride[]> | undefined; detail: string } {
+/** As portas do compose do projeto; erro quando não é compose ou o código não está no servidor. */
+function composeEntriesOf(project: Project, input: PortsInput): Record<string, ComposePortEntry[]> {
   if (project.detection?.type !== "compose") {
     throw httpError(409, "not_compose", "Trocar a porta pelo painel só vale para projetos compose.");
   }
@@ -367,6 +423,19 @@ export function checkPortChange(
       "O código do projeto ainda não está no servidor. Faça o primeiro deploy e tente de novo.",
     );
   }
+  return entries;
+}
+
+/**
+ * Valida uma troca e devolve as trocas do projeto já atualizadas (undefined =
+ * nenhuma) e a frase da auditoria. Lança erro HTTP com a explicação.
+ */
+export function checkPortChange(
+  project: Project,
+  input: PortsInput,
+  req: SetPortRequest,
+): { portOverrides: Record<string, PortOverride[]> | undefined; detail: string } {
+  const entries = composeEntriesOf(project, input);
   const list = entries[req.service];
   if (!list) {
     throw httpError(
@@ -443,5 +512,158 @@ export function checkPortChange(
   return {
     portOverrides: Object.keys(all).length > 0 ? all : undefined,
     detail: `Projeto "${project.name}", serviço ${req.service}: ${beforeText} → ${afterText}.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Edição em lote (e "Publicar uma porta", que manda a lista completa)
+// ---------------------------------------------------------------------------
+
+const PROXY_PORTS_MESSAGE =
+  "As portas 80 e 443 são do painel (ele recebe o tráfego de todos os sites e cuida do HTTPS) e não podem ser usadas aqui.";
+
+/** Uma publicação como vai ficar depois de salvar (para conferir conflitos). */
+interface Publication {
+  /** Índice da linha enviada; null = porta do compose que não veio na lista. */
+  index: number | null;
+  service: string;
+  hostIp: string | null;
+  hostPort: number;
+  containerPort: number;
+  protocol: string;
+}
+
+/** Portas publicadas de um serviço, em texto, para o resumo da auditoria. */
+function serviceSummary(list: ComposePortEntry[], overrides: PortOverride[]): string[] {
+  const out: string[] = [];
+  for (const entry of list) {
+    const override = overrides.find((o) => !o.added && o.original === entry.key);
+    const eff = effective(entry, override);
+    if (!eff.published) continue;
+    const ip = override && entry.panel === null ? override.hostIp : entry.hostIp;
+    out.push(eff.hostPort === null ? entry.key : text(ip, eff.hostPort, entry.containerPort, entry.protocol));
+  }
+  for (const o of overrides) {
+    if (o.added && o.hostPort !== null) out.push(text(o.hostIp, o.hostPort, o.added.containerPort, o.added.protocol));
+  }
+  return out;
+}
+
+/**
+ * Valida a lista COMPLETA de trocas e publicações adicionadas do projeto (a
+ * edição em lote) e devolve as trocas novas e o resumo da auditoria. Porta do
+ * compose fora da lista volta ao que o compose pede. Qualquer linha com
+ * problema recusa tudo: erro 400 invalid_ports com o erro de cada linha em
+ * `details.errors` ({ index, message }).
+ */
+export function checkPortsBatch(
+  project: Project,
+  input: PortsInput,
+  req: SetPortsRequest,
+): { portOverrides: Record<string, PortOverride[]> | undefined; detail: string } {
+  const entries = composeEntriesOf(project, input);
+  const errors = new Map<number, string>();
+  const next: Record<string, PortOverride[]> = {};
+  const pubs: Publication[] = [];
+  const seen = new Set<string>();
+
+  req.ports.forEach((item: PortPublicationInput, index) => {
+    const fail = (message: string) => void errors.set(index, message);
+    const list = entries[item.service];
+    if (!list) return fail(`O serviço "${item.service}" não existe no compose. Serviços: ${Object.keys(entries).join(", ")}.`);
+
+    let containerPort: number;
+    let protocol: string;
+    let entry: ComposePortEntry | undefined;
+    if (item.original !== undefined) {
+      entry = list.find((e) => e.key === item.original);
+      if (!entry) return fail(`A porta ${item.original} não está no compose do serviço ${item.service}.`);
+      if (entry.panel !== null) return fail(PROXY_PORTS_MESSAGE);
+      const id = `${item.service}\n${entry.key}`;
+      if (seen.has(id)) return fail("Esta porta do compose aparece duas vezes na lista.");
+      seen.add(id);
+      containerPort = entry.containerPort;
+      protocol = entry.protocol;
+      if (item.hostPort === null) {
+        (next[item.service] ??= []).push({ original: entry.key, hostPort: null, hostIp: null });
+        return;
+      }
+    } else {
+      const blocked = publishBlockOf(project, input, item.service);
+      if (blocked) return fail(blocked);
+      if (item.containerPort === undefined || !Number.isInteger(item.containerPort) || item.containerPort < 1 || item.containerPort > 65535) {
+        return fail("Informe a porta interna (onde o app escuta dentro do container), de 1 a 65535.");
+      }
+      containerPort = item.containerPort;
+      protocol = item.protocol ?? "tcp";
+    }
+
+    const hostPort = item.hostPort ?? entry?.hostPort ?? null;
+    if (hostPort === null) return fail("Informe a porta do servidor.");
+    if (hostPort === 80 || hostPort === 443) return fail(PROXY_PORTS_MESSAGE);
+    if (!Number.isInteger(hostPort) || hostPort < 1024 || hostPort > 65535) return fail("A porta do servidor precisa ser de 1024 a 65535.");
+    if (input.reserved.includes(hostPort)) return fail(`A porta ${hostPort} do servidor é reservada ao painel. Escolha outra.`);
+
+    const hostIp = item.hostIp ?? "127.0.0.1";
+    pubs.push({ index, service: item.service, hostIp: normalizeIp(hostIp), hostPort, containerPort, protocol });
+    if (entry) {
+      const sameAsCompose = hostPort === entry.hostPort && normalizeIp(hostIp) === normalizeIp(entry.hostIp);
+      if (!sameAsCompose) (next[item.service] ??= []).push({ original: entry.key, hostPort, hostIp });
+    } else {
+      (next[item.service] ??= []).push({
+        original: addedPortKey(hostIp, hostPort, containerPort, protocol),
+        hostPort,
+        hostIp,
+        added: { containerPort, protocol: protocol as "tcp" | "udp" },
+      });
+    }
+  });
+
+  // Portas do compose que não vieram na lista ficam como o compose pede.
+  for (const [service, list] of Object.entries(entries)) {
+    for (const entry of list) {
+      if (seen.has(`${service}\n${entry.key}`) || entry.panel === "removed" || entry.hostPort === null) continue;
+      pubs.push({ index: null, service, hostIp: normalizeIp(entry.hostIp), hostPort: entry.hostPort, containerPort: entry.containerPort, protocol: entry.protocol });
+    }
+  }
+
+  // Conflitos: entre as linhas do projeto e com o resto do servidor (o que o
+  // próprio projeto usa hoje não conta: depois do deploy vale a lista nova).
+  const others = allWants(input).filter((w) => w.project?.id !== project.id);
+  for (const pub of pubs) {
+    if (pub.index === null) continue;
+    const twin = pubs.find(
+      (o) => o !== pub && o.hostPort === pub.hostPort && o.protocol === pub.protocol && ipOverlap(o.hostIp, pub.hostIp),
+    );
+    if (twin) {
+      errors.set(pub.index, `A porta ${pub.hostPort} do servidor também está na linha de ${twin.service} (→ ${twin.containerPort}).`);
+      continue;
+    }
+    const conflict = conflictOf({ ownerKey: "", hostIp: pub.hostIp, hostPort: pub.hostPort, protocol: pub.protocol }, others, []);
+    if (conflict) errors.set(pub.index, `A porta ${pub.hostPort} do servidor já é usada por ${conflict}. Escolha outra.`);
+  }
+
+  if (errors.size > 0) {
+    const list: PortRowError[] = [...errors.entries()].sort((a, b) => a[0] - b[0]).map(([index, message]) => ({ index, message }));
+    const err = httpError(
+      400,
+      "invalid_ports",
+      `${list.length} ${list.length === 1 ? "porta" : "portas"} com problema. A primeira: ${list[0]!.message}`,
+    );
+    err.details = { errors: list };
+    throw err;
+  }
+
+  const changes: string[] = [];
+  for (const [service, list] of Object.entries(entries)) {
+    const before = serviceSummary(list, project.portOverrides?.[service] ?? []);
+    const after = serviceSummary(list, next[service] ?? []);
+    if (before.join(", ") !== after.join(", ")) {
+      changes.push(`${service}: ${before.join(", ") || "nenhuma"} → ${after.join(", ") || "nenhuma"}`);
+    }
+  }
+  return {
+    portOverrides: Object.keys(next).length > 0 ? next : undefined,
+    detail: `Projeto "${project.name}", portas em lote — ${changes.length > 0 ? changes.join("; ") : "nenhuma mudança"}.`,
   };
 }

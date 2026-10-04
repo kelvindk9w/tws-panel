@@ -24,6 +24,7 @@ async function build(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
     portsOverview: vi.fn(async () => OVERVIEW),
     projectPorts: vi.fn(async () => PROJECT_PORTS),
     setPort: vi.fn(async () => PROJECT_PORTS),
+    setPorts: vi.fn(async () => PROJECT_PORTS),
     ...overrides,
   };
   ctx = await buildAuthTestApp(TOKEN);
@@ -43,6 +44,7 @@ describe("portas", () => {
       ["GET", "/api/ports"],
       ["GET", "/api/projects/p1/ports"],
       ["PUT", "/api/projects/p1/ports"],
+      ["PUT", "/api/projects/p1/ports/batch"],
     ] as const) {
       const res = await app.inject({ method, url, payload: method === "PUT" ? { service: "a", original: "1:1", action: "remove" } : undefined });
       expect(res.statusCode, url).toBe(401);
@@ -111,5 +113,54 @@ describe("portas", () => {
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
     }
     expect(service.setPort).not.toHaveBeenCalled();
+  });
+
+  it("PUT /batch grava a lista completa numa chamada", async () => {
+    await build();
+    const body = {
+      ports: [
+        { service: "api", original: "127.0.0.1:8010:8010", hostPort: 18010, hostIp: "0.0.0.0" },
+        { service: "db", original: "5432:5432", hostPort: null },
+        { service: "db", containerPort: 5432, protocol: "tcp", hostPort: 15432, hostIp: "127.0.0.1" },
+      ],
+    };
+    const res = await app.inject({ method: "PUT", url: "/api/projects/p1/ports/batch", headers: auth, payload: body });
+    expect(res.statusCode).toBe(200);
+    expect(service.setPorts).toHaveBeenCalledWith("p1", body);
+  });
+
+  it("PUT /batch com erro nas linhas devolve os erros de cada uma", async () => {
+    const err = Object.assign(httpError(400, "invalid_ports", "1 porta com problema."), {
+      details: { errors: [{ index: 0, message: "A porta 9000 é reservada." }] },
+    });
+    await build({ setPorts: vi.fn(async () => Promise.reject(err)) });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/projects/p1/ports/batch",
+      headers: auth,
+      payload: { ports: [{ service: "db", containerPort: 5432, hostPort: 9000 }] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "invalid_ports", errors: [{ index: 0, message: "A porta 9000 é reservada." }] });
+  });
+
+  it("PUT /batch recusa corpo inválido", async () => {
+    await build();
+    for (const payload of [
+      {},
+      { ports: "x" },
+      { ports: [{ service: "db", containerPort: 5432, hostPort: 80 }] },
+      { ports: [{ service: "db", containerPort: 0, hostPort: 15432 }] },
+      { ports: [{ service: "db", containerPort: 5432, hostPort: 15432, hostIp: "10.0.0.1" }] },
+      { ports: [{ service: "db", containerPort: 5432, hostPort: 15432, protocol: "sctp" }] },
+      { ports: [{ service: "db", containerPort: 5432, hostPort: 15432, extra: 1 }] },
+      { ports: [{ containerPort: 5432, hostPort: 15432 }] },
+      { ports: [{ service: "db", containerPort: 5432 }] },
+      { ports: Array.from({ length: 201 }, () => ({ service: "db", containerPort: 5432, hostPort: 15432 })) },
+    ]) {
+      const res = await app.inject({ method: "PUT", url: "/api/projects/p1/ports/batch", headers: auth, payload });
+      expect(res.statusCode, JSON.stringify(payload).slice(0, 80)).toBe(400);
+    }
+    expect(service.setPorts).not.toHaveBeenCalled();
   });
 });

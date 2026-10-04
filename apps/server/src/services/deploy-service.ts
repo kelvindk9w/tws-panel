@@ -30,6 +30,7 @@ import {
   type PortsResponse,
   type ProjectPortsResponse,
   type SetPortRequest,
+  type SetPortsRequest,
   type SetProjectCredentialRequest,
   type UpdateProjectRequest,
   missingComposeVariables,
@@ -42,6 +43,7 @@ import {
   projectWorkDir,
   runGuardrails,
   composeVariables,
+  composeNetworkModes,
   composePortEntries,
   readEnvExamples,
   type CertificateStatus,
@@ -59,7 +61,7 @@ import type { AlertsService } from "./alerts-service.js";
 import type { AuditService } from "./audit-service.js";
 import { CredentialVault } from "./credential-vault.js";
 import { listContainers } from "./docker-service.js";
-import { buildPortRows, checkPortChange, projectPortsView, type PortsInput } from "./port-map.js";
+import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 
 const MAX_JOBS = 100;
 
@@ -1037,13 +1039,16 @@ export class DeployService {
   // Portas (modal "Portas" da página do projeto)
   // -------------------------------------------------------------------------
 
-  /** Portas publicadas do compose do projeto, lidas do código no servidor. */
-  private async composePortsOf(project: Project): Promise<Record<string, ComposePortEntry[]> | null> {
+  /** Portas publicadas e network_mode de cada serviço do compose do projeto, lidos do código no servidor. */
+  private async composePortsOf(
+    project: Project,
+  ): Promise<{ ports: Record<string, ComposePortEntry[]>; networkModes: Record<string, string | null> } | null> {
     const file = project.detection?.type === "compose" ? project.detection.composeFile : null;
     const dir = file ? this.sourceDirOf(project) : null;
     if (!file || !dir) return null;
     try {
-      return composePortEntries(await readFile(path.join(dir, file), "utf8"));
+      const content = await readFile(path.join(dir, file), "utf8");
+      return { ports: composePortEntries(content), networkModes: composeNetworkModes(content) };
     } catch {
       return null;
     }
@@ -1060,8 +1065,13 @@ export class DeployService {
       containers = null;
     }
     const composePorts = new Map<string, Record<string, ComposePortEntry[]> | null>();
-    for (const p of this.projects) composePorts.set(p.id, await this.composePortsOf(p));
-    return { projects: this.projects, composePorts, containers, reserved: this.reservedPorts };
+    const networkModes = new Map<string, Record<string, string | null>>();
+    for (const p of this.projects) {
+      const facts = await this.composePortsOf(p);
+      composePorts.set(p.id, facts?.ports ?? null);
+      if (facts) networkModes.set(p.id, facts.networkModes);
+    }
+    return { projects: this.projects, composePorts, containers, reserved: this.reservedPorts, networkModes };
   }
 
   private portsResponse(input: PortsInput): PortsResponse {
@@ -1093,6 +1103,23 @@ export class DeployService {
     project.updatedAt = new Date().toISOString();
     await this.saveProjects();
     await this.hooks.audit?.record({ action: "project.port_changed", target: project.slug, detail });
+    return { ...this.portsResponse(input), project: projectPortsView(project, input) };
+  }
+
+  /**
+   * Edição em lote (e "Publicar uma porta"): grava a lista COMPLETA de trocas
+   * e publicações adicionadas numa chamada só. Qualquer linha com problema
+   * recusa tudo (nada é gravado). Vale no próximo deploy.
+   */
+  async setPorts(id: string, req: SetPortsRequest): Promise<ProjectPortsResponse> {
+    const project = await this.requireProject(id);
+    const input = await this.portsInput();
+    const { portOverrides, detail } = checkPortsBatch(project, input, req);
+    if (portOverrides) project.portOverrides = portOverrides;
+    else delete project.portOverrides;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({ action: "project.ports_batch", target: project.slug, detail });
     return { ...this.portsResponse(input), project: projectPortsView(project, input) };
   }
 
