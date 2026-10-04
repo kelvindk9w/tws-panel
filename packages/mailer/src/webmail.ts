@@ -22,7 +22,7 @@
  * cada requisição — trocar o arquivo vale na hora, sem reiniciar.
  */
 import { randomBytes } from "node:crypto";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { PAAS_LABEL_MANAGED, PAAS_NETWORK, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 import { copyFilesToContainer } from "./container-files.js";
 import { run } from "./exec.js";
@@ -151,6 +151,28 @@ function clientIp(remote: string, extra: string | undefined): string | null {
   const xff = /X-Forwarded-For: ([^)]*)$/.exec(extra ?? "")?.[1];
   const candidate = xff ? xff.slice(xff.lastIndexOf(",") + 1).trim() : remote;
   return isIP(candidate) ? candidate : null;
+}
+
+/** Faixas que não são da internet (rede do Docker, loopback, link-local, CGNAT, ULA). */
+const INTERNAL = new BlockList();
+for (const [net, prefix] of [["10.0.0.0", 8], ["172.16.0.0", 12], ["192.168.0.0", 16], ["127.0.0.0", 8], ["169.254.0.0", 16], ["100.64.0.0", 10], ["0.0.0.0", 8]] as const) {
+  INTERNAL.addSubnet(net, prefix, "ipv4");
+}
+for (const [net, prefix] of [["::1", 128], ["fc00::", 7], ["fe80::", 10], ["::", 128]] as const) {
+  INTERNAL.addSubnet(net, prefix, "ipv6");
+}
+
+/**
+ * IP da internet? O bloqueio por senha errada só vale para eles: se o
+ * Docker entregar ao Caddy o IP do gateway da rede (proxy de portas do
+ * Docker), bloquear esse IP bloquearia todos os visitantes.
+ */
+export function isPublicIp(ip: string): boolean {
+  const family = isIP(ip);
+  if (family === 0) return false;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip)?.[1];
+  if (mapped) return isPublicIp(mapped);
+  return !INTERNAL.check(ip, family === 4 ? "ipv4" : "ipv6");
 }
 
 export function parseFailedLogins(log: string): FailedLogin[] {

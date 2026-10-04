@@ -305,6 +305,14 @@ describe("proxy e bloqueio de quem erra a senha demais", () => {
     await expect(s.proxyState()).resolves.toEqual({ upstream: "paas-webmail:8000", blockedIps: [] });
   });
 
+  it("IP da rede interna nunca é bloqueado (seria o gateway do Docker: bloquearia todo mundo)", async () => {
+    const s = service();
+    await s.enable();
+    logs = Array.from({ length: 12 }, () => failed("172.18.0.1")).join("\n");
+    await expect(s.pollFailedLogins()).resolves.toBe(false);
+    await expect(s.proxyState()).resolves.toEqual({ upstream: "paas-webmail:8000", blockedIps: [] });
+  });
+
   it("tentativas espalhadas por mais de 10 min não bloqueiam", async () => {
     const s = service();
     await s.enable();

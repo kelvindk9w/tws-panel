@@ -22,7 +22,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_WEBMAIL_CONTAINER, WEBMAIL_INTERNAL_PORT, webmailUrl, type WebmailStatus } from "@paas/core";
-import { generateDesKey, parseFailedLogins, renderRoundcubeConfig, WebmailManager } from "@paas/mailer";
+import { generateDesKey, isPublicIp, parseFailedLogins, renderRoundcubeConfig, WebmailManager } from "@paas/mailer";
 import type { ServerConfig } from "../config.js";
 import { httpError } from "./http-error.js";
 import type { MailAuditSink } from "./mail-service.js";
@@ -277,7 +277,8 @@ export class WebmailService {
     const since = this.lastPoll === null ? Math.floor(now / 1000) - FIRST_LOOKBACK_S : Math.floor(this.lastPoll / 1000);
     this.lastPoll = now;
     for (const { ip } of parseFailedLogins(await manager.logsSince(since))) {
-      if (this.blocked.has(ip)) continue;
+      // rede interna: seria o gateway do Docker (todo mundo) — ver isPublicIp
+      if (this.blocked.has(ip) || !isPublicIp(ip)) continue;
       const recent = [...(this.failures.get(ip) ?? []), now].filter((t) => t > now - FAIL_WINDOW_MS);
       if (recent.length < FAIL_LIMIT) {
         this.failures.set(ip, recent);

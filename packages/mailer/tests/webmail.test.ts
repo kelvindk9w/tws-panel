@@ -40,6 +40,7 @@ const {
   ROUNDCUBE_IMAGE,
   WebmailManager,
   generateDesKey,
+  isPublicIp,
   parseFailedLogins,
   phpString,
   renderRoundcubeConfig,
@@ -172,6 +173,15 @@ describe("parseFailedLogins", () => {
   it("ignora linhas sem IP válido e o resto do log", () => {
     const log = [line("a@b.com", "nao-e-ip"), "qualquer coisa", "", line("a@b.com", "172.18.0.5 (X-Forwarded-For: lixo)")].join("\n");
     expect(parseFailedLogins(log)).toEqual([]);
+  });
+});
+
+describe("isPublicIp", () => {
+  it("IP da internet: sim; rede interna, loopback, link-local e CGNAT: não", () => {
+    for (const ip of ["203.0.113.7", "8.8.8.8", "2001:db8::1", "2804:14c::1"]) expect(isPublicIp(ip)).toBe(true);
+    for (const ip of ["10.1.2.3", "172.18.0.1", "192.168.0.10", "127.0.0.1", "169.254.1.1", "100.64.0.1", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1"])
+      expect(isPublicIp(ip)).toBe(false);
+    expect(isPublicIp("nao-e-ip")).toBe(false);
   });
 });
 

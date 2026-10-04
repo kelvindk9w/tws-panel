@@ -98,6 +98,7 @@ export {
   WEBMAIL_DATA_DIR,
   WebmailManager,
   generateDesKey,
+  isPublicIp,
   parseFailedLogins,
   phpString,
   renderRoundcubeConfig,
