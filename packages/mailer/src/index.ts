@@ -6,9 +6,11 @@
 export {
   StalwartManager,
   renderConfigToml,
+  stalwartConfigFingerprint,
   STALWART_IMAGE,
   type StalwartCertificate,
   type StalwartManagerOptions,
+  type RenderConfigOptions,
 } from "./server.js";
 export {
   CADDY_CERTIFICATES_DIR,
