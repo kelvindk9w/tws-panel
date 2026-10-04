@@ -54,6 +54,22 @@ describe("db-port-exposed (block)", () => {
   });
 });
 
+describe("db-port-exposed com as trocas de porta do painel (modal Portas)", () => {
+  it("publicação do banco removida no painel não bloqueia mais", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["5432:5432"]');
+    const report = await runGuardrails(dir, null, { db: [{ original: "5432:5432", hostPort: null, hostIp: null }] });
+    expect(report.findings.filter((f) => f.rule === "db-port-exposed")).toHaveLength(0);
+  });
+
+  it("porta do banco só trocada continua bloqueando, com a porta nova na evidência", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["5432:5432"]');
+    const report = await runGuardrails(dir, null, { db: [{ original: "5432:5432", hostPort: 15432, hostIp: "127.0.0.1" }] });
+    const hit = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(hit?.evidence).toContain("127.0.0.1:15432:5432");
+    expect(hit?.fix).toContain("Remover publicação");
+  });
+});
+
 describe("db-port-exposed (block) — mesma lista de bancos do aviso prévio", () => {
   // O aviso prévio (guardrails.ts) e o bloqueio do deploy (rules.ts) tinham
   // listas de portas de banco diferentes: Oracle, CouchDB e Elasticsearch
