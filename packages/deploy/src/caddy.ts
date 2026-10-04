@@ -13,6 +13,7 @@
  * Em produção (domínio real): endereço sem esquema → HTTPS automático.
  */
 import { mkdir, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 import {
   PAAS_CADDY_CONTAINER,
@@ -62,9 +63,22 @@ export interface ManualCaddyCertificate {
   key: string;
 }
 
+/**
+ * Webmail (Roundcube) servido em cada mail.<domínio>. Ausente = o bloco do
+ * nome responde a página "Servidor de e-mail" (como antes).
+ */
+export interface CaddyWebmail {
+  /** Container do webmail na paas-net (ex.: paas-webmail:8000). */
+  upstream: string;
+  /** IPs bloqueados agora por excesso de senhas erradas (recebem 429). */
+  blockedIps?: string[];
+}
+
 export interface CaddyApplyOptions {
   /** Certificados manuais em vigor (os demais nomes ficam no automático). */
   manual?: ManualCaddyCertificate[];
+  /** Webmail ativado: os blocos mail.<domínio> encaminham para ele. */
+  webmail?: CaddyWebmail;
   /**
    * `caddy reload --force`: recarrega mesmo com a configuração igual. O
    * certmagic cancela as tentativas em espera da configuração antiga e
@@ -303,6 +317,7 @@ export class CaddyManager {
       this.panelSite,
       mailHosts,
       this.manual.map((m) => m.host),
+      opts.webmail ? { webmail: opts.webmail } : {},
     );
     await this.ensureRunning(content);
     // O Caddy alcança o painel pelo nome do container na paas-net.
@@ -476,6 +491,53 @@ export const MAIL_HOST_PAGE = sitePage({
   refresh: false,
 });
 
+/** Webmail fora do ar (container parado, reiniciando ou atualizando). */
+export const WEBMAIL_DOWN_PAGE = sitePage({
+  title: "Webmail temporariamente indisponível",
+  message: "O webmail está reiniciando ou em manutenção. Volte em alguns minutos.",
+  hint: "Seus e-mails continuam chegando normalmente. Esta página se atualiza sozinha.",
+  icon: "mail",
+  refresh: true,
+});
+
+/** Visitante bloqueado por excesso de senhas erradas (ver WebmailService). */
+export const WEBMAIL_BLOCKED_PAGE = sitePage({
+  title: "Muitas tentativas de entrar",
+  message: "Foram feitas muitas tentativas com senha errada a partir da sua conexão. Tente de novo em 1 hora.",
+  hint: "Se esqueceu a senha, peça ao administrador do e-mail para trocá-la.",
+  icon: "mail",
+  refresh: false,
+});
+
+/** Linhas do bloco mail.<domínio> com o webmail (dentro das chaves). */
+function webmailBody(webmail: CaddyWebmail): string[] {
+  const blocked = [...new Set(webmail.blockedIps ?? [])].filter((ip) => isIP(ip) !== 0);
+  return [
+    ...(blocked.length
+      ? [
+          `\t@webmail_bloqueado remote_ip ${blocked.join(" ")}`,
+          '\theader @webmail_bloqueado Content-Type "text/html; charset=utf-8"',
+          `\trespond @webmail_bloqueado \`${WEBMAIL_BLOCKED_PAGE}\` 429`,
+        ]
+      : []),
+    // O X-Frame-Options e a política de conteúdo vêm do próprio Roundcube.
+    "\theader {",
+    '\t\tStrict-Transport-Security "max-age=31536000"',
+    '\t\tX-Content-Type-Options "nosniff"',
+    '\t\tReferrer-Policy "no-referrer"',
+    '\t\tPermissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"',
+    "\t}",
+    `\treverse_proxy ${webmail.upstream} {`,
+    "\t\theader_down -Server",
+    "\t\theader_down -X-Powered-By",
+    "\t}",
+    "\thandle_errors 502 503 504 {",
+    '\t\theader Content-Type "text/html; charset=utf-8"',
+    `\t\trespond \`${WEBMAIL_DOWN_PAGE}\` 503`,
+    "\t}",
+  ];
+}
+
 /** Corpo de um bloco de site: proxy para o app e página amigável quando ele não responde. */
 function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): void {
   if (target.websocket) {
@@ -513,7 +575,9 @@ export function renderCaddyfile(
   mailHosts: string[] = [],
   /** Nomes com certificado manual: bloco próprio com `tls <cert> <key>`. */
   manualHosts: string[] = [],
+  opts: { webmail?: CaddyWebmail } = {},
 ): string {
+  const webmail = opts.webmail && SAFE_UPSTREAM_RE.test(opts.webmail.upstream) ? opts.webmail : null;
   const manual = new Set(manualHosts.filter((h) => SAFE_DOMAIN_RE.test(h)));
   const panelTarget =
     panel && isSafeCaddyTarget({ ...panel, websocket: true }) ? { ...panel, websocket: true } : null;
@@ -553,7 +617,9 @@ export function renderCaddyfile(
       lines.push("}", "");
     }
   }
-  // Servidor de e-mail: só para o Caddy emitir o certificado de mail.<domínio>.
+  // Servidor de e-mail: o bloco faz o Caddy emitir o certificado de
+  // mail.<domínio> (o painel o copia para o Stalwart). Com o webmail ativado,
+  // o mesmo bloco encaminha para ele; senão, a página do servidor de e-mail.
   // Nome que já é de um site (ou do painel) sai — o bloco existente já emite
   // o certificado, e dois blocos com o mesmo nome derrubariam o Caddyfile
   // inteiro. .localhost não tem certificado público.
@@ -565,8 +631,9 @@ export function renderCaddyfile(
     lines.push(
       `${host} {`,
       ...(manual.has(host) ? [`\ttls ${p.cert} ${p.key}`] : []),
-      '\theader Content-Type "text/html; charset=utf-8"',
-      `\trespond \`${MAIL_HOST_PAGE}\` 200`,
+      ...(webmail
+        ? webmailBody(webmail)
+        : ['\theader Content-Type "text/html; charset=utf-8"', `\trespond \`${MAIL_HOST_PAGE}\` 200`]),
       "}",
       "",
     );

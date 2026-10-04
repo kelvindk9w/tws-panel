@@ -23,6 +23,7 @@ export {
   manualCertificatePaths,
   type CaddyApplyOptions,
   type CaddyTarget,
+  type CaddyWebmail,
   type ManualCaddyCertificate,
   type PanelSite,
 } from "./caddy.js";

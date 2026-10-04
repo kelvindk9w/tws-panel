@@ -25,7 +25,7 @@ import {
   PAAS_CADDY_CONTAINER,
 } from "@paas/core";
 import { parse } from "yaml";
-import { CaddyManager, projectDomain, type CaddyTarget, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
+import { CaddyManager, projectDomain, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir } from "./static-site.js";
@@ -79,6 +79,11 @@ export interface EngineContext extends IngestContext {
    * sincronização do proxy; ausente = todos os nomes no automático.
    */
   manualCertificates?: () => Promise<ManualCaddyCertificate[]>;
+  /**
+   * Webmail ativado (upstream e IPs bloqueados) ou null. Consultado a cada
+   * sincronização do proxy; ausente = página do servidor de e-mail.
+   */
+  webmail?: () => Promise<CaddyWebmail | null>;
 }
 
 export type LogFn = (chunk: string) => void;
@@ -281,6 +286,7 @@ export class DeployEngine {
     await this.caddy.apply(targets, onLog, await this.mailHosts(onLog), {
       manual: await this.manualCertificates(onLog),
       force: false,
+      ...(await this.webmail(onLog)),
     });
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
@@ -296,7 +302,19 @@ export class DeployEngine {
     await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, await this.mailHosts(onLog), {
       manual: await this.manualCertificates(onLog),
       force: opts.force ?? false,
+      ...(await this.webmail(onLog)),
     });
+  }
+
+  /** Webmail ativado; falha aqui não pode derrubar o proxy dos sites. */
+  private async webmail(onLog?: LogFn): Promise<{ webmail?: CaddyWebmail }> {
+    try {
+      const webmail = await this.ctx.webmail?.();
+      return webmail ? { webmail } : {};
+    } catch (err) {
+      onLog?.(`aviso: webmail indisponível para o proxy (${err instanceof Error ? err.message : String(err)}).\n`);
+      return {};
+    }
   }
 
   /** Certificados manuais; falha aqui não pode derrubar o proxy dos sites. */

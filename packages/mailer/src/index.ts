@@ -92,6 +92,21 @@ export {
   type DnsblDefinition,
 } from "./blacklist.js";
 export {
+  ROUNDCUBE_IMAGE,
+  WEBMAIL_CONFIG_DIR,
+  WEBMAIL_CONFIG_FILE,
+  WEBMAIL_DATA_DIR,
+  WebmailManager,
+  generateDesKey,
+  isPublicIp,
+  parseFailedLogins,
+  phpString,
+  renderRoundcubeConfig,
+  type FailedLogin,
+  type RoundcubeConfigInput,
+  type WebmailManagerOptions,
+} from "./webmail.js";
+export {
   buildSmtpEnv,
   maskEnv,
   projectMailboxAddress,

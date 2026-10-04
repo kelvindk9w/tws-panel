@@ -1402,6 +1402,51 @@ export class MailService {
       throw httpError(409, "mail_server_stopped", "O servidor de e-mail está parado. Inicie-o antes de continuar.");
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Webmail (ver webmail-service.ts)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Por onde o webmail fala com o Stalwart: um nome que é alias dele na
+   * paas-net e, se possível, cujo certificado já foi instalado (o do
+   * hostname do servidor primeiro) — aí o webmail confere cadeia e nome.
+   * Sem nenhum instalado, o hostname e sem conferir (autoassinado).
+   */
+  async webmailBackend(): Promise<{
+    serverRunning: boolean;
+    imapHost: string;
+    verifyTls: boolean;
+    hosts: string[];
+    domains: { domain: string; host: string }[];
+  }> {
+    await this.ensureLoaded();
+    const serverRunning = this.data.adminSecret ? (await this.manager().status()).running : false;
+    const hosts = this.hostList();
+    const installed = Object.keys(this.data.tls?.certificates ?? {}).filter((h) => hosts.includes(h));
+    const hostname = this.hostname();
+    const verified = installed.includes(hostname) ? hostname : (installed[0] ?? null);
+    return {
+      serverRunning,
+      imapHost: verified ?? hostname,
+      verifyTls: verified !== null,
+      hosts,
+      domains: Object.keys(this.data.domains).map((domain) => ({ domain, host: mailHostFor(domain) })),
+    };
+  }
+
+  /** Isenta o IP do webmail do bloqueio automático do Stalwart (e tira o anterior). */
+  async exemptWebmailIp(ip: string, previousIp: string | null): Promise<void> {
+    await this.ensureLoaded();
+    await this.ensureNetworkAccess();
+    await this.client().exemptIp(ip, previousIp);
+  }
+
+  async removeWebmailIpExemption(ip: string): Promise<void> {
+    await this.ensureLoaded();
+    await this.ensureNetworkAccess();
+    await this.client().removeIpExemption(ip);
+  }
 }
 
 /** Corpo do e-mail de teste (texto simples, para leigo). */

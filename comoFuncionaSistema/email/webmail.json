@@ -1,0 +1,91 @@
+{
+  "id": "webmail",
+  "modulo": "email",
+  "titulo": "Webmail (Roundcube em https://mail.<domínio>/)",
+  "resumo": "Webmail para as pessoas lerem, responderem e enviarem e-mail das caixas (contato@, suporte@…) pelo navegador, sem configurar Outlook/Gmail. Pedido do dono do produto em 04/10/2026. O painel sobe e gerencia o container paas-webmail (Roundcube 1.7.4) na paas-net, sem porta publicada; o Caddy central o serve em https://mail.<domínio>/ de cada domínio cadastrado.",
+  "endpoints": [
+    {
+      "metodo": "GET",
+      "url": "/api/mail/webmail",
+      "resumo": "Estado do webmail: ativado, container instalado/rodando, servidor de e-mail rodando, certificado conferido pelo nome, um link por domínio, quantos IPs estão bloqueados e uma orientação em português.",
+      "corpo": "WebmailStatus { enabled, installed, running, image, containerName, mailServerRunning, tlsVerified, links: [{ domain, host, url }], blockedIps, message }",
+      "exemplo": {
+        "enabled": true,
+        "installed": true,
+        "running": true,
+        "image": "roundcube/roundcubemail:1.7.4-apache-nonroot@sha256:533b48d35f8fef99f24ae6997a032a727888d6992bd55a1a0a24d1ea208dbf3f",
+        "containerName": "paas-webmail",
+        "mailServerRunning": true,
+        "tlsVerified": true,
+        "links": [{ "domain": "exemplo.com.br", "host": "mail.exemplo.com.br", "url": "https://mail.exemplo.com.br/" }],
+        "blockedIps": 0,
+        "message": null
+      }
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/mail/webmail/enable",
+      "resumo": "Ativa (ou sobe de novo) o webmail. Recalcula o Caddyfile e registra 'mail.webmail.enable' na Auditoria.",
+      "corpo": "{ ok: true, status: WebmailStatus, proxyError?: string } — proxyError quando o webmail subiu mas o Caddy não recarregou (a próxima sincronização do proxy corrige).",
+      "erros": [
+        { "status": 409, "codigo": "mail_server_stopped", "quando": "Servidor de e-mail parado." },
+        { "status": 409, "codigo": "webmail_no_domain", "quando": "Nenhum domínio de e-mail cadastrado (é o domínio que dá o endereço mail.<domínio>)." },
+        { "status": 500, "codigo": "internal_error", "quando": "Falha do Docker ao criar/iniciar o container." }
+      ]
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/mail/webmail/disable",
+      "resumo": "Desativa: remove o container (o volume paas_webmail_data fica), tira a isenção do IP no Stalwart, recalcula o Caddyfile (mail.<domínio> volta à página 'Servidor de e-mail') e registra 'mail.webmail.disable' na Auditoria."
+    }
+  ],
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Rotas do painel: guard global (apps/server/src/plugins/auth.ts). O webmail em si tem o login do Roundcube (endereço completo da caixa + senha dela), validado pelo IMAP do Stalwart."
+  },
+  "comoFunciona": [
+    "Escolha (pesquisa de 04/10/2026, fontes no _RELATORIO-webmail.md): Roundcube. Imagem oficial do projeto (roundcube/roundcubemail), versão de segurança todo mês em 2026 (1.7.0 em 10/05, 1.7.1 em 24/05, 1.7.2 em 05/07, 1.7.3 em 09/08, 1.7.4 em 06/09), SQLite embutido (sem banco externo), sem painel administrativo (o instalador vem desligado e responde 404), usuário preenchido por URL (?_user=) e tradução pt_BR. SnappyMail descartado: última versão 2.38.2 em out/2024 e painel de administração na própria URL (?admin).",
+    "Imagem fixada por tag E digest: roundcube/roundcubemail:1.7.4-apache-nonroot@sha256:533b48d3… (ROUNDCUBE_IMAGE em packages/mailer/src/webmail.ts). Variante 'nonroot': Apache como www-data (uid 33) na porta 8000. ~265 MB.",
+    "Container paas-webmail: rede paas-net, SEM -p (só o Caddy alcança), volume paas_webmail_data em /var/roundcube (banco SQLite de preferências, contatos e sessões), --cap-drop ALL, --security-opt no-new-privileges, --memory 256m, --restart unless-stopped, labels paas.managed=true e paas.role=webmail. Conferido no Docker real: sobe e funciona sem nenhuma capability.",
+    "Configuração: o painel gera /var/roundcube/config/paas.php (renderRoundcubeConfig) e entrega pelo daemon (docker cp, 0644 — o Apache roda como www-data e o arquivo chega com dono root). O entrypoint da imagem inclui todo *.php dessa pasta DEPOIS dos valores de ambiente; por isso o arquivo precisa existir antes do primeiro start (create → cp → start). Trocar o arquivo vale em até 2 segundos, sem reiniciar (cache do PHP: opcache.revalidate_freq=2, conferido no container real).",
+    "Só o servidor de e-mail do painel: imap_host = ssl://<nome>:993 e smtp_host = ssl://<nome>:465 (TLS implícito nos dois), com o mesmo login (smtp_user %u, smtp_pass %p). Sem campo de servidor na tela de login: não dá para usar o webmail contra outro IMAP.",
+    "Nome e certificado: <nome> é um alias do paas-stalwart na paas-net — o hostname do servidor se o certificado dele já foi instalado no Stalwart; senão outro mail.<domínio> com certificado instalado; senão o hostname. Com certificado instalado (tlsVerified true), o webmail confere cadeia E nome (verify_peer, verify_peer_name, peer_name). Sem nenhum (servidor novo, Let's Encrypt ainda não emitiu), cifra a conexão interna sem conferir (verify_peer false, allow_self_signed) — a conexão não sai da paas-net — e o card avisa. A sincronização seguinte (hora em hora, ou ao instalar o certificado) passa a conferir sozinha. Conferido no real: com a conferência ligada e CA não confiável o login falha ('certificate verify failed'); com nome fora do certificado também ('subjectAltName did not match').",
+    "Segurança da configuração: enable_installer false; plugins só archive e zipdownload; spellcheck desligado (não chama serviço externo); login_username_filter 'email'; identities_level 3 (uma identidade, sem trocar o endereço: ninguém envia 'como' outra caixa); display_product_info 0 (sem versão na tela); session_lifetime 10 min sem uso; session_samesite Strict; use_https true (cookie Secure); x_frame_options deny; login_rate_limit 3 por minuto por caixa (do próprio Roundcube, vale para caixas que já entraram alguma vez); log_logins true; trusted_host_patterns = os mail.<domínio>; proxy_whitelist = faixas privadas (o Caddy chega pela paas-net); des_key de 32 caracteres gerada uma vez (data/mail/webmail.json) com cipher AES-256-CBC.",
+    "Caddy: com o webmail ativado, o bloco de cada mail.<domínio> (o mesmo que faz o Caddy emitir o certificado copiado para o Stalwart) passa a ter reverse_proxy paas-webmail:8000 (header_down -Server e -X-Powered-By), cabeçalhos Strict-Transport-Security max-age=31536000, X-Content-Type-Options nosniff, Referrer-Policy no-referrer e Permissions-Policy, e handle_errors 502/503/504 com a página 'Webmail temporariamente indisponível'. Desativado: a página 'Servidor de e-mail' de antes. A emissão do certificado não muda: o nome continua no Caddyfile nos dois casos. Nome que já é de um site/painel continua com o site (não vira webmail). O X-Frame-Options vem do Roundcube (deny). Sem CSP: o Roundcube 1.7 não envia e usa scripts inline; uma CSP errada quebraria a tela — o Roundcube bloqueia imagens remotas e limpa o HTML das mensagens por conta própria.",
+    "Bloqueio automático do Stalwart (conferido no v0.11.8 real): server.auto-ban.auth.rate (padrão 100 senhas erradas por dia por IP) bloqueia o IP PARA SEMPRE (server.blocked-ip.<ip> no banco). Todos os logins do webmail chegam do IP do container: sem isenção, 100 senhas erradas de quaisquer visitantes num dia derrubariam o webmail de todo mundo. Por isso o painel isenta o IP do paas-webmail (server.allowed-ip.<ip> por POST /api/settings + GET /api/reload, sem reiniciar) e desfaz um bloqueio já feito desse IP; quando o IP muda (container recriado), troca a isenção.",
+    "No lugar do bloqueio do Stalwart, o painel bloqueia o IP REAL de quem erra: a cada minuto lê o log do paas-webmail (docker logs --since), conta as linhas 'Failed login for … from … (X-Forwarded-For: <ip>)' por IP e, com 10 em 10 minutos, bloqueia o IP por 1 hora no Caddy (@webmail_bloqueado remote_ip … → 429 com a página 'Muitas tentativas de entrar'). Registra 'mail.webmail.block' na Auditoria. IP de rede interna (10/8, 172.16/12, 192.168/16, loopback, link-local, CGNAT, ULA) nunca é bloqueado: se o Docker entregar ao Caddy o IP do gateway, bloquear seria bloquear todos. Estado do bloqueio só em memória (reiniciar o painel libera).",
+    "Ciclo de vida: ativar exige servidor de e-mail rodando e pelo menos um domínio. Parar o servidor de e-mail (POST /api/mail/server/stop) para o webmail junto; iniciar dispara a sincronização do certificado, que no fim sobe o webmail de novo (se ativado). A mesma sincronização (1 min depois do boot, de hora em hora, ao adicionar/remover domínio) regrava paas.php (nomes aceitos e conferência do certificado) e reconfere a isenção do IP.",
+    "Na tela: card 'Webmail' na página E-mail (estado, Ativar webmail verde, Desativar vermelho com confirmação, 'Abrir webmail' azul por domínio em aba nova) e, em cada caixa (MailboxesPanel, na página do domínio e no e-mail do projeto), 'Abrir webmail' com o usuário preenchido: https://mail.<domínio>/?_user=<caixa>. A senha nunca vai na URL."
+  ],
+  "persistencia": [
+    { "arquivo": "data/mail/webmail.json", "formato": "json (chmod 0600)", "conteudo": "{ enabled, enabledAt, desKey (chave da sessão do Roundcube), exemptIp (IP isento no Stalwart) }" },
+    { "arquivo": "volume Docker paas_webmail_data", "formato": "SQLite + config (interno ao Roundcube)", "conteudo": "/var/roundcube: db/sqlite.db (usuários do Roundcube, preferências, contatos, sessões) e config/paas.php. As mensagens ficam no Stalwart, não aqui. Desativar não apaga o volume." }
+  ],
+  "arquivosFonte": {
+    "pacotes": ["packages/core/src/webmail.ts", "packages/mailer/src/webmail.ts", "packages/mailer/src/client.ts (exemptIp, removeIpExemption)", "packages/deploy/src/caddy.ts (webmailBody, WEBMAIL_DOWN_PAGE, WEBMAIL_BLOCKED_PAGE)", "packages/deploy/src/engine.ts (ctx.webmail)"],
+    "servicos": ["apps/server/src/services/webmail-service.ts", "apps/server/src/services/mail-service.ts (webmailBackend, exemptWebmailIp, removeWebmailIpExemption)", "apps/server/src/services/deploy-service.ts (setWebmailProvider)"],
+    "rotas": ["apps/server/src/routes/webmail.ts", "apps/server/src/routes/mail.ts (cria o serviço, registra as rotas, acompanha o servidor)"],
+    "web": ["apps/web/src/components/mail/WebmailCard.tsx", "apps/web/src/pages/MailPage.tsx", "apps/web/src/components/mail/MailboxesPanel.tsx"]
+  },
+  "testes": [
+    "packages/core/tests/webmail.test.ts",
+    "packages/mailer/tests/webmail.test.ts",
+    "packages/mailer/tests/client-allowed-ip.test.ts",
+    "packages/deploy/tests/caddy-webmail.test.ts",
+    "apps/server/tests/webmail-service.test.ts",
+    "apps/server/tests/routes-webmail.test.ts",
+    "apps/server/tests/routes-mail-webmail.test.ts",
+    "apps/server/tests/mail-webmail-backend.test.ts",
+    "apps/server/tests/deploy-panel-route.test.ts",
+    "apps/web/tests/webmail.test.tsx"
+  ],
+  "pontosDeAtencao": [
+    "fail2ban (Fase 04 de hardening) NÃO ganhou jail para o webmail: o tráfego do webmail entra pela porta publicada do Caddy, que o Docker encaminha pela cadeia FORWARD/DOCKER-USER — a ação nftables-multiport do jail.local bane na INPUT e não bloquearia nada; além disso o log fica no json do Docker com caminho por ID de container. O bloqueio por IP foi feito no próprio Caddy, pelo painel (ver comoFunciona).",
+    "O bloqueio por IP (10 em 10 min → 1 h) fica em memória: reiniciar o painel libera os IPs bloqueados. O limite do Roundcube (3 por minuto por caixa) só vale para caixas que já entraram no webmail alguma vez.",
+    "O IP isento no Stalwart muda quando o container é recriado; até a sincronização seguinte (no máximo 1 hora, ou ao ativar), o IP novo não está isento — o risco é só o bloqueio do Stalwart (100 erros/dia), que o próprio painel desfaz ao isentar.",
+    "Linhas de log forjadas: o usuário digitado entra no log do Roundcube. O leitor exige o formato completo e um IP válido; no pior caso, alguém consegue bloquear por 1 hora um IP de terceiro só no webmail. IP interno nunca é bloqueado.",
+    "Sem CSP do Caddy (ver comoFunciona). O Roundcube teve muitas correções de XSS em 2025–2026: manter a imagem atualizada é a principal defesa — trocar ROUNDCUBE_IMAGE (tag e digest) a cada versão de segurança.",
+    "Dois domínios: o login funciona em qualquer mail.<domínio> (todas as caixas estão no mesmo Stalwart). O cookie de sessão é por nome: entrar por mail.a não vale em mail.b."
+  ]
+}

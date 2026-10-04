@@ -19,6 +19,7 @@
     "Renovação (MailService.syncTls): roda 1 min após o boot, a cada hora, depois de iniciar o servidor, de adicionar/remover domínio e ao abrir a página E-mail (GET /api/mail/tls). Compara com o estado aplicado (data/mail/mail.json → tls): nada mudou → nada; só a impressão digital (renovação) ou os aliases → entrega os arquivos e chama GET /api/reload/certificate (troca sem derrubar conexão; se a API falhar, reinicia); certificado de um nome novo ou outro hostname → entrega e REINICIA o container (o Stalwart v0.11.8 não relê seção nova do config.toml nem com /api/reload — conferido no servidor real em 01/10/2026). Hosts de e-mail mudaram → o Caddyfile é recalculado (DeployService.refreshProxy). Desde 04/10/2026 a comparação inclui a impressão digital do config.toml gerado (tls.config): se uma versão nova do painel gera outro arquivo (chave nova, outro report.domain), a sincronização seguinte entrega e reinicia uma vez. A mesma sincronização acrescenta dmarc@ à postmaster@ dos domínios cadastrados antes disso.",
     "Hostname do servidor: PAAS_MAIL_HOSTNAME → data.hostname (legado) → mail.<1º domínio cadastrado> → mail.localhost (sem domínio). Hosts de e-mail = hostname + mail.<cada domínio>, sem .localhost. Cada um ganha bloco no Caddy, certificado, alias na paas-net.",
     "Proteção do e-mail existente (01/10/2026): POST /api/mail/domains consulta o MX do domínio (resolvers públicos) antes de provisionar. Se ele aponta para outro servidor ('elsewhere') ou a consulta falha ('unknown'), responde 409 domain_receives_mail com existingMail {status, servers, suggestedDomain: envio.<domínio>} e só segue com confirmExistingMail:true. Sem MX, MX nulo (RFC 7505) ou MX já apontando para mail.<domínio>/hostname: segue direto. Motivo: o dono do produto ia cadastrar o domínio principal da empresa, que recebe e-mail em outro provedor.",
+    "Webmail (04/10/2026, ver webmail.json): botão 'Ativar webmail' na página E-mail sobe o container paas-webmail (Roundcube 1.7.4, imagem fixada por tag e digest) na paas-net, sem porta publicada, falando só com o paas-stalwart (IMAP 993 e SMTP 465, mesmo login). O bloco de cada mail.<domínio> no Caddy passa de página estática a reverse_proxy para ele (o certificado continua sendo emitido pelo mesmo bloco). O painel isenta o IP do webmail no bloqueio automático do Stalwart e bloqueia no Caddy o IP real de quem erra a senha demais.",
     "Blacklist (GET /api/mail/blacklist): consulta DNSBLs públicas (Spamhaus ZEN, SpamCop, Barracuda para o IP; Spamhaus DBL para cada domínio cadastrado) via reverse-DNS lookup (127.0.0.0/8 = listado)."
   ],
   "arquivosFonte": {
@@ -37,11 +38,12 @@
       "packages/mailer/src/delivery-status.ts",
       "packages/deploy/src/caddy.ts",
       "packages/mailer/src/exec.ts",
+      "packages/mailer/src/webmail.ts",
       "packages/mailer/src/index.ts",
       "packages/core/src/mail.ts",
       "packages/deploy/src/engine.ts"
     ],
-    "web": ["apps/web/src/pages/MailPage.tsx", "apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/mail/TestEmailCard.tsx", "apps/web/src/components/mail/MailboxesPanel.tsx", "apps/web/src/components/mail/DnsChecklistPanel.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"],
+    "web": ["apps/web/src/pages/MailPage.tsx", "apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/mail/TestEmailCard.tsx", "apps/web/src/components/mail/MailboxesPanel.tsx", "apps/web/src/components/mail/DnsChecklistPanel.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx", "apps/web/src/components/mail/WebmailCard.tsx"],
     "testes": [
       "packages/mailer/tests/mailboxes.test.ts",
       "packages/mailer/tests/blacklist.test.ts",
@@ -62,6 +64,11 @@
       "apps/web/tests/test-email-card.test.tsx",
       "apps/web/tests/mail-panels.test.tsx",
       "apps/web/tests/project-email-card.test.tsx",
+      "packages/mailer/tests/webmail.test.ts",
+      "packages/deploy/tests/caddy-webmail.test.ts",
+      "apps/server/tests/webmail-service.test.ts",
+      "apps/server/tests/routes-webmail.test.ts",
+      "apps/web/tests/webmail.test.tsx",
       "scripts/test-mail.mts"
     ]
   },
@@ -90,6 +97,9 @@
     { "id": "criar-dominio", "metodo": "POST", "url": "/api/mail/domains", "resumo": "Provisiona um domínio: DKIM RSA 2048 + caixa postmaster@.", "arquivo": "criar-dominio.json" },
     { "id": "remover-dominio", "metodo": "DELETE", "url": "/api/mail/domains/:domain", "resumo": "Remove um domínio e todas as suas caixas.", "arquivo": "remover-dominio.json" },
     { "id": "certificado-servidor", "metodo": "GET", "url": "/api/mail/tls", "resumo": "Certificado de cada mail.<domínio>: válido (emissor/validade) ou o que falta.", "arquivo": "certificado-servidor.json" },
+    { "id": "webmail", "metodo": "GET", "url": "/api/mail/webmail", "resumo": "Estado do webmail (Roundcube em https://mail.<domínio>/), um link por domínio.", "arquivo": "webmail.json" },
+    { "id": "webmail-ativar", "metodo": "POST", "url": "/api/mail/webmail/enable", "resumo": "Ativa o webmail: sobe o paas-webmail e mail.<domínio> passa a abri-lo.", "arquivo": "webmail.json" },
+    { "id": "webmail-desativar", "metodo": "POST", "url": "/api/mail/webmail/disable", "resumo": "Desativa o webmail: mail.<domínio> volta à página do servidor de e-mail.", "arquivo": "webmail.json" },
     { "id": "blacklist", "metodo": "GET", "url": "/api/mail/blacklist", "resumo": "Checa o IP público e os domínios contra DNSBLs.", "arquivo": "blacklist.json" },
     { "id": "dns-checklist", "metodo": "GET", "url": "/api/mail/domains/:domain/dns", "resumo": "Lista os registros DNS esperados para o domínio.", "arquivo": "dns-checklist.json" },
     { "id": "verificar-dns", "metodo": "POST", "url": "/api/mail/domains/:domain/verify", "resumo": "Verifica os registros DNS contra o DNS real + PTR (verde, azul ou amarelo).", "arquivo": "verificar-dns.json" },

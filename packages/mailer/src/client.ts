@@ -14,6 +14,7 @@
  *                                   destinatário (formato em delivery-status.ts)
  * Auth: HTTP Basic com o fallback-admin (admin:<secret>).
  */
+import { isIP } from "node:net";
 import { DKIM_SELECTOR } from "@paas/core";
 import type { QueuedMessage } from "./delivery-status.js";
 
@@ -25,6 +26,10 @@ export class StalwartApiError extends Error {
     super(message);
     this.name = "StalwartApiError";
   }
+}
+
+function assertIp(ip: string): void {
+  if (!isIP(ip)) throw new StalwartApiError(400, `IP inválido: ${JSON.stringify(ip)}`);
 }
 
 interface ApiEnvelope {
@@ -181,6 +186,36 @@ export class StalwartClient {
     return (data?.items ?? [])
       .map((item) => item.name ?? "")
       .filter((name) => name.endsWith(`@${domain}`));
+  }
+
+  // -------------------------------------------------------------------------
+  // IP isento do bloqueio automático (webmail)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Isenta `ip` do bloqueio automático (server.allowed-ip), desfaz um
+   * bloqueio já feito dele (server.blocked-ip) e tira a isenção do IP
+   * anterior. Conferido no Stalwart v0.11.8 real: grava no banco e vale
+   * depois de GET /api/reload, sem reiniciar. Usado para o webmail, de onde
+   * chegam os logins de todos os visitantes (ver webmail.ts).
+   */
+  async exemptIp(ip: string, previousIp: string | null): Promise<void> {
+    assertIp(ip);
+    const remove = [
+      ...(previousIp && previousIp !== ip && isIP(previousIp) ? [`server.allowed-ip.${previousIp}`] : []),
+      `server.blocked-ip.${ip}`,
+    ];
+    await this.request("POST", "/settings", [
+      { type: "delete", keys: remove },
+      { type: "insert", prefix: null, values: [[`server.allowed-ip.${ip}`, ""]], assert_empty: false },
+    ]);
+    await this.request("GET", "/reload");
+  }
+
+  async removeIpExemption(ip: string): Promise<void> {
+    assertIp(ip);
+    await this.request("POST", "/settings", [{ type: "delete", keys: [`server.allowed-ip.${ip}`] }]);
+    await this.request("GET", "/reload");
   }
 
   // -------------------------------------------------------------------------
