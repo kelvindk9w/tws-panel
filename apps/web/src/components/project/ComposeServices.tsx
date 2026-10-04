@@ -44,8 +44,8 @@ function buildLabel(build: NonNullable<ComposeServiceInfo["build"]>): string {
 
 type ContainerState = { label: string; variant: "success" | "warning" | "destructive" | "secondary" };
 
-/** Estado do container de um serviço, em palavras simples. */
-function containerState(c: DockerContainerInfo | undefined): ContainerState {
+/** Estado do container de um serviço, em palavras simples (também no modal Portas). */
+export function containerState(c: Pick<DockerContainerInfo, "state" | "health"> | undefined): ContainerState {
   if (!c) return { label: "sem container", variant: "secondary" };
   if (c.state === "running") {
     if (c.health === "unhealthy") return { label: "não saudável", variant: "destructive" };
