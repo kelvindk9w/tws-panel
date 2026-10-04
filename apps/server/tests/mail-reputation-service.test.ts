@@ -202,10 +202,13 @@ describe("agendamento diário", () => {
     const s = new MailReputationService(deps());
     await s.state(); // lê o arquivo antes do relógio de mentira (E/S de verdade)
     vi.useFakeTimers();
+    // simula a conferência marcando a hora da tentativa SÓ em memória: gravar
+    // em disco (E/S de verdade) com o relógio de mentira deixava o teste
+    // instável com a máquina carregada (falhou 1 vez na suíte completa).
+    const internal = s as unknown as { cache: { lastAttemptAt: string | null } };
     const check = vi.spyOn(s, "check").mockImplementation(async () => {
-      // simula a conferência: grava a hora da tentativa
-      await (s as unknown as { markAttempt(): Promise<void> }).markAttempt();
-      return s.state();
+      internal.cache.lastAttemptAt = new Date(clock).toISOString();
+      return undefined as never;
     });
     s.start();
     await vi.advanceTimersByTimeAsync(61_000);
