@@ -84,11 +84,13 @@ export {
 export {
   checkIpBlacklists,
   checkDomainBlacklists,
+  isValidDqsKey,
   reversedIpv4,
   defaultBlacklistResolver,
   IP_DNSBLS,
   DOMAIN_DNSBLS,
   type BlacklistResolverLike,
+  type BlacklistOptions,
   type DnsblDefinition,
 } from "./blacklist.js";
 export {
@@ -106,6 +108,29 @@ export {
   type RoundcubeConfigInput,
   type WebmailManagerOptions,
 } from "./webmail.js";
+export {
+  DeliveryLogReader,
+  isDeliveryLogLine,
+  logValueText,
+  parseStalwartLogLine,
+  sanitizeLogText,
+  type DeliveryLogReaderOptions,
+  type StalwartLogLine,
+} from "./delivery-log.js";
+export {
+  isQueueId,
+  parseQueueResponse,
+  queueItemFromMessage,
+  type QueueItemView,
+  type QueueMessageRaw,
+} from "./queue-view.js";
+export {
+  deliverabilityScore,
+  formatPercent,
+  GOOGLE_POSTMASTER_URL,
+  MICROSOFT_SNDS_URL,
+  type DeliverabilityInput,
+} from "./deliverability-score.js";
 export {
   buildSmtpEnv,
   maskEnv,

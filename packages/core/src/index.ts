@@ -162,3 +162,4 @@ export * from "./terminal";
 export * from "./onboarding";
 export * from "./certificates";
 export * from "./webmail";
+export * from "./mail-envios";

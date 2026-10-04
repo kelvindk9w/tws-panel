@@ -105,23 +105,13 @@ const monitoringRoutes: FastifyPluginAsync = async (app) => {
   );
   app.decorate("monitorService", monitor);
 
-  // Inclui o check de blacklist no scan recorrente quando o módulo de e-mail
-  // está ativo (há domínios cadastrados).
-  monitor.setMailBlacklistHook(async () => {
-    const domains = await app.mailService.listDomains();
-    if (domains.length === 0) return [];
-    const check = await app.mailService.checkBlacklists();
-    const listed: string[] = [];
-    for (const target of [check.ip, ...check.domains]) {
-      if (!target) continue;
-      for (const r of target.results) {
-        if (r.status === "listed") {
-          listed.push(`${target.target} listado em ${r.label} — remoção: ${r.removalUrl ?? "ver provedor da DNSBL"}`);
-        }
-      }
-    }
-    return listed;
-  });
+  // A checagem de blacklist do e-mail NÃO fica mais aqui. O gancho antigo
+  // (monitor.setMailBlacklistHook) lia app.mailService, que é decorado
+  // dentro do plugin de e-mail e não é visível neste plugin (o Fastify isola
+  // cada plugin): dava TypeError, engolido como "best-effort", e a checagem
+  // nunca rodou. Agora ela é agendada pelo próprio e-mail, uma vez por dia
+  // (services/mail-reputation-service.ts, página E-mail → Envios), e o alerta
+  // de listagem continua indo para a central de alertas.
 
   await monitor.start();
   app.addHook("onClose", async () => monitor.stop());

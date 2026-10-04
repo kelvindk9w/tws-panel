@@ -18,9 +18,9 @@ import { Layout } from "@/components/Layout";
 
 afterEach(cleanup);
 
-function renderLayout(navLayout: NavLayout) {
+function renderLayout(navLayout: NavLayout, path = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <AuthContext.Provider
         value={{ user: { username: "admin", createdAt: "x" }, setUser: () => undefined, preferences: { navLayout }, setPreferences: () => undefined }}
       >
@@ -62,5 +62,26 @@ describe("Layout — posição do menu", () => {
     expect(screen.queryByTestId("nav-mobile")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Menu/ }));
     expect(screen.getByTestId("nav-mobile")).toHaveTextContent("Configurações");
+  });
+});
+
+describe("Layout — Envios no menu", () => {
+  it("link Envios logo depois de E-mail", () => {
+    renderLayout("top");
+    const links = screen.getAllByRole("link").map((a) => a.textContent);
+    const mail = links.indexOf("E-mail");
+    expect(mail).toBeGreaterThanOrEqual(0);
+    expect(links[mail + 1]).toBe("Envios");
+    expect(screen.getByRole("link", { name: "Envios" })).toHaveAttribute("href", "/mail/envios");
+  });
+
+  it("em /mail/envios só Envios fica marcado; num domínio, só E-mail", () => {
+    renderLayout("top", "/mail/envios");
+    expect(screen.getByRole("link", { name: "Envios" }).className).toContain("bg-secondary");
+    expect(screen.getByRole("link", { name: "E-mail" }).className).not.toContain("bg-secondary");
+    cleanup();
+    renderLayout("top", "/mail/envio.exemplo.com.br");
+    expect(screen.getByRole("link", { name: "E-mail" }).className).toContain("bg-secondary");
+    expect(screen.getByRole("link", { name: "Envios" }).className).not.toContain("bg-secondary");
   });
 });

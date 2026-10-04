@@ -217,7 +217,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Página Certificados: depois do e-mail (que registra no deployService os
   // hosts mail.<domínio> e a instalação do certificado no Stalwart).
   await app.register(certificatesRoutes);
-  // Fase 4 — por último: consome mailService (hook de blacklist no scan).
+  // Fase 4 — por último. A checagem de blacklist do e-mail não passa mais por
+  // aqui: é agendada dentro do plugin de e-mail (mail-reputation-service.ts).
   await app.register(monitoringRoutes);
   await app.register(terminalRoutes);
 

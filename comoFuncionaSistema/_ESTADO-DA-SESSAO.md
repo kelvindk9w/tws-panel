@@ -21,6 +21,21 @@ pendente e por quê — informação que não está no código nem no git log.
 - Detalhes, fontes da escolha, testes e passo a passo na VPS: `_RELATORIO-webmail.md`. Comportamento: `email/webmail.json`.
 - Sem push nem PR: o agente principal decide.
 
+## Atualização de 04/10/2026 — branch `feat/envios` (subagente, worktree isolado)
+- Pedido do dono: um painel para acompanhar o que o servidor de e-mail faz.
+- O que entrou: página **Envios** (`/mail/envios`, link no menu depois de E-mail) com
+  fila (Tentar agora / Cancelar), histórico, volume de 14 dias, reputação e nota.
+- **Blacklist resolvida**: nunca rodava porque o gancho ficava no plugin do Monitoramento,
+  que não enxerga o serviço de e-mail (plugins isolados no Fastify; o erro era engolido).
+  Agora roda uma vez por dia e no botão, dentro do plugin de e-mail, com ponto de teste
+  (nunca "limpo" sem resposta) e chave DQS da Spamhaus.
+- Histórico vem do registro do container (`docker logs` a cada 5 min), só metadados, 30
+  dias em `data/mail/envios/`.
+- Achado: no Stalwart 0.11.8, "tentar agora" encurta o prazo para 10 s — é a última
+  tentativa. A tela avisa.
+- Detalhes, decisões e como validar na VPS: `_RELATORIO-envios.md` e `email/envios.json`.
+- Sem push nem PR. Falta um link "Ver envios" na página E-mail (arquivo do agente do webmail).
+
 ## Atualização de 03/10/2026 — branch `feat/portas` (subagente, worktree isolado)
 - Pedido do dono depois de colocar o cassino no ar: ver e trocar as portas dos containers pelo painel.
 - O que entrou:
