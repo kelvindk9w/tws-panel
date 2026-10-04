@@ -1,0 +1,98 @@
+{
+  "id": "envios",
+  "modulo": "email",
+  "tipo": "tela",
+  "rota": "/mail/envios",
+  "resumo": "Página Envios (E-mail → Envios, link no menu logo depois de E-mail): o que o servidor de e-mail está fazendo — fila agora (com Tentar agora e Cancelar), histórico de entregas com o motivo devolvido pelo destino, volume de 14 dias por dia e por projeto com taxas de recusa e adiamento, reputação (listas de bloqueio, uma vez por dia e no botão) e a nota de entregabilidade.",
+  "pedido": "Dono do produto, 04/10/2026: um painel para acompanhar o que o servidor de e-mail faz.",
+  "abas": {
+    "fila": "?aba= ausente. Mensagens que o Stalwart ainda tenta entregar: destinatários com estado (Aguardando, Adiada, Entregue, Recusada), remetente (caixa e projeto), tentativas, próxima tentativa, quando desiste e o motivo da última falha, com dica para códigos conhecidos (S3150 da Microsoft, 4.7.28 do Gmail, TSS04 do Yahoo, 5.1.1 endereço inexistente). Botões com confirmação.",
+    "historico": "?aba=historico. Entregues, recusadas, adiadas e canceladas, com filtros (período 1/7/14/30 dias, estado, projeto ou 'sem projeto', caixa, domínio de destino) e busca (endereço, motivo ou servidor). 100 por vez, 'Carregar mais'. A primeira carga e o botão Atualizar leem o registro do servidor antes (se a última leitura tiver mais de 1 min).",
+    "volume": "?aba=volume. Barras empilhadas por dia (entregues verde, adiadas âmbar, recusadas vermelho, canceladas cinza), feitas em HTML puro (sem biblioteca), cada barra com rótulo acessível e foco por teclado; legenda, linha de leitura ao passar o dedo/mouse e 'Ver como tabela'. Taxa de recusa (limite 2%), destinatários com adiamento (limite 5%, referência do painel), reclamações sem dado (manda para o Postmaster Tools, limite 0,1%), aviso de poucos envios (< 50) e totais por projeto. Os dias seguem o fuso do navegador (?tz=getTimezoneOffset).",
+    "reputacao": "?aba=reputacao. Resultado da última conferência por IP e por domínio: Limpo, Listado (com 'Pedir remoção') ou Não deu para verificar (com 'Conferir no site' e o motivo) — nunca 'limpo' sem resposta da lista. Botão Conferir agora (no máximo 1 por minuto), próxima conferência automática, e o campo da chave DQS gratuita da Spamhaus (guardada no servidor, mostra só os 4 últimos caracteres, 'Apagar chave').",
+    "nota": "?aba=nota. 'Prontidão para a caixa de entrada' de 0 a 100 com faixa (85+ verde, 60–84 amarelo, abaixo vermelho), lista do que está feito e do que falta (pontos, situação, o que fazer e link) e as marcações com data: Google Postmaster Tools cadastrado, IP no Microsoft SNDS, taxa de spam conferida abaixo de 0,1%."
+  },
+  "endpoints": [
+    { "metodo": "GET", "url": "/api/mail/envios/queue", "resposta": "MailQueueResponse { available, message, items: MailQueueItem[], total, checkedAt }. Servidor não criado ou fora do ar → available:false com a explicação (200)." },
+    { "metodo": "POST", "url": "/api/mail/envios/queue/:id/retry", "parametros": "id: só dígitos, até 20 (u64 da fila, mantido como texto)", "resposta": "{ ok, message }; 404 queue_message_not_found (já saiu ou nada pendente); 502 mail_unreachable; auditoria mail.queue.retry." },
+    { "metodo": "POST", "url": "/api/mail/envios/queue/:id/cancel", "resposta": "{ ok, message }; grava 'cancelada' no histórico para os destinatários pendentes; 404/502 como acima; auditoria mail.queue.cancel." },
+    { "metodo": "GET", "url": "/api/mail/envios/history", "parametros": "days (1–30, padrão 7), state (delivered|bounced|deferred|cancelled), projectId (ou 'none'), mailbox, domain, q (até 100), limit (até 500), offset, refresh (0|1). Campo desconhecido → 400.", "resposta": "MailHistoryResponse { items (mais recentes primeiro, com sender), total, collectedAt, collectError, retentionDays: 30, projects, mailboxes, domains }." },
+    { "metodo": "GET", "url": "/api/mail/envios/volume?tz=<minutos>", "parametros": "tz = getTimezoneOffset do navegador (-840 a 840; padrão 0)", "resposta": "MailVolumeResponse { days[14], byProject, totals, bounceRate, deferRate, complaintRate: null, lowVolume }." },
+    { "metodo": "GET", "url": "/api/mail/envios/reputation", "resposta": "MailReputationResponse { lastCheck: BlacklistCheckResponse|null, lastError, checking, nextCheckAt, dqs: { configured, hint } }." },
+    { "metodo": "POST", "url": "/api/mail/envios/reputation/check", "resposta": "O mesmo estado depois de conferir; 429 check_too_soon se o botão foi usado há menos de 1 min." },
+    { "metodo": "PUT", "url": "/api/mail/envios/reputation/dqs", "corpo": "{ key: string|null } (até 64; o serviço exige [a-z0-9]{20,64})", "resposta": "Estado (sem a chave); 400 invalid_dqs_key; auditoria mail.dqs.set / mail.dqs.clear SEM a chave." },
+    { "metodo": "GET", "url": "/api/mail/envios/deliverability", "resposta": "DeliverabilityResponse { score, max: 100, band, items, marks, factsAt }." },
+    { "metodo": "PUT", "url": "/api/mail/envios/postmaster", "corpo": "{ googleAt?, microsoftAt?, spamRateOkAt? } (data AAAA-MM-DD ou ISO; null desmarca; ao menos um campo)", "resposta": "{ marks }; 400 invalid_date (inválida ou no futuro)." }
+  ],
+  "deOndeVemCadaDado": {
+    "fila": "API de administração do Stalwart v0.11.8: GET /api/queue/messages?values=1&limit=200 (crates/jmap/src/api/management/queue.rs). O id é u64 e o JSON.parse comum arredonda (333028896599011329 vira …300): o painel lê a resposta como texto e põe o id entre aspas antes (packages/mailer/src/queue-view.ts).",
+    "tentarAgora": "PATCH /api/queue/messages/{id}. ATENÇÃO, conferido no código da tag e num Stalwart real: além de marcar a tentativa para agora, o Stalwart encurta o prazo da mensagem para 10 s depois ('if domain.expires > time { domain.expires = time + 10 }'). Se a tentativa falhar de novo, ele desiste ('Queue rate limit exceeded'), registra falha definitiva e manda o aviso ao remetente. Por isso o botão pede confirmação dizendo que é a última tentativa.",
+    "cancelar": "DELETE /api/queue/messages/{id} sem filtro: a mensagem sai da fila (message.remove), sem aviso ao remetente e sem linha no registro — o painel grava ele mesmo o evento 'cancelada' no histórico.",
+    "historico": "Registro (stdout) do container paas-stalwart, lido com `docker logs --since <última linha − 10 s> paas-stalwart` a cada 5 min (1 min depois do boot) e na abertura da aba. O config.toml gerado pelo painel já tem [tracer.stdout] level=info, e nesse nível cada resultado de entrega vira uma linha com os campos da tentativa (queueId, from, to). Eventos usados: delivery.dsn-success (entregue; a resposta do DATA vem de delivery.delivered), delivery.dsn-perm-fail (recusada, inclusive a desistência depois de dias), queue.rescheduled (adiada; o motivo é a última falha da tentativa: delivery.rcpt-to-rejected ou uma falha do domínio como delivery.connect-error). Remetente vazio (avisos do próprio servidor) fica de fora. Parser: packages/mailer/src/delivery-log.ts; leitura: apps/server/src/services/stalwart-logs.ts.",
+    "volume": "Os mesmos eventos guardados. Recusa = recusadas ÷ (entregues + recusadas). Adiamento = destinatários (mensagem+endereço) com algum adiamento ÷ destinatários no período (um destinatário adiado 5 vezes conta 1).",
+    "remetente": "MailService.enviosSenders: cada caixa (com o projeto dono ou, nas antigas, o projeto que a usa para enviar), abuse@ e dmarc@ apontando para a postmaster@ e o endereço de envio antigo de projeto. Nome do projeto: DeployService.listProjects.",
+    "reputacao": "Consultas DNS (DNSBL) do próprio servidor (resolvedor do sistema): Spamhaus ZEN, SpamCop e Barracuda para o IP; Spamhaus DBL para cada domínio. Cada zona é testada junto com o ponto de teste oficial (RFC 5782: 127.0.0.2; DBL: dbltest.com) — se o teste não aparece listado, o resultado é 'unknown'. Com chave DQS, a Spamhaus vai por <chave>.zen.dq.spamhaus.net / <chave>.dbl.dq.spamhaus.net.",
+    "nota": "packages/mailer/src/deliverability-score.ts, seção 3.3 da pesquisa (_PESQUISA-entregabilidade.md): DNS 25 (proporcional, sem o PTR), PTR 10 (genérico 5), certificado 5, listas 15 (Spamhaus listando 0; outra lista 5; Spamhaus limpa e outra sem conferir 12; Spamhaus sem conferir 0), aquecimento 15 (dias desde o primeiro envio ÷ 30), recusas+adiamentos em 7 dias 10 (< 2%; < 5% vale 5), Postmaster 3, SNDS 2, taxa de spam 10 (conferida há até 30 dias; mais antiga 5), relatórios DMARC 5 (sempre 'não deu para verificar': o painel ainda não lê). DNS/PTR/certificado vêm da conferência diária (MailService.enviosDeliverabilityFacts → verifyDomain e tlsStatus), guardados em data/mail/reputacao.json."
+  },
+  "persistencia": [
+    { "arquivo": "data/mail/envios/AAAA-MM-DD.jsonl", "formato": "uma linha JSON por evento (MailDeliveryEvent), 0600", "conteudo": "Só metadados: hora, id da fila, remetente e destinatário do envelope, domínio do destino, estado, código SMTP, resposta (até 300 caracteres, sem controle), servidor que respondeu, próxima tentativa. Nunca assunto nem corpo. Arquivos com mais de 30 dias são apagados a cada leitura." },
+    { "arquivo": "data/mail/envios/estado.json", "formato": "json 0600", "conteudo": "{ cursor: { at, hashes } (última linha lida e as linhas daquele segundo, para não duplicar), firstEventAt (primeiro envio já visto — não some com a retenção; usado no aquecimento), collectedAt, collectError }." },
+    { "arquivo": "data/mail/reputacao.json", "formato": "json 0600 (guarda a chave DQS)", "conteudo": "{ dqsKey, lastCheck, lastError, lastAttemptAt, marks { googleAt, microsoftAt, spamRateOkAt }, facts { at, domains[{ name, dnsOk, dnsTotal, ptr }], tls { ok, total } } }." }
+  ],
+  "agendamentos": [
+    "Histórico: 1 min depois do boot e a cada 5 min (MailEnviosService.start), só com o servidor de e-mail criado.",
+    "Reputação: 1 min depois do boot e de hora em hora confere se já passou 1 dia da última tentativa (1 hora se a última falhou) — então confere listas + DNS/PTR/certificado. Listagem cria o alerta 'E-mail: IP ou domínio listado em blacklist' (fonte blacklist) na central de alertas."
+  ],
+  "porQueABlacklistNaoRodava": "O gancho ficava no plugin do Monitoramento (routes/monitoring.ts: monitor.setMailBlacklistHook lendo app.mailService). O MailService é decorado DENTRO do plugin de e-mail, e o Fastify isola plugins: no Monitoramento app.mailService era undefined, o gancho lançava TypeError e o scan engolia o erro como 'best-effort'. Além disso, o scan só chega ao gancho depois de coletar a linha de base pelo host bridge. Agora o gancho foi tirado do Monitoramento e a conferência é agendada dentro do plugin de e-mail (apps/server/tests/mail-envios-wiring.test.ts prova as duas coisas). GET /api/mail/blacklist (card da página Segurança) usa a mesma conferência (com a chave DQS e o resultado guardado).",
+  "arquivosFonte": {
+    "web": [
+      "apps/web/src/pages/MailEnviosPage.tsx",
+      "apps/web/src/components/envios/QueueSection.tsx",
+      "apps/web/src/components/envios/HistorySection.tsx",
+      "apps/web/src/components/envios/VolumeSection.tsx",
+      "apps/web/src/components/envios/ReputationSection.tsx",
+      "apps/web/src/components/envios/ScoreSection.tsx",
+      "apps/web/src/lib/envios.ts",
+      "apps/web/src/components/Layout.tsx",
+      "apps/web/src/App.tsx"
+    ],
+    "server": [
+      "apps/server/src/routes/mail-envios.ts",
+      "apps/server/src/routes/mail.ts",
+      "apps/server/src/services/mail-envios-service.ts",
+      "apps/server/src/services/mail-reputation-service.ts",
+      "apps/server/src/services/stalwart-logs.ts",
+      "apps/server/src/services/mail-service.ts (métodos envios*)"
+    ],
+    "pacotes": [
+      "packages/mailer/src/delivery-log.ts",
+      "packages/mailer/src/queue-view.ts",
+      "packages/mailer/src/deliverability-score.ts",
+      "packages/mailer/src/blacklist.ts",
+      "packages/mailer/src/client.ts",
+      "packages/core/src/mail-envios.ts"
+    ]
+  },
+  "testes": [
+    "packages/mailer/tests/delivery-log.test.ts",
+    "packages/mailer/tests/queue-view.test.ts",
+    "packages/mailer/tests/deliverability-score.test.ts",
+    "packages/mailer/tests/blacklist.test.ts",
+    "packages/mailer/tests/client-queue.test.ts",
+    "apps/server/tests/mail-envios-service.test.ts",
+    "apps/server/tests/mail-reputation-service.test.ts",
+    "apps/server/tests/mail-envios-mailservice.test.ts",
+    "apps/server/tests/routes-mail-envios.test.ts",
+    "apps/server/tests/mail-envios-wiring.test.ts",
+    "apps/server/tests/stalwart-logs.test.ts",
+    "apps/web/tests/mail-envios-page.test.tsx",
+    "apps/web/tests/layout.test.tsx"
+  ],
+  "limites": [
+    "Histórico começa quando o painel lê o registro: na primeira leitura, pega até 30 dias do que o Docker ainda tiver. Se o container do Stalwart for recriado, o registro antigo some (o que já foi lido fica guardado).",
+    "Recusa de mensagem que o próprio app nem conseguiu enfileirar (senha errada, remetente não permitido) não entra: acontece antes da fila.",
+    "Reclamações (spam) não chegam ao servidor: só o Google Postmaster Tools e o JMRP da Microsoft mostram.",
+    "A lista de bloqueio da Microsoft não é consultável por DNS: aparece como recusa S3150 no histórico, com a dica de sender.office.com.",
+    "Tentar agora na v0.11.8 é a última tentativa (ver deOndeVemCadaDado.tentarAgora)."
+  ]
+}

@@ -2,7 +2,10 @@
   "modulo": "email",
   "titulo": "E-mail",
   "resumo": "Servidor de e-mail próprio (Stalwart Mail Server em container Docker) gerenciado pelo painel: domínios com DKIM, checklist/verificação de DNS, caixas de e-mail (IMAP/SMTP) e injeção automática de credenciais SMTP nos projetos deployados. Todas as rotas exigem sessão (ou setup token enquanto o setup não terminou), via o guard global de auth.",
-  "pontoDeEntrada": { "api": "GET /api/mail/status", "web": "/mail" },
+  "pontoDeEntrada": {
+    "api": "GET /api/mail/status",
+    "web": "/mail"
+  },
   "comoFunciona": [
     "O painel gerencia um único container Docker dedicado (paas-stalwart) rodando a imagem stalwartlabs/mail-server:v0.11.8 (Stalwart Mail Server, linha v0.11.x — a última com API REST de gerenciamento; a linha nova stalwartlabs/stalwart v0.16+ removeu essa API e exige wizard interativo, então NÃO é usada aqui). O container roda na rede Docker paas-net, a mesma rede dos projetos deployados.",
     "Persistência: os dados internos do Stalwart (contas, mensagens IMAP, chaves privadas DKIM) ficam no volume Docker nomeado paas_stalwart_data, montado em /opt/stalwart-mail/data. O painel injeta a configuração (data/mail/stalwart/config.toml, renderizada a cada start) montada somente-leitura em /opt/stalwart-mail/etc.",
@@ -19,11 +22,20 @@
     "Renovação (MailService.syncTls): roda 1 min após o boot, a cada hora, depois de iniciar o servidor, de adicionar/remover domínio e ao abrir a página E-mail (GET /api/mail/tls). Compara com o estado aplicado (data/mail/mail.json → tls): nada mudou → nada; só a impressão digital (renovação) ou os aliases → entrega os arquivos e chama GET /api/reload/certificate (troca sem derrubar conexão; se a API falhar, reinicia); certificado de um nome novo ou outro hostname → entrega e REINICIA o container (o Stalwart v0.11.8 não relê seção nova do config.toml nem com /api/reload — conferido no servidor real em 01/10/2026). Hosts de e-mail mudaram → o Caddyfile é recalculado (DeployService.refreshProxy). Desde 04/10/2026 a comparação inclui a impressão digital do config.toml gerado (tls.config): se uma versão nova do painel gera outro arquivo (chave nova, outro report.domain), a sincronização seguinte entrega e reinicia uma vez. A mesma sincronização acrescenta dmarc@ à postmaster@ dos domínios cadastrados antes disso.",
     "Hostname do servidor: PAAS_MAIL_HOSTNAME → data.hostname (legado) → mail.<1º domínio cadastrado> → mail.localhost (sem domínio). Hosts de e-mail = hostname + mail.<cada domínio>, sem .localhost. Cada um ganha bloco no Caddy, certificado, alias na paas-net.",
     "Proteção do e-mail existente (01/10/2026): POST /api/mail/domains consulta o MX do domínio (resolvers públicos) antes de provisionar. Se ele aponta para outro servidor ('elsewhere') ou a consulta falha ('unknown'), responde 409 domain_receives_mail com existingMail {status, servers, suggestedDomain: envio.<domínio>} e só segue com confirmExistingMail:true. Sem MX, MX nulo (RFC 7505) ou MX já apontando para mail.<domínio>/hostname: segue direto. Motivo: o dono do produto ia cadastrar o domínio principal da empresa, que recebe e-mail em outro provedor.",
-    "Blacklist (GET /api/mail/blacklist): consulta DNSBLs públicas (Spamhaus ZEN, SpamCop, Barracuda para o IP; Spamhaus DBL para cada domínio cadastrado) via reverse-DNS lookup (127.0.0.0/8 = listado)."
+    "Blacklist (GET /api/mail/blacklist e página Envios → Reputação): consulta DNSBLs (Spamhaus ZEN, SpamCop, Barracuda para o IP; Spamhaus DBL para cada domínio) pelo resolvedor do sistema. Desde 04/10/2026 cada zona é testada com o ponto de teste oficial (127.0.0.2 / dbltest.com): sem resposta ao teste o resultado é 'não deu para verificar', nunca 'limpo'; a Spamhaus aceita a chave DQS gratuita. Roda uma vez por dia e no botão, agendada pelo próprio plugin de e-mail (antes era um gancho do Monitoramento que nunca rodou). Detalhes em envios.json.",
+    "Página Envios (04/10/2026, /mail/envios): fila do Stalwart com Tentar agora/Cancelar, histórico lido do registro do container (docker logs a cada 5 min, só metadados, 30 dias em data/mail/envios), volume de 14 dias, reputação e nota de entregabilidade. Ver envios.json."
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/mail.ts"],
-    "servicos": ["apps/server/src/services/mail-service.ts"],
+    "rotas": [
+      "apps/server/src/routes/mail.ts",
+      "apps/server/src/routes/mail-envios.ts"
+    ],
+    "servicos": [
+      "apps/server/src/services/mail-service.ts",
+      "apps/server/src/services/mail-envios-service.ts",
+      "apps/server/src/services/mail-reputation-service.ts",
+      "apps/server/src/services/stalwart-logs.ts"
+    ],
     "pacotes": [
       "packages/mailer/src/server.ts",
       "packages/mailer/src/client.ts",
@@ -39,9 +51,22 @@
       "packages/mailer/src/exec.ts",
       "packages/mailer/src/index.ts",
       "packages/core/src/mail.ts",
-      "packages/deploy/src/engine.ts"
+      "packages/deploy/src/engine.ts",
+      "packages/mailer/src/delivery-log.ts",
+      "packages/mailer/src/queue-view.ts",
+      "packages/mailer/src/deliverability-score.ts",
+      "packages/core/src/mail-envios.ts"
     ],
-    "web": ["apps/web/src/pages/MailPage.tsx", "apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/mail/TestEmailCard.tsx", "apps/web/src/components/mail/MailboxesPanel.tsx", "apps/web/src/components/mail/DnsChecklistPanel.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"],
+    "web": [
+      "apps/web/src/pages/MailPage.tsx",
+      "apps/web/src/pages/MailDomainPage.tsx",
+      "apps/web/src/components/mail/TestEmailCard.tsx",
+      "apps/web/src/components/mail/MailboxesPanel.tsx",
+      "apps/web/src/components/mail/DnsChecklistPanel.tsx",
+      "apps/web/src/components/project/ProjectEmailCard.tsx",
+      "apps/web/src/pages/MailEnviosPage.tsx",
+      "apps/web/src/components/envios/"
+    ],
     "testes": [
       "packages/mailer/tests/mailboxes.test.ts",
       "packages/mailer/tests/blacklist.test.ts",
@@ -62,7 +87,18 @@
       "apps/web/tests/test-email-card.test.tsx",
       "apps/web/tests/mail-panels.test.tsx",
       "apps/web/tests/project-email-card.test.tsx",
-      "scripts/test-mail.mts"
+      "scripts/test-mail.mts",
+      "packages/mailer/tests/delivery-log.test.ts",
+      "packages/mailer/tests/queue-view.test.ts",
+      "packages/mailer/tests/deliverability-score.test.ts",
+      "packages/mailer/tests/client-queue.test.ts",
+      "apps/server/tests/mail-envios-service.test.ts",
+      "apps/server/tests/mail-reputation-service.test.ts",
+      "apps/server/tests/mail-envios-mailservice.test.ts",
+      "apps/server/tests/routes-mail-envios.test.ts",
+      "apps/server/tests/mail-envios-wiring.test.ts",
+      "apps/server/tests/stalwart-logs.test.ts",
+      "apps/web/tests/mail-envios-page.test.tsx"
     ]
   },
   "persistencia": [
@@ -80,35 +116,254 @@
       "arquivo": "volume Docker paas_stalwart_data",
       "formato": "rocksdb (interno ao Stalwart)",
       "conteudo": "Todo o estado real do servidor de e-mail: contas, mensagens IMAP, filas SMTP e as CHAVES PRIVADAS DKIM (o painel só guarda a chave pública). Não é um arquivo local — só existe dentro do Docker; perder o volume derruba tudo mesmo com mail.json intacto."
+    },
+    {
+      "arquivo": "data/mail/envios/AAAA-MM-DD.jsonl e estado.json",
+      "formato": "jsonl/json 0600",
+      "conteudo": "Histórico de entregas (só metadados do envelope e a resposta do destino), 30 dias; cursor da leitura do registro. Ver envios.json."
+    },
+    {
+      "arquivo": "data/mail/reputacao.json",
+      "formato": "json 0600",
+      "conteudo": "Chave DQS da Spamhaus, última conferência das listas, marcações do Postmaster/SNDS e fatos da nota. Ver envios.json."
     }
   ],
   "endpoints": [
-    { "id": "status", "metodo": "GET", "url": "/api/mail/status", "resumo": "Estado do servidor de e-mail (instalado/rodando/versão/portas).", "arquivo": "status.json" },
-    { "id": "iniciar-servidor", "metodo": "POST", "url": "/api/mail/server/start", "resumo": "Provisiona/inicia o container do Stalwart.", "arquivo": "iniciar-servidor.json" },
-    { "id": "parar-servidor", "metodo": "POST", "url": "/api/mail/server/stop", "resumo": "Para o container do Stalwart.", "arquivo": "parar-servidor.json" },
-    { "id": "listar-dominios", "metodo": "GET", "url": "/api/mail/domains", "resumo": "Lista os domínios de e-mail cadastrados.", "arquivo": "listar-dominios.json" },
-    { "id": "criar-dominio", "metodo": "POST", "url": "/api/mail/domains", "resumo": "Provisiona um domínio: DKIM RSA 2048 + caixa postmaster@.", "arquivo": "criar-dominio.json" },
-    { "id": "remover-dominio", "metodo": "DELETE", "url": "/api/mail/domains/:domain", "resumo": "Remove um domínio e todas as suas caixas.", "arquivo": "remover-dominio.json" },
-    { "id": "certificado-servidor", "metodo": "GET", "url": "/api/mail/tls", "resumo": "Certificado de cada mail.<domínio>: válido (emissor/validade) ou o que falta.", "arquivo": "certificado-servidor.json" },
-    { "id": "blacklist", "metodo": "GET", "url": "/api/mail/blacklist", "resumo": "Checa o IP público e os domínios contra DNSBLs.", "arquivo": "blacklist.json" },
-    { "id": "dns-checklist", "metodo": "GET", "url": "/api/mail/domains/:domain/dns", "resumo": "Lista os registros DNS esperados para o domínio.", "arquivo": "dns-checklist.json" },
-    { "id": "verificar-dns", "metodo": "POST", "url": "/api/mail/domains/:domain/verify", "resumo": "Verifica os registros DNS contra o DNS real + PTR (verde, azul ou amarelo).", "arquivo": "verificar-dns.json" },
-    { "id": "enviar-email-teste", "metodo": "POST", "url": "/api/mail/domains/:domain/test-email", "resumo": "Envia um e-mail de teste de postmaster@<domínio> para um endereço.", "arquivo": "enviar-email-teste.json" },
-    { "id": "acompanhar-email-teste", "metodo": "GET", "url": "/api/mail/domains/:domain/test-email/:id", "resumo": "Destino do e-mail de teste: na fila, entregue, recusado ou adiado.", "arquivo": "acompanhar-email-teste.json" },
-    { "id": "listar-caixas", "metodo": "GET", "url": "/api/mail/domains/:domain/mailboxes", "resumo": "Lista as caixas de e-mail do domínio (sem senha).", "arquivo": "listar-caixas.json" },
-    { "id": "criar-caixa", "metodo": "POST", "url": "/api/mail/domains/:domain/mailboxes", "resumo": "Cria uma caixa de e-mail (IMAP/SMTP) no domínio.", "arquivo": "criar-caixa.json" },
-    { "id": "remover-caixa", "metodo": "DELETE", "url": "/api/mail/domains/:domain/mailboxes/:id", "resumo": "Remove uma caixa de e-mail do tipo 'user'.", "arquivo": "remover-caixa.json" },
-    { "id": "credenciais-caixa", "metodo": "GET", "url": "/api/mail/mailboxes/:id/credentials", "resumo": "Configuração IMAP/SMTP para app de e-mail, sem a senha.", "arquivo": "credenciais-caixa.json" },
-    { "id": "trocar-senha-caixa", "metodo": "PUT", "url": "/api/mail/mailboxes/:id/password", "resumo": "Troca a senha de uma caixa, inclusive a do projeto (digitada ou gerada e mostrada uma vez).", "arquivo": "trocar-senha-caixa.json" },
-    { "id": "email-projeto", "metodo": "GET", "url": "/api/projects/:id/email", "resumo": "Configuração de e-mail atual de um projeto (env mascaradas).", "arquivo": "email-projeto.json" },
-    { "id": "habilitar-email-projeto", "metodo": "POST", "url": "/api/projects/:id/email", "resumo": "Ativa ou altera o e-mail do projeto: o endereço de envio vira a caixa do projeto, com senha (liga a injeção SMTP).", "arquivo": "habilitar-email-projeto.json" },
-    { "id": "desabilitar-email-projeto", "metodo": "DELETE", "url": "/api/projects/:id/email", "resumo": "Desativa a injeção SMTP no próximo deploy do projeto.", "arquivo": "desabilitar-email-projeto.json" },
-    { "id": "ligar-variaveis-email-projeto", "metodo": "PUT", "url": "/api/projects/:id/email/links", "resumo": "Liga variáveis do app a valores do e-mail do projeto (guarda só o mapeamento; o deploy entrega o valor atual).", "arquivo": "ligar-variaveis-email-projeto.json" }
+    {
+      "id": "status",
+      "metodo": "GET",
+      "url": "/api/mail/status",
+      "resumo": "Estado do servidor de e-mail (instalado/rodando/versão/portas).",
+      "arquivo": "status.json"
+    },
+    {
+      "id": "iniciar-servidor",
+      "metodo": "POST",
+      "url": "/api/mail/server/start",
+      "resumo": "Provisiona/inicia o container do Stalwart.",
+      "arquivo": "iniciar-servidor.json"
+    },
+    {
+      "id": "parar-servidor",
+      "metodo": "POST",
+      "url": "/api/mail/server/stop",
+      "resumo": "Para o container do Stalwart.",
+      "arquivo": "parar-servidor.json"
+    },
+    {
+      "id": "listar-dominios",
+      "metodo": "GET",
+      "url": "/api/mail/domains",
+      "resumo": "Lista os domínios de e-mail cadastrados.",
+      "arquivo": "listar-dominios.json"
+    },
+    {
+      "id": "criar-dominio",
+      "metodo": "POST",
+      "url": "/api/mail/domains",
+      "resumo": "Provisiona um domínio: DKIM RSA 2048 + caixa postmaster@.",
+      "arquivo": "criar-dominio.json"
+    },
+    {
+      "id": "remover-dominio",
+      "metodo": "DELETE",
+      "url": "/api/mail/domains/:domain",
+      "resumo": "Remove um domínio e todas as suas caixas.",
+      "arquivo": "remover-dominio.json"
+    },
+    {
+      "id": "certificado-servidor",
+      "metodo": "GET",
+      "url": "/api/mail/tls",
+      "resumo": "Certificado de cada mail.<domínio>: válido (emissor/validade) ou o que falta.",
+      "arquivo": "certificado-servidor.json"
+    },
+    {
+      "id": "blacklist",
+      "metodo": "GET",
+      "url": "/api/mail/blacklist",
+      "resumo": "Checa o IP público e os domínios contra DNSBLs.",
+      "arquivo": "blacklist.json"
+    },
+    {
+      "id": "dns-checklist",
+      "metodo": "GET",
+      "url": "/api/mail/domains/:domain/dns",
+      "resumo": "Lista os registros DNS esperados para o domínio.",
+      "arquivo": "dns-checklist.json"
+    },
+    {
+      "id": "verificar-dns",
+      "metodo": "POST",
+      "url": "/api/mail/domains/:domain/verify",
+      "resumo": "Verifica os registros DNS contra o DNS real + PTR (verde, azul ou amarelo).",
+      "arquivo": "verificar-dns.json"
+    },
+    {
+      "id": "enviar-email-teste",
+      "metodo": "POST",
+      "url": "/api/mail/domains/:domain/test-email",
+      "resumo": "Envia um e-mail de teste de postmaster@<domínio> para um endereço.",
+      "arquivo": "enviar-email-teste.json"
+    },
+    {
+      "id": "acompanhar-email-teste",
+      "metodo": "GET",
+      "url": "/api/mail/domains/:domain/test-email/:id",
+      "resumo": "Destino do e-mail de teste: na fila, entregue, recusado ou adiado.",
+      "arquivo": "acompanhar-email-teste.json"
+    },
+    {
+      "id": "listar-caixas",
+      "metodo": "GET",
+      "url": "/api/mail/domains/:domain/mailboxes",
+      "resumo": "Lista as caixas de e-mail do domínio (sem senha).",
+      "arquivo": "listar-caixas.json"
+    },
+    {
+      "id": "criar-caixa",
+      "metodo": "POST",
+      "url": "/api/mail/domains/:domain/mailboxes",
+      "resumo": "Cria uma caixa de e-mail (IMAP/SMTP) no domínio.",
+      "arquivo": "criar-caixa.json"
+    },
+    {
+      "id": "remover-caixa",
+      "metodo": "DELETE",
+      "url": "/api/mail/domains/:domain/mailboxes/:id",
+      "resumo": "Remove uma caixa de e-mail do tipo 'user'.",
+      "arquivo": "remover-caixa.json"
+    },
+    {
+      "id": "credenciais-caixa",
+      "metodo": "GET",
+      "url": "/api/mail/mailboxes/:id/credentials",
+      "resumo": "Configuração IMAP/SMTP para app de e-mail, sem a senha.",
+      "arquivo": "credenciais-caixa.json"
+    },
+    {
+      "id": "trocar-senha-caixa",
+      "metodo": "PUT",
+      "url": "/api/mail/mailboxes/:id/password",
+      "resumo": "Troca a senha de uma caixa, inclusive a do projeto (digitada ou gerada e mostrada uma vez).",
+      "arquivo": "trocar-senha-caixa.json"
+    },
+    {
+      "id": "email-projeto",
+      "metodo": "GET",
+      "url": "/api/projects/:id/email",
+      "resumo": "Configuração de e-mail atual de um projeto (env mascaradas).",
+      "arquivo": "email-projeto.json"
+    },
+    {
+      "id": "habilitar-email-projeto",
+      "metodo": "POST",
+      "url": "/api/projects/:id/email",
+      "resumo": "Ativa ou altera o e-mail do projeto: o endereço de envio vira a caixa do projeto, com senha (liga a injeção SMTP).",
+      "arquivo": "habilitar-email-projeto.json"
+    },
+    {
+      "id": "desabilitar-email-projeto",
+      "metodo": "DELETE",
+      "url": "/api/projects/:id/email",
+      "resumo": "Desativa a injeção SMTP no próximo deploy do projeto.",
+      "arquivo": "desabilitar-email-projeto.json"
+    },
+    {
+      "id": "ligar-variaveis-email-projeto",
+      "metodo": "PUT",
+      "url": "/api/projects/:id/email/links",
+      "resumo": "Liga variáveis do app a valores do e-mail do projeto (guarda só o mapeamento; o deploy entrega o valor atual).",
+      "arquivo": "ligar-variaveis-email-projeto.json"
+    },
+    {
+      "id": "envios-fila",
+      "metodo": "GET",
+      "url": "/api/mail/envios/queue",
+      "resumo": "Fila do servidor de e-mail agora.",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-tentar",
+      "metodo": "POST",
+      "url": "/api/mail/envios/queue/:id/retry",
+      "resumo": "Tentar agora (no Stalwart 0.11.8, a última tentativa).",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-cancelar",
+      "metodo": "POST",
+      "url": "/api/mail/envios/queue/:id/cancel",
+      "resumo": "Tira a mensagem da fila.",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-historico",
+      "metodo": "GET",
+      "url": "/api/mail/envios/history",
+      "resumo": "Histórico de entregas com filtros.",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-volume",
+      "metodo": "GET",
+      "url": "/api/mail/envios/volume",
+      "resumo": "Envios por dia e por projeto (14 dias) e taxas.",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-reputacao",
+      "metodo": "GET",
+      "url": "/api/mail/envios/reputation",
+      "resumo": "Última conferência das listas de bloqueio.",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-conferir",
+      "metodo": "POST",
+      "url": "/api/mail/envios/reputation/check",
+      "resumo": "Conferir agora (1 por minuto).",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-dqs",
+      "metodo": "PUT",
+      "url": "/api/mail/envios/reputation/dqs",
+      "resumo": "Chave DQS da Spamhaus (nunca devolvida).",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-nota",
+      "metodo": "GET",
+      "url": "/api/mail/envios/deliverability",
+      "resumo": "Nota de entregabilidade.",
+      "arquivo": "envios.json"
+    },
+    {
+      "id": "envios-postmaster",
+      "metodo": "PUT",
+      "url": "/api/mail/envios/postmaster",
+      "resumo": "Marcações do Postmaster Tools / SNDS / taxa de spam.",
+      "arquivo": "envios.json"
+    }
   ],
   "telas": [
-    { "id": "tela-email-projeto", "rota": "/projects/:id/email", "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente, Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).", "arquivo": "tela-email-projeto.json" }
+    {
+      "id": "tela-email-projeto",
+      "rota": "/projects/:id/email",
+      "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente, Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).",
+      "arquivo": "tela-email-projeto.json"
+    },
+    {
+      "id": "envios",
+      "rota": "/mail/envios",
+      "resumo": "Página Envios: fila, histórico, volume, reputação e nota (?aba=historico|volume|reputacao|nota).",
+      "arquivo": "envios.json"
+    }
   ],
-  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json"
+  ],
   "pontosDeAtencao": [
     "Senhas de caixas de e-mail e o adminSecret do Stalwart ficam em TEXTO PLANO em data/mail/mail.json (só protegido por chmod 0600) — qualquer leitura desse arquivo (backup mal protegido, outro processo do mesmo usuário do SO) expõe todas as credenciais SMTP/IMAP e o acesso admin ao Stalwart.",
     "A imagem usada (stalwartlabs/mail-server:v0.11.8) é uma linha antiga/descontinuada — o próprio código (packages/mailer/src/server.ts:7-11) documenta que a linha nova (stalwartlabs/stalwart v0.16+) removeu a API REST usada por todo o módulo; migrar de versão exigiria reescrever client.ts inteiro. Dado novo verificado nesta rodada: CVE-2025-61600 (DoS não autenticada no parser IMAP do Stalwart) foi corrigida só na 0.13.4, SEM backport para a linha 0.11.x — a versão fixada aqui é vulnerável e permanece assim enquanto não migrar. Ainda aberto, ver global/review-2026-08-24.json (achado stalwart-descontinuado).",
