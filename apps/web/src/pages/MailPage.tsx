@@ -18,6 +18,7 @@ import { ExistingMailWarning } from "@/components/mail/ExistingMailWarning";
 import { WebmailCard } from "@/components/mail/WebmailCard";
 import {
   CheckCircle2,
+  ChartColumn,
   ChevronRight,
   Globe,
   Loader2,
@@ -210,13 +211,21 @@ export function MailPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-          <Mail className="h-6 w-6" /> E-mail
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Servidor Stalwart Mail (SMTP + IMAP + DKIM) gerenciado pelo painel.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+            <Mail className="h-6 w-6" /> E-mail
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Servidor Stalwart Mail (SMTP + IMAP + DKIM) gerenciado pelo painel.
+          </p>
+        </div>
+        {/* fila, histórico, volume, reputação e nota de entregabilidade */}
+        <Button variant="info" size="sm" asChild>
+          <Link to="/mail/envios">
+            <ChartColumn className="h-4 w-4" /> Ver envios
+          </Link>
+        </Button>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
