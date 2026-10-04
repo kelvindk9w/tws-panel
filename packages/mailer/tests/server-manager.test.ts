@@ -241,6 +241,53 @@ describe("renderConfigToml — certificados", () => {
   });
 });
 
+describe("renderConfigToml — entregabilidade (chaves conferidas no Stalwart v0.11.8)", () => {
+  it("acrescenta Message-ID e Date que faltem também na submissão (465/587), não só na porta 25", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    const toml = renderConfigToml("mail.exemplo.com", "s");
+    expect(toml).toMatch(/^session\.data\.add-headers\.message-id = true$/m);
+    expect(toml).toMatch(/^session\.data\.add-headers\.date = true$/m);
+  });
+
+  it("sai só por IPv4 (o SPF só tem ip4 e não há PTR IPv6)", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    expect(renderConfigToml("mail.exemplo.com", "s")).toMatch(/^queue\.outbound\.ip-strategy = "ipv4_only"$/m);
+  });
+
+  it("report.domain = domínio de e-mail cadastrado; sem ele, a chave não aparece (vale o padrão do Stalwart)", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    const toml = renderConfigToml("mail.envio.exemplo.com.br", "s", [], { reportDomain: "envio.exemplo.com.br" });
+    expect(toml).toMatch(/^report\.domain = "envio\.exemplo\.com\.br"$/m);
+    expect(renderConfigToml("mail.localhost", "s")).not.toContain("report.domain");
+  });
+
+  it("as chaves soltas ficam antes da primeira seção [..] (senão o TOML as põe dentro dela)", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    const toml = renderConfigToml("mail.exemplo.com", "s", [], { reportDomain: "exemplo.com" });
+    const firstSection = toml.indexOf("\n[");
+    for (const key of ["session.data.add-headers.message-id", "queue.outbound.ip-strategy", "report.domain"]) {
+      expect(toml.indexOf(key)).toBeGreaterThan(-1);
+      expect(toml.indexOf(key)).toBeLessThan(firstSection);
+    }
+  });
+
+  it("configFingerprint muda quando a configuração muda e não carrega o segredo", async () => {
+    const { stalwartConfigFingerprint } = await import("../src/server.js");
+    const base = stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: ["mail.a.com"], reportDomain: "a.com" });
+    expect(base).toMatch(/^[0-9a-f]{64}$/);
+    expect(stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: ["mail.a.com"], reportDomain: "a.com" })).toBe(base);
+    expect(stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: ["mail.a.com"], reportDomain: "b.com" })).not.toBe(base);
+    expect(stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: [] })).not.toBe(base);
+  });
+
+  it("o manager entrega ao container o config com o report.domain recebido", async () => {
+    responder = daemon(null);
+    await manager({ reportDomain: "exemplo.com" }).start();
+    const toml = copies[0]!.files.find((f) => f.name === "etc/config.toml")!.content as string;
+    expect(toml).toContain('report.domain = "exemplo.com"');
+  });
+});
+
 describe("StalwartManager — certificados e alias", () => {
   it("cria com o alias paas-stalwart E os mail.<domínio>; entrega certificado e chave com modo 0600", async () => {
     responder = daemon(null);

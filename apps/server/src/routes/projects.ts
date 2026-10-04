@@ -11,6 +11,7 @@ import type {
   ProjectListResponse,
   ProjectResponse,
   SetPortRequest,
+  SetPortsRequest,
   SetProjectCredentialRequest,
   UpdateProjectRequest,
 } from "@paas/core";
@@ -153,6 +154,38 @@ const setPortSchema = {
   },
 } as const;
 
+// Edição em lote (e "Publicar uma porta"): a lista COMPLETA de publicações do
+// projeto. Com `original`, é uma porta do compose (hostPort null = remover);
+// sem, é uma publicação adicionada (porta interna 1–65535). O servidor confere
+// as linhas juntas (conflito entre si e com o resto do servidor).
+const setPortsSchema = {
+  params: projectIdParams,
+  body: {
+    type: "object",
+    required: ["ports"],
+    additionalProperties: false,
+    properties: {
+      ports: {
+        type: "array",
+        maxItems: 200,
+        items: {
+          type: "object",
+          required: ["service", "hostPort"],
+          additionalProperties: false,
+          properties: {
+            service: { type: "string", minLength: 1, maxLength: 100 },
+            original: { type: "string", minLength: 1, maxLength: 200 },
+            containerPort: { type: "integer", minimum: 1, maximum: 65535 },
+            protocol: { type: "string", enum: ["tcp", "udp"] },
+            hostPort: { type: ["integer", "null"], minimum: 1024, maximum: 65535 },
+            hostIp: { type: "string", enum: ["127.0.0.1", "0.0.0.0"] },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   const e = err as Partial<HttpError>;
   return reply.code(e.statusCode ?? 500).send({
@@ -161,6 +194,8 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
     // relatório de guardrails quando o deploy é bloqueado (Fase 4)
     ...(e.report ? { report: e.report } : {}),
     ...(e.missing ? { missing: e.missing } : {}),
+    // erros de cada linha na edição de portas em lote
+    ...(e.details ?? {}),
   });
 }
 
@@ -418,6 +453,19 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         return reply.send(await service.setPort(request.params.id, request.body));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Edição em lote: a lista completa numa chamada (auditoria project.ports_batch).
+  app.put<{ Params: { id: string }; Body: SetPortsRequest }>(
+    "/api/projects/:id/ports/batch",
+    { schema: setPortsSchema },
+    async (request, reply) => {
+      try {
+        return reply.send(await service.setPorts(request.params.id, request.body));
       } catch (err) {
         return sendError(reply, err);
       }

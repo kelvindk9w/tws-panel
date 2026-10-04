@@ -275,6 +275,30 @@ describe("PTR em três níveis (verde, azul, amarelo)", () => {
     });
   }
 
+  it("PTR único: o esperado é o nome com que o servidor se apresenta (HELO), não mail.<domínio> de cada um", async () => {
+    // Um IP tem UM nome reverso. Com dois domínios, esperar mail.<domínio> em
+    // cada checklist deixava sempre um deles amarelo/azul sem ter conserto.
+    const input = { ...BASE_INPUT, domain: "outro.com.br", mailHostname: "mail.outro.com.br", serverHostname: "mail.exemplo.com.br" };
+    const checklist = buildDnsChecklist(input);
+    expect(checklist.ptr.expected).toBe("mail.exemplo.com.br");
+    // o A e o MX continuam sendo do próprio domínio
+    expect(checklist.records.find((r) => r.id === "a")?.name).toBe("mail.outro.com.br");
+    const result = await verifyDnsRecords(
+      checklist,
+      mockResolver({ reverse: async () => ["mail.exemplo.com.br."], resolve4: async () => ["203.0.113.10"] }),
+    );
+    expect(result.ptr.status).toBe("found");
+  });
+
+  it("DMARC diz onde os relatórios chegam (dmarc@ é endereço da postmaster@)", () => {
+    const dmarc = buildDnsChecklist(BASE_INPUT).records.find((r) => r.id === "dmarc")!;
+    expect(dmarc.purpose).toContain("chegam na caixa postmaster@exemplo.com.br");
+  });
+
+  it("sem o nome do servidor informado, vale mail.<domínio> (compatível)", () => {
+    expect(buildDnsChecklist(BASE_INPUT).ptr.expected).toBe("mail.exemplo.com.br");
+  });
+
   it("verde: o nome reverso é mail.<domínio>", async () => {
     const result = await verifyDnsRecords(
       buildDnsChecklist(BASE_INPUT),

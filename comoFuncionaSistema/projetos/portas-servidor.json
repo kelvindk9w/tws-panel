@@ -93,6 +93,7 @@
   ],
   "observacoes": [
     "Containers parados não mostram portas no docker ps: conflito com um container externo parado não aparece.",
-    "Processos fora do Docker (algo escutando direto na VPS) não aparecem."
+    "Processos fora do Docker (algo escutando direto na VPS) não aparecem.",
+    "Publicações adicionadas no painel (modal Portas → Publicar uma porta / Editar em lote) aparecem como 'configured' até o deploy, e entram na checagem de conflito."
   ]
 }

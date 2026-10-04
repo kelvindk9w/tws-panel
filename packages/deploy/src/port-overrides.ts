@@ -14,6 +14,13 @@
  * Cada porta publicada tem uma chave estável: como ela está escrita no compose
  * ("127.0.0.1:8010:8010", "5353:53/udp"). Se o compose mudar e a porta sumir,
  * a troca deixa de valer (e o deploy avisa) em vez de cair noutra porta.
+ *
+ * Publicações ADICIONADAS no painel (pedido do dono, 04/10/2026: "não consigo
+ * trocar de cada container ou em lote?"): um serviço sem porta publicada no
+ * compose — banco, redis — pode ganhar uma (ex.: acessar o banco por túnel
+ * SSH). Elas entram no fim da lista do serviço. Serviço que usa a rede de
+ * outro (`network_mode`) não pode ter porta própria: a adicionada é ignorada
+ * e avisada.
  */
 import type { PortOverride } from "@paas/core";
 import { parse } from "yaml";
@@ -107,11 +114,45 @@ export function composePortEntries(compose: string): Record<string, ComposePortE
   return result;
 }
 
+/** Identificador de uma publicação adicionada no painel: "+127.0.0.1:15432:5432". */
+export function addedPortKey(hostIp: string | null, hostPort: number, containerPort: number, protocol: string): string {
+  return `+${portEntryText(hostIp, hostPort, containerPort, protocol)}`;
+}
+
+/** network_mode de cada serviço do compose (null = rede própria do projeto). */
+export function composeNetworkModes(compose: string): Record<string, string | null> {
+  const result: Record<string, string | null> = {};
+  for (const [name, svc] of Object.entries(servicesOf(compose))) {
+    const mode = svc?.network_mode;
+    result[name] = typeof mode === "string" ? mode : null;
+  }
+  return result;
+}
+
+/**
+ * Por que um serviço não pode publicar porta própria, para leigo (null = pode).
+ * Quem usa a rede de outro serviço recebe as portas dele.
+ */
+export function networkModeBlock(mode: string | null): string | null {
+  if (mode === null || mode === "bridge" || mode === "default") return null;
+  if (mode.startsWith("service:")) {
+    const other = mode.slice("service:".length);
+    return `Usa a rede do ${other} — publique a porta no ${other}.`;
+  }
+  if (mode.startsWith("container:")) return `Usa a rede do container ${mode.slice("container:".length)} — publique a porta nele.`;
+  if (mode === "host") return "Usa a rede do próprio servidor (network_mode: host): as portas dele já estão abertas no servidor.";
+  if (mode === "none") return "Está sem rede (network_mode: none): não dá para publicar porta.";
+  return null;
+}
+
 export interface EffectivePorts {
   /** Lista final de portas, só dos serviços que mudam. */
   ports: Record<string, unknown[]>;
-  /** Trocas aplicadas (para o log do deploy); to null = publicação removida. */
-  changes: Array<{ service: string; from: string; to: string | null }>;
+  /**
+   * Trocas aplicadas (para o log do deploy); to null = publicação removida;
+   * from null = publicação adicionada no painel.
+   */
+  changes: Array<{ service: string; from: string | null; to: string | null }>;
   /** Trocas salvas que não se aplicam mais (porta fora do compose, ou 80/443). */
   stale: Array<{ service: string; original: string }>;
 }
@@ -132,7 +173,8 @@ export function effectiveServicePorts(
   for (const [name, svc] of Object.entries(services)) {
     const raw = Array.isArray(svc?.ports) ? (svc.ports as unknown[]) : [];
     const strip = opts.stripProxyPorts && !hasOwnHttpsProxy(compose, name);
-    const byKey = new Map((overrides?.[name] ?? []).map((o) => [o.original, o]));
+    const mine = overrides?.[name] ?? [];
+    const byKey = new Map(mine.filter((o) => !o.added).map((o) => [o.original, o]));
     let changed = false;
     const list: unknown[] = [];
     for (const entry of raw) {
@@ -158,6 +200,16 @@ export function effectiveServicePorts(
         const to = o.hostPort === null ? null : portEntryText(o.hostIp, o.hostPort, p.container, p.protocol);
         if (to !== null) list.push(to);
         result.changes.push({ service: name, from: key, to });
+      }
+    }
+    if (networkModeBlock(typeof svc?.network_mode === "string" ? svc.network_mode : null) === null) {
+      for (const o of mine) {
+        if (!o.added || o.hostPort === null) continue;
+        const to = portEntryText(o.hostIp, o.hostPort, o.added.containerPort, o.added.protocol);
+        used.add(`${name}\n${o.original}`);
+        list.push(to);
+        changed = true;
+        result.changes.push({ service: name, from: null, to });
       }
     }
     if (changed) result.ports[name] = list;

@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/projects/new", label: "Novo Projeto" },
   { to: "/mail", label: "E-mail" },
+  { to: "/mail/envios", label: "Envios" },
   { to: "/certificates", label: "Certificados" },
   { to: "/security", label: "Segurança" },
   { to: "/alerts", label: "Alertas" },
@@ -82,6 +83,9 @@ function Brand() {
 
 /** Itens do menu — em linha (topo) ou empilhados (lateral). */
 function NavItems({ vertical }: { vertical: boolean }) {
+  // /mail/envios fica dentro de /mail: sem isto, "E-mail" ficaria marcado junto.
+  const { pathname } = useLocation();
+  const enviosOpen = pathname === "/mail/envios" || pathname.startsWith("/mail/envios/");
   return (
     <nav className={cn("flex gap-1 text-sm", vertical ? "flex-col" : "flex-wrap items-center")}>
       {NAV_ITEMS.map((item) => (
@@ -92,7 +96,9 @@ function NavItems({ vertical }: { vertical: boolean }) {
           className={({ isActive }) =>
             cn(
               "rounded-md px-3 py-1.5 transition-colors",
-              isActive ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
+              isActive && !(item.to === "/mail" && enviosOpen)
+                ? "bg-secondary text-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground",
             )
           }
         >

@@ -119,4 +119,12 @@ describe("DeployService — hosts do servidor de e-mail no proxy", () => {
     svc.setMailHostsProvider(async () => ["mail.exemplo.com"]);
     await expect(ctx.mailHosts()).resolves.toEqual(["mail.exemplo.com"]);
   });
+
+  it("o motor recebe o webmail do provedor registrado; sem provedor, null (página do servidor de e-mail)", async () => {
+    const svc = servico(null);
+    const ctx = (svc as unknown as { engineCtx: { webmail: () => Promise<unknown> } }).engineCtx;
+    await expect(ctx.webmail()).resolves.toBeNull();
+    svc.setWebmailProvider(async () => ({ upstream: "paas-webmail:8000", blockedIps: [] }));
+    await expect(ctx.webmail()).resolves.toEqual({ upstream: "paas-webmail:8000", blockedIps: [] });
+  });
 });

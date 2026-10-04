@@ -518,6 +518,12 @@ export interface BlacklistResult {
   detail: string | null;
   /** Link para checagem/remoção quando listed. */
   removalUrl: string | null;
+  /**
+   * Página da lista para conferir o endereço à mão. Vem sempre que a lista
+   * tem uma; é o caminho quando o resultado é "unknown" (ex.: Barracuda sem
+   * cadastro do servidor DNS). Ausente em resultados antigos.
+   */
+  lookupUrl?: string | null;
 }
 
 export interface BlacklistTargetResult {

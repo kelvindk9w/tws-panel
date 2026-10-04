@@ -10,6 +10,7 @@
  * v0.16+) removeu a API REST em favor de JMAP `x:` e exige um wizard de setup
  * interativo (config.json) — migração fica como roadmap (ver docs/fase-3-email.md).
  */
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -71,6 +72,12 @@ export interface StalwartManagerOptions {
   /** Certificados emitidos pelo Caddy para os mail.<domínio> (ausente = autoassinado). */
   certificates?: StalwartCertificate[];
   /**
+   * Domínio dos avisos de entrega e relatórios que o próprio Stalwart envia
+   * (`report.domain`). Ausente = padrão do Stalwart (domínio registrável do
+   * hostname). Ver renderConfigToml.
+   */
+  reportDomain?: string | null;
+  /**
    * Onde a API HTTP do Stalwart responde. Padrão: 127.0.0.1:<porta http>
    * (painel fora de container). Com o painel em container, 127.0.0.1 é o
    * próprio painel — o MailService passa http://paas-stalwart:8080.
@@ -123,6 +130,7 @@ export class StalwartManager {
       this.opts.hostname,
       this.opts.adminSecret,
       this.certificates().map((c) => c.host),
+      { reportDomain: this.opts.reportDomain ?? null },
     );
   }
 
@@ -415,11 +423,64 @@ function certificateSections(hostname: string, hosts: string[]): string[] {
   });
 }
 
+export interface RenderConfigOptions {
+  /** `report.domain` (ver StalwartManagerOptions.reportDomain). */
+  reportDomain?: string | null;
+}
+
+/**
+ * Chaves de entregabilidade (todas conferidas no código da tag v0.11.8 do
+ * Stalwart, em crates/common/src/config):
+ *  - `session.data.add-headers.message-id` / `.date` (smtp/session.rs): o
+ *    padrão é `local_port == 25`, ou seja, só a porta 25 completava esses
+ *    cabeçalhos — e os projetos enviam por 465/587. `true` faz o servidor
+ *    acrescentar quando a mensagem chega sem eles (nunca troca o que veio);
+ *  - `queue.outbound.ip-strategy` (smtp/queue.rs): padrão `ipv4_then_ipv6`.
+ *    O SPF do checklist só tem `ip4:` e não há PTR IPv6: sair por IPv6 seria
+ *    recusa certa no Gmail. `ipv4_only` é constante da expressão;
+ *  - `report.domain` (network.rs): texto simples; o padrão é o domínio
+ *    registrável do hostname (mail.envio.exemplo.com.br → exemplo.com.br),
+ *    que não tem a chave DKIM `rsa-<domínio>` nem o SPF desta VPS. Os avisos
+ *    de entrega (MAILER-DAEMON@) e os relatórios saem desse domínio e são
+ *    assinados com `rsa-` + ele (report.dsn.sign, smtp/queue.rs).
+ * Ficam antes da primeira seção `[..]`: depois dela, o TOML as poria dentro.
+ */
+function deliverabilityKeys(opts: RenderConfigOptions): string[] {
+  return [
+    "session.data.add-headers.message-id = true",
+    "session.data.add-headers.date = true",
+    'queue.outbound.ip-strategy = "ipv4_only"',
+    ...(opts.reportDomain ? [`report.domain = "${opts.reportDomain}"`] : []),
+  ];
+}
+
+/**
+ * Impressão digital da configuração que o Stalwart lê ao iniciar (sem o
+ * segredo do administrador, que não muda). O painel guarda a da última vez
+ * que reiniciou o servidor: se a versão nova do painel gerar outra (chave
+ * nova, outro report.domain), a sincronização reinicia o Stalwart uma vez —
+ * o reload dele não relê o config.toml (conferido na v0.11.8 real).
+ */
+export function stalwartConfigFingerprint(input: {
+  hostname: string;
+  certificateHosts: string[];
+  reportDomain?: string | null;
+}): string {
+  const toml = renderConfigToml(input.hostname, "", input.certificateHosts, { reportDomain: input.reportDomain ?? null });
+  return createHash("sha256").update(toml).digest("hex");
+}
+
 /** Config TOML mínimo e determinístico (bootstrap sem wizard). */
-export function renderConfigToml(hostname: string, adminSecret: string, certificateHosts: string[] = []): string {
+export function renderConfigToml(
+  hostname: string,
+  adminSecret: string,
+  certificateHosts: string[] = [],
+  opts: RenderConfigOptions = {},
+): string {
   return [
     "# Gerado pelo painel PaaS — não editar manualmente.",
     `server.hostname = "${hostname}"`,
+    ...deliverabilityKeys(opts),
     "",
     "[server.listener.smtp]",
     'bind = ["[::]:25"]',

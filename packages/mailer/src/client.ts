@@ -12,10 +12,15 @@
  *  - GET    /api/queue/messages?values=1&text=…
  *                                   fila de saída, com o estado de cada
  *                                   destinatário (formato em delivery-status.ts)
+ *  - GET    /api/queue/messages?values=1&limit=N   fila inteira (página Envios)
+ *  - PATCH  /api/queue/messages/{id}  tenta de novo agora (ver retryQueuedMessage)
+ *  - DELETE /api/queue/messages/{id}  tira da fila (cancela)
  * Auth: HTTP Basic com o fallback-admin (admin:<secret>).
  */
+import { isIP } from "node:net";
 import { DKIM_SELECTOR } from "@paas/core";
 import type { QueuedMessage } from "./delivery-status.js";
+import { isQueueId, parseQueueResponse, type QueueMessageRaw } from "./queue-view.js";
 
 export class StalwartApiError extends Error {
   constructor(
@@ -25,6 +30,10 @@ export class StalwartApiError extends Error {
     super(message);
     this.name = "StalwartApiError";
   }
+}
+
+function assertIp(ip: string): void {
+  if (!isIP(ip)) throw new StalwartApiError(400, `IP inválido: ${JSON.stringify(ip)}`);
 }
 
 interface ApiEnvelope {
@@ -45,11 +54,8 @@ export class StalwartClient {
     this.authHeader = `Basic ${Buffer.from(`${user}:${secret}`).toString("base64")}`;
   }
 
-  private async request(
-    method: string,
-    path: string,
-    body?: unknown,
-  ): Promise<unknown> {
+  /** Chamada crua: devolve o corpo como texto (erros já viram StalwartApiError). */
+  private async call(method: string, path: string, body?: unknown): Promise<string> {
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}/api${path}`, {
@@ -68,17 +74,32 @@ export class StalwartClient {
       );
     }
 
-    let payload: ApiEnvelope | null = null;
-    try {
-      payload = (await res.json()) as ApiEnvelope;
-    } catch {
-      // resposta sem corpo JSON
-    }
+    const text = await res.text().catch(() => "");
     if (!res.ok) {
+      let payload: ApiEnvelope | null = null;
+      try {
+        payload = JSON.parse(text) as ApiEnvelope;
+      } catch {
+        // resposta sem corpo JSON
+      }
       const detail = payload?.detail ?? payload?.title ?? `HTTP ${res.status}`;
       throw new StalwartApiError(res.status, `Stalwart: ${detail}`);
     }
-    return payload?.data;
+    return text;
+  }
+
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> {
+    const text = await this.call(method, path, body);
+    try {
+      return (JSON.parse(text) as ApiEnvelope | null)?.data;
+    } catch {
+      // resposta sem corpo JSON
+      return undefined;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -149,6 +170,19 @@ export class StalwartClient {
     ]);
   }
 
+  /**
+   * Endereços da caixa (o principal e os aliases), em minúsculas. O Stalwart
+   * devolve `emails` como lista ou, com um endereço só, como texto.
+   */
+  async mailboxEmails(email: string): Promise<string[]> {
+    const data = (await this.request("GET", `/principal/${encodeURIComponent(email)}`)) as {
+      emails?: string | string[];
+    } | null;
+    const emails = data?.emails;
+    const list = typeof emails === "string" ? [emails] : Array.isArray(emails) ? emails : [];
+    return list.map((e) => e.toLowerCase());
+  }
+
   async removeMailboxAlias(email: string, alias: string): Promise<void> {
     await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
       { action: "removeItem", field: "emails", value: alias },
@@ -171,6 +205,36 @@ export class StalwartClient {
   }
 
   // -------------------------------------------------------------------------
+  // IP isento do bloqueio automático (webmail)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Isenta `ip` do bloqueio automático (server.allowed-ip), desfaz um
+   * bloqueio já feito dele (server.blocked-ip) e tira a isenção do IP
+   * anterior. Conferido no Stalwart v0.11.8 real: grava no banco e vale
+   * depois de GET /api/reload, sem reiniciar. Usado para o webmail, de onde
+   * chegam os logins de todos os visitantes (ver webmail.ts).
+   */
+  async exemptIp(ip: string, previousIp: string | null): Promise<void> {
+    assertIp(ip);
+    const remove = [
+      ...(previousIp && previousIp !== ip && isIP(previousIp) ? [`server.allowed-ip.${previousIp}`] : []),
+      `server.blocked-ip.${ip}`,
+    ];
+    await this.request("POST", "/settings", [
+      { type: "delete", keys: remove },
+      { type: "insert", prefix: null, values: [[`server.allowed-ip.${ip}`, ""]], assert_empty: false },
+    ]);
+    await this.request("GET", "/reload");
+  }
+
+  async removeIpExemption(ip: string): Promise<void> {
+    assertIp(ip);
+    await this.request("POST", "/settings", [{ type: "delete", keys: [`server.allowed-ip.${ip}`] }]);
+    await this.request("GET", "/reload");
+  }
+
+  // -------------------------------------------------------------------------
   // Fila de saída
   // -------------------------------------------------------------------------
 
@@ -185,5 +249,35 @@ export class StalwartClient {
       `/queue/messages?values=1&text=${encodeURIComponent(text.toLowerCase())}`,
     )) as { items?: unknown[] } | null;
     return (data?.items ?? []).filter((item): item is QueuedMessage => typeof item === "object" && item !== null);
+  }
+
+  /**
+   * A fila inteira (até `limit` mensagens), com o id preservado como texto
+   * (u64 — o JSON.parse comum arredondaria). Página Envios → Fila agora.
+   */
+  async listQueue(limit = 200): Promise<{ items: QueueMessageRaw[]; total: number }> {
+    return parseQueueResponse(await this.call("GET", `/queue/messages?values=1&limit=${limit}`));
+  }
+
+  /**
+   * "Tentar agora": PATCH /api/queue/messages/{id}. ATENÇÃO (conferido no
+   * código da v0.11.8 e num Stalwart real): além de marcar a tentativa para
+   * agora, o Stalwart encurta o prazo da mensagem para 10 s depois. Se essa
+   * tentativa falhar de novo, ele desiste e devolve o aviso de falha ao
+   * remetente. Por isso a página chama de "última tentativa".
+   * true = havia domínio pendente para tentar.
+   */
+  async retryQueuedMessage(id: string): Promise<boolean> {
+    if (!isQueueId(id)) throw new StalwartApiError(400, "Id de fila inválido.");
+    return (await this.request("PATCH", `/queue/messages/${id}`)) === true;
+  }
+
+  /**
+   * "Cancelar": DELETE /api/queue/messages/{id} (sem filtro): a mensagem sai
+   * da fila sem nova tentativa e sem aviso ao remetente.
+   */
+  async cancelQueuedMessage(id: string): Promise<boolean> {
+    if (!isQueueId(id)) throw new StalwartApiError(400, "Id de fila inválido.");
+    return (await this.request("DELETE", `/queue/messages/${id}`)) === true;
   }
 }

@@ -129,6 +129,12 @@ describe("MailPage — certificado do servidor de e-mail", () => {
     expect(await screen.findByRole("link", { name: /Ver em Certificados/ })).toHaveAttribute("href", "/certificates");
   });
 
+  it("leva à página Envios (fila, histórico e reputação)", async () => {
+    mockApi({ tls: TLS_OK });
+    renderPage();
+    expect(await screen.findByRole("link", { name: /Ver envios/ })).toHaveAttribute("href", "/mail/envios");
+  });
+
   it("'Conferir de novo' consulta outra vez", async () => {
     let calls = 0;
     mockApi({

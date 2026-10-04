@@ -2,7 +2,10 @@
   "modulo": "email",
   "titulo": "E-mail",
   "resumo": "Servidor de e-mail próprio (Stalwart Mail Server em container Docker) gerenciado pelo painel: domínios com DKIM, checklist/verificação de DNS, caixas de e-mail (IMAP/SMTP) e injeção automática de credenciais SMTP nos projetos deployados. Todas as rotas exigem sessão (ou setup token enquanto o setup não terminou), via o guard global de auth.",
-  "pontoDeEntrada": { "api": "GET /api/mail/status", "web": "/mail" },
+  "pontoDeEntrada": {
+    "api": "GET /api/mail/status",
+    "web": "/mail"
+  },
   "comoFunciona": [
     "O painel gerencia um único container Docker dedicado (paas-stalwart) rodando a imagem stalwartlabs/mail-server:v0.11.8 (Stalwart Mail Server, linha v0.11.x — a última com API REST de gerenciamento; a linha nova stalwartlabs/stalwart v0.16+ removeu essa API e exige wizard interativo, então NÃO é usada aqui). O container roda na rede Docker paas-net, a mesma rede dos projetos deployados.",
     "Persistência: os dados internos do Stalwart (contas, mensagens IMAP, chaves privadas DKIM) ficam no volume Docker nomeado paas_stalwart_data, montado em /opt/stalwart-mail/data. O painel injeta a configuração (data/mail/stalwart/config.toml, renderizada a cada start) montada somente-leitura em /opt/stalwart-mail/etc.",
@@ -10,20 +13,30 @@
     "O painel fala com o Stalwart via API REST HTTP Basic (usuário 'admin', senha = adminSecret). Fora de container (desenvolvimento): http://127.0.0.1:<porta-http>. Com o painel em container (produção, /.dockerenv): http://paas-stalwart:8080 pela rede paas-net — 127.0.0.1 dentro do container é o próprio painel. O painel é ligado à paas-net ao iniciar o servidor e, depois de uma atualização que recria o container do painel, na primeira operação que precisa do Stalwart (MailService.ensureNetworkAccess, uma vez por processo).",
     "Adicionar um domínio (POST /api/mail/domains): o painel cria o domínio no Stalwart (POST /api/principal {type:'domain'}), gera um par de chaves DKIM RSA 2048 (POST /api/dkim {algorithm:'Rsa'}), lê a chave pública (GET /api/dkim/{id}) e guarda dkimPublicKey/dkimSelector('paas')/dkimKeyBits(2048) em data/mail/mail.json. Cria automaticamente a caixa postmaster@<domínio> (com alias abuse@) — exigida pelas boas práticas de e-mail.",
     "Checklist de DNS (GET /api/mail/domains/:domain/dns): o painel MONTA localmente (sem consultar o Stalwart nem o DNS real) a lista de registros esperados — A (mail.<domínio>), MX, SPF (v=spf1 ip4:<ip> ~all/-all conforme o estágio DMARC), DKIM (TXT com a chave pública gerada) e DMARC (progressivo none→quarantine→reject). O usuário copia cada registro para o provedor de DNS do domínio.",
-    "Verificar DNS (POST /api/mail/domains/:domain/verify): consulta o DNS real via resolver público injetável (1.1.1.1/8.8.8.8, não o resolver local da VPS) e compara cada registro com o esperado (found/missing/mismatch). Verifica também o reverse DNS (PTR) do IP público — que o painel NÃO consegue configurar (depende do provedor da VPS) — em três níveis (01/10/2026): verde = o nome reverso é mail.<domínio>; azul ('generic') = nome genérico do provedor que volta para o mesmo IP (FCrDNS válido: Gmail/Yahoo/Microsoft aceitam; conta como OK; trocar é opcional); amarelo = sem nome reverso ou nome que não volta para o IP. O provedor é reconhecido pelo sufixo do nome (Contabo, Hetzner, Vultr) e a página diz onde a própria pessoa troca; o texto de chamado fica só para provedor desconhecido. O resultado (ok/total, com o PTR azul contando como OK) é persistido em domain.lastVerify.",
+    "Verificar DNS (POST /api/mail/domains/:domain/verify): consulta o DNS real via resolver público injetável (1.1.1.1/8.8.8.8, não o resolver local da VPS) e compara cada registro com o esperado (found/missing/mismatch). Verifica também o reverse DNS (PTR) do IP público — que o painel NÃO consegue configurar (depende do provedor da VPS) — em três níveis (01/10/2026): verde = o nome reverso é o nome com que o servidor se apresenta (HELO = server.hostname; um só para todos os domínios desde 04/10/2026 — antes era mail.<domínio> de cada um); azul ('generic') = nome genérico do provedor que volta para o mesmo IP (FCrDNS válido: Gmail/Yahoo/Microsoft aceitam; conta como OK; trocar é recomendado desde 04/10/2026); amarelo = sem nome reverso ou nome que não volta para o IP. O provedor é reconhecido pelo sufixo do nome (Contabo, Hetzner, Vultr) e a página diz onde a própria pessoa troca; o texto de chamado fica só para provedor desconhecido. O resultado (ok/total, com o PTR azul contando como OK) é persistido em domain.lastVerify.",
     "E-mail de teste (01/10/2026, POST /api/mail/domains/:domain/test-email): a pessoa digita um endereço e o painel envia uma mensagem simples de postmaster@<domínio> pela submission do próprio Stalwart (465, TLS; em container por paas-stalwart na paas-net, sem verificar a cadeia — o teste funciona com certificado autoassinado). O envio pede aviso de entrega (DSN). O destino é acompanhado (GET …/test-email/:id): na fila, pela API de administração (/api/queue/messages); fora dela, pelo aviso que o Stalwart deixa na caixa postmaster@, lido por JMAP — o Stalwart remove a mensagem da fila tanto na entrega quanto na recusa, então 'sumiu da fila' sozinho não diz nada. Limite: 1 teste a cada 30 s e 20 por hora; auditoria 'mail.test.send'.",
     "Criar caixa de e-mail (POST /api/mail/domains/:domain/mailboxes): gera senha forte (ou usa a informada, mín. 8 chars) e cria a caixa no Stalwart como principal 'individual' com role 'user' (obrigatório — sem essa role o Stalwart autentica mas nega SMTP/IMAP). A senha é guardada em CLARO em data/mail/mail.json e devolvida ao cliente apenas na criação (depois só via /credentials).",
     "Habilitar e-mail para um projeto (POST /api/projects/:id/email): cria (se não existir) uma caixa técnica <slug-do-projeto>@<domínio> e registra a associação projeto→caixa em data/mail/mail.json. No boot do módulo, mail.ts chama app.deployService.setEnvProvider(service.envForProject) — isso conecta o módulo de e-mail ao engine de deploy da Fase 2: a cada deploy do projeto, o engine chama envForProject(project) e injeta SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/MAIL_FROM como variáveis de ambiente do container (compose: em TODOS os serviços do compose.yml; dockerfile: no container único via -e; site estático: injeção ignorada, apenas loga um aviso).",
     "O host injetado é mail.<domínio da caixa> na porta 587 (submission, STARTTLS) — o NOME DO CERTIFICADO. O container paas-stalwart tem esse nome como alias na paas-net (além de paas-stalwart), então o projeto conecta por dentro da rede Docker, sem sair pela internet, e a verificação padrão do certificado passa (validado com nodemailer requireTLS + verificação ligada). Antes (até 01/10/2026) era SMTP_HOST=paas-stalwart com certificado autoassinado: app que confere o certificado recusava. Projetos com e-mail ativo recebem o valor novo no próximo deploy.",
     "Certificado de verdade (01/10/2026): o Caddy central (paas-caddy) serve um bloco para cada mail.<domínio> com uma página simples 'Servidor de e-mail' — é o bloco que faz o Caddy EMITIR o certificado (Let's Encrypt; ZeroSSL de reserva). O Caddy guarda o par em /data/caddy/certificates/<emissor>/<host>/<host>.crt|.key no volume paas_caddy_data. O painel lê o par pelo daemon (docker exec paas-caddy find/cat — packages/mailer/src/tls-certificates.ts), confere nome, validade e se a chave é do certificado, e COPIA só ele para o Stalwart (etc/certs/<id>.crt|.key, 0600, junto com o config.toml via docker cp). O config.toml ganha uma seção [certificate.<id>] por host, lida de arquivo (cert = \"%{file:...}%\"); o Stalwart escolhe pelo SNI e o do hostname do servidor é o default. Volume do Caddy NÃO é montado no Stalwart: exporia as chaves de todos os sites e a conta ACME.",
-    "Renovação (MailService.syncTls): roda 1 min após o boot, a cada hora, depois de iniciar o servidor, de adicionar/remover domínio e ao abrir a página E-mail (GET /api/mail/tls). Compara com o estado aplicado (data/mail/mail.json → tls): nada mudou → nada; só a impressão digital (renovação) ou os aliases → entrega os arquivos e chama GET /api/reload/certificate (troca sem derrubar conexão; se a API falhar, reinicia); certificado de um nome novo ou outro hostname → entrega e REINICIA o container (o Stalwart v0.11.8 não relê seção nova do config.toml nem com /api/reload — conferido no servidor real em 01/10/2026). Hosts de e-mail mudaram → o Caddyfile é recalculado (DeployService.refreshProxy).",
+    "Renovação (MailService.syncTls): roda 1 min após o boot, a cada hora, depois de iniciar o servidor, de adicionar/remover domínio e ao abrir a página E-mail (GET /api/mail/tls). Compara com o estado aplicado (data/mail/mail.json → tls): nada mudou → nada; só a impressão digital (renovação) ou os aliases → entrega os arquivos e chama GET /api/reload/certificate (troca sem derrubar conexão; se a API falhar, reinicia); certificado de um nome novo ou outro hostname → entrega e REINICIA o container (o Stalwart v0.11.8 não relê seção nova do config.toml nem com /api/reload — conferido no servidor real em 01/10/2026). Hosts de e-mail mudaram → o Caddyfile é recalculado (DeployService.refreshProxy). Desde 04/10/2026 a comparação inclui a impressão digital do config.toml gerado (tls.config): se uma versão nova do painel gera outro arquivo (chave nova, outro report.domain), a sincronização seguinte entrega e reinicia uma vez. A mesma sincronização acrescenta dmarc@ à postmaster@ dos domínios cadastrados antes disso.",
     "Hostname do servidor: PAAS_MAIL_HOSTNAME → data.hostname (legado) → mail.<1º domínio cadastrado> → mail.localhost (sem domínio). Hosts de e-mail = hostname + mail.<cada domínio>, sem .localhost. Cada um ganha bloco no Caddy, certificado, alias na paas-net.",
     "Proteção do e-mail existente (01/10/2026): POST /api/mail/domains consulta o MX do domínio (resolvers públicos) antes de provisionar. Se ele aponta para outro servidor ('elsewhere') ou a consulta falha ('unknown'), responde 409 domain_receives_mail com existingMail {status, servers, suggestedDomain: envio.<domínio>} e só segue com confirmExistingMail:true. Sem MX, MX nulo (RFC 7505) ou MX já apontando para mail.<domínio>/hostname: segue direto. Motivo: o dono do produto ia cadastrar o domínio principal da empresa, que recebe e-mail em outro provedor.",
-    "Blacklist (GET /api/mail/blacklist): consulta DNSBLs públicas (Spamhaus ZEN, SpamCop, Barracuda para o IP; Spamhaus DBL para cada domínio cadastrado) via reverse-DNS lookup (127.0.0.0/8 = listado)."
+    "Webmail (04/10/2026, ver webmail.json): botão 'Ativar webmail' na página E-mail sobe o container paas-webmail (Roundcube 1.7.4, imagem fixada por tag e digest) na paas-net, sem porta publicada, falando só com o paas-stalwart (IMAP 993 e SMTP 465, mesmo login). O bloco de cada mail.<domínio> no Caddy passa de página estática a reverse_proxy para ele (o certificado continua sendo emitido pelo mesmo bloco). O painel isenta o IP do webmail no bloqueio automático do Stalwart e bloqueia no Caddy o IP real de quem erra a senha demais.",
+    "Blacklist (GET /api/mail/blacklist e página Envios → Reputação): consulta DNSBLs (Spamhaus ZEN, SpamCop, Barracuda para o IP; Spamhaus DBL para cada domínio) pelo resolvedor do sistema. Desde 04/10/2026 cada zona é testada com o ponto de teste oficial (127.0.0.2 / dbltest.com): sem resposta ao teste o resultado é 'não deu para verificar', nunca 'limpo'; a Spamhaus aceita a chave DQS gratuita. Roda uma vez por dia e no botão, agendada pelo próprio plugin de e-mail (antes era um gancho do Monitoramento que nunca rodou). Detalhes em envios.json.",
+    "Página Envios (04/10/2026, /mail/envios): fila do Stalwart com Tentar agora/Cancelar, histórico lido do registro do container (docker logs a cada 5 min, só metadados, 30 dias em data/mail/envios), volume de 14 dias, reputação e nota de entregabilidade. Ver envios.json."
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/mail.ts"],
-    "servicos": ["apps/server/src/services/mail-service.ts"],
+    "rotas": [
+      "apps/server/src/routes/mail.ts",
+      "apps/server/src/routes/mail-envios.ts"
+    ],
+    "servicos": [
+      "apps/server/src/services/mail-service.ts",
+      "apps/server/src/services/mail-envios-service.ts",
+      "apps/server/src/services/mail-reputation-service.ts",
+      "apps/server/src/services/stalwart-logs.ts"
+    ],
     "pacotes": [
       "packages/mailer/src/server.ts",
       "packages/mailer/src/client.ts",
@@ -37,11 +50,26 @@
       "packages/mailer/src/delivery-status.ts",
       "packages/deploy/src/caddy.ts",
       "packages/mailer/src/exec.ts",
+      "packages/mailer/src/webmail.ts",
       "packages/mailer/src/index.ts",
       "packages/core/src/mail.ts",
-      "packages/deploy/src/engine.ts"
+      "packages/deploy/src/engine.ts",
+      "packages/mailer/src/delivery-log.ts",
+      "packages/mailer/src/queue-view.ts",
+      "packages/mailer/src/deliverability-score.ts",
+      "packages/core/src/mail-envios.ts"
     ],
-    "web": ["apps/web/src/pages/MailPage.tsx", "apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/mail/TestEmailCard.tsx", "apps/web/src/components/mail/MailboxesPanel.tsx", "apps/web/src/components/mail/DnsChecklistPanel.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"],
+    "web": [
+      "apps/web/src/pages/MailPage.tsx",
+      "apps/web/src/pages/MailDomainPage.tsx",
+      "apps/web/src/components/mail/TestEmailCard.tsx",
+      "apps/web/src/components/mail/MailboxesPanel.tsx",
+      "apps/web/src/components/mail/DnsChecklistPanel.tsx",
+      "apps/web/src/components/project/ProjectEmailCard.tsx",
+      "apps/web/src/pages/MailEnviosPage.tsx",
+      "apps/web/src/components/envios/"
+    ],
+    "web": ["apps/web/src/pages/MailPage.tsx", "apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/mail/TestEmailCard.tsx", "apps/web/src/components/mail/MailboxesPanel.tsx", "apps/web/src/components/mail/DnsChecklistPanel.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx", "apps/web/src/components/mail/WebmailCard.tsx"],
     "testes": [
       "packages/mailer/tests/mailboxes.test.ts",
       "packages/mailer/tests/blacklist.test.ts",
@@ -62,24 +90,50 @@
       "apps/web/tests/test-email-card.test.tsx",
       "apps/web/tests/mail-panels.test.tsx",
       "apps/web/tests/project-email-card.test.tsx",
-      "scripts/test-mail.mts"
+      "packages/mailer/tests/webmail.test.ts",
+      "packages/deploy/tests/caddy-webmail.test.ts",
+      "apps/server/tests/webmail-service.test.ts",
+      "apps/server/tests/routes-webmail.test.ts",
+      "apps/web/tests/webmail.test.tsx",
+      "scripts/test-mail.mts",
+      "packages/mailer/tests/delivery-log.test.ts",
+      "packages/mailer/tests/queue-view.test.ts",
+      "packages/mailer/tests/deliverability-score.test.ts",
+      "packages/mailer/tests/client-queue.test.ts",
+      "apps/server/tests/mail-envios-service.test.ts",
+      "apps/server/tests/mail-reputation-service.test.ts",
+      "apps/server/tests/mail-envios-mailservice.test.ts",
+      "apps/server/tests/routes-mail-envios.test.ts",
+      "apps/server/tests/mail-envios-wiring.test.ts",
+      "apps/server/tests/stalwart-logs.test.ts",
+      "apps/web/tests/mail-envios-page.test.tsx"
     ]
   },
   "persistencia": [
     {
       "arquivo": "data/mail/mail.json",
       "formato": "json (chmod 0600)",
-      "conteudo": "{ adminSecret: string|null, hostname: string|null, domains: Record<domínio, {name, dkimSelector, dkimPublicKey, dkimKeyBits, dmarcStage, createdAt, lastVerify}>, mailboxes: Record<email, {id, localPart, domain, kind:'user'|'project'|'system', createdAt, password}>, projects: Record<projectId, {domain, mailbox, enabledAt}>, tls: {hostname, aliases, certificates: Record<host, sha256>} | null (o que foi instalado no Stalwart na última sincronização — sem chave privada) }. IMPORTANTE: mailboxes[].password fica em TEXTO PLANO (necessário para reexibir credenciais e para a injeção SMTP)."
+      "conteudo": "{ adminSecret: string|null, hostname: string|null, domains: Record<domínio, {name, dkimSelector, dkimPublicKey, dkimKeyBits, dmarcStage, createdAt, lastVerify, dmarcAlias?}>, mailboxes: Record<email, {id, localPart, domain, kind:'user'|'project'|'system', createdAt, password}>, projects: Record<projectId, {domain, mailbox, enabledAt}>, tls: {hostname, aliases, certificates: Record<host, sha256>, config?: sha256 do config.toml sem o segredo} | null (o que foi instalado no Stalwart na última sincronização — sem chave privada) }. IMPORTANTE: mailboxes[].password fica em TEXTO PLANO (necessário para reexibir credenciais e para a injeção SMTP)."
     },
     {
       "arquivo": "data/mail/stalwart/config.toml",
       "formato": "toml (chmod 0600, regenerado a cada start)",
-      "conteudo": "Config mínima e determinística do Stalwart: hostname, listeners (smtp:25, submission:587, submissions:465 TLS implícito, imap:143, imaptls:993 TLS implícito, http:8080), [authentication.fallback-admin] user=admin secret=<adminSecret>, storage 100% rocksdb, uma seção [certificate.<id>] por mail.<domínio> com certificado já emitido pelo Caddy (cert/private-key lidos de /opt/stalwart-mail/etc/certs/<id>.crt|.key; o do hostname é default). Sem nenhum emitido: sem seção, e o Stalwart gera um autoassinado. Esta cópia local NUNCA contém a chave privada (os arquivos de certificado só existem dentro do container)."
+      "conteudo": "Config mínima e determinística do Stalwart: hostname, listeners (smtp:25, submission:587, submissions:465 TLS implícito, imap:143, imaptls:993 TLS implícito, http:8080), [authentication.fallback-admin] user=admin secret=<adminSecret>, storage 100% rocksdb, uma seção [certificate.<id>] por mail.<domínio> com certificado já emitido pelo Caddy (cert/private-key lidos de /opt/stalwart-mail/etc/certs/<id>.crt|.key; o do hostname é default), e as chaves de entregabilidade antes da primeira seção (session.data.add-headers.message-id/date = true, queue.outbound.ip-strategy = \"ipv4_only\", report.domain). Sem nenhum emitido: sem seção, e o Stalwart gera um autoassinado. Esta cópia local NUNCA contém a chave privada (os arquivos de certificado só existem dentro do container)."
     },
     {
       "arquivo": "volume Docker paas_stalwart_data",
       "formato": "rocksdb (interno ao Stalwart)",
       "conteudo": "Todo o estado real do servidor de e-mail: contas, mensagens IMAP, filas SMTP e as CHAVES PRIVADAS DKIM (o painel só guarda a chave pública). Não é um arquivo local — só existe dentro do Docker; perder o volume derruba tudo mesmo com mail.json intacto."
+    },
+    {
+      "arquivo": "data/mail/envios/AAAA-MM-DD.jsonl e estado.json",
+      "formato": "jsonl/json 0600",
+      "conteudo": "Histórico de entregas (só metadados do envelope e a resposta do destino), 30 dias; cursor da leitura do registro. Ver envios.json."
+    },
+    {
+      "arquivo": "data/mail/reputacao.json",
+      "formato": "json 0600",
+      "conteudo": "Chave DQS da Spamhaus, última conferência das listas, marcações do Postmaster/SNDS e fatos da nota. Ver envios.json."
     }
   ],
   "endpoints": [
@@ -90,6 +144,9 @@
     { "id": "criar-dominio", "metodo": "POST", "url": "/api/mail/domains", "resumo": "Provisiona um domínio: DKIM RSA 2048 + caixa postmaster@.", "arquivo": "criar-dominio.json" },
     { "id": "remover-dominio", "metodo": "DELETE", "url": "/api/mail/domains/:domain", "resumo": "Remove um domínio e todas as suas caixas.", "arquivo": "remover-dominio.json" },
     { "id": "certificado-servidor", "metodo": "GET", "url": "/api/mail/tls", "resumo": "Certificado de cada mail.<domínio>: válido (emissor/validade) ou o que falta.", "arquivo": "certificado-servidor.json" },
+    { "id": "webmail", "metodo": "GET", "url": "/api/mail/webmail", "resumo": "Estado do webmail (Roundcube em https://mail.<domínio>/), um link por domínio.", "arquivo": "webmail.json" },
+    { "id": "webmail-ativar", "metodo": "POST", "url": "/api/mail/webmail/enable", "resumo": "Ativa o webmail: sobe o paas-webmail e mail.<domínio> passa a abri-lo.", "arquivo": "webmail.json" },
+    { "id": "webmail-desativar", "metodo": "POST", "url": "/api/mail/webmail/disable", "resumo": "Desativa o webmail: mail.<domínio> volta à página do servidor de e-mail.", "arquivo": "webmail.json" },
     { "id": "blacklist", "metodo": "GET", "url": "/api/mail/blacklist", "resumo": "Checa o IP público e os domínios contra DNSBLs.", "arquivo": "blacklist.json" },
     { "id": "dns-checklist", "metodo": "GET", "url": "/api/mail/domains/:domain/dns", "resumo": "Lista os registros DNS esperados para o domínio.", "arquivo": "dns-checklist.json" },
     { "id": "verificar-dns", "metodo": "POST", "url": "/api/mail/domains/:domain/verify", "resumo": "Verifica os registros DNS contra o DNS real + PTR (verde, azul ou amarelo).", "arquivo": "verificar-dns.json" },
@@ -103,12 +160,35 @@
     { "id": "email-projeto", "metodo": "GET", "url": "/api/projects/:id/email", "resumo": "Configuração de e-mail atual de um projeto (env mascaradas).", "arquivo": "email-projeto.json" },
     { "id": "habilitar-email-projeto", "metodo": "POST", "url": "/api/projects/:id/email", "resumo": "Ativa ou altera o e-mail do projeto: o endereço de envio vira a caixa do projeto, com senha (liga a injeção SMTP).", "arquivo": "habilitar-email-projeto.json" },
     { "id": "desabilitar-email-projeto", "metodo": "DELETE", "url": "/api/projects/:id/email", "resumo": "Desativa a injeção SMTP no próximo deploy do projeto.", "arquivo": "desabilitar-email-projeto.json" },
-    { "id": "ligar-variaveis-email-projeto", "metodo": "PUT", "url": "/api/projects/:id/email/links", "resumo": "Liga variáveis do app a valores do e-mail do projeto (guarda só o mapeamento; o deploy entrega o valor atual).", "arquivo": "ligar-variaveis-email-projeto.json" }
+    { "id": "ligar-variaveis-email-projeto", "metodo": "PUT", "url": "/api/projects/:id/email/links", "resumo": "Liga variáveis do app a valores do e-mail do projeto (guarda só o mapeamento; o deploy entrega o valor atual).", "arquivo": "ligar-variaveis-email-projeto.json" },
+    {"id": "envios-fila", "metodo": "GET", "url": "/api/mail/envios/queue", "resumo": "Fila do servidor de e-mail agora.", "arquivo": "envios.json"},
+    {"id": "envios-tentar", "metodo": "POST", "url": "/api/mail/envios/queue/:id/retry", "resumo": "Tentar agora (no Stalwart 0.11.8, a última tentativa).", "arquivo": "envios.json"},
+    {"id": "envios-cancelar", "metodo": "POST", "url": "/api/mail/envios/queue/:id/cancel", "resumo": "Tira a mensagem da fila.", "arquivo": "envios.json"},
+    {"id": "envios-historico", "metodo": "GET", "url": "/api/mail/envios/history", "resumo": "Histórico de entregas com filtros.", "arquivo": "envios.json"},
+    {"id": "envios-volume", "metodo": "GET", "url": "/api/mail/envios/volume", "resumo": "Envios por dia e por projeto (14 dias) e taxas.", "arquivo": "envios.json"},
+    {"id": "envios-reputacao", "metodo": "GET", "url": "/api/mail/envios/reputation", "resumo": "Última conferência das listas de bloqueio.", "arquivo": "envios.json"},
+    {"id": "envios-conferir", "metodo": "POST", "url": "/api/mail/envios/reputation/check", "resumo": "Conferir agora (1 por minuto).", "arquivo": "envios.json"},
+    {"id": "envios-dqs", "metodo": "PUT", "url": "/api/mail/envios/reputation/dqs", "resumo": "Chave DQS da Spamhaus (nunca devolvida).", "arquivo": "envios.json"},
+    {"id": "envios-nota", "metodo": "GET", "url": "/api/mail/envios/deliverability", "resumo": "Nota de entregabilidade.", "arquivo": "envios.json"},
+    {"id": "envios-postmaster", "metodo": "PUT", "url": "/api/mail/envios/postmaster", "resumo": "Marcações do Postmaster Tools / SNDS / taxa de spam.", "arquivo": "envios.json"}
   ],
   "telas": [
-    { "id": "tela-email-projeto", "rota": "/projects/:id/email", "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente, Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).", "arquivo": "tela-email-projeto.json" }
+    {
+      "id": "tela-email-projeto",
+      "rota": "/projects/:id/email",
+      "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente, Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).",
+      "arquivo": "tela-email-projeto.json"
+    },
+    {
+      "id": "envios",
+      "rota": "/mail/envios",
+      "resumo": "Página Envios: fila, histórico, volume, reputação e nota (?aba=historico|volume|reputacao|nota).",
+      "arquivo": "envios.json"
+    }
   ],
-  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json"
+  ],
   "pontosDeAtencao": [
     "Senhas de caixas de e-mail e o adminSecret do Stalwart ficam em TEXTO PLANO em data/mail/mail.json (só protegido por chmod 0600) — qualquer leitura desse arquivo (backup mal protegido, outro processo do mesmo usuário do SO) expõe todas as credenciais SMTP/IMAP e o acesso admin ao Stalwart.",
     "A imagem usada (stalwartlabs/mail-server:v0.11.8) é uma linha antiga/descontinuada — o próprio código (packages/mailer/src/server.ts:7-11) documenta que a linha nova (stalwartlabs/stalwart v0.16+) removeu a API REST usada por todo o módulo; migrar de versão exigiria reescrever client.ts inteiro. Dado novo verificado nesta rodada: CVE-2025-61600 (DoS não autenticada no parser IMAP do Stalwart) foi corrigida só na 0.13.4, SEM backport para a linha 0.11.x — a versão fixada aqui é vulnerável e permanece assim enquanto não migrar. Ainda aberto, ver global/review-2026-08-24.json (achado stalwart-descontinuado).",

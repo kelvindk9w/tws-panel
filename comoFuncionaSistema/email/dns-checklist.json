@@ -27,7 +27,7 @@
           { "id": "mx", "type": "MX", "name": "exemplo.com.br", "expected": "10 mail.exemplo.com.br", "priority": 10, "target": "mail.exemplo.com.br", "purpose": "Recebimento de e-mail — aponta para o hostname, nunca para IP.", "status": "pending", "found": [], "note": null },
           { "id": "spf", "type": "TXT", "name": "exemplo.com.br", "expected": "v=spf1 ip4:203.0.113.10 ~all", "purpose": "SPF: declara quais IPs podem enviar pelo domínio.", "status": "pending", "found": [], "note": null },
           { "id": "dkim", "type": "TXT", "name": "paas._domainkey.exemplo.com.br", "expected": "v=DKIM1; k=rsa; p=MIIBIjANBg...", "purpose": "DKIM (RSA 2048): assinatura criptográfica de toda mensagem enviada.", "status": "pending", "found": [], "note": null },
-          { "id": "dmarc", "type": "TXT", "name": "_dmarc.exemplo.com.br", "expected": "v=DMARC1; p=none; rua=mailto:dmarc@exemplo.com.br", "purpose": "DMARC: política de autenticação + relatórios (evoluir none → quarantine → reject).", "status": "pending", "found": [], "note": null }
+          { "id": "dmarc", "type": "TXT", "name": "_dmarc.exemplo.com.br", "expected": "v=DMARC1; p=none; rua=mailto:dmarc@exemplo.com.br", "purpose": "DMARC: política de autenticação + relatórios, que chegam na caixa postmaster@exemplo.com.br pelo endereço dmarc@ (evoluir none → quarantine → reject).", "status": "pending", "found": [], "note": null }
         ],
         "ptr": { "ip": "203.0.113.10", "expected": "mail.exemplo.com.br", "status": "pending", "found": [], "forwardConfirmed": null, "provider": null, "ticketText": null },
         "suggestion": "Estágio de observação: SPF \"~all\" e DMARC \"p=none\". Após 2–4 semanas monitorando os relatórios (rua) sem falsos positivos, endureça para p=quarantine e SPF \"-all\"."
@@ -40,7 +40,7 @@
   ],
   "fluxo": [
     "1. requireDomain(name).",
-    "2. buildDnsChecklist({ domain, mailHostname:'mail.'+domain, serverIp: serverIp(), serverIpv6: config.publicIpv6, dkimSelector, dkimPublicKey, dmarcStage }) — puramente local, monta os 5 (ou 6 com AAAA) registros esperados com status 'pending' e found:[].",
+    "2. buildDnsChecklist({ domain, mailHostname:'mail.'+domain, serverHostname: hostname() (PAAS_MAIL_HOSTNAME → mail.<1º domínio>), serverIp: serverIp(), serverIpv6: config.publicIpv6, dkimSelector, dkimPublicKey, dmarcStage }) — puramente local, monta os 5 (ou 6 com AAAA) registros esperados com status 'pending' e found:[].",
     "3. Não consulta o DNS real nem exige o servidor de e-mail rodando — só precisa que o domínio já esteja cadastrado no painel.",
     "4. MX: além de expected ('10 mail.<domínio>', que é o que a verificação compara), vem priority (10) e target (mail.<domínio>) separados, porque o Cloudflare e outros provedores pedem os dois em campos diferentes. Os outros registros não têm esses campos."
   ],
@@ -52,6 +52,8 @@
   "chamadoPor": ["apps/web/src/pages/MailDomainPage.tsx:198"],
   "testes": ["packages/mailer/tests/dns-checklist.test.ts", "apps/web/tests/mail-domain-page.test.tsx", "scripts/test-mail.mts (passo 2)"],
   "observacoes": [
+    "PTR único (04/10/2026): ptr.expected é o nome com que o servidor se apresenta (HELO = server.hostname, o mesmo MailService.hostname() que vai no config.toml), igual em todos os domínios. Antes cada checklist esperava mail.<domínio>; com dois domínios ou mais um deles nunca ficava verde, porque um IP tem um nome reverso só. No exemplo (um domínio só) os dois coincidem. O A e o MX continuam sendo mail.<domínio> de cada um.",
+    "DMARC (04/10/2026): o rua continua mailto:dmarc@<domínio> — o registro publicado não muda —, mas agora dmarc@ é endereço extra da caixa postmaster@ (criado no cadastro; domínios antigos ganham na sincronização seguinte, ver criar-dominio.json). Antes os relatórios voltavam como \"usuário desconhecido\".",
     "Na página do domínio (MailDomainPage, aba Checklist DNS), cada registro tem um botão de copiar ao lado do NOME e outro ao lado do VALOR, cada um copiando só aquele campo exatamente como aparece (leitor de tela: 'Copiar nome de <nome>' / 'Copiar valor de <nome>'); o ícone vira um ✓ por 1,5 s. Até 02/10/2026 um botão só copiava 'nome  tipo  valor' juntos e a pessoa colava tudo num campo só do Cloudflare.",
     "MX na página: 'Servidor de e-mail: mail.<domínio>' e 'Prioridade: 10', cada um com o seu copiar ('Copiar servidor de e-mail de <nome>' / 'Copiar prioridade de <nome>'), e a observação 'No Cloudflare, o MX tem dois campos: Servidor de e-mail e Prioridade.'. Servidor antigo sem priority/target: a página separa a partir de expected.",
     "Registro A (e AAAA) de mail.<domínio> na página: 'No Cloudflare: Proxy desligado (nuvem cinza)' — com o proxy ligado o nome aponta para o Cloudflare, e nem o e-mail nem a emissão do certificado funcionam.",

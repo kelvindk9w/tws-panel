@@ -111,7 +111,7 @@ function statusLabel(status: DnsCheckStatus): string {
   }
 }
 
-/** PTR verde (mail.<domínio>) ou azul (genérico com FCrDNS válido) conta como OK. */
+/** PTR verde (nome do servidor) ou azul (genérico com FCrDNS válido) conta como OK. */
 function ptrIsOk(status: PtrCheckStatus): boolean {
   return status === "found" || status === "generic";
 }
@@ -158,9 +158,12 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
           <StatusIcon status={ptr.status} /> Reverse DNS (PTR) — {ptr.ip}
         </CardTitle>
         <CardDescription>
-          O nome reverso é o "nome" que o IP da VPS informa a quem recebe o e-mail. Ideal:{" "}
-          <code className="text-xs">{ptr.expected}</code>. Ele é configurado no provedor da VPS, não
-          no DNS do domínio.
+          O nome reverso é o "nome" que o IP da VPS informa a quem recebe o e-mail. Ele é configurado no
+          provedor da VPS, não no DNS do domínio.{" "}
+          <span>
+            O nome reverso do IP é um só para o servidor inteiro; ele deve ser {ptr.expected}, o nome com que
+            este servidor se apresenta.
+          </span>
           {ptr.status !== "generic" && current && ` Encontrado: ${current}.`}
         </CardDescription>
       </CardHeader>
@@ -179,12 +182,13 @@ function PtrCard({ ptr }: { ptr: PtrCheck }) {
             provedores conferem: Gmail, Yahoo e Microsoft aceitam suas mensagens.
           </p>
           <p className="text-sm text-muted-foreground">
-            Trocar o nome reverso para {ptr.expected} melhora um pouco a entrega, mas é opcional.
+            Funciona, mas troque: o Yahoo e os filtros de reputação preferem um nome reverso que reflita o seu
+            domínio.
           </p>
           {(ptr.provider || ptr.ticketText) && (
             <details className="rounded-lg border px-3 py-2">
               <summary className="cursor-pointer text-sm text-muted-foreground">
-                Opcional: trocar o nome reverso para {ptr.expected}
+                Recomendado: trocar o nome reverso para {ptr.expected}
                 {ptr.provider ? ` (${ptr.provider.name})` : ""}
               </summary>
               <div className="pt-2">

@@ -9,6 +9,33 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 04/10/2026 — branch `feat/webmail` (subagente, worktree isolado)
+- Pedido do dono: webmail para ler, responder e enviar e-mail das caixas pelo navegador.
+- O que entrou:
+  - **Roundcube 1.7.4**, com a imagem fixada por tag e digest, no container `paas-webmail`: fica na `paas-net`, sem porta publicada, e fala só com o `paas-stalwart` (IMAP 993 e SMTP 465, conferindo o certificado pelo nome).
+  - **Card "Webmail"** na página E-mail (ativar/desativar) e botão **"Abrir webmail"** em cada caixa, com o usuário preenchido.
+  - **`https://mail.<domínio>/`** abre o webmail quando ele está ativado; o certificado continua sendo emitido pelo mesmo bloco do Caddy.
+  - **Defesa contra senha errada:**
+    - o IP do webmail fica isento no bloqueio automático do Stalwart: sem isso, 100 erros/dia derrubariam o webmail de todos para sempre (conferido no real);
+    - o painel bloqueia no Caddy o IP real de quem erra 10 vezes em 10 min, por 1 h.
+- Detalhes, fontes da escolha, testes e passo a passo na VPS: `_RELATORIO-webmail.md`. Comportamento: `email/webmail.json`.
+- Sem push nem PR: o agente principal decide.
+
+## Atualização de 04/10/2026 — branch `feat/envios` (subagente, worktree isolado)
+- Pedido do dono: um painel para acompanhar o que o servidor de e-mail faz.
+- O que entrou: página **Envios** (`/mail/envios`, link no menu depois de E-mail) com
+  fila (Tentar agora / Cancelar), histórico, volume de 14 dias, reputação e nota.
+- **Blacklist resolvida**: nunca rodava porque o gancho ficava no plugin do Monitoramento,
+  que não enxerga o serviço de e-mail (plugins isolados no Fastify; o erro era engolido).
+  Agora roda uma vez por dia e no botão, dentro do plugin de e-mail, com ponto de teste
+  (nunca "limpo" sem resposta) e chave DQS da Spamhaus.
+- Histórico vem do registro do container (`docker logs` a cada 5 min), só metadados, 30
+  dias em `data/mail/envios/`.
+- Achado: no Stalwart 0.11.8, "tentar agora" encurta o prazo para 10 s — é a última
+  tentativa. A tela avisa.
+- Detalhes, decisões e como validar na VPS: `_RELATORIO-envios.md` e `email/envios.json`.
+- Sem push nem PR. Falta um link "Ver envios" na página E-mail (arquivo do agente do webmail).
+
 ## Atualização de 03/10/2026 — branch `feat/portas` (subagente, worktree isolado)
 - Pedido do dono depois de colocar o cassino no ar: ver e trocar as portas dos containers pelo painel.
 - O que entrou:

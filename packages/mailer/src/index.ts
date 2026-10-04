@@ -6,9 +6,11 @@
 export {
   StalwartManager,
   renderConfigToml,
+  stalwartConfigFingerprint,
   STALWART_IMAGE,
   type StalwartCertificate,
   type StalwartManagerOptions,
+  type RenderConfigOptions,
 } from "./server.js";
 export {
   CADDY_CERTIFICATES_DIR,
@@ -82,13 +84,53 @@ export {
 export {
   checkIpBlacklists,
   checkDomainBlacklists,
+  isValidDqsKey,
   reversedIpv4,
   defaultBlacklistResolver,
   IP_DNSBLS,
   DOMAIN_DNSBLS,
   type BlacklistResolverLike,
+  type BlacklistOptions,
   type DnsblDefinition,
 } from "./blacklist.js";
+export {
+  ROUNDCUBE_IMAGE,
+  WEBMAIL_CONFIG_DIR,
+  WEBMAIL_CONFIG_FILE,
+  WEBMAIL_DATA_DIR,
+  WebmailManager,
+  generateDesKey,
+  isPublicIp,
+  parseFailedLogins,
+  phpString,
+  renderRoundcubeConfig,
+  type FailedLogin,
+  type RoundcubeConfigInput,
+  type WebmailManagerOptions,
+} from "./webmail.js";
+export {
+  DeliveryLogReader,
+  isDeliveryLogLine,
+  logValueText,
+  parseStalwartLogLine,
+  sanitizeLogText,
+  type DeliveryLogReaderOptions,
+  type StalwartLogLine,
+} from "./delivery-log.js";
+export {
+  isQueueId,
+  parseQueueResponse,
+  queueItemFromMessage,
+  type QueueItemView,
+  type QueueMessageRaw,
+} from "./queue-view.js";
+export {
+  deliverabilityScore,
+  formatPercent,
+  GOOGLE_POSTMASTER_URL,
+  MICROSOFT_SNDS_URL,
+  type DeliverabilityInput,
+} from "./deliverability-score.js";
 export {
   buildSmtpEnv,
   maskEnv,
