@@ -1,23 +1,34 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type {
   PortBindAddress,
+  PortRowError,
   PortUsageRow,
   ProjectPortEntry,
   ProjectPortService,
   ProjectPortsResponse,
   SetPortRequest,
 } from "@paas/core";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiRequestError } from "@/lib/api";
 import {
+  addDraftRow,
   bindingText,
+  checkDraft,
   checkNewPort,
+  closeAllToLocal,
+  databaseName,
+  draftFromView,
+  draftToRequest,
   filterRows,
+  isAsCompose,
   loadSort,
   ownerLabel,
+  resetAllToCompose,
   saveSort,
   sortRows,
   sortServices,
+  suggestHostPort,
   type AllSortKey,
+  type DraftRow,
   type ProjectSortKey,
   type SortState,
 } from "@/lib/ports";
@@ -25,13 +36,32 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, ArrowDown, ArrowRightLeft, ArrowUp, ArrowUpDown, Loader2, Plug, Rocket, Search, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowRightLeft,
+  ArrowUp,
+  ArrowUpDown,
+  Loader2,
+  Lock,
+  Plug,
+  Plus,
+  Rocket,
+  Search,
+  Table2,
+  Undo2,
+  X,
+} from "lucide-react";
 import { containerState } from "./ComposeServices";
 
 /**
  * Modal "Portas" da página do projeto. Pedido do dono (03/10/2026, depois de
  * publicar o cassino): ver as portas dos containers do projeto e de todo o
  * servidor, ordenar, e trocar a porta publicada pelo painel.
+ *
+ * Pedido de 04/10/2026 ("não consigo trocar de cada container ou em lote?"):
+ * cada serviço pode publicar uma porta (ou mais uma), e "Editar em lote" vira
+ * uma lista editável de todas as portas, salva numa chamada só.
  *
  * Uma consulta ao abrir (o servidor lista o Docker uma vez) alimenta as duas
  * abas. A troca vale no próximo deploy.
@@ -80,6 +110,229 @@ function SortButton<K extends string>({
 // ---------------------------------------------------------------------------
 // Aba "Este projeto"
 // ---------------------------------------------------------------------------
+
+/** Onde a porta fica aberta: 127.0.0.1 (recomendado) ou 0.0.0.0. */
+function AddressChoice({ name, value, onChange }: { name: string; value: PortBindAddress; onChange: (v: PortBindAddress) => void }) {
+  return (
+    <fieldset className="flex flex-col gap-1.5 text-sm">
+      <legend className="mb-1 text-xs font-medium text-foreground">Onde a porta fica aberta</legend>
+      <label className="flex items-start gap-2">
+        <input type="radio" name={name} className="mt-1" checked={value === "127.0.0.1"} onChange={() => onChange("127.0.0.1")} />
+        <span>
+          Só no servidor (127.0.0.1) — recomendado
+          <span className="block text-xs text-muted-foreground">Só programas da própria VPS (e túnel SSH) chegam nela.</span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2">
+        <input type="radio" name={name} className="mt-1" checked={value === "0.0.0.0"} onChange={() => onChange("0.0.0.0")} />
+        <span>Em todos os endereços (0.0.0.0)</span>
+      </label>
+    </fieldset>
+  );
+}
+
+function ExposedWarning() {
+  return (
+    <p data-testid="port-exposed-warning" className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-200">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>
+        A porta fica aberta para a internet. Na maioria das VPS o Docker publica por fora do firewall (UFW); se a sua
+        tem regras para o Docker, o UFW pode bloquear. Depois do deploy, teste de fora da VPS.
+      </span>
+    </p>
+  );
+}
+
+/** Banco aberto para a internet: o risco, para leigo, e o que o deploy faz. */
+function DatabaseWarning({ db, testId }: { db: string; testId: string }) {
+  return (
+    <p data-testid={testId} className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-200">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+      <span>
+        {db} aberto para a internet: qualquer pessoa pode tentar entrar no banco e ler ou apagar os dados. O painel
+        bloqueia o deploy assim. Use 127.0.0.1 e um túnel SSH.
+      </span>
+    </p>
+  );
+}
+
+const SAVE_URL = (projectId: string) => `/api/projects/${projectId}/ports/batch`;
+
+/** Grava a lista completa; devolve o erro de cada linha (pelo id) quando o servidor recusa. */
+async function saveDraft(
+  projectId: string,
+  rows: DraftRow[],
+): Promise<{ data: ProjectPortsResponse } | { message: string; rowErrors: Record<string, string> }> {
+  const { ports, ids } = draftToRequest(rows);
+  try {
+    return { data: await apiFetch<ProjectPortsResponse>(SAVE_URL(projectId), { method: "PUT", body: JSON.stringify({ ports }) }) };
+  } catch (err) {
+    const rowErrors: Record<string, string> = {};
+    const list = err instanceof ApiRequestError ? (err.data?.errors as PortRowError[] | undefined) : undefined;
+    for (const e of list ?? []) {
+      const id = ids[e.index];
+      if (id) rowErrors[id] = e.message;
+    }
+    return { message: err instanceof Error ? err.message : "Não foi possível salvar as portas.", rowErrors };
+  }
+}
+
+/** Portas do servidor já ocupadas (para a sugestão): as do servidor, as reservadas e as do rascunho. */
+function takenBy(data: ProjectPortsResponse, rows: DraftRow[], except: string) {
+  return (port: number) =>
+    data.reserved.includes(port) ||
+    data.rows.some((r) => r.hostPort === port) ||
+    rows.some((r) => r.id !== except && !r.removed && Number(r.hostPort) === port);
+}
+
+/**
+ * "Publicar uma porta" / "Adicionar outra" de um serviço, e a troca de uma
+ * publicação adicionada (editing). Manda a lista completa do projeto.
+ */
+function PublishForm({
+  data,
+  service,
+  editing,
+  onSaved,
+  onCancel,
+}: {
+  data: ProjectPortsResponse;
+  service: ProjectPortService;
+  editing: ProjectPortEntry | null;
+  onSaved: (data: ProjectPortsResponse) => void;
+  onCancel: () => void;
+}) {
+  const base = useMemo(() => draftFromView(data.project), [data.project]);
+  const myId = editing ? `${service.name}|${editing.original}` : "publicar";
+  const [internal, setInternal] = useState(editing ? String(editing.containerPort) : "");
+  const [host, setHost] = useState(editing?.hostPort != null ? String(editing.hostPort) : "");
+  const [hostTouched, setHostTouched] = useState(Boolean(editing));
+  const [address, setAddress] = useState<PortBindAddress>(editing && editing.hostIp === null ? "0.0.0.0" : "127.0.0.1");
+  const [busy, setBusy] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+
+  const mine: DraftRow = {
+    ...(base.find((r) => r.id === myId) ?? { service: service.name, original: null, protocol: "tcp", removed: false, compose: null }),
+    id: myId,
+    containerPort: internal,
+    hostPort: host,
+    hostIp: address,
+  };
+  const rows = editing ? base.map((r) => (r.id === myId ? mine : r)) : [...base, mine];
+  const clientError = checkDraft(rows, data.rows, data.reserved, data.project.projectId)[myId] ?? null;
+  const error = serverError ?? clientError;
+  const internalNumber = /^\d+$/.test(internal.trim()) ? Number(internal.trim()) : null;
+  const db = internalNumber !== null ? databaseName(internalNumber) : null;
+
+  function chooseInternal(text: string) {
+    setInternal(text);
+    setServerError(null);
+    const n = /^\d+$/.test(text.trim()) ? Number(text.trim()) : null;
+    if (!hostTouched && n !== null && n >= 1 && n <= 65535) {
+      setHost(String(suggestHostPort(n, takenBy(data, rows, myId)) ?? ""));
+    }
+  }
+
+  async function send(next: DraftRow[]) {
+    setBusy(true);
+    setServerError(null);
+    const r = await saveDraft(data.project.projectId, next);
+    if ("data" in r) return onSaved(r.data);
+    setServerError(r.rowErrors[myId] ?? r.message);
+    setBusy(false);
+  }
+
+  const id = `publish-${service.name}`;
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-sky-500/40 bg-sky-500/5 p-3" data-testid="publish-form">
+      <p className="text-xs text-muted-foreground">
+        Publicar uma porta liga uma porta do servidor a uma porta interna deste container. Serve, por exemplo, para
+        acessar o banco do seu computador por um túnel SSH. Os sites não precisam disso: o HTTP chega pelo painel.
+      </p>
+      <div className="flex flex-col gap-1">
+        <label htmlFor={`${id}-internal`} className="text-xs font-medium text-foreground">
+          Porta interna (dentro do container)
+        </label>
+        {service.internalPorts.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+            Conhecidas:
+            {service.internalPorts.map((p) => (
+              <Button
+                key={p}
+                type="button"
+                size="sm"
+                variant={internal === String(p) ? "secondary" : "outline"}
+                className="h-7 font-mono"
+                aria-pressed={internal === String(p)}
+                onClick={() => chooseInternal(String(p))}
+              >
+                {p}
+              </Button>
+            ))}
+          </div>
+        )}
+        <Input
+          id={`${id}-internal`}
+          inputMode="numeric"
+          className="max-w-[12rem] font-mono"
+          placeholder="ex.: 5432"
+          value={internal}
+          onChange={(e) => chooseInternal(e.target.value)}
+        />
+        <span className="text-xs text-muted-foreground">
+          De 1 a 65535. É onde o app escuta; as conhecidas vêm do compose (expose), do Dockerfile (EXPOSE) e do healthcheck.
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor={`${id}-host`} className="text-xs font-medium text-foreground">
+          Porta do servidor
+        </label>
+        <Input
+          id={`${id}-host`}
+          inputMode="numeric"
+          className="max-w-[12rem] font-mono"
+          placeholder="ex.: 15432"
+          value={host}
+          onChange={(e) => {
+            setHost(e.target.value);
+            setHostTouched(true);
+            setServerError(null);
+          }}
+        />
+        <span className="text-xs text-muted-foreground">De 1024 a 65535. Sugerimos a mesma da interna quando está livre.</span>
+      </div>
+      <AddressChoice name={`${id}-ip`} value={address} onChange={setAddress} />
+      {address === "0.0.0.0" && <ExposedWarning />}
+      {address === "0.0.0.0" && db && <DatabaseWarning db={db} testId="publish-db-warning" />}
+      {address === "127.0.0.1" && db && /^\d+$/.test(host.trim()) && (
+        <p className="text-xs text-muted-foreground">
+          Para acessar do seu computador, abra um túnel SSH e conecte em localhost:{host.trim()}:{" "}
+          <code className="break-all rounded bg-black/30 px-1 font-mono">
+            ssh -L {host.trim()}:127.0.0.1:{host.trim()} usuario@seu-servidor
+          </code>
+        </p>
+      )}
+      {error && (
+        <p data-testid="publish-error" className="text-xs text-red-300">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy || clientError !== null} onClick={() => void send(rows)}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editing ? "Salvar" : "Publicar"}
+        </Button>
+        {editing && (
+          <Button size="sm" variant="danger" disabled={busy} onClick={() => void send(base.filter((r) => r.id !== myId))}>
+            Remover publicação
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function PortForm({
   projectId,
@@ -141,29 +394,8 @@ function PortForm({
           De 1024 a 65535. Vazio = manter a mesma. A porta interna ({entry.containerPort}) não muda.
         </span>
       </div>
-      <fieldset className="flex flex-col gap-1.5 text-sm">
-        <legend className="mb-1 text-xs font-medium text-foreground">Onde a porta fica aberta</legend>
-        <label className="flex items-start gap-2">
-          <input type="radio" name={`${inputId}-ip`} className="mt-1" checked={address === "127.0.0.1"} onChange={() => setAddress("127.0.0.1")} />
-          <span>
-            Só no servidor (127.0.0.1) — recomendado
-            <span className="block text-xs text-muted-foreground">Só programas da própria VPS (e túnel SSH) chegam nela.</span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2">
-          <input type="radio" name={`${inputId}-ip`} className="mt-1" checked={address === "0.0.0.0"} onChange={() => setAddress("0.0.0.0")} />
-          <span>Em todos os endereços (0.0.0.0)</span>
-        </label>
-      </fieldset>
-      {address === "0.0.0.0" && (
-        <p data-testid="port-exposed-warning" className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-200">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>
-            A porta fica aberta para a internet. Na maioria das VPS o Docker publica por fora do firewall (UFW); se a sua
-            tem regras para o Docker, o UFW pode bloquear. Depois do deploy, teste de fora da VPS.
-          </span>
-        </p>
-      )}
+      <AddressChoice name={`${inputId}-ip`} value={address} onChange={setAddress} />
+      {address === "0.0.0.0" && <ExposedWarning />}
       {error && (
         <p data-testid="port-form-error" className="text-xs text-red-300">
           {error}
@@ -222,7 +454,8 @@ function PortLine({ entry, canChange, onChange }: { entry: ProjectPortEntry; can
         {entry.panel === "conflict" && <Badge variant="destructive">conflita com o painel</Badge>}
         {entry.panel === null && !entry.published && <Badge variant="secondary">publicação removida</Badge>}
         {entry.published && entry.hostIp === null && <Badge variant="warning">aberta a todos os endereços</Badge>}
-        {entry.override && <Badge variant="outline">trocada no painel</Badge>}
+        {entry.added && <Badge variant="outline">adicionada no painel</Badge>}
+        {entry.override && !entry.added && <Badge variant="outline">trocada no painel</Badge>}
         {entry.applied === false && <Badge variant="warning">vale no próximo deploy</Badge>}
         {entry.applied === true && entry.published && <Badge variant="success">no ar</Badge>}
         {canChange && entry.changeable && (
@@ -231,7 +464,7 @@ function PortLine({ entry, canChange, onChange }: { entry: ProjectPortEntry; can
           </Button>
         )}
       </div>
-      {entry.override && <span className="text-xs text-muted-foreground">no compose: {entry.original}</span>}
+      {entry.override && !entry.added && <span className="text-xs text-muted-foreground">no compose: {entry.original}</span>}
     </div>
   );
 }
@@ -242,14 +475,20 @@ function ServiceCard({
   editing,
   onEdit,
   form,
+  publishForm,
+  onPublish,
 }: {
   service: ProjectPortService;
   canChange: boolean;
   editing: string | null;
   onEdit: (original: string | null) => void;
   form: (entry: ProjectPortEntry) => ReactNode;
+  /** Formulário "Publicar uma porta" aberto neste serviço (null = fechado). */
+  publishForm: ReactNode;
+  onPublish: () => void;
 }) {
   const state = service.container ? containerState({ state: service.state ?? "", health: service.health }) : null;
+  const hasPublished = service.ports.some((p) => p.published);
   return (
     <li data-testid={`port-service-${service.name}`} className="flex min-w-0 flex-col gap-2 rounded-lg border p-3 text-sm">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -262,8 +501,12 @@ function ServiceCard({
       <span className="text-xs text-muted-foreground">
         Portas internas: {service.internalPorts.length > 0 ? service.internalPorts.join(", ") : "não identificadas"}
       </span>
-      {service.networkModeService && (
-        <span className="text-xs text-muted-foreground">Usa a rede do {service.networkModeService}: as portas publicadas são as dele.</span>
+      {service.publishBlocked ? (
+        <span className="text-xs text-muted-foreground">{service.publishBlocked}</span>
+      ) : (
+        service.networkModeService && (
+          <span className="text-xs text-muted-foreground">Usa a rede do {service.networkModeService}: as portas publicadas são as dele.</span>
+        )
       )}
       <div className="flex flex-col gap-2">
         <span className="text-xs font-medium">Publicadas no servidor</span>
@@ -282,8 +525,256 @@ function ServiceCard({
         {service.ports.length === 0 && service.livePorts.length === 0 && (
           <span className="text-xs text-muted-foreground">nenhuma — só acessível pela rede interna e pelo painel</span>
         )}
+        {canChange && !service.publishBlocked && !publishForm && (
+          <Button size="sm" variant="outline" className="h-7 self-start" onClick={onPublish}>
+            <Plus className="h-3.5 w-3.5" /> {hasPublished ? "Adicionar outra" : "Publicar uma porta"}
+          </Button>
+        )}
+        {publishForm}
       </div>
     </li>
+  );
+}
+
+const SELECT_CLASS = "h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-2 text-sm disabled:opacity-50";
+
+function composeText(row: DraftRow): string {
+  if (!row.compose) return "";
+  return row.compose.hostPort === null
+    ? `aleatória → ${row.containerPort}`
+    : bindingText(row.compose.hostIp === "0.0.0.0" ? null : row.compose.hostIp, row.compose.hostPort, Number(row.containerPort), row.protocol);
+}
+
+/**
+ * "Editar em lote": todas as portas do projeto (do compose, trocadas e
+ * adicionadas) numa lista editável. Confere todas juntas enquanto se digita;
+ * "Salvar tudo" grava numa chamada só.
+ */
+function BatchEditor({
+  data,
+  onSaved,
+  onCancel,
+}: {
+  data: ProjectPortsResponse;
+  onSaved: (data: ProjectPortsResponse) => void;
+  onCancel: () => void;
+}) {
+  const { project } = data;
+  const [rows, setRows] = useState<DraftRow[]>(() => draftFromView(project));
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
+  const [topError, setTopError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // linhas novas em que a pessoa já digitou a porta do servidor (a sugestão para de mexer)
+  const [touched, setTouched] = useState<Set<string>>(() => new Set());
+  const eligible = project.services.filter((s) => !s.publishBlocked);
+  const clientErrors = checkDraft(rows, data.rows, data.reserved, project.projectId);
+  const hasClientErrors = Object.keys(clientErrors).length > 0;
+
+  function change(next: DraftRow[]) {
+    setRows(next);
+    setServerErrors({});
+    setTopError(null);
+  }
+
+  function update(id: string, patch: Partial<DraftRow>) {
+    change(
+      rows.map((r) => {
+        if (r.id !== id) return r;
+        const next = { ...r, ...patch };
+        // linha nova: a porta do servidor segue a sugestão até a pessoa digitar nela
+        if (r.original === null && r.compose === null && patch.containerPort !== undefined && !touched.has(id) && id.startsWith("nova-")) {
+          const n = /^\d+$/.test(patch.containerPort.trim()) ? Number(patch.containerPort.trim()) : null;
+          if (n !== null && n >= 1 && n <= 65535) next.hostPort = String(suggestHostPort(n, takenBy(data, rows, id)) ?? "");
+        }
+        return next;
+      }),
+    );
+  }
+
+  async function saveAll() {
+    setBusy(true);
+    const r = await saveDraft(project.projectId, rows);
+    if ("data" in r) return onSaved(r.data);
+    setServerErrors(r.rowErrors);
+    setTopError(r.message);
+    setBusy(false);
+  }
+
+  return (
+    <div data-testid="ports-batch" className="flex flex-col gap-3 rounded-lg border p-3">
+      <p className="text-sm text-muted-foreground">
+        Edite várias portas de uma vez. Nada muda até você clicar em <strong>Salvar tudo</strong>; depois, as mudanças
+        valem no próximo deploy. As portas 80 e 443 são do painel e não aparecem aqui.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={() => change(closeAllToLocal(rows))}>
+          <Lock className="h-4 w-4" /> Fechar todas para a internet
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => change(resetAllToCompose(rows))}>
+          <Undo2 className="h-4 w-4" /> Voltar tudo ao compose
+        </Button>
+        {eligible.length > 0 && (
+          <Button size="sm" variant="outline" onClick={() => change([...rows, addDraftRow(eligible[0]!.name)])}>
+            <Plus className="h-4 w-4" /> Adicionar publicação
+          </Button>
+        )}
+      </div>
+      {rows.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma porta publicada. Use “Adicionar publicação”.</p>}
+      <ul className="flex flex-col gap-2">
+        {rows.map((r) => {
+          const error = serverErrors[r.id] ?? clientErrors[r.id];
+          const db = databaseName(Number(r.containerPort));
+          const differs = r.compose !== null && !isAsCompose(r);
+          const field = `batch-${r.id}`;
+          return (
+            <li
+              key={r.id}
+              data-testid="batch-row"
+              className={cn(
+                "grid min-w-0 grid-cols-2 gap-2 rounded-lg border p-2 text-sm sm:grid-cols-[minmax(0,1fr)_6rem_7rem_minmax(0,12rem)_auto] sm:items-end",
+                error && "border-red-500/50 bg-red-500/10",
+              )}
+            >
+              {r.original === null ? (
+                <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                  Serviço
+                  <select className={SELECT_CLASS} value={r.service} onChange={(e) => update(r.id, { service: e.target.value })}>
+                    {eligible.map((s) => (
+                      <option key={s.name} value={s.name} className="bg-background">
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                  Serviço
+                  <span className="break-all py-2 font-mono text-sm text-foreground">{r.service}</span>
+                </div>
+              )}
+              {r.original === null ? (
+                <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                  Porta interna
+                  <Input
+                    inputMode="numeric"
+                    className="font-mono"
+                    list={`${field}-known`}
+                    placeholder="ex.: 5432"
+                    value={r.containerPort}
+                    onChange={(e) => update(r.id, { containerPort: e.target.value })}
+                  />
+                  <datalist id={`${field}-known`}>
+                    {(project.services.find((s) => s.name === r.service)?.internalPorts ?? []).map((p) => (
+                      <option key={p} value={p} />
+                    ))}
+                  </datalist>
+                </label>
+              ) : (
+                <div className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                  Porta interna
+                  <span className="py-2 font-mono text-sm text-foreground">
+                    {r.containerPort}
+                    {r.protocol === "tcp" ? "" : `/${r.protocol}`}
+                  </span>
+                </div>
+              )}
+              <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                Porta do servidor
+                <Input
+                  inputMode="numeric"
+                  className="font-mono"
+                  disabled={r.removed}
+                  placeholder={r.compose?.hostPort === null ? "aleatória" : "ex.: 15432"}
+                  value={r.hostPort}
+                  onChange={(e) => {
+                    setTouched(new Set(touched).add(r.id));
+                    update(r.id, { hostPort: e.target.value });
+                  }}
+                />
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                Onde fica aberta
+                <select
+                  className={SELECT_CLASS}
+                  disabled={r.removed}
+                  value={r.hostIp}
+                  onChange={(e) => update(r.id, { hostIp: e.target.value })}
+                >
+                  <option value="127.0.0.1" className="bg-background">
+                    Só no servidor (127.0.0.1)
+                  </option>
+                  <option value="0.0.0.0" className="bg-background">
+                    Todos os endereços (0.0.0.0)
+                  </option>
+                  {r.hostIp !== "127.0.0.1" && r.hostIp !== "0.0.0.0" && (
+                    <option value={r.hostIp} className="bg-background">
+                      {r.hostIp} (do compose)
+                    </option>
+                  )}
+                </select>
+              </label>
+              <div className="col-span-2 flex flex-wrap gap-1 sm:col-span-1 sm:justify-end">
+                {r.original === null ? (
+                  <Button size="sm" variant="danger" onClick={() => change(rows.filter((x) => x.id !== r.id))}>
+                    Remover
+                  </Button>
+                ) : r.removed ? (
+                  <Button size="sm" variant="outline" onClick={() => update(r.id, { removed: false })}>
+                    Publicar de novo
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="danger" onClick={() => update(r.id, { removed: true })}>
+                    Remover
+                  </Button>
+                )}
+                {differs && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      update(r.id, { removed: false, hostPort: String(r.compose!.hostPort ?? ""), hostIp: r.compose!.hostIp })
+                    }
+                  >
+                    Voltar ao compose
+                  </Button>
+                )}
+              </div>
+              <div className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-5">
+                {r.original === null && <span className="text-muted-foreground">adicionada no painel</span>}
+                {r.removed && <span className="text-muted-foreground">publicação removida — o app continua acessível pelo painel</span>}
+                {differs && !r.removed && <span className="text-muted-foreground">no compose: {composeText(r)}</span>}
+                {!r.removed && r.hostIp === "0.0.0.0" && (
+                  <span className={db ? "text-red-300" : "text-amber-300"}>
+                    {db
+                      ? `${db} aberto para a internet: qualquer pessoa pode tentar entrar no banco. O painel bloqueia o deploy assim.`
+                      : "Aberta para a internet (todos os endereços)."}
+                  </span>
+                )}
+                {error && (
+                  <span data-testid="batch-row-error" className="text-red-300">
+                    {error}
+                  </span>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {topError && (
+        <p data-testid="ports-batch-error" className="text-sm text-red-300">
+          {topError}
+        </p>
+      )}
+      {hasClientErrors && <p className="text-xs text-red-300">Corrija as linhas marcadas em vermelho para salvar.</p>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy || hasClientErrors} onClick={() => void saveAll()}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Salvar tudo
+        </Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -299,7 +790,19 @@ function ProjectTab({
   const { project } = data;
   const [sort, setSort] = useState(() => loadSort<ProjectSortKey>("project", PROJECT_SORT_KEYS, { key: "service", dir: "asc" }));
   const [editing, setEditing] = useState<{ service: string; original: string } | null>(null);
+  const [publishing, setPublishing] = useState<string | null>(null);
+  const [batch, setBatch] = useState(false);
+  // Salvo pelo "Publicar uma porta" ou pelo lote: oferece o deploy na hora.
+  const [saved, setSaved] = useState(false);
   const services = useMemo(() => sortServices(project.services, sort), [project.services, sort]);
+
+  function savedAll(next: ProjectPortsResponse) {
+    setEditing(null);
+    setPublishing(null);
+    setBatch(false);
+    setSaved(true);
+    onSaved(next);
+  }
 
   function onSort(key: ProjectSortKey) {
     const next = nextSort(sort, key);
@@ -329,7 +832,17 @@ function ProjectTab({
             : "Trocar a porta pelo painel só vale para projetos compose. Aqui aparecem as portas que estão no ar."}
         </p>
       )}
-      {project.pendingDeploy && (
+      {saved && (
+        <div data-testid="ports-saved" className="flex flex-col gap-2 rounded-md border border-violet-500/40 bg-violet-500/10 p-3 text-sm sm:flex-row sm:items-center">
+          <span className="flex-1">Portas salvas. As mudanças valem no próximo deploy.</span>
+          {onDeploy && (
+            <Button size="sm" variant="deploy" onClick={onDeploy}>
+              <Rocket className="h-4 w-4" /> Fazer deploy agora
+            </Button>
+          )}
+        </div>
+      )}
+      {!saved && project.pendingDeploy && (
         <div data-testid="ports-pending" className="flex flex-col gap-2 rounded-md border border-violet-500/40 bg-violet-500/10 p-3 text-sm sm:flex-row sm:items-center">
           <span className="flex-1">Há troca salva que ainda não está no ar: vale no próximo deploy.</span>
           {onDeploy && (
@@ -339,7 +852,22 @@ function ProjectTab({
           )}
         </div>
       )}
-      {project.services.length > 1 && (
+      {batch && <BatchEditor data={data} onSaved={savedAll} onCancel={() => setBatch(false)} />}
+      {!batch && project.canChange && project.services.length > 0 && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-start"
+          onClick={() => {
+            setEditing(null);
+            setPublishing(null);
+            setBatch(true);
+          }}
+        >
+          <Table2 className="h-4 w-4" /> Editar em lote
+        </Button>
+      )}
+      {!batch && project.services.length > 1 && (
         <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
           Ordenar por:
           <SortButton label="Serviço" sortKey="service" sort={sort} onSort={onSort} />
@@ -348,31 +876,49 @@ function ProjectTab({
         </div>
       )}
       {services.length === 0 && <p className="text-sm text-muted-foreground">Nenhum container deste projeto ainda.</p>}
-      <ul className="grid gap-2 lg:grid-cols-2">
-        {services.map((s) => (
-          <ServiceCard
-            key={s.name}
-            service={s}
-            canChange={project.canChange}
-            editing={editing?.service === s.name ? editing.original : null}
-            onEdit={(original) => setEditing(original ? { service: s.name, original } : null)}
-            form={(entry) => (
-              <PortForm
-                projectId={project.projectId}
-                service={s.name}
-                entry={entry}
-                rows={data.rows}
-                reserved={data.reserved}
-                onSaved={(next) => {
-                  setEditing(null);
-                  onSaved(next);
-                }}
-                onCancel={() => setEditing(null)}
-              />
-            )}
-          />
-        ))}
-      </ul>
+      {!batch && (
+        <ul className="grid gap-2 lg:grid-cols-2">
+          {services.map((s) => (
+            <ServiceCard
+              key={s.name}
+              service={s}
+              canChange={project.canChange}
+              editing={editing?.service === s.name ? editing.original : null}
+              onEdit={(original) => {
+                setPublishing(null);
+                setEditing(original ? { service: s.name, original } : null);
+              }}
+              onPublish={() => {
+                setEditing(null);
+                setPublishing(s.name);
+              }}
+              publishForm={
+                publishing === s.name ? (
+                  <PublishForm data={data} service={s} editing={null} onSaved={savedAll} onCancel={() => setPublishing(null)} />
+                ) : null
+              }
+              form={(entry) =>
+                entry.added ? (
+                  <PublishForm data={data} service={s} editing={entry} onSaved={savedAll} onCancel={() => setEditing(null)} />
+                ) : (
+                  <PortForm
+                    projectId={project.projectId}
+                    service={s.name}
+                    entry={entry}
+                    rows={data.rows}
+                    reserved={data.reserved}
+                    onSaved={(next) => {
+                      setEditing(null);
+                      onSaved(next);
+                    }}
+                    onCancel={() => setEditing(null)}
+                  />
+                )
+              }
+            />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
