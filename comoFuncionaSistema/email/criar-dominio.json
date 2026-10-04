@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "POST",
   "url": "/api/mail/domains",
-  "resumo": "Provisiona um domínio de e-mail: cria o domínio no Stalwart, gera o par DKIM RSA 2048 e cria a caixa postmaster@ (com alias abuse@).",
+  "resumo": "Provisiona um domínio de e-mail: cria o domínio no Stalwart, gera o par DKIM RSA 2048 e cria a caixa postmaster@ (com os endereços extras abuse@ e dmarc@).",
   "arquivoFonte": "apps/server/src/routes/mail.ts:87",
   "autenticacao": {
     "exigida": true,
@@ -106,7 +106,7 @@
     "5. client().createDkimSignature(domain, 'paas'): POST /api/dkim {algorithm:'Rsa', domain, selector:'paas', id:'rsa-<domínio>'} — se já existir (400 do Stalwart), segue com o id existente (idempotente).",
     "6. client().getDkimPublicKey(id): GET /api/dkim/{id} — valida que a chave tem pelo menos 100 chars, senão 500.",
     "7. Persiste o StoredDomain (dkimSelector, dkimPublicKey, dkimKeyBits:2048, dmarcStage:'none', createdAt, lastVerify:null) em data.domains.",
-    "8. Gera senha e cria a caixa postmaster@<domínio> no Stalwart com alias abuse@<domínio> (client().createMailbox); persiste como StoredMailbox kind:'system'.",
+    "8. Gera senha e cria a caixa postmaster@<domínio> no Stalwart com os endereços extras abuse@<domínio> e dmarc@<domínio> (client().createMailbox); persiste como StoredMailbox kind:'system' e marca o domínio com dmarcAlias: true.",
     "9. save() → grava data/mail/mail.json.",
     "10. Rota grava auditoria mail.domain.add (target = nome do domínio, detail com dkimKeyBits) e responde 201.",
     "11. Em segundo plano: DeployService.refreshProxy() (o Caddyfile ganha o bloco mail.<domínio> e o Caddy emite o certificado) e MailService.syncTls() (instala no Stalwart o que já tiver sido emitido, ajusta os aliases na paas-net). Falha só vai para o log."
@@ -149,6 +149,7 @@
     "scripts/test-mail.mts (passo 2)"
   ],
   "observacoes": [
+    "dmarc@ (04/10/2026): é o destino dos relatórios DMARC (rua=mailto:dmarc@<domínio> no checklist). Até então nenhuma caixa tinha esse endereço e os relatórios voltavam como \"usuário desconhecido\". Domínios cadastrados antes (sem dmarcAlias no mail.json) ganham o endereço na sincronização seguinte do servidor de e-mail (MailService.ensureDmarcAliases, chamada por syncTls: 1 min após o boot e a cada hora): confere no Stalwart (GET /api/principal/postmaster@<domínio>) e só acrescenta se faltar; se dmarc@ já for uma caixa própria, não mexe. Falha fica no log e é tentada de novo. postmaster, abuse e dmarc ficam reservados: não viram caixa nova (409 mailbox_exists) nem endereço de projeto (409 address_in_use).",
     "A senha da caixa postmaster@ é gerada e guardada em texto plano em data/mail/mail.json, mas NUNCA é devolvida na resposta desta rota — só reobtida depois via GET /api/mail/mailboxes/:id/credentials.",
     "O schema Fastify (MAIL_DOMAIN_PATTERN) é uma cópia deliberada do padrão de normalizeMailDomain no service, mas aceitando as duas caixas (a/A) — o comentário no código explica que isso é para não restringir o conjunto de domínios aceitos além do que o service já aceita. Os dois padrões precisam ser mantidos em sincronia manualmente; não há teste de contrato garantindo isso.",
     "02/10/2026: também chamado pelo card do e-mail do projeto (components/project/ProjectEmailCard.tsx, 'Usar um domínio meu'); o aviso de MX é o componente compartilhado components/mail/ExistingMailWarning.tsx."

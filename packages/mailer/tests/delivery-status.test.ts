@@ -334,3 +334,37 @@ describe("StalwartClient — aliases da caixa (endereço de envio do projeto)", 
     ]);
   });
 });
+
+describe("StalwartClient — endereços de uma caixa (migração do dmarc@)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function answer(data: unknown) {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        urls.push(String(input));
+        return Response.json({ data });
+      }),
+    );
+    return urls;
+  }
+
+  it("lê o campo emails da caixa (lista ou um endereço só), em minúsculas", async () => {
+    const client = new StalwartClient("http://paas-stalwart:8080", "admin", "s");
+    const urls = answer({ name: "postmaster@exemplo.com.br", emails: ["postmaster@exemplo.com.br", "Abuse@exemplo.com.br"] });
+    expect(await client.mailboxEmails("postmaster@exemplo.com.br")).toEqual([
+      "postmaster@exemplo.com.br",
+      "abuse@exemplo.com.br",
+    ]);
+    expect(urls).toEqual(["http://paas-stalwart:8080/api/principal/postmaster%40exemplo.com.br"]);
+
+    answer({ emails: "postmaster@exemplo.com.br" });
+    expect(await client.mailboxEmails("postmaster@exemplo.com.br")).toEqual(["postmaster@exemplo.com.br"]);
+
+    answer({ name: "x" });
+    expect(await client.mailboxEmails("postmaster@exemplo.com.br")).toEqual([]);
+    answer(null);
+    expect(await client.mailboxEmails("postmaster@exemplo.com.br")).toEqual([]);
+  });
+});

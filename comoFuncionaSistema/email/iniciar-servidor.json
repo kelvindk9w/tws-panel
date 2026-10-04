@@ -44,6 +44,8 @@
   "chamadoPor": ["apps/web/src/pages/MailPage.tsx:75", "scripts/test-mail.mts (passo 1)"],
   "testes": ["scripts/test-mail.mts"],
   "observacoes": [
+    "Chaves de entregabilidade no config.toml (04/10/2026, conferidas no código do Stalwart v0.11.8): session.data.add-headers.message-id = true e session.data.add-headers.date = true (o padrão só completava esses cabeçalhos na porta 25; os projetos enviam por 465/587), queue.outbound.ip-strategy = \"ipv4_only\" (o SPF só tem ip4 e não há PTR IPv6) e report.domain = <domínio de e-mail cadastrado a que o hostname pertence; fora de todos, o 1º> (avisos de entrega MAILER-DAEMON@ e relatórios saem por um domínio com DKIM rsa-<domínio> e SPF desta VPS; o padrão do Stalwart era o domínio registrável do hostname). Sem domínio cadastrado, report.domain fica de fora.",
+    "Servidor já rodando: start() só regrava o arquivo. As chaves novas passam a valer quando a sincronização (syncTls) vê que a impressão digital do config.toml gerado (data/mail/mail.json → tls.config, sha256 sem o segredo) é diferente da aplicada e reinicia o container uma vez.",
     "Não é idempotente em rollback: se o 'docker run' falhar após o adminSecret já ter sido salvo, o secret persiste em disco mesmo sem container — uma nova chamada reaproveita o mesmo secret (data.adminSecret ??= ...).",
     "Nenhuma auditoria (auditService.record) é gravada para start/stop do servidor — só para criação/remoção de domínio e caixa."
   ]

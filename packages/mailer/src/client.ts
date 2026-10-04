@@ -149,6 +149,19 @@ export class StalwartClient {
     ]);
   }
 
+  /**
+   * Endereços da caixa (o principal e os aliases), em minúsculas. O Stalwart
+   * devolve `emails` como lista ou, com um endereço só, como texto.
+   */
+  async mailboxEmails(email: string): Promise<string[]> {
+    const data = (await this.request("GET", `/principal/${encodeURIComponent(email)}`)) as {
+      emails?: string | string[];
+    } | null;
+    const emails = data?.emails;
+    const list = typeof emails === "string" ? [emails] : Array.isArray(emails) ? emails : [];
+    return list.map((e) => e.toLowerCase());
+  }
+
   async removeMailboxAlias(email: string, alias: string): Promise<void> {
     await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
       { action: "removeItem", field: "emails", value: alias },

@@ -51,6 +51,7 @@ import {
   sendSmtpMail,
   StalwartClient,
   StalwartManager,
+  stalwartConfigFingerprint,
   verifyDnsRecords,
   type DnsResolverLike,
   type MailCertificate,
@@ -72,11 +73,29 @@ interface AppliedTls {
   aliases: string[];
   /** host → impressão digital do certificado instalado. */
   certificates: Record<string, string>;
+  /**
+   * Impressão digital do config.toml com que o Stalwart foi (re)iniciado
+   * (stalwartConfigFingerprint — sem o segredo). Ausente = gravado por uma
+   * versão anterior do painel: conta como diferente, e a sincronização
+   * reinicia uma vez para as chaves novas valerem.
+   */
+  config?: string;
 }
 
 interface StoredDomain extends MailDomain {
   lastVerify: { at: string; ok: number; total: number } | null;
+  /**
+   * dmarc@<domínio> já é endereço da postmaster@ (o rua do DMARC). Ausente
+   * em domínios cadastrados antes de 04/10/2026: a sincronização acrescenta.
+   */
+  dmarcAlias?: boolean;
 }
+
+/**
+ * Partes locais que o painel cria com o domínio, todas na postmaster@:
+ * abuse@ (boa prática) e dmarc@ (destino dos relatórios DMARC, rua=).
+ */
+const SYSTEM_LOCAL_PARTS = new Set(["postmaster", "abuse", "dmarc"]);
 
 interface StoredMailbox extends Mailbox {
   /** Senha em claro — necessária para credenciais e injeção SMTP (arquivo 0600). */
@@ -295,6 +314,31 @@ export class MailService {
   }
 
   /**
+   * Domínio dos avisos de entrega e relatórios do Stalwart (report.domain):
+   * o domínio cadastrado a que o hostname pertence (o mais específico), ou o
+   * 1º domínio quando o hostname é de fora (PAAS_MAIL_HOSTNAME). Precisa ser
+   * cadastrado: é ele que tem a chave DKIM rsa-<domínio> e o SPF desta VPS.
+   * Sem domínio: null (vale o padrão do Stalwart).
+   */
+  private reportDomain(): string | null {
+    const host = this.hostname();
+    const domains = Object.keys(this.data.domains);
+    const owner = domains
+      .filter((d) => host === d || host.endsWith(`.${d}`))
+      .sort((a, b) => b.length - a.length)[0];
+    return owner ?? domains[0] ?? null;
+  }
+
+  /** Impressão digital do config.toml que o Stalwart leria agora (ver AppliedTls.config). */
+  private configFingerprint(certificates: MailCertificate[]): string {
+    return stalwartConfigFingerprint({
+      hostname: this.hostname(),
+      certificateHosts: certificates.map((c) => c.host),
+      reportDomain: this.reportDomain(),
+    });
+  }
+
+  /**
    * Nomes do servidor de e-mail: o hostname dele e o mail.<domínio> de cada
    * domínio (é o nome do registro A e do MX no checklist). Cada um ganha
    * certificado (Caddy), alias na paas-net e vira o SMTP_HOST dos projetos.
@@ -342,6 +386,7 @@ export class MailService {
       ports: this.config.mailPorts,
       aliases: this.hostList(),
       certificates,
+      reportDomain: this.reportDomain(),
       ...(this.inContainer ? { apiBaseUrl: this.apiBaseUrl() } : {}),
     });
   }
@@ -418,6 +463,7 @@ export class MailService {
       hostname: this.hostname(),
       aliases: this.hostList(),
       certificates: Object.fromEntries(certificates.map((c) => [c.host, c.fingerprint])),
+      config: this.configFingerprint(certificates),
     };
   }
 
@@ -447,12 +493,16 @@ export class MailService {
     await this.ensureNetworkAccess();
     const certificates = await this.currentCertificates();
     if (!(await this.manager().status()).running) return { result: "none", certificates };
+    await this.ensureDmarcAliases();
 
     const wanted = this.tlsState(certificates);
     const applied = this.data.tls ?? null;
+    // "Mesmos nomes" inclui a mesma configuração: chave nova no config.toml
+    // (atualização do painel) só vale reiniciando — o reload não relê o arquivo.
     const sameNames =
       applied !== null &&
       applied.hostname === wanted.hostname &&
+      applied.config === wanted.config &&
       Object.keys(applied.certificates).sort().join(",") === Object.keys(wanted.certificates).sort().join(",");
     const sameContent =
       sameNames &&
@@ -464,6 +514,39 @@ export class MailService {
     this.data.tls = wanted;
     await this.save();
     return { result, certificates };
+  }
+
+  /**
+   * Domínios cadastrados antes de 04/10/2026: o DMARC deles manda os
+   * relatórios para dmarc@<domínio>, que não existia (os provedores
+   * recebiam "usuário desconhecido"). Acrescenta dmarc@ como endereço da
+   * postmaster@, conferindo antes no Stalwart (idempotente). Falha fica no
+   * log e é tentada de novo na próxima sincronização; não trava o TLS.
+   */
+  private async ensureDmarcAliases(): Promise<void> {
+    const pending = Object.values(this.data.domains).filter((d) => !d.dmarcAlias);
+    if (pending.length === 0) return;
+    let changed = false;
+    for (const domain of pending) {
+      const dmarc = `dmarc@${domain.name}`;
+      const postmaster = `postmaster@${domain.name}`;
+      try {
+        // Caixa própria dmarc@ (criada antes da reserva): os relatórios já chegam nela.
+        if (!this.data.mailboxes[dmarc]) {
+          const client = this.client();
+          const emails = await client.mailboxEmails(postmaster);
+          if (!emails.includes(dmarc)) await client.addMailboxAlias(postmaster, dmarc);
+        }
+        domain.dmarcAlias = true;
+        changed = true;
+      } catch (err) {
+        this.log(`E-mail: não deu para acrescentar ${dmarc} à ${postmaster}; tento de novo na próxima sincronização.`, {
+          domain: domain.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (changed) await this.save();
   }
 
   /**
@@ -576,7 +659,8 @@ export class MailService {
     const mailboxCount = Object.values(this.data.mailboxes).filter(
       (m) => m.domain === domain.name,
     ).length;
-    return { ...domain, mailboxCount };
+    const { dmarcAlias: _migrated, ...summary } = domain;
+    return { ...summary, mailboxCount };
   }
 
   async addDomain(name: string, opts: { confirmExistingMail?: boolean } = {}): Promise<MailDomainSummary> {
@@ -624,13 +708,15 @@ export class MailService {
       dmarcStage: "none",
       createdAt: now,
       lastVerify: null,
+      dmarcAlias: true,
     };
     this.data.domains[domain] = stored;
 
-    // Boas práticas (spec §3): postmaster@ e abuse@ funcionais.
+    // Boas práticas (spec §3): postmaster@ e abuse@ funcionais; dmarc@ é o
+    // destino dos relatórios DMARC (rua= do checklist) e cai na mesma caixa.
     const postmaster = `postmaster@${domain}`;
     const password = generatePassword();
-    await client.createMailbox(postmaster, password, [`abuse@${domain}`]);
+    await client.createMailbox(postmaster, password, [`abuse@${domain}`, `dmarc@${domain}`]);
     this.data.mailboxes[postmaster] = {
       id: postmaster,
       localPart: "postmaster",
@@ -691,6 +777,9 @@ export class MailService {
     return buildDnsChecklist({
       domain: domain.name,
       mailHostname: `mail.${domain.name}`,
+      // Um IP tem um nome reverso só: o PTR esperado é o nome com que o
+      // servidor se apresenta (HELO), o mesmo em todos os domínios.
+      serverHostname: this.hostname(),
       serverIp: this.serverIp(),
       serverIpv6: this.config.publicIpv6,
       dkimSelector: domain.dkimSelector,
@@ -762,6 +851,13 @@ export class MailService {
     const email = `${local}@${domain.name}`;
     if (this.data.mailboxes[email]) {
       throw httpError(409, "mailbox_exists", `A caixa ${email} já existe.`);
+    }
+    if (SYSTEM_LOCAL_PARTS.has(local)) {
+      throw httpError(
+        409,
+        "mailbox_exists",
+        `O endereço ${email} já existe: ele entrega na caixa postmaster@${domain.name}, que o painel cria com o domínio.`,
+      );
     }
     // senha da pessoa ou, com `generate`, uma forte devolvida uma única vez
     const generated = opts.generate ? generateStrongPassword() : undefined;
@@ -1137,7 +1233,7 @@ export class MailService {
   /**
    * O endereço não pode ser de outra caixa (salvo uma caixa de projeto que
    * ninguém usa mais, ou a do próprio projeto), nem de outro projeto, nem o
-   * postmaster@/abuse@ que o painel cria com o domínio.
+   * postmaster@/abuse@/dmarc@ que o painel cria com o domínio.
    */
   private requireFreeAddress(address: string, projectId: string): void {
     const [local] = address.split("@");
@@ -1145,7 +1241,7 @@ export class MailService {
       ([id, p]) => id !== projectId && (p.fromAddress === address || p.mailbox === address),
     );
     const mailbox = this.data.mailboxes[address];
-    if (takenByOther || (mailbox && mailbox.kind !== "project") || local === "postmaster" || local === "abuse") {
+    if (takenByOther || (mailbox && mailbox.kind !== "project") || SYSTEM_LOCAL_PARTS.has(local ?? "")) {
       throw httpError(409, "address_in_use", `O endereço ${address} já é de outra caixa ou de outro projeto.`);
     }
   }
