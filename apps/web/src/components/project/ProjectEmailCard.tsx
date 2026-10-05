@@ -618,7 +618,7 @@ export function ProjectEmailCard({
               <Rocket className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 O projeto recebe estes valores no próximo deploy: depois de ativar ou alterar, faça um novo deploy. A
-                senha (SMTP_PASS) nunca aparece aqui.
+                senha (SMTP_PASS) não aparece neste card: para vê-la, use o olho na seção Variáveis.
               </span>
             </p>
             <p data-testid="display-name-note" className="text-xs text-muted-foreground">

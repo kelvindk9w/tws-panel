@@ -9,6 +9,20 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 04/10/2026 — branch `feat/variaveis-senha-webmail-nome` (subagente, worktree isolado)
+- Pedidos do dono depois de validar na VPS:
+  - **Variáveis: ver qualquer valor, inclusive a senha da caixa.** Decisão nova; antes a senha nunca aparecia.
+    - O olho e "Mostrar valores" buscam a senha (SMTP_PASS e as ligadas a ela) em `GET /api/projects/:id/env/provided/:name`.
+    - A listagem continua sem ela.
+    - Limite de 30 por minuto por projeto; a Auditoria registra `project.env_revealed`, só com o nome.
+    - A criação de caixa não mudou: a senha gerada aparece uma vez.
+  - **Webmail com nome de exibição:** a caixa do projeto entra no Roundcube com o nome do e-mail do projeto.
+    - Plugin próprio `paas_identity` (hooks `user_create` e `login_after`) lê `paas-identities.json`.
+    - Só preenche nome vazio; nunca sobrescreve o que a pessoa escolheu.
+    - Validado no Roundcube e no Stalwart reais: o e-mail chegou com `From: Nome <endereço>`.
+- Detalhes: `email/ligar-variaveis-email-projeto.json`, `projetos/conceito-pagina-do-projeto.json`, `email/webmail.json` e a seção nova do `_RELATORIO-webmail.md` (com o passo a passo na VPS).
+- Sem push nem PR: o agente principal decide.
+
 ## Atualização de 04/10/2026 — branch `feat/webmail` (subagente, worktree isolado)
 - Pedido do dono: webmail para ler, responder e enviar e-mail das caixas pelo navegador.
 - O que entrou:

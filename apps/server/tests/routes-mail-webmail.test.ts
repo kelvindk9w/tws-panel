@@ -44,6 +44,7 @@ beforeEach(async () => {
     setMailHostsProvider: vi.fn(),
     setWebmailProvider: vi.fn(),
     refreshProxy: vi.fn(async () => undefined),
+    getProject: vi.fn(async (id: string) => (id === "p1" ? { id: "p1", slug: "loja", name: "Loja" } : null)),
   };
   app.decorate("deployService", deployService as unknown as FastifyInstance["deployService"]);
   await app.register(mailRoutes);
@@ -75,6 +76,38 @@ describe("webmail dentro do módulo de e-mail", () => {
     const res = await app.inject({ method: "POST", url: "/api/mail/server/stop", headers: auth });
     expect(res.statusCode).toBe(200);
     expect(follow).toHaveBeenCalledWith(false);
+  });
+
+  /**
+   * Pedido do dono do produto (04/10/2026): o webmail usa o nome de exibição
+   * do e-mail do projeto. Salvar (nome novo) ou desativar o e-mail do
+   * projeto regrava o arquivo de nomes do webmail, em segundo plano.
+   */
+  it("salvar ou desativar o e-mail do projeto regrava os nomes do webmail", async () => {
+    spy(MailService.prototype, "enableProjectEmail").mockResolvedValue({ email: { enabled: true } } as never);
+    spy(MailService.prototype, "disableProjectEmail").mockResolvedValue({ enabled: false } as never);
+    const sync = spy(WebmailService.prototype, "sync").mockResolvedValue(undefined);
+    const save = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", fromName: "Contato - Loja" },
+    });
+    expect(save.statusCode, save.body).toBe(200);
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(1));
+    const off = await app.inject({ method: "DELETE", url: "/api/projects/p1/email", headers: auth });
+    expect(off.statusCode).toBe(200);
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(2));
+  });
+
+  it("falha ao regravar os nomes do webmail não atrapalha salvar (fica no log)", async () => {
+    spy(MailService.prototype, "enableProjectEmail").mockResolvedValue({ email: { enabled: true } } as never);
+    const sync = spy(WebmailService.prototype, "sync").mockRejectedValue(new Error("docker fora"));
+    const warn = vi.spyOn(app.log, "warn");
+    const save = await app.inject({ method: "POST", url: "/api/projects/p1/email", headers: auth, payload: { domain: "exemplo.com" } });
+    expect(save.statusCode).toBe(200);
+    await vi.waitFor(() => expect(sync).toHaveBeenCalled());
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("docker fora")));
   });
 
   it("iniciar o servidor de e-mail: a sincronização em segundo plano sobe o webmail (se ativado)", async () => {

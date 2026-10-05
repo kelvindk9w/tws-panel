@@ -25,7 +25,7 @@ const DESCRIPTION: Record<ProjectEmailValueKey, string> = {
   SMTP_HOST: "servidor de envio",
   SMTP_PORT: "porta",
   SMTP_USER: "usuário (a caixa do projeto)",
-  SMTP_PASS: "senha da caixa (nunca aparece)",
+  SMTP_PASS: "senha da caixa",
   MAIL_FROM: "endereço de envio",
   MAIL_FROM_NAME: "nome de exibição",
 };

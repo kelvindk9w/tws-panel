@@ -297,6 +297,34 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // Olho da seção Variáveis: valor de UMA variável fornecida pelo painel
+  // (e-mail do projeto e ligadas), senha da caixa inclusive. A listagem acima
+  // nunca traz a senha; aqui ela só sai a pedido, com Auditoria (só o nome) e
+  // limite de frequência no serviço (decisão do dono do produto, 04/10/2026).
+  app.get<{ Params: { id: string; name: string } }>(
+    "/api/projects/:id/env/provided/:name",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id", "name"],
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 64 },
+            name: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]{0,127}$" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const value = await service.revealProvidedEnv(request.params.id, request.params.name);
+        return reply.header("cache-control", "no-store").send({ name: request.params.name, value });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
   app.put<{ Params: { id: string }; Body: { vars: Array<{ key: string; value: string }> } }>(
     "/api/projects/:id/env",
     {

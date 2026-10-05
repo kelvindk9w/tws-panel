@@ -20,6 +20,8 @@ let backend: Awaited<ReturnType<WebmailMailSource["webmailBackend"]>>;
 const mailCalls: unknown[][] = [];
 const managerCalls: unknown[][] = [];
 const configs: string[] = [];
+/** Arquivo de nomes entregue junto com cada configuração. */
+const identityFiles: (string | undefined)[] = [];
 /** Última configuração entregue ao container (o estado usa um gerenciador sem config). */
 const lastConfig = () => configs.filter(Boolean).at(-1);
 let containerState: { installed: boolean; running: boolean };
@@ -37,8 +39,9 @@ const mail: WebmailMailSource = {
   },
 };
 
-function fakeManager(config: string): WebmailManagerLike {
+function fakeManager(config: string, identities?: string): WebmailManagerLike {
   configs.push(config);
+  identityFiles.push(identities);
   return {
     image: "roundcube/roundcubemail:teste",
     containerName: "paas-webmail",
@@ -86,7 +89,9 @@ beforeEach(async () => {
       { domain: "exemplo.com", host: "mail.exemplo.com" },
       { domain: "outro.com", host: "mail.outro.com" },
     ],
+    identities: { "contato@exemplo.com": "Contato - Loja" },
   };
+  identityFiles.length = 0;
   mailCalls.length = 0;
   managerCalls.length = 0;
   configs.length = 0;
@@ -258,6 +263,20 @@ describe("junto com o servidor de e-mail e sincronização", () => {
     mailCalls.length = 0;
     await s.sync();
     expect(mailCalls).toEqual([]);
+  });
+
+  /**
+   * Pedido do dono do produto (04/10/2026): a caixa do projeto entra no
+   * webmail com o nome de exibição do e-mail do projeto. O arquivo de nomes
+   * vai junto com a configuração e é regravado quando o nome muda.
+   */
+  it("entrega o arquivo de nomes de exibição junto com a configuração; sync leva o nome novo", async () => {
+    const s = service();
+    await s.enable();
+    expect(JSON.parse(identityFiles.filter(Boolean).at(-1)!)).toEqual({ "contato@exemplo.com": "Contato - Loja" });
+    backend = { ...backend, identities: { "contato@exemplo.com": "Contato - Loja Nova" } };
+    await s.sync();
+    expect(JSON.parse(identityFiles.filter(Boolean).at(-1)!)).toEqual({ "contato@exemplo.com": "Contato - Loja Nova" });
   });
 
   it("sync com o servidor de e-mail parado: não sobe o webmail", async () => {

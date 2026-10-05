@@ -283,6 +283,17 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   });
   app.deployService.setWebmailProvider?.(() => webmail.proxyState());
   await app.register(webmailRoutes, { webmail });
+  /**
+   * Nome de exibição das caixas no webmail (04/10/2026): salvar ou desativar
+   * o e-mail do projeto regrava o arquivo de nomes. Em segundo plano — não
+   * prende a resposta; falha fica no log e a sincronização de hora em hora
+   * tenta de novo.
+   */
+  const syncWebmailInBackground = (): void => {
+    webmail.sync().catch((err: unknown) => {
+      app.log.warn(`Webmail: falha ao atualizar os nomes de exibição (${err instanceof Error ? err.message : String(err)}).`);
+    });
+  };
 
   /**
    * Validação real (02/10/2026): o domínio foi cadastrado antes de existir o
@@ -746,6 +757,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
           ...(generatePassword ? { generatePassword: true } : {}),
         });
         const response: ProjectEmailResponse = generatedPassword ? { email, generatedPassword } : { email };
+        // nome de exibição novo: o webmail recebe (em segundo plano)
+        syncWebmailInBackground();
         // A senha gerada aparece uma única vez: nada de cache no caminho.
         if (generatedPassword) reply.header("cache-control", "no-store");
         return reply.send(response);
@@ -790,6 +803,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
       }
       const email = await service.disableProjectEmail(project.id);
+      syncWebmailInBackground();
       const response: ProjectEmailResponse = { email };
       return reply.send(response);
     },

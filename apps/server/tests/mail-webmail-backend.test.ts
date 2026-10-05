@@ -85,7 +85,26 @@ describe("MailService.webmailBackend", () => {
         { domain: "exemplo.com", host: "mail.exemplo.com" },
         { domain: "outro.com.br", host: "mail.outro.com.br" },
       ],
+      identities: {},
     });
+  });
+
+  /**
+   * Pedido do dono do produto (04/10/2026): e-mail enviado pelo webmail a
+   * partir da caixa do projeto saía sem nome. O webmail recebe o nome de
+   * exibição do e-mail do projeto para cada caixa de projeto.
+   */
+  it("nome de exibição de cada caixa de projeto (registro antigo sem nome fica de fora)", async () => {
+    await writeMail({
+      domains: { "exemplo.com": domain("exemplo.com") },
+      projects: {
+        p1: { domain: "exemplo.com", mailbox: "contato@exemplo.com", enabledAt: "", fromName: "Contato - Loja" },
+        p2: { domain: "exemplo.com", mailbox: "loja2@exemplo.com", enabledAt: "", fromAddress: "vendas@exemplo.com" },
+        p3: { domain: "exemplo.com", mailbox: "Suporte@Exemplo.com", enabledAt: "", fromName: "Suporte" },
+      },
+    });
+    const backend = await new MailService(config()).webmailBackend();
+    expect(backend.identities).toEqual({ "contato@exemplo.com": "Contato - Loja", "suporte@exemplo.com": "Suporte" });
   });
 
   it("só outro nome com certificado: fala por ele (o Stalwart escolhe pelo SNI)", async () => {

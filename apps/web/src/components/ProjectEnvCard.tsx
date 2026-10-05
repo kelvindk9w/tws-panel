@@ -159,14 +159,14 @@ const SECRET_NAME = /PASS|SENHA|SECRET|TOKEN|KEY|CHAVE|PRIVATE|CREDENTIAL|AUTH|C
 
 /**
  * Linha da lista: uma variável editável ou uma que o e-mail do projeto entrega
- * (não editável; `value` null = a senha da caixa, que nunca aparece;
- * ausente = servidor antigo, que não manda os valores).
+ * (não editável). `onDemand` = a senha da caixa (e o que vale o mesmo): a
+ * listagem não traz o valor, que é buscado na rota própria ao clicar no olho
+ * (`value` fica vazio até lá). Sem `value` nem `onDemand` = servidor antigo,
+ * que não manda os valores.
  */
 type Line =
   | { kind: "row"; row: EnvRow; index: number }
-  | { kind: "panel"; name: string; source?: string; value?: string | null };
-
-const PASSWORD_TEXT = "preenchida (senha da caixa — não é exibida; troque em ";
+  | { kind: "panel"; name: string; source?: string; value?: string; onDemand?: boolean };
 
 const lineName = (l: Line) => (l.kind === "row" ? l.row.key.trim() : l.name);
 
@@ -184,8 +184,9 @@ const lineName = (l: Line) => (l.kind === "row" ? l.row.key.trim() : l.name);
  * pesquisa ativa, "Mostrar valores" vale só para as mostradas (revela menos)
  * e "Apagar todas"/"Salvar" continuam valendo para todas — a tela avisa.
  * O que o e-mail do projeto entrega (e o que está ligado a ele) aparece na
- * lista já preenchido, com o olho e sem edição (o valor muda no E-mail); a
- * senha da caixa nunca aparece. Faltando inclui os nomes do .env.example sem
+ * lista já preenchido, com o olho e sem edição (o valor muda no E-mail). A
+ * senha da caixa também tem o olho (decisão do dono, 04/10/2026), mas o valor
+ * só é buscado quando a pessoa pede — rota própria, com Auditoria. Faltando inclui os nomes do .env.example sem
  * valor (o app pode lê-los por env_file): aviso, não bloqueia o deploy.
  */
 export function ProjectEnvCard({ project }: { project: Project }) {
@@ -196,8 +197,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [provided, setProvided] = useState<string[]>([]);
   // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA → SMTP_PASS)
   const [links, setLinks] = useState<Record<string, ProjectEmailValueKey>>({});
-  // Valores do que o painel fornece (sem a senha da caixa, que nunca vem)
-  const [providedValues, setProvidedValues] = useState<Record<string, string>>({});
+  // Valores do que o painel fornece (sem a senha da caixa; null = servidor antigo)
+  const [providedValues, setProvidedValues] = useState<Record<string, string> | null>(null);
+  // Senha da caixa (e o que vale o mesmo) buscada a pedido, pelo olho
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
   // Nomes do .env.example do código (o app pode lê-los por env_file)
   const [example, setExample] = useState<EnvExampleVariable[]>([]);
   const [query, setQuery] = useState("");
@@ -231,7 +234,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         const exampleVars = r.example?.variables ?? [];
         setComposeVars(compose);
         setProvided(r.provided ?? []);
-        setProvidedValues(r.providedValues ?? {});
+        setProvidedValues(r.providedValues ?? null);
         setLinks(r.links ?? {});
         setExample(exampleVars);
         setSavedCount(r.vars.length);
@@ -275,6 +278,40 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       else next.delete(name);
       return next;
     });
+  }
+
+  /**
+   * Busca o valor das variáveis do painel que a listagem não traz (a senha
+   * da caixa) — uma chamada por variável, cada uma registrada na Auditoria.
+   * Devolve os nomes que deram certo; falha vira aviso e o campo fica oculto.
+   */
+  async function reveal(names: string[]): Promise<string[]> {
+    const got: Record<string, string> = {};
+    for (const name of names) {
+      if (revealed[name] !== undefined) {
+        got[name] = revealed[name];
+        continue;
+      }
+      try {
+        const r = await apiFetch<{ name: string; value: string }>(
+          `/api/projects/${project.id}/env/provided/${encodeURIComponent(name)}`,
+        );
+        got[name] = r.value;
+      } catch (err) {
+        setError(err instanceof ApiRequestError ? err.message : `Não foi possível mostrar o valor de ${name}.`);
+        break;
+      }
+    }
+    setRevealed((prev) => ({ ...prev, ...got }));
+    return Object.keys(got);
+  }
+
+  /** Olho de uma linha do painel: a senha é buscada na primeira vez. */
+  async function togglePanel(line: { name: string; onDemand?: boolean }, show: boolean) {
+    if (show && line.onDemand && revealed[line.name] === undefined) {
+      if ((await reveal([line.name])).length === 0) return;
+    }
+    setPanelVisible(line.name, show);
   }
 
   /** `key`: "row:<id>" ou "panel:<nome>" — onde mostrar o "copiado". */
@@ -377,11 +414,11 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const delivered = PROJECT_EMAIL_VALUE_KEYS.filter((k) => providedSet.has(k));
   // …e as variáveis do app ligadas a ele (SMTP_SENHA ← SMTP_PASS)
   const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n));
-  // O que o e-mail fornece vira linha do painel, com o valor (a senha, nunca).
+  // O que o e-mail fornece vira linha do painel, com o valor; a senha (fora
+  // da listagem) é buscada a pedido.
   // Nome padrão com valor salvo aqui: a linha salva substitui o e-mail no
   // deploy, e a do painel não aparece. Ligada: a ligação vence sempre.
   const overridden = new Set((vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()));
-  const isSecret = (name: string) => name === "SMTP_PASS" || links[name] === "SMTP_PASS";
   const lines: Line[] = [
     ...(vars ?? []).map((row, index): Line => ({ kind: "row", row, index })),
     ...[...delivered, ...linked]
@@ -391,7 +428,11 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           kind: "panel",
           name,
           ...(links[name] ? { source: links[name] } : {}),
-          value: isSecret(name) ? null : providedValues[name],
+          ...(providedValues === null
+            ? {}
+            : providedValues[name] !== undefined
+              ? { value: providedValues[name] }
+              : { value: revealed[name] ?? "", onDemand: true }),
         }),
       ),
   ];
@@ -422,7 +463,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     if (name.toLowerCase().includes(q)) return true;
     if (l.kind === "panel") {
       if ((l.source ?? "").toLowerCase().includes(q)) return true;
-      return visiblePanel.has(name) && !SECRET_NAME.test(name) && (l.value ?? "").toLowerCase().includes(q);
+      // a senha da caixa nunca entra na pesquisa, com nome nenhum
+      return visiblePanel.has(name) && !l.onDemand && !SECRET_NAME.test(name) && (l.value ?? "").toLowerCase().includes(q);
     }
     // valor: só o que já está à mostra, e nunca o de nome com cara de segredo
     return visible.has(l.row.id) && !SECRET_NAME.test(name) && l.row.value.toLowerCase().includes(q);
@@ -440,8 +482,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     filled: lines.filter((l) => inFilter(l, "filled")).length,
     panel: lines.filter((l) => inFilter(l, "panel")).length,
   };
-  // linhas do e-mail com valor que dá para mostrar (a senha fica de fora)
-  const shownPanel = shownLines.flatMap((l) => (l.kind === "panel" && typeof l.value === "string" ? [l.name] : []));
+  // linhas do e-mail com valor que dá para mostrar (a senha inclusive, buscada a pedido)
+  const shownPanelLines = shownLines.flatMap((l) => (l.kind === "panel" && typeof l.value === "string" ? [l] : []));
+  const shownPanel = shownPanelLines.map((l) => l.name);
   // "Mostrar valores" vale para as mostradas: com a pesquisa ativa, revela menos
   const allVisible =
     shownRows.length + shownPanel.length > 0 &&
@@ -677,16 +720,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                             {line.source && <span className="text-muted-foreground"> ← {line.source}</span>}
                           </span>
                           <div className="flex min-w-0 flex-1 items-center gap-1">
-                            {line.value === null ? (
-                              // a senha da caixa nunca aparece: quem esqueceu troca
-                              <span className="text-xs text-emerald-300">
-                                {PASSWORD_TEXT}
-                                <Link to={`/projects/${project.id}/email?email=caixas`} className="text-sky-400 underline">
-                                  E-mail → Caixas
-                                </Link>
-                                )
-                              </span>
-                            ) : line.value === undefined ? (
+                            {line.value === undefined ? (
                               <span className="text-xs text-emerald-300/80">fornecida pelo e-mail do projeto no deploy</span>
                             ) : (
                               <>
@@ -695,12 +729,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                                   readOnly
                                   revealLabel="valor"
                                   visible={visiblePanel.has(line.name)}
-                                  onVisibleChange={(show) => setPanelVisible(line.name, show)}
+                                  onVisibleChange={(show) => void togglePanel(line, show)}
+                                  {...(line.onDemand && !line.value ? { placeholder: "••••••••" } : {})}
                                   className={cn("cursor-default font-mono", compact && "h-8 text-xs")}
                                   containerClassName="flex-1"
                                   aria-label={`Valor de ${line.name}`}
                                 />
-                                {visiblePanel.has(line.name) && (
+                                {visiblePanel.has(line.name) && line.value !== "" && (
                                   <Button
                                     variant="ghost"
                                     size="icon"
@@ -888,15 +923,23 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                       }
                       return next;
                     });
-                    // as do e-mail também (a senha não tem valor para mostrar)
+                    // as do e-mail também; a senha é buscada na rota própria
+                    const hide = allVisible;
+                    const plain = shownPanelLines.filter((l) => !l.onDemand || revealed[l.name] !== undefined);
+                    const pending = shownPanelLines.filter((l) => l.onDemand && revealed[l.name] === undefined);
                     setVisiblePanel((prev) => {
                       const next = new Set(prev);
-                      for (const n of shownPanel) {
-                        if (allVisible) next.delete(n);
-                        else next.add(n);
+                      for (const l of plain) {
+                        if (hide) next.delete(l.name);
+                        else next.add(l.name);
                       }
                       return next;
                     });
+                    if (!hide && pending.length > 0) {
+                      void reveal(pending.map((l) => l.name)).then((ok) =>
+                        setVisiblePanel((prev) => new Set([...prev, ...ok])),
+                      );
+                    }
                   }}
                 >
                   {allVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
