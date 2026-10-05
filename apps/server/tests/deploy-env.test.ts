@@ -128,6 +128,70 @@ describe("variáveis do projeto no deploy", () => {
     expect(await svc.providedEnvValues(p.id)).toEqual({ MAIL_FROM: "contato@x.com" });
   });
 
+  /**
+   * Mudança de decisão do dono do produto (04/10/2026, validação na VPS):
+   * "Eu preciso conseguir visualizar o valor de qualquer variável que eu
+   * desejar." A LISTAGEM continua sem a senha da caixa (testes acima), mas o
+   * olho da seção Variáveis busca o valor de UMA variável fornecida pelo
+   * painel — senha inclusive — numa chamada própria, que fica na Auditoria
+   * (só o nome) e tem limite de frequência.
+   */
+  describe("valor de uma variável fornecida pelo painel (olho da seção Variáveis)", () => {
+    async function comEmail() {
+      const p = await projeto();
+      svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PASS: "segredo-da-caixa", MAIL_FROM: "contato@x.com" }));
+      svc.setLinkedEnvProvider(async () => ({ SMTP_SENHA: "segredo-da-caixa", EMAIL_DE: "contato@x.com" }));
+      return p;
+    }
+
+    it("devolve a senha da caixa e as ligadas a ela; a Auditoria registra só o nome", async () => {
+      const p = await comEmail();
+      record.mockClear();
+      expect(await svc.revealProvidedEnv(p.id, "SMTP_PASS")).toBe("segredo-da-caixa");
+      expect(await svc.revealProvidedEnv(p.id, "SMTP_SENHA")).toBe("segredo-da-caixa");
+      expect(await svc.revealProvidedEnv(p.id, "EMAIL_DE")).toBe("contato@x.com");
+      expect(record).toHaveBeenCalledWith({
+        action: "project.env_revealed",
+        target: p.slug,
+        detail: `Valor de SMTP_PASS exibido no projeto "${p.name}".`,
+      });
+      expect(JSON.stringify(record.mock.calls)).not.toContain("segredo-da-caixa");
+    });
+
+    it("variável que o painel não fornece → 404, sem registrar nada", async () => {
+      const p = await comEmail();
+      record.mockClear();
+      await expect(svc.revealProvidedEnv(p.id, "DATABASE_URL")).rejects.toMatchObject({ statusCode: 404, code: "env_not_provided" });
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it("sem e-mail ativo nada é fornecido → 404", async () => {
+      const p = await projeto();
+      await expect(svc.revealProvidedEnv(p.id, "SMTP_PASS")).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it("projeto inexistente → 404", async () => {
+      await expect(svc.revealProvidedEnv("nao-existe", "SMTP_PASS")).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it("limite de frequência: 30 por minuto por projeto; depois de um minuto volta", async () => {
+      const p = await comEmail();
+      let agora = 1_000_000;
+      const spy = vi.spyOn(Date, "now").mockImplementation(() => agora);
+      try {
+        for (let i = 0; i < 30; i++) await svc.revealProvidedEnv(p.id, "SMTP_HOST");
+        await expect(svc.revealProvidedEnv(p.id, "SMTP_PASS")).rejects.toMatchObject({ statusCode: 429, code: "reveal_rate_limited" });
+        // outro projeto tem a própria conta
+        const outro = await projeto("outro");
+        await expect(svc.revealProvidedEnv(outro.id, "SMTP_PASS")).resolves.toBe("segredo-da-caixa");
+        agora += 60_001;
+        await expect(svc.revealProvidedEnv(p.id, "SMTP_PASS")).resolves.toBe("segredo-da-caixa");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it("auditoria só com os nomes, nunca os valores", async () => {
     const p = await projeto();
     await svc.setEnv(p.id, [{ key: "API_KEY", value: "valor-super-secreto" }]);

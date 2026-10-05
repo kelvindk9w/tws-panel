@@ -84,14 +84,14 @@ describe("Variáveis — o que o e-mail do projeto entrega", () => {
     );
   });
 
-  it("as entregues e as ligadas aparecem na lista como linhas do painel; a senha nunca", async () => {
+  it("as entregues e as ligadas aparecem na lista como linhas do painel", async () => {
+    // servidor antigo (sem providedValues): só diz que o painel fornece
     serve(cassino());
     renderCard();
     const senha = await screen.findByTestId("env-panel-SMTP_SENHA");
     expect(senha).toHaveTextContent("SMTP_SENHA ← SMTP_PASS");
-    expect(senha).toHaveTextContent("preenchida (senha da caixa — não é exibida; troque em E-mail → Caixas)");
-    // nenhum campo de valor: o valor (a senha) nunca aparece aqui
-    expect(senha.querySelector("input")).toBeNull();
+    expect(senha).toHaveTextContent("fornecida pelo e-mail do projeto no deploy");
+    expect(senha).not.toHaveTextContent(/senha da caixa — não é exibida/);
     expect(screen.getByTestId("env-panel-MAIL_FROM_NAME")).toHaveTextContent(/vem do E-mail do projeto/);
     // SMTP_HOST é do compose e o e-mail entrega: linha do painel, não um campo vazio
     expect(screen.getByTestId("env-panel-SMTP_HOST")).toBeInTheDocument();
@@ -276,8 +276,9 @@ describe("Variáveis — densidade", () => {
  * Validação real (03/10/2026): as fornecidas pelo e-mail do projeto e as
  * ligadas apareciam só como "fornecida pelo painel", sem valor — o dono
  * precisava VER que estavam preenchidas. Agora: campo mascarado com o olho,
- * como as outras, mas não editável (o valor vem do E-mail). A senha da
- * caixa nunca aparece, com nome nenhum.
+ * como as outras, mas não editável (o valor vem do E-mail). Até
+ * 04/10/2026 a senha da caixa nunca aparecia; desde então ela também tem o
+ * olho, com o valor buscado a pedido (testes abaixo).
  */
 describe("Variáveis — valores do que o e-mail do projeto fornece", () => {
   const VALUES = {
@@ -311,27 +312,116 @@ describe("Variáveis — valores do que o e-mail do projeto fornece", () => {
     expect(within(line).getByRole("link", { name: "E-mail do projeto" })).toHaveAttribute("href", "/projects/p1/email");
   });
 
-  it("a senha: 'preenchida', nunca o valor, com o caminho para trocar", async () => {
-    serve(withValues());
+  /**
+   * Mudança de decisão do dono do produto (04/10/2026, validação na VPS):
+   * "Eu preciso conseguir visualizar o valor de qualquer variável que eu
+   * desejar." Até aqui a senha da caixa (SMTP_PASS e as ligadas a ela)
+   * mostrava só "preenchida (senha da caixa — não é exibida…)", sem campo.
+   * Agora ela tem o campo mascarado com o olho e o copiar, como as outras;
+   * a listagem continua sem a senha e o valor é buscado na rota própria
+   * (GET /env/provided/:name, que registra na Auditoria) só quando a pessoa
+   * clica no olho ou em "Mostrar valores".
+   */
+  const SENHA = "senha-de-exemplo-da-caixa";
+  function serveWithReveal(
+    data: Record<string, unknown>,
+    reveal: (name: string) => Promise<unknown> = async (name) => ({ name, value: SENHA }),
+  ) {
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") return JSON.parse(String(init.body));
+      const m = /\/env\/provided\/([A-Za-z0-9_]+)$/.exec(path);
+      if (m) return reveal(m[1]!);
+      return data;
+    });
+  }
+  const revealCalls = () =>
+    apiFetchMock.mock.calls.map(([path]) => String(path)).filter((p) => p.includes("/env/provided/"));
+
+  it("a senha: campo mascarado com o olho; o valor só é buscado ao clicar, e dá para copiar", async () => {
+    serveWithReveal(withValues());
     renderCard();
     for (const name of ["SMTP_PASS", "SMTP_SENHA"]) {
       const line = await screen.findByTestId(`env-panel-${name}`);
-      expect(line).toHaveTextContent("preenchida (senha da caixa — não é exibida; troque em E-mail → Caixas)");
-      expect(line.querySelector("input")).toBeNull();
-      expect(within(line).getByRole("link", { name: "E-mail → Caixas" })).toHaveAttribute(
-        "href",
-        "/projects/p1/email?email=caixas",
-      );
+      expect(line).not.toHaveTextContent(/senha da caixa — não é exibida/);
+      const input = within(line).getByLabelText(`Valor de ${name}`) as HTMLInputElement;
+      expect(input.type).toBe("password");
+      expect(input).toHaveAttribute("readonly");
+      // a listagem não traz a senha: nada no campo antes do clique
+      expect(input).toHaveValue("");
+      expect(revealCalls()).not.toContain(`/api/projects/p1/env/provided/${name}`);
+      fireEvent.click(within(line).getByRole("button", { name: "Mostrar valor" }));
+      await waitFor(() => expect(input).toHaveValue(SENHA));
+      expect(input.type).toBe("text");
+      expect(revealCalls()).toContain(`/api/projects/p1/env/provided/${name}`);
+      expect(within(line).getByRole("button", { name: `Copiar valor de ${name}` })).toBeInTheDocument();
     }
   });
 
-  it("'Mostrar valores' revela também as do e-mail (menos a senha)", async () => {
-    serve(withValues());
+  it("ocultar e mostrar de novo não busca outra vez", async () => {
+    serveWithReveal(withValues());
+    renderCard();
+    const line = await screen.findByTestId("env-panel-SMTP_PASS");
+    const input = within(line).getByLabelText("Valor de SMTP_PASS") as HTMLInputElement;
+    fireEvent.click(within(line).getByRole("button", { name: "Mostrar valor" }));
+    await waitFor(() => expect(input).toHaveValue(SENHA));
+    fireEvent.click(within(line).getByRole("button", { name: "Ocultar valor" }));
+    expect(input.type).toBe("password");
+    fireEvent.click(within(line).getByRole("button", { name: "Mostrar valor" }));
+    expect(input.type).toBe("text");
+    expect(revealCalls()).toEqual(["/api/projects/p1/env/provided/SMTP_PASS"]);
+  });
+
+  it("falha ao buscar (ex.: limite de frequência): avisa e o campo continua oculto", async () => {
+    const { ApiRequestError } = await import("../src/lib/api");
+    serveWithReveal(withValues(), async () => {
+      throw new ApiRequestError(429, "reveal_rate_limited", "Muitos valores exibidos em pouco tempo. Espere um minuto e tente de novo.");
+    });
+    renderCard();
+    const line = await screen.findByTestId("env-panel-SMTP_PASS");
+    const input = within(line).getByLabelText("Valor de SMTP_PASS") as HTMLInputElement;
+    fireEvent.click(within(line).getByRole("button", { name: "Mostrar valor" }));
+    expect(await screen.findByText(/Muitos valores exibidos em pouco tempo/)).toBeInTheDocument();
+    expect(input.type).toBe("password");
+    expect(input).toHaveValue("");
+    expect(within(line).queryByRole("button", { name: "Copiar valor de SMTP_PASS" })).toBeNull();
+  });
+
+  it("falha sem mensagem do servidor: frase genérica", async () => {
+    serveWithReveal(withValues(), async () => {
+      throw new Error("rede");
+    });
+    renderCard();
+    const line = await screen.findByTestId("env-panel-SMTP_PASS");
+    fireEvent.click(within(line).getByRole("button", { name: "Mostrar valor" }));
+    expect(await screen.findByText("Não foi possível mostrar o valor de SMTP_PASS.")).toBeInTheDocument();
+  });
+
+  it("a senha à mostra nunca entra na pesquisa, mesmo com nome que não parece segredo", async () => {
+    serveWithReveal(
+      withValues({ provided: [...DELIVERED, "APP_X"].sort(), links: { APP_X: "SMTP_PASS" } }),
+    );
+    renderCard();
+    const line = await screen.findByTestId("env-panel-APP_X");
+    fireEvent.click(within(line).getByRole("button", { name: "Mostrar valor" }));
+    await waitFor(() => expect(within(line).getByLabelText("Valor de APP_X")).toHaveValue(SENHA));
+    fireEvent.change(search(), { target: { value: "senha-de-exemplo" } });
+    expect(screen.queryByTestId("env-panel-APP_X")).not.toBeInTheDocument();
+  });
+
+  it("'Mostrar valores' revela também as do e-mail, a senha inclusive (buscada na rota própria)", async () => {
+    serveWithReveal(withValues());
     renderCard();
     await screen.findByTestId("env-panel-MAIL_FROM");
     fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
     const input = within(screen.getByTestId("env-panel-MAIL_FROM")).getByLabelText("Valor de MAIL_FROM") as HTMLInputElement;
     expect(input.type).toBe("text");
+    const senha = within(screen.getByTestId("env-panel-SMTP_SENHA")).getByLabelText("Valor de SMTP_SENHA") as HTMLInputElement;
+    await waitFor(() => expect(senha).toHaveValue(SENHA));
+    expect(senha.type).toBe("text");
+    expect(revealCalls().sort()).toEqual(["/api/projects/p1/env/provided/SMTP_PASS", "/api/projects/p1/env/provided/SMTP_SENHA"]);
+    // e "Ocultar valores" esconde tudo de novo
+    fireEvent.click(screen.getByRole("button", { name: /Ocultar valores/ }));
+    expect(senha.type).toBe("password");
   });
 
   it("variável ligada e salva nas Variáveis: a salva é ignorada no deploy", async () => {
