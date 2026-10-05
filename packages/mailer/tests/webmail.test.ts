@@ -37,13 +37,16 @@ vi.mock("../src/container-files.js", async (importOriginal) => {
 });
 
 const {
+  ROUNDCUBE_IDENTITY_PLUGIN,
   ROUNDCUBE_IMAGE,
+  WEBMAIL_IDENTITIES_PATH,
   WebmailManager,
   generateDesKey,
   isPublicIp,
   parseFailedLogins,
   phpString,
   renderRoundcubeConfig,
+  renderWebmailIdentities,
 } = await import("../src/webmail.js");
 
 const BASE = {
@@ -111,7 +114,8 @@ describe("renderRoundcubeConfig", () => {
 
   it("sem instalador, sem cadastro, plugins mínimos, português", () => {
     expect(php).toContain("$config['enable_installer'] = false;");
-    expect(php).toContain("$config['plugins'] = ['archive', 'zipdownload'];");
+    // paas_identity: o plugin do painel que dá o nome de exibição à caixa (ver abaixo)
+    expect(php).toContain("$config['plugins'] = ['archive', 'zipdownload', 'paas_identity'];");
     expect(php).toContain("$config['language'] = 'pt_BR';");
     expect(php).toContain("$config['enable_spellcheck'] = false;");
     // uma identidade, sem trocar o endereço: ninguém envia "como" outra caixa
@@ -146,6 +150,93 @@ describe("renderRoundcubeConfig", () => {
 
   it("recusa chave curta", () => {
     expect(() => renderRoundcubeConfig({ ...BASE, desKey: "curta" })).toThrow(/chave/);
+  });
+});
+
+/**
+ * Pedido do dono do produto (04/10/2026, validação na VPS): um e-mail
+ * enviado pelo webmail a partir da caixa do projeto saiu com
+ * "From: contato@<domínio>", sem nome. A caixa do projeto passa a entrar no
+ * webmail com o nome de exibição do e-mail do projeto (ex.: "Contato -
+ * Loja"); a pessoa ainda pode mudar no Roundcube. O painel grava um JSON
+ * {endereço: nome} e um plugin mínimo do Roundcube o lê no primeiro login
+ * (user_create) e, para quem já entrou antes, só preenche um nome VAZIO
+ * (login_after) — nunca sobrescreve o que a pessoa escolheu.
+ */
+describe("nome de exibição das caixas no webmail", () => {
+  it("a configuração diz ao plugin onde está o arquivo (e só isso)", () => {
+    const php = renderRoundcubeConfig(BASE);
+    expect(WEBMAIL_IDENTITIES_PATH).toBe("/var/roundcube/config/paas-identities.json");
+    expect(php).toContain("$config['paas_identities_file'] = '/var/roundcube/config/paas-identities.json';");
+  });
+
+  it("arquivo {endereço: nome}: endereço em minúsculas, ordem fixa, JSON válido", () => {
+    const json = renderWebmailIdentities({ "suporte@exemplo.com.br": "Suporte", "Contato@Exemplo.com.br": "Contato - Loja" });
+    expect(json.endsWith("\n")).toBe(true);
+    expect(JSON.parse(json)).toEqual({ "contato@exemplo.com.br": "Contato - Loja", "suporte@exemplo.com.br": "Suporte" });
+    expect(Object.keys(JSON.parse(json) as object)).toEqual(["contato@exemplo.com.br", "suporte@exemplo.com.br"]);
+    expect(renderWebmailIdentities({})).toBe("{}\n");
+  });
+
+  it("nome limpo: sem quebra de linha nem caractere de controle, sem espaço sobrando, até 100 caracteres", () => {
+    const parsed = JSON.parse(
+      renderWebmailIdentities({
+        "a@x.com": "  Loja\r\nBcc: alguem@x.com\u0000 ",
+        "b@x.com": "N".repeat(150),
+        "c@x.com": "Ação & \"aspas\" <tag> 'simples'",
+      }),
+    ) as Record<string, string>;
+    expect(parsed["a@x.com"]).toBe("Loja Bcc: alguem@x.com");
+    expect(parsed["b@x.com"]).toHaveLength(100);
+    // o resto vai como texto: o JSON escapa e o Roundcube grava com parâmetro
+    expect(parsed["c@x.com"]).toBe("Ação & \"aspas\" <tag> 'simples'");
+  });
+
+  it("ignora endereço fora do formato e nome vazio", () => {
+    expect(JSON.parse(renderWebmailIdentities({ "sem-arroba": "X", "a b@x.com": "Y", "ok@x.com": "   ", "z@x.com": "Z" }))).toEqual({
+      "z@x.com": "Z",
+    });
+  });
+
+  describe("plugin paas_identity (PHP)", () => {
+    const php = ROUNDCUBE_IDENTITY_PLUGIN;
+
+    it("classe com o nome do plugin, carregada só na tela de login", () => {
+      expect(php.startsWith("<?php\n")).toBe(true);
+      expect(php).toContain("class paas_identity extends rcube_plugin");
+      expect(php).toMatch(/public \$task = 'login';/);
+      expect(php).toContain("$this->add_hook('user_create', [$this, 'user_create']);");
+      expect(php).toContain("$this->add_hook('login_after', [$this, 'login_after']);");
+    });
+
+    it("lê só o arquivo da configuração, e só lê", () => {
+      expect(php).toContain("->config->get('paas_identities_file')");
+      expect(php).toContain("file_get_contents($file)");
+      expect(php.match(/file_get_contents/g)).toHaveLength(1);
+      const proibidos = ["file_put_contents", "fopen", "unlink", "exec(", "shell_exec", "system(", "passthru", "proc_open", "popen", "curl_", "eval(", "include", "require", "$_GET", "$_POST", "$_REQUEST", "$_COOKIE"];
+      for (const proibido of proibidos) {
+        expect(php, proibido).not.toContain(proibido);
+      }
+    });
+
+    it("primeiro login: nome da identidade criada vem do arquivo, só se o Roundcube não tiver um", () => {
+      expect(php).toMatch(/function user_create\(\$args\)/);
+      expect(php).toContain("empty($args['user_name'])");
+      expect(php).toContain("$args['user_name'] = $name;");
+    });
+
+    it("quem já entrou antes: preenche a identidade padrão só se o nome estiver vazio", () => {
+      expect(php).toMatch(/function login_after\(\$args\)/);
+      expect(php).toContain("$user->get_identity()");
+      expect(php).toContain("trim((string) ($identity['name'] ?? '')) !== ''");
+      expect(php).toContain("$user->update_identity($identity['identity_id'], ['name' => $name]);");
+      // devolve os argumentos do Roundcube como vieram (o redirecionamento depois do login)
+      expect(php.match(/return \$args;/g)!.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("endereço comparado em minúsculas, como o painel grava", () => {
+      expect(php).toContain("strtolower(trim((string) $email))");
+    });
   });
 });
 
@@ -201,7 +292,8 @@ describe("WebmailManager", () => {
   it("cria sem porta publicada, na paas-net, com volume, limites e a config antes do start", async () => {
     responder = daemon(null);
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "create", "<cp>", "start"]);
+    // o plugin vai para a fonte da imagem (o entrypoint o copia ao subir pela 1ª vez); depois config e nomes
+    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "create", "<cp>", "<cp>", "start"]);
     const create = calls.find((c) => c[0] === "create")!;
     expect(create).not.toContain("-p");
     expect(create.join(" ")).toContain("--network paas-net");
@@ -210,11 +302,47 @@ describe("WebmailManager", () => {
     expect(create.join(" ")).toContain("--memory 256m");
     expect(create.join(" ")).toContain("--label paas.role=webmail");
     expect(create.at(-1)).toBe(ROUNDCUBE_IMAGE);
-    expect(copies[0]).toEqual({
+    expect(copies[1]).toEqual({
       container: "paas-webmail",
       dest: "/var/roundcube/config",
-      files: [{ name: "paas.php", content: "<?php // cfg", mode: 0o644 }],
+      files: [
+        { name: "paas.php", content: "<?php // cfg", mode: 0o644 },
+        { name: "paas-identities.json", content: "{}\n", mode: 0o644 },
+      ],
     });
+    expect(copies[0]).toEqual({
+      container: "paas-webmail",
+      dest: "/usr/src/roundcubemail/plugins",
+      files: [
+        { name: "paas_identity/", mode: 0o755 },
+        { name: "paas_identity/paas_identity.php", content: ROUNDCUBE_IDENTITY_PLUGIN, mode: 0o644 },
+      ],
+    });
+  });
+
+  it("arquivo de nomes vem das opções", async () => {
+    responder = daemon(null);
+    await manager({ identities: '{"a@x.com":"A"}\n' }).start();
+    expect(copies[1]!.files[1]).toEqual({ name: "paas-identities.json", content: '{"a@x.com":"A"}\n', mode: 0o644 });
+  });
+
+  it("container que já subiu: o plugin vai também para a pasta servida, antes da config que o liga", async () => {
+    await manager().pushConfig();
+    expect(copies.map((c) => c.dest)).toEqual(["/usr/src/roundcubemail/plugins", "/var/www/html/plugins", "/var/roundcube/config"]);
+    expect(copies[1]!.files).toEqual(copies[0]!.files);
+  });
+
+  it("pasta servida ainda não existe (criado e nunca iniciado): sem erro; outra falha do plugin é erro", async () => {
+    const { copyFilesToContainer } = await import("../src/container-files.js");
+    const cp = vi.mocked(copyFilesToContainer);
+    cp.mockImplementationOnce(async () => ok())
+      .mockImplementationOnce(async () => fail("Error response from daemon: Could not find the file /var/www/html/plugins in container paas-webmail\n"))
+      .mockImplementationOnce(async () => ok());
+    await expect(manager().pushConfig()).resolves.toBeUndefined();
+    cp.mockImplementationOnce(async () => fail("sem espaço\n"));
+    await expect(manager().pushConfig()).rejects.toThrow(/falha ao instalar o plugin do webmail em paas-webmail: sem espaço$/);
+    cp.mockImplementationOnce(async () => ok()).mockImplementationOnce(async () => fail("negado\n"));
+    await expect(manager().pushConfig()).rejects.toThrow(/falha ao instalar o plugin do webmail em paas-webmail: negado$/);
   });
 
   it("cria a rede ausente; falha ao criá-la é erro claro", async () => {
@@ -228,18 +356,18 @@ describe("WebmailManager", () => {
   it("existente e parado: regrava a config e inicia; rodando: só regrava", async () => {
     responder = daemon({ running: false });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "<cp>", "<cp>", "start"]);
     calls.length = 0;
     responder = daemon({ running: true });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "<cp>", "<cp>"]);
   });
 
   it("não inicia o existente: remove e recria", async () => {
     let starts = 0;
     responder = daemon({ running: false }, (a) => (a[0] === "start" && starts++ === 0 ? fail("quebrado") : undefined));
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "start", "rm", "create", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "<cp>", "<cp>", "start", "rm", "create", "<cp>", "<cp>", "start"]);
     expect(calls.find((c) => c[0] === "rm")).toEqual(["rm", "-f", "paas-webmail"]);
   });
 
@@ -248,8 +376,14 @@ describe("WebmailManager", () => {
     await expect(manager().start()).rejects.toThrow(/falha ao criar paas-webmail: conflito/);
     responder = daemon(null);
     copyResult = fail("sem espaço\n");
-    await expect(manager().start()).rejects.toThrow(/falha ao gravar a configuração em paas-webmail: sem espaço$/);
+    await expect(manager().start()).rejects.toThrow(/falha ao instalar o plugin do webmail em paas-webmail: sem espaço$/);
     copyResult = ok();
+    // o plugin passou; a configuração não
+    const { copyFilesToContainer } = await import("../src/container-files.js");
+    vi.mocked(copyFilesToContainer)
+      .mockImplementationOnce(async () => ok())
+      .mockImplementationOnce(async () => fail("sem espaço\n"));
+    await expect(manager().start()).rejects.toThrow(/falha ao gravar a configuração em paas-webmail: sem espaço$/);
     responder = daemon(null, (a) => (a[0] === "start" ? fail("erro") : undefined));
     await expect(manager().start()).rejects.toThrow(/falha ao iniciar paas-webmail: erro/);
   });
@@ -263,7 +397,7 @@ describe("WebmailManager", () => {
 
   it("pushConfig com o container rodando (a config vale na próxima requisição)", async () => {
     await manager().pushConfig();
-    expect(copies).toHaveLength(1);
+    expect(copies).toHaveLength(3);
   });
 
   it("status: instalado/rodando", async () => {

@@ -14,7 +14,9 @@
  *    logins chegam desse IP, e 100 senhas erradas num dia bloqueariam o
  *    webmail de todo mundo para sempre (conferido no Stalwart real);
  *  - no lugar desse bloqueio, bloqueia no Caddy o IP REAL de quem erra a
- *    senha demais (10 em 10 min → 1 hora), lendo o log do Roundcube.
+ *    senha demais (10 em 10 min → 1 hora), lendo o log do Roundcube;
+ *  - entrega o nome de exibição de cada caixa de projeto (paas-identities.json,
+ *    lido pelo plugin paas_identity), regravado a cada sincronização.
  *
  * Estado em data/mail/webmail.json (0600: guarda a chave da sessão).
  */
@@ -22,7 +24,14 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_WEBMAIL_CONTAINER, WEBMAIL_INTERNAL_PORT, webmailUrl, type WebmailStatus } from "@paas/core";
-import { generateDesKey, isPublicIp, parseFailedLogins, renderRoundcubeConfig, WebmailManager } from "@paas/mailer";
+import {
+  generateDesKey,
+  isPublicIp,
+  parseFailedLogins,
+  renderRoundcubeConfig,
+  renderWebmailIdentities,
+  WebmailManager,
+} from "@paas/mailer";
 import type { ServerConfig } from "../config.js";
 import { httpError } from "./http-error.js";
 import type { MailAuditSink } from "./mail-service.js";
@@ -35,6 +44,8 @@ export interface WebmailMailSource {
     verifyTls: boolean;
     hosts: string[];
     domains: { domain: string; host: string }[];
+    /** Caixa de projeto → nome de exibição do e-mail do projeto. */
+    identities: Record<string, string>;
   }>;
   exemptWebmailIp(ip: string, previousIp: string | null): Promise<void>;
   removeWebmailIpExemption(ip: string): Promise<void>;
@@ -47,7 +58,7 @@ export type WebmailManagerLike = Pick<
 >;
 
 export interface WebmailServiceOptions {
-  createManager?: (config: string) => WebmailManagerLike;
+  createManager?: (config: string, identities?: string) => WebmailManagerLike;
   audit?: MailAuditSink;
   log?: (message: string) => void;
   now?: () => number;
@@ -73,7 +84,7 @@ const FIRST_LOOKBACK_S = 120;
 
 export class WebmailService {
   private readonly file: string;
-  private readonly createManager: (config: string) => WebmailManagerLike;
+  private readonly createManager: (config: string, identities?: string) => WebmailManagerLike;
   private readonly audit: MailAuditSink | undefined;
   private readonly log: (message: string) => void;
   private readonly now: () => number;
@@ -92,7 +103,9 @@ export class WebmailService {
     opts: WebmailServiceOptions = {},
   ) {
     this.file = path.join(config.dataDir, "mail", "webmail.json");
-    this.createManager = opts.createManager ?? ((cfg) => new WebmailManager({ config: cfg }));
+    this.createManager =
+      opts.createManager ??
+      ((cfg, identities) => new WebmailManager({ config: cfg, ...(identities !== undefined ? { identities } : {}) }));
     this.audit = opts.audit;
     this.log = opts.log ?? ((m) => console.warn(m));
     this.now = opts.now ?? Date.now;
@@ -121,8 +134,13 @@ export class WebmailService {
     return next;
   }
 
-  private manager(config = ""): WebmailManagerLike {
-    return this.createManager(config);
+  private manager(config = "", identities?: string): WebmailManagerLike {
+    return this.createManager(config, identities);
+  }
+
+  /** Gerenciador com a configuração e os nomes de exibição atuais (para subir/regravar). */
+  private configured(backend: Awaited<ReturnType<WebmailMailSource["webmailBackend"]>>): WebmailManagerLike {
+    return this.manager(this.configFor(backend), renderWebmailIdentities(backend.identities));
   }
 
   private configFor(backend: Awaited<ReturnType<WebmailMailSource["webmailBackend"]>>): string {
@@ -175,7 +193,7 @@ export class WebmailService {
       if (!backend.serverRunning) {
         throw httpError(409, "mail_server_stopped", "O servidor de e-mail está parado. Inicie-o antes de ativar o webmail.");
       }
-      const manager = this.manager(this.configFor(backend));
+      const manager = this.configured(backend);
       await manager.start();
       this.data.enabled = true;
       this.data.enabledAt = new Date(this.now()).toISOString();
@@ -224,7 +242,7 @@ export class WebmailService {
       if (!this.data.enabled) return;
       const backend = await this.mail.webmailBackend();
       if (!backend.serverRunning) return;
-      const manager = this.manager(this.configFor(backend));
+      const manager = this.configured(backend);
       await manager.start();
       await this.refreshExemption(manager);
     });
