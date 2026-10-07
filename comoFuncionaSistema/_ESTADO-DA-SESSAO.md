@@ -9,6 +9,16 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 07/10/2026 — branch `feat/dominio-painel` (subagente, worktree isolado)
+- Item 3 da ordem combinada: **Configurações → Domínio do painel**.
+  - Fluxo: registro A → Verificar DNS (DNS público) → os dois endereços no proxy → certificado (cartão da página Certificados) → "Abrir o painel pelo endereço novo" (entrar de novo).
+  - "Desativar o acesso pelo IP" só aberto pelo domínio novo, com certificado válido e o domínio digitado; "Reativar" na tela.
+  - Volta por SSH: `scripts/reativar-acesso-ip.sh`.
+  - A escolha fica em `data/panel-domain.json` e vale depois de reiniciar.
+- O passo 3 do roteiro deixou de ser "em breve". No modo túnel, a tela explica como mudar para HTTPS.
+- Detalhes: `configuracoes/dominio-do-painel.json` e `_RELATORIO-dominio-painel.md`, com o passo a passo na VPS.
+- Falta validar na VPS real (ACME com o domínio, script com Docker de verdade). Sem push nem PR.
+
 ## Atualização de 04/10/2026 — branch `feat/variaveis-senha-webmail-nome` (subagente, worktree isolado)
 - Pedidos do dono depois de validar na VPS:
   - **Variáveis: ver qualquer valor, inclusive a senha da caixa.** Decisão nova; antes a senha nunca aparecia.

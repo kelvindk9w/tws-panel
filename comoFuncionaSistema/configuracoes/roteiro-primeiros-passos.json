@@ -60,7 +60,7 @@
           },
           {
             "id": "panel-domain",
-            "status": "soon",
+            "status": "pending",
             "optional": false,
             "detail": "Hoje o painel abre em https://203-0-113-10.sslip.io — o endereço atual tem o IP da VPS no nome."
           },
@@ -100,7 +100,7 @@
   "comoCadaStatusECalculado": {
     "hardening": "services/onboarding.ts:hardeningState. Lê data/security-last-scan.json e data/security-history.json (loadLastSecurityReport / loadSecurityHistory, exportados de security-service.ts; NUNCA dispara varredura). Uma fase está resolvida se foi aplicada de verdade com sucesso (job dryRun=false, status success — conta mesmo com checagem ainda reprovada, caso Contabo) ou se o plano da última varredura (buildSecurityPlan) não aponta checagem corrigível reprovada nela. Sem varredura e sem fase aplicada → pending. Todas resolvidas → done; algumas → in_progress; nenhuma → pending. A frase traz 'X de 8 fases resolvidas', a nota (Lynis ou interna) e as fases que faltam.",
     "two-factor": "twoFactorState: StoredUser.twoFactor da conta da sessão existe → done; senão pending.",
-    "panel-domain": "panelDomainState(config.panelDomain): domínio próprio (não *.sslip.io) em PAAS_PANEL_DOMAIN → done; *.sslip.io ou acesso por túnel (vazio) → soon, explicando que o endereço atual tem o IP da VPS no nome.",
+    "panel-domain": "panelDomainState(PanelDomainService.facts(host)), com o host por onde a página foi aberta (OnboardingContext.host = request.hostname). Túnel → done ('acesso só por túnel SSH: sem endereço na internet'). PAAS_PANEL_DOMAIN que não é sslip.io → done. Só o sslip → pending ('o endereço atual tem o IP da VPS no nome'). Domínio cadastrado sem DNS conferido → in_progress (falta o registro A e 'Verificar DNS'). DNS certo sem certificado válido → in_progress (falta o certificado). Certificado válido + IP desativado → done. Certificado válido, IP ativo, aberto pelo IP → in_progress ('abra pelo endereço novo e entre de novo'). Aberto pelo domínio novo com certificado e IP ativo → done com o aviso 'acesso pelo IP ainda ativo' — decisão: desativar o IP é a última camada e opcional; quem prefere manter o endereço de reserva não fica com o cartão aberto para sempre.",
     "email": "emailState com os fatos de onboarding-sources.ts:mailFactsSource — uma instância NOVA de MailService por consulta (lê data/mail/mail.json na hora; só consulta o Docker se o servidor já foi criado, igual a GET /api/mail/status). Nada criado → pending; domínio sem servidor, servidor parado, ligado sem domínio ou sem nenhum domínio com DNS verificado (lastVerify ok === total) → in_progress; não deu para saber se está ligado → unknown; ligado com ao menos um domínio com DNS certo → done. Opcional: 'Não vou usar' vira skipped, mas e-mail configurado de verdade (done) vence o skipped.",
     "notifications": "notificationsState: sempre soon (aviso fora do painel ainda não existe). Opcional."
   },
@@ -171,12 +171,14 @@
     "apps/server/tests/onboarding.test.ts",
     "apps/server/tests/routes-onboarding.test.ts",
     "apps/web/tests/onboarding-checklist.test.tsx",
-    "apps/web/tests/dashboard-page.test.tsx"
+    "apps/web/tests/dashboard-page.test.tsx",
+    "apps/web/tests/settings-sections.test.tsx"
   ],
   "observacoes": [
     "Fora do roteiro por decisão do dono do produto: backups.",
     "A pasta dos projetos (config.projectsDir, PAAS_PROJECTS_DIR; /opt/tws-projects pelo instalador) é só informativa.",
     "Achado lateral, não corrigido aqui: routes/monitoring.ts usa app.mailService no gancho de blacklist, mas o MailService é decorado dentro do plugin de e-mail (encapsulado) — no plugin de monitoramento app.mailService é undefined, então o check de blacklist do monitoramento agendado não roda. Conferido com um plugin irmão no Fastify 5 (decoração não visível).",
-    "07/10/2026 (validação real): o passo 4 (e-mail) ficava 'em andamento' com o e-mail funcionando, porque exigia tudo certo na última verificação de DNS, inclusive o PTR. Agora o domínio conta como conferido quando os REGISTROS do domínio (A, MX, SPF, DKIM, DMARC) estão certos (lastVerify.recordsOk, gravado por MailService.verifyDomain; onboarding.domainDnsOk). O PTR continua como recomendação na página do domínio. Verificações antigas, sem recordsOk, seguem a regra antiga até a próxima verificação (abrir o domínio na página E-mail verifica sozinho)."
+    "07/10/2026 (validação real): o passo 4 (e-mail) ficava 'em andamento' com o e-mail funcionando, porque exigia tudo certo na última verificação de DNS, inclusive o PTR. Agora o domínio conta como conferido quando os REGISTROS do domínio (A, MX, SPF, DKIM, DMARC) estão certos (lastVerify.recordsOk, gravado por MailService.verifyDomain; onboarding.domainDnsOk). O PTR continua como recomendação na página do domínio. Verificações antigas, sem recordsOk, seguem a regra antiga até a próxima verificação (abrir o domínio na página E-mail verifica sozinho).",
+    "07/10/2026: o passo 3 (domínio do painel) deixou de ser 'em breve' — ver configuracoes/dominio-do-painel.json. Como previsto em comoPlugarUmPassoEmBreve, o cartão reaparece no Dashboard de quem já tinha concluído o roteiro e ainda abre o painel pelo sslip.io."
   ]
 }
