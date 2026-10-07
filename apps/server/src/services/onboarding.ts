@@ -25,6 +25,7 @@ import {
 import { buildSecurityPlan } from "@paas/security";
 import type { ServerConfig } from "../config.js";
 import { loadLastSecurityReport, loadSecurityHistory } from "./security-service.js";
+import type { NotificationFacts } from "./notification-service.js";
 import type { PanelDomainFacts } from "./panel-domain.js";
 import type { StoredOnboarding, UserStore } from "./user-store.js";
 
@@ -209,15 +210,34 @@ export function emailState(facts: EmailFacts): StepState {
 }
 
 // ---------------------------------------------------------------------------
-// Passo 5 — notificações (em breve)
+// Passo 5 — notificações (opcional)
 // ---------------------------------------------------------------------------
 
-/** Aviso fora do painel (Telegram, e-mail) ainda não existe. */
-export function notificationsState(): StepState {
-  return {
-    status: "soon",
-    detail: "Hoje os alertas aparecem só dentro do painel: com ele fechado, você não fica sabendo.",
-  };
+/**
+ * Configurações → Notificações (services/notification-service.ts). Feito com
+ * pelo menos um canal conectado E testado ("Enviar teste" deu certo):
+ * conectado sem teste ainda não garante que o aviso chega.
+ */
+export function notificationsState(facts: NotificationFacts): StepState {
+  const label = (id: NotificationFacts["channels"][number]["id"]) => (id === "telegram" ? "Telegram" : "e-mail");
+  const connected = facts.channels.filter((c) => c.connected);
+  const tested = connected.filter((c) => c.tested);
+  if (connected.length === 0) {
+    return {
+      status: "pending",
+      detail: "Hoje os alertas aparecem só dentro do painel: com ele fechado, você não fica sabendo.",
+    };
+  }
+  if (tested.length === 0) {
+    return {
+      status: "in_progress",
+      detail: `${connected.map((c) => label(c.id)).join(" e ")} conectado; falta clicar em "Enviar teste" e conferir se a mensagem chegou.`,
+    };
+  }
+  const names = connected.map((c) => label(c.id)).join(" e ");
+  const untested = connected.filter((c) => !c.tested).map((c) => label(c.id));
+  const note = untested.length > 0 ? ` (o ${untested.join(" e o ")} ainda sem teste)` : "";
+  return { status: "done", detail: `Avisos chegando por ${names}${note}.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +251,8 @@ export interface OnboardingDeps {
   emailFacts: () => Promise<EmailFacts>;
   /** Domínio do painel, vendo por onde a página foi aberta (PanelDomainService.facts). */
   panelDomainFacts?: (host: string) => Promise<PanelDomainFacts>;
+  /** Canais de notificação conectados e testados (NotificationService.facts). */
+  notificationFacts?: () => Promise<NotificationFacts>;
 }
 
 /** As conferências de cada passo, a partir das fontes reais do painel. */
@@ -244,7 +266,8 @@ export function createOnboardingChecks(deps: OnboardingDeps): OnboardingChecks {
         deps.panelDomainFacts ? await deps.panelDomainFacts(host ?? "") : installFacts(deps.config.panelDomain),
       ),
     email: async () => emailState(await deps.emailFacts()),
-    notifications: async () => notificationsState(),
+    notifications: async () =>
+      notificationsState(deps.notificationFacts ? await deps.notificationFacts() : { channels: [] }),
   };
 }
 

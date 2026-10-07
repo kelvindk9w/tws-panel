@@ -49,6 +49,7 @@ import {
   systemResolver,
   readCaddyCertificate,
   sendSmtpMail,
+  SmtpSendError,
   StalwartClient,
   StalwartManager,
   stalwartConfigFingerprint,
@@ -1498,6 +1499,85 @@ export class MailService {
     const status = await this.manager().status();
     if (!status.running) {
       throw httpError(409, "mail_server_stopped", "O servidor de e-mail está parado. Inicie-o antes de continuar.");
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Avisos do painel por e-mail (Configurações → Notificações)
+  // -------------------------------------------------------------------------
+
+  /**
+   * De onde os avisos do painel saem: a postmaster@ do primeiro domínio com o
+   * DNS conferido (A, MX, SPF, DKIM, DMARC — mesma regra do roteiro de
+   * primeiros passos; sem DNS certo o aviso iria para o spam ou seria
+   * recusado). Não pronto: diz o que falta, em português.
+   */
+  async systemMailReadiness(): Promise<{ ready: boolean; reason: string | null; from: string | null }> {
+    await this.ensureLoaded();
+    const notReady = (reason: string) => ({ ready: false, reason, from: null });
+    if (!this.data.adminSecret) {
+      return notReady("O servidor de e-mail do painel não foi iniciado. Inicie-o na página E-mail e cadastre um domínio de envio.");
+    }
+    const domains = Object.values(this.data.domains);
+    if (domains.length === 0) {
+      return notReady("O servidor de e-mail está criado, mas não tem nenhum domínio de envio. Adicione um na página E-mail.");
+    }
+    const dnsOk = (d: StoredDomain): boolean => {
+      const v = d.lastVerify as { ok: number; total: number; recordsOk?: boolean } | null;
+      if (!v) return false;
+      return typeof v.recordsOk === "boolean" ? v.recordsOk : v.total > 0 && v.ok === v.total;
+    };
+    const chosen = domains.find((d) => dnsOk(d) && this.data.mailboxes[`postmaster@${d.name}`]);
+    if (!chosen) {
+      return notReady("Nenhum domínio de e-mail está com o DNS conferido. Abra o domínio na página E-mail e clique em Verificar DNS.");
+    }
+    try {
+      await this.ensureNetworkAccess();
+      const status = await this.manager().status();
+      if (!status.running) return notReady("O servidor de e-mail do painel está parado. Inicie-o na página E-mail.");
+    } catch {
+      return notReady("Não foi possível conferir o servidor de e-mail agora. Tente de novo em instantes.");
+    }
+    return { ready: true, reason: null, from: `postmaster@${chosen.name}` };
+  }
+
+  /**
+   * Envia um aviso do painel (texto + HTML) pela submission do Stalwart,
+   * autenticado como a postmaster@ escolhida. Sem aviso de entrega (DSN):
+   * cada aviso deixaria uma mensagem na caixa. Recusa 5xx do servidor é
+   * definitiva (`permanent`), o resto vale tentar de novo.
+   */
+  async sendSystemMail(msg: { to: string; subject: string; text: string; html: string }): Promise<void> {
+    const readiness = await this.systemMailReadiness();
+    if (!readiness.ready || !readiness.from) {
+      throw Object.assign(new Error(readiness.reason ?? "O servidor de e-mail não está pronto."), { permanent: false });
+    }
+    const mailbox = this.data.mailboxes[readiness.from]!;
+    const domainName = mailbox.domain;
+    const id = randomBytes(8).toString("hex");
+    try {
+      await this.sendMail({
+        host: this.inContainer ? PAAS_STALWART_CONTAINER : "127.0.0.1",
+        port: this.inContainer ? 465 : this.config.mailPorts.submissions,
+        servername: mailHostFor(domainName),
+        username: mailbox.id,
+        password: mailbox.password,
+        from: readiness.from,
+        fromName: "TWS Panel",
+        to: msg.to,
+        subject: msg.subject,
+        text: msg.text,
+        html: msg.html,
+        dsn: false,
+        envId: `tws-aviso-${id}`,
+        messageId: `<tws-aviso-${id}@${domainName}>`,
+        date: new Date(this.now()),
+      });
+    } catch (err) {
+      const code = err instanceof SmtpSendError ? err.code : 0;
+      throw Object.assign(new Error(err instanceof Error ? err.message : String(err)), {
+        permanent: code >= 500 && code < 600,
+      });
     }
   }
 

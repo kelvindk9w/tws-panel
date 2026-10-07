@@ -239,3 +239,29 @@ describe("persistência", () => {
     expect(alerts.map((a) => a.title).sort()).toEqual(["depois da falha", "durante a falha"]);
   });
 });
+
+describe("onCreated — quem escuta alertas novos (notificações)", () => {
+  it("avisa só quando o alerta é NOVO (o mesmo alerta aberto atualizado não avisa de novo)", async () => {
+    const heard: string[] = [];
+    service.onCreated((a) => void heard.push(a.title));
+    await service.create(INPUT);
+    await service.create(INPUT);
+    await service.create({ ...INPUT, title: "Outro" });
+    expect(heard).toEqual(["Porta 5432 exposta", "Outro"]);
+  });
+
+  it("quem escuta e falha (síncrono ou assíncrono) não derruba a criação do alerta", async () => {
+    const log = vi.fn();
+    const s = new AlertsService(dir, { log });
+    s.onCreated(() => {
+      throw new Error("boom");
+    });
+    s.onCreated(async () => {
+      throw new Error("boom assíncrono");
+    });
+    const { created } = await s.create(INPUT);
+    expect(created).toBe(true);
+    await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(2));
+    expect(String(log.mock.calls[0]![0])).toMatch(/boom/);
+  });
+});
