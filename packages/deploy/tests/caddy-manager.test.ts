@@ -277,6 +277,17 @@ describe("CaddyManager — site do painel", () => {
     ).rejects.toThrow(/paas-net.*tws-panel|tws-panel.*paas-net/);
   });
 
+  it("setPanelSite troca os endereços do painel na próxima aplicação (sem recriar o gerenciador)", async () => {
+    responder = comRedes('{"paas-net":{}}');
+    const m = new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL });
+    m.setPanelSite({ domain: "painel.exemplo.com.br", aliases: ["203-0-113-10.sslip.io"], upstream: "tws-panel:9000" });
+    await m.apply([]);
+    expect(String(copies.at(-1)!.files[0]!.content)).toContain("painel.exemplo.com.br, 203-0-113-10.sslip.io {");
+    expect(m.currentPanelSite?.domain).toBe("painel.exemplo.com.br");
+    m.setPanelSite(undefined);
+    expect(m.currentPanelSite).toBeUndefined();
+  });
+
   it("sem site do painel, não mexe em rede de container nenhum", async () => {
     responder = daemon(running);
     await manager().apply(alvo);

@@ -57,6 +57,7 @@ beforeEach(async () => {
   deps = {
     listProjects: vi.fn(async () => [{ id: "p1", name: "Loja", domain: "loja.exemplo.com.br", aliases: [] } as unknown as Project]),
     panelDomain: vi.fn(() => "painel.exemplo.com.br"),
+    panelAliases: vi.fn((): string[] => []),
     mailHosts: vi.fn(async () => ["mail.exemplo.com.br"]),
     proxyRunning: vi.fn(async () => true),
     servedCertificate: vi.fn(async () => ({ ok: false, issuer: null, validTo: null, error: "tlsv1 alert internal error" })),

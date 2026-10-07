@@ -182,6 +182,7 @@ export function buildCertificateService(app: FastifyInstance): CertificateServic
     {
       listProjects: () => deploy.listProjects(),
       panelDomain: () => deploy.panelSite?.domain ?? null,
+      panelAliases: () => deploy.panelSite?.aliases ?? [],
       mailHosts: () => deploy.mailHosts(),
       proxyRunning: () => deploy.proxyRunning(),
       servedCertificate: (host) => deploy.servedCertificate(host),

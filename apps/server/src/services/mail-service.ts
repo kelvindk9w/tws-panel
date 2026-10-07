@@ -84,7 +84,7 @@ interface AppliedTls {
 }
 
 interface StoredDomain extends MailDomain {
-  lastVerify: { at: string; ok: number; total: number } | null;
+  lastVerify: { at: string; ok: number; total: number; recordsOk?: boolean } | null;
   /**
    * dmarc@<domínio> já é endereço da postmaster@ (o rua do DMARC). Ausente
    * em domínios cadastrados antes de 04/10/2026: a sincronização acrescenta.
@@ -896,6 +896,8 @@ export class MailService {
       at: new Date().toISOString(),
       ok: result.summary.ok,
       total: result.summary.total,
+      // sem o PTR (recomendação): o roteiro de primeiros passos se guia por isto
+      recordsOk: result.records.every((r) => r.status === "found"),
     };
     await this.save();
     return {

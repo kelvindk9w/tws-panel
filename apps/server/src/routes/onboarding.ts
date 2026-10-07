@@ -42,10 +42,10 @@ const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> = async (app
   registerErrorHandler(app);
   const { checks } = opts;
 
-  async function respond(user: StoredUser, reply: FastifyReply): Promise<FastifyReply> {
+  async function respond(user: StoredUser, request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
     const response: OnboardingResponse = await buildOnboardingResponse(
       checks,
-      { userId: user.id },
+      { userId: user.id, host: request.hostname },
       user.onboarding,
       app.config.projectsDir,
     );
@@ -60,7 +60,7 @@ const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> = async (app
   app.get("/api/onboarding", async (request, reply) => {
     const user = await app.userStore.findById(request.session!.userId);
     if (!user) return unauthorized(request, reply);
-    return respond(user, reply);
+    return respond(user, request, reply);
   });
 
   app.post("/api/onboarding/start", async (request, reply) => {
@@ -69,7 +69,7 @@ const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> = async (app
       startedAt: current.startedAt ?? new Date().toISOString(),
     }));
     if (!user) return unauthorized(request, reply);
-    return respond(user, reply);
+    return respond(user, request, reply);
   });
 
   app.put<{ Params: { id: OnboardingStepId }; Body: OnboardingSkipRequest }>(
@@ -94,7 +94,7 @@ const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> = async (app
           ? `Roteiro de primeiros passos: "${id}" marcado como "Não vou usar".`
           : `Roteiro de primeiros passos: "${id}" voltou a ser considerado.`,
       });
-      return respond(user, reply);
+      return respond(user, request, reply);
     },
   );
 };

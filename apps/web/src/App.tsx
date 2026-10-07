@@ -22,6 +22,7 @@ import { AppearanceSettings } from "@/pages/settings/AppearanceSettings";
 import { NotificationSettings } from "@/pages/settings/NotificationSettings";
 import { IntegrationSettings } from "@/pages/settings/IntegrationSettings";
 import { OnboardingSettings } from "@/pages/settings/OnboardingSettings";
+import { PanelDomainSettings } from "@/pages/settings/PanelDomainSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 
@@ -56,6 +57,7 @@ const router = createBrowserRouter([
           { index: true, element: <Navigate to="/settings/profile" replace /> },
           { path: "profile", element: <ProfileSettings /> },
           { path: "security", element: <SecuritySettings /> },
+          { path: "panel-domain", element: <PanelDomainSettings /> },
           { path: "appearance", element: <AppearanceSettings /> },
           { path: "notifications", element: <NotificationSettings /> },
           { path: "integrations", element: <IntegrationSettings /> },

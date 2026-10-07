@@ -67,6 +67,7 @@ function Harness({ at }: { at: string }) {
           { path: "security", element: <SecuritySettings /> },
           { path: "appearance", element: <AppearanceSettings /> },
           { path: "notifications", element: <NotificationSettings /> },
+          { path: "panel-domain", element: <p>domínio</p> },
         ],
       },
     ],
@@ -95,6 +96,12 @@ describe("Configurações — seções", () => {
     await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/settings/profile"));
     const nav = screen.getByTestId("settings-nav");
     for (const s of ["Perfil", "Segurança", "Aparência", "Notificações"]) expect(nav).toHaveTextContent(s);
+  });
+
+  it("Domínio do painel tem a sua seção e endereço (/settings/panel-domain)", async () => {
+    render(<Harness at="/settings/profile" />);
+    fireEvent.click(screen.getByRole("link", { name: /Domínio do painel/ }));
+    expect(await screen.findByTestId("where")).toHaveTextContent("/settings/panel-domain");
   });
 
   it("cada seção tem o seu endereço", async () => {

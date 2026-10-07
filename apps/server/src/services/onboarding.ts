@@ -25,6 +25,7 @@ import {
 import { buildSecurityPlan } from "@paas/security";
 import type { ServerConfig } from "../config.js";
 import { loadLastSecurityReport, loadSecurityHistory } from "./security-service.js";
+import type { PanelDomainFacts } from "./panel-domain.js";
 import type { StoredOnboarding, UserStore } from "./user-store.js";
 
 /** Resultado de uma conferência ("Não vou usar" é aplicado depois, pela conta). */
@@ -35,6 +36,8 @@ export interface StepState {
 
 export interface OnboardingContext {
   userId: string;
+  /** Nome com que a página foi aberta (Host do pedido) — passo do domínio do painel. */
+  host?: string;
 }
 
 export type OnboardingCheck = (ctx: OnboardingContext) => Promise<StepState>;
@@ -102,28 +105,53 @@ export function twoFactorState(enabled: boolean): StepState {
 }
 
 // ---------------------------------------------------------------------------
-// Passo 3 — domínio do painel (em breve)
+// Passo 3 — domínio do painel
 // ---------------------------------------------------------------------------
 
 /**
- * A troca de domínio ainda não existe na interface. O instalador grava em
- * PAAS_PANEL_DOMAIN o endereço automático <ip-com-hífens>.sslip.io (ou nada,
- * no acesso por túnel). Quem já instalou com um domínio próprio está feito.
+ * Configurações → Domínio do painel (services/panel-domain.ts). Feito quando
+ * a pessoa abre o painel pelo domínio novo com certificado válido — com o
+ * acesso pelo IP desativado, ou ainda ativo (feito com aviso: desativar é
+ * a última camada, e quem prefere manter o endereço de reserva não fica com
+ * o cartão aberto para sempre). Túnel: feito — o painel não tem endereço na
+ * internet, então não há IP exposto no nome.
  */
-export function panelDomainState(panelDomain: string | null): StepState {
-  if (!panelDomain) {
+export function panelDomainState(facts: PanelDomainFacts): StepState {
+  const ip = facts.ipAddress;
+  if (!ip) {
     return {
-      status: "soon",
-      detail: "Hoje o painel é aberto por túnel SSH, sem endereço próprio na internet.",
+      status: "done",
+      detail: "Acesso só por túnel SSH: o painel não tem endereço na internet. Para usar um domínio, veja Configurações → Domínio do painel.",
     };
   }
-  if (panelDomain.endsWith(".sslip.io")) {
-    return {
-      status: "soon",
-      detail: `Hoje o painel abre em https://${panelDomain} — o endereço atual tem o IP da VPS no nome.`,
-    };
+  if (!ip.endsWith(".sslip.io")) {
+    return { status: "done", detail: `O painel abre em https://${ip}.` };
   }
-  return { status: "done", detail: `O painel abre em https://${panelDomain}.` };
+  const d = facts.domain;
+  if (!d) {
+    return { status: "pending", detail: `Hoje o painel abre em https://${ip} — o endereço atual tem o IP da VPS no nome.` };
+  }
+  if (!facts.active) {
+    return { status: "in_progress", detail: `${d} cadastrado; falta o DNS apontar para a VPS (registro A) e clicar em "Verificar DNS".` };
+  }
+  if (!facts.certificateValid) {
+    return { status: "in_progress", detail: `DNS de ${d} certo; falta o certificado HTTPS ficar válido (Configurações → Domínio do painel).` };
+  }
+  if (facts.ipAccessDisabled) {
+    return { status: "done", detail: `O painel abre em https://${d}; o acesso pelo IP está desativado.` };
+  }
+  if (!facts.openedViaDomain) {
+    return { status: "in_progress", detail: `Certificado pronto: abra o painel por https://${d} e entre de novo.` };
+  }
+  return {
+    status: "done",
+    detail: `O painel abre em https://${d} · acesso pelo IP ainda ativo (dá para desativar em Configurações → Domínio do painel).`,
+  };
+}
+
+/** Sem a fonte do domínio (testes, túnel): só o endereço da instalação. */
+function installFacts(panelDomain: string | null): PanelDomainFacts {
+  return { ipAddress: panelDomain, domain: null, active: false, certificateValid: false, ipAccessDisabled: false, openedViaDomain: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +165,20 @@ export interface EmailFacts {
   running: boolean | null;
   /** Domínios de e-mail; dnsOk = última verificação de DNS toda certa (null = nunca verificado). */
   domains: Array<{ name: string; dnsOk: boolean | null }>;
+}
+
+/**
+ * DNS do domínio de e-mail conferido: os registros do domínio certos (A, MX,
+ * SPF, DKIM, DMARC). O PTR fica de fora — é recomendação e às vezes fica "não
+ * deu para conferir" quando o DNS demora (validação real, 07/10/2026).
+ * Verificação antiga, sem `recordsOk`: tudo certo, como antes. null = nunca.
+ */
+export function domainDnsOk(
+  lastVerify: { at: string; ok: number; total: number; recordsOk?: boolean } | null,
+): boolean | null {
+  if (!lastVerify) return null;
+  if (typeof lastVerify.recordsOk === "boolean") return lastVerify.recordsOk;
+  return lastVerify.total > 0 && lastVerify.ok === lastVerify.total;
 }
 
 export function emailState(facts: EmailFacts): StepState {
@@ -187,6 +229,8 @@ export interface OnboardingDeps {
   userStore: Pick<UserStore, "findById">;
   /** Estado do e-mail (servidor + domínios). Ver onboarding-sources.ts. */
   emailFacts: () => Promise<EmailFacts>;
+  /** Domínio do painel, vendo por onde a página foi aberta (PanelDomainService.facts). */
+  panelDomainFacts?: (host: string) => Promise<PanelDomainFacts>;
 }
 
 /** As conferências de cada passo, a partir das fontes reais do painel. */
@@ -195,7 +239,10 @@ export function createOnboardingChecks(deps: OnboardingDeps): OnboardingChecks {
     hardening: async () =>
       hardeningState(await loadLastSecurityReport(deps.config.dataDir), await loadSecurityHistory(deps.config.dataDir)),
     "two-factor": async ({ userId }) => twoFactorState(Boolean((await deps.userStore.findById(userId))?.twoFactor)),
-    "panel-domain": async () => panelDomainState(deps.config.panelDomain),
+    "panel-domain": async ({ host }) =>
+      panelDomainState(
+        deps.panelDomainFacts ? await deps.panelDomainFacts(host ?? "") : installFacts(deps.config.panelDomain),
+      ),
     email: async () => emailState(await deps.emailFacts()),
     notifications: async () => notificationsState(),
   };

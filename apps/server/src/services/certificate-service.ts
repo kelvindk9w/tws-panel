@@ -58,6 +58,8 @@ export interface CertificateDeps {
   listProjects(): Promise<Project[]>;
   /** Domínio do painel no proxy central (null = acesso por túnel/IP). */
   panelDomain(): string | null;
+  /** Outros endereços do painel (o acesso pelo IP enquanto o domínio próprio não o substitui). */
+  panelAliases?(): string[];
   /** mail.<domínio> do servidor de e-mail. */
   mailHosts(): Promise<string[]>;
   proxyRunning(): Promise<boolean>;
@@ -128,6 +130,7 @@ export class CertificateService {
     };
     const panel = this.deps.panelDomain();
     if (panel) add(panel, { kind: "panel", projectId: null, projectName: null });
+    for (const alias of this.deps.panelAliases?.() ?? []) add(alias, { kind: "panel", projectId: null, projectName: null });
     for (const p of await this.deps.listProjects()) {
       for (const d of [p.domain, ...(p.aliases ?? [])]) {
         if (d) add(d, { kind: "project", projectId: p.id, projectName: p.name });

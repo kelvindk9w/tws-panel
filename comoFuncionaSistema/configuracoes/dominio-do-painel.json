@@ -1,0 +1,117 @@
+{
+  "id": "dominio-do-painel",
+  "modulo": "configuracoes",
+  "metodo": "GET/PUT/DELETE/POST",
+  "url": "/api/settings/panel-domain, /api/settings/panel-domain/verify, /api/settings/panel-domain/disable-ip, /api/settings/panel-domain/enable-ip",
+  "resumo": "Configurações → Domínio do painel (/settings/panel-domain): a pessoa troca o endereço automático https://<ip-com-hífens>.sslip.io (que tem o IP da VPS no nome) por um domínio seu (ex.: painel.exemplo.com.br). O painel mostra o registro A, confere o DNS, acrescenta o domínio ao bloco do painel no proxy (os dois endereços respondem), acompanha o certificado e, aberto pelo endereço novo, permite desativar o acesso pelo IP — com volta pela tela ou por SSH.",
+  "porQue": "Ordem combinada com o dono do produto em 01/10/2026 (item 3): o endereço sslip.io entrega o IP do servidor e é difícil de lembrar. Requisito central: nunca trancar ninguém fora.",
+  "arquivoFonte": "apps/server/src/services/panel-domain.ts, apps/server/src/routes/panel-domain.ts, packages/core/src/panel-domain.ts, packages/deploy/src/caddy.ts (PanelSite.aliases, CaddyManager.setPanelSite), apps/server/src/services/deploy-service.ts (setPanelAddresses, setPanelReserved, isPanelHost), apps/web/src/pages/settings/PanelDomainSettings.tsx, scripts/reativar-acesso-ip.sh, scripts/reativar-acesso-ip.mjs",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). A auditoria registra o usuário da sessão."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "PUT; 1 a 270 caracteres no schema (additionalProperties false); o serviço limpa https://, barra e ponto final, põe em minúsculas e recusa IP, nome sem ponto, .localhost, *.sslip.io, curinga e caractere inválido", "descricao": "Domínio do painel." },
+      { "nome": "confirm", "tipo": "string", "obrigatorio": true, "regras": "POST disable-ip; até 270; tem de ser igual ao domínio (sem diferença de maiúsculas e espaços)", "descricao": "Confirmação forte: digitar o domínio." }
+    ],
+    "headers": [
+      { "nome": "Host", "descricao": "Por onde a página foi aberta (request.hostname, sem porta). Atrás do Caddy é o nome que o navegador usou; o Caddy não repassa X-Forwarded-Host vindo de fora (trusted_proxies vazio)." }
+    ]
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "GET, PUT, DELETE, disable-ip e enable-ip devolvem a situação (PanelDomainStatus). verify devolve { check, status }.",
+      "corpo": {
+        "mode": "https | tunnel",
+        "ipAddress": "string|null — endereço pelo IP (PAAS_PANEL_DOMAIN)",
+        "ipAccessDisabled": "boolean",
+        "serverIp": "string|null — valor do registro A",
+        "domain": "string|null",
+        "domainActive": "boolean — DNS conferido e domínio no proxy",
+        "lastCheck": "PanelDomainDnsCheck|null — { ok, problem: ok|missing|cloudflare|wrong_ip|wrong_ipv6|unavailable|no_server_ip, ipv4, ipv6, expectedIp, message, checkedAt }",
+        "certificate": "CertificateItem|null — o mesmo item da página Certificados",
+        "addresses": "string[] — onde o painel responde agora (principal primeiro)",
+        "currentHost": "string",
+        "openedVia": "domain | ip | other",
+        "disableIp": "{ allowed, blockers[] }",
+        "reactivateCommand": "cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh (pasta = PAAS_HOST_REPO_DIR)",
+        "configFile": "/data/panel-domain.json (volume Docker paas_data)"
+      },
+      "exemplo": {
+        "mode": "https",
+        "ipAddress": "203-0-113-10.sslip.io",
+        "ipAccessDisabled": false,
+        "serverIp": "203.0.113.10",
+        "domain": "painel.exemplo.com.br",
+        "domainActive": true,
+        "addresses": ["painel.exemplo.com.br", "203-0-113-10.sslip.io"],
+        "currentHost": "203-0-113-10.sslip.io",
+        "openedVia": "ip",
+        "disableIp": { "allowed": false, "blockers": ["Abra o painel pelo endereço novo (https://painel.exemplo.com.br), entre de novo e volte a esta tela: o botão só funciona lá."] }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "Corpo fora do schema.", "mensagem": "Nome do campo recusado." },
+    { "status": 400, "codigo": "invalid_domain", "quando": "Domínio inválido (IP, sslip.io, localhost, sem ponto…).", "mensagem": "Explica o motivo." },
+    { "status": 400, "codigo": "confirm_mismatch", "quando": "disable-ip com o texto digitado diferente do domínio.", "mensagem": "Para confirmar, digite exatamente <domínio>." },
+    { "status": 401, "codigo": "unauthorized", "quando": "Sem sessão.", "mensagem": "Sessão inválida ou expirada." },
+    { "status": 409, "codigo": "tunnel_mode", "quando": "PUT/verify no acesso por túnel.", "mensagem": "Explica que é preciso mudar o acesso para HTTPS." },
+    { "status": 409, "codigo": "domain_in_use", "quando": "O nome é domínio (principal ou adicional) de um projeto ou um mail.<domínio>.", "mensagem": "Sugere outro nome." },
+    { "status": 409, "codigo": "no_domain", "quando": "verify/DELETE sem domínio cadastrado.", "mensagem": "Cadastre o domínio do painel primeiro." },
+    { "status": 409, "codigo": "disable_ip_blocked", "quando": "disable-ip sem as condições (ver regras).", "mensagem": "Os motivos, em frases." },
+    { "status": 500, "codigo": "internal_error", "quando": "Falha inesperada ao aplicar no proxy (o arquivo volta ao que era).", "mensagem": "Nada mudou no endereço do painel; tente de novo." }
+  ],
+  "regras": {
+    "dns": "checkPanelDomainDns: resolvedor público (1.1.1.1, 8.8.8.8, publicResolver do @paas/mailer) e o do sistema só quando o público não responde. ok = todos os A iguais ao IP da VPS e nenhum AAAA diferente do IPv6 da VPS (PAAS_PUBLIC_IPV6). IP da VPS = PAAS_PUBLIC_IP ou o tirado do endereço sslip.io. Sem resposta = 'unavailable' (nunca ok).",
+    "ativar": "Só com o DNS certo o domínio entra no proxy (antes disso nada muda no Caddy). Assim a primeira tentativa de emissão do certificado sai na hora, sem a espera crescente de tentativas anteriores. 'Tentar emitir agora' fica no cartão do certificado (CertificateService.retry).",
+    "desativarIp": "disableIpBlockers: liberado só com domínio ativo, certificado válido (válido ou vence em breve) e Host do pedido = domínio novo. A tela exige também window.location.hostname = domínio (o navegador comprova) e o domínio digitado.",
+    "nuncaSemEndereco": "Trocar ou remover o domínio reativa o acesso pelo IP. Arquivo ilegível ou incoerente (IP desativado sem domínio ativo) = só o endereço pelo IP. Falha do proxy ao aplicar = o arquivo volta ao que era e o proxy é reaplicado com o estado anterior.",
+    "reservado": "O domínio cadastrado (mesmo sem DNS) e todos os endereços do painel ficam reservados: nenhum projeto pode usá-los (DeployService.isPanelHost) e o Caddyfile descarta projeto que tente."
+  },
+  "fluxo": [
+    "1. Boot (app.ts): buildPanelDomainService + init() lê data/panel-domain.json e põe os endereços no DeployService ANTES de startPanelRoute montar o proxy — reiniciar o painel mantém a escolha. Reiniciar só o Caddy também: o Caddyfile fica na camada do container (docker cp) e o painel o regrava a cada aplicação.",
+    "2. PUT grava o domínio (active=false), reserva o nome e audita panel_domain.set. Se havia um domínio ativo, o proxy volta só ao endereço pelo IP.",
+    "3. POST verify confere o DNS; certo → active=true, o bloco do painel passa a ter '<domínio>, <ip>.sslip.io' (o mesmo reverse_proxy com flush_interval -1) e audita panel_domain.activated.",
+    "4. A tela acompanha o certificado pelo item da página Certificados (GET /api/certificates?host=… dentro do cartão).",
+    "5. Certificado válido: link 'Abrir o painel pelo endereço novo'. Lá a pessoa entra de novo (cookie de sessão é por endereço).",
+    "6. POST disable-ip (aberto pelo domínio, certificado válido, domínio digitado) → bloco só com o domínio; audita panel_domain.ip_disabled com o comando de SSH.",
+    "7. POST enable-ip ou o script de SSH → os dois endereços de novo; audita panel_domain.ip_enabled (o script não passa pela auditoria: ele age com o painel parado).",
+    "8. DELETE → volta ao endereço pelo IP; audita panel_domain.removed."
+  ],
+  "protecoesPorOrigem": [
+    "WebSocket do terminal (routes/terminal.ts isCrossOrigin): compara o Origin com o Host do próprio pedido. Funciona nos dois endereços sem mudança — cada um só aceita a si mesmo.",
+    "Cookie de sessão: sem atributo Domain (vale só no endereço em que a pessoa entrou), SameSite=Lax, Secure no HTTPS. Por isso é preciso entrar de novo no endereço novo — a tela avisa.",
+    "CORS: só a mesma origem (ALLOWED_ORIGINS vazio por padrão). Não há CSRF por token: SameSite=Lax + corpo JSON.",
+    "Com o IP desativado o Caddy não tem bloco para o sslip.io: o nome não tem certificado (HTTPS falha) e em HTTP cai na página 'domínio ainda não configurado'. O painel continua escutando só em 127.0.0.1 e na paas-net.",
+    "Links e textos: o terminal, o health check e os e-mails não citam o endereço do painel. scripts/show-token.sh passa a mostrar o domínio quando o IP está desativado. O rótulo do app autenticador do 2FA (admin@<endereço>) continua o da instalação — é só um nome no celular."
+  ],
+  "modoTunel": "Decisão: a tela desabilita a função e explica. No acesso por túnel (PAAS_PANEL_DOMAIN vazio) o painel não tem endereço na internet, então não há IP exposto em nome nenhum; o passo 3 do roteiro conta como feito. Para usar um domínio, primeiro mudar o acesso para HTTPS: cd /opt/tws-panel && sudo ./scripts/install.sh --acesso=https (o instalador respeita o .env e só troca o modo).",
+  "ondeFicaGravado": "<dataDir>/panel-domain.json — em produção /data/panel-domain.json no volume Docker paas_data (0600, gravação atômica). O PAAS_PANEL_DOMAIN do .env nunca muda: continua sendo a fonte do IP da VPS (registro A, checklist do e-mail, endereço automático dos projetos <projeto>.<ip>.sslip.io, que seguem funcionando).",
+  "comoVoltarPorSsh": "cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh — para o painel, troca ipAccessDisabled para false no panel-domain.json (rodando o .mjs dentro da imagem do painel), sobe o painel e espera até 90 s o Caddyfile do paas-caddy voltar a ter o endereço pelo IP. Mantém o domínio cadastrado.",
+  "efeitosColaterais": [
+    "Grava data/panel-domain.json.",
+    "verify (ativando), disable-ip, enable-ip, DELETE e trocar um domínio ativo recarregam o Caddy (sem queda de conexão).",
+    "Auditoria: panel_domain.set, panel_domain.activated, panel_domain.ip_disabled, panel_domain.ip_enabled, panel_domain.removed."
+  ],
+  "chamadoPor": ["apps/web/src/pages/settings/PanelDomainSettings.tsx", "apps/server/src/services/onboarding.ts (facts, passo 3 do roteiro)"],
+  "testes": [
+    "apps/server/tests/panel-domain.test.ts",
+    "apps/server/tests/routes-panel-domain.test.ts",
+    "apps/server/tests/reativar-acesso-ip-script.test.ts",
+    "apps/server/tests/deploy-panel-route.test.ts",
+    "apps/server/tests/certificate-service.test.ts",
+    "apps/server/tests/onboarding.test.ts",
+    "packages/deploy/tests/caddy-render.test.ts",
+    "packages/deploy/tests/caddy-manager.test.ts",
+    "apps/web/tests/panel-domain-settings.test.tsx",
+    "apps/web/tests/onboarding-checklist.test.tsx",
+    "apps/web/tests/settings-sections.test.tsx"
+  ]
+}

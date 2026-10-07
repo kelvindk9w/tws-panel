@@ -81,6 +81,11 @@ export interface MailDomainSummary extends MailDomain {
     at: string;
     ok: number;
     total: number;
+    /**
+     * Os registros do domínio (A, MX, SPF, DKIM, DMARC) estão todos certos —
+     * sem o PTR, que é recomendação. Ausente em verificações antigas.
+     */
+    recordsOk?: boolean;
   } | null;
 }
 

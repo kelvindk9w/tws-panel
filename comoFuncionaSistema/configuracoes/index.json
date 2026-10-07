@@ -1,9 +1,9 @@
 {
   "modulo": "configuracoes",
   "titulo": "Configurações",
-  "resumo": "Área /settings do painel, com menu próprio e um endereço por seção: Perfil (/settings/profile), Segurança (/settings/security), Aparência (/settings/appearance) Notificações (/settings/notifications), Integrações (/settings/integrations) e Primeiros passos (/settings/onboarding). /settings abre o Perfil. Pedido do dono do produto em 30/09/2026: centralizar as opções da conta num lugar só, com URL própria para cada uma.",
+  "resumo": "Área /settings do painel, com menu próprio e um endereço por seção: Perfil (/settings/profile), Segurança (/settings/security), Domínio do painel (/settings/panel-domain), Aparência (/settings/appearance) Notificações (/settings/notifications), Integrações (/settings/integrations) e Primeiros passos (/settings/onboarding). /settings abre o Perfil. Pedido do dono do produto em 30/09/2026: centralizar as opções da conta num lugar só, com URL própria para cada uma.",
   "pontoDeEntrada": {
-    "api": "PUT /api/settings/preferences, PUT /api/settings/profile, GET /api/onboarding",
+    "api": "PUT /api/settings/preferences, PUT /api/settings/profile, GET /api/onboarding, /api/settings/panel-domain",
     "web": "/settings/*"
   },
   "comoFunciona": [
@@ -18,7 +18,8 @@
     "Notificações: só o que existe — alertas aparecem dentro do painel (badge de Alertas) e a frequência da verificação automática (mesma API de /api/security/monitor/config, 1 a 168 h). A tela diz que aviso fora do painel (e-mail ou outro canal) ainda não existe; o canal é decisão pendente do dono do produto.",
     "Menu do usuário: Configurações, Trocar senha, Verificação em duas etapas e Sair. No topo, em tela de celular, mostra só o ícone (o nome empurrava a página para o lado).",
     "Integrações (/settings/integrations): conta do GitHub conectada com um token SOMENTE LEITURA (services/github-integration.ts). O token é conferido em GET https://api.github.com/user; token clássico com permissão de escrita (x-oauth-scopes com repo, public_repo, workflow, write:*, admin:*, delete_repo) é recusado (github_token_can_write). Guardado no cofre cifrado (credential-vault, chave 'integration:github'; username = login). Rotas: GET/PUT/DELETE /api/integrations/github e GET /api/integrations/github/repos (até 500, mais recentes primeiro). Auditoria: integration.github_connected / _disconnected (nunca o token). No Novo Projeto, 'Escolher dos meus repositórios' preenche URL e branch padrão; o clone de repositório do github.com usa o token do projeto e, sem ele, o da conta (DeployService.credentialFor). Clicar-e-autorizar (sem copiar token) exigiria registrar um GitHub App da TWS — decisão/ação do dono do produto.",
-    "Primeiros passos (/settings/onboarding) e Dashboard: roteiro \"Deixe o painel pronto\" (proteções da VPS, 2FA, domínio do painel — em breve, e-mail do servidor — opcional, notificações — em breve). Status calculado do estado real em GET /api/onboarding; 'Não vou usar' e 'roteiro iniciado' ficam em StoredUser.onboarding (data/users.json). No Dashboard: aberto até a pessoa começar, depois compacto (só o próximo passo + janela com todos); some quando tudo está resolvido. Detalhes em configuracoes/roteiro-primeiros-passos.json."
+    "Primeiros passos (/settings/onboarding) e Dashboard: roteiro \"Deixe o painel pronto\" (proteções da VPS, 2FA, domínio do painel, e-mail do servidor — opcional, notificações — em breve). Status calculado do estado real em GET /api/onboarding; 'Não vou usar' e 'roteiro iniciado' ficam em StoredUser.onboarding (data/users.json). No Dashboard: aberto até a pessoa começar, depois compacto (só o próximo passo + janela com todos); some quando tudo está resolvido. Detalhes em configuracoes/roteiro-primeiros-passos.json.",
+    "Domínio do painel (/settings/panel-domain, 07/10/2026): domínio próprio no lugar do endereço <ip>.sslip.io — registro A, Verificar DNS (resolvedor público), os dois endereços no proxy, certificado (cartão da página Certificados), 'Abrir o painel pelo endereço novo', 'Desativar o acesso pelo IP' só aberto pelo domínio novo com certificado válido e o domínio digitado, 'Reativar o acesso pelo IP' e scripts/reativar-acesso-ip.sh por SSH. Gravado em data/panel-domain.json. Detalhes em configuracoes/dominio-do-painel.json."
   ],
   "testes": [
     "apps/server/tests/settings-preferences.test.ts",
@@ -34,7 +35,11 @@
     "packages/core/tests/onboarding.test.ts",
     "apps/server/tests/onboarding.test.ts",
     "apps/server/tests/routes-onboarding.test.ts",
-    "apps/web/tests/onboarding-checklist.test.tsx"
+    "apps/web/tests/onboarding-checklist.test.tsx",
+    "apps/server/tests/panel-domain.test.ts",
+    "apps/server/tests/routes-panel-domain.test.ts",
+    "apps/server/tests/reativar-acesso-ip-script.test.ts",
+    "apps/web/tests/panel-domain-settings.test.tsx"
   ],
   "proximos": "Próximas seções combinadas: configurações do painel e dos projetos.",
   "endpoints": [
@@ -44,6 +49,13 @@
       "url": "/api/onboarding, /api/onboarding/start, /api/onboarding/steps/:id",
       "resumo": "Roteiro 'Deixe o painel pronto': status real de cada passo e progresso da conta.",
       "arquivo": "roteiro-primeiros-passos.json"
+    },
+    {
+      "id": "dominio-do-painel",
+      "metodo": "GET/PUT/DELETE/POST",
+      "url": "/api/settings/panel-domain, /verify, /disable-ip, /enable-ip",
+      "resumo": "Domínio próprio do painel; desativar e reativar o acesso pelo IP.",
+      "arquivo": "dominio-do-painel.json"
     }
   ]
 }

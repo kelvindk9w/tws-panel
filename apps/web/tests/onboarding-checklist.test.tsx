@@ -241,19 +241,25 @@ describe("e-mail do servidor (opcional)", () => {
   });
 });
 
-describe("passos em breve", () => {
-  it("domínio do painel: explica o porquê e não tem botão de ação", async () => {
-    serve(response());
+describe("domínio do painel (deixou de ser 'em breve')", () => {
+  it("passo a passo real e o botão para Configurações → Domínio do painel", async () => {
+    serve(response({}, { "panel-domain": "pending" }));
     renderChecklist();
     const item = await screen.findByTestId("onboarding-step-panel-domain");
     fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
     expect(within(item).getByText(/IP da VPS no nome/)).toBeInTheDocument();
-    // diz o que já dá para adiantar e manda seguir para o próximo passo
-    expect(within(item).getByText(/já pode adiantar/)).toBeInTheDocument();
     expect(within(item).getByText(/nuvem cinza/)).toBeInTheDocument();
-    expect(within(item).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(item).getByText(/Verificar DNS/)).toBeInTheDocument();
+    expect(within(item).getByText(/entre de novo/)).toBeInTheDocument();
+    expect(within(item).getByText(/Desativar o acesso pelo IP/)).toBeInTheDocument();
+    expect(within(item).getByRole("link", { name: /Abrir Domínio do painel/ })).toHaveAttribute(
+      "href",
+      "/settings/panel-domain",
+    );
   });
+});
 
+describe("passos em breve", () => {
   it("notificações: Telegram primeiro, e-mail depois, um, outro ou os dois", async () => {
     serve(response());
     renderChecklist();
