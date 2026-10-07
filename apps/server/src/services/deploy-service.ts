@@ -141,6 +141,16 @@ export function validateBranch(branch: string | null | undefined): string | null
 export interface DeployHooks {
   audit?: AuditService;
   alerts?: AlertsService;
+  /**
+   * Um deploy terminou (notificações: "falhou" e "voltou a funcionar"). Recebe
+   * o resultado anterior do projeto. Falha de quem escuta não muda o deploy.
+   */
+  onDeployFinished?: (e: {
+    projectId: string;
+    projectName: string;
+    status: "success" | "failed";
+    previousStatus: "success" | "failed" | null;
+  }) => void;
 }
 
 export class DeployService {
@@ -1007,6 +1017,7 @@ export class DeployService {
       this.trackStep(job, chunk);
     };
 
+    const previousStatus = project.lastDeployStatus ?? null;
     void (async () => {
       try {
         await this.engine.deploy(project, this.projects, appendLog, {
@@ -1039,6 +1050,16 @@ export class DeployService {
         }
         await this.saveProjects();
         await this.saveJobs();
+        try {
+          this.hooks.onDeployFinished?.({
+            projectId: project.id,
+            projectName: project.name,
+            status: job.status === "success" ? "success" : "failed",
+            previousStatus,
+          });
+        } catch {
+          // aviso é extra: nunca muda o resultado do deploy
+        }
       }
     })();
 

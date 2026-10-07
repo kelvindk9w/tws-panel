@@ -266,14 +266,17 @@ describe("domínio do painel (deixou de ser 'em breve')", () => {
   });
 });
 
-describe("passos em breve", () => {
-  it("notificações: Telegram primeiro, e-mail depois, um, outro ou os dois", async () => {
-    serve(response());
+describe("passo das notificações", () => {
+  it("passo a passo do Telegram (@BotFather, /start, Conectar, Enviar teste) e o botão para a tela", async () => {
+    serve(response({}, { notifications: "pending" }));
     renderChecklist();
     const item = await screen.findByTestId("onboarding-step-notifications");
     fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
-    expect(within(item).getByText(/Primeiro virá o Telegram/)).toBeInTheDocument();
-    expect(within(item).getByText(/um, outro ou os dois/)).toBeInTheDocument();
+    expect(within(item).getByText(/@BotFather/)).toBeInTheDocument();
+    expect(within(item).getByText(/clique em Conectar/)).toBeInTheDocument();
+    expect(within(item).getByText(/Enviar teste/)).toBeInTheDocument();
+    expect(within(item).getByText(/só o Telegram, só o e-mail ou os dois/)).toBeInTheDocument();
+    expect(within(item).getByRole("link", { name: /Abrir Notificações/ })).toHaveAttribute("href", "/settings/notifications");
   });
 });
 

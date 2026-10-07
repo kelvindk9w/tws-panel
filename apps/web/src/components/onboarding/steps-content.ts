@@ -86,13 +86,17 @@ export const ONBOARDING_CONTENT: Record<OnboardingStepId, OnboardingStepContent>
     title: "Notificações",
     icon: Bell,
     whatIs:
-      "Avisos fora do painel quando algo precisa da sua atenção: alerta de segurança, deploy que falhou, certificado perto de vencer.",
-    why: "Hoje os alertas só aparecem dentro do painel. Com ele fechado, um problema pode passar dias sem ninguém ver.",
+      "Avisos fora do painel quando algo precisa da sua atenção: alerta de segurança, deploy que falhou, certificado que não renovou, e-mail em lista de bloqueio, disco quase cheio.",
+    why: "Sem isso, os alertas só aparecem dentro do painel. Com ele fechado, um problema pode passar dias sem ninguém ver.",
     howTo: [
-      "Esta opção ainda não existe no painel — está em preparação.",
-      "Primeiro virá o Telegram: você conversa com um robô do painel e passa a receber os avisos por lá.",
-      "Depois, o e-mail (usando o e-mail do servidor do passo anterior).",
-      "Você vai poder escolher um, outro ou os dois.",
+      "No Telegram, abra a conversa com o @BotFather, mande /newbot e escolha um nome e um @ terminado em “bot”.",
+      "Copie o token que ele responder (a linha inteira, como 123456789:ABC…) e cole em Configurações → Notificações → Telegram.",
+      "Abra a conversa com o seu robô, toque em “Começar” (ou mande /start) e clique em Conectar: o painel mostra o nome da conversa para você conferir.",
+      "Clique em “Enviar teste” e confira se a mensagem chegou no Telegram.",
+      "Se quiser também por e-mail (precisa do e-mail do servidor do passo anterior), informe os endereços no cartão E-mail e envie o teste.",
+      "Escolha o que avisa. O padrão já liga tudo que pede ação; “Painel reiniciado” começa desligado.",
     ],
+    note: "Conta como feito com pelo menos um canal conectado e com o teste enviado. Pode ser só o Telegram, só o e-mail ou os dois. Se preferir acompanhar só pelo painel, marque “Não vou usar”.",
+    action: { label: "Abrir Notificações", to: "/settings/notifications" },
   },
 };

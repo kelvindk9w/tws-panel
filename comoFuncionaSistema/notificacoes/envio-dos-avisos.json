@@ -1,0 +1,29 @@
+{
+  "id": "envio-dos-avisos",
+  "modulo": "notificacoes",
+  "tipo": "fluxo",
+  "resumo": "Do evento ao aviso: quem chama notify(), como o serviço decide se manda, agrupa repetidos, respeita o limite por hora e tenta de novo.",
+  "arquivoFonte": "apps/server/src/app.ts, apps/server/src/services/notification-sources.ts, apps/server/src/services/notification-service.ts (notify, dispatch, attempt, tick)",
+  "origens": [
+    { "origem": "AlertsService.onCreated", "tipo": "security | blacklist | certificate", "key": "alert:<origem>:<título>", "texto": "Título do alerta + gravidade + 'detalhes em Alertas'. O detalhe do alerta não vai." },
+    { "origem": "DeployService onDeployFinished", "tipo": "deploy", "key": "deploy-failed:<id> | deploy-ok:<id>", "texto": "'Deploy de X falhou' ou 'X voltou a publicar sem erro' (só quando o anterior tinha falhado)." },
+    { "origem": "CertificateWatcher (6 h; 1º giro 10 min após o boot)", "tipo": "certificate", "key": "cert:<host>:<estado>", "texto": "não foi emitido | venceu | não renovou e vence em breve (só automático). Repete após 24 h; problema resolvido é esquecido." },
+    { "origem": "DiskWatcher (15 min; 1º giro 2 min após o boot)", "tipo": "disk", "key": "disk", "texto": "'Disco da VPS com N% de uso' + GB livres. ≥ 90% avisa; repete após 24 h; < 85% volta ao normal." },
+    { "origem": "onReady do Fastify", "tipo": "panel", "key": "panel-started", "texto": "'O painel foi iniciado' com a hora de Brasília." }
+  ],
+  "passos": [
+    "notify(): tipo desligado → descarta; nenhum canal conectado (Telegram com conversa, ou e-mail com endereço) → descarta.",
+    "Agrupamento: se o mesmo key saiu há menos de 10 min, só incrementa o contador. No tick (a cada 30 s), janela vencida com contador > 0 → um resumo '<título> (repetiu N vezes nos últimos 10 minutos)', se o tipo continuar ligado.",
+    "Limite: no máximo 20 avisos por canal por hora (janela deslizante). O excesso só conta; quando abre vaga, sai um resumo 'N avisos não foram enviados para não lotar'. O que ficou de fora não entra no histórico.",
+    "Envio: Telegram → sendMessage; e-mail → um envio por endereço. Cada envio vira uma linha do histórico (só o título mascarado).",
+    "Falha: permanente (token inválido, robô bloqueado/removido, conversa não encontrada, 4xx do Telegram, 5xx do SMTP, canal desconectado) → 'failed'. Temporária → 'retrying' e nova tentativa em 30 s, 2 min, 10 min (ou o retry_after do Telegram, se maior); esgotou → 'failed' + log. Nada disso lança para quem avisou."
+  ],
+  "seguranca": [
+    "maskSensitive: IPv4, IPv6 (com '::' ou 8 grupos) e nomes …sslip.io viram marcador em título, corpo e histórico. Endereços de e-mail no motivo de falha viram '[endereço]'.",
+    "Link só com domínio próprio do painel com certificado válido (ou PAAS_PANEL_DOMAIN que não seja sslip/IP)."
+  ],
+  "observacoes": [
+    "Agrupamento, limite e novas tentativas vivem em memória (somem ao reiniciar o painel).",
+    "AlertsService avisa só alerta NOVO: o monitor rodando de novo e encontrando o mesmo problema faz bump do alerta aberto e não gera aviso. Depois de resolvido, o próximo alerta igual é novo e avisa."
+  ]
+}

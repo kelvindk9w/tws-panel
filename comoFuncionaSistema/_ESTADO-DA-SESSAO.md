@@ -9,6 +9,15 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 07/10/2026 — branch `feat/notificacoes` (subagente, worktree isolado)
+- Item 4 da ordem combinada: **Configurações → Notificações** com Telegram (robô do @BotFather, Conectar depois do /start, Enviar teste) e e-mail (pelo servidor de e-mail do painel, postmaster@ do domínio com DNS conferido).
+- Avisa: alertas novos (segurança, blacklist, certificado manual), deploy que falhou e voltou, certificado automático com problema, disco acima de 90% e painel iniciado (desligado por padrão).
+- Proteções: agrupamento de 10 min, até 20 avisos por hora por canal e novas tentativas com recuo. O token fica cifrado e as mensagens não levam IP nem o detalhe do alerta.
+- Serviço no escopo raiz (`app.ts`), ligado por ganchos (`AlertsService.onCreated`, `onDeployFinished`).
+- O passo 5 do roteiro deixou de ser "em breve".
+- Detalhes: `notificacoes/` e `_RELATORIO-notificacoes.md`, com o passo a passo na VPS. Falta validar com o Telegram e o Stalwart reais.
+- Não feito: o código por e-mail para recomeçar o setup. Sem push nem PR.
+
 ## Atualização de 07/10/2026 — branch `feat/dominio-painel` (subagente, worktree isolado)
 - Item 3 da ordem combinada: **Configurações → Domínio do painel**.
   - Fluxo: registro A → Verificar DNS (DNS público) → os dois endereços no proxy → certificado (cartão da página Certificados) → "Abrir o painel pelo endereço novo" (entrar de novo).

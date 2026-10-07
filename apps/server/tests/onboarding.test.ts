@@ -207,11 +207,33 @@ describe("e-mail do servidor", () => {
   });
 });
 
-describe("notificações (em breve)", () => {
-  it("em breve, dizendo que hoje os alertas só aparecem dentro do painel", () => {
-    const s = notificationsState();
-    expect(s.status).toBe("soon");
+describe("notificações", () => {
+  const ch = (id: "telegram" | "email", connected: boolean, tested: boolean) => ({ id, connected, tested });
+
+  it("sem canal conectado: pendente, dizendo que hoje os alertas só aparecem dentro do painel", () => {
+    const s = notificationsState({ channels: [ch("telegram", false, false), ch("email", false, false)] });
+    expect(s.status).toBe("pending");
     expect(s.detail).toMatch(/dentro do painel/);
+  });
+
+  it("conectado mas sem teste: em andamento, pedindo o teste", () => {
+    const s = notificationsState({ channels: [ch("telegram", true, false), ch("email", false, false)] });
+    expect(s.status).toBe("in_progress");
+    expect(s.detail).toMatch(/Telegram/);
+    expect(s.detail).toMatch(/Enviar teste/);
+  });
+
+  it("pelo menos um canal conectado e testado: feito, citando os canais", () => {
+    expect(notificationsState({ channels: [ch("telegram", true, true), ch("email", false, false)] })).toEqual({
+      status: "done",
+      detail: "Avisos chegando por Telegram.",
+    });
+    expect(notificationsState({ channels: [ch("telegram", true, true), ch("email", true, false)] }).detail).toBe(
+      "Avisos chegando por Telegram e e-mail (o e-mail ainda sem teste).",
+    );
+    expect(notificationsState({ channels: [ch("telegram", true, true), ch("email", true, true)] }).detail).toBe(
+      "Avisos chegando por Telegram e e-mail.",
+    );
   });
 });
 
@@ -335,7 +357,19 @@ describe("createOnboardingChecks — fontes reais", () => {
     expect((await checks["two-factor"](ctx)).status).toBe("pending");
     expect((await checks["panel-domain"](ctx)).status).toBe("pending");
     expect((await checks.email(ctx)).status).toBe("pending");
-    expect((await checks.notifications(ctx)).status).toBe("soon");
+    // sem a fonte das notificações: nenhum canal
+    expect((await checks.notifications(ctx)).status).toBe("pending");
+  });
+
+  it("notificações: usa a fonte do serviço de notificações", async () => {
+    const user = await users.create("admin", "hash");
+    const checks = createOnboardingChecks({
+      config: { dataDir: dir, panelDomain: null },
+      userStore: users,
+      emailFacts: async () => ({ installed: false, running: false, domains: [] }),
+      notificationFacts: async () => ({ channels: [{ id: "email", connected: true, tested: true }] }),
+    });
+    expect(await checks.notifications({ userId: user.id })).toEqual({ status: "done", detail: "Avisos chegando por e-mail." });
   });
 
   it("domínio do painel: usa a fonte do domínio com o endereço por onde a página foi aberta", async () => {
