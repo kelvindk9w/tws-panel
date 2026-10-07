@@ -74,6 +74,18 @@ fi
 # Acesso por HTTPS (gravado pelo install.sh): o endereço pronto, sem túnel.
 PANEL_DOMAIN="${PAAS_PANEL_DOMAIN:-$(env_value PAAS_PANEL_DOMAIN)}"
 
+# Domínio do painel (Configurações → Domínio do painel): com o acesso pelo IP
+# desativado, o endereço que abre é o domínio próprio (data/panel-domain.json,
+# gravado pelo painel com uma chave por linha).
+if [ -n "$PANEL_DOMAIN" ]; then
+  PANEL_DOMAIN_JSON="$(docker run --rm -v "$VOLUME_NAME:/data" alpine:3 \
+    sh -c 'cat /data/panel-domain.json 2>/dev/null || true' 2>/dev/null || true)"
+  if printf '%s' "$PANEL_DOMAIN_JSON" | grep -q '"ipAccessDisabled": true'; then
+    OWN_DOMAIN="$(printf '%s\n' "$PANEL_DOMAIN_JSON" | sed -n 's/^  "domain": "\([a-z0-9.-]*\)",$/\1/p' | head -n 1)"
+    [ -n "$OWN_DOMAIN" ] && PANEL_DOMAIN="$OWN_DOMAIN"
+  fi
+fi
+
 # Porta alternativa citada quando a ponta local do túnel estiver ocupada.
 LOCAL_ALT=9100
 [ "$PORT" = "9100" ] && LOCAL_ALT=9101

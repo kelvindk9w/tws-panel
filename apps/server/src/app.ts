@@ -42,6 +42,7 @@ import certificatesRoutes, { buildCertificateService } from "./routes/certificat
 import { ManualCertificateStore } from "./services/certificate-store.js";
 import monitoringRoutes from "./routes/monitoring.js";
 import terminalRoutes from "./routes/terminal.js";
+import panelDomainRoutes, { buildPanelDomainService } from "./routes/panel-domain.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -107,6 +108,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // DNS do e-mail pede a emissão de mail.<domínio> por ele (mesmo limite de
   // 1 pedido por minuto que o botão "Tentar emitir agora").
   app.decorate("certificateService", buildCertificateService(app));
+  // Domínio do painel (Configurações → Domínio do painel): lê a escolha
+  // gravada em data/panel-domain.json ANTES de o proxy subir — um reinício do
+  // painel mantém o domínio próprio e o acesso pelo IP como estavam.
+  const panelDomainService = buildPanelDomainService(app);
+  await panelDomainService.init();
+  app.decorate("panelDomainService", panelDomainService);
   // Acesso por HTTPS (PAAS_PANEL_DOMAIN): o Caddy central sobe JUNTO com o
   // painel, já com o site dele — senão só subiria no primeiro deploy.
   app.deployService.startPanelRoute({
@@ -204,8 +211,14 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Roteiro "Deixe o painel pronto" (Dashboard): status de cada passo lido do
   // estado real (segurança em data/, 2FA da conta, domínio do painel, e-mail).
   await app.register(onboardingRoutes, {
-    checks: createOnboardingChecks({ config, userStore, emailFacts: mailFactsSource(config) }),
+    checks: createOnboardingChecks({
+      config,
+      userStore,
+      emailFacts: mailFactsSource(config),
+      panelDomainFacts: (host) => panelDomainService.facts(host),
+    }),
   });
+  await app.register(panelDomainRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(setupRestartRoutes);

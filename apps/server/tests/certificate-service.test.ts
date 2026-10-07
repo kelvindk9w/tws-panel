@@ -90,6 +90,7 @@ beforeEach(async () => {
   deps = {
     listProjects: vi.fn(async () => [PROJECT]),
     panelDomain: vi.fn(() => "painel.exemplo.com.br"),
+    panelAliases: vi.fn((): string[] => []),
     mailHosts: vi.fn(async () => ["mail.exemplo.com.br"]),
     proxyRunning: vi.fn(async () => true),
     servedCertificate: vi.fn(async (host: string) => served[host] ?? NONE),
@@ -119,6 +120,12 @@ describe("lista", () => {
       ["www.exemplo.com.br", "project", "Loja"],
       ["mail.exemplo.com.br", "mail", null],
     ]);
+  });
+
+  it("domínio do painel com o acesso pelo IP ainda ativo: os dois endereços do painel aparecem", async () => {
+    deps.panelAliases.mockReturnValue(["203-0-113-10.sslip.io"]);
+    const r = await service.list({ kind: "panel" });
+    expect(r.items.map((i) => i.host)).toEqual(["painel.exemplo.com.br", "203-0-113-10.sslip.io"]);
   });
 
   it("nome repetido aparece uma vez só (o primeiro dono vence)", async () => {
