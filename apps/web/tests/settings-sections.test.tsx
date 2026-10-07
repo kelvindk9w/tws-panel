@@ -85,6 +85,14 @@ beforeEach(() => {
   apiFetchMock.mockImplementation(async (path: string) => {
     if (path === "/api/auth/2fa") return { enabled: false, recoveryCodesLeft: 0 };
     if (path === "/api/security/monitor/last") return { config: { intervalMs: 6 * 3_600_000 } };
+    if (path === "/api/notifications") {
+      return {
+        telegram: { state: "none", botUsername: null, chatTitle: null, connectedAt: null, testedAt: null },
+        email: { available: false, unavailableReason: "O servidor de e-mail do painel não foi iniciado.", from: null, recipients: [], testedAt: null },
+        kinds: { security: true, deploy: true, certificate: true, blacklist: true, disk: true, panel: false },
+        history: [],
+      };
+    }
     return {};
   });
 });
@@ -109,7 +117,7 @@ describe("Configurações — seções", () => {
     fireEvent.click(screen.getByRole("link", { name: /Notificações/ }));
     expect(await screen.findByTestId("where")).toHaveTextContent("/settings/notifications");
     expect(await screen.findByLabelText(/A cada quantas horas/)).toHaveValue(6);
-    expect(screen.getByTestId("no-external-channel")).toHaveTextContent(/ainda não existe/);
+    expect(await screen.findByTestId("telegram-card")).toBeInTheDocument();
   });
 
   it("Segurança reúne a troca de senha e a verificação em duas etapas, na própria página", async () => {
