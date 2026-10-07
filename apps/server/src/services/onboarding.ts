@@ -14,6 +14,7 @@ import {
   OPTIONAL_ONBOARDING_STEPS,
   SECURITY_PHASES,
   isOnboardingComplete,
+  isOnboardingHiddenUntilNews,
   type OnboardingResponse,
   type OnboardingStep,
   type OnboardingStepId,
@@ -276,6 +277,7 @@ export async function buildOnboardingResponse(
     steps,
     started: Boolean(progress?.startedAt),
     complete: isOnboardingComplete(steps),
+    hidden: isOnboardingHiddenUntilNews(steps, progress?.hiddenSoon),
     projectsDir,
   };
 }

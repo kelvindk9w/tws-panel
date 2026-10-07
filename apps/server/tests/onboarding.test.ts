@@ -20,7 +20,7 @@ import {
   twoFactorState,
   type OnboardingChecks,
 } from "../src/services/onboarding.js";
-import { UserStore } from "../src/services/user-store.js";
+import { UserStore, type StoredOnboarding } from "../src/services/user-store.js";
 
 function check(id: string, phase: SecurityCheckResult["phase"], status: SecurityCheckResult["status"]): SecurityCheckResult {
   return { id, phase, title: id, severity: "warning", status, description: "", remediation: "" };
@@ -245,7 +245,9 @@ describe("buildOnboardingResponse", () => {
     expect(res.started).toBe(true);
     expect(res.steps.find((s) => s.id === "email")?.status).toBe("skipped");
     expect(res.steps.find((s) => s.id === "two-factor")?.status).toBe("done");
-    expect(res.complete).toBe(true);
+    // Nada a fazer agora, mas há passos "em breve": não está concluído (o cartão continua).
+    expect(res.complete).toBe(false);
+    expect(res.hidden).toBe(false);
 
     const feito = await buildOnboardingResponse(
       { ...checks, email: fixed("done") },
@@ -254,6 +256,37 @@ describe("buildOnboardingResponse", () => {
       "/x",
     );
     expect(feito.steps.find((s) => s.id === "email")?.status).toBe("done");
+  });
+
+  it("tudo feito ou 'Não vou usar': concluído", async () => {
+    const res = await buildOnboardingResponse(
+      { ...checks, "two-factor": fixed("done"), "panel-domain": fixed("done") },
+      { userId: "u1" },
+      { startedAt: "2026-10-01T10:00:00Z", skipped: ["email", "notifications"] },
+      "/x",
+    );
+    expect(res.complete).toBe(true);
+  });
+
+  it("'Ocultar até ter novidade': oculto enquanto os mesmos passos seguem 'em breve' e nada pede ação", async () => {
+    const waiting = { ...checks, "two-factor": fixed("done"), email: fixed("done") };
+    const progress = (): StoredOnboarding => ({
+      startedAt: "2026-10-07T10:00:00Z",
+      skipped: [],
+      hiddenSoon: ["panel-domain", "notifications"],
+    });
+    const res = await buildOnboardingResponse(waiting, { userId: "u1" }, progress(), "/x");
+    expect(res.hidden).toBe(true);
+    expect(res.complete).toBe(false);
+
+    // O domínio do painel chegou (deixou de ser "em breve"): novidade.
+    const arrived = await buildOnboardingResponse(
+      { ...waiting, "panel-domain": fixed("pending") },
+      { userId: "u1" },
+      progress(),
+      "/x",
+    );
+    expect(arrived.hidden).toBe(false);
   });
 
   it("um passo que falha ao conferir vira 'não confirmado', sem derrubar os outros", async () => {
