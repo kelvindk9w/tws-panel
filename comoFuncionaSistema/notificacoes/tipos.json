@@ -1,0 +1,31 @@
+{
+  "id": "tipos",
+  "modulo": "notificacoes",
+  "metodo": "PUT",
+  "url": "/api/notifications/kinds",
+  "resumo": "Liga ou desliga cada tipo de aviso. A tela salva na hora em que a caixa é marcada.",
+  "arquivoFonte": "apps/server/src/routes/notifications.ts, apps/server/src/services/notification-service.ts (setKinds), packages/core/src/notifications.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global." },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "kinds", "tipo": "object", "obrigatorio": true, "regras": "Só as chaves security, deploy, certificate, blacklist, disk, panel, cada uma boolean; chave desconhecida ou valor não booleano → 400. Chaves ausentes não mudam.", "descricao": "Escolha parcial." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "corpo": "NotificationsStatus." },
+    { "status": 400, "corpo": "invalid_request." }
+  ],
+  "tipos": {
+    "security": "Alertas de origem scan (monitoramento) e guardrail (deploy barrado/override). Padrão: ligado.",
+    "deploy": "Deploy que falhou e projeto que voltou a publicar depois de falhar. Padrão: ligado.",
+    "certificate": "Certificado não emitido, vencido, automático que não renovou, e alertas de certificado manual (30/7 dias). Padrão: ligado.",
+    "blacklist": "Alerta de IP/domínio do e-mail listado em blacklist. Padrão: ligado.",
+    "disk": "Disco da pasta de dados acima de 90%. Padrão: ligado.",
+    "panel": "Painel iniciado (atualização ou reinício). Padrão: desligado."
+  },
+  "auditoria": ["notifications.kinds — a lista completa 'Tipo: sim/não'."]
+}
