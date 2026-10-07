@@ -2,11 +2,11 @@
  * onboarding.ts — status dos passos do roteiro "Deixe o painel pronto"
  * (Dashboard), calculado do estado REAL que o painel já conhece.
  *
- * Cada passo tem uma "conferência" (OnboardingCheck). As de domínio do painel
- * e de notificações dizem "em breve": essas funcionalidades ainda não existem.
- * Para plugar uma delas depois, basta trocar a conferência em
- * createOnboardingChecks por uma que leia o estado novo — a rota, o Dashboard
- * e o texto "Como fazer" não mudam de forma (ver
+ * Cada passo tem uma "conferência" (OnboardingCheck). Desde 07/10/2026 todos
+ * os cinco leem o estado real (o domínio do painel e as notificações deixaram
+ * de ser "em breve"). Um passo novo que ainda não exista no painel volta a
+ * usar "em breve": basta uma conferência em createOnboardingChecks — a rota,
+ * o Dashboard e o texto "Como fazer" não mudam de forma (ver
  * comoFuncionaSistema/configuracoes/roteiro-primeiros-passos.json).
  */
 import {
