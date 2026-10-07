@@ -117,7 +117,7 @@ type Tracking =
   | { phase: "running"; message: string }
   | { phase: "done"; ok: boolean; message: string };
 
-function CertificateCard({
+export function CertificateCard({
   item,
   onItem,
   pollMs,

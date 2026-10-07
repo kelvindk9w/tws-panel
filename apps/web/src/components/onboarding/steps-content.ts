@@ -58,10 +58,14 @@ export const ONBOARDING_CONTENT: Record<OnboardingStepId, OnboardingStepContent>
       "Um endereço seu para abrir o painel, como painel.exemplo.com.br, no lugar do endereço automático criado na instalação.",
     why: "O endereço atual tem o IP da VPS no nome: entrega onde o seu servidor está e é difícil de lembrar. Um domínio seu é mais discreto e fácil de guardar.",
     howTo: [
-      "Esta opção ainda não existe no painel: chega numa próxima versão. Por enquanto, siga para o próximo passo.",
-      "O que você já pode adiantar: escolha um subdomínio para o painel (ex.: painel.exemplo.com.br) e crie no seu provedor de DNS um registro do tipo A com esse nome, apontando para o IP da VPS. No Cloudflare, deixe a nuvem cinza (“Somente DNS”).",
-      "Quando a opção chegar: você informa o domínio em Configurações, o painel emite o certificado HTTPS sozinho e, depois de abrir o painel pelo endereço novo, você pode desligar o acesso pelo IP.",
+      "Escolha um subdomínio para o painel (ex.: painel.exemplo.com.br) e informe em Configurações → Domínio do painel.",
+      "No seu provedor de DNS, crie o registro do tipo A que a tela mostrar, apontando para o IP da VPS. No Cloudflare, deixe a nuvem cinza (“Somente DNS”).",
+      "Clique em Verificar DNS. Com o DNS certo, o painel passa a responder nos dois endereços e emite o certificado HTTPS sozinho (costuma levar de segundos a 2 minutos).",
+      "Com o certificado válido, clique em “Abrir o painel pelo endereço novo” e entre de novo: a sessão vale só no endereço em que você entrou.",
+      "Opcional, já no endereço novo: Desativar o acesso pelo IP. Antes, anote o comando de SSH que a tela mostra para reativar, caso o domínio pare de abrir.",
     ],
+    note: "No acesso por túnel SSH o painel não tem endereço na internet: este passo já conta como feito e a tela explica como mudar para HTTPS.",
+    action: { label: "Abrir Domínio do painel", to: "/settings/panel-domain" },
   },
   email: {
     title: "E-mail do servidor",

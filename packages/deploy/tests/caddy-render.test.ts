@@ -82,6 +82,58 @@ describe("renderCaddyfile — site do painel", () => {
 });
 
 /**
+ * Domínio do painel (Configurações → Domínio do painel, 07/10/2026): o painel
+ * responde nos DOIS endereços (o automático pelo IP e o domínio próprio) até a
+ * pessoa desativar o acesso pelo IP; aí o bloco fica só com o domínio novo.
+ */
+describe("renderCaddyfile — painel com um ou dois endereços", () => {
+  const DOIS = { domain: "painel.exemplo.com.br", aliases: ["203-0-113-10.sslip.io"], upstream: "tws-panel:9000" };
+
+  it("dois endereços no MESMO bloco do painel (mesmo proxy, terminal sem buffer)", () => {
+    const out = renderCaddyfile([], DOIS);
+    expect(out).toContain("painel.exemplo.com.br, 203-0-113-10.sslip.io {");
+    const bloco = out.slice(out.indexOf("painel.exemplo.com.br, 203-0-113-10.sslip.io {"));
+    expect(bloco).toContain("reverse_proxy tws-panel:9000");
+    expect(bloco).toContain("flush_interval -1");
+    expect(out.match(/reverse_proxy tws-panel:9000/g)).toHaveLength(1);
+  });
+
+  it("acesso pelo IP desativado: só o domínio novo; o endereço sslip.io some do Caddyfile", () => {
+    const out = renderCaddyfile([], { domain: "painel.exemplo.com.br", upstream: "tws-panel:9000" });
+    expect(out).toContain("painel.exemplo.com.br {");
+    expect(out).not.toContain("sslip.io");
+  });
+
+  it("projeto que usa qualquer um dos endereços do painel não sequestra o acesso", () => {
+    const out = renderCaddyfile(
+      [
+        { domain: "203-0-113-10.sslip.io", upstream: "paas-intruso:80", websocket: false },
+        { domain: "loja.exemplo.com.br", aliases: ["painel.exemplo.com.br"], upstream: "paas-loja:80", websocket: false },
+      ],
+      DOIS,
+    );
+    expect(out).not.toContain("paas-intruso");
+    expect(out).toContain("loja.exemplo.com.br {");
+    expect(out.match(/painel\.exemplo\.com\.br/g)).toHaveLength(1);
+  });
+
+  it("endereço extra do painel inválido ou repetido é descartado; o principal segue", () => {
+    const out = renderCaddyfile([], {
+      domain: "painel.exemplo.com.br",
+      aliases: ["x.com {\n respond hi\n}", "painel.exemplo.com.br"],
+      upstream: "tws-panel:9000",
+    });
+    expect(out).not.toContain("respond hi");
+    expect(out).toContain("painel.exemplo.com.br {");
+  });
+
+  it("mail.<domínio> igual a um endereço extra do painel não vira segundo bloco", () => {
+    const out = renderCaddyfile([], DOIS, ["203-0-113-10.sslip.io"]);
+    expect(out.match(/203-0-113-10\.sslip\.io/g)).toHaveLength(1);
+  });
+});
+
+/**
  * Vários domínios no mesmo projeto (validação real, 30/09/2026): o endereço
  * automático sslip.io e um subdomínio próprio (devlink.tws.tec.br) servidos
  * juntos, cada um com o seu certificado.

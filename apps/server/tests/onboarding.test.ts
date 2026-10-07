@@ -7,7 +7,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecurityCheckResult, SecurityHistoryEntry, SecurityScanReport } from "@paas/core";
 import {
   buildOnboardingResponse,
@@ -121,24 +121,59 @@ describe("verificação em duas etapas", () => {
   });
 });
 
-describe("domínio do painel (em breve)", () => {
-  it("endereço automático sslip.io → em breve, explicando que o nome tem o IP da VPS", () => {
-    const s = panelDomainState("203-0-113-10.sslip.io");
-    expect(s.status).toBe("soon");
-    expect(s.detail).toContain("https://203-0-113-10.sslip.io");
+describe("domínio do painel", () => {
+  const IP = "203-0-113-10.sslip.io";
+  const D = "painel.exemplo.com.br";
+  const base = { ipAddress: IP, domain: null, active: false, certificateValid: false, ipAccessDisabled: false, openedViaDomain: false };
+
+  it("só o endereço automático sslip.io → a fazer, explicando que o nome tem o IP da VPS", () => {
+    const s = panelDomainState(base);
+    expect(s.status).toBe("pending");
+    expect(s.detail).toContain(`https://${IP}`);
     expect(s.detail).toMatch(/IP da VPS no nome/);
   });
 
-  it("acesso por túnel SSH → em breve", () => {
-    const s = panelDomainState(null);
-    expect(s.status).toBe("soon");
+  it("domínio cadastrado sem DNS conferido → em andamento, dizendo que falta o DNS", () => {
+    const s = panelDomainState({ ...base, domain: D });
+    expect(s.status).toBe("in_progress");
+    expect(s.detail).toMatch(/DNS/);
+  });
+
+  it("DNS certo, certificado ainda não válido → em andamento, falta o certificado", () => {
+    const s = panelDomainState({ ...base, domain: D, active: true });
+    expect(s.status).toBe("in_progress");
+    expect(s.detail).toMatch(/certificado/);
+  });
+
+  it("certificado válido, mas aberto pelo IP → em andamento: abrir pelo endereço novo", () => {
+    const s = panelDomainState({ ...base, domain: D, active: true, certificateValid: true });
+    expect(s.status).toBe("in_progress");
+    expect(s.detail).toContain(`https://${D}`);
+  });
+
+  it("aberto pelo domínio novo com certificado, IP ainda ativo → feito, com o aviso do IP", () => {
+    const s = panelDomainState({ ...base, domain: D, active: true, certificateValid: true, openedViaDomain: true });
+    expect(s.status).toBe("done");
+    expect(s.detail).toMatch(/acesso pelo IP ainda ativo/);
+  });
+
+  it("IP desativado e certificado válido → feito", () => {
+    const s = panelDomainState({ ...base, domain: D, active: true, certificateValid: true, ipAccessDisabled: true });
+    expect(s.status).toBe("done");
+    expect(s.detail).toContain(`https://${D}`);
+    expect(s.detail).not.toMatch(/ainda ativo/);
+  });
+
+  it("acesso por túnel SSH → feito: o painel não tem endereço na internet", () => {
+    const s = panelDomainState({ ...base, ipAddress: null });
+    expect(s.status).toBe("done");
     expect(s.detail).toMatch(/túnel SSH/);
   });
 
-  it("domínio próprio já configurado na instalação → feito", () => {
-    const s = panelDomainState("painel.exemplo.com.br");
+  it("domínio próprio já configurado na instalação (PAAS_PANEL_DOMAIN sem sslip.io) → feito", () => {
+    const s = panelDomainState({ ...base, ipAddress: D });
     expect(s.status).toBe("done");
-    expect(s.detail).toContain("https://painel.exemplo.com.br");
+    expect(s.detail).toContain(`https://${D}`);
   });
 });
 
@@ -265,9 +300,30 @@ describe("createOnboardingChecks — fontes reais", () => {
     const ctx = { userId: user.id };
     expect((await checks.hardening(ctx)).status).toBe("done");
     expect((await checks["two-factor"](ctx)).status).toBe("pending");
-    expect((await checks["panel-domain"](ctx)).status).toBe("soon");
+    expect((await checks["panel-domain"](ctx)).status).toBe("pending");
     expect((await checks.email(ctx)).status).toBe("pending");
     expect((await checks.notifications(ctx)).status).toBe("soon");
+  });
+
+  it("domínio do painel: usa a fonte do domínio com o endereço por onde a página foi aberta", async () => {
+    const facts = vi.fn(async (host: string) => ({
+      ipAddress: "203-0-113-10.sslip.io",
+      domain: "painel.exemplo.com.br",
+      active: true,
+      certificateValid: true,
+      ipAccessDisabled: false,
+      openedViaDomain: host === "painel.exemplo.com.br",
+    }));
+    const checks = createOnboardingChecks({
+      config: { dataDir: dir, panelDomain: "203-0-113-10.sslip.io" },
+      userStore: users,
+      emailFacts: async () => ({ installed: false, running: false, domains: [] }),
+      panelDomainFacts: facts,
+    });
+    expect((await checks["panel-domain"]({ userId: "x", host: "painel.exemplo.com.br" })).status).toBe("done");
+    expect((await checks["panel-domain"]({ userId: "x", host: "203-0-113-10.sslip.io" })).status).toBe("in_progress");
+    expect((await checks["panel-domain"]({ userId: "x" })).status).toBe("in_progress");
+    expect(facts).toHaveBeenLastCalledWith("");
   });
 
   it("sem arquivos de segurança (painel novo) → pendente; conta inexistente → 2FA pendente", async () => {

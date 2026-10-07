@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from "react-router";
 import { cn } from "@/lib/utils";
-import { Bell, ListChecks, Palette, Plug, ShieldCheck, UserRound } from "lucide-react";
+import { Bell, Globe, ListChecks, Palette, Plug, ShieldCheck, UserRound } from "lucide-react";
 
 /** Seções de Configurações — cada uma com o seu endereço. */
 export const SETTINGS_SECTIONS = [
   { to: "/settings/profile", label: "Perfil", icon: UserRound },
   { to: "/settings/security", label: "Segurança", icon: ShieldCheck },
+  { to: "/settings/panel-domain", label: "Domínio do painel", icon: Globe },
   { to: "/settings/appearance", label: "Aparência", icon: Palette },
   { to: "/settings/notifications", label: "Notificações", icon: Bell },
   { to: "/settings/integrations", label: "Integrações", icon: Plug },

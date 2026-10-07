@@ -128,7 +128,14 @@ export interface CaddyManagerOptions {
 
 /** Domínio do painel servido pelo Caddy central e o upstream dele na paas-net. */
 export interface PanelSite {
+  /** Endereço principal do painel (o domínio próprio, quando ativo; senão o sslip.io). */
   domain: string;
+  /**
+   * Outros endereços do MESMO bloco — Configurações → Domínio do painel: o
+   * endereço automático pelo IP continua respondendo junto com o domínio
+   * próprio até a pessoa desativá-lo.
+   */
+  aliases?: string[];
   upstream: string;
 }
 
@@ -146,7 +153,7 @@ export class CaddyManager {
   private readonly network: string;
   private readonly dataVolume: string;
   private readonly configVolume: string;
-  private readonly panelSite: PanelSite | undefined;
+  private panelSite: PanelSite | undefined;
   /** Certificados manuais da última aplicação: vão junto em toda gravação do Caddyfile. */
   private manual: ManualCaddyCertificate[] = [];
 
@@ -167,6 +174,19 @@ export class CaddyManager {
 
   get containerName(): string {
     return this.name;
+  }
+
+  /** Endereços do painel em uso (undefined = acesso por túnel). */
+  get currentPanelSite(): PanelSite | undefined {
+    return this.panelSite;
+  }
+
+  /**
+   * Troca os endereços do painel (domínio próprio ativado, acesso pelo IP
+   * desativado/reativado). Vale a partir do próximo apply().
+   */
+  setPanelSite(site: PanelSite | undefined): void {
+    this.panelSite = site;
   }
 
   /** Garante a rede dedicada do painel. */
@@ -579,18 +599,25 @@ export function renderCaddyfile(
 ): string {
   const webmail = opts.webmail && SAFE_UPSTREAM_RE.test(opts.webmail.upstream) ? opts.webmail : null;
   const manual = new Set(manualHosts.filter((h) => SAFE_DOMAIN_RE.test(h)));
-  const panelTarget =
-    panel && isSafeCaddyTarget({ ...panel, websocket: true }) ? { ...panel, websocket: true } : null;
+  const panelTarget: CaddyTarget | null =
+    panel && isSafeCaddyTarget({ ...panel, websocket: true })
+      ? {
+          domain: panel.domain,
+          aliases: [...new Set(panel.aliases ?? [])].filter((a) => SAFE_DOMAIN_RE.test(a) && a !== panel.domain),
+          upstream: panel.upstream,
+          websocket: true,
+        }
+      : null;
+  // Todos os endereços do painel: nenhum projeto pode usar um deles.
+  const panelNames = new Set(panelTarget ? [panelTarget.domain, ...(panelTarget.aliases ?? [])] : []);
   const targets: CaddyTarget[] = [
     ...(panelTarget ? [panelTarget] : []),
     ...allTargets
-      .filter((t) => isSafeCaddyTarget(t) && t.domain !== panelTarget?.domain)
-      // domínio adicional inválido ou igual ao do painel sai; o resto do projeto segue
+      .filter((t) => isSafeCaddyTarget(t) && !panelNames.has(t.domain))
+      // domínio adicional inválido ou igual a um do painel sai; o resto do projeto segue
       .map((t) => ({
         ...t,
-        aliases: (t.aliases ?? []).filter(
-          (a) => SAFE_DOMAIN_RE.test(a) && a !== panelTarget?.domain && a !== t.domain,
-        ),
+        aliases: (t.aliases ?? []).filter((a) => SAFE_DOMAIN_RE.test(a) && !panelNames.has(a) && a !== t.domain),
       })),
   ];
   const lines: string[] = [

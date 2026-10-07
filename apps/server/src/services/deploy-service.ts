@@ -180,7 +180,9 @@ export class DeployService {
   /** Instala no Stalwart o certificado de mail.<domínio>, registrado pela rota de e-mail. */
   private mailTlsSync: (() => Promise<unknown>) | null = null;
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
-  readonly panelSite: PanelSite | null;
+  private currentPanelSite: PanelSite | null;
+  /** Nomes reservados ao painel mesmo antes de estarem no proxy (domínio cadastrado aguardando o DNS). */
+  private panelReserved: string[] = [];
   private projects: Project[] = [];
   private jobs: DeployJob[] = [];
   private loaded = false;
@@ -188,7 +190,7 @@ export class DeployService {
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
     // Container do painel no compose (container_name) na rede paas-net.
-    this.panelSite = config.panelDomain
+    this.currentPanelSite = config.panelDomain
       ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
       : null;
     this.projectsDir = config.projectsDir;
@@ -247,6 +249,38 @@ export class DeployService {
       ...(existsSync("/.dockerenv") ? { panelContainer: PANEL_CONTAINER } : {}),
     };
     this.engine = new DeployEngine(this.engineCtx);
+  }
+
+  /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
+  get panelSite(): PanelSite | null {
+    return this.currentPanelSite;
+  }
+
+  /** Endereços em que o painel responde agora (o principal primeiro). */
+  panelHosts(): string[] {
+    const site = this.currentPanelSite;
+    return site ? [site.domain, ...(site.aliases ?? [])] : [];
+  }
+
+  /**
+   * Domínio do painel (Configurações → Domínio do painel): troca os endereços
+   * do bloco do painel. Vale no próximo refreshProxy (quem chama decide).
+   * No modo túnel não há site do painel — nada muda.
+   */
+  setPanelAddresses(site: { primary: string; aliases: string[] }): void {
+    if (!this.currentPanelSite) return;
+    this.currentPanelSite = { domain: site.primary, aliases: [...site.aliases], upstream: this.currentPanelSite.upstream };
+    this.engine.caddy.setPanelSite(this.currentPanelSite);
+  }
+
+  /** Nomes reservados ao painel (domínio cadastrado, ainda sem DNS conferido). */
+  setPanelReserved(names: string[]): void {
+    this.panelReserved = [...names];
+  }
+
+  /** O nome é (ou vai ser) do painel: nenhum projeto pode usá-lo. */
+  isPanelHost(domain: string): boolean {
+    return this.panelHosts().includes(domain) || this.panelReserved.includes(domain);
   }
 
   /**
@@ -1176,7 +1210,7 @@ export class DeployService {
    * adicional) ou — com `exceptProjectId` — um adicional do próprio projeto.
    */
   private domainInUse(domain: string, exceptProjectId: string | null): boolean {
-    if (this.panelSite?.domain === domain) return true;
+    if (this.isPanelHost(domain)) return true;
     return this.projects.some((p) =>
       p.id === exceptProjectId ? (p.aliases ?? []).includes(domain) : p.domain === domain || (p.aliases ?? []).includes(domain),
     );

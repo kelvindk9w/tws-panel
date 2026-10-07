@@ -100,6 +100,42 @@ describe("DeployService.startPanelRoute — tenta de novo no boot", () => {
 });
 
 /**
+ * Domínio do painel (07/10/2026): os endereços do painel mudam com o painel
+ * no ar — domínio próprio ativado, acesso pelo IP desativado/reativado.
+ */
+describe("DeployService — endereços do painel", () => {
+  it("setPanelAddresses troca o site do painel e o proxy usa os novos na próxima aplicação", async () => {
+    const svc = servico("203-0-113-10.sslip.io");
+    svc.setPanelAddresses({ primary: "painel.exemplo.com.br", aliases: ["203-0-113-10.sslip.io"] });
+    expect(svc.panelSite).toEqual({
+      domain: "painel.exemplo.com.br",
+      aliases: ["203-0-113-10.sslip.io"],
+      upstream: "tws-panel:9000",
+    });
+    expect(svc.panelHosts()).toEqual(["painel.exemplo.com.br", "203-0-113-10.sslip.io"]);
+    const engine = (svc as unknown as { engine: DeployEngine }).engine;
+    expect(engine.caddy.currentPanelSite?.domain).toBe("painel.exemplo.com.br");
+  });
+
+  it("no modo túnel não há site do painel para trocar", () => {
+    const svc = servico(null);
+    svc.setPanelAddresses({ primary: "painel.exemplo.com.br", aliases: [] });
+    expect(svc.panelSite).toBeNull();
+    expect(svc.panelHosts()).toEqual([]);
+  });
+
+  it("nome reservado ao painel (cadastrado, DNS ainda não conferido) e o endereço pelo IP não podem ir para projeto", async () => {
+    const svc = servico("203-0-113-10.sslip.io");
+    svc.setPanelReserved(["painel.exemplo.com.br"]);
+    expect(svc.isPanelHost("painel.exemplo.com.br")).toBe(true);
+    expect(svc.isPanelHost("203-0-113-10.sslip.io")).toBe(true);
+    expect(svc.isPanelHost("loja.exemplo.com.br")).toBe(false);
+    svc.setPanelReserved([]);
+    expect(svc.isPanelHost("painel.exemplo.com.br")).toBe(false);
+  });
+});
+
+/**
  * Certificado do servidor de e-mail (validação real, 01/10/2026): o Caddy
  * central serve mail.<domínio> para emitir o certificado que o Stalwart usa.
  * O módulo de e-mail informa os hosts; refreshProxy recalcula o Caddyfile.
