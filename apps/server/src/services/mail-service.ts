@@ -1515,6 +1515,7 @@ export class MailService {
     verifyTls: boolean;
     hosts: string[];
     domains: { domain: string; host: string }[];
+    identities: Record<string, string>;
   }> {
     await this.ensureLoaded();
     const serverRunning = this.data.adminSecret ? (await this.manager().status()).running : false;
@@ -1528,7 +1529,22 @@ export class MailService {
       verifyTls: verified !== null,
       hosts,
       domains: Object.keys(this.data.domains).map((domain) => ({ domain, host: mailHostFor(domain) })),
+      identities: this.webmailIdentities(),
     };
+  }
+
+  /**
+   * Nome de exibição de cada caixa de projeto (pedido do dono, 04/10/2026:
+   * e-mail enviado pelo webmail saía sem nome). O webmail dá esse nome à
+   * identidade da caixa no primeiro login, ou a quem ainda está sem nome.
+   * Registro antigo sem nome guardado fica de fora.
+   */
+  private webmailIdentities(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const p of Object.values(this.data.projects)) {
+      if (p.fromName) out[p.mailbox.toLowerCase()] = p.fromName;
+    }
+    return out;
   }
 
   /** Isenta o IP do webmail do bloqueio automático do Stalwart (e tira o anterior). */

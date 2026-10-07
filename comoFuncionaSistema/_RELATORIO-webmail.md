@@ -160,8 +160,9 @@ O que o painel faz:
   - O instalador fica desligado (404, conferido).
   - Arquivos internos (`config/`, `logs/`, `temp/`, `SQL/`, `composer.json`) também
     respondem 404, conferido.
-- **Plugins:** só `archive` e `zipdownload`. Corretor ortográfico desligado (ele chamaria
-  serviço externo).
+- **Plugins:** só `archive` e `zipdownload` (desde 04/10/2026, também o `paas_identity`
+  do painel; ver a seção "Nome de exibição das caixas"). Corretor ortográfico desligado
+  (ele chamaria serviço externo).
 - **Login e identidade:**
   - só o endereço completo é aceito no login (`login_username_filter=email`);
   - uma identidade por caixa, sem trocar o endereço (`identities_level=3`);
@@ -369,3 +370,172 @@ Bloqueio por senha errada (opcional):
 4. **Endereço.** O webmail abre na raiz de `mail.<domínio>`. Se preferir outro nome,
    como `webmail.<domínio>`, seria um registro DNS a mais por domínio e mais um
    certificado.
+
+---
+
+## Nome de exibição das caixas (04/10/2026)
+
+Branch `feat/variaveis-senha-webmail-nome`, criada a partir de `origin/dev`.
+
+### O pedido
+
+Na validação na VPS, um e-mail enviado pelo webmail a partir da caixa do projeto saiu
+com `From: contato@<domínio>`, sem nome. O dono do produto pediu que a caixa do projeto
+já entre no webmail com o nome de exibição configurado no e-mail do projeto (ex.:
+"Contato - Loja"). A pessoa continua podendo mudar o nome no Roundcube.
+
+### O que passou a acontecer (pelo comportamento)
+
+- **Primeiro login de uma caixa de projeto no webmail:** a identidade já nasce com o
+  nome de exibição do e-mail do projeto. O campo "De" do compose mostra
+  `Contato - Loja <contato@…>`, e quem recebe vê o nome.
+- **Caixa que já tinha entrado antes, ainda sem nome** (o caso da VPS): no próximo
+  login, o nome é preenchido.
+- **Caixa que já tem nome**, seja escolhido pela pessoa (Configurações → Identidades),
+  seja posto pelo painel antes: o painel **nunca** sobrescreve. Se o dono mudar o nome
+  de exibição do projeto depois, a pessoa troca no Roundcube.
+- **Caixas que não são de projeto** (criadas na página do domínio): nada muda, o nome
+  fica vazio como antes.
+- **Salvar ou desativar o e-mail do projeto:** o painel atualiza a lista de nomes do
+  webmail em segundo plano, sem atrasar a resposta. Se o Docker falhar, fica no log, e
+  a sincronização de hora em hora tenta de novo.
+
+### Como funciona
+
+- **Forma suportada pelo Roundcube 1.7.4**, conferida no código da imagem fixada:
+  - `rcube_user::create` chama o hook **`user_create`** com `user_name` vazio e usa o
+    valor que voltar como nome da identidade criada;
+  - `index.php` chama o hook **`login_after`** depois de cada login com sucesso;
+  - `rcube_user::update_identity` grava com parâmetro, sem montar SQL com o nome.
+- **Arquivo de nomes:** o painel grava `/var/roundcube/config/paas-identities.json`,
+  com `{endereço: nome}`.
+  - O endereço vai em minúsculas.
+  - O nome fica numa linha só, sem caractere de controle, com até 100 caracteres.
+  - Não é `*.php`, então o entrypoint da imagem não o inclui na configuração.
+  - Os nomes vêm do e-mail de cada projeto. Registro antigo sem nome guardado fica de
+    fora.
+- **Plugin `paas_identity`:** plugin próprio, pequeno, gerado pelo painel.
+  - Ele carrega só na tela de login.
+  - Ele só **lê** o arquivo indicado em `$config['paas_identities_file']`.
+  - Ele só mexe no nome da identidade da caixa que entrou.
+  - No `user_create`, preenche o nome da identidade nova.
+  - No `login_after`, preenche a identidade padrão **só se o nome estiver vazio**.
+  - Ele entra na lista de plugins da configuração gerada.
+- **Onde o plugin fica:**
+  - na fonte da imagem (`/usr/src/roundcubemail/plugins/`), que o entrypoint copia para
+    a pasta servida no primeiro start e atualiza nos seguintes;
+  - se o container já subiu, também na pasta servida (`/var/www/html/plugins/`), para
+    valer na hora, sem reiniciar.
+- **Por que não gravar na pasta servida antes do primeiro start:** o entrypoint só copia
+  a fonte para lá se a pasta estiver vazia. Com qualquer arquivo dentro, ele espera 10 s
+  e mostra um aviso.
+- **Ordem:** o plugin é copiado antes da configuração que o liga. Num painel que se
+  atualiza com o webmail rodando, nenhuma requisição pede um plugin que ainda não existe.
+
+### Decisões
+
+- **Não sobrescrever nome existente.** O Roundcube não guarda se o nome veio do painel
+  ou da pessoa. Para nunca apagar a escolha dela, o painel só preenche nome vazio. O
+  custo: trocar o nome de exibição do projeto depois não muda o nome de quem já tem um.
+- **Arquivo JSON lido pelo plugin, em vez de gerar PHP com os nomes.** O nome é texto
+  digitado pelo dono e nunca vira código. O JSON escapa tudo, e o banco grava com
+  parâmetro.
+- **Plugin mínimo, sem acesso a nada além do JSON.** Os testes conferem que o código
+  dele não escreve arquivo, não executa comando, não lê a requisição e não inclui outro
+  arquivo.
+
+### Como foi testado
+
+**Testes automatizados (TDD):** cada teste foi escrito antes do código e rodou falhando
+antes de passar.
+
+- `packages/mailer/tests/webmail.test.ts`:
+  - configuração com o plugin na lista e o caminho do arquivo;
+  - arquivo de nomes (minúsculas, ordem fixa, limpeza do nome, endereço inválido e nome
+    vazio fora);
+  - conteúdo do plugin (classe, tarefa, hooks, "só preenche vazio", nada além de ler o
+    JSON);
+  - entrega pelo Docker simulado: plugin na fonte antes do primeiro start, na pasta
+    servida depois, antes da configuração, e as falhas.
+- `apps/server/tests/mail-webmail-backend.test.ts`: os nomes de cada caixa de projeto,
+  com o registro antigo sem nome de fora.
+- `apps/server/tests/webmail-service.test.ts`: o arquivo de nomes vai junto com a
+  configuração, e a sincronização leva o nome novo.
+- `apps/server/tests/routes-mail-webmail.test.ts`: salvar ou desativar o e-mail do
+  projeto atualiza o webmail em segundo plano; uma falha não atrapalha salvar.
+
+`pnpm -r --workspace-concurrency=1 --no-bail run test:coverage`, antes e depois da
+branch, que também inclui a senha visível nas Variáveis:
+
+| Pacote | Antes | Depois | Cobertura (ramos) |
+|---|---|---|---|
+| packages/core | 54 | 54 | (sem cobertura configurada) |
+| apps/web | 623 | 627 | 84,06% → 84,06% |
+| packages/deploy | 417 | 417 | 96,64% → 96,64% (mínimo 95%) |
+| packages/mailer | 327 | 339 | 99,38% → 99,39% (mínimo 98%) |
+| packages/security | 187 | 187 | 97,26% |
+| apps/server | 1202 | 1215 | 94,87% → 94,94% |
+
+Nesta rodada, nenhum arquivo falhou, nem os que baixam `ubuntu:24.04`, que antes
+falhavam por falta da credencial do Docker Desktop.
+
+**Validação real com Docker (WSL):**
+
+- Rede isolada `webmail-nome-net` (`10.250.78.0/24`).
+- Stalwart real, com duas caixas: `contato@exemplo.test` e `suporte@exemplo.test`.
+- Roundcube real, subido pelo `WebmailManager` do painel, com o arquivo de
+  `renderWebmailIdentities`.
+- Login de verdade pelo formulário (token e cookies), feito de dentro da rede.
+- No fim, containers, volumes e a rede foram removidos (conferido).
+
+| O que | Resultado |
+|---|---|
+| `php -l` no plugin | sem erro de sintaxe |
+| Primeiro start | sem o aviso "is not empty"; o plugin está na fonte e na pasta servida |
+| A. Primeiro login de contato@ (nome no arquivo) | "De": `Contato - Loja <contato@exemplo.test>` |
+| B. Primeiro login de suporte@ (sem nome no arquivo) | identidade sem nome, como antes |
+| O painel passa a ter "Suporte - Loja" e muda contato@ para "Outro Nome" (container rodando) | arquivo trocado na hora, sem reiniciar |
+| B2. suporte@ entra de novo (já tinha entrado, nome vazio) | nome preenchido: `Suporte - Loja` |
+| C. contato@ entra de novo (já tinha nome) | continua `Contato - Loja` (não sobrescreve) |
+| C. Envio pelo webmail de contato@ para suporte@ | `sent_successfully`; no IMAP de suporte@, `From: Contato - Loja <contato@exemplo.test>` |
+| D. A pessoa troca o nome de suporte@ para "Maria do Suporte" e entra de novo | continua `Maria do Suporte` |
+| Erros do PHP no log do webmail | nenhum |
+
+**O que não deu para validar localmente:** a atualização a partir do webmail que já está
+na VPS. É o mesmo caminho da segunda entrega da validação (container rodando: plugin na
+pasta servida e configuração trocada sem reiniciar), mas com a caixa criada pela versão
+anterior.
+
+### Na VPS: passo a passo para validar
+
+1. No terminal da VPS (SSH), atualize o painel:
+
+   ```bash
+   cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build
+   ```
+
+2. Espere até 1 minuto (a primeira sincronização do e-mail). Ou, no painel, abra
+   **Projetos → o projeto → E-mail** e clique em **Salvar** sem mudar nada.
+3. Confira que o plugin e os nomes chegaram:
+
+   ```bash
+   sudo docker exec paas-webmail cat /var/roundcube/config/paas-identities.json
+   sudo docker exec paas-webmail ls /var/www/html/plugins/paas_identity/
+   ```
+
+   O primeiro comando deve mostrar o endereço da caixa do projeto com o nome de
+   exibição. O segundo deve listar `paas_identity.php`.
+4. Abra o webmail, **saia** (se estiver logado) e entre de novo com a caixa do projeto.
+5. Clique em **Escrever**: o campo "De" deve mostrar `Nome <endereço>`.
+6. Envie um e-mail para um endereço seu (Gmail, por exemplo). Ele deve chegar com o
+   nome.
+7. Se a caixa já tinha um nome escolhido em Configurações → Identidades, ele continua.
+   Isso é de propósito. Para usar o nome do painel, apague o nome lá e entre de novo, ou
+   digite o nome que preferir.
+
+### Dúvida para o dono do produto
+
+- **Trocar o nome do projeto depois.** Hoje, se a caixa já tem nome no webmail, o nome
+  novo do painel não chega lá, para não apagar o que a pessoa escolheu. Prefere que o
+  painel sobrescreva quando o nome atual for o que ele mesmo pôs antes? Daria para
+  guardar o último nome entregue e comparar.

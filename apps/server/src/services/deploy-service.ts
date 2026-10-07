@@ -433,9 +433,10 @@ export class DeployService {
 
   /**
    * Valores que o painel fornece, para a seção Variáveis mostrar (com o olho).
-   * A senha da caixa NUNCA sai: nem SMTP_PASS, nem as variáveis ligadas a
-   * ela, nem qualquer outra com o mesmo valor (regra do dono do produto:
-   * senha de caixa não fica visível; quem esqueceu troca).
+   * A senha da caixa NÃO vai nesta listagem: nem SMTP_PASS, nem as variáveis
+   * ligadas a ela, nem qualquer outra com o mesmo valor. Desde 04/10/2026 o
+   * dono do produto quer poder vê-la pelo olho: ela sai uma por vez, a
+   * pedido, por revealProvidedEnv (Auditoria + limite de frequência).
    */
   async providedEnvValues(id: string): Promise<Record<string, string>> {
     const project = await this.requireProject(id);
@@ -450,6 +451,43 @@ export class DeployService {
       out[name] = value;
     }
     return out;
+  }
+
+  /** Exibições por projeto no último minuto (limite do olho da seção Variáveis). */
+  private readonly reveals = new Map<string, number[]>();
+
+  /**
+   * Valor de UMA variável fornecida pelo painel, senha da caixa inclusive,
+   * para o olho da seção Variáveis. Decisão do dono do produto (04/10/2026):
+   * "preciso conseguir visualizar o valor de qualquer variável". A listagem
+   * (providedEnvValues) continua sem a senha; este valor só sai quando a
+   * pessoa pede, fica na Auditoria (só o NOME) e tem limite de 30 por minuto
+   * por projeto — o bastante para "Mostrar valores", pouco para varredura.
+   */
+  async revealProvidedEnv(id: string, name: string): Promise<string> {
+    const project = await this.requireProject(id);
+    const provided = {
+      ...((await this.mailEnv?.(project)) ?? {}),
+      ...((await this.linkedMailEnv?.(project)) ?? {}),
+    };
+    if (!Object.prototype.hasOwnProperty.call(provided, name)) {
+      throw httpError(404, "env_not_provided", `${name} não é fornecida pelo painel neste projeto.`);
+    }
+    const now = Date.now();
+    const recent = (this.reveals.get(project.id) ?? []).filter((t) => now - t < REVEAL_WINDOW_MS);
+    if (recent.length >= REVEAL_LIMIT) {
+      this.reveals.set(project.id, recent);
+      throw httpError(429, "reveal_rate_limited", "Muitos valores exibidos em pouco tempo. Espere um minuto e tente de novo.");
+    }
+    recent.push(now);
+    this.reveals.set(project.id, recent);
+    await this.hooks.audit?.record({
+      action: "project.env_revealed",
+      target: project.slug,
+      // só o NOME: o valor costuma ser segredo
+      detail: `Valor de ${name} exibido no projeto "${project.name}".`,
+    });
+    return provided[name]!;
   }
 
   /**
@@ -1240,6 +1278,10 @@ export class DeployService {
     return project;
   }
 }
+
+/** Limite do olho da seção Variáveis: exibições por projeto numa janela. */
+const REVEAL_LIMIT = 30;
+const REVEAL_WINDOW_MS = 60_000;
 
 export { httpError, type HttpError } from "./http-error.js";
 

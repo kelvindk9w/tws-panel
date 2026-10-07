@@ -72,6 +72,7 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
       { domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
     ]),
     setEnv: vi.fn(async (_id: string, vars: unknown) => vars),
+    revealProvidedEnv: vi.fn(async () => "segredo-da-caixa"),
     ...overrides,
   };
 }
@@ -544,6 +545,46 @@ describe("rotas de variáveis do projeto", () => {
     const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [{ key: "A" }] } });
     expect(res.statusCode).toBe(400);
     expect(service.setEnv).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Mudança de decisão do dono do produto (04/10/2026): o olho da seção
+ * Variáveis mostra qualquer variável, inclusive a senha da caixa. A listagem
+ * (GET /env) continua sem ela; o valor vem por esta rota, uma variável por vez.
+ */
+describe("GET /api/projects/:id/env/provided/:name", () => {
+  it("devolve o valor de uma variável fornecida pelo painel", async () => {
+    await build();
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/env/provided/SMTP_PASS", headers: auth });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ name: "SMTP_PASS", value: "segredo-da-caixa" });
+    expect(service.revealProvidedEnv).toHaveBeenCalledWith("p1", "SMTP_PASS");
+  });
+
+  it("nome fora do padrão → 400 antes de chegar ao serviço", async () => {
+    await build();
+    for (const nome of ["1ABC", "A-B", "A%20B"]) {
+      const res = await app.inject({ method: "GET", url: `/api/projects/p1/env/provided/${nome}`, headers: auth });
+      expect(res.statusCode, nome).toBe(400);
+    }
+    // nome longo demais: o próprio roteador recusa (414, parâmetro > 100 caracteres)
+    const longo = await app.inject({ method: "GET", url: `/api/projects/p1/env/provided/${"A".repeat(129)}`, headers: auth });
+    expect(longo.statusCode).toBeGreaterThanOrEqual(400);
+    expect(service.revealProvidedEnv).not.toHaveBeenCalled();
+  });
+
+  it("erros do serviço (404 não fornecida, 429 limite) passam com o código", async () => {
+    await build({ revealProvidedEnv: vi.fn(async () => Promise.reject(httpError(429, "reveal_rate_limited", "Espere."))) });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/env/provided/SMTP_PASS", headers: auth });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toBe("reveal_rate_limited");
+  });
+
+  it("exige login", async () => {
+    await build();
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/env/provided/SMTP_PASS" });
+    expect(res.statusCode).toBe(401);
   });
 });
 

@@ -20,6 +20,11 @@
  * daemon (`docker cp`): o entrypoint da imagem inclui todo *.php dessa pasta
  * DEPOIS dos valores das variáveis de ambiente, e o PHP relê o arquivo a
  * cada requisição — trocar o arquivo vale na hora, sem reiniciar.
+ *
+ * Nome de exibição (pedido do dono, 04/10/2026): o painel grava também
+ * paas-identities.json ({endereço: nome}) e instala o plugin paas_identity,
+ * que dá esse nome à identidade da caixa no primeiro login e, para quem já
+ * entrou antes, só preenche um nome vazio (ver ROUNDCUBE_IDENTITY_PLUGIN).
  */
 import { randomBytes } from "node:crypto";
 import { BlockList, isIP } from "node:net";
@@ -40,6 +45,18 @@ export const WEBMAIL_DATA_DIR = "/var/roundcube";
 /** Pasta lida pelo entrypoint: todo *.php daqui é incluído na configuração. */
 export const WEBMAIL_CONFIG_DIR = `${WEBMAIL_DATA_DIR}/config`;
 export const WEBMAIL_CONFIG_FILE = "paas.php";
+/** {endereço: nome de exibição} lido pelo plugin paas_identity (não é *.php: o entrypoint não o inclui). */
+export const WEBMAIL_IDENTITIES_FILE = "paas-identities.json";
+export const WEBMAIL_IDENTITIES_PATH = `${WEBMAIL_CONFIG_DIR}/${WEBMAIL_IDENTITIES_FILE}`;
+/** Plugin do painel (nome = pasta = arquivo = classe, regra do Roundcube). */
+export const WEBMAIL_IDENTITY_PLUGIN = "paas_identity";
+/**
+ * Onde o plugin fica: na fonte da imagem (o entrypoint copia tudo para a
+ * pasta servida no primeiro start e a atualiza nos seguintes) e na pasta
+ * servida, para valer na hora num container que já subiu.
+ */
+const PLUGINS_SOURCE_DIR = "/usr/src/roundcubemail/plugins";
+const PLUGINS_SERVED_DIR = "/var/www/html/plugins";
 
 /** Faixas privadas: o Caddy chega ao webmail pela paas-net, com IP de uma delas. */
 const PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
@@ -106,7 +123,9 @@ export function renderRoundcubeConfig(input: RoundcubeConfigInput): string {
     "",
     "// Nada de instalador, cadastro ou plugin além do necessário.",
     set("enable_installer", "false"),
-    set("plugins", phpList(["archive", "zipdownload"])),
+    set("plugins", phpList(["archive", "zipdownload", WEBMAIL_IDENTITY_PLUGIN])),
+    "// Nome de exibição de cada caixa ({endereço: nome}), lido pelo plugin paas_identity.",
+    set("paas_identities_file", phpString(WEBMAIL_IDENTITIES_PATH)),
     set("enable_spellcheck", "false"),
     set("auto_create_user", "true"),
     set("login_username_filter", "'email'"),
@@ -132,6 +151,103 @@ export function renderRoundcubeConfig(input: RoundcubeConfigInput): string {
     "",
   ].join("\n");
 }
+
+const IDENTITY_EMAIL_RE = /^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,253}$/;
+const NAME_MAX = 100;
+
+/**
+ * Conteúdo de paas-identities.json: {endereço: nome de exibição}. Endereço
+ * em minúsculas (o plugin compara assim); nome numa linha só, sem
+ * caractere de controle, até 100 caracteres. Endereço fora do formato ou
+ * nome vazio ficam de fora. Ordem fixa: o arquivo só muda quando um nome muda.
+ */
+export function renderWebmailIdentities(identities: Record<string, string>): string {
+  const clean: Record<string, string> = {};
+  for (const [address, name] of Object.entries(identities)) {
+    const email = address.trim().toLowerCase();
+    if (!IDENTITY_EMAIL_RE.test(email)) continue;
+    // eslint-disable-next-line no-control-regex
+    const text = name.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, NAME_MAX).trim();
+    if (text) clean[email] = text;
+  }
+  const sorted = Object.fromEntries(Object.keys(clean).sort().map((k) => [k, clean[k]!]));
+  return `${JSON.stringify(sorted)}\n`;
+}
+
+/**
+ * Plugin do Roundcube que dá à caixa o nome de exibição do e-mail do
+ * projeto. Mínimo de propósito: só carrega na tela de login, só LÊ o
+ * arquivo indicado em `paas_identities_file` e só mexe no nome da
+ * identidade da própria caixa que entrou.
+ *  - user_create (primeiro login): o nome da identidade criada vem do arquivo;
+ *  - login_after (quem já entrou antes): preenche a identidade padrão só se
+ *    o nome estiver VAZIO — nunca sobrescreve o que a pessoa escolheu.
+ * Conferido no código do Roundcube 1.7.4: rcube_user::create passa
+ * 'user_name' ao hook e usa-o como nome da identidade; index.php chama
+ * login_after depois do login com sucesso; update_identity grava com
+ * parâmetro (sem montar SQL com o nome).
+ */
+export const ROUNDCUBE_IDENTITY_PLUGIN = `<?php
+/**
+ * paas_identity — gerado pelo painel TWS; o painel regrava este arquivo.
+ * Nome de exibição da caixa a partir do e-mail do projeto.
+ */
+class paas_identity extends rcube_plugin
+{
+    public $task = 'login';
+
+    public function init()
+    {
+        $this->add_hook('user_create', [$this, 'user_create']);
+        $this->add_hook('login_after', [$this, 'login_after']);
+    }
+
+    /** Nome configurado no painel para o endereço, ou null. */
+    private function name_for($email)
+    {
+        $file = rcube::get_instance()->config->get('paas_identities_file');
+        if (!is_string($file) || $file === '' || !is_readable($file)) {
+            return null;
+        }
+        $map = json_decode((string) file_get_contents($file), true);
+        if (!is_array($map)) {
+            return null;
+        }
+        $name = $map[strtolower(trim((string) $email))] ?? null;
+        return is_string($name) && trim($name) !== '' ? $name : null;
+    }
+
+    /** Primeiro login: a identidade nasce com o nome do painel. */
+    public function user_create($args)
+    {
+        if (empty($args['user_name'])) {
+            $name = $this->name_for(!empty($args['user_email']) ? $args['user_email'] : ($args['user'] ?? ''));
+            if ($name !== null) {
+                $args['user_name'] = $name;
+            }
+        }
+        return $args;
+    }
+
+    /** Quem já entrou antes: só preenche um nome vazio. */
+    public function login_after($args)
+    {
+        $user = rcmail::get_instance()->user;
+        if (!$user || empty($user->ID)) {
+            return $args;
+        }
+        $identity = $user->get_identity();
+        if (!is_array($identity) || trim((string) ($identity['name'] ?? '')) !== '') {
+            return $args;
+        }
+        $name = $this->name_for($identity['email'] ?? '');
+        if ($name !== null) {
+            $user->update_identity($identity['identity_id'], ['name' => $name]);
+        }
+        return $args;
+    }
+}
+`;
 
 /** Uma tentativa de login recusada, com o IP de quem tentou. */
 export interface FailedLogin {
@@ -189,6 +305,8 @@ export function parseFailedLogins(log: string): FailedLogin[] {
 export interface WebmailManagerOptions {
   /** Conteúdo de paas.php (renderRoundcubeConfig). */
   config: string;
+  /** Conteúdo de paas-identities.json (renderWebmailIdentities); padrão: nenhum nome. */
+  identities?: string;
   image?: string;
   containerName?: string;
   network?: string;
@@ -221,12 +339,31 @@ export class WebmailManager {
   }
 
   /**
-   * Entrega paas.php (0644: o Apache roda como www-data e o arquivo chega
-   * com dono root). Vale na próxima requisição, sem reiniciar.
+   * Entrega paas.php e paas-identities.json (0644: o Apache roda como
+   * www-data e o arquivo chega com dono root) e o plugin paas_identity. Vale
+   * na próxima requisição, sem reiniciar.
+   *
+   * O plugin vai para a fonte da imagem e, se o container já subiu alguma
+   * vez (`served`), também para a pasta servida. Antes do primeiro start a
+   * pasta servida está vazia e não pode ganhar nada: o entrypoint copia a
+   * fonte para lá só se ela estiver vazia (senão espera 10 s com um aviso).
    */
-  async pushConfig(): Promise<void> {
+  async pushConfig(opts: { served?: boolean } = {}): Promise<void> {
+    // o plugin antes da configuração que o liga: num container que já roda
+    // (atualização do painel), nenhuma requisição pede um plugin que não existe
+    const plugin = [
+      { name: `${WEBMAIL_IDENTITY_PLUGIN}/`, mode: 0o755 },
+      { name: `${WEBMAIL_IDENTITY_PLUGIN}/${WEBMAIL_IDENTITY_PLUGIN}.php`, content: ROUNDCUBE_IDENTITY_PLUGIN, mode: 0o644 },
+    ];
+    for (const dir of opts.served === false ? [PLUGINS_SOURCE_DIR] : [PLUGINS_SOURCE_DIR, PLUGINS_SERVED_DIR]) {
+      const r = await copyFilesToContainer(this.containerName, dir, plugin);
+      // criado e nunca iniciado: a pasta servida ainda não existe (o start a cria com o plugin)
+      if (r.code === 0 || (dir === PLUGINS_SERVED_DIR && /could not find|no such file/i.test(r.stderr))) continue;
+      throw new Error(`falha ao instalar o plugin do webmail em ${this.containerName}: ${r.stderr.trim()}`);
+    }
     const cp = await copyFilesToContainer(this.containerName, WEBMAIL_CONFIG_DIR, [
       { name: WEBMAIL_CONFIG_FILE, content: this.opts.config, mode: 0o644 },
+      { name: WEBMAIL_IDENTITIES_FILE, content: this.opts.identities ?? "{}\n", mode: 0o644 },
     ]);
     if (cp.code !== 0) {
       throw new Error(`falha ao gravar a configuração em ${this.containerName}: ${cp.stderr.trim()}`);
@@ -271,7 +408,7 @@ export class WebmailManager {
       this.image,
     ]);
     if (create.code !== 0) throw new Error(`falha ao criar ${this.containerName}: ${create.stderr}`);
-    await this.pushConfig();
+    await this.pushConfig({ served: false });
     const start = await run("docker", ["start", this.containerName]);
     if (start.code !== 0) throw new Error(`falha ao iniciar ${this.containerName}: ${start.stderr}`);
   }
