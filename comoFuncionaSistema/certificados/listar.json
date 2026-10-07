@@ -62,5 +62,7 @@
     "apps/web/src/components/certificates/CertificateSummary.tsx (card do e-mail e Domínios do projeto)"
   ],
   "testes": ["apps/server/tests/certificate-service.test.ts", "apps/server/tests/routes-certificates.test.ts", "apps/web/tests/certificates-page.test.tsx"],
-  "observacoes": ["Cada chamada abre uma conexão TLS por nome e lê até 20 000 linhas de log: as telas de resumo usam filtro para conferir só o que mostram."]
+  "observacoes": ["Cada chamada abre uma conexão TLS por nome e lê até 20 000 linhas de log: as telas de resumo usam filtro para conferir só o que mostram.",
+    "Validação real (07/10/2026): o certificado do domínio do painel ficou válido e a tela seguiu em 'Emitindo' até recarregar. Agora apps/web/src/lib/auto-refresh.ts (useAutoRefresh + certificatePending) faz as telas consultarem sozinhas enquanto há certificado automático sem certificado válido (emitindo, falhou, não conferido, vencido; manual ou coberto por manual não): a cada 5 s nos 2 primeiros minutos, 15 s até 10 min, depois 1 min; nada com a aba oculta; ao voltar para a aba, consulta na hora e recomeça o ritmo rápido. Consulta automática que falha mantém a tela como está. Usado em CertificatesPage (GET /api/certificates), CertificateSummary (resumo no e-mail e nos domínios do projeto) e PanelDomainSettings (GET /api/settings/panel-domain, que atualiza também o link para o endereço novo e as condições do 'Desativar o acesso pelo IP'). Testes: apps/web/tests/auto-refresh.test.tsx, certificates-page.test.tsx, panel-domain-settings.test.tsx."
+  ]
 }

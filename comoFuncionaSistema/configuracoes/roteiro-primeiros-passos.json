@@ -2,7 +2,7 @@
   "id": "roteiro-primeiros-passos",
   "modulo": "configuracoes",
   "metodo": "GET/POST/PUT",
-  "url": "/api/onboarding, /api/onboarding/start, /api/onboarding/steps/:id",
+  "url": "/api/onboarding, /api/onboarding/start, /api/onboarding/steps/:id, /api/onboarding/hidden",
   "resumo": "Roteiro \"Deixe o painel pronto\" no Dashboard: lista o que falta configurar depois da instalação (proteções da VPS, verificação em duas etapas, domínio do painel, e-mail do servidor, notificações), com o status de cada passo calculado do estado REAL do painel. Também fica em Configurações → Primeiros passos (/settings/onboarding).",
   "porQue": "Pedido do dono do produto em 01/10/2026: depois da instalação o painel não dizia o que faltava; ele só descobriu que precisava configurar o e-mail do servidor por acaso, ao criar um projeto.",
   "arquivoFonte": "apps/server/src/routes/onboarding.ts, apps/server/src/services/onboarding.ts, apps/server/src/services/onboarding-sources.ts, packages/core/src/onboarding.ts, apps/web/src/components/onboarding/OnboardingChecklist.tsx, apps/web/src/components/onboarding/steps-content.ts",
@@ -30,6 +30,13 @@
         "obrigatorio": true,
         "regras": "additionalProperties false",
         "descricao": "PUT /api/onboarding/steps/:id — true = \"Não vou usar\"; false = desfazer."
+      },
+      {
+        "nome": "hidden",
+        "tipo": "boolean",
+        "obrigatorio": true,
+        "regras": "additionalProperties false",
+        "descricao": "PUT /api/onboarding/hidden — true = \"Ocultar até ter novidade\" (só quando o que falta é 'em breve'); false = mostrar de novo no Dashboard."
       }
     ],
     "headers": []
@@ -37,12 +44,13 @@
   "respostas": [
     {
       "status": 200,
-      "quando": "As três rotas devolvem o roteiro inteiro, já com a escolha aplicada.",
+      "quando": "As quatro rotas devolvem o roteiro inteiro, já com a escolha aplicada.",
       "corpo": {
         "steps": "OnboardingStep[] — { id, status: done|in_progress|pending|skipped|soon|unknown, optional, detail }, na ordem ONBOARDING_STEP_IDS",
         "started": "boolean — a pessoa já começou o roteiro",
-        "complete": "boolean — nada mais pede ação (passos 'em breve' não seguram)",
-        "projectsDir": "string — pasta dos projetos na VPS (informativa)"
+        "complete": "boolean — todos os passos feitos ou 'Não vou usar' (passo 'em breve' NÃO conta como concluído desde 07/10/2026)",
+        "projectsDir": "string — pasta dos projetos na VPS (informativa)",
+        "hidden": "boolean — 'Ocultar até ter novidade' vigente (isOnboardingHiddenUntilNews): o Dashboard não mostra o cartão"
       },
       "exemplo": {
         "steps": [
@@ -79,7 +87,8 @@
         ],
         "started": false,
         "complete": false,
-        "projectsDir": "/opt/tws-projects"
+        "projectsDir": "/opt/tws-projects",
+        "hidden": false
       }
     }
   ],
@@ -87,8 +96,14 @@
     {
       "status": 400,
       "codigo": "validation (FST_ERR_VALIDATION)",
-      "quando": "PUT em passo obrigatório/inexistente, skipped não booleano ou campo a mais.",
+      "quando": "PUT em passo obrigatório/inexistente, skipped/hidden não booleano ou campo a mais.",
       "mensagem": "Mensagem do Ajv pelo error handler global."
+    },
+    {
+      "status": 409,
+      "codigo": "onboarding_has_action",
+      "quando": "PUT /api/onboarding/hidden com hidden=true quando ainda há passo pedindo ação (ou nada 'em breve').",
+      "mensagem": "Ainda há passo a fazer agora no roteiro: o cartão só pode ser ocultado quando falta apenas o que chega em breve."
     },
     {
       "status": 401,
@@ -107,13 +122,14 @@
   "fluxo": [
     "1. app.ts registra o plugin com createOnboardingChecks({ config, userStore, emailFacts: mailFactsSource(config) }) — uma conferência por passo.",
     "2. GET: buildOnboardingResponse roda as cinco conferências em paralelo; uma que lança vira 'unknown' ('Não foi possível conferir agora') sem derrubar as outras.",
-    "3. Aplica as escolhas da conta (StoredUser.onboarding em data/users.json: { startedAt, skipped[] }): skipped só em passo opcional que não esteja done.",
-    "4. complete = isOnboardingComplete (core): todos done/skipped/soon.",
-    "5. POST /start grava startedAt (uma vez). PUT /steps/:id grava/remove o passo em skipped, também marca startedAt e audita settings.onboarding_step_skipped / _unskipped. A gravação usa UserStore.updateOnboarding, que recebe o estado atual DENTRO da fila de gravações."
+    "3. Aplica as escolhas da conta (StoredUser.onboarding em data/users.json: { startedAt, skipped[], hiddenSoon?[] }): skipped só em passo opcional que não esteja done.",
+    "4. complete = isOnboardingComplete (core): todos done/skipped. hidden = isOnboardingHiddenUntilNews(steps, hiddenSoon): hiddenSoon gravado, nenhum passo pedindo ação (nextOnboardingStep null) e todos os passos de hiddenSoon ainda 'soon'.",
+    "5. POST /start grava startedAt (uma vez). PUT /steps/:id grava/remove o passo em skipped, também marca startedAt e audita settings.onboarding_step_skipped / _unskipped. A gravação usa UserStore.updateOnboarding, que recebe o estado atual DENTRO da fila de gravações.",
+    "6. PUT /hidden {hidden:true}: monta o roteiro; se isOnboardingWaitingOnSoon(steps) for falso → 409 onboarding_has_action; senão grava hiddenSoon = soonOnboardingSteps(steps) (os passos 'em breve' naquele momento) e marca startedAt. {hidden:false} remove hiddenSoon. Não é auditado (preferência de exibição, como o startedAt)."
   ],
   "interface": [
-    "OnboardingChecklist variant=dashboard (topo do Dashboard): primeiro acesso (isOnboardingFirstVisit: roteiro não começado e nada feito além das proteções da VPS) → ABERTO com os cinco passos, botão 'Recolher' e a pasta dos projetos; senão → COMPACTO (01/10, pedido do dono): números 1 a 5 no topo (feito = check verde, passo mostrado destacado, em breve = borda tracejada), resumo 'N feitos · N a fazer · N em breve no painel' e a orientação só do passo atual, já aberta; clicar num número mostra aquele passo; 'Ver todos os passos' expande a lista no próprio cartão ('Mostrar só o próximo' volta); complete → não aparece. Falha ou resposta fora do formato → não aparece.",
-    "OnboardingChecklist variant=settings (/settings/onboarding): sempre a lista inteira, com 'Tudo pronto' quando complete; falha → mensagem de erro.",
+    "OnboardingChecklist variant=dashboard (topo do Dashboard): primeiro acesso (isOnboardingFirstVisit: roteiro não começado e nada feito além das proteções da VPS) → ABERTO com os cinco passos, botão 'Recolher' e a pasta dos projetos; senão → COMPACTO (01/10, pedido do dono): números 1 a 5 no topo (feito = check verde, passo mostrado destacado, em breve = borda tracejada), resumo 'N feitos · N a fazer · N em breve no painel' e a orientação só do passo atual, já aberta; clicar num número mostra aquele passo; 'Ver todos os passos' expande a lista no próprio cartão ('Mostrar só o próximo' volta). Só falta o que é 'em breve' (isOnboardingWaitingOnSoon, 07/10/2026) → continua COMPACTO com 'Tudo o que dá para fazer agora está feito. <Passo> chega em breve.' (vários: 'A e B chegam em breve.') no lugar do passo e o botão 'Ocultar até ter novidade' (PUT /hidden); os números e 'Ver todos os passos' / 'Recolher a lista' continuam. Some quando complete (tudo feito ou 'Não vou usar') ou hidden. Falha ou resposta fora do formato → não aparece.",
+    "OnboardingChecklist variant=settings (/settings/onboarding): sempre a lista inteira, com 'Tudo pronto' quando complete e a mensagem do 'em breve' quando só falta isso (sem o botão de ocultar); se hidden, 'Este roteiro está oculto no Dashboard até ter novidade.' com 'Mostrar no Dashboard' (PUT /hidden {hidden:false}); falha → mensagem de erro.",
     "Cada passo: ícone de status, badge (feito, em andamento, a fazer, não vou usar, em breve, não confirmado), frase do servidor, 'Como fazer' (O que é, Por que importa, Passo a passo, observação e botão azul para a tela certa; passos em breve dizem 'Em breve no painel'), 'Não vou usar'/'Desfazer' nos opcionais.",
     "Começar o roteiro: 'Recolher', clicar no botão de um passo ou 'Não vou usar'. 'Conferir de novo' busca o status outra vez (a pessoa faz o passo na outra tela e volta).",
     "O aviso de 2FA do Dashboard (TwoFactorNudge) continua, abaixo do roteiro."
@@ -122,14 +138,14 @@
     "Servidor: em createOnboardingChecks (apps/server/src/services/onboarding.ts) troque a conferência do passo ('panel-domain' ou 'notifications') por uma que leia o estado novo e devolva done/in_progress/pending. Ex.: domínio do painel → done quando o domínio próprio estiver ativo; notificações → done quando houver ao menos um canal (Telegram ou e-mail) confirmado.",
     "Se o estado novo morar num serviço criado dentro de outro plugin de rotas (encapsulado pelo Fastify), passe uma função de leitura pelas opções do plugin, como mailFactsSource faz para o e-mail.",
     "Interface: em apps/web/src/components/onboarding/steps-content.ts troque o passo a passo e ponha a 'action' { label, to } com a tela nova. Nada mais muda: a ordem, o modo compacto e o 'Não vou usar' já tratam o passo.",
-    "Quando o passo deixar de ser 'soon', ele volta a contar como pendente e o cartão reaparece no Dashboard de quem já tinha concluído — de propósito: é a forma de avisar que há algo novo para configurar."
+    "Quando o passo deixar de ser 'soon', ele volta a pedir ação: o cartão, que já estava no Dashboard no modo 'chega em breve', passa a mostrar o passo. Quem tinha clicado em 'Ocultar até ter novidade' vê o cartão de volta — o passo saiu de 'soon' e estava na lista hiddenSoon guardada na conta; essa é a novidade."
   ],
   "dependencias": [
     {
       "tipo": "servico",
       "nome": "UserStore.updateOnboarding / findById",
       "arquivo": "apps/server/src/services/user-store.ts",
-      "papel": "Progresso da conta (startedAt, skipped) e 2FA."
+      "papel": "Progresso da conta (startedAt, skipped, hiddenSoon) e 2FA."
     },
     {
       "tipo": "servico",
@@ -151,14 +167,14 @@
     },
     {
       "tipo": "pacote",
-      "nome": "ONBOARDING_STEP_IDS, nextOnboardingStep, isOnboardingComplete",
+      "nome": "ONBOARDING_STEP_IDS, nextOnboardingStep, isOnboardingComplete, isOnboardingWaitingOnSoon, soonOnboardingSteps, isOnboardingHiddenUntilNews",
       "arquivo": "packages/core/src/onboarding.ts",
       "papel": "Ordem dos passos e regras compartilhadas entre servidor e interface."
     }
   ],
   "efeitosColaterais": [
     "GET: nenhum (só leitura; o passo de e-mail pode rodar docker inspect/exec como GET /api/mail/status).",
-    "POST /start e PUT /steps/:id: gravam StoredUser.onboarding em data/users.json.",
+    "POST /start, PUT /steps/:id e PUT /hidden: gravam StoredUser.onboarding em data/users.json.",
     "PUT /steps/:id: auditoria settings.onboarding_step_skipped / settings.onboarding_step_unskipped."
   ],
   "chamadoPor": [
@@ -179,6 +195,7 @@
     "A pasta dos projetos (config.projectsDir, PAAS_PROJECTS_DIR; /opt/tws-projects pelo instalador) é só informativa.",
     "Achado lateral, não corrigido aqui: routes/monitoring.ts usa app.mailService no gancho de blacklist, mas o MailService é decorado dentro do plugin de e-mail (encapsulado) — no plugin de monitoramento app.mailService é undefined, então o check de blacklist do monitoramento agendado não roda. Conferido com um plugin irmão no Fastify 5 (decoração não visível).",
     "07/10/2026 (validação real): o passo 4 (e-mail) ficava 'em andamento' com o e-mail funcionando, porque exigia tudo certo na última verificação de DNS, inclusive o PTR. Agora o domínio conta como conferido quando os REGISTROS do domínio (A, MX, SPF, DKIM, DMARC) estão certos (lastVerify.recordsOk, gravado por MailService.verifyDomain; onboarding.domainDnsOk). O PTR continua como recomendação na página do domínio. Verificações antigas, sem recordsOk, seguem a regra antiga até a próxima verificação (abrir o domínio na página E-mail verifica sozinho).",
-    "07/10/2026: o passo 3 (domínio do painel) deixou de ser 'em breve' — ver configuracoes/dominio-do-painel.json. Como previsto em comoPlugarUmPassoEmBreve, o cartão reaparece no Dashboard de quem já tinha concluído o roteiro e ainda abre o painel pelo sslip.io."
+    "07/10/2026: o passo 3 (domínio do painel) deixou de ser 'em breve' — ver configuracoes/dominio-do-painel.json. Como previsto em comoPlugarUmPassoEmBreve, o cartão reaparece no Dashboard de quem já tinha concluído o roteiro e ainda abre o painel pelo sslip.io.",
+    "07/10/2026 (validação real): com os passos 1 a 4 feitos e o 5 (Notificações) 'em breve', o cartão sumia do Dashboard como se estivesse tudo pronto; o dono esperava continuar vendo o progresso e o que ainda vem. Agora 'em breve' não conta como concluído (isOnboardingComplete = todos done/skipped); o cartão fica no modo compacto com a mensagem 'chega em breve' e 'Ocultar até ter novidade', guardado na conta como a lista dos passos 'em breve' naquele momento (StoredOnboarding.hiddenSoon). Novidade = um desses passos deixa de ser 'em breve' ou algum passo volta a pedir ação (pending, in_progress, unknown). Decisão: se a novidade for 'passo voltou a pedir ação' e a pessoa resolver de novo, o cartão volta a ficar oculto sozinho (hiddenSoon continua valendo); PUT /hidden {hidden:false} existe para quem quer o cartão de volta antes disso (botão em Configurações → Primeiros passos)."
   ]
 }
