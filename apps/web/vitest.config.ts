@@ -26,6 +26,7 @@ export default defineConfig({
         "src/components/TerminalPanel.tsx",
         "src/components/project/PortsModal.tsx",
         "src/components/onboarding/**",
+        "src/pages/settings/PanelDomainSettings.tsx",
         "src/lib/**",
       ],
       reporter: ["text", "html"],
