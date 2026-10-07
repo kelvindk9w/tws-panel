@@ -6,7 +6,7 @@
  * com o estado de verdade e um botão para agir — "Tentar emitir agora" no
  * automático e certificado próprio (manual) com "Voltar para automático".
  */
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -97,7 +97,24 @@ function renderPage() {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
+
+function setVisibility(value: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+const VALID_LOJA: CertificateItem = {
+  ...LOJA,
+  state: "valid",
+  issuer: "Let's Encrypt",
+  validTo: base.validTo,
+  renewsAround: base.renewsAround,
+  lastError: null,
+  canRetry: false,
+};
 
 describe("CertificatesPage — lista", () => {
   it("cada nome com dono, modo, estado, emissor, validade e renovação aproximada", async () => {
@@ -204,6 +221,73 @@ describe("CertificatesPage — Tentar emitir agora", () => {
   });
 });
 
+// Validação real (07/10/2026): o certificado ficou válido e a tela seguiu
+// mostrando o estado antigo até recarregar a página.
+describe("CertificatesPage — atualiza sozinha enquanto um certificado está a caminho", () => {
+  it("consulta sozinha enquanto há nome emitindo/falhou e para quando todos ficam válidos", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let issued = false;
+    const fetchMock = mockApi((url) =>
+      url === "/api/certificates" ? { status: 200, body: list([PANEL, issued ? VALID_LOJA : LOJA]) } : undefined,
+    );
+    const listCalls = () => fetchMock.mock.calls.filter(([u]) => String(u) === "/api/certificates").length;
+    renderPage();
+    const card = await screen.findByTestId("cert-loja.exemplo.com.br");
+    expect(within(card).getByText("Falhou")).toBeInTheDocument();
+    issued = true;
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(within(screen.getByTestId("cert-loja.exemplo.com.br")).getByText("Válido")).toBeInTheDocument();
+    const after = listCalls();
+    await act(async () => vi.advanceTimersByTimeAsync(30 * 60_000));
+    expect(listCalls()).toBe(after);
+  });
+
+  it("tudo válido (ou manual): não fica consultando", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = mockApi((url) => (url === "/api/certificates" ? { status: 200, body: list([PANEL, MANUAL]) } : undefined));
+    renderPage();
+    await screen.findByTestId("cert-painel.exemplo.com.br");
+    await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aba oculta: não consulta; uma consulta que falha não apaga a lista", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let fail = false;
+    const fetchMock = mockApi((url) =>
+      url === "/api/certificates" ? (fail ? { status: 500, body: { error: "x", message: "x" } } : { status: 200, body: list([MAIL]) }) : undefined,
+    );
+    renderPage();
+    await screen.findByTestId("cert-mail.exemplo.com.br");
+    act(() => setVisibility("hidden"));
+    await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fail = true;
+    await act(async () => setVisibility("visible"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("cert-mail.exemplo.com.br")).toBeInTheDocument();
+    expect(screen.queryByText(/Não foi possível carregar/)).not.toBeInTheDocument();
+  });
+
+  it("\"Tentar emitir agora\" e o servidor diz que já está válido: o card se atualiza na hora", async () => {
+    mockApi((url, init) => {
+      if (url.endsWith("/retry") && init?.method === "POST") {
+        return { status: 409, body: { error: "already_valid", message: "O certificado de loja.exemplo.com.br já está válido." } };
+      }
+      if (url.startsWith("/api/certificates?host=loja.exemplo.com.br")) return { status: 200, body: list([VALID_LOJA]) };
+      if (url === "/api/certificates") return { status: 200, body: list([LOJA]) };
+      return undefined;
+    });
+    renderPage();
+    const card = await screen.findByTestId("cert-loja.exemplo.com.br");
+    await userEvent.click(within(card).getByRole("button", { name: /Tentar emitir agora/ }));
+    expect(await within(card).findByText("Válido")).toBeInTheDocument();
+    expect(within(card).getByText(/já está válido/)).toBeInTheDocument();
+    expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /Tentar emitir agora/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("CertificatesPage — certificado próprio (manual)", () => {
   it("envia certificado e chave; recusa aparece com o motivo; sucesso vira Manual", async () => {
     let attempt = 0;
@@ -265,6 +349,26 @@ describe("CertificateSummary — resumo no e-mail e nos domínios do projeto", (
     expect(screen.getByText(/Manual/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Ver em Certificados/ })).toHaveAttribute("href", "/certificates");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("certificado do e-mail emitindo: o resumo consulta sozinho até ficar válido", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let issued = false;
+    const fetchMock = mockApi((url) =>
+      url === "/api/certificates?kind=mail" ? { status: 200, body: list([issued ? { ...MAIL, state: "valid", canRetry: false } : MAIL]) } : undefined,
+    );
+    render(
+      <MemoryRouter>
+        <CertificateSummary query="kind=mail" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Emitindo")).toBeInTheDocument();
+    issued = true;
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByText("Válido")).toBeInTheDocument();
+    const after = fetchMock.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(30 * 60_000));
+    expect(fetchMock.mock.calls.length).toBe(after);
   });
 
   it("falha ao carregar: só o link (não quebra o card que o contém)", async () => {

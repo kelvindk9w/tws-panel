@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useInRouterContext } from "react-router";
 import type { CertificateItem, CertificateListResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { formatDay, modeLabel, STATE_LABELS, stateVariant } from "@/lib/certificates";
+import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { ChevronRight, ShieldCheck } from "lucide-react";
 
@@ -13,6 +14,8 @@ import { ChevronRight, ShieldCheck } from "lucide-react";
  * contém: fica só o link.
  *
  * `query`: filtro do GET /api/certificates (ex.: "kind=mail", "project=<id>").
+ * Enquanto algum nome estiver sem certificado válido (emitindo, falhou), o
+ * resumo consulta sozinho até ele ficar válido (lib/auto-refresh.ts).
  */
 export function CertificateSummary({ query }: { query: string }) {
   const [items, setItems] = useState<CertificateItem[] | null>(null);
@@ -35,6 +38,13 @@ export function CertificateSummary({ query }: { query: string }) {
       cancelled = true;
     };
   }, [query]);
+
+  // Consulta automática em silêncio: uma falha mantém o que já está na tela.
+  const quietLoad = useCallback(async () => {
+    const r = await apiFetch<CertificateListResponse>(`/api/certificates?${query}`).catch(() => null);
+    if (r) setItems(r.items);
+  }, [query]);
+  useAutoRefresh(items?.some(certificatePending) ?? false, quietLoad);
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-dashed px-4 py-3" data-testid="certificate-summary">
