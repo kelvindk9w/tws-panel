@@ -139,6 +139,20 @@ export interface EmailFacts {
   domains: Array<{ name: string; dnsOk: boolean | null }>;
 }
 
+/**
+ * DNS do domínio de e-mail conferido: os registros do domínio certos (A, MX,
+ * SPF, DKIM, DMARC). O PTR fica de fora — é recomendação e às vezes fica "não
+ * deu para conferir" quando o DNS demora (validação real, 07/10/2026).
+ * Verificação antiga, sem `recordsOk`: tudo certo, como antes. null = nunca.
+ */
+export function domainDnsOk(
+  lastVerify: { at: string; ok: number; total: number; recordsOk?: boolean } | null,
+): boolean | null {
+  if (!lastVerify) return null;
+  if (typeof lastVerify.recordsOk === "boolean") return lastVerify.recordsOk;
+  return lastVerify.total > 0 && lastVerify.ok === lastVerify.total;
+}
+
 export function emailState(facts: EmailFacts): StepState {
   const names = facts.domains.map((d) => d.name).join(", ");
   if (!facts.installed && facts.domains.length === 0) {

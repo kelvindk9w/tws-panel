@@ -11,14 +11,14 @@
  */
 import type { ServerConfig } from "../config.js";
 import { MailService } from "./mail-service.js";
-import type { EmailFacts } from "./onboarding.js";
+import { domainDnsOk, type EmailFacts } from "./onboarding.js";
 
 export function mailFactsSource(config: ServerConfig): () => Promise<EmailFacts> {
   return async () => {
     const mail = new MailService(config, { log: () => undefined });
     const domains = (await mail.listDomains()).map((d) => ({
       name: d.name,
-      dnsOk: d.lastVerify ? d.lastVerify.total > 0 && d.lastVerify.ok === d.lastVerify.total : null,
+      dnsOk: domainDnsOk(d.lastVerify),
     }));
     let installed = false;
     let running: boolean | null = null;

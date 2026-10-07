@@ -13,6 +13,7 @@ import {
   buildOnboardingResponse,
   createOnboardingChecks,
   emailState,
+  domainDnsOk,
   hardeningState,
   notificationsState,
   panelDomainState,
@@ -277,5 +278,28 @@ describe("createOnboardingChecks — fontes reais", () => {
     });
     expect((await checks.hardening({ userId: "x" })).status).toBe("pending");
     expect((await checks["two-factor"]({ userId: "x" })).status).toBe("pending");
+  });
+});
+
+/**
+ * Validação real (07/10/2026): e-mail funcionando (DKIM, SPF e DMARC passando
+ * no Gmail) e o passo 4 continuava "em andamento" — a regra exigia TUDO certo
+ * na última verificação, inclusive o PTR, que é recomendação e às vezes fica
+ * "não deu para conferir" quando o DNS demora. Agora valem os registros do
+ * domínio (A, MX, SPF, DKIM, DMARC).
+ */
+describe("e-mail do servidor — DNS conferido sem depender do PTR", () => {
+  it("registros certos e PTR pendente → DNS ok", () => {
+    expect(domainDnsOk({ at: "x", ok: 5, total: 6, recordsOk: true })).toBe(true);
+  });
+  it("registro faltando → não ok, mesmo com o PTR certo", () => {
+    expect(domainDnsOk({ at: "x", ok: 5, total: 6, recordsOk: false })).toBe(false);
+  });
+  it("verificação antiga, sem recordsOk: vale a regra antiga (tudo certo)", () => {
+    expect(domainDnsOk({ at: "x", ok: 6, total: 6 })).toBe(true);
+    expect(domainDnsOk({ at: "x", ok: 5, total: 6 })).toBe(false);
+  });
+  it("nunca verificado → null", () => {
+    expect(domainDnsOk(null)).toBeNull();
   });
 });
