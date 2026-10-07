@@ -275,6 +275,14 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       : {}),
   });
   app.decorate("mailService", service);
+  // Avisos do painel por e-mail (Configurações → Notificações): o serviço de
+  // notificações mora no escopo raiz e só este plugin enxerga o MailService.
+  if (app.hasDecorator("notificationService")) {
+    app.notificationService.setEmailSender({
+      readiness: () => service.systemMailReadiness(),
+      send: (msg) => service.sendSystemMail(msg),
+    });
+  }
   // Webmail (Roundcube em https://mail.<domínio>/): acompanha o servidor de
   // e-mail e conta ao proxy se os blocos mail.<domínio> abrem o webmail.
   const webmail = new WebmailService(app.config, service, {

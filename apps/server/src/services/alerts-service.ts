@@ -37,6 +37,7 @@ export class AlertsService {
   private alerts: Alert[] = [];
   private loaded = false;
   private writing: Promise<void> = Promise.resolve();
+  private readonly listeners: Array<(alert: Alert) => void | Promise<void>> = [];
 
   constructor(dataDir: string, opts: AlertsServiceOptions = {}) {
     this.file = path.join(dataDir, "alerts.json");
@@ -52,6 +53,27 @@ export class AlertsService {
       this.alerts = Array.isArray(raw.alerts) ? raw.alerts : [];
     } catch {
       this.alerts = [];
+    }
+  }
+
+  /**
+   * Quem quer saber de alerta NOVO (o serviço de notificações, ligado em
+   * app.ts). Um alerta aberto atualizado (bump) não chama de novo. Falha de
+   * quem escuta vai para o log e nunca derruba a criação do alerta.
+   */
+  onCreated(listener: (alert: Alert) => void | Promise<void>): void {
+    this.listeners.push(listener);
+  }
+
+  private emitCreated(alert: Alert): void {
+    for (const listener of this.listeners) {
+      const fail = (err: unknown) =>
+        this.log(`alerts: falha ao avisar sobre o alerta novo (${err instanceof Error ? err.message : String(err)}).`);
+      try {
+        void Promise.resolve(listener({ ...alert })).catch(fail);
+      } catch (err) {
+        fail(err);
+      }
     }
   }
 
@@ -90,6 +112,7 @@ export class AlertsService {
     this.alerts.push(alert);
     this.enforceCap();
     await this.persist();
+    this.emitCreated(alert);
     return { alert, created: true };
   }
 

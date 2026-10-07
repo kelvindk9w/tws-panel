@@ -7,6 +7,7 @@ import type {
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { formatDay, modeLabel, ownerLabel, STATE_LABELS, stateVariant } from "@/lib/certificates";
+import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -117,14 +118,22 @@ type Tracking =
   | { phase: "running"; message: string }
   | { phase: "done"; ok: boolean; message: string };
 
+/**
+ * Um nome com o seu certificado e as ações. `onValid`: o card descobriu que
+ * o certificado ficou válido (depois de "Tentar emitir agora", ou o servidor
+ * respondeu que ele já estava válido) — a tela que o contém atualiza o que
+ * depende disso (ex.: Domínio do painel).
+ */
 export function CertificateCard({
   item,
   onItem,
+  onValid,
   pollMs,
   pollMaxMs,
 }: {
   item: CertificateItem;
   onItem: (item: CertificateItem) => void;
+  onValid?: () => unknown;
   pollMs: number;
   pollMaxMs: number;
 }) {
@@ -144,6 +153,24 @@ export function CertificateCard({
 
   const path = `/api/certificates/${encodeURIComponent(item.host)}`;
 
+  const fetchCurrent = () =>
+    apiFetch<CertificateListResponse>(`/api/certificates?host=${encodeURIComponent(item.host)}`)
+      .then((list) => list.items[0] ?? null)
+      .catch(() => null);
+
+  /**
+   * O servidor respondeu que o certificado já está válido (ficou pronto
+   * enquanto a tela estava aberta): atualiza a tela na hora, em vez de só
+   * mostrar a mensagem.
+   */
+  async function alreadyValid(message: string) {
+    const current = await fetchCurrent();
+    if (!alive.current) return;
+    if (current) onItem(current);
+    setTracking({ phase: "done", ok: true, message });
+    await onValid?.();
+  }
+
   async function retry() {
     setBusy("retry");
     setError(null);
@@ -155,12 +182,12 @@ export function CertificateCard({
       while (alive.current && Date.now() - started < pollMaxMs) {
         await sleep(pollMs);
         if (!alive.current) return;
-        const list = await apiFetch<CertificateListResponse>(`/api/certificates?host=${encodeURIComponent(item.host)}`).catch(() => null);
-        const current = list?.items[0];
-        if (!current) continue;
+        const current = await fetchCurrent();
+        if (!current || !alive.current) continue;
         onItem(current);
         if (current.state === "valid" || current.state === "expiring") {
           setTracking({ phase: "done", ok: true, message: "Certificado emitido! O endereço já abre com HTTPS válido." });
+          await onValid?.();
           return;
         }
         if (current.state === "failed") {
@@ -176,7 +203,8 @@ export function CertificateCard({
         });
       }
     } catch (err) {
-      setError(errorText(err, "Não foi possível pedir a emissão."));
+      if (err instanceof ApiRequestError && err.code === "already_valid") await alreadyValid(err.message);
+      else setError(errorText(err, "Não foi possível pedir a emissão."));
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -339,7 +367,9 @@ export function CertificateCard({
  * próprio (manual).
  *
  * `pollMs`/`pollMaxMs`: acompanhamento depois de "Tentar emitir agora"
- * (padrão: a cada 10 s, por até 2 min).
+ * (padrão: a cada 10 s, por até 2 min). Fora isso, enquanto algum nome
+ * automático estiver sem certificado válido, a página consulta sozinha
+ * (lib/auto-refresh.ts), pausando com a aba oculta.
  */
 export function CertificatesPage({ pollMs = 10_000, pollMaxMs = 120_000 }: { pollMs?: number; pollMaxMs?: number }) {
   const [data, setData] = useState<CertificateListResponse | null>(null);
@@ -361,6 +391,13 @@ export function CertificatesPage({ pollMs = 10_000, pollMaxMs = 120_000 }: { pol
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Consulta automática: em silêncio (uma falha mantém a lista como está).
+  const quietLoad = useCallback(async () => {
+    const next = await apiFetch<CertificateListResponse>("/api/certificates").catch(() => null);
+    if (next) setData(next);
+  }, []);
+  useAutoRefresh(data?.items.some(certificatePending) ?? false, quietLoad);
 
   const replace = useCallback((next: CertificateItem) => {
     setData((d) => (d ? { ...d, items: d.items.map((i) => (i.host === next.host ? next : i)) } : d));

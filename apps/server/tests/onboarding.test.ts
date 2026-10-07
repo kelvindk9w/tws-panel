@@ -20,7 +20,7 @@ import {
   twoFactorState,
   type OnboardingChecks,
 } from "../src/services/onboarding.js";
-import { UserStore } from "../src/services/user-store.js";
+import { UserStore, type StoredOnboarding } from "../src/services/user-store.js";
 
 function check(id: string, phase: SecurityCheckResult["phase"], status: SecurityCheckResult["status"]): SecurityCheckResult {
   return { id, phase, title: id, severity: "warning", status, description: "", remediation: "" };
@@ -207,11 +207,33 @@ describe("e-mail do servidor", () => {
   });
 });
 
-describe("notificações (em breve)", () => {
-  it("em breve, dizendo que hoje os alertas só aparecem dentro do painel", () => {
-    const s = notificationsState();
-    expect(s.status).toBe("soon");
+describe("notificações", () => {
+  const ch = (id: "telegram" | "email", connected: boolean, tested: boolean) => ({ id, connected, tested });
+
+  it("sem canal conectado: pendente, dizendo que hoje os alertas só aparecem dentro do painel", () => {
+    const s = notificationsState({ channels: [ch("telegram", false, false), ch("email", false, false)] });
+    expect(s.status).toBe("pending");
     expect(s.detail).toMatch(/dentro do painel/);
+  });
+
+  it("conectado mas sem teste: em andamento, pedindo o teste", () => {
+    const s = notificationsState({ channels: [ch("telegram", true, false), ch("email", false, false)] });
+    expect(s.status).toBe("in_progress");
+    expect(s.detail).toMatch(/Telegram/);
+    expect(s.detail).toMatch(/Enviar teste/);
+  });
+
+  it("pelo menos um canal conectado e testado: feito, citando os canais", () => {
+    expect(notificationsState({ channels: [ch("telegram", true, true), ch("email", false, false)] })).toEqual({
+      status: "done",
+      detail: "Avisos chegando por Telegram.",
+    });
+    expect(notificationsState({ channels: [ch("telegram", true, true), ch("email", true, false)] }).detail).toBe(
+      "Avisos chegando por Telegram e e-mail (o e-mail ainda sem teste).",
+    );
+    expect(notificationsState({ channels: [ch("telegram", true, true), ch("email", true, true)] }).detail).toBe(
+      "Avisos chegando por Telegram e e-mail.",
+    );
   });
 });
 
@@ -245,7 +267,9 @@ describe("buildOnboardingResponse", () => {
     expect(res.started).toBe(true);
     expect(res.steps.find((s) => s.id === "email")?.status).toBe("skipped");
     expect(res.steps.find((s) => s.id === "two-factor")?.status).toBe("done");
-    expect(res.complete).toBe(true);
+    // Nada a fazer agora, mas há passos "em breve": não está concluído (o cartão continua).
+    expect(res.complete).toBe(false);
+    expect(res.hidden).toBe(false);
 
     const feito = await buildOnboardingResponse(
       { ...checks, email: fixed("done") },
@@ -254,6 +278,37 @@ describe("buildOnboardingResponse", () => {
       "/x",
     );
     expect(feito.steps.find((s) => s.id === "email")?.status).toBe("done");
+  });
+
+  it("tudo feito ou 'Não vou usar': concluído", async () => {
+    const res = await buildOnboardingResponse(
+      { ...checks, "two-factor": fixed("done"), "panel-domain": fixed("done") },
+      { userId: "u1" },
+      { startedAt: "2026-10-01T10:00:00Z", skipped: ["email", "notifications"] },
+      "/x",
+    );
+    expect(res.complete).toBe(true);
+  });
+
+  it("'Ocultar até ter novidade': oculto enquanto os mesmos passos seguem 'em breve' e nada pede ação", async () => {
+    const waiting = { ...checks, "two-factor": fixed("done"), email: fixed("done") };
+    const progress = (): StoredOnboarding => ({
+      startedAt: "2026-10-07T10:00:00Z",
+      skipped: [],
+      hiddenSoon: ["panel-domain", "notifications"],
+    });
+    const res = await buildOnboardingResponse(waiting, { userId: "u1" }, progress(), "/x");
+    expect(res.hidden).toBe(true);
+    expect(res.complete).toBe(false);
+
+    // O domínio do painel chegou (deixou de ser "em breve"): novidade.
+    const arrived = await buildOnboardingResponse(
+      { ...waiting, "panel-domain": fixed("pending") },
+      { userId: "u1" },
+      progress(),
+      "/x",
+    );
+    expect(arrived.hidden).toBe(false);
   });
 
   it("um passo que falha ao conferir vira 'não confirmado', sem derrubar os outros", async () => {
@@ -302,7 +357,19 @@ describe("createOnboardingChecks — fontes reais", () => {
     expect((await checks["two-factor"](ctx)).status).toBe("pending");
     expect((await checks["panel-domain"](ctx)).status).toBe("pending");
     expect((await checks.email(ctx)).status).toBe("pending");
-    expect((await checks.notifications(ctx)).status).toBe("soon");
+    // sem a fonte das notificações: nenhum canal
+    expect((await checks.notifications(ctx)).status).toBe("pending");
+  });
+
+  it("notificações: usa a fonte do serviço de notificações", async () => {
+    const user = await users.create("admin", "hash");
+    const checks = createOnboardingChecks({
+      config: { dataDir: dir, panelDomain: null },
+      userStore: users,
+      emailFacts: async () => ({ installed: false, running: false, domains: [] }),
+      notificationFacts: async () => ({ channels: [{ id: "email", connected: true, tested: true }] }),
+    });
+    expect(await checks.notifications({ userId: user.id })).toEqual({ status: "done", detail: "Avisos chegando por e-mail." });
   });
 
   it("domínio do painel: usa a fonte do domínio com o endereço por onde a página foi aberta", async () => {

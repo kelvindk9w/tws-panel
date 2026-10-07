@@ -351,3 +351,50 @@ describe("xtext", () => {
     expect(xtext("a+b=c d")).toBe("a+2Bb+3Dc+20d");
   });
 });
+
+describe("versão em HTML (avisos do painel)", () => {
+  const base = {
+    from: "postmaster@exemplo.com.br",
+    to: "pessoa@exemplo.org",
+    subject: "Aviso do TWS Panel",
+    text: "Texto simples.",
+    messageId: "<aviso-1@exemplo.com.br>",
+    date: new Date("2026-10-01T12:00:00Z"),
+  };
+
+  function decodePart(raw: string, type: string): string {
+    const part = raw.split(/--[^\r\n]+\r\n/).find((p) => p.includes(`Content-Type: ${type}`));
+    if (!part) throw new Error(`parte ${type} ausente`);
+    const body = part.split("\r\n\r\n")[1]!.replace(/\r\n--.*$/s, "").replace(/\r\n/g, "");
+    return Buffer.from(body, "base64").toString("utf8");
+  }
+
+  it("com html: multipart/alternative com texto e HTML, os dois em base64 UTF-8", () => {
+    const raw = buildTestMessage({ ...base, html: "<p>Olá, <b>mundo</b></p>" });
+    const boundary = /boundary="([^"]+)"/.exec(raw)?.[1];
+    expect(boundary).toBeTruthy();
+    expect(raw).toContain(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    expect(raw).toContain(`--${boundary}--`);
+    expect(decodePart(raw, "text/plain")).toBe("Texto simples.");
+    expect(decodePart(raw, "text/html")).toBe("<p>Olá, <b>mundo</b></p>");
+    // texto antes do HTML (o leitor mostra a última alternativa que entende)
+    expect(raw.indexOf("text/plain")).toBeLessThan(raw.indexOf("text/html"));
+    expect(/^[\x00-\x7f]*$/.test(raw)).toBe(true);
+  });
+
+  it("sem html: continua texto simples", () => {
+    expect(buildTestMessage(base)).not.toContain("multipart");
+  });
+});
+
+describe("sem pedir aviso de entrega (dsn: false)", () => {
+  it("mesmo com DSN anunciado, não manda ENVID nem NOTIFY", async () => {
+    const server = await fakeSmtp();
+    const result = await sendSmtpMail({ ...options(server.port), dsn: false, html: "<p>oi</p>" });
+    expect(result.dsn).toBe(false);
+    await vi.waitFor(() => expect(server.commands).toContain("QUIT"));
+    expect(server.commands).toContain("MAIL FROM:<postmaster@exemplo.com.br>");
+    expect(server.commands).toContain("RCPT TO:<pessoa@gmail.com>");
+    expect(server.data).toContain("multipart/alternative");
+  });
+});

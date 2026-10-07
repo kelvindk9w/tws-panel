@@ -5,7 +5,7 @@
  * pelo domínio novo → desativar o IP → reativar → remover). O endereço da
  * página vem de @/lib/page-location (o jsdom sempre roda em localhost).
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CertificateItem, PanelDomainDnsCheck, PanelDomainStatus } from "@paas/core";
@@ -127,10 +127,31 @@ beforeEach(() => {
       state = { ...state, ipAccessDisabled: false };
       return refresh();
     }
+    if (path === `/api/certificates/${encodeURIComponent(D)}/retry`) {
+      if (certState === "valid") {
+        throw new ApiRequestError(409, "already_valid", `O certificado de ${D} já está válido e o painel renova sozinho perto do fim.`);
+      }
+      return { host: D, message: "Pedimos ao proxy que tente emitir o certificado agora." };
+    }
+    if (path === `/api/certificates?host=${encodeURIComponent(D)}`) {
+      return { checkedAt: "2026-10-07T12:00:00Z", proxyRunning: true, items: [cert()] };
+    }
     throw new Error(`chamada inesperada: ${method} ${path}`);
   });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+});
+
+function setVisibility(value: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+const statusCalls = () =>
+  apiFetchMock.mock.calls.filter(([p, init]) => p === "/api/settings/panel-domain" && !(init as RequestInit | undefined)?.method).length;
 
 function renderPage() {
   return render(<PanelDomainSettings />, { wrapper: MemoryRouter });
@@ -241,6 +262,84 @@ describe("Configurações → Domínio do painel", () => {
     expect(await screen.findByTestId("tunnel-mode")).toHaveTextContent(/túnel SSH/);
     expect(screen.getByTestId("tunnel-mode")).toHaveTextContent("--acesso=https");
     expect(screen.queryByLabelText(/Domínio do painel/)).not.toBeInTheDocument();
+  });
+
+  // Validação real (07/10/2026): o certificado ficou válido e a tela seguiu em
+  // "Emitindo" até recarregar a página.
+  it("certificado emitindo: a tela consulta sozinha e, quando fica válido, atualiza tudo", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    state = { ...base(), domain: D, domainActive: true };
+    renderPage();
+    expect(await screen.findByTestId(`cert-${D}`)).toHaveTextContent("Emitindo");
+    expect(screen.getByTestId("disable-ip-blockers")).toHaveTextContent(/certificado HTTPS/);
+    const before = statusCalls();
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(statusCalls()).toBeGreaterThan(before); // conferiu sozinha
+    expect(screen.getByTestId(`cert-${D}`)).toHaveTextContent("Emitindo");
+
+    certState = "valid";
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByTestId(`cert-${D}`)).toHaveTextContent("Válido");
+    expect(screen.getByRole("link", { name: /Abrir o painel pelo endereço novo/ })).toBeInTheDocument();
+    expect(screen.getByTestId("disable-ip-blockers")).not.toHaveTextContent(/certificado HTTPS/);
+
+    // válido: para de consultar
+    const after = statusCalls();
+    await act(async () => vi.advanceTimersByTimeAsync(30 * 60_000));
+    expect(statusCalls()).toBe(after);
+  });
+
+  it("aba oculta: não consulta; ao voltar, confere na hora", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    state = { ...base(), domain: D, domainActive: true };
+    renderPage();
+    await screen.findByTestId(`cert-${D}`);
+    act(() => setVisibility("hidden"));
+    const before = statusCalls();
+    await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(statusCalls()).toBe(before);
+    certState = "valid";
+    await act(async () => setVisibility("visible"));
+    await waitFor(() => expect(screen.getByTestId(`cert-${D}`)).toHaveTextContent("Válido"));
+    expect(statusCalls()).toBe(before + 1);
+  });
+
+  it("DNS ainda não conferido: não fica consultando o certificado", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    state = { ...base(), domain: D };
+    renderPage();
+    await screen.findByRole("button", { name: /Verificar DNS/ });
+    const before = statusCalls();
+    await act(async () => vi.advanceTimersByTimeAsync(5 * 60_000));
+    expect(statusCalls()).toBe(before);
+  });
+
+  it("\"Tentar emitir agora\" com o certificado que já ficou válido: a tela se atualiza na hora", async () => {
+    state = { ...base(), domain: D, domainActive: true };
+    renderPage();
+    expect(await screen.findByTestId(`cert-${D}`)).toHaveTextContent("Emitindo");
+    certState = "valid"; // ficou válido enquanto a tela estava aberta
+    fireEvent.click(screen.getByRole("button", { name: /Tentar emitir agora/ }));
+    await waitFor(() => expect(screen.getByTestId(`cert-${D}`)).toHaveTextContent("Válido"));
+    expect(screen.getByRole("link", { name: /Abrir o painel pelo endereço novo/ })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(/já está válido/)).toBeInTheDocument();
+  });
+
+  it("\"Tentar emitir agora\" acompanha a emissão e, quando sai, atualiza a tela inteira", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    state = { ...base(), domain: D, domainActive: true };
+    renderPage();
+    await screen.findByTestId(`cert-${D}`);
+    apiFetchMock.mockImplementationOnce(async () => {
+      certState = "valid"; // o pedido de emissão funciona; a próxima conferência já vê válido
+      return { host: D, message: "Pedimos ao proxy." };
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Tentar emitir agora/ }));
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText(/Certificado emitido/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Abrir o painel pelo endereço novo/ })).toBeInTheDocument();
+    expect(screen.getByTestId("disable-ip-blockers")).not.toHaveTextContent(/certificado HTTPS/);
   });
 
   it("falha ao carregar: mensagem de erro", async () => {

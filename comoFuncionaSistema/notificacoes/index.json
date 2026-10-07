@@ -1,0 +1,63 @@
+{
+  "modulo": "notificacoes",
+  "titulo": "Notificações (avisos fora do painel)",
+  "resumo": "Avisos por Telegram e/ou e-mail quando algo precisa de atenção: alerta de segurança, deploy que falhou (e que voltou a funcionar), certificado que não foi emitido/renovado ou que vence, e-mail em blacklist, disco quase cheio e painel reiniciado (opcional). Um serviço central no escopo raiz decide se e como cada aviso sai, com agrupamento de repetidos, limite por hora e novas tentativas com recuo.",
+  "pontoDeEntrada": { "api": "GET /api/notifications", "web": "/settings/notifications" },
+  "comoFunciona": [
+    "NotificationService (apps/server/src/services/notification-service.ts) é criado em app.ts e decorado no app RAIZ (app.notificationService). Motivo: plugins do Fastify são isolados; um serviço decorado dentro de um plugin não é visto pelos outros (foi o que deixou a checagem de blacklist sem rodar). Alertas, deploy, vigias e o plugin de e-mail usam o mesmo objeto.",
+    "Menor acoplamento: quem gera o evento não conhece o serviço. AlertsService ganhou onCreated(listener) — chamado só para alerta NOVO (o bump de um alerta aberto não chama); DeployService ganhou o gancho onDeployFinished. app.ts liga os dois ao notify(). Assim, toda origem de alerta (scan, guardrail, blacklist, certificado manual 30/7 dias) vira aviso sem mexer em quem cria o alerta.",
+    "Vigias só de leitura (notification-sources.ts): DiskWatcher (statfs da pasta de dados, a cada 15 min; avisa ao passar de 90%, repete a cada 24 h enquanto durar, volta ao normal abaixo de 85%) e CertificateWatcher (lista da página Certificados a cada 6 h; avisa 'não foi emitido', 'venceu' e automático 'não renovou e vence em breve'; o manual perto de vencer já chega pelos alertas; repete só depois de 24 h). 'Painel iniciado' sai no onReady (tipo desligado por padrão).",
+    "O e-mail chega por um 'EmailSender' que o plugin de e-mail registra (routes/mail.ts → setEmailSender): só ele enxerga o MailService. Envio pela submission do Stalwart, autenticado como postmaster@ do primeiro domínio com DNS conferido, texto + HTML, sem pedir DSN (cada aviso deixaria uma mensagem na postmaster@).",
+    "notify(evento): tipo desligado → nada; sem canal conectado → nada; mesmo 'key' dentro de 10 min → só conta e, no fim da janela, sai UM resumo 'repetiu N vezes'; acima de 20 avisos/hora por canal → conta e, quando a hora libera, sai um resumo de quantos ficaram de fora; falha temporária → nova tentativa em 30 s, 2 min, 10 min (ou o retry_after do Telegram, se maior); falha permanente (token inválido, robô bloqueado, 5xx do SMTP) → 'falhou' no histórico e no log, sem derrubar quem avisou.",
+    "Mensagens curtas em português. O detalhe do alerta (portas, pacotes, IP listado) NÃO vai na mensagem: só o título, a gravidade e 'detalhes em Alertas'. maskSensitive troca IPv4/IPv6 e nomes …sslip.io por marcador. Link para o painel só quando ele tem domínio próprio com certificado válido (o endereço sslip.io tem o IP no nome).",
+    "Token do Telegram cifrado em repouso (AES-256-GCM, chave própria em data/notifications-key 0600, mesmo padrão do 2FA e do cofre de credenciais). Nunca volta pela API, nunca entra em auditoria nem em log; erros de rede do cliente do Telegram não repassam a mensagem original (a URL contém o token)."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/notifications.ts"],
+    "servicos": [
+      "apps/server/src/services/notification-service.ts",
+      "apps/server/src/services/notification-sources.ts",
+      "apps/server/src/services/telegram-client.ts",
+      "apps/server/src/services/alerts-service.ts (onCreated)",
+      "apps/server/src/services/deploy-service.ts (DeployHooks.onDeployFinished)",
+      "apps/server/src/services/mail-service.ts (systemMailReadiness, sendSystemMail)",
+      "apps/server/src/services/onboarding.ts (notificationsState)",
+      "apps/server/src/app.ts (ligação de tudo)"
+    ],
+    "pacotes": ["packages/core/src/notifications.ts", "packages/mailer/src/smtp-send.ts (html, dsn)"],
+    "web": ["apps/web/src/pages/settings/NotificationSettings.tsx", "apps/web/src/components/onboarding/steps-content.ts (passo notifications)"],
+    "testes": [
+      "apps/server/tests/notification-service.test.ts",
+      "apps/server/tests/notification-sources.test.ts",
+      "apps/server/tests/telegram-client.test.ts",
+      "apps/server/tests/routes-notifications.test.ts",
+      "apps/server/tests/mail-system-send.test.ts",
+      "apps/server/tests/deploy-notify.test.ts",
+      "apps/server/tests/alerts-service.test.ts (onCreated)",
+      "apps/server/tests/onboarding.test.ts (notificações)",
+      "packages/mailer/tests/smtp-send.test.ts (HTML, dsn: false)",
+      "apps/web/tests/notification-settings.test.tsx"
+    ]
+  },
+  "persistencia": [
+    { "arquivo": "data/notifications.json", "formato": "json", "conteudo": "{ telegram: { token: {iv,tag,data} cifrado, botUsername, chatId, chatTitle, connectedAt, testedAt } | null, email: { recipients[], testedAt }, kinds: { tipo: boolean } }. 0600." },
+    { "arquivo": "data/notifications-key", "formato": "hex", "conteudo": "Chave AES-256 do token do Telegram, gerada no primeiro uso. 0600. Apagar a chave invalida o token (volta a 'none', com aviso no log)." },
+    { "arquivo": "data/notifications-history.json", "formato": "json", "conteudo": "{ entries: [{ id, at, channel, kind, title, status: sent|failed|retrying, detail }] } — os 50 últimos envios; só o assunto, sem o conteúdo; motivo de falha sem IP nem endereço de e-mail. 0600." }
+  ],
+  "endpoints": [
+    { "id": "situacao", "metodo": "GET", "url": "/api/notifications", "resumo": "Canais, tipos e últimos envios.", "arquivo": "situacao.json" },
+    { "id": "telegram", "metodo": "PUT/POST/DELETE", "url": "/api/notifications/telegram, /telegram/connect, /telegram/test", "resumo": "Token do robô, conectar a conversa, enviar teste, desconectar.", "arquivo": "telegram.json" },
+    { "id": "email", "metodo": "PUT/POST/DELETE", "url": "/api/notifications/email, /email/test", "resumo": "Endereços, enviar teste, desligar.", "arquivo": "email.json" },
+    { "id": "tipos", "metodo": "PUT", "url": "/api/notifications/kinds", "resumo": "O que avisa.", "arquivo": "tipos.json" }
+  ],
+  "fluxos": [
+    { "id": "envio-dos-avisos", "resumo": "De onde vêm os avisos e como saem (agrupamento, limite, novas tentativas).", "arquivo": "envio-dos-avisos.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "Estado de agrupamento, limite por hora e novas tentativas fica só em memória: reiniciar o painel no meio de uma nova tentativa perde essa tentativa (o histórico fica 'tentando de novo'). Escolha consciente: simples e sem fila em disco.",
+    "O e-mail só fica disponível com o servidor de e-mail ligado e um domínio com o DNS conferido. Sem isso a tela oferece só o Telegram.",
+    "getUpdates do Telegram não funciona se o robô tiver webhook (409): a tela explica para usar um robô só para o painel.",
+    "Ainda NÃO feito: 'código por e-mail para recomeçar o setup' (citado na ordem combinada). O canal de e-mail agora existe e pode ser reaproveitado (MailService.sendSystemMail)."
+  ]
+}
