@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { statfs } from "node:fs/promises";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -43,6 +44,16 @@ import { ManualCertificateStore } from "./services/certificate-store.js";
 import monitoringRoutes from "./routes/monitoring.js";
 import terminalRoutes from "./routes/terminal.js";
 import panelDomainRoutes, { buildPanelDomainService } from "./routes/panel-domain.js";
+import notificationsRoutes from "./routes/notifications.js";
+import { NotificationService, type NotificationEvent } from "./services/notification-service.js";
+import {
+  CertificateWatcher,
+  DiskWatcher,
+  alertNotification,
+  deployNotification,
+  panelStartedNotification,
+} from "./services/notification-sources.js";
+import { createTelegramClient } from "./services/telegram-client.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -93,11 +104,41 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
   app.decorate("alertsService", new AlertsService(config.dataDir));
+  // Notificações (Telegram/e-mail) no escopo RAIZ: alertas, deploy, vigias e
+  // o plugin de e-mail (que registra o envio por e-mail) precisam do MESMO
+  // objeto — decorado dentro de um plugin, os outros não o enxergariam (foi
+  // assim que a checagem de blacklist ficou sem rodar). Quem avisa não
+  // conhece o serviço: o AlertsService e o DeployService só chamam ganchos.
+  const notificationService = new NotificationService({
+    dataDir: config.dataDir,
+    telegram: createTelegramClient(),
+    audit: app.auditService,
+    log: (m) => app.log.warn(m),
+    // Link nas mensagens só com endereço próprio (o …sslip.io tem o IP no nome).
+    panelUrl: async () => {
+      const facts = await app.panelDomainService.facts("");
+      if (facts.domain && facts.active && facts.certificateValid) return `https://${facts.domain}`;
+      const own = facts.ipAddress;
+      return own && !own.endsWith(".sslip.io") && !/^[\d.:]+$/.test(own) ? `https://${own}` : null;
+    },
+  });
+  app.decorate("notificationService", notificationService);
+  const notify = (event: NotificationEvent | null): void => {
+    if (!event) return;
+    notificationService.notify(event).catch((err: unknown) => {
+      app.log.warn("notificações: aviso não enviado (%s)", err instanceof Error ? err.message : String(err));
+    });
+  };
+  app.alertsService.onCreated((alert) => notify(alertNotification(alert)));
   // DeployService no escopo raiz: compartilhado entre as rotas de projetos e
   // de e-mail (Fase 3 registra o provedor de env vars SMTP nele).
   app.decorate(
     "deployService",
-    new DeployService(config, { audit: app.auditService, alerts: app.alertsService }),
+    new DeployService(config, {
+      audit: app.auditService,
+      alerts: app.alertsService,
+      onDeployFinished: (e) => notify(deployNotification(e)),
+    }),
   );
   // Certificados manuais (página Certificados): no escopo raiz porque o
   // proxy (Caddyfile com `tls`) e o e-mail (Stalwart) usam o mesmo par.
@@ -216,9 +257,11 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       userStore,
       emailFacts: mailFactsSource(config),
       panelDomainFacts: (host) => panelDomainService.facts(host),
+      notificationFacts: () => notificationService.facts(),
     }),
   });
   await app.register(panelDomainRoutes);
+  await app.register(notificationsRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(setupRestartRoutes);
@@ -235,7 +278,29 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(monitoringRoutes);
   await app.register(terminalRoutes);
 
+  // Notificações: novas tentativas e resumos a cada 30 s; disco a cada 15 min
+  // e certificados a cada 6 h (só leitura). O primeiro giro dos vigias espera
+  // o painel assentar (o proxy e o e-mail sobem em segundo plano).
+  notificationService.start();
+  const disk = new DiskWatcher({ path: config.dataDir, statfs, notify: async (e) => notify(e) });
+  const certificates = new CertificateWatcher({
+    list: async () => (await app.certificateService.list()).items,
+    notify: async (e) => notify(e),
+  });
+  const watcherTimers = [
+    setTimeout(() => void disk.check(), 2 * 60_000),
+    setInterval(() => void disk.check(), 15 * 60_000),
+    setTimeout(() => void certificates.check(), 10 * 60_000),
+    setInterval(() => void certificates.check(), 6 * 60 * 60_000),
+  ];
+  for (const t of watcherTimers) t.unref();
+  // "Painel iniciado" (desligado por padrão): quando o servidor fica pronto.
+  app.addHook("onReady", async () => notify(panelStartedNotification(new Date())));
+
   app.addHook("onClose", async () => {
+    notificationService.stop();
+    for (const t of watcherTimers) clearTimeout(t);
+    await notificationService.flush();
     await terminalService.dispose();
     // Depois do dispose: encerrar terminais dispara auditoria sem await, e
     // essas gravações precisam terminar antes de o processo sair.

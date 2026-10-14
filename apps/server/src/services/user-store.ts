@@ -40,6 +40,12 @@ export interface StoredOnboarding {
   startedAt: string | null;
   /** Passos opcionais marcados como "Não vou usar". */
   skipped: OnboardingStepId[];
+  /**
+   * "Ocultar até ter novidade": os passos que eram "em breve" quando a
+   * pessoa ocultou o cartão. Ausente = não ocultou. Ver
+   * isOnboardingHiddenUntilNews (@paas/core).
+   */
+  hiddenSoon?: OnboardingStepId[];
 }
 
 export interface StoredUser {

@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { CertificateCard } from "@/pages/CertificatesPage";
+import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -105,20 +106,32 @@ export function PanelDomainSettings() {
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [typed, setTyped] = useState("");
 
-  const load = useCallback(async () => {
+  /** `quiet`: consulta automática — uma falha mantém a tela como está (a próxima tenta de novo). */
+  const load = useCallback(async (quiet = false) => {
     try {
       const s = await apiFetch<PanelDomainStatus>(PATH);
       setStatus(s);
       setLastCheck(s.lastCheck);
       setLoadError(null);
     } catch {
-      setLoadError("Não foi possível consultar o domínio do painel. Recarregue a página.");
+      if (!quiet) setLoadError("Não foi possível consultar o domínio do painel. Recarregue a página.");
     }
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Domínio no proxy e certificado ainda não válido (emitindo, falhou, não
+  // conferido): a tela consulta sozinha e, quando ele fica válido, atualiza
+  // o certificado, o link para o endereço novo e o "Desativar o acesso pelo IP".
+  const watching =
+    status !== null &&
+    status.mode !== "tunnel" &&
+    status.domain !== null &&
+    status.domainActive &&
+    (status.certificate === null || certificatePending(status.certificate));
+  useAutoRefresh(watching, () => load(true));
 
   async function act(kind: NonNullable<typeof busy>, fn: () => Promise<void>, fallback: string) {
     setBusy(kind);
@@ -192,7 +205,7 @@ export function PanelDomainSettings() {
       "Não foi possível reativar o acesso pelo IP.",
     );
 
-  const refresh = () => act("refresh", load, "Não foi possível conferir de novo.");
+  const refresh = () => act("refresh", () => load(), "Não foi possível conferir de novo.");
 
   if (loadError) {
     return (
@@ -386,6 +399,7 @@ export function PanelDomainSettings() {
               <CertificateCard
                 item={status.certificate}
                 onItem={(item) => setStatus((s) => (s ? { ...s, certificate: item } : s))}
+                onValid={() => load(true)}
                 pollMs={10_000}
                 pollMaxMs={120_000}
               />

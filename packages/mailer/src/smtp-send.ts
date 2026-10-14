@@ -23,6 +23,7 @@
  * estado do certificado continua conferido à parte (MailService.tlsStatus),
  * como um app confere.
  */
+import { randomBytes } from "node:crypto";
 import tls from "node:tls";
 import type { Duplex } from "node:stream";
 
@@ -41,6 +42,14 @@ export interface SmtpSendOptions extends SmtpConnectOptions {
   to: string;
   subject: string;
   text: string;
+  /** Versão em HTML (opcional): a mensagem vira multipart/alternative, texto + HTML. */
+  html?: string;
+  /**
+   * Pedir o aviso de entrega (DSN) quando o servidor anuncia. Padrão: sim (o
+   * e-mail de teste acompanha a entrega por ele). Os avisos do painel
+   * (notificações) desligam: cada envio deixaria uma mensagem na postmaster@.
+   */
+  dsn?: boolean;
   /** Identificador do envio (ENVID do DSN). */
   envId: string;
   messageId: string;
@@ -118,7 +127,19 @@ export function formatFromHeader(address: string, name?: string): string {
   return `From: ${encoded.join("\r\n ")}\r\n <${address}>`;
 }
 
-/** Mensagem de texto simples, 100% ASCII no fio (corpo em base64). */
+/** Corpo em base64, linhas de até 76 caracteres (sem linha começando com ponto). */
+function base64Body(value: string): string {
+  return Buffer.from(value.replace(/\r?\n/g, "\r\n"), "utf8")
+    .toString("base64")
+    .replace(/.{1,76}/g, "$&\r\n")
+    .trimEnd();
+}
+
+/**
+ * Mensagem 100% ASCII no fio (corpo em base64). Só texto: text/plain. Com
+ * `html`: multipart/alternative, a parte de texto antes da de HTML (o leitor
+ * mostra a última alternativa que sabe exibir).
+ */
 export function buildTestMessage(input: {
   from: string;
   /** Nome de exibição do remetente (caixa de um projeto); ausente = só o endereço. */
@@ -126,25 +147,46 @@ export function buildTestMessage(input: {
   to: string;
   subject: string;
   text: string;
+  html?: string;
   messageId: string;
   date: Date;
 }): string {
-  const body = Buffer.from(input.text.replace(/\r?\n/g, "\r\n"), "utf8")
-    .toString("base64")
-    .replace(/.{1,76}/g, "$&\r\n")
-    .trimEnd();
-  return [
+  const headers = [
     formatFromHeader(input.from, input.fromName),
     `To: ${input.to}`,
     `Subject: ${encodeHeader(input.subject)}`,
     `Date: ${input.date.toUTCString().replace("GMT", "+0000")}`,
     `Message-ID: ${input.messageId}`,
     "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=utf-8",
-    "Content-Transfer-Encoding: base64",
+  ];
+  if (input.html === undefined) {
+    return [
+      ...headers,
+      "Content-Type: text/plain; charset=utf-8",
+      "Content-Transfer-Encoding: base64",
+      "Auto-Submitted: auto-generated",
+      "",
+      base64Body(input.text),
+    ].join("\r\n");
+  }
+  // base64 nunca contém "=_", então a fronteira não aparece dentro das partes.
+  const boundary = `=_tws_${randomBytes(12).toString("hex")}`;
+  return [
+    ...headers,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
     "Auto-Submitted: auto-generated",
     "",
-    body,
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Body(input.text),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Body(input.html),
+    `--${boundary}--`,
   ].join("\r\n");
 }
 
@@ -276,10 +318,12 @@ export async function sendSmtpMail(opts: SmtpSendOptions): Promise<SmtpSendResul
     // autenticação (o reset da sessão não mexe nela — conferido na v0.11.8)
     // e devolve a lista certa. Visto na validação local com o Stalwart real.
     const ehlo = await expect("EHLO tws-panel", [250]);
-    const dsn = ehlo
-      .split("\n")
-      .map((l) => l.slice(4).toUpperCase())
-      .includes("DSN");
+    const dsn =
+      opts.dsn !== false &&
+      ehlo
+        .split("\n")
+        .map((l) => l.slice(4).toUpperCase())
+        .includes("DSN");
     await expect(`MAIL FROM:<${opts.from}>${dsn ? ` RET=HDRS ENVID=${xtext(opts.envId)}` : ""}`, [250]);
     await expect(
       `RCPT TO:<${opts.to}>${dsn ? ` NOTIFY=SUCCESS,FAILURE,DELAY ORCPT=rfc822;${xtext(opts.to)}` : ""}`,
@@ -292,6 +336,7 @@ export async function sendSmtpMail(opts: SmtpSendOptions): Promise<SmtpSendResul
       to: opts.to,
       subject: opts.subject,
       text: opts.text,
+      ...(opts.html !== undefined ? { html: opts.html } : {}),
       messageId: opts.messageId,
       date: opts.date ?? new Date(),
     });

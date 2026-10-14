@@ -83,7 +83,8 @@
     "5. Certificado válido: link 'Abrir o painel pelo endereço novo'. Lá a pessoa entra de novo (cookie de sessão é por endereço).",
     "6. POST disable-ip (aberto pelo domínio, certificado válido, domínio digitado) → bloco só com o domínio; audita panel_domain.ip_disabled com o comando de SSH.",
     "7. POST enable-ip ou o script de SSH → os dois endereços de novo; audita panel_domain.ip_enabled (o script não passa pela auditoria: ele age com o painel parado).",
-    "8. DELETE → volta ao endereço pelo IP; audita panel_domain.removed."
+    "8. DELETE → volta ao endereço pelo IP; audita panel_domain.removed.",
+    "9. Tela (PanelDomainSettings), desde 07/10/2026 (validação real: o certificado ficou válido e a tela seguiu em 'Emitindo'): com o domínio no proxy e o certificado ainda não válido (emitindo, falhou, não conferido ou ausente), a tela consulta GET /api/settings/panel-domain sozinha (lib/auto-refresh.ts: 5 s nos 2 primeiros minutos, 15 s até 10 min, depois 1 min; pausa com a aba oculta) e, quando fica válido, atualiza o certificado, o botão 'Abrir o painel pelo endereço novo' e as condições do 'Desativar o acesso pelo IP'. 'Tentar emitir agora' respondendo already_valid (ou o acompanhamento vendo o certificado válido) recarrega a tela na hora (CertificateCard onValid)."
   ],
   "protecoesPorOrigem": [
     "WebSocket do terminal (routes/terminal.ts isCrossOrigin): compara o Origin com o Host do próprio pedido. Funciona nos dois endereços sem mudança — cada um só aceita a si mesmo.",

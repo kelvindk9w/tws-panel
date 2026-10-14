@@ -1,0 +1,40 @@
+{
+  "id": "email",
+  "modulo": "notificacoes",
+  "metodo": "PUT/POST/DELETE",
+  "url": "/api/notifications/email, /api/notifications/email/test",
+  "resumo": "Avisos por e-mail para até 5 endereços, enviados pelo servidor de e-mail do próprio painel (Stalwart), a partir da postmaster@ do primeiro domínio com o DNS conferido. PUT salva os endereços; POST test manda um e-mail de teste para cada um; DELETE desliga.",
+  "arquivoFonte": "apps/server/src/routes/notifications.ts, apps/server/src/services/notification-service.ts, apps/server/src/services/mail-service.ts (systemMailReadiness, sendSystemMail), apps/server/src/routes/mail.ts (setEmailSender), packages/mailer/src/smtp-send.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global." },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "recipients", "tipo": "string[]", "obrigatorio": true, "regras": "PUT; 1 a 5 itens, cada um 1 a 254 caracteres; o serviço tira espaços, põe em minúsculas, remove repetidos e recusa o que não for um endereço só (isSingleEmailAddress)", "descricao": "Quem recebe os avisos." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "corpo": "NotificationsStatus. Trocar a lista desfaz o 'testado'; salvar a mesma lista mantém." },
+    { "status": 400, "corpo": "invalid_request (schema), invalid_recipient, too_many_recipients." },
+    { "status": 409, "corpo": "email_unavailable (o servidor de e-mail não está pronto — message diz o que falta) ou email_no_recipients (teste sem endereço)." },
+    { "status": 502, "corpo": "email_send_failed — o servidor de e-mail não aceitou o teste (message com o motivo)." }
+  ],
+  "prontidao": [
+    "Servidor nunca iniciado → 'não foi iniciado'.",
+    "Sem domínio de e-mail → 'não tem nenhum domínio de envio'.",
+    "Nenhum domínio com o DNS conferido (mesma regra do roteiro: recordsOk; PTR fica de fora) e caixa postmaster@ registrada → 'Verificar DNS'.",
+    "Container parado → 'está parado'; Docker sem resposta → 'não foi possível conferir'."
+  ],
+  "auditoria": [
+    "notifications.email_saved — só a QUANTIDADE de endereços (nunca os endereços).",
+    "notifications.test — 'Teste por e-mail: enviado para N endereço(s)/falhou.'",
+    "notifications.email_removed"
+  ],
+  "observacoes": [
+    "Mensagem multipart/alternative (texto + HTML), From 'TWS Panel' <postmaster@…>, Auto-Submitted: auto-generated, sem DSN.",
+    "Recusa 5xx do servidor é definitiva (não tenta de novo); falha de conexão/tempo esgotado tenta de novo com recuo.",
+    "No primeiro envio de um servidor novo o e-mail costuma cair no spam (falta reputação) — a tela avisa."
+  ]
+}

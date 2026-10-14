@@ -240,6 +240,22 @@
         "apps/server/src/routes/health.ts",
         "apps/server/src/services/system-info.ts"
       ]
+    },
+    {
+      "id": "notificacoes",
+      "titulo": "Notificações",
+      "resumo": "Avisos fora do painel por Telegram e/ou e-mail (alertas de segurança, deploy, certificados, blacklist, disco, painel iniciado), com agrupamento de repetidos, limite por hora e novas tentativas. Serviço central no escopo raiz, ligado aos alertas e ao deploy por ganchos.",
+      "pontoDeEntrada": {
+        "api": "GET /api/notifications",
+        "web": "/settings/notifications"
+      },
+      "indice": "notificacoes/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/notification-service.ts",
+        "apps/server/src/services/notification-sources.ts",
+        "apps/server/src/routes/notifications.ts",
+        "apps/web/src/pages/settings/NotificationSettings.tsx"
+      ]
     }
   ],
   "global": {

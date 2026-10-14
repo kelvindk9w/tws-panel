@@ -3,6 +3,7 @@
  *  GET  /api/onboarding                 status de cada passo + progresso da conta
  *  POST /api/onboarding/start           "comecei" (o Dashboard passa a mostrar o roteiro compacto)
  *  PUT  /api/onboarding/steps/:id       "Não vou usar" / desfazer (só passos opcionais)
+ *  PUT  /api/onboarding/hidden          "Ocultar até ter novidade" / mostrar de novo
  *
  * O progresso é da CONTA (data/users.json, ao lado das preferências): vale
  * em qualquer computador. As conferências são injetadas (sem Docker).
@@ -24,14 +25,16 @@ let ctx: AuthTestContext;
 let app: FastifyInstance;
 let cookie: string;
 let emailState: StepState;
+let twoFactorState: StepState;
 
 const fixed = (state: StepState) => async () => state;
 
 beforeEach(async () => {
   emailState = { status: "pending", detail: "Servidor de e-mail não iniciado." };
+  twoFactorState = { status: "pending", detail: "Desligada." };
   const checks: OnboardingChecks = {
     hardening: fixed({ status: "done", detail: "Todas as 8 fases resolvidas." }),
-    "two-factor": fixed({ status: "pending", detail: "Desligada." }),
+    "two-factor": async () => twoFactorState,
     "panel-domain": fixed({ status: "soon", detail: "Em breve." }),
     email: async () => emailState,
     notifications: fixed({ status: "soon", detail: "Em breve." }),
@@ -88,6 +91,7 @@ describe("GET /api/onboarding", () => {
     ]);
     expect(res.started).toBe(false);
     expect(res.complete).toBe(false);
+    expect(res.hidden).toBe(false);
     expect(res.projectsDir).toBe("/opt/tws-projects");
   });
 
@@ -161,5 +165,70 @@ describe("PUT /api/onboarding/steps/:id", () => {
     expect((await skip("email", true)).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/api/onboarding", headers: { cookie } })).statusCode).toBe(401);
     expect((await app.inject({ method: "POST", url: "/api/onboarding/start", headers: { cookie } })).statusCode).toBe(401);
+  });
+});
+
+function hide(hidden: unknown, extra: Record<string, unknown> = {}) {
+  return app.inject({
+    method: "PUT",
+    url: "/api/onboarding/hidden",
+    headers: { cookie },
+    payload: { hidden, ...extra } as Record<string, unknown>,
+  });
+}
+
+// Validação real (07/10/2026): com o que dá para fazer feito e passos "em
+// breve", o cartão continua no Dashboard; "Ocultar até ter novidade" o
+// esconde — guardado na conta — até um passo chegar ou voltar a pedir ação.
+describe("PUT /api/onboarding/hidden", () => {
+  beforeEach(() => {
+    twoFactorState = { status: "done", detail: "Ativa." };
+    emailState = { status: "done", detail: "Servidor ligado." };
+  });
+
+  it("só falta o que está 'em breve': oculta, guarda na conta os passos 'em breve' e marca o roteiro como começado", async () => {
+    const before = await get();
+    expect(before.complete).toBe(false);
+    expect(before.hidden).toBe(false);
+
+    const res = await hide(true);
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json() as OnboardingResponse;
+    expect(body.hidden).toBe(true);
+    expect(body.started).toBe(true);
+    expect(await storedOnboarding()).toMatchObject({ hiddenSoon: ["panel-domain", "notifications"] });
+    expect((await get()).hidden).toBe(true);
+  });
+
+  it("um passo volta a pedir ação: o cartão reaparece; resolvido de novo, volta a ficar oculto", async () => {
+    await hide(true);
+    twoFactorState = { status: "pending", detail: "Desligada." };
+    expect((await get()).hidden).toBe(false);
+    twoFactorState = { status: "done", detail: "Ativa." };
+    expect((await get()).hidden).toBe(true);
+  });
+
+  it("mostrar de novo (hidden: false) apaga a escolha", async () => {
+    await hide(true);
+    const res = await hide(false);
+    expect(res.statusCode, res.body).toBe(200);
+    expect((res.json() as OnboardingResponse).hidden).toBe(false);
+    expect(await storedOnboarding()).not.toHaveProperty("hiddenSoon");
+  });
+
+  it("com passo pedindo ação agora → 409 (não há o que esperar)", async () => {
+    twoFactorState = { status: "pending", detail: "Desligada." };
+    const res = await hide(true);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "onboarding_has_action" });
+    expect(await storedOnboarding()).toBeUndefined();
+  });
+
+  it("corpo inválido → 400; conta que não existe mais → 401", async () => {
+    expect((await hide("sim")).statusCode).toBe(400);
+    expect((await hide(true, { outro: 1 })).statusCode).toBe(400);
+    await ctx.userStore.removeAll();
+    expect((await hide(true)).statusCode).toBe(401);
+    expect((await hide(false)).statusCode).toBe(401);
   });
 });

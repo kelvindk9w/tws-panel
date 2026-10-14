@@ -55,6 +55,7 @@
   "observacoes": [
     "Fontes: documentação do comando `caddy reload` (--force recarrega mesmo com a config igual) e da emissão automática (tentativas com espera crescente, até 1 dia entre elas, por até 30 dias); código do certmagic: async.go (doWithRetry: intervalos 1 min, 2 min, … até 6 h; para no ctx.Done) e config.go (manageOne: obtain assíncrono sem nome de job).",
     "Modo em segundo plano (02/10/2026): retry(host, { background: true }) faz as mesmas conferências e pode recusar igual, mas não espera o recarregamento do Caddy; falha dele vai para o log ('Certificados: falha ao pedir a emissão de <nome> (...)'). Usado pela verificação de DNS do e-mail. O limite de 1 por minuto é o MESMO para o botão e para a verificação, porque o serviço é um só: nasce no escopo raiz em app.ts (buildCertificateService) e as rotas desta página usam o que já existe.",
-    "'Renovar agora?' num certificado válido NÃO chama este endpoint: a tela só explica que não é preciso."
+    "'Renovar agora?' num certificado válido NÃO chama este endpoint: a tela só explica que não é preciso.",
+    "07/10/2026: na interface, a resposta 409 already_valid não aparece mais como erro: o CertificateCard busca o item atualizado (GET /api/certificates?host=), troca o card, mostra a mensagem em verde e chama onValid (o Domínio do painel recarrega a tela inteira). onValid também é chamado quando o acompanhamento depois do pedido vê o certificado válido."
   ]
 }

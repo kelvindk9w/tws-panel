@@ -9,8 +9,11 @@ import {
   OPTIONAL_ONBOARDING_STEPS,
   isOnboardingComplete,
   isOnboardingFirstVisit,
+  isOnboardingHiddenUntilNews,
   isOnboardingStepResolved,
+  isOnboardingWaitingOnSoon,
   nextOnboardingStep,
+  soonOnboardingSteps,
   type OnboardingStep,
   type OnboardingStepStatus,
 } from "../src/index";
@@ -50,17 +53,72 @@ describe("roteiro de primeiros passos", () => {
     expect(nextOnboardingStep([step("hardening", "done"), step("email", "in_progress")])?.id).toBe("email");
   });
 
-  it("tudo resolvido: sem próximo passo e roteiro concluído (passos 'em breve' não seguram o cartão)", () => {
+  it("sem próximo passo, mas com passo 'em breve': ainda não está concluído (o cartão continua)", () => {
     const steps = [
       step("hardening", "done"),
       step("two-factor", "done"),
-      step("panel-domain", "soon"),
+      step("panel-domain", "done"),
       step("email", "skipped"),
       step("notifications", "soon"),
     ];
     expect(nextOnboardingStep(steps)).toBeNull();
+    expect(isOnboardingComplete(steps)).toBe(false);
+    expect(isOnboardingWaitingOnSoon(steps)).toBe(true);
+    expect(soonOnboardingSteps(steps)).toEqual(["notifications"]);
+  });
+
+  // Validação real (07/10/2026): com 1 a 4 feitos e o 5 "em breve", o cartão
+  // sumiu do Dashboard. Só some de vez com tudo feito ou "Não vou usar".
+  it("concluído = todos os passos feitos ou 'Não vou usar'", () => {
+    const steps = [
+      step("hardening", "done"),
+      step("two-factor", "done"),
+      step("panel-domain", "done"),
+      step("email", "skipped"),
+      step("notifications", "skipped"),
+    ];
     expect(isOnboardingComplete(steps)).toBe(true);
+    expect(isOnboardingWaitingOnSoon(steps)).toBe(false);
     expect(isOnboardingComplete([...steps.slice(0, 4), step("notifications", "pending")])).toBe(false);
+    expect(isOnboardingComplete([...steps.slice(0, 4), step("notifications", "unknown")])).toBe(false);
+  });
+
+  it("com passo pedindo ação, não está só esperando o 'em breve'", () => {
+    expect(isOnboardingWaitingOnSoon([step("two-factor", "pending"), step("notifications", "soon")])).toBe(false);
+  });
+
+  describe("'Ocultar até ter novidade'", () => {
+    const waiting = [
+      step("hardening", "done"),
+      step("two-factor", "done"),
+      step("panel-domain", "done"),
+      step("email", "done"),
+      step("notifications", "soon"),
+    ];
+
+    it("nunca ocultado: aparece", () => {
+      expect(isOnboardingHiddenUntilNews(waiting, undefined)).toBe(false);
+      expect(isOnboardingHiddenUntilNews(waiting, null)).toBe(false);
+    });
+
+    it("ocultado com os mesmos passos 'em breve' e nada a fazer: continua oculto", () => {
+      expect(isOnboardingHiddenUntilNews(waiting, ["notifications"])).toBe(true);
+    });
+
+    it("um passo deixou de ser 'em breve': é novidade, aparece de novo", () => {
+      const arrived = [...waiting.slice(0, 4), step("notifications", "pending")];
+      expect(isOnboardingHiddenUntilNews(arrived, ["notifications"])).toBe(false);
+    });
+
+    it("um passo voltou a pedir ação (ex.: 2FA desligada): aparece de novo", () => {
+      const regressed = [waiting[0]!, step("two-factor", "pending"), ...waiting.slice(2)];
+      expect(isOnboardingHiddenUntilNews(regressed, ["notifications"])).toBe(false);
+    });
+
+    it("passo que não dá para conferir agora também pede atenção: aparece", () => {
+      const unknown = [waiting[0]!, step("two-factor", "unknown"), ...waiting.slice(2)];
+      expect(isOnboardingHiddenUntilNews(unknown, ["notifications"])).toBe(false);
+    });
   });
 
   // Pedido do dono do produto (01/10/2026): com 2FA ligado e projeto rodando,

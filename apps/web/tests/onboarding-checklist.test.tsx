@@ -8,7 +8,9 @@
  *    passos" expande a lista inteira no cartão;
  *  - cada passo tem "Como fazer" (o que é, por que importa, passo a passo e o
  *    botão que leva à tela certa);
- *  - tudo resolvido: some do Dashboard e continua em Configurações;
+ *  - só falta o que é "em breve": continua no Dashboard, compacto, com a
+ *    mensagem e "Ocultar até ter novidade" (validação real, 07/10/2026);
+ *  - tudo feito ou "Não vou usar": some do Dashboard e continua em Configurações;
  *  - opcionais podem ser marcados "Não vou usar" (e desfeitos).
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -44,7 +46,7 @@ function steps(statuses: Partial<Record<OnboardingStep["id"], OnboardingStepStat
 }
 
 function response(over: Partial<OnboardingResponse> = {}, statuses = {}): OnboardingResponse {
-  return { steps: steps(statuses), started: false, complete: false, projectsDir: "/opt/tws-projects", ...over };
+  return { steps: steps(statuses), started: false, complete: false, hidden: false, projectsDir: "/opt/tws-projects", ...over };
 }
 
 function Where() {
@@ -78,6 +80,11 @@ function serve(initial: OnboardingResponse) {
     if (path === "/api/onboarding" && method === "GET") return current;
     if (path === "/api/onboarding/start" && method === "POST") {
       current = { ...current, started: true };
+      return current;
+    }
+    if (path === "/api/onboarding/hidden" && method === "PUT") {
+      const { hidden } = JSON.parse(String(init?.body)) as { hidden: boolean };
+      current = { ...current, started: true, hidden };
       return current;
     }
     const m = /^\/api\/onboarding\/steps\/(.+)$/.exec(path);
@@ -259,27 +266,121 @@ describe("domínio do painel (deixou de ser 'em breve')", () => {
   });
 });
 
-describe("passos em breve", () => {
-  it("notificações: Telegram primeiro, e-mail depois, um, outro ou os dois", async () => {
-    serve(response());
+describe("passo das notificações", () => {
+  it("passo a passo do Telegram (@BotFather, /start, Conectar, Enviar teste) e o botão para a tela", async () => {
+    serve(response({}, { notifications: "pending" }));
     renderChecklist();
     const item = await screen.findByTestId("onboarding-step-notifications");
     fireEvent.click(within(item).getByRole("button", { name: /Como fazer/ }));
-    expect(within(item).getByText(/Primeiro virá o Telegram/)).toBeInTheDocument();
-    expect(within(item).getByText(/um, outro ou os dois/)).toBeInTheDocument();
+    expect(within(item).getByText(/@BotFather/)).toBeInTheDocument();
+    expect(within(item).getByText(/clique em Conectar/)).toBeInTheDocument();
+    expect(within(item).getByText(/Enviar teste/)).toBeInTheDocument();
+    expect(within(item).getByText(/só o Telegram, só o e-mail ou os dois/)).toBeInTheDocument();
+    expect(within(item).getByRole("link", { name: /Abrir Notificações/ })).toHaveAttribute("href", "/settings/notifications");
+  });
+});
+
+// Validação real (07/10/2026): com os passos 1 a 4 feitos e o 5 "em breve",
+// o cartão sumiu do Dashboard como se estivesse tudo pronto. O dono esperava
+// continuar vendo o progresso e o que ainda vem.
+describe("só falta o que chega em breve", () => {
+  const waiting = { "two-factor": "done", "panel-domain": "done", email: "done" } as const;
+
+  it("no Dashboard o cartão continua, compacto, com a mensagem e 'Ocultar até ter novidade'", async () => {
+    serve(response({ started: true }, waiting));
+    renderChecklist("dashboard");
+    const card = await screen.findByTestId("onboarding-card");
+    expect(within(card).getAllByRole("button", { name: /^\d\. / })).toHaveLength(5);
+    expect(within(card).getByText(/4 feitos · 1 em breve no painel/)).toBeInTheDocument();
+    expect(within(card).getByTestId("onboarding-waiting")).toHaveTextContent(
+      "Tudo o que dá para fazer agora está feito. Notificações chega em breve.",
+    );
+    expect(within(card).queryAllByTestId(/^onboarding-step-/)).toHaveLength(0);
+    expect(within(card).getByRole("button", { name: /Ocultar até ter novidade/ })).toBeInTheDocument();
+    expect(within(card).queryByText(/Tudo pronto/)).not.toBeInTheDocument();
+  });
+
+  it("mais de um passo em breve: cita todos", async () => {
+    serve(response({ started: true }, { "two-factor": "done", email: "skipped" }));
+    renderChecklist("dashboard");
+    expect(await screen.findByTestId("onboarding-waiting")).toHaveTextContent(
+      "Domínio do painel e Notificações chegam em breve.",
+    );
+  });
+
+  it("clicar num número ou em 'Ver todos os passos' ainda mostra os passos", async () => {
+    serve(response({ started: true }, waiting));
+    renderChecklist("dashboard");
+    const card = await screen.findByTestId("onboarding-card");
+    fireEvent.click(within(card).getByRole("button", { name: /Ver todos os passos/ }));
+    expect(within(card).getAllByTestId(/^onboarding-step-/)).toHaveLength(5);
+    fireEvent.click(within(card).getByRole("button", { name: /Recolher a lista/ }));
+    expect(within(card).getByTestId("onboarding-waiting")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /5\. Notificações/ }));
+    expect(within(card).getByTestId("onboarding-step-notifications")).toBeInTheDocument();
+    expect(within(card).queryByTestId("onboarding-waiting")).not.toBeInTheDocument();
+  });
+
+  it("'Ocultar até ter novidade' grava na conta e o cartão sai do Dashboard", async () => {
+    serve(response({ started: true }, waiting));
+    const onVisibleChange = vi.fn();
+    const router = createMemoryRouter([{ path: "*", element: <OnboardingChecklist variant="dashboard" onVisibleChange={onVisibleChange} /> }]);
+    render(<RouterProvider router={router} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Ocultar até ter novidade/ }));
+    await waitFor(() => expect(screen.queryByTestId("onboarding-card")).not.toBeInTheDocument());
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      "/api/onboarding/hidden",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ hidden: true }) }),
+    );
+    expect(onVisibleChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("falha ao ocultar: o cartão fica e mostra o motivo", async () => {
+    serve(response({ started: true }, waiting));
+    renderChecklist("dashboard");
+    const btn = await screen.findByRole("button", { name: /Ocultar até ter novidade/ });
+    apiFetchMock.mockRejectedValueOnce(new Error("Ainda há passo a fazer agora."));
+    fireEvent.click(btn);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Ainda há passo a fazer/);
+    expect(screen.getByTestId("onboarding-card")).toBeInTheDocument();
+  });
+
+  it("ocultado e sem novidade: o Dashboard não mostra o cartão", async () => {
+    serve(response({ started: true, hidden: true }, waiting));
+    renderChecklist("dashboard");
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("onboarding-card")).not.toBeInTheDocument();
+  });
+
+  it("em Configurações continua visível, diz que está oculto no Dashboard e permite mostrar de novo", async () => {
+    serve(response({ started: true, hidden: true }, waiting));
+    renderChecklist("settings");
+    const card = await screen.findByTestId("onboarding-card");
+    expect(within(card).getAllByTestId(/^onboarding-step-/)).toHaveLength(5);
+    expect(within(card).getByTestId("onboarding-waiting")).toHaveTextContent(/Notificações chega em breve/);
+    expect(within(card).queryByRole("button", { name: /Ocultar até ter novidade/ })).not.toBeInTheDocument();
+    expect(within(card).getByText(/oculto no Dashboard até ter novidade/)).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /Mostrar no Dashboard/ }));
+    await waitFor(() => expect(within(card).queryByText(/oculto no Dashboard/)).not.toBeInTheDocument());
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      "/api/onboarding/hidden",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ hidden: false }) }),
+    );
   });
 });
 
 describe("tudo resolvido", () => {
+  const allDone = { "two-factor": "done", "panel-domain": "done", email: "skipped", notifications: "skipped" } as const;
+
   it("no Dashboard o cartão some", async () => {
-    serve(response({ started: true, complete: true }, { "two-factor": "done", email: "skipped" }));
+    serve(response({ started: true, complete: true }, allDone));
     renderChecklist("dashboard");
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     expect(screen.queryByTestId("onboarding-card")).not.toBeInTheDocument();
   });
 
   it("em Configurações continua acessível, com todos os passos e o aviso de que está tudo pronto", async () => {
-    serve(response({ started: true, complete: true }, { "two-factor": "done", email: "skipped" }));
+    serve(response({ started: true, complete: true }, allDone));
     renderChecklist("settings");
     const card = await screen.findByTestId("onboarding-card");
     expect(within(card).getAllByTestId(/^onboarding-step-/)).toHaveLength(5);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
   isOnboardingFirstVisit,
+  isOnboardingWaitingOnSoon,
   nextOnboardingStep,
   type OnboardingResponse,
   type OnboardingStep,
@@ -24,6 +25,8 @@ import {
   Circle,
   CircleMinus,
   Clock,
+  Eye,
+  EyeOff,
   FolderOpen,
   ListChecks,
   Loader2,
@@ -307,14 +310,25 @@ function summary(steps: OnboardingStep[]): string {
   return parts.join(" · ");
 }
 
+/** "Domínio do painel e Notificações chegam em breve." */
+function soonSentence(steps: OnboardingStep[]): string {
+  const titles = steps.filter((s) => s.status === "soon").map((s) => ONBOARDING_CONTENT[s.id].title);
+  const names = titles.length > 1 ? `${titles.slice(0, -1).join(", ")} e ${titles[titles.length - 1]}` : titles[0];
+  return `${names} ${titles.length > 1 ? "chegam" : "chega"} em breve.`;
+}
+
 /**
  * Roteiro "Deixe o painel pronto".
  *  - Dashboard: aberto só no primeiro acesso (isOnboardingFirstVisit);
  *    depois, compacto: números 1 a 5 com a situação de cada passo e a
  *    orientação só do passo atual (ou do número clicado); "Ver todos os
- *    passos" expande a lista no próprio cartão; some quando nada mais
- *    pede ação. Sem resposta do servidor, não aparece.
- *  - Configurações: sempre a lista inteira, mesmo com tudo resolvido.
+ *    passos" expande a lista no próprio cartão. Quando só falta o que é
+ *    "em breve", continua compacto com "Tudo o que dá para fazer agora está
+ *    feito…" e "Ocultar até ter novidade" (guardado na conta; o cartão volta
+ *    quando um passo chega ou volta a pedir ação). Some de vez com tudo
+ *    feito ou "Não vou usar". Sem resposta do servidor, não aparece.
+ *  - Configurações: sempre a lista inteira, mesmo com tudo resolvido ou
+ *    oculto no Dashboard ("Mostrar no Dashboard" desfaz o ocultar).
  */
 export function OnboardingChecklist({
   variant,
@@ -328,6 +342,7 @@ export function OnboardingChecklist({
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [hiding, setHiding] = useState(false);
   const [showAll, setShowAll] = useState(false);
   /** Passo escolhido nos números do compacto (null = o próximo que pede algo). */
   const [selectedId, setSelectedId] = useState<OnboardingStep["id"] | null>(null);
@@ -377,13 +392,33 @@ export function OnboardingChecklist({
     }
   }
 
+  /** "Ocultar até ter novidade" (true) ou "Mostrar no Dashboard" (false). */
+  async function setHidden(hidden: boolean) {
+    setHiding(true);
+    try {
+      setData(
+        await apiFetch<OnboardingResponse>("/api/onboarding/hidden", {
+          method: "PUT",
+          body: JSON.stringify({ hidden }),
+        }),
+      );
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível salvar.");
+    } finally {
+      setHiding(false);
+    }
+  }
+
+  const onDashboard = variant === "dashboard" && data !== null && !data.complete && !data.hidden;
+
   // só depois de saber (carregou ou falhou): enquanto carrega, não decide nada
   useEffect(() => {
     if (data === null && error === null) return;
-    onVisibleChange?.(variant === "dashboard" && data !== null && !data.complete);
-  }, [data, error, variant, onVisibleChange]);
+    onVisibleChange?.(onDashboard);
+  }, [data, error, onDashboard, onVisibleChange]);
 
-  if (variant === "dashboard" && (!data || data.complete)) return null;
+  if (variant === "dashboard" && !onDashboard) return null;
   if (!data) {
     return error ? (
       <p role="alert" className="text-sm text-destructive">
@@ -399,7 +434,10 @@ export function OnboardingChecklist({
   const compact = variant === "dashboard" && !isOnboardingFirstVisit(data);
   const next = nextOnboardingStep(data.steps);
   const shown = data.steps.find((s) => s.id === selectedId) ?? next;
-  const listAll = !compact || showAll || !shown;
+  // Só falta o que é "em breve": no compacto, a mensagem no lugar do passo.
+  const waiting = isOnboardingWaitingOnSoon(data.steps);
+  const waitingOnly = compact && waiting && !showAll && !shown;
+  const listAll = !waitingOnly && (!compact || showAll || !shown);
   const listProps = { all: data.steps, busyId, onSkip: (s: OnboardingStep, v: boolean) => void skip(s, v), onGo: () => void start() };
 
   return (
@@ -427,10 +465,10 @@ export function OnboardingChecklist({
               <ChevronUp className="h-4 w-4" /> Recolher
             </Button>
           )}
-          {compact && shown && (
+          {compact && (shown || waiting) && (
             <Button variant="outline" size="sm" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
               {showAll ? <ChevronUp className="h-4 w-4" /> : <ListChecks className="h-4 w-4" />}
-              {showAll ? "Mostrar só o próximo" : "Ver todos os passos"}
+              {showAll ? (waiting && !shown ? "Recolher a lista" : "Mostrar só o próximo") : "Ver todos os passos"}
             </Button>
           )}
         </div>
@@ -459,7 +497,30 @@ export function OnboardingChecklist({
         </p>
       )}
 
-      {listAll ? (
+      {waiting && (!compact || waitingOnly) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed px-3 py-3">
+          <p data-testid="onboarding-waiting" className="flex min-w-0 items-start gap-2 text-sm">
+            <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <span>Tudo o que dá para fazer agora está feito. {soonSentence(data.steps)}</span>
+          </p>
+          {variant === "dashboard" && (
+            <Button variant="outline" size="sm" disabled={hiding} onClick={() => void setHidden(true)}>
+              {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <EyeOff className="h-4 w-4" />} Ocultar até ter novidade
+            </Button>
+          )}
+        </div>
+      )}
+
+      {variant === "settings" && data.hidden && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+          <p>Este roteiro está oculto no Dashboard até ter novidade.</p>
+          <Button variant="outline" size="sm" disabled={hiding} onClick={() => void setHidden(false)}>
+            {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />} Mostrar no Dashboard
+          </Button>
+        </div>
+      )}
+
+      {waitingOnly ? null : listAll ? (
         <>
           <StepList steps={data.steps} {...listProps} />
           <ProjectsDirNote dir={data.projectsDir} />
