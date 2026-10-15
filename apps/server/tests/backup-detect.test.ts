@@ -4,6 +4,10 @@
  * de volume) e os comandos de dump/restauração de cada banco. Puro: a saída
  * do `docker inspect`/`docker diff` entra como dado.
  */
+import { spawnSync } from "node:child_process";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildDetection,
@@ -11,6 +15,7 @@ import {
   engineFromImage,
   itemFileName,
   mountId,
+  REDIS_SAVE,
   restoreScript,
   unsavedWritesFromDiff,
   type ContainerInspect,
@@ -210,5 +215,118 @@ describe("dump e restauração", () => {
   it("nome de arquivo seguro dentro do backup", () => {
     expect(itemFileName("web", "/app/public/uploads")).toBe("web__app_public_uploads");
     expect(itemFileName("my svc", "/")).toBe("my_svc__raiz");
+  });
+});
+
+/**
+ * Roda o script de verdade (sh) com um mongodump/mongorestore/redis-cli
+ * falso no PATH. O falso grava os argumentos e, se recebeu --config, o modo
+ * e o conteúdo do arquivo naquele instante.
+ */
+async function rodarComFalso(script: string, opts: { tool: string; hasConfig: boolean; env: Record<string, string>; exitCode?: number }) {
+  const dir = await mkdtemp(path.join(tmpdir(), "paas-mongo-cfg-"));
+  const bin = path.join(dir, "bin");
+  const tmp = path.join(dir, "tmp");
+  await writeFile(path.join(dir, ".keep"), "");
+  await spawnSync("mkdir", ["-p", bin, tmp]);
+  const log = path.join(dir, "argv.log");
+  const fake = `#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo "Usage: ${opts.tool} <options>"
+  ${opts.hasConfig ? 'echo "      --config=<filename>   path to a configuration file"' : "true"}
+  exit 0
+fi
+printf '%s\\n' "$*" >> "${log}"
+if [ -n "\${REDISCLI_AUTH:-}" ]; then echo "auth=\$REDISCLI_AUTH" >> "${log}"; fi
+prev=""
+for a in "$@"; do
+  case "$a" in --config=*) cfg="\${a#--config=}" ;; esac
+  [ "$prev" = "--config" ] && cfg="$a"
+  prev="$a"
+done
+if [ -n "\${cfg:-}" ]; then
+  stat -c 'modo=%a' "$cfg" >> "${log}"
+  cat "$cfg" >> "${log}"
+fi
+cat >/dev/null 2>&1 || true
+exit ${opts.exitCode ?? 0}
+`;
+  await writeFile(path.join(bin, opts.tool), fake);
+  await chmod(path.join(bin, opts.tool), 0o755);
+  const r = spawnSync("sh", ["-c", script, "sh"], {
+    encoding: "utf8",
+    input: "",
+    env: { PATH: `${bin}:/usr/bin:/bin`, TMPDIR: tmp, ...opts.env },
+  });
+  const argv = await readFile(log, "utf8").catch(() => "");
+  const sobras = await readdir(tmp);
+  await rm(dir, { recursive: true, force: true });
+  return { status: r.status, stderr: r.stderr, argv, sobras };
+}
+
+const SENHA_MONGO = `se'nha "forte" $x`;
+
+describe("MongoDB: a senha não vai na linha de comando", () => {
+  const env = { MONGO_INITDB_ROOT_USERNAME: "root", MONGO_INITDB_ROOT_PASSWORD: SENHA_MONGO };
+
+  it("dump com database-tools 100.x: senha num --config 0600 que some no fim", async () => {
+    const r = await rodarComFalso(dumpPlan("mongo")[0]!.script, { tool: "mongodump", hasConfig: true, env });
+    expect(r.status, r.stderr).toBe(0);
+    const [linha, modo, conteudo] = r.argv.split("\n");
+    expect(linha).toMatch(/^--archive --quiet --username root --authenticationDatabase admin --config \S+/);
+    expect(linha).not.toContain("nha");
+    expect(linha).not.toMatch(/--password/);
+    expect(modo).toBe("modo=600");
+    expect(conteudo).toBe(`password: 'se''nha "forte" $x'`);
+    expect(r.sobras).toEqual([]);
+  });
+
+  it("restauração com database-tools 100.x: o mesmo, com mongorestore", async () => {
+    const r = await rodarComFalso(restoreScript("mongo"), { tool: "mongorestore", hasConfig: true, env });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.argv.split("\n")[0]).toMatch(/^--archive --drop --quiet --username root --authenticationDatabase admin --config /);
+    expect(r.argv).not.toMatch(/--password/);
+    expect(r.sobras).toEqual([]);
+  });
+
+  it("o arquivo some mesmo quando o dump falha, e o código de saída é o do mongodump", async () => {
+    const r = await rodarComFalso(dumpPlan("mongo")[0]!.script, { tool: "mongodump", hasConfig: true, env, exitCode: 3 });
+    expect(r.status).toBe(3);
+    expect(r.sobras).toEqual([]);
+  });
+
+  it("senha em arquivo (*_FILE) também vai pelo --config", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-mongo-file-"));
+    await writeFile(path.join(dir, "pw"), "do-arquivo");
+    const r = await rodarComFalso(dumpPlan("mongo")[0]!.script, {
+      tool: "mongodump",
+      hasConfig: true,
+      env: { MONGO_INITDB_ROOT_USERNAME: "root", MONGO_INITDB_ROOT_PASSWORD_FILE: path.join(dir, "pw") },
+    });
+    await rm(dir, { recursive: true, force: true });
+    expect(r.argv).toContain("password: 'do-arquivo'");
+    expect(r.argv.split("\n")[0]).not.toContain("do-arquivo");
+  });
+
+  it("database-tools antigas (sem --config): cai na senha por argumento, como antes", async () => {
+    const r = await rodarComFalso(dumpPlan("mongo")[0]!.script, { tool: "mongodump", hasConfig: false, env });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.argv.split("\n")[0]).toBe(`--archive --quiet --username root --password ${SENHA_MONGO} --authenticationDatabase admin`);
+    expect(r.sobras).toEqual([]);
+  });
+
+  it("sem usuário no ambiente: sem autenticação e sem arquivo", async () => {
+    const r = await rodarComFalso(dumpPlan("mongo")[0]!.script, { tool: "mongodump", hasConfig: true, env: {} });
+    expect(r.argv.split("\n")[0]).toBe("--archive --quiet");
+    expect(r.sobras).toEqual([]);
+  });
+});
+
+describe("Redis: a senha não vai na linha de comando", () => {
+  it("SAVE com REDIS_PASSWORD usa REDISCLI_AUTH, não -a", async () => {
+    const r = await rodarComFalso(REDIS_SAVE, { tool: "redis-cli", hasConfig: false, env: { REDIS_PASSWORD: "segredo-redis" } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.argv.split("\n")[0]).toBe("--no-auth-warning SAVE");
+    expect(r.argv).toContain("auth=segredo-redis");
   });
 });

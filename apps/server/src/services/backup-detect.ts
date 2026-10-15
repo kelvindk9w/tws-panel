@@ -261,12 +261,34 @@ const MY_ENV = [
   "export MYSQL_PWD",
 ].join("\n");
 
-const MONGO_ENV = [
-  'MU="${MONGO_INITDB_ROOT_USERNAME:-}"',
-  'MP="${MONGO_INITDB_ROOT_PASSWORD:-}"',
-  'if [ -z "$MP" ] && [ -n "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ] && [ -r "$MONGO_INITDB_ROOT_PASSWORD_FILE" ]; then MP="$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE")"; fi',
-  'if [ -n "$MU" ]; then set -- --username "$MU" --password "$MP" --authenticationDatabase admin; else set --; fi',
-].join("\n");
+/**
+ * Credenciais do MongoDB para `tool` (mongodump ou mongorestore), em "$@".
+ * A senha NÃO vai na linha de comando (ela apareceria no `ps` do container):
+ * as database-tools 100.3+ leem `password` de um YAML passado em --config.
+ * O arquivo é criado com umask 077 (0600) no /tmp do container do banco e
+ * apagado ao sair, com sucesso, erro ou sinal.
+ * Fallback: database-tools antigas (sem --config no --help, como nas imagens
+ * mongo até 4.2) recebem --password como antes; o relatório documenta isso.
+ */
+function mongoEnv(tool: "mongodump" | "mongorestore"): string {
+  return [
+    'MU="${MONGO_INITDB_ROOT_USERNAME:-}"',
+    'MP="${MONGO_INITDB_ROOT_PASSWORD:-}"',
+    'if [ -z "$MP" ] && [ -n "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ] && [ -r "$MONGO_INITDB_ROOT_PASSWORD_FILE" ]; then MP="$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE")"; fi',
+    "set --",
+    'if [ -n "$MU" ]; then',
+    `  if ${tool} --help 2>&1 | grep -q -- "--config"; then`,
+    '    MCFG="$(umask 077 && mktemp "${TMPDIR:-/tmp}/tws-mongo.XXXXXX")" || exit 1',
+    `    trap 'rm -f "$MCFG"' EXIT`,
+    `    trap 'rm -f "$MCFG"; exit 143' HUP INT TERM`,
+    `    printf "password: '%s'\\n" "$(printf %s "$MP" | sed "s/'/''/g")" > "$MCFG"`,
+    '    set -- --username "$MU" --authenticationDatabase admin --config "$MCFG"',
+    "  else",
+    '    set -- --username "$MU" --password "$MP" --authenticationDatabase admin',
+    "  fi",
+    "fi",
+  ].join("\n");
+}
 
 export interface DumpStep {
   /** list: lista os bancos (um por linha); globals: papéis do Postgres; db: um banco ($1 = nome); all: tudo num arquivo. */
@@ -303,7 +325,7 @@ export function dumpPlan(engine: BackupDatabaseEngine): DumpStep[] {
         },
       ];
     case "mongo":
-      return [{ id: "all", script: `${MONGO_ENV}\nmongodump --archive --quiet "$@"`, ext: ".archive" }];
+      return [{ id: "all", script: `${mongoEnv("mongodump")}\nmongodump --archive --quiet "$@"`, ext: ".archive" }];
     default:
       return [];
   }
@@ -323,7 +345,7 @@ export function restoreScript(engine: BackupDatabaseEngine): string {
     case "mariadb":
       return `${MY_ENV}\n$CLI -u"$U"`;
     case "mongo":
-      return `${MONGO_ENV}\nmongorestore --archive --drop --quiet "$@"`;
+      return `${mongoEnv("mongorestore")}\nmongorestore --archive --drop --quiet "$@"`;
     default:
       return "";
   }
@@ -333,4 +355,5 @@ export function restoreScript(engine: BackupDatabaseEngine): string {
 export const PG_GLOBALS_RESTORE = `${PG_ENV}\npsql -U "$U" -d template1 -X -q`;
 
 /** Antes de copiar o /data do Redis: grava o que está na memória. */
-export const REDIS_SAVE = 'redis-cli --no-auth-warning ${REDIS_PASSWORD:+-a "$REDIS_PASSWORD"} SAVE';
+// A senha vai pela variável REDISCLI_AUTH (redis-cli 6+), nunca por -a.
+export const REDIS_SAVE = 'if [ -n "${REDIS_PASSWORD:-}" ]; then export REDISCLI_AUTH="$REDIS_PASSWORD"; fi\nredis-cli --no-auth-warning SAVE';
