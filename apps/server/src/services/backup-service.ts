@@ -716,8 +716,11 @@ export class BackupService {
 
   async setDestination(req: BackupDestinationRequest, actor: string): Promise<BackupsStatus> {
     await this.ensureLoaded();
-    const endpoint = req.endpoint.trim().replace(/\/+$/, "");
     const bucket = req.bucket.trim();
+    // O Cloudflare mostra o "S3 API" já com o bucket no fim
+    // (https://<conta>.r2.cloudflarestorage.com/<bucket>): aceita colado assim.
+    let endpoint = req.endpoint.trim().replace(/\/+$/, "");
+    if (bucket && endpoint.toLowerCase().endsWith(`/${bucket.toLowerCase()}`)) endpoint = endpoint.slice(0, -(bucket.length + 1));
     const accessKeyId = req.accessKeyId.trim();
     const region = req.region.trim() || (req.provider === "r2" ? "auto" : "us-east-1");
     if (!/^https?:\/\/[^\s/]+(\/[^\s]*)?$/i.test(endpoint)) {

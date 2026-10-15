@@ -356,6 +356,11 @@ describe("destino externo", () => {
     expect(audits.map((a) => a.detail).join(" ")).not.toContain("chave-secreta-do-r2");
   });
 
+  it("endpoint colado como o Cloudflare mostra (com o bucket no fim) é aceito", async () => {
+    const s = await service.setDestination({ ...DEST, endpoint: "https://abc.r2.cloudflarestorage.com/meus-backups/" }, "admin");
+    expect(s.destination?.endpoint).toBe("https://abc.r2.cloudflarestorage.com");
+  });
+
   it("editar sem a chave secreta mantém a guardada; sem nenhuma, pede", async () => {
     await expect(service.setDestination({ ...DEST, secretAccessKey: "" }, "admin")).rejects.toMatchObject({ code: "secret_required" });
     await service.setDestination(DEST, "admin");
