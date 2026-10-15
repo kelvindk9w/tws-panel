@@ -16,6 +16,7 @@ import { DeployDetailModal } from "@/components/project/DeployDetailModal";
 import { DeployHistory } from "@/components/project/DeployHistory";
 import { MissingEnvModal } from "@/components/project/MissingEnvModal";
 import { ProjectEmailCard } from "@/components/project/ProjectEmailCard";
+import { ProjectBackupsCard } from "@/components/project/ProjectBackupsCard";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertTriangle,
   ArrowLeft,
+  DatabaseBackup,
   ExternalLink,
   GitBranch,
   Globe,
@@ -157,6 +159,7 @@ const PROJECT_SECTIONS = [
   { key: "git", label: "Git", icon: GitBranch },
   { key: "env", label: "Variáveis", icon: Variable },
   { key: "email", label: "E-mail", icon: Mail },
+  { key: "backups", label: "Backups", icon: DatabaseBackup },
   { key: "settings", label: "Configurações", icon: Settings },
 ] as const;
 type ProjectSectionKey = (typeof PROJECT_SECTIONS)[number]["key"];
@@ -554,6 +557,8 @@ export function ProjectDetailPage() {
       )}
 
       {section === "deploys" && <DeployHistory jobs={jobs} onOpen={setOpenJobId} />}
+
+      {section === "backups" && <ProjectBackupsCard projectId={project.id} projectName={project.name} />}
 
       {section === "settings" && (
         <>
