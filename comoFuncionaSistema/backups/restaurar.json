@@ -1,0 +1,104 @@
+{
+  "id": "restaurar",
+  "modulo": "backups",
+  "metodo": "POST",
+  "url": "/api/backups/targets/:target/restore",
+  "resumo": "Restaura um backup (projeto, e-mail ou painel). Confirmação digitando o nome (projeto), 'painel' ou 'e-mail'.",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:240, apps/server/src/services/backup-service.ts:1441",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "target",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "'panel', 'email' ou 'project:<id>' (padrão ^(panel|email|project:[A-Za-z0-9_-]{1,64})$)."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "fileName",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "AAAA-MM-DD_HH-MM.7z"
+      },
+      {
+        "nome": "source",
+        "tipo": "'local'|'remote'",
+        "obrigatorio": true
+      },
+      {
+        "nome": "confirm",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Sem diferenciar maiúsculas."
+      },
+      {
+        "nome": "redeploy",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "descricao": "Projeto sem containers (VPS nova): publica do GitHub e espera (até 45 min) antes."
+      },
+      {
+        "nome": "password",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Senha da época (backup de antes de uma troca)."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "BackupRecord (operation restore, na fila); acompanhar em GET /api/backups/records/:id",
+      "headers": {
+        "cache-control": "no-store"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "confirm_mismatch|invalid_file"
+    },
+    {
+      "status": 404,
+      "codigo": "not_found"
+    },
+    {
+      "status": 409,
+      "codigo": "no_destination"
+    }
+  ],
+  "fluxo": [
+    "Projeto: para os serviços que não são banco; sobe o banco se preciso e espera responder; Postgres: _papeis.sql e um .sql por banco (--clean --if-exists); MySQL/MariaDB: .sql com --add-drop-database; Mongo: mongorestore --drop; Redis e pastas: esvazia e extrai o .tar (dono e permissões mantidos) por um container auxiliar; liga tudo de novo (bancos primeiro).",
+    "E-mail: para o Stalwart, devolve o volume e a configuração, liga; webmail igual.",
+    "Painel: extrai em data/backups/.restaurar-painel/, grava o marcador e reinicia; na subida (index.ts → panel-restore.ts) o estado atual vai para data/backups/_painel/antes-da-restauracao/ e o backup entra no lugar."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [
+    "auditoria backups.restore"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": []
+}

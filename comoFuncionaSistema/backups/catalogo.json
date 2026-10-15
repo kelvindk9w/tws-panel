@@ -1,0 +1,50 @@
+{
+  "id": "catalogo",
+  "modulo": "backups",
+  "metodo": "GET",
+  "url": "/api/backups/catalog",
+  "resumo": "'Restaurar de outro servidor': o que existe no armazenamento (painel, e-mail e cada pasta de projeto, ligada ao projeto cadastrado pelo slug).",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:261, apps/server/src/services/backup-service.ts:1411",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "BackupCatalog"
+    }
+  ],
+  "erros": [
+    {
+      "status": 409,
+      "codigo": "no_destination"
+    }
+  ],
+  "fluxo": [],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": []
+}

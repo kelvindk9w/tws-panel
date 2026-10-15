@@ -1,0 +1,178 @@
+{
+  "modulo": "backups",
+  "titulo": "Backups",
+  "resumo": "Backups automáticos do painel (diretório de dados), do e-mail (Stalwart e webmail) e dos bancos e pastas de cada projeto, em .7z. Uma cópia fica na VPS (sem senha, as N mais recentes) e outra pode ir para um armazenamento S3/R2, cifrada com AES-256 (-mhe=on) e conferida depois do envio. Restauração por item, inclusive numa VPS nova ('Restaurar de outro servidor').",
+  "pontoDeEntrada": {
+    "api": "GET /api/backups",
+    "web": "/settings/backups e /projects/:id/backups"
+  },
+  "comoFunciona": [
+    "BackupService (apps/server/src/services/backup-service.ts) é criado em app.ts e decorado no escopo RAIZ (app.backupService): rotas de backup, rotas de projetos (escolha na criação, projeto apagado) e o gancho do deploy (detecção) usam o mesmo objeto.",
+    "Fila: um backup ou restauração por vez, em segundo plano. Cada um vira um BackupRecord com etapas. Ao subir, o que estava 'rodando' vira falha ('o painel reiniciou') e data/backups/.tmp é apagada.",
+    "Agenda: tick() a cada minuto. Horário base 03:00 no fuso da VPS (services/host-timezone.ts descobre o fuso pelo /etc/localtime do host montado em /host/etc/localtime) e depois a cada 24, 12 ou 6 h. O mesmo horário não roda duas vezes; se o painel estava desligado no horário, roda uma vez assim que voltar.",
+    "Backup: confere o espaço (tamanho × 2,2 a 3,2 + 256 MB, mantendo 5% livre) → dumps dentro do container do banco (credenciais lidas do ambiente do próprio container) e pastas por docker cp (.tar com dono) → LEIA-ME.txt + manifesto.json → 7zz a (sem senha) em data/backups/<pasta>/AAAA-MM-DD_HH-MM.7z → com destino: cifrado = um SEGUNDO .7z com -p -mhe=on (senha pela entrada padrão), sem criptografia = o mesmo arquivo → envio (multipart acima de 64 MB) → baixa de volta, compara o SHA-256 e roda 7z t → só então apaga os externos além dos N mais recentes. Falhou em qualquer ponto → nada é apagado fora e sai o aviso backup_failed.",
+    "Organização no destino: 'TWS Panel Backups/<slug-do-projeto>/', '_painel/', '_email/'. _verificacao/ guarda o arquivinho cifrado que testa a senha.",
+    "E-mail: docker stop do paas-stalwart (até 30 s), cópia do volume de dados e da configuração, docker start; webmail copiado sem parar. Export nativo do Stalwart não foi usado (ver relatório).",
+    "Painel: o diretório de dados inteiro, menos backups/ (as cópias e os temporários) e projects/ quando ele fica dentro do diretório de dados. Inclui as chaves que cifram os segredos (por isso a criptografia é recomendada).",
+    "Avisos (NotificationService): backup_failed (falhou ou a cópia externa falhou), backup_stale (sem cópia externa conferida há mais de 2 dias ou 2× a frequência; no máximo 1 por dia por item), backup_reminder (senha, a cada 90 dias).",
+    "Roteiro, passo 6 'Backups fora da VPS' (opcional): feito com destino conectado e pelo menos um item com cópia externa conferida."
+  ],
+  "arquivosFonte": {
+    "rotas": [
+      "apps/server/src/routes/backups.ts",
+      "apps/server/src/routes/projects.ts (backup na criação; forgetProject ao apagar)"
+    ],
+    "servicos": [
+      "apps/server/src/services/backup-service.ts",
+      "apps/server/src/services/backup-detect.ts",
+      "apps/server/src/services/backup-docker.ts",
+      "apps/server/src/services/backup-archive.ts",
+      "apps/server/src/services/backup-s3.ts",
+      "apps/server/src/services/backup-schedule.ts",
+      "apps/server/src/services/backup-passphrase.ts",
+      "apps/server/src/services/panel-restore.ts",
+      "apps/server/src/services/host-timezone.ts",
+      "apps/server/src/services/onboarding.ts (backupsState)",
+      "apps/server/src/app.ts",
+      "apps/server/src/index.ts"
+    ],
+    "pacotes": [
+      "packages/core/src/backups.ts",
+      "packages/core/src/notifications.ts (backup_failed, backup_stale, backup_reminder)",
+      "packages/core/src/onboarding.ts (passo backups)"
+    ],
+    "web": [
+      "apps/web/src/pages/settings/BackupSettings.tsx",
+      "apps/web/src/components/backups/backup-ui.tsx",
+      "apps/web/src/components/project/ProjectBackupsCard.tsx",
+      "apps/web/src/pages/NewProjectPage.tsx (Fazer backup: sim/não)",
+      "apps/web/src/components/onboarding/steps-content.ts (passo backups)"
+    ],
+    "scripts": [
+      "scripts/restaurar-painel.sh"
+    ],
+    "testes": [
+      "apps/server/tests/routes-backups.test.ts",
+      "apps/server/tests/backup-service.test.ts",
+      "apps/server/tests/backup-detect.test.ts",
+      "apps/server/tests/backup-s3.test.ts",
+      "apps/server/tests/backup-schedule.test.ts",
+      "apps/server/tests/backup-archive.test.ts",
+      "apps/server/tests/panel-restore.test.ts",
+      "apps/server/tests/host-timezone.test.ts",
+      "apps/server/tests/restaurar-painel-script.test.ts",
+      "packages/core/tests/backups.test.ts",
+      "apps/web/tests/backup-settings.test.tsx",
+      "apps/web/tests/project-backups.test.tsx",
+      "apps/web/tests/new-project-page.test.tsx"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/backups.json",
+      "formato": "json",
+      "conteudo": "destino (chave secreta cifrada), criptografia (senha cifrada, datas de teste/lembrete), itens (ligado, frequência, cópias, último horário, escolhas, pastas extras, últimos sucessos) e detecções. 0600."
+    },
+    {
+      "arquivo": "data/backups-key",
+      "formato": "hex",
+      "conteudo": "Chave AES-256 da chave secreta e da senha. 0600. Vai junto no backup do painel."
+    },
+    {
+      "arquivo": "data/backups-history.json",
+      "formato": "json",
+      "conteudo": "Os 200 últimos BackupRecord."
+    },
+    {
+      "arquivo": "data/backups/<pasta>/AAAA-MM-DD_HH-MM.7z",
+      "formato": "7z",
+      "conteudo": "Cópias na VPS (sem senha). No host: /var/lib/docker/volumes/paas_data/_data/backups."
+    },
+    {
+      "arquivo": "data/backups/.tmp/",
+      "formato": "pasta",
+      "conteudo": "Trabalho em andamento; apagada a cada subida."
+    },
+    {
+      "arquivo": "data/backups/.restaurar-painel/ + .restaurar-painel.json",
+      "formato": "pasta + json",
+      "conteudo": "Restauração do painel pendente (aplicada na subida)."
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "situacao",
+      "metodo": "GET",
+      "url": "/api/backups",
+      "resumo": "Situação de tudo para Configurações → Backups.",
+      "arquivo": "situacao.json"
+    },
+    {
+      "id": "destino",
+      "metodo": "PUT/POST/DELETE",
+      "url": "/api/backups/destination, /api/backups/destination/test",
+      "resumo": "Armazenamento externo S3/R2: salvar (testa antes: grava, lê e apaga TWS Panel Backups/_verificacao/conexao-*.txt), Testar conexão e Desconectar (os arquivos lá continuam).",
+      "arquivo": "destino.json"
+    },
+    {
+      "id": "criptografia",
+      "metodo": "PUT",
+      "url": "/api/backups/encryption",
+      "resumo": "Liga/desliga a criptografia da cópia externa (vem ligada).",
+      "arquivo": "criptografia.json"
+    },
+    {
+      "id": "senha",
+      "metodo": "PUT/GET/POST",
+      "url": "/api/backups/password, /password/suggest, /password/reveal, /password/test",
+      "resumo": "Senha dos backups: definir/trocar (exige 'Guardei a senha'), sugerir frase forte, ver (pede a senha de login) e Testar minha senha.",
+      "arquivo": "senha.json"
+    },
+    {
+      "id": "itens",
+      "metodo": "PUT/POST/GET",
+      "url": "/api/backups/targets/:target, /:target/run, /:target/points",
+      "resumo": "Configuração de cada item (ligado, frequência 24/12/6 h, cópias na VPS e fora, itens marcados, pastas extras), Fazer backup agora e as datas para restaurar.",
+      "arquivo": "itens.json"
+    },
+    {
+      "id": "restaurar",
+      "metodo": "POST",
+      "url": "/api/backups/targets/:target/restore",
+      "resumo": "Restaura um backup (projeto, e-mail ou painel). Confirmação digitando o nome (projeto), 'painel' ou 'e-mail'.",
+      "arquivo": "restaurar.json"
+    },
+    {
+      "id": "progresso",
+      "metodo": "GET",
+      "url": "/api/backups/records/:id",
+      "resumo": "Um backup ou restauração (etapas, avisos, erro).",
+      "arquivo": "progresso.json"
+    },
+    {
+      "id": "aba-do-projeto",
+      "metodo": "GET/POST",
+      "url": "/api/backups/projects/:id, /api/backups/projects/:id/detect",
+      "resumo": "Aba Backups do projeto: item, detecção, escolhas, pastas extras, histórico; e 'Detectar de novo'.",
+      "arquivo": "aba-do-projeto.json"
+    },
+    {
+      "id": "catalogo",
+      "metodo": "GET",
+      "url": "/api/backups/catalog",
+      "resumo": "'Restaurar de outro servidor': o que existe no armazenamento (painel, e-mail e cada pasta de projeto, ligada ao projeto cadastrado pelo slug).",
+      "arquivo": "catalogo.json"
+    }
+  ],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json"
+  ],
+  "pontosDeAtencao": [
+    "Imagem do painel precisa do 7zz (pacote 7zip no Dockerfile). Sem ele a tela avisa e os backups não rodam.",
+    "O backup do painel contém as chaves que cifram os segredos (2FA, tokens, chave do armazenamento): quem abre o .7z tem tudo. Por isso a cópia externa vem cifrada.",
+    "MongoDB: mongodump recebe a senha por argumento DENTRO do container do banco (visível no ps daquele container). MySQL/MariaDB usam MYSQL_PWD; Postgres usa PGPASSWORD.",
+    "Projetos que não vêm do GitHub (envio/pasta do servidor): a pasta do código entra no backup (item 'src', marcado), porque não existe em outro lugar.",
+    "O aviso de arquivos fora de volume é heurístico (docker diff com uma lista de pastas ignoradas).",
+    "Google Drive: só a abstração (BackupStorage); não implementado."
+  ]
+}

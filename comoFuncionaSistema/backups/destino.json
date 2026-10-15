@@ -1,0 +1,104 @@
+{
+  "id": "destino",
+  "modulo": "backups",
+  "metodo": "PUT/POST/DELETE",
+  "url": "/api/backups/destination, /api/backups/destination/test",
+  "resumo": "Armazenamento externo S3/R2: salvar (testa antes: grava, lê e apaga TWS Panel Backups/_verificacao/conexao-*.txt), Testar conexão e Desconectar (os arquivos lá continuam).",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:145, apps/server/src/services/backup-service.ts:717",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "provider",
+        "tipo": "'r2'|'s3'",
+        "obrigatorio": true,
+        "descricao": "Só muda o texto da tela."
+      },
+      {
+        "nome": "endpoint",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "8 a 300; http(s)://host[/caminho]. http:// é aceito (MinIO local), mas manda a assinatura sem TLS: use https:// na internet",
+        "descricao": "Ex.: https://<conta>.r2.cloudflarestorage.com"
+      },
+      {
+        "nome": "region",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "^[A-Za-z0-9-]*$; vazio vira 'auto'",
+        "descricao": "R2: auto."
+      },
+      {
+        "nome": "bucket",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+      },
+      {
+        "nome": "accessKeyId",
+        "tipo": "string",
+        "obrigatorio": true
+      },
+      {
+        "nome": "secretAccessKey",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Vazio ao editar = mantém a guardada."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sucesso",
+      "corpo": "BackupsStatus (packages/core/src/backups.ts): destination (sem a chave secreta), encryption (sem a senha), targets, running, queued, history (50), timezone, backupHour, archiverAvailable, localPath."
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request|invalid_endpoint|secret_required",
+      "quando": "schema, endpoint inválido, primeira conexão sem chave secreta"
+    },
+    {
+      "status": 400,
+      "codigo": "destination_test_failed",
+      "quando": "o teste falhou; message = motivo em português (chave recusada, bucket não existe, sem resposta…)"
+    },
+    {
+      "status": 409,
+      "codigo": "no_destination",
+      "quando": "testar sem destino"
+    }
+  ],
+  "fluxo": [],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [
+    "grava data/backups.json (secret cifrada AES-256-GCM com data/backups-key)",
+    "grava o arquivo de verificação da senha no destino, se já houver senha",
+    "auditoria backups.destination_saved / destination_test / destination_removed (nunca a chave)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": []
+}
