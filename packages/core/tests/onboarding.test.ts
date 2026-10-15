@@ -23,12 +23,12 @@ function step(id: OnboardingStep["id"], status: OnboardingStepStatus): Onboardin
 }
 
 describe("roteiro de primeiros passos", () => {
-  it("ordem combinada: proteções, 2FA, domínio do painel, e-mail, notificações", () => {
-    expect(ONBOARDING_STEP_IDS).toEqual(["hardening", "two-factor", "panel-domain", "email", "notifications"]);
+  it("ordem combinada: proteções, 2FA, domínio do painel, e-mail, notificações, backups", () => {
+    expect(ONBOARDING_STEP_IDS).toEqual(["hardening", "two-factor", "panel-domain", "email", "notifications", "backups"]);
   });
 
-  it("só e-mail e notificações podem ser marcados como 'Não vou usar'", () => {
-    expect(OPTIONAL_ONBOARDING_STEPS).toEqual(["email", "notifications"]);
+  it("só e-mail, notificações e backups podem ser marcados como 'Não vou usar'", () => {
+    expect(OPTIONAL_ONBOARDING_STEPS).toEqual(["email", "notifications", "backups"]);
   });
 
   it("feito, 'não vou usar' e 'em breve' não pedem nada agora; o resto pede", () => {

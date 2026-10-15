@@ -23,6 +23,9 @@ describe("notificações: tipos e padrão", () => {
       blacklist: true,
       disk: true,
       panel: false,
+      backup_failed: true,
+      backup_stale: true,
+      backup_reminder: true,
     });
     expect(MAX_NOTIFICATION_RECIPIENTS).toBe(5);
   });
