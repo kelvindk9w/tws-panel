@@ -72,6 +72,9 @@ services:
       # install.sh como <ip-com-hífens>.sslip.io. Vazio = acesso por túnel.
       PAAS_PANEL_DOMAIN: ${PAAS_PANEL_DOMAIN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Fuso horário (ex.: America/Sao_Paulo). Vazio = o da VPS, lido de
+      # /host/etc/localtime (ver volumes).
+      TZ: ${TZ:-}
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -89,6 +92,11 @@ services:
       # node:*-slim), então /etc/os-release local NÃO reflete a VPS real.
       - /etc/os-release:/host/etc/os-release:ro
       - /etc/hostname:/host/etc/hostname:ro
+      # Fuso horário da VPS (somente leitura): os backups agendados rodam às
+      # 03:00 no horário da VPS, não no UTC do container. O painel lê este
+      # arquivo na subida e descobre o nome do fuso (services/host-timezone.ts);
+      # TZ no .env, se existir, tem prioridade.
+      - /etc/localtime:/host/etc/localtime:ro
       # Código dos projetos implantados: diretório REAL do host, montado com o
       # MESMO caminho dentro e fora do container. Isso não é capricho: o
       # deploy roda `docker compose --project-directory <esse caminho>`, e
