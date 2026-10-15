@@ -870,7 +870,10 @@ export class BackupService {
     await this.ensureLoaded();
     const storage = this.storage();
     if (!storage) throw httpError(409, "no_destination", "Conecte o armazenamento externo para testar a senha.");
-    if (!this.password()) throw httpError(409, "no_password", "Defina a senha dos backups primeiro.");
+    // Sem senha guardada (VPS nova em "Restaurar de outro servidor"): confere a
+    // senha digitada no arquivo de verificação que a instalação antiga deixou
+    // no armazenamento, sem regravá-lo e sem guardar nada.
+    const saved = this.password() !== null;
     const dir = await this.tempDir("teste-senha");
     let ok = false;
     try {
@@ -879,6 +882,13 @@ export class BackupService {
         await storage.download(CHECK_FILE, file);
       } catch (err) {
         if (!(err instanceof StorageError && err.code === "not_found")) throw httpError(502, "destination_error", reasonOf(err));
+        if (!saved) {
+          throw httpError(
+            409,
+            "no_check_file",
+            "O armazenamento ainda não tem o arquivo de verificação da senha. Defina a senha: se ela estiver errada, a restauração avisa.",
+          );
+        }
         await this.uploadCheckFile();
         await storage.download(CHECK_FILE, file);
       }
@@ -891,10 +901,12 @@ export class BackupService {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-    const at = new Date(this.now()).toISOString();
-    this.config.encryption.lastTestAt = at;
-    this.config.encryption.lastTestOk = ok;
-    await this.persist({ config: true });
+    if (saved) {
+      const at = new Date(this.now()).toISOString();
+      this.config.encryption.lastTestAt = at;
+      this.config.encryption.lastTestOk = ok;
+      await this.persist({ config: true });
+    }
     this.audit("backups.password_test", ok ? "Teste da senha dos backups: certa." : "Teste da senha dos backups: não abriu.", actor);
     return ok
       ? { ok, message: "Senha certa: ela abre o arquivo de verificação gravado no seu armazenamento." }

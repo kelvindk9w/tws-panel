@@ -430,7 +430,7 @@ describe("senha dos backups", () => {
   it("Testar minha senha abre o arquivo de verificação do destino", async () => {
     await expect(service.testPassword(PW, "a")).rejects.toMatchObject({ code: "no_destination" });
     await service.setDestination(DEST, "admin");
-    await expect(service.testPassword(PW, "a")).rejects.toMatchObject({ code: "no_password" });
+    await expect(service.testPassword(PW, "a")).rejects.toMatchObject({ code: "no_check_file" });
     await service.setPassword(PW, true, "admin");
     expect(await service.testPassword(PW, "a")).toMatchObject({ ok: true });
     expect(await service.testPassword("nao-e-essa-senha", "a")).toMatchObject({ ok: false });
@@ -441,6 +441,25 @@ describe("senha dos backups", () => {
     storage.failUpload = true;
     storage.objects.clear();
     await expect(service.testPassword(PW, "a")).rejects.toThrow();
+  });
+
+  it("VPS nova: confere a senha antiga no arquivo do armazenamento antes de salvar, sem regravá-lo", async () => {
+    await connect();
+    const checkKey = "TWS Panel Backups/_verificacao/senha.7z";
+    const original = storage.objects.get(checkKey)!;
+    // Outra instalação (VPS nova), sem senha guardada, conectada ao mesmo armazenamento.
+    const otherDir = await mkdtemp(path.join(tmpdir(), "paas-backup-nova-"));
+    const nova = build({ dataDir: otherDir });
+    try {
+      await nova.setDestination(DEST, "admin");
+      expect(await nova.testPassword("senha-errada-qualquer-1", "admin")).toMatchObject({ ok: false });
+      expect(await nova.testPassword(PW, "admin")).toMatchObject({ ok: true });
+      expect(storage.objects.get(checkKey)).toEqual(original);
+      expect((await nova.status()).encryption).toMatchObject({ passwordSet: false, lastTestOk: null });
+    } finally {
+      await nova.flush();
+      await rm(otherDir, { recursive: true, force: true });
+    }
   });
 
   it("criptografia desligada e a sugestão de frase", async () => {
