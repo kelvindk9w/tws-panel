@@ -92,8 +92,8 @@ e API em `backups/` (index.json e um JSON por endpoint).
 4. **Bancos**: o dump roda **dentro do container do banco**, com as credenciais do ambiente dele (inclusive `*_FILE`).
    - **PostgreSQL**: um `.sql` por banco (`pg_dump --clean --if-exists`) e `_papeis.sql` (`pg_dumpall --globals-only`).
    - **MySQL / MariaDB**: `mysqldump` ou `mariadb-dump` com `--add-drop-database --databases`, sem os bancos de sistema. A senha vai por `MYSQL_PWD`.
-   - **MongoDB**: `mongodump --archive`.
-   - **Redis**: `redis-cli SAVE` e cópia de `/data`.
+   - **MongoDB**: `mongodump --archive`. A senha vai num arquivo `--config` temporário (decisão 13).
+   - **Redis**: `redis-cli SAVE` e cópia de `/data`. A senha, quando existe, vai pela variável `REDISCLI_AUTH`.
 5. **Pastas e volumes**: `docker cp` gera um `.tar`, que guarda dono e permissões.
 6. **Compactar**: `7zz a` (`-mx=5`). Junto vão um `LEIA-ME.txt`, que explica cada arquivo, e um `manifesto.json`, que é o que a restauração lê.
 7. **Cópia na VPS**: sempre, **sem senha**, em `data/backups/<pasta>/AAAA-MM-DD_HH-MM.7z`. No host fica em `/var/lib/docker/volumes/paas_data/_data/backups/`. O painel guarda as N mais recentes.
@@ -125,6 +125,7 @@ e API em `backups/` (index.json e um JSON por endpoint).
    - Primeiro ele extrai o backup em `data/backups/.restaurar-painel/`, grava um marcador e reinicia (o Docker sobe de novo com `restart: unless-stopped`).
    - Na subida, **antes de qualquer serviço ler o disco**, ele guarda o estado atual em `data/backups/_painel/antes-da-restauracao/` e põe o backup no lugar.
    - Ficam como estão: as cópias de backup, o `setup-token` desta instalação e a pasta `projects/` das instalações antigas.
+   - **Permissões**: o 7-Zip guarda e devolve o modo de cada arquivo (conferido: 0600, 0700 e 0640 voltam iguais). Um `.7z` refeito no Windows, porém, chega sem esse dado. Por isso a troca deixa tudo o que volta só para o dono: arquivos 0600 (0700 se eram executáveis) e pastas 0700. Links simbólicos não são seguidos. O dono é o usuário do painel (10001), porque é ele quem extrai, tanto pela tela quanto pelo script por SSH. O script também extrai com `umask 077`.
 6. **O backup do painel inclui as chaves que cifram os segredos** (2FA, tokens, chave do armazenamento, `backups-key`). Quem abre esse `.7z` tem tudo. É por isso que a cópia externa vem cifrada e a tela recomenda manter a criptografia.
 7. **Fuso da VPS.**
    - Montar `/etc/localtime` por cima do arquivo do container **não funciona** no Node: testado, continuou em UTC.
@@ -140,7 +141,12 @@ e API em `backups/` (index.json e um JSON por endpoint).
     - MySQL e MariaDB usam `--add-drop-database`: o banco é recriado inteiro.
     - MongoDB usa `--drop`.
     - Os avisos do banco (`ERROR`) viram "N aviso(s) do banco" na restauração, sem derrubá-la.
-13. **Senha do MongoDB**: o `mongodump` recebe a senha por argumento **dentro do container do banco**. Ela fica visível no `ps` daquele container enquanto o dump roda. MySQL e Postgres usam variável de ambiente.
+13. **Senha do MongoDB fora do `ps`**.
+    - O `mongodump` e o `mongorestore` recebem `--config <arquivo>` em vez de `--password`. É um YAML com a linha `password: '…'`, criado com `umask 077` (0600) e `mktemp` no `/tmp` do container do banco.
+    - Ele é apagado ao sair, com sucesso, com erro ou por sinal (`trap`). Aspas e caracteres especiais na senha funcionam.
+    - **Fallback**: antes de usar, o painel confere se a ferramenta mostra `--config` no `--help`. As database-tools 100.3+ têm, e elas vêm nas imagens `mongo` 4.4 em diante. Nas imagens até 4.2 (ferramentas 4.2) a opção não existe, e a senha volta a ir por `--password`. Nesse caso ela aparece no `ps` do container do banco enquanto o dump roda. Para evitar, atualize a imagem do Mongo.
+    - Se o painel for derrubado no meio de um dump, o arquivo pode ficar no `/tmp` do container do banco, mas com 0600 e só até o container reiniciar.
+    - MySQL e Postgres usam variável de ambiente, e o Redis usa `REDISCLI_AUTH` (antes ia por `-a`).
 14. **Google Drive**: ficou só a abstração (`BackupStorage` em `backup-s3.ts`, a mesma interface que um destino Drive implementaria). Não foi implementado, como pedido.
 15. **Endpoint `http://`** é aceito (MinIO local), mas a tela e o kit falam em `https://`. Na internet, use sempre `https://`.
 
@@ -180,10 +186,17 @@ teste com nomes próprios (`paas-e2eloja`, `paas-e2emaria`, `e2e-*`).
 4. **`scripts/restaurar-painel.sh`** com Docker, volume e 7-Zip de verdade. Foi usada uma imagem de teste (`node:22-bookworm-slim` + pacote `7zip`) e um container "painel" que roda o `panel-restore.ts` real na subida.
    - Com a senha errada: o script recusa e não mexe no volume.
    - Com a senha certa: confere, para, extrai, sobe e confirma.
-   - No volume: `users.json` veio do backup, o `setup-token` da VPS ficou, as cópias de backup ficaram e o estado anterior foi para `backups/_painel/antes-da-restauracao/`. Os arquivos ficaram com dono 10001, mas com permissão 0644 em vez da 0600 original. O painel só roda como o usuário 10001, e o volume não é lido por outros, mas fica a anotação.
-5. **Pacote `7zip` do Debian bookworm** num container: o binário `7zz` existe; criar com senha pela entrada padrão, testar e extrair funcionam; a senha errada sai com código 2 e "Wrong password".
-6. **Fuso**: veja a decisão 7.
-7. **Telas no navegador** (Chromium headless com `playwright-core` instalado no rascunho da sessão, Vite com a API simulada), em desktop 1366 px e celular 390 px:
+   - No volume: `users.json` veio do backup, o `setup-token` da VPS ficou, as cópias de backup ficaram e o estado anterior foi para `backups/_painel/antes-da-restauracao/`. Os arquivos ficaram com dono 10001.
+   - Segunda rodada, com a **imagem real do painel** (`docker build` desta branch) e um `.7z` com permissões misturadas (0644, 0666, 0640, pastas 0755 e 0750). Depois da restauração, todos os arquivos ficaram 0600 e as pastas 0700, com dono 10001:10001. O `setup-token` da VPS ficou como estava.
+5. **MongoDB 7 (database-tools 100.19.1) e Redis com senha**, só cópia na VPS.
+   - Dados: senha do Mongo com aspas simples e duplas; 3 documentos com acento e uma coleção de 300 mil documentos (dump de 74 MB, para dar tempo de vigiar). Redis com `requirepass`.
+   - Durante o backup e a restauração, um laço lia `docker top` dos dois containers sem parar. Ele viu o `mongodump` e o `mongorestore` com `--config /tmp/tws-mongo.XXXXXX` e sem `--password`. A senha do Mongo e a do Redis não apareceram em nenhuma leitura.
+   - Nenhum `tws-mongo.*` sobrou no `/tmp` do container.
+   - A restauração trouxe os 3 documentos (sem o "intruso"), as 300 mil linhas e a chave do Redis. O `SAVE` com `REDISCLI_AUTH` respondeu OK.
+   - **Fallback**: num `mongo:4.2` (mongodump r4.2.24, sem `--config`), o mesmo script caiu na senha por argumento e gerou o dump.
+6. **Pacote `7zip` do Debian bookworm** num container: o binário `7zz` existe; criar com senha pela entrada padrão, testar e extrair funcionam; a senha errada sai com código 2 e "Wrong password".
+7. **Fuso**: veja a decisão 7.
+8. **Telas no navegador** (Chromium headless com `playwright-core` instalado no rascunho da sessão, Vite com a API simulada), em desktop 1366 px e celular 390 px:
    - Configurações → Backups configurada;
    - a tela de ativação da senha com a sugestão e a força;
    - a aba Backups do projeto;
@@ -195,7 +208,7 @@ teste com nomes próprios (`paas-e2eloja`, `paas-e2emaria`, `e2e-*`).
 
 - **Cloudflare R2 real**: o cliente S3 (assinatura SigV4 própria, path-style, envio em partes) foi validado contra o versitygw e por testes unitários com as respostas do S3. Falta conectar um bucket R2 de verdade.
 - **Stalwart real** (parar, copiar e subir) e Roundcube real: só com o container de mentira.
-- **MongoDB** e **MySQL oficial** (a imagem `mysql`): só os scripts e os testes unitários. O MariaDB foi real.
+- **MySQL oficial** (a imagem `mysql`): só os scripts e os testes unitários. O MariaDB e o MongoDB foram reais.
 - **A imagem `tws-panel` completa rodando como painel**: o `docker build` da imagem inteira deu certo e o `7zz` dentro dela responde (7-Zip 26.02). Mas o painel não foi posto no ar a partir dessa imagem.
 - **O painel inteiro no ar** (servidor real com as telas reais) e o **reinício real do painel** depois de restaurar pelo navegador. A troca na subida foi testada com o `panel-restore.ts` real, mas o `process.kill` + `restart: unless-stopped` não.
 - **"Publicar do GitHub antes de restaurar"** de verdade (deploy real numa VPS nova): só com dublê.
@@ -205,7 +218,8 @@ teste com nomes próprios (`paas-e2eloja`, `paas-e2emaria`, `e2e-*`).
 
 - Servidor:
   - `backup-service` com 51 testes;
-  - rotas, detecção, S3, agenda, 7-Zip (falso e real via `PAAS_TEST_7Z`), restauração do painel, fuso e o script por SSH (com `docker` falso);
+  - rotas, detecção, S3, agenda, 7-Zip (falso e real via `PAAS_TEST_7Z`), restauração do painel (inclusive as permissões), fuso e o script por SSH (com `docker` falso);
+  - os scripts do Mongo e do Redis rodam de verdade no `sh`, com ferramentas falsas que registram os argumentos e o arquivo `--config`: sem senha na linha, arquivo 0600 que some no fim, mesmo com erro, e o fallback;
   - testes das rotas de projetos (escolha na criação, projeto apagado).
 - Core: `backups.test.ts` (carimbo, cobertura, força da senha, kit), tipos novos de notificação e o roteiro com 6 passos.
 - Web: Configurações → Backups (11), aba do projeto (4) e "Fazer backup: Não" na criação.
@@ -215,7 +229,7 @@ teste com nomes próprios (`paas-e2eloja`, `paas-e2emaria`, `e2e-*`).
   - deploy: 99,3 / 96,64 / 99,48 / 99,69 (linhas de instruções, ramos, funções, linhas);
   - mailer: 100 / 99,4 / 100 / 100;
   - web: 697 testes passando (sem mínimo configurado);
-  - server: 97,96 / 93,46 / 98,18 / 99,07, medido sem `terminal-service-pty.test.ts`;
+  - server: 97,97 / 93,48 / 98,19 / 99,08 (1558 testes), medido sem `terminal-service-pty.test.ts`;
   - security: 167 testes passando.
 - Suítes que falham só por depender de `docker pull ubuntu:24.04`, que é negado nesta máquina. Já falhavam antes desta branch:
   - server: `terminal-service-pty.test.ts`;
@@ -307,5 +321,5 @@ O que conferir depois:
 - **Fuso**: o pedido era montar `/etc/localtime`. Montado no lugar do arquivo do container, não funciona com o Node, por isso a montagem foi feita em `/host/etc/localtime` e lida pelo painel (decisão 7).
 - **E-mail com parada em vez de export nativo** (decisão 4).
 - **Teste real com versitygw em vez de MinIO**: a imagem do MinIO não está disponível.
-- **Senha do MongoDB visível no `ps` do container do banco** durante o dump (decisão 13).
+- **Senha do MongoDB**: fora do `ps` nas ferramentas 100.3+. Nas imagens `mongo` até 4.2 ela ainda vai por argumento (decisão 13).
 - **Conferência visual** feita com Chromium e `playwright-core` instalados no rascunho da sessão. O Playwright do MCP gravava fora do worktree (`/home/kelvin/projects/paas/.playwright-mcp/`). Antes de trocar de ferramenta, ele criou ali um `.yml` de página e um `.log` de console desta sessão. Eles não foram apagados, porque ficam fora do worktree.
