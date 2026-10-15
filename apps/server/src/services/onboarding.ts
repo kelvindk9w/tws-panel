@@ -3,8 +3,8 @@
  * (Dashboard), calculado do estado REAL que o painel já conhece.
  *
  * Cada passo tem uma "conferência" (OnboardingCheck). Desde 07/10/2026 todos
- * os cinco leem o estado real (o domínio do painel e as notificações deixaram
- * de ser "em breve"). Um passo novo que ainda não exista no painel volta a
+ * leem o estado real (o domínio do painel e as notificações deixaram de ser
+ * "em breve"); o passo 6, backups fora da VPS, entrou em 14/10/2026. Um passo novo que ainda não exista no painel volta a
  * usar "em breve": basta uma conferência em createOnboardingChecks — a rota,
  * o Dashboard e o texto "Como fazer" não mudam de forma (ver
  * comoFuncionaSistema/configuracoes/roteiro-primeiros-passos.json).
@@ -242,6 +242,42 @@ export function notificationsState(facts: NotificationFacts): StepState {
 }
 
 // ---------------------------------------------------------------------------
+// Passo 6 — backups fora da VPS (opcional)
+// ---------------------------------------------------------------------------
+
+export interface BackupFacts {
+  /** Armazenamento externo (R2/S3) conectado. */
+  destinationConnected: boolean;
+  /** Itens com pelo menos um backup externo enviado E conferido. */
+  verifiedRemote: number;
+  /** Motivo da última falha de backup externo, se houver. */
+  lastFailure: string | null;
+}
+
+/**
+ * Configurações → Backups (services/backup-service.ts). Feito com destino
+ * externo conectado e pelo menos um backup externo conferido (baixado de
+ * volta e aberto): só conectar ainda não prova que o backup chega lá.
+ */
+export function backupsState(facts: BackupFacts): StepState {
+  if (!facts.destinationConnected) {
+    return {
+      status: "pending",
+      detail: "Hoje os backups ficam só na VPS: se ela for perdida, eles vão junto.",
+    };
+  }
+  if (facts.verifiedRemote === 0) {
+    const why = facts.lastFailure ? ` O último falhou: ${facts.lastFailure}` : "";
+    return {
+      status: "in_progress",
+      detail: `Armazenamento conectado; falta um backup externo conferido (clique em "Fazer backup agora").${why}`,
+    };
+  }
+  const n = facts.verifiedRemote;
+  return { status: "done", detail: `Backups conferidos fora da VPS (${n} ${n === 1 ? "item" : "itens"}).` };
+}
+
+// ---------------------------------------------------------------------------
 // Montagem
 // ---------------------------------------------------------------------------
 
@@ -254,6 +290,8 @@ export interface OnboardingDeps {
   panelDomainFacts?: (host: string) => Promise<PanelDomainFacts>;
   /** Canais de notificação conectados e testados (NotificationService.facts). */
   notificationFacts?: () => Promise<NotificationFacts>;
+  /** Destino externo e backups conferidos (BackupService.facts). */
+  backupFacts?: () => Promise<BackupFacts>;
 }
 
 /** As conferências de cada passo, a partir das fontes reais do painel. */
@@ -269,6 +307,10 @@ export function createOnboardingChecks(deps: OnboardingDeps): OnboardingChecks {
     email: async () => emailState(await deps.emailFacts()),
     notifications: async () =>
       notificationsState(deps.notificationFacts ? await deps.notificationFacts() : { channels: [] }),
+    backups: async () =>
+      backupsState(
+        deps.backupFacts ? await deps.backupFacts() : { destinationConnected: false, verifiedRemote: 0, lastFailure: null },
+      ),
   };
 }
 

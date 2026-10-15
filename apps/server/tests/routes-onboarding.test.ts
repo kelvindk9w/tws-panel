@@ -38,6 +38,7 @@ beforeEach(async () => {
     "panel-domain": fixed({ status: "soon", detail: "Em breve." }),
     email: async () => emailState,
     notifications: fixed({ status: "soon", detail: "Em breve." }),
+    backups: fixed({ status: "soon", detail: "Em breve." }),
   };
   ctx = await buildAuthTestApp(TOKEN);
   app = ctx.app;
@@ -88,6 +89,7 @@ describe("GET /api/onboarding", () => {
       "panel-domain:soon",
       "email:pending",
       "notifications:soon",
+      "backups:soon",
     ]);
     expect(res.started).toBe(false);
     expect(res.complete).toBe(false);
@@ -149,7 +151,7 @@ describe("PUT /api/onboarding/steps/:id", () => {
   it("passo obrigatório, passo inexistente ou corpo inválido → 400", async () => {
     expect((await skip("two-factor", true)).statusCode).toBe(400);
     expect((await skip("hardening", true)).statusCode).toBe(400);
-    expect((await skip("backups", true)).statusCode).toBe(400);
+    expect((await skip("inexistente", true)).statusCode).toBe(400);
     expect((await skip("email", "sim")).statusCode).toBe(400);
     const extra = await app.inject({
       method: "PUT",
@@ -196,7 +198,7 @@ describe("PUT /api/onboarding/hidden", () => {
     const body = res.json() as OnboardingResponse;
     expect(body.hidden).toBe(true);
     expect(body.started).toBe(true);
-    expect(await storedOnboarding()).toMatchObject({ hiddenSoon: ["panel-domain", "notifications"] });
+    expect(await storedOnboarding()).toMatchObject({ hiddenSoon: ["panel-domain", "notifications", "backups"] });
     expect((await get()).hidden).toBe(true);
   });
 

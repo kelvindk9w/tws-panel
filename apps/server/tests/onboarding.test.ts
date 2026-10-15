@@ -16,6 +16,7 @@ import {
   domainDnsOk,
   hardeningState,
   notificationsState,
+  backupsState,
   panelDomainState,
   twoFactorState,
   type OnboardingChecks,
@@ -237,6 +238,29 @@ describe("notificações", () => {
   });
 });
 
+describe("backups fora da VPS", () => {
+  it("sem destino externo: a fazer", () => {
+    expect(backupsState({ destinationConnected: false, verifiedRemote: 0, lastFailure: null }).status).toBe("pending");
+  });
+
+  it("destino conectado sem backup externo conferido: em andamento", () => {
+    const s = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null });
+    expect(s.status).toBe("in_progress");
+    expect(s.detail).toMatch(/Fazer backup agora/);
+    expect(backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: "sem espaço" }).detail).toMatch(/sem espaço/);
+  });
+
+  it("com um backup externo conferido: feito", () => {
+    expect(backupsState({ destinationConnected: true, verifiedRemote: 1, lastFailure: null })).toEqual({
+      status: "done",
+      detail: "Backups conferidos fora da VPS (1 item).",
+    });
+    expect(backupsState({ destinationConnected: true, verifiedRemote: 3, lastFailure: null }).detail).toBe(
+      "Backups conferidos fora da VPS (3 itens).",
+    );
+  });
+});
+
 describe("buildOnboardingResponse", () => {
   const fixed = (status: Awaited<ReturnType<OnboardingChecks["email"]>>["status"]) => async () => ({ status, detail: status });
   const checks: OnboardingChecks = {
@@ -245,11 +269,12 @@ describe("buildOnboardingResponse", () => {
     "panel-domain": fixed("soon"),
     email: fixed("pending"),
     notifications: fixed("soon"),
+    backups: fixed("pending"),
   };
 
   it("monta os passos na ordem, com 'opcional' e o progresso da conta", async () => {
     const res = await buildOnboardingResponse(checks, { userId: "u1" }, undefined, "/opt/tws-projects");
-    expect(res.steps.map((s) => s.id)).toEqual(["hardening", "two-factor", "panel-domain", "email", "notifications"]);
+    expect(res.steps.map((s) => s.id)).toEqual(["hardening", "two-factor", "panel-domain", "email", "notifications", "backups"]);
     expect(res.steps.find((s) => s.id === "email")?.optional).toBe(true);
     expect(res.steps.find((s) => s.id === "hardening")?.optional).toBe(false);
     expect(res.started).toBe(false);
@@ -284,14 +309,14 @@ describe("buildOnboardingResponse", () => {
     const res = await buildOnboardingResponse(
       { ...checks, "two-factor": fixed("done"), "panel-domain": fixed("done") },
       { userId: "u1" },
-      { startedAt: "2026-10-01T10:00:00Z", skipped: ["email", "notifications"] },
+      { startedAt: "2026-10-01T10:00:00Z", skipped: ["email", "notifications", "backups"] },
       "/x",
     );
     expect(res.complete).toBe(true);
   });
 
   it("'Ocultar até ter novidade': oculto enquanto os mesmos passos seguem 'em breve' e nada pede ação", async () => {
-    const waiting = { ...checks, "two-factor": fixed("done"), email: fixed("done") };
+    const waiting = { ...checks, "two-factor": fixed("done"), email: fixed("done"), backups: fixed("done") };
     const progress = (): StoredOnboarding => ({
       startedAt: "2026-10-07T10:00:00Z",
       skipped: [],
@@ -359,6 +384,19 @@ describe("createOnboardingChecks — fontes reais", () => {
     expect((await checks.email(ctx)).status).toBe("pending");
     // sem a fonte das notificações: nenhum canal
     expect((await checks.notifications(ctx)).status).toBe("pending");
+    // sem a fonte dos backups: nada conectado
+    expect((await checks.backups(ctx)).status).toBe("pending");
+  });
+
+  it("backups: usa a fonte do serviço de backups", async () => {
+    const user = await users.create("admin", "hash");
+    const checks = createOnboardingChecks({
+      config: { dataDir: dir, panelDomain: null },
+      userStore: users,
+      emailFacts: async () => ({ installed: false, running: false, domains: [] }),
+      backupFacts: async () => ({ destinationConnected: true, verifiedRemote: 2, lastFailure: null }),
+    });
+    expect((await checks.backups({ userId: user.id })).status).toBe("done");
   });
 
   it("notificações: usa a fonte do serviço de notificações", async () => {
