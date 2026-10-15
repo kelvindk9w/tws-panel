@@ -30,7 +30,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { chmod, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   BACKUP_ENGINE_LABELS,
@@ -245,6 +245,30 @@ interface Job {
 
 /** Erro com mensagem para a pessoa (vai para o histórico como está). */
 class BackupFailure extends Error {}
+
+/** Arquivo citado no manifesto: só dentro das pastas que o próprio backup cria. */
+const MANIFEST_FILE = /^(bancos|volumes|pastas|codigo|email)(\/[A-Za-z0-9._-]+){1,2}$/;
+
+/**
+ * Confere cada arquivo que o manifesto cita antes de tocar em qualquer coisa:
+ * um backup trocado por alguém com acesso ao armazenamento não pode apontar
+ * para fora da pasta extraída (../, link simbólico, caminho absoluto).
+ */
+async function checkManifestFiles(manifest: Manifest, content: string): Promise<void> {
+  const root = await realpath(content);
+  const files = manifest.items.flatMap((i) => [i.file, i.globalsFile, ...(i.databases ?? []).map((d) => d.file)]).filter((f): f is string => f !== undefined);
+  for (const f of files) {
+    const bad = () => new BackupFailure(`Este backup tem um caminho inválido ("${f.slice(0, 80)}") e não foi restaurado. O arquivo pode ter sido alterado.`);
+    if (!MANIFEST_FILE.test(f) || f.split("/").some((seg) => seg === "." || seg === "..")) throw bad();
+    let real: string;
+    try {
+      real = await realpath(path.join(content, f));
+    } catch {
+      throw bad();
+    }
+    if (!real.startsWith(root + path.sep)) throw bad();
+  }
+}
 
 const IV_BYTES = 12;
 const KEY_BYTES = 32;
@@ -1484,7 +1508,7 @@ export class BackupService {
         }
       }
       this.step(r, "Conferir e abrir o arquivo");
-      const password = await this.findPassword(archive, req.password ?? null);
+      const password = await this.findPassword(archive, req.password ?? null, req.source === "remote");
       const content = path.join(staging, "conteudo");
       await this.opts.archiver.extract(archive, content, password);
       let manifest: Manifest | null = null;
@@ -1496,6 +1520,7 @@ export class BackupService {
       if (!manifest || manifest.kind !== kind) {
         throw new BackupFailure("Este arquivo não é um backup deste item (manifesto ausente ou de outro tipo).");
       }
+      await checkManifestFiles(manifest, content);
       if (kind === "project") await this.restoreProject(r, project!, manifest, content, req.redeploy === true);
       else if (kind === "email") await this.restoreEmail(r, manifest, content);
       else {
@@ -1508,12 +1533,23 @@ export class BackupService {
   }
 
   /** null = sem senha; senão a do pedido ou a guardada. Erro claro quando nenhuma abre. */
-  private async findPassword(archive: string, given: string | null): Promise<string | null> {
+  private async findPassword(archive: string, given: string | null, remote: boolean): Promise<string | null> {
+    let opensWithout = false;
     try {
       await this.opts.archiver.test(archive, null);
-      return null;
+      opensWithout = true;
     } catch (err) {
       if (!(err instanceof ArchiveError && err.code === "wrong_password")) throw err;
+    }
+    if (opensWithout) {
+      // Com a criptografia ligada, a cópia externa sempre sai cifrada. Uma que
+      // abre sem senha pode ter sido trocada por quem tem acesso ao bucket.
+      if (remote && this.config.encryption.enabled) {
+        throw new BackupFailure(
+          "Esta cópia externa está sem senha, mas a criptografia está ligada. Por segurança, o painel não restaura: ela pode ter sido trocada por alguém com acesso ao armazenamento. Se ela é de antes de você ligar a criptografia, use a cópia da VPS ou desligue a criptografia só para restaurar.",
+        );
+      }
+      return null;
     }
     const candidates = [given, this.password()].filter((p): p is string => Boolean(p));
     for (const pw of candidates) {
@@ -1564,6 +1600,12 @@ export class BackupService {
     }
     const byService = new Map<string, ProjectContainer>();
     for (const c of containers) if (!byService.has(c.service)) byService.set(c.service, c);
+    // Os destinos vêm do projeto de agora (detecção e pastas cadastradas),
+    // nunca do manifesto: ele está dentro do arquivo e pode ter sido trocado.
+    const detection = await this.detect(project);
+    const key = (service: string, dest: string) => `${service}\0${dest}`;
+    const allowedMounts = new Set(detection.mounts.map((m) => key(m.service, m.destination)));
+    const allowedExtras = new Set(this.target(projectTargetId(project.id)).extraFolders.map((x) => key(x.service, x.path)));
     const wasRunning = new Set(containers.filter((c) => c.running).map((c) => c.id));
     const dbServices = new Set(manifest.items.filter((i) => i.type === "database" && i.engine !== "redis").map((i) => i.service!));
     const stopped = new Set<string>();
@@ -1580,7 +1622,7 @@ export class BackupService {
         const c = item.service ? byService.get(item.service) : undefined;
         if (item.type === "source") {
           this.step(r, "Pôr o código de volta");
-          await this.tar.extract(path.join(content, item.file!), path.dirname(item.destination!));
+          await this.tar.extract(path.join(content, item.file!), path.dirname(this.opts.projects.srcDir(project)));
           continue;
         }
         if (!c) {
@@ -1605,10 +1647,17 @@ export class BackupService {
           if (errors.length > 0) r.warnings.push(`${item.service}: ${errors.length} aviso(s) do banco na restauração (ex.: ${errors[0]!.trim().slice(0, 160)}).`);
           continue;
         }
-        this.step(r, `Restaurar ${item.destination} (${item.service})`);
+        const redis = item.type === "database";
+        const dest = redis ? "/data" : item.destination ?? "";
+        const allowed = redis || (item.type === "extra" ? allowedExtras : allowedMounts).has(key(item.service!, dest));
+        if (!allowed) {
+          r.warnings.push(`"${dest}" (${item.service}) não é uma pasta deste projeto: não foi restaurada.`);
+          continue;
+        }
+        this.step(r, `Restaurar ${dest} (${item.service})`);
         await stop(c);
-        if (item.type === "extra") await docker.copyIn(c.id, path.posix.dirname(item.destination!), path.join(content, item.file!));
-        else await docker.restorePath(c.id, item.destination!, path.join(content, item.file!), item.isFile === true);
+        if (item.type === "extra") await docker.copyIn(c.id, path.posix.dirname(dest), path.join(content, item.file!));
+        else await docker.restorePath(c.id, dest, path.join(content, item.file!), item.isFile === true);
       }
     } finally {
       this.step(r, "Ligar o projeto de novo");

@@ -315,6 +315,15 @@ O que conferir depois:
     - uma caixa recebe e envia;
     - em Configurações → Backups, **Fazer backup agora** no Painel termina com "cópia externa conferida".
 
+## Restauração de backup adulterado (revisão de segurança, 14/10)
+
+Quem tiver as chaves do bucket poderia trocar um backup por outro montado à mão. Agora:
+
+- **Caminhos:** a restauração confere todos os arquivos que o manifesto cita antes de parar qualquer coisa. Eles precisam estar dentro do próprio backup: sem `../`, sem link simbólico para fora e só nas pastas que o painel cria. Se algum não estiver, nada é restaurado e aparece "caminho inválido".
+- **Destinos:** o lugar onde cada pasta volta não é lido do manifesto. Vale só o que o projeto tem hoje (os volumes detectados e as pastas extras cadastradas). O Redis volta sempre em `/data` e o código volta na pasta do projeto. O que não bate é pulado com aviso.
+- **Criptografia ligada:** uma cópia externa que abre sem senha é recusada. Com a criptografia ligada, ela sempre sai cifrada; uma cópia sem senha ali só pode ter sido trocada.
+- **Limite:** o backup do **painel** substitui o `/data` inteiro. Sem criptografia, quem tem as chaves do bucket pode montar um backup do painel e tomar o controle. Por isso a criptografia vem sugerida. Assinar cada arquivo com uma chave do painel não resolveria o caso da VPS nova, porque essa chave morre junto com a VPS antiga.
+
 ## Objeções e diferenças em relação ao pedido
 
 - **Código dos projetos que não vêm do GitHub entra no backup** (decisão 8). O pedido dizia para não fazer backup do código, mas nesses projetos não existe outra cópia.

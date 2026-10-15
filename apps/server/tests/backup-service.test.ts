@@ -10,7 +10,7 @@
  * lembrete da senha.
  */
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -663,7 +663,8 @@ describe("restaurar", () => {
     const done = await service.record(r.id);
     expect(done.status).toBe("warning"); // o banco "postgres" respondeu com um ERROR
     expect(done.warnings.join(" ")).toMatch(/aviso\(s\) do banco/);
-    expect(docker.calls[0]).toBe("stop c-web");
+    // A detecção (docker diff) roda antes, para saber as pastas de agora.
+    expect(docker.calls.filter((c) => !c.startsWith("diff"))[0]).toBe("stop c-web");
     expect(docker.calls).toEqual(expect.arrayContaining(["execFromFile c-db app", "execFromFile c-db postgres", "restorePath c-web /app/uploads"]));
     expect(docker.calls.at(-1)).toBe("start c-web");
     expect(docker.dbInput.find((d) => d.args[0] === "app")!.content).toBe("dump c-db app banco");
@@ -754,6 +755,98 @@ describe("restaurar", () => {
     const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "e-mail" }, "admin");
     await service.idle();
     expect((await service.record(r.id)).error).toMatch(/não é um backup deste item/);
+  });
+});
+
+describe("restaurar: backup adulterado não manda nos caminhos", () => {
+  const FILE = "2026-10-13_03-00.7z";
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+
+  /** Grava na VPS um "backup" montado à mão, com o manifesto que quisermos. */
+  async function forge(items: unknown[], extra: Record<string, string> = {}): Promise<void> {
+    const folder = (await service.status()).targets.find((t) => t.id === projectTargetId("p1"))!.folder;
+    const manifest = { version: 1, kind: "project", name: "Loja", projectId: "p1", slug: "loja", createdAt: "2026-10-13T06:00:00Z", items };
+    const files: Record<string, string> = { "manifesto.json": b64(JSON.stringify(manifest)) };
+    for (const [k, v] of Object.entries(extra)) files[k] = b64(v);
+    await mkdir(path.join(dir, "backups", folder), { recursive: true });
+    await writeFile(path.join(dir, "backups", folder, FILE), JSON.stringify({ password: null, files }));
+  }
+
+  async function restoreForged() {
+    const r = await service.restore(projectTargetId("p1"), { fileName: FILE, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+
+  it("pasta que o projeto não tem é ignorada com aviso", async () => {
+    await forge([{ type: "mount", service: "web", destination: "/etc", mountType: "volume", file: "volumes/web__etc.tar" }], {
+      "volumes/web__etc.tar": "tar",
+    });
+    const r = await restoreForged();
+    expect(docker.calls).not.toContain("restorePath c-web /etc");
+    expect(r.warnings.join(" ")).toMatch(/\/etc.*não é uma pasta deste projeto/);
+  });
+
+  it("pasta extra só se estiver cadastrada no projeto", async () => {
+    await forge([{ type: "extra", service: "web", destination: "/root/.ssh", file: "pastas/web__ssh.tar" }], { "pastas/web__ssh.tar": "tar" });
+    const r = await restoreForged();
+    expect(docker.calls.some((c) => c.startsWith("copyIn"))).toBe(false);
+    expect(r.warnings.join(" ")).toMatch(/\/root\/\.ssh.*não é uma pasta deste projeto/);
+  });
+
+  it("Redis volta sempre para /data, não para o caminho do manifesto", async () => {
+    await forge([{ type: "database", service: "db", engine: "redis", destination: "/etc", file: "bancos/db-redis.tar" }], {
+      "bancos/db-redis.tar": "tar",
+    });
+    await restoreForged();
+    expect(docker.calls).toContain("restorePath c-db /data");
+    expect(docker.calls).not.toContain("restorePath c-db /etc");
+  });
+
+  it("código volta para a pasta do projeto, não para o caminho do manifesto", async () => {
+    const extracted: string[] = [];
+    service = build({ tar: { create: async () => undefined, extract: async (_f, parent) => void extracted.push(parent) } });
+    await forge([{ type: "source", destination: "/etc/cron.d/x", file: "codigo/codigo.tar" }], { "codigo/codigo.tar": "tar" });
+    await restoreForged();
+    expect(extracted).toEqual([path.join(dir, "projects", "loja")]);
+  });
+
+  it("arquivo fora do backup (../ ou nome estranho) faz a restauração falhar sem tocar em nada", async () => {
+    await forge([{ type: "mount", service: "web", destination: "/app/uploads", mountType: "volume", file: "../../users.json" }]);
+    const r = await restoreForged();
+    expect(r.status).toBe("failed");
+    expect(r.error).toMatch(/caminho inválido/);
+    expect(docker.calls.some((c) => c.startsWith("restorePath") || c.startsWith("stop"))).toBe(false);
+  });
+
+  it("arquivo citado que não existe ou é link para fora também falha", async () => {
+    await forge([{ type: "mount", service: "web", destination: "/app/uploads", mountType: "volume", file: "volumes/sumiu.tar" }]);
+    expect((await restoreForged()).error).toMatch(/caminho inválido/);
+    const extract = archiver.extract.bind(archiver);
+    archiver.extract = async (archive, outDir, password) => {
+      await extract(archive, outDir, password);
+      await mkdir(path.join(outDir, "volumes"), { recursive: true });
+      await symlink(path.join(dir, "users.json"), path.join(outDir, "volumes", "web__app_uploads.tar"));
+    };
+    await forge([{ type: "mount", service: "web", destination: "/app/uploads", mountType: "volume", file: "volumes/web__app_uploads.tar" }]);
+    const r = await restoreForged();
+    expect(r.error).toMatch(/caminho inválido/);
+    expect(docker.calls.some((c) => c.startsWith("restorePath"))).toBe(false);
+  });
+
+  it("criptografia ligada: cópia externa que abre sem senha é recusada", async () => {
+    await connect();
+    const b = await backup();
+    const folder = (await service.status()).targets.find((t) => t.id === projectTargetId("p1"))!.folder;
+    const key = [...storage.objects.keys()].find((k) => k.endsWith(`/${folder}/${b.fileName}`))!;
+    storage.objects.set(key, await readFile(path.join(dir, "backups", folder, b.fileName!)));
+    docker.calls = [];
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "remote", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/sem senha/);
+    expect(docker.calls.some((c) => c.startsWith("restorePath") || c.startsWith("execFromFile"))).toBe(false);
   });
 });
 
