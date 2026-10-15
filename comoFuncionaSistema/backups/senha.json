@@ -1,0 +1,118 @@
+{
+  "id": "senha",
+  "modulo": "backups",
+  "metodo": "PUT/GET/POST",
+  "url": "/api/backups/password, /password/suggest, /password/reveal, /password/test",
+  "resumo": "Senha dos backups: definir/trocar (exige 'Guardei a senha'), sugerir frase forte, ver (pede a senha de login) e Testar minha senha.",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:163, apps/server/src/services/backup-service.ts:789",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "reveal: 10 por 15 min (rota) + 5 erradas por 15 min por usuário (serviço); test: 20 por 15 min.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "password",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "PUT: 12 a 200 caracteres e backupPasswordStrength().ok",
+        "descricao": "Senha nova."
+      },
+      {
+        "nome": "acknowledged",
+        "tipo": "boolean",
+        "obrigatorio": true,
+        "descricao": "PUT: 'Guardei a senha em lugar seguro'."
+      },
+      {
+        "nome": "loginPassword",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "POST reveal: senha de login de quem pede."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sucesso",
+      "corpo": "BackupsStatus (packages/core/src/backups.ts): destination (sem a chave secreta), encryption (sem a senha), targets, running, queued, history (50), timezone, backupHour, archiverAvailable, localPath."
+    },
+    {
+      "status": 200,
+      "quando": "suggest/reveal",
+      "corpo": {
+        "password": "string"
+      },
+      "headers": {
+        "cache-control": "no-store"
+      }
+    },
+    {
+      "status": 200,
+      "quando": "test",
+      "corpo": {
+        "ok": "boolean",
+        "message": "string"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "weak_password|not_acknowledged"
+    },
+    {
+      "status": 502,
+      "codigo": "destination_error",
+      "quando": "test: o armazenamento não respondeu"
+    },
+    {
+      "status": 401,
+      "codigo": "invalid_login_password",
+      "quando": "reveal com senha de login errada"
+    },
+    {
+      "status": 429,
+      "codigo": "too_many_attempts",
+      "quando": "reveal: 5 tentativas erradas em 15 min por usuário"
+    },
+    {
+      "status": 409,
+      "codigo": "no_destination|no_password|no_check_file",
+      "quando": "test sem destino; reveal sem senha; test numa VPS nova sem o arquivo de verificação"
+    }
+  ],
+  "fluxo": [
+    "PUT: cifra e guarda a senha; grava TWS Panel Backups/_verificacao/senha.7z (arquivinho cifrado) no destino.",
+    "test: baixa _verificacao/senha.7z e tenta abrir com a senha digitada (7z t). Sem senha guardada (VPS nova), testa sem regravar o arquivo.",
+    "Trocar a senha: só os backups novos usam a nova; os antigos continuam com a antiga (a restauração aceita a senha da época)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [
+    "auditoria backups.password_set / password_changed / password_revealed / password_reveal_denied / password_test (nunca a senha)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": [
+    "A senha chega ao 7-Zip pela entrada padrão, nunca por argumento (não aparece no ps, em log nem na auditoria).",
+    "Lembrete a cada 90 dias (aviso backup_reminder) desde a senha definida, o último teste certo ou o último lembrete."
+  ]
+}

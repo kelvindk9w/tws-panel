@@ -565,6 +565,11 @@ export class DeployService {
    * certificado sozinho). .localhost (desenvolvimento): http. A porta entra
    * quando não é a padrão.
    */
+  /** Pasta do código do projeto no servidor (backups dos projetos que não vêm do GitHub). */
+  backupSourceDir(project: Project): string {
+    return projectSrcDir(this.engineCtx, project);
+  }
+
   projectUrl(project: Project): string {
     const local = project.domain === "localhost" || project.domain.endsWith(".localhost");
     if (local) {

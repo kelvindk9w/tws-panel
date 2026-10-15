@@ -1,0 +1,56 @@
+{
+  "id": "progresso",
+  "modulo": "backups",
+  "metodo": "GET",
+  "url": "/api/backups/records/:id",
+  "resumo": "Um backup ou restauração (etapas, avisos, erro).",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:248, apps/server/src/services/backup-service.ts:992",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "BackupRecord"
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "not_found"
+    }
+  ],
+  "fluxo": [],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": []
+}

@@ -165,3 +165,4 @@ export * from "./webmail";
 export * from "./mail-envios";
 export * from "./panel-domain";
 export * from "./notifications";
+export * from "./backups";

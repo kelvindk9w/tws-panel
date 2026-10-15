@@ -11,11 +11,11 @@
  */
 
 /** Passos, na ordem combinada com o dono do produto. */
-export const ONBOARDING_STEP_IDS = ["hardening", "two-factor", "panel-domain", "email", "notifications"] as const;
+export const ONBOARDING_STEP_IDS = ["hardening", "two-factor", "panel-domain", "email", "notifications", "backups"] as const;
 export type OnboardingStepId = (typeof ONBOARDING_STEP_IDS)[number];
 
 /** Passos que a pessoa pode marcar como "Não vou usar" (e desfazer). */
-export const OPTIONAL_ONBOARDING_STEPS: readonly OnboardingStepId[] = ["email", "notifications"];
+export const OPTIONAL_ONBOARDING_STEPS: readonly OnboardingStepId[] = ["email", "notifications", "backups"];
 
 /**
  * - done: o painel conferiu e está feito;

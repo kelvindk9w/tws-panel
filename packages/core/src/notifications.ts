@@ -8,7 +8,16 @@
  */
 
 /** O que pode virar aviso. */
-export type NotificationKind = "security" | "deploy" | "certificate" | "blacklist" | "disk" | "panel";
+export type NotificationKind =
+  | "security"
+  | "deploy"
+  | "certificate"
+  | "blacklist"
+  | "disk"
+  | "panel"
+  | "backup_failed"
+  | "backup_stale"
+  | "backup_reminder";
 
 export const NOTIFICATION_KINDS: readonly NotificationKind[] = [
   "security",
@@ -17,6 +26,9 @@ export const NOTIFICATION_KINDS: readonly NotificationKind[] = [
   "blacklist",
   "disk",
   "panel",
+  "backup_failed",
+  "backup_stale",
+  "backup_reminder",
 ];
 
 /** Padrão sensato: tudo que pede ação ligado; "painel iniciado" desligado (é informativo). */
@@ -27,6 +39,9 @@ export const DEFAULT_NOTIFICATION_KINDS: Readonly<Record<NotificationKind, boole
   blacklist: true,
   disk: true,
   panel: false,
+  backup_failed: true,
+  backup_stale: true,
+  backup_reminder: true,
 };
 
 /** Texto de cada tipo para a tela. */
@@ -54,6 +69,18 @@ export const NOTIFICATION_KIND_LABELS: Readonly<Record<NotificationKind, { title
   panel: {
     title: "Painel reiniciado",
     description: "Quando o painel liga de novo (depois de uma atualização ou de reiniciar a VPS).",
+  },
+  backup_failed: {
+    title: "Backup que falhou",
+    description: "Quando um backup não termina ou a cópia externa não confere.",
+  },
+  backup_stale: {
+    title: "Backup externo atrasado",
+    description: "Quando passa mais de 2 dias (ou o dobro da frequência) sem um backup externo conferido.",
+  },
+  backup_reminder: {
+    title: "Lembrete da senha de backup",
+    description: "A cada 3 meses, para você testar se ainda tem a senha dos backups.",
   },
 };
 

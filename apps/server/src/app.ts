@@ -54,6 +54,13 @@ import {
   panelStartedNotification,
 } from "./services/notification-sources.js";
 import { createTelegramClient } from "./services/telegram-client.js";
+import backupsRoutes from "./routes/backups.js";
+import { BackupService } from "./services/backup-service.js";
+import { DockerCli } from "./services/backup-docker.js";
+import { SevenZip } from "./services/backup-archive.js";
+import { S3Storage } from "./services/backup-s3.js";
+import { verifyPasswordTimingSafe } from "./services/password.js";
+import { PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -130,6 +137,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     });
   };
   app.alertsService.onCreated((alert) => notify(alertNotification(alert)));
+  // Backups: criado logo abaixo (precisa do DeployService). O gancho do
+  // deploy só o usa depois que ele existe.
+  let backupService: BackupService | null = null;
   // DeployService no escopo raiz: compartilhado entre as rotas de projetos e
   // de e-mail (Fase 3 registra o provedor de env vars SMTP nele).
   app.decorate(
@@ -137,9 +147,69 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     new DeployService(config, {
       audit: app.auditService,
       alerts: app.alertsService,
-      onDeployFinished: (e) => notify(deployNotification(e)),
+      onDeployFinished: (e) => {
+        notify(deployNotification(e));
+        // A aba Backups do projeto mostra o que foi detectado DEPOIS do deploy.
+        if (e.status === "success") {
+          void backupService?.detectProject(e.projectId).catch((err: unknown) => {
+            app.log.warn("backups: detecção depois do deploy falhou (%s)", err instanceof Error ? err.message : String(err));
+          });
+        }
+      },
     }),
   );
+  // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
+  // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
+  backupService = new BackupService({
+    dataDir: config.dataDir,
+    projectsDir: config.projectsDir,
+    docker: new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage }),
+    archiver: new SevenZip(),
+    storage: (cfg) => new S3Storage(cfg),
+    projects: {
+      list: () => app.deployService.listProjects(),
+      get: (id) => app.deployService.getProject(id),
+      srcDir: (p) => app.deployService.backupSourceDir(p),
+      // "VPS nova": publica do GitHub e espera terminar antes de pôr os dados de volta.
+      redeploy: async (id) => {
+        const job = await app.deployService.startDeploy(id);
+        const deadline = Date.now() + 45 * 60_000;
+        for (;;) {
+          const current = await app.deployService.getJob(id, job.id);
+          if (current && current.status !== "running" && current.status !== "queued") {
+            if (current.status !== "success") throw new Error(`o deploy falhou: ${current.error ?? "veja o log do deploy"}`);
+            return;
+          }
+          if (Date.now() > deadline) throw new Error("o deploy passou de 45 minutos");
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      },
+    },
+    mail: {
+      container: PAAS_STALWART_CONTAINER,
+      volume: PAAS_STALWART_VOLUME,
+      dataPath: "/opt/stalwart-mail/data",
+      etcPath: "/opt/stalwart-mail/etc",
+      webmailContainer: PAAS_WEBMAIL_CONTAINER,
+      webmailVolume: PAAS_WEBMAIL_VOLUME,
+      webmailPath: "/var/roundcube",
+    },
+    verifyLogin: async (userId, password) => {
+      const user = await userStore.findById(userId);
+      return verifyPasswordTimingSafe(user?.passwordHash ?? null, password);
+    },
+    notify,
+    audit: app.auditService,
+    log: (m) => app.log.warn(m),
+    // Depois de preparar a restauração do painel: encerra o processo e o
+    // Docker (restart: unless-stopped) sobe de novo; a troca acontece na
+    // subida (index.ts → applyPendingPanelRestore).
+    restartPanel: () => {
+      app.log.warn("Backups: reiniciando o painel para terminar a restauração.");
+      process.kill(process.pid, "SIGTERM");
+    },
+  });
+  app.decorate("backupService", backupService);
   // Certificados manuais (página Certificados): no escopo raiz porque o
   // proxy (Caddyfile com `tls`) e o e-mail (Stalwart) usam o mesmo par.
   const certificateStore = new ManualCertificateStore(config.dataDir);
@@ -258,10 +328,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       emailFacts: mailFactsSource(config),
       panelDomainFacts: (host) => panelDomainService.facts(host),
       notificationFacts: () => notificationService.facts(),
+      backupFacts: () => backupService.facts(),
     }),
   });
   await app.register(panelDomainRoutes);
   await app.register(notificationsRoutes);
+  await app.register(backupsRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(setupRestartRoutes);
@@ -294,11 +366,14 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     setInterval(() => void certificates.check(), 6 * 60 * 60_000),
   ];
   for (const t of watcherTimers) t.unref();
+  // Backups: a agenda confere a cada minuto (horário, atraso, lembrete).
+  backupService.start();
   // "Painel iniciado" (desligado por padrão): quando o servidor fica pronto.
   app.addHook("onReady", async () => notify(panelStartedNotification(new Date())));
 
   app.addHook("onClose", async () => {
     notificationService.stop();
+    backupService.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.flush();
     await terminalService.dispose();

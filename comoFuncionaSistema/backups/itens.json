@@ -1,0 +1,112 @@
+{
+  "id": "itens",
+  "modulo": "backups",
+  "metodo": "PUT/POST/GET",
+  "url": "/api/backups/targets/:target, /:target/run, /:target/points",
+  "resumo": "Configuração de cada item (ligado, frequência 24/12/6 h, cópias na VPS e fora, itens marcados, pastas extras), Fazer backup agora e as datas para restaurar.",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:223, apps/server/src/services/backup-service.ts:652",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "target",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "'panel', 'email' ou 'project:<id>' (padrão ^(panel|email|project:[A-Za-z0-9_-]{1,64})$)."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "enabled",
+        "tipo": "boolean",
+        "obrigatorio": false
+      },
+      {
+        "nome": "frequencyHours",
+        "tipo": "24|12|6",
+        "obrigatorio": false
+      },
+      {
+        "nome": "localKeep",
+        "tipo": "integer 1-60",
+        "obrigatorio": false,
+        "descricao": "Padrão 2."
+      },
+      {
+        "nome": "remoteKeep",
+        "tipo": "integer 1-60",
+        "obrigatorio": false,
+        "descricao": "Padrão 5."
+      },
+      {
+        "nome": "choices",
+        "tipo": "Record<string, boolean>",
+        "obrigatorio": false,
+        "descricao": "id do item detectado (db:<serviço>, mnt:<serviço>:<destino>, src) → marcado."
+      },
+      {
+        "nome": "extraFolders",
+        "tipo": "Array<{service, path}>",
+        "obrigatorio": false,
+        "regras": "até 20; caminho absoluto sem '..'"
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 204,
+      "quando": "PUT"
+    },
+    {
+      "status": 200,
+      "quando": "run",
+      "corpo": "BackupRecord (na fila)"
+    },
+    {
+      "status": 200,
+      "quando": "points",
+      "corpo": {
+        "points": "BackupPoint[] (local e/ou remote)"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "not_found"
+    },
+    {
+      "status": 409,
+      "codigo": "not_deployed|email_unavailable"
+    }
+  ],
+  "fluxo": [],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [
+    "auditoria backups.settings / backups.run"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx",
+    "apps/web/src/components/project/ProjectBackupsCard.tsx",
+    "apps/web/src/pages/NewProjectPage.tsx (enabled: false quando 'Fazer backup: Não')"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": []
+}

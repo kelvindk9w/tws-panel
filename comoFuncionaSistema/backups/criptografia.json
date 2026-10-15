@@ -1,0 +1,54 @@
+{
+  "id": "criptografia",
+  "modulo": "backups",
+  "metodo": "PUT",
+  "url": "/api/backups/encryption",
+  "resumo": "Liga/desliga a criptografia da cópia externa (vem ligada).",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:153, apps/server/src/services/backup-service.ts:820",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "enabled",
+        "tipo": "boolean",
+        "obrigatorio": true
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sucesso",
+      "corpo": "BackupsStatus (packages/core/src/backups.ts): destination (sem a chave secreta), encryption (sem a senha), targets, running, queued, history (50), timezone, backupHour, archiverAvailable, localPath."
+    }
+  ],
+  "erros": [],
+  "fluxo": [],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [
+    "auditoria backups.encryption"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": []
+}

@@ -1,0 +1,54 @@
+{
+  "id": "aba-do-projeto",
+  "modulo": "backups",
+  "metodo": "GET/POST",
+  "url": "/api/backups/projects/:id, /api/backups/projects/:id/detect",
+  "resumo": "Aba Backups do projeto: item, detecção, escolhas, pastas extras, histórico; e 'Detectar de novo'.",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:250, apps/server/src/services/backup-service.ts:637",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "ProjectBackupView"
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "Detecção (backup-detect.ts): docker inspect dos containers do projeto; banco pela imagem (postgres, mysql, mariadb, mongo, redis); montagens com tamanho (du -sk num container auxiliar); 'coberto pelo dump' para a pasta de dados do banco; marcado por padrão: bancos (menos Redis) e pastas com nome de upload/storage/media/dados; docker diff ignorando /tmp, /var/tmp, /var/cache, /var/log, /run, /etc, /proc, /sys, /dev, listas do apt/dpkg e caches de pacotes vira o aviso de arquivos fora de volume.",
+    "Roda sozinha depois de cada deploy que deu certo (gancho onDeployFinished em app.ts)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/components/project/ProjectBackupsCard.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts"
+  ],
+  "observacoes": []
+}

@@ -301,6 +301,8 @@ export interface CreateProjectRequest {
   websocket?: boolean;
   proxyService?: string;
   proxyPort?: number;
+  /** "Fazer backup" do projeto (padrão sim). Fica no serviço de backups, não no projeto. */
+  backup?: boolean;
 }
 
 export interface UpdateProjectRequest {
