@@ -604,3 +604,36 @@ describe("HTTPS do projeto", () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe("backups na criação e na remoção do projeto", () => {
+  it("'Fazer backup: sim/não' vai para o serviço de backups (padrão sim) e o projeto apagado é esquecido", async () => {
+    await build();
+    const backups = { initProject: vi.fn(async () => undefined), forgetProject: vi.fn(async () => undefined) };
+    await closeAuthTestApp(ctx);
+    service = makeServiceStub();
+    ctx = await buildAuthTestApp(TOKEN);
+    app = ctx.app;
+    app.decorate("deployService", service as unknown as DeployService);
+    app.decorate("backupService", backups as unknown as FastifyInstance["backupService"]);
+    await app.register(projectsRoutes);
+    const body = { name: "Loja", ingestMode: "git", source: "https://github.com/x/y.git", domain: "loja.localhost" };
+    expect((await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: body })).statusCode).toBe(201);
+    expect(backups.initProject).toHaveBeenLastCalledWith("p1", true);
+    await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: { ...body, backup: false } });
+    expect(backups.initProject).toHaveBeenLastCalledWith("p1", false);
+    expect((await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: { ...body, backup: "sim" } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "DELETE", url: "/api/projects/p1", headers: auth })).statusCode).toBeLessThan(300);
+    expect(backups.forgetProject).toHaveBeenCalledWith("p1");
+  });
+
+  it("sem o serviço de backups (instalação de teste) a criação continua", async () => {
+    await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: auth,
+      payload: { name: "Loja", ingestMode: "git", source: "https://github.com/x/y.git", domain: "loja.localhost", backup: true },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+});

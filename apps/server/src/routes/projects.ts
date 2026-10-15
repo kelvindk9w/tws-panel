@@ -39,6 +39,7 @@ const createProjectSchema = {
       websocket: { type: "boolean" },
       proxyService: { type: ["string", "null"], maxLength: 100 },
       proxyPort: { type: ["integer", "null"], minimum: 1, maximum: 65535 },
+      backup: { type: "boolean" },
     },
   },
 } as const;
@@ -250,9 +251,11 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: createProjectSchema },
     async (request, reply) => {
       try {
-        const project = await service.createProject(
-          request.body ?? ({} as CreateProjectRequest),
-        );
+        const { backup, ...req } = request.body ?? ({} as CreateProjectRequest);
+        const project = await service.createProject(req);
+        // "Fazer backup: sim/não" da criação (padrão sim). O serviço de backups
+        // fica no escopo raiz (app.ts); instalações de teste podem não tê-lo.
+        if (app.hasDecorator("backupService")) await app.backupService.initProject(project.id, backup !== false);
         return reply.code(201).send(await projectResponse(project));
       } catch (err) {
         return sendError(reply, err);
@@ -713,11 +716,14 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   }>("/api/projects/:id", { schema: deleteProjectSchema }, async (request, reply) => {
     const log: string[] = [];
     try {
+      const existing = await service.getProject(request.params.id);
       await service.deleteProject(
         request.params.id,
         request.query.deleteSource === "true",
         (chunk) => log.push(chunk),
       );
+      // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
+      if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
       return reply.send({ ok: true, log: log.join("") });
     } catch (err) {
       return sendError(reply, err);
