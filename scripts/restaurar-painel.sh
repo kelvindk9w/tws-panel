@@ -24,6 +24,8 @@
 #   5. confere que a troca aconteceu.
 # Ficam como estão: as cópias de backup na VPS, o token de instalação e o
 # código dos projetos. Depois: entre com o usuário e a senha do backup.
+# Permissões: a extração roda como o usuário da imagem (o mesmo dono do
+# painel) e tudo fica só para ele (0600 nos arquivos, 0700 nas pastas).
 # =============================================================================
 set -euo pipefail
 
@@ -38,7 +40,7 @@ log() { printf '\033[1;34m[tws-panel]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 case "${1:-}" in
-  -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
   "") die "informe o arquivo do backup. Ex.: sudo ./scripts/restaurar-painel.sh /root/2026-10-14_03-00.7z" ;;
 esac
 [ "$#" -eq 1 ] || die "informe só o arquivo do backup (use --help)"
@@ -87,8 +89,10 @@ STATUS=0
 printf '%s\n' "$SENHA_LIDA" | docker run --rm -i --entrypoint sh \
   -v "$VOLUME_NAME:/data" -v "$ARCHIVE_DIR:/entrada:ro" "$IMAGE" -c '
     set -e
+    umask 077
     rm -rf "$1" && mkdir -p "$1"
     if [ -n "$4" ]; then 7zz x -y -bso0 -bsp0 -o"$1" "/entrada/$2"; else 7zz x -y -bso0 -bsp0 -o"$1" "/entrada/$2" </dev/null; fi
+    chmod -R go-rwx "$1"
     rm -rf "$1/backups" "$1/setup-token" "$1/projects"
     printf "{\"requestedAt\":\"%s\",\"fileName\":\"%s\",\"actor\":\"ssh\"}\n" "$3" "$2" > "$5"
   ' restaurar "$STAGE" "$ARCHIVE_NAME" "$NOW" "${SENHA_LIDA:+cifrado}" "$MARKER" || STATUS=$?

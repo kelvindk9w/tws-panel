@@ -14,10 +14,16 @@
  * Ficam como estão: a pasta backups/ (as cópias locais), o setup-token desta
  * instalação e a pasta projects/ (código dos projetos, nas instalações
  * antigas em que ela fica dentro do diretório de dados).
+ *
+ * Permissões: o 7-Zip guarda e devolve o modo de cada arquivo, mas um .7z
+ * refeito no Windows (ou extraído com umask aberto) chega com 0644. Tudo o
+ * que volta é estado privado do painel (segredos, chaves, contas), então a
+ * troca deixa cada arquivo só para o dono: 0600 (0700 se era executável) e
+ * pastas 0700. O dono é o próprio processo do painel, que é quem extrai.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BackupRecord } from "@paas/core";
 
@@ -65,6 +71,7 @@ export async function applyPendingPanelRestore(dataDir: string, now: () => Date 
   }
   for (const name of await readdir(staged)) {
     if (PANEL_PRESERVED.includes(name) || ARCHIVE_EXTRAS.includes(name)) continue;
+    await onlyOwner(path.join(staged, name));
     await rename(path.join(staged, name), path.join(dataDir, name));
   }
   await rm(staged, { recursive: true, force: true });
@@ -102,4 +109,19 @@ export async function applyPendingPanelRestore(dataDir: string, now: () => Date 
   });
   await writeFile(historyFile, JSON.stringify({ entries: entries.slice(-200) }, null, 2) + "\n", { mode: 0o600 });
   return marker;
+}
+
+/**
+ * Tira o acesso do grupo e dos outros, recursivamente. Links simbólicos não
+ * são seguidos (um link no backup não leva o chmod para fora de /data).
+ */
+async function onlyOwner(target: string): Promise<void> {
+  const info = await lstat(target);
+  if (info.isSymbolicLink()) return;
+  if (info.isDirectory()) {
+    await chmod(target, 0o700);
+    for (const name of await readdir(target)) await onlyOwner(path.join(target, name));
+    return;
+  }
+  await chmod(target, info.mode & 0o100 ? 0o700 : 0o600);
 }

@@ -94,6 +94,18 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
     expect(r.stdout).toMatch(/Entre no painel com o usuário e a senha do backup/);
   });
 
+  it("a extração no volume fica só para o dono (umask 077 e chmod go-rwx na pasta extraída)", async () => {
+    const m = await montar();
+    const file = await arquivo("2026-10-14_03-00.7z");
+    const r = rodar(m, [file]);
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    const calls = await readFile(m.log, "utf8");
+    const extracao = calls.slice(calls.indexOf("-v paas_data:/data"));
+    expect(extracao).toMatch(/umask 077/);
+    expect(extracao).toMatch(/chmod -R go-rwx "\$1"/);
+    expect(extracao.indexOf("umask 077")).toBeLessThan(extracao.indexOf("7zz x"));
+  });
+
   it("backup cifrado: pergunta a senha e ela vai só pela entrada padrão", async () => {
     const m = await montar();
     const file = await arquivo("cifrado.7z");

@@ -3,7 +3,7 @@
  * restauração (antes de qualquer serviço ler o disco).
  */
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,5 +81,46 @@ describe("restauração do painel na subida", () => {
     await applyPendingPanelRestore(dir);
     const history = JSON.parse(await readFile(path.join(dir, "backups-history.json"), "utf8")) as { entries: unknown[] };
     expect(history.entries).toHaveLength(1);
+  });
+
+  it("o que volta fica só para o dono: arquivos 0600 (0700 se executável) e pastas 0700", async () => {
+    await put("backups/.restaurar-painel/users.json", "do-backup");
+    await put("backups/.restaurar-painel/backups-key", "chave");
+    await put("backups/.restaurar-painel/certificates/site/key.pem", "chave-tls");
+    await put("backups/.restaurar-painel/ferramentas/rodar.sh", "#!/bin/sh");
+    const staged = path.join(dir, "backups/.restaurar-painel");
+    // Como chegaria de um .7z feito no Windows ou com umask aberto.
+    await chmod(path.join(staged, "users.json"), 0o644);
+    await chmod(path.join(staged, "backups-key"), 0o600);
+    await chmod(path.join(staged, "certificates/site/key.pem"), 0o666);
+    await chmod(path.join(staged, "certificates/site"), 0o755);
+    await chmod(path.join(staged, "certificates"), 0o775);
+    await chmod(path.join(staged, "ferramentas/rodar.sh"), 0o755);
+    await put("backups/.restaurar-painel.json", JSON.stringify({ requestedAt: "x", fileName: "y", actor: "z" }));
+
+    await applyPendingPanelRestore(dir);
+
+    const mode = async (rel: string) => (await stat(path.join(dir, rel))).mode & 0o777;
+    expect(await mode("users.json")).toBe(0o600);
+    expect(await mode("backups-key")).toBe(0o600);
+    expect(await mode("certificates")).toBe(0o700);
+    expect(await mode("certificates/site")).toBe(0o700);
+    expect(await mode("certificates/site/key.pem")).toBe(0o600);
+    expect(await mode("ferramentas/rodar.sh")).toBe(0o700);
+    expect(await mode("backups-history.json")).toBe(0o600);
+    // Mesmo dono do processo do painel (quem vai ler e gravar esses arquivos).
+    expect((await stat(path.join(dir, "users.json"))).uid).toBe(process.getuid!());
+  });
+
+  it("um link simbólico que veio no backup não leva o chmod para fora do diretório de dados", async () => {
+    const fora = path.join(dir, "..", `${path.basename(dir)}-fora.txt`);
+    await writeFile(fora, "fora");
+    await chmod(fora, 0o644);
+    await put("backups/.restaurar-painel/users.json", "do-backup");
+    await symlink(fora, path.join(dir, "backups/.restaurar-painel/atalho"));
+    await put("backups/.restaurar-painel.json", JSON.stringify({ requestedAt: "x", fileName: "y", actor: "z" }));
+    await applyPendingPanelRestore(dir);
+    expect((await stat(fora)).mode & 0o777).toBe(0o644);
+    await rm(fora, { force: true });
   });
 });
