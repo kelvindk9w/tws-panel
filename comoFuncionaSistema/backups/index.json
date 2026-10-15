@@ -170,7 +170,7 @@
   "pontosDeAtencao": [
     "Imagem do painel precisa do 7zz (pacote 7zip no Dockerfile). Sem ele a tela avisa e os backups não rodam.",
     "O backup do painel contém as chaves que cifram os segredos (2FA, tokens, chave do armazenamento): quem abre o .7z tem tudo. Por isso a cópia externa vem cifrada.",
-    "MongoDB: mongodump recebe a senha por argumento DENTRO do container do banco (visível no ps daquele container). MySQL/MariaDB usam MYSQL_PWD; Postgres usa PGPASSWORD.",
+    "MongoDB: mongodump/mongorestore recebem --config com um YAML temporário (password), criado 0600 com mktemp no /tmp do container do banco e apagado ao sair (trap). Fallback: ferramentas sem --config (imagens mongo até 4.2) recebem --password, visível no ps daquele container. Redis: REDISCLI_AUTH. MySQL/MariaDB usam MYSQL_PWD; Postgres usa PGPASSWORD.",
     "Projetos que não vêm do GitHub (envio/pasta do servidor): a pasta do código entra no backup (item 'src', marcado), porque não existe em outro lugar.",
     "O aviso de arquivos fora de volume é heurístico (docker diff com uma lista de pastas ignoradas).",
     "Google Drive: só a abstração (BackupStorage); não implementado."

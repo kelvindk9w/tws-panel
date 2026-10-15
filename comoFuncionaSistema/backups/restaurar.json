@@ -80,7 +80,7 @@
   "fluxo": [
     "Projeto: para os serviços que não são banco; sobe o banco se preciso e espera responder; Postgres: _papeis.sql e um .sql por banco (--clean --if-exists); MySQL/MariaDB: .sql com --add-drop-database; Mongo: mongorestore --drop; Redis e pastas: esvazia e extrai o .tar (dono e permissões mantidos) por um container auxiliar; liga tudo de novo (bancos primeiro).",
     "E-mail: para o Stalwart, devolve o volume e a configuração, liga; webmail igual.",
-    "Painel: extrai em data/backups/.restaurar-painel/, grava o marcador e reinicia; na subida (index.ts → panel-restore.ts) o estado atual vai para data/backups/_painel/antes-da-restauracao/ e o backup entra no lugar."
+    "Painel: extrai em data/backups/.restaurar-painel/, grava o marcador e reinicia; na subida (index.ts → panel-restore.ts) o estado atual vai para data/backups/_painel/antes-da-restauracao/ e o backup entra no lugar, só para o dono (arquivos 0600, ou 0700 se executáveis; pastas 0700; links simbólicos não seguidos). scripts/restaurar-painel.sh extrai com umask 077 e chmod -R go-rwx."
   ],
   "dependencias": [
     {
