@@ -107,8 +107,11 @@ export async function waitHealthy(opts: HealthCheckOptions): Promise<void> {
     onLog(`Última resposta do health check: ${lastError}\n`);
     throw new Error(`health check falhou após ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
   }
-  if (appConfirmed && !warnedClientError) onLog(`Health check OK — o proxy responde por ${domain}.\n`);
-  else onLog(`O proxy responde por ${domain} e redireciona para o HTTPS — a aplicação é conferida por lá.\n`);
+  // 4xx direto: o aviso do app já foi dado no laço acima.
+  if (!warnedClientError) {
+    if (appConfirmed) onLog(`Health check OK — o proxy responde por ${domain}.\n`);
+    else onLog(`O proxy responde por ${domain} e redireciona para o HTTPS — a aplicação é conferida por lá.\n`);
+  }
   if (isLocal(domain)) return;
 
   // HTTPS: o Caddy emite o certificado na primeira visita (Let's Encrypt).

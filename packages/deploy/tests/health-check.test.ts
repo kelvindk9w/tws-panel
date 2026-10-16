@@ -125,6 +125,12 @@ describe("waitHealthy — o backend precisa responder", () => {
     expect(log.join("")).toMatch(/respondeu HTTP 401/);
   });
 
+  it("HTTP 4xx direto: não diz que 'redireciona para o HTTPS'", async () => {
+    const { done, log } = run(seq({ ok: false, status: 404 }), seq({ ok: true, status: 200 }));
+    await done;
+    expect(log.join("")).not.toMatch(/redireciona/);
+  });
+
   it("HTTP 4xx direto do app e depois HTTPS 200: passa", async () => {
     const http = seq({ ok: false, status: 404 });
     const https = seq({ ok: true, status: 200 });
