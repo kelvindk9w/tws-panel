@@ -266,14 +266,9 @@ domínio novo** e o certificado válido.
 
 ## Etapa 5 — Fuso horário
 
-> [!NOTE]
-> **Tela nova, em implementação.** Os nomes abaixo são os da versão em desenvolvimento. Se a sua
-> versão do painel ainda não tem **Configurações → Fuso horário**, pule esta etapa e volte depois
-> de [atualizar o painel](#etapa-11).
-
 O fuso da VPS define **o horário dos backups agendados, que rodam às 03:00 no fuso da VPS**, e as
-datas dos registros. Uma VPS nova costuma vir em UTC, três horas à frente de Brasília: nesse caso,
-o "03:00" dos backups seria meia-noite no horário de Brasília.
+datas dos registros. Cada provedor entrega a VPS num fuso: a maioria em UTC (três horas à frente de Brasília), a Contabo
+em Berlim. Em UTC, o "03:00" dos backups seria meia-noite no horário de Brasília.
 
 **Onde ver:** o assistente inicial já mostra o fuso detectado na etapa **Saúde da máquina**, com
 **Trocar o fuso**. Depois da instalação, o lugar é **Configurações → Fuso horário**.
@@ -288,7 +283,7 @@ o "03:00" dos backups seria meia-noite no horário de Brasília.
    Os desmarcados mantêm o fuso que têm.
 4. Clique em **Aplicar na VPS**. A troca vale para a VPS inteira, sem precisar de SSH.
 
-Cada projeto também tem o campo **Fuso horário do projeto**, na aba **Configurações** do projeto:
+Cada projeto também tem o cartão **Fuso horário**, na aba **Configurações** do projeto:
 "Padrão da imagem" (geralmente UTC), "Igual ao da VPS" ou um fuso específico.
 
 **O que conferir:** a hora mostrada na tela bate com o seu relógio. Em **Configurações → Backups**,
