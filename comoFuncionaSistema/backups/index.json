@@ -17,7 +17,9 @@
     "Avisos (NotificationService): backup_failed (falhou ou a cópia externa falhou), backup_stale (sem cópia externa conferida há mais de 2 dias ou 2× a frequência; no máximo 1 por dia por item), backup_reminder (senha, a cada 90 dias).",
     "Roteiro, passo 6 'Backups fora da VPS' (opcional): feito com destino conectado e pelo menos um item com cópia externa conferida.",
     "Conferir (conferir.json): cada cópia é conferida na fila; o resultado fica ao lado do backup e falha avisa pelas notificações. O hash SHA-256 e o tamanho de cada cópia são gravados no backup.",
-    "Fuso: a agenda segue process.env.TZ, que Configurações → Fuso horário troca na hora (BackupService.timezoneChanged recalcula sem disparar um horário que já passou). GET /api/backups traz timezoneName."
+    "Fuso: a agenda segue process.env.TZ, que Configurações → Fuso horário troca na hora (BackupService.timezoneChanged recalcula sem disparar um horário que já passou). GET /api/backups traz timezoneName.",
+    "Padrão dos projetos (padrao.json): projectDefaults em data/backups.json. Cada item de projeto tem followsDefaults: quem segue guarda uma cópia do padrão e muda junto quando o padrão muda; salvar frequência, cópias ou ligado na aba do projeto vira configuração própria; 'Voltar ao padrão' e 'Aplicar também nestes projetos' voltam a seguir. Painel e e-mail têm a configuração deles.",
+    "Sessão obrigatória: o plugin de backups responde 401 sem sessão, inclusive só com o setup token (antes dava 500)."
   ],
   "arquivosFonte": {
     "rotas": [
@@ -134,7 +136,7 @@
       "id": "itens",
       "metodo": "PUT/POST/GET",
       "url": "/api/backups/targets/:target, /:target/run, /:target/points",
-      "resumo": "Configuração de cada item (ligado, frequência 24/12/6 h, cópias na VPS e fora, itens marcados, pastas extras), Fazer backup agora e as datas para restaurar.",
+      "resumo": "Configuração de cada item (ligado, frequência 24/12/6 h, cópias na VPS e fora, itens marcados, pastas extras), Fazer backup agora e as datas para restaurar. Salvar frequência, cópias ou ligado num projeto vira configuração própria.",
       "arquivo": "itens.json"
     },
     {
@@ -171,6 +173,13 @@
       "url": "/api/backups/targets/:target/verify, /api/backups/verify",
       "resumo": "'Conferir' um backup, 'Conferir todos' do item ou de tudo: 7z t na VPS, download + hash + 7z t na externa, senha da época.",
       "arquivo": "conferir.json"
+    },
+    {
+      "id": "padrao",
+      "metodo": "PUT/POST",
+      "url": "/api/backups/defaults, /api/backups/defaults/apply, /api/backups/targets/:target/use-defaults",
+      "resumo": "Padrão dos projetos (ligado, frequência, cópias), 'Aplicar também nestes projetos' e 'Voltar ao padrão'.",
+      "arquivo": "padrao.json"
     }
   ],
   "dependenciasGlobais": [
@@ -181,8 +190,9 @@
     "O backup do painel contém as chaves que cifram os segredos (2FA, tokens, chave do armazenamento): quem abre o .7z tem tudo. Por isso a cópia externa vem cifrada.",
     "MongoDB: mongodump/mongorestore recebem --config com um YAML temporário (password), criado 0600 com mktemp no /tmp do container do banco e apagado ao sair (trap). Fallback: ferramentas sem --config (imagens mongo até 4.2) recebem --password, visível no ps daquele container. Redis: REDISCLI_AUTH. MySQL/MariaDB usam MYSQL_PWD; Postgres usa PGPASSWORD.",
     "Projetos que não vêm do GitHub (envio/pasta do servidor): a pasta do código entra no backup (item 'src', marcado), porque não existe em outro lugar.",
-    "O aviso de arquivos fora de volume é heurístico (docker diff com uma lista de pastas ignoradas).",
     "Google Drive: só a abstração (BackupStorage); não implementado.",
-    "POST de verify sem sessão (só setup token) não se aplica: as rotas de backups exigem sessão."
+    "O aviso de arquivos fora de volume é heurístico (docker diff): ignora o que o Docker cria sozinho, pontos de montagem e suas pastas pai, e pastas que só aparecem por ter algo dentro. Detalhe em aba-do-projeto.json.",
+    "Projetos que seguem o padrão: trocar o padrão muda a frequência e as cópias deles na hora; a retenção nova vale no próximo backup.",
+    "Rotas de backups sem sessão (inclusive só com o setup token): 401."
   ]
 }

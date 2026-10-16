@@ -8,7 +8,7 @@
   "autenticacao": {
     "exigida": true,
     "tipo": "sessao",
-    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts) e um onRequest no plugin de backups: sem sessão, mesmo com o setup token (setup pendente), responde 401 { error: 'unauthorized' } em vez de chegar à rota. O usuário da sessão vira o 'actor' da auditoria."
   },
   "rateLimit": "Global: 200 req/min por IP.",
   "parametros": {
@@ -21,7 +21,7 @@
     {
       "status": 200,
       "quando": "sucesso",
-      "corpo": "BackupsStatus (packages/core/src/backups.ts): destination (sem a chave secreta), encryption (sem a senha), targets, running, queued, history (50), timezone, backupHour, archiverAvailable, localPath."
+      "corpo": "BackupsStatus (packages/core/src/backups.ts): destination (sem a chave secreta), encryption (sem a senha), targets (projetos com followsDefaults), projectDefaults (o 'Padrão dos projetos'), running, queued, history (50), timezone, backupHour, archiverAvailable, localPath."
     }
   ],
   "erros": [],

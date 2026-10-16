@@ -8,7 +8,7 @@
   "autenticacao": {
     "exigida": true,
     "tipo": "sessao",
-    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts) e um onRequest no plugin de backups: sem sessão, mesmo com o setup token (setup pendente), responde 401 { error: 'unauthorized' } em vez de chegar à rota. O usuário da sessão vira o 'actor' da auditoria."
   },
   "rateLimit": "Do item: 20/min. Geral: 5/min.",
   "parametros": {

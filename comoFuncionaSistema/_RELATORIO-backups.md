@@ -332,3 +332,120 @@ Quem tiver as chaves do bucket poderia trocar um backup por outro montado à mã
 - **Teste real com versitygw em vez de MinIO**: a imagem do MinIO não está disponível.
 - **Senha do MongoDB**: fora do `ps` nas ferramentas 100.3+. Nas imagens `mongo` até 4.2 ela ainda vai por argumento (decisão 13).
 - **Conferência visual** feita com Chromium e `playwright-core` instalados no rascunho da sessão. O Playwright do MCP gravava fora do worktree (`/home/kelvin/projects/paas/.playwright-mcp/`). Antes de trocar de ferramenta, ele criou ali um `.yml` de página e um `.log` de console desta sessão. Eles não foram apagados, porque ficam fora do worktree.
+
+## Padrão dos projetos, alarme falso e 401 (15/10/2026, branch `fix/backups-padrao-projetos`)
+
+### 1. Padrão dos projetos
+
+**O problema.** O dono configurou Painel e E-mail (a cada 6 h, 8 cópias na VPS, 30 fora) e o
+projeto continuou com 24 h, 2 e 5. Cada item tem a sua configuração.
+
+**Como ficou.**
+
+- **Configurações → Backups** tem o cartão **Padrão dos projetos**:
+  - backup automático ligado ou desligado, frequência (24, 12 ou 6 h), cópias na VPS e fora;
+  - a frase "Roda às 03:00… Seus backups cobrem…", igual à dos outros cartões;
+  - **Aplicar também nestes projetos**: uma caixa por projeto, **Marcar todos** e **Nenhum**, no
+    mesmo jeito da tela de fuso. Cada projeto mostra "hoje: segue o padrão" ou "hoje:
+    configuração própria (a cada 12 h, 2 na VPS, 5 fora)";
+  - um só **Salvar**: grava o padrão (se mudou) e aplica nos marcados. A tela diz "Padrão salvo.
+    Aplicado em: Loja, Blog.".
+- **Aba Backups do projeto**, em Frequência e cópias:
+  - "Seguindo o padrão do painel", com o aviso de que salvar ali passa a usar uma configuração
+    própria;
+  - ou "Configuração própria", com o botão **Voltar ao padrão**.
+- **Novo projeto**: "Sim" segue o padrão (a tela diz isso). "Não" desliga e vira configuração
+  própria.
+- O que entra no backup (bancos, pastas, pastas extras) nunca passa pelo padrão.
+
+**Decisões.**
+
+1. **Como se guarda.** `data/backups.json` ganhou `projectDefaults` (começa em ligado, 24 h, 2 e
+   5, como antes). Cada item de projeto ganhou `followsDefaults`: `true` segue o padrão, `false`
+   tem configuração própria. Painel e e-mail não têm esse campo.
+2. **Quem segue guarda uma cópia do padrão.** Quando o padrão muda, o painel copia os valores para
+   cada projeto que segue. A agenda e a retenção continuam lendo o item, sem caso especial. Trocar
+   a frequência recomeça a contagem no horário atual, como já acontecia ao salvar um item.
+3. **Quando vira próprio.** Ao salvar ligado, frequência ou cópias na aba do projeto, mesmo que os
+   valores sejam iguais ao padrão. "Salvar itens" (bancos e pastas) não muda nada disso.
+4. **Quando volta a seguir.** "Voltar ao padrão" na aba do projeto ou "Aplicar também nestes
+   projetos". Os dois copiam o padrão na hora.
+5. **Projeto novo.** Nasce do padrão e segue o padrão. Se a escolha "Fazer backup" for diferente
+   do padrão (ex.: "Não" com o padrão ligado), vira configuração própria com o resto do padrão.
+6. **Instalação antiga.** Projeto sem `followsDefaults` e com ligado, 24 h, 2 e 5 (o que o painel
+   criava sozinho) passa a seguir o padrão. Com qualquer outro valor, alguém mudou: fica
+   configuração própria. Nada muda na subida, porque o padrão começa com os mesmos valores.
+7. **Auditoria.** `backups.defaults` (o que mudou e quantos projetos seguem),
+   `backups.defaults_applied` ("Padrão dos projetos aplicado em: Loja, Blog.") e `backups.settings`
+   ("Loja: voltou ao padrão dos projetos." e "configuração própria" ao salvar no projeto).
+8. **Rotas novas.** `PUT /api/backups/defaults`, `POST /api/backups/defaults/apply` e
+   `POST /api/backups/targets/project:<id>/use-defaults`. Detalhe em `backups/padrao.json`.
+
+### 2. Alarme falso de "Arquivos gravados fora de volume"
+
+**O problema.** Num projeto real, o aviso apontou `/docker-entrypoint-initdb.d` (a pasta que o
+Docker cria para montar `init-databases.sql`) e `/usr/sbin/docker-init` (do `init: true`).
+
+**Como ficou.** O aviso não conta mais:
+
+- o que o Docker cria sozinho: `/usr/sbin/docker-init`, `/sbin/docker-init`, `/.dockerenv`,
+  `/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf`. `/dev`, `/proc`, `/sys`, `/run` (com
+  `/run/secrets`) e `/etc` já eram ignorados;
+- qualquer ponto de montagem e as pastas pai dele: volumes, binds, arquivos únicos montados e
+  tmpfs. O tmpfs do compose (`tmpfs:`) não aparece em `Mounts`, só em `HostConfig.Tmpfs`, e agora
+  é lido de lá também;
+- uma pasta (linha `A` ou `C`) que tem outro caminho do diff dentro, mesmo apagado ou ignorado. É
+  o caso de `C /usr/sbin` por causa do `docker-init` e de `C /srv` por um arquivo apagado. A pasta
+  só conta pelo que tem dentro.
+
+Os testes usam saídas reais de `docker diff` (Docker 29), tiradas de containers alpine e debian com
+`--init`, um arquivo montado em `/docker-entrypoint-initdb.d/`, um secret em `/run/secrets/`, tmpfs
+pelas duas formas e arquivos gravados de verdade fora de volume. Os gravados de verdade continuam
+aparecendo.
+
+### 3. Erro 500 nas rotas de backups
+
+**O problema.** Com o setup pendente, o plugin de autenticação deixa passar com o setup token, sem
+sessão. As rotas de backups liam quem pediu da sessão e quebravam com 500.
+
+**Como ficou.** O plugin de backups responde **401** `{ error: "unauthorized" }` quando não há
+sessão, antes de validar o corpo. É o mesmo código e o mesmo formato das outras rotas protegidas
+depois do setup. Backups pedem uma conta: quem pediu vai para a auditoria, e "Ver a senha" confere
+a senha de login. O teste chama 13 rotas só com o setup token e espera 401 em todas, sem chegar ao
+serviço.
+
+### Testes
+
+- `pnpm -r --workspace-concurrency=1 --no-bail run test:coverage`: todos os pacotes passaram
+  com os mínimos de cobertura.
+- `pnpm -r run typecheck`: sem erros.
+- Novos: `backup-detect.test.ts` (6, com saídas reais), `backup-service.test.ts` (8, padrão dos
+  projetos), `routes-backups.test.ts` (401 com setup token; rotas do padrão),
+  `routes-projects.test.ts` (criação sem escolha), `backup-settings.test.tsx` (2),
+  `project-backups.test.tsx` (1), `new-project-page.test.tsx` (texto do "Sim").
+
+### O que não foi testado de verdade
+
+- As telas no navegador. Elas têm testes de componente, mas não houve print.
+- O aviso de arquivos fora de volume num deploy completo pelo painel. A função foi testada com as
+  saídas reais de `docker diff`.
+
+### Observação
+
+- `routes/notifications.ts` também lê `request.session!` sem conferir. Só com o setup token, deve
+  dar o mesmo 500. Ficou fora desta branch.
+
+### Passo a passo na VPS
+
+```
+cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build
+```
+
+1. Abra **Configurações → Backups → Padrão dos projetos**. Ele aparece com ligado, 24 h, 2 e 5.
+2. Escolha **A cada 6 horas**, 8 cópias na VPS e 30 fora. Em **Aplicar também nestes projetos**,
+   clique em **Marcar todos** e depois em **Salvar**. A tela diz "Padrão salvo. Aplicado em: …".
+3. Na lista, cada projeto passa a "hoje: segue o padrão".
+4. Abra a aba **Backups** de um projeto. Aparece **Seguindo o padrão do painel**, com 6 h, 8 e 30.
+5. Em **Auditoria**, aparecem `backups.defaults` e `backups.defaults_applied`.
+6. No projeto que acusava arquivos fora de volume, clique em **Detectar de novo**. O aviso de
+   `/docker-entrypoint-initdb.d` e de `/usr/sbin/docker-init` some.

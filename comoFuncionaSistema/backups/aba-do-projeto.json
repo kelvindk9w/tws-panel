@@ -8,7 +8,7 @@
   "autenticacao": {
     "exigida": true,
     "tipo": "sessao",
-    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts) e um onRequest no plugin de backups: sem sessão, mesmo com o setup token (setup pendente), responde 401 { error: 'unauthorized' } em vez de chegar à rota. O usuário da sessão vira o 'actor' da auditoria."
   },
   "rateLimit": "Global: 200 req/min por IP.",
   "parametros": {
@@ -31,8 +31,10 @@
   ],
   "erros": [],
   "fluxo": [
-    "Detecção (backup-detect.ts): docker inspect dos containers do projeto; banco pela imagem (postgres, mysql, mariadb, mongo, redis); montagens com tamanho (du -sk num container auxiliar); 'coberto pelo dump' para a pasta de dados do banco; marcado por padrão: bancos (menos Redis) e pastas com nome de upload/storage/media/dados; docker diff ignorando /tmp, /var/tmp, /var/cache, /var/log, /run, /etc, /proc, /sys, /dev, listas do apt/dpkg e caches de pacotes vira o aviso de arquivos fora de volume.",
-    "Roda sozinha depois de cada deploy que deu certo (gancho onDeployFinished em app.ts)."
+    "Detecção (backup-detect.ts): docker inspect dos containers do projeto; banco pela imagem (postgres, mysql, mariadb, mongo, redis); montagens com tamanho (du -sk num container auxiliar); 'coberto pelo dump' para a pasta de dados do banco; marcado por padrão: bancos (menos Redis) e pastas com nome de upload/storage/media/dados.",
+    "Arquivos fora de volume (unsavedWritesFromDiff): docker diff do container. Linhas D não contam. Não contam: o que o Docker cria sozinho (/.dockerenv, /usr/sbin/docker-init e /sbin/docker-init do init: true, /etc/hostname, /etc/hosts, /etc/resolv.conf), as pastas ignoradas (/tmp, /var/tmp, /var/cache, /var/log, /run (inclui /run/secrets), /var/run, /etc, /proc, /sys, /dev, listas do apt/dpkg), caches de pacote, .pid/.sock/.lock/.pyc, qualquer ponto de montagem (volume, bind, tmpfs de Mounts e de HostConfig.Tmpfs, inclusive arquivo único) e as pastas pai de um ponto de montagem (ex.: /docker-entrypoint-initdb.d, criada para montar init-databases.sql). Uma pasta (A ou C) que tem outro caminho do diff dentro, até um apagado ou ignorado, só conta pelo que tem dentro: 'C /usr/sbin' por causa do docker-init some.",
+    "Roda sozinha depois de cada deploy que deu certo (gancho onDeployFinished em app.ts).",
+    "target.followsDefaults: true = 'Seguindo o padrão do painel' (a tela diz que salvar ali passa a usar configuração própria); false = 'Configuração própria', com o botão 'Voltar ao padrão' (padrao.json)."
   ],
   "dependencias": [
     {
@@ -48,7 +50,8 @@
   ],
   "testes": [
     "apps/server/tests/routes-backups.test.ts",
-    "apps/server/tests/backup-service.test.ts"
+    "apps/server/tests/backup-service.test.ts",
+    "apps/server/tests/backup-detect.test.ts (saídas reais de docker diff)"
   ],
   "observacoes": []
 }
