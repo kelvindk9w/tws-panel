@@ -13,6 +13,8 @@
  *  POST   /api/backups/targets/:target/run      "Fazer backup agora"
  *  GET    /api/backups/targets/:target/points   datas disponíveis para restaurar (VPS e externo)
  *  POST   /api/backups/targets/:target/restore  restaurar (confirmação digitando o nome)
+ *  POST   /api/backups/targets/:target/verify   "Conferir" um backup ({ fileName }) ou todos do item (sem fileName)
+ *  POST   /api/backups/verify                   "Conferir todos" de todos os itens
  *  GET    /api/backups/records/:id              progresso de um backup/restauração
  *  GET    /api/backups/projects/:id             aba Backups do projeto
  *  POST   /api/backups/projects/:id/detect      detectar de novo
@@ -31,6 +33,7 @@ import {
   type BackupPasswordRequest,
   type BackupRestoreRequest,
   type BackupTargetSettingsRequest,
+  type BackupVerifyRequest,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import type { HttpError } from "../services/http-error.js";
@@ -108,6 +111,17 @@ const restoreSchema = {
       redeploy: { type: "boolean" },
       password: { type: "string", maxLength: MAX_BACKUP_PASSWORD_LENGTH },
     },
+  },
+} as const;
+
+/** Corpo do "Conferir": a senha da época só entra (nunca é guardada nem auditada). */
+const verifyBody = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    fileName: { type: "string", minLength: 1, maxLength: 64 },
+    where: { type: "string", enum: ["local", "remote", "both"] },
+    password: { type: "string", minLength: 1, maxLength: MAX_BACKUP_PASSWORD_LENGTH },
   },
 } as const;
 
@@ -243,6 +257,20 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
     handle((req, actor) => service.restore(target(req), req.body as BackupRestoreRequest & { password?: string }, actor), {
       noStore: true,
     }),
+  );
+
+  app.post(
+    "/api/backups/targets/:target/verify",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } }, schema: { params: targetParams, body: verifyBody } },
+    handle((req, actor) => service.verify(target(req), (req.body ?? {}) as BackupVerifyRequest, actor), { noStore: true }),
+  );
+  app.post(
+    "/api/backups/verify",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      schema: { body: { ...verifyBody, properties: { where: verifyBody.properties.where, password: verifyBody.properties.password } } },
+    },
+    handle((req, actor) => service.verify("all", (req.body ?? {}) as BackupVerifyRequest, actor), { noStore: true }),
   );
 
   app.get("/api/backups/records/:id", { schema: { params: idParams } }, handle((req) => service.record((req.params as { id: string }).id)));

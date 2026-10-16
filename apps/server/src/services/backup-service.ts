@@ -19,7 +19,11 @@
  *  - restauração do projeto (bancos e pastas), do e-mail e do painel (este
  *    na subida seguinte, ver panel-restore.ts);
  *  - avisos (notificações): backup que falhou, externo atrasado e o lembrete
- *    trimestral da senha.
+ *    trimestral da senha;
+ *  - "Conferir" (um backup ou todos): entra na mesma fila. A cópia da VPS é
+ *    aberta com `7z t`; a externa é baixada, o tamanho e o hash gravados no
+ *    backup são comparados e ela é aberta com a senha. O resultado fica
+ *    guardado (data/backups.json) e aparece ao lado de cada backup.
  *
  * Segredos: a chave secreta do armazenamento e a senha dos backups ficam
  * CIFRADAS em data/backups.json (AES-256-GCM, chave própria em
@@ -33,6 +37,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { chmod, mkdir, readFile, readdir, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  BACKUP_ALL_TARGETS,
   BACKUP_ENGINE_LABELS,
   BACKUP_FREQUENCIES,
   BACKUP_ROOT_FOLDER,
@@ -48,6 +53,11 @@ import {
   isValidBackupFileName,
   parseBackupFileStamp,
   type BackupCatalog,
+  type BackupCheckResult,
+  type BackupCheckStatus,
+  type BackupCopyWhere,
+  type BackupVerifyItem,
+  type BackupVerifyRequest,
   type BackupDatabaseEngine,
   type BackupDestinationInfo,
   type BackupDestinationRequest,
@@ -78,7 +88,7 @@ import {
 } from "./backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "./backup-docker.js";
 import { suggestPassphrase } from "./backup-passphrase.js";
-import { StorageError, type BackupStorage } from "./backup-s3.js";
+import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, type PanelRestoreMarker } from "./panel-restore.js";
@@ -157,6 +167,8 @@ export interface BackupServiceOptions {
   readyDelayMs?: number;
   /** Espera antes de reiniciar o painel depois de preparar a restauração (padrão 3 s). */
   restartDelayMs?: number;
+  /** Nome do fuso da VPS em uso (Configurações → Fuso horário). */
+  timezoneName?: () => string;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,11 +217,27 @@ interface StoredTarget {
   lastStaleNoticeAt: string | null;
 }
 
+/** O que o painel sabe de uma cópia (gravado no backup) e a última conferência. */
+interface StoredCopyInfo {
+  sha256?: string;
+  size?: number;
+  /** Cópia externa: saiu cifrada. */
+  encrypted?: boolean;
+  check?: BackupCheckResult;
+}
+
+interface StoredFileChecks {
+  local?: StoredCopyInfo;
+  remote?: StoredCopyInfo;
+}
+
 interface StoredConfig {
   destination: StoredDestination | null;
   encryption: StoredEncryption;
   targets: Record<string, StoredTarget>;
   detections: Record<string, ProjectBackupDetection>;
+  /** "<pasta>/<arquivo>" → hash, tamanho e a última conferência de cada cópia. */
+  checks: Record<string, StoredFileChecks>;
 }
 
 /** O que vai em manifesto.json dentro do .7z (lido de volta na restauração). */
@@ -343,6 +371,7 @@ function emptyConfig(): StoredConfig {
     },
     targets: {},
     detections: {},
+    checks: {},
   };
 }
 
@@ -409,6 +438,7 @@ export class BackupService {
           encryption: { ...base.encryption, ...(raw.encryption ?? {}) },
           targets: raw.targets ?? {},
           detections: raw.detections ?? {},
+          checks: raw.checks ?? {},
         };
       } catch {
         this.config = emptyConfig();
@@ -638,8 +668,9 @@ export class BackupService {
       targets,
       running: this.running?.record ?? null,
       queued: this.queue.map((j) => j.record),
-      history: [...this.history].reverse().slice(0, 50),
+      history: this.decorate([...this.history].reverse().slice(0, 50), projects),
       timezone: timezoneLabel(-new Date(this.now()).getTimezoneOffset()),
+      timezoneName: this.opts.timezoneName?.() ?? (process.env.TZ || "UTC"),
       backupHour: this.hour,
       archiverAvailable: this.archiverOk,
       localPath: "/var/lib/docker/volumes/paas_data/_data/backups",
@@ -668,7 +699,10 @@ export class BackupService {
       detection: this.config.detections[project!.id] ?? null,
       choices: { ...t.choices },
       extraFolders: [...t.extraFolders],
-      history: [...this.history].reverse().filter((r) => r.target === id).slice(0, 30),
+      history: this.decorate(
+        [...this.history].reverse().filter((r) => r.target === id).slice(0, 30),
+        [project!],
+      ),
       destinationConnected: this.config.destination !== null,
     };
   }
@@ -968,8 +1002,13 @@ export class BackupService {
   }
 
   private enqueue(record: BackupRecord, run: Job["run"]): BackupRecord {
+    // Pedir o mesmo backup (ou a mesma conferência) duas vezes não duplica.
     const dup = [this.running, ...this.queue].find(
-      (j) => j && j.record.target === record.target && j.record.operation === record.operation && record.operation === "backup",
+      (j) =>
+        j &&
+        j.record.target === record.target &&
+        j.record.operation === record.operation &&
+        (record.operation === "backup" || (record.operation === "verify" && j.record.fileName === record.fileName)),
     );
     if (dup) return dup.record;
     this.queue.push({ record, run });
@@ -1343,11 +1382,14 @@ export class BackupService {
     r.fileName = name;
     r.local = true;
     r.sizeBytes = (await stat(localPath)).size;
+    // Hash e tamanho guardados: o "Conferir" compara com eles depois.
+    this.copyInfo(folder, name, "local", { sha256: await sha256File(localPath), size: r.sizeBytes });
     t.lastSuccessAt = new Date(this.now()).toISOString();
     // Cópias na VPS além das N mais recentes.
     const local = await this.localFiles(folder);
     for (const old of local.slice(0, Math.max(0, local.length - t.localKeep))) {
       await rm(path.join(localDir, old), { force: true });
+      this.dropCopy(folder, old, "local");
     }
 
     const storage = this.storage();
@@ -1371,7 +1413,9 @@ export class BackupService {
         await this.opts.archiver.create(upload, inputs, { password: pw });
       }
       const hash = await sha256File(upload);
+      const uploadSize = (await stat(upload)).size;
       await storage.upload(key, upload);
+      this.copyInfo(folder, name, "remote", { sha256: hash, size: uploadSize, encrypted: encrypt });
       r.remote = "uploaded";
       this.step(r, "Conferir a cópia externa (baixar e abrir)");
       const back = path.join(staging, "conferencia.7z");
@@ -1384,17 +1428,270 @@ export class BackupService {
       if (encrypt) await rm(upload, { force: true });
       r.remote = "verified";
       t.lastRemoteVerifiedAt = new Date(this.now()).toISOString();
+      // A conferência automática depois do envio também conta como "conferido em".
+      this.copyInfo(folder, name, "remote", { check: { status: "ok", at: t.lastRemoteVerifiedAt, reason: null } });
       t.lastStaleNoticeAt = null;
       this.step(r, "Apagar os backups externos mais antigos");
       const prefix = `${BACKUP_ROOT_FOLDER}/${folder}/`;
       const remote = (await storage.list(prefix)).map((o) => o.key.slice(prefix.length)).filter(isValidBackupFileName).sort();
       for (const old of remote.slice(0, Math.max(0, remote.length - t.remoteKeep))) {
         await storage.remove(`${prefix}${old}`);
+        this.dropCopy(folder, old, "remote");
       }
     } catch (err) {
       if (r.remote !== "verified") r.remote = "failed";
       r.remoteDetail = reasonOf(err);
       for (const s of r.steps) if (s.status === "running") s.status = "failed";
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Conferir backups ("Conferir" e "Conferir todos")
+  // -------------------------------------------------------------------------
+
+  private static checkKey(folder: string, fileName: string): string {
+    return `${folder}/${fileName}`;
+  }
+
+  /** Junta dados de uma cópia ao que já se sabe dela. */
+  private copyInfo(folder: string, fileName: string, where: BackupCopyWhere, info: StoredCopyInfo): void {
+    const key = BackupService.checkKey(folder, fileName);
+    const entry = (this.config.checks[key] ??= {});
+    entry[where] = { ...(entry[where] ?? {}), ...info };
+  }
+
+  /** A cópia foi apagada (retenção): esquece o que se sabia dela. */
+  private dropCopy(folder: string, fileName: string, where: BackupCopyWhere): void {
+    const key = BackupService.checkKey(folder, fileName);
+    const entry = this.config.checks[key];
+    if (!entry) return;
+    delete entry[where];
+    if (!entry.local && !entry.remote) delete this.config.checks[key];
+  }
+
+  private folderOf(target: string, projects: Project[]): string | null {
+    if (target === "panel") return "_painel";
+    if (target === "email") return "_email";
+    const p = projects.find((x) => projectTargetId(x.id) === target);
+    return p ? p.slug : null;
+  }
+
+  /** Histórico com a situação de cada cópia (existe na VPS? última conferência). */
+  private decorate(records: BackupRecord[], projects: Project[]): BackupRecord[] {
+    return records.map((r) => {
+      if (r.operation !== "backup" || !r.fileName) return r;
+      const folder = this.folderOf(r.target, projects);
+      if (!folder) return r;
+      const entry = this.config.checks[BackupService.checkKey(folder, r.fileName)];
+      return {
+        ...r,
+        localExists: r.local && existsSync(path.join(this.backupsDir, folder, r.fileName)),
+        localCheck: entry?.local?.check ?? null,
+        remoteCheck: entry?.remote?.check ?? null,
+      };
+    });
+  }
+
+  /**
+   * "Conferir": um backup (fileName) ou todos de um item (sem fileName), ou
+   * todos de tudo (id = "all"). Entra na fila, um por vez, com uma etapa por
+   * cópia. A senha da época, quando informada, só vive na memória do pedido.
+   */
+  async verify(id: string, req: BackupVerifyRequest, actor: string): Promise<BackupRecord> {
+    await this.ensureLoaded();
+    if (req.fileName !== undefined && !isValidBackupFileName(req.fileName)) throw httpError(400, "invalid_file", "Nome de backup inválido.");
+    const all = id === BACKUP_ALL_TARGETS;
+    if (all && req.fileName) throw httpError(400, "invalid_file", "Para um backup só, confira pelo item dele.");
+    const where = req.where ?? "both";
+    if (where === "remote" && !this.config.destination) throw httpError(409, "no_destination", "Conecte o armazenamento externo primeiro.");
+    const targets = all
+      ? [
+          { id: "panel", name: "Painel", folder: "_painel" },
+          ...((await this.mailAvailable()) ? [{ id: "email", name: "E-mail", folder: "_email" }] : []),
+          ...(await this.opts.projects.list()).map((p) => ({ id: projectTargetId(p.id), name: p.name, folder: p.slug })),
+        ]
+      : [await this.resolveTarget(id)].map((t) => ({ id, name: t.name, folder: t.folder }));
+    const name = all ? "Todos os backups" : targets[0]!.name;
+    const record = this.newRecord(all ? BACKUP_ALL_TARGETS : id, name, "verify", "manual");
+    record.fileName = req.fileName ?? null;
+    record.verify = { items: [], summary: { ok: 0, failed: 0, missing: 0, needsPassword: 0 } };
+    const queued = this.enqueue(record, (r) => this.runVerify(r, targets, where, req.fileName ?? null, req.password ?? null, actor));
+    if (queued === record) {
+      const what = req.fileName ? `do backup ${req.fileName}` : all ? "de todos os backups" : "de todos os backups do item";
+      this.audit("backups.verify", `Conferência ${what} de ${name} pedida (${where === "both" ? "VPS e externa" : where === "local" ? "cópia da VPS" : "cópia externa"}).`, actor, name);
+    }
+    return queued;
+  }
+
+  private async runVerify(
+    r: BackupRecord,
+    targets: Array<{ id: string; name: string; folder: string }>,
+    where: BackupCopyWhere | "both",
+    fileName: string | null,
+    password: string | null,
+    actor: string,
+  ): Promise<void> {
+    const storage = where === "local" ? null : this.storage();
+    const plan: Array<BackupVerifyItem & { folder: string; listedSize: number | null }> = [];
+    for (const t of targets) {
+      const local = where === "remote" ? [] : await this.localFiles(t.folder);
+      let remote: StoredObject[] = [];
+      let listError: string | null = null;
+      if (storage) {
+        try {
+          remote = await storage.list(`${BACKUP_ROOT_FOLDER}/${t.folder}/`);
+        } catch (err) {
+          listError = reasonOf(err);
+          r.warnings.push(`${t.name}: não foi possível listar o armazenamento externo (${listError}).`);
+        }
+      }
+      const prefix = `${BACKUP_ROOT_FOLDER}/${t.folder}/`;
+      const remoteSizes = new Map(remote.map((o) => [o.key.slice(prefix.length), o.size]));
+      const names = fileName
+        ? [fileName]
+        : [...new Set([...local, ...[...remoteSizes.keys()].filter(isValidBackupFileName)])].sort().reverse();
+      for (const n of names) {
+        const base = { target: t.id, targetName: t.name, fileName: n, folder: t.folder, status: "pending" as const, reason: null };
+        if (where !== "remote" && (local.includes(n) || fileName)) plan.push({ ...base, where: "local", listedSize: null });
+        if (storage && (remoteSizes.has(n) || fileName)) {
+          plan.push({ ...base, where: "remote", listedSize: remoteSizes.get(n) ?? null });
+        }
+      }
+    }
+    const summary = r.verify!.summary;
+    r.verify!.items = plan.map(({ folder: _f, listedSize: _s, ...item }) => item);
+    r.steps = plan.map((i) => ({ label: `${i.targetName} · ${i.fileName} · ${i.where === "local" ? "cópia da VPS" : "cópia externa"}`, status: "pending" }));
+    if (plan.length === 0) r.warnings.push(fileName ? "Este backup não existe mais na VPS nem no armazenamento externo." : "Nenhum backup para conferir.");
+    for (let i = 0; i < plan.length; i++) {
+      const item = plan[i]!;
+      const view = r.verify!.items[i]!;
+      const step = r.steps[i]!;
+      step.status = "running";
+      view.status = "running";
+      const result =
+        item.where === "local"
+          ? await this.checkLocal(item.folder, item.fileName)
+          : await this.checkRemote(storage!, item.folder, item.fileName, item.listedSize, password);
+      this.copyInfo(item.folder, item.fileName, item.where, { check: result });
+      view.status = result.status;
+      view.reason = result.reason;
+      step.status = result.status === "failed" ? "failed" : "done";
+      if (result.status === "ok") summary.ok++;
+      else if (result.status === "failed") summary.failed++;
+      else if (result.status === "missing") summary.missing++;
+      else summary.needsPassword++;
+      await this.persist({ config: true });
+    }
+    const parts = [
+      `${summary.ok} íntegra(s)`,
+      summary.failed ? `${summary.failed} com problema` : null,
+      summary.missing ? `${summary.missing} não existe(m) mais` : null,
+      summary.needsPassword ? `${summary.needsPassword} pede(m) a senha da época` : null,
+    ].filter(Boolean);
+    this.audit("backups.verify_result", `Conferência de ${r.targetName}: ${parts.join(", ")}.`, actor, r.targetName);
+    if (summary.needsPassword) r.warnings.push("Alguma cópia não abre com a senha guardada. Confira de novo informando a senha da época do backup.");
+    if (summary.failed > 0) {
+      r.status = "failed";
+      r.error = `${summary.failed} cópia(s) com problema.`;
+      const failed = r.verify!.items.filter((x) => x.status === "failed");
+      this.opts.notify?.({
+        kind: "backup_failed",
+        key: `backup-verify-failed:${r.target}`,
+        title: failed.length === 1 ? `Conferência do backup de ${failed[0]!.targetName} falhou` : `Conferência dos backups: ${failed.length} cópias com problema`,
+        body: failed
+          .slice(0, 3)
+          .map((x) => `${x.targetName} ${x.fileName} (${x.where === "local" ? "VPS" : "externa"}): ${(x.reason ?? "").slice(0, 120)}`),
+        path: r.target.startsWith("project:") ? `/projects/${r.target.slice(8)}/backups` : "/settings/backups",
+      });
+    }
+  }
+
+  private result(status: BackupCheckStatus, reason: string | null): BackupCheckResult {
+    return { status, at: new Date(this.now()).toISOString(), reason };
+  }
+
+  /** Cópia da VPS: existe, tamanho e hash do backup, `7z t`. */
+  private async checkLocal(folder: string, fileName: string): Promise<BackupCheckResult> {
+    const file = path.join(this.backupsDir, folder, fileName);
+    if (!existsSync(file)) return this.result("missing", "A cópia da VPS não existe mais (a retenção apagou as mais antigas).");
+    const info = this.config.checks[BackupService.checkKey(folder, fileName)]?.local;
+    try {
+      const size = (await stat(file)).size;
+      if (info?.size !== undefined && size !== info.size) {
+        return this.result("failed", `O tamanho mudou desde o backup (${formatBytes(size)}; era ${formatBytes(info.size)}).`);
+      }
+      if (info?.sha256 && (await sha256File(file)) !== info.sha256) {
+        return this.result("failed", "O conteúdo mudou desde o backup (hash diferente).");
+      }
+      await this.opts.archiver.test(file, null);
+      return this.result("ok", null);
+    } catch (err) {
+      if (err instanceof ArchiveError && err.code === "wrong_password") {
+        return this.result("failed", "A cópia da VPS pede senha, mas o painel grava essa cópia sem senha: ela pode ter sido trocada.");
+      }
+      return this.result("failed", `O 7-Zip não conseguiu abrir: ${reasonOf(err)}`);
+    }
+  }
+
+  /** Cópia externa: baixa, compara tamanho e hash do envio e abre com a senha. */
+  private async checkRemote(
+    storage: BackupStorage,
+    folder: string,
+    fileName: string,
+    listedSize: number | null,
+    given: string | null,
+  ): Promise<BackupCheckResult> {
+    const info = this.config.checks[BackupService.checkKey(folder, fileName)]?.remote;
+    const dir = await this.tempDir("conferir");
+    try {
+      await this.ensureSpace(listedSize ?? info?.size ?? 0, 1.1);
+      const file = path.join(dir, fileName);
+      try {
+        await storage.download(`${BACKUP_ROOT_FOLDER}/${folder}/${fileName}`, file);
+      } catch (err) {
+        if (err instanceof StorageError && err.code === "not_found") {
+          return this.result("missing", "A cópia externa não existe mais (a retenção apagou as mais antigas).");
+        }
+        return this.result("failed", `Não foi possível baixar do armazenamento: ${reasonOf(err)}`);
+      }
+      const size = (await stat(file)).size;
+      const expected = info?.size ?? listedSize;
+      if (expected !== undefined && expected !== null && size !== expected) {
+        return this.result("failed", `O arquivo baixado tem ${formatBytes(size)}, e o enviado tinha ${formatBytes(expected)}.`);
+      }
+      if (info?.sha256 && (await sha256File(file)) !== info.sha256) {
+        return this.result("failed", "O arquivo baixado não bate com o enviado (hash diferente).");
+      }
+      let opensWithout = false;
+      try {
+        await this.opts.archiver.test(file, null);
+        opensWithout = true;
+      } catch (err) {
+        if (!(err instanceof ArchiveError && err.code === "wrong_password")) return this.result("failed", `O 7-Zip não conseguiu abrir: ${reasonOf(err)}`);
+      }
+      if (opensWithout) {
+        return info?.encrypted
+          ? this.result("failed", "Esta cópia saiu cifrada e agora abre sem senha: ela pode ter sido trocada por alguém com acesso ao armazenamento.")
+          : this.result("ok", null);
+      }
+      for (const pw of [given, this.password()].filter((p): p is string => Boolean(p))) {
+        try {
+          await this.opts.archiver.test(file, pw);
+          return this.result("ok", null);
+        } catch (err) {
+          if (!(err instanceof ArchiveError && err.code === "wrong_password")) return this.result("failed", `O 7-Zip não conseguiu abrir: ${reasonOf(err)}`);
+        }
+      }
+      return this.result(
+        "needs_password",
+        given
+          ? "A senha digitada também não abre esta cópia. Use a senha da época do backup."
+          : "Não abre com a senha guardada. Se o backup é de antes de uma troca de senha, informe a senha da época.",
+      );
+    } catch (err) {
+      return this.result("failed", reasonOf(err));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   }
 
@@ -1774,6 +2071,22 @@ export class BackupService {
         path: "/settings/backups",
       });
     }
+  }
+
+  /**
+   * O fuso da VPS mudou (Configurações → Fuso horário): a agenda passa a
+   * contar as 03:00 no fuso novo. O horário que acabou de "chegar" no fuso
+   * novo conta como atendido — senão trocar de Berlim para São Paulo de
+   * manhã dispararia na hora um backup das 03:00 que já passou.
+   */
+  async timezoneChanged(): Promise<void> {
+    await this.ensureLoaded();
+    const now = this.now();
+    for (const t of Object.values(this.config.targets)) {
+      const slot = currentSlot(now, t.frequencyHours, this.hour);
+      if (t.lastSlot === null || slot > t.lastSlot) t.lastSlot = slot;
+    }
+    await this.persist({ config: true });
   }
 
   start(intervalMs = 60_000): void {
