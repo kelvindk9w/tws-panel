@@ -151,6 +151,18 @@ shellcheck 0.10.0. Os avisos que sobram no shellcheck já existiam antes.
 - **Não testado:** o caminho com systemd (`systemctl reload`). No container o serviço sobe pelo
   `service`.
 
+## Reforços pedidos pela revisão (sobre o achado 24)
+
+- **Ordem no firewall:** na fase 03, o `ufw default deny incoming` vinha antes dos `ufw allow`. Com o
+  UFW já ativo, o deny valia na hora e havia uma janela sem regra para o SSH. Os padrões agora vêm
+  depois das regras do SSH, de HTTP/HTTPS e de e-mail, e antes do enable.
+- **Porta da sessão atual:** `detect_ssh_ports` soma sempre a porta de `$SSH_CONNECTION` (4º campo),
+  se for numérica e estiver entre 1 e 65535. Cobre sshd parado ou `sshd -T` falhando (por exemplo,
+  Port num Include fora de `sshd_config.d`). Sem nenhuma outra fonte, a lista fica só com essa porta.
+- **`--ssh-port` na fase 04:** passou a recusar valores fora de 1-65535 (a fase 03 já recusava).
+- Testado no Ubuntu real, em `packages/security/tests/phase03-04-scripts.test.ts`. Cada teste novo
+  falhou antes da correção.
+
 ## Verificação geral
 
 - `pnpm -r run typecheck`: passou em todos os pacotes.
