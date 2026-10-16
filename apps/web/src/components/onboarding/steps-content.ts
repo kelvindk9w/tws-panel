@@ -108,8 +108,10 @@ export const ONBOARDING_CONTENT: Record<OnboardingStepId, OnboardingStepContent>
     howTo: [
       "No painel da Cloudflare, abra R2 Object Storage e ative o R2 (o plano gratuito cobre 10 GB por mês).",
       "Crie um bucket (ex.: tws-backups).",
-      "Em Manage API tokens, crie um token com permissão Object Read & Write só para esse bucket. Copie a Access Key ID, a Secret Access Key e o endpoint.",
-      "Em Configurações → Backups, cole os dados no cartão Armazenamento externo e clique em Testar e salvar.",
+      "Na página do R2, no canto direito, ache “API Tokens” e clique em Manage. Depois, em Create Account API token (ou “Create User API token”).",
+      "No formulário: um nome (ex.: tws-panel-backups); em Permissions, Object Read & Write; em Specify bucket(s), Apply to specific buckets only e escolha o bucket; TTL Forever. Clique em Create API Token.",
+      "A tela seguinte mostra as chaves uma única vez: copie a Access Key ID, a Secret Access Key e o endpoint que termina em .r2.cloudflarestorage.com (o “Token value” não é usado). Perdeu o endpoint? Ele fica no bucket → Settings → S3 API.",
+      "Em Configurações → Backups, cole os dados no cartão Armazenamento externo (região auto) e clique em Testar e salvar.",
       "No cartão Criptografia, crie a senha (ou clique em Sugerir uma frase forte), baixe o kit de recuperação e marque “Guardei a senha em lugar seguro”.",
       "Clique em Fazer backup agora no Painel: o passo fica feito quando a primeira cópia externa for enviada e conferida.",
     ],

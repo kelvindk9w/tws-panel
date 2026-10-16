@@ -202,10 +202,22 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
                   Clique em <strong className="text-foreground">Create bucket</strong>, dê um nome (ex.: tws-backups) e crie.
                 </li>
                 <li>
-                  Volte ao R2 e abra <strong className="text-foreground">Manage API tokens</strong> → Create API token. Permissão{" "}
-                  <strong className="text-foreground">Object Read &amp; Write</strong>, só para esse bucket.
+                  Na página do R2, no canto direito, ache <strong className="text-foreground">API Tokens</strong> e clique em{" "}
+                  <strong className="text-foreground">Manage</strong>. Depois, em{" "}
+                  <strong className="text-foreground">Create Account API token</strong> (ou “Create User API token”).
                 </li>
-                <li>Copie a Access Key ID, a Secret Access Key e o endpoint (https://…r2.cloudflarestorage.com) e cole aqui.</li>
+                <li>
+                  No formulário: um nome (ex.: tws-panel-backups); em Permissions,{" "}
+                  <strong className="text-foreground">Object Read &amp; Write</strong>; em Specify bucket(s),{" "}
+                  <strong className="text-foreground">Apply to specific buckets only</strong> e escolha o bucket; TTL{" "}
+                  <strong className="text-foreground">Forever</strong>. Clique em Create API Token.
+                </li>
+                <li>
+                  A tela seguinte mostra as chaves uma única vez. Copie a <strong className="text-foreground">Access Key ID</strong>, a{" "}
+                  <strong className="text-foreground">Secret Access Key</strong> e o endpoint que termina em .r2.cloudflarestorage.com (o
+                  “Token value” não é usado). Perdeu o endpoint? Ele fica no bucket → Settings → S3 API.
+                </li>
+                <li>Cole tudo aqui, com a região auto, e clique em Testar e salvar.</li>
               </ol>
             ) : (
               <p className="text-muted-foreground">
