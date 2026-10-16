@@ -3,7 +3,7 @@
 # TWS Panel — uninstall.sh
 #
 # Remove o painel desta VPS para você poder instalar de novo SEM reinstalar o
-# sistema operacional. Depois dele, recomece pelo Passo 6 do README (clonar o
+# sistema operacional. Depois dele, recomece pelo Passo 6 de docs/instalacao.md (clonar o
 # repositório em /opt/tws-panel) — o Passo 5 (git) já está feito.
 #
 # Uso (na VPS, como o seu usuário — ele se reexecuta via sudo):
@@ -56,7 +56,7 @@
 #   • imagens públicas baixadas (alpine, caddy, stalwart, node, nginx) — são só
 #     cache; o comando para apagá-las é mostrado no final.
 # Para uma validação "do zero de verdade", o caminho continua sendo reinstalar
-# o sistema no painel do provedor (veja o README).
+# o sistema no painel do provedor (veja docs/instalacao.md).
 #
 # ⚠  Não há desfazer. Exige confirmação digitada ("remover").
 # =============================================================================
@@ -297,12 +297,12 @@ EOF
     cat <<EOF
 
 ${BOLD}Próximo passo:${RESET} a pasta do repositório ficou (--keep-repo), então pule o clone do
-Passo 6 e vá direto ao ${BOLD}Passo 7 do README${RESET}:  cd $REPO_DIR && ./scripts/install.sh
+Passo 6 e vá direto ao ${BOLD}Passo 7 de docs/instalacao.md${RESET}:  cd $REPO_DIR && ./scripts/install.sh
 EOF
   else
     cat <<EOF
 
-${BOLD}Próximo passo:${RESET} recomece pelo ${BOLD}Passo 6 do README${RESET} (clonar o repositório). Se este
+${BOLD}Próximo passo:${RESET} recomece pelo ${BOLD}Passo 6 de docs/instalacao.md${RESET} (clonar o repositório). Se este
 terminal estava dentro da pasta apagada, rode antes:  cd ~
 EOF
   fi
