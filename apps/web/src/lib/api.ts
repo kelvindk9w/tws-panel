@@ -52,12 +52,30 @@ export class ApiRequestError extends Error {
   }
 }
 
+/** Evento disparado quando o servidor diz que a sessão do painel acabou (RequireAuth leva ao /login). */
+export const SESSION_EXPIRED_EVENT = "paas:session-expired";
+
+export interface ApiFetchInit extends RequestInit {
+  /**
+   * O que fazer se o servidor responder "sessão inválida ou expirada" (401):
+   * "redirect" (padrão) leva ao login; "ignore" só devolve o erro — para quem
+   * acompanha algo que derruba a sessão de propósito (reinício do painel).
+   */
+  onUnauthorized?: "redirect" | "ignore";
+}
+
+/** 401 de SESSÃO (não de senha errada nem de setup token): o servidor usa o código "unauthorized". */
+function isSessionExpired(status: number, code: string, message: string): boolean {
+  return status === 401 && code === "unauthorized" && !/setup token/i.test(message);
+}
+
 /** Fetch com header de setup token e tratamento de erro padronizado. */
-export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
+export async function apiFetch<T>(path: string, options?: ApiFetchInit): Promise<T> {
+  const { onUnauthorized = "redirect", ...init } = options ?? {};
+  const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   // JSON por padrão; quem envia outra coisa (arquivo cru) informa o tipo.
-  if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const token = getSetupToken();
   if (token) headers.set(SETUP_TOKEN_HEADER, token);
 
@@ -79,6 +97,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       data = body;
     } catch {
       // resposta não-JSON: mantém mensagem padrão
+    }
+    // /api/auth/me e /logout já têm tratamento próprio (guard e menu do usuário).
+    if (onUnauthorized === "redirect" && isSessionExpired(response.status, code, message) && !/^\/api\/auth\/(me|logout)\b/.test(path)) {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
     }
     throw new ApiRequestError(response.status, code, message, data);
   }

@@ -1068,6 +1068,36 @@ describe("agenda, atraso e lembrete", () => {
     expect((await service.status()).history).toHaveLength(3);
   });
 
+  it("agendado com NADA marcado no projeto: vira aviso (não falha) e só avisa uma vez por semana", async () => {
+    // Antes: cada horário agendado falhava e mandava "Backup de … falhou" de novo
+    // (a cada horário) para um projeto que simplesmente não tem o que copiar.
+    await service.updateTarget("panel", { enabled: false }, "a");
+    await service.updateTarget("email", { enabled: false }, "a");
+    await service.updateTarget(projectTargetId("p1"), { choices: { "db:db": false, "mnt:web:/app/uploads": false } }, "admin");
+    now = new Date(2026, 9, 15, 3, 1).getTime();
+    await service.tick();
+    await service.idle();
+    const first = (await service.status()).history.at(-1)!;
+    expect(first).toMatchObject({ target: "project:p1", trigger: "schedule", status: "warning", error: null });
+    expect(first.warnings.join(" ")).toMatch(/Nada marcado/);
+    const avisos = () => notices.filter((n) => n.key === "backup-empty:project:p1");
+    expect(avisos()).toHaveLength(1);
+    expect(avisos()[0]).toMatchObject({ path: "/projects/p1/backups" });
+    expect(avisos()[0]!.title).toMatch(/nada marcado/i);
+    expect(notices.some((n) => n.kind === "backup_failed" && n.key === "backup-failed:project:p1")).toBe(false);
+    // próximo horário (dia seguinte): continua aviso na tela, sem novo alerta
+    now += 24 * H;
+    await service.tick();
+    await service.idle();
+    expect((await service.status()).history.filter((r) => r.target === "project:p1")).toHaveLength(2);
+    expect(avisos()).toHaveLength(1);
+    // uma semana depois, lembra de novo
+    now += 7 * 24 * H;
+    await service.tick();
+    await service.idle();
+    expect(avisos()).toHaveLength(2);
+  });
+
   it("item desligado, projeto nunca publicado e e-mail inexistente ficam de fora", async () => {
     projects = [project({ lastDeployAt: null })];
     docker.states = {};
