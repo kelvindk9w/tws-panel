@@ -57,6 +57,7 @@ beforeAll(() => {
   issue("a-b.exemplo.com");
   issue("a.b-exemplo.com");
   issue("loja.exemplo.com");
+  issue("a.b.exemplo.com");
 });
 afterAll(() => rmSync(pemDir, { recursive: true, force: true }));
 
@@ -142,6 +143,52 @@ describe("ManualCertificateStore — migração dos arquivos com o nome antigo",
     const [x, y] = await Promise.all([store.pairs(), store.pairs()]);
     expect(x[0]!.cert).toBe(pem["a-b.exemplo.com"]!.cert);
     expect(y[0]!.cert).toBe(pem["a-b.exemplo.com"]!.cert);
+  });
+
+  // O id NOVO de a.b.exemplo.com (sem hífen) é igual ao id ANTIGO de
+  // a-b.exemplo.com: enquanto o par antigo não for migrado, o arquivo
+  // a-b-exemplo-com.* é do a-b, e o a.b não pode servi-lo.
+  describe("id novo de um nome sem hífen = id antigo de um nome com hífen", () => {
+    const BOTH = ["a-b.exemplo.com", "a.b.exemplo.com"];
+
+    it("o nome sem hífen não serve o certificado do outro; o do hífen migra e mantém o seu", async () => {
+      await legacy(BOTH, { "a-b-exemplo-com": "a-b.exemplo.com" });
+      const store = new ManualCertificateStore(dataDir);
+      const pairs = await store.pairs();
+      expect(pairs.map((p) => p.host)).toEqual(["a-b.exemplo.com"]);
+      expect(pairs[0]!.cert).toBe(pem["a-b.exemplo.com"]!.cert);
+      expect(await store.forHost("a.b.exemplo.com")).toBeNull();
+      expect((await store.forHost("a-b.exemplo.com"))?.cert).toBe(pem["a-b.exemplo.com"]!.cert);
+    });
+
+    it("lendo o nome sem hífen primeiro, nada muda de lugar e o outro ainda migra depois", async () => {
+      await legacy(BOTH, { "a-b-exemplo-com": "a-b.exemplo.com" });
+      const store = new ManualCertificateStore(dataDir);
+      expect(await store.forHost("a.b.exemplo.com")).toBeNull();
+      expect((await store.forHost("a-b.exemplo.com"))?.cert).toBe(pem["a-b.exemplo.com"]!.cert);
+    });
+
+    it("remover o nome sem hífen antes da migração não apaga o arquivo do outro", async () => {
+      await legacy(BOTH, { "a-b-exemplo-com": "a-b.exemplo.com" });
+      const store = new ManualCertificateStore(dataDir);
+      expect(await store.remove("a.b.exemplo.com")).toBe(true);
+      expect((await store.pairs())[0]!.cert).toBe(pem["a-b.exemplo.com"]!.cert);
+    });
+
+    it("instalar o nome sem hífen antes da migração não sobrescreve o arquivo do outro", async () => {
+      await legacy(["a-b.exemplo.com"], { "a-b-exemplo-com": "a-b.exemplo.com" });
+      const store = new ManualCertificateStore(dataDir);
+      await store.install("a.b.exemplo.com", inspected("a.b.exemplo.com"), "2026-10-16T00:00:00.000Z");
+      const pairs = await store.pairs();
+      expect(pairs.find((p) => p.host === "a-b.exemplo.com")?.cert).toBe(pem["a-b.exemplo.com"]!.cert);
+      expect(pairs.find((p) => p.host === "a.b.exemplo.com")?.cert).toBe(pem["a.b.exemplo.com"]!.cert);
+    });
+
+    it("o arquivo é mesmo do nome sem hífen (fingerprint bate): ele o usa normalmente", async () => {
+      await legacy(["a.b.exemplo.com"], { "a-b-exemplo-com": "a.b.exemplo.com" });
+      const store = new ManualCertificateStore(dataDir);
+      expect((await store.pairs())[0]!.cert).toBe(pem["a.b.exemplo.com"]!.cert);
+    });
   });
 
   it("nome sem hífen: o id não mudou, nada é mexido", async () => {

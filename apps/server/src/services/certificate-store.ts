@@ -112,24 +112,52 @@ export class ManualCertificateStore {
    * mostra que falta reenviar).
    */
   private async readPair(meta: ManualCertificateMeta): Promise<{ cert: string; key: string } | null> {
+    const all = await this.list();
     const current = await this.readFiles(fileId(meta.host));
-    if (current) return current;
+    if (current && this.isOurs(meta, current.cert, all)) return current;
     const legacyId = legacyCertificateFileId(meta.host);
     if (legacyId === fileId(meta.host)) return null;
     let migrated: { cert: string; key: string } | null = null;
     await this.queue(async () => {
-      migrated = await this.readFiles(fileId(meta.host)); // outra leitura pode ter migrado antes
-      if (migrated) return;
-      const old = await this.readFiles(legacyId);
-      if (!old || fingerprintOf(old.cert) !== meta.fingerprint) return;
-      const id = fileId(meta.host);
-      await writeSecret(path.join(this.dir, `${id}.crt`), old.cert);
-      await writeSecret(path.join(this.dir, `${id}.key`), old.key);
-      await rm(path.join(this.dir, `${legacyId}.crt`), { force: true });
-      await rm(path.join(this.dir, `${legacyId}.key`), { force: true });
-      migrated = old;
+      migrated = await this.migrateLegacy(meta);
     });
     return migrated;
+  }
+
+  /**
+   * O arquivo com o id ATUAL do host é dele? Sim se a impressão digital bate
+   * com a do índice. Se não bate, só vale quando nenhum OUTRO host do índice
+   * tem esse id como id antigo: o id novo de um nome sem hífen (a.b.com →
+   * a-b-com) é o id antigo de um nome com hífen (a-b.com), e enquanto este
+   * não migra o arquivo é dele — o outro não pode servi-lo nem apagá-lo.
+   */
+  private isOurs(meta: ManualCertificateMeta, cert: string, all: ManualCertificateMeta[]): boolean {
+    if (fingerprintOf(cert) === meta.fingerprint) return true;
+    const id = fileId(meta.host);
+    return !all.some((o) => o.host !== meta.host && legacyCertificateFileId(o.host) === id);
+  }
+
+  /** Passa o par do nome antigo para o novo (na fila de escrita). Devolve o par do host, se há. */
+  private async migrateLegacy(meta: ManualCertificateMeta): Promise<{ cert: string; key: string } | null> {
+    const id = fileId(meta.host);
+    const legacyId = legacyCertificateFileId(meta.host);
+    const all = await this.list();
+    const here = await this.readFiles(id); // outra leitura pode ter migrado antes
+    if (here && this.isOurs(meta, here.cert, all)) return here;
+    if (legacyId === id) return null;
+    const old = await this.readFiles(legacyId);
+    if (!old || fingerprintOf(old.cert) !== meta.fingerprint) return null;
+    // o id novo pode ser o id antigo de outro host ainda não migrado: ele sai primeiro
+    for (const other of all) {
+      if (other.host !== meta.host && legacyCertificateFileId(other.host) === id && fileId(other.host) !== id) {
+        await this.migrateLegacy(other);
+      }
+    }
+    await writeSecret(path.join(this.dir, `${id}.crt`), old.cert);
+    await writeSecret(path.join(this.dir, `${id}.key`), old.key);
+    await rm(path.join(this.dir, `${legacyId}.crt`), { force: true });
+    await rm(path.join(this.dir, `${legacyId}.key`), { force: true });
+    return old;
   }
 
   /**
@@ -162,6 +190,12 @@ export class ManualCertificateStore {
     await this.queue(async () => {
       await this.ensureDir();
       const id = fileId(host);
+      // o arquivo deste id pode ser, ainda, o par antigo de outro host: ele migra antes
+      for (const other of await this.list()) {
+        if (other.host !== host && legacyCertificateFileId(other.host) === id && fileId(other.host) !== id) {
+          await this.migrateLegacy(other);
+        }
+      }
       await writeSecret(path.join(this.dir, `${id}.crt`), inspected.cert);
       await writeSecret(path.join(this.dir, `${id}.key`), inspected.key);
       const others = (await this.list()).filter((c) => c.host !== host);
@@ -180,8 +214,12 @@ export class ManualCertificateStore {
       removed = true;
       await this.writeIndex(all.filter((c) => c.host !== host));
       const id = fileId(host);
-      await rm(path.join(this.dir, `${id}.crt`), { force: true });
-      await rm(path.join(this.dir, `${id}.key`), { force: true });
+      const here = await this.readFiles(id);
+      // arquivo do id novo que é, ainda, o par antigo de outro host: não é deste
+      if (!here || this.isOurs(meta, here.cert, all)) {
+        await rm(path.join(this.dir, `${id}.crt`), { force: true });
+        await rm(path.join(this.dir, `${id}.key`), { force: true });
+      }
       // par ainda com o nome antigo (não migrado): sai junto, se for deste host
       const legacyId = legacyCertificateFileId(host);
       const old = legacyId === id ? null : await this.readFiles(legacyId);
