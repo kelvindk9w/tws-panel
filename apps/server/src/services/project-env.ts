@@ -8,10 +8,9 @@
  * só os nomes.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { httpError } from "./http-error.js";
-import { JsonFile, createFileOnce, withFileLock, writeFileAtomic } from "./json-file.js";
+import { JsonFile, loadOrCreateKey } from "./json-file.js";
 
 export interface EnvVar {
   key: string;
@@ -75,40 +74,13 @@ export class ProjectEnvStore {
     this.keyFile = path.join(dataDir, "project-env-key");
   }
 
-  /** Chave de cifra: lida (ou criada) uma vez, na fila do arquivo da chave. */
+  /** Chave de cifra: lida (ou criada) uma vez só (services/json-file.ts). */
   private loadKey(): Promise<Buffer> {
-    this.keyLoading ??= withFileLock(this.keyFile, () => this.readOrCreateKey()).catch((err: unknown) => {
+    this.keyLoading ??= loadOrCreateKey(this.keyFile, 32).catch((err: unknown) => {
       this.keyLoading = null;
       throw err;
     });
     return this.keyLoading;
-  }
-
-  private async readOrCreateKey(): Promise<Buffer> {
-    const existing = await this.readKey();
-    if (existing.key) return existing.key;
-    const gerada = randomBytes(32);
-    const text = gerada.toString("hex") + "\n";
-    if (existing.present) {
-      // arquivo com conteúdo que não é uma chave (nada pode ter sido cifrado com ele): troca
-      await writeFileAtomic(this.keyFile, text);
-      return gerada;
-    }
-    if (await createFileOnce(this.keyFile, text)) return gerada;
-    // outro processo criou primeiro: vale a dele
-    const criada = await this.readKey();
-    if (!criada.key) throw new Error("A chave das variáveis dos projetos (project-env-key) está ilegível.");
-    return criada.key;
-  }
-
-  private async readKey(): Promise<{ key: Buffer | null; present: boolean }> {
-    try {
-      const raw = Buffer.from((await readFile(this.keyFile, "utf8")).trim(), "hex");
-      return { key: raw.length === 32 ? raw : null, present: true };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { key: null, present: false };
-      throw err;
-    }
   }
 
   async get(projectId: string): Promise<EnvVar[]> {

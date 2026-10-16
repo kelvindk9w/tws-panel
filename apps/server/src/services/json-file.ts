@@ -112,6 +112,41 @@ export async function createFileOnce(file: string, data: string | Buffer, opts: 
   }
 }
 
+/**
+ * Chave de cifra guardada em hexa num arquivo próprio (0600). Lê; se não
+ * existe, cria — dentro da fila do arquivo e com criação exclusiva, então
+ * chamadas paralelas na primeira vez (e outro processo) recebem TODAS a
+ * mesma chave. Conteúdo que não é uma chave do tamanho certo (nada pode ter
+ * sido cifrado com ele) é trocado por uma nova, como os stores já faziam.
+ * Guarde a promessa devolvida: ela é a "carga única" do store.
+ */
+export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
+  const read = async (): Promise<{ key: Buffer | null; present: boolean }> => {
+    try {
+      const raw = Buffer.from((await readFile(file, "utf8")).trim(), "hex");
+      return { key: raw.length === bytes ? raw : null, present: true };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { key: null, present: false };
+      throw err;
+    }
+  };
+  return withFileLock(file, async () => {
+    const existing = await read();
+    if (existing.key) return existing.key;
+    const generated = randomBytes(bytes);
+    const text = generated.toString("hex") + "\n";
+    if (existing.present) {
+      await writeFileAtomic(file, text);
+      return generated;
+    }
+    if (await createFileOnce(file, text)) return generated;
+    // outro processo criou entre a leitura e a criação: vale a dele
+    const other = await read();
+    if (!other.key) throw new Error(`A chave ${path.basename(file)} está ilegível.`);
+    return other.key;
+  });
+}
+
 /** Data em formato seguro para nome de arquivo (2026-10-16T12-00-00-000Z). */
 function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");

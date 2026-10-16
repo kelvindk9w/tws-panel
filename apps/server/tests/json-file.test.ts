@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { JsonFile, createFileOnce, withFileLock, writeFileAtomic } from "../src/services/json-file.js";
+import { JsonFile, createFileOnce, loadOrCreateKey, withFileLock, writeFileAtomic } from "../src/services/json-file.js";
 
 let dir: string;
 
@@ -111,6 +111,30 @@ describe("createFileOnce", () => {
   it("erro de disco (pasta que é arquivo) chega a quem chamou", async () => {
     await writeFile(path.join(dir, "b"), "");
     await expect(createFileOnce(path.join(dir, "b", "chave"), "x")).rejects.toThrow();
+  });
+});
+
+describe("loadOrCreateKey", () => {
+  it("dez pedidos paralelos na primeira vez: a mesma chave para todos, gravada uma vez", async () => {
+    const file = path.join(dir, "k");
+    const chaves = await Promise.all(Array.from({ length: 10 }, () => loadOrCreateKey(file, 32)));
+    const hex = chaves[0]!.toString("hex");
+    expect(hex).toMatch(/^[0-9a-f]{64}$/);
+    expect(chaves.every((k) => k.toString("hex") === hex)).toBe(true);
+    expect((await readFile(file, "utf8")).trim()).toBe(hex);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(await readdir(dir)).toEqual(["k"]);
+    expect((await loadOrCreateKey(file, 32)).toString("hex")).toBe(hex);
+  });
+
+  it("conteúdo que não é chave do tamanho certo é trocado; erro de disco é lançado", async () => {
+    const file = path.join(dir, "k");
+    await writeFile(file, "abcd\n");
+    const k = await loadOrCreateKey(file, 16);
+    expect(k).toHaveLength(16);
+    expect((await readFile(file, "utf8")).trim()).toBe(k.toString("hex"));
+    await mkdir(path.join(dir, "pasta"));
+    await expect(loadOrCreateKey(path.join(dir, "pasta"), 16)).rejects.toThrow();
   });
 });
 
