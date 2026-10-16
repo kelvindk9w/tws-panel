@@ -538,6 +538,55 @@ describe("notify: envio dos avisos", () => {
     expect((await s.status()).history.at(-1)).toMatchObject({ status: "failed" });
   });
 
+  // Achado 16 da revisão: a nova tentativa guardava o endereço e enviava para
+  // ele mesmo depois de o administrador tirá-lo da lista.
+  it("endereço tirado da lista com nova tentativa pendente: NÃO recebe; os que ficaram recebem", async () => {
+    const email = makeEmail();
+    const s = service();
+    s.setEmailSender(email);
+    await s.setEmailRecipients(["a@exemplo.org", "b@exemplo.org"], "admin");
+    email.failNext.push(new Error("conexão recusada"), new Error("conexão recusada"));
+    await s.notify({ kind: "disk", key: "disk", title: "Disco quase cheio" });
+    expect(email.sent).toHaveLength(0);
+
+    await s.setEmailRecipients(["b@exemplo.org"], "admin");
+    clock += 31_000;
+    await s.tick();
+
+    expect(email.sent.map((m) => m.to)).toEqual(["b@exemplo.org"]);
+    const history = (await s.status()).history;
+    expect(history.find((h) => h.detail?.includes("removido"))).toMatchObject({ status: "failed" });
+  });
+
+  it("resumo de repetidos pendente no agrupamento vai só para a lista atual", async () => {
+    const email = makeEmail();
+    const s = service();
+    s.setEmailSender(email);
+    await s.setEmailRecipients(["a@exemplo.org", "b@exemplo.org"], "admin");
+    await s.notify({ kind: "disk", key: "disk", title: "Disco quase cheio" });
+    await s.notify({ kind: "disk", key: "disk", title: "Disco quase cheio" });
+    await s.setEmailRecipients(["b@exemplo.org"], "admin");
+    clock += 11 * 60_000;
+    await s.tick();
+    expect(email.sent.map((m) => m.to)).toEqual(["a@exemplo.org", "b@exemplo.org", "b@exemplo.org"]);
+  });
+
+  it("e-mail desligado com nova tentativa pendente: ninguém recebe e a entrada fecha como falha", async () => {
+    const email = makeEmail();
+    const s = service();
+    s.setEmailSender(email);
+    await s.setEmailRecipients(["a@exemplo.org"], "admin");
+    email.failNext.push(new Error("conexão recusada"));
+    await s.notify({ kind: "disk", key: "disk", title: "Disco quase cheio" });
+    await s.removeEmail("admin");
+    // o e-mail volta a ser ligado com o MESMO endereço só depois: a tentativa
+    // antiga já foi encerrada e não ressuscita
+    clock += 31_000;
+    await s.tick();
+    expect(email.sent).toHaveLength(0);
+    expect((await s.status()).history[0]).toMatchObject({ status: "failed" });
+  });
+
   it("histórico guarda só os 50 últimos e sobrevive a reiniciar", async () => {
     const s = service({ maxPerHour: 1000 });
     await connected(s);
