@@ -124,7 +124,7 @@
         "codigo": 4401,
         "constante": "WS_CLOSE_SESSION_ENDED",
         "razao": "sessão encerrada",
-        "quando": "a sessão de login que abriu o terminal deixou de valer: logout, 'encerrar as outras sessões' na troca de senha, 'Recomeçar do zero' (destroyAll) ou vencimento (timer em expiresAt e conferência a cada frame recebido)",
+        "quando": "a sessão de login que abriu o terminal deixou de valer: logout, 'encerrar as outras sessões' na troca de senha, 'Recomeçar do zero' (destroyAll) ou vencimento (timer em expiresAt e conferência a cada frame recebido). Também fecha se a sessão já tinha acabado entre a autenticação do handshake e o registro da conexão (corrida), e se a cada frame recebido a sessão não existir mais no SessionStore (SessionStore.isActive, conferência síncrona em memória).",
         "reconectaAutomaticamente": false,
         "observacao": "Nenhum frame recebido depois disso chega ao PTY. Auditoria terminal.session-ended com o motivo (nunca o que foi digitado). O PTY segue vivo no servidor. TerminalPanel.tsx mostra 'sessão encerrada' e pede para entrar de novo, sem tentar reconectar (seria 401). Revogação que falha ao gravar NÃO fecha nada: a sessão continua valendo. Conexões com o setup token (wizard) não têm sessão e não entram nessa regra."
       }

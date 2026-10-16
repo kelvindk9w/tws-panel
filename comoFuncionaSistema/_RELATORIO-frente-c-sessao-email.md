@@ -118,7 +118,7 @@ mesmo recibo.
 - Em `apps/server/tests/mail-test-email.test.ts`, a verificação de que o painel passa o ENVID do
   teste na busca. No código antigo não passava nenhum.
 
-**O que mudou.**
+**O que mudou na primeira rodada (a segunda rodada, abaixo, endureceu isto).**
 - Conferi o código do Stalwart v0.11.8 (`crates/smtp/src/queue/dsn.rs`). O aviso é um
   multipart/report com três partes: text/plain, message/delivery-status (com `Original-Envelope-Id`)
   e message/rfc822 só com os cabeçalhos originais. As duas últimas não são text/*, então o JMAP as
@@ -140,14 +140,73 @@ o bounce. Depois, os containers `paas-stalwart` e `paas-caddy` e o volume `paas_
 criados pela validação foram removidos. Nenhum deles existia antes. A imagem `caddy:2-alpine`,
 baixada pelo painel durante a validação, ficou na máquina.
 
+## Segunda rodada (revisão rigorosa dos achados 4 e 19)
+
+O revisor aprovou os achados 6, 16 e 18 e apontou dois problemas. Os dois foram corrigidos com o
+teste de reprodução escrito antes.
+
+### Achado 4, corrida entre autenticar e registrar a conexão
+
+**O que era.** A sessão é resolvida no hook de autenticação, antes de a conexão entrar no mapa de
+conexões por sessão. Se o logout terminava nesse intervalo, o aviso de revogação já tinha passado e
+o terminal ficava aberto até o vencimento.
+
+**Teste que reproduziu.** Em `apps/server/tests/routes-terminal.test.ts`, "logout que termina entre
+a autenticação e o registro da conexão": a resolução da sessão é envolvida para destruir a sessão
+logo depois de resolvê-la. No código anterior o WebSocket nunca fechava (estouro de tempo). Um
+segundo teste cobre a revogação sem aviso: a sessão some do armazenamento sem passar por `revoke()`,
+e o frame seguinte tem que fechar o terminal e não chegar ao PTY.
+
+**O que mudou.** O `SessionStore` ganhou `isActive(id)`, uma conferência síncrona em memória (existe
+e não venceu). Depois de registrar a conexão, o terminal confere de novo e encerra com 4401 se a
+sessão já não existe. A mesma conferência roda a cada frame recebido, além do vencimento.
+
+### Achado 19, recibo forjável por quem recebeu o teste
+
+**O que era.** O aviso era aceito se o texto ou um anexo trazia o ENVID, sem olhar quem enviou. O
+ENVID era `tws-teste-<id>` e o `<id>` aparece no texto do e-mail e no Message-ID, então o
+destinatário externo podia responder ao postmaster@ com assunto "Failed to deliver message" e forjar
+um bounce confirmado.
+
+**Teste que reproduziu.** Em `packages/mailer/tests/delivery-status.test.ts`, o bloco "recibo
+forjado por quem recebeu o teste": remetente externo com o ENVID certo na parte delivery-status,
+remetente que só imita o nome (`mailer-daemon@dominio-alheio`), remetente ausente, e ENVID só em texto
+livre (corpo, cabeçalho original ou outra linha da delivery-status). No código anterior, 6 desses
+testes falharam (o recibo forjado era aceito). Em `apps/server/tests/mail-test-email.test.ts`, o teste
+de envio passou a exigir que o ENVID não seja derivável do id, do Message-ID, do texto nem da
+resposta da API.
+
+**O que mudou.**
+- O ENVID virou segredo do painel: `tws-teste-<id>-<24 hex aleatórios>`, só no envelope SMTP e na
+  memória. O Message-ID usa só o id público.
+- O aviso só vale se o campo `from` do JMAP for MAILER-DAEMON ou postmaster do domínio do painel (ou
+  de `mail.<domínio>`, ou o padrão do Stalwart `mail.localhost`) e se o ENVID vier da linha
+  `Original-Envelope-Id:` da parte message/delivery-status, com igualdade exata. Texto livre e o
+  cabeçalho do message/rfc822 não valem mais.
+
+**Limitação declarada.** A checagem do remetente não autentica sozinha: o From de e-mail que chega
+de fora é falsificável, e com DMARC em p=none nada o barra. Quem segura a fraude é o segredo do
+ENVID. Se ele vazasse (log, memória), um e-mail forjado com From de MAILER-DAEMON e a linha
+`Original-Envelope-Id` seria aceito. O painel guarda o ENVID só em memória, por 1 hora.
+
+**Validado contra o Stalwart v0.11.8 real.** Dois testes ao mesmo destino terminaram `bounced`
+confirmado, cada um com o próprio recibo, usando o fluxo completo da API do painel (com ENVID
+secreto). Depois, com um ENVID conhecido, o aviso verdadeiro do servidor foi encontrado, e um e-mail
+forjado ao postmaster@ citando um ENVID em corpo, Message-ID e linha `Original-Envelope-Id` não gerou
+recibo; um ENVID alheio também não. Foi observado o `from` real do aviso: `MAILER-DAEMON@<domínio>`
+assinado por DKIM, ou `MAILER-DAEMON@mail.localhost` antes de o hostname estar configurado. Os
+containers `paas-stalwart` e `paas-caddy` e o volume `paas_stalwart_data` criados pela validação foram
+removidos; nenhum deles existia antes.
+
 ## Verificação final
 
 - `pnpm -r --workspace-concurrency=1 --no-bail run test:coverage`: tudo verde, e todos os mínimos
   de cobertura foram cumpridos. Nenhum teste falhou por depender do Docker local; o servidor tem 2
   testes pulados, que já eram pulados antes. Cobertura em instruções, ramos, funções e linhas, nesta
   ordem:
-  - server: 1716 testes, 97,91 / 93,47 / 98,43 / 98,86 (mínimo 94 / 91 / 98 / 94);
-  - mailer: 346 testes, 100 / 99,41 / 100 / 100 (mínimo de ramos 98);
+  (números da segunda rodada)
+  - server: 1719 testes, 97,91 / 93,48 / 98,43 / 98,86 (mínimo 94 / 91 / 98 / 94);
+  - mailer: 353 testes, 99,9 / 98,56 / 100 / 100 (mínimo de ramos 98);
   - web: 723 testes, 90,86 / 85,47 / 89,04 / 92,09;
   - core: 86 testes; deploy: 429 testes; security: 191 testes.
 - `pnpm -r run typecheck`: passou em todos os pacotes.
