@@ -552,7 +552,8 @@ describe("SecurityExecutor — restoreJobs (persistência após restart do paine
     expect(job.status).toBe("awaiting_confirmation");
     expect(job.log).toContain("linha que passou");
     expect(host.calls[0]).toContain("--paas-run-follow '/etc/paas/runs' f02-0123456789abcdef");
-    expect(executor.isBusy).toBe(false);
+    // aguardando confirmação: a trava continua até confirmar, desfazer ou vencer (achado 23)
+    expect(executor.isBusy).toBe(true);
   });
 
   it("reatache de job que terminou EM FALHA enquanto ninguém olhava dispara o rollback imediato", async () => {
@@ -758,6 +759,115 @@ describe("SecurityExecutor — fase 01 e o marcador de rollback agendado", () =>
       const current = executor.getJob(job.id) as SecurityJob;
       expect(current.status).toBe("success");
       expect(current.rollbackScheduled).toBe(false);
+    }
+  });
+});
+
+/**
+ * Achado 23: o mutex era liberado assim que a fase entrava em
+ * "awaiting_confirmation". Um segundo job (outra aba, chamada direta à API)
+ * era aceito antes de o primeiro ser confirmado ou desfeito: dois jobs da
+ * fase 02 ficavam aguardando ao mesmo tempo, e a segunda execução
+ * sobrescrevia o backup e a reversão agendada da primeira. Agora a trava só
+ * sai quando a fase termina de verdade: confirmada, desfeita ou expirada.
+ */
+describe("SecurityExecutor — trava enquanto a fase aguarda confirmação", () => {
+  it("recusa um novo job enquanto outro aguarda confirmação", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = detached();
+      const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+      const first = await executor.startJob("02", false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executor.getJob(first.id)?.status).toBe("awaiting_confirmation");
+      expect(executor.isBusy).toBe(true);
+      await expect(executor.startJob("02", false)).rejects.toThrow(/aguardando a confirmação/i);
+      await expect(executor.startJob("00", true)).rejects.toThrow(/aguardando a confirmação/i);
+      const awaiting = executor.listJobs().filter((j) => j.status === "awaiting_confirmation");
+      expect(awaiting).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("confirmar libera a trava", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = detached();
+      const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+      const first = await executor.startJob("02", false);
+      await vi.advanceTimersByTimeAsync(0);
+      await executor.confirmAccess(first.id);
+      expect(executor.isBusy).toBe(false);
+      const next = await executor.startJob("03", true);
+      expect(next.phase).toBe("03");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("desfazer agora libera a trava; desfazer que falhou no alvo mantém", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = detached();
+      const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+      const first = await executor.startJob("02", false);
+      await vi.advanceTimersByTimeAsync(0);
+      host.directCode = 1; // o --rollback falha no alvo: a reversão agendada continua valendo
+      await expect(executor.undoNow(first.id)).rejects.toThrow();
+      expect(executor.isBusy).toBe(true);
+      host.directCode = 0;
+      await executor.undoNow(first.id);
+      expect(executor.isBusy).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("o prazo expirado libera a trava", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = detached();
+      const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts", rollbackWindowMs: 5_000 });
+      await executor.startJob("02", false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executor.isBusy).toBe(true);
+      await vi.advanceTimersByTimeAsync(5_000 + 15_000);
+      expect(executor.isBusy).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("job restaurado aguardando confirmação (painel reiniciado) também segura a trava", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = detached();
+      const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts" });
+      executor.restoreJobs([
+        {
+          id: "restaurado",
+          phase: "03",
+          phaseKey: "firewall",
+          title: "Firewall",
+          dryRun: false,
+          status: "awaiting_confirmation",
+          createdAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          finishedAt: null,
+          steps: [],
+          log: "",
+          rollbackScheduled: true,
+          rollbackDeadline: new Date(Date.now() + 60_000).toISOString(),
+          error: null,
+        },
+      ]);
+      expect(executor.isBusy).toBe(true);
+      await expect(executor.startJob("03", false)).rejects.toThrow(/aguardando a confirmação/i);
+      await vi.advanceTimersByTimeAsync(60_000 + 15_000);
+      expect(executor.isBusy).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

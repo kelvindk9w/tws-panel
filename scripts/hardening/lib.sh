@@ -458,6 +458,45 @@ cancel_scheduled_rollback() {
   [ "$cancelled" = "1" ]
 }
 
+# pending_rollback_alive <id> — 0 se a reversão agendada de <id> ainda vai
+# rodar: job do `at` ainda na fila ou processo do timer vivo. Arquivos de uma
+# reversão que já rodou (job fora da fila, processo morto) não contam.
+pending_rollback_alive() {
+  local id="$1"
+  local pidfile="${PAAS_STATE_DIR}/pending-rollback-${id}.pid"
+  local jobfile="${PAAS_STATE_DIR}/pending-rollback-${id}.at"
+  if [ -f "$jobfile" ] && command -v atq >/dev/null 2>&1; then
+    local job
+    job="$(cat "$jobfile")"
+    if [ -n "$job" ] && atq 2>/dev/null | awk '{print $1}' | grep -qx "$job"; then
+      return 0
+    fi
+  fi
+  if [ -f "$pidfile" ]; then
+    local pid
+    pid="$(cat "$pidfile")"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# require_no_pending_rollback <id> — recusa reaplicar a fase enquanto a
+# aplicação anterior aguarda confirmação. Reaplicar por cima sobrescrevia o
+# backup e o agendamento da anterior: a reversão antiga ficava órfã e rodava
+# assim mesmo, e confirmar a antiga cancelava a proteção da nova (achado 23).
+# Chamada no começo da aplicação, antes de qualquer mudança.
+require_no_pending_rollback() {
+  local id="$1"
+  pending_rollback_alive "$id" || return 0
+  if [ "$PAAS_DRY_RUN" = "1" ]; then
+    warn "a aplicação anterior desta fase ($id) está aguardando confirmação de acesso — confirme ou desfaça antes de aplicar de verdade"
+    return 0
+  fi
+  die "a aplicação anterior desta fase ($id) está aguardando confirmação de acesso — confirme (--confirm) ou desfaça (--rollback) antes de aplicar de novo"
+}
+
 confirm_rollback() {
   if cancel_scheduled_rollback "$1"; then
     info "rollback agendado CANCELADO ($1) — acesso confirmado pelo operador"

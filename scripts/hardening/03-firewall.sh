@@ -62,6 +62,9 @@ if [ "$MODE" = "rollback" ]; then
   exit 0
 fi
 
+# Nunca por cima de uma aplicação que ainda aguarda confirmação (achado 23).
+require_no_pending_rollback "firewall"
+
 step "Instalando UFW"
 apt_install ufw
 ok "UFW presente"

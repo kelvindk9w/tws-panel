@@ -81,6 +81,9 @@ if [ "$MODE" = "rollback" ]; then
   exit 0
 fi
 
+# Nunca por cima de uma aplicação que ainda aguarda confirmação (achado 23).
+require_no_pending_rollback "user"
+
 step "Criando usuário não-root '$SSH_USER'"
 if id -u "$SSH_USER" >/dev/null 2>&1; then
   info "usuário $SSH_USER já existe (idempotente)"

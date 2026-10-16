@@ -132,4 +132,53 @@ describe.skipIf(!HAS_DOCKER)("fases 03/04 e lib.sh num Ubuntu real", { timeout: 
       sh("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw >/dev/null 2>&1");
     });
   });
+
+  // -------------------------------------------------------------- achado 23
+  describe("reaplicar com a confirmação pendente — achado 23", () => {
+    it("fase 03 recusa reaplicar enquanto a reversão agendada anterior está viva, sem mexer em nada", () => {
+      resetFirewall();
+      startSshd([22]);
+      const r = sh(
+        [
+          "mkdir -p /etc/paas",
+          // reversão agendada "viva": o timer em segundo plano ainda não rodou
+          "setsid nohup sleep 600 >/dev/null 2>&1 & echo $! > /etc/paas/pending-rollback-firewall.pid",
+          "bash /opt/h/03-firewall.sh 2>&1; echo EXIT=$?",
+          "ufw status",
+        ].join("; "),
+      );
+      expect(r.out).toContain("EXIT=1");
+      expect(r.out).toMatch(/aguardando confirmação/i);
+      expect(r.out).toContain("Status: inactive");
+      resetFirewall();
+    });
+
+    it("reversão agendada que já rodou (processo morto) não bloqueia", () => {
+      resetFirewall();
+      startSshd([22]);
+      const r = sh(
+        [
+          "mkdir -p /etc/paas",
+          "echo 999999 > /etc/paas/pending-rollback-firewall.pid",
+          "PAAS_ROLLBACK_DELAY=600 bash /opt/h/03-firewall.sh >/dev/null; echo EXIT=$?",
+        ].join("; "),
+      );
+      expect(r.out).toContain("EXIT=0");
+      resetFirewall();
+    });
+
+    it("fase 02 também recusa reaplicar com a reversão do SSH pendente", () => {
+      const r = sh(
+        [
+          "mkdir -p /etc/paas",
+          // reversão agendada "viva": o timer em segundo plano ainda não rodou
+          "setsid nohup sleep 600 >/dev/null 2>&1 & echo $! > /etc/paas/pending-rollback-ssh.pid",
+          "bash /opt/h/02-ssh.sh 2>&1; echo EXIT=$?",
+          "kill $(cat /etc/paas/pending-rollback-ssh.pid); rm -f /etc/paas/pending-rollback-ssh.pid",
+        ].join("; "),
+      );
+      expect(r.out).toContain("EXIT=1");
+      expect(r.out).toMatch(/aguardando confirmação/i);
+    });
+  });
 });
