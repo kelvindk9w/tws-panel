@@ -8,9 +8,10 @@
  * só os nomes.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { httpError } from "./http-error.js";
+import { JsonFile, createFileOnce, withFileLock, writeFileAtomic } from "./json-file.js";
 
 export interface EnvVar {
   key: string;
@@ -51,56 +52,67 @@ function validate(vars: EnvVar[]): EnvVar[] {
   });
 }
 
+/**
+ * Toda alteração é ler → alterar → cifrar → gravar DENTRO da fila do
+ * project-env.json (services/json-file.ts): duas gravações paralelas (duas
+ * abas, ou salvar enquanto outro projeto é excluído) nunca partem da mesma
+ * leitura. A chave é criada uma vez só, com criação exclusiva do arquivo.
+ */
 export class ProjectEnvStore {
-  private readonly file: string;
+  private readonly json: JsonFile<EnvRecord[]>;
   private readonly keyFile: string;
-  private key: Buffer | null = null;
-  private records: EnvRecord[] | null = null;
-  private writing: Promise<void> = Promise.resolve();
+  private keyLoading: Promise<Buffer> | null = null;
 
   constructor(dataDir: string) {
-    this.file = path.join(dataDir, "project-env.json");
+    this.json = new JsonFile<EnvRecord[]>(path.join(dataDir, "project-env.json"), {
+      empty: () => [],
+      parse: (raw) => {
+        const projects = (raw as { projects?: unknown } | null)?.projects;
+        return Array.isArray(projects) ? (projects as EnvRecord[]) : null;
+      },
+      serialize: (projects) => JSON.stringify({ projects }, null, 2) + "\n",
+    });
     this.keyFile = path.join(dataDir, "project-env-key");
   }
 
-  private async loadKey(): Promise<Buffer> {
-    if (this.key) return this.key;
+  /** Chave de cifra: lida (ou criada) uma vez, na fila do arquivo da chave. */
+  private loadKey(): Promise<Buffer> {
+    this.keyLoading ??= withFileLock(this.keyFile, () => this.readOrCreateKey()).catch((err: unknown) => {
+      this.keyLoading = null;
+      throw err;
+    });
+    return this.keyLoading;
+  }
+
+  private async readOrCreateKey(): Promise<Buffer> {
+    const existing = await this.readKey();
+    if (existing.key) return existing.key;
+    const gerada = randomBytes(32);
+    const text = gerada.toString("hex") + "\n";
+    if (existing.present) {
+      // arquivo com conteúdo que não é uma chave (nada pode ter sido cifrado com ele): troca
+      await writeFileAtomic(this.keyFile, text);
+      return gerada;
+    }
+    if (await createFileOnce(this.keyFile, text)) return gerada;
+    // outro processo criou primeiro: vale a dele
+    const criada = await this.readKey();
+    if (!criada.key) throw new Error("A chave das variáveis dos projetos (project-env-key) está ilegível.");
+    return criada.key;
+  }
+
+  private async readKey(): Promise<{ key: Buffer | null; present: boolean }> {
     try {
       const raw = Buffer.from((await readFile(this.keyFile, "utf8")).trim(), "hex");
-      if (raw.length === 32) return (this.key = raw);
-    } catch {
-      // primeira vez — gera abaixo
+      return { key: raw.length === 32 ? raw : null, present: true };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { key: null, present: false };
+      throw err;
     }
-    const gerada = randomBytes(32);
-    await mkdir(path.dirname(this.keyFile), { recursive: true });
-    await writeFile(this.keyFile, gerada.toString("hex") + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(this.keyFile, 0o600).catch(() => undefined);
-    return (this.key = gerada);
-  }
-
-  private async load(): Promise<EnvRecord[]> {
-    if (this.records) return this.records;
-    try {
-      const parsed = JSON.parse(await readFile(this.file, "utf8")) as { projects?: EnvRecord[] };
-      this.records = Array.isArray(parsed.projects) ? parsed.projects : [];
-    } catch {
-      this.records = [];
-    }
-    return this.records;
-  }
-
-  private persist(records: EnvRecord[]): Promise<void> {
-    const run = this.writing.then(async () => {
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFile(this.file, JSON.stringify({ projects: records }, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-      this.records = records;
-    });
-    this.writing = run.catch(() => undefined);
-    return run;
   }
 
   async get(projectId: string): Promise<EnvVar[]> {
-    const record = (await this.load()).find((r) => r.projectId === projectId);
+    const record = (await this.json.read()).find((r) => r.projectId === projectId);
     if (!record) return [];
     const decipher = createDecipheriv("aes-256-gcm", await this.loadKey(), Buffer.from(record.iv, "base64"));
     decipher.setAuthTag(Buffer.from(record.tag, "base64"));
@@ -115,31 +127,31 @@ export class ProjectEnvStore {
   /** Substitui a lista inteira do projeto (variável que saiu da lista é apagada). */
   async set(projectId: string, vars: EnvVar[]): Promise<EnvVar[]> {
     const clean = validate(vars);
-    const others = (await this.load()).filter((r) => r.projectId !== projectId);
-    if (clean.length === 0) {
-      await this.persist(others);
-      return [];
-    }
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", await this.loadKey(), iv);
-    const data = Buffer.concat([cipher.update(JSON.stringify(clean), "utf8"), cipher.final()]);
-    await this.persist([
-      ...others,
-      {
-        projectId,
-        updatedAt: new Date().toISOString(),
-        iv: iv.toString("base64"),
-        tag: cipher.getAuthTag().toString("base64"),
-        data: data.toString("base64"),
-      },
-    ]);
+    const key = clean.length > 0 ? await this.loadKey() : null;
+    await this.json.update((records) => {
+      const others = records.filter((r) => r.projectId !== projectId);
+      if (!key) return others.length === records.length ? records : others;
+      const iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", key, iv);
+      const data = Buffer.concat([cipher.update(JSON.stringify(clean), "utf8"), cipher.final()]);
+      return [
+        ...others,
+        {
+          projectId,
+          updatedAt: new Date().toISOString(),
+          iv: iv.toString("base64"),
+          tag: cipher.getAuthTag().toString("base64"),
+          data: data.toString("base64"),
+        },
+      ];
+    });
     return clean;
   }
 
   async remove(projectId: string): Promise<void> {
-    const records = await this.load();
-    if (records.some((r) => r.projectId === projectId)) {
-      await this.persist(records.filter((r) => r.projectId !== projectId));
-    }
+    await this.json.update((records) => {
+      const others = records.filter((r) => r.projectId !== projectId);
+      return others.length === records.length ? records : others;
+    });
   }
 }
