@@ -326,3 +326,38 @@ describe("falha de gravação", () => {
     expect(await store.resolve(cookieValue)).not.toBeNull();
   });
 });
+
+describe("onRevoked — aviso de sessão encerrada (terminal aberto)", () => {
+  it("avisa os ids revogados só depois de gravar; nada a revogar não avisa", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    const a = await store.create(USER);
+    const b = await store.create(USER);
+    const avisos: string[][] = [];
+    const off = store.onRevoked((ids) => avisos.push([...ids]));
+
+    await store.destroy("inexistente");
+    expect(avisos).toEqual([]);
+
+    expect(await store.destroyOthersForUser(USER.id, a.session.id)).toBe(1);
+    expect(avisos).toEqual([[b.session.id]]);
+
+    off();
+    await store.destroyAll();
+    expect(avisos).toHaveLength(1); // cancelado o registro, não avisa mais
+  });
+
+  it("ouvinte com defeito não desfaz a revogação nem impede os outros", async () => {
+    const store = new SessionStore(dir);
+    await store.init();
+    const a = await store.create(USER);
+    const recebidos: string[] = [];
+    store.onRevoked(() => {
+      throw new Error("ouvinte quebrado");
+    });
+    store.onRevoked((ids) => recebidos.push(...ids));
+    await store.destroy(a.session.id);
+    expect(recebidos).toEqual([a.session.id]);
+    expect((await readSessionsFile()).sessions).toEqual([]);
+  });
+});

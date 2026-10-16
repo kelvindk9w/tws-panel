@@ -13,7 +13,11 @@ import { Duplex } from "node:stream";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import terminalRoutes, { WS_CLOSE_BUSY, WS_CLOSE_REPLACED } from "../src/routes/terminal.js";
+import terminalRoutes, {
+  WS_CLOSE_BUSY,
+  WS_CLOSE_REPLACED,
+  WS_CLOSE_SESSION_ENDED,
+} from "../src/routes/terminal.js";
 import { TerminalService } from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
 import {
@@ -590,6 +594,113 @@ describe("WS /api/terminal/ws — mensagens de controle (protocolo do modo senha
     expect(parseTerminalControl(frames[0] ?? "")).toEqual({ type: "background-exec", state: "start", command: "ufw status" });
     expect(frames[1]).toBe("│ Status: active\r\n");
     expect(Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8")).toBe(""); // nada digitado
+    ws.close();
+  });
+});
+
+/**
+ * Achado 4 da revisão: o handshake do WS é autenticado, mas a conexão já
+ * aberta sobrevivia ao fim da sessão (logout, "encerrar as outras" na troca
+ * de senha, "Recomeçar do zero", expiração) e continuava entregando o que se
+ * digitava ao PTY. Agora o terminal daquela sessão fecha na hora (4401), nada
+ * mais chega ao shell e o encerramento fica na auditoria.
+ */
+describe("WS /api/terminal/ws — fim da sessão encerra o terminal conectado", () => {
+  async function sessionTerminal() {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener("open", () => resolve(), { once: true });
+      ws.addEventListener("error", () => reject(new Error("falha ao conectar o WS")), { once: true });
+    });
+    await tick();
+    return { ws, session, pty: ctx.ptys[0]! };
+  }
+
+  const typed = (pty: FakePty) => Buffer.concat(pty.inputs).toString("utf8");
+
+  it("logout (destroy da sessão) fecha o WS com 4401 e o input seguinte não chega ao PTY", async () => {
+    const { ws, session, pty } = await sessionTerminal();
+    ws.send("antes\n");
+    await tick();
+    expect(typed(pty)).toContain("antes");
+
+    const closed = wsClosed(ws);
+    await ctx!.sessionStore.destroy(session.id);
+    try {
+      ws.send("depois-do-logout\n");
+    } catch {
+      // socket já fechado no cliente: também prova que não há relay
+    }
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    await tick();
+    expect(typed(pty)).not.toContain("depois-do-logout");
+    const audit = await waitForAuditContains(ctx!.dir, "terminal.session-ended");
+    expect(audit).toContain("terminal.session-ended");
+    expect(audit).not.toContain("depois-do-logout");
+  });
+
+  it("troca de senha que encerra as outras sessões fecha o terminal delas", async () => {
+    const { ws } = await sessionTerminal();
+    const atual = await ctx!.sessionStore.create({ id: "u1", username: "admin" });
+    const closed = wsClosed(ws);
+    expect(await ctx!.sessionStore.destroyOthersForUser("u1", atual.session.id)).toBe(1);
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+  });
+
+  it("encerrar OUTRA sessão não derruba o terminal desta", async () => {
+    const { ws, pty } = await sessionTerminal();
+    const outra = await ctx!.sessionStore.create({ id: "u1", username: "admin" });
+    await ctx!.sessionStore.destroy(outra.session.id);
+    await tick();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.send("segue\n");
+    await tick();
+    expect(typed(pty)).toContain("segue");
+    ws.close();
+  });
+
+  it("Recomeçar do zero (destroyAll) fecha o terminal", async () => {
+    const { ws } = await sessionTerminal();
+    const closed = wsClosed(ws);
+    await ctx!.sessionStore.destroyAll();
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+  });
+
+  it("sessão expirada: o primeiro frame depois do vencimento fecha o WS e não chega ao PTY", async () => {
+    const { ws, session, pty } = await sessionTerminal();
+    const closed = wsClosed(ws);
+    // a sessão vence enquanto o terminal está aberto
+    session.expiresAt = new Date(Date.now() - 1_000).toISOString();
+    ws.send("depois-de-expirar\n");
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    expect(typed(pty)).not.toContain("depois-de-expirar");
+  });
+
+  it("sessão que vence com o terminal parado: fecha no vencimento, sem precisar de frame", async () => {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    session.expiresAt = new Date(Date.now() + 300).toISOString();
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    const closed = wsClosed(ws);
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    expect(await waitForAuditContains(ctx.dir, "a sessão expirou")).toContain("a sessão expirou");
+  });
+
+  it("revogação que falha ao gravar NÃO fecha o terminal (a sessão continua valendo)", async () => {
+    const { ws, session } = await sessionTerminal();
+    const store = ctx!.sessionStore as unknown as { save: () => Promise<void> };
+    store.save = () => Promise.reject(new Error("disco cheio"));
+    await expect(ctx!.sessionStore.destroy(session.id)).rejects.toMatchObject({ code: "storage_write_failed" });
+    await tick();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
     ws.close();
   });
 });

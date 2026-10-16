@@ -56,6 +56,15 @@
  *  A senha que o operador digita continua sendo input comum (relay puro):
  *  nenhum destes eventos contém, deriva ou inspeciona o que foi digitado.
  *
+ * FIM DA SESSÃO: o handshake é autenticado uma vez, mas a conexão aberta
+ * fica presa à sessão de quem abriu. Logout, "encerrar as outras sessões"
+ * (troca de senha), "Recomeçar do zero" ou o vencimento da sessão fecham na
+ * hora o WebSocket dela com 4401 (WS_CLOSE_SESSION_ENDED) — nada mais do que
+ * chega por ele vai ao PTY — e isso fica na auditoria (terminal.session-ended,
+ * sem nada do que foi digitado). O PTY em si continua vivo no servidor (pode
+ * haver uma fase rodando): só uma conexão autenticada de novo o reanexa.
+ * Conexões com o setup token (durante o wizard) não têm sessão e não entram.
+ *
  * GET /api/terminal/info: usuário com que o terminal abre e o modo de root
  * (TerminalInfoResponse), com a mesma autenticação do WS. Nos modos senha e
  * segundo-plano inclui `hostDockerAccess` ("sim" | "nao" | "nao-verificado"):
@@ -70,6 +79,7 @@ import fastifyWebsocket, { type WebSocket } from "@fastify/websocket";
 import { encodeTerminalControl, type TerminalInfoResponse } from "@paas/core";
 import { resolveTerminalAccess } from "../config.js";
 import type { TerminalService } from "../services/terminal-service.js";
+import { isSessionExpired } from "../services/session-store.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
 // Querystring do handshake do WS (não um body — upgrade não tem corpo):
@@ -112,6 +122,13 @@ export const WS_CLOSE_REPLACED = 4000;
 /** Código de fechamento quando a sessão já tem dono (outro clientId) — o
  * cliente que recebe 4009 NÃO deve tentar reconectar (fim do ping-pong). */
 export const WS_CLOSE_BUSY = 4009;
+/** Código de fechamento quando a sessão de quem abriu o terminal acabou
+ * (logout, revogação, vencimento). O cliente NÃO deve tentar reconectar:
+ * é preciso entrar de novo. */
+export const WS_CLOSE_SESSION_ENDED = 4401;
+
+/** Teto do setTimeout no Node (acima disso ele dispara em 1 ms). */
+const MAX_TIMER_MS = 2_147_483_647;
 
 const terminalRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
@@ -134,6 +151,17 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
 
   /** Dono atual da sessão de terminal (uma conexão por vez). */
   let owner: { clientId: string | null; socket: WebSocket } | null = null;
+
+  /** Conexões abertas com sessão de login → como encerrá-las se ela acabar. */
+  const bySession = new Map<WebSocket, { sessionId: string; end: (motivo: string) => void }>();
+  const offRevoked = app.sessionStore.onRevoked((ids) => {
+    for (const { sessionId, end } of [...bySession.values()]) {
+      if (ids.includes(sessionId)) end("a sessão foi encerrada (saída, troca de senha ou recomeço)");
+    }
+  });
+  app.addHook("onClose", async () => {
+    offRevoked();
+  });
 
   app.get(
     "/api/terminal/ws",
@@ -176,6 +204,36 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       });
 
       let unsubscribe: (() => void) | null = null;
+
+      // Conexão presa à sessão de login (sem sessão = setup token do wizard).
+      const session = request.session;
+      let ended = false;
+      let expiryTimer: NodeJS.Timeout | null = null;
+      const endForSession = (motivo: string) => {
+        if (ended) return;
+        ended = true;
+        if (expiryTimer) clearTimeout(expiryTimer);
+        bySession.delete(socket);
+        unsubscribe?.();
+        unsubscribe = null;
+        void app.auditService.record({
+          action: "terminal.session-ended",
+          actor: session?.username ?? "setup",
+          detail: `Terminal web desconectado pelo painel: ${motivo}.`,
+        });
+        socket.close(WS_CLOSE_SESSION_ENDED, "sessão encerrada");
+      };
+      if (session) {
+        bySession.set(socket, { sessionId: session.id, end: endForSession });
+        // Vencimento sem nenhum frame chegando: fecha no instante em que a
+        // sessão expira (o TTL é de horas, bem abaixo do teto do timer).
+        const left = Date.parse(session.expiresAt) - Date.now();
+        expiryTimer = setTimeout(
+          () => endForSession("a sessão expirou"),
+          Math.min(Math.max(left, 0), MAX_TIMER_MS),
+        );
+        expiryTimer.unref();
+      }
       // Bytes do terminal sem NUL: nenhum frame comum começa como controle.
       const sendOutput = (chunk: string) => {
         const clean = chunk.includes("\u0000") ? chunk.replace(/\u0000/g, "") : chunk;
@@ -185,7 +243,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       term
         .connect()
         .then(({ replay }) => {
-          if (socket.readyState !== socket.OPEN) return;
+          if (ended || socket.readyState !== socket.OPEN) return;
           sendOutput(replay);
           if (term.sudoPromptOpen) {
             // O prazo (se houver) vai como o que AINDA FALTA (não o total): quem
@@ -214,6 +272,12 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         });
 
       socket.on("message", (raw: Buffer, isBinary: boolean) => {
+        // Sessão encerrada ou vencida: nada mais chega ao PTY por aqui.
+        if (ended) return;
+        if (session && isSessionExpired(session)) {
+          endForSession("a sessão expirou");
+          return;
+        }
         // Frame de controle (JSON) — único desvio do relay puro.
         if (!isBinary) {
           const text = raw.toString("utf8");
@@ -246,6 +310,8 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       });
 
       socket.on("close", () => {
+        if (expiryTimer) clearTimeout(expiryTimer);
+        bySession.delete(socket);
         unsubscribe?.();
         // Sessão órfã: o PTY segue vivo no servidor (idle timeout) e qualquer
         // cliente pode assumir na próxima conexão.
