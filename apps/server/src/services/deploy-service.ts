@@ -175,6 +175,8 @@ export class DeployService {
   private readonly caddyHttpsPort: number;
   /** Portas do servidor que são do painel (Caddy, admin do Caddy, painel, e-mail). */
   private readonly reservedPorts: number[];
+  /** Projetos com um deploy/reinício sendo preparado (antes de o job existir). */
+  private readonly starting = new Set<string>();
   private readonly hooks: DeployHooks;
   /**
    * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
@@ -922,9 +924,15 @@ export class DeployService {
 
   async startDeploy(id: string, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
     const project = await this.requireProject(id);
-    if (this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) {
-      throw httpError(409, "deploy_in_progress", "Já existe um deploy em andamento para este projeto.");
+    const release = this.reserveProject(project);
+    try {
+      return await this.startDeployReserved(project, opts);
+    } finally {
+      release();
     }
+  }
+
+  private async startDeployReserved(project: Project, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
 
     // Re-roda a detecção se necessário (código mudou desde a última).
     if (!project.detection) {
@@ -1471,9 +1479,15 @@ export class DeployService {
    */
   async startRecreate(id: string, actor?: string): Promise<DeployJob> {
     const project = await this.requireProject(id);
-    if (this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) {
-      throw httpError(409, "deploy_in_progress", "Já existe um deploy em andamento para este projeto.");
+    const release = this.reserveProject(project);
+    try {
+      return await this.startRecreateReserved(project, actor);
+    } finally {
+      release();
     }
+  }
+
+  private async startRecreateReserved(project: Project, actor?: string): Promise<DeployJob> {
     const deployed = project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
     if (!deployed) throw httpError(409, "not_deployed", "Faça o primeiro deploy do projeto: o fuso entra junto.");
     const zone = this.projectZone(project);
@@ -1520,6 +1534,26 @@ export class DeployService {
       }
     })();
     return job;
+  }
+
+  /**
+   * Reserva o projeto para um deploy/reinício (achado 10 da revisão). A
+   * reserva é feita SEM nenhum `await` entre conferir e marcar: até o job
+   * ser registrado há vários `await` (detecção, variáveis, guardrails,
+   * auditoria), e só olhar os jobs deixava dois pedidos passarem juntos.
+   * O segundo pedido é recusado (409), não fica esperando. Depois que o job
+   * entra em `this.jobs`, ele mesmo segura o projeto; quem chama libera a
+   * reserva no `finally`.
+   */
+  private reserveProject(project: Project): () => void {
+    const busy =
+      this.starting.has(project.id) ||
+      this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
+    if (busy) throw httpError(409, "deploy_in_progress", "Já existe um deploy em andamento para este projeto.");
+    this.starting.add(project.id);
+    return () => {
+      this.starting.delete(project.id);
+    };
   }
 
   private async requireProject(id: string): Promise<Project> {
