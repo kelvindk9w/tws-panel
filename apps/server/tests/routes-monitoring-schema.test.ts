@@ -184,6 +184,28 @@ describe("PUT /api/security/monitor/config — schema", () => {
     expect(monitorMocks.setIntervalMs).toHaveBeenCalledWith(60_000);
   });
 
+  it("recusa intervalMs acima de 168 h (720 h viraria um scan por milissegundo — achado 17)", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/security/monitor/config",
+      headers: auth,
+      payload: { intervalMs: 720 * 3_600_000 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(monitorMocks.setIntervalMs).not.toHaveBeenCalled();
+  });
+
+  it("aceita exatamente 168 h", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/security/monitor/config",
+      headers: auth,
+      payload: { intervalMs: 168 * 3_600_000 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(monitorMocks.setIntervalMs).toHaveBeenCalledWith(168 * 3_600_000);
+  });
+
   it("recusa corpo sem intervalMs", async () => {
     const res = await app.inject({ method: "PUT", url: "/api/security/monitor/config", headers: auth, payload: {} });
     expect(res.statusCode).toBe(400);

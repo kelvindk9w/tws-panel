@@ -12,7 +12,7 @@
  * mínimo antigo (10s, @paas/core MONITOR_MIN_INTERVAL_MS) era menor que a
  * duração real de um scan — o serviço agora aplica um piso mais realista.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -161,5 +161,33 @@ describe("intervalo mínimo efetivo do scan recorrente", () => {
     await monitor.setIntervalMs(15_000);
     const state = await monitor.getState();
     expect(state.config.intervalMs).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe("intervalo máximo do scan recorrente (achado 17)", () => {
+  const MAX = 168 * 3_600_000;
+
+  it("setIntervalMs acima de 168 h é reduzido ao teto", async () => {
+    const monitor = new MonitorService(config, alerts);
+    await monitor.setIntervalMs(720 * 3_600_000);
+    const state = await monitor.getState();
+    expect(state.config.intervalMs).toBe(MAX);
+  });
+
+  it("monitor.json gravado antes da correção com 720 h volta limitado ao teto", async () => {
+    await mkdir(path.join(dir, "security"), { recursive: true });
+    await writeFile(
+      path.join(dir, "security", "monitor.json"),
+      JSON.stringify({ intervalMs: 720 * 3_600_000, lastRunAt: null, lastResult: null }),
+    );
+    const monitor = new MonitorService(config, alerts);
+    const state = await monitor.getState();
+    expect(state.config.intervalMs).toBe(MAX);
+  });
+
+  it("PAAS_MONITOR_INTERVAL_MS acima do teto também é limitado", async () => {
+    const monitor = new MonitorService({ ...config, monitorIntervalMs: 2 ** 31 }, alerts);
+    const state = await monitor.getState();
+    expect(state.config.intervalMs).toBe(MAX);
   });
 });
