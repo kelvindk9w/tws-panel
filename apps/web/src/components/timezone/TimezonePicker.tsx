@@ -20,7 +20,7 @@ export function optionLabel(o: TimezoneOption): string {
 /** "America/Sao_Paulo (UTC−3)" para frases. */
 export function zoneWithOffset(zone: string, options: TimezoneOption[]): string {
   const offset = options.find((o) => o.zone === zone)?.offset;
-  return offset ? `${zone} (${offset})` : zone;
+  return offset && offset !== zone ? `${zone} (${offset})` : zone;
 }
 
 /** Hora de agora num fuso, ex.: "14:05". */

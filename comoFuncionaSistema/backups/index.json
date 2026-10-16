@@ -15,7 +15,9 @@
     "E-mail: docker stop do paas-stalwart (até 30 s), cópia do volume de dados e da configuração, docker start; webmail copiado sem parar. Export nativo do Stalwart não foi usado (ver relatório).",
     "Painel: o diretório de dados inteiro, menos backups/ (as cópias e os temporários) e projects/ quando ele fica dentro do diretório de dados. Inclui as chaves que cifram os segredos (por isso a criptografia é recomendada).",
     "Avisos (NotificationService): backup_failed (falhou ou a cópia externa falhou), backup_stale (sem cópia externa conferida há mais de 2 dias ou 2× a frequência; no máximo 1 por dia por item), backup_reminder (senha, a cada 90 dias).",
-    "Roteiro, passo 6 'Backups fora da VPS' (opcional): feito com destino conectado e pelo menos um item com cópia externa conferida."
+    "Roteiro, passo 6 'Backups fora da VPS' (opcional): feito com destino conectado e pelo menos um item com cópia externa conferida.",
+    "Conferir (conferir.json): cada cópia é conferida na fila; o resultado fica ao lado do backup e falha avisa pelas notificações. O hash SHA-256 e o tamanho de cada cópia são gravados no backup.",
+    "Fuso: a agenda segue process.env.TZ, que Configurações → Fuso horário troca na hora (BackupService.timezoneChanged recalcula sem disparar um horário que já passou). GET /api/backups traz timezoneName."
   ],
   "arquivosFonte": {
     "rotas": [
@@ -162,6 +164,13 @@
       "url": "/api/backups/catalog",
       "resumo": "'Restaurar de outro servidor': o que existe no armazenamento (painel, e-mail e cada pasta de projeto, ligada ao projeto cadastrado pelo slug).",
       "arquivo": "catalogo.json"
+    },
+    {
+      "id": "conferir",
+      "metodo": "POST",
+      "url": "/api/backups/targets/:target/verify, /api/backups/verify",
+      "resumo": "'Conferir' um backup, 'Conferir todos' do item ou de tudo: 7z t na VPS, download + hash + 7z t na externa, senha da época.",
+      "arquivo": "conferir.json"
     }
   ],
   "dependenciasGlobais": [
@@ -173,6 +182,7 @@
     "MongoDB: mongodump/mongorestore recebem --config com um YAML temporário (password), criado 0600 com mktemp no /tmp do container do banco e apagado ao sair (trap). Fallback: ferramentas sem --config (imagens mongo até 4.2) recebem --password, visível no ps daquele container. Redis: REDISCLI_AUTH. MySQL/MariaDB usam MYSQL_PWD; Postgres usa PGPASSWORD.",
     "Projetos que não vêm do GitHub (envio/pasta do servidor): a pasta do código entra no backup (item 'src', marcado), porque não existe em outro lugar.",
     "O aviso de arquivos fora de volume é heurístico (docker diff com uma lista de pastas ignoradas).",
-    "Google Drive: só a abstração (BackupStorage); não implementado."
+    "Google Drive: só a abstração (BackupStorage); não implementado.",
+    "POST de verify sem sessão (só setup token) não se aplica: as rotas de backups exigem sessão."
   ]
 }
