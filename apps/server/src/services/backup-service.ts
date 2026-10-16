@@ -302,12 +302,10 @@ class BackupFailure extends Error {}
 
 /**
  * O projeto não tem nada marcado (ou nada para copiar). No backup pedido à mão
- * é falha; no agendado é aviso — repetir "falhou" a cada horário não ajuda.
+ * é falha; no agendado o painel desliga o automático daquele projeto — repetir
+ * "falhou" a cada horário não ajuda.
  */
 class NothingToBackup extends BackupFailure {}
-
-/** Aviso de "nada marcado" no máximo uma vez por semana por projeto. */
-const EMPTY_NOTICE_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Arquivo citado no manifesto: só dentro das pastas que o próprio backup cria. */
 const MANIFEST_FILE = /^(bancos|volumes|pastas|codigo|email)(\/[A-Za-z0-9._-]+){1,2}$/;
@@ -1219,11 +1217,12 @@ export class BackupService {
       if (r.status === "running") r.status = r.warnings.length > 0 || r.remote === "failed" || r.remote === "skipped" ? "warning" : "success";
     } catch (err) {
       if (err instanceof NothingToBackup && r.trigger === "schedule") {
-        // Agendado e sem nada marcado: fica registrado como aviso, sem alarme de falha.
+        // Agendado e sem nada para copiar: desliga o automático deste projeto,
+        // avisa uma vez e registra como aviso (sem alarme de falha).
         r.status = "warning";
-        r.warnings.push(reasonOf(err));
+        r.warnings.push(`${reasonOf(err)} O backup automático deste projeto foi desligado; ligue de novo na aba Backups quando houver o que copiar.`);
         for (const s of r.steps) if (s.status === "running") s.status = "done";
-        this.noticeNothingMarked(r);
+        this.disableEmptyProject(r);
       } else {
         r.status = "failed";
         r.error = reasonOf(err);
@@ -1247,18 +1246,17 @@ export class BackupService {
     void this.pump();
   }
 
-  private readonly emptyNoticeAt = new Map<string, number>();
-
-  /** "Nada marcado" no agendado: avisa no máximo uma vez por semana por projeto. */
-  private noticeNothingMarked(r: BackupRecord): void {
-    const last = this.emptyNoticeAt.get(r.target) ?? 0;
-    if (this.now() - last < EMPTY_NOTICE_EVERY_MS) return;
-    this.emptyNoticeAt.set(r.target, this.now());
+  /** Agendado sem nada para copiar: desliga o automático do projeto (configuração própria) e avisa. */
+  private disableEmptyProject(r: BackupRecord): void {
+    const t = this.target(r.target);
+    t.enabled = false;
+    t.followsDefaults = false; // mudar o padrão dos projetos não religa
+    this.audit("backups.settings", `${r.targetName}: nada para copiar, backup automático desligado.`, "painel", r.targetName);
     this.opts.notify?.({
       kind: "backup_failed",
       key: `backup-empty:${r.target}`,
-      title: `Backup de ${r.targetName}: nada marcado para copiar`,
-      body: ["Marque o que entra no backup na aba Backups do projeto, ou desligue o backup automático dele."],
+      title: `Backup de ${r.targetName}: automático desligado (nada para copiar)`,
+      body: ["Se o projeto passar a guardar dados, marque o que entra na aba Backups e ligue de novo."],
       path: `/projects/${r.target.slice(8)}/backups`,
     });
   }
