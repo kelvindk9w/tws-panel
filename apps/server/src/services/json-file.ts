@@ -26,7 +26,7 @@
  * Os temporários terminam em `.tmp`: o backup do painel já os ignora.
  */
 import { randomBytes } from "node:crypto";
-import { link, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { chmod, link, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
 const queues = new Map<string, Promise<unknown>>();
@@ -56,7 +56,6 @@ async function writeTemp(file: string, data: string | Buffer, mode: number): Pro
   const handle = await open(tmp, "wx", mode);
   try {
     await handle.writeFile(data);
-    await handle.chmod(mode);
     await handle.sync();
   } catch (err) {
     await handle.close();
@@ -64,6 +63,9 @@ async function writeTemp(file: string, data: string | Buffer, mode: number): Pro
     throw err;
   }
   await handle.close();
+  // O modo exato mesmo com umask; sistema de arquivos que recusa chmod
+  // (volume NTFS/CIFS) não impede a gravação — o open já pediu o modo.
+  await chmod(tmp, mode).catch(ignore);
   return tmp;
 }
 

@@ -21,13 +21,14 @@
  * 4 últimos caracteres como dica de conferência.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_GIT_CREDENTIAL_USERNAME,
   type GitReadCredential,
   type ProjectCredentialInfo,
 } from "@paas/core";
+import { writeFileAtomic } from "./json-file.js";
 
 /** Registro persistido: metadados em claro, segredo cifrado. */
 interface CredentialRecord {
@@ -77,12 +78,8 @@ export class CredentialVault {
       // arquivo inexistente ou ilegível — gera uma nova abaixo
     }
     const gerada = randomBytes(KEY_BYTES);
-    await mkdir(path.dirname(this.keyFile), { recursive: true });
-    await writeFile(this.keyFile, gerada.toString("hex") + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await chmod(this.keyFile, 0o600).catch(() => undefined);
+    // atômica: chave pela metade seria trocada por outra e as credenciais ficariam ilegíveis
+    await writeFileAtomic(this.keyFile, gerada.toString("hex") + "\n");
     this.key = gerada;
   }
 
@@ -261,13 +258,8 @@ export class CredentialVault {
   }
 
   private async save(): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
     const data: CredentialsFile = { credentials: this.records };
-    await writeFile(this.file, JSON.stringify(data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await chmod(this.file, 0o600).catch(() => undefined);
+    await writeFileAtomic(this.file, JSON.stringify(data, null, 2) + "\n");
   }
 }
 

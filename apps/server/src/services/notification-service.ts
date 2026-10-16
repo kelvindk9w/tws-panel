@@ -23,7 +23,7 @@
  * troca IPs e endereços …sslip.io — que têm o IP no nome — por um marcador).
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_NOTIFICATION_KINDS,
@@ -38,6 +38,7 @@ import {
 import { isSingleEmailAddress } from "@paas/mailer";
 import { httpError } from "./http-error.js";
 import { TelegramError, type TelegramClient } from "./telegram-client.js";
+import { writeFileAtomic } from "./json-file.js";
 
 /** Um aviso pedido por algum módulo do painel. */
 export interface NotificationEvent {
@@ -263,9 +264,7 @@ export class NotificationService {
       // sem chave ainda — gera abaixo
     }
     const fresh = randomBytes(KEY_BYTES);
-    await mkdir(path.dirname(this.keyFile), { recursive: true });
-    await writeFile(this.keyFile, fresh.toString("hex") + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(this.keyFile, 0o600);
+    await writeFileAtomic(this.keyFile, fresh.toString("hex") + "\n");
     this.key = fresh;
   }
 
@@ -283,9 +282,7 @@ export class NotificationService {
   }
 
   private async writeJson(file: string, data: unknown): Promise<void> {
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(file, 0o600);
+    await writeFileAtomic(file, JSON.stringify(data, null, 2) + "\n");
   }
 
   /** Grava configuração (e histórico) em fila; falha de disco vai para o log. */

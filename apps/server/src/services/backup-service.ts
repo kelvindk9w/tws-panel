@@ -34,7 +34,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, statfs, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, statfs, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   BACKUP_ALL_TARGETS,
@@ -93,7 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
-import { withFileLock } from "./json-file.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 
@@ -582,9 +582,7 @@ export class BackupService {
       // sem chave ainda — gera abaixo
     }
     const fresh = randomBytes(KEY_BYTES);
-    await mkdir(path.dirname(this.keyFile), { recursive: true });
-    await writeFile(this.keyFile, fresh.toString("hex") + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(this.keyFile, 0o600);
+    await writeFileAtomic(this.keyFile, fresh.toString("hex") + "\n");
     this.key = fresh;
   }
 
@@ -602,11 +600,7 @@ export class BackupService {
   }
 
   private async writeJson(file: string, data: unknown): Promise<void> {
-    await mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(tmp, 0o600);
-    await rename(tmp, file);
+    await writeFileAtomic(file, JSON.stringify(data, null, 2) + "\n");
   }
 
   private persist(what: { config?: boolean; history?: boolean }): Promise<void> {
