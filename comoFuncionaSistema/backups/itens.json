@@ -114,5 +114,7 @@
     "apps/server/tests/routes-backups.test.ts",
     "apps/server/tests/backup-service.test.ts"
   ],
-  "observacoes": []
+  "observacoes": [
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Redis: o SAVE precisa responder OK; se não, o item é copiado com aviso e a cópia fica incompleta (status 'warning'). Itens cujos nomes viram o mesmo arquivo dentro do .7z (ex.: 'a b' e 'a/b', ou 'A_B' e 'a_b') ganham sufixo -2, -3…; o manifesto guarda o nome de cada um."
+  ]
 }
