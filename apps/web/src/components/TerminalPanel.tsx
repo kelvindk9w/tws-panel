@@ -169,11 +169,12 @@ const XTERM_THEME = {
   brightWhite: "#f8fafc",
 };
 
-type WsStatus = "connecting" | "online" | "offline" | "busy";
+type WsStatus = "connecting" | "online" | "offline" | "busy" | "ended";
 
 /** Códigos de close definidos pelo servidor (apps/server/src/routes/terminal.ts). */
 const WS_CLOSE_REPLACED = 4000; // o MESMO clientId reanexou por outra conexão
 const WS_CLOSE_BUSY = 4009; // sessão tem dono (outro clientId): NÃO reconectar
+const WS_CLOSE_SESSION_ENDED = 4401; // a sessão de login acabou (saída, troca de senha, vencimento): NÃO reconectar
 
 const CLIENT_ID_KEY = "paas.terminal.client-id";
 
@@ -445,6 +446,13 @@ export function TerminalPanel({
           setStatus("busy");
           return;
         }
+        if (ev.code === WS_CLOSE_SESSION_ENDED) {
+          // A sessão de login acabou: reconectar só receberia 401. Quem
+          // continua é quem entrar de novo (o PTY segue vivo no servidor).
+          setSudoAlert((prev) => (prev?.kind === "prompt" ? null : prev));
+          setStatus("ended");
+          return;
+        }
         setStatus("offline");
         // Backoff exponencial com jitter: 1s → 2s → 4s → … (teto 30s).
         // Reseta ao conectar com sucesso (ws.onopen).
@@ -642,7 +650,9 @@ export function TerminalPanel({
         ? "conectando…"
         : status === "busy"
           ? "em uso em outra aba"
-          : "reconectando…";
+          : status === "ended"
+            ? "sessão encerrada"
+            : "reconectando…";
   const statusColor =
     status === "online"
       ? "bg-emerald-400"
@@ -791,6 +801,14 @@ export function TerminalPanel({
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
           ⚠️ <strong>Terminal em uso em outra aba/janela.</strong> Feche a outra aba e recarregue
           esta página para retomar o controle. A sessão no servidor NÃO foi interrompida.
+        </p>
+      )}
+
+      {status === "ended" && (
+        <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
+          ⚠️ <strong>Sua sessão no painel terminou</strong> (saída, troca de senha ou tempo esgotado)
+          e o terminal foi desconectado. Entre de novo para voltar a usá-lo. O que estava rodando no
+          servidor NÃO foi interrompido.
         </p>
       )}
 

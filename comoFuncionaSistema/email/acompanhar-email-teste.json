@@ -13,16 +13,32 @@
   "rateLimit": "Global: 200 req/min por IP (a página faz no máximo ~20 consultas por minuto).",
   "parametros": {
     "path": [
-      { "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (MAIL_DOMAIN_SCHEMA).", "descricao": "Domínio do teste." },
-      { "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "^[a-f0-9]{16}$ (testEmailStatusSchema).", "descricao": "Id devolvido pelo POST." }
+      {
+        "nome": "domain",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "schema Fastify (MAIL_DOMAIN_SCHEMA).",
+        "descricao": "Domínio do teste."
+      },
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "^[a-f0-9]{16}$ (testEmailStatusSchema).",
+        "descricao": "Id devolvido pelo POST."
+      }
     ],
-    "query": [], "body": [], "headers": []
+    "query": [],
+    "body": [],
+    "headers": []
   },
   "respostas": [
     {
       "status": 200,
       "quando": "Teste conhecido.",
-      "corpo": { "test": "MailTestStatus — state: 'queued' | 'delivered' | 'bounced' | 'deferred'; detail: resposta/motivo do servidor do destinatário; nextRetryAt: ISO quando adiada; confirmed: o resultado veio do aviso de entrega; final: não muda mais" },
+      "corpo": {
+        "test": "MailTestStatus — state: 'queued' | 'delivered' | 'bounced' | 'deferred'; detail: resposta/motivo do servidor do destinatário; nextRetryAt: ISO quando adiada; confirmed: o resultado veio do aviso de entrega; final: não muda mais"
+      },
       "exemplo": {
         "test": {
           "id": "0123456789abcdef",
@@ -41,9 +57,24 @@
     }
   ],
   "erros": [
-    { "status": 400, "codigo": "invalid_request", "quando": "id fora do formato.", "mensagem": "Campo inválido: id." },
-    { "status": 404, "codigo": "test_not_found", "quando": "Id desconhecido, de outro domínio, com mais de 1 hora, ou o painel reiniciou.", "mensagem": "Teste não encontrado (o painel guarda os testes por 1 hora)." },
-    { "status": 502, "codigo": "mail_queue_unavailable", "quando": "A API de administração do Stalwart não respondeu.", "mensagem": "Não foi possível consultar a fila do servidor de e-mail: …" }
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "id fora do formato.",
+      "mensagem": "Campo inválido: id."
+    },
+    {
+      "status": 404,
+      "codigo": "test_not_found",
+      "quando": "Id desconhecido, de outro domínio, com mais de 1 hora, ou o painel reiniciou.",
+      "mensagem": "Teste não encontrado (o painel guarda os testes por 1 hora)."
+    },
+    {
+      "status": 502,
+      "codigo": "mail_queue_unavailable",
+      "quando": "A API de administração do Stalwart não respondeu.",
+      "mensagem": "Não foi possível consultar a fila do servidor de e-mail: …"
+    }
   ],
   "fluxo": [
     "1. Resultado já definitivo (final) → devolve sem consultar nada.",
@@ -53,12 +84,31 @@
     "5. Sem aviso: espera 20 s (TEST_REPORT_GRACE_MS) mostrando 'queued'; depois trata como entregue sem recibo (confirmed false). Falha ao ler o aviso conta como 'sem aviso' (fica no log)."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "MailService.testEmailStatus", "arquivo": "apps/server/src/services/mail-service.ts:857", "papel": "Combina fila e aviso de entrega." },
-    { "tipo": "pacote", "nome": "StalwartClient.listQueuedMessages", "arquivo": "packages/mailer/src/client.ts:158", "papel": "Fila de saída pela API de administração." },
-    { "tipo": "pacote", "nome": "deliveryFromQueue / findDeliveryReport", "arquivo": "packages/mailer/src/delivery-status.ts", "papel": "Interpretação da fila e leitura do aviso por JMAP." }
+    {
+      "tipo": "servico",
+      "nome": "MailService.testEmailStatus",
+      "arquivo": "apps/server/src/services/mail-service.ts:857",
+      "papel": "Combina fila e aviso de entrega."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "StalwartClient.listQueuedMessages",
+      "arquivo": "packages/mailer/src/client.ts:158",
+      "papel": "Fila de saída pela API de administração."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "deliveryFromQueue / findDeliveryReport",
+      "arquivo": "packages/mailer/src/delivery-status.ts",
+      "papel": "Interpretação da fila e leitura do aviso por JMAP."
+    }
   ],
-  "efeitosColaterais": ["Nenhum além de leituras (fila e caixa postmaster@). Os avisos de entrega ficam na caixa postmaster@ (não são apagados)."],
-  "chamadoPor": ["apps/web/src/components/mail/TestEmailCard.tsx:137"],
+  "efeitosColaterais": [
+    "Nenhum além de leituras (fila e caixa postmaster@). Os avisos de entrega ficam na caixa postmaster@ (não são apagados)."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/mail/TestEmailCard.tsx:137"
+  ],
   "testes": [
     "apps/server/tests/routes-mail-test-email.test.ts",
     "apps/server/tests/mail-test-email.test.ts",
@@ -67,6 +117,10 @@
   ],
   "observacoes": [
     "Na tela (TestEmailCard): azul 'Na fila / tentando entregar…'; verde 'Entregue ao servidor do destinatário (aceito pelo Gmail)' + 'Confira também a pasta Spam'; vermelho 'Recusado: <motivo>'; amarelo 'Adiada: <motivo>, nova tentativa às HH:MM'. Depois de 2 min sem resultado definitivo, para de consultar e oferece 'Conferir de novo'.",
-    "Validado localmente com Stalwart v0.11.8 real (01/10/2026): DSN aceito após o EHLO pós-AUTH; recusa (domínio inexistente) e entrega local lidas pelo aviso via JMAP. Entrega real para o Gmail e o estado 'adiada' só se confirmam na VPS."
+    "Validado localmente com Stalwart v0.11.8 real (01/10/2026): DSN aceito após o EHLO pós-AUTH; recusa (domínio inexistente) e entrega local lidas pelo aviso via JMAP. Entrega real para o Gmail e o estado 'adiada' só se confirmam na VPS.",
+    "Recibo de entrega do teste (achado 19 da revisão, duas camadas). (1) Outra mensagem ao mesmo destinatário: o aviso só vale se a parte message/delivery-status trouxer, na linha 'Original-Envelope-Id:', EXATAMENTE o ENVID deste teste. O Stalwart v0.11.8 (crates/smtp/src/queue/dsn.rs) monta multipart/report com text/plain, message/delivery-status e message/rfc822 (só cabeçalhos); as duas últimas vêm no JMAP como 'attachments' e findDeliveryReport baixa a delivery-status pelo caminho de download da sessão JMAP, no endereço interno (baseUrl). (2) Recibo forjado: quem recebe o teste vê o id, o texto e o Message-ID, e podia responder ao postmaster@ com assunto 'Failed to deliver message' para forjar um bounce confirmado. Por isso o ENVID agora é um SEGREDO do painel: aleatório (tws-teste-<id>-<24 hex>), só no envelope SMTP (MAIL FROM ... ENVID=) e na memória do painel, nunca no texto, no Message-ID (que usa só o id público), nem na resposta da API. Além disso o remetente do aviso (campo 'from' do JMAP) precisa ser MAILER-DAEMON ou postmaster do domínio do painel, de mail.<domínio> ou o padrão do Stalwart (mail.localhost). O ENVID em texto livre, no corpo ou em cabeçalho original, não vale mais.",
+    "LIMITAÇÃO conhecida: a checagem do remetente NÃO autentica sozinha. O From de um e-mail que chega de fora é falsificável, e com o DMARC do domínio em p=none nada o barra. Quem impede a fraude é o segredo do ENVID: sem ele não existe aviso aceito. Se o segredo vazasse (log, memória), um e-mail forjado com From de MAILER-DAEMON e a linha Original-Envelope-Id seria aceito. O painel só guarda o ENVID em memória por 1 hora, como o resto do teste.",
+    "Validado contra o Stalwart v0.11.8 real: dois testes ao mesmo destino acharam cada um o próprio recibo (From real do aviso: MAILER-DAEMON@<domínio> assinado por DKIM, ou MAILER-DAEMON@mail.localhost antes de o hostname estar configurado); um e-mail forjado ao postmaster@ citando um ENVID em corpo, cabeçalho e linha Original-Envelope-Id não gerou recibo, e um ENVID alheio também não.",
+    "Domínios aceitos no remetente do aviso: o aviso do Stalwart sai de MAILER-DAEMON@<report.domain> (reportDomain() em mail-service.ts: o domínio cadastrado dono do hostname, ou o 1º cadastrado), que pode ser OUTRO domínio que não o da caixa que enviou o teste (painel com A e B, hostname de A, teste de postmaster@B). Por isso o painel passa a findDeliveryReport o conjunto senderDomains = domínios cadastrados + hostname + reportDomain(); o filtro aceita cada um deles e mail.<cada um>, além de localhost, mail.localhost e o domínio da própria caixa. Vale também para config antigo sem report.domain (o padrão mail.localhost continua aceito). Continua sendo defesa em camadas: o que barra a forja é o ENVID secreto."
   ]
 }

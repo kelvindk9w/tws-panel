@@ -1104,7 +1104,10 @@ export class MailService {
     const fromName = owner?.fromName ?? undefined;
 
     const id = randomBytes(8).toString("hex");
-    const envId = `tws-teste-${id}`;
+    // O ENVID é segredo do painel (só no envelope SMTP e na memória): quem recebe
+    // o teste vê o id, o Message-ID e o texto, e não pode montá-lo para forjar
+    // o recibo de entrega. O Message-ID usa só o id público.
+    const envId = `tws-teste-${id}-${randomBytes(12).toString("hex")}`;
     const sentAt = new Date(this.now());
     try {
       await this.sendMail({
@@ -1120,7 +1123,7 @@ export class MailService {
         subject: "Teste do TWS Panel",
         text: testEmailText(domain.name, from, id, sentAt),
         envId,
-        messageId: `<${envId}@${domain.name}>`,
+        messageId: `<tws-teste-${id}@${domain.name}>`,
         date: sentAt,
       });
     } catch (err) {
@@ -1186,7 +1189,7 @@ export class MailService {
         final: info.state === "delivered" || info.state === "bounced",
       });
     } else {
-      const report = await this.readDeliveryReport(status);
+      const report = await this.readDeliveryReport(record);
       if (report && report.state !== "deferred") {
         Object.assign(status, { state: report.state, detail: report.detail, nextRetryAt: null, confirmed: true, final: true });
       } else {
@@ -1209,7 +1212,8 @@ export class MailService {
   }
 
   /** Aviso de entrega na caixa do remetente; falha na leitura conta como "sem aviso". */
-  private async readDeliveryReport(status: MailTestStatus): Promise<Awaited<ReturnType<typeof findDeliveryReport>>> {
+  private async readDeliveryReport(record: TestEmailRecord): Promise<Awaited<ReturnType<typeof findDeliveryReport>>> {
+    const { status } = record;
     const mailbox = this.data.mailboxes[status.from];
     if (!mailbox) return null;
     try {
@@ -1218,6 +1222,15 @@ export class MailService {
         username: mailbox.id,
         password: mailbox.password,
         to: status.to,
+        // só o aviso desta mensagem (o de um teste anterior ao mesmo destino não serve)
+        envId: record.envId,
+        // O aviso sai do domínio dos relatórios (report.domain), que pode ser
+        // outro domínio cadastrado, não o da caixa: passa todos os possíveis.
+        senderDomains: [
+          ...Object.keys(this.data.domains),
+          this.hostname(),
+          ...(this.reportDomain() ? [this.reportDomain()!] : []),
+        ],
         // folga para diferença de relógio entre o painel e o Stalwart
         since: new Date(Date.parse(status.sentAt) - 60_000),
       });

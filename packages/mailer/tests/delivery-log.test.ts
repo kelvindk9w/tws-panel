@@ -151,6 +151,19 @@ describe("isDeliveryLogLine", () => {
   });
 });
 
+describe("DeliveryLogReader.clone", () => {
+  it("a cópia é independente: o que ela lê não muda o original (e vice-versa)", () => {
+    const original = new DeliveryLogReader({ maxTracked: 10 });
+    original.push(L.okDelivered); // o original já sabe da resposta do DATA
+    const copia = original.clone();
+    expect(copia.push(L.okDsn)).toEqual([expect.objectContaining({ state: "delivered", detail: "OK 1700000000 abc123 - gsmtp" })]);
+    // o original não viu o recibo: lê de novo e ainda entrega o resultado
+    expect(original.push(L.okDsn)).toHaveLength(1);
+    // e a cópia já tinha dado o destinatário como encerrado
+    expect(copia.push(L.okDsn)).toEqual([]);
+  });
+});
+
 describe("DeliveryLogReader", () => {
   it("entregue: a resposta do DATA (da linha 'delivered') vale mais que a do aviso", () => {
     const events = feed([L.queued, L.okStart, L.okDomain, L.okDelivered, L.okDsn, L.okCompleted, L.okEnd]);

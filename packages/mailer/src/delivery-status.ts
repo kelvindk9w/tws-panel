@@ -25,6 +25,18 @@
  *    ou "<end> (host 'host' rejected command '...' with code 550 (5.1.1) '...')".
  *    O painel lê esse aviso pela API JMAP do próprio Stalwart, com a senha da
  *    caixa postmaster@ (que ele já guarda).
+ *
+ *    Um aviso só vale se for MESMO do servidor e da mensagem certa. O
+ *    destinatário externo vê o Message-ID e o texto do teste e pode responder
+ *    ao postmaster@ com assunto "Failed to deliver message"; por isso:
+ *    (1) o ENVID é um segredo do painel (aleatório, só no envelope SMTP, nunca
+ *    no texto nem no Message-ID); (2) ele só é lido da linha
+ *    "Original-Envelope-Id:" da parte message/delivery-status (anexo no JMAP,
+ *    baixado pelo download do próprio JMAP), nunca de texto livre; (3) o
+ *    remetente precisa ser MAILER-DAEMON/postmaster do domínio do próprio
+ *    painel (o campo `from` do JMAP). O item 3 NÃO autentica sozinho: o From
+ *    de e-mail que chega de fora é falsificável (com DMARC em p=none nada o
+ *    barra). Quem segura a fraude é o item 1: sem o ENVID, não há recibo.
  */
 import type { MailTestState } from "@paas/core";
 
@@ -142,9 +154,51 @@ export interface FindDeliveryReportOptions {
   username: string;
   password: string;
   to: string;
+  /**
+   * Domínios de onde o aviso do servidor pode vir além do da caixa: o dos
+   * relatórios do Stalwart (report.domain), o do hostname e os cadastrados.
+   * Filtro em camadas; quem barra a forja é o ENVID secreto.
+   */
+  senderDomains?: readonly string[];
+  /**
+   * ENVID da mensagem (o mesmo do MAIL FROM ... ENVID=). Segredo do painel:
+   * só vale o aviso do servidor cuja parte delivery-status o traz em
+   * Original-Envelope-Id.
+   */
+  envId: string;
   /** Só avisos que chegaram depois disto. */
   since: Date;
   timeoutMs?: number;
+}
+
+/** Parte do aviso que traz o Original-Envelope-Id. */
+const STATUS_PART = /^message\/(global-)?delivery-status$/i;
+
+/** Quem o Stalwart usa como remetente dos avisos (nome fixo, domínio do painel ou o padrão dele). */
+const REPORT_SENDER_LOCALS = new Set(["mailer-daemon", "postmaster"]);
+
+function isReportSender(email: string | undefined, mailboxUser: string, extraDomains: readonly string[]): boolean {
+  if (!email) return false;
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return false;
+  const local = email.slice(0, at).toLowerCase();
+  const host = email.slice(at + 1).toLowerCase();
+  const domain = mailboxUser.slice(mailboxUser.lastIndexOf("@") + 1).toLowerCase();
+  // O aviso sai do domínio dos relatórios do Stalwart (report.domain), que pode
+  // ser outro domínio cadastrado, e não o da caixa que enviou o teste.
+  const allowed = new Set(["localhost", "mail.localhost"]);
+  for (const d of [domain, ...extraDomains]) {
+    const lower = d.toLowerCase();
+    allowed.add(lower);
+    allowed.add(`mail.${lower}`);
+  }
+  return REPORT_SENDER_LOCALS.has(local) && allowed.has(host);
+}
+
+interface JmapBodyPart {
+  partId?: string;
+  blobId?: string;
+  type?: string;
 }
 
 /** UTCDate do JMAP (RFC 8620): sem fração de segundo. */
@@ -154,7 +208,8 @@ function utcDate(date: Date): string {
 
 /**
  * Procura, na caixa do remetente, o aviso de entrega mais recente sobre `to`
- * (JMAP do próprio Stalwart: GET /.well-known/jmap e POST /jmap/).
+ * DA MENSAGEM `envId` (JMAP do próprio Stalwart: GET /.well-known/jmap e
+ * POST /jmap/).
  */
 export async function findDeliveryReport(
   opts: FindDeliveryReportOptions,
@@ -166,9 +221,8 @@ export async function findDeliveryReport(
     signal: timeout(),
   });
   if (!session.ok) throw new Error(`JMAP: sessão recusada (HTTP ${session.status}).`);
-  const accountId = ((await session.json()) as { primaryAccounts?: Record<string, string> }).primaryAccounts?.[
-    "urn:ietf:params:jmap:mail"
-  ];
+  const sessionBody = (await session.json()) as { primaryAccounts?: Record<string, string>; downloadUrl?: string };
+  const accountId = sessionBody.primaryAccounts?.["urn:ietf:params:jmap:mail"];
   if (!accountId) throw new Error("JMAP: a caixa não tem conta de e-mail.");
 
   const res = await fetch(`${opts.baseUrl}/jmap/`, {
@@ -193,7 +247,7 @@ export async function findDeliveryReport(
           {
             accountId,
             "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
-            properties: ["subject", "receivedAt", "textBody", "bodyValues"],
+            properties: ["subject", "from", "receivedAt", "textBody", "bodyValues", "attachments"],
             fetchTextBodyValues: true,
           },
           "g",
@@ -206,13 +260,45 @@ export async function findDeliveryReport(
   const get = payload.methodResponses?.find((r) => r[0] === "Email/get");
   const list = (get?.[1]?.list ?? []) as Array<{
     subject?: string;
-    textBody?: Array<{ partId?: string }>;
+    from?: Array<{ email?: string }> | null;
+    textBody?: JmapBodyPart[];
+    attachments?: JmapBodyPart[];
     bodyValues?: Record<string, { value?: string }>;
   }>;
+
+  // Download pelo endereço interno (baseUrl), com o caminho que a sessão
+  // anuncia — o host dela é o público, que de dentro da rede pode não servir.
+  const template = (sessionBody.downloadUrl ?? "/jmap/download/{accountId}/{blobId}/{name}?accept={type}").replace(
+    /^[a-z]+:\/\/[^/]+/i,
+    "",
+  );
+  const hasEnvelopeId = async (parts: JmapBodyPart[]): Promise<boolean> => {
+    for (const part of parts) {
+      if (!part.blobId || !STATUS_PART.test(part.type ?? "")) continue;
+      const url =
+        opts.baseUrl +
+        template
+          .replace("{accountId}", encodeURIComponent(accountId))
+          .replace("{blobId}", encodeURIComponent(part.blobId))
+          .replace("{name}", "aviso")
+          .replace("{type}", encodeURIComponent("application/octet-stream"));
+      const blob = await fetch(url, { headers: { authorization: auth }, signal: timeout() });
+      if (!blob.ok) throw new Error(`JMAP: download do aviso recusado (HTTP ${blob.status}).`);
+      const matches = (await blob.text())
+        .split(/\r?\n/)
+        .some((line) => /^original-envelope-id:/i.test(line) && line.slice(line.indexOf(":") + 1).trim() === opts.envId);
+      if (matches) return true;
+    }
+    return false;
+  };
+
   for (const email of list) {
+    // Remetente do próprio servidor? (defesa em camadas, ver o cabeçalho do arquivo)
+    if (!isReportSender(email.from?.[0]?.email, opts.username, opts.senderDomains ?? [])) continue;
     const text = (email.textBody ?? []).map((p) => email.bodyValues?.[p.partId ?? ""]?.value ?? "").join("\n");
     const report = interpretDeliveryReport(email.subject ?? "", text, opts.to);
-    if (report) return report;
+    // Do destinatário certo, mas de qual mensagem? Só se o delivery-status disser o ENVID.
+    if (report && (await hasEnvelopeId(email.attachments ?? []))) return report;
   }
   return null;
 }

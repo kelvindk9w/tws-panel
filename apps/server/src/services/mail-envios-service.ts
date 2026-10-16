@@ -9,9 +9,17 @@
  * do destinatário) em data/mail/envios/AAAA-MM-DD.jsonl, por 30 dias. O
  * conteúdo das mensagens nunca passa por aqui. Detalhes em
  * packages/mailer/src/delivery-log.ts e comoFuncionaSistema/email/envios.json.
+ *
+ * Nada se perde numa leitura que falha: cada coleta trabalha numa CÓPIA do
+ * leitor do registro e só fica com ela depois de gravar os eventos e o
+ * cursor. Se algo falha no meio, a próxima coleta relê do mesmo ponto com o
+ * leitor de antes e gera os mesmos eventos; os que já tinham chegado ao
+ * arquivo do dia não se repetem (linha idêntica conta uma vez só na leitura).
+ * O estado (cursor, primeiro envio) só muda em fila e com gravação atômica:
+ * o cancelamento pelo painel e a coleta não desfazem a gravação um do outro.
  */
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type {
   MailDeliveryEvent,
@@ -35,6 +43,7 @@ import {
   type QueueMessageRaw,
 } from "@paas/mailer";
 import { httpError } from "./http-error.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 export interface SenderEntry {
   address: string;
@@ -119,7 +128,8 @@ export class MailEnviosService {
   private readonly stateFile: string;
   private readonly now: () => number;
   private readonly retentionDays: number;
-  private readonly reader = new DeliveryLogReader();
+  /** Leitor do registro confirmado: só avança quando a coleta foi gravada. */
+  private reader = new DeliveryLogReader();
   private collecting: Promise<{ added: number }> | null = null;
   private timers: Array<ReturnType<typeof setTimeout>> = [];
 
@@ -135,7 +145,7 @@ export class MailEnviosService {
   // -------------------------------------------------------------------------
 
   start(): void {
-    const tick = () => void this.collect();
+    const tick = () => void this.collect().catch(() => undefined);
     const first = setTimeout(() => {
       tick();
       const every = setInterval(tick, COLLECT_EVERY_MS);
@@ -268,9 +278,14 @@ export class MailEnviosService {
     }
   }
 
-  private async saveState(state: EnviosState): Promise<void> {
+  /** Lê, altera e grava o estado numa fila só (e gravação atômica). */
+  private async updateState(change: (state: EnviosState) => void): Promise<void> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    await writeFile(this.stateFile, JSON.stringify(state, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    await withFileLock(this.stateFile, async () => {
+      const state = await this.loadState();
+      change(state);
+      await writeFileAtomic(this.stateFile, JSON.stringify(state, null, 2) + "\n");
+    });
   }
 
   private async append(events: MailDeliveryEvent[]): Promise<void> {
@@ -284,12 +299,10 @@ export class MailEnviosService {
     for (const [day, lines] of byDay) {
       await appendFile(path.join(this.dir, `${day}.jsonl`), lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 });
     }
-    const state = await this.loadState();
     const first = events.map((e) => e.at).sort()[0]!;
-    if (!state.firstEventAt || first < state.firstEventAt) {
-      state.firstEventAt = first;
-      await this.saveState(state);
-    }
+    await this.updateState((state) => {
+      if (!state.firstEventAt || first < state.firstEventAt) state.firstEventAt = first;
+    });
   }
 
   /** Lê o registro novo do Stalwart e guarda os eventos. Uma leitura por vez. */
@@ -308,6 +321,8 @@ export class MailEnviosService {
     let maxMs = cursorMs;
     let maxHashes = new Set(seen);
     const events: MailDeliveryEvent[] = [];
+    // Trabalha numa cópia: o leitor confirmado só muda depois de tudo gravado.
+    const reader = this.reader.clone();
     try {
       await this.deps.readLogs(cursorMs === null ? null : new Date(cursorMs - SINCE_SLACK_MS), (line) => {
         if (!isDeliveryLogLine(line)) return;
@@ -321,20 +336,21 @@ export class MailEnviosService {
         } else if (ms === maxMs) {
           maxHashes.add(h);
         }
-        events.push(...this.reader.push(line));
+        events.push(...reader.push(line));
       });
     } catch (err) {
-      const fresh = await this.loadState();
-      fresh.collectError = err instanceof Error ? err.message : String(err);
-      await this.saveState(fresh);
+      await this.updateState((fresh) => {
+        fresh.collectError = err instanceof Error ? err.message : String(err);
+      });
       return { added: 0 };
     }
     await this.append(events);
-    const fresh = await this.loadState();
-    fresh.cursor = { at: maxMs === null ? null : new Date(maxMs).toISOString(), hashes: [...maxHashes] };
-    fresh.collectedAt = new Date(this.now()).toISOString();
-    fresh.collectError = null;
-    await this.saveState(fresh);
+    await this.updateState((fresh) => {
+      fresh.cursor = { at: maxMs === null ? null : new Date(maxMs).toISOString(), hashes: [...maxHashes] };
+      fresh.collectedAt = new Date(this.now()).toISOString();
+      fresh.collectError = null;
+    });
+    this.reader = reader;
     await this.prune();
     return { added: events.length };
   }
@@ -360,8 +376,12 @@ export class MailEnviosService {
     for (const name of names.sort()) {
       const m = DAY_FILE.exec(name);
       if (!m || m[1]! < sinceDay) continue;
+      // Linha idêntica = o mesmo evento gravado de novo por uma coleta que
+      // falhou depois de gravar os eventos e antes do cursor: conta uma vez.
+      const seen = new Set<string>();
       for (const line of (await readFile(path.join(this.dir, name), "utf8")).split("\n")) {
-        if (!line.trim()) continue;
+        if (!line.trim() || seen.has(line)) continue;
+        seen.add(line);
         try {
           const e = JSON.parse(line) as MailDeliveryEvent;
           if (Date.parse(e.at) >= sinceMs) out.push(e);
