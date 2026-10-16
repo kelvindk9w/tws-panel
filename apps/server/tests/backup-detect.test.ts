@@ -187,6 +187,93 @@ describe("arquivos gravados fora de volume (docker diff)", () => {
     expect(unsavedWritesFromDiff(diff, ["/data/volume"])).toEqual(["/app/public/uploads/foto.png"]);
   });
 
+  // Saídas reais de `docker diff` (Docker 29), capturadas em containers de teste.
+  it("pasta criada pelo Docker para montar um arquivo não conta (initdb do Postgres)", () => {
+    const diff = [
+      "A /docker-entrypoint-initdb.d",
+      "A /docker-entrypoint-initdb.d/init-databases.sql",
+      "C /var",
+      "A /var/scratch",
+      "C /opt",
+      "A /opt/app",
+      "A /opt/app/conf",
+      "A /opt/app/conf/app.conf",
+      "A /cache",
+      "A /cache/tmpfs",
+      "",
+    ].join("\n");
+    const mounts = ["/docker-entrypoint-initdb.d/init-databases.sql", "/opt/app/conf/app.conf", "/var/scratch", "/cache/tmpfs"];
+    expect(unsavedWritesFromDiff(diff, mounts)).toEqual([]);
+  });
+
+  it("docker-init (init: true) não conta, nem as pastas pai alteradas por ele", () => {
+    const debian = ["C /usr", "C /usr/sbin", "A /usr/sbin/docker-init", ""].join("\n");
+    const alpine = ["C /sbin", "A /sbin/docker-init", ""].join("\n");
+    expect(unsavedWritesFromDiff(debian, [])).toEqual([]);
+    expect(unsavedWritesFromDiff(alpine, [])).toEqual([]);
+  });
+
+  it("ruídos que o Docker cria sozinho não contam", () => {
+    const diff = [
+      "A /.dockerenv",
+      "C /etc",
+      "A /etc/hostname",
+      "A /etc/hosts",
+      "A /etc/resolv.conf",
+      "C /run",
+      "A /run/secrets",
+      "A /run/secrets/db_password",
+      "C /dev",
+      "A /dev/shm/x",
+      "C /proc",
+      "C /sys",
+      "",
+    ].join("\n");
+    expect(unsavedWritesFromDiff(diff, ["/run/secrets/db_password"])).toEqual([]);
+  });
+
+  it("pasta pai alterada só por um arquivo apagado ou ignorado não conta", () => {
+    const diff = ["C /srv", "D /srv/velho.txt", "C /app", "A /app/server.pid", ""].join("\n");
+    expect(unsavedWritesFromDiff(diff, [])).toEqual([]);
+  });
+
+  it("projeto real: só o que foi gravado de verdade fica", () => {
+    const diff = [
+      "A /docker-entrypoint-initdb.d",
+      "A /docker-entrypoint-initdb.d/init-databases.sql",
+      "C /var",
+      "A /var/www",
+      "A /var/www/html",
+      "A /var/www/html/uploads",
+      "A /var/www/html/uploads/a.jpg",
+      "A /app.db",
+      "C /data/app.sqlite",
+      "C /usr",
+      "C /usr/sbin",
+      "A /usr/sbin/docker-init",
+      "C /run",
+      "A /run/secrets",
+      "A /run/secrets/db_password",
+      "",
+    ].join("\n");
+    const mounts = ["/run/secrets/db_password", "/docker-entrypoint-initdb.d/init-databases.sql"];
+    expect(unsavedWritesFromDiff(diff, mounts)).toEqual(["/app.db", "/data/app.sqlite", "/var/www/html/uploads/a.jpg"]);
+  });
+
+  it("tmpfs do HostConfig conta como montagem na detecção", () => {
+    const c = container({ service: "web", image: "alpine:3" });
+    c.HostConfig = { Tmpfs: { "/cache/tmpfs": "" } };
+    const det = buildDetection({
+      containers: [c],
+      diffs: { web: "A /cache\nA /cache/tmpfs\nC /sbin\nA /sbin/docker-init\n" },
+      sizes: {},
+      files: new Set(),
+      sourceFolder: null,
+      now: new Date(),
+    });
+    expect(det.unsavedWrites).toEqual([]);
+  });
+
   it("muitos caminhos: conta todos, mostra alguns", () => {
     const diff = Array.from({ length: 30 }, (_, i) => `A /srv/files/${i}.txt`).join("\n");
     expect(unsavedWritesFromDiff(diff, [])).toHaveLength(30);
