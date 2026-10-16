@@ -514,6 +514,40 @@ describe("TerminalService — runCommandCaptured (checks do scanner no terminal)
     await service.dispose();
   });
 
+  it("marcador de fim COLADO à saída, com o código já lido e o fim de linha na leitura seguinte, resolve (captura)", async () => {
+    // Falha intermitente vista no CI: o PTY cortou a leitura entre o código de
+    // saída e o "\r\n" ("pronto:::PAAS_EXIT_<n>:0" | "\r\n"). O trecho já
+    // continha o marcador inteiro, mas não era "prefixo" dele, então foi
+    // exibido como texto, o EXIT nunca casou e o comando só terminava no
+    // tempo limite.
+    const { service, next } = makeService();
+    const broadcasted: string[] = [];
+    service.onOutput((c) => broadcasted.push(c));
+    const promise = service.runCommandCaptured("printf 'pronto'");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit(`pronto:::PAAS_EXIT_${nonce}:0`);
+    await flush();
+    next().emit("\r\n");
+    expect(await promise).toEqual({ code: 0, output: "pronto" });
+    expect(broadcasted.join("")).not.toContain("PAAS_EXIT");
+    await service.dispose();
+  });
+
+  it("código de saída com mais de um dígito dividido entre leituras ainda resolve (captura)", async () => {
+    const { service, next } = makeService();
+    const promise = service.runCommandCaptured("grep x /inexistente");
+    await flush();
+    const nonce = nonceOf(next().inputs, "BEGIN");
+    next().emit(`:::PAAS_BEGIN_${nonce}\r\n`);
+    next().emit(`sem saída:::PAAS_EXIT_${nonce}:1`);
+    await flush();
+    next().emit("30\r\n");
+    expect(await promise).toEqual({ code: 130, output: "sem saída" });
+    await service.dispose();
+  });
+
   it("saída que termina de verdade em ':' não se perde quando o marcador vem depois", async () => {
     const { service, next } = makeService();
     const promise = service.runCommandCaptured("printf 'chave:'");

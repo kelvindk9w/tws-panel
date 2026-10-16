@@ -696,8 +696,14 @@ export class TerminalService {
         // O sufixo pode ser o início do EXIT (sempre) ou do BEGIN (enquanto
         // a captura não ligou — BEGIN colado ao prompt E dividido entre
         // chunks, ex.: `root@host:/# :::PAAS_BE` | `GIN_<n>`).
+        // Também segura o marcador de fim já COM o código de saída (total ou
+        // parcial): a leitura pode cortar antes do "\r\n" ou no meio do código
+        // ("…:::PAAS_EXIT_<n>:1" | "30\r\n"). Sem isso o trecho ia à tela como
+        // texto e o EXIT nunca casava (o comando só terminava no tempo limite).
+        const exitWithCode = suffix.startsWith(exitFull) && /^\d*$/.test(suffix.slice(exitFull.length));
         if (
           exitFull.startsWith(suffix) ||
+          exitWithCode ||
           (watchBegin && !waiter.capturing && beginFull.startsWith(suffix))
         ) {
           glue = i;
