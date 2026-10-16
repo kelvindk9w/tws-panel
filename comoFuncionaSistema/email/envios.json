@@ -13,16 +13,61 @@
     "nota": "?aba=nota. 'Prontidão para a caixa de entrada' de 0 a 100 com faixa (85+ verde, 60–84 amarelo, abaixo vermelho), lista do que está feito e do que falta (pontos, situação, o que fazer e link) e as marcações com data: Google Postmaster Tools cadastrado, IP no Microsoft SNDS, taxa de spam conferida abaixo de 0,1%."
   },
   "endpoints": [
-    { "metodo": "GET", "url": "/api/mail/envios/queue", "resposta": "MailQueueResponse { available, message, items: MailQueueItem[], total, checkedAt }. Servidor não criado ou fora do ar → available:false com a explicação (200)." },
-    { "metodo": "POST", "url": "/api/mail/envios/queue/:id/retry", "parametros": "id: só dígitos, até 20 (u64 da fila, mantido como texto)", "resposta": "{ ok, message }; 404 queue_message_not_found (já saiu ou nada pendente); 502 mail_unreachable; auditoria mail.queue.retry." },
-    { "metodo": "POST", "url": "/api/mail/envios/queue/:id/cancel", "resposta": "{ ok, message }; grava 'cancelada' no histórico para os destinatários pendentes; 404/502 como acima; auditoria mail.queue.cancel." },
-    { "metodo": "GET", "url": "/api/mail/envios/history", "parametros": "days (1–30, padrão 7), state (delivered|bounced|deferred|cancelled), projectId (ou 'none'), mailbox, domain, q (até 100), limit (até 500), offset, refresh (0|1). Campo desconhecido → 400.", "resposta": "MailHistoryResponse { items (mais recentes primeiro, com sender), total, collectedAt, collectError, retentionDays: 30, projects, mailboxes, domains }." },
-    { "metodo": "GET", "url": "/api/mail/envios/volume?tz=<minutos>", "parametros": "tz = getTimezoneOffset do navegador (-840 a 840; padrão 0)", "resposta": "MailVolumeResponse { days[14], byProject, totals, bounceRate, deferRate, complaintRate: null, lowVolume }." },
-    { "metodo": "GET", "url": "/api/mail/envios/reputation", "resposta": "MailReputationResponse { lastCheck: BlacklistCheckResponse|null, lastError, checking, nextCheckAt, dqs: { configured, hint } }." },
-    { "metodo": "POST", "url": "/api/mail/envios/reputation/check", "resposta": "O mesmo estado depois de conferir; 429 check_too_soon se o botão foi usado há menos de 1 min." },
-    { "metodo": "PUT", "url": "/api/mail/envios/reputation/dqs", "corpo": "{ key: string|null } (até 64; o serviço exige [a-z0-9]{20,64})", "resposta": "Estado (sem a chave); 400 invalid_dqs_key; auditoria mail.dqs.set / mail.dqs.clear SEM a chave." },
-    { "metodo": "GET", "url": "/api/mail/envios/deliverability", "resposta": "DeliverabilityResponse { score, max: 100, band, items, marks, factsAt }." },
-    { "metodo": "PUT", "url": "/api/mail/envios/postmaster", "corpo": "{ googleAt?, microsoftAt?, spamRateOkAt? } (data AAAA-MM-DD ou ISO; null desmarca; ao menos um campo)", "resposta": "{ marks }; 400 invalid_date (inválida ou no futuro)." }
+    {
+      "metodo": "GET",
+      "url": "/api/mail/envios/queue",
+      "resposta": "MailQueueResponse { available, message, items: MailQueueItem[], total, checkedAt }. Servidor não criado ou fora do ar → available:false com a explicação (200)."
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/mail/envios/queue/:id/retry",
+      "parametros": "id: só dígitos, até 20 (u64 da fila, mantido como texto)",
+      "resposta": "{ ok, message }; 404 queue_message_not_found (já saiu ou nada pendente); 502 mail_unreachable; auditoria mail.queue.retry."
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/mail/envios/queue/:id/cancel",
+      "resposta": "{ ok, message }; grava 'cancelada' no histórico para os destinatários pendentes; 404/502 como acima; auditoria mail.queue.cancel."
+    },
+    {
+      "metodo": "GET",
+      "url": "/api/mail/envios/history",
+      "parametros": "days (1–30, padrão 7), state (delivered|bounced|deferred|cancelled), projectId (ou 'none'), mailbox, domain, q (até 100), limit (até 500), offset, refresh (0|1). Campo desconhecido → 400.",
+      "resposta": "MailHistoryResponse { items (mais recentes primeiro, com sender), total, collectedAt, collectError, retentionDays: 30, projects, mailboxes, domains }."
+    },
+    {
+      "metodo": "GET",
+      "url": "/api/mail/envios/volume?tz=<minutos>",
+      "parametros": "tz = getTimezoneOffset do navegador (-840 a 840; padrão 0)",
+      "resposta": "MailVolumeResponse { days[14], byProject, totals, bounceRate, deferRate, complaintRate: null, lowVolume }."
+    },
+    {
+      "metodo": "GET",
+      "url": "/api/mail/envios/reputation",
+      "resposta": "MailReputationResponse { lastCheck: BlacklistCheckResponse|null, lastError, checking, nextCheckAt, dqs: { configured, hint } }."
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/mail/envios/reputation/check",
+      "resposta": "O mesmo estado depois de conferir; 429 check_too_soon se o botão foi usado há menos de 1 min."
+    },
+    {
+      "metodo": "PUT",
+      "url": "/api/mail/envios/reputation/dqs",
+      "corpo": "{ key: string|null } (até 64; o serviço exige [a-z0-9]{20,64})",
+      "resposta": "Estado (sem a chave); 400 invalid_dqs_key; auditoria mail.dqs.set / mail.dqs.clear SEM a chave."
+    },
+    {
+      "metodo": "GET",
+      "url": "/api/mail/envios/deliverability",
+      "resposta": "DeliverabilityResponse { score, max: 100, band, items, marks, factsAt }."
+    },
+    {
+      "metodo": "PUT",
+      "url": "/api/mail/envios/postmaster",
+      "corpo": "{ googleAt?, microsoftAt?, spamRateOkAt? } (data AAAA-MM-DD ou ISO; null desmarca; ao menos um campo)",
+      "resposta": "{ marks }; 400 invalid_date (inválida ou no futuro)."
+    }
   ],
   "deOndeVemCadaDado": {
     "fila": "API de administração do Stalwart v0.11.8: GET /api/queue/messages?values=1&limit=200 (crates/jmap/src/api/management/queue.rs). O id é u64 e o JSON.parse comum arredonda (333028896599011329 vira …300): o painel lê a resposta como texto e põe o id entre aspas antes (packages/mailer/src/queue-view.ts).",
@@ -35,9 +80,22 @@
     "nota": "packages/mailer/src/deliverability-score.ts, seção 3.3 da pesquisa (_PESQUISA-entregabilidade.md): DNS 25 (proporcional, sem o PTR), PTR 10 (genérico 5), certificado 5, listas 15 (Spamhaus listando 0; outra lista 5; Spamhaus limpa e outra sem conferir 12; Spamhaus sem conferir 0), aquecimento 15 (dias desde o primeiro envio ÷ 30), recusas+adiamentos em 7 dias 10 (< 2%; < 5% vale 5), Postmaster 3, SNDS 2, taxa de spam 10 (conferida há até 30 dias; mais antiga 5), relatórios DMARC 5 (sempre 'não deu para verificar': o painel ainda não lê). DNS/PTR/certificado vêm da conferência diária (MailService.enviosDeliverabilityFacts → verifyDomain e tlsStatus), guardados em data/mail/reputacao.json."
   },
   "persistencia": [
-    { "arquivo": "data/mail/envios/AAAA-MM-DD.jsonl", "formato": "uma linha JSON por evento (MailDeliveryEvent), 0600", "conteudo": "Só metadados: hora, id da fila, remetente e destinatário do envelope, domínio do destino, estado, código SMTP, resposta (até 300 caracteres, sem controle), servidor que respondeu, próxima tentativa. Nunca assunto nem corpo. Arquivos com mais de 30 dias são apagados a cada leitura." },
-    { "arquivo": "data/mail/envios/estado.json", "formato": "json 0600", "conteudo": "{ cursor: { at, hashes } (última linha lida e as linhas daquele segundo, para não duplicar), firstEventAt (primeiro envio já visto — não some com a retenção; usado no aquecimento), collectedAt, collectError }." },
-    { "arquivo": "data/mail/reputacao.json", "formato": "json 0600 (guarda a chave DQS)", "conteudo": "{ dqsKey, lastCheck, lastError, lastAttemptAt, marks { googleAt, microsoftAt, spamRateOkAt }, facts { at, domains[{ name, dnsOk, dnsTotal, ptr }], tls { ok, total } } }." }
+    {
+      "arquivo": "data/mail/envios/AAAA-MM-DD.jsonl",
+      "formato": "uma linha JSON por evento (MailDeliveryEvent), 0600",
+      "conteudo": "Só metadados: hora, id da fila, remetente e destinatário do envelope, domínio do destino, estado, código SMTP, resposta (até 300 caracteres, sem controle), servidor que respondeu, próxima tentativa. Nunca assunto nem corpo. Arquivos com mais de 30 dias são apagados a cada leitura."
+    },
+    {
+      "arquivo": "data/mail/envios/estado.json",
+      "formato": "json 0600",
+      "conteudo": "{ cursor: { at, hashes } (última linha lida e as linhas daquele segundo, para não duplicar), firstEventAt (primeiro envio já visto — não some com a retenção; usado no aquecimento), collectedAt, collectError }."
+    },
+    {
+      "arquivo": "data/mail/reputacao.json",
+      "formato": "json 0600 (guarda a chave DQS)",
+      "conteudo": "{ dqsKey, lastCheck, lastError, lastAttemptAt, marks { googleAt, microsoftAt, spamRateOkAt }, facts { at, domains[{ name, dnsOk, dnsTotal, ptr }], tls { ok, total } } }."
+    },
+    "Coleta à prova de falha no meio (achado 18 da revisão): cada coleta trabalha numa CÓPIA do leitor do registro (DeliveryLogReader.clone) e só fica com ela depois de gravar os eventos e o cursor. Uma leitura que falha depois de passar por um recibo não faz mais a próxima ignorar aquele recibo. Se os eventos chegaram ao arquivo do dia e o cursor não, a releitura gera os mesmos eventos e a linha idêntica conta uma vez só na leitura (readEvents). O estado (estado.json: cursor, primeiro envio, erro da coleta) só muda em fila (withFileLock) com gravação atômica (writeFileAtomic): o cancelamento pelo painel, que grava o primeiro envio, não desfaz mais o que a coleta gravou. A coleta agendada não deixa rejeição sem tratamento."
   ],
   "agendamentos": [
     "Histórico: 1 min depois do boot e a cada 5 min (MailEnviosService.start), só com o servidor de e-mail criado.",
