@@ -45,7 +45,7 @@
 | Pasta | Resumo |
 |---|---|
 | [phase1-evidence/](phase1-evidence/) | Prints e JSONs do scan de segurança antes/depois do hardening (Fase 1). |
-| [imagens/](imagens/) | Prints das telas usados no README (dados fictícios). |
+| [imagens/](imagens/) | Prints das telas usados no README (dados fictícios). Para regenerar: [imagens/regenerar/COMO-REGENERAR.md](imagens/regenerar/COMO-REGENERAR.md). |
 
 ## Documentos de comunidade (raiz do repositório)
 
