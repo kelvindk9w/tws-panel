@@ -83,6 +83,33 @@ describe("autenticação", () => {
     expect((await app.inject({ method: "GET", url: "/api/notifications" })).statusCode).toBe(401);
     expect((await app.inject({ method: "PUT", url: "/api/notifications/telegram", payload: { token: BOT } })).statusCode).toBe(401);
   });
+
+  it("só com o setup token (setup pendente, sem sessão): 401 em todas, nunca 500", async () => {
+    const fresh = await buildAuthTestApp(SETUP);
+    try {
+      fresh.app.decorate("notificationService", service);
+      await fresh.app.register(notificationsRoutes);
+      const headers = { [SETUP_TOKEN_HEADER]: SETUP };
+      const routes: Array<["GET" | "PUT" | "POST" | "DELETE", string, Record<string, unknown>?]> = [
+        ["GET", "/api/notifications"],
+        ["PUT", "/api/notifications/telegram", { token: BOT }],
+        ["POST", "/api/notifications/telegram/connect"],
+        ["POST", "/api/notifications/telegram/test"],
+        ["DELETE", "/api/notifications/telegram"],
+        ["PUT", "/api/notifications/email", { recipients: ["a@exemplo.com.br"] }],
+        ["POST", "/api/notifications/email/test"],
+        ["DELETE", "/api/notifications/email"],
+      ];
+      for (const [method, url, payload] of routes) {
+        const res = await fresh.app.inject({ method, url, headers, ...(payload ? { payload } : {}) });
+        expect(res.statusCode, `${method} ${url}`).toBe(401);
+        expect(res.json()).toMatchObject({ error: "unauthorized" });
+      }
+      expect(telegram.getMe).not.toHaveBeenCalled();
+    } finally {
+      await closeAuthTestApp(fresh);
+    }
+  });
 });
 
 describe("Telegram", () => {

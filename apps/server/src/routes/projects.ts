@@ -10,6 +10,7 @@ import type {
   ProjectCredentialResponse,
   ProjectListResponse,
   ProjectResponse,
+  ProjectTimezoneRequest,
   SetPortRequest,
   SetPortsRequest,
   SetProjectCredentialRequest,
@@ -253,9 +254,10 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       try {
         const { backup, ...req } = request.body ?? ({} as CreateProjectRequest);
         const project = await service.createProject(req);
-        // "Fazer backup: sim/não" da criação (padrão sim). O serviço de backups
-        // fica no escopo raiz (app.ts); instalações de teste podem não tê-lo.
-        if (app.hasDecorator("backupService")) await app.backupService.initProject(project.id, backup !== false);
+        // "Fazer backup: sim/não" da criação; sem a escolha, vale o "Padrão dos
+        // projetos". O serviço de backups fica no escopo raiz (app.ts);
+        // instalações de teste podem não tê-lo.
+        if (app.hasDecorator("backupService")) await app.backupService.initProject(project.id, backup);
         return reply.code(201).send(await projectResponse(project));
       } catch (err) {
         return sendError(reply, err);
@@ -676,6 +678,63 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       const jobs = await service.listJobs(request.params.id);
       const response: DeployJobListResponse = { jobs };
       return reply.send(response);
+    },
+  );
+
+  // Fuso horário do projeto: a escolha, o que está nos containers, quem já
+  // define TZ e se a imagem tem a base de fusos (docker exec).
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/timezone",
+    { schema: projectIdParamsSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      try {
+        return reply.send(await service.timezoneView(request.params.id));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.put<{ Params: { id: string }; Body: ProjectTimezoneRequest }>(
+    "/api/projects/:id/timezone",
+    {
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+      schema: {
+        params: projectIdParams,
+        body: {
+          type: "object",
+          required: ["mode"],
+          additionalProperties: false,
+          properties: {
+            mode: { type: "string", enum: ["image", "host", "zone"] },
+            zone: { type: "string", minLength: 1, maxLength: 64 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        await service.setProjectTimezone(request.params.id, request.body, request.session?.username);
+        return reply.send(await service.timezoneView(request.params.id));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // "Reiniciar com o fuso novo": recria os containers com a configuração
+  // atual, sem baixar código nem refazer o build (job, como o deploy).
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/recreate",
+    { schema: projectIdParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      try {
+        const job = await service.startRecreate(request.params.id, request.session?.username);
+        const response: DeployJobResponse = { job };
+        return reply.code(202).send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
     },
   );
 

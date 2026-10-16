@@ -29,14 +29,15 @@ Gmail e Outlook).
    está faltando. Alvo: ≥ 9/10.
 2. Abra o **checklist DNS** do domínio no painel e clique em "verificar": A, MX, SPF, DKIM e
    DMARC precisam estar ✅.
-3. **PTR ausente** é a causa nº 1: só o provedor da VPS configura. O painel gera o texto pronto
-   do chamado — abra e aguarde.
-4. Confira a **blacklist** no painel (E-mail → Blacklist). Se estiver listado, siga o link de
-   remoção da DNSBL correspondente.
-5. **IP novo sem reputação**: nas primeiras 2–4 semanas envie volume baixo e crescente
+3. **PTR amarelo** (sem nome reverso válido) é a causa nº 1: só o provedor da VPS configura. O
+   card do PTR diz onde trocar (Contabo, Hetzner, Vultr) ou gera o texto pronto do chamado.
+4. Confira as **listas de bloqueio** no painel (Envios → Reputação). Se estiver listado, use
+   "Pedir remoção" na lista correspondente.
+5. Veja a **Nota de entregabilidade** (Envios → Nota): ela lista o que falta, item por item.
+6. **IP novo sem reputação**: nas primeiras 2–4 semanas envie volume baixo e crescente
    (dezenas/dia, não milhares). Veja "warm-up de IP" em
    [email-deliverability.md](email-deliverability.md).
-6. Mantenha o DMARC em `p=none` coletando relatórios até tudo estabilizar; endureça para
+7. Mantenha o DMARC em `p=none` coletando relatórios até tudo estabilizar; endureça para
    `quarantine`/`reject` depois.
 
 ### Certificado TLS do Stalwart inválido
@@ -83,17 +84,22 @@ nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/ho
 
 ## 🛠️ Painel e wizard
 
-### Wizard inacessível (porta 9000)
+### Painel não abre depois do `install.sh`
 
-**Sintomas:** `http://IP:9000/?token=...` não abre após rodar `install.sh`.
+**Sintomas:** o endereço `https://SEU-IP-COM-HÍFENS.sslip.io/?token=...` não abre, ou o
+instalador avisa que ele não respondeu em 3 minutos.
 
-**Checklist:**
-1. O serviço está de pé? `systemctl status paas-setup` e `journalctl -u paas-setup -n 50`;
-2. O UFW está liberando? `sudo ufw allow 9000/tcp` (libere **só durante o setup** e feche
-   depois: `sudo ufw delete allow 9000/tcp`);
-3. O provedor tem firewall externo (security group)? Libere a 9000 nele também;
-4. Token correto? O token é impresso no fim da instalação e salvo em `/etc/paas/setup-token`
-   (`sudo cat /etc/paas/setup-token`).
+**Checklist (na VPS, em `/opt/tws-panel`):**
+1. Os containers estão de pé? `sudo docker compose ps`;
+2. O certificado saiu? A causa mais comum são as portas **80 e 443 bloqueadas** num firewall do
+   provedor (no painel da hospedagem): libere as duas e rode `sudo docker compose restart`. Para
+   ver o que o proxy diz: `sudo docker logs paas-caddy --tail 50`;
+3. Enquanto isso, o acesso por túnel SSH funciona: o banner do instalador mostra o comando
+   (veja [Acesso por túnel SSH](instalacao.md#acesso-por-tunel));
+4. Token correto? Reexiba o link completo com `sudo ./scripts/show-token.sh`.
+
+O painel em si escuta só dentro da VPS (`127.0.0.1`): o endereço `http://SEU-IP:9000` não abre,
+de propósito.
 
 ### "Token inválido" no wizard
 
@@ -101,13 +107,13 @@ nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/ho
 `SETUP_TOKEN` no ambiente.
 
 **Solução:** o valor de `SETUP_TOKEN` no ambiente tem prioridade sobre o arquivo. Reexiba a
-URL + token a qualquer momento com `./scripts/show-token.sh` (lê o volume `paas_data`, sem
+URL + token a qualquer momento com `sudo ./scripts/show-token.sh` (lê o volume `paas_data`, sem
 reinstalar nada).
 
 ### Perdi o token / quero recomeçar o wizard do zero
 
-- **Perdeu o token:** `./scripts/show-token.sh` — imprime o banner com a URL e o token.
-- **Recomeçar o wizard:** `./scripts/reset-setup.sh` — apaga `setup-state.json` do volume
+- **Perdeu o token:** `sudo ./scripts/show-token.sh` — imprime o banner com a URL e o token.
+- **Recomeçar o wizard:** `sudo ./scripts/reset-setup.sh` — apaga `setup-state.json` do volume
   (com confirmação interativa) e o wizard volta ao passo 0; a conta admin é mantida.
   Com `--full` apaga também `users.json` e `sessions.json` (a conta admin deixa de existir
   e todos são deslogados). Projetos, domínios, e-mail e o token NÃO são tocados.
@@ -117,7 +123,9 @@ reinstalar nada).
 **Não entre em pânico — é para isso que existe o rollback.** O hardening agenda uma reversão
 automática (via `at`) que restaura a configuração anterior em ~5 minutos **se você não
 confirmar o acesso** pelo painel. Aguarde o rollback, entre novamente e revise o plano de
-correções antes de reaplicar. Cada arquivo alterado tem backup em `/var/backups/paas-hardening/`.
+correções antes de reaplicar. Cada arquivo alterado tem backup em `/var/backups/paas/`.
+Perdeu a chave, a senha ou o celular da verificação em duas etapas? Veja
+[Perdi o acesso — e agora?](recuperar-acesso.md).
 
 ### Deploy bloqueado por guardrail
 

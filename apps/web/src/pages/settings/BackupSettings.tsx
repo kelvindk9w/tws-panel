@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import {
   BACKUP_PASSWORD_REMINDER_DAYS,
   BACKUP_ROOT_FOLDER,
+  type BackupApplyDefaultsResult,
   type BackupCatalog,
   type BackupProvider,
   type BackupRecord,
@@ -17,12 +18,14 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { CopyButton } from "@/components/CopyButton";
 import {
+  BackupTimezoneNote,
   Feedback,
   HistoryList,
   PasswordSetup,
   RecordBadge,
   RestoreDialog,
   TargetSettings,
+  VerifyAllButton,
   downloadRecoveryKit,
   errorText,
   when,
@@ -33,8 +36,8 @@ import { AlertTriangle, CloudUpload, Download, HardDrive, KeyRound, Loader2, Loc
 /**
  * Configurações → Backups: onde os backups ficam (VPS e armazenamento externo
  * S3/R2), a criptografia da cópia externa e a senha, o painel e o e-mail
- * (frequência, cópias, fazer agora, restaurar), os projetos (cada um tem a
- * sua aba Backups), "Restaurar de outro servidor" e os últimos backups.
+ * (frequência, cópias, fazer agora, restaurar), o padrão dos projetos (com
+ * "Aplicar também nestes projetos"), os projetos (cada um tem a sua aba Backups), "Restaurar de outro servidor" e os últimos backups.
  */
 
 type OnStatus = (s: BackupsStatus) => void;
@@ -193,20 +196,37 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
               </label>
             </div>
             {provider === "r2" ? (
-              <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
-                <li>
-                  No painel da Cloudflare, abra <strong className="text-foreground">R2 Object Storage</strong>. Na primeira vez, ative o R2
-                  (o plano gratuito cobre 10 GB por mês).
-                </li>
-                <li>
-                  Clique em <strong className="text-foreground">Create bucket</strong>, dê um nome (ex.: tws-backups) e crie.
-                </li>
-                <li>
-                  Volte ao R2 e abra <strong className="text-foreground">Manage API tokens</strong> → Create API token. Permissão{" "}
-                  <strong className="text-foreground">Object Read &amp; Write</strong>, só para esse bucket.
-                </li>
-                <li>Copie a Access Key ID, a Secret Access Key e o endpoint (https://…r2.cloudflarestorage.com) e cole aqui.</li>
-              </ol>
+              <>
+                <p className="text-muted-foreground">
+                  Os nomes aparecem em inglês ou em português, conforme o idioma da sua conta na Cloudflare: os dois vêm abaixo (inglês /
+                  português).
+                </p>
+                <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
+                  <li>
+                    No painel da Cloudflare, abra <strong className="text-foreground">R2 Object Storage</strong> / <strong className="text-foreground">Armazenamento de objetos R2</strong>. Na primeira vez, ative o R2 (o plano
+                    gratuito cobre 10 GB por mês).
+                  </li>
+                  <li>
+                    Clique em <strong className="text-foreground">Create bucket</strong> / <strong className="text-foreground">Criar bucket</strong>, dê um nome (ex.: tws-backups) e crie.
+                  </li>
+                  <li>
+                    Na página do R2, no canto direito, ache <strong className="text-foreground">API Tokens</strong> / <strong className="text-foreground">Tokens de API</strong> e clique em <strong className="text-foreground">Manage</strong> / <strong className="text-foreground">Gerenciar</strong>. Depois, em 
+                    <strong className="text-foreground">Create Account API token</strong> / <strong className="text-foreground">Criar token de API da conta</strong> (ou o de usuário, se só ele aparecer).
+                  </li>
+                  <li>
+                    No formulário: um nome (ex.: tws-panel-backups); em Permissions / Permissões, 
+                    <strong className="text-foreground">Object Read &amp; Write</strong> / <strong className="text-foreground">Leitura e gravação de objetos</strong>; em Specify bucket(s) / Especificar bucket(s), 
+                    <strong className="text-foreground">Apply to specific buckets only</strong> / <strong className="text-foreground">Aplicar somente a buckets específicos</strong> e escolha o bucket; TTL 
+                    <strong className="text-foreground">Forever</strong> / <strong className="text-foreground">Para sempre</strong>. Confirme no botão de criar o token, no fim da página.
+                  </li>
+                  <li>
+                    A tela seguinte mostra as chaves uma única vez. Copie a <strong className="text-foreground">Access Key ID</strong> / <strong className="text-foreground">ID da chave de acesso</strong>, a 
+                    <strong className="text-foreground">Secret Access Key</strong> / <strong className="text-foreground">Chave de acesso secreta</strong> e o endpoint que termina em .r2.cloudflarestorage.com (o “Token value” /
+                    “Valor do token” não é usado). Perdeu o endpoint? Ele fica no bucket → Settings / Configurações → S3 API.
+                  </li>
+                  <li>Cole tudo aqui, com a região auto, e clique em Testar e salvar.</li>
+                </ol>
+              </>
             ) : (
               <p className="text-muted-foreground">
                 Use os dados do seu provedor: o endpoint (ex.: https://s3.us-west-004.backblazeb2.com ou https://eu2.contabostorage.com), a
@@ -630,9 +650,108 @@ function TargetCard({
               <Button variant="outline" onClick={() => onRestore({ id: target.id, kind: target.kind, name: target.name })}>
                 <RotateCcw className="h-4 w-4" /> Restaurar
               </Button>
+              <VerifyAllButton target={target.id} onQueued={reload} disabled={!status.archiverAvailable || !target.lastBackup} />
             </div>
           </>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function settingsText(t: BackupTargetStatus): string {
+  if (t.followsDefaults !== false) return "segue o padrão";
+  const freq = t.enabled ? `a cada ${t.frequencyHours} h` : "desligado";
+  return `configuração própria (${freq}, ${t.localKeep} na VPS, ${t.remoteKeep} fora)`;
+}
+
+/**
+ * "Padrão dos projetos": com o que um projeto novo nasce. Quem segue o padrão
+ * muda junto. "Aplicar também nestes projetos" copia o padrão para os marcados,
+ * que passam a seguir o padrão. Itens marcados no backup não mudam.
+ */
+function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () => void }) {
+  const projects = status.targets.filter((t) => t.kind === "project");
+  const [marked, setMarked] = useState<Set<string>>(new Set());
+  const toggle = (id: string, on: boolean) =>
+    setMarked((cur) => {
+      const next = new Set(cur);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  async function save(settings: BackupsStatus["projectDefaults"], changed: boolean): Promise<string> {
+    const parts: string[] = [];
+    if (changed) {
+      await apiFetch("/api/backups/defaults", { method: "PUT", body: JSON.stringify(settings) });
+      parts.push("Padrão salvo.");
+    }
+    if (marked.size > 0) {
+      const ids = projects.filter((p) => marked.has(p.id)).map((p) => p.id.slice("project:".length));
+      const r = await apiFetch<BackupApplyDefaultsResult>("/api/backups/defaults/apply", {
+        method: "POST",
+        body: JSON.stringify({ projectIds: ids }),
+      });
+      const names = r.applied.map((a) => a.name).join(", ");
+      parts.push(changed ? `Aplicado em: ${names}.` : `Padrão aplicado em: ${names}.`);
+      setMarked(new Set());
+    }
+    return parts.join(" ");
+  }
+
+  const list =
+    projects.length > 0 ? (
+      <fieldset className="flex flex-col gap-2" data-testid="defaults-projects">
+        <legend className="mb-1 font-medium">Aplicar também nestes projetos</legend>
+        <p className="text-xs text-muted-foreground">
+          Os marcados recebem o padrão e passam a segui-lo. Os outros mantêm o que têm.
+        </p>
+        <div className="flex gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => setMarked(new Set(projects.map((p) => p.id)))}>
+            Marcar todos
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => setMarked(new Set())}>
+            Nenhum
+          </Button>
+        </div>
+        <ul className="flex flex-col gap-1">
+          {projects.map((p) => (
+            <li key={p.id}>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" className="h-4 w-4" checked={marked.has(p.id)} onChange={(e) => toggle(p.id, e.target.checked)} />
+                <span className="min-w-0 break-words">
+                  {p.name} <span className="text-xs text-muted-foreground">— hoje: {settingsText(p)}</span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </fieldset>
+    ) : undefined;
+
+  return (
+    <Card data-testid="defaults-card">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Server className="h-4 w-4 text-sky-400" /> Padrão dos projetos
+        </CardTitle>
+        <CardDescription>
+          Projeto novo nasce com este padrão. Quem segue o padrão muda junto. Um projeto passa a ter configuração própria quando você salva
+          na aba Backups dele. Os bancos e as pastas escolhidos não mudam.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <TargetSettings
+          target={{ id: "defaults", ...status.projectDefaults }}
+          remote={status.destination !== null}
+          timezone={status.timezone}
+          backupHour={status.backupHour}
+          onSaved={reload}
+          onSave={save}
+          extra={list}
+          extraDirty={marked.size > 0}
+        />
       </CardContent>
     </Card>
   );
@@ -913,8 +1032,9 @@ export function BackupSettings() {
           )}
           {status.running && (
             <p className="flex items-center gap-2 text-sm text-sky-300">
-              <Loader2 className="h-4 w-4 animate-spin" /> {status.running.operation === "restore" ? "Restaurando" : "Fazendo backup de"}{" "}
-              {status.running.targetName}
+              <Loader2 className="h-4 w-4 animate-spin" />{" "}
+              {status.running.operation === "restore" ? "Restaurando" : status.running.operation === "verify" ? "Conferindo" : "Fazendo backup de"}{" "}
+              {status.running.operation === "verify" && status.running.target === "all" ? "todos os backups" : status.running.targetName}
               {status.queued.length > 0 && `; ${status.queued.length} na fila`}.
             </p>
           )}
@@ -944,6 +1064,7 @@ export function BackupSettings() {
               />
             )}
           </div>
+          <DefaultsCard status={status} reload={load} />
           <ProjectsCard status={status} />
           <OtherServerCard
             status={status}
@@ -953,10 +1074,17 @@ export function BackupSettings() {
           <Card data-testid="backup-history">
             <CardHeader>
               <CardTitle className="text-base">Últimos backups</CardTitle>
-              <CardDescription>Backups e restaurações, com o motivo quando algo falhou. Cópias na VPS em <span className="break-all">{status.localPath}</span>.</CardDescription>
+              <CardDescription>
+                Backups, restaurações e conferências, com o motivo quando algo falhou. Cópias na VPS em <span className="break-all">{status.localPath}</span>.
+                Conferir abre cada cópia com o 7-Zip; a externa é baixada e comparada com o que foi enviado.
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-              <HistoryList records={status.history.slice(0, 30)} empty="Nenhum backup feito ainda." />
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <VerifyAllButton target="all" onQueued={load} label="Conferir todos os backups" disabled={!status.archiverAvailable} />
+              </div>
+              <BackupTimezoneNote status={status} />
+              <HistoryList records={status.history.slice(0, 30)} empty="Nenhum backup feito ainda." onVerify={load} />
             </CardContent>
           </Card>
         </>

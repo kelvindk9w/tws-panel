@@ -21,7 +21,57 @@ import {
   fixedReadOnlyCommands,
   isAllowedHostCommand,
   parsePhaseScriptCommand,
+  HOST_TIMEZONE_READ_CMD,
+  buildSetTimezoneCommand,
+  isSetTimezoneCommand,
+  parseHostTimezoneOutput,
 } from "../src/host-bridge.js";
+
+describe("fuso horário do host", () => {
+  const REMOTE_DIR = "/opt/paas-hardening";
+
+  it("a leitura do fuso é um comando fixo da allowlist", () => {
+    expect(fixedReadOnlyCommands().has(HOST_TIMEZONE_READ_CMD)).toBe(true);
+    expect(isAllowedHostCommand(HOST_TIMEZONE_READ_CMD, REMOTE_DIR)).toBe(true);
+  });
+
+  it("entende a saída do timedatectl e do readlink", () => {
+    expect(parseHostTimezoneOutput("America/Sao_Paulo\n")).toBe("America/Sao_Paulo");
+    expect(parseHostTimezoneOutput("/usr/share/zoneinfo/Europe/Berlin\n")).toBe("Europe/Berlin");
+    expect(parseHostTimezoneOutput("/usr/share/zoneinfo/posix/Asia/Tokyo")).toBe("Asia/Tokyo");
+    expect(parseHostTimezoneOutput("Etc/UTC")).toBe("Etc/UTC");
+    expect(parseHostTimezoneOutput("")).toBeNull();
+    expect(parseHostTimezoneOutput("/etc/localtime")).toBeNull();
+    expect(parseHostTimezoneOutput("n/a")).toBeNull();
+  });
+
+  it("monta a troca só com um fuso da lista IANA, entre aspas simples", () => {
+    const cmd = buildSetTimezoneCommand("America/Sao_Paulo");
+    expect(cmd).toBe(
+      "{ timedatectl set-timezone 'America/Sao_Paulo' 2>/dev/null || { test -f '/usr/share/zoneinfo/America/Sao_Paulo' && " +
+        "ln -sf '/usr/share/zoneinfo/America/Sao_Paulo' /etc/localtime; }; } && { test ! -f /etc/timezone || echo 'America/Sao_Paulo' > /etc/timezone; }",
+    );
+    for (const bad of ["Asia/Calcutta", "America/Sao_Paulo'; reboot; '", "../../etc/shadow", "", "Nao/Existe"]) {
+      expect(() => buildSetTimezoneCommand(bad), bad).toThrow(/fora da lista IANA/);
+    }
+  });
+
+  it("a allowlist aceita a troca montada pelo builder e nada parecido", () => {
+    const ok = buildSetTimezoneCommand("Europe/Berlin");
+    expect(isSetTimezoneCommand(ok)).toBe(true);
+    expect(isAllowedHostCommand(ok, REMOTE_DIR)).toBe(true);
+    const denied = [
+      `${ok}; reboot`,
+      `${ok}\nreboot`,
+      ok.split("Europe/Berlin").join("Asia/Calcutta"),
+      "{ timedatectl set-timezone 'Europe/Berlin' ",
+      "{ timedatectl set-timezone 'Europe/Berlin' 2>/dev/null; reboot",
+      "timedatectl set-timezone Europe/Berlin",
+      "{ timedatectl set-timezone 'Nao/Existe' 2>/dev/null || true; }",
+    ];
+    for (const cmd of denied) expect(isAllowedHostCommand(cmd, REMOTE_DIR), cmd).toBe(false);
+  });
+});
 
 const REMOTE = "/opt/paas-hardening";
 // chave ed25519 realista (formato, não é uma chave real em uso)

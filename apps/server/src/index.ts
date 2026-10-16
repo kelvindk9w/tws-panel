@@ -1,10 +1,15 @@
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { applyHostTimezone } from "./services/host-timezone.js";
+import { rememberStartupTimezone, resolveStartupTimezone } from "./services/host-timezone.js";
 import { applyPendingPanelRestore } from "./services/panel-restore.js";
 
-// Fuso da VPS (backups às 03:00 no horário dela, não no UTC do container).
-await applyHostTimezone().catch(() => null);
+// Fuso da VPS (backups às 03:00 no horário dela, não no UTC do container):
+// TZ do .env, o último lido da VPS (data/timezone.json) ou o /etc/localtime
+// montado. Depois de subir, o painel confere pelo host bridge
+// (services/timezone-service.ts).
+await resolveStartupTimezone({ dataDir: loadConfig().dataDir })
+  .then(rememberStartupTimezone)
+  .catch(() => null);
 
 // Restauração do painel pedida antes do reinício: troca o estado ANTES de
 // qualquer serviço ler o disco (ver services/panel-restore.ts).

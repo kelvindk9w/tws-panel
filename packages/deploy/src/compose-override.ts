@@ -3,6 +3,7 @@
  * gera para o compose adotado. NÃO reescreve o compose do repositório; apenas:
  *  - anexa o serviço web à rede do painel com um alias estável para o Caddy;
  *  - injeta env extra (ex.: SMTP do painel) nos serviços indicados;
+ *  - injeta o TZ do fuso do projeto nos serviços que não definem TZ;
  *  - em app comum, troca a lista de portas por uma sem 80/443 do host
  *    (`ports: !override`, ver proxy-ports.ts);
  *  - aplica as trocas da porta do servidor feitas no painel (modal Portas,
@@ -23,6 +24,8 @@ export interface ComposeOverrideOptions {
   envServices?: string[];
   /** Trocas da porta do servidor por serviço (Project.portOverrides). */
   portOverrides?: Record<string, PortOverride[]>;
+  /** Env de um serviço só (ex.: TZ do fuso do projeto, ver compose-timezone.ts). */
+  serviceEnv?: Record<string, Record<string, string>>;
 }
 
 export const OVERRIDE_HEADER = "# Gerado pelo painel PaaS — não editar. Anexa o serviço web à rede do painel.\n";
@@ -43,6 +46,10 @@ export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
     for (const name of opts.envServices ?? []) {
       services[name] = { ...(services[name] ?? {}), environment: { ...env } };
     }
+  }
+  for (const [name, extra] of Object.entries(opts.serviceEnv ?? {})) {
+    const current = (services[name]?.environment as Record<string, string> | undefined) ?? {};
+    services[name] = { ...(services[name] ?? {}), environment: { ...current, ...extra } };
   }
 
   const doc = new Document({ networks: { [opts.network]: { external: true } }, services });

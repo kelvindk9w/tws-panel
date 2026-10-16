@@ -240,12 +240,61 @@ export interface BackupRunStep {
   status: "pending" | "running" | "done" | "failed" | "skipped";
 }
 
-/** Um backup ou uma restauração (histórico). */
-export interface BackupRecord {
-  id: string;
+/** Qual cópia de um backup: a da VPS ou a do armazenamento externo. */
+export type BackupCopyWhere = "local" | "remote";
+
+/**
+ * Resultado da conferência de uma cópia ("Conferir"):
+ *  - ok: íntegra (tamanho, hash quando conhecido e `7z t`);
+ *  - failed: não abriu, hash ou tamanho diferente, ou sem senha quando deveria ter;
+ *  - missing: a cópia não existe mais (a retenção apagou);
+ *  - needs_password: não abre com a senha guardada; falta a senha da época.
+ */
+export type BackupCheckStatus = "ok" | "failed" | "missing" | "needs_password";
+
+export interface BackupCheckResult {
+  status: BackupCheckStatus;
+  at: string;
+  reason: string | null;
+}
+
+/** Uma cópia dentro de uma conferência (um item da fila de "Conferir todos"). */
+export interface BackupVerifyItem {
   target: BackupTargetId;
   targetName: string;
-  operation: "backup" | "restore";
+  fileName: string;
+  where: BackupCopyWhere;
+  status: BackupCheckStatus | "pending" | "running";
+  reason: string | null;
+}
+
+export interface BackupVerifySummary {
+  ok: number;
+  failed: number;
+  missing: number;
+  needsPassword: number;
+}
+
+/** "Conferir" (um backup) ou "Conferir todos" (de um item ou de tudo). */
+export interface BackupVerifyRequest {
+  /** Sem nome = todos os backups do item (ou de tudo, em /api/backups/verify). */
+  fileName?: string;
+  /** Qual cópia; padrão as duas. */
+  where?: BackupCopyWhere | "both";
+  /** Senha da época, quando a guardada não abre a cópia externa. Nunca é guardada. */
+  password?: string;
+}
+
+/** Item especial das conferências gerais. */
+export const BACKUP_ALL_TARGETS = "all";
+
+/** Um backup, uma restauração ou uma conferência (histórico). */
+export interface BackupRecord {
+  id: string;
+  /** Item; "all" numa conferência de todos os backups. */
+  target: BackupTargetId;
+  targetName: string;
+  operation: "backup" | "restore" | "verify";
   trigger: "schedule" | "manual";
   status: BackupRunStatus;
   queuedAt: string;
@@ -261,6 +310,14 @@ export interface BackupRecord {
   steps: BackupRunStep[];
   warnings: string[];
   error: string | null;
+  /** Backup: a cópia da VPS ainda existe (preenchido na situação). */
+  localExists?: boolean;
+  /** Backup: última conferência da cópia da VPS. */
+  localCheck?: BackupCheckResult | null;
+  /** Backup: última conferência da cópia externa (a automática, depois do envio, conta). */
+  remoteCheck?: BackupCheckResult | null;
+  /** Conferência: cada cópia e o resumo. */
+  verify?: { items: BackupVerifyItem[]; summary: BackupVerifySummary };
 }
 
 export interface BackupTargetSettings {
@@ -282,17 +339,26 @@ export interface BackupTargetStatus extends BackupTargetSettings {
   nextRunAt: string | null;
   /** E-mail: o servidor de e-mail existe nesta instalação. */
   available: boolean;
+  /**
+   * Só projetos: true = segue o "Padrão dos projetos" (Configurações →
+   * Backups) e muda junto com ele; false = configuração própria.
+   */
+  followsDefaults?: boolean;
 }
 
 export interface BackupsStatus {
   destination: BackupDestinationInfo | null;
   encryption: BackupEncryptionInfo;
   targets: BackupTargetStatus[];
+  /** "Padrão dos projetos": com o que um projeto novo nasce. */
+  projectDefaults: BackupTargetSettings;
   running: BackupRecord | null;
   queued: BackupRecord[];
   history: BackupRecord[];
   /** Fuso da VPS, ex.: "UTC-03:00". */
   timezone: string;
+  /** Nome do fuso da VPS, ex.: "America/Sao_Paulo" (Configurações → Fuso horário). */
+  timezoneName?: string;
   backupHour: number;
   /** O 7-Zip está instalado no container do painel. */
   archiverAvailable: boolean;
@@ -353,6 +419,25 @@ export interface BackupTargetSettingsRequest {
   remoteKeep?: number;
   choices?: Record<string, boolean>;
   extraFolders?: Array<{ service: string; path: string }>;
+}
+
+/** "Padrão dos projetos" (só frequência, cópias e ligado/desligado). */
+export interface BackupDefaultsRequest {
+  enabled?: boolean;
+  frequencyHours?: BackupFrequencyHours;
+  localKeep?: number;
+  remoteKeep?: number;
+}
+
+/** "Aplicar também nestes projetos". */
+export interface BackupApplyDefaultsRequest {
+  projectIds: string[];
+}
+
+export interface BackupApplyDefaultsResult {
+  applied: Array<{ id: string; name: string }>;
+  /** Ids que não são de nenhum projeto. */
+  missing: string[];
 }
 
 export interface BackupRestoreRequest {

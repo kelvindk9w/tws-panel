@@ -74,7 +74,13 @@ function base(): BackupsStatus {
   return {
     destination: null,
     encryption: { enabled: true, passwordSet: false, passwordSetAt: null, acknowledgedAt: null, lastTestAt: null, lastTestOk: null },
-    targets: [target("panel", "panel", "Painel"), target("email", "email", "E-mail", { available: false }), target("project:p1", "project", "Loja")],
+    targets: [
+      target("panel", "panel", "Painel"),
+      target("email", "email", "E-mail", { available: false }),
+      target("project:p1", "project", "Loja", { followsDefaults: true }),
+      target("project:p2", "project", "Blog", { followsDefaults: false, frequencyHours: 12 }),
+    ],
+    projectDefaults: { enabled: true, frequencyHours: 24, localKeep: 2, remoteKeep: 5 },
     running: null,
     queued: [],
     history: [],
@@ -144,6 +150,13 @@ function handler(path: string, init?: RequestInit): unknown {
     case "PUT /api/backups/targets/panel":
       state = { ...state, targets: state.targets.map((t) => (t.id === "panel" ? { ...t, ...(body as Partial<BackupTargetStatus>) } : t)) };
       return undefined;
+    case "PUT /api/backups/defaults":
+      state = { ...state, projectDefaults: { ...state.projectDefaults, ...(body as Partial<BackupsStatus["projectDefaults"]>) } };
+      return undefined;
+    case "POST /api/backups/defaults/apply": {
+      const ids = body.projectIds as string[];
+      return { applied: ids.map((id) => ({ id, name: id === "p1" ? "Loja" : "Blog" })), missing: [] };
+    }
     case "GET /api/backups/targets/panel/points":
       return { points: [{ fileName: "2026-10-14_03-00.7z", at: "2026-10-14T06:00:00Z", sizeBytes: 4096, local: true, remote: true }] };
     case "POST /api/backups/targets/panel/restore":
@@ -160,6 +173,28 @@ function handler(path: string, init?: RequestInit): unknown {
       });
     case "GET /api/backups/catalog":
       return CATALOG;
+    case "POST /api/backups/verify":
+    case "POST /api/backups/targets/panel/verify": {
+      const all = path === "/api/backups/verify";
+      const v = record({
+        id: `v${calls.length}`,
+        target: all ? "all" : "panel",
+        targetName: all ? "Todos os backups" : "Painel",
+        operation: "verify",
+        status: "running",
+        fileName: (body.fileName as string | undefined) ?? null,
+        finishedAt: null,
+        verify: {
+          items: [
+            { target: "panel", targetName: "Painel", fileName: "2026-10-14_09-00.7z", where: "local", status: "ok", reason: null },
+            { target: "panel", targetName: "Painel", fileName: "2026-10-14_09-00.7z", where: "remote", status: "running", reason: null },
+          ],
+          summary: { ok: 1, failed: 0, missing: 0, needsPassword: 0 },
+        },
+      });
+      state = { ...state, running: v, history: [v, ...state.history] };
+      return v;
+    }
     default:
       throw new Error(`rota inesperada: ${key}`);
   }
@@ -300,6 +335,52 @@ describe("Configurações → Backups", () => {
     expect(email).toHaveTextContent("O servidor de e-mail não está instalado nesta VPS.");
   });
 
+  it("padrão dos projetos: frequência, cópias e cobertura; Aplicar também nestes projetos", async () => {
+    state.destination = { type: "s3", provider: "r2", endpoint: "https://x", region: "auto", bucket: "b", accessKeyHint: "…1", connectedAt: "", testedAt: null };
+    renderPage();
+    const card = await screen.findByTestId("defaults-card");
+    expect(card).toHaveTextContent("Padrão dos projetos");
+    expect(card).toHaveTextContent("Seus backups cobrem os últimos 5 dias no armazenamento externo e os últimos 2 dias na VPS.");
+    const list = within(card).getByTestId("defaults-projects");
+    expect(list).toHaveTextContent("Aplicar também nestes projetos");
+    expect(list).toHaveTextContent("Loja — hoje: segue o padrão");
+    expect(list).toHaveTextContent("Blog — hoje: configuração própria (a cada 12 h, 2 na VPS, 5 fora)");
+    const save = within(card).getByRole("button", { name: "Salvar" });
+    expect(save).toBeDisabled();
+    fireEvent.change(within(card).getByLabelText("Frequência"), { target: { value: "6" } });
+    fireEvent.change(within(card).getByLabelText("Cópias na VPS"), { target: { value: "8" } });
+    fireEvent.change(within(card).getByLabelText("Cópias fora da VPS"), { target: { value: "30" } });
+    expect(card).toHaveTextContent("Seus backups cobrem os últimos 7 dias e 12 horas no armazenamento externo e os últimos 2 dias na VPS.");
+    fireEvent.click(within(list).getByRole("button", { name: "Marcar todos" }));
+    expect(within(list).getAllByRole("checkbox").every((c) => (c as HTMLInputElement).checked)).toBe(true);
+    fireEvent.click(within(list).getByRole("button", { name: "Nenhum" }));
+    expect(within(list).getAllByRole("checkbox").some((c) => (c as HTMLInputElement).checked)).toBe(false);
+    fireEvent.click(within(list).getByRole("checkbox", { name: /Blog/ }));
+    fireEvent.click(save);
+    expect(await within(card).findByText("Padrão salvo. Aplicado em: Blog.")).toBeInTheDocument();
+    expect(calls.find((c) => c.key === "PUT /api/backups/defaults")?.body).toEqual({ enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30 });
+    expect(calls.find((c) => c.key === "POST /api/backups/defaults/apply")?.body).toEqual({ projectIds: ["p2"] });
+  });
+
+  it("padrão dos projetos: só aplicar, sem mudar o padrão, e cópias inválidas", async () => {
+    renderPage();
+    const card = await screen.findByTestId("defaults-card");
+    expect(card).toHaveTextContent("Seus backups cobrem os últimos 2 dias (cópias na VPS).");
+    fireEvent.click(within(card).getByRole("checkbox", { name: /Loja/ }));
+    fireEvent.click(within(card).getByRole("button", { name: "Salvar" }));
+    expect(await within(card).findByText("Padrão aplicado em: Loja.")).toBeInTheDocument();
+    expect(calls.some((c) => c.key === "PUT /api/backups/defaults")).toBe(false);
+    fireEvent.change(within(card).getByLabelText("Cópias na VPS"), { target: { value: "0" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Salvar" }));
+    expect(await within(card).findByText("Informe de 1 a 60 cópias.")).toBeInTheDocument();
+    failures["PUT /api/backups/defaults"] = new ApiRequestError(400, "invalid_keep", "Quantidade de cópias inválida.");
+    fireEvent.change(within(card).getByLabelText("Cópias na VPS"), { target: { value: "3" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Salvar" }));
+    expect(await within(card).findByText("Quantidade de cópias inválida.")).toBeInTheDocument();
+    fireEvent.click(within(card).getByTestId("enabled-defaults"));
+    expect(card).toHaveTextContent("Desligado: só roda quando você clicar em Fazer backup agora.");
+  });
+
   it("restaurar o painel: confirma digitando 'painel' e acompanha até o fim", async () => {
     renderPage();
     const card = await screen.findByTestId("target-panel");
@@ -375,6 +456,130 @@ describe("Configurações → Backups", () => {
     expect(history).toHaveTextContent("nada foi apagado");
     expect(within(screen.getByTestId("target-panel")).getByRole("button", { name: /Fazer backup agora/ })).toBeDisabled();
     expect(screen.getByTestId("projects-card")).toHaveTextContent("Loja");
+  });
+
+  it("Últimos backups: cada cópia com o resultado da conferência, Conferir e a senha da época", async () => {
+    state.destination = { type: "s3", provider: "r2", endpoint: "https://x", region: "auto", bucket: "b", accessKeyHint: "…1", connectedAt: "", testedAt: null };
+    state.timezoneName = "America/Sao_Paulo";
+    state.history = [
+      record({
+        id: "b1",
+        localExists: true,
+        localCheck: { status: "ok", at: "2026-10-14T15:00:00Z", reason: null },
+        remoteCheck: { status: "failed", at: "2026-10-14T15:00:00Z", reason: "O arquivo baixado não bate com o enviado (hash diferente)." },
+      }),
+      record({ id: "b2", fileName: "2026-10-13_03-00.7z", localExists: false, localCheck: null, remoteCheck: { status: "needs_password", at: "2026-10-14T15:00:00Z", reason: "x" } }),
+      record({ id: "b3", fileName: "2026-10-12_03-00.7z", localExists: true, localCheck: null, remoteCheck: null }),
+    ];
+    renderPage();
+    const history = await screen.findByTestId("backup-history");
+    expect(within(history).getByTestId("backup-timezone")).toHaveTextContent("America/Sao_Paulo (UTC-03:00)");
+    expect(within(history).getByRole("link", { name: /Configurações → Fuso horário/ })).toHaveAttribute("href", "/settings/timezone");
+    const [b1, b2, b3] = within(history).getAllByTestId("backup-record");
+    expect(b1).toHaveTextContent(/Cópia da VPS: Íntegro — conferido em 14\/10\/2026/);
+    expect(b1).toHaveTextContent("Cópia externa: Falhou: O arquivo baixado não bate com o enviado (hash diferente).");
+    expect(b2).toHaveTextContent("Cópia da VPS: apagada pela retenção");
+    expect(b3).toHaveTextContent("Cópia da VPS: ainda não conferida");
+    // Conferir um: entra na fila e o andamento aparece
+    fireEvent.click(within(b1).getByRole("button", { name: "Conferir" }));
+    await waitFor(() => expect(calls.some((c) => c.key === "POST /api/backups/targets/panel/verify")).toBe(true));
+    expect(calls.find((c) => c.key === "POST /api/backups/targets/panel/verify")!.body).toEqual({ fileName: "2026-10-14_09-00.7z" });
+    expect(await screen.findByText(/Conferindo… 1 de 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Conferindo\s+Painel/)).toBeInTheDocument();
+    // a senha da época vai junto, só da cópia externa
+    const row2 = within(screen.getByTestId("backup-history")).getAllByTestId("backup-record").find((r) => r.textContent?.includes("2026-10-13_03-00.7z"))!;
+    fireEvent.change(within(row2).getByLabelText("Senha da época do backup"), { target: { value: "senha-antiga-longa" } });
+    fireEvent.click(within(row2).getByRole("button", { name: "Conferir com esta senha" }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.key === "POST /api/backups/targets/panel/verify").at(-1)!.body).toEqual({
+        fileName: "2026-10-13_03-00.7z",
+        where: "remote",
+        password: "senha-antiga-longa",
+      }),
+    );
+  });
+
+  it("Conferir todos (geral e do item) e o resumo com as cópias com problema", async () => {
+    state.history = [
+      record({
+        id: "v0",
+        target: "all",
+        targetName: "Todos os backups",
+        operation: "verify",
+        status: "failed",
+        fileName: null,
+        error: "1 cópia(s) com problema.",
+        warnings: ["Alguma cópia não abre com a senha guardada. Confira de novo informando a senha da época do backup."],
+        verify: {
+          items: [
+            { target: "panel", targetName: "Painel", fileName: "a.7z", where: "local", status: "ok", reason: null },
+            { target: "project:p1", targetName: "Loja", fileName: "b.7z", where: "remote", status: "failed", reason: "O 7-Zip não conseguiu abrir." },
+            { target: "panel", targetName: "Painel", fileName: "c.7z", where: "remote", status: "needs_password", reason: "Não abre com a senha guardada: falta a senha da época." },
+            { target: "panel", targetName: "Painel", fileName: "d.7z", where: "local", status: "missing", reason: "apagada" },
+          ],
+          summary: { ok: 1, failed: 1, missing: 1, needsPassword: 1 },
+        },
+      }),
+    ];
+    state.targets = state.targets.map((t) => (t.id === "panel" ? { ...t, lastBackup: record() } : t));
+    renderPage();
+    const history = await screen.findByTestId("backup-history");
+    const detail = within(history).getByTestId("verify-detail");
+    expect(detail).toHaveTextContent("1 íntegra · 1 com problema · 1 não existe mais · 1 pede a senha da época");
+    expect(detail).toHaveTextContent("Loja · b.7z · cópia externa: Falhou: O 7-Zip não conseguiu abrir.");
+    expect(detail).toHaveTextContent("Painel · c.7z · cópia externa: Não abre com a senha guardada");
+    expect(history).toHaveTextContent("conferência de todos");
+    fireEvent.click(within(history).getByRole("button", { name: /Conferir todos os backups/ }));
+    await waitFor(() => expect(calls.some((c) => c.key === "POST /api/backups/verify")).toBe(true));
+    expect(await screen.findByText(/Conferindo\s+todos os backups/)).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId("target-panel")).getByRole("button", { name: "Conferir todos" }));
+    await waitFor(() => expect(calls.filter((c) => c.key === "POST /api/backups/targets/panel/verify").at(-1)!.body).toEqual({}));
+    failures["POST /api/backups/verify"] = new ApiRequestError(429, "rate_limited", "Muitas conferências seguidas. Espere um minuto.");
+    fireEvent.click(within(screen.getByTestId("backup-history")).getByRole("button", { name: /Conferir todos os backups/ }));
+    expect(await screen.findByText("Muitas conferências seguidas. Espere um minuto.")).toBeInTheDocument();
+  });
+
+  it("selo da cópia externa ao lado do Concluído: conferida, enviando, conferindo, falhou, só na VPS e o resultado do Conferir", async () => {
+    state.history = [
+      record({ id: "s1", fileName: "1.7z", remote: "verified" }),
+      record({ id: "s2", fileName: "2.7z", status: "running", remote: "uploading", finishedAt: null }),
+      record({ id: "s3", fileName: "3.7z", status: "running", remote: "uploaded", finishedAt: null }),
+      record({ id: "s4", fileName: "4.7z", status: "warning", remote: "failed" }),
+      record({ id: "s5", fileName: "5.7z", remote: "none" }),
+      record({ id: "s6", fileName: "6.7z", remote: "verified", remoteCheck: { status: "failed", at: "2026-10-14T15:00:00Z", reason: "hash diferente" } }),
+      record({ id: "s7", fileName: "7.7z", remote: "verified", remoteCheck: { status: "needs_password", at: "2026-10-14T15:00:00Z", reason: null } }),
+      record({ id: "s8", fileName: "8.7z", status: "failed", remote: "none", error: "Disco cheio." }),
+      record({ id: "s9", fileName: "9.7z", remote: "skipped" }),
+      record({ id: "s10", fileName: "10.7z", remote: "verified", remoteCheck: { status: "missing", at: "2026-10-14T15:00:00Z", reason: null } }),
+      record({ id: "s11", fileName: null, operation: "restore", remote: "none" }),
+    ];
+    renderPage();
+    const history = await screen.findByTestId("backup-history");
+    const rows = within(history).getAllByTestId("backup-record");
+    const badge = (i: number) => within(rows[i]!).queryByTestId("remote-badge")?.textContent ?? null;
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(badge)).toEqual([
+      "Externa conferida",
+      "Enviando",
+      "Conferindo",
+      "Externa falhou",
+      "Só na VPS",
+      "Externa falhou",
+      "Externa pede a senha da época",
+      null,
+      "Externa não feita",
+      "Externa apagada",
+      null,
+    ]);
+    expect(within(rows[0]!).getByTestId("remote-badge").className).toMatch(/emerald|success|green/);
+  });
+
+  it("Conferir que falha mostra o motivo na linha", async () => {
+    state.history = [record({ id: "b1", localExists: true })];
+    failures["POST /api/backups/targets/panel/verify"] = new ApiRequestError(409, "no_destination", "Conecte o armazenamento externo primeiro.");
+    renderPage();
+    const row = (await screen.findAllByTestId("backup-record"))[0]!;
+    fireEvent.click(within(row).getByRole("button", { name: "Conferir" }));
+    expect(await within(row).findByText("Conecte o armazenamento externo primeiro.")).toBeInTheDocument();
   });
 
   it("falha ao carregar: mensagem e Tentar de novo", async () => {

@@ -36,6 +36,7 @@ function baseView(): ProjectBackupView {
       lastRemoteVerifiedAt: null,
       nextRunAt: null,
       available: true,
+      followsDefaults: true,
     },
     detection: {
       detectedAt: "2026-10-14T12:00:00Z",
@@ -78,6 +79,9 @@ beforeEach(() => {
       case "PUT /api/backups/targets/project:p1":
         view = { ...view, choices: { ...view.choices, ...(body.choices ?? {}) }, extraFolders: (body.extraFolders ?? view.extraFolders).map((f: { service: string; path: string }) => ({ id: `extra:${f.service}:${f.path}`, ...f })) };
         return undefined;
+      case "POST /api/backups/targets/project:p1/use-defaults":
+        view = { ...view, target: { ...view.target, followsDefaults: true, frequencyHours: 6 } };
+        return undefined;
       case "POST /api/backups/projects/p1/detect":
         return view;
       case "POST /api/backups/targets/project:p1/run":
@@ -89,6 +93,11 @@ beforeEach(() => {
         return view.target.lastBackup;
       case "GET /api/backups/targets/project:p1/points":
         return { points: [] };
+      case "POST /api/backups/targets/project:p1/verify": {
+        const v = { ...view.history[0]!, id: `v${calls.length}`, operation: "verify" as const, status: "running" as const, fileName: body.fileName ?? null, verify: { items: [], summary: { ok: 0, failed: 0, missing: 0, needsPassword: 0 } } };
+        view = { ...view, history: [v, ...view.history] };
+        return v;
+      }
       default:
         throw new Error(`rota inesperada: ${key}`);
     }
@@ -156,6 +165,39 @@ describe("aba Backups do projeto", () => {
     const dialog = await screen.findByTestId("restore-dialog");
     expect(await within(dialog).findByText("Ainda não há backups para restaurar.")).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/Publicar do GitHub antes de restaurar/)).not.toBeChecked();
+  });
+
+  it("Conferir um backup e Conferir todos do projeto; o fuso da agenda com o link para trocar", async () => {
+    const b = { id: "r1", target: "project:p1", targetName: "Loja", operation: "backup" as const, trigger: "manual" as const, status: "success" as const, queuedAt: "2026-10-14T12:00:00Z", startedAt: null, finishedAt: "2026-10-14T12:01:00Z", fileName: "2026-10-14_09-00.7z", sizeBytes: 1000, local: true, remote: "verified" as const, remoteEncrypted: true, remoteDetail: null, steps: [], warnings: [], error: null, localExists: true, localCheck: null, remoteCheck: { status: "ok" as const, at: "2026-10-14T12:02:00Z", reason: null } };
+    view.target.lastBackup = b;
+    view.history = [b];
+    renderCard();
+    const root = await screen.findByTestId("project-backups");
+    expect(within(root).getByTestId("backup-timezone")).toHaveTextContent("UTC-03:00");
+    const row = within(root).getAllByTestId("backup-record")[0]!;
+    expect(row).toHaveTextContent("Cópia externa: Íntegro — conferido em");
+    fireEvent.click(within(row).getByRole("button", { name: "Conferir" }));
+    await waitFor(() => expect(calls.find((c) => c.key === "POST /api/backups/targets/project:p1/verify")?.body).toEqual({ fileName: "2026-10-14_09-00.7z" }));
+    expect(await within(root).findByText(/Conferindo… 0 de 0/)).toBeInTheDocument();
+    fireEvent.click(within(root).getByRole("button", { name: "Conferir todos" }));
+    await waitFor(() => expect(calls.filter((c) => c.key === "POST /api/backups/targets/project:p1/verify").at(-1)!.body).toEqual({}));
+  });
+
+  it("seguindo o padrão do painel ou configuração própria, com Voltar ao padrão", async () => {
+    const { unmount } = renderCard();
+    const freq = await screen.findByTestId("project-settings-source");
+    expect(freq).toHaveTextContent("Seguindo o padrão do painel");
+    expect(freq).toHaveTextContent("Salvar aqui passa a usar uma configuração própria.");
+    expect(within(freq).queryByRole("button", { name: "Voltar ao padrão" })).toBeNull();
+    unmount();
+    view.target = { ...view.target, followsDefaults: false, frequencyHours: 12 };
+    renderCard();
+    const own = await screen.findByTestId("project-settings-source");
+    expect(own).toHaveTextContent("Configuração própria");
+    fireEvent.click(within(own).getByRole("button", { name: "Voltar ao padrão" }));
+    await waitFor(() => expect(screen.getByTestId("project-settings-source")).toHaveTextContent("Seguindo o padrão do painel"));
+    expect(calls.some((c) => c.key === "POST /api/backups/targets/project:p1/use-defaults")).toBe(true);
+    expect(await screen.findByText("O projeto voltou ao padrão do painel.")).toBeInTheDocument();
   });
 
   it("antes do primeiro deploy: explica e oferece detectar agora", async () => {

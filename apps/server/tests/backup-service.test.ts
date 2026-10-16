@@ -907,6 +907,107 @@ describe("configuração por item", () => {
   });
 });
 
+describe("padrão dos projetos", () => {
+  const P1 = projectTargetId("p1");
+  const P2 = projectTargetId("p2");
+
+  it("vem com 24 h, 2 e 5 e ligado; projeto que nunca salvou segue o padrão", async () => {
+    const s = await service.status();
+    expect(s.projectDefaults).toEqual({ enabled: true, frequencyHours: 24, localKeep: 2, remoteKeep: 5 });
+    expect(s.targets.find((t) => t.id === P1)).toMatchObject({ followsDefaults: true });
+    expect(s.targets.find((t) => t.id === "panel")!.followsDefaults).toBeUndefined();
+  });
+
+  it("trocar o padrão muda quem segue, não quem tem configuração própria nem painel e e-mail", async () => {
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" })];
+    await service.updateTarget(P2, { frequencyHours: 12 }, "admin");
+    await service.updateDefaults({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    const s = await service.status();
+    expect(s.projectDefaults).toMatchObject({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 });
+    expect(s.targets.find((t) => t.id === P1)).toMatchObject({ frequencyHours: 6, localKeep: 8, remoteKeep: 30, followsDefaults: true });
+    expect(s.targets.find((t) => t.id === P2)).toMatchObject({ frequencyHours: 12, localKeep: 2, remoteKeep: 5, followsDefaults: false });
+    expect(s.targets.find((t) => t.id === "panel")).toMatchObject({ frequencyHours: 24, localKeep: 2 });
+    expect(audits.at(-1)).toMatchObject({ action: "backups.defaults" });
+    expect(audits.at(-1)!.detail).toMatch(/Padrão dos projetos: a cada 6 h, na VPS: 8 cópias, fora: 30 cópias \(1 projeto segue o padrão\)/);
+    // não mexe nos itens marcados
+    await service.updateTarget(P1, { choices: { "db:db": false } }, "admin");
+    expect((await service.projectView("p1")).target.followsDefaults).toBe(true);
+    expect((await service.projectView("p1")).choices).toEqual({ "db:db": false });
+  });
+
+  it("projeto novo nasce com o padrão; com a escolha diferente do padrão, vira próprio", async () => {
+    await service.updateDefaults({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" }), project({ id: "p3", name: "Site", slug: "site" })];
+    await service.initProject("p2", true);
+    await service.initProject("p3", false);
+    expect((await service.projectView("p2")).target).toMatchObject({ enabled: true, frequencyHours: 6, localKeep: 8, followsDefaults: true });
+    expect((await service.projectView("p3")).target).toMatchObject({ enabled: false, frequencyHours: 6, localKeep: 8, followsDefaults: false });
+    // padrão desligado e projeto criado sem escolher: nasce desligado, seguindo o padrão
+    await service.updateDefaults({ enabled: false }, "admin");
+    projects.push(project({ id: "p4", name: "Api", slug: "api" }));
+    await service.initProject("p4");
+    expect((await service.projectView("p4")).target).toMatchObject({ enabled: false, followsDefaults: true });
+  });
+
+  it("salvar frequência ou cópias na aba do projeto vira configuração própria; Voltar ao padrão desfaz", async () => {
+    await service.updateDefaults({ frequencyHours: 6 }, "admin");
+    await service.updateTarget(P1, { enabled: true, frequencyHours: 12, localKeep: 3, remoteKeep: 4 }, "admin");
+    expect((await service.projectView("p1")).target).toMatchObject({ frequencyHours: 12, followsDefaults: false });
+    await service.useDefaults(P1, "admin");
+    expect((await service.projectView("p1")).target).toMatchObject({ frequencyHours: 6, localKeep: 2, remoteKeep: 5, followsDefaults: true });
+    expect(audits.at(-1)!.detail).toMatch(/Loja: voltou ao padrão dos projetos/);
+    await expect(service.useDefaults("panel", "admin")).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("Aplicar também nestes projetos: copia o padrão e marca como seguindo", async () => {
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" })];
+    await service.updateTarget(P1, { frequencyHours: 12, enabled: false }, "admin");
+    await service.updateTarget(P2, { localKeep: 9 }, "admin");
+    await service.updateDefaults({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    const r = await service.applyDefaults(["p1", "nao-existe"], "admin");
+    expect(r).toEqual({ applied: [{ id: "p1", name: "Loja" }], missing: ["nao-existe"] });
+    const s = await service.status();
+    expect(s.targets.find((t) => t.id === P1)).toMatchObject({ enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30, followsDefaults: true });
+    expect(s.targets.find((t) => t.id === P2)).toMatchObject({ localKeep: 9, followsDefaults: false });
+    expect(audits.at(-1)).toMatchObject({ action: "backups.defaults_applied", detail: "Padrão dos projetos aplicado em: Loja." });
+  });
+
+  it("valida o padrão", async () => {
+    await expect(service.updateDefaults({ frequencyHours: 8 as 6 }, "a")).rejects.toMatchObject({ code: "invalid_frequency" });
+    await expect(service.updateDefaults({ remoteKeep: 0 }, "a")).rejects.toMatchObject({ code: "invalid_keep" });
+  });
+
+  it("instalação antiga: quem tem 24 h, 2 e 5 e ligado segue o padrão; o resto fica próprio", async () => {
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" })];
+    const old = (enabled: boolean, frequencyHours: number) => ({
+      enabled,
+      frequencyHours,
+      localKeep: 2,
+      remoteKeep: 5,
+      lastSlot: null,
+      enabledSince: "2026-10-01T00:00:00Z",
+      choices: {},
+      extraFolders: [],
+      lastSuccessAt: null,
+      lastRemoteVerifiedAt: null,
+      lastStaleNoticeAt: null,
+    });
+    await writeFile(path.join(dir, "backups.json"), JSON.stringify({ targets: { [P1]: old(true, 24), [P2]: old(true, 12) } }));
+    service = build();
+    const s = await service.status();
+    expect(s.targets.find((t) => t.id === P1)!.followsDefaults).toBe(true);
+    expect(s.targets.find((t) => t.id === P2)!.followsDefaults).toBe(false);
+  });
+
+  it("desligar o padrão desliga quem segue; religar recomeça a contagem", async () => {
+    await service.updateDefaults({ enabled: false }, "admin");
+    expect((await service.projectView("p1")).target).toMatchObject({ enabled: false, nextRunAt: null });
+    await service.updateDefaults({ enabled: true }, "admin");
+    expect((await service.projectView("p1")).target.enabled).toBe(true);
+    expect(audits.at(-1)!.detail).toMatch(/ligado/);
+  });
+});
+
 describe("agenda, atraso e lembrete", () => {
   it("roda no horário (03:00) e não repete o mesmo horário", async () => {
     await service.tick();
@@ -1075,5 +1176,273 @@ describe("caminhos de exceção", () => {
     const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
     await service.idle();
     expect((await service.record(r.id)).warnings.join(" ")).toMatch(/db: 1 aviso\(s\) do banco/);
+  });
+});
+
+describe("fuso da VPS trocado", () => {
+  it("a agenda passa a contar no fuso novo sem disparar na hora o horário que já passou", async () => {
+    const prev = process.env.TZ;
+    try {
+      process.env.TZ = "Europe/Berlin";
+      // 12:00 em Berlim (07:00 em São Paulo): o das 03:00 de Berlim já rodou
+      now = Date.parse("2026-10-14T10:00:00Z");
+      const svc = build({ timezoneName: () => "Europe/Berlin" });
+      await svc.tick();
+      await svc.idle();
+      expect((await svc.status()).timezoneName).toBe("Europe/Berlin");
+      process.env.TZ = "America/Sao_Paulo";
+      await svc.timezoneChanged();
+      const before = (await svc.status()).history.length;
+      await svc.tick();
+      await svc.idle();
+      expect((await svc.status()).history.length).toBe(before);
+      expect((await svc.status()).targets[0]!.nextRunAt).toBe("2026-10-15T06:00:00.000Z");
+      await svc.flush();
+    } finally {
+      process.env.TZ = prev;
+    }
+  });
+
+  it("sem quem informe o fuso, a situação usa o TZ do processo", async () => {
+    expect((await service.status()).timezoneName).toBe(process.env.TZ || "UTC");
+  });
+});
+
+describe("conferir backups", () => {
+  const P1 = projectTargetId("p1");
+
+  it("Conferir um backup: abre a cópia da VPS, baixa e abre a externa com a senha, e guarda o resultado", async () => {
+    await connect();
+    const b = await backup();
+    // a conferência automática depois do envio já conta como "conferido em"
+    let line = (await service.status()).history.find((r) => r.id === b.id)!;
+    expect(line).toMatchObject({ localExists: true, localCheck: null, remoteCheck: { status: "ok", reason: null } });
+    now += H;
+    const v = await service.verify(P1, { fileName: b.fileName! }, "admin");
+    expect(v.operation).toBe("verify");
+    await service.idle();
+    const done = await service.record(v.id);
+    expect(done.status).toBe("success");
+    expect(done.verify!.summary).toEqual({ ok: 2, failed: 0, missing: 0, needsPassword: 0 });
+    expect(done.verify!.items.map((i) => [i.where, i.status])).toEqual([
+      ["local", "ok"],
+      ["remote", "ok"],
+    ]);
+    expect(done.steps.map((s) => s.label)).toEqual([`Loja · ${b.fileName} · cópia da VPS`, `Loja · ${b.fileName} · cópia externa`]);
+    line = (await service.status()).history.find((r) => r.id === b.id)!;
+    expect(line.localCheck).toEqual({ status: "ok", at: new Date(now).toISOString(), reason: null });
+    expect(line.remoteCheck!.at).toBe(new Date(now).toISOString());
+    expect((await service.projectView("p1")).history.find((r) => r.id === b.id)!.localCheck!.status).toBe("ok");
+    // a senha passou só pela memória: nada de senha na auditoria
+    expect(audits.map((a) => a.action)).toEqual(expect.arrayContaining(["backups.verify", "backups.verify_result"]));
+    expect(JSON.stringify(audits)).not.toContain(PW);
+    expect(audits.find((a) => a.action === "backups.verify_result")!.detail).toBe("Conferência de Loja: 2 íntegra(s).");
+    expect(archiver.calls.filter((c) => c.op === "test").at(-1)).toEqual({ op: "test", password: PW });
+  });
+
+  it("cópia estragada: falha com o motivo, aparece ao lado do backup e avisa pelas notificações", async () => {
+    await connect();
+    const b = await backup();
+    // a cópia da VPS mudou de conteúdo depois do backup
+    const local = path.join(dir, "backups", "loja", b.fileName!);
+    const raw = JSON.parse(await readFile(local, "utf8"));
+    raw.files["manifesto.json"] = Buffer.from("{}").toString("base64");
+    await writeFile(local, JSON.stringify(raw));
+    // e a externa foi trocada por outra do mesmo tamanho
+    const key = `TWS Panel Backups/loja/${b.fileName}`;
+    const remote = storage.objects.get(key)!;
+    storage.objects.set(key, Buffer.from(remote.toString("utf8").replace(/[a-z]/, (c) => (c === "a" ? "b" : "a"))));
+    notices = [];
+    const v = await service.verify(P1, { fileName: b.fileName! }, "admin");
+    await service.idle();
+    const done = await service.record(v.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toBe("2 cópia(s) com problema.");
+    expect(done.verify!.items.map((i) => i.reason)).toEqual([
+      expect.stringMatching(/tamanho mudou|hash diferente/),
+      "O arquivo baixado não bate com o enviado (hash diferente).",
+    ]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ kind: "backup_failed", key: "backup-verify-failed:project:p1", path: "/projects/p1/backups" });
+    expect(notices[0]!.title).toBe("Conferência dos backups: 2 cópias com problema");
+    const line = (await service.status()).history.find((r) => r.id === b.id)!;
+    expect(line.localCheck!.status).toBe("failed");
+    expect(line.remoteCheck!.status).toBe("failed");
+  });
+
+  it("mesmo tamanho e hash trocados: o 7z t é que pega; externa sem senha onde devia ter", async () => {
+    await connect();
+    const b = await backup();
+    const key = `TWS Panel Backups/loja/${b.fileName}`;
+    // esquece o que foi gravado (backup de antes desta versão): só o 7z t confere
+    const cfg = (service as unknown as { config: { checks: Record<string, unknown> } }).config;
+    cfg.checks = {};
+    storage.objects.set(key, Buffer.from("não é 7z"));
+    await writeFile(path.join(dir, "backups", "loja", b.fileName!), "também não");
+    const v = await service.verify(P1, { fileName: b.fileName! }, "admin");
+    await service.idle();
+    const items = (await service.record(v.id)).verify!.items;
+    expect(items.every((i) => i.status === "failed" && /7-Zip não conseguiu abrir/.test(i.reason!))).toBe(true);
+    // cópia externa cifrada trocada por uma sem senha
+    const c = await backup();
+    const key2 = `TWS Panel Backups/loja/${c.fileName}`;
+    const plain = await readFile(path.join(dir, "backups", "loja", c.fileName!));
+    storage.objects.set(key2, plain);
+    (service as unknown as { config: { checks: Record<string, { remote?: { size?: number; sha256?: string } }> } }).config.checks[`loja/${c.fileName}`]!.remote = { encrypted: true } as never;
+    const w = await service.verify(P1, { fileName: c.fileName!, where: "remote" }, "admin");
+    await service.idle();
+    expect((await service.record(w.id)).verify!.items[0]!.reason).toMatch(/saiu cifrada e agora abre sem senha/);
+  });
+
+  it("backup de antes de uma troca de senha: pede a senha da época e abre com ela", async () => {
+    await connect();
+    const b = await backup();
+    await service.setPassword("outra-senha-bem-longa-99", true, "admin");
+    const v = await service.verify(P1, { fileName: b.fileName!, where: "remote" }, "admin");
+    await service.idle();
+    const first = await service.record(v.id);
+    expect(first.status).toBe("warning");
+    expect(first.verify!.summary.needsPassword).toBe(1);
+    expect(first.verify!.items[0]!.reason).toMatch(/senha da época/);
+    expect(first.warnings.join(" ")).toMatch(/senha da época/);
+    const wrong = await service.verify(P1, { fileName: b.fileName!, where: "remote", password: "chute-errado-123" }, "admin");
+    await service.idle();
+    expect((await service.record(wrong.id)).verify!.items[0]!.reason).toMatch(/senha digitada também não abre/);
+    const ok = await service.verify(P1, { fileName: b.fileName!, where: "remote", password: PW }, "admin");
+    await service.idle();
+    expect((await service.record(ok.id)).verify!.items[0]!.status).toBe("ok");
+    expect(JSON.stringify(audits)).not.toContain(PW);
+  });
+
+  it("Conferir todos (do item e geral): cada cópia, as que a retenção apagou e o resumo", async () => {
+    await connect();
+    const a = await backup();
+    now += 2 * H;
+    await backup();
+    now += 2 * H;
+    const c = await backup(); // a retenção apagou a primeira da VPS
+    expect(existsSync(path.join(dir, "backups", "loja", a.fileName!))).toBe(false);
+    const v = await service.verify(P1, {}, "admin");
+    await service.idle();
+    const done = await service.record(v.id);
+    expect(done.verify!.items.filter((i) => i.where === "local")).toHaveLength(2);
+    expect(done.verify!.items.filter((i) => i.where === "remote")).toHaveLength(3);
+    expect(done.verify!.items[0]!.fileName).toBe(c.fileName);
+    expect(done.verify!.summary).toEqual({ ok: 5, failed: 0, missing: 0, needsPassword: 0 });
+    // a VPS já não tem a primeira: conferir só ela diz que não existe mais
+    const gone = await service.verify(P1, { fileName: a.fileName!, where: "local" }, "admin");
+    await service.idle();
+    expect((await service.record(gone.id)).verify!.items[0]).toMatchObject({ status: "missing", reason: expect.stringMatching(/retenção/) });
+    // geral: painel, e-mail e projetos
+    await backup("panel");
+    const all = await service.verify("all", {}, "admin");
+    expect(all).toMatchObject({ target: "all", targetName: "Todos os backups" });
+    await service.idle();
+    const sum = (await service.record(all.id)).verify!;
+    expect(new Set(sum.items.map((i) => i.targetName))).toEqual(new Set(["Painel", "Loja"]));
+    expect(sum.summary.failed).toBe(0);
+  });
+
+  it("externa apagada pela retenção, sem nada para conferir e listagem que falha", async () => {
+    await connect();
+    const b = await backup();
+    storage.objects.delete(`TWS Panel Backups/loja/${b.fileName}`);
+    const v = await service.verify(P1, { fileName: b.fileName!, where: "remote" }, "admin");
+    await service.idle();
+    const done = await service.record(v.id);
+    expect(done.verify!.items[0]).toMatchObject({ status: "missing" });
+    expect(done.status).toBe("success");
+    expect(notices.filter((n) => n.key.startsWith("backup-verify"))).toHaveLength(0);
+    const none = await service.verify("email", {}, "admin");
+    await service.idle();
+    expect((await service.record(none.id)).warnings).toEqual(["Nenhum backup para conferir."]);
+    const ghost = await service.verify(P1, { fileName: "2020-01-01_03-00.7z", where: "local" }, "admin");
+    await service.idle();
+    expect((await service.record(ghost.id)).verify!.items[0]!.status).toBe("missing");
+    storage.list = async () => Promise.reject(new StorageError("O armazenamento não respondeu.", "unreachable"));
+    const broken = await service.verify(P1, {}, "admin");
+    await service.idle();
+    const br = await service.record(broken.id);
+    expect(br.warnings.join(" ")).toMatch(/não foi possível listar o armazenamento externo/);
+    expect(br.verify!.items.every((i) => i.where === "local")).toBe(true);
+  });
+
+  it("download que falha, disco cheio e cópia da VPS que pede senha", async () => {
+    await connect();
+    const b = await backup();
+    storage.download = async () => Promise.reject(new StorageError("Chave recusada.", "invalid_credentials"));
+    const v = await service.verify(P1, { fileName: b.fileName!, where: "remote" }, "admin");
+    await service.idle();
+    expect((await service.record(v.id)).verify!.items[0]!.reason).toBe("Não foi possível baixar do armazenamento: Chave recusada.");
+    free = 0;
+    const full = await service.verify(P1, { fileName: b.fileName!, where: "remote" }, "admin");
+    await service.idle();
+    expect((await service.record(full.id)).verify!.items[0]!.reason).toMatch(/Espaço em disco insuficiente/);
+    free = 50 * 1024 ** 3;
+    const local = path.join(dir, "backups", "loja", b.fileName!);
+    const raw = JSON.parse(await readFile(local, "utf8"));
+    raw.password = "alguma";
+    await writeFile(local, JSON.stringify(raw));
+    (service as unknown as { config: { checks: Record<string, unknown> } }).config.checks = {};
+    const pw = await service.verify(P1, { fileName: b.fileName!, where: "local" }, "admin");
+    await service.idle();
+    expect((await service.record(pw.id)).verify!.items[0]!.reason).toMatch(/pede senha/);
+  });
+
+  it("tamanho diferente do listado; erro do 7-Zip que não é senha", async () => {
+    await connect();
+    const b = await backup();
+    const key = `TWS Panel Backups/loja/${b.fileName}`;
+    (service as unknown as { config: { checks: Record<string, unknown> } }).config.checks = {};
+    const realList = storage.list.bind(storage);
+    storage.list = async (prefix) => (await realList(prefix)).map((o) => ({ ...o, size: o.size + 10 }));
+    const v = await service.verify(P1, { fileName: b.fileName!, where: "remote" }, "admin");
+    await service.idle();
+    expect((await service.record(v.id)).verify!.items[0]!.reason).toMatch(/o enviado tinha/);
+    storage.list = realList;
+    expect(storage.objects.has(key)).toBe(true);
+    const test = archiver.test.bind(archiver);
+    let n = 0;
+    archiver.test = async (file, pw) => {
+      n++;
+      if (pw !== null) throw new ArchiveError("O 7-Zip falhou (código 2): Data Error.", "failed");
+      return test(file, pw);
+    };
+    const w = await service.verify(P1, { fileName: b.fileName!, where: "remote" }, "admin");
+    await service.idle();
+    expect((await service.record(w.id)).verify!.items[0]!.reason).toMatch(/Data Error/);
+    expect(n).toBeGreaterThan(1);
+  });
+
+  it("validação do pedido e o mesmo pedido duas vezes entra uma só", async () => {
+    await expect(service.verify(P1, { fileName: "../x.7z" }, "admin")).rejects.toMatchObject({ statusCode: 400 });
+    await expect(service.verify("all", { fileName: "2026-10-14_03-00.7z" }, "admin")).rejects.toMatchObject({ statusCode: 400 });
+    await expect(service.verify(P1, { where: "remote" }, "admin")).rejects.toMatchObject({ statusCode: 409, code: "no_destination" });
+    await expect(service.verify("project:nao-existe", {}, "admin")).rejects.toMatchObject({ statusCode: 404 });
+    const b = await backup();
+    const first = await service.verify(P1, { fileName: b.fileName! }, "admin");
+    const again = await service.verify(P1, { fileName: b.fileName! }, "admin");
+    expect(again.id).toBe(first.id);
+    const other = await service.verify(P1, {}, "admin");
+    expect(other.id).not.toBe(first.id);
+    await service.idle();
+    expect(audits.filter((a) => a.action === "backups.verify")).toHaveLength(2);
+    // geral sem servidor de e-mail: não entra o e-mail
+    docker.states["paas-stalwart"] = { exists: false, running: false };
+    const all = await service.verify("all", { where: "local" }, "admin");
+    await service.idle();
+    expect((await service.record(all.id)).verify!.items.every((i) => i.target !== "email")).toBe(true);
+  });
+
+  it("a retenção esquece o hash das cópias apagadas", async () => {
+    await connect();
+    service = build();
+    await service.updateTarget(P1, { localKeep: 1, remoteKeep: 1 }, "admin");
+    const a = await backup();
+    now += H;
+    await backup();
+    const cfg = (service as unknown as { config: { checks: Record<string, unknown> } }).config;
+    expect(Object.keys(cfg.checks)).toHaveLength(1);
+    expect(cfg.checks[`loja/${a.fileName}`]).toBeUndefined();
   });
 });

@@ -31,6 +31,14 @@ export interface ComboboxProps {
 
 type Item = { kind: "option"; option: ComboboxOption } | { kind: "create"; value: string };
 
+/** Busca sem diferença de maiúsculas, acentos nem "_" ("sao paulo" acha "America/Sao_Paulo" e "São Paulo"). */
+const fold = (t: string) =>
+  t
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/_/g, " ")
+    .toLowerCase();
+
 const selectable = (item: Item | undefined): item is Item => !!item && !(item.kind === "option" && item.option.disabled);
 
 /** Próximo índice escolhível a partir de `from`, andando `step` (com volta); -1 = nenhum. */
@@ -77,9 +85,9 @@ export function Combobox({
 
   const itemsFor = React.useCallback(
     (text: string): Item[] => {
-      const q = text.trim().toLowerCase();
+      const q = fold(text.trim());
       const list: Item[] = options
-        .filter((o) => !q || o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+        .filter((o) => !q || fold(o.label).includes(q) || fold(o.value).includes(q))
         .map((option) => ({ kind: "option", option }));
       const created = normalizeCreate(text);
       if (allowCreate && created && !options.some((o) => o.value === created || o.label === created)) {

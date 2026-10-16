@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-14",
+  "atualizadoEm": "2026-10-15",
   "comoUsarEstaDocumentacao": [
     "Retomando o trabalho? Leia _ESTADO-DA-SESSAO.md ANTES de tudo: ele diz onde o trabalho parou, o que está pendente e por quê.",
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
@@ -271,6 +271,23 @@
         "apps/server/src/routes/backups.ts",
         "apps/web/src/pages/settings/BackupSettings.tsx",
         "apps/web/src/components/project/ProjectBackupsCard.tsx"
+      ]
+    },
+    {
+      "id": "fuso",
+      "titulo": "Fuso horário",
+      "resumo": "Fuso da VPS trocado pelo painel (host bridge), usado na hora pelo painel e pela agenda dos backups, e fuso de cada projeto (TZ injetado no deploy, com reinício sem build).",
+      "pontoDeEntrada": {
+        "api": "GET /api/timezone",
+        "web": "/settings/timezone"
+      },
+      "indice": "fuso/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/timezone-service.ts",
+        "apps/server/src/routes/timezone.ts",
+        "packages/deploy/src/compose-timezone.ts",
+        "apps/web/src/pages/settings/TimezoneSettings.tsx",
+        "apps/web/src/components/project/ProjectTimezoneCard.tsx"
       ]
     }
   ],

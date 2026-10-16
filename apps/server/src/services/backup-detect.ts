@@ -25,7 +25,14 @@ export interface ContainerInspect {
   Name: string;
   Config: { Image: string; Env: string[] | null; Labels: Record<string, string> | null };
   Mounts: Array<{ Type: string; Name?: string; Source: string; Destination: string; RW?: boolean }>;
+  /** tmpfs do compose (`tmpfs:`) não aparece em Mounts, só aqui. */
+  HostConfig?: { Tmpfs?: Record<string, string> | null };
   State: { Running: boolean };
+}
+
+/** Todos os pontos de montagem do container: volumes, binds e tmpfs. */
+export function mountPoints(c: ContainerInspect): string[] {
+  return [...c.Mounts.map((m) => m.Destination), ...Object.keys(c.HostConfig?.Tmpfs ?? {})];
 }
 
 export function serviceOf(c: ContainerInspect): string {
@@ -124,6 +131,15 @@ function mountReason(m: { destination: string; source: string; isFile: boolean }
 
 /** Caminhos que mudam sozinhos (temporário, cache, log, pid) e não são dados. */
 const IGNORE_PREFIXES = ["/tmp", "/var/tmp", "/var/cache", "/var/log", "/run", "/var/run", "/proc", "/sys", "/dev", "/etc", "/var/lib/apt", "/var/lib/dpkg"];
+/** Arquivos que o próprio Docker cria em todo container. */
+const DOCKER_FILES = new Set([
+  "/.dockerenv",
+  "/usr/sbin/docker-init", // init: true
+  "/sbin/docker-init",
+  "/etc/hostname",
+  "/etc/hosts",
+  "/etc/resolv.conf",
+]);
 const IGNORE_PATTERNS = [
   /^\/root\/\./,
   /^\/home\/[^/]+\/\./,
@@ -139,22 +155,32 @@ function under(p: string, base: string): boolean {
 
 /**
  * Heurística: caminhos Adicionados/alterados no container (não apagados),
- * fora de volumes e fora dos óbvios temporários. Pastas que só aparecem
- * como "C" por terem algo dentro são descartadas (fica o arquivo).
+ * fora de volumes e fora dos óbvios temporários.
+ *  - O que o Docker cria sozinho (docker-init, .dockerenv, hosts…) não conta.
+ *  - Ponto de montagem e pasta pai de um ponto de montagem também não: o
+ *    Docker cria a pasta para montar ali (inclusive um arquivo único).
+ *  - Uma pasta que tem qualquer outro caminho do diff dentro só conta pelo
+ *    que tem dentro: "C /usr/sbin" por causa do docker-init, "C /srv" por
+ *    um arquivo apagado.
  */
 export function unsavedWritesFromDiff(diff: string, mountDestinations: string[]): string[] {
-  const paths: string[] = [];
+  const all: Array<{ kind: string; path: string }> = [];
   for (const line of diff.split("\n")) {
-    const m = /^([AC]) (\/.*)$/.exec(line.trim());
-    if (!m) continue;
-    const p = m[2]!;
+    const m = /^([ACD]) (\/.*)$/.exec(line.trim());
+    if (m) all.push({ kind: m[1]!, path: m[2]! });
+  }
+  const hasChild = (p: string) => all.some((o) => o.path !== p && o.path.startsWith(p === "/" ? "/" : `${p}/`));
+  const paths: string[] = [];
+  for (const { kind, path: p } of all) {
+    if (kind === "D") continue;
+    if (DOCKER_FILES.has(p)) continue;
     if (IGNORE_PREFIXES.some((base) => under(p, base))) continue;
     if (IGNORE_PATTERNS.some((re) => re.test(p))) continue;
-    if (mountDestinations.some((d) => under(p, d))) continue;
+    if (mountDestinations.some((d) => under(p, d) || under(d, p))) continue;
+    if (hasChild(p)) continue;
     paths.push(p);
   }
-  const set = [...new Set(paths)];
-  return set.filter((p) => !set.some((other) => other !== p && other.startsWith(`${p}/`))).sort();
+  return [...new Set(paths)].sort();
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +242,7 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
         reason,
       });
     }
-    const paths = unsavedWritesFromDiff(input.diffs[service] ?? "", c.Mounts.map((m) => m.Destination));
+    const paths = unsavedWritesFromDiff(input.diffs[service] ?? "", mountPoints(c));
     if (paths.length > 0) unsavedWrites.push({ service, count: paths.length, samples: paths.slice(0, 5) });
   }
   return {

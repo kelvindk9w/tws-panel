@@ -1,5 +1,6 @@
 /**
- * backups.ts — Configurações → Backups e a aba Backups do projeto (todas com sessão).
+ * backups.ts — Configurações → Backups e a aba Backups do projeto (todas com sessão;
+ * só com o setup token, sem sessão, respondem 401).
  *  GET    /api/backups                          situação: destino, criptografia, itens, fila, histórico
  *  PUT    /api/backups/destination              armazenamento S3/R2 (testa antes de salvar; a chave secreta fica cifrada)
  *  POST   /api/backups/destination/test         "Testar conexão"
@@ -9,10 +10,15 @@
  *  GET    /api/backups/password/suggest         "Sugerir uma frase forte"
  *  POST   /api/backups/password/reveal          ver a senha, confirmando a senha de login
  *  POST   /api/backups/password/test            "Testar minha senha"
+ *  PUT    /api/backups/defaults                 "Padrão dos projetos" (frequência, cópias, ligado)
+ *  POST   /api/backups/defaults/apply           "Aplicar também nestes projetos" ({ projectIds })
  *  PUT    /api/backups/targets/:target          frequência, retenção, ligado, itens marcados, pastas extras
+ *  POST   /api/backups/targets/:target/use-defaults  "Voltar ao padrão" (só projeto)
  *  POST   /api/backups/targets/:target/run      "Fazer backup agora"
  *  GET    /api/backups/targets/:target/points   datas disponíveis para restaurar (VPS e externo)
  *  POST   /api/backups/targets/:target/restore  restaurar (confirmação digitando o nome)
+ *  POST   /api/backups/targets/:target/verify   "Conferir" um backup ({ fileName }) ou todos do item (sem fileName)
+ *  POST   /api/backups/verify                   "Conferir todos" de todos os itens
  *  GET    /api/backups/records/:id              progresso de um backup/restauração
  *  GET    /api/backups/projects/:id             aba Backups do projeto
  *  POST   /api/backups/projects/:id/detect      detectar de novo
@@ -27,10 +33,13 @@ import {
   BACKUP_FREQUENCIES,
   MAX_BACKUP_KEEP,
   MAX_BACKUP_PASSWORD_LENGTH,
+  type BackupApplyDefaultsRequest,
+  type BackupDefaultsRequest,
   type BackupDestinationRequest,
   type BackupPasswordRequest,
   type BackupRestoreRequest,
   type BackupTargetSettingsRequest,
+  type BackupVerifyRequest,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import type { HttpError } from "../services/http-error.js";
@@ -58,6 +67,35 @@ const destinationSchema = {
       bucket: { type: "string", minLength: 3, maxLength: 63, pattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" },
       accessKeyId: { type: "string", minLength: 3, maxLength: 200, pattern: "^\\S+$" },
       secretAccessKey: { type: "string", maxLength: 300 },
+    },
+  },
+} as const;
+
+const defaultsSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: { type: "boolean" },
+      frequencyHours: { type: "integer", enum: [...BACKUP_FREQUENCIES] },
+      localKeep: { type: "integer", minimum: 1, maximum: MAX_BACKUP_KEEP },
+      remoteKeep: { type: "integer", minimum: 1, maximum: MAX_BACKUP_KEEP },
+    },
+  },
+} as const;
+
+const applyDefaultsSchema = {
+  body: {
+    type: "object",
+    required: ["projectIds"],
+    additionalProperties: false,
+    properties: {
+      projectIds: {
+        type: "array",
+        minItems: 1,
+        maxItems: 500,
+        items: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" },
+      },
     },
   },
 } as const;
@@ -111,6 +149,17 @@ const restoreSchema = {
   },
 } as const;
 
+/** Corpo do "Conferir": a senha da época só entra (nunca é guardada nem auditada). */
+const verifyBody = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    fileName: { type: "string", minLength: 1, maxLength: 64 },
+    where: { type: "string", enum: ["local", "remote", "both"] },
+    password: { type: "string", minLength: 1, maxLength: MAX_BACKUP_PASSWORD_LENGTH },
+  },
+} as const;
+
 function sendError(reply: FastifyReply, err: unknown, log: (e: unknown) => void): FastifyReply {
   const e = err as Partial<HttpError>;
   if (!e.statusCode) log(err);
@@ -124,6 +173,18 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const service = app.backupService;
   const logError = (err: unknown) => app.log.error({ err }, "backups: falha inesperada");
+
+  // Backups pedem uma conta: quem fez o pedido vai para a auditoria e "Ver a
+  // senha" confere a senha de login. Com o setup pendente, o plugin de auth
+  // deixa passar só com o setup token, sem sessão: aqui isso vira 401.
+  app.addHook("onRequest", async (request, reply) => {
+    if (!request.session) {
+      return reply.code(401).send({
+        error: "unauthorized",
+        message: "Entre com a conta de administrador para usar os backups.",
+      });
+    }
+  });
 
   type Req = { session: { username: string; userId: string } | null; body: unknown; params: unknown };
   const handle =
@@ -221,6 +282,26 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
   );
 
   app.put(
+    "/api/backups/defaults",
+    { schema: defaultsSchema },
+    handle(async (req, actor) => {
+      await service.updateDefaults(req.body as BackupDefaultsRequest, actor);
+    }),
+  );
+  app.post(
+    "/api/backups/defaults/apply",
+    { schema: applyDefaultsSchema },
+    handle((req, actor) => service.applyDefaults((req.body as BackupApplyDefaultsRequest).projectIds, actor)),
+  );
+  app.post(
+    "/api/backups/targets/:target/use-defaults",
+    { schema: { params: targetParams } },
+    handle(async (req, actor) => {
+      await service.useDefaults(target(req), actor);
+    }),
+  );
+
+  app.put(
     "/api/backups/targets/:target",
     { schema: settingsSchema },
     handle(async (req, actor) => {
@@ -243,6 +324,20 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
     handle((req, actor) => service.restore(target(req), req.body as BackupRestoreRequest & { password?: string }, actor), {
       noStore: true,
     }),
+  );
+
+  app.post(
+    "/api/backups/targets/:target/verify",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } }, schema: { params: targetParams, body: verifyBody } },
+    handle((req, actor) => service.verify(target(req), (req.body ?? {}) as BackupVerifyRequest, actor), { noStore: true }),
+  );
+  app.post(
+    "/api/backups/verify",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      schema: { body: { ...verifyBody, properties: { where: verifyBody.properties.where, password: verifyBody.properties.password } } },
+    },
+    handle((req, actor) => service.verify("all", (req.body ?? {}) as BackupVerifyRequest, actor), { noStore: true }),
   );
 
   app.get("/api/backups/records/:id", { schema: { params: idParams } }, handle((req) => service.record((req.params as { id: string }).id)));

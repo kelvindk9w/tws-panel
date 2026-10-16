@@ -9,6 +9,16 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 15/10/2026 — branch `feat/fuso-conferir-backup` (subagente, worktree isolado)
+- **Configurações → Fuso horário**: mostra o fuso e a hora da VPS e troca o fuso pelo host bridge (comando novo na allowlist, auditado). Vale na hora para o painel e para a agenda dos backups. Os projetos marcados reiniciam com o fuso novo.
+- O fuso é lido pelo host bridge e guardado em `data/timezone.json`. A montagem `/host/etc/localtime`, que ficava presa no fuso antigo, virou só reserva.
+- Fuso por projeto: "Padrão da imagem", "Igual ao da VPS" ou um fuso específico. O TZ entra no deploy sem passar por cima do TZ que o projeto já define. O botão "Reiniciar com o fuso novo" recria os containers sem build. A tela avisa quando a imagem não tem tzdata.
+- O assistente de instalação mostra o fuso detectado e deixa trocar sem travar.
+- **Conferir backups**: um backup, todos de um item ou todos. A cópia da VPS passa pelo `7zz t`. A externa é baixada e comparada (tamanho e SHA-256) antes do `7zz t`. Se a senha guardada não abrir, pede a senha da época. O resultado fica ao lado do backup, e uma falha avisa por `backup_failed`.
+- Selo da cópia externa ao lado do "Concluído" na lista de backups.
+- Detalhes: `fuso/`, `backups/conferir.json` e `_RELATORIO-fuso-conferir-backup.md`, com o que foi testado de verdade e o passo a passo na VPS.
+- Falta validar a troca do fuso numa VPS real (systemd e nsenter) e com o R2 real. Sem push nem PR.
+
 ## Atualização de 14/10/2026 — branch `feat/backups` (subagente, worktree isolado)
 - Fase 1 dos backups: **Configurações → Backups**, aba **Backups** do projeto, "Fazer backup: Sim/Não" na criação e passo 6 do roteiro ("Backups fora da VPS").
 - Entram no backup: bancos detectados pela imagem (dump dentro do container), volumes e pastas escolhidos, o painel (`data/` sem as cópias) e o e-mail (Stalwart parado por instantes e webmail).

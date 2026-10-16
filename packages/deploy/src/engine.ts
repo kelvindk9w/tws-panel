@@ -10,7 +10,7 @@
  *  - projetos compose adotados: compose project "paas-<slug>" + override gerado
  *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -34,6 +34,7 @@ import { composeOverrideYaml, strippedProxyPortServices } from "./compose-overri
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
+import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
 
 export interface EngineContext extends IngestContext {
@@ -68,6 +69,11 @@ export interface EngineContext extends IngestContext {
    * entrega segredos da carteira ao front de propósito).
    */
   injectEnvForProject?: (project: Project) => Promise<Record<string, string>>;
+  /**
+   * Fuso horário que o projeto recebe (campo "Fuso horário" do projeto):
+   * `TZ=<fuso>` nos serviços que não definem TZ. null/ausente = o da imagem.
+   */
+  timezoneForProject?: (project: Project) => Promise<string | null>;
   /**
    * Hostnames do servidor de e-mail (mail.<domínio>) que o Caddy central
    * precisa servir para emitir o certificado deles. Consultado a cada
@@ -244,6 +250,8 @@ export class DeployEngine {
       onLog(`Injetando ${envKeys.length} variável(is) de ambiente do projeto (${envKeys.join(", ")}).\n`);
     }
 
+    const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
+
     let upstream: string;
     switch (type) {
       case "static":
@@ -268,11 +276,12 @@ export class DeployEngine {
           onLog,
           extraEnv,
           (await this.ctx.injectEnvForProject?.(project)) ?? {},
+          timezone,
         );
         break;
       case "dockerfile":
         onLog("\n=== Etapa 3/5 · docker build (Dockerfile) ===\n");
-        upstream = await this.deployDockerfile(project, src, onLog, extraEnv);
+        upstream = await this.deployDockerfile(project, src, onLog, extraEnv, timezone);
         break;
     }
 
@@ -452,7 +461,77 @@ export class DeployEngine {
     onLog: LogFn,
     dotenv: Record<string, string> = {},
     extraEnv: Record<string, string> = {},
+    timezone: string | null = null,
   ): Promise<string> {
+    const { proxyPort, composeContent } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
+    const args = this.composeArgs(project, src);
+    let output = "";
+    const code = await runStream("docker", [...args, "up", "-d", "--build"], (chunk) => {
+      output += chunk;
+      onLog(chunk);
+    });
+    if (code !== 0) await this.composeUpFailed(args, output, code, composeContent, onLog);
+    return `${project.slug}:${proxyPort}`;
+  }
+
+  /** O compose falhou: variáveis faltando ou "por que falhou" de cada serviço. */
+  private async composeUpFailed(args: string[], output: string, code: number, composeContent: string, onLog: LogFn): Promise<never> {
+    const missing = missingFromComposeOutput(output);
+    if (missing.length > 0) {
+      throw new Error(
+        `faltam variáveis obrigatórias do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto` +
+          (missing.some((m) => m.startsWith("SMTP_") || m === "MAIL_FROM")
+            ? " (SMTP_* e MAIL_FROM o painel preenche sozinho se você ativar a seção E-mail do projeto)"
+            : "") +
+          " e faça o deploy de novo.",
+      );
+    }
+    // Por que falhou: estado de cada serviço, fim do log e healthcheck de
+    // quem ficou unhealthy/parou (validação real: "wallet is unhealthy"
+    // sem nenhuma linha do wallet no log do painel).
+    onLog("\n=== Diagnóstico: estado dos serviços depois da falha ===\n");
+    const summary = await diagnoseComposeFailure(args, startableServices(composeContent), onLog, run);
+    throw new Error(summary ? `docker compose up falhou: ${summary}.` : `docker compose up falhou (exit ${code}).`);
+  }
+
+  /** TZ do fuso do projeto por serviço (quem já define TZ fica como está). */
+  private composeTimezone(
+    src: string,
+    composeContent: string,
+    dotenv: Record<string, string>,
+    timezone: string | null,
+    onLog: LogFn,
+  ): Record<string, Record<string, string>> {
+    if (!timezone) return {};
+    const root = path.resolve(src);
+    const definitions = composeTimezoneDefinitions(composeContent, dotenv, (rel) => {
+      const file = path.resolve(root, rel);
+      if (!file.startsWith(root + path.sep)) return null;
+      try {
+        return readFileSync(file, "utf8");
+      } catch {
+        return null;
+      }
+    });
+    const serviceEnv = timezoneServiceEnv(composeServiceList(composeContent), definitions, timezone);
+    const names = Object.keys(serviceEnv);
+    if (names.length > 0) onLog(`Fuso horário: TZ=${timezone} nos serviços ${names.join(", ")}.\n`);
+    for (const d of definitions) {
+      const where = d.where === "compose" ? "no compose" : d.where === "variables" ? "nas Variáveis" : "num env_file";
+      onLog(`Fuso horário: o serviço ${d.service} já define TZ=${d.value} (${where}); mantido.\n`);
+    }
+    return serviceEnv;
+  }
+
+  /** Gera o paas.override.yml e o .env do compose (deploy e reinício com a configuração nova). */
+  private async writeComposeFiles(
+    project: Project,
+    src: string,
+    onLog: LogFn,
+    dotenv: Record<string, string>,
+    extraEnv: Record<string, string>,
+    timezone: string | null,
+  ): Promise<{ proxyPort: number; composeContent: string }> {
     const composeFile = project.detection?.composeFile;
     if (!composeFile) throw new Error("Nenhum arquivo compose detectado.");
     const proxyService = project.proxyService ?? project.detection?.proxyService;
@@ -477,6 +556,7 @@ export class DeployEngine {
       env: extraEnv,
       envServices,
       ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
+      serviceEnv: this.composeTimezone(src, composeContent, dotenv, timezone, onLog),
     });
     await writeFile(overrideFile, overrideYaml, { encoding: "utf8", mode: 0o600 });
     onLog(`Override gerado em ${overrideFile} (serviço "${proxyService}" na ${PAAS_NETWORK}).\n`);
@@ -510,33 +590,53 @@ export class DeployEngine {
       onLog(`Variáveis gravadas no .env do projeto (${dotenvKeys.join(", ")}).\n`);
     }
     if (env.note) onLog(`Aviso: ${env.note}\n`);
+    return { proxyPort, composeContent };
+  }
 
-    const args = this.composeArgs(project, src);
-    let output = "";
-    const code = await runStream("docker", [...args, "up", "-d", "--build"], (chunk) => {
-      output += chunk;
-      onLog(chunk);
-    });
-    if (code !== 0) {
-      const missing = missingFromComposeOutput(output);
-      if (missing.length > 0) {
-        throw new Error(
-          `faltam variáveis obrigatórias do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto` +
-            (missing.some((m) => m.startsWith("SMTP_") || m === "MAIL_FROM")
-              ? " (SMTP_* e MAIL_FROM o painel preenche sozinho se você ativar a seção E-mail do projeto)"
-              : "") +
-            " e faça o deploy de novo.",
-        );
+  /**
+   * Recria os containers com a configuração atual (variáveis, e-mail, fuso),
+   * SEM baixar código nem refazer o build: é o necessário para um TZ novo
+   * entrar (`docker restart` mantém o ambiente antigo). Compose: `up -d
+   * --no-build` só recria quem mudou. Dockerfile: o mesmo container de
+   * novo, da imagem já construída. Site estático: nada a fazer.
+   */
+  async recreate(project: Project, onLog: LogFn): Promise<void> {
+    const type = project.detection?.type;
+    const src = projectSrcDir(this.ctx, project);
+    const extraEnv = (await this.ctx.envForProject?.(project)) ?? {};
+    const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
+    if (type === "compose") {
+      const { composeContent } = await this.writeComposeFiles(
+        project,
+        src,
+        onLog,
+        extraEnv,
+        (await this.ctx.injectEnvForProject?.(project)) ?? {},
+        timezone,
+      );
+      const args = this.composeArgs(project, src);
+      let output = "";
+      const code = await runStream("docker", [...args, "up", "-d", "--no-build"], (chunk) => {
+        output += chunk;
+        onLog(chunk);
+      });
+      if (code !== 0) {
+        if (/no such image|image .* not found|must be built|pull access denied/i.test(output)) {
+          throw new Error("a imagem de um serviço não existe mais no servidor. Faça um deploy para construir de novo.");
+        }
+        await this.composeUpFailed(args, output, code, composeContent, onLog);
       }
-      // Por que falhou: estado de cada serviço, fim do log e healthcheck de
-      // quem ficou unhealthy/parou (validação real: "wallet is unhealthy"
-      // sem nenhuma linha do wallet no log do painel).
-      onLog("\n=== Diagnóstico: estado dos serviços depois da falha ===\n");
-      const summary = await diagnoseComposeFailure(args, startableServices(composeContent), onLog, run);
-      throw new Error(summary ? `docker compose up falhou: ${summary}.` : `docker compose up falhou (exit ${code}).`);
+      onLog("Containers recriados com a configuração atual.\n");
+      return;
     }
-
-    return `${project.slug}:${proxyPort}`;
+    if (type === "dockerfile") {
+      const image = `paas-${project.slug}:latest`;
+      const inspect = await run("docker", ["image", "inspect", image]);
+      if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
+      await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone);
+      return;
+    }
+    onLog("Site estático: o servidor web não usa fuso horário; nada a recriar.\n");
   }
 
   private composeArgs(project: Project, src: string): string[] {
@@ -569,6 +669,7 @@ export class DeployEngine {
     src: string,
     onLog: LogFn,
     extraEnv: Record<string, string> = {},
+    timezone: string | null = null,
   ): Promise<string> {
     const image = `paas-${project.slug}:latest`;
     const port = project.proxyPort ?? project.detection?.proxyPort;
@@ -581,11 +682,31 @@ export class DeployEngine {
     );
     if (buildCode !== 0) throw new Error(`docker build falhou (exit ${buildCode}).`);
 
+    await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone);
+    return `${project.slug}:${port}`;
+  }
+
+  /** Sobe (ou recria) o container do pipeline Dockerfile. */
+  private async runDockerfileContainer(
+    project: Project,
+    image: string,
+    onLog: LogFn,
+    extraEnv: Record<string, string>,
+    timezone: string | null,
+  ): Promise<void> {
     const app = `${containerPrefix(project)}-app`;
     await run("docker", ["rm", "-f", app]);
     const envArgs: string[] = [];
     for (const [key, value] of Object.entries(extraEnv)) {
       envArgs.push("-e", `${key}=${value}`);
+    }
+    if (timezone) {
+      // TZ nas Variáveis do projeto vence a escolha do painel.
+      if (extraEnv.TZ) onLog(`Fuso horário: o projeto já define TZ=${extraEnv.TZ} nas Variáveis; mantido.\n`);
+      else {
+        envArgs.push("-e", `TZ=${timezone}`);
+        onLog(`Fuso horário: TZ=${timezone}.\n`);
+      }
     }
     const runRes = await run("docker", [
       "run",
@@ -607,7 +728,6 @@ export class DeployEngine {
     ]);
     if (runRes.code !== 0) throw new Error(`falha ao subir o container: ${runRes.stderr}`);
     onLog(`Container ${app} rodando na rede ${PAAS_NETWORK}.\n`);
-    return `${project.slug}:${port}`;
   }
 
   // -------------------------------------------------------------------------

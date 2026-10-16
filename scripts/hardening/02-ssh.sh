@@ -24,7 +24,7 @@ TCP_FORWARDING="local"
 # de nuvem (Contabo e outras) trazem 50-cloud-init.conf com
 # "PasswordAuthentication yes": com o nome antigo (99-) o painel perdia e o
 # login por senha seguia ligado (visto em campo). 40 vence o 50 e continua
-# perdendo para o 10-local-override.conf que o README ensina ao operador.
+# perdendo para o 10-local-override.conf que docs/instalacao.md ensina ao operador.
 DROPIN="/etc/ssh/sshd_config.d/40-paas-hardening.conf"
 OLD_DROPIN="/etc/ssh/sshd_config.d/99-paas-hardening.conf"
 REVERT_SCRIPT="${PAAS_STATE_DIR}/revert-ssh.sh"

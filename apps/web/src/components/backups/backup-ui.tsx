@@ -3,7 +3,7 @@
  * do projeto: situação de cada backup, histórico, frequência e cópias
  * guardadas, a janela de restauração (com progresso) e a criação da senha.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   BACKUP_FREQUENCIES,
   MAX_BACKUP_KEEP,
@@ -12,20 +12,25 @@ import {
   backupPasswordStrength,
   buildRecoveryKit,
   formatBackupCoverage,
+  type BackupCheckResult,
   type BackupFrequencyHours,
   type BackupPoint,
   type BackupRecord,
   type BackupRemoteState,
   type BackupsStatus,
+  type BackupTargetSettings,
   type BackupTargetStatus,
+  type BackupVerifyRequest,
+  type BackupVerifySummary,
 } from "@paas/core";
+import { Link } from "react-router";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, CheckCircle2, Download, Loader2, RotateCcw, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Loader2, RotateCcw, ShieldCheck, Sparkles } from "lucide-react";
 
 export function errorText(err: unknown): string {
   return err instanceof ApiRequestError ? err.message : "Não foi possível concluir agora. Tente de novo em instantes.";
@@ -112,18 +117,239 @@ export function RecordBadge({ record }: { record: BackupRecord }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Conferir backups
+// ---------------------------------------------------------------------------
+
+/** "Íntegro — conferido em …", "Falhou: …" e os outros resultados de uma cópia. */
+export function checkText(c: BackupCheckResult | null | undefined): string {
+  if (!c) return "ainda não conferida";
+  switch (c.status) {
+    case "ok":
+      return `Íntegro — conferido em ${when(c.at)}`;
+    case "failed":
+      return `Falhou: ${c.reason ?? "motivo desconhecido"}`;
+    case "missing":
+      return `Não existe mais${c.reason ? ` (${c.reason})` : ""}`;
+    default:
+      return "Não abre com a senha guardada: informe a senha da época do backup.";
+  }
+}
+
+const CHECK_COLOR: Record<BackupCheckResult["status"], string> = {
+  ok: "text-emerald-400",
+  failed: "text-red-400",
+  missing: "text-muted-foreground",
+  needs_password: "text-amber-400",
+};
+
+/** Resumo de uma conferência: "3 íntegras · 1 com problema". */
+export function verifySummaryText(s: BackupVerifySummary): string {
+  const parts = [
+    s.ok ? `${s.ok} ${s.ok === 1 ? "íntegra" : "íntegras"}` : null,
+    s.failed ? `${s.failed} com problema` : null,
+    s.missing ? `${s.missing} ${s.missing === 1 ? "não existe" : "não existem"} mais` : null,
+    s.needsPassword ? `${s.needsPassword} ${s.needsPassword === 1 ? "pede" : "pedem"} a senha da época` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "nada conferido";
+}
+
+function postVerify(target: string, body: BackupVerifyRequest): Promise<BackupRecord> {
+  const url = target === "all" ? "/api/backups/verify" : `/api/backups/targets/${target}/verify`;
+  return apiFetch<BackupRecord>(url, { method: "POST", body: JSON.stringify(body) });
+}
+
+/** "Conferir todos": de um item (target) ou de tudo ("all"). */
+export function VerifyAllButton({
+  target,
+  onQueued,
+  label = "Conferir todos",
+  disabled,
+}: {
+  target: string;
+  onQueued: () => void;
+  label?: string;
+  disabled?: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <Button
+        variant="outline"
+        disabled={busy || disabled}
+        onClick={() => {
+          setBusy(true);
+          setError(null);
+          postVerify(target, {})
+            .then(onQueued)
+            .catch((err: unknown) => setError(errorText(err)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} {label}
+      </Button>
+      {error && (
+        <p role="alert" className="basis-full text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Situação de cada cópia de um backup, o botão Conferir e a senha da época quando falta. */
+function BackupChecks({ record, onVerify }: { record: BackupRecord; onVerify: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [queued, setQueued] = useState(false);
+  const hasRemote = record.remote === "uploaded" || record.remote === "verified" || record.remote === "failed";
+  const localGone = record.local && record.localExists === false;
+  const needsPassword = record.remoteCheck?.status === "needs_password";
+  const fileName = record.fileName ?? "";
+
+  function run(body: BackupVerifyRequest) {
+    setBusy(true);
+    setError(null);
+    postVerify(record.target, body)
+      .then(() => {
+        setQueued(true);
+        setPassword("");
+        onVerify();
+      })
+      .catch((err: unknown) => setError(errorText(err)))
+      .finally(() => setBusy(false));
+  }
+
+  if (!record.local && !hasRemote) return null;
+  return (
+    <span className="mt-1 flex flex-col gap-1 text-xs" data-testid="backup-checks">
+      {record.local && (
+        <span className={localGone || !record.localCheck ? "text-muted-foreground" : CHECK_COLOR[record.localCheck.status]}>
+          Cópia da VPS: {localGone ? "apagada pela retenção" : checkText(record.localCheck)}
+        </span>
+      )}
+      {hasRemote && (
+        <span className={record.remoteCheck ? CHECK_COLOR[record.remoteCheck.status] : "text-muted-foreground"}>
+          Cópia externa: {checkText(record.remoteCheck)}
+        </span>
+      )}
+      <span className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" className="h-7" disabled={busy || (localGone && !hasRemote)} onClick={() => run({ fileName })}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} Conferir
+        </Button>
+        {queued && !busy && <span className="text-muted-foreground">Na fila. O resultado aparece aqui.</span>}
+      </span>
+      {needsPassword && (
+        <span className="flex flex-col gap-1">
+          <span className="text-muted-foreground">
+            Este backup foi feito com outra senha. Digite a senha que valia na época. Ela só serve para esta conferência e não fica guardada.
+          </span>
+          <span className="flex flex-wrap items-center gap-2">
+            <PasswordInput
+              aria-label="Senha da época do backup"
+              className="h-8 w-56"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="off"
+            />
+            <Button size="sm" variant="outline" className="h-8" disabled={busy || !password} onClick={() => run({ fileName, where: "remote", password })}>
+              Conferir com esta senha
+            </Button>
+          </span>
+        </span>
+      )}
+      {error && (
+        <span role="alert" className="text-destructive">
+          {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Andamento e resultado de uma conferência. */
+function VerifyDetail({ record }: { record: BackupRecord }) {
+  const v = record.verify;
+  if (!v) return null;
+  const done = v.items.filter((i) => i.status !== "pending" && i.status !== "running").length;
+  const active = record.status === "running" || record.status === "queued";
+  const problems = v.items.filter((i) => i.status === "failed" || i.status === "needs_password");
+  const copy = (w: "local" | "remote") => (w === "local" ? "cópia da VPS" : "cópia externa");
+  return (
+    <span className="block text-xs" data-testid="verify-detail">
+      {active ? (
+        <span className="text-sky-300">
+          Conferindo… {done} de {v.items.length}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">{verifySummaryText(v.summary)}</span>
+      )}
+      {problems.map((i, n) => (
+        <span key={n} className={cn("block", i.status === "failed" ? "text-red-400" : "text-amber-400")}>
+          {record.target === "all" ? `${i.targetName} · ` : ""}
+          {i.fileName} · {copy(i.where)}: {i.status === "failed" ? `Falhou: ${i.reason}` : i.reason}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+type BadgeVariant = "success" | "destructive" | "warning" | "secondary";
+
+/**
+ * Selo da cópia externa ao lado do "Concluído": o resultado da última
+ * conferência manda (Conferir), senão a situação do envio.
+ */
+export function remoteBadge(record: BackupRecord): { label: string; variant: BadgeVariant } | null {
+  if (record.operation !== "backup" || record.status === "queued") return null;
+  // backup que falhou antes do envio: o selo "Falhou" já diz tudo
+  if (record.status === "failed" && record.remote === "none") return null;
+  const c = record.remoteCheck;
+  if (c && record.remote !== "none" && record.remote !== "skipped") {
+    if (c.status === "ok") return { label: "Externa conferida", variant: "success" };
+    if (c.status === "failed") return { label: "Externa falhou", variant: "destructive" };
+    if (c.status === "needs_password") return { label: "Externa pede a senha da época", variant: "warning" };
+    return { label: "Externa apagada", variant: "secondary" };
+  }
+  switch (record.remote) {
+    case "verified":
+      return { label: "Externa conferida", variant: "success" };
+    case "uploading":
+      return { label: "Enviando", variant: "warning" };
+    case "uploaded":
+      return { label: "Conferindo", variant: "warning" };
+    case "failed":
+      return { label: "Externa falhou", variant: "destructive" };
+    case "skipped":
+      return { label: "Externa não feita", variant: "warning" };
+    default:
+      return record.local ? { label: "Só na VPS", variant: "secondary" } : null;
+  }
+}
+
+function operationText(record: BackupRecord): string {
+  if (record.operation === "restore") return "restauração";
+  if (record.operation === "verify") return record.fileName ? "conferência" : "conferência de todos";
+  return record.trigger === "schedule" ? "backup agendado" : "backup feito agora";
+}
+
 /** Uma linha do histórico: o que, quando, onde ficou e o motivo de falha/aviso. */
-export function RecordLine({ record, showTarget = true }: { record: BackupRecord; showTarget?: boolean }) {
+export function RecordLine({ record, showTarget = true, onVerify }: { record: BackupRecord; showTarget?: boolean; onVerify?: () => void }) {
   const remote = REMOTE_TEXT[record.remote];
-  const where = [record.local && record.operation === "backup" ? "na VPS" : null, remote].filter(Boolean).join(" · ");
+  const where = record.operation === "verify" ? "" : [record.local && record.operation === "backup" ? "na VPS" : null, remote].filter(Boolean).join(" · ");
+  const checkable = onVerify && record.operation === "backup" && record.fileName && (record.status === "success" || record.status === "warning");
+  const rb = remoteBadge(record);
   return (
     <li className="flex flex-col gap-1 py-2 sm:flex-row sm:items-start sm:gap-3" data-testid="backup-record">
       <span className="shrink-0 text-xs text-muted-foreground sm:w-28">{when(record.finishedAt ?? record.startedAt ?? record.queuedAt)}</span>
       <span className="min-w-0 flex-1 break-words">
         {showTarget && <strong className="font-medium">{record.targetName}: </strong>}
-        {record.operation === "restore" ? "restauração" : record.trigger === "schedule" ? "backup agendado" : "backup feito agora"}
+        {operationText(record)}
         {record.fileName && <span className="text-muted-foreground"> ({record.fileName}{record.sizeBytes ? `, ${formatBytes(record.sizeBytes)}` : ""})</span>}
         {where && <span className="block text-xs text-muted-foreground">{where}</span>}
+        {record.operation === "verify" && <VerifyDetail record={record} />}
         {record.error && <span className="block text-xs text-red-400">{record.error}</span>}
         {record.remoteDetail && <span className="block text-xs text-amber-400">{record.remoteDetail}</span>}
         {record.warnings.map((w, i) => (
@@ -131,22 +357,51 @@ export function RecordLine({ record, showTarget = true }: { record: BackupRecord
             {w}
           </span>
         ))}
+        {checkable && <BackupChecks record={record} onVerify={onVerify} />}
       </span>
-      <span className="shrink-0">
+      <span className="flex shrink-0 flex-wrap items-start gap-1 sm:justify-end">
         <RecordBadge record={record} />
+        {rb && (
+          <Badge variant={rb.variant} data-testid="remote-badge">
+            {rb.label}
+          </Badge>
+        )}
       </span>
     </li>
   );
 }
 
-export function HistoryList({ records, showTarget = true, empty }: { records: BackupRecord[]; showTarget?: boolean; empty: string }) {
+export function HistoryList({
+  records,
+  showTarget = true,
+  empty,
+  onVerify,
+}: {
+  records: BackupRecord[];
+  showTarget?: boolean;
+  empty: string;
+  /** Com isto, cada backup ganha o botão Conferir (e o que fazer depois: recarregar). */
+  onVerify?: () => void;
+}) {
   if (records.length === 0) return <p className="text-sm text-muted-foreground">{empty}</p>;
   return (
     <ul className="flex flex-col divide-y divide-border text-sm">
       {records.map((r) => (
-        <RecordLine key={r.id} record={r} showTarget={showTarget} />
+        <RecordLine key={r.id} record={r} showTarget={showTarget} onVerify={onVerify} />
       ))}
     </ul>
+  );
+}
+
+/** Fuso usado pela agenda dos backups, com o caminho para trocar. */
+export function BackupTimezoneNote({ status }: { status: Pick<BackupsStatus, "timezone" | "timezoneName"> }) {
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="backup-timezone">
+      Os horários seguem o fuso da VPS: {status.timezoneName ? `${status.timezoneName} (${status.timezone})` : status.timezone}.{" "}
+      <Link to="/settings/timezone" className="underline underline-offset-2">
+        Trocar em Configurações → Fuso horário
+      </Link>
+    </p>
   );
 }
 
@@ -183,18 +438,30 @@ export function coverageText(t: Pick<BackupTargetStatus, "frequencyHours" | "loc
   return `Seus backups cobrem ${ext} no armazenamento externo e ${local} na VPS.`;
 }
 
+/**
+ * Ligado, frequência e cópias de um item. Sem `onSave`, grava em
+ * /api/backups/targets/:id. Com `onSave` (o "Padrão dos projetos"), quem usa
+ * decide o que gravar e devolve o aviso; `extra` aparece antes do Salvar e
+ * `extraDirty` libera o Salvar mesmo sem mudar os campos.
+ */
 export function TargetSettings({
   target,
   remote,
   timezone,
   backupHour,
   onSaved,
+  onSave,
+  extra,
+  extraDirty = false,
 }: {
-  target: BackupTargetStatus;
+  target: Pick<BackupTargetStatus, "id" | "enabled" | "frequencyHours" | "localKeep" | "remoteKeep">;
   remote: boolean;
   timezone: string;
   backupHour: number;
   onSaved: () => void;
+  onSave?: (settings: BackupTargetSettings, changed: boolean) => Promise<string>;
+  extra?: ReactNode;
+  extraDirty?: boolean;
 }) {
   const [enabled, setEnabled] = useState(target.enabled);
   const [frequency, setFrequency] = useState<BackupFrequencyHours>(target.frequencyHours);
@@ -221,12 +488,14 @@ export function TargetSettings({
     setBusy(true);
     setError(null);
     setNotice(null);
+    const settings: BackupTargetSettings = { enabled, frequencyHours: frequency, localKeep: lk, remoteKeep: rk };
     try {
-      await apiFetch(`/api/backups/targets/${target.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ enabled, frequencyHours: frequency, localKeep: lk, remoteKeep: rk }),
-      });
-      setNotice("Salvo.");
+      if (onSave) {
+        setNotice(await onSave(settings, dirty));
+      } else {
+        await apiFetch(`/api/backups/targets/${target.id}`, { method: "PUT", body: JSON.stringify(settings) });
+        setNotice("Salvo.");
+      }
       onSaved();
     } catch (err) {
       setError(errorText(err));
@@ -236,6 +505,11 @@ export function TargetSettings({
   }
 
   const hh = String(backupHour).padStart(2, "0");
+  const saveButton = (
+    <Button onClick={() => void save()} disabled={busy || !(dirty || extraDirty)}>
+      {busy && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
+    </Button>
+  );
   return (
     <div className="flex flex-col gap-3 text-sm">
       <label className="flex items-center gap-2">
@@ -280,9 +554,7 @@ export function TargetSettings({
             <Input id={`rk-${id}`} type="number" min={1} max={MAX_BACKUP_KEEP} className="w-24" value={remoteKeep} onChange={(e) => setRemoteKeep(e.target.value)} />
           </div>
         )}
-        <Button onClick={() => void save()} disabled={busy || !dirty}>
-          {busy && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
-        </Button>
+        {!extra && saveButton}
       </div>
       <p className="text-muted-foreground">
         {enabled
@@ -290,6 +562,12 @@ export function TargetSettings({
           : "Desligado: só roda quando você clicar em Fazer backup agora. "}
         {coverageText(preview, remote)}
       </p>
+      {extra && (
+        <>
+          {extra}
+          <div>{saveButton}</div>
+        </>
+      )}
       <Feedback error={error} notice={notice} />
     </div>
   );

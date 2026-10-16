@@ -8,10 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import {
   Feedback,
+  BackupTimezoneNote,
   HistoryList,
   RecordBadge,
   RestoreDialog,
   TargetSettings,
+  VerifyAllButton,
   errorText,
   formatBytes,
   when,
@@ -53,11 +55,13 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
 
   const last = view?.target.lastBackup ?? null;
   const running = last !== null && (last.status === "running" || last.status === "queued");
+  // conferências também entram na fila: acompanha enquanto houver algo andando
+  const active = running || Boolean(view?.history.some((r) => r.status === "running" || r.status === "queued"));
   useEffect(() => {
-    if (!running) return;
+    if (!active) return;
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, [running, load]);
+  }, [active, load]);
 
   if (loadError) {
     return (
@@ -289,6 +293,38 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm">
+          <div className="flex flex-wrap items-center gap-2" data-testid="project-settings-source">
+            {view.target.followsDefaults !== false ? (
+              <>
+                <Badge variant="secondary">Seguindo o padrão do painel</Badge>
+                <span className="text-muted-foreground">
+                  Muda junto com o{" "}
+                  <Link to="/settings/backups" className="underline underline-offset-2">
+                    padrão dos projetos
+                  </Link>
+                  . Salvar aqui passa a usar uma configuração própria.
+                </span>
+              </>
+            ) : (
+              <>
+                <Badge variant="outline">Configuração própria</Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void act(
+                      "defaults",
+                      () => apiFetch(`/api/backups/targets/project:${projectId}/use-defaults`, { method: "POST" }),
+                      "O projeto voltou ao padrão do painel.",
+                    )
+                  }
+                >
+                  {busy === "defaults" && <Loader2 className="h-4 w-4 animate-spin" />} Voltar ao padrão
+                </Button>
+              </>
+            )}
+          </div>
           <TargetSettings
             key={`${view.target.enabled}-${view.target.frequencyHours}-${view.target.localKeep}-${view.target.remoteKeep}`}
             target={view.target}
@@ -321,7 +357,9 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
             <Button variant="outline" onClick={() => setRestoring(true)}>
               <RotateCcw className="h-4 w-4" /> Restaurar
             </Button>
+            <VerifyAllButton target={`project:${projectId}`} onQueued={load} disabled={!status.archiverAvailable || !last} />
           </div>
+          <BackupTimezoneNote status={status} />
         </CardContent>
       </Card>
 
@@ -330,7 +368,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           <CardTitle className="text-base">Histórico</CardTitle>
         </CardHeader>
         <CardContent>
-          <HistoryList records={view.history} showTarget={false} empty="Nenhum backup deste projeto ainda." />
+          <HistoryList records={view.history} showTarget={false} empty="Nenhum backup deste projeto ainda." onVerify={load} />
         </CardContent>
       </Card>
 

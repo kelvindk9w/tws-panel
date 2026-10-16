@@ -38,6 +38,10 @@ const service = {
   projectView: vi.fn(async () => ({ target: { id: "project:p1" } })),
   detectProject: vi.fn(async () => ({})),
   catalog: vi.fn(async () => ({ panel: [], email: [], projects: [] })),
+  verify: vi.fn(async () => ({ id: "r3", operation: "verify" })),
+  updateDefaults: vi.fn(async () => undefined),
+  applyDefaults: vi.fn(async () => ({ applied: [{ id: "p1", name: "Loja" }], missing: [] })),
+  useDefaults: vi.fn(async () => undefined),
 };
 
 beforeEach(async () => {
@@ -72,6 +76,35 @@ describe("rotas de backups", () => {
   it("sem sessão: 401", async () => {
     const res = await app.inject({ method: "GET", url: "/api/backups" });
     expect(res.statusCode).toBe(401);
+  });
+
+  it("só com o setup token (setup pendente, sem sessão): 401 em todas, nunca 500", async () => {
+    const fresh = await buildAuthTestApp(SETUP);
+    fresh.app.decorate("backupService", service as unknown as FastifyInstance["backupService"]);
+    await fresh.app.register(backupsRoutes);
+    const token = { [SETUP_TOKEN_HEADER]: SETUP };
+    const routes: Array<["GET" | "PUT" | "POST" | "DELETE", string, unknown?]> = [
+      ["GET", "/api/backups"],
+      ["PUT", "/api/backups/destination", DEST],
+      ["POST", "/api/backups/destination/test"],
+      ["DELETE", "/api/backups/destination"],
+      ["PUT", "/api/backups/defaults", { frequencyHours: 6 }],
+      ["POST", "/api/backups/defaults/apply", { projectIds: ["p1"] }],
+      ["POST", "/api/backups/password/reveal", { loginPassword: "x" }],
+      ["PUT", "/api/backups/targets/panel", { frequencyHours: 6 }],
+      ["POST", "/api/backups/targets/project:p1/use-defaults"],
+      ["POST", "/api/backups/targets/panel/run"],
+      ["POST", "/api/backups/verify", {}],
+      ["GET", "/api/backups/projects/p1"],
+      ["GET", "/api/backups/catalog"],
+    ];
+    for (const [method, url, payload] of routes) {
+      const res = await fresh.app.inject({ method, url, headers: token, ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}) });
+      expect(res.statusCode, `${method} ${url}`).toBe(401);
+      expect(res.json()).toMatchObject({ error: "unauthorized" });
+    }
+    for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
+    await closeAuthTestApp(fresh);
   });
 
   it("situação, destino, teste e desconectar", async () => {
@@ -125,11 +158,51 @@ describe("rotas de backups", () => {
     expect((await call("GET", "/api/backups/records/r1")).json()).toEqual({ id: "r1", status: "running" });
   });
 
+  it("padrão dos projetos, Aplicar também e Voltar ao padrão", async () => {
+    const put = await call("PUT", "/api/backups/defaults", { enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30 });
+    expect(put.statusCode).toBe(204);
+    expect(service.updateDefaults).toHaveBeenCalledWith({ enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    expect((await call("PUT", "/api/backups/defaults", { frequencyHours: 8 })).statusCode).toBe(400);
+    expect((await call("PUT", "/api/backups/defaults", { choices: { "db:db": false } })).statusCode).toBe(400);
+    expect((await call("PUT", "/api/backups/defaults", { localKeep: 0 })).statusCode).toBe(400);
+    const apply = await call("POST", "/api/backups/defaults/apply", { projectIds: ["p1"] });
+    expect(apply.json()).toEqual({ applied: [{ id: "p1", name: "Loja" }], missing: [] });
+    expect(service.applyDefaults).toHaveBeenCalledWith(["p1"], "admin");
+    expect((await call("POST", "/api/backups/defaults/apply", { projectIds: [] })).statusCode).toBe(400);
+    expect((await call("POST", "/api/backups/defaults/apply", { projectIds: ["../x"] })).statusCode).toBe(400);
+    expect((await call("POST", "/api/backups/targets/project:p1/use-defaults")).statusCode).toBe(204);
+    expect(service.useDefaults).toHaveBeenCalledWith("project:p1", "admin");
+  });
+
   it("aba do projeto, detectar de novo e catálogo", async () => {
     expect((await call("GET", "/api/backups/projects/p1")).json()).toEqual({ target: { id: "project:p1" } });
     await call("POST", "/api/backups/projects/p1/detect");
     expect(service.detectProject).toHaveBeenCalledWith("p1");
     expect((await call("GET", "/api/backups/catalog")).json()).toEqual({ panel: [], email: [], projects: [] });
+  });
+
+  it("Conferir um, todos do item e todos: corpo validado, sem cache", async () => {
+    const one = await call("POST", "/api/backups/targets/project:p1/verify", { fileName: "2026-10-14_03-00.7z" });
+    expect(one.json()).toEqual({ id: "r3", operation: "verify" });
+    expect(one.headers["cache-control"]).toBe("no-store");
+    expect(service.verify).toHaveBeenCalledWith("project:p1", { fileName: "2026-10-14_03-00.7z" }, "admin");
+    await call("POST", "/api/backups/targets/panel/verify", {});
+    expect(service.verify).toHaveBeenLastCalledWith("panel", {}, "admin");
+    await call("POST", "/api/backups/targets/panel/verify");
+    expect(service.verify).toHaveBeenLastCalledWith("panel", {}, "admin");
+    await call("POST", "/api/backups/targets/email/verify", { fileName: "a.7z", where: "remote", password: "senha-antiga" });
+    expect(service.verify).toHaveBeenLastCalledWith("email", { fileName: "a.7z", where: "remote", password: "senha-antiga" }, "admin");
+    for (const body of [{ where: "ftp" }, { fileName: "" }, { password: "" }, { cmd: "x" }]) {
+      expect((await call("POST", "/api/backups/targets/panel/verify", body)).statusCode, JSON.stringify(body)).toBe(400);
+    }
+    const all = await call("POST", "/api/backups/verify", {});
+    expect(all.statusCode).toBe(200);
+    expect(service.verify).toHaveBeenLastCalledWith("all", {}, "admin");
+    await call("POST", "/api/backups/verify");
+    expect(service.verify).toHaveBeenLastCalledWith("all", {}, "admin");
+    expect((await call("POST", "/api/backups/verify", { fileName: "a.7z" })).statusCode).toBe(400);
+    service.verify.mockRejectedValueOnce(httpError(409, "no_destination", "Conecte um armazenamento externo."));
+    expect((await call("POST", "/api/backups/verify", { where: "remote" })).json().error).toBe("no_destination");
   });
 
   it("erro inesperado: 500 genérico, sem detalhe interno", async () => {

@@ -1,0 +1,110 @@
+{
+  "id": "conferir",
+  "modulo": "backups",
+  "metodo": "POST",
+  "url": "/api/backups/targets/:target/verify, /api/backups/verify",
+  "resumo": "'Conferir' um backup (fileName), 'Conferir todos' de um item (sem fileName) ou de tudo (/api/backups/verify). Entra na fila (um por vez) como BackupRecord operation 'verify', com uma etapa por cópia.",
+  "arquivoFonte": "apps/server/src/routes/backups.ts:262, apps/server/src/services/backup-service.ts:1500",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts) e um onRequest no plugin de backups: sem sessão, mesmo com o setup token (setup pendente), responde 401 { error: 'unauthorized' } em vez de chegar à rota. O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Do item: 20/min. Geral: 5/min.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "target",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "'panel', 'email' ou 'project:<id>' (só na rota do item)."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "fileName",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "AAAA-MM-DD_HH-MM.7z; só na rota do item. Sem ele: todos os backups do item."
+      },
+      {
+        "nome": "where",
+        "tipo": "'local'|'remote'|'both'",
+        "obrigatorio": false,
+        "descricao": "Qual cópia (padrão as duas)."
+      },
+      {
+        "nome": "password",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Senha da época para a cópia externa. Só vive na memória do pedido: não é guardada nem auditada."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "BackupRecord (operation 'verify', target 'all' na geral); acompanhar em GET /api/backups/records/:id. verify.items e verify.summary trazem cada cópia e o resumo."
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_file",
+      "quando": "Nome inválido ou fileName na rota geral."
+    },
+    {
+      "status": 404,
+      "codigo": "not_found",
+      "quando": "Item não existe."
+    },
+    {
+      "status": 409,
+      "codigo": "no_destination",
+      "quando": "where 'remote' sem armazenamento externo."
+    }
+  ],
+  "fluxo": [
+    "1. Mesmo pedido (alvo + arquivo) já na fila → devolve o registro existente.",
+    "2. Plano: cópias da VPS (pastas backups/<pasta>) e externas (listagem do S3); falha na listagem vira aviso e confere só as da VPS.",
+    "3. Cópia da VPS: tamanho e SHA-256 gravados no backup (quando conhecidos) e 7zz t sem senha.",
+    "4. Cópia externa: baixa para a área temporária (confere espaço), compara tamanho listado/gravado e hash, 7zz t com a senha guardada; não abre → senha digitada → senão needs_password. Abrir sem senha uma cópia que saiu cifrada = falha.",
+    "5. Resultado de cada cópia vai para config.checks e aparece ao lado do backup (localCheck/remoteCheck). A retenção esquece o hash das cópias apagadas.",
+    "6. Alguma falha: registro 'failed' e notificação kind backup_failed (chave backup-verify-failed:<alvo>). Senha da época faltando: 'warning'."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "SevenZip.test",
+      "arquivo": "apps/server/src/services/backup-archive.ts",
+      "papel": "7zz t (senha pela entrada padrão)."
+    },
+    {
+      "tipo": "servico",
+      "nome": "S3Storage",
+      "arquivo": "apps/server/src/services/backup-s3.ts",
+      "papel": "Listar e baixar."
+    }
+  ],
+  "efeitosColaterais": [
+    "grava data/backups.json (checks e histórico)",
+    "auditoria: backups.verify, backups.verify_result",
+    "notificação backup_failed quando há cópia com problema"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/backups/backup-ui.tsx (BackupChecks, VerifyAllButton)"
+  ],
+  "testes": [
+    "apps/server/tests/backup-service.test.ts (describe 'conferir backups')",
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/web/tests/backup-settings.test.tsx",
+    "apps/web/tests/project-backups.test.tsx"
+  ],
+  "observacoes": [
+    "Backups feitos antes desta versão não têm hash gravado: a conferência usa tamanho listado e o 7zz t.",
+    "A conferência automática depois do envio já conta como 'Íntegro — conferido em'.",
+    "A lista mostra também um selo da cópia externa ao lado do Concluído (remoteBadge em backup-ui.tsx)."
+  ]
+}

@@ -88,6 +88,18 @@ const notificationsRoutes: FastifyPluginAsync = async (app) => {
   const service = app.notificationService;
   const logError = (err: unknown) => app.log.error({ err }, "notificações: falha inesperada");
 
+  // As notificações pedem uma conta (quem mexeu vai para a auditoria). Com o
+  // setup pendente, o plugin de auth deixa passar só com o setup token, sem
+  // sessão: aqui isso vira 401, não um erro 500.
+  app.addHook("onRequest", async (request, reply) => {
+    if (!request.session) {
+      return reply.code(401).send({
+        error: "unauthorized",
+        message: "Entre com a conta de administrador para configurar as notificações.",
+      });
+    }
+  });
+
   /** Roda a ação com o nome de quem pediu e responde a situação (ou o erro). */
   const handle =
     (action: (actor: string, body: unknown) => Promise<unknown>) =>
