@@ -81,7 +81,7 @@
     "Antes de tocar em qualquer coisa: cada arquivo citado no manifesto precisa estar em bancos/, volumes/, pastas/, codigo/ ou email/, sem '..', e o caminho real (realpath) tem que ficar dentro da pasta extraída; senão a restauração falha com 'caminho inválido'. Com a criptografia ligada, cópia externa que abre sem senha é recusada.",
     "Projeto: para os serviços que não são banco; sobe o banco se preciso e espera responder; Postgres: _papeis.sql e um .sql por banco (--clean --if-exists); MySQL/MariaDB: .sql com --add-drop-database; Mongo: mongorestore --drop; Redis e pastas: esvazia e extrai o .tar (dono e permissões mantidos) por um container auxiliar; liga tudo de novo (bancos primeiro).",
     "E-mail: para o Stalwart, devolve o volume e a configuração, liga; webmail igual.",
-    "Painel: extrai em data/backups/.restaurar-painel/, grava o marcador e reinicia; na subida (index.ts → panel-restore.ts) o estado atual vai para data/backups/_painel/antes-da-restauracao/ e o backup entra no lugar, só para o dono (arquivos 0600, ou 0700 se executáveis; pastas 0700; links simbólicos não seguidos). scripts/restaurar-painel.sh extrai com umask 077 e chmod -R go-rwx."
+    "Painel: extrai em data/backups/.restaurar-painel/, grava o marcador e reinicia; na subida (index.ts → panel-restore.ts) o estado atual vai para data/backups/_painel/antes-da-restauracao/ e o backup entra no lugar, só para o dono (arquivos 0600, ou 0700 se executáveis; pastas 0700; links simbólicos não seguidos). scripts/restaurar-painel.sh extrai com umask 077 e chmod -R go-rwx. Troca retomável e reversível (lote 1, achado 2): o progresso fica em data/backups/.restaurar-painel.progresso.json; fases salvando (atual → antes-da-restauracao) → aplicando (backup → data) → concluindo (histórico com id fixo por pedido, sem duplicar; limpeza). Cada fase só move o que falta, então uma queda em qualquer ponto é retomada na subida seguinte. Uma FALHA (erro de disco) desfaz: desfazendo-retirando (backup volta à pasta extraída) → desfazendo-devolvendo (cópia de segurança volta ao lugar), também retomável; o histórico registra 'failed' com o motivo e o painel sobe com o estado de antes. Se nem desfazer der certo, restorePanelAtBoot devolve false e o index.ts sai com erro (o Docker reinicia e continua de onde parou) — nunca sobe com metade trocada. Log e auditoria (backups.panel_restored / backups.panel_restore_undone) dizem o que aconteceu. A cópia antes-da-restauracao nunca é apagada com troca pela metade; ao começar outra restauração, a anterior vira antes-da-restauracao.anterior. O fuso passou a ser lido depois da troca."
   ],
   "dependencias": [
     {
@@ -99,10 +99,14 @@
   ],
   "testes": [
     "apps/server/tests/routes-backups.test.ts",
-    "apps/server/tests/backup-service.test.ts"
+    "apps/server/tests/backup-service.test.ts",
+    "apps/server/tests/panel-restore-interrupcao.test.ts",
+    "apps/server/tests/panel-restore.test.ts",
+    "apps/server/tests/restaurar-painel-script.test.ts"
   ],
   "observacoes": [
     "Os destinos não vêm do manifesto (ele está dentro do arquivo e pode ter sido trocado por quem tem acesso ao bucket): pastas e volumes só são restaurados se baterem com a detecção de agora do projeto ou com as pastas extras cadastradas; o Redis volta sempre em /data; o código volta para a pasta do projeto (srcDir). O que não bate vira aviso e é pulado.",
-    "Limite conhecido: o backup do PAINEL substitui o /data inteiro; um backup do painel trocado no bucket dá controle do painel. Com a criptografia ligada isso exige a senha; sem ela, quem tem as chaves do bucket pode montar um. Por isso a criptografia vem sugerida."
+    "Limite conhecido: o backup do PAINEL substitui o /data inteiro; um backup do painel trocado no bucket dá controle do painel. Com a criptografia ligada isso exige a senha; sem ela, quem tem as chaves do bucket pode montar um. Por isso a criptografia vem sugerida.",
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Painel com troca pela metade (progresso gravado): a restauração pelo painel falha com 'Há uma restauração do painel pela metade…' sem apagar a pasta extraída; scripts/restaurar-painel.sh para antes de parar o painel e pede para iniciá-lo; depois da troca, o script lê o registro da restauração no histórico (node no container) e avisa quando ela foi desfeita, com o motivo."
   ]
 }

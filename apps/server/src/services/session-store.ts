@@ -13,9 +13,10 @@
  * sessão dada como encerrada não pode voltar a valer depois de um reinício.
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { SESSION_TTL_MS } from "@paas/core";
+import { writeFileAtomic } from "./json-file.js";
 
 export interface Session {
   id: string;
@@ -56,12 +57,8 @@ export class SessionStore {
       // arquivo inexistente ou ilegível — gera um novo abaixo
     }
     const generated = randomBytes(32);
-    await mkdir(path.dirname(this.secretFile), { recursive: true });
-    await writeFile(this.secretFile, generated.toString("hex") + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await chmod(this.secretFile, 0o600).catch(() => undefined);
+    // atômica: uma queda no meio nunca deixa a chave pela metade (todas as sessões cairiam)
+    await writeFileAtomic(this.secretFile, generated.toString("hex") + "\n");
     this.secret = generated;
   }
 
@@ -203,12 +200,8 @@ export class SessionStore {
   }
 
   private async save(): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
     const data: SessionsFile = { sessions: this.sessions };
-    await writeFile(this.file, JSON.stringify(data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await writeFileAtomic(this.file, JSON.stringify(data, null, 2) + "\n");
   }
 }
 

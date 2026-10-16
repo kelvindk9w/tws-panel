@@ -15,8 +15,8 @@
  * login até o operador provar, com um código, que o app ficou configurado.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { loadOrCreateKey } from "./json-file.js";
 import type { StoredUser, UserStore } from "./user-store.js";
 import {
   generateRecoveryCodes,
@@ -49,7 +49,7 @@ export class TwoFactorError extends Error {
 
 export class TwoFactorService {
   private readonly keyFile: string;
-  private key: Buffer | null = null;
+  private keyLoading: Promise<Buffer> | null = null;
   private readonly pending = new Map<string, { secret: string; expiresAt: number }>();
   private readonly now: () => number;
   /** Aparece no app autenticador ("admin@1-2-3-4.sslip.io"): distingue um painel de outro. */
@@ -114,21 +114,26 @@ export class TwoFactorService {
    * grava o passo usado (anti-reuso). Código de recuperação: é consumido.
    */
   async verify(user: StoredUser, code: string): Promise<TwoFactorCheck> {
-    const tf = user.twoFactor;
-    if (!tf) return null;
-    const secret = await this.open(tf);
-    const step = verifyTotp(secret, code, { nowMs: this.now(), lastStep: tf.lastStep });
-    if (step !== null) {
-      await this.users.setTwoFactor(user.id, { ...tf, lastStep: step });
-      return { method: "totp", recoveryCodesLeft: tf.recoveryHashes.length };
-    }
+    const snapshot = user.twoFactor;
+    if (!snapshot) return null;
+    const secret = await this.open(snapshot);
+    const nowMs = this.now();
     const hash = hashRecoveryCode(code);
-    if (tf.recoveryHashes.includes(hash)) {
+    // Conferir e consumir acontecem juntos, na fila do UserStore, contra o
+    // estado ATUAL: dois pedidos paralelos com o mesmo código nunca passam
+    // os dois, e um código de recuperação usado nunca volta à lista.
+    const check = await this.users.updateTwoFactor<TwoFactorCheck>(user.id, (tf) => {
+      // desativada (ou reativada com outro segredo) desde a leitura de quem chamou
+      if (!tf || tf.data !== snapshot.data || tf.iv !== snapshot.iv) return { result: null };
+      const step = verifyTotp(secret, code, { nowMs, lastStep: tf.lastStep });
+      if (step !== null) {
+        return { result: { method: "totp", recoveryCodesLeft: tf.recoveryHashes.length }, next: { ...tf, lastStep: step } };
+      }
+      if (!tf.recoveryHashes.includes(hash)) return { result: null };
       const recoveryHashes = tf.recoveryHashes.filter((h) => h !== hash);
-      await this.users.setTwoFactor(user.id, { ...tf, recoveryHashes });
-      return { method: "recovery", recoveryCodesLeft: recoveryHashes.length };
-    }
-    return null;
+      return { result: { method: "recovery", recoveryCodesLeft: recoveryHashes.length }, next: { ...tf, recoveryHashes } };
+    });
+    return check ?? null;
   }
 
   async disable(user: StoredUser): Promise<void> {
@@ -136,23 +141,13 @@ export class TwoFactorService {
     await this.users.setTwoFactor(user.id, null);
   }
 
-  private async loadKey(): Promise<Buffer> {
-    if (this.key) return this.key;
-    try {
-      const raw = Buffer.from((await readFile(this.keyFile, "utf8")).trim(), "hex");
-      if (raw.length === KEY_BYTES) {
-        this.key = raw;
-        return raw;
-      }
-    } catch {
-      // arquivo inexistente — gera abaixo
-    }
-    const gerada = randomBytes(KEY_BYTES);
-    await mkdir(path.dirname(this.keyFile), { recursive: true });
-    await writeFile(this.keyFile, gerada.toString("hex") + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(this.keyFile, 0o600).catch(() => undefined);
-    this.key = gerada;
-    return gerada;
+  /** Lida (ou criada) uma vez só: pedidos paralelos no primeiro uso nunca geram duas chaves. */
+  private loadKey(): Promise<Buffer> {
+    this.keyLoading ??= loadOrCreateKey(this.keyFile, KEY_BYTES).catch((err: unknown) => {
+      this.keyLoading = null;
+      throw err;
+    });
+    return this.keyLoading;
   }
 
   private async seal(secret: string): Promise<{ iv: string; tag: string; data: string }> {

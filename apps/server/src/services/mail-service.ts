@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import {
   MAILBOX_PASSWORD_MIN,
   DKIM_SELECTOR,
@@ -62,6 +62,7 @@ import {
 import type { ServerConfig } from "../config.js";
 import { isCloudflareIp, publicIpFromPanelDomain } from "../routes/domains.js";
 import { httpError } from "./deploy-service.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
 const PANEL_CONTAINER = "tws-panel";
@@ -239,7 +240,7 @@ export class MailService {
   /** Horário (ms) de cada tentativa de envio de teste na última hora. */
   private testAttempts: number[] = [];
   private data: MailFile = structuredClone(EMPTY_FILE);
-  private loaded = false;
+  private loadedPromise: Promise<void> | null = null;
   private syncing: Promise<{ result: TlsSyncResult; certificates: MailCertificate[] }> | null = null;
   private networkReady: Promise<void> | null = null;
 
@@ -286,23 +287,30 @@ export class MailService {
   // Persistência
   // -------------------------------------------------------------------------
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
-    try {
-      const raw = JSON.parse(await readFile(this.mailFile, "utf8")) as Partial<MailFile>;
-      this.data = { ...structuredClone(EMPTY_FILE), ...raw };
-    } catch {
-      this.data = structuredClone(EMPTY_FILE);
-    }
+  /**
+   * Carga única e compartilhada. Com a flag marcada antes de ler, uma segunda
+   * chamada seguia com os dados vazios: podia gerar outra senha de admin do
+   * Stalwart e gravar o mail.json inteiro por cima do de verdade.
+   */
+  private ensureLoaded(): Promise<void> {
+    this.loadedPromise ??= (async () => {
+      try {
+        const raw = JSON.parse(await readFile(this.mailFile, "utf8")) as Partial<MailFile>;
+        this.data = { ...structuredClone(EMPTY_FILE), ...raw };
+      } catch {
+        this.data = structuredClone(EMPTY_FILE);
+      }
+    })();
+    return this.loadedPromise;
   }
 
+  /**
+   * Grava o estado em memória de AGORA, na fila do arquivo e de forma
+   * atômica: gravações nunca se intercalam nem terminam fora de ordem (uma
+   * versão mais velha chegando por último).
+   */
   private async save(): Promise<void> {
-    await mkdir(this.mailDir, { recursive: true });
-    await writeFile(this.mailFile, JSON.stringify(this.data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await withFileLock(this.mailFile, () => writeFileAtomic(this.mailFile, JSON.stringify(this.data, null, 2) + "\n"));
   }
 
   // -------------------------------------------------------------------------

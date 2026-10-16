@@ -330,3 +330,22 @@ describe("nomes do .env.example do código", () => {
     expect(await svc.envLinkSources(p.id)).toEqual({ SMTP_SENHA: "SMTP_PASS" });
   });
 });
+
+describe("projetos com chamadas em paralelo logo depois de subir", () => {
+  const novo = () =>
+    new DeployService(
+      { dataDir, projectsDir: path.join(dataDir, "projects"), caddyHttpPort: 80, caddyHttpsPort: 443, panelDomain: null, port: 9000 } as unknown as ServerConfig,
+      { audit: { record } as never },
+    );
+
+  it("criar projetos em paralelo num serviço recém-criado não apaga os que já estavam no disco", async () => {
+    await projeto("antigo");
+    const subindo = novo();
+    await Promise.all(
+      ["a1", "a2", "a3"].map((n) =>
+        subindo.createProject({ name: n, ingestMode: "git", source: `https://github.com/k/${n}`, branch: "main", domain: `${n}.localhost` }),
+      ),
+    );
+    expect((await novo().listProjects()).map((p) => p.name).sort()).toEqual(["a1", "a2", "a3", "antigo"]);
+  });
+});

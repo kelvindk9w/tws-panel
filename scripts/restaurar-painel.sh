@@ -20,12 +20,16 @@
 #   3. extrai o backup no volume paas_data, em /data/backups/.restaurar-painel,
 #      e grava o pedido de restauração;
 #   4. sobe o painel: na subida ele guarda o estado atual em
-#      /data/backups/_painel/antes-da-restauracao/ e põe o backup no lugar;
-#   5. confere que a troca aconteceu.
+#      /data/backups/_painel/antes-da-restauracao/ e põe o backup no lugar
+#      (se a troca falhar no meio, ele a desfaz e volta ao estado de antes);
+#   5. confere que a troca aconteceu (ou avisa que foi desfeita, e por quê).
 # Ficam como estão: as cópias de backup na VPS, o token de instalação e o
 # código dos projetos. Depois: entre com o usuário e a senha do backup.
 # Permissões: a extração roda como o usuário da imagem (o mesmo dono do
 # painel) e tudo fica só para ele (0600 nos arquivos, 0700 nas pastas).
+# Uma troca que ficou pela metade (o painel não terminou nem desfez) não é
+# tocada: o script para e pede para iniciar o painel, que continua de onde
+# parou.
 # =============================================================================
 set -euo pipefail
 
@@ -35,12 +39,13 @@ CONTAINER="${PAAS_CONTAINER:-tws-panel}"
 WAIT_SECONDS="${PAAS_WAIT_SECONDS:-120}"
 STAGE="/data/backups/.restaurar-painel"
 MARKER="/data/backups/.restaurar-painel.json"
+PROGRESS="/data/backups/.restaurar-painel.progresso.json"
 
 log() { printf '\033[1;34m[tws-panel]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 case "${1:-}" in
-  -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
   "") die "informe o arquivo do backup. Ex.: sudo ./scripts/restaurar-painel.sh /root/2026-10-14_03-00.7z" ;;
 esac
 [ "$#" -eq 1 ] || die "informe só o arquivo do backup (use --help)"
@@ -51,6 +56,12 @@ case "$ARCHIVE" in *.7z) ;; *) die "o arquivo precisa ser um .7z do TWS Panel (p
 
 command -v docker >/dev/null 2>&1 || die "docker não encontrado — rode este script na VPS do painel."
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "imagem $IMAGE não encontrada — instale o painel primeiro (scripts/install.sh)."
+
+# Troca pela metade no volume: a pasta extraída ainda guarda parte do backup
+# e o painel sabe continuar (ou desfazer). Apagar agora perderia arquivos.
+if ! docker run --rm --entrypoint sh -v "$VOLUME_NAME:/data" "$IMAGE" -c 'test ! -e "$1"' conferir "$PROGRESS" </dev/null >/dev/null 2>&1; then
+  die "há uma restauração do painel pela metade neste volume — não mexa nela. Inicie o painel (sudo docker start $CONTAINER) para ele terminar ou desfazer a troca, veja o que ele diz (sudo docker logs $CONTAINER --tail 50) e rode este script de novo se precisar."
+fi
 
 ARCHIVE_DIR="$(cd "$(dirname "$ARCHIVE")" && pwd)"
 ARCHIVE_NAME="$(basename "$ARCHIVE")"
@@ -108,13 +119,23 @@ fi
 log "iniciando o painel…"
 docker start "$CONTAINER" >/dev/null
 
-# 5. Conferir: o pedido some quando a troca termina.
+# 5. Conferir: o pedido some quando a troca termina (aplicada ou desfeita).
+# O registro desta restauração no histórico diz qual das duas.
+CHECK_JS='const fs=require("fs");let h=[];try{h=JSON.parse(fs.readFileSync("/data/backups-history.json","utf8")).entries||[]}catch{}
+const e=h.filter(x=>x.operation==="restore"&&x.target==="panel"&&x.queuedAt===process.argv[1]).pop();
+if(!e)process.exit(3);if(e.status==="success")process.exit(0);console.log(e.error||"");process.exit(2);'
 log "conferindo a restauração (até ${WAIT_SECONDS}s)…"
 DEADLINE=$(( $(date +%s) + WAIT_SECONDS ))
 while :; do
   if docker exec "$CONTAINER" sh -c "test ! -e $MARKER" >/dev/null 2>&1; then
+    RESULT=0
+    OUT="$(docker exec "$CONTAINER" node -e "$CHECK_JS" "$NOW" 2>/dev/null)" || RESULT=$?
+    if [ "$RESULT" = "2" ]; then
+      die "a troca não deu certo e foi desfeita: o painel voltou ao estado de antes da restauração. ${OUT}"
+    fi
     log "pronto. Entre no painel com o usuário e a senha do backup."
     log "o estado anterior ficou em /data/backups/_painel/antes-da-restauracao/ (volume $VOLUME_NAME)."
+    [ "$RESULT" = "0" ] || log "(não achei o registro da troca no histórico para conferir; veja Configurações → Backups → Painel.)"
     exit 0
   fi
   [ "$(date +%s)" -lt "$DEADLINE" ] || break

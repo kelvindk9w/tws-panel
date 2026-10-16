@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { SetupState, SetupStepInfo } from "@paas/core";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Passos do wizard na Fase 0 (fases futuras adicionam os demais). */
 export const SETUP_STEPS: SetupStepInfo[] = [
@@ -37,33 +38,39 @@ export class SetupStateStore {
     }
   }
 
+  /** Substitui o estado inteiro (na fila do arquivo, como as demais alterações). */
   async save(state: SetupState): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
+    await withFileLock(this.file, () => this.write(state));
+  }
+
+  /** Gravação atômica (services/json-file.ts). */
+  private async write(state: SetupState): Promise<SetupState> {
     const toWrite: SetupState = { ...state, updatedAt: new Date().toISOString() };
-    await writeFile(this.file, JSON.stringify(toWrite, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await writeFileAtomic(this.file, JSON.stringify(toWrite, null, 2) + "\n");
+    return toWrite;
+  }
+
+  /**
+   * Lê, altera e grava na fila do arquivo: "avançar o passo" e "concluir"
+   * chegando juntos nunca desfazem um ao outro (ex.: setup concluído que
+   * voltava a "não concluído").
+   */
+  private change(fn: (state: SetupState) => SetupState): Promise<SetupState> {
+    return withFileLock(this.file, async () => this.write(fn(await this.load())));
+  }
+
+  /** Volta ao passo 0, não concluído ("Recomeçar do zero"). */
+  async reset(): Promise<void> {
+    await this.change(() => ({ ...DEFAULT_STATE }));
   }
 
   /** Avança o passo atual (usado pelos endpoints do wizard). */
-  /** Volta ao passo 0, não concluído ("Recomeçar do zero"). */
-  async reset(): Promise<void> {
-    await this.save({ ...DEFAULT_STATE });
-  }
-
   async setStep(step: number): Promise<SetupState> {
-    const state = await this.load();
-    const next: SetupState = { ...state, currentStep: step };
-    await this.save(next);
-    return next;
+    return this.change((state) => ({ ...state, currentStep: step }));
   }
 
   /** Marca o setup como concluído (chamado ao criar a conta admin). */
   async complete(): Promise<SetupState> {
-    const state = await this.load();
-    const next: SetupState = { ...state, completed: true };
-    await this.save(next);
-    return next;
+    return this.change((state) => ({ ...state, completed: true }));
   }
 }

@@ -19,7 +19,7 @@ import { ArchiveError } from "../src/services/backup-archive.js";
 import type { ContainerInspect } from "../src/services/backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "../src/services/backup-docker.js";
 import { StorageError, type BackupStorage, type StoredObject } from "../src/services/backup-s3.js";
-import { BackupService, projectTargetId, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
+import { BackupService, projectTargetId, retentionVictims, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
 import type { NotificationEvent } from "../src/services/notification-service.js";
 
 // ---------------------------------------------------------------------------
@@ -148,8 +148,9 @@ class FakeDocker implements BackupDocker {
     await writeFile(outFile, `dump ${container} ${args.join(",")} ${script.includes("globals-only") ? "papeis" : "banco"}`);
     return { stderr: "" };
   }
-  async execCapture(container: string, script: string) {
+  async execCapture(container: string, script: string): Promise<string> {
     this.calls.push(`execCapture ${container}`);
+    if (script.includes("SAVE")) return "OK\n";
     return script.includes("pg_database") ? "app\npostgres\n" : "";
   }
   async execFromFile(container: string, script: string, args: string[], inFile: string) {
@@ -604,6 +605,37 @@ describe("backup de projeto", () => {
     expect(files).toEqual(expect.arrayContaining(["codigo/codigo.tar", "pastas/web__app_storage.tar", "bancos/cache-redis.tar"]));
   });
 
+  it("nomes que colidem depois de normalizados ganham sufixo: nenhum dump ou pasta sobrescreve outro (achado 13)", async () => {
+    const capture = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script) => (script.includes("pg_database") ? "a b\na/b\na_b\nA_B\n" : capture(c, script));
+    await service.updateTarget(
+      projectTargetId("p1"),
+      { extraFolders: [{ service: "web", path: "/data/x" }, { service: "web", path: "/data_x" }] },
+      "admin",
+    );
+    const r = await backup();
+    expect(r.status).toBe("success");
+    const arquivo = JSON.parse(await readFile(path.join(dir, "backups", "loja", r.fileName!), "utf8")) as { files: Record<string, string> };
+    const conteudo = (f: string) => Buffer.from(arquivo.files[f]!, "base64").toString();
+    const manifest = JSON.parse(conteudo("manifesto.json")) as {
+      items: Array<{ type: string; destination?: string; file?: string; databases?: Array<{ name: string; file: string }> }>;
+    };
+    const dbs = manifest.items.find((i) => i.type === "database")!.databases!;
+    expect(new Set(dbs.map((d) => d.file)).size).toBe(4);
+    for (const d of dbs) expect(conteudo(d.file)).toBe(`dump c-db ${d.name} banco`);
+    expect(dbs.map((d) => d.file)).toEqual(["bancos/db/a_b.sql", "bancos/db/a_b-2.sql", "bancos/db/a_b-3.sql", "bancos/db/A_B-4.sql"]);
+    const extras = manifest.items.filter((i) => i.type === "extra");
+    expect(new Set(extras.map((e) => e.file)).size).toBe(2);
+    for (const e of extras) expect(conteudo(e.file!)).toBe(`tar c-web ${e.destination}`);
+    // e a restauração devolve cada um ao seu lugar
+    const rr = await service.restore(projectTargetId("p1"), { fileName: r.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(rr.id)).status).not.toBe("failed");
+    expect(docker.dbInput.find((d) => d.args[0] === "a/b")!.content).toBe("dump c-db a/b banco");
+    expect(docker.dbInput.find((d) => d.args[0] === "A_B")!.content).toBe("dump c-db A_B banco");
+    expect(docker.restored.map((x) => x.content)).toEqual(expect.arrayContaining(["tar c-web /data/x", "tar c-web /data_x"]));
+  });
+
   it("o primeiro deploy vem antes; e-mail sem servidor", async () => {
     projects = [project({ lastDeployAt: null })];
     await expect(service.runNow(projectTargetId("p1"), "admin")).rejects.toMatchObject({ code: "not_deployed" });
@@ -746,6 +778,18 @@ describe("restaurar", () => {
     expect(existsSync(path.join(dir, "backups", ".restaurar-painel", "users.json"))).toBe(true);
     await new Promise((res) => setTimeout(res, 20));
     expect(restarted).toBe(1);
+  });
+
+  it("painel com uma troca pela metade (progresso gravado): recusa e não apaga a pasta extraída", async () => {
+    const b = await backup("panel");
+    await mkdir(path.join(dir, "backups", ".restaurar-painel"), { recursive: true });
+    await writeFile(path.join(dir, "backups", ".restaurar-painel", "secrets.json"), "parte do backup anterior");
+    await writeFile(path.join(dir, "backups", ".restaurar-painel.progresso.json"), "{}");
+    const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).error).toMatch(/restauração do painel pela metade/);
+    expect(await readFile(path.join(dir, "backups", ".restaurar-painel", "secrets.json"), "utf8")).toBe("parte do backup anterior");
+    expect(restarted).toBe(0);
   });
 
   it("arquivo de outro tipo não é restaurado", async () => {
@@ -1148,7 +1192,9 @@ describe("caminhos de exceção", () => {
     };
     await service.updateTarget(projectTargetId("p1"), { choices: { "db:cache": true } }, "admin");
     const b = await backup();
-    expect(b.status).toBe("success");
+    // antes desta correção, o SAVE que falha virava "success" sem aviso (achado 14)
+    expect(b.status).toBe("warning");
+    expect(b.warnings.join(" ")).toMatch(/não confirmou o SAVE \(redis\)/);
     const fromFile = docker.execFromFile.bind(docker);
     docker.execFromFile = async (c, script, args, file) => {
       if (args.length === 0 && script.includes("psql")) throw new Error("papéis");
@@ -1444,5 +1490,186 @@ describe("conferir backups", () => {
     const cfg = (service as unknown as { config: { checks: Record<string, unknown> } }).config;
     expect(Object.keys(cfg.checks)).toHaveLength(1);
     expect(cfg.checks[`loja/${a.fileName}`]).toBeUndefined();
+  });
+});
+
+/**
+ * Backup incompleto nunca conta como completo (achados 3 e 14 da revisão).
+ * O 7-Zip de verdade sai com código 1 quando um arquivo some ou não pode ser
+ * lido (reproduzido com o 7zz 24.09: o .7z sai sem o arquivo e o teste do
+ * arquivo passa). Aqui um 7zz de mentira imita essa saída, o SevenZip é o de
+ * verdade e o disco também.
+ */
+describe("backup incompleto não entra na retenção como completo", () => {
+  const P1 = projectTargetId("p1");
+
+  async function seteZipQueAvisa(): Promise<string> {
+    const bin = path.join(dir, "7zz-aviso");
+    await writeFile(
+      bin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+process.stdin.resume();
+process.stdin.on("end", () => {
+  if (args[0] === "i") process.exit(0);
+  const archive = args.find((a) => a.endsWith(".7z"));
+  fs.writeFileSync(archive, "parcial");
+  const first = args.filter((a) => a.startsWith("/") && !a.endsWith(".7z"))[0];
+  process.stderr.write("Scan WARNINGS for files and folders:\\n\\n" + first + "/app.sql : errno=2 : No such file or directory\\n");
+  process.exit(1);
+});
+`,
+    );
+    const { chmod } = await import("node:fs/promises");
+    await chmod(bin, 0o755);
+    return bin;
+  }
+
+  it("7-Zip com código 1: o backup falha com os arquivos no motivo e a retenção não apaga a cópia completa", async () => {
+    await service.updateTarget(P1, { localKeep: 1 }, "admin");
+    const completa = await backup();
+    expect(completa.status).toBe("success");
+    const { SevenZip } = await import("../src/services/backup-archive.js");
+    service = build({ archiver: new SevenZip({ bin: await seteZipQueAvisa() }) });
+    now += H;
+    const r = await backup();
+    expect(r.status).toBe("failed");
+    expect(r.error).toMatch(/não conseguiu ler 1 arquivo\(s\): bancos\/app\.sql \(não encontrado\)/);
+    expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([completa.fileName]);
+    expect((await service.status()).targets.find((t) => t.id === P1)!.lastSuccessAt).toBe(completa.finishedAt);
+    expect(notices.at(-1)).toMatchObject({ kind: "backup_failed" });
+  });
+
+  it("painel: compacta uma cópia do diretório de dados, não os arquivos em uso", async () => {
+    // 7-Zip de mentira que, no meio da compactação, vê um arquivo do painel
+    // sumir (gravação atômica de outro serviço, limpeza) — como o real, pula o que sumiu.
+    const vistos: string[] = [];
+    archiver.create = async (archive, inputs) => {
+      await rm(path.join(dir, "users.json"), { force: true });
+      const files: Record<string, string> = {};
+      for (const i of inputs) {
+        vistos.push(i);
+        if (!existsSync(i)) continue;
+        const s = await stat(i);
+        if (s.isFile()) files[path.basename(i)] = (await readFile(i)).toString("base64");
+      }
+      await writeFile(archive, JSON.stringify({ password: null, files }));
+    };
+    await mkdir(path.join(dir, "mail"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "config.json.123-abcd.tmp"), "meia gravação");
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(vistos.every((i) => !i.startsWith(dir + path.sep + "users.json"))).toBe(true);
+    const files = Object.keys((JSON.parse(await readFile(path.join(dir, "backups", "_painel", r.fileName!), "utf8")) as { files: Record<string, string> }).files);
+    expect(files).toContain("users.json");
+  });
+
+  it("painel: arquivo do diretório de dados que não pode ser lido faz o backup falhar dizendo qual", async () => {
+    const { chmod } = await import("node:fs/promises");
+    await writeFile(path.join(dir, "trancado.json"), "{}");
+    await chmod(path.join(dir, "trancado.json"), 0o000);
+    try {
+      const r = await backup("panel");
+      expect(r.status).toBe("failed");
+      expect(r.error).toMatch(/trancado\.json/);
+    } finally {
+      await chmod(path.join(dir, "trancado.json"), 0o600);
+    }
+  });
+
+  it("painel: arquivo que some entre listar e copiar fica de fora sem falhar; links e subpastas são copiados", async () => {
+    await writeFile(path.join(dir, "sumiu.json"), "{}");
+    await mkdir(path.join(dir, "certificados", "site"), { recursive: true });
+    await writeFile(path.join(dir, "certificados", "site", "cert.pem"), "pem");
+    await symlink("certificados/site/cert.pem", path.join(dir, "atalho.pem"));
+    // o statfs roda depois de listar e antes de copiar: é o momento de "sumir"
+    service = build({
+      statfs: async () => {
+        await rm(path.join(dir, "sumiu.json"), { force: true });
+        return { bavail: free, bsize: 1, blocks: 100 * 1024 ** 3 };
+      },
+    });
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    const files = Object.keys((JSON.parse(await readFile(path.join(dir, "backups", "_painel", r.fileName!), "utf8")) as { files: Record<string, string> }).files);
+    expect(files).toEqual(expect.arrayContaining(["certificados/site/cert.pem", "atalho.pem", "users.json"]));
+    expect(files).not.toContain("sumiu.json");
+  });
+
+  it("painel: arquivo ilegível numa subpasta: o motivo diz o caminho dele", async () => {
+    const { chmod } = await import("node:fs/promises");
+    await mkdir(path.join(dir, "mail", "sub"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "sub", "chave.key"), "x");
+    await chmod(path.join(dir, "mail", "sub", "chave.key"), 0o000);
+    try {
+      const r = await backup("panel");
+      expect(r.status).toBe("failed");
+      expect(r.error).toMatch(/"mail\/sub\/chave\.key" do diretório de dados do painel \(sem permissão de leitura\)/);
+    } finally {
+      await chmod(path.join(dir, "mail", "sub", "chave.key"), 0o600);
+    }
+  });
+
+  it("retentionVictims: N mais novas ficam; a última completa também, se nenhuma das que ficam for completa", () => {
+    const completas = new Set(["a", "c"]);
+    const ok = (f: string) => completas.has(f);
+    expect(retentionVictims(["a", "b", "c", "d"], 2, ok)).toEqual(["a", "b"]); // "c" fica entre as 2
+    expect(retentionVictims(["a", "b", "c", "d", "e"], 2, ok)).toEqual(["a", "b"]); // "c" é a última completa
+    expect(retentionVictims(["a", "b"], 5, ok)).toEqual([]);
+    expect(retentionVictims(["x", "y", "z"], 1, () => false)).toEqual(["x", "y"]); // nenhuma completa: como antes
+  });
+
+  function comRedis(save: (script: string) => Promise<string>): void {
+    docker.containers.push({ id: "c-redis", name: "paas-loja-cache-1", service: "cache", running: true });
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) => [
+      ...(await inspect(ids.filter((i) => i !== "c-redis"))),
+      { Name: "/cache", Config: { Image: "redis:7", Env: [], Labels: { "com.docker.compose.service": "cache" } }, Mounts: [], State: { Running: true } },
+    ];
+    const capture = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script) => (script.includes("SAVE") ? save(script) : capture(c, script));
+  }
+
+  it("SAVE do Redis que falha ou não responde OK: aviso explícito, sem contar como completo", async () => {
+    comRedis(async () => "NOAUTH Authentication required.\n");
+    await service.updateTarget(P1, { choices: { "db:cache": true } }, "admin");
+    const r = await backup();
+    expect(r.status).toBe("warning");
+    expect(r.warnings.join(" ")).toMatch(/cache: o Redis não confirmou o SAVE \(NOAUTH Authentication required\.\)/);
+    expect(r.warnings.join(" ")).toMatch(/incompleto/);
+    expect((await service.status()).targets.find((t) => t.id === P1)!.lastSuccessAt).toBeNull();
+    // erro do comando (código diferente de zero) também
+    docker.execCapture = async (c, script) => (script.includes("SAVE") ? Promise.reject(new Error("redis-cli: conexão recusada")) : "app\n");
+    now += H;
+    const r2 = await backup();
+    expect(r2.warnings.join(" ")).toMatch(/não confirmou o SAVE \(redis-cli: conexão recusada\)/);
+  });
+
+  it("retenção: cópias incompletas nunca levam embora a última completa (na VPS e fora)", async () => {
+    await connect();
+    let ok = true;
+    comRedis(async () => (ok ? "OK\n" : "ERR MISCONF\n"));
+    await service.updateTarget(P1, { localKeep: 1, remoteKeep: 1, choices: { "db:cache": true } }, "admin");
+    const completa = await backup();
+    expect(completa.status).toBe("success");
+    ok = false;
+    for (let i = 0; i < 3; i++) {
+      now += H;
+      expect((await backup()).status).toBe("warning");
+    }
+    const locais = await readdir(path.join(dir, "backups", "loja"));
+    expect(locais).toContain(completa.fileName);
+    expect(locais).toHaveLength(2); // a completa + a incompleta mais nova
+    const fora = (await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key));
+    expect(fora).toContain(completa.fileName);
+    expect(fora).toHaveLength(2);
+    // uma completa nova: aí sim a retenção volta ao normal
+    ok = true;
+    now += H;
+    const nova = await backup();
+    expect(nova.status).toBe("success");
+    expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([nova.fileName]);
+    expect((await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key))).toEqual([nova.fileName]);
   });
 });

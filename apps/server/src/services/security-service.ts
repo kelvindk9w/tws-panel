@@ -2,7 +2,7 @@
  * security-service.ts — orquestra scan/plano/execução de segurança e persiste
  * o histórico em disco (data/security-history.json).
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   SECURITY_PHASES,
@@ -26,6 +26,7 @@ import {
 import { resolveTerminalAccess, type ServerConfig } from "../config.js";
 import { BackgroundMirrorRunner, TerminalRelayRunner } from "./terminal-runner.js";
 import type { TerminalService } from "./terminal-service.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Callback de auditoria para comandos executados no host real. */
 export type SecurityAuditHook = (action: string, detail: string) => void;
@@ -424,13 +425,13 @@ export class SecurityService {
 
   private async appendHistory(entry: SecurityHistoryEntry): Promise<void> {
     try {
-      const entries = await this.loadHistory();
-      entries.push(entry);
-      const trimmed = trimHistoryPreservingBefore(entries);
-      await mkdir(path.dirname(this.historyFile), { recursive: true });
-      await writeFile(this.historyFile, JSON.stringify({ entries: trimmed }, null, 2) + "\n", {
-        encoding: "utf8",
-        mode: 0o600,
+      // ler → acrescentar → gravar na fila do arquivo (services/json-file.ts):
+      // varredura e fase terminando juntas não apagam o registro uma da outra
+      await withFileLock(this.historyFile, async () => {
+        const entries = await this.loadHistory();
+        entries.push(entry);
+        const trimmed = trimHistoryPreservingBefore(entries);
+        await writeFileAtomic(this.historyFile, JSON.stringify({ entries: trimmed }, null, 2) + "\n");
       });
     } catch {
       // histórico é best-effort; nunca derruba a requisição
@@ -450,11 +451,7 @@ export class SecurityService {
   /** Persiste o relatório completo (sobrevive a restart do painel). Best-effort. */
   private async persistLastReport(report: SecurityScanReport): Promise<void> {
     try {
-      await mkdir(path.dirname(this.lastReportFile), { recursive: true });
-      await writeFile(this.lastReportFile, JSON.stringify(report, null, 2) + "\n", {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+      await writeFileAtomic(this.lastReportFile, JSON.stringify(report, null, 2) + "\n");
     } catch {
       // cache em disco é best-effort; nunca derruba a requisição
     }
@@ -511,11 +508,7 @@ export class SecurityService {
         if (runId !== undefined) runs[job.id] = runId;
       }
       const toSave: JobsFile = { jobs: saved, runs };
-      await mkdir(path.dirname(this.jobsFile), { recursive: true });
-      await writeFile(this.jobsFile, JSON.stringify(toSave, null, 2) + "\n", {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+      await writeFileAtomic(this.jobsFile, JSON.stringify(toSave, null, 2) + "\n");
     } catch {
       // jobs persistidos são best-effort; nunca derruba a requisição
     }

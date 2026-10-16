@@ -207,7 +207,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     log: (m) => app.log.warn(m),
     // Depois de preparar a restauração do painel: encerra o processo e o
     // Docker (restart: unless-stopped) sobe de novo; a troca acontece na
-    // subida (index.ts → applyPendingPanelRestore).
+    // subida (index.ts → restorePanelAtBoot), que termina ou desfaz a troca.
     restartPanel: () => {
       app.log.warn("Backups: reiniciando o painel para terminar a restauração.");
       process.kill(process.pid, "SIGTERM");

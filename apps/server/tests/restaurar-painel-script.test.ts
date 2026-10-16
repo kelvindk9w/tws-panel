@@ -30,7 +30,9 @@ afterEach(async () => {
  * nome; com senha, só se a linha recebida for SENHA. "run ... sh -c" (a
  * extração) grava o que recebeu; "exec" diz que o pedido já sumiu.
  */
-async function montar(opts: { image?: boolean; running?: boolean; markerStays?: boolean; extractFails?: boolean } = {}) {
+async function montar(
+  opts: { image?: boolean; running?: boolean; markerStays?: boolean; extractFails?: boolean; halfway?: boolean; undone?: boolean } = {},
+) {
   const repo = path.join(dir, "tws-panel");
   const bin = path.join(dir, "bin");
   await mkdir(path.join(repo, "scripts"), { recursive: true });
@@ -44,7 +46,11 @@ case "$1" in
   image) ${opts.image === false ? "exit 1" : "exit 0"} ;;
   ps) ${opts.running === false ? "true" : "echo tws-panel"} ;;
   stop|start) echo "$2" ;;
-  exec) ${opts.markerStays ? "exit 1" : "exit 0"} ;;
+  exec)
+    case "$*" in
+      *"node -e"*) ${opts.undone ? 'echo "A troca falhou no meio (disco cheio) e foi desfeita."; exit 2' : "exit 0"} ;;
+      *) ${opts.markerStays ? "exit 1" : "exit 0"} ;;
+    esac ;;
   run)
     input="$(cat)"
     echo "[$input]" >> "${stdin}"
@@ -55,6 +61,7 @@ case "$1" in
         esac
         exit 0 ;;
       *"-c "*"7zz x"*) ${opts.extractFails ? "exit 2" : "exit 0"} ;;
+      *" conferir "*) ${opts.halfway ? "exit 1" : "exit 0"} ;;
       *) exit 0 ;;
     esac ;;
   *) exit 0 ;;
@@ -86,7 +93,7 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
     const r = rodar(m, [file]);
     expect(r.status, r.stderr + r.stdout).toBe(0);
     const calls = await readFile(m.log, "utf8");
-    const order = ["--entrypoint 7zz", "stop tws-panel", "-v paas_data:/data", "start tws-panel", "exec tws-panel"].map((s) => calls.indexOf(s));
+    const order = ["--entrypoint 7zz", "stop tws-panel", "-v paas_data:/data -v", "start tws-panel", "exec tws-panel"].map((s) => calls.indexOf(s));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(calls).toContain(`-v ${dir}:/entrada:ro tws-panel:latest t -bso0 -bsp0 /entrada/2026-10-14_03-00.7z`);
@@ -100,7 +107,7 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
     const r = rodar(m, [file]);
     expect(r.status, r.stderr + r.stdout).toBe(0);
     const calls = await readFile(m.log, "utf8");
-    const extracao = calls.slice(calls.indexOf("-v paas_data:/data"));
+    const extracao = calls.slice(calls.indexOf("-v paas_data:/data -v"));
     expect(extracao).toMatch(/umask 077/);
     expect(extracao).toMatch(/chmod -R go-rwx "\$1"/);
     expect(extracao.indexOf("umask 077")).toBeLessThan(extracao.indexOf("7zz x"));
@@ -127,7 +134,7 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
     expect(vazia.stderr).toMatch(/nenhuma senha foi digitada/);
     const calls = await readFile(m.log, "utf8");
     expect(calls).not.toMatch(/^stop /m);
-    expect(calls).not.toContain("paas_data:/data");
+    expect(calls).not.toContain("paas_data:/data -v");
   });
 
   it("senha pela variável PAAS_BACKUP_PASSWORD (sem perguntar)", async () => {
@@ -156,6 +163,45 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/docker logs tws-panel/);
     expect(await readFile(m.log, "utf8")).not.toMatch(/^stop /m);
+  });
+
+  it("troca pela metade no volume: para antes de parar o painel ou apagar a pasta extraída", async () => {
+    const m = await montar({ halfway: true });
+    const r = rodar(m, [await arquivo("2026-10-14_03-00.7z")]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/restauração do painel pela metade/);
+    expect(r.stderr).toMatch(/docker start tws-panel/);
+    const calls = await readFile(m.log, "utf8");
+    expect(calls).toContain("conferir /data/backups/.restaurar-painel.progresso.json");
+    expect(calls).not.toMatch(/^stop /m);
+    expect(calls).not.toContain("7zz x");
+  });
+
+  it("troca que o painel desfez: avisa que voltou ao estado de antes e por quê (sem dizer 'pronto')", async () => {
+    const m = await montar({ undone: true });
+    const r = rodar(m, [await arquivo("2026-10-14_03-00.7z")]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/foi desfeita: o painel voltou ao estado de antes/);
+    expect(r.stderr).toMatch(/disco cheio/);
+    expect(r.stdout).not.toMatch(/pronto\./);
+  });
+
+  it("o conferidor do histórico (node) acha o registro certo", async () => {
+    // roda o mesmo JavaScript do script contra um histórico de verdade
+    const sh = await readFile(SH, "utf8");
+    const js = /CHECK_JS='([\s\S]*?)'\n/.exec(sh)![1]!.replace("/data/backups-history.json", path.join(dir, "h.json"));
+    const hist = (entries: unknown[]) => writeFile(path.join(dir, "h.json"), JSON.stringify({ entries }));
+    const run = (now: string) => spawnSync(process.execPath, ["-e", js, now], { encoding: "utf8" });
+    const base = { operation: "restore", target: "panel", queuedAt: "2026-10-14T12:00:00Z" };
+    await hist([{ ...base, status: "success" }]);
+    expect(run("2026-10-14T12:00:00Z").status).toBe(0);
+    await hist([{ ...base, status: "failed", error: "desfeita (motivo)" }]);
+    const falha = run("2026-10-14T12:00:00Z");
+    expect(falha.status).toBe(2);
+    expect(falha.stdout).toContain("desfeita (motivo)");
+    expect(run("2026-10-15T00:00:00Z").status).toBe(3);
+    await writeFile(path.join(dir, "h.json"), "{");
+    expect(run("2026-10-14T12:00:00Z").status).toBe(3);
   });
 
   it("argumentos: sem arquivo, arquivo que não existe, não .7z, dois arquivos, sem imagem e --help", async () => {
