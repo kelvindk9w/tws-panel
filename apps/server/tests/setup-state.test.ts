@@ -82,4 +82,14 @@ describe("SETUP_STEPS", () => {
     expect(SETUP_STEPS[0]).toMatchObject({ id: 0, available: true });
     expect(SETUP_STEPS.find((s) => s.key === "admin")?.available).toBe(true);
   });
+
+  it("avançar o passo e concluir ao mesmo tempo: nenhuma das duas mudanças se perde", async () => {
+    for (let i = 0; i < 5; i++) {
+      const store = new SetupStateStore(dir);
+      await store.reset();
+      await Promise.all([store.setStep(3), store.complete(), store.setStep(3)]);
+      const final = await new SetupStateStore(dir).load();
+      expect(final).toMatchObject({ currentStep: 3, completed: true });
+    }
+  });
 });

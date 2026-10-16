@@ -211,4 +211,11 @@ describe("SecurityService.history — retomada após restart do painel", () => {
   it("sem arquivo de histórico → applied null", async () => {
     expect((await freshService().history()).applied).toBeNull();
   });
+
+  it("registros paralelos no histórico não se perdem (ler-alterar-gravar na fila do arquivo)", async () => {
+    const service = freshService() as unknown as { appendHistory: (e: SecurityHistoryEntry) => Promise<void> };
+    await Promise.all(Array.from({ length: 12 }, (_, i) => service.appendHistory(SCAN(`2026-08-20T10:${String(i).padStart(2, "0")}:00Z`, 40 + i))));
+    const { entries } = await freshService().history();
+    expect(entries).toHaveLength(12);
+  });
 });
