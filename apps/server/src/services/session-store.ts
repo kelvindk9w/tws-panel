@@ -11,6 +11,12 @@
  * gravações e desfeita em memória se a gravação falhar, com o erro
  * `storage_write_failed` chegando a quem pediu. Revogação é segurança: uma
  * sessão dada como encerrada não pode voltar a valer depois de um reinício.
+ *
+ * `onRevoked` avisa quem guarda conexões presas a uma sessão (o WebSocket do
+ * terminal) quando ela deixa de valer: só DEPOIS de a revogação estar no
+ * disco — uma revogação que falhou não derruba nada, porque a sessão continua
+ * valendo. A expiração não passa por aqui: quem guarda conexão confere
+ * `expiresAt` por conta própria (ver isSessionExpired).
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -39,6 +45,7 @@ export class SessionStore {
   private loading: Promise<void> | null = null;
   private secret: Buffer | null = null;
   private writing: Promise<void> = Promise.resolve();
+  private readonly revokedListeners = new Set<(ids: readonly string[]) => void>();
 
   constructor(dataDir: string) {
     this.file = path.join(dataDir, "sessions.json");
@@ -60,6 +67,18 @@ export class SessionStore {
     // atômica: uma queda no meio nunca deixa a chave pela metade (todas as sessões cairiam)
     await writeFileAtomic(this.secretFile, generated.toString("hex") + "\n");
     this.secret = generated;
+  }
+
+  /**
+   * Registra quem quer saber das sessões revogadas (logout, troca de senha,
+   * "Recomeçar do zero"). Recebe os ids que deixaram de valer. Devolve a
+   * função que cancela o registro.
+   */
+  onRevoked(listener: (ids: readonly string[]) => void): () => void {
+    this.revokedListeners.add(listener);
+    return () => {
+      this.revokedListeners.delete(listener);
+    };
   }
 
   /** Carga única e compartilhada (chamadas concorrentes esperam a mesma leitura). */
@@ -129,7 +148,7 @@ export class SessionStore {
     if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
     const session = this.sessions.find((s) => s.id === id);
     if (!session) return null;
-    if (Date.parse(session.expiresAt) <= Date.now()) {
+    if (isSessionExpired(session)) {
       // Expirada é recusada mesmo que a limpeza não chegue ao disco: a
       // validade vem de expiresAt, não da presença no arquivo.
       await this.destroy(id).catch(() => undefined);
@@ -138,33 +157,48 @@ export class SessionStore {
     return session;
   }
 
+  /**
+   * A sessão ainda vale agora? Conferência SÍNCRONA, só em memória (sem
+   * cookie e sem disco): para quem guarda conexão aberta e precisa fechar a
+   * corrida entre resolver a sessão e registrar a conexão.
+   */
+  isActive(id: string): boolean {
+    const session = this.sessions.find((s) => s.id === id);
+    return session !== undefined && !isSessionExpired(session);
+  }
+
   async destroy(id: string): Promise<void> {
-    await this.ensureLoaded();
-    await this.persist(() => {
-      const restantes = this.sessions.filter((s) => s.id !== id);
-      if (restantes.length !== this.sessions.length) this.sessions = restantes;
-    });
+    await this.revoke((s) => s.id === id);
   }
 
   /** Encerra todas as sessões ("Recomeçar do zero"). */
   async destroyAll(): Promise<void> {
-    await this.ensureLoaded();
-    await this.persist(() => {
-      if (this.sessions.length > 0) this.sessions = [];
-    });
+    await this.revoke(() => true);
   }
 
   /** Invalida todas as sessões do usuário, exceto a atual (troca de senha). */
   async destroyOthersForUser(userId: string, keepSessionId: string): Promise<number> {
+    return (await this.revoke((s) => s.userId === userId && s.id !== keepSessionId)).length;
+  }
+
+  /** Remove as sessões que casam com `match`, grava e avisa os ouvintes. */
+  private async revoke(match: (s: Session) => boolean): Promise<string[]> {
     await this.ensureLoaded();
-    return this.persist(() => {
-      const restantes = this.sessions.filter(
-        (s) => s.userId !== userId || s.id === keepSessionId,
-      );
-      const removed = this.sessions.length - restantes.length;
-      if (removed > 0) this.sessions = restantes;
-      return removed;
+    const ids = await this.persist(() => {
+      const removidas = this.sessions.filter(match).map((s) => s.id);
+      if (removidas.length > 0) this.sessions = this.sessions.filter((s) => !match(s));
+      return removidas;
     });
+    if (ids.length > 0) {
+      for (const listener of this.revokedListeners) {
+        try {
+          listener(ids);
+        } catch {
+          // um ouvinte com defeito não desfaz a revogação já gravada
+        }
+      }
+    }
+    return ids;
   }
 
   /**
@@ -203,6 +237,11 @@ export class SessionStore {
     const data: SessionsFile = { sessions: this.sessions };
     await writeFileAtomic(this.file, JSON.stringify(data, null, 2) + "\n");
   }
+}
+
+/** A sessão já venceu? (a mesma regra de resolve(), para quem guarda conexão aberta) */
+export function isSessionExpired(session: Pick<Session, "expiresAt">, now = Date.now()): boolean {
+  return Date.parse(session.expiresAt) <= now;
 }
 
 /**

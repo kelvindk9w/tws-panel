@@ -15,6 +15,7 @@ import {
   INGEST_MODES,
   MAIL_DEFAULT_PORTS,
   MONITOR_DEFAULT_INTERVAL_MS,
+  MONITOR_MAX_INTERVAL_MS,
   MONITOR_MIN_INTERVAL_MS,
   PAAS_CADDY_CONTAINER,
   PAAS_LABEL_MANAGED,
@@ -221,6 +222,13 @@ describe("monitoring contract", () => {
     expect(MONITOR_DEFAULT_INTERVAL_MS).toBe(6 * 60 * 60 * 1000);
     expect(MONITOR_MIN_INTERVAL_MS).toBe(10_000);
     expect(MONITOR_MIN_INTERVAL_MS).toBeLessThan(MONITOR_DEFAULT_INTERVAL_MS);
+  });
+
+  it("intervalo máximo é 168 h (uma semana) e cabe no timer do Node (achado 17)", () => {
+    expect(MONITOR_MAX_INTERVAL_MS).toBe(168 * 60 * 60 * 1000);
+    // acima de 2^31-1 ms o Node troca o atraso por 1 ms
+    expect(MONITOR_MAX_INTERVAL_MS).toBeLessThanOrEqual(2 ** 31 - 1);
+    expect(MONITOR_DEFAULT_INTERVAL_MS).toBeLessThan(MONITOR_MAX_INTERVAL_MS);
   });
 });
 

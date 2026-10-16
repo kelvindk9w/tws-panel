@@ -17,7 +17,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,12 @@ const PUBLIC_IP = "203.0.113.10";
 const PORTS = { smtp: 10125, submission: 10587, submissions: 10465, imap: 10143, imaps: 10993, http: 18081 };
 
 const DATA_DIR = mkdtempSync(path.join(tmpdir(), "paas-mail-e2e-"));
+// A API só aceita projeto "existing" dentro da pasta de projetos: o exemplo
+// da Fase 2 é copiado para uma pasta de projetos isolada (o deploy grava
+// .env e override na pasta do projeto — o exemplo do repositório não muda).
+const PROJECTS_DIR = mkdtempSync(path.join(tmpdir(), "paas-mail-e2e-projects-"));
+const APP_DIR = path.join(PROJECTS_DIR, "compose-app");
+cpSync(path.join(ROOT, "examples/compose-app"), APP_DIR, { recursive: true });
 let server: ChildProcess | null = null;
 let passed = 0;
 
@@ -113,6 +119,7 @@ server = spawn("pnpm", ["--filter", "@paas/server", "exec", "tsx", "src/index.ts
     PORT: String(API_PORT),
     SETUP_TOKEN: TOKEN,
     PAAS_DATA_DIR: DATA_DIR,
+    PAAS_PROJECTS_DIR: PROJECTS_DIR,
     PAAS_CADDY_HTTP_PORT: "18080",
     PAAS_CADDY_HTTPS_PORT: "18443",
     PAAS_STALWART_PORT_SMTP: String(PORTS.smtp),
@@ -305,7 +312,7 @@ try {
   const created = await api<{ project: { id: string; slug: string } }>("POST", "/api/projects", {
     name: "App Email E2E",
     ingestMode: "existing",
-    source: path.join(ROOT, "examples/compose-app"),
+    source: APP_DIR,
     domain: "app-email-e2e.localhost",
     proxyService: "api",
     proxyPort: 3000,
@@ -404,6 +411,7 @@ try {
     await run("docker", args).catch(() => ({ stdout: "", stderr: "" }));
   }
   rmSync(DATA_DIR, { recursive: true, force: true });
+  rmSync(PROJECTS_DIR, { recursive: true, force: true });
   console.log("\n\x1b[36m▶ Containers/volumes de teste removidos.\x1b[0m");
 }
 

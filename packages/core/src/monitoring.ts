@@ -189,3 +189,9 @@ export interface MonitorRunResponse {
 export const MONITOR_DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Intervalo mínimo aceito pela API (evita busy-loop). */
 export const MONITOR_MIN_INTERVAL_MS = 10 * 1000;
+/**
+ * Intervalo máximo aceito: 168 h (uma semana), o mesmo teto da tela de
+ * Notificações. Precisa ficar abaixo de 2^31-1 ms (~24,8 dias): acima disso o
+ * Node troca o atraso do setInterval por 1 ms e o scan passa a rodar sem parar.
+ */
+export const MONITOR_MAX_INTERVAL_MS = 168 * 60 * 60 * 1000;

@@ -336,3 +336,65 @@ describe("GET /api/security/phases/:phase/manual — schema", () => {
     expect(mocks.manualCommands).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Achado 21: a tela comparava o prazo absoluto do servidor com o relógio do
+ * navegador. Com o computador do operador 10 min adiantado, uma janela nova de
+ * 5 min aparecia vencida e os botões travavam. O servidor agora manda também
+ * quanto falta (medido no relógio dele), e a tela conta a partir disso.
+ */
+describe("GET /api/security/jobs/:id — tempo restante pelo relógio do servidor", () => {
+  it("job aguardando confirmação traz rollbackRemainingMs calculado no servidor", async () => {
+    mocks.getJob.mockReturnValue({
+      ...JOB,
+      status: "awaiting_confirmation",
+      rollbackScheduled: true,
+      rollbackDeadline: new Date(Date.now() + 120_000).toISOString(),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/security/jobs/job1", headers: auth });
+    expect(res.statusCode).toBe(200);
+    const remaining = res.json().job.rollbackRemainingMs as number;
+    expect(remaining).toBeGreaterThan(110_000);
+    expect(remaining).toBeLessThanOrEqual(120_000);
+  });
+
+  it("prazo já vencido → 0; sem prazo → null", async () => {
+    mocks.getJob.mockReturnValue({
+      ...JOB,
+      status: "awaiting_confirmation",
+      rollbackDeadline: new Date(Date.now() - 5_000).toISOString(),
+    });
+    let res = await app.inject({ method: "GET", url: "/api/security/jobs/job1", headers: auth });
+    expect(res.json().job.rollbackRemainingMs).toBe(0);
+    mocks.getJob.mockReturnValue(JOB);
+    res = await app.inject({ method: "GET", url: "/api/security/jobs/job1", headers: auth });
+    expect(res.json().job.rollbackRemainingMs).toBeNull();
+  });
+
+  it("não altera o job guardado no serviço (o campo é só da resposta)", async () => {
+    const stored = { ...JOB, rollbackDeadline: new Date(Date.now() + 60_000).toISOString() };
+    mocks.getJob.mockReturnValue(stored);
+    await app.inject({ method: "GET", url: "/api/security/jobs/job1", headers: auth });
+    expect(stored).not.toHaveProperty("rollbackRemainingMs");
+  });
+
+  it("apply e confirm-access também mandam o campo", async () => {
+    const awaiting = { ...JOB, status: "awaiting_confirmation", rollbackDeadline: new Date(Date.now() + 60_000).toISOString() };
+    mocks.apply.mockResolvedValue(awaiting);
+    mocks.confirmAccess.mockResolvedValue(awaiting);
+    const applied = await app.inject({
+      method: "POST",
+      url: "/api/security/apply",
+      headers: auth,
+      payload: { phase: "00", dryRun: true },
+    });
+    expect(applied.json().job.rollbackRemainingMs).toBeGreaterThan(50_000);
+    const confirmed = await app.inject({
+      method: "POST",
+      url: "/api/security/confirm-access",
+      headers: auth,
+      payload: { jobId: "job1" },
+    });
+    expect(confirmed.json().job.rollbackRemainingMs).toBeGreaterThan(50_000);
+  });
+});

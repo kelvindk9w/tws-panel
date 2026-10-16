@@ -6,7 +6,7 @@
  * em andamento. O card mostra o índice cacheado + indicador discreto
  * "atualizando…" em vez de bloquear a tela.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SecurityPage } from "../src/pages/SecurityPage";
@@ -139,5 +139,47 @@ describe("SecurityPage — evolução sem misturar réguas", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByTestId("evolution")).toHaveTextContent("Evolução: 58 → 86 ▲");
+  });
+});
+
+/**
+ * Achado 17: o campo "Intervalo (horas)" aceitava qualquer valor > 0. A partir
+ * de ~597 h o atraso passa do limite do timer do Node (2^31-1 ms) e o scan
+ * passava a rodar a cada milissegundo. A tela agora segue o mesmo teto das
+ * Notificações: de 1 a 168 h.
+ */
+describe("SecurityPage — intervalo do monitoramento", () => {
+  it("recusa 720 h sem chamar a API e explica o limite", async () => {
+    mockSecurityFetch({ report: REPORT, cached: true, refreshing: false });
+    render(
+      <MemoryRouter>
+        <SecurityPage />
+      </MemoryRouter>,
+    );
+    const input = await screen.findByLabelText("Intervalo (horas)");
+    expect(input).toHaveAttribute("max", "168");
+    fireEvent.change(input, { target: { value: "720" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    expect(await screen.findByText(/entre 1 e 168/)).toBeInTheDocument();
+    const calls = vi.mocked(fetch).mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET"]);
+    expect(calls).not.toContainEqual(["/api/security/monitor/config", "PUT"]);
+  });
+
+  it("aceita 168 h e envia o intervalo em milissegundos", async () => {
+    mockSecurityFetch({ report: REPORT, cached: true, refreshing: false });
+    render(
+      <MemoryRouter>
+        <SecurityPage />
+      </MemoryRouter>,
+    );
+    const input = await screen.findByLabelText("Intervalo (horas)");
+    fireEvent.change(input, { target: { value: "168" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    await waitFor(() => {
+      const put = vi
+        .mocked(fetch)
+        .mock.calls.find(([url, init]) => String(url).includes("/api/security/monitor/config") && init?.method === "PUT");
+      expect(put?.[1]?.body).toBe(JSON.stringify({ intervalMs: 168 * 3_600_000 }));
+    });
   });
 });

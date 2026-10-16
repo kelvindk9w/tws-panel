@@ -659,6 +659,12 @@ export class NotificationService {
       await this.telegram.sendMessage(this.token, t.chatId, d.message.text);
       return;
     }
+    // Confere a lista ATUAL a cada tentativa (como o Telegram acima): uma nova
+    // tentativa guardada não pode chegar a um endereço que o administrador já
+    // tirou dos avisos (ou ao e-mail desligado).
+    if (!this.config.email.recipients.includes(d.to!)) {
+      throw Object.assign(new Error("O endereço foi removido dos avisos antes do envio."), { permanent: true });
+    }
     const readiness = await this.emailReadiness();
     if (!readiness.ready) throw new Error(readiness.reason);
     await this.emailSender!.send({ to: d.to!, subject: d.message.subject, text: d.message.text, html: d.message.html });

@@ -102,3 +102,33 @@ export interface InstallManualCertificateRequest {
 export interface CertificateItemResponse {
   item: CertificateItem;
 }
+
+/**
+ * Id do certificado de um host: nome dos arquivos .crt/.key (painel, Caddy e
+ * Stalwart) e da seção [certificate.<id>] do Stalwart. Só letras minúsculas,
+ * números, hífen e sublinhado (arquivo e chave TOML sem aspas).
+ *
+ * Sem colisão (achado 7 da revisão): ponto vira "-" e hífen vira "--". Num
+ * hostname válido o hífen nunca encosta no ponto (o rótulo não começa nem
+ * termina com hífen), então um "-" sozinho só pode ser ponto e uma sequência
+ * par de hífens só pode ser hífen. Qualquer outro caractere (ex.: "*") vira
+ * "_<hex>_". Um nome sem hífen fica com o mesmo id da regra antiga.
+ */
+export function certificateFileId(host: string): string {
+  let out = "";
+  for (const ch of host.toLowerCase()) {
+    if (/[a-z0-9]/.test(ch)) out += ch;
+    else if (ch === ".") out += "-";
+    else if (ch === "-") out += "--";
+    else out += `_${ch.codePointAt(0)!.toString(16)}_`;
+  }
+  return out;
+}
+
+/**
+ * Regra antiga (trocava qualquer sequência fora de letra/número por hífen e
+ * colidia). Só para achar o que já está gravado com o nome antigo e migrar.
+ */
+export function legacyCertificateFileId(host: string): string {
+  return host.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+}

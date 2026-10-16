@@ -21,6 +21,17 @@ export interface MonitorSchedulerOptions {
   onSkip?: () => void;
 }
 
+/**
+ * Maior atraso que o timer do Node aceita (2^31-1 ms, ~24,8 dias). Acima disso
+ * ele troca o atraso por 1 ms — um intervalo de 30 dias virava um scan por
+ * milissegundo. Última defesa: a API e o serviço já limitam a 168 h.
+ */
+export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+function safeDelay(intervalMs: number): number {
+  return Math.min(intervalMs, MAX_TIMER_DELAY_MS);
+}
+
 export class MonitorScheduler {
   private intervalMs: number;
   private readonly task: () => Promise<void>;
@@ -30,7 +41,7 @@ export class MonitorScheduler {
   private inFlightFlag = false;
 
   constructor(opts: MonitorSchedulerOptions) {
-    this.intervalMs = opts.intervalMs;
+    this.intervalMs = safeDelay(opts.intervalMs);
     this.task = opts.task;
     this.onTick = opts.onTick;
     this.onSkip = opts.onSkip;
@@ -62,7 +73,7 @@ export class MonitorScheduler {
 
   /** Altera o intervalo (reagenda se estiver rodando). */
   setIntervalMs(intervalMs: number): void {
-    this.intervalMs = intervalMs;
+    this.intervalMs = safeDelay(intervalMs);
     if (this.timer) {
       this.stop();
       this.start();

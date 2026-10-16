@@ -40,6 +40,7 @@
           "log": "[executor] alvo=host fase=02 script=02-ssh.sh dryRun=false rollbackDelay=300s\n...",
           "rollbackScheduled": true,
           "rollbackDeadline": "2026-08-24T10:15:16.000Z",
+          "rollbackRemainingMs": 299000,
           "error": null
         }
       }
@@ -65,6 +66,8 @@
     "Acompanhamento pelo frontend: POLLING simples via setTimeout, SEM WebSocket — a cada 1500ms (apps/web/src/pages/setup/SecurityStep.tsx:350) enquanto o status não é terminal (success/failed/rolled_back). Ao ver status='awaiting_confirmation', o polling FICA PARADO aguardando uma Promise resolvida pelo usuário (clique em 'confirmar' ou 'interromper') antes de continuar; ele não some da tela sozinho.",
     "CORRIGIDO nesta rodada: jobs agora são persistidos em data/security-jobs.json (SecurityService.persistJobs, chmod 0600) a CADA mudança de status — não só ao finalizar — e restaurados no boot (SecurityService.restoreJobsFromDisk, chamado por routes/security.ts antes de aceitar tráfego). Isso resolve exatamente o cenário anterior: antes, um restart do painel durante 'awaiting_confirmation' fazia este endpoint responder 404 job_not_found para um job cujo rollback agendado NO ALVO continuava correndo de forma independente — o operador perdia visibilidade justo quando precisava confirmar acesso.",
     "Regras de restauração (SecurityExecutor.restoreJobs, packages/security/src/executor.ts): jobs 'queued'/'running' viram 'failed' com uma nota explicando que o processo do painel reiniciou durante a execução (não há como saber o resultado real, então nunca ficam presos 'em execução' para sempre). Jobs 'awaiting_confirmation' são reagendados com o tempo RESTANTE da janela (rollbackDeadline - agora + 15s de folga) se ainda houver tempo, ou marcados 'rolled_back' imediatamente se a janela já expirou enquanto o painel estava fora do ar (assume-se que o rollback agendado no alvo já reverteu). Jobs terminais (success/failed/rolled_back) são restaurados como estão.",
-    "Retenção em disco: jobs NÃO-terminais (queued/running/awaiting_confirmation) nunca são descartados pelo teto; o teto de MAX_PERSISTED_JOBS=100 (security-service.ts) só afeta jobs terminais antigos, priorizando os mais recentes por createdAt."
+    "Retenção em disco: jobs NÃO-terminais (queued/running/awaiting_confirmation) nunca são descartados pelo teto; o teto de MAX_PERSISTED_JOBS=100 (security-service.ts) só afeta jobs terminais antigos, priorizando os mais recentes por createdAt.",
+    "rollbackRemainingMs (achado 21): toda resposta com job (GET /api/security/jobs/:id, POST /api/security/apply, confirm-access, undo-access) traz quanto falta para a reversão automática, medido no relógio do SERVIDOR na hora da resposta (withRemaining() em apps/server/src/routes/security.ts; null sem prazo, 0 se já venceu). O campo é só da resposta — não é persistido nem altera o job do executor. A tela (AccessTestAlert) conta a partir dele e usa o relógio local apenas para medir o tempo que passou; antes comparava rollbackDeadline com o relógio do navegador e, com o computador adiantado, a janela nascia vencida e os botões travavam.",
+    "Trava do executor (achado 23): SecurityExecutor.isBusy agora é 'um job rodando OU uma fase em awaiting_confirmation' (inclusive restaurada após reinício do painel). A trava só sai quando o job sai desse status: confirmado (success), desfeito (rolled_back) ou com o prazo vencido (flip para rolled_back em rollbackDeadline + 15 s). Desfazer que falhou no alvo mantém a trava."
   ]
 }

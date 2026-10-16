@@ -7,6 +7,7 @@
  * .env". Agora elas vão para o `.env` que o compose lê.
  */
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -83,6 +84,44 @@ describe("writeProjectDotenv", () => {
     const r = await writeProjectDotenv(src, work, {});
     expect(r.envFileArgs).toEqual([]);
     await expect(stat(path.join(src, ".env"))).rejects.toThrow();
+  });
+
+  // Achado 9 da revisão: apagar todas as variáveis no painel deixava o `.env`
+  // antigo na pasta (o clone é mantido entre deploys) e o container subia
+  // com o segredo que o dono acabou de apagar.
+  it("todas as variáveis excluídas: o .env gerado pelo painel some no próximo deploy", async () => {
+    gitInit();
+    await writeProjectDotenv(src, work, { API_KEY: "old-secret" });
+    const r = await writeProjectDotenv(src, work, {});
+    expect(r.envFileArgs).toEqual([]);
+    expect(existsSync(path.join(src, ".env"))).toBe(false);
+  });
+
+  it("todas excluídas com .env versionado: o paas.env some (o --env-file deixa de ser passado)", async () => {
+    gitInit();
+    await writeFile(path.join(src, ".env"), "DO_REPO=1\n");
+    execFileSync("git", ["-C", src, "add", ".env"]);
+    await writeProjectDotenv(src, work, { API_KEY: "old-secret" });
+    expect(existsSync(path.join(work, "paas.env"))).toBe(true);
+    const r = await writeProjectDotenv(src, work, {});
+    expect(r.envFileArgs).toEqual([]);
+    expect(existsSync(path.join(work, "paas.env"))).toBe(false);
+    // o .env do repositório não é tocado
+    expect(await readFile(path.join(src, ".env"), "utf8")).toBe("DO_REPO=1\n");
+  });
+
+  it("todas excluídas: um .env que o painel NÃO gerou (do dono, fora do git) fica intacto", async () => {
+    await writeFile(path.join(src, ".env"), "MEU=1\n");
+    await writeProjectDotenv(src, work, {});
+    expect(await readFile(path.join(src, ".env"), "utf8")).toBe("MEU=1\n");
+  });
+
+  it(".env deixou de ser versionado: o paas.env antigo some e as variáveis vão para o .env", async () => {
+    await writeFile(path.join(work, "paas.env"), "API_KEY='old-secret'\n");
+    const r = await writeProjectDotenv(src, work, { A: "1" });
+    expect(r.envFileArgs).toEqual([]);
+    expect(existsSync(path.join(work, "paas.env"))).toBe(false);
+    expect(await readFile(path.join(src, ".env"), "utf8")).toContain("A='1'");
   });
 });
 

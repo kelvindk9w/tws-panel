@@ -116,6 +116,9 @@ fi
 
 # --- Aplicação ---------------------------------------------------------------
 
+# Nunca por cima de uma aplicação que ainda aguarda confirmação (achado 23).
+require_no_pending_rollback "ssh"
+
 step "Garantindo OpenSSH server instalado"
 apt_install openssh-server
 ok "OpenSSH server presente"

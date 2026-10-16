@@ -398,6 +398,22 @@ describe("TerminalPanel — reconexão resiliente", () => {
     expect(screen.getByText("em uso em outra aba")).toBeInTheDocument();
   });
 
+  it("close 4401 (a sessão de login acabou): NÃO reconecta e diz para entrar de novo", async () => {
+    render(<TerminalPanel enabled={true} />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+
+    vi.useFakeTimers();
+    try {
+      act(() => lastWs().serverClose(4401));
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      expect(MockWebSocket.instances).toHaveLength(1); // sem sessão, reconectar só daria 401
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(screen.getByText("sessão encerrada")).toBeInTheDocument();
+    expect(screen.getByText(/Sua sessão no painel terminou/)).toBeInTheDocument();
+  });
+
   it("close 4000 (reattach do mesmo clientId por outra conexão): NÃO reconecta", async () => {
     render(<TerminalPanel enabled={true} />);
     await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());

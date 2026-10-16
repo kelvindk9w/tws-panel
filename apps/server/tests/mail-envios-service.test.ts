@@ -228,6 +228,59 @@ describe("leitura do registro (histórico)", () => {
     expect(files).toEqual(["2026-09-10.jsonl", "estado.json", "outro.txt"]);
   });
 
+  // Achado 18 da revisão: o leitor do registro é alterado linha a linha. Se a
+  // leitura falhava DEPOIS de passar por um recibo (DSN), os eventos eram
+  // descartados mas o leitor já dava o destinatário como encerrado — na
+  // leitura seguinte o mesmo recibo virava nada, e a entrega sumia de vez.
+  it("leitura que falha depois de passar por um recibo: a próxima leitura guarda a entrega", async () => {
+    const line = delivered("2026-10-04T14:00:00Z", "1", "loja@envio.test", "a@gmail.com");
+    let falhar = true;
+    const s = new MailEnviosService(
+      deps({
+        readLogs: async (_since, onLine) => {
+          onLine(line);
+          if (falhar) throw new Error("docker logs interrompido");
+        },
+      }),
+    );
+    expect(await s.collect()).toEqual({ added: 0 });
+    expect((await s.history({ days: 1 })).collectError).toContain("interrompido");
+
+    falhar = false;
+    expect(await s.collect()).toEqual({ added: 1 });
+    const h = await s.history({ days: 1 });
+    expect(h.items).toEqual([expect.objectContaining({ state: "delivered", to: "a@gmail.com" })]);
+    expect(h.collectError).toBeNull();
+  });
+
+  it("eventos gravados mas cursor não: a releitura não perde nem duplica a entrega", async () => {
+    logLines = [delivered("2026-10-04T14:00:00Z", "1", "loja@envio.test", "a@gmail.com")];
+    const estado = path.join(dir, "mail", "envios", "estado.json");
+    await mkdir(estado, { recursive: true }); // estado.json vira pasta: gravar o cursor falha
+    const s = new MailEnviosService(deps());
+    await expect(s.collect()).rejects.toThrow();
+    await rm(estado, { recursive: true });
+
+    await s.collect();
+    const h = await s.history({ days: 1 });
+    expect(h.items).toHaveLength(1);
+    expect(await s.collect()).toEqual({ added: 0 });
+    expect((await s.history({ days: 1 })).items).toHaveLength(1);
+  });
+
+  it("cancelar durante a leitura do registro não desfaz o cursor gravado pela leitura", async () => {
+    for (let i = 0; i < 15; i++) {
+      await rm(path.join(dir, "mail"), { recursive: true, force: true });
+      queueItems = [TEMP];
+      logLines = [delivered("2026-10-04T14:00:00Z", "1", "loja@envio.test", "a@gmail.com")];
+      const s = new MailEnviosService(deps());
+      await Promise.all([s.collect(), s.cancel(TEMP.id)]);
+      const estado = JSON.parse(await readFile(path.join(dir, "mail", "envios", "estado.json"), "utf8"));
+      expect(estado.cursor.at).toBe("2026-10-04T14:00:00.000Z");
+      expect(estado.firstEventAt).toBe("2026-10-04T14:00:00.000Z");
+    }
+  });
+
   it("estado corrompido: recomeça do zero sem quebrar", async () => {
     await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
     await writeFile(path.join(dir, "mail", "envios", "estado.json"), "{lixo");

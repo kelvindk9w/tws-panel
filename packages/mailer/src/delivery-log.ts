@@ -267,6 +267,18 @@ export class DeliveryLogReader {
     this.maxTracked = opts.maxTracked ?? 5000;
   }
 
+  /**
+   * Cópia independente do estado (o que cada tentativa já disse). Quem lê o
+   * registro trabalha numa cópia e só fica com ela depois de gravar os
+   * eventos: uma leitura que falha no meio não pode deixar o leitor achando
+   * que já entregou um resultado que não foi guardado.
+   */
+  clone(): DeliveryLogReader {
+    const copy = new DeliveryLogReader({ maxTracked: this.maxTracked });
+    for (const [id, t] of this.tracked) copy.tracked.set(id, structuredClone(t));
+    return copy;
+  }
+
   private track(queueId: string): Track {
     let t = this.tracked.get(queueId);
     if (t) {

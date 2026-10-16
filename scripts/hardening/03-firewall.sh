@@ -6,20 +6,25 @@
 # (5 min) desfaz tudo caso o operador não confirme acesso com `--confirm`.
 # Portas de e-mail (25/465/587/993) só com --profile mail.
 #
-# Uso: ./03-firewall.sh [--ssh-port 22] [--profile mail] [--dry-run] [--rollback] [--confirm]
+# Porta do SSH: detectada no próprio servidor (detect_ssh_ports, em lib.sh) —
+# a configuração efetiva do sshd e as portas em que ele escuta. `--ssh-port`
+# SOMA uma porta às detectadas (pode repetir), nunca as substitui: presumir a
+# 22 trancava quem tinha o SSH em outra porta (achado 24).
+#
+# Uso: ./03-firewall.sh [--ssh-port N]... [--profile mail] [--dry-run] [--rollback] [--confirm]
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "$(readlink -f "$0")")/lib.sh"
 
 MODE="apply"
-SSH_PORT="22"
+EXTRA_SSH_PORTS=""
 PROFILE=""
 SYSCTL_FILE="/etc/sysctl.d/99-paas-hardening.conf"
 REVERT_SCRIPT="${PAAS_STATE_DIR}/revert-firewall.sh"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ssh-port) SSH_PORT="${2:?--ssh-port exige um número}"; shift ;;
+    --ssh-port) EXTRA_SSH_PORTS="$EXTRA_SSH_PORTS ${2:?--ssh-port exige um número}"; shift ;;
     --profile)  PROFILE="${2:?--profile exige um nome}"; shift ;;
     --dry-run)  PAAS_DRY_RUN=1 ;;
     --rollback) MODE="rollback" ;;
@@ -32,9 +37,14 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-case "$SSH_PORT" in
-  ''|*[!0-9]*) die "porta inválida: $SSH_PORT" ;;
-esac
+for port in $EXTRA_SSH_PORTS; do
+  case "$port" in
+    ''|*[!0-9]*) die "porta inválida: $port" ;;
+  esac
+  if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    die "porta fora do intervalo 1-65535: $port"
+  fi
+done
 [ -z "$PROFILE" ] || [ "$PROFILE" = "mail" ] || die "profile desconhecido: $PROFILE (suportado: mail)"
 
 if [ "$MODE" = "confirm" ]; then
@@ -62,6 +72,9 @@ if [ "$MODE" = "rollback" ]; then
   exit 0
 fi
 
+# Nunca por cima de uma aplicação que ainda aguarda confirmação (achado 23).
+require_no_pending_rollback "firewall"
+
 step "Instalando UFW"
 apt_install ufw
 ok "UFW presente"
@@ -88,13 +101,15 @@ EOF
 fi
 ok "Rollback automático agendado — cancele com '$0 --confirm' após testar o acesso"
 
-step "Política padrão: deny incoming / allow outgoing"
-run ufw default deny incoming
-run ufw default allow outgoing
-ok "Política padrão definida"
-
-step "Liberando SSH (porta $SSH_PORT) ANTES de ativar o firewall"
-run ufw allow "$SSH_PORT/tcp" comment 'SSH'
+# Portas reais do SSH + as pedidas com --ssh-port (sem repetição).
+# shellcheck disable=SC2046,SC2086 # separação por espaço é intencional
+SSH_PORTS="$(printf '%s\n' $(detect_ssh_ports) $EXTRA_SSH_PORTS | sort -un | tr '\n' ' ')"
+SSH_PORTS="${SSH_PORTS% }"
+step "Liberando SSH (porta(s) $SSH_PORTS) ANTES de ativar o firewall"
+info "porta(s) em que o SSH deste servidor atende: $SSH_PORTS"
+for port in $SSH_PORTS; do
+  run ufw allow "$port/tcp" comment 'SSH'
+done
 ok "SSH liberado"
 
 step "Liberando HTTP/HTTPS"
@@ -111,7 +126,22 @@ else
   skip "Sem --profile mail — portas 25/465/587/993 permanecem fechadas"
 fi
 
+step "Política padrão: deny incoming / allow outgoing"
+# Só DEPOIS das regras do SSH: com o UFW já ativo, o "deny incoming" vale na
+# hora e, vindo antes do allow, deixava uma janela sem regra para o SSH.
+run ufw default deny incoming
+run ufw default allow outgoing
+ok "Política padrão definida"
+
 step "Ativando UFW"
+# Última trava anti-lockout: só ativa se TODAS as portas do SSH têm regra.
+if [ "$PAAS_DRY_RUN" != "1" ]; then
+  ADDED_RULES="$(ufw show added 2>/dev/null || true)"
+  for port in $SSH_PORTS; do
+    printf '%s\n' "$ADDED_RULES" | grep -qE "^ufw allow ${port}/tcp( |$)" \
+      || die "a regra do SSH na porta $port não aparece no UFW — firewall NÃO ativado (evita trancar o acesso)"
+  done
+fi
 if [ "$PAAS_DRY_RUN" = "1" ]; then
   echo "[dry-run] ufw --force enable"
 elif ! ufw --force enable; then

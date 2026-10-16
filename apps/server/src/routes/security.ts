@@ -7,6 +7,7 @@ import {
   type SecurityApplyResponse,
   type SecurityConfirmAccessResponse,
   type SecurityHistoryResponse,
+  type SecurityJob,
   type SecurityJobResponse,
   type SecurityManualCommandsResponse,
   type SecurityPhaseId,
@@ -15,6 +16,21 @@ import {
 } from "@paas/core";
 import { SecurityService } from "../services/security-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+
+/**
+ * Cópia do job com quanto falta para a reversão automática, medido AQUI, no
+ * relógio do servidor. A tela conta a partir disso em vez de comparar o prazo
+ * absoluto com o relógio do navegador — com o computador do operador
+ * adiantado, uma janela nova aparecia vencida e travava os botões (achado 21).
+ * Não altera o job guardado: o campo existe só na resposta.
+ */
+function withRemaining(job: SecurityJob): SecurityJob {
+  const rollbackRemainingMs =
+    job.rollbackDeadline === null
+      ? null
+      : Math.max(0, new Date(job.rollbackDeadline).getTime() - Date.now());
+  return { ...job, rollbackRemainingMs };
+}
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -177,7 +193,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
             `Fase de hardening "${job.title}" iniciada (dryRun=${dryRun}).` +
             (sshPublicKey !== undefined ? ` Chave SSH do operador instalada para "${sshUser ?? "deploy"}".` : ""),
         });
-        const response: SecurityApplyResponse = { job };
+        const response: SecurityApplyResponse = { job: withRemaining(job) };
         return reply.code(202).send(response);
       } catch (err) {
         return reply.code(409).send({
@@ -197,7 +213,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
       if (!job) {
         return reply.code(404).send({ error: "job_not_found", message: "Job não encontrado." });
       }
-      const response: SecurityJobResponse = { job };
+      const response: SecurityJobResponse = { job: withRemaining(job) };
       return reply.send(response);
     },
   );
@@ -210,7 +226,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
       const { jobId } = request.body;
       try {
         const job = await service.confirmAccess(jobId);
-        const response: SecurityConfirmAccessResponse = { confirmed: true, job };
+        const response: SecurityConfirmAccessResponse = { confirmed: true, job: withRemaining(job) };
         return reply.send(response);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Falha ao confirmar acesso.";
@@ -237,7 +253,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
           target: job.phase,
           detail: `Fase "${job.title}" desfeita pelo operador (não conseguiu entrar no teste de acesso).`,
         });
-        const response: SecurityJobResponse = { job };
+        const response: SecurityJobResponse = { job: withRemaining(job) };
         return reply.send(response);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Falha ao desfazer a fase.";

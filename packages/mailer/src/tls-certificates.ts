@@ -17,7 +17,7 @@
  * Encrypt, ~60 dias) — ver MailService.syncTls.
  */
 import { createPrivateKey, X509Certificate } from "node:crypto";
-import { PAAS_CADDY_CONTAINER } from "@paas/core";
+import { PAAS_CADDY_CONTAINER, certificateFileId } from "@paas/core";
 import { run } from "./exec.js";
 
 /** Pasta onde o Caddy guarda os certificados (dentro do container dele). */
@@ -28,9 +28,14 @@ export function mailHostFor(domain: string): string {
   return `mail.${domain}`;
 }
 
-/** Id da seção [certificate.<id>] e nome dos arquivos no Stalwart. */
+/**
+ * Id da seção [certificate.<id>] e nome dos arquivos no Stalwart — a mesma
+ * regra do painel e do Caddy, sem colisão (@paas/core). O config e os
+ * arquivos são regravados juntos a cada sincronização, então trocar a regra
+ * não deixa referência para arquivo inexistente.
+ */
 export function certificateId(host: string): string {
-  return host.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  return certificateFileId(host);
 }
 
 export interface MailCertificate {

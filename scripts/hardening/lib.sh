@@ -244,10 +244,69 @@ svc_disable_mask() {
 }
 
 # ---------------------------------------------------------------------------
+# Portas reais do SSH
+# ---------------------------------------------------------------------------
+# detect_ssh_ports — imprime, separadas por espaço e sem repetição, as portas
+# em que o SSH deste servidor atende de fato. O firewall e o fail2ban
+# presumiam a 22: numa VPS com o sshd em 2222, a fase 03 ativava "deny
+# incoming" liberando só a 22 e trancava novas conexões (achado 24).
+# Fontes, todas somadas (liberar uma porta a mais do SSH é seguro; esquecer
+# uma é o que tranca o acesso):
+#  1. `sshd -T` — a configuração efetiva (inclui sshd_config.d);
+#  2. `ss -tlnp` — portas em que o processo sshd está escutando agora;
+#  3. ssh.socket — ativação por socket do systemd (Ubuntu 22.10+), em que
+#     quem escuta é o systemd, não o sshd;
+#  4. sem nada acima: linhas "Port" dos arquivos de configuração;
+#  5. a porta da sessão atual do operador ($SSH_CONNECTION), sempre somada.
+# Sem nenhuma porta encontrada, cai para a 22 (padrão do OpenSSH).
+detect_ssh_ports() {
+  local found=""
+  if command -v sshd >/dev/null 2>&1; then
+    found="$found $(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' || true)"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    found="$found $(ss -H -tlnp 2>/dev/null | awk '/"sshd"/ {n = split($4, a, ":"); print a[n]}' || true)"
+  fi
+  if has_systemd && systemctl is-active --quiet ssh.socket 2>/dev/null; then
+    found="$found $(systemctl show ssh.socket -p Listen --value 2>/dev/null | grep -oE ':[0-9]+ ' | tr -d ': ' || true)"
+  fi
+  if [ -z "${found//[[:space:]]/}" ]; then
+    found="$(cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null \
+      | awk 'tolower($1) == "port" {print $2}' || true)"
+  fi
+  # 5. A porta da sessão SSH do próprio operador ($SSH_CONNECTION = "ip porta
+  #    ip porta-local"): se ele está conectado nela, ela funciona — cobre sshd
+  #    parado ou `sshd -T` falhando (ex.: Port num Include fora de sshd_config.d).
+  local session_port
+  session_port="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
+  case "$session_port" in
+    ''|*[!0-9]*) ;;
+    *) found="$found $session_port" ;;
+  esac
+  local ports
+  # shellcheck disable=SC2086 # separação por espaço é intencional
+  ports="$(printf '%s\n' $found | grep -E '^[0-9]+$' | awk '$1 >= 1 && $1 <= 65535' | sort -un | tr '\n' ' ' || true)"
+  ports="${ports% }"
+  echo "${ports:-22}"
+}
+
+# ---------------------------------------------------------------------------
 # Pacotes
 # ---------------------------------------------------------------------------
 
-pkg_installed() { dpkg -s "$1" >/dev/null 2>&1; }
+# pkg_installed <pkg> — instalado DE FATO (estado "ii" do dpkg).
+# `dpkg -s` também sai 0 no estado "rc" (removido sem purge, só restam os
+# arquivos de configuração): apt_install pulava a reinstalação e a fase caía
+# depois por falta do binário (achado 25). Mesma regra do scanner
+# (packages/security/src/checks.ts, DPKG_INSTALLED).
+# shellcheck disable=SC2016 # ${db:...} é formato do dpkg-query, não variável do shell
+pkg_installed() {
+  dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null | grep -q '^ii '
+}
+
+# pkg_known <pkg> — o dpkg ainda guarda algo do pacote (instalado OU só a
+# configuração, "rc"). Usado pelo purge, que também limpa esses restos.
+pkg_known() { dpkg -s "$1" >/dev/null 2>&1; }
 
 # apt_install <pkgs...> — instala se ausente (idempotente).
 apt_install() {
@@ -357,7 +416,7 @@ apt_purge_if_installed() {
   local installed=()
   local pkg
   for pkg in "$@"; do
-    pkg_installed "$pkg" && installed+=("$pkg")
+    pkg_known "$pkg" && installed+=("$pkg")
   done
   if [ "${#installed[@]}" -eq 0 ]; then
     info "nenhum dos pacotes está instalado: $*"
@@ -444,6 +503,45 @@ cancel_scheduled_rollback() {
     cancelled=1
   fi
   [ "$cancelled" = "1" ]
+}
+
+# pending_rollback_alive <id> — 0 se a reversão agendada de <id> ainda vai
+# rodar: job do `at` ainda na fila ou processo do timer vivo. Arquivos de uma
+# reversão que já rodou (job fora da fila, processo morto) não contam.
+pending_rollback_alive() {
+  local id="$1"
+  local pidfile="${PAAS_STATE_DIR}/pending-rollback-${id}.pid"
+  local jobfile="${PAAS_STATE_DIR}/pending-rollback-${id}.at"
+  if [ -f "$jobfile" ] && command -v atq >/dev/null 2>&1; then
+    local job
+    job="$(cat "$jobfile")"
+    if [ -n "$job" ] && atq 2>/dev/null | awk '{print $1}' | grep -qx "$job"; then
+      return 0
+    fi
+  fi
+  if [ -f "$pidfile" ]; then
+    local pid
+    pid="$(cat "$pidfile")"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# require_no_pending_rollback <id> — recusa reaplicar a fase enquanto a
+# aplicação anterior aguarda confirmação. Reaplicar por cima sobrescrevia o
+# backup e o agendamento da anterior: a reversão antiga ficava órfã e rodava
+# assim mesmo, e confirmar a antiga cancelava a proteção da nova (achado 23).
+# Chamada no começo da aplicação, antes de qualquer mudança.
+require_no_pending_rollback() {
+  local id="$1"
+  pending_rollback_alive "$id" || return 0
+  if [ "$PAAS_DRY_RUN" = "1" ]; then
+    warn "a aplicação anterior desta fase ($id) está aguardando confirmação de acesso — confirme ou desfaça antes de aplicar de verdade"
+    return 0
+  fi
+  die "a aplicação anterior desta fase ($id) está aguardando confirmação de acesso — confirme (--confirm) ou desfaça (--rollback) antes de aplicar de novo"
 }
 
 confirm_rollback() {

@@ -18,17 +18,31 @@ function whatChanged(phase: SecurityPhaseId, user: string | null): string {
   }
 }
 
-function secondsUntil(deadline: string): number {
-  return Math.max(0, Math.floor((new Date(deadline).getTime() - Date.now()) / 1000));
+function secondsUntil(endsAtLocal: number): number {
+  return Math.max(0, Math.floor((endsAtLocal - Date.now()) / 1000));
 }
 
-/** Segundos que faltam para o prazo, atualizados a cada segundo. */
-function useSecondsUntil(deadline: string): number {
-  const [remaining, setRemaining] = useState(() => secondsUntil(deadline));
+/**
+ * Segundos que faltam, atualizados a cada segundo.
+ *
+ * Parte de `remainingMs` — quanto falta medido NO SERVIDOR quando a resposta
+ * saiu — e só usa o relógio local para medir o tempo que passou desde então.
+ * Antes comparava o prazo absoluto do servidor com o relógio do navegador: com
+ * o computador 10 min adiantado, uma janela nova de 5 min já nascia vencida e
+ * travava os botões (achado 21). Cada nova resposta do servidor ressincroniza.
+ */
+function useSecondsLeft(remainingMs: number): number {
+  const [endsAtLocal, setEndsAtLocal] = useState(() => Date.now() + remainingMs);
+  const [remaining, setRemaining] = useState(() => secondsUntil(endsAtLocal));
   useEffect(() => {
-    const t = setInterval(() => setRemaining(secondsUntil(deadline)), 1000);
+    const ends = Date.now() + remainingMs;
+    setEndsAtLocal(ends);
+    setRemaining(secondsUntil(ends));
+  }, [remainingMs]);
+  useEffect(() => {
+    const t = setInterval(() => setRemaining(secondsUntil(endsAtLocal)), 1000);
     return () => clearInterval(t);
-  }, [deadline]);
+  }, [endsAtLocal]);
   return remaining;
 }
 
@@ -55,7 +69,7 @@ export function AccessTestAlert({
   phaseTitle,
   user,
   host,
-  deadline,
+  remainingMs,
   busy,
   onConfirm,
   onUndo,
@@ -66,15 +80,19 @@ export function AccessTestAlert({
   user: string | null;
   /** Endereço da VPS para o ssh (ou VPS_ADDRESS_PLACEHOLDER). */
   host: string;
-  /** Quando a reversão automática acontece (ISO). */
-  deadline: string;
+  /**
+   * Quanto falta para a reversão automática, medido no relógio do servidor
+   * (`job.rollbackRemainingMs`). Nunca o prazo absoluto: o relógio do
+   * navegador pode estar adiantado ou atrasado.
+   */
+  remainingMs: number;
   /** Confirmando ou desfazendo: trava os botões. */
   busy: boolean;
   onConfirm: () => void;
   onUndo: () => void;
 }) {
   const [details, setDetails] = useState(false);
-  const remaining = useSecondsUntil(deadline);
+  const remaining = useSecondsLeft(remainingMs);
   // Prazo acabou: quem decide agora é o servidor (a reversão agendada roda lá).
   // Os botões travam — confirmar a esta altura só daria erro.
   const expired = remaining === 0;

@@ -94,3 +94,27 @@ describe("MonitorScheduler — lock inFlight compartilhado", () => {
     expect(task).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("MonitorScheduler — intervalo acima do limite do timer (achado 17)", () => {
+  // O Node troca qualquer atraso acima de 2^31-1 ms (~24,8 dias) por 1 ms.
+  // Um intervalo de 30 dias virava um scan por milissegundo.
+  it("30 dias não vira execução a cada milissegundo", async () => {
+    const task = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new MonitorScheduler({ intervalMs: 30 * 24 * 3_600_000, task });
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    scheduler.stop();
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("setIntervalMs com valor acima do limite também não dispara em sequência", async () => {
+    const task = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new MonitorScheduler({ intervalMs: 60_000, task });
+    scheduler.start();
+    scheduler.setIntervalMs(2 ** 31);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    scheduler.stop();
+    expect(task).not.toHaveBeenCalled();
+    expect(scheduler.currentIntervalMs).toBeLessThanOrEqual(2 ** 31 - 1);
+  });
+});

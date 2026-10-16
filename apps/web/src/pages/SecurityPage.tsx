@@ -7,6 +7,7 @@ import type {
   SecurityHistoryResponse,
   SecurityScanResponse,
 } from "@paas/core";
+import { MONITOR_MAX_INTERVAL_MS } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,9 @@ import {
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
+
+/** Teto do intervalo do monitoramento em horas (168 h, igual às Notificações). */
+const MAX_INTERVAL_HOURS = MONITOR_MAX_INTERVAL_MS / 3_600_000;
 
 function fmtDate(iso: string | null | undefined): string {
   return iso ? new Date(iso).toLocaleString("pt-BR") : "—";
@@ -248,8 +252,10 @@ function MonitorCard({ refreshKey }: { refreshKey: number }) {
 
   async function saveInterval() {
     const value = Number(hours);
-    if (!Number.isFinite(value) || value <= 0) {
-      setError("Informe um intervalo válido em horas.");
+    // teto de 168 h (o mesmo das Notificações): acima de ~597 h o timer do
+    // servidor estoura e o scan passaria a rodar sem parar
+    if (!Number.isFinite(value) || value < 1 || value > MAX_INTERVAL_HOURS) {
+      setError(`Informe um número de horas entre 1 e ${MAX_INTERVAL_HOURS} (uma semana).`);
       return;
     }
     setBusy(true);
@@ -306,6 +312,8 @@ function MonitorCard({ refreshKey }: { refreshKey: number }) {
               <Input
                 type="number"
                 min={1}
+                max={MAX_INTERVAL_HOURS}
+                aria-label="Intervalo (horas)"
                 value={hours}
                 onChange={(e) => setHours(e.target.value)}
                 className="h-8 w-20"

@@ -10,7 +10,7 @@
  * Sem Docker e sem rede: StalwartManager/Client são dublês; o envio SMTP, a
  * leitura do aviso e o relógio são injetados.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -170,8 +170,14 @@ describe("sendTestEmail — envio", () => {
       subject: "Teste do TWS Panel",
     });
     expect(o.text).toContain("servidor de e-mail da sua VPS");
-    expect(o.envId).toBe(`tws-teste-${test.id}`);
+    // O ENVID é segredo do painel: o destinatário vê o id, o Message-ID e o
+    // texto, e nenhum deles pode permitir montá-lo (recibo forjado, achado 19).
+    expect(o.envId).toMatch(/^tws-teste-[0-9a-f]{16}-[0-9a-f]{24}$/);
     expect(o.messageId).toBe(`<tws-teste-${test.id}@${DOMAIN}>`);
+    expect(o.envId).not.toBe(`tws-teste-${test.id}`);
+    expect(o.messageId).not.toContain(o.envId);
+    expect(o.text).not.toContain(o.envId);
+    expect(JSON.stringify(test)).not.toContain(o.envId);
     expect(test).toMatchObject({
       domain: DOMAIN,
       from: `postmaster@${DOMAIN}`,
@@ -291,7 +297,7 @@ describe("testEmailStatus — destino da mensagem", () => {
   async function sendOne() {
     const s = service();
     const test = await s.sendTestEmail(DOMAIN, TO);
-    return { s, test, envId: `tws-teste-${test.id}` };
+    return { s, test, envId: sent.at(-1)!.envId };
   }
 
   it("na fila, sem tentativa ainda → 'queued' (consulta a fila pelo destinatário)", async () => {
@@ -329,9 +335,40 @@ describe("testEmailStatus — destino da mensagem", () => {
       to: TO,
     });
     expect(reports[0]!.since.getTime()).toBeLessThanOrEqual(Date.parse(test.sentAt));
+    // e só o aviso DESTA mensagem: o painel passa o ENVID do teste (achado 19)
+    expect(reports[0]!.envId).toBe(sent[0]!.envId);
     // resultado definitivo não consulta de novo
     await s.testEmailStatus(DOMAIN, test.id);
     expect(reports).toHaveLength(1);
+  });
+
+  // Vários domínios: o aviso do Stalwart sai do domínio dos relatórios
+  // (report.domain = dono do hostname), não do da caixa que enviou o teste.
+  it("teste enviado de um domínio e hostname de outro: o filtro de remetente do aviso inclui o domínio dos relatórios", async () => {
+    const OUTRO = "loja.exemplo.org";
+    const file = path.join(dir, "mail", "mail.json");
+    const data = JSON.parse(await readFile(file, "utf8")) as { domains: Record<string, unknown>; mailboxes: Record<string, unknown> };
+    data.domains[OUTRO] = { ...(data.domains[DOMAIN] as object), name: OUTRO };
+    data.mailboxes[`postmaster@${OUTRO}`] = { ...postmaster(), id: `postmaster@${OUTRO}`, domain: OUTRO };
+    await writeFile(file, JSON.stringify(data));
+    config = { ...config, mailHostname: `mail.${DOMAIN}` } as unknown as ServerConfig;
+
+    const s = service();
+    const test = await s.sendTestEmail(OUTRO, TO);
+    queue = [];
+    reportImpl = async () => ({ state: "bounced", detail: "550 5.1.1 sem usuário" });
+    await s.testEmailStatus(OUTRO, test.id);
+    expect(reports[0]!.username).toBe(`postmaster@${OUTRO}`);
+    // o aviso legítimo vem de MAILER-DAEMON@<domínio do hostname>
+    expect(reports[0]!.senderDomains).toEqual(expect.arrayContaining([DOMAIN, OUTRO, `mail.${DOMAIN}`]));
+  });
+
+  it("config antigo, sem hostname: o filtro inclui os domínios cadastrados e mail.<1º domínio>", async () => {
+    const s = service();
+    const test = await s.sendTestEmail(DOMAIN, TO);
+    queue = [];
+    await s.testEmailStatus(DOMAIN, test.id);
+    expect(reports[0]!.senderDomains).toEqual(expect.arrayContaining([DOMAIN, `mail.${DOMAIN}`]));
   });
 
   it("saiu da fila e o aviso diz recusado → 'bounced' com o motivo", async () => {

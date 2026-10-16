@@ -371,4 +371,55 @@ describe("DeployService.updateProject — editar configuração do projeto", () 
     expect(p.deployedBranch).toBeNull();
     expect(p.deployedSource).toBeNull();
   });
+
+  // Achado 11 da revisão: nome, fonte e branch eram gravados no projeto antes
+  // de o domínio e o serviço de entrada serem validados. O PATCH recusado
+  // deixava a memória alterada, e o próximo save gravava isso em disco.
+  it("PATCH recusado pelo domínio não muda nome, fonte nem branch (nem em memória, nem no disco)", async () => {
+    const p = await criar();
+    await service.createProject({
+      name: "Outra",
+      ingestMode: "git",
+      source: "https://github.com/usuario/outra.git",
+      branch: "main",
+      domain: "outra.exemplo.com",
+    });
+    await expect(
+      service.updateProject(p.id, {
+        name: "Nome Novo",
+        source: "https://github.com/usuario/outro-repo.git",
+        branch: "sandbox",
+        domain: "outra.exemplo.com",
+      }),
+    ).rejects.toMatchObject({ code: "domain_in_use" });
+    const atual = await service.getProject(p.id);
+    expect(atual).toMatchObject({ name: "Minha App", source: "https://github.com/usuario/app.git", branch: "main" });
+
+    // qualquer gravação seguinte (aqui, outro PATCH válido) não leva a mudança recusada para o disco
+    await service.updateProject(p.id, { websocket: true });
+    const relido = await new DeployService({ dataDir, caddyHttpPort: 80, caddyHttpsPort: 443 } as unknown as ServerConfig).getProject(p.id);
+    expect(relido).toMatchObject({ name: "Minha App", source: "https://github.com/usuario/app.git", branch: "main" });
+  });
+
+  it("PATCH recusado pelo serviço de entrada não muda o restante", async () => {
+    const p = await criar();
+    const stored = (await service.getProject(p.id))!;
+    stored.detection = { type: "compose", services: [{ name: "web" }], warnings: [], details: [] } as never;
+    await expect(
+      service.updateProject(p.id, { branch: "sandbox", domain: "novo.exemplo.com", websocket: true, proxyService: "inexistente" }),
+    ).rejects.toMatchObject({ code: "invalid_proxy_service" });
+    expect(await service.getProject(p.id)).toMatchObject({ branch: "main", domain: "app.exemplo.com" });
+    expect((await service.getProject(p.id))!.websocket).not.toBe(true);
+  });
+
+  it("PATCH válido com vários campos aplica todos juntos", async () => {
+    const p = await criar();
+    const atualizado = await service.updateProject(p.id, {
+      name: "Nome Novo",
+      branch: "sandbox",
+      domain: "novo.exemplo.com",
+      proxyPort: 8080,
+    });
+    expect(atualizado).toMatchObject({ name: "Nome Novo", branch: "sandbox", domain: "novo.exemplo.com", proxyPort: 8080 });
+  });
 });

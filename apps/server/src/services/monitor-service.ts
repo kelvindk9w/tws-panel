@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   MONITOR_DEFAULT_INTERVAL_MS,
+  MONITOR_MAX_INTERVAL_MS,
   type BaselineDiff,
   type MonitorScanResult,
   type MonitorStateResponse,
@@ -65,8 +66,12 @@ export type MailBlacklistHook = () => Promise<string[]>;
  */
 const EFFECTIVE_MIN_INTERVAL_MS = 60_000;
 
+/**
+ * Também limita por cima (MONITOR_MAX_INTERVAL_MS, 168 h): protege valores
+ * vindos da variável de ambiente e de um monitor.json gravado antes do teto.
+ */
 function clampInterval(intervalMs: number): number {
-  return Math.max(intervalMs, EFFECTIVE_MIN_INTERVAL_MS);
+  return Math.min(Math.max(intervalMs, EFFECTIVE_MIN_INTERVAL_MS), MONITOR_MAX_INTERVAL_MS);
 }
 
 export class MonitorService {
