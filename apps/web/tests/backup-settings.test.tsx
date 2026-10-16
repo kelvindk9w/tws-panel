@@ -480,6 +480,40 @@ describe("Configurações → Backups", () => {
     expect(await screen.findByText("Muitas conferências seguidas. Espere um minuto.")).toBeInTheDocument();
   });
 
+  it("selo da cópia externa ao lado do Concluído: conferida, enviando, conferindo, falhou, só na VPS e o resultado do Conferir", async () => {
+    state.history = [
+      record({ id: "s1", fileName: "1.7z", remote: "verified" }),
+      record({ id: "s2", fileName: "2.7z", status: "running", remote: "uploading", finishedAt: null }),
+      record({ id: "s3", fileName: "3.7z", status: "running", remote: "uploaded", finishedAt: null }),
+      record({ id: "s4", fileName: "4.7z", status: "warning", remote: "failed" }),
+      record({ id: "s5", fileName: "5.7z", remote: "none" }),
+      record({ id: "s6", fileName: "6.7z", remote: "verified", remoteCheck: { status: "failed", at: "2026-10-14T15:00:00Z", reason: "hash diferente" } }),
+      record({ id: "s7", fileName: "7.7z", remote: "verified", remoteCheck: { status: "needs_password", at: "2026-10-14T15:00:00Z", reason: null } }),
+      record({ id: "s8", fileName: "8.7z", status: "failed", remote: "none", error: "Disco cheio." }),
+      record({ id: "s9", fileName: "9.7z", remote: "skipped" }),
+      record({ id: "s10", fileName: "10.7z", remote: "verified", remoteCheck: { status: "missing", at: "2026-10-14T15:00:00Z", reason: null } }),
+      record({ id: "s11", fileName: null, operation: "restore", remote: "none" }),
+    ];
+    renderPage();
+    const history = await screen.findByTestId("backup-history");
+    const rows = within(history).getAllByTestId("backup-record");
+    const badge = (i: number) => within(rows[i]!).queryByTestId("remote-badge")?.textContent ?? null;
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(badge)).toEqual([
+      "Externa conferida",
+      "Enviando",
+      "Conferindo",
+      "Externa falhou",
+      "Só na VPS",
+      "Externa falhou",
+      "Externa pede a senha da época",
+      null,
+      "Externa não feita",
+      "Externa apagada",
+      null,
+    ]);
+    expect(within(rows[0]!).getByTestId("remote-badge").className).toMatch(/emerald|success|green/);
+  });
+
   it("Conferir que falha mostra o motivo na linha", async () => {
     state.history = [record({ id: "b1", localExists: true })];
     failures["POST /api/backups/targets/panel/verify"] = new ApiRequestError(409, "no_destination", "Conecte o armazenamento externo primeiro.");

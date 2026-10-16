@@ -295,6 +295,39 @@ function VerifyDetail({ record }: { record: BackupRecord }) {
   );
 }
 
+type BadgeVariant = "success" | "destructive" | "warning" | "secondary";
+
+/**
+ * Selo da cópia externa ao lado do "Concluído": o resultado da última
+ * conferência manda (Conferir), senão a situação do envio.
+ */
+export function remoteBadge(record: BackupRecord): { label: string; variant: BadgeVariant } | null {
+  if (record.operation !== "backup" || record.status === "queued") return null;
+  // backup que falhou antes do envio: o selo "Falhou" já diz tudo
+  if (record.status === "failed" && record.remote === "none") return null;
+  const c = record.remoteCheck;
+  if (c && record.remote !== "none" && record.remote !== "skipped") {
+    if (c.status === "ok") return { label: "Externa conferida", variant: "success" };
+    if (c.status === "failed") return { label: "Externa falhou", variant: "destructive" };
+    if (c.status === "needs_password") return { label: "Externa pede a senha da época", variant: "warning" };
+    return { label: "Externa apagada", variant: "secondary" };
+  }
+  switch (record.remote) {
+    case "verified":
+      return { label: "Externa conferida", variant: "success" };
+    case "uploading":
+      return { label: "Enviando", variant: "warning" };
+    case "uploaded":
+      return { label: "Conferindo", variant: "warning" };
+    case "failed":
+      return { label: "Externa falhou", variant: "destructive" };
+    case "skipped":
+      return { label: "Externa não feita", variant: "warning" };
+    default:
+      return record.local ? { label: "Só na VPS", variant: "secondary" } : null;
+  }
+}
+
 function operationText(record: BackupRecord): string {
   if (record.operation === "restore") return "restauração";
   if (record.operation === "verify") return record.fileName ? "conferência" : "conferência de todos";
@@ -306,6 +339,7 @@ export function RecordLine({ record, showTarget = true, onVerify }: { record: Ba
   const remote = REMOTE_TEXT[record.remote];
   const where = record.operation === "verify" ? "" : [record.local && record.operation === "backup" ? "na VPS" : null, remote].filter(Boolean).join(" · ");
   const checkable = onVerify && record.operation === "backup" && record.fileName && (record.status === "success" || record.status === "warning");
+  const rb = remoteBadge(record);
   return (
     <li className="flex flex-col gap-1 py-2 sm:flex-row sm:items-start sm:gap-3" data-testid="backup-record">
       <span className="shrink-0 text-xs text-muted-foreground sm:w-28">{when(record.finishedAt ?? record.startedAt ?? record.queuedAt)}</span>
@@ -324,8 +358,13 @@ export function RecordLine({ record, showTarget = true, onVerify }: { record: Ba
         ))}
         {checkable && <BackupChecks record={record} onVerify={onVerify} />}
       </span>
-      <span className="shrink-0">
+      <span className="flex shrink-0 flex-wrap items-start gap-1 sm:justify-end">
         <RecordBadge record={record} />
+        {rb && (
+          <Badge variant={rb.variant} data-testid="remote-badge">
+            {rb.label}
+          </Badge>
+        )}
       </span>
     </li>
   );
