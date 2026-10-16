@@ -75,6 +75,32 @@ describe("rotas de backups", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it("só com o setup token (setup pendente, sem sessão): 401 em todas, nunca 500", async () => {
+    const fresh = await buildAuthTestApp(SETUP);
+    fresh.app.decorate("backupService", service as unknown as FastifyInstance["backupService"]);
+    await fresh.app.register(backupsRoutes);
+    const token = { [SETUP_TOKEN_HEADER]: SETUP };
+    const routes: Array<["GET" | "PUT" | "POST" | "DELETE", string, unknown?]> = [
+      ["GET", "/api/backups"],
+      ["PUT", "/api/backups/destination", DEST],
+      ["POST", "/api/backups/destination/test"],
+      ["DELETE", "/api/backups/destination"],
+      ["POST", "/api/backups/password/reveal", { loginPassword: "x" }],
+      ["PUT", "/api/backups/targets/panel", { frequencyHours: 6 }],
+      ["POST", "/api/backups/targets/panel/run"],
+      ["POST", "/api/backups/verify", {}],
+      ["GET", "/api/backups/projects/p1"],
+      ["GET", "/api/backups/catalog"],
+    ];
+    for (const [method, url, payload] of routes) {
+      const res = await fresh.app.inject({ method, url, headers: token, ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}) });
+      expect(res.statusCode, `${method} ${url}`).toBe(401);
+      expect(res.json()).toMatchObject({ error: "unauthorized" });
+    }
+    for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
+    await closeAuthTestApp(fresh);
+  });
+
   it("situação, destino, teste e desconectar", async () => {
     expect((await call("GET", "/api/backups")).json()).toEqual({ ok: "status" });
     expect((await call("PUT", "/api/backups/destination", DEST)).statusCode).toBe(200);

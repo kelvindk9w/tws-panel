@@ -1,5 +1,6 @@
 /**
- * backups.ts — Configurações → Backups e a aba Backups do projeto (todas com sessão).
+ * backups.ts — Configurações → Backups e a aba Backups do projeto (todas com sessão;
+ * só com o setup token, sem sessão, respondem 401).
  *  GET    /api/backups                          situação: destino, criptografia, itens, fila, histórico
  *  PUT    /api/backups/destination              armazenamento S3/R2 (testa antes de salvar; a chave secreta fica cifrada)
  *  POST   /api/backups/destination/test         "Testar conexão"
@@ -138,6 +139,18 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const service = app.backupService;
   const logError = (err: unknown) => app.log.error({ err }, "backups: falha inesperada");
+
+  // Backups pedem uma conta: quem fez o pedido vai para a auditoria e "Ver a
+  // senha" confere a senha de login. Com o setup pendente, o plugin de auth
+  // deixa passar só com o setup token, sem sessão: aqui isso vira 401.
+  app.addHook("onRequest", async (request, reply) => {
+    if (!request.session) {
+      return reply.code(401).send({
+        error: "unauthorized",
+        message: "Entre com a conta de administrador para usar os backups.",
+      });
+    }
+  });
 
   type Req = { session: { username: string; userId: string } | null; body: unknown; params: unknown };
   const handle =
