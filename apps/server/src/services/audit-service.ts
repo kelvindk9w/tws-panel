@@ -9,9 +9,9 @@
  * justamente sobre o começo do histórico.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AuditEntry } from "@paas/core";
+import { JsonFile } from "./json-file.js";
 
 const MAX_ENTRIES = 2_000;
 
@@ -24,13 +24,26 @@ export interface AuditServiceOptions {
   maxEntries?: number;
 }
 
+function auditFile(file: string): JsonFile<AuditFile> {
+  return new JsonFile<AuditFile>(file, {
+    empty: () => ({ entries: [] }),
+    parse: (raw) => {
+      const entries = (raw as Partial<AuditFile> | null)?.entries;
+      return Array.isArray(entries) ? { entries } : null;
+    },
+  });
+}
+
+/**
+ * Cada registro é UMA transação na fila do audit.json (services/json-file.ts):
+ * lê o arquivo, acrescenta, rotaciona (o audit.1.json é alterado dentro da
+ * mesma vez) e grava. Nada fica em memória entre um registro e outro — por
+ * isso não há "carga inicial" para disputar com os primeiros registros.
+ */
 export class AuditService {
-  private readonly file: string;
-  private readonly archiveFile: string;
+  private readonly active: JsonFile<AuditFile>;
+  private readonly archived: JsonFile<AuditFile>;
   private readonly maxEntries: number;
-  private entries: AuditEntry[] = [];
-  private loaded = false;
-  private writing: Promise<void> = Promise.resolve();
   /**
    * Registros em andamento. Existe porque as rotas de terminal e de segurança
    * chamam `record()` sem await de propósito (auditar não pode atrasar o
@@ -38,40 +51,17 @@ export class AuditService {
    * desligamento — elas aterrissariam depois de o processo achar que terminou.
    */
   private readonly pending = new Set<Promise<unknown>>();
+  /**
+   * Registros cuja gravação falhou (disco cheio, permissão). Ficam aqui e
+   * entram na próxima gravação que der certo — como antes, quando a lista
+   * inteira vivia em memória.
+   */
+  private unsaved: AuditEntry[] = [];
 
   constructor(dataDir: string, opts: AuditServiceOptions = {}) {
-    this.file = path.join(dataDir, "audit.json");
-    this.archiveFile = path.join(dataDir, "audit.1.json");
+    this.active = auditFile(path.join(dataDir, "audit.json"));
+    this.archived = auditFile(path.join(dataDir, "audit.1.json"));
     this.maxEntries = opts.maxEntries ?? MAX_ENTRIES;
-  }
-
-  /** Move as entradas excedentes para o arquivo de arquivo, preservando-as. */
-  private async archive(excedente: AuditEntry[]): Promise<void> {
-    if (excedente.length === 0) return;
-    let anteriores: AuditEntry[] = [];
-    try {
-      const raw = JSON.parse(await readFile(this.archiveFile, "utf8")) as Partial<AuditFile>;
-      if (Array.isArray(raw.entries)) anteriores = raw.entries;
-    } catch {
-      // sem arquivo de arquivo ainda, ou ilegível — recomeça deste ponto
-    }
-    await mkdir(path.dirname(this.archiveFile), { recursive: true });
-    await writeFile(
-      this.archiveFile,
-      JSON.stringify({ entries: [...anteriores, ...excedente] }, null, 2),
-      { mode: 0o600 },
-    );
-  }
-
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
-    try {
-      const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<AuditFile>;
-      this.entries = Array.isArray(raw.entries) ? raw.entries : [];
-    } catch {
-      this.entries = [];
-    }
   }
 
   /** Registra uma ação sensível. Best-effort: falha de disco não derruba a ação. */
@@ -101,7 +91,6 @@ export class AuditService {
     while (this.pending.size > 0) {
       await Promise.allSettled([...this.pending]);
     }
-    await this.writing.catch(() => undefined);
   }
 
   private async doRecord(input: {
@@ -110,7 +99,6 @@ export class AuditService {
     target?: string | null;
     detail: string;
   }): Promise<AuditEntry> {
-    await this.ensureLoaded();
     const entry: AuditEntry = {
       id: randomBytes(8).toString("hex"),
       at: new Date().toISOString(),
@@ -119,27 +107,39 @@ export class AuditService {
       target: input.target ?? null,
       detail: input.detail,
     };
-    this.entries.push(entry);
-    if (this.entries.length > this.maxEntries) {
-      const excedente = this.entries.slice(0, this.entries.length - this.maxEntries);
-      this.entries = this.entries.slice(-this.maxEntries);
-      // best-effort, como o resto da auditoria: falha de disco no arquivamento
-      // não pode derrubar a ação que estava sendo registrada.
-      await this.archive(excedente).catch(() => undefined);
-    }
-    // serializa escritas para não intercalar JSON
-    this.writing = this.writing.then(() => this.save()).catch(() => undefined);
-    await this.writing;
+    let carried: AuditEntry[] = [];
+    await this.active
+      .update(async (current) => {
+        carried = this.unsaved;
+        this.unsaved = [];
+        const entries = [...current.entries, ...carried, entry];
+        if (entries.length <= this.maxEntries) return { entries };
+        const excedente = entries.slice(0, entries.length - this.maxEntries);
+        try {
+          // Ao estourar o teto, as antigas vão para o audit.1.json ANTES de
+          // saírem do ativo. Se o arquivamento falhar, elas ficam no ativo
+          // (passa do teto por um tempo, mas nada se perde).
+          await this.archived.update((old) => ({ entries: [...old.entries, ...excedente] }));
+        } catch {
+          return { entries };
+        }
+        return { entries: entries.slice(-this.maxEntries) };
+      })
+      // best-effort, como sempre foi: falha de disco não derruba a ação auditada
+      .catch(() => {
+        this.unsaved = [...carried, entry, ...this.unsaved];
+      });
     return entry;
   }
 
   async list(page = 1, perPage = 50): Promise<{ entries: AuditEntry[]; total: number; page: number; perPage: number }> {
-    await this.ensureLoaded();
-    const total = this.entries.length;
+    const saved = (await this.active.read().catch(() => ({ entries: [] as AuditEntry[] }))).entries;
+    const all = [...saved, ...this.unsaved];
+    const total = all.length;
     const safePerPage = Math.min(Math.max(perPage, 1), 200);
     const safePage = Math.max(page, 1);
     // mais recentes primeiro
-    const sorted = [...this.entries].reverse();
+    const sorted = [...all].reverse();
     const start = (safePage - 1) * safePerPage;
     return {
       entries: sorted.slice(start, start + safePerPage),
@@ -147,14 +147,5 @@ export class AuditService {
       page: safePage,
       perPage: safePerPage,
     };
-  }
-
-  private async save(): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
-    const data: AuditFile = { entries: this.entries };
-    await writeFile(this.file, JSON.stringify(data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
   }
 }
