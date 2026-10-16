@@ -131,6 +131,23 @@ correção, passou.
     been fully subnetted": as redes do Docker se esgotaram), não por causa do código. Não apaguei
     redes de terceiros para liberar espaço.
 
+## Correções da revisão rigorosa
+
+Um commit por correção, teste que reproduz escrito antes.
+
+- **22 (prazo e leitura de 401):** a espera pelo reinício agora tem prazo de 5 minutos (`restartTimeoutMs`,
+  documentado no componente). Passado o prazo com o painel ainda respondendo "vai reiniciar", a janela para e
+  manda reiniciar o container. Um 401 sem queda anterior é "Sua sessão expirou" (aviso); só 404, ou 401
+  depois de ter caído, vale como reinício. "O painel voltou" sem registro da subida deixou de usar selo de
+  sucesso e aparece em tom de aviso.
+- **7 (cruzamento de ids):** o id novo de `a.b.com` é o id antigo de `a-b.com`. Agora o arquivo do id novo
+  só é do host se a impressão digital bater com o índice (ou nenhum outro host o reivindicar como nome
+  antigo). Instalar migra antes o outro host, e remover não apaga arquivo alheio. 5 testes novos
+  cobrem a colisão (3 falhavam antes).
+- **12 (4xx):** qualquer status abaixo de 500 passou a ser "app respondendo": avisa e segue na primeira
+  resposta, na fase HTTP e na HTTPS. Julguei simples e seguro. Risco aceito: um 4xx do próprio Caddy
+  (host sem rota) passaria como app no ar, mas o proxy está de pé e o site configurado tem rota.
+
 ## Verificação final
 
 - `pnpm -r --workspace-concurrency=1 --no-bail run test:coverage`: tudo passou, dentro dos mínimos
