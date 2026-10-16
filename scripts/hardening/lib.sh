@@ -274,6 +274,7 @@ detect_ssh_ports() {
       | awk 'tolower($1) == "port" {print $2}' || true)"
   fi
   local ports
+  # shellcheck disable=SC2086 # separação por espaço é intencional
   ports="$(printf '%s\n' $found | grep -E '^[0-9]+$' | awk '$1 >= 1 && $1 <= 65535' | sort -un | tr '\n' ' ' || true)"
   ports="${ports% }"
   echo "${ports:-22}"

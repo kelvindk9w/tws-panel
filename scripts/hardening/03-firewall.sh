@@ -41,7 +41,9 @@ for port in $EXTRA_SSH_PORTS; do
   case "$port" in
     ''|*[!0-9]*) die "porta inválida: $port" ;;
   esac
-  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "porta fora do intervalo 1-65535: $port"
+  if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    die "porta fora do intervalo 1-65535: $port"
+  fi
 done
 [ -z "$PROFILE" ] || [ "$PROFILE" = "mail" ] || die "profile desconhecido: $PROFILE (suportado: mail)"
 
@@ -105,7 +107,7 @@ run ufw default allow outgoing
 ok "Política padrão definida"
 
 # Portas reais do SSH + as pedidas com --ssh-port (sem repetição).
-# shellcheck disable=SC2086 # separação por espaço é intencional
+# shellcheck disable=SC2046,SC2086 # separação por espaço é intencional
 SSH_PORTS="$(printf '%s\n' $(detect_ssh_ports) $EXTRA_SSH_PORTS | sort -un | tr '\n' ' ')"
 SSH_PORTS="${SSH_PORTS% }"
 step "Liberando SSH (porta(s) $SSH_PORTS) ANTES de ativar o firewall"
