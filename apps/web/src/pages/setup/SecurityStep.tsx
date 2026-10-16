@@ -1092,13 +1092,13 @@ export function SecurityStep({
       {stage === "run" && (
         <>
           {/* ALERTA GRANDE DE AÇÃO DO USUÁRIO — bloqueia a continuação */}
-          {job?.status === "awaiting_confirmation" && job.rollbackDeadline && (
+          {job?.status === "awaiting_confirmation" && typeof job.rollbackRemainingMs === "number" && (
             <AccessTestAlert
               phase={job.phase}
               phaseTitle={job.title}
               user={job.sshUser ?? (isValidSshUsername(sshUser.trim()) ? sshUser.trim() : null)}
               host={vpsSshHost(pageLocation(), vpsAddress)}
-              deadline={job.rollbackDeadline}
+              remainingMs={job.rollbackRemainingMs}
               busy={accessBusy}
               onConfirm={() => void confirmAccess()}
               onUndo={() => void undoAccess()}

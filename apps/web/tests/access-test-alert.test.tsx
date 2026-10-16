@@ -21,7 +21,7 @@ function renderAlert(overrides: Partial<Parameters<typeof AccessTestAlert>[0]> =
     phaseTitle: "Hardening de SSH",
     user: "kelvin",
     host: "203-0-113-10.sslip.io",
-    deadline: new Date(Date.now() + 300_000).toISOString(),
+    remainingMs: 300_000,
     busy: false,
     onConfirm: vi.fn(),
     onUndo: vi.fn(),
@@ -105,9 +105,40 @@ describe("AccessTestAlert", () => {
  */
 describe("AccessTestAlert — prazo esgotado", () => {
   it("em 0:00 diz que o servidor está desfazendo a fase e trava os botões", () => {
-    renderAlert({ deadline: new Date(Date.now() - 1_000).toISOString() });
+    renderAlert({ remainingMs: 0 });
     expect(screen.getByTestId("access-test-alert")).toHaveTextContent(/prazo acabou.*desfazendo esta fase/i);
     expect(screen.getByRole("button", { name: /Entrei — confirmar/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /desfazer agora/ })).toBeDisabled();
+  });
+});
+
+/**
+ * Achado 21: o prazo era calculado com o relógio do navegador contra o prazo
+ * absoluto do servidor. Com o computador 10 min adiantado, uma janela nova de
+ * 5 min aparecia vencida e os dois botões travavam. Agora a contagem parte do
+ * tempo restante medido pelo servidor.
+ */
+describe("AccessTestAlert — relógio do navegador diferente do servidor", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("navegador 10 min adiantado: a janela de 5 min do servidor continua aberta", () => {
+    const serverNow = new Date("2026-10-16T12:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(serverNow + 10 * 60_000); // relógio local adiantado
+    // o prazo absoluto do servidor seria serverNow + 5 min — já "vencido" no relógio local
+    renderAlert({ remainingMs: 300_000 });
+    expect(screen.getByTestId("access-test-alert")).toHaveTextContent("5:00");
+    expect(screen.getByRole("button", { name: /Entrei — confirmar/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /desfazer agora/ })).toBeEnabled();
+  });
+
+  it("navegador atrasado: não mostra mais tempo do que o servidor concede", () => {
+    const serverNow = new Date("2026-10-16T12:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(serverNow - 30 * 60_000);
+    renderAlert({ remainingMs: 60_000 });
+    expect(screen.getByTestId("access-test-alert")).toHaveTextContent(/sozinha em 1:00/);
   });
 });
