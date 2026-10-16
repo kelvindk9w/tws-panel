@@ -192,6 +192,18 @@ describe.skipIf(!HAS_DOCKER)("fases 03/04 e lib.sh num Ubuntu real", { timeout: 
       expect(r.out.trim().split(/\s+/).at(-1)).toBe("22");
     });
 
+    it("com o UFW já ativo, nenhuma política 'deny' vem antes das regras do SSH", () => {
+      startSshd([2222]);
+      const r = sh("bash /opt/h/03-firewall.sh --dry-run");
+      expect(r.code, r.out).toBe(0);
+      const allowSsh = r.out.indexOf("ufw allow 2222/tcp");
+      const denyIn = r.out.indexOf("ufw default deny incoming");
+      const enable = r.out.indexOf("ufw --force enable");
+      expect(allowSsh).toBeGreaterThan(-1);
+      expect(denyIn).toBeGreaterThan(allowSsh);
+      expect(enable).toBeGreaterThan(denyIn);
+    });
+
     it("fail2ban (fase 04) vigia a porta real do SSH", () => {
       startSshd([2222]);
       const r = sh("bash /opt/h/04-intrusion.sh --dry-run");

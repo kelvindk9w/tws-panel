@@ -101,11 +101,6 @@ EOF
 fi
 ok "Rollback automático agendado — cancele com '$0 --confirm' após testar o acesso"
 
-step "Política padrão: deny incoming / allow outgoing"
-run ufw default deny incoming
-run ufw default allow outgoing
-ok "Política padrão definida"
-
 # Portas reais do SSH + as pedidas com --ssh-port (sem repetição).
 # shellcheck disable=SC2046,SC2086 # separação por espaço é intencional
 SSH_PORTS="$(printf '%s\n' $(detect_ssh_ports) $EXTRA_SSH_PORTS | sort -un | tr '\n' ' ')"
@@ -130,6 +125,13 @@ if [ "$PROFILE" = "mail" ]; then
 else
   skip "Sem --profile mail — portas 25/465/587/993 permanecem fechadas"
 fi
+
+step "Política padrão: deny incoming / allow outgoing"
+# Só DEPOIS das regras do SSH: com o UFW já ativo, o "deny incoming" vale na
+# hora e, vindo antes do allow, deixava uma janela sem regra para o SSH.
+run ufw default deny incoming
+run ufw default allow outgoing
+ok "Política padrão definida"
 
 step "Ativando UFW"
 # Última trava anti-lockout: só ativa se TODAS as portas do SSH têm regra.
