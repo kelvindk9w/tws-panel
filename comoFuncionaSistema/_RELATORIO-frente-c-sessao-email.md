@@ -198,6 +198,25 @@ assinado por DKIM, ou `MAILER-DAEMON@mail.localhost` antes de o hostname estar c
 containers `paas-stalwart` e `paas-caddy` e o volume `paas_stalwart_data` criados pela validação foram
 removidos; nenhum deles existia antes.
 
+### Achado 19, regressão: aviso legítimo de outro domínio era recusado
+
+**O que era.** O filtro de remetente só aceitava o domínio da caixa que lê o aviso (ou `mail.` dele,
+ou localhost). O MAILER-DAEMON do aviso vem do domínio dos relatórios do Stalwart (`reportDomain()`:
+o domínio cadastrado dono do hostname, ou o primeiro cadastrado). Num painel com os domínios A e B,
+hostname de A e teste enviado de `postmaster@B`, o aviso legítimo vinha de `MAILER-DAEMON@A`, era
+recusado e o teste nunca confirmava a devolução. O mesmo valia para config antigo sem `report.domain`.
+
+**Teste que reproduziu.** Em `packages/mailer/tests/delivery-status.test.ts`, "caixa de outro
+domínio" (aviso de `MAILER-DAEMON@a...` com a caixa de outro domínio era recusado). Em
+`apps/server/tests/mail-test-email.test.ts`, dois testes: vários domínios com hostname de outro
+domínio, e config antigo sem hostname; no código anterior o painel não passava domínio nenhum.
+
+**O que mudou.** `findDeliveryReport` recebe `senderDomains`. O painel passa os domínios cadastrados,
+o hostname e o `reportDomain()`. O filtro aceita cada um deles e `mail.<cada um>`, além de
+`localhost`, `mail.localhost` e o domínio da própria caixa. Domínio informado não abre a porta para
+outros domínios nem para outros nomes locais além de MAILER-DAEMON e postmaster. O filtro segue
+sendo defesa em camadas; quem barra a forja é o ENVID secreto.
+
 ## Verificação final
 
 - `pnpm -r --workspace-concurrency=1 --no-bail run test:coverage`: tudo verde, e todos os mínimos
@@ -205,8 +224,8 @@ removidos; nenhum deles existia antes.
   testes pulados, que já eram pulados antes. Cobertura em instruções, ramos, funções e linhas, nesta
   ordem:
   (números da segunda rodada)
-  - server: 1719 testes, 97,91 / 93,48 / 98,43 / 98,86 (mínimo 94 / 91 / 98 / 94);
-  - mailer: 353 testes, 99,9 / 98,56 / 100 / 100 (mínimo de ramos 98);
+  - server: 1721 testes, 97,91 / 93,48 / 98,43 / 98,86 (mínimo 94 / 91 / 98 / 94);
+  - mailer: 354 testes, 99,9 / 98,56 / 100 / 100 (mínimo de ramos 98);
   - web: 723 testes, 90,86 / 85,47 / 89,04 / 92,09;
   - core: 86 testes; deploy: 429 testes; security: 191 testes.
 - `pnpm -r run typecheck`: passou em todos os pacotes.

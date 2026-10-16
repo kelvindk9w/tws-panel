@@ -1224,6 +1224,13 @@ export class MailService {
         to: status.to,
         // só o aviso desta mensagem (o de um teste anterior ao mesmo destino não serve)
         envId: record.envId,
+        // O aviso sai do domínio dos relatórios (report.domain), que pode ser
+        // outro domínio cadastrado, não o da caixa: passa todos os possíveis.
+        senderDomains: [
+          ...Object.keys(this.data.domains),
+          this.hostname(),
+          ...(this.reportDomain() ? [this.reportDomain()!] : []),
+        ],
         // folga para diferença de relógio entre o painel e o Stalwart
         since: new Date(Date.parse(status.sentAt) - 60_000),
       });

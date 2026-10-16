@@ -155,6 +155,12 @@ export interface FindDeliveryReportOptions {
   password: string;
   to: string;
   /**
+   * Domínios de onde o aviso do servidor pode vir além do da caixa: o dos
+   * relatórios do Stalwart (report.domain), o do hostname e os cadastrados.
+   * Filtro em camadas; quem barra a forja é o ENVID secreto.
+   */
+  senderDomains?: readonly string[];
+  /**
    * ENVID da mensagem (o mesmo do MAIL FROM ... ENVID=). Segredo do painel:
    * só vale o aviso do servidor cuja parte delivery-status o traz em
    * Original-Envelope-Id.
@@ -171,14 +177,21 @@ const STATUS_PART = /^message\/(global-)?delivery-status$/i;
 /** Quem o Stalwart usa como remetente dos avisos (nome fixo, domínio do painel ou o padrão dele). */
 const REPORT_SENDER_LOCALS = new Set(["mailer-daemon", "postmaster"]);
 
-function isReportSender(email: string | undefined, mailboxUser: string): boolean {
+function isReportSender(email: string | undefined, mailboxUser: string, extraDomains: readonly string[]): boolean {
   if (!email) return false;
   const at = email.lastIndexOf("@");
   if (at <= 0) return false;
   const local = email.slice(0, at).toLowerCase();
   const host = email.slice(at + 1).toLowerCase();
   const domain = mailboxUser.slice(mailboxUser.lastIndexOf("@") + 1).toLowerCase();
-  const allowed = new Set([domain, `mail.${domain}`, "localhost", "mail.localhost"]);
+  // O aviso sai do domínio dos relatórios do Stalwart (report.domain), que pode
+  // ser outro domínio cadastrado, e não o da caixa que enviou o teste.
+  const allowed = new Set(["localhost", "mail.localhost"]);
+  for (const d of [domain, ...extraDomains]) {
+    const lower = d.toLowerCase();
+    allowed.add(lower);
+    allowed.add(`mail.${lower}`);
+  }
   return REPORT_SENDER_LOCALS.has(local) && allowed.has(host);
 }
 
@@ -281,7 +294,7 @@ export async function findDeliveryReport(
 
   for (const email of list) {
     // Remetente do próprio servidor? (defesa em camadas, ver o cabeçalho do arquivo)
-    if (!isReportSender(email.from?.[0]?.email, opts.username)) continue;
+    if (!isReportSender(email.from?.[0]?.email, opts.username, opts.senderDomains ?? [])) continue;
     const text = (email.textBody ?? []).map((p) => email.bodyValues?.[p.partId ?? ""]?.value ?? "").join("\n");
     const report = interpretDeliveryReport(email.subject ?? "", text, opts.to);
     // Do destinatário certo, mas de qual mensagem? Só se o delivery-status disser o ENVID.

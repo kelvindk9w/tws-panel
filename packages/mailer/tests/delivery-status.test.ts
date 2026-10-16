@@ -289,6 +289,23 @@ describe("findDeliveryReport (JMAP na caixa postmaster@)", () => {
     }
   });
 
+  // Vários domínios: o aviso vem de report.domain (domínio dono do hostname),
+  // que pode não ser o da caixa que envia o teste.
+  it("caixa de outro domínio: o aviso de MAILER-DAEMON do domínio do hostname vale se ele foi informado", async () => {
+    const alheio = { ...legit, from: "MAILER-DAEMON@a.exemplo.com.br" };
+    stubJmap([alheio]);
+    await expect(findDeliveryReport(opts)).resolves.toBeNull(); // sem informar, continua recusado
+    stubJmap([alheio]);
+    await expect(findDeliveryReport({ ...opts, senderDomains: ["a.exemplo.com.br", "envio.exemplo.com.br"] })).resolves.toMatchObject({ state: "delivered" });
+    stubJmap([{ ...legit, from: "mailer-daemon@mail.a.exemplo.com.br" }]);
+    await expect(findDeliveryReport({ ...opts, senderDomains: ["a.exemplo.com.br"] })).resolves.toMatchObject({ state: "delivered" });
+    // domínio informado não abre a porta para outros nem para outros nomes locais
+    stubJmap([{ ...alheio, from: "MAILER-DAEMON@gmail.com" }]);
+    await expect(findDeliveryReport({ ...opts, senderDomains: ["a.exemplo.com.br"] })).resolves.toBeNull();
+    stubJmap([{ ...alheio, from: "atacante@a.exemplo.com.br" }]);
+    await expect(findDeliveryReport({ ...opts, senderDomains: ["a.exemplo.com.br"] })).resolves.toBeNull();
+  });
+
   it("bounce legítimo (recusa) é lido do aviso do servidor", async () => {
     stubJmap([{ subject: "Failed to deliver message", text: BOUNCE_TEXT, dsn: dsnOf(SECRET) }]);
     await expect(findDeliveryReport(opts)).resolves.toMatchObject({ state: "bounced" });

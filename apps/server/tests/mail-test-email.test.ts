@@ -10,7 +10,7 @@
  * Sem Docker e sem rede: StalwartManager/Client são dublês; o envio SMTP, a
  * leitura do aviso e o relógio são injetados.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -340,6 +340,35 @@ describe("testEmailStatus — destino da mensagem", () => {
     // resultado definitivo não consulta de novo
     await s.testEmailStatus(DOMAIN, test.id);
     expect(reports).toHaveLength(1);
+  });
+
+  // Vários domínios: o aviso do Stalwart sai do domínio dos relatórios
+  // (report.domain = dono do hostname), não do da caixa que enviou o teste.
+  it("teste enviado de um domínio e hostname de outro: o filtro de remetente do aviso inclui o domínio dos relatórios", async () => {
+    const OUTRO = "loja.exemplo.org";
+    const file = path.join(dir, "mail", "mail.json");
+    const data = JSON.parse(await readFile(file, "utf8")) as { domains: Record<string, unknown>; mailboxes: Record<string, unknown> };
+    data.domains[OUTRO] = { ...(data.domains[DOMAIN] as object), name: OUTRO };
+    data.mailboxes[`postmaster@${OUTRO}`] = { ...postmaster(), id: `postmaster@${OUTRO}`, domain: OUTRO };
+    await writeFile(file, JSON.stringify(data));
+    config = { ...config, mailHostname: `mail.${DOMAIN}` } as unknown as ServerConfig;
+
+    const s = service();
+    const test = await s.sendTestEmail(OUTRO, TO);
+    queue = [];
+    reportImpl = async () => ({ state: "bounced", detail: "550 5.1.1 sem usuário" });
+    await s.testEmailStatus(OUTRO, test.id);
+    expect(reports[0]!.username).toBe(`postmaster@${OUTRO}`);
+    // o aviso legítimo vem de MAILER-DAEMON@<domínio do hostname>
+    expect(reports[0]!.senderDomains).toEqual(expect.arrayContaining([DOMAIN, OUTRO, `mail.${DOMAIN}`]));
+  });
+
+  it("config antigo, sem hostname: o filtro inclui os domínios cadastrados e mail.<1º domínio>", async () => {
+    const s = service();
+    const test = await s.sendTestEmail(DOMAIN, TO);
+    queue = [];
+    await s.testEmailStatus(DOMAIN, test.id);
+    expect(reports[0]!.senderDomains).toEqual(expect.arrayContaining([DOMAIN, `mail.${DOMAIN}`]));
   });
 
   it("saiu da fila e o aviso diz recusado → 'bounced' com o motivo", async () => {
