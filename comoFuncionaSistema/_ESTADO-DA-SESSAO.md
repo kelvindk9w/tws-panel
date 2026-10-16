@@ -1,4 +1,4 @@
-# Estado da sessão — atualizado em 02/10/2026
+# Estado da sessão — atualizado em 14/10/2026
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
@@ -8,6 +8,17 @@ pendente e por quê — informação que não está no código nem no git log.
 > senhas nem nomes de clientes.
 
 ---
+
+## Atualização de 14/10/2026 — branch `feat/backups` (subagente, worktree isolado)
+- Fase 1 dos backups: **Configurações → Backups**, aba **Backups** do projeto, "Fazer backup: Sim/Não" na criação e passo 6 do roteiro ("Backups fora da VPS").
+- Entram no backup: bancos detectados pela imagem (dump dentro do container), volumes e pastas escolhidos, o painel (`data/` sem as cópias) e o e-mail (Stalwart parado por instantes e webmail).
+- Formato `.7z` com o `7zz` da imagem. A senha vai pela entrada padrão, nunca por argumento.
+- Onde fica: cópia na VPS sempre, sem senha. Cópia externa S3 (R2 em destaque) cifrada com AES-256 e `-mhe=on`. Ela é baixada de volta e conferida antes de a retenção apagar as antigas.
+- Restauração por item, restauração do painel em duas fases (troca na subida), `scripts/restaurar-painel.sh` por SSH e o fluxo "Restaurar de outro servidor".
+- Avisos novos: backup falhou, backup externo atrasado, lembrete trimestral da senha.
+- Serviço no escopo raiz (`app.ts`), ganchos no deploy. O fuso da VPS é lido de `/host/etc/localtime`.
+- Detalhes: `backups/` e `_RELATORIO-backups.md`, com o que foi testado de verdade, o passo a passo na VPS e o da VPS nova.
+- Falta validar com R2, Stalwart, MongoDB e MySQL reais, e o painel inteiro no ar. Google Drive fica para a fase 2. Sem push nem PR.
 
 ## Atualização de 07/10/2026 — branch `feat/notificacoes` (subagente, worktree isolado)
 - Item 4 da ordem combinada: **Configurações → Notificações** com Telegram (robô do @BotFather, Conectar depois do /start, Enviar teste) e e-mail (pelo servidor de e-mail do painel, postmaster@ do domínio com DNS conferido).

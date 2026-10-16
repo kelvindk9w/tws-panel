@@ -8,7 +8,7 @@
  * o servidor passa a devolver o status real e o resto do roteiro não muda.
  */
 import type { OnboardingStepId } from "@paas/core";
-import { Bell, Globe, KeyRound, Mail, ShieldCheck, type LucideIcon } from "lucide-react";
+import { Bell, DatabaseBackup, Globe, KeyRound, Mail, ShieldCheck, type LucideIcon } from "lucide-react";
 
 export interface OnboardingStepContent {
   title: string;
@@ -98,5 +98,22 @@ export const ONBOARDING_CONTENT: Record<OnboardingStepId, OnboardingStepContent>
     ],
     note: "Conta como feito com pelo menos um canal conectado e com o teste enviado. Pode ser só o Telegram, só o e-mail ou os dois. Se preferir acompanhar só pelo painel, marque “Não vou usar”.",
     action: { label: "Abrir Notificações", to: "/settings/notifications" },
+  },
+  backups: {
+    title: "Backups fora da VPS",
+    icon: DatabaseBackup,
+    whatIs:
+      "Uma cópia automática do painel, do e-mail e dos bancos e arquivos de cada projeto, enviada para um armazenamento fora da VPS (como o Cloudflare R2) e cifrada com uma senha sua.",
+    why: "O painel já guarda cópias na própria VPS, mas elas somem junto se o servidor for perdido, invadido ou apagado por engano. Com uma cópia fora, dá para montar tudo de novo numa VPS nova.",
+    howTo: [
+      "No painel da Cloudflare, abra R2 Object Storage e ative o R2 (o plano gratuito cobre 10 GB por mês).",
+      "Crie um bucket (ex.: tws-backups).",
+      "Em Manage API tokens, crie um token com permissão Object Read & Write só para esse bucket. Copie a Access Key ID, a Secret Access Key e o endpoint.",
+      "Em Configurações → Backups, cole os dados no cartão Armazenamento externo e clique em Testar e salvar.",
+      "No cartão Criptografia, crie a senha (ou clique em Sugerir uma frase forte), baixe o kit de recuperação e marque “Guardei a senha em lugar seguro”.",
+      "Clique em Fazer backup agora no Painel: o passo fica feito quando a primeira cópia externa for enviada e conferida.",
+    ],
+    note: "Conta como feito com o armazenamento conectado e pelo menos um backup externo conferido. Se você já tem outra rotina de backup fora da VPS, marque “Não vou usar”.",
+    action: { label: "Abrir Backups", to: "/settings/backups" },
   },
 };

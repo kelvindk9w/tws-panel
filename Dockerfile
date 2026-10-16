@@ -80,8 +80,13 @@ RUN echo "${DOCKER_CLI_SHA256}  /tmp/docker.tgz" | sha256sum -c - \
 # A imagem base não traz o binário; sem ele o clone falhava com ENOENT em
 # qualquer repositório. Limpeza das listas do apt na MESMA camada para não
 # carregar o cache do apt na imagem final.
+#
+# 7zip (binário `7zz`): formato dos backups (Configurações → Backups). Os
+# arquivos .7z abrem no 7-Zip (Windows) e no Keka (Mac) sem o painel. A senha
+# dos backups chega ao 7zz pela ENTRADA PADRÃO, nunca pela linha de comando
+# (não aparece no `ps` nem em log). Também usado por scripts/restaurar-painel.sh.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates 7zip \
     && rm -rf /var/lib/apt/lists/*
 
 # pnpm preparado em build (sem download em runtime) + usuário não-root.

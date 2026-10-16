@@ -390,6 +390,41 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
     });
   });
 
+  it("Fazer backup: Sim por padrão (nada a mais); Não desliga o backup do projeto", async () => {
+    expect(await criar(DETECTION)).toHaveTextContent("/projects/p1?deploy=1");
+    expect(apiFetchMock.mock.calls.some(([p]) => String(p).startsWith("/api/backups/"))).toBe(false);
+    cleanup();
+
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/backups/targets/project:p1" && init?.method === "PUT") return undefined;
+      return base(path, init);
+    });
+    render(
+      <MemoryRouter initialEntries={["/new"]}>
+        <Routes>
+          <Route path="/new" element={<NewProjectPage />} />
+          <Route path="*" element={<Onde />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "cassino" } });
+    fireEvent.click(screen.getByRole("button", { name: /Repositório Git/ }));
+    fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
+      target: { value: "https://github.com/usuario/cassino" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
+    await screen.findByText(/Tipo detectado/);
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    const choice = await screen.findByTestId("backup-choice");
+    expect(within(choice).getByLabelText("Sim")).toBeChecked();
+    fireEvent.click(within(choice).getByLabelText("Não"));
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    expect(await screen.findByTestId("onde")).toHaveTextContent("/projects/p1");
+    const put = apiFetchMock.mock.calls.find(([p]) => p === "/api/backups/targets/project:p1");
+    expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({ enabled: false });
+  });
+
   it("compose com tudo preenchido: deploy direto", async () => {
     const compose = { ...DETECTION, type: "compose", composeFile: "compose.yml", proxyService: "web" };
     const env = { vars: [], compose: { variables: [{ name: "LOG_LEVEL", required: false, defaultValue: "info" }] } };

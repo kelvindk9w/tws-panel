@@ -108,6 +108,8 @@ export function NewProjectPage() {
   // passo 3 — domínio/config
   const [domain, setDomain] = useState("");
   const [websocket, setWebsocket] = useState(false);
+  // "Fazer backup": ligado por padrão; o que entra é escolhido na aba Backups depois do deploy.
+  const [backup, setBackup] = useState(true);
   const [proxyService, setProxyService] = useState("");
   const [proxyPort, setProxyPort] = useState("");
   const [dnsCheck, setDnsCheck] = useState<DomainCheckResponse | null>(null);
@@ -238,6 +240,9 @@ export function NewProjectPage() {
           proxyPort: proxyPort ? Number(proxyPort) : null,
         }),
       });
+      if (!backup) {
+        await apiFetch(`/api/backups/targets/project:${projectId}`, { method: "PUT", body: JSON.stringify({ enabled: false }) });
+      }
       navigate(await firstDeployPath(projectId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao salvar o projeto.");
@@ -669,6 +674,23 @@ export function NewProjectPage() {
               />
               Projeto usa WebSocket / conexões longas (ex.: Colyseus, SSE)
             </label>
+
+            <fieldset className="flex flex-col gap-1.5 text-sm" data-testid="backup-choice">
+              <legend className="mb-1 font-medium">Fazer backup</legend>
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="backup" className="h-4 w-4" checked={backup} onChange={() => setBackup(true)} />
+                  Sim
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="backup" className="h-4 w-4" checked={!backup} onChange={() => setBackup(false)} />
+                  Não
+                </label>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                Depois do primeiro deploy, a aba Backups do projeto mostra os bancos e as pastas encontrados para você conferir.
+              </span>
+            </fieldset>
 
             <div className="flex justify-between">
               <Button variant="outline" onClick={() => setStep(1)}>
