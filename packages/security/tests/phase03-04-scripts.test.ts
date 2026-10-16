@@ -204,6 +204,31 @@ describe.skipIf(!HAS_DOCKER)("fases 03/04 e lib.sh num Ubuntu real", { timeout: 
       expect(enable).toBeGreaterThan(denyIn);
     });
 
+    it("soma a porta da sessão atual ($SSH_CONNECTION), mesmo sem sshd ou com sshd -T falhando", () => {
+      const r = sh(
+        [
+          "pkill -x sshd || true",
+          "sleep 0.5",
+          "rm -f /etc/ssh/sshd_config.d/10-porta-teste.conf",
+          "mv /usr/sbin/sshd /usr/sbin/sshd.off",
+          "source /opt/h/lib.sh",
+          "SSH_CONNECTION='203.0.113.9 51234 10.0.0.5 2200' detect_ssh_ports",
+          "mv /usr/sbin/sshd.off /usr/sbin/sshd",
+        ].join("; "),
+      );
+      expect(r.out.trim().split(/\s+/).at(-1)).toBe("2200");
+    });
+
+    it("porta da sessão soma às detectadas; valor não numérico ou fora do intervalo é ignorado", () => {
+      startSshd([2222]);
+      const somada = sh("source /opt/h/lib.sh; SSH_CONNECTION='1.2.3.4 5 6.7.8.9 2200' detect_ssh_ports").out;
+      expect(somada.trim().split(/\s+/)).toEqual(["2200", "2222"]);
+      for (const ruim of ["1.2.3.4 5 6.7.8.9 abc", "1.2.3.4 5 6.7.8.9 70000", "1.2.3.4 5 6.7.8.9 0", ""]) {
+        const out = sh(`source /opt/h/lib.sh; SSH_CONNECTION='${ruim}' detect_ssh_ports`).out;
+        expect(out.trim().split(/\s+/), ruim).toEqual(["2222"]);
+      }
+    });
+
     it("fail2ban (fase 04) vigia a porta real do SSH", () => {
       startSshd([2222]);
       const r = sh("bash /opt/h/04-intrusion.sh --dry-run");

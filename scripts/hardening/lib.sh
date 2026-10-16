@@ -256,7 +256,8 @@ svc_disable_mask() {
 #  2. `ss -tlnp` — portas em que o processo sshd está escutando agora;
 #  3. ssh.socket — ativação por socket do systemd (Ubuntu 22.10+), em que
 #     quem escuta é o systemd, não o sshd;
-#  4. sem nada acima: linhas "Port" dos arquivos de configuração.
+#  4. sem nada acima: linhas "Port" dos arquivos de configuração;
+#  5. a porta da sessão atual do operador ($SSH_CONNECTION), sempre somada.
 # Sem nenhuma porta encontrada, cai para a 22 (padrão do OpenSSH).
 detect_ssh_ports() {
   local found=""
@@ -273,6 +274,15 @@ detect_ssh_ports() {
     found="$(cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null \
       | awk 'tolower($1) == "port" {print $2}' || true)"
   fi
+  # 5. A porta da sessão SSH do próprio operador ($SSH_CONNECTION = "ip porta
+  #    ip porta-local"): se ele está conectado nela, ela funciona — cobre sshd
+  #    parado ou `sshd -T` falhando (ex.: Port num Include fora de sshd_config.d).
+  local session_port
+  session_port="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
+  case "$session_port" in
+    ''|*[!0-9]*) ;;
+    *) found="$found $session_port" ;;
+  esac
   local ports
   # shellcheck disable=SC2086 # separação por espaço é intencional
   ports="$(printf '%s\n' $found | grep -E '^[0-9]+$' | awk '$1 >= 1 && $1 <= 65535' | sort -un | tr '\n' ' ' || true)"
