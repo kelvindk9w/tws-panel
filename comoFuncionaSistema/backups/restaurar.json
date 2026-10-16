@@ -102,11 +102,13 @@
     "apps/server/tests/backup-service.test.ts",
     "apps/server/tests/panel-restore-interrupcao.test.ts",
     "apps/server/tests/panel-restore.test.ts",
-    "apps/server/tests/restaurar-painel-script.test.ts"
+    "apps/server/tests/restaurar-painel-script.test.ts",
+    "apps/web/tests/panel-restore-dialog.test.tsx"
   ],
   "observacoes": [
     "Os destinos não vêm do manifesto (ele está dentro do arquivo e pode ter sido trocado por quem tem acesso ao bucket): pastas e volumes só são restaurados se baterem com a detecção de agora do projeto ou com as pastas extras cadastradas; o Redis volta sempre em /data; o código volta para a pasta do projeto (srcDir). O que não bate vira aviso e é pulado.",
     "Limite conhecido: o backup do PAINEL substitui o /data inteiro; um backup do painel trocado no bucket dá controle do painel. Com a criptografia ligada isso exige a senha; sem ela, quem tem as chaves do bucket pode montar um. Por isso a criptografia vem sugerida.",
-    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Painel com troca pela metade (progresso gravado): a restauração pelo painel falha com 'Há uma restauração do painel pela metade…' sem apagar a pasta extraída; scripts/restaurar-painel.sh para antes de parar o painel e pede para iniciá-lo; depois da troca, o script lê o registro da restauração no histórico (node no container) e avisa quando ela foi desfeita, com o motivo."
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Painel com troca pela metade (progresso gravado): a restauração pelo painel falha com 'Há uma restauração do painel pela metade…' sem apagar a pasta extraída; scripts/restaurar-painel.sh para antes de parar o painel e pede para iniciá-lo; depois da troca, o script lê o registro da restauração no histórico (node no container) e avisa quando ela foi desfeita, com o motivo.",
+    "16/10/2026 — achado 22 da revisão (janela 'em andamento' para sempre): RestoreDialog (apps/web/src/components/backups/backup-ui.tsx) acompanha o reinício do painel. O aviso 'vai reiniciar' (status warning) não encerra mais o acompanhamento. Fases: waiting → down (sem conexão ou 5xx: 'O painel está reiniciando…') → relogin (401 da sessão que não vale mais ou 404 do registro que sumiu com o histórico do backup: 'O painel reiniciou com o estado do backup. Entre de novo…', para de consultar) ou, se voltar com a sessão valendo, lê GET /api/backups e procura no histórico o registro da subida ('Trocar o estado do painel (na subida)', terminado depois do pedido): success ('Painel restaurado…') ou undone ('A troca falhou na subida e foi desfeita… Motivo: …'); sem registro, 'O painel voltou. Confira…'. Fora do ar por mais de 5 min (restartTimeoutMs): para e manda conferir os logs do container. Em todos os desfechos aparece 'Recarregar a página'. Nas restaurações de projeto/e-mail, 30 erros seguidos encerram a consulta com aviso. Teste: apps/web/tests/panel-restore-dialog.test.tsx."
   ]
 }
