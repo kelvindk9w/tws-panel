@@ -248,4 +248,31 @@ describe.skipIf(!HAS_DOCKER)("fases 03/04 e lib.sh num Ubuntu real", { timeout: 
       expect(r.out).toMatch(/aguardando confirmação/i);
     });
   });
+
+  // -------------------------------------------------------------- achado 26
+  describe("fail2ban já rodando — achado 26", () => {
+    it("as jails novas entram em vigor (recidive ativa), não só depois de um reboot", () => {
+      startSshd([22]);
+      // como o pacote deixa: serviço rodando com a configuração padrão (só sshd)
+      const before = sh(
+        [
+          "rm -f /etc/fail2ban/jail.local",
+          "touch /var/log/auth.log",
+          "service fail2ban restart >/dev/null 2>&1",
+          "sleep 2",
+          "fail2ban-client status",
+        ].join("; "),
+      );
+      expect(before.out).toContain("sshd");
+      expect(before.out).not.toContain("recidive");
+
+      const r = sh("bash /opt/h/04-intrusion.sh", 400_000);
+      expect(r.code, r.out).toBe(0);
+      const after = sh("fail2ban-client status").out;
+      expect(after).toContain("recidive");
+      expect(after).toContain("sshd");
+      // a política nova (maxretry 3 no sshd) está valendo no daemon
+      expect(sh("fail2ban-client get sshd maxretry").out.trim()).toBe("3");
+    });
+  });
 });

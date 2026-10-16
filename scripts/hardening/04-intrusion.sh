@@ -51,7 +51,7 @@ ok "Pacotes instalados"
 
 step "Configurando jails do fail2ban ($JAIL)"
 # Portas reais do SSH + as pedidas com --ssh-port, no formato do fail2ban (vírgulas).
-# shellcheck disable=SC2086 # separação por espaço é intencional
+# shellcheck disable=SC2046,SC2086 # separação por espaço é intencional
 SSH_PORT="$(printf '%s\n' $(detect_ssh_ports) $EXTRA_SSH_PORTS | sort -un | paste -sd, -)"
 info "jail sshd vigiando a(s) porta(s) do SSH: $SSH_PORT"
 # Jails seguem os serviços presentes (spec §4 passo 17: "conforme serviços") —
@@ -144,10 +144,45 @@ else
 fi
 ok "Configuração válida"
 
-step "Ativando fail2ban"
-svc_enable_now fail2ban
-if [ "$PAAS_DRY_RUN" != "1" ]; then
-  fail2ban-client ping 2>/dev/null && info "fail2ban respondendo" || warn "fail2ban não respondeu (sem systemd? serviço subirá no boot)"
+step "Ativando fail2ban com as regras novas"
+# O pacote já sobe o serviço ao ser instalado, com a configuração padrão.
+# `enable --now` não recarrega um serviço que já roda: as jails novas
+# (recidive, maxretry 3, e-mail…) só entravam em vigor no próximo reboot
+# (achado 26). Daemon já ativo → reload; depois, confere no daemon que cada
+# jail do jail.local está de fato ativa.
+EXPECTED_JAILS="$(printf '%s\n' "$JAILS" | sed -n 's/^\[\([A-Za-z0-9_-]*\)\]$/\1/p' | grep -vx DEFAULT | tr '\n' ' ')"
+if [ "$PAAS_DRY_RUN" = "1" ]; then
+  echo "[dry-run] habilitaria o fail2ban, recarregaria se já estivesse rodando e conferiria as jails: $EXPECTED_JAILS"
+else
+  WAS_RUNNING=0
+  fail2ban-client ping >/dev/null 2>&1 && WAS_RUNNING=1
+  svc_enable_now fail2ban
+  if [ "$WAS_RUNNING" = "1" ]; then
+    info "fail2ban já estava rodando — recarregando para aplicar o jail.local"
+    fail2ban-client reload >/dev/null 2>&1 || svc_reload_or_restart fail2ban
+  fi
+  # o daemon leva alguns segundos para subir/recarregar as jails
+  F2B_UP=0
+  for _ in $(seq 1 20); do
+    if fail2ban-client ping >/dev/null 2>&1; then F2B_UP=1; break; fi
+    sleep 1
+  done
+  if [ "$F2B_UP" = "1" ]; then
+    MISSING=""
+    for _ in $(seq 1 10); do
+      ACTIVE=" $(fail2ban-client status 2>/dev/null | sed -n 's/.*Jail list:[[:space:]]*//p' | tr -d ',' | tr -s '[:space:]' ' ') "
+      MISSING=""
+      for jail in $EXPECTED_JAILS; do
+        case "$ACTIVE" in *" $jail "*) ;; *) MISSING="$MISSING $jail" ;; esac
+      done
+      [ -z "$MISSING" ] && break
+      sleep 1
+    done
+    [ -z "$MISSING" ] || die "jails do fail2ban que não ficaram ativas:$MISSING (rollback: $0 --rollback)"
+    info "jails ativas no fail2ban: $EXPECTED_JAILS"
+  else
+    warn "fail2ban não respondeu (sem systemd? serviço subirá no boot) — não foi possível conferir as jails"
+  fi
 fi
 ok "Fail2ban ativo"
 
