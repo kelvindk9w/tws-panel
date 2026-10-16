@@ -6,7 +6,7 @@
  * chave DQS da Spamhaus guardada como segredo (0600, nunca devolvida) e as
  * marcações do Postmaster Tools / SNDS.
  */
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -241,5 +241,17 @@ describe("agendamento diário", () => {
     s.start();
     await vi.advanceTimersByTimeAsync(61_000);
     s.stop();
+  });
+});
+
+describe("gravação", () => {
+  it("uma gravação que falha não trava as seguintes", async () => {
+    const s = new MailReputationService(deps());
+    const file = path.join(dir, "mail", "reputacao.json");
+    await mkdir(file, { recursive: true }); // o arquivo vira pasta: a gravação falha
+    await expect(s.setDqsKey("abcdefghij0123456789")).rejects.toThrow();
+    await rm(file, { recursive: true });
+    await s.setDqsKey("abcdefghij0123456789xyz");
+    expect((JSON.parse(await readFile(file, "utf8")) as { dqsKey: string }).dqsKey).toBe("abcdefghij0123456789xyz");
   });
 });
