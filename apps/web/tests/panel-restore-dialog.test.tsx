@@ -174,6 +174,38 @@ describe("RestoreDialog — reinício do painel", () => {
     expect(await within(dialog).findByText(/O painel voltou/)).toBeInTheDocument();
   });
 
+  it("painel segue respondendo 'vai reiniciar' e nunca reinicia: desiste no prazo e manda reiniciar", async () => {
+    polls = [WARNING];
+    const dialog = start(PANEL, { restartTimeoutMs: 30 });
+    expect(await within(dialog).findByText(/O painel ainda não reiniciou/)).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("Esta janela acompanha até ele voltar");
+    const n = pollCount;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pollCount).toBe(n);
+  });
+
+  it("401 ainda sem o painel ter caído: é sessão expirada, não reinício", async () => {
+    polls = [WARNING, UNAUTH];
+    const dialog = start(PANEL);
+    expect(await within(dialog).findByText(/Sua sessão expirou/)).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("reiniciou com o estado do backup");
+    expect(within(dialog).queryByText("Concluído")).not.toBeInTheDocument();
+  });
+
+  it("404 (registro mudou) ainda sem queda: vale como reinício", async () => {
+    polls = [WARNING, GONE];
+    const dialog = start(PANEL);
+    expect(await within(dialog).findByText(/O painel reiniciou com o estado do backup/)).toBeInTheDocument();
+  });
+
+  it("voltou sem registro da subida: confirmação parcial, sem selo de sucesso e em tom de aviso", async () => {
+    polls = [WARNING, DOWN, WARNING];
+    const dialog = start(PANEL);
+    const msg = await within(dialog).findByText(/O painel voltou/);
+    expect(msg.className).toMatch(/amber/);
+    expect(within(dialog).queryByText("Concluído")).not.toBeInTheDocument();
+  });
+
   it("fora do ar além do limite: para e diz o que conferir", async () => {
     polls = [WARNING, DOWN];
     const dialog = start(PANEL, { restartTimeoutMs: 30 });

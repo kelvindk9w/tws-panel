@@ -603,18 +603,24 @@ const RESTORE_WARNING: Record<RestoreTarget["kind"], string> = {
  * (achado 22 da revisão). A troca do estado só termina na subida seguinte;
  * durante o reinício a API some e, na volta, a sessão e o próprio registro
  * podem não existir mais (usuários e histórico voltam do backup).
- *  - waiting: o painel ainda vai reiniciar;
+ *  - waiting: o painel ainda vai reiniciar (prazo: restartTimeoutMs, desde
+ *    `since`; passado o prazo sem reiniciar, vira timeout);
  *  - down: fora do ar (sem conexão ou 5xx) — reiniciando;
- *  - relogin: voltou e não reconhece a sessão (401) ou o registro (404):
- *    o estado do backup está no lugar;
+ *  - relogin: voltou e não reconhece a sessão (401, só depois de ter caído)
+ *    ou o registro (404): o estado do backup está no lugar;
+ *  - expired: 401 sem o painel ter caído antes — é a sessão que expirou, não
+ *    prova reinício;
  *  - success / undone: voltou com a sessão valendo e o histórico diz como
  *    terminou a troca na subida;
- *  - back: voltou, mas sem registro da subida no histórico;
- *  - timeout: não voltou dentro do prazo.
+ *  - back: voltou, mas sem registro da subida no histórico (confirmação
+ *    parcial: aviso, não sucesso);
+ *  - timeout: não reiniciou (neverRestarted) ou não voltou dentro do prazo.
  */
 type PanelWatch =
-  | { phase: "waiting" | "down"; downSince: number | null; tick: number }
-  | { phase: "relogin" | "success" | "back" | "timeout" }
+  | { phase: "waiting"; since: number }
+  | { phase: "down"; since: number; downSince: number }
+  | { phase: "timeout"; neverRestarted: boolean }
+  | { phase: "relogin" | "expired" | "success" | "back" }
   | { phase: "undone"; error: string | null };
 
 /** Erros seguidos ao acompanhar uma restauração (que não é a do painel) antes de desistir. */
@@ -667,7 +673,10 @@ export function RestoreDialog({
   points?: BackupPoint[];
   /** Intervalo do acompanhamento (testes usam um curto). */
   pollMs?: number;
-  /** Quanto esperar o painel voltar depois do reinício antes de desistir. */
+  /**
+   * Prazo (padrão 5 min) para o painel reiniciar depois de preparada a troca,
+   * e outro igual para ele voltar depois de cair, antes de desistir.
+   */
   restartTimeoutMs?: number;
 }) {
   const [points, setPoints] = useState<BackupPoint[] | null>(givenPoints ?? null);
@@ -705,10 +714,13 @@ export function RestoreDialog({
   /** Próximo passo do acompanhamento do painel depois de um erro ao consultar. */
   const afterError = (err: unknown, current: PanelWatch): PanelWatch => {
     const status = err instanceof ApiRequestError ? err.status : 0;
-    if (status === 401 || status === 404) return { phase: "relogin" };
-    const downSince = current.phase === "down" && current.downSince !== null ? current.downSince : Date.now();
-    if (Date.now() - downSince >= restartTimeoutMs) return { phase: "timeout" };
-    return { phase: "down", downSince, tick: current.phase === "down" || current.phase === "waiting" ? current.tick + 1 : 0 };
+    const fell = current.phase === "down";
+    if (status === 404) return { phase: "relogin" };
+    if (status === 401) return fell ? { phase: "relogin" } : { phase: "expired" };
+    const since = current.phase === "waiting" || current.phase === "down" ? current.since : Date.now();
+    const downSince = current.phase === "down" ? current.downSince : Date.now();
+    if (Date.now() - downSince >= restartTimeoutMs) return { phase: "timeout", neverRestarted: false };
+    return { phase: "down", since, downSince };
   };
 
   // Acompanha a restauração até terminar.
@@ -720,7 +732,7 @@ export function RestoreDialog({
         onFinished?.(record);
       }
       // Painel: "vai reiniciar" ainda não é o fim — acompanha o reinício.
-      if (target.kind === "panel" && record.status === "warning") setWatch({ phase: "waiting", downSince: null, tick: 0 });
+      if (target.kind === "panel" && record.status === "warning") setWatch({ phase: "waiting", since: Date.now() });
       return;
     }
     const t = setTimeout(() => {
@@ -731,7 +743,7 @@ export function RestoreDialog({
         })
         .catch((err: unknown) => {
           if (target.kind === "panel") {
-            setWatch(afterError(err, { phase: "waiting", downSince: null, tick: 0 }));
+            setWatch(afterError(err, { phase: "waiting", since: Date.now() }));
             return;
           }
           pollErrors.current++;
@@ -751,9 +763,11 @@ export function RestoreDialog({
       apiFetch<BackupRecord>(`/api/backups/records/${record.id}`)
         .then(async (r) => {
           if (watch.phase === "waiting") {
-            // ainda não reiniciou: segue esperando (ou volta ao acompanhamento normal)
+            // ainda não reiniciou: segue esperando até o prazo (ou volta ao acompanhamento normal)
             setRecord(r);
-            setWatch(r.status === "warning" ? { ...watch, tick: watch.tick + 1 } : null);
+            if (r.status !== "warning") setWatch(null);
+            else if (Date.now() - watch.since >= restartTimeoutMs) setWatch({ phase: "timeout", neverRestarted: true });
+            else setWatch({ ...watch });
             return;
           }
           // voltou e a sessão ainda vale: o histórico diz como terminou a troca
@@ -792,7 +806,7 @@ export function RestoreDialog({
   const shown: BackupRecord | null =
     record && watch?.phase === "undone"
       ? { ...record, status: "failed" }
-      : record && watch && (watch.phase === "relogin" || watch.phase === "success" || watch.phase === "back")
+      : record && watch && (watch.phase === "relogin" || watch.phase === "success")
         ? { ...record, status: "success" }
         : record;
   return (
@@ -936,14 +950,20 @@ export function RestoreDialog({
               </p>
             )}
             {watch?.phase === "back" && (
-              <p className="text-sm text-muted-foreground" data-testid="panel-restart">
-                O painel voltou. Confira o resultado da restauração no histórico de backups.
+              <p className="text-sm text-amber-400" data-testid="panel-restart">
+                O painel voltou, mas não deu para confirmar o resultado da troca. Confira no histórico de backups.
+              </p>
+            )}
+            {watch?.phase === "expired" && (
+              <p className="text-sm text-amber-400" data-testid="panel-restart">
+                Sua sessão expirou. Entre de novo e confira no histórico de backups se a restauração terminou.
               </p>
             )}
             {watch?.phase === "timeout" && (
               <p className="text-sm text-destructive" data-testid="panel-restart">
-                O painel não voltou depois de {Math.max(1, Math.round(restartTimeoutMs / 60_000))} minuto(s). Confira o container do painel na
-                VPS (docker logs) — se a troca ficou pela metade, ele explica o que fazer.
+                {watch.neverRestarted
+                  ? `O painel ainda não reiniciou depois de ${Math.max(1, Math.round(restartTimeoutMs / 60_000))} minuto(s). A troca ficou preparada: reinicie o container do painel na VPS (docker restart) para terminar a restauração.`
+                  : `O painel não voltou depois de ${Math.max(1, Math.round(restartTimeoutMs / 60_000))} minuto(s). Confira o container do painel na VPS (docker logs) — se a troca ficou pela metade, ele explica o que fazer.`}
               </p>
             )}
             {lost && (
