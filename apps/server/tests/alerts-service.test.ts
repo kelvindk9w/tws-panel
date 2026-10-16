@@ -265,3 +265,14 @@ describe("onCreated — quem escuta alertas novos (notificações)", () => {
     expect(String(log.mock.calls[0]![0])).toMatch(/boom/);
   });
 });
+
+describe("carga inicial com chamadas em paralelo", () => {
+  it("alertas criados logo depois de subir não apagam os que já estavam no disco", async () => {
+    const antigo = { ...INPUT, title: "Alerta antigo" };
+    await new AlertsService(dir).create(antigo);
+    const subindo = new AlertsService(dir);
+    await Promise.all(Array.from({ length: 5 }, (_, i) => subindo.create({ ...INPUT, title: `Novo ${i}` })));
+    const { alerts } = await new AlertsService(dir).list();
+    expect(alerts.map((a) => a.title).sort()).toEqual(["Alerta antigo", "Novo 0", "Novo 1", "Novo 2", "Novo 3", "Novo 4"]);
+  });
+});

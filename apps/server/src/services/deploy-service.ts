@@ -5,7 +5,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { isInsideProjectsDir } from "./projects-dir.js";
 import { httpError, type HttpError } from "./http-error.js";
@@ -74,6 +74,7 @@ import type { AuditService } from "./audit-service.js";
 import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 const MAX_JOBS = 100;
 
@@ -206,7 +207,7 @@ export class DeployService {
   private panelReserved: string[] = [];
   private projects: Project[] = [];
   private jobs: DeployJob[] = [];
-  private loaded = false;
+  private loadedPromise: Promise<void> | null = null;
   /** Fuso da VPS em uso (Configurações → Fuso horário), para "Igual ao da VPS". */
   private hostTimezoneProvider: () => string = () => process.env.TZ || "UTC";
   /** TZ e base de fusos de um container (trocado nos testes). */
@@ -600,9 +601,16 @@ export class DeployService {
   // Persistência
   // -------------------------------------------------------------------------
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
+  /**
+   * Carga única e compartilhada. Com a flag marcada antes de ler, uma segunda
+   * chamada seguia com a lista vazia e a gravação dela apagava os projetos.
+   */
+  private ensureLoaded(): Promise<void> {
+    this.loadedPromise ??= this.load();
+    return this.loadedPromise;
+  }
+
+  private async load(): Promise<void> {
     try {
       const raw = JSON.parse(await readFile(this.projectsFile, "utf8")) as Partial<ProjectsFile>;
       this.projects = Array.isArray(raw.projects) ? raw.projects : [];
@@ -625,21 +633,22 @@ export class DeployService {
     }
   }
 
+  /**
+   * Grava a lista em memória de AGORA (lida dentro da fila do arquivo), de
+   * forma atômica: duas gravações nunca terminam fora de ordem, com uma
+   * versão mais velha chegando por último.
+   */
   private async saveProjects(): Promise<void> {
-    await mkdir(path.dirname(this.projectsFile), { recursive: true });
-    const data: ProjectsFile = { projects: this.projects };
-    await writeFile(this.projectsFile, JSON.stringify(data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
+    await withFileLock(this.projectsFile, () => {
+      const data: ProjectsFile = { projects: this.projects };
+      return writeFileAtomic(this.projectsFile, JSON.stringify(data, null, 2) + "\n");
     });
   }
 
   private async saveJobs(): Promise<void> {
-    await mkdir(path.dirname(this.jobsFile), { recursive: true });
-    const data: JobsFile = { jobs: this.jobs.slice(-MAX_JOBS) };
-    await writeFile(this.jobsFile, JSON.stringify(data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
+    await withFileLock(this.jobsFile, () => {
+      const data: JobsFile = { jobs: this.jobs.slice(-MAX_JOBS) };
+      return writeFileAtomic(this.jobsFile, JSON.stringify(data, null, 2) + "\n");
     });
   }
 
