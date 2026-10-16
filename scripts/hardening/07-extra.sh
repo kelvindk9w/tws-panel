@@ -6,7 +6,7 @@
 #  - idade máxima/expiração de senha: a senha do usuário do terminal expiraria
 #    e o sudo do modo senha pararia de funcionar (e o NIST já não recomenda);
 #  - senha no GRUB: um erro impede o boot desatendido da VPS;
-#  - trocar a porta do SSH: obscuridade que quebra o README e o túnel;
+#  - trocar a porta do SSH: obscuridade que quebra docs/instalacao.md e o túnel;
 #  - partições separadas (/home, /tmp, /var): só na instalação do sistema;
 #  - apt-listbugs: consulta o BTS do Debian, não o do Ubuntu, e pode travar o apt;
 #  - Lynis de repositório de terceiros; log remoto; remover contas travadas.
