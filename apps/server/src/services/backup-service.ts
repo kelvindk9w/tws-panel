@@ -93,7 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
-import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, type PanelRestoreMarker } from "./panel-restore.js";
+import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 
 // ---------------------------------------------------------------------------
@@ -2120,6 +2120,11 @@ export class BackupService {
   /** Painel: deixa pronto para a troca na próxima subida e pede o reinício. */
   private async stagePanel(r: BackupRecord, content: string, fileName: string, actor: string): Promise<void> {
     this.step(r, "Preparar a troca do estado do painel");
+    // Troca pela metade (só acontece se a subida não terminou nem desfez):
+    // a pasta extraída ainda guarda parte do backup — não pode ser apagada.
+    if (existsSync(path.join(this.backupsDir, PANEL_RESTORE_PROGRESS))) {
+      throw new BackupFailure("Há uma restauração do painel pela metade. Reinicie o painel para ele terminar ou desfazer a troca e tente de novo.");
+    }
     const target = path.join(this.backupsDir, PANEL_RESTORE_DIR);
     await rm(target, { recursive: true, force: true });
     await rename(content, target);

@@ -748,6 +748,18 @@ describe("restaurar", () => {
     expect(restarted).toBe(1);
   });
 
+  it("painel com uma troca pela metade (progresso gravado): recusa e não apaga a pasta extraída", async () => {
+    const b = await backup("panel");
+    await mkdir(path.join(dir, "backups", ".restaurar-painel"), { recursive: true });
+    await writeFile(path.join(dir, "backups", ".restaurar-painel", "secrets.json"), "parte do backup anterior");
+    await writeFile(path.join(dir, "backups", ".restaurar-painel.progresso.json"), "{}");
+    const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).error).toMatch(/restauração do painel pela metade/);
+    expect(await readFile(path.join(dir, "backups", ".restaurar-painel", "secrets.json"), "utf8")).toBe("parte do backup anterior");
+    expect(restarted).toBe(0);
+  });
+
   it("arquivo de outro tipo não é restaurado", async () => {
     const b = await backup("panel");
     await mkdir(path.join(dir, "backups", "_email"), { recursive: true });
