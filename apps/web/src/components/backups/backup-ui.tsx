@@ -12,20 +12,24 @@ import {
   backupPasswordStrength,
   buildRecoveryKit,
   formatBackupCoverage,
+  type BackupCheckResult,
   type BackupFrequencyHours,
   type BackupPoint,
   type BackupRecord,
   type BackupRemoteState,
   type BackupsStatus,
   type BackupTargetStatus,
+  type BackupVerifyRequest,
+  type BackupVerifySummary,
 } from "@paas/core";
+import { Link } from "react-router";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, CheckCircle2, Download, Loader2, RotateCcw, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Loader2, RotateCcw, ShieldCheck, Sparkles } from "lucide-react";
 
 export function errorText(err: unknown): string {
   return err instanceof ApiRequestError ? err.message : "Não foi possível concluir agora. Tente de novo em instantes.";
@@ -112,18 +116,205 @@ export function RecordBadge({ record }: { record: BackupRecord }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Conferir backups
+// ---------------------------------------------------------------------------
+
+/** "Íntegro — conferido em …", "Falhou: …" e os outros resultados de uma cópia. */
+export function checkText(c: BackupCheckResult | null | undefined): string {
+  if (!c) return "ainda não conferida";
+  switch (c.status) {
+    case "ok":
+      return `Íntegro — conferido em ${when(c.at)}`;
+    case "failed":
+      return `Falhou: ${c.reason ?? "motivo desconhecido"}`;
+    case "missing":
+      return `Não existe mais${c.reason ? ` (${c.reason})` : ""}`;
+    default:
+      return "Não abre com a senha guardada: informe a senha da época do backup.";
+  }
+}
+
+const CHECK_COLOR: Record<BackupCheckResult["status"], string> = {
+  ok: "text-emerald-400",
+  failed: "text-red-400",
+  missing: "text-muted-foreground",
+  needs_password: "text-amber-400",
+};
+
+/** Resumo de uma conferência: "3 íntegras · 1 com problema". */
+export function verifySummaryText(s: BackupVerifySummary): string {
+  const parts = [
+    s.ok ? `${s.ok} ${s.ok === 1 ? "íntegra" : "íntegras"}` : null,
+    s.failed ? `${s.failed} com problema` : null,
+    s.missing ? `${s.missing} ${s.missing === 1 ? "não existe" : "não existem"} mais` : null,
+    s.needsPassword ? `${s.needsPassword} ${s.needsPassword === 1 ? "pede" : "pedem"} a senha da época` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "nada conferido";
+}
+
+function postVerify(target: string, body: BackupVerifyRequest): Promise<BackupRecord> {
+  const url = target === "all" ? "/api/backups/verify" : `/api/backups/targets/${target}/verify`;
+  return apiFetch<BackupRecord>(url, { method: "POST", body: JSON.stringify(body) });
+}
+
+/** "Conferir todos": de um item (target) ou de tudo ("all"). */
+export function VerifyAllButton({
+  target,
+  onQueued,
+  label = "Conferir todos",
+  disabled,
+}: {
+  target: string;
+  onQueued: () => void;
+  label?: string;
+  disabled?: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <Button
+        variant="outline"
+        disabled={busy || disabled}
+        onClick={() => {
+          setBusy(true);
+          setError(null);
+          postVerify(target, {})
+            .then(onQueued)
+            .catch((err: unknown) => setError(errorText(err)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} {label}
+      </Button>
+      {error && (
+        <p role="alert" className="basis-full text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Situação de cada cópia de um backup, o botão Conferir e a senha da época quando falta. */
+function BackupChecks({ record, onVerify }: { record: BackupRecord; onVerify: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [queued, setQueued] = useState(false);
+  const hasRemote = record.remote === "uploaded" || record.remote === "verified" || record.remote === "failed";
+  const localGone = record.local && record.localExists === false;
+  const needsPassword = record.remoteCheck?.status === "needs_password";
+  const fileName = record.fileName ?? "";
+
+  function run(body: BackupVerifyRequest) {
+    setBusy(true);
+    setError(null);
+    postVerify(record.target, body)
+      .then(() => {
+        setQueued(true);
+        setPassword("");
+        onVerify();
+      })
+      .catch((err: unknown) => setError(errorText(err)))
+      .finally(() => setBusy(false));
+  }
+
+  if (!record.local && !hasRemote) return null;
+  return (
+    <span className="mt-1 flex flex-col gap-1 text-xs" data-testid="backup-checks">
+      {record.local && (
+        <span className={localGone || !record.localCheck ? "text-muted-foreground" : CHECK_COLOR[record.localCheck.status]}>
+          Cópia da VPS: {localGone ? "apagada pela retenção" : checkText(record.localCheck)}
+        </span>
+      )}
+      {hasRemote && (
+        <span className={record.remoteCheck ? CHECK_COLOR[record.remoteCheck.status] : "text-muted-foreground"}>
+          Cópia externa: {checkText(record.remoteCheck)}
+        </span>
+      )}
+      <span className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" className="h-7" disabled={busy || (localGone && !hasRemote)} onClick={() => run({ fileName })}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} Conferir
+        </Button>
+        {queued && !busy && <span className="text-muted-foreground">Na fila. O resultado aparece aqui.</span>}
+      </span>
+      {needsPassword && (
+        <span className="flex flex-col gap-1">
+          <span className="text-muted-foreground">
+            Este backup foi feito com outra senha. Digite a senha que valia na época. Ela só serve para esta conferência e não fica guardada.
+          </span>
+          <span className="flex flex-wrap items-center gap-2">
+            <PasswordInput
+              aria-label="Senha da época do backup"
+              className="h-8 w-56"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="off"
+            />
+            <Button size="sm" variant="outline" className="h-8" disabled={busy || !password} onClick={() => run({ fileName, where: "remote", password })}>
+              Conferir com esta senha
+            </Button>
+          </span>
+        </span>
+      )}
+      {error && (
+        <span role="alert" className="text-destructive">
+          {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Andamento e resultado de uma conferência. */
+function VerifyDetail({ record }: { record: BackupRecord }) {
+  const v = record.verify;
+  if (!v) return null;
+  const done = v.items.filter((i) => i.status !== "pending" && i.status !== "running").length;
+  const active = record.status === "running" || record.status === "queued";
+  const problems = v.items.filter((i) => i.status === "failed" || i.status === "needs_password");
+  const copy = (w: "local" | "remote") => (w === "local" ? "cópia da VPS" : "cópia externa");
+  return (
+    <span className="block text-xs" data-testid="verify-detail">
+      {active ? (
+        <span className="text-sky-300">
+          Conferindo… {done} de {v.items.length}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">{verifySummaryText(v.summary)}</span>
+      )}
+      {problems.map((i, n) => (
+        <span key={n} className={cn("block", i.status === "failed" ? "text-red-400" : "text-amber-400")}>
+          {record.target === "all" ? `${i.targetName} · ` : ""}
+          {i.fileName} · {copy(i.where)}: {i.status === "failed" ? `Falhou: ${i.reason}` : i.reason}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function operationText(record: BackupRecord): string {
+  if (record.operation === "restore") return "restauração";
+  if (record.operation === "verify") return record.fileName ? "conferência" : "conferência de todos";
+  return record.trigger === "schedule" ? "backup agendado" : "backup feito agora";
+}
+
 /** Uma linha do histórico: o que, quando, onde ficou e o motivo de falha/aviso. */
-export function RecordLine({ record, showTarget = true }: { record: BackupRecord; showTarget?: boolean }) {
+export function RecordLine({ record, showTarget = true, onVerify }: { record: BackupRecord; showTarget?: boolean; onVerify?: () => void }) {
   const remote = REMOTE_TEXT[record.remote];
-  const where = [record.local && record.operation === "backup" ? "na VPS" : null, remote].filter(Boolean).join(" · ");
+  const where = record.operation === "verify" ? "" : [record.local && record.operation === "backup" ? "na VPS" : null, remote].filter(Boolean).join(" · ");
+  const checkable = onVerify && record.operation === "backup" && record.fileName && (record.status === "success" || record.status === "warning");
   return (
     <li className="flex flex-col gap-1 py-2 sm:flex-row sm:items-start sm:gap-3" data-testid="backup-record">
       <span className="shrink-0 text-xs text-muted-foreground sm:w-28">{when(record.finishedAt ?? record.startedAt ?? record.queuedAt)}</span>
       <span className="min-w-0 flex-1 break-words">
         {showTarget && <strong className="font-medium">{record.targetName}: </strong>}
-        {record.operation === "restore" ? "restauração" : record.trigger === "schedule" ? "backup agendado" : "backup feito agora"}
+        {operationText(record)}
         {record.fileName && <span className="text-muted-foreground"> ({record.fileName}{record.sizeBytes ? `, ${formatBytes(record.sizeBytes)}` : ""})</span>}
         {where && <span className="block text-xs text-muted-foreground">{where}</span>}
+        {record.operation === "verify" && <VerifyDetail record={record} />}
         {record.error && <span className="block text-xs text-red-400">{record.error}</span>}
         {record.remoteDetail && <span className="block text-xs text-amber-400">{record.remoteDetail}</span>}
         {record.warnings.map((w, i) => (
@@ -131,6 +322,7 @@ export function RecordLine({ record, showTarget = true }: { record: BackupRecord
             {w}
           </span>
         ))}
+        {checkable && <BackupChecks record={record} onVerify={onVerify} />}
       </span>
       <span className="shrink-0">
         <RecordBadge record={record} />
@@ -139,14 +331,37 @@ export function RecordLine({ record, showTarget = true }: { record: BackupRecord
   );
 }
 
-export function HistoryList({ records, showTarget = true, empty }: { records: BackupRecord[]; showTarget?: boolean; empty: string }) {
+export function HistoryList({
+  records,
+  showTarget = true,
+  empty,
+  onVerify,
+}: {
+  records: BackupRecord[];
+  showTarget?: boolean;
+  empty: string;
+  /** Com isto, cada backup ganha o botão Conferir (e o que fazer depois: recarregar). */
+  onVerify?: () => void;
+}) {
   if (records.length === 0) return <p className="text-sm text-muted-foreground">{empty}</p>;
   return (
     <ul className="flex flex-col divide-y divide-border text-sm">
       {records.map((r) => (
-        <RecordLine key={r.id} record={r} showTarget={showTarget} />
+        <RecordLine key={r.id} record={r} showTarget={showTarget} onVerify={onVerify} />
       ))}
     </ul>
+  );
+}
+
+/** Fuso usado pela agenda dos backups, com o caminho para trocar. */
+export function BackupTimezoneNote({ status }: { status: Pick<BackupsStatus, "timezone" | "timezoneName"> }) {
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="backup-timezone">
+      Os horários seguem o fuso da VPS: {status.timezoneName ? `${status.timezoneName} (${status.timezone})` : status.timezone}.{" "}
+      <Link to="/settings/timezone" className="underline underline-offset-2">
+        Trocar em Configurações → Fuso horário
+      </Link>
+    </p>
   );
 }
 

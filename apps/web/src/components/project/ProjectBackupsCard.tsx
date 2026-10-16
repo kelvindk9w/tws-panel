@@ -8,10 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import {
   Feedback,
+  BackupTimezoneNote,
   HistoryList,
   RecordBadge,
   RestoreDialog,
   TargetSettings,
+  VerifyAllButton,
   errorText,
   formatBytes,
   when,
@@ -53,11 +55,13 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
 
   const last = view?.target.lastBackup ?? null;
   const running = last !== null && (last.status === "running" || last.status === "queued");
+  // conferências também entram na fila: acompanha enquanto houver algo andando
+  const active = running || Boolean(view?.history.some((r) => r.status === "running" || r.status === "queued"));
   useEffect(() => {
-    if (!running) return;
+    if (!active) return;
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, [running, load]);
+  }, [active, load]);
 
   if (loadError) {
     return (
@@ -321,7 +325,9 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
             <Button variant="outline" onClick={() => setRestoring(true)}>
               <RotateCcw className="h-4 w-4" /> Restaurar
             </Button>
+            <VerifyAllButton target={`project:${projectId}`} onQueued={load} disabled={!status.archiverAvailable || !last} />
           </div>
+          <BackupTimezoneNote status={status} />
         </CardContent>
       </Card>
 
@@ -330,7 +336,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           <CardTitle className="text-base">Histórico</CardTitle>
         </CardHeader>
         <CardContent>
-          <HistoryList records={view.history} showTarget={false} empty="Nenhum backup deste projeto ainda." />
+          <HistoryList records={view.history} showTarget={false} empty="Nenhum backup deste projeto ainda." onVerify={load} />
         </CardContent>
       </Card>
 
