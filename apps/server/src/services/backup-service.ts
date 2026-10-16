@@ -52,7 +52,9 @@ import {
   backupPasswordStrength,
   isValidBackupFileName,
   parseBackupFileStamp,
+  type BackupApplyDefaultsResult,
   type BackupCatalog,
+  type BackupDefaultsRequest,
   type BackupCheckResult,
   type BackupCheckStatus,
   type BackupCopyWhere,
@@ -215,7 +217,23 @@ interface StoredTarget {
   lastSuccessAt: string | null;
   lastRemoteVerifiedAt: string | null;
   lastStaleNoticeAt: string | null;
+  /**
+   * Só projetos: segue o "Padrão dos projetos" (muda junto com ele). Vira
+   * false quando a frequência, as cópias ou o ligado/desligado são salvos
+   * na aba do projeto; "Voltar ao padrão" e "Aplicar também" põem true.
+   */
+  followsDefaults?: boolean;
 }
+
+/** "Padrão dos projetos". */
+interface StoredDefaults {
+  enabled: boolean;
+  frequencyHours: BackupFrequencyHours;
+  localKeep: number;
+  remoteKeep: number;
+}
+
+const INITIAL_DEFAULTS: StoredDefaults = { enabled: true, frequencyHours: 24, localKeep: DEFAULT_LOCAL_KEEP, remoteKeep: DEFAULT_REMOTE_KEEP };
 
 /** O que o painel sabe de uma cópia (gravado no backup) e a última conferência. */
 interface StoredCopyInfo {
@@ -235,6 +253,7 @@ interface StoredConfig {
   destination: StoredDestination | null;
   encryption: StoredEncryption;
   targets: Record<string, StoredTarget>;
+  projectDefaults: StoredDefaults;
   detections: Record<string, ProjectBackupDetection>;
   /** "<pasta>/<arquivo>" → hash, tamanho e a última conferência de cada cópia. */
   checks: Record<string, StoredFileChecks>;
@@ -370,6 +389,7 @@ function emptyConfig(): StoredConfig {
       lastReminderAt: null,
     },
     targets: {},
+    projectDefaults: { ...INITIAL_DEFAULTS },
     detections: {},
     checks: {},
   };
@@ -437,11 +457,19 @@ export class BackupService {
           destination: raw.destination ?? null,
           encryption: { ...base.encryption, ...(raw.encryption ?? {}) },
           targets: raw.targets ?? {},
+          projectDefaults: { ...INITIAL_DEFAULTS, ...(raw.projectDefaults ?? {}) },
           detections: raw.detections ?? {},
           checks: raw.checks ?? {},
         };
       } catch {
         this.config = emptyConfig();
+      }
+      // Instalação de antes do "Padrão dos projetos": quem está como o painel
+      // criava sozinho (ligado, 24 h, 2 e 5) segue o padrão; o resto ficou
+      // assim porque alguém mudou, então é configuração própria.
+      for (const [id, t] of Object.entries(this.config.targets)) {
+        if (!id.startsWith("project:") || t.followsDefaults !== undefined) continue;
+        t.followsDefaults = t.enabled && t.frequencyHours === 24 && t.localKeep === DEFAULT_LOCAL_KEEP && t.remoteKeep === DEFAULT_REMOTE_KEEP;
       }
       if (this.config.destination) {
         try {
@@ -546,33 +574,142 @@ export class BackupService {
   // Itens (painel, e-mail, projetos)
   // -------------------------------------------------------------------------
 
+  /** Item sem configuração guardada: projeto nasce com o padrão dos projetos. */
   private target(id: string): StoredTarget {
     let t = this.config.targets[id];
     if (!t) {
+      const project = id.startsWith("project:");
+      const base = project ? this.config.projectDefaults : INITIAL_DEFAULTS;
       t = {
-        enabled: true,
-        frequencyHours: 24,
-        localKeep: DEFAULT_LOCAL_KEEP,
-        remoteKeep: DEFAULT_REMOTE_KEEP,
-        lastSlot: currentSlot(this.now(), 24, this.hour),
+        enabled: base.enabled,
+        frequencyHours: base.frequencyHours,
+        localKeep: base.localKeep,
+        remoteKeep: base.remoteKeep,
+        lastSlot: currentSlot(this.now(), base.frequencyHours, this.hour),
         enabledSince: new Date(this.now()).toISOString(),
         choices: {},
         extraFolders: [],
         lastSuccessAt: null,
         lastRemoteVerifiedAt: null,
         lastStaleNoticeAt: null,
+        ...(project ? { followsDefaults: true } : {}),
       };
       this.config.targets[id] = t;
     }
     return t;
   }
 
-  /** Projeto recém-criado: "Fazer backup: sim/não". */
-  async initProject(projectId: string, enabled: boolean): Promise<void> {
+  /**
+   * Frequência, cópias e ligado/desligado (já validados). Trocar a frequência
+   * ou religar recomeça a contagem no horário atual. Devolve o que mudou,
+   * para a auditoria.
+   */
+  private applySettings(t: StoredTarget | StoredDefaults, req: BackupDefaultsRequest): string[] {
+    const changes: string[] = [];
+    const restart = () => {
+      if ("lastSlot" in t) t.lastSlot = currentSlot(this.now(), t.frequencyHours, this.hour);
+    };
+    if (req.frequencyHours !== undefined && req.frequencyHours !== t.frequencyHours) {
+      t.frequencyHours = req.frequencyHours;
+      restart();
+      changes.push(`a cada ${t.frequencyHours} h`);
+    }
+    for (const k of ["localKeep", "remoteKeep"] as const) {
+      const v = req[k];
+      if (v === undefined) continue;
+      t[k] = v;
+      changes.push(`${k === "localKeep" ? "na VPS" : "fora"}: ${v} cópias`);
+    }
+    if (req.enabled !== undefined && req.enabled !== t.enabled) {
+      t.enabled = req.enabled;
+      if (t.enabled) {
+        restart();
+        if ("enabledSince" in t) t.enabledSince = new Date(this.now()).toISOString();
+      }
+      changes.push(t.enabled ? "ligado" : "desligado");
+    }
+    return changes;
+  }
+
+  private validateSettings(req: BackupDefaultsRequest): void {
+    if (req.frequencyHours !== undefined && !BACKUP_FREQUENCIES.includes(req.frequencyHours)) {
+      throw httpError(400, "invalid_frequency", "Frequência inválida: use 24, 12 ou 6 horas.");
+    }
+    for (const k of ["localKeep", "remoteKeep"] as const) {
+      const v = req[k];
+      if (v !== undefined && (!Number.isInteger(v) || v < 1 || v > MAX_BACKUP_KEEP)) {
+        throw httpError(400, "invalid_keep", `Quantidade de cópias inválida: de 1 a ${MAX_BACKUP_KEEP}.`);
+      }
+    }
+  }
+
+  /**
+   * Projeto recém-criado: "Fazer backup: sim/não". Sem escolha ou igual ao
+   * padrão = segue o padrão; diferente = configuração própria.
+   */
+  async initProject(projectId: string, enabled?: boolean): Promise<void> {
     await this.ensureLoaded();
     const t = this.target(projectTargetId(projectId));
-    t.enabled = enabled;
+    if (enabled !== undefined && enabled !== this.config.projectDefaults.enabled) {
+      this.applySettings(t, { enabled });
+      t.followsDefaults = false;
+    }
     await this.persist({ config: true });
+  }
+
+  /** "Padrão dos projetos": grava e leva junto os projetos que seguem o padrão. */
+  async updateDefaults(req: BackupDefaultsRequest, actor: string): Promise<void> {
+    await this.ensureLoaded();
+    this.validateSettings(req);
+    const d = this.config.projectDefaults;
+    const changes = this.applySettings(d, req);
+    let followers = 0;
+    for (const p of await this.opts.projects.list()) {
+      const t = this.target(projectTargetId(p.id));
+      if (!t.followsDefaults) continue;
+      this.applySettings(t, d);
+      followers++;
+    }
+    await this.persist({ config: true });
+    if (changes.length > 0) {
+      const who = followers === 1 ? "1 projeto segue o padrão" : `${followers} projetos seguem o padrão`;
+      this.audit("backups.defaults", `Padrão dos projetos: ${changes.join(", ")} (${who}).`, actor);
+    }
+  }
+
+  /** "Aplicar também nestes projetos": copia o padrão e passa a seguir o padrão. */
+  async applyDefaults(projectIds: string[], actor: string): Promise<BackupApplyDefaultsResult> {
+    await this.ensureLoaded();
+    const applied: BackupApplyDefaultsResult["applied"] = [];
+    const missing: string[] = [];
+    for (const pid of [...new Set(projectIds)]) {
+      const project = await this.opts.projects.get(pid);
+      if (!project || project.id !== pid) {
+        missing.push(pid);
+        continue;
+      }
+      const t = this.target(projectTargetId(pid));
+      this.applySettings(t, this.config.projectDefaults);
+      t.followsDefaults = true;
+      applied.push({ id: pid, name: project.name });
+    }
+    await this.persist({ config: true });
+    if (applied.length > 0) {
+      this.audit("backups.defaults_applied", `Padrão dos projetos aplicado em: ${applied.map((a) => a.name).join(", ")}.`, actor);
+    }
+    return { applied, missing };
+  }
+
+  /** "Voltar ao padrão" na aba do projeto. */
+  async useDefaults(id: string, actor: string): Promise<void> {
+    await this.ensureLoaded();
+    if (!id.startsWith("project:")) throw httpError(400, "not_a_project", "Só projetos seguem o padrão dos projetos.");
+    const { name } = await this.resolveTarget(id);
+    const t = this.target(id);
+    this.applySettings(t, this.config.projectDefaults);
+    t.followsDefaults = true;
+    await this.persist({ config: true });
+    this.audit("backups.settings", `${name}: voltou ao padrão dos projetos.`, actor, name);
   }
 
   /** Projeto apagado: esquece a configuração (os arquivos de backup ficam). */
@@ -617,6 +754,7 @@ export class BackupService {
       lastRemoteVerifiedAt: t.lastRemoteVerifiedAt,
       nextRunAt: t.enabled && available ? new Date(nextSlot(this.now(), t.frequencyHours, this.hour)).toISOString() : null,
       available,
+      ...(kind === "project" ? { followsDefaults: t.followsDefaults !== false } : {}),
     };
   }
 
@@ -666,6 +804,7 @@ export class BackupService {
         lastTestOk: e.lastTestOk,
       },
       targets,
+      projectDefaults: { ...this.config.projectDefaults },
       running: this.running?.record ?? null,
       queued: this.queue.map((j) => j.record),
       history: this.decorate([...this.history].reverse().slice(0, 50), projects),
@@ -711,31 +850,13 @@ export class BackupService {
     await this.ensureLoaded();
     const { name } = await this.resolveTarget(id);
     const t = this.target(id);
-    const changes: string[] = [];
-    if (req.frequencyHours !== undefined) {
-      if (!BACKUP_FREQUENCIES.includes(req.frequencyHours)) throw httpError(400, "invalid_frequency", "Frequência inválida: use 24, 12 ou 6 horas.");
-      if (req.frequencyHours !== t.frequencyHours) {
-        t.frequencyHours = req.frequencyHours;
-        t.lastSlot = currentSlot(this.now(), t.frequencyHours, this.hour);
-        changes.push(`a cada ${t.frequencyHours} h`);
-      }
-    }
-    for (const k of ["localKeep", "remoteKeep"] as const) {
-      const v = req[k];
-      if (v === undefined) continue;
-      if (!Number.isInteger(v) || v < 1 || v > MAX_BACKUP_KEEP) {
-        throw httpError(400, "invalid_keep", `Quantidade de cópias inválida: de 1 a ${MAX_BACKUP_KEEP}.`);
-      }
-      t[k] = v;
-      changes.push(`${k === "localKeep" ? "na VPS" : "fora"}: ${v} cópias`);
-    }
-    if (req.enabled !== undefined && req.enabled !== t.enabled) {
-      t.enabled = req.enabled;
-      if (t.enabled) {
-        t.lastSlot = currentSlot(this.now(), t.frequencyHours, this.hour);
-        t.enabledSince = new Date(this.now()).toISOString();
-      }
-      changes.push(t.enabled ? "ligado" : "desligado");
+    this.validateSettings(req);
+    const changes = this.applySettings(t, req);
+    // Salvar frequência, cópias ou ligado na aba do projeto = configuração própria.
+    const own = req.enabled !== undefined || req.frequencyHours !== undefined || req.localKeep !== undefined || req.remoteKeep !== undefined;
+    if (own && id.startsWith("project:") && t.followsDefaults !== false) {
+      t.followsDefaults = false;
+      changes.push("configuração própria");
     }
     if (req.choices) {
       t.choices = { ...t.choices, ...req.choices };

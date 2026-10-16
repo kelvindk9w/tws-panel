@@ -10,7 +10,10 @@
  *  GET    /api/backups/password/suggest         "Sugerir uma frase forte"
  *  POST   /api/backups/password/reveal          ver a senha, confirmando a senha de login
  *  POST   /api/backups/password/test            "Testar minha senha"
+ *  PUT    /api/backups/defaults                 "Padrão dos projetos" (frequência, cópias, ligado)
+ *  POST   /api/backups/defaults/apply           "Aplicar também nestes projetos" ({ projectIds })
  *  PUT    /api/backups/targets/:target          frequência, retenção, ligado, itens marcados, pastas extras
+ *  POST   /api/backups/targets/:target/use-defaults  "Voltar ao padrão" (só projeto)
  *  POST   /api/backups/targets/:target/run      "Fazer backup agora"
  *  GET    /api/backups/targets/:target/points   datas disponíveis para restaurar (VPS e externo)
  *  POST   /api/backups/targets/:target/restore  restaurar (confirmação digitando o nome)
@@ -30,6 +33,8 @@ import {
   BACKUP_FREQUENCIES,
   MAX_BACKUP_KEEP,
   MAX_BACKUP_PASSWORD_LENGTH,
+  type BackupApplyDefaultsRequest,
+  type BackupDefaultsRequest,
   type BackupDestinationRequest,
   type BackupPasswordRequest,
   type BackupRestoreRequest,
@@ -62,6 +67,35 @@ const destinationSchema = {
       bucket: { type: "string", minLength: 3, maxLength: 63, pattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" },
       accessKeyId: { type: "string", minLength: 3, maxLength: 200, pattern: "^\\S+$" },
       secretAccessKey: { type: "string", maxLength: 300 },
+    },
+  },
+} as const;
+
+const defaultsSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: { type: "boolean" },
+      frequencyHours: { type: "integer", enum: [...BACKUP_FREQUENCIES] },
+      localKeep: { type: "integer", minimum: 1, maximum: MAX_BACKUP_KEEP },
+      remoteKeep: { type: "integer", minimum: 1, maximum: MAX_BACKUP_KEEP },
+    },
+  },
+} as const;
+
+const applyDefaultsSchema = {
+  body: {
+    type: "object",
+    required: ["projectIds"],
+    additionalProperties: false,
+    properties: {
+      projectIds: {
+        type: "array",
+        minItems: 1,
+        maxItems: 500,
+        items: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" },
+      },
     },
   },
 } as const;
@@ -245,6 +279,26 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     handle((req, actor) => service.testPassword((req.body as { password: string }).password, actor), { noStore: true }),
+  );
+
+  app.put(
+    "/api/backups/defaults",
+    { schema: defaultsSchema },
+    handle(async (req, actor) => {
+      await service.updateDefaults(req.body as BackupDefaultsRequest, actor);
+    }),
+  );
+  app.post(
+    "/api/backups/defaults/apply",
+    { schema: applyDefaultsSchema },
+    handle((req, actor) => service.applyDefaults((req.body as BackupApplyDefaultsRequest).projectIds, actor)),
+  );
+  app.post(
+    "/api/backups/targets/:target/use-defaults",
+    { schema: { params: targetParams } },
+    handle(async (req, actor) => {
+      await service.useDefaults(target(req), actor);
+    }),
   );
 
   app.put(

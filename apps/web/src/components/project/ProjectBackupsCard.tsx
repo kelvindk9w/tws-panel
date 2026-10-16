@@ -293,6 +293,38 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm">
+          <div className="flex flex-wrap items-center gap-2" data-testid="project-settings-source">
+            {view.target.followsDefaults !== false ? (
+              <>
+                <Badge variant="secondary">Seguindo o padrão do painel</Badge>
+                <span className="text-muted-foreground">
+                  Muda junto com o{" "}
+                  <Link to="/settings/backups" className="underline underline-offset-2">
+                    padrão dos projetos
+                  </Link>
+                  . Salvar aqui passa a usar uma configuração própria.
+                </span>
+              </>
+            ) : (
+              <>
+                <Badge variant="outline">Configuração própria</Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void act(
+                      "defaults",
+                      () => apiFetch(`/api/backups/targets/project:${projectId}/use-defaults`, { method: "POST" }),
+                      "O projeto voltou ao padrão do painel.",
+                    )
+                  }
+                >
+                  {busy === "defaults" && <Loader2 className="h-4 w-4 animate-spin" />} Voltar ao padrão
+                </Button>
+              </>
+            )}
+          </div>
           <TargetSettings
             key={`${view.target.enabled}-${view.target.frequencyHours}-${view.target.localKeep}-${view.target.remoteKeep}`}
             target={view.target}

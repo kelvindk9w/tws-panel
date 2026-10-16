@@ -3,7 +3,7 @@
  * do projeto: situação de cada backup, histórico, frequência e cópias
  * guardadas, a janela de restauração (com progresso) e a criação da senha.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   BACKUP_FREQUENCIES,
   MAX_BACKUP_KEEP,
@@ -18,6 +18,7 @@ import {
   type BackupRecord,
   type BackupRemoteState,
   type BackupsStatus,
+  type BackupTargetSettings,
   type BackupTargetStatus,
   type BackupVerifyRequest,
   type BackupVerifySummary,
@@ -437,18 +438,30 @@ export function coverageText(t: Pick<BackupTargetStatus, "frequencyHours" | "loc
   return `Seus backups cobrem ${ext} no armazenamento externo e ${local} na VPS.`;
 }
 
+/**
+ * Ligado, frequência e cópias de um item. Sem `onSave`, grava em
+ * /api/backups/targets/:id. Com `onSave` (o "Padrão dos projetos"), quem usa
+ * decide o que gravar e devolve o aviso; `extra` aparece antes do Salvar e
+ * `extraDirty` libera o Salvar mesmo sem mudar os campos.
+ */
 export function TargetSettings({
   target,
   remote,
   timezone,
   backupHour,
   onSaved,
+  onSave,
+  extra,
+  extraDirty = false,
 }: {
-  target: BackupTargetStatus;
+  target: Pick<BackupTargetStatus, "id" | "enabled" | "frequencyHours" | "localKeep" | "remoteKeep">;
   remote: boolean;
   timezone: string;
   backupHour: number;
   onSaved: () => void;
+  onSave?: (settings: BackupTargetSettings, changed: boolean) => Promise<string>;
+  extra?: ReactNode;
+  extraDirty?: boolean;
 }) {
   const [enabled, setEnabled] = useState(target.enabled);
   const [frequency, setFrequency] = useState<BackupFrequencyHours>(target.frequencyHours);
@@ -475,12 +488,14 @@ export function TargetSettings({
     setBusy(true);
     setError(null);
     setNotice(null);
+    const settings: BackupTargetSettings = { enabled, frequencyHours: frequency, localKeep: lk, remoteKeep: rk };
     try {
-      await apiFetch(`/api/backups/targets/${target.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ enabled, frequencyHours: frequency, localKeep: lk, remoteKeep: rk }),
-      });
-      setNotice("Salvo.");
+      if (onSave) {
+        setNotice(await onSave(settings, dirty));
+      } else {
+        await apiFetch(`/api/backups/targets/${target.id}`, { method: "PUT", body: JSON.stringify(settings) });
+        setNotice("Salvo.");
+      }
       onSaved();
     } catch (err) {
       setError(errorText(err));
@@ -490,6 +505,11 @@ export function TargetSettings({
   }
 
   const hh = String(backupHour).padStart(2, "0");
+  const saveButton = (
+    <Button onClick={() => void save()} disabled={busy || !(dirty || extraDirty)}>
+      {busy && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
+    </Button>
+  );
   return (
     <div className="flex flex-col gap-3 text-sm">
       <label className="flex items-center gap-2">
@@ -534,9 +554,7 @@ export function TargetSettings({
             <Input id={`rk-${id}`} type="number" min={1} max={MAX_BACKUP_KEEP} className="w-24" value={remoteKeep} onChange={(e) => setRemoteKeep(e.target.value)} />
           </div>
         )}
-        <Button onClick={() => void save()} disabled={busy || !dirty}>
-          {busy && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
-        </Button>
+        {!extra && saveButton}
       </div>
       <p className="text-muted-foreground">
         {enabled
@@ -544,6 +562,12 @@ export function TargetSettings({
           : "Desligado: só roda quando você clicar em Fazer backup agora. "}
         {coverageText(preview, remote)}
       </p>
+      {extra && (
+        <>
+          {extra}
+          <div>{saveButton}</div>
+        </>
+      )}
       <Feedback error={error} notice={notice} />
     </div>
   );

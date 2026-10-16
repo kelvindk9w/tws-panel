@@ -254,9 +254,10 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       try {
         const { backup, ...req } = request.body ?? ({} as CreateProjectRequest);
         const project = await service.createProject(req);
-        // "Fazer backup: sim/não" da criação (padrão sim). O serviço de backups
-        // fica no escopo raiz (app.ts); instalações de teste podem não tê-lo.
-        if (app.hasDecorator("backupService")) await app.backupService.initProject(project.id, backup !== false);
+        // "Fazer backup: sim/não" da criação; sem a escolha, vale o "Padrão dos
+        // projetos". O serviço de backups fica no escopo raiz (app.ts);
+        // instalações de teste podem não tê-lo.
+        if (app.hasDecorator("backupService")) await app.backupService.initProject(project.id, backup);
         return reply.code(201).send(await projectResponse(project));
       } catch (err) {
         return sendError(reply, err);

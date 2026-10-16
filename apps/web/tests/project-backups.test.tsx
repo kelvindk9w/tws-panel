@@ -36,6 +36,7 @@ function baseView(): ProjectBackupView {
       lastRemoteVerifiedAt: null,
       nextRunAt: null,
       available: true,
+      followsDefaults: true,
     },
     detection: {
       detectedAt: "2026-10-14T12:00:00Z",
@@ -77,6 +78,9 @@ beforeEach(() => {
         return STATUS;
       case "PUT /api/backups/targets/project:p1":
         view = { ...view, choices: { ...view.choices, ...(body.choices ?? {}) }, extraFolders: (body.extraFolders ?? view.extraFolders).map((f: { service: string; path: string }) => ({ id: `extra:${f.service}:${f.path}`, ...f })) };
+        return undefined;
+      case "POST /api/backups/targets/project:p1/use-defaults":
+        view = { ...view, target: { ...view.target, followsDefaults: true, frequencyHours: 6 } };
         return undefined;
       case "POST /api/backups/projects/p1/detect":
         return view;
@@ -177,6 +181,23 @@ describe("aba Backups do projeto", () => {
     expect(await within(root).findByText(/Conferindo… 0 de 0/)).toBeInTheDocument();
     fireEvent.click(within(root).getByRole("button", { name: "Conferir todos" }));
     await waitFor(() => expect(calls.filter((c) => c.key === "POST /api/backups/targets/project:p1/verify").at(-1)!.body).toEqual({}));
+  });
+
+  it("seguindo o padrão do painel ou configuração própria, com Voltar ao padrão", async () => {
+    const { unmount } = renderCard();
+    const freq = await screen.findByTestId("project-settings-source");
+    expect(freq).toHaveTextContent("Seguindo o padrão do painel");
+    expect(freq).toHaveTextContent("Salvar aqui passa a usar uma configuração própria.");
+    expect(within(freq).queryByRole("button", { name: "Voltar ao padrão" })).toBeNull();
+    unmount();
+    view.target = { ...view.target, followsDefaults: false, frequencyHours: 12 };
+    renderCard();
+    const own = await screen.findByTestId("project-settings-source");
+    expect(own).toHaveTextContent("Configuração própria");
+    fireEvent.click(within(own).getByRole("button", { name: "Voltar ao padrão" }));
+    await waitFor(() => expect(screen.getByTestId("project-settings-source")).toHaveTextContent("Seguindo o padrão do painel"));
+    expect(calls.some((c) => c.key === "POST /api/backups/targets/project:p1/use-defaults")).toBe(true);
+    expect(await screen.findByText("O projeto voltou ao padrão do painel.")).toBeInTheDocument();
   });
 
   it("antes do primeiro deploy: explica e oferece detectar agora", async () => {

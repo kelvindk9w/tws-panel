@@ -108,7 +108,8 @@ export function NewProjectPage() {
   // passo 3 — domínio/config
   const [domain, setDomain] = useState("");
   const [websocket, setWebsocket] = useState(false);
-  // "Fazer backup": ligado por padrão; o que entra é escolhido na aba Backups depois do deploy.
+  // "Fazer backup": Sim segue o "Padrão dos projetos" (Configurações → Backups);
+  // Não desliga e vira configuração própria. O que entra é escolhido na aba Backups.
   const [backup, setBackup] = useState(true);
   const [proxyService, setProxyService] = useState("");
   const [proxyPort, setProxyPort] = useState("");
@@ -688,7 +689,8 @@ export function NewProjectPage() {
                 </label>
               </div>
               <span className="text-xs text-muted-foreground">
-                Depois do primeiro deploy, a aba Backups do projeto mostra os bancos e as pastas encontrados para você conferir.
+                Sim segue o padrão dos projetos, em Configurações → Backups. Depois do primeiro deploy, a aba Backups do projeto mostra os
+                bancos e as pastas encontrados para você conferir.
               </span>
             </fieldset>
 
