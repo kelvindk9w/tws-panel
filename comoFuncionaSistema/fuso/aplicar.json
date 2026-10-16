@@ -1,0 +1,95 @@
+{
+  "id": "aplicar",
+  "modulo": "fuso",
+  "metodo": "PUT",
+  "url": "/api/timezone",
+  "resumo": "Aplica um fuso na VPS (timedatectl set-timezone pelo host bridge) e, se pedido, nos projetos marcados.",
+  "arquivoFonte": "apps/server/src/routes/timezone.ts:47, apps/server/src/services/timezone-service.ts:226",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao|setup-token",
+    "detalhe": "Sessão ou o setup token (assistente de instalação, antes de existir conta). Sem sessão o actor da auditoria é 'assistente de instalação'."
+  },
+  "rateLimit": "10 por minuto.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "zone",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "Nome da lista fechada (isKnownTimezone)."
+      },
+      {
+        "nome": "projects",
+        "tipo": "string[]",
+        "obrigatorio": false,
+        "descricao": "Projetos de 'Aplicar também nestes projetos': passam a 'Igual ao da VPS' e reiniciam."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "SetTimezoneResponse { status, projects: [{ id, name, jobId, error }] }"
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_timezone",
+      "quando": "Fuso fora da lista.",
+      "mensagem": "Escolha um fuso da lista."
+    },
+    {
+      "status": 409,
+      "codigo": "host_bridge_unavailable",
+      "quando": "PAAS_TARGET não é host.",
+      "mensagem": "O painel não está ligado à VPS (PAAS_TARGET não é host). Troque o fuso pelo SSH: sudo timedatectl set-timezone <fuso>"
+    },
+    {
+      "status": 502,
+      "codigo": "timezone_apply_failed",
+      "quando": "O comando falhou ou a VPS continua no fuso antigo ao reler."
+    }
+  ],
+  "fluxo": [
+    "1. Valida o nome; exige host bridge.",
+    "2. buildSetTimezoneCommand(zone) pelo NsenterHostRunner (auditoria timezone.host-exec).",
+    "3. Relê com HOST_TIMEZONE_READ_CMD; diferente → 502.",
+    "4. Grava data/timezone.json, process.env.TZ = zone, avisa BackupService.timezoneChanged() (agenda recalcula sem disparar na hora um horário que já passou), audita timezone.applied.",
+    "5. Para cada projeto marcado: setProjectTimezone(host) + startRecreate; erro de um não para os outros."
+  ],
+  "dependencias": [
+    {
+      "tipo": "pacote",
+      "nome": "buildSetTimezoneCommand / isSetTimezoneCommand",
+      "arquivo": "packages/security/src/host-bridge.ts:85",
+      "papel": "Comando montado e reconferido na allowlist."
+    },
+    {
+      "tipo": "servico",
+      "nome": "DeployService.startRecreate",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1463",
+      "papel": "Reinício dos projetos marcados."
+    }
+  ],
+  "efeitosColaterais": [
+    "Muda o fuso da VPS inteira.",
+    "grava data/timezone.json",
+    "auditoria: timezone.applied | timezone.apply_failed, project.timezone, project.recreate"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/TimezoneSettings.tsx",
+    "apps/web/src/components/setup/SetupTimezoneCard.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/timezone-service.test.ts",
+    "apps/server/tests/routes-timezone.test.ts"
+  ],
+  "observacoes": [
+    "Na VPS o comando roda pelo nsenter no host: timedatectl, ou ln -sf do /usr/share/zoneinfo/<fuso> em /etc/localtime se não houver systemd; atualiza /etc/timezone quando existe."
+  ]
+}

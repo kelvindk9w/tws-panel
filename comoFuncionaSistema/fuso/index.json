@@ -1,0 +1,103 @@
+{
+  "modulo": "fuso",
+  "titulo": "Fuso horário",
+  "resumo": "Fuso da VPS (Configurações → Fuso horário e assistente de instalação) e fuso de cada projeto (campo Fuso horário na aba Configurações do projeto). Trocar o fuso da VPS usa o host bridge, vale na hora para o painel e para a agenda dos backups e pode reiniciar os projetos marcados.",
+  "pontoDeEntrada": {
+    "api": "GET /api/timezone",
+    "web": "/settings/timezone"
+  },
+  "comoFunciona": [
+    "Na subida (apps/server/src/index.ts) o fuso do painel vem, nesta ordem: TZ do /opt/tws-panel/.env → data/timezone.json (último lido da VPS pelo host bridge) → /host/etc/localtime montado → nada (UTC). Ver resolveStartupTimezone em apps/server/src/services/host-timezone.ts:137.",
+    "Com PAAS_TARGET=host, TimezoneService.refresh() lê o fuso da VPS pelo host bridge (HOST_TIMEZONE_READ_CMD), grava data/timezone.json (0600) e põe em process.env.TZ, sem depender da montagem do /etc/localtime (que fica presa no arquivo antigo quando o link muda). Ao abrir a tela relê se a leitura tem mais de 5 minutos.",
+    "PUT /api/timezone valida o nome contra a lista fechada (zone.tab + UTC), roda buildSetTimezoneCommand pelo host bridge, relê para conferir, grava data/timezone.json, troca process.env.TZ (o Node passa a usar na hora), avisa a agenda dos backups (BackupService.timezoneChanged) e audita. Projetos marcados passam a 'Igual ao da VPS' e são reiniciados (job recreate).",
+    "Projeto: Project.timezone = {mode: image|host|zone, zone?}. No deploy e no reinício o engine injeta TZ (compose: override por serviço; Dockerfile: -e TZ) só nos serviços que não definem TZ por conta própria. Project.timezoneApplied guarda o que foi injetado; a diferença vira 'vale depois de reiniciar'.",
+    "Reiniciar com o fuso novo = DeployEngine.recreate: compose up -d --no-build com o override novo; Dockerfile recria o container da imagem existente; site estático nada. Não baixa código do GitHub.",
+    "Ao abrir o fuso do projeto, cada container é conferido com docker exec test -e /usr/share/zoneinfo/<fuso>: sem a base, a tela diz 'este serviço ignora o fuso; instale tzdata na imagem'."
+  ],
+  "arquivosFonte": {
+    "rotas": [
+      "apps/server/src/routes/timezone.ts",
+      "apps/server/src/routes/projects.ts:686"
+    ],
+    "servicos": [
+      "apps/server/src/services/timezone-service.ts",
+      "apps/server/src/services/host-timezone.ts",
+      "apps/server/src/services/deploy-service.ts:1397",
+      "apps/server/src/services/docker-service.ts (containerTimezone)"
+    ],
+    "pacotes": [
+      "packages/core/src/timezone.ts",
+      "packages/core/src/timezone-names.ts",
+      "packages/security/src/host-bridge.ts:64",
+      "packages/deploy/src/compose-timezone.ts",
+      "packages/deploy/src/engine.ts:603"
+    ],
+    "web": [
+      "apps/web/src/pages/settings/TimezoneSettings.tsx",
+      "apps/web/src/components/project/ProjectTimezoneCard.tsx",
+      "apps/web/src/components/setup/SetupTimezoneCard.tsx",
+      "apps/web/src/components/timezone/TimezonePicker.tsx"
+    ],
+    "testes": [
+      "apps/server/tests/timezone-service.test.ts",
+      "apps/server/tests/host-timezone.test.ts",
+      "apps/server/tests/routes-timezone.test.ts",
+      "apps/server/tests/deploy-timezone.test.ts",
+      "packages/core/tests/timezone.test.ts",
+      "packages/deploy/tests/compose-timezone.test.ts",
+      "packages/security/tests/host-bridge.test.ts",
+      "apps/web/tests/timezone-settings.test.tsx"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/timezone.json",
+      "formato": "json",
+      "conteudo": "{ zone, readAt }: último fuso lido/aplicado na VPS (0600). Usado na subida antes do /host/etc/localtime."
+    },
+    {
+      "arquivo": "data/projects.json",
+      "formato": "json",
+      "conteudo": "Project.timezone (escolha) e Project.timezoneApplied (o que o último deploy/reinício injetou)."
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "situacao",
+      "metodo": "GET",
+      "url": "/api/timezone",
+      "resumo": "Fuso da VPS, hora, origem, se dá para aplicar, a lista de fusos e os projetos.",
+      "arquivo": "situacao.json"
+    },
+    {
+      "id": "aplicar",
+      "metodo": "PUT",
+      "url": "/api/timezone",
+      "resumo": "Troca o fuso da VPS pelo host bridge e reinicia os projetos marcados.",
+      "arquivo": "aplicar.json"
+    },
+    {
+      "id": "fuso-do-projeto",
+      "metodo": "GET/PUT",
+      "url": "/api/projects/:id/timezone",
+      "resumo": "Escolha do projeto, quem já define TZ, aviso de reiniciar e base de fusos de cada container.",
+      "arquivo": "fuso-do-projeto.json"
+    },
+    {
+      "id": "reiniciar",
+      "metodo": "POST",
+      "url": "/api/projects/:id/recreate",
+      "resumo": "'Reiniciar com o fuso novo': recria os containers sem build nem git pull.",
+      "arquivo": "reiniciar.json"
+    }
+  ],
+  "dependenciasGlobais": [],
+  "pontosDeAtencao": [
+    "Precedência do TZ no projeto: environment do compose > TZ nas Variáveis (.env do projeto, quando o serviço usa env_file .env) > outros env_file > escolha do painel > ENV TZ da imagem.",
+    "Não monta /etc/localtime nos projetos: a montagem do link congela no arquivo antigo (o mesmo problema que o painel tinha) e contraria o 'Padrão da imagem'. TZ é o padrão que glibc, musl (com tzdata), Node, Python e Java entendem.",
+    "Node.js em imagem alpine sem tzdata acerta o fuso pelo ICU embutido: o aviso de tzdata pode aparecer para um serviço Node que, na prática, funciona (a tela diz isso).",
+    "Sem PAAS_TARGET=host o painel só mostra o fuso e explica o comando de SSH (409 host_bridge_unavailable ao aplicar).",
+    "TZ no .env do painel vence na subida: depois de aplicar, o painel usa o fuso novo até reiniciar e volta ao do .env (a tela avisa).",
+    "Lista fechada vem do zone.tab (nomes canônicos); Intl.supportedValuesOf usa nomes antigos (Asia/Calcutta) e foi evitado."
+  ]
+}

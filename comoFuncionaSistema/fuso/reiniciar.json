@@ -1,0 +1,72 @@
+{
+  "id": "reiniciar",
+  "modulo": "fuso",
+  "metodo": "POST",
+  "url": "/api/projects/:id/recreate",
+  "resumo": "'Reiniciar com o fuso novo': job kind 'recreate' que recria os containers com a configuração atual (TZ incluído), sem build e sem baixar código.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:727, apps/server/src/services/deploy-service.ts:1463, packages/deploy/src/engine.ts:603",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "10 por minuto.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 202,
+      "corpo": "{ job: DeployJob (kind 'recreate') } — aparece em Deploys como 'Reinício com a configuração nova'."
+    }
+  ],
+  "erros": [
+    {
+      "status": 409,
+      "codigo": "not_deployed",
+      "quando": "Projeto nunca publicado.",
+      "mensagem": "Faça o primeiro deploy do projeto: o fuso entra junto."
+    },
+    {
+      "status": 409,
+      "codigo": "deploy_in_progress",
+      "quando": "Já há deploy ou reinício rodando."
+    }
+  ],
+  "fluxo": [
+    "1. Compose: escreve o override com TZ e roda docker compose up -d --no-build.",
+    "2. Dockerfile: recria o container da imagem já construída com -e TZ.",
+    "3. Sucesso: Project.timezoneApplied = fuso efetivo."
+  ],
+  "dependencias": [
+    {
+      "tipo": "pacote",
+      "nome": "DeployEngine.recreate",
+      "arquivo": "packages/deploy/src/engine.ts:603",
+      "papel": "Recriação."
+    }
+  ],
+  "efeitosColaterais": [
+    "Containers recriados (alguns segundos fora do ar).",
+    "auditoria: project.recreate"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/ProjectTimezoneCard.tsx",
+    "TimezoneService.apply (projetos marcados)"
+  ],
+  "testes": [
+    "apps/server/tests/deploy-timezone.test.ts"
+  ],
+  "observacoes": [
+    "Se a imagem foi apagada do servidor, o reinício falha com o motivo no job; aí é preciso um deploy."
+  ]
+}

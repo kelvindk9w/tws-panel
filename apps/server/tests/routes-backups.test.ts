@@ -38,6 +38,7 @@ const service = {
   projectView: vi.fn(async () => ({ target: { id: "project:p1" } })),
   detectProject: vi.fn(async () => ({})),
   catalog: vi.fn(async () => ({ panel: [], email: [], projects: [] })),
+  verify: vi.fn(async () => ({ id: "r3", operation: "verify" })),
 };
 
 beforeEach(async () => {
@@ -130,6 +131,30 @@ describe("rotas de backups", () => {
     await call("POST", "/api/backups/projects/p1/detect");
     expect(service.detectProject).toHaveBeenCalledWith("p1");
     expect((await call("GET", "/api/backups/catalog")).json()).toEqual({ panel: [], email: [], projects: [] });
+  });
+
+  it("Conferir um, todos do item e todos: corpo validado, sem cache", async () => {
+    const one = await call("POST", "/api/backups/targets/project:p1/verify", { fileName: "2026-10-14_03-00.7z" });
+    expect(one.json()).toEqual({ id: "r3", operation: "verify" });
+    expect(one.headers["cache-control"]).toBe("no-store");
+    expect(service.verify).toHaveBeenCalledWith("project:p1", { fileName: "2026-10-14_03-00.7z" }, "admin");
+    await call("POST", "/api/backups/targets/panel/verify", {});
+    expect(service.verify).toHaveBeenLastCalledWith("panel", {}, "admin");
+    await call("POST", "/api/backups/targets/panel/verify");
+    expect(service.verify).toHaveBeenLastCalledWith("panel", {}, "admin");
+    await call("POST", "/api/backups/targets/email/verify", { fileName: "a.7z", where: "remote", password: "senha-antiga" });
+    expect(service.verify).toHaveBeenLastCalledWith("email", { fileName: "a.7z", where: "remote", password: "senha-antiga" }, "admin");
+    for (const body of [{ where: "ftp" }, { fileName: "" }, { password: "" }, { cmd: "x" }]) {
+      expect((await call("POST", "/api/backups/targets/panel/verify", body)).statusCode, JSON.stringify(body)).toBe(400);
+    }
+    const all = await call("POST", "/api/backups/verify", {});
+    expect(all.statusCode).toBe(200);
+    expect(service.verify).toHaveBeenLastCalledWith("all", {}, "admin");
+    await call("POST", "/api/backups/verify");
+    expect(service.verify).toHaveBeenLastCalledWith("all", {}, "admin");
+    expect((await call("POST", "/api/backups/verify", { fileName: "a.7z" })).statusCode).toBe(400);
+    service.verify.mockRejectedValueOnce(httpError(409, "no_destination", "Conecte um armazenamento externo."));
+    expect((await call("POST", "/api/backups/verify", { where: "remote" })).json().error).toBe("no_destination");
   });
 
   it("erro inesperado: 500 genérico, sem detalhe interno", async () => {

@@ -25,6 +25,7 @@ export function DeployHistory({ jobs, onOpen }: { jobs: DeployJob[]; onOpen: (jo
                   className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-6 py-3 text-left text-sm hover:bg-accent/50"
                 >
                   <JobStatusBadge status={job.status} />
+                  {job.kind === "recreate" && <span className="text-xs font-medium">Reinício com a configuração nova</span>}
                   <span className="text-xs text-muted-foreground">{formatDateTime(job.createdAt)}</span>
                   <span className="text-xs text-muted-foreground">duração {deployDuration(job)}</span>
                   <code className="text-xs text-muted-foreground">{job.id.slice(0, 8)}</code>

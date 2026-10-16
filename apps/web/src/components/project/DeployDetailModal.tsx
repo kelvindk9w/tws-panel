@@ -63,7 +63,7 @@ export function DeployDetailModal({
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-col gap-1">
             <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
-              Deploy <code className="text-sm text-muted-foreground">{jobId.slice(0, 8)}</code>
+              {job?.kind === "recreate" ? "Reinício" : "Deploy"} <code className="text-sm text-muted-foreground">{jobId.slice(0, 8)}</code>
               {job && <JobStatusBadge status={job.status} />}
             </h2>
             {job && (

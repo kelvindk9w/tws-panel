@@ -1,0 +1,82 @@
+{
+  "id": "fuso-do-projeto",
+  "modulo": "fuso",
+  "metodo": "GET/PUT",
+  "url": "/api/projects/:id/timezone",
+  "resumo": "Lê e salva o fuso do projeto. A visão traz a escolha, o fuso efetivo, o da VPS, quem já define TZ no projeto, o que foi aplicado, se falta reiniciar, se o tipo aceita fuso e a base de fusos de cada container.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:686, apps/server/src/services/deploy-service.ts:1397",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "GET 30/min; PUT 20/min.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "mode",
+        "tipo": "'image'|'host'|'zone'",
+        "obrigatorio": true
+      },
+      {
+        "nome": "zone",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "Obrigatório com mode zone; da lista fechada."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "ProjectTimezoneView (packages/core/src/timezone.ts:221); o PUT devolve a visão nova."
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_timezone",
+      "quando": "Modo ou fuso inválido."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Projeto não existe."
+    }
+  ],
+  "fluxo": [
+    "1. definedByProject: composeTimezoneDefinitions (environment do serviço, env_file .env com TZ nas Variáveis, outros env_file); Dockerfile: TZ nas Variáveis.",
+    "2. services: containers do projeto; nos que estão rodando e com TZ, docker exec test -e /usr/share/zoneinfo/<TZ>.",
+    "3. pendingRestart = suportado && já publicado && efetivo ≠ aplicado."
+  ],
+  "dependencias": [
+    {
+      "tipo": "pacote",
+      "nome": "composeTimezoneDefinitions",
+      "arquivo": "packages/deploy/src/compose-timezone.ts:64",
+      "papel": "Quem já define TZ."
+    }
+  ],
+  "efeitosColaterais": [
+    "PUT grava data/projects.json; auditoria project.timezone."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/ProjectTimezoneCard.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/deploy-timezone.test.ts",
+    "apps/server/tests/routes-timezone.test.ts"
+  ],
+  "observacoes": [
+    "A escolha só entra nos containers no próximo deploy ou reinício."
+  ]
+}

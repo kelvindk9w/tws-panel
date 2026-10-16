@@ -17,12 +17,14 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { CopyButton } from "@/components/CopyButton";
 import {
+  BackupTimezoneNote,
   Feedback,
   HistoryList,
   PasswordSetup,
   RecordBadge,
   RestoreDialog,
   TargetSettings,
+  VerifyAllButton,
   downloadRecoveryKit,
   errorText,
   when,
@@ -647,6 +649,7 @@ function TargetCard({
               <Button variant="outline" onClick={() => onRestore({ id: target.id, kind: target.kind, name: target.name })}>
                 <RotateCcw className="h-4 w-4" /> Restaurar
               </Button>
+              <VerifyAllButton target={target.id} onQueued={reload} disabled={!status.archiverAvailable || !target.lastBackup} />
             </div>
           </>
         )}
@@ -930,8 +933,9 @@ export function BackupSettings() {
           )}
           {status.running && (
             <p className="flex items-center gap-2 text-sm text-sky-300">
-              <Loader2 className="h-4 w-4 animate-spin" /> {status.running.operation === "restore" ? "Restaurando" : "Fazendo backup de"}{" "}
-              {status.running.targetName}
+              <Loader2 className="h-4 w-4 animate-spin" />{" "}
+              {status.running.operation === "restore" ? "Restaurando" : status.running.operation === "verify" ? "Conferindo" : "Fazendo backup de"}{" "}
+              {status.running.operation === "verify" && status.running.target === "all" ? "todos os backups" : status.running.targetName}
               {status.queued.length > 0 && `; ${status.queued.length} na fila`}.
             </p>
           )}
@@ -970,10 +974,17 @@ export function BackupSettings() {
           <Card data-testid="backup-history">
             <CardHeader>
               <CardTitle className="text-base">Últimos backups</CardTitle>
-              <CardDescription>Backups e restaurações, com o motivo quando algo falhou. Cópias na VPS em <span className="break-all">{status.localPath}</span>.</CardDescription>
+              <CardDescription>
+                Backups, restaurações e conferências, com o motivo quando algo falhou. Cópias na VPS em <span className="break-all">{status.localPath}</span>.
+                Conferir abre cada cópia com o 7-Zip; a externa é baixada e comparada com o que foi enviado.
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-              <HistoryList records={status.history.slice(0, 30)} empty="Nenhum backup feito ainda." />
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <VerifyAllButton target="all" onQueued={load} label="Conferir todos os backups" disabled={!status.archiverAvailable} />
+              </div>
+              <BackupTimezoneNote status={status} />
+              <HistoryList records={status.history.slice(0, 30)} empty="Nenhum backup feito ainda." onVerify={load} />
             </CardContent>
           </Card>
         </>
