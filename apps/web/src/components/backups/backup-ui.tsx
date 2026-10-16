@@ -736,7 +736,7 @@ export function RestoreDialog({
       return;
     }
     const t = setTimeout(() => {
-      apiFetch<BackupRecord>(`/api/backups/records/${record.id}`)
+      apiFetch<BackupRecord>(`/api/backups/records/${record.id}`, { onUnauthorized: "ignore" })
         .then((r) => {
           pollErrors.current = 0;
           setRecord(r);
@@ -760,7 +760,7 @@ export function RestoreDialog({
   useEffect(() => {
     if (!record || !watch || (watch.phase !== "waiting" && watch.phase !== "down")) return;
     const t = setTimeout(() => {
-      apiFetch<BackupRecord>(`/api/backups/records/${record.id}`)
+      apiFetch<BackupRecord>(`/api/backups/records/${record.id}`, { onUnauthorized: "ignore" })
         .then(async (r) => {
           if (watch.phase === "waiting") {
             // ainda não reiniciou: segue esperando até o prazo (ou volta ao acompanhamento normal)

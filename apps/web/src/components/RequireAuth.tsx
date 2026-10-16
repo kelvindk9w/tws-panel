@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, useLocation } from "react-router";
 import { DEFAULT_USER_PREFERENCES, type AdminUser, type AuthMeResponse, type UserPreferences } from "@paas/core";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch, ApiRequestError, SESSION_EXPIRED_EVENT } from "@/lib/api";
 import { AuthContext } from "@/lib/auth";
 
 type GuardState =
@@ -34,6 +34,15 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Sessão que acaba com a página aberta (expirou, foi encerrada em outro
+  // lugar): qualquer chamada que receber "sessão inválida" leva ao login, em vez
+  // de deixar o erro em cada tela. O destino é lembrado em `from`.
+  useEffect(() => {
+    const onExpired = () => setState((prev) => (prev.status === "ok" ? { status: "redirect", to: "/login" } : prev));
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, []);
 
   if (state.status === "loading") {

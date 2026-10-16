@@ -300,6 +300,15 @@ interface Job {
 /** Erro com mensagem para a pessoa (vai para o histórico como está). */
 class BackupFailure extends Error {}
 
+/**
+ * O projeto não tem nada marcado (ou nada para copiar). No backup pedido à mão
+ * é falha; no agendado é aviso — repetir "falhou" a cada horário não ajuda.
+ */
+class NothingToBackup extends BackupFailure {}
+
+/** Aviso de "nada marcado" no máximo uma vez por semana por projeto. */
+const EMPTY_NOTICE_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Arquivo citado no manifesto: só dentro das pastas que o próprio backup cria. */
 const MANIFEST_FILE = /^(bancos|volumes|pastas|codigo|email)(\/[A-Za-z0-9._-]+){1,2}$/;
 
@@ -1209,10 +1218,18 @@ export class BackupService {
       await job.run(r);
       if (r.status === "running") r.status = r.warnings.length > 0 || r.remote === "failed" || r.remote === "skipped" ? "warning" : "success";
     } catch (err) {
-      r.status = "failed";
-      r.error = reasonOf(err);
-      for (const s of r.steps) if (s.status === "running") s.status = "failed";
-      this.log(`Backups: ${r.operation === "backup" ? "backup" : "restauração"} de ${r.targetName} falhou (${r.error}).`);
+      if (err instanceof NothingToBackup && r.trigger === "schedule") {
+        // Agendado e sem nada marcado: fica registrado como aviso, sem alarme de falha.
+        r.status = "warning";
+        r.warnings.push(reasonOf(err));
+        for (const s of r.steps) if (s.status === "running") s.status = "done";
+        this.noticeNothingMarked(r);
+      } else {
+        r.status = "failed";
+        r.error = reasonOf(err);
+        for (const s of r.steps) if (s.status === "running") s.status = "failed";
+        this.log(`Backups: ${r.operation === "backup" ? "backup" : "restauração"} de ${r.targetName} falhou (${r.error}).`);
+      }
     }
     for (const s of r.steps) if (s.status === "running") s.status = "done";
     r.finishedAt = new Date(this.now()).toISOString();
@@ -1228,6 +1245,22 @@ export class BackupService {
     await this.persist({ config: true, history: true });
     this.running = null;
     void this.pump();
+  }
+
+  private readonly emptyNoticeAt = new Map<string, number>();
+
+  /** "Nada marcado" no agendado: avisa no máximo uma vez por semana por projeto. */
+  private noticeNothingMarked(r: BackupRecord): void {
+    const last = this.emptyNoticeAt.get(r.target) ?? 0;
+    if (this.now() - last < EMPTY_NOTICE_EVERY_MS) return;
+    this.emptyNoticeAt.set(r.target, this.now());
+    this.opts.notify?.({
+      kind: "backup_failed",
+      key: `backup-empty:${r.target}`,
+      title: `Backup de ${r.targetName}: nada marcado para copiar`,
+      body: ["Marque o que entra no backup na aba Backups do projeto, ou desligue o backup automático dele."],
+      path: `/projects/${r.target.slice(8)}/backups`,
+    });
   }
 
   /** Um registro (para a tela acompanhar o progresso). */
@@ -1371,7 +1404,7 @@ export class BackupService {
     const extras = t.extraFolders;
     const withSource = detection.sourceFolder !== null && chosen("src", true);
     if (dbs.length + mounts.length + extras.length + (withSource ? 1 : 0) === 0) {
-      throw new BackupFailure("Nada marcado para o backup. Marque pelo menos um item na aba Backups do projeto.");
+      throw new NothingToBackup("Nada marcado para o backup. Marque pelo menos um item na aba Backups do projeto ou desligue o backup automático deste projeto.");
     }
     const containers = await docker.projectContainers(project.slug);
     const byService = new Map<string, ProjectContainer>();

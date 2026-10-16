@@ -44,6 +44,7 @@
   "chamadoPor": ["apps/web/src/components/RequireAuth.tsx:23"],
   "testes": ["apps/server/tests/auth.test.ts"],
   "observacoes": [
-    "É a única rota entre as quatro deste módulo que efetivamente limpa uma sessão fantasma (usuário removido) — POST /api/auth/change-password tem o mesmo cenário possível mas não destrói a sessão nesse caso (ver pontosDeAtencao em index.json)."
+    "É a única rota entre as quatro deste módulo que efetivamente limpa uma sessão fantasma (usuário removido) — POST /api/auth/change-password tem o mesmo cenário possível mas não destrói a sessão nesse caso (ver pontosDeAtencao em index.json).",
+    "Sessão que acaba com a página aberta: apiFetch (apps/web/src/lib/api.ts) dispara o evento paas:session-expired quando o servidor responde 401 com código \"unauthorized\" (exceto setup token, /api/auth/me e /logout); o RequireAuth escuta e leva ao /login lembrando a página em `from`. Quem acompanha algo que derruba a sessão de propósito (reinício do painel na restauração) passa onUnauthorized: \"ignore\". 401 de senha errada (invalid_current_password etc.) não redireciona."
   ]
 }
