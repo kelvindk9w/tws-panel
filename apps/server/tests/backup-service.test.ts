@@ -19,7 +19,7 @@ import { ArchiveError } from "../src/services/backup-archive.js";
 import type { ContainerInspect } from "../src/services/backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "../src/services/backup-docker.js";
 import { StorageError, type BackupStorage, type StoredObject } from "../src/services/backup-s3.js";
-import { BackupService, projectTargetId, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
+import { BackupService, projectTargetId, retentionVictims, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
 import type { NotificationEvent } from "../src/services/notification-service.js";
 
 // ---------------------------------------------------------------------------
@@ -1161,7 +1161,9 @@ describe("caminhos de exceção", () => {
     };
     await service.updateTarget(projectTargetId("p1"), { choices: { "db:cache": true } }, "admin");
     const b = await backup();
-    expect(b.status).toBe("success");
+    // antes desta correção, o SAVE que falha virava "success" sem aviso (achado 14)
+    expect(b.status).toBe("warning");
+    expect(b.warnings.join(" ")).toMatch(/não confirmou o SAVE \(redis\)/);
     const fromFile = docker.execFromFile.bind(docker);
     docker.execFromFile = async (c, script, args, file) => {
       if (args.length === 0 && script.includes("psql")) throw new Error("papéis");
@@ -1576,5 +1578,67 @@ process.stdin.on("end", () => {
     } finally {
       await chmod(path.join(dir, "mail", "sub", "chave.key"), 0o600);
     }
+  });
+
+  it("retentionVictims: N mais novas ficam; a última completa também, se nenhuma das que ficam for completa", () => {
+    const completas = new Set(["a", "c"]);
+    const ok = (f: string) => completas.has(f);
+    expect(retentionVictims(["a", "b", "c", "d"], 2, ok)).toEqual(["a", "b"]); // "c" fica entre as 2
+    expect(retentionVictims(["a", "b", "c", "d", "e"], 2, ok)).toEqual(["a", "b"]); // "c" é a última completa
+    expect(retentionVictims(["a", "b"], 5, ok)).toEqual([]);
+    expect(retentionVictims(["x", "y", "z"], 1, () => false)).toEqual(["x", "y"]); // nenhuma completa: como antes
+  });
+
+  function comRedis(save: (script: string) => Promise<string>): void {
+    docker.containers.push({ id: "c-redis", name: "paas-loja-cache-1", service: "cache", running: true });
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) => [
+      ...(await inspect(ids.filter((i) => i !== "c-redis"))),
+      { Name: "/cache", Config: { Image: "redis:7", Env: [], Labels: { "com.docker.compose.service": "cache" } }, Mounts: [], State: { Running: true } },
+    ];
+    const capture = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script) => (script.includes("SAVE") ? save(script) : capture(c, script));
+  }
+
+  it("SAVE do Redis que falha ou não responde OK: aviso explícito, sem contar como completo", async () => {
+    comRedis(async () => "NOAUTH Authentication required.\n");
+    await service.updateTarget(P1, { choices: { "db:cache": true } }, "admin");
+    const r = await backup();
+    expect(r.status).toBe("warning");
+    expect(r.warnings.join(" ")).toMatch(/cache: o Redis não confirmou o SAVE \(NOAUTH Authentication required\.\)/);
+    expect(r.warnings.join(" ")).toMatch(/incompleto/);
+    expect((await service.status()).targets.find((t) => t.id === P1)!.lastSuccessAt).toBeNull();
+    // erro do comando (código diferente de zero) também
+    docker.execCapture = async (c, script) => (script.includes("SAVE") ? Promise.reject(new Error("redis-cli: conexão recusada")) : "app\n");
+    now += H;
+    const r2 = await backup();
+    expect(r2.warnings.join(" ")).toMatch(/não confirmou o SAVE \(redis-cli: conexão recusada\)/);
+  });
+
+  it("retenção: cópias incompletas nunca levam embora a última completa (na VPS e fora)", async () => {
+    await connect();
+    let ok = true;
+    comRedis(async () => (ok ? "OK\n" : "ERR MISCONF\n"));
+    await service.updateTarget(P1, { localKeep: 1, remoteKeep: 1, choices: { "db:cache": true } }, "admin");
+    const completa = await backup();
+    expect(completa.status).toBe("success");
+    ok = false;
+    for (let i = 0; i < 3; i++) {
+      now += H;
+      expect((await backup()).status).toBe("warning");
+    }
+    const locais = await readdir(path.join(dir, "backups", "loja"));
+    expect(locais).toContain(completa.fileName);
+    expect(locais).toHaveLength(2); // a completa + a incompleta mais nova
+    const fora = (await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key));
+    expect(fora).toContain(completa.fileName);
+    expect(fora).toHaveLength(2);
+    // uma completa nova: aí sim a retenção volta ao normal
+    ok = true;
+    now += H;
+    const nova = await backup();
+    expect(nova.status).toBe("success");
+    expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([nova.fileName]);
+    expect((await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key))).toEqual([nova.fileName]);
   });
 });

@@ -243,6 +243,12 @@ interface StoredCopyInfo {
   /** Cópia externa: saiu cifrada. */
   encrypted?: boolean;
   check?: BackupCheckResult;
+  /**
+   * Backup incompleto (ex.: o Redis não confirmou o SAVE): fica guardado,
+   * mas não conta como completo — a retenção nunca apaga a última cópia
+   * completa por causa dele.
+   */
+  incomplete?: boolean;
 }
 
 interface StoredFileChecks {
@@ -343,6 +349,19 @@ async function sha256File(file: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
   return hash.digest("hex");
+}
+
+/**
+ * O que a retenção apaga: as cópias além das `keep` mais novas (`files` em
+ * ordem, da mais antiga para a mais nova) — menos a última cópia COMPLETA,
+ * se nenhuma das que ficam for completa. Cópias incompletas seguidas nunca
+ * levam embora a última completa.
+ */
+export function retentionVictims(files: string[], keep: number, isComplete: (file: string) => boolean): string[] {
+  const victims = files.slice(0, Math.max(0, files.length - keep));
+  if (files.slice(victims.length).some(isComplete)) return victims;
+  const lastComplete = [...victims].reverse().find(isComplete);
+  return lastComplete ? victims.filter((f) => f !== lastComplete) : victims;
 }
 
 /** Temporários de gravação (atômica ou parcial): nunca entram no backup do painel. */
@@ -1405,7 +1424,19 @@ export class BackupService {
           }
           items.push(item);
         } else if (db.engine === "redis") {
-          await docker.execCapture(c.id, REDIS_SAVE, []).catch(() => "");
+          // O SAVE grava o que está na memória no dump.rdb. Sem o "OK", o
+          // /data copiado pode estar velho (ou sem dump nenhum): o backup
+          // segue, mas fica marcado como incompleto e avisa.
+          const saved = await docker.execCapture(c.id, REDIS_SAVE, []).then(
+            (out) => ({ ok: out.trim() === "OK", why: out.trim().split("\n")[0] || "sem resposta" }),
+            (err: unknown) => ({ ok: false, why: reasonOf(err) }),
+          );
+          if (!saved.ok) {
+            r.warnings.push(
+              `${db.service}: o Redis não confirmou o SAVE (${saved.why.slice(0, 160)}). A cópia do /data dele pode estar desatualizada: este backup ficou incompleto e não substitui as cópias completas anteriores.`,
+            );
+            this.incomplete.add(r);
+          }
           const file = `bancos/${base}-redis.tar`;
           await docker.copyOut(c.id, "/data", path.join(content, file));
           items.push({ type: "database", service: db.service, engine: "redis", file, destination: "/data" });
@@ -1528,6 +1559,9 @@ export class BackupService {
     return d && this.config.encryption.enabled ? 3.2 : d ? 2.4 : 2.2;
   }
 
+  /** Backups em andamento que ficaram incompletos (ver StoredCopyInfo.incomplete). */
+  private readonly incomplete = new WeakSet<BackupRecord>();
+
   private uniqueName(dir: string): string {
     const stamp = backupFileStamp(new Date(this.now()));
     let name = `${stamp}.7z`;
@@ -1545,6 +1579,8 @@ export class BackupService {
 
   private async finishArchive(r: BackupRecord, folder: string, staging: string, inputs: string[]): Promise<void> {
     const t = this.target(r.target);
+    const complete = !this.incomplete.has(r);
+    const mark: StoredCopyInfo = complete ? {} : { incomplete: true };
     this.step(r, "Compactar (.7z)");
     const localDir = path.join(this.backupsDir, folder);
     await mkdir(localDir, { recursive: true });
@@ -1557,11 +1593,11 @@ export class BackupService {
     r.local = true;
     r.sizeBytes = (await stat(localPath)).size;
     // Hash e tamanho guardados: o "Conferir" compara com eles depois.
-    this.copyInfo(folder, name, "local", { sha256: await sha256File(localPath), size: r.sizeBytes });
-    t.lastSuccessAt = new Date(this.now()).toISOString();
-    // Cópias na VPS além das N mais recentes.
+    this.copyInfo(folder, name, "local", { sha256: await sha256File(localPath), size: r.sizeBytes, ...mark });
+    if (complete) t.lastSuccessAt = new Date(this.now()).toISOString();
+    // Cópias na VPS além das N mais recentes (nunca a última completa).
     const local = await this.localFiles(folder);
-    for (const old of local.slice(0, Math.max(0, local.length - t.localKeep))) {
+    for (const old of retentionVictims(local, t.localKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.local?.incomplete)) {
       await rm(path.join(localDir, old), { force: true });
       this.dropCopy(folder, old, "local");
     }
@@ -1589,7 +1625,7 @@ export class BackupService {
       const hash = await sha256File(upload);
       const uploadSize = (await stat(upload)).size;
       await storage.upload(key, upload);
-      this.copyInfo(folder, name, "remote", { sha256: hash, size: uploadSize, encrypted: encrypt });
+      this.copyInfo(folder, name, "remote", { sha256: hash, size: uploadSize, encrypted: encrypt, ...mark });
       r.remote = "uploaded";
       this.step(r, "Conferir a cópia externa (baixar e abrir)");
       const back = path.join(staging, "conferencia.7z");
@@ -1608,7 +1644,7 @@ export class BackupService {
       this.step(r, "Apagar os backups externos mais antigos");
       const prefix = `${BACKUP_ROOT_FOLDER}/${folder}/`;
       const remote = (await storage.list(prefix)).map((o) => o.key.slice(prefix.length)).filter(isValidBackupFileName).sort();
-      for (const old of remote.slice(0, Math.max(0, remote.length - t.remoteKeep))) {
+      for (const old of retentionVictims(remote, t.remoteKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.remote?.incomplete)) {
         await storage.remove(`${prefix}${old}`);
         this.dropCopy(folder, old, "remote");
       }
