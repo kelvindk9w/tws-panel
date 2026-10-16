@@ -361,3 +361,18 @@ describe("onRevoked — aviso de sessão encerrada (terminal aberto)", () => {
     expect((await readSessionsFile()).sessions).toEqual([]);
   });
 });
+
+describe("isActive — conferência síncrona", () => {
+  it("vale só enquanto a sessão existe e não venceu", async () => {
+    const store = new SessionStore(dir);
+    const { session } = await store.create({ id: "u1", username: "admin" });
+    expect(store.isActive(session.id)).toBe(true);
+    expect(store.isActive("outra")).toBe(false);
+    session.expiresAt = new Date(Date.now() - 1_000).toISOString();
+    expect(store.isActive(session.id)).toBe(false);
+    session.expiresAt = new Date(Date.now() + 60_000).toISOString();
+    expect(store.isActive(session.id)).toBe(true);
+    await store.destroy(session.id);
+    expect(store.isActive(session.id)).toBe(false);
+  });
+});

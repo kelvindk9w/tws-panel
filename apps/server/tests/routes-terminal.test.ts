@@ -694,6 +694,48 @@ describe("WS /api/terminal/ws — fim da sessão encerra o terminal conectado", 
     expect(await waitForAuditContains(ctx.dir, "a sessão expirou")).toContain("a sessão expirou");
   });
 
+  // Corrida: a sessão é resolvida no hook de autenticação, ANTES de a conexão
+  // entrar no mapa de conexões por sessão. Se o logout termina nesse intervalo,
+  // o aviso de revogação já passou e ninguém fecharia o terminal.
+  it("logout que termina entre a autenticação e o registro da conexão: fecha com 4401 e nada chega ao PTY", async () => {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    const store = ctx.sessionStore;
+    const resolveOriginal = store.resolve.bind(store);
+    store.resolve = async (cookie: string | undefined) => {
+      const found = await resolveOriginal(cookie);
+      if (found) await store.destroy(found.id); // o logout conclui logo após a resolução
+      return found;
+    };
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    const closed = wsClosed(ws);
+    ws.addEventListener("open", () => {
+      try {
+        ws.send("depois-do-logout\n");
+      } catch {
+        // já fechado
+      }
+    });
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    await tick();
+    expect(session.id).toBeTruthy();
+    expect(ctx.ptys.map((p) => typed(p)).join("")).not.toContain("depois-do-logout");
+  });
+
+  it("sessão revogada depois do registro, sem aviso (ouvinte perdido): o próximo frame confere no SessionStore e fecha", async () => {
+    const { ws, session, pty } = await sessionTerminal();
+    // some do armazenamento sem passar por revoke(): nenhum aviso é emitido
+    (ctx!.sessionStore as unknown as { sessions: unknown[] }).sessions = [];
+    const closed = wsClosed(ws);
+    ws.send("sem-aviso\n");
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    expect(typed(pty)).not.toContain("sem-aviso");
+    expect(session.id).toBeTruthy();
+  });
+
   it("revogação que falha ao gravar NÃO fecha o terminal (a sessão continua valendo)", async () => {
     const { ws, session } = await sessionTerminal();
     const store = ctx!.sessionStore as unknown as { save: () => Promise<void> };

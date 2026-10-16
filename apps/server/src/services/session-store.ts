@@ -157,6 +157,16 @@ export class SessionStore {
     return session;
   }
 
+  /**
+   * A sessão ainda vale agora? Conferência SÍNCRONA, só em memória (sem
+   * cookie e sem disco): para quem guarda conexão aberta e precisa fechar a
+   * corrida entre resolver a sessão e registrar a conexão.
+   */
+  isActive(id: string): boolean {
+    const session = this.sessions.find((s) => s.id === id);
+    return session !== undefined && !isSessionExpired(session);
+  }
+
   async destroy(id: string): Promise<void> {
     await this.revoke((s) => s.id === id);
   }

@@ -233,6 +233,13 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
           Math.min(Math.max(left, 0), MAX_TIMER_MS),
         );
         expiryTimer.unref();
+        // A sessão foi resolvida no hook de autenticação, ANTES deste registro.
+        // Um logout que terminou nesse intervalo já emitiu o aviso, que não
+        // pegou esta conexão: confere de novo, de forma síncrona.
+        if (!app.sessionStore.isActive(session.id)) {
+          endForSession("a sessão foi encerrada antes de o terminal abrir");
+          return;
+        }
       }
       // Bytes do terminal sem NUL: nenhum frame comum começa como controle.
       const sendOutput = (chunk: string) => {
@@ -276,6 +283,11 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         if (ended) return;
         if (session && isSessionExpired(session)) {
           endForSession("a sessão expirou");
+          return;
+        }
+        // Presente no SessionStore? (cobre revogação cujo aviso não chegou aqui)
+        if (session && !app.sessionStore.isActive(session.id)) {
+          endForSession("a sessão foi encerrada");
           return;
         }
         // Frame de controle (JSON) — único desvio do relay puro.
