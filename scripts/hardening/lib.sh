@@ -244,6 +244,42 @@ svc_disable_mask() {
 }
 
 # ---------------------------------------------------------------------------
+# Portas reais do SSH
+# ---------------------------------------------------------------------------
+# detect_ssh_ports — imprime, separadas por espaço e sem repetição, as portas
+# em que o SSH deste servidor atende de fato. O firewall e o fail2ban
+# presumiam a 22: numa VPS com o sshd em 2222, a fase 03 ativava "deny
+# incoming" liberando só a 22 e trancava novas conexões (achado 24).
+# Fontes, todas somadas (liberar uma porta a mais do SSH é seguro; esquecer
+# uma é o que tranca o acesso):
+#  1. `sshd -T` — a configuração efetiva (inclui sshd_config.d);
+#  2. `ss -tlnp` — portas em que o processo sshd está escutando agora;
+#  3. ssh.socket — ativação por socket do systemd (Ubuntu 22.10+), em que
+#     quem escuta é o systemd, não o sshd;
+#  4. sem nada acima: linhas "Port" dos arquivos de configuração.
+# Sem nenhuma porta encontrada, cai para a 22 (padrão do OpenSSH).
+detect_ssh_ports() {
+  local found=""
+  if command -v sshd >/dev/null 2>&1; then
+    found="$found $(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' || true)"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    found="$found $(ss -H -tlnp 2>/dev/null | awk '/"sshd"/ {n = split($4, a, ":"); print a[n]}' || true)"
+  fi
+  if has_systemd && systemctl is-active --quiet ssh.socket 2>/dev/null; then
+    found="$found $(systemctl show ssh.socket -p Listen --value 2>/dev/null | grep -oE ':[0-9]+ ' | tr -d ': ' || true)"
+  fi
+  if [ -z "${found//[[:space:]]/}" ]; then
+    found="$(cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null \
+      | awk 'tolower($1) == "port" {print $2}' || true)"
+  fi
+  local ports
+  ports="$(printf '%s\n' $found | grep -E '^[0-9]+$' | awk '$1 >= 1 && $1 <= 65535' | sort -un | tr '\n' ' ' || true)"
+  ports="${ports% }"
+  echo "${ports:-22}"
+}
+
+# ---------------------------------------------------------------------------
 # Pacotes
 # ---------------------------------------------------------------------------
 

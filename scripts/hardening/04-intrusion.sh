@@ -2,19 +2,22 @@
 # 04-intrusion.sh — Fase 04: prevenção ativa (fail2ban) + AppArmor.
 # Spec: docs/security-research.md §2.5 (jail.local completo) e §2.7.
 #
-# Uso: ./04-intrusion.sh [--ssh-port 22] [--profile mail] [--dry-run] [--rollback]
+# A jail sshd vigia as portas reais do SSH (detect_ssh_ports, em lib.sh);
+# `--ssh-port` soma uma porta às detectadas (achado 24).
+#
+# Uso: ./04-intrusion.sh [--ssh-port N]... [--profile mail] [--dry-run] [--rollback]
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "$(readlink -f "$0")")/lib.sh"
 
 MODE="apply"
-SSH_PORT="22"
+EXTRA_SSH_PORTS=""
 PROFILE=""
 JAIL="/etc/fail2ban/jail.local"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ssh-port) SSH_PORT="${2:?--ssh-port exige um número}"; shift ;;
+    --ssh-port) EXTRA_SSH_PORTS="$EXTRA_SSH_PORTS ${2:?--ssh-port exige um número}"; shift ;;
     --profile)  PROFILE="${2:?--profile exige um nome}"; shift ;;
     --dry-run)  PAAS_DRY_RUN=1 ;;
     --rollback) MODE="rollback" ;;
@@ -26,6 +29,11 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -z "$PROFILE" ] || [ "$PROFILE" = "mail" ] || die "profile desconhecido: $PROFILE (suportado: mail)"
+for port in $EXTRA_SSH_PORTS; do
+  case "$port" in
+    ''|*[!0-9]*) die "porta inválida: $port" ;;
+  esac
+done
 
 if [ "$MODE" = "rollback" ]; then
   step "Restaurando configuração do fail2ban"
@@ -42,6 +50,10 @@ apt_install fail2ban apparmor-utils
 ok "Pacotes instalados"
 
 step "Configurando jails do fail2ban ($JAIL)"
+# Portas reais do SSH + as pedidas com --ssh-port, no formato do fail2ban (vírgulas).
+# shellcheck disable=SC2086 # separação por espaço é intencional
+SSH_PORT="$(printf '%s\n' $(detect_ssh_ports) $EXTRA_SSH_PORTS | sort -un | paste -sd, -)"
+info "jail sshd vigiando a(s) porta(s) do SSH: $SSH_PORT"
 # Jails seguem os serviços presentes (spec §4 passo 17: "conforme serviços") —
 # habilitar jail de serviço inexistente faz `fail2ban-client -t` falhar por
 # falta de arquivo de log.

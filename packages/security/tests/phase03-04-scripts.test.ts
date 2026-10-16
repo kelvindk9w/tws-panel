@@ -133,6 +133,73 @@ describe.skipIf(!HAS_DOCKER)("fases 03/04 e lib.sh num Ubuntu real", { timeout: 
     });
   });
 
+  // -------------------------------------------------------------- achado 24
+  describe("porta real do SSH no firewall — achado 24", () => {
+    it("detect_ssh_ports encontra a porta configurada e a que está escutando", () => {
+      startSshd([2222]);
+      const r = sh("source /opt/h/lib.sh; detect_ssh_ports");
+      expect(r.out.trim().split(/\s+/)).toEqual(["2222"]);
+    });
+
+    it("simulação: libera a porta real (2222) do sshd, não a 22", () => {
+      startSshd([2222]);
+      const r = sh("bash /opt/h/03-firewall.sh --dry-run");
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain("ufw allow 2222/tcp");
+      expect(r.out).not.toContain("ufw allow 22/tcp");
+    });
+
+    it("de verdade: com o sshd em 2222, o UFW ativo libera a 2222 antes de bloquear o resto", () => {
+      resetFirewall();
+      startSshd([2222]);
+      const r = sh("PAAS_ROLLBACK_DELAY=600 bash /opt/h/03-firewall.sh");
+      expect(r.code, r.out).toBe(0);
+      const status = sh("ufw status").out;
+      expect(status).toContain("Status: active");
+      expect(status).toMatch(/^2222\/tcp\s+ALLOW/m);
+      resetFirewall();
+    });
+
+    it("sshd em duas portas: libera as duas", () => {
+      resetFirewall();
+      startSshd([22, 2222]);
+      const r = sh("bash /opt/h/03-firewall.sh --dry-run");
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain("ufw allow 22/tcp");
+      expect(r.out).toContain("ufw allow 2222/tcp");
+    });
+
+    it("--ssh-port explícito soma à porta detectada (nunca a substitui)", () => {
+      startSshd([2222]);
+      const r = sh("bash /opt/h/03-firewall.sh --dry-run --ssh-port 22");
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain("ufw allow 22/tcp");
+      expect(r.out).toContain("ufw allow 2222/tcp");
+    });
+
+    it("sem sshd rodando e sem porta na configuração: cai para a 22", () => {
+      const r = sh(
+        [
+          "pkill -x sshd || true",
+          "sleep 0.5",
+          "rm -f /etc/ssh/sshd_config.d/10-porta-teste.conf",
+          "mv /usr/sbin/sshd /usr/sbin/sshd.off",
+          "source /opt/h/lib.sh",
+          "detect_ssh_ports",
+          "mv /usr/sbin/sshd.off /usr/sbin/sshd",
+        ].join("; "),
+      );
+      expect(r.out.trim().split(/\s+/).at(-1)).toBe("22");
+    });
+
+    it("fail2ban (fase 04) vigia a porta real do SSH", () => {
+      startSshd([2222]);
+      const r = sh("bash /opt/h/04-intrusion.sh --dry-run");
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toMatch(/\|\s*port = 2222$/m);
+    });
+  });
+
   // -------------------------------------------------------------- achado 23
   describe("reaplicar com a confirmação pendente — achado 23", () => {
     it("fase 03 recusa reaplicar enquanto a reversão agendada anterior está viva, sem mexer em nada", () => {
