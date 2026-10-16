@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import {
   BACKUP_PASSWORD_REMINDER_DAYS,
   BACKUP_ROOT_FOLDER,
+  type BackupApplyDefaultsResult,
   type BackupCatalog,
   type BackupProvider,
   type BackupRecord,
@@ -35,8 +36,8 @@ import { AlertTriangle, CloudUpload, Download, HardDrive, KeyRound, Loader2, Loc
 /**
  * Configurações → Backups: onde os backups ficam (VPS e armazenamento externo
  * S3/R2), a criptografia da cópia externa e a senha, o painel e o e-mail
- * (frequência, cópias, fazer agora, restaurar), os projetos (cada um tem a
- * sua aba Backups), "Restaurar de outro servidor" e os últimos backups.
+ * (frequência, cópias, fazer agora, restaurar), o padrão dos projetos (com
+ * "Aplicar também nestes projetos"), os projetos (cada um tem a sua aba Backups), "Restaurar de outro servidor" e os últimos backups.
  */
 
 type OnStatus = (s: BackupsStatus) => void;
@@ -658,6 +659,104 @@ function TargetCard({
   );
 }
 
+function settingsText(t: BackupTargetStatus): string {
+  if (t.followsDefaults !== false) return "segue o padrão";
+  const freq = t.enabled ? `a cada ${t.frequencyHours} h` : "desligado";
+  return `configuração própria (${freq}, ${t.localKeep} na VPS, ${t.remoteKeep} fora)`;
+}
+
+/**
+ * "Padrão dos projetos": com o que um projeto novo nasce. Quem segue o padrão
+ * muda junto. "Aplicar também nestes projetos" copia o padrão para os marcados,
+ * que passam a seguir o padrão. Itens marcados no backup não mudam.
+ */
+function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () => void }) {
+  const projects = status.targets.filter((t) => t.kind === "project");
+  const [marked, setMarked] = useState<Set<string>>(new Set());
+  const toggle = (id: string, on: boolean) =>
+    setMarked((cur) => {
+      const next = new Set(cur);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  async function save(settings: BackupsStatus["projectDefaults"], changed: boolean): Promise<string> {
+    const parts: string[] = [];
+    if (changed) {
+      await apiFetch("/api/backups/defaults", { method: "PUT", body: JSON.stringify(settings) });
+      parts.push("Padrão salvo.");
+    }
+    if (marked.size > 0) {
+      const ids = projects.filter((p) => marked.has(p.id)).map((p) => p.id.slice("project:".length));
+      const r = await apiFetch<BackupApplyDefaultsResult>("/api/backups/defaults/apply", {
+        method: "POST",
+        body: JSON.stringify({ projectIds: ids }),
+      });
+      const names = r.applied.map((a) => a.name).join(", ");
+      parts.push(changed ? `Aplicado em: ${names}.` : `Padrão aplicado em: ${names}.`);
+      setMarked(new Set());
+    }
+    return parts.join(" ");
+  }
+
+  const list =
+    projects.length > 0 ? (
+      <fieldset className="flex flex-col gap-2" data-testid="defaults-projects">
+        <legend className="mb-1 font-medium">Aplicar também nestes projetos</legend>
+        <p className="text-xs text-muted-foreground">
+          Os marcados recebem o padrão e passam a segui-lo. Os outros mantêm o que têm.
+        </p>
+        <div className="flex gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => setMarked(new Set(projects.map((p) => p.id)))}>
+            Marcar todos
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => setMarked(new Set())}>
+            Nenhum
+          </Button>
+        </div>
+        <ul className="flex flex-col gap-1">
+          {projects.map((p) => (
+            <li key={p.id}>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" className="h-4 w-4" checked={marked.has(p.id)} onChange={(e) => toggle(p.id, e.target.checked)} />
+                <span className="min-w-0 break-words">
+                  {p.name} <span className="text-xs text-muted-foreground">— hoje: {settingsText(p)}</span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </fieldset>
+    ) : undefined;
+
+  return (
+    <Card data-testid="defaults-card">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Server className="h-4 w-4 text-sky-400" /> Padrão dos projetos
+        </CardTitle>
+        <CardDescription>
+          Projeto novo nasce com este padrão. Quem segue o padrão muda junto. Um projeto passa a ter configuração própria quando você salva
+          na aba Backups dele. Os bancos e as pastas escolhidos não mudam.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <TargetSettings
+          target={{ id: "defaults", ...status.projectDefaults }}
+          remote={status.destination !== null}
+          timezone={status.timezone}
+          backupHour={status.backupHour}
+          onSaved={reload}
+          onSave={save}
+          extra={list}
+          extraDirty={marked.size > 0}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
 function ProjectsCard({ status }: { status: BackupsStatus }) {
   const projects = status.targets.filter((t) => t.kind === "project");
   return (
@@ -965,6 +1064,7 @@ export function BackupSettings() {
               />
             )}
           </div>
+          <DefaultsCard status={status} reload={load} />
           <ProjectsCard status={status} />
           <OtherServerCard
             status={status}

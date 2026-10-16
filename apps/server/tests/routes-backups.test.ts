@@ -39,6 +39,9 @@ const service = {
   detectProject: vi.fn(async () => ({})),
   catalog: vi.fn(async () => ({ panel: [], email: [], projects: [] })),
   verify: vi.fn(async () => ({ id: "r3", operation: "verify" })),
+  updateDefaults: vi.fn(async () => undefined),
+  applyDefaults: vi.fn(async () => ({ applied: [{ id: "p1", name: "Loja" }], missing: [] })),
+  useDefaults: vi.fn(async () => undefined),
 };
 
 beforeEach(async () => {
@@ -73,6 +76,35 @@ describe("rotas de backups", () => {
   it("sem sessão: 401", async () => {
     const res = await app.inject({ method: "GET", url: "/api/backups" });
     expect(res.statusCode).toBe(401);
+  });
+
+  it("só com o setup token (setup pendente, sem sessão): 401 em todas, nunca 500", async () => {
+    const fresh = await buildAuthTestApp(SETUP);
+    fresh.app.decorate("backupService", service as unknown as FastifyInstance["backupService"]);
+    await fresh.app.register(backupsRoutes);
+    const token = { [SETUP_TOKEN_HEADER]: SETUP };
+    const routes: Array<["GET" | "PUT" | "POST" | "DELETE", string, unknown?]> = [
+      ["GET", "/api/backups"],
+      ["PUT", "/api/backups/destination", DEST],
+      ["POST", "/api/backups/destination/test"],
+      ["DELETE", "/api/backups/destination"],
+      ["PUT", "/api/backups/defaults", { frequencyHours: 6 }],
+      ["POST", "/api/backups/defaults/apply", { projectIds: ["p1"] }],
+      ["POST", "/api/backups/password/reveal", { loginPassword: "x" }],
+      ["PUT", "/api/backups/targets/panel", { frequencyHours: 6 }],
+      ["POST", "/api/backups/targets/project:p1/use-defaults"],
+      ["POST", "/api/backups/targets/panel/run"],
+      ["POST", "/api/backups/verify", {}],
+      ["GET", "/api/backups/projects/p1"],
+      ["GET", "/api/backups/catalog"],
+    ];
+    for (const [method, url, payload] of routes) {
+      const res = await fresh.app.inject({ method, url, headers: token, ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}) });
+      expect(res.statusCode, `${method} ${url}`).toBe(401);
+      expect(res.json()).toMatchObject({ error: "unauthorized" });
+    }
+    for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
+    await closeAuthTestApp(fresh);
   });
 
   it("situação, destino, teste e desconectar", async () => {
@@ -124,6 +156,22 @@ describe("rotas de backups", () => {
     expect(restore.json()).toEqual({ id: "r2" });
     expect((await call("POST", "/api/backups/targets/project:p1/restore", { fileName: "x", source: "ftp", confirm: "" })).statusCode).toBe(400);
     expect((await call("GET", "/api/backups/records/r1")).json()).toEqual({ id: "r1", status: "running" });
+  });
+
+  it("padrão dos projetos, Aplicar também e Voltar ao padrão", async () => {
+    const put = await call("PUT", "/api/backups/defaults", { enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30 });
+    expect(put.statusCode).toBe(204);
+    expect(service.updateDefaults).toHaveBeenCalledWith({ enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    expect((await call("PUT", "/api/backups/defaults", { frequencyHours: 8 })).statusCode).toBe(400);
+    expect((await call("PUT", "/api/backups/defaults", { choices: { "db:db": false } })).statusCode).toBe(400);
+    expect((await call("PUT", "/api/backups/defaults", { localKeep: 0 })).statusCode).toBe(400);
+    const apply = await call("POST", "/api/backups/defaults/apply", { projectIds: ["p1"] });
+    expect(apply.json()).toEqual({ applied: [{ id: "p1", name: "Loja" }], missing: [] });
+    expect(service.applyDefaults).toHaveBeenCalledWith(["p1"], "admin");
+    expect((await call("POST", "/api/backups/defaults/apply", { projectIds: [] })).statusCode).toBe(400);
+    expect((await call("POST", "/api/backups/defaults/apply", { projectIds: ["../x"] })).statusCode).toBe(400);
+    expect((await call("POST", "/api/backups/targets/project:p1/use-defaults")).statusCode).toBe(204);
+    expect(service.useDefaults).toHaveBeenCalledWith("project:p1", "admin");
   });
 
   it("aba do projeto, detectar de novo e catálogo", async () => {

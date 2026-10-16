@@ -339,12 +339,19 @@ export interface BackupTargetStatus extends BackupTargetSettings {
   nextRunAt: string | null;
   /** E-mail: o servidor de e-mail existe nesta instalação. */
   available: boolean;
+  /**
+   * Só projetos: true = segue o "Padrão dos projetos" (Configurações →
+   * Backups) e muda junto com ele; false = configuração própria.
+   */
+  followsDefaults?: boolean;
 }
 
 export interface BackupsStatus {
   destination: BackupDestinationInfo | null;
   encryption: BackupEncryptionInfo;
   targets: BackupTargetStatus[];
+  /** "Padrão dos projetos": com o que um projeto novo nasce. */
+  projectDefaults: BackupTargetSettings;
   running: BackupRecord | null;
   queued: BackupRecord[];
   history: BackupRecord[];
@@ -412,6 +419,25 @@ export interface BackupTargetSettingsRequest {
   remoteKeep?: number;
   choices?: Record<string, boolean>;
   extraFolders?: Array<{ service: string; path: string }>;
+}
+
+/** "Padrão dos projetos" (só frequência, cópias e ligado/desligado). */
+export interface BackupDefaultsRequest {
+  enabled?: boolean;
+  frequencyHours?: BackupFrequencyHours;
+  localKeep?: number;
+  remoteKeep?: number;
+}
+
+/** "Aplicar também nestes projetos". */
+export interface BackupApplyDefaultsRequest {
+  projectIds: string[];
+}
+
+export interface BackupApplyDefaultsResult {
+  applied: Array<{ id: string; name: string }>;
+  /** Ids que não são de nenhum projeto. */
+  missing: string[];
 }
 
 export interface BackupRestoreRequest {

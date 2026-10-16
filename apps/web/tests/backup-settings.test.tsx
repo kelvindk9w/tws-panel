@@ -74,7 +74,13 @@ function base(): BackupsStatus {
   return {
     destination: null,
     encryption: { enabled: true, passwordSet: false, passwordSetAt: null, acknowledgedAt: null, lastTestAt: null, lastTestOk: null },
-    targets: [target("panel", "panel", "Painel"), target("email", "email", "E-mail", { available: false }), target("project:p1", "project", "Loja")],
+    targets: [
+      target("panel", "panel", "Painel"),
+      target("email", "email", "E-mail", { available: false }),
+      target("project:p1", "project", "Loja", { followsDefaults: true }),
+      target("project:p2", "project", "Blog", { followsDefaults: false, frequencyHours: 12 }),
+    ],
+    projectDefaults: { enabled: true, frequencyHours: 24, localKeep: 2, remoteKeep: 5 },
     running: null,
     queued: [],
     history: [],
@@ -144,6 +150,13 @@ function handler(path: string, init?: RequestInit): unknown {
     case "PUT /api/backups/targets/panel":
       state = { ...state, targets: state.targets.map((t) => (t.id === "panel" ? { ...t, ...(body as Partial<BackupTargetStatus>) } : t)) };
       return undefined;
+    case "PUT /api/backups/defaults":
+      state = { ...state, projectDefaults: { ...state.projectDefaults, ...(body as Partial<BackupsStatus["projectDefaults"]>) } };
+      return undefined;
+    case "POST /api/backups/defaults/apply": {
+      const ids = body.projectIds as string[];
+      return { applied: ids.map((id) => ({ id, name: id === "p1" ? "Loja" : "Blog" })), missing: [] };
+    }
     case "GET /api/backups/targets/panel/points":
       return { points: [{ fileName: "2026-10-14_03-00.7z", at: "2026-10-14T06:00:00Z", sizeBytes: 4096, local: true, remote: true }] };
     case "POST /api/backups/targets/panel/restore":
@@ -320,6 +333,52 @@ describe("Configurações → Backups", () => {
     expect(await screen.findByText(/Fazendo backup de Painel/)).toBeInTheDocument();
     const email = screen.getByTestId("target-email");
     expect(email).toHaveTextContent("O servidor de e-mail não está instalado nesta VPS.");
+  });
+
+  it("padrão dos projetos: frequência, cópias e cobertura; Aplicar também nestes projetos", async () => {
+    state.destination = { type: "s3", provider: "r2", endpoint: "https://x", region: "auto", bucket: "b", accessKeyHint: "…1", connectedAt: "", testedAt: null };
+    renderPage();
+    const card = await screen.findByTestId("defaults-card");
+    expect(card).toHaveTextContent("Padrão dos projetos");
+    expect(card).toHaveTextContent("Seus backups cobrem os últimos 5 dias no armazenamento externo e os últimos 2 dias na VPS.");
+    const list = within(card).getByTestId("defaults-projects");
+    expect(list).toHaveTextContent("Aplicar também nestes projetos");
+    expect(list).toHaveTextContent("Loja — hoje: segue o padrão");
+    expect(list).toHaveTextContent("Blog — hoje: configuração própria (a cada 12 h, 2 na VPS, 5 fora)");
+    const save = within(card).getByRole("button", { name: "Salvar" });
+    expect(save).toBeDisabled();
+    fireEvent.change(within(card).getByLabelText("Frequência"), { target: { value: "6" } });
+    fireEvent.change(within(card).getByLabelText("Cópias na VPS"), { target: { value: "8" } });
+    fireEvent.change(within(card).getByLabelText("Cópias fora da VPS"), { target: { value: "30" } });
+    expect(card).toHaveTextContent("Seus backups cobrem os últimos 7 dias e 12 horas no armazenamento externo e os últimos 2 dias na VPS.");
+    fireEvent.click(within(list).getByRole("button", { name: "Marcar todos" }));
+    expect(within(list).getAllByRole("checkbox").every((c) => (c as HTMLInputElement).checked)).toBe(true);
+    fireEvent.click(within(list).getByRole("button", { name: "Nenhum" }));
+    expect(within(list).getAllByRole("checkbox").some((c) => (c as HTMLInputElement).checked)).toBe(false);
+    fireEvent.click(within(list).getByRole("checkbox", { name: /Blog/ }));
+    fireEvent.click(save);
+    expect(await within(card).findByText("Padrão salvo. Aplicado em: Blog.")).toBeInTheDocument();
+    expect(calls.find((c) => c.key === "PUT /api/backups/defaults")?.body).toEqual({ enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30 });
+    expect(calls.find((c) => c.key === "POST /api/backups/defaults/apply")?.body).toEqual({ projectIds: ["p2"] });
+  });
+
+  it("padrão dos projetos: só aplicar, sem mudar o padrão, e cópias inválidas", async () => {
+    renderPage();
+    const card = await screen.findByTestId("defaults-card");
+    expect(card).toHaveTextContent("Seus backups cobrem os últimos 2 dias (cópias na VPS).");
+    fireEvent.click(within(card).getByRole("checkbox", { name: /Loja/ }));
+    fireEvent.click(within(card).getByRole("button", { name: "Salvar" }));
+    expect(await within(card).findByText("Padrão aplicado em: Loja.")).toBeInTheDocument();
+    expect(calls.some((c) => c.key === "PUT /api/backups/defaults")).toBe(false);
+    fireEvent.change(within(card).getByLabelText("Cópias na VPS"), { target: { value: "0" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Salvar" }));
+    expect(await within(card).findByText("Informe de 1 a 60 cópias.")).toBeInTheDocument();
+    failures["PUT /api/backups/defaults"] = new ApiRequestError(400, "invalid_keep", "Quantidade de cópias inválida.");
+    fireEvent.change(within(card).getByLabelText("Cópias na VPS"), { target: { value: "3" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Salvar" }));
+    expect(await within(card).findByText("Quantidade de cópias inválida.")).toBeInTheDocument();
+    fireEvent.click(within(card).getByTestId("enabled-defaults"));
+    expect(card).toHaveTextContent("Desligado: só roda quando você clicar em Fazer backup agora.");
   });
 
   it("restaurar o painel: confirma digitando 'painel' e acompanha até o fim", async () => {

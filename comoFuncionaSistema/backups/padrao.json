@@ -1,0 +1,104 @@
+{
+  "id": "padrao",
+  "modulo": "backups",
+  "metodo": "PUT/POST",
+  "url": "/api/backups/defaults, /api/backups/defaults/apply, /api/backups/targets/:target/use-defaults",
+  "resumo": "'Padrão dos projetos' em Configurações → Backups (ligado, frequência 24/12/6 h, cópias na VPS e fora), 'Aplicar também nestes projetos' e 'Voltar ao padrão' na aba Backups do projeto.",
+  "arquivoFonte": "apps/server/src/routes/backups.ts, apps/server/src/services/backup-service.ts (updateDefaults, applyDefaults, useDefaults, initProject)",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts) e um onRequest no plugin de backups: sem sessão, mesmo com o setup token, responde 401. O usuário da sessão vira o 'actor' da auditoria."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "target",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Só em use-defaults: 'project:<id>'. 'panel' e 'email' dão 400 not_a_project."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "enabled | frequencyHours | localKeep | remoteKeep",
+        "tipo": "boolean | 24|12|6 | integer 1-60 | integer 1-60",
+        "obrigatorio": false,
+        "descricao": "PUT /defaults. Outros campos (choices, extraFolders) dão 400: o padrão não mexe no que entra no backup."
+      },
+      {
+        "nome": "projectIds",
+        "tipo": "string[] (1 a 500, ^[A-Za-z0-9_-]{1,64}$)",
+        "obrigatorio": true,
+        "descricao": "POST /defaults/apply: ids dos projetos (sem o 'project:')."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 204,
+      "quando": "PUT /defaults e POST use-defaults"
+    },
+    {
+      "status": 200,
+      "quando": "POST /defaults/apply",
+      "corpo": "BackupApplyDefaultsResult: { applied: [{ id, name }], missing: [ids que não são de nenhum projeto] }"
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_frequency|invalid_keep|not_a_project|FST_ERR_VALIDATION"
+    },
+    {
+      "status": 401,
+      "codigo": "unauthorized"
+    },
+    {
+      "status": 404,
+      "codigo": "not_found",
+      "quando": "use-defaults de projeto que não existe"
+    }
+  ],
+  "fluxo": [
+    "Guarda: data/backups.json ganhou projectDefaults ({ enabled, frequencyHours, localKeep, remoteKeep }; começa em ligado, 24 h, 2 e 5) e cada item de projeto ganhou followsDefaults (true = segue o padrão, false = configuração própria). Painel e e-mail não têm followsDefaults.",
+    "Quem segue o padrão guarda uma cópia dos valores do padrão: a agenda e a retenção continuam lendo o item, sem caso especial.",
+    "PUT /defaults: valida, grava o padrão e copia para cada projeto com followsDefaults=true. Trocar a frequência ou religar recomeça a contagem no horário atual (não dispara um horário que já passou). Auditoria backups.defaults: 'Padrão dos projetos: a cada 6 h, na VPS: 8 cópias, fora: 30 cópias (N projetos seguem o padrão).'",
+    "POST /defaults/apply: para cada id que é um projeto, copia o padrão e põe followsDefaults=true. Auditoria backups.defaults_applied: 'Padrão dos projetos aplicado em: Loja, Blog.'",
+    "POST use-defaults ('Voltar ao padrão'): copia o padrão e põe followsDefaults=true. Auditoria backups.settings: '<projeto>: voltou ao padrão dos projetos.'",
+    "PUT /api/backups/targets/project:<id> com enabled, frequencyHours, localKeep ou remoteKeep põe followsDefaults=false (a auditoria diz 'configuração própria'). Só choices/extraFolders ('Salvar itens') não muda.",
+    "Projeto novo (POST /api/projects): initProject(id, backup). Sem 'backup' ou igual ao padrão → segue o padrão; diferente → configuração própria com os valores do padrão e o ligado escolhido. A tela de Novo projeto não manda 'backup'; 'Não' faz depois PUT { enabled: false } (vira configuração própria).",
+    "Item de projeto criado sozinho (o GET /api/backups cria o que falta) nasce do padrão, com followsDefaults=true.",
+    "Instalação antiga (item de projeto sem followsDefaults): ligado, 24 h, 2 e 5 → segue o padrão; qualquer outro valor → configuração própria (alguém mudou)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra; a rota só valida e repassa."
+    }
+  ],
+  "efeitosColaterais": [
+    "auditoria backups.defaults / backups.defaults_applied / backups.settings",
+    "muda frequência, cópias e ligado dos projetos que seguem o padrão"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/BackupSettings.tsx (DefaultsCard: um Salvar grava o padrão, se mudou, e aplica nos marcados)",
+    "apps/web/src/components/project/ProjectBackupsCard.tsx (Voltar ao padrão)"
+  ],
+  "testes": [
+    "apps/server/tests/routes-backups.test.ts",
+    "apps/server/tests/backup-service.test.ts (padrão dos projetos)",
+    "apps/server/tests/routes-projects.test.ts (criação sem escolha)",
+    "apps/web/tests/backup-settings.test.tsx",
+    "apps/web/tests/project-backups.test.tsx"
+  ],
+  "observacoes": [
+    "Os itens marcados (bancos, pastas, pastas extras) nunca passam pelo padrão.",
+    "GET /api/backups traz projectDefaults e, em cada item de projeto, followsDefaults."
+  ]
+}

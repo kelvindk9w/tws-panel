@@ -907,6 +907,107 @@ describe("configuração por item", () => {
   });
 });
 
+describe("padrão dos projetos", () => {
+  const P1 = projectTargetId("p1");
+  const P2 = projectTargetId("p2");
+
+  it("vem com 24 h, 2 e 5 e ligado; projeto que nunca salvou segue o padrão", async () => {
+    const s = await service.status();
+    expect(s.projectDefaults).toEqual({ enabled: true, frequencyHours: 24, localKeep: 2, remoteKeep: 5 });
+    expect(s.targets.find((t) => t.id === P1)).toMatchObject({ followsDefaults: true });
+    expect(s.targets.find((t) => t.id === "panel")!.followsDefaults).toBeUndefined();
+  });
+
+  it("trocar o padrão muda quem segue, não quem tem configuração própria nem painel e e-mail", async () => {
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" })];
+    await service.updateTarget(P2, { frequencyHours: 12 }, "admin");
+    await service.updateDefaults({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    const s = await service.status();
+    expect(s.projectDefaults).toMatchObject({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 });
+    expect(s.targets.find((t) => t.id === P1)).toMatchObject({ frequencyHours: 6, localKeep: 8, remoteKeep: 30, followsDefaults: true });
+    expect(s.targets.find((t) => t.id === P2)).toMatchObject({ frequencyHours: 12, localKeep: 2, remoteKeep: 5, followsDefaults: false });
+    expect(s.targets.find((t) => t.id === "panel")).toMatchObject({ frequencyHours: 24, localKeep: 2 });
+    expect(audits.at(-1)).toMatchObject({ action: "backups.defaults" });
+    expect(audits.at(-1)!.detail).toMatch(/Padrão dos projetos: a cada 6 h, na VPS: 8 cópias, fora: 30 cópias \(1 projeto segue o padrão\)/);
+    // não mexe nos itens marcados
+    await service.updateTarget(P1, { choices: { "db:db": false } }, "admin");
+    expect((await service.projectView("p1")).target.followsDefaults).toBe(true);
+    expect((await service.projectView("p1")).choices).toEqual({ "db:db": false });
+  });
+
+  it("projeto novo nasce com o padrão; com a escolha diferente do padrão, vira próprio", async () => {
+    await service.updateDefaults({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" }), project({ id: "p3", name: "Site", slug: "site" })];
+    await service.initProject("p2", true);
+    await service.initProject("p3", false);
+    expect((await service.projectView("p2")).target).toMatchObject({ enabled: true, frequencyHours: 6, localKeep: 8, followsDefaults: true });
+    expect((await service.projectView("p3")).target).toMatchObject({ enabled: false, frequencyHours: 6, localKeep: 8, followsDefaults: false });
+    // padrão desligado e projeto criado sem escolher: nasce desligado, seguindo o padrão
+    await service.updateDefaults({ enabled: false }, "admin");
+    projects.push(project({ id: "p4", name: "Api", slug: "api" }));
+    await service.initProject("p4");
+    expect((await service.projectView("p4")).target).toMatchObject({ enabled: false, followsDefaults: true });
+  });
+
+  it("salvar frequência ou cópias na aba do projeto vira configuração própria; Voltar ao padrão desfaz", async () => {
+    await service.updateDefaults({ frequencyHours: 6 }, "admin");
+    await service.updateTarget(P1, { enabled: true, frequencyHours: 12, localKeep: 3, remoteKeep: 4 }, "admin");
+    expect((await service.projectView("p1")).target).toMatchObject({ frequencyHours: 12, followsDefaults: false });
+    await service.useDefaults(P1, "admin");
+    expect((await service.projectView("p1")).target).toMatchObject({ frequencyHours: 6, localKeep: 2, remoteKeep: 5, followsDefaults: true });
+    expect(audits.at(-1)!.detail).toMatch(/Loja: voltou ao padrão dos projetos/);
+    await expect(service.useDefaults("panel", "admin")).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("Aplicar também nestes projetos: copia o padrão e marca como seguindo", async () => {
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" })];
+    await service.updateTarget(P1, { frequencyHours: 12, enabled: false }, "admin");
+    await service.updateTarget(P2, { localKeep: 9 }, "admin");
+    await service.updateDefaults({ frequencyHours: 6, localKeep: 8, remoteKeep: 30 }, "admin");
+    const r = await service.applyDefaults(["p1", "nao-existe"], "admin");
+    expect(r).toEqual({ applied: [{ id: "p1", name: "Loja" }], missing: ["nao-existe"] });
+    const s = await service.status();
+    expect(s.targets.find((t) => t.id === P1)).toMatchObject({ enabled: true, frequencyHours: 6, localKeep: 8, remoteKeep: 30, followsDefaults: true });
+    expect(s.targets.find((t) => t.id === P2)).toMatchObject({ localKeep: 9, followsDefaults: false });
+    expect(audits.at(-1)).toMatchObject({ action: "backups.defaults_applied", detail: "Padrão dos projetos aplicado em: Loja." });
+  });
+
+  it("valida o padrão", async () => {
+    await expect(service.updateDefaults({ frequencyHours: 8 as 6 }, "a")).rejects.toMatchObject({ code: "invalid_frequency" });
+    await expect(service.updateDefaults({ remoteKeep: 0 }, "a")).rejects.toMatchObject({ code: "invalid_keep" });
+  });
+
+  it("instalação antiga: quem tem 24 h, 2 e 5 e ligado segue o padrão; o resto fica próprio", async () => {
+    projects = [project(), project({ id: "p2", name: "Blog", slug: "blog" })];
+    const old = (enabled: boolean, frequencyHours: number) => ({
+      enabled,
+      frequencyHours,
+      localKeep: 2,
+      remoteKeep: 5,
+      lastSlot: null,
+      enabledSince: "2026-10-01T00:00:00Z",
+      choices: {},
+      extraFolders: [],
+      lastSuccessAt: null,
+      lastRemoteVerifiedAt: null,
+      lastStaleNoticeAt: null,
+    });
+    await writeFile(path.join(dir, "backups.json"), JSON.stringify({ targets: { [P1]: old(true, 24), [P2]: old(true, 12) } }));
+    service = build();
+    const s = await service.status();
+    expect(s.targets.find((t) => t.id === P1)!.followsDefaults).toBe(true);
+    expect(s.targets.find((t) => t.id === P2)!.followsDefaults).toBe(false);
+  });
+
+  it("desligar o padrão desliga quem segue; religar recomeça a contagem", async () => {
+    await service.updateDefaults({ enabled: false }, "admin");
+    expect((await service.projectView("p1")).target).toMatchObject({ enabled: false, nextRunAt: null });
+    await service.updateDefaults({ enabled: true }, "admin");
+    expect((await service.projectView("p1")).target.enabled).toBe(true);
+    expect(audits.at(-1)!.detail).toMatch(/ligado/);
+  });
+});
+
 describe("agenda, atraso e lembrete", () => {
   it("roda no horário (03:00) e não repete o mesmo horário", async () => {
     await service.tick();

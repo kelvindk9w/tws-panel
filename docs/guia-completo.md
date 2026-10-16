@@ -551,7 +551,17 @@ repetir isto.
 
 Nos cartões **Painel** e **E-mail**, escolha a frequência (uma vez por dia, a cada 12 ou a cada 6
 horas) e quantas cópias ficam na VPS e fora. **O horário base é 03:00 no fuso da VPS** (veja a
-[Etapa 5](#etapa-5)). Os backups de cada projeto se configuram na aba **Backups** do projeto
+[Etapa 5](#etapa-5)).
+
+Os projetos têm a configuração deles. No cartão **Padrão dos projetos**, escolha o mesmo para os
+projetos: ligado ou desligado, frequência e cópias.
+
+1. Ajuste os campos. A frase de baixo mostra quantos dias os backups cobrem.
+2. Em **Aplicar também nestes projetos**, marque os projetos que já existem (ou **Marcar todos**).
+3. Clique em **Salvar**.
+
+**O que conferir:** cada projeto da lista mostra "hoje: segue o padrão". Projeto novo já nasce com
+o padrão. Os bancos e as pastas de cada projeto continuam na aba **Backups** dele
 ([Etapa 9](#etapa-9)).
 
 Detalhes do que entra, de onde fica e de como restaurar numa VPS nova:
@@ -663,9 +673,12 @@ Depois do primeiro deploy que dá certo, o painel olha os containers e sugere o 
    desmarcado, porque costuma ser cache) e **Volumes e pastas** (uploads e dados marcados; caches,
    logs e `node_modules` desmarcados).
 3. Se aparecer o aviso laranja de **arquivos gravados fora de volume**, leia: eles somem no próximo
-   deploy.
-4. Clique em **Salvar itens** e escolha a frequência e as cópias.
-5. Clique em **Fazer backup agora**.
+   deploy. O aviso não conta o que o próprio Docker cria (como `docker-init` ou a pasta de um
+   arquivo montado).
+4. Clique em **Salvar itens**.
+5. Em **Frequência e cópias**, o selo diz **Seguindo o padrão do painel**. Mudar e salvar ali passa
+   o projeto para **Configuração própria**; **Voltar ao padrão** desfaz.
+6. Clique em **Fazer backup agora**.
 
 **O que conferir:** o histórico do projeto mostra o backup concluído, com "cópia externa
 conferida". No Cloudflare, aparece a pasta `TWS Panel Backups/<nome-do-projeto>/`.

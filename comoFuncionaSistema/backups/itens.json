@@ -8,7 +8,7 @@
   "autenticacao": {
     "exigida": true,
     "tipo": "sessao",
-    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). O usuário da sessão vira o 'actor' da auditoria."
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts) e um onRequest no plugin de backups: sem sessão, mesmo com o setup token (setup pendente), responde 401 { error: 'unauthorized' } em vez de chegar à rota. O usuário da sessão vira o 'actor' da auditoria."
   },
   "rateLimit": "Global: 200 req/min por IP.",
   "parametros": {
@@ -85,9 +85,15 @@
     {
       "status": 409,
       "codigo": "not_deployed|email_unavailable"
+    },
+    {
+      "status": 401,
+      "codigo": "unauthorized"
     }
   ],
-  "fluxo": [],
+  "fluxo": [
+    "Projeto: enabled, frequencyHours, localKeep ou remoteKeep no corpo põe followsDefaults=false (configuração própria; a auditoria diz isso). Só choices/extraFolders não muda. Painel e e-mail não seguem padrão."
+  ],
   "dependencias": [
     {
       "tipo": "servico",
@@ -102,7 +108,7 @@
   "chamadoPor": [
     "apps/web/src/pages/settings/BackupSettings.tsx",
     "apps/web/src/components/project/ProjectBackupsCard.tsx",
-    "apps/web/src/pages/NewProjectPage.tsx (enabled: false quando 'Fazer backup: Não')"
+    "apps/web/src/pages/NewProjectPage.tsx (enabled: false quando 'Fazer backup: Não'; 'Sim' não manda nada e segue o padrão dos projetos)"
   ],
   "testes": [
     "apps/server/tests/routes-backups.test.ts",

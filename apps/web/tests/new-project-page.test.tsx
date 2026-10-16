@@ -418,6 +418,7 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     const choice = await screen.findByTestId("backup-choice");
     expect(within(choice).getByLabelText("Sim")).toBeChecked();
+    expect(choice).toHaveTextContent("Sim segue o padrão dos projetos, em Configurações → Backups.");
     fireEvent.click(within(choice).getByLabelText("Não"));
     fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
     expect(await screen.findByTestId("onde")).toHaveTextContent("/projects/p1");

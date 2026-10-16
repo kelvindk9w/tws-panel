@@ -606,7 +606,7 @@ describe("HTTPS do projeto", () => {
 });
 
 describe("backups na criação e na remoção do projeto", () => {
-  it("'Fazer backup: sim/não' vai para o serviço de backups (padrão sim) e o projeto apagado é esquecido", async () => {
+  it("'Fazer backup: sim/não' vai para o serviço de backups (sem escolha, o padrão dos projetos) e o projeto apagado é esquecido", async () => {
     await build();
     const backups = { initProject: vi.fn(async () => undefined), forgetProject: vi.fn(async () => undefined) };
     await closeAuthTestApp(ctx);
@@ -618,6 +618,9 @@ describe("backups na criação e na remoção do projeto", () => {
     await app.register(projectsRoutes);
     const body = { name: "Loja", ingestMode: "git", source: "https://github.com/x/y.git", domain: "loja.localhost" };
     expect((await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: body })).statusCode).toBe(201);
+    // sem a escolha: segue o padrão dos projetos
+    expect(backups.initProject).toHaveBeenLastCalledWith("p1", undefined);
+    await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: { ...body, backup: true } });
     expect(backups.initProject).toHaveBeenLastCalledWith("p1", true);
     await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: { ...body, backup: false } });
     expect(backups.initProject).toHaveBeenLastCalledWith("p1", false);
