@@ -329,6 +329,8 @@ describe("testEmailStatus — destino da mensagem", () => {
       to: TO,
     });
     expect(reports[0]!.since.getTime()).toBeLessThanOrEqual(Date.parse(test.sentAt));
+    // e só o aviso DESTA mensagem: o painel passa o ENVID do teste (achado 19)
+    expect(reports[0]!.envId).toBe(sent[0]!.envId);
     // resultado definitivo não consulta de novo
     await s.testEmailStatus(DOMAIN, test.id);
     expect(reports).toHaveLength(1);

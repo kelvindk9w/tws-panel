@@ -25,6 +25,17 @@
  *    ou "<end> (host 'host' rejected command '...' with code 550 (5.1.1) '...')".
  *    O painel lê esse aviso pela API JMAP do próprio Stalwart, com a senha da
  *    caixa postmaster@ (que ele já guarda).
+ *
+ *    Um aviso só vale para a mensagem que o gerou: o painel exige o ENVID
+ *    dela no aviso. O dsn.rs (v0.11.8) monta multipart/report com três
+ *    partes: text/plain (as linhas por destinatário), message/delivery-status
+ *    (com "Original-Envelope-Id: <envid>" quando o envio tinha ENVID) e
+ *    message/rfc822 só com os cabeçalhos originais (o Message-ID do teste é
+ *    `<envid@domínio>`). As duas últimas não são text/*, então o JMAP não as
+ *    devolve em bodyValues: vêm em `attachments`, e o painel baixa cada uma
+ *    (pequenas) pelo download do próprio JMAP para procurar o ENVID. Casar
+ *    só pelo destinatário fazia um teste herdar o recibo do teste anterior
+ *    ao mesmo endereço.
  */
 import type { MailTestState } from "@paas/core";
 
@@ -142,9 +153,23 @@ export interface FindDeliveryReportOptions {
   username: string;
   password: string;
   to: string;
+  /**
+   * ENVID da mensagem (o mesmo do MAIL FROM ... ENVID=). Só um aviso que o
+   * cita (Original-Envelope-Id ou Message-ID original) conta.
+   */
+  envId: string;
   /** Só avisos que chegaram depois disto. */
   since: Date;
   timeoutMs?: number;
+}
+
+/** Partes do aviso que identificam a mensagem original. */
+const REPORT_PART = /^(message\/(delivery-status|global-delivery-status|rfc822|global-headers)|text\/rfc822-headers)$/i;
+
+interface JmapBodyPart {
+  partId?: string;
+  blobId?: string;
+  type?: string;
 }
 
 /** UTCDate do JMAP (RFC 8620): sem fração de segundo. */
@@ -154,7 +179,8 @@ function utcDate(date: Date): string {
 
 /**
  * Procura, na caixa do remetente, o aviso de entrega mais recente sobre `to`
- * (JMAP do próprio Stalwart: GET /.well-known/jmap e POST /jmap/).
+ * DA MENSAGEM `envId` (JMAP do próprio Stalwart: GET /.well-known/jmap e
+ * POST /jmap/).
  */
 export async function findDeliveryReport(
   opts: FindDeliveryReportOptions,
@@ -166,9 +192,8 @@ export async function findDeliveryReport(
     signal: timeout(),
   });
   if (!session.ok) throw new Error(`JMAP: sessão recusada (HTTP ${session.status}).`);
-  const accountId = ((await session.json()) as { primaryAccounts?: Record<string, string> }).primaryAccounts?.[
-    "urn:ietf:params:jmap:mail"
-  ];
+  const sessionBody = (await session.json()) as { primaryAccounts?: Record<string, string>; downloadUrl?: string };
+  const accountId = sessionBody.primaryAccounts?.["urn:ietf:params:jmap:mail"];
   if (!accountId) throw new Error("JMAP: a caixa não tem conta de e-mail.");
 
   const res = await fetch(`${opts.baseUrl}/jmap/`, {
@@ -193,7 +218,7 @@ export async function findDeliveryReport(
           {
             accountId,
             "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
-            properties: ["subject", "receivedAt", "textBody", "bodyValues"],
+            properties: ["subject", "receivedAt", "textBody", "bodyValues", "attachments"],
             fetchTextBodyValues: true,
           },
           "g",
@@ -206,13 +231,39 @@ export async function findDeliveryReport(
   const get = payload.methodResponses?.find((r) => r[0] === "Email/get");
   const list = (get?.[1]?.list ?? []) as Array<{
     subject?: string;
-    textBody?: Array<{ partId?: string }>;
+    textBody?: JmapBodyPart[];
+    attachments?: JmapBodyPart[];
     bodyValues?: Record<string, { value?: string }>;
   }>;
+
+  // Download pelo endereço interno (baseUrl), com o caminho que a sessão
+  // anuncia — o host dela é o público, que de dentro da rede pode não servir.
+  const template = (sessionBody.downloadUrl ?? "/jmap/download/{accountId}/{blobId}/{name}?accept={type}").replace(
+    /^[a-z]+:\/\/[^/]+/i,
+    "",
+  );
+  const mentionsEnvId = async (parts: JmapBodyPart[]): Promise<boolean> => {
+    for (const part of parts) {
+      if (!part.blobId || !REPORT_PART.test(part.type ?? "")) continue;
+      const url =
+        opts.baseUrl +
+        template
+          .replace("{accountId}", encodeURIComponent(accountId))
+          .replace("{blobId}", encodeURIComponent(part.blobId))
+          .replace("{name}", "aviso")
+          .replace("{type}", encodeURIComponent("application/octet-stream"));
+      const blob = await fetch(url, { headers: { authorization: auth }, signal: timeout() });
+      if (!blob.ok) throw new Error(`JMAP: download do aviso recusado (HTTP ${blob.status}).`);
+      if ((await blob.text()).includes(opts.envId)) return true;
+    }
+    return false;
+  };
+
   for (const email of list) {
     const text = (email.textBody ?? []).map((p) => email.bodyValues?.[p.partId ?? ""]?.value ?? "").join("\n");
     const report = interpretDeliveryReport(email.subject ?? "", text, opts.to);
-    if (report) return report;
+    // Do destinatário certo, mas de qual mensagem? Só vale se citar o ENVID.
+    if (report && (text.includes(opts.envId) || (await mentionsEnvId(email.attachments ?? [])))) return report;
   }
   return null;
 }
