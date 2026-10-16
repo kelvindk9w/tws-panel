@@ -14,6 +14,7 @@
 import { X509Certificate } from "node:crypto";
 import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { certificateFileId, legacyCertificateFileId } from "@paas/core";
 import type { ManualCaddyCertificate } from "@paas/deploy";
 import type { InspectedCertificate, MailCertificate } from "@paas/mailer";
 import { writeFileAtomic } from "./json-file.js";
@@ -34,9 +35,16 @@ interface IndexFile {
 
 const HOST_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
-/** Nome de arquivo do host (mesma regra do Caddy e do Stalwart). */
-function fileId(host: string): string {
-  return host.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+/** Nome de arquivo do host (mesma regra do Caddy e do Stalwart, sem colisão — achado 7). */
+const fileId = certificateFileId;
+
+/** Impressão digital do PEM, ou null se não for um certificado. */
+function fingerprintOf(cert: string): string | null {
+  try {
+    return new X509Certificate(cert).fingerprint256;
+  } catch {
+    return null;
+  }
 }
 
 /** O nome `host` é coberto por algum dos nomes do certificado (wildcard de um nível)? */
@@ -77,15 +85,14 @@ export class ManualCertificateStore {
   async pairs(): Promise<ManualCaddyCertificate[]> {
     const out: ManualCaddyCertificate[] = [];
     for (const meta of await this.list()) {
-      const pair = await this.readPair(meta.host);
+      const pair = await this.readPair(meta);
       if (pair) out.push({ host: meta.host, ...pair });
     }
     return out;
   }
 
-  private async readPair(host: string): Promise<{ cert: string; key: string } | null> {
+  private async readFiles(id: string): Promise<{ cert: string; key: string } | null> {
     try {
-      const id = fileId(host);
       const [cert, key] = await Promise.all([
         readFile(path.join(this.dir, `${id}.crt`), "utf8"),
         readFile(path.join(this.dir, `${id}.key`), "utf8"),
@@ -97,6 +104,35 @@ export class ManualCertificateStore {
   }
 
   /**
+   * Par do host. Sem o arquivo com o nome atual, procura o do nome antigo
+   * (regra que colidia) e o migra — mas só se a impressão digital bater com
+   * a do índice: na colisão, o arquivo antigo ficou com o certificado do
+   * ÚLTIMO domínio instalado, e entregá-lo a outro nome seria servir o
+   * certificado errado. Sem par que bata, o host fica sem par (o painel
+   * mostra que falta reenviar).
+   */
+  private async readPair(meta: ManualCertificateMeta): Promise<{ cert: string; key: string } | null> {
+    const current = await this.readFiles(fileId(meta.host));
+    if (current) return current;
+    const legacyId = legacyCertificateFileId(meta.host);
+    if (legacyId === fileId(meta.host)) return null;
+    let migrated: { cert: string; key: string } | null = null;
+    await this.queue(async () => {
+      migrated = await this.readFiles(fileId(meta.host)); // outra leitura pode ter migrado antes
+      if (migrated) return;
+      const old = await this.readFiles(legacyId);
+      if (!old || fingerprintOf(old.cert) !== meta.fingerprint) return;
+      const id = fileId(meta.host);
+      await writeSecret(path.join(this.dir, `${id}.crt`), old.cert);
+      await writeSecret(path.join(this.dir, `${id}.key`), old.key);
+      await rm(path.join(this.dir, `${legacyId}.crt`), { force: true });
+      await rm(path.join(this.dir, `${legacyId}.key`), { force: true });
+      migrated = old;
+    });
+    return migrated;
+  }
+
+  /**
    * Certificado manual que vale para `host` (o próprio ou um wildcard de
    * outro nome que o cubra), no formato do servidor de e-mail. null = nenhum.
    */
@@ -104,14 +140,10 @@ export class ManualCertificateStore {
     const all = await this.list();
     const meta = all.find((c) => c.host === host) ?? all.find((c) => covers(c.names, host));
     if (!meta) return null;
-    const pair = await this.readPair(meta.host);
+    const pair = await this.readPair(meta);
     if (!pair) return null;
-    let fingerprint = meta.fingerprint;
-    try {
-      fingerprint = new X509Certificate(pair.cert).fingerprint256;
-    } catch {
-      return null;
-    }
+    const fingerprint = fingerprintOf(pair.cert);
+    if (!fingerprint) return null;
     return { host, cert: pair.cert, key: pair.key, fingerprint, issuer: meta.issuer, validTo: meta.validTo };
   }
 
@@ -143,12 +175,20 @@ export class ManualCertificateStore {
     let removed = false;
     await this.queue(async () => {
       const all = await this.list();
-      if (!all.some((c) => c.host === host)) return;
+      const meta = all.find((c) => c.host === host);
+      if (!meta) return;
       removed = true;
       await this.writeIndex(all.filter((c) => c.host !== host));
       const id = fileId(host);
       await rm(path.join(this.dir, `${id}.crt`), { force: true });
       await rm(path.join(this.dir, `${id}.key`), { force: true });
+      // par ainda com o nome antigo (não migrado): sai junto, se for deste host
+      const legacyId = legacyCertificateFileId(host);
+      const old = legacyId === id ? null : await this.readFiles(legacyId);
+      if (old && fingerprintOf(old.cert) === meta.fingerprint) {
+        await rm(path.join(this.dir, `${legacyId}.crt`), { force: true });
+        await rm(path.join(this.dir, `${legacyId}.key`), { force: true });
+      }
     });
     return removed;
   }

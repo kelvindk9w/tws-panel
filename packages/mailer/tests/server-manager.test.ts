@@ -234,6 +234,18 @@ describe("renderConfigToml — certificados", () => {
     expect(toml.match(/default = true/g)).toHaveLength(1);
   });
 
+  // Achado 7 da revisão: mail.foo-bar.com e mail.foo.bar.com davam o mesmo
+  // id (mail-foo-bar-com) — seção [certificate.*] repetida e arquivos sobrescritos.
+  it("hosts que só diferem na posição de ponto e hífen ganham seções e arquivos diferentes", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    const toml = renderConfigToml("mail.foo.bar.com", "s", ["mail.foo-bar.com", "mail.foo.bar.com"]);
+    const sections = toml.match(/^\[certificate\.[^\]]+\]$/gm) ?? [];
+    expect(sections).toHaveLength(2);
+    expect(new Set(sections).size).toBe(2);
+    expect(toml).toContain("[certificate.mail-foo--bar-com]");
+    expect(toml).toContain("/opt/stalwart-mail/etc/certs/mail-foo--bar-com.crt");
+  });
+
   it("hostname do servidor sem certificado: o primeiro vira o padrão", async () => {
     const { renderConfigToml } = await import("../src/server.js");
     const toml = renderConfigToml("mail.localhost", "s", ["mail.outro.com"]);
