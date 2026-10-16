@@ -8,7 +8,7 @@
  * data/security/monitor.json; baseline em data/security/baseline.json.
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   MONITOR_DEFAULT_INTERVAL_MS,
@@ -28,6 +28,7 @@ import {
 } from "@paas/security";
 import type { ServerConfig } from "../config.js";
 import type { AlertsService } from "./alerts-service.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 interface MonitorFile {
   intervalMs: number;
@@ -80,7 +81,7 @@ export class MonitorService {
   private readonly collector: BaselineCollector;
   private mailHook: MailBlacklistHook | null = null;
   private state: MonitorFile;
-  private stateLoaded = false;
+  private stateLoading: Promise<void> | null = null;
   private writing: Promise<void> = Promise.resolve();
 
   constructor(
@@ -178,11 +179,7 @@ export class MonitorService {
 
   private async saveBaseline(baseline: SecurityBaseline): Promise<void> {
     const stored: StoredBaseline = { ...baseline, collector: this.collector };
-    await mkdir(this.securityDir, { recursive: true });
-    await writeFile(this.baselineFile, JSON.stringify(stored, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await withFileLock(this.baselineFile, () => writeFileAtomic(this.baselineFile, JSON.stringify(stored, null, 2) + "\n"));
   }
 
   /**
@@ -360,31 +357,29 @@ export class MonitorService {
   // Persistência do estado do monitor
   // -------------------------------------------------------------------------
 
-  private async ensureStateLoaded(): Promise<void> {
-    if (this.stateLoaded) return;
-    this.stateLoaded = true;
-    try {
-      const raw = JSON.parse(await readFile(this.monitorFile, "utf8")) as Partial<MonitorFile>;
-      this.state = {
-        intervalMs: clampInterval(
-          typeof raw.intervalMs === "number" && raw.intervalMs > 0 ? raw.intervalMs : this.state.intervalMs,
-        ),
-        lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
-        lastResult: raw.lastResult ?? null,
-      };
-    } catch {
-      // primeira execução — mantém defaults
-    }
+  /** Carga única e compartilhada (uma flag marcada antes de ler deixava a segunda chamada com os padrões). */
+  private ensureStateLoaded(): Promise<void> {
+    this.stateLoading ??= (async () => {
+      try {
+        const raw = JSON.parse(await readFile(this.monitorFile, "utf8")) as Partial<MonitorFile>;
+        this.state = {
+          intervalMs: clampInterval(
+            typeof raw.intervalMs === "number" && raw.intervalMs > 0 ? raw.intervalMs : this.state.intervalMs,
+          ),
+          lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
+          lastResult: raw.lastResult ?? null,
+        };
+      } catch {
+        // primeira execução — mantém defaults
+      }
+    })();
+    return this.stateLoading;
   }
 
   private async saveState(): Promise<void> {
     this.writing = this.writing
       .then(async () => {
-        await mkdir(this.securityDir, { recursive: true });
-        await writeFile(this.monitorFile, JSON.stringify(this.state, null, 2) + "\n", {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        await writeFileAtomic(this.monitorFile, JSON.stringify(this.state, null, 2) + "\n");
       })
       .catch(() => undefined);
     await this.writing;

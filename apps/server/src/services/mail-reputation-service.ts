@@ -13,7 +13,7 @@
  *
  * Arquivo: data/mail/reputacao.json (0600 — guarda a chave DQS).
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   BlacklistCheckResponse,
@@ -24,6 +24,7 @@ import type {
 } from "@paas/core";
 import { checkDomainBlacklists, checkIpBlacklists, isValidDqsKey, type BlacklistOptions } from "@paas/mailer";
 import { httpError } from "./http-error.js";
+import { writeFileAtomic } from "./json-file.js";
 
 export interface DeliverabilityFacts {
   domains: Array<{ name: string; dnsOk: number | null; dnsTotal: number | null; ptr: PtrCheckStatus | null }>;
@@ -108,11 +109,10 @@ export class MailReputationService {
 
   private save(data: ReputationFile): Promise<void> {
     const content = JSON.stringify(data, null, 2) + "\n";
-    this.writing = this.writing.then(async () => {
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFile(this.file, content, { encoding: "utf8", mode: 0o600 });
-    });
-    return this.writing;
+    const run = this.writing.then(() => writeFileAtomic(this.file, content));
+    // uma gravação que falha não pode travar as seguintes (a cadeia segue resolvida)
+    this.writing = run.catch(() => undefined);
+    return run;
   }
 
   private async update(change: (data: ReputationFile) => void): Promise<ReputationFile> {

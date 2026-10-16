@@ -3,7 +3,7 @@
  * Valores cifrados em disco; nomes validados; injeção no deploy junto com as
  * do e-mail (as definidas pelo operador vencem).
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -54,5 +54,66 @@ describe("ProjectEnvStore", () => {
     expect(await store.get("p1")).toEqual([{ key: "B", value: "3" }]);
     await store.remove("p1");
     expect(await store.get("p1")).toEqual([]);
+  });
+});
+
+/**
+ * Concorrência real (achado 8 da revisão), com Promise.all sobre arquivos de
+ * verdade. Antes da correção, set() lia a lista dos outros projetos fora da
+ * fila de gravação (a última gravação apagava a outra) e a chave de cifra
+ * podia ser gerada duas vezes na primeira gravação (variáveis cifradas com
+ * uma chave que deixava de existir).
+ */
+describe("ProjectEnvStore com gravações em paralelo", () => {
+  it("salvar projetos diferentes ao mesmo tempo não apaga as variáveis de outro", async () => {
+    await store.set("seed", [{ key: "S", value: "0" }]);
+    await Promise.all([
+      store.set("p1", [{ key: "A", value: "1" }]),
+      store.set("p2", [{ key: "B", value: "2" }]),
+      store.set("p3", [{ key: "C", value: "3" }]),
+    ]);
+    const relido = new ProjectEnvStore(dir); // "depois de reiniciar": só o disco
+    expect(await relido.get("seed")).toEqual([{ key: "S", value: "0" }]);
+    expect(await relido.get("p1")).toEqual([{ key: "A", value: "1" }]);
+    expect(await relido.get("p2")).toEqual([{ key: "B", value: "2" }]);
+    expect(await relido.get("p3")).toEqual([{ key: "C", value: "3" }]);
+  });
+
+  it("remover um projeto enquanto outro salva não perde o que foi salvo", async () => {
+    await store.set("velho", [{ key: "V", value: "1" }]);
+    await Promise.all([store.remove("velho"), store.set("novo", [{ key: "N", value: "2" }])]);
+    const relido = new ProjectEnvStore(dir);
+    expect(await relido.get("velho")).toEqual([]);
+    expect(await relido.get("novo")).toEqual([{ key: "N", value: "2" }]);
+  });
+
+  it("primeira gravação em paralelo cria UMA chave só e tudo continua legível", async () => {
+    await Promise.all(Array.from({ length: 6 }, (_, i) => store.set(`p${i}`, [{ key: "K", value: String(i) }])));
+    const relido = new ProjectEnvStore(dir);
+    for (let i = 0; i < 6; i++) expect(await relido.get(`p${i}`)).toEqual([{ key: "K", value: String(i) }]);
+  });
+
+  it("duas instâncias na mesma pasta (duas abas, duas rotas) também não geram chaves diferentes", async () => {
+    const outra = new ProjectEnvStore(dir);
+    await Promise.all([store.set("a", [{ key: "A", value: "1" }]), outra.set("b", [{ key: "B", value: "2" }])]);
+    const relido = new ProjectEnvStore(dir);
+    expect(await relido.get("a")).toEqual([{ key: "A", value: "1" }]);
+    expect(await relido.get("b")).toEqual([{ key: "B", value: "2" }]);
+  });
+
+  it("arquivo de chave com conteúdo que não é chave: troca por uma nova e segue", async () => {
+    await writeFile(path.join(dir, "project-env-key"), "curta\n", "utf8");
+    await store.set("p1", [{ key: "A", value: "1" }]);
+    expect((await readFile(path.join(dir, "project-env-key"), "utf8")).trim()).toMatch(/^[0-9a-f]{64}$/);
+    expect(await new ProjectEnvStore(dir).get("p1")).toEqual([{ key: "A", value: "1" }]);
+  });
+
+  it("project-env.json ilegível é guardado à parte em vez de sobrescrito", async () => {
+    await writeFile(path.join(dir, "project-env.json"), "{ estragado", "utf8");
+    await store.set("p1", [{ key: "A", value: "1" }]);
+    const guardado = (await readdir(dir)).find((n) => n.startsWith("project-env.json.corrompido-"));
+    expect(guardado).toBeDefined();
+    expect(await readFile(path.join(dir, guardado!), "utf8")).toBe("{ estragado");
+    expect(await store.get("p1")).toEqual([{ key: "A", value: "1" }]);
   });
 });

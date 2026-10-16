@@ -94,7 +94,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  // o fim de cada ciclo (onTick) grava o estado em segundo plano: um
+  // temporário pode aparecer na pasta enquanto ela é apagada
+  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 });
 
 describe("runNow() — respeita o lock inFlight do scheduler", () => {

@@ -34,7 +34,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { chmod, mkdir, readFile, readdir, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, statfs, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   BACKUP_ALL_TARGETS,
@@ -93,7 +93,8 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
-import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, type PanelRestoreMarker } from "./panel-restore.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 
 // ---------------------------------------------------------------------------
@@ -242,6 +243,12 @@ interface StoredCopyInfo {
   /** Cópia externa: saiu cifrada. */
   encrypted?: boolean;
   check?: BackupCheckResult;
+  /**
+   * Backup incompleto (ex.: o Redis não confirmou o SAVE): fica guardado,
+   * mas não conta como completo — a retenção nunca apaga a última cópia
+   * completa por causa dele.
+   */
+  incomplete?: boolean;
 }
 
 interface StoredFileChecks {
@@ -342,6 +349,60 @@ async function sha256File(file: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
   return hash.digest("hex");
+}
+
+/**
+ * O que a retenção apaga: as cópias além das `keep` mais novas (`files` em
+ * ordem, da mais antiga para a mais nova) — menos a última cópia COMPLETA,
+ * se nenhuma das que ficam for completa. Cópias incompletas seguidas nunca
+ * levam embora a última completa.
+ */
+export function retentionVictims(files: string[], keep: number, isComplete: (file: string) => boolean): string[] {
+  const victims = files.slice(0, Math.max(0, files.length - keep));
+  if (files.slice(victims.length).some(isComplete)) return victims;
+  const lastComplete = [...victims].reverse().find(isComplete);
+  return lastComplete ? victims.filter((f) => f !== lastComplete) : victims;
+}
+
+/** Temporários de gravação (atômica ou parcial): nunca entram no backup do painel. */
+const TEMP_FILE_RE = /\.(tmp|partial)$/;
+
+/**
+ * Copia `src` para `dst` para o backup do painel compactar uma foto parada,
+ * e não os arquivos em uso. Cada arquivo é copiado dentro da fila de
+ * gravação dele (services/json-file.ts): um store que grava pelo helper
+ * nunca é copiado no meio de uma gravação. Arquivo que sumiu entre listar e
+ * copiar foi apagado de propósito (não faz parte do estado); arquivo que
+ * existe e não pode ser lido faz o backup FALHAR, dizendo qual.
+ */
+async function snapshotTree(src: string, dst: string, rel: string): Promise<void> {
+  let info;
+  try {
+    info = await lstat(src);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  try {
+    if (info.isSymbolicLink()) {
+      await symlink(await readlink(src), dst);
+    } else if (info.isDirectory()) {
+      await mkdir(dst, { mode: info.mode & 0o777 });
+      for (const name of await readdir(src)) {
+        if (TEMP_FILE_RE.test(name)) continue;
+        await snapshotTree(path.join(src, name), path.join(dst, name), `${rel}/${name}`);
+      }
+    } else if (info.isFile()) {
+      await withFileLock(src, () => copyFile(src, dst));
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" && !existsSync(src)) return;
+    if (err instanceof BackupFailure) throw err;
+    throw new BackupFailure(
+      `Não foi possível copiar "${rel}" do diretório de dados do painel (${code === "EACCES" ? "sem permissão de leitura" : reasonOf(err)}). O backup não foi feito e as cópias anteriores foram mantidas.`,
+    );
+  }
 }
 
 async function dirSize(dir: string, skip: (name: string) => boolean = () => false): Promise<number> {
@@ -521,9 +582,7 @@ export class BackupService {
       // sem chave ainda — gera abaixo
     }
     const fresh = randomBytes(KEY_BYTES);
-    await mkdir(path.dirname(this.keyFile), { recursive: true });
-    await writeFile(this.keyFile, fresh.toString("hex") + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(this.keyFile, 0o600);
+    await writeFileAtomic(this.keyFile, fresh.toString("hex") + "\n");
     this.key = fresh;
   }
 
@@ -541,11 +600,7 @@ export class BackupService {
   }
 
   private async writeJson(file: string, data: unknown): Promise<void> {
-    await mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    await chmod(tmp, 0o600);
-    await rename(tmp, file);
+    await writeFileAtomic(file, JSON.stringify(data, null, 2) + "\n");
   }
 
   private persist(what: { config?: boolean; history?: boolean }): Promise<void> {
@@ -1252,7 +1307,7 @@ export class BackupService {
       let manifest: Manifest;
       if (kind === "project") ({ inputs, manifest } = await this.collectProject(r, project!, content));
       else if (kind === "email") ({ inputs, manifest } = await this.collectEmail(r, content));
-      else ({ inputs, manifest } = await this.collectPanel(r));
+      else ({ inputs, manifest } = await this.collectPanel(r, staging));
       await writeFile(path.join(content, "manifesto.json"), JSON.stringify(manifest, null, 2) + "\n");
       await writeFile(path.join(content, "LEIA-ME.txt"), readme(manifest));
       inputs.push(path.join(content, "manifesto.json"), path.join(content, "LEIA-ME.txt"));
@@ -1337,6 +1392,18 @@ export class BackupService {
     await this.ensureSpace(estimate, this.remoteFactor());
 
     const items: ManifestItem[] = [];
+    // Nomes de arquivo dentro do .7z: a troca de caracteres ("a b" e "a/b"
+    // viram "a_b") podia dar o mesmo nome a dois itens, e o segundo
+    // sobrescrevia o primeiro. Repetido (sem diferenciar maiúsculas, por
+    // causa do Windows) ganha sufixo: a_b.sql, a_b-2.sql… O manifesto guarda
+    // o arquivo de cada item, então a restauração não muda.
+    const used = new Set<string>();
+    const unique = (dir: string, base: string, ext: string): string => {
+      let name = base;
+      for (let n = 2; used.has(`${dir}/${name}${ext}`.toLowerCase()); n++) name = `${base}-${n}`;
+      used.add(`${dir}/${name}${ext}`.toLowerCase());
+      return `${dir}/${name}${ext}`;
+    };
     if (dbs.length > 0) {
       this.step(r, "Copiar os bancos de dados");
       await mkdir(path.join(content, "bancos"), { recursive: true });
@@ -1349,6 +1416,7 @@ export class BackupService {
           const names = (await docker.execCapture(c.id, list!.script, [])).split("\n").map((s) => s.trim()).filter(Boolean);
           const dir = path.join(content, "bancos", base);
           await mkdir(dir, { recursive: true });
+          used.add(`bancos/${base}/_papeis.sql`.toLowerCase());
           const item: ManifestItem = { type: "database", service: db.service, engine: "postgres", databases: [] };
           try {
             await docker.execToFile(c.id, globals!.script, [], path.join(dir, "_papeis.sql"));
@@ -1357,19 +1425,31 @@ export class BackupService {
             r.warnings.push(`${db.service}: os papéis (usuários) do Postgres não foram copiados; os bancos foram.`);
           }
           for (const name of names) {
-            const file = `${name.replace(/[^A-Za-z0-9._-]+/g, "_")}.sql`;
-            await this.dumpTo(c.id, one!.script, [name], path.join(dir, file), db.service);
-            item.databases!.push({ name, file: `bancos/${base}/${file}` });
+            const file = unique(`bancos/${base}`, name.replace(/[^A-Za-z0-9._-]+/g, "_"), ".sql");
+            await this.dumpTo(c.id, one!.script, [name], path.join(content, file), db.service);
+            item.databases!.push({ name, file });
           }
           items.push(item);
         } else if (db.engine === "redis") {
-          await docker.execCapture(c.id, REDIS_SAVE, []).catch(() => "");
-          const file = `bancos/${base}-redis.tar`;
+          // O SAVE grava o que está na memória no dump.rdb. Sem o "OK", o
+          // /data copiado pode estar velho (ou sem dump nenhum): o backup
+          // segue, mas fica marcado como incompleto e avisa.
+          const saved = await docker.execCapture(c.id, REDIS_SAVE, []).then(
+            (out) => ({ ok: out.trim() === "OK", why: out.trim().split("\n")[0] || "sem resposta" }),
+            (err: unknown) => ({ ok: false, why: reasonOf(err) }),
+          );
+          if (!saved.ok) {
+            r.warnings.push(
+              `${db.service}: o Redis não confirmou o SAVE (${saved.why.slice(0, 160)}). A cópia do /data dele pode estar desatualizada: este backup ficou incompleto e não substitui as cópias completas anteriores.`,
+            );
+            this.incomplete.add(r);
+          }
+          const file = unique("bancos", `${base}-redis`, ".tar");
           await docker.copyOut(c.id, "/data", path.join(content, file));
           items.push({ type: "database", service: db.service, engine: "redis", file, destination: "/data" });
         } else {
           const [all] = dumpPlan(db.engine);
-          const file = `bancos/${base}${all!.ext}`;
+          const file = unique("bancos", base, all!.ext ?? "");
           await this.dumpTo(c.id, all!.script, [], path.join(content, file), db.service);
           items.push({ type: "database", service: db.service, engine: db.engine, file });
         }
@@ -1379,14 +1459,14 @@ export class BackupService {
       this.step(r, "Copiar os arquivos");
       for (const m of mounts) {
         const c = need(m.service);
-        const file = `volumes/${itemFileName(m.service, m.destination)}.tar`;
+        const file = unique("volumes", itemFileName(m.service, m.destination), ".tar");
         await mkdir(path.join(content, "volumes"), { recursive: true });
         await docker.copyOut(c.id, m.destination, path.join(content, file));
         items.push({ type: "mount", service: m.service, destination: m.destination, mountType: m.type, source: m.source, isFile: m.isFile, file });
       }
       for (const x of extras) {
         const c = need(x.service);
-        const file = `pastas/${itemFileName(x.service, x.path)}.tar`;
+        const file = unique("pastas", itemFileName(x.service, x.path), ".tar");
         await mkdir(path.join(content, "pastas"), { recursive: true });
         await docker.copyOut(c.id, x.path, path.join(content, file));
         items.push({ type: "extra", service: x.service, destination: x.path, file });
@@ -1452,20 +1532,31 @@ export class BackupService {
     const legacyProjects = path.resolve(path.join(this.opts.dataDir, "projects")) === path.resolve(this.opts.projectsDir);
     const names = await readdir(this.opts.dataDir);
     return names
-      .filter((n) => n !== "backups" && !(n === "projects" && legacyProjects) && !/\.(tmp|partial)$/.test(n))
+      .filter((n) => n !== "backups" && !(n === "projects" && legacyProjects) && !TEMP_FILE_RE.test(n))
       .map((n) => path.join(this.opts.dataDir, n));
   };
 
-  private async collectPanel(r: BackupRecord): Promise<{ inputs: string[]; manifest: Manifest }> {
+  private async collectPanel(r: BackupRecord, staging: string): Promise<{ inputs: string[]; manifest: Manifest }> {
     this.step(r, "Conferir o espaço em disco");
-    const inputs = await this.panelEntries();
+    const live = await this.panelEntries();
     let size = 0;
-    for (const p of inputs) {
-      const s = await stat(p);
-      size += s.isDirectory() ? await dirSize(p) : s.size;
+    for (const p of live) {
+      const s = await stat(p).catch(() => null);
+      if (s) size += s.isDirectory() ? await dirSize(p) : s.size;
     }
     await this.ensureSpace(size, this.remoteFactor());
     this.step(r, "Copiar o diretório de dados do painel");
+    // O 7-Zip compacta uma cópia: com os arquivos em uso, um que some ou muda
+    // no meio sai do .7z sem aviso (código 1 do 7-Zip, achado 3 da revisão).
+    const copy = path.join(staging, "painel");
+    await mkdir(copy, { recursive: true, mode: 0o700 });
+    const inputs: string[] = [];
+    for (const p of live) {
+      const name = path.basename(p);
+      await snapshotTree(p, path.join(copy, name), name);
+      // o que sumiu entre listar e copiar não entra (foi apagado de propósito)
+      if (await lstat(path.join(copy, name)).catch(() => null)) inputs.push(path.join(copy, name));
+    }
     return { inputs, manifest: { version: 1, kind: "panel", name: "Painel", createdAt: new Date(this.now()).toISOString(), items: [] } };
   }
 
@@ -1474,6 +1565,9 @@ export class BackupService {
     const d = this.config.destination;
     return d && this.config.encryption.enabled ? 3.2 : d ? 2.4 : 2.2;
   }
+
+  /** Backups em andamento que ficaram incompletos (ver StoredCopyInfo.incomplete). */
+  private readonly incomplete = new WeakSet<BackupRecord>();
 
   private uniqueName(dir: string): string {
     const stamp = backupFileStamp(new Date(this.now()));
@@ -1492,6 +1586,8 @@ export class BackupService {
 
   private async finishArchive(r: BackupRecord, folder: string, staging: string, inputs: string[]): Promise<void> {
     const t = this.target(r.target);
+    const complete = !this.incomplete.has(r);
+    const mark: StoredCopyInfo = complete ? {} : { incomplete: true };
     this.step(r, "Compactar (.7z)");
     const localDir = path.join(this.backupsDir, folder);
     await mkdir(localDir, { recursive: true });
@@ -1504,11 +1600,11 @@ export class BackupService {
     r.local = true;
     r.sizeBytes = (await stat(localPath)).size;
     // Hash e tamanho guardados: o "Conferir" compara com eles depois.
-    this.copyInfo(folder, name, "local", { sha256: await sha256File(localPath), size: r.sizeBytes });
-    t.lastSuccessAt = new Date(this.now()).toISOString();
-    // Cópias na VPS além das N mais recentes.
+    this.copyInfo(folder, name, "local", { sha256: await sha256File(localPath), size: r.sizeBytes, ...mark });
+    if (complete) t.lastSuccessAt = new Date(this.now()).toISOString();
+    // Cópias na VPS além das N mais recentes (nunca a última completa).
     const local = await this.localFiles(folder);
-    for (const old of local.slice(0, Math.max(0, local.length - t.localKeep))) {
+    for (const old of retentionVictims(local, t.localKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.local?.incomplete)) {
       await rm(path.join(localDir, old), { force: true });
       this.dropCopy(folder, old, "local");
     }
@@ -1536,7 +1632,7 @@ export class BackupService {
       const hash = await sha256File(upload);
       const uploadSize = (await stat(upload)).size;
       await storage.upload(key, upload);
-      this.copyInfo(folder, name, "remote", { sha256: hash, size: uploadSize, encrypted: encrypt });
+      this.copyInfo(folder, name, "remote", { sha256: hash, size: uploadSize, encrypted: encrypt, ...mark });
       r.remote = "uploaded";
       this.step(r, "Conferir a cópia externa (baixar e abrir)");
       const back = path.join(staging, "conferencia.7z");
@@ -1555,7 +1651,7 @@ export class BackupService {
       this.step(r, "Apagar os backups externos mais antigos");
       const prefix = `${BACKUP_ROOT_FOLDER}/${folder}/`;
       const remote = (await storage.list(prefix)).map((o) => o.key.slice(prefix.length)).filter(isValidBackupFileName).sort();
-      for (const old of remote.slice(0, Math.max(0, remote.length - t.remoteKeep))) {
+      for (const old of retentionVictims(remote, t.remoteKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.remote?.incomplete)) {
         await storage.remove(`${prefix}${old}`);
         this.dropCopy(folder, old, "remote");
       }
@@ -2120,6 +2216,11 @@ export class BackupService {
   /** Painel: deixa pronto para a troca na próxima subida e pede o reinício. */
   private async stagePanel(r: BackupRecord, content: string, fileName: string, actor: string): Promise<void> {
     this.step(r, "Preparar a troca do estado do painel");
+    // Troca pela metade (só acontece se a subida não terminou nem desfez):
+    // a pasta extraída ainda guarda parte do backup — não pode ser apagada.
+    if (existsSync(path.join(this.backupsDir, PANEL_RESTORE_PROGRESS))) {
+      throw new BackupFailure("Há uma restauração do painel pela metade. Reinicie o painel para ele terminar ou desfazer a troca e tente de novo.");
+    }
     const target = path.join(this.backupsDir, PANEL_RESTORE_DIR);
     await rm(target, { recursive: true, force: true });
     await rename(content, target);

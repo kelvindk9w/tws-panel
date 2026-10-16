@@ -4,7 +4,7 @@
  * no próprio projeto, o aviso de reiniciar e o reinício que recria os
  * containers sem baixar código. O Docker é um dublê.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +40,17 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  // o fim do job grava projects.json e deploy-jobs.json em segundo plano
+  // o fim do job grava projects.json e depois deploy-jobs.json em segundo
+  // plano: espera a última gravação antes de apagar a pasta (a gravação é
+  // atômica, e um rename numa pasta já apagada falharia fora do teste)
+  const jobs = (svc as unknown as { jobs: { id: string }[] }).jobs;
+  if (jobs.length > 0) {
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(path.join(dataDir, "deploy-jobs.json"), "utf8")) as { jobs: { finishedAt: string | null }[] };
+      expect(saved.jobs.length).toBe(jobs.length);
+      expect(saved.jobs.every((j) => j.finishedAt)).toBe(true);
+    });
+  }
   await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 });
 

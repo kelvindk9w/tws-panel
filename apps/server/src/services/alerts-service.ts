@@ -5,9 +5,10 @@
  * recorrente rodando a cada intervalo não geraria pilha de repetidos.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Alert, AlertSeverity, AlertSource, AlertStatus } from "@paas/core";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 const MAX_ALERTS = 500;
 
@@ -35,7 +36,7 @@ export class AlertsService {
   private readonly maxAlerts: number;
   private readonly log: (msg: string) => void;
   private alerts: Alert[] = [];
-  private loaded = false;
+  private loadedPromise: Promise<void> | null = null;
   private writing: Promise<void> = Promise.resolve();
   private readonly listeners: Array<(alert: Alert) => void | Promise<void>> = [];
 
@@ -45,15 +46,21 @@ export class AlertsService {
     this.log = opts.log ?? ((msg) => console.warn(msg));
   }
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
-    try {
-      const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<AlertsFile>;
-      this.alerts = Array.isArray(raw.alerts) ? raw.alerts : [];
-    } catch {
-      this.alerts = [];
-    }
+  /**
+   * Carga única e compartilhada: chamadas concorrentes esperam a MESMA
+   * leitura (com uma flag marcada antes de ler, a segunda chamada seguia com
+   * a lista vazia e a gravação dela apagava os alertas do disco).
+   */
+  private ensureLoaded(): Promise<void> {
+    this.loadedPromise ??= (async () => {
+      try {
+        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<AlertsFile>;
+        this.alerts = Array.isArray(raw.alerts) ? raw.alerts : [];
+      } catch {
+        this.alerts = [];
+      }
+    })();
+    return this.loadedPromise;
   }
 
   /**
@@ -191,11 +198,7 @@ export class AlertsService {
   }
 
   private async save(): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
     const data: AlertsFile = { alerts: this.alerts };
-    await writeFile(this.file, JSON.stringify(data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await withFileLock(this.file, () => writeFileAtomic(this.file, JSON.stringify(data, null, 2) + "\n"));
   }
 }

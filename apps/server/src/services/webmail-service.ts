@@ -21,7 +21,7 @@
  * Estado em data/mail/webmail.json (0600: guarda a chave da sessão).
  */
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_WEBMAIL_CONTAINER, WEBMAIL_INTERNAL_PORT, webmailUrl, type WebmailStatus } from "@paas/core";
 import {
@@ -35,6 +35,7 @@ import {
 import type { ServerConfig } from "../config.js";
 import { httpError } from "./http-error.js";
 import type { MailAuditSink } from "./mail-service.js";
+import { withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** O que o webmail usa do servidor de e-mail (MailService). */
 export interface WebmailMailSource {
@@ -89,7 +90,7 @@ export class WebmailService {
   private readonly log: (message: string) => void;
   private readonly now: () => number;
   private data: WebmailFile = { ...EMPTY };
-  private loaded = false;
+  private loadedPromise: Promise<void> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   /** IP → horários (ms) das senhas erradas na janela. Só em memória. */
   private readonly failures = new Map<string, number[]>();
@@ -111,20 +112,21 @@ export class WebmailService {
     this.now = opts.now ?? Date.now;
   }
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
-    if (!existsSync(this.file)) return;
-    try {
-      this.data = { ...EMPTY, ...(JSON.parse(await readFile(this.file, "utf8")) as Partial<WebmailFile>) };
-    } catch {
-      this.data = { ...EMPTY };
-    }
+  /** Carga única e compartilhada (uma flag marcada antes de ler deixava a segunda chamada com os dados vazios). */
+  private ensureLoaded(): Promise<void> {
+    this.loadedPromise ??= (async () => {
+      if (!existsSync(this.file)) return;
+      try {
+        this.data = { ...EMPTY, ...(JSON.parse(await readFile(this.file, "utf8")) as Partial<WebmailFile>) };
+      } catch {
+        this.data = { ...EMPTY };
+      }
+    })();
+    return this.loadedPromise;
   }
 
   private async save(): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
-    await writeFile(this.file, JSON.stringify(this.data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    await withFileLock(this.file, () => writeFileAtomic(this.file, JSON.stringify(this.data, null, 2) + "\n"));
   }
 
   /** Uma operação de cada vez (ativar, desativar, sincronizar). */

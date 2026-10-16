@@ -48,8 +48,9 @@ describe("restauração do painel na subida", () => {
       JSON.stringify({ requestedAt: "2026-10-14T12:00:00Z", fileName: "2026-10-14_03-00.7z", actor: "admin" }),
     );
 
-    const marker = await applyPendingPanelRestore(dir, () => new Date("2026-10-14T12:01:00Z"));
-    expect(marker?.fileName).toBe("2026-10-14_03-00.7z");
+    const result = await applyPendingPanelRestore(dir, { now: () => new Date("2026-10-14T12:01:00Z") });
+    expect(result).toMatchObject({ outcome: "applied", error: null });
+    expect(result?.marker.fileName).toBe("2026-10-14_03-00.7z");
     expect(await readFile(path.join(dir, "users.json"), "utf8")).toBe("do-backup");
     expect(await readFile(path.join(dir, "backups-key"), "utf8")).toBe("chave");
     expect(existsSync(path.join(dir, "mail"))).toBe(false);

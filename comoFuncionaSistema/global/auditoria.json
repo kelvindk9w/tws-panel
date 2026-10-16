@@ -9,9 +9,9 @@
     { "simbolo": "list", "assinatura": "(page = 1, perPage = 50) => Promise<{ entries; total; page; perPage }>", "descricao": "Lista paginada, mais recentes primeiro (reverse do array). perPage clamped entre 1 e 200." }
   ],
   "comportamento": [
-    "Persistência em data/audit.json, mode 0o600. Carga lazy (ensureLoaded) na primeira chamada de record/list; entries fica em memória depois.",
-    "Cap rígido de MAX_ENTRIES = 2.000 — a cada record(), o array é truncado com slice(-2000), descartando as entradas mais antigas silenciosamente quando o limite é ultrapassado.",
-    "Escritas são serializadas via uma Promise encadeada (this.writing = this.writing.then(...).catch(...)) para garantir que duas chamadas concorrentes a record() nunca produzam um JSON.stringify intercalado no arquivo.",
+    "Persistência em data/audit.json, mode 0o600, via JsonFile (apps/server/src/services/json-file.ts). Desde o lote 1 não há cópia em memória: cada record() é uma transação na fila do arquivo (lê o disco, acrescenta, rotaciona, grava de forma atômica) e list() lê o disco (mais os registros cuja gravação falhou, que ficam guardados e entram na próxima gravação).",
+    "Teto de MAX_ENTRIES = 2.000 no arquivo ativo — o excedente é movido para data/audit.1.json DENTRO da mesma transação do record(). Se o audit.1.json não puder ser gravado, as antigas ficam no ativo (passa do teto, nada se perde); audit.1.json ilegível é guardado à parte (.corrompido-<data>), nunca sobrescrito.",
+    "Serialização: withFileLock por caminho do arquivo (comum a todas as instâncias). Antes, só o writeFile estava na fila; a carga marcava 'carregado' antes de ler e a rotação lia/gravava o audit.1.json fora da fila — registros paralelos na subida se perdiam e o arquivo de rotação podia corromper.",
     "REGRA DE PRODUTO explícita no cabeçalho do arquivo: o campo detail NUNCA deve conter segredos — é responsabilidade de quem chama record() garantir isso (o serviço não sanitiza/mascara nada automaticamente)."
   ],
   "usadoPor": [
@@ -30,6 +30,7 @@
   ],
   "observacoes": [
     "Não há filtro por ação/ator na API de listagem — só paginação; qualquer filtragem (ex.: por tipo de evento) precisa ser feita no cliente sobre a página retornada.",
-    "O terminal web é a exceção deliberada à auditoria: por design, o conteúdo digitado nunca é passado para record() — só eventos de conexão/desconexão (ver terminal/index.json)."
+    "O terminal web é a exceção deliberada à auditoria: por design, o conteúdo digitado nunca é passado para record() — só eventos de conexão/desconexão (ver terminal/index.json).",
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Achado 15 corrigido. Testes com Promise.all em disco real em apps/server/tests/audit-service.test.ts (bloco 'auditoria com registros em paralelo'): 11 registros na subida, 1.500 entradas + 2 registros, rotação em paralelo, audit.1.json ilegível."
   ]
 }

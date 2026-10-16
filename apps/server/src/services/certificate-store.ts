@@ -12,10 +12,11 @@
  * nunca sai pela API, por log ou pela auditoria.
  */
 import { X509Certificate } from "node:crypto";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { ManualCaddyCertificate } from "@paas/deploy";
 import type { InspectedCertificate, MailCertificate } from "@paas/mailer";
+import { writeFileAtomic } from "./json-file.js";
 
 export interface ManualCertificateMeta {
   host: string;
@@ -172,6 +173,5 @@ export class ManualCertificateStore {
 
 /** Grava com 0600 (também quando o arquivo já existia com outra permissão). */
 async function writeSecret(file: string, content: string): Promise<void> {
-  await writeFile(file, content, { encoding: "utf8", mode: 0o600 });
-  await chmod(file, 0o600);
+  await writeFileAtomic(file, content);
 }

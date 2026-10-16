@@ -10,9 +10,10 @@
  * volta a ser a antiga depois do restart).
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { OnboardingStepId, UserPreferences } from "@paas/core";
+import { writeFileAtomic } from "./json-file.js";
 
 /**
  * Verificação em duas etapas (ver services/two-factor.ts). O segredo fica
@@ -242,6 +243,29 @@ export class UserStore {
   }
 
   /**
+   * Lê e altera a verificação em duas etapas DENTRO da fila de gravações:
+   * `decide` recebe o estado atual (não o de uma leitura feita antes) e diz
+   * o que gravar. É o que faz o código de uso único valer uma vez só, mesmo
+   * com dois pedidos chegando juntos. Sem `next` no retorno, nada é gravado.
+   * Devolve null se o usuário não existe.
+   */
+  async updateTwoFactor<R>(
+    id: string,
+    decide: (current: StoredTwoFactor | null) => { result: R; next?: StoredTwoFactor | null },
+  ): Promise<R | null> {
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const atual = this.users.find((u) => u.id === id);
+      if (!atual) return null;
+      const decision = decide(atual.twoFactor ?? null);
+      if (!("next" in decision)) return decision.result;
+      const user: StoredUser = { ...atual, twoFactor: decision.next ?? null, updatedAt: new Date().toISOString() };
+      this.users = this.users.map((u) => (u.id === id ? user : u));
+      return decision.result;
+    });
+  }
+
+  /**
    * Aplica `change` e grava, em fila (sem intercalar JSON no arquivo).
    *
    * `change` só roda na vez dele, com as alterações anteriores já gravadas (ou
@@ -273,13 +297,10 @@ export class UserStore {
     return run;
   }
 
+  /** Gravação atômica (services/json-file.ts): queda no meio nunca deixa o users.json pela metade. */
   private async save(): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
     const data: UsersFile = { users: this.users };
-    await writeFile(this.file, JSON.stringify(data, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await writeFileAtomic(this.file, JSON.stringify(data, null, 2) + "\n");
   }
 }
 

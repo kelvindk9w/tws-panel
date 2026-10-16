@@ -480,6 +480,8 @@ describe("Configurações → Backups", () => {
     expect(b1).toHaveTextContent("Cópia externa: Falhou: O arquivo baixado não bate com o enviado (hash diferente).");
     expect(b2).toHaveTextContent("Cópia da VPS: apagada pela retenção");
     expect(b3).toHaveTextContent("Cópia da VPS: ainda não conferida");
+    // Conferida no envio (sem Conferir manual): não pode dizer "ainda não conferida" ao lado do selo verde.
+    expect(b3).toHaveTextContent("Cópia externa: Íntegro — conferida no envio");
     // Conferir um: entra na fila e o andamento aparece
     fireEvent.click(within(b1).getByRole("button", { name: "Conferir" }));
     await waitFor(() => expect(calls.some((c) => c.key === "POST /api/backups/targets/panel/verify")).toBe(true));
