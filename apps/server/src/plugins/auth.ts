@@ -46,6 +46,25 @@ function extractToken(request: FastifyRequest): string | null {
   return null;
 }
 
+/**
+ * Caminho usado na decisão de acesso: o padrão da rota que o roteador
+ * escolheu (ex.: "/api/projects/:id"). Sem rota (404), o caminho do endereço
+ * decodificado, sem query e sem esquema/host — nunca o texto bruto.
+ */
+export function routePath(request: FastifyRequest): string {
+  const route = request.routeOptions?.url;
+  if (route) return route;
+  let raw = request.url;
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/[^/]*/i.exec(raw);
+  if (scheme) raw = raw.slice(scheme[0].length) || "/";
+  raw = raw.split(/[?#]/)[0]!;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function requireSetupToken(app: { setupToken: string | null }, request: FastifyRequest, reply: FastifyReply) {
   if (!app.setupToken) {
     return reply.code(503).send({
@@ -74,14 +93,18 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       request.session = await app.sessionStore.resolve(cookieValue);
     }
 
-    if (!request.url.startsWith("/api/")) return;
-    if (request.url === "/api/healthz") return;
-    if (request.url.startsWith("/api/auth/login")) return;
+    // Decide pelo caminho que o ROTEADOR usou, não pelo texto bruto: ele
+    // decodifica %xx, então "/%61pi/projects" cai na rota "/api/projects".
+    // Comparar o endereço bruto deixava esse pedido passar sem login.
+    const url = routePath(request);
+    if (!url.startsWith("/api/")) return;
+    if (url === "/api/healthz") return;
+    if (url.startsWith("/api/auth/login")) return;
 
     const state = await app.setupState.load();
 
     // Wizard: trava depois de concluído; antes disso exige o setup token.
-    if (request.url.startsWith("/api/setup/")) {
+    if (url.startsWith("/api/setup/")) {
       if (state.completed) {
         return reply.code(403).send({
           error: "setup_completed",
@@ -89,12 +112,12 @@ const authPlugin: FastifyPluginAsync = async (app) => {
         });
       }
       // verify-token é a porta de entrada do wizard: valida o token no corpo.
-      if (request.url.startsWith("/api/setup/verify-token")) return;
+      if (url.startsWith("/api/setup/verify-token")) return;
       return requireSetupToken(app, request, reply);
     }
 
     // Rotas de conta: exigem sessão. "setup_incomplete" orienta o guard do frontend.
-    if (request.url.startsWith("/api/auth/")) {
+    if (url.startsWith("/api/auth/")) {
       if (!request.session) {
         return reply.code(401).send(
           state.completed

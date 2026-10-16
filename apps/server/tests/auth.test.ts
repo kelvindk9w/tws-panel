@@ -214,6 +214,37 @@ describe("setup token após a conclusão", () => {
 // Middleware de sessão
 // ---------------------------------------------------------------------------
 
+describe("endereço codificado não escapa da guarda", () => {
+  // Uma letra do prefixo codificada (%61 = "a", %69 = "i", %70 = "p"): o
+  // roteador decodifica e acha a rota; a guarda precisa ver o mesmo caminho.
+  const variants = (p: string) => [p.replace("/api/", "/%61pi/"), p.replace("/api/", "/ap%69/"), p.replace("/api/", "/%61%70%69/")];
+
+  it("setup pendente: criar o admin por endereço codificado exige o setup token", async () => {
+    for (const url of variants("/api/setup/admin")) {
+      const res = await app.inject({ method: "POST", url, payload: { username: "admin", password: PASSWORD } });
+      expect(res.statusCode, url).toBe(401);
+    }
+    expect(await ctx.userStore.hasAdmin()).toBe(false);
+  });
+
+  it("setup concluído: rota protegida por endereço codificado exige sessão", async () => {
+    await createAdmin();
+    for (const url of variants("/api/protegida")) {
+      const res = await app.inject({ method: "GET", url });
+      expect(res.statusCode, url).toBe(401);
+    }
+    const setup = await app.inject({ method: "POST", url: "/%61pi/setup/admin", headers: auth, payload: { username: "outro", password: PASSWORD } });
+    expect(setup.statusCode).toBe(403);
+  });
+
+  it("endereço absoluto (http://host/api/...) também passa pela guarda", async () => {
+    await createAdmin();
+    const res = await app.inject({ method: "GET", url: "http://localhost/%61pi/protegida" });
+    expect([401, 404]).toContain(res.statusCode);
+    expect(res.body).not.toContain('"ok":true');
+  });
+});
+
 describe("middleware de auth (setup concluído)", () => {
   beforeEach(async () => {
     await createAdmin();
