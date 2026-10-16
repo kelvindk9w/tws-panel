@@ -4,7 +4,7 @@
  */
 export { detectProject } from "./detect.js";
 export { describeComposeServices } from "./compose-services.js";
-export { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";
+export { composeEnvFiles, composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";
 export {
   addedPortKey,
   composeNetworkModes,

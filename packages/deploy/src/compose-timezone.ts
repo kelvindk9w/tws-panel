@@ -98,6 +98,17 @@ export function composeTimezoneDefinitions(
   return out;
 }
 
+/** Todos os `env_file:` dos serviços (para ler os arquivos antes de procurar TZ). */
+export function composeEnvFiles(compose: string): string[] {
+  try {
+    const doc = parse(compose) as { services?: Record<string, { env_file?: unknown } | null> } | null;
+    const all = Object.values(doc?.services ?? {}).flatMap((def) => envFilePaths(def?.env_file));
+    return [...new Set(all)].filter((p) => !isDotEnv(p));
+  } catch {
+    return [];
+  }
+}
+
 /** Serviços do compose (para injetar o TZ em quem não define). */
 export function composeServiceList(compose: string): string[] {
   try {

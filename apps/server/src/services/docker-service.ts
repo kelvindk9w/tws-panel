@@ -128,6 +128,49 @@ export async function listContainers(
   return containersFromPs(r.stdout);
 }
 
+/**
+ * Fuso de um container (campo "Fuso horário" do projeto): o TZ do ambiente
+ * dele agora e se a imagem tem a base de fusos para esse TZ
+ * (/usr/share/zoneinfo/<fuso>; alpine sem tzdata não tem). `zone` precisa
+ * vir validado (isSafeTimezoneName): vai como argumento do `test`, sem shell.
+ * zoneinfo null = não deu para conferir (container parado, imagem sem `test`).
+ */
+export async function containerTimezone(
+  id: string,
+  zone: string | null,
+  dockerSocketPath: string = defaultDockerSocketPath(),
+): Promise<{ tz: string | null; zoneinfo: boolean | null }> {
+  const inspect = await runDocker(["inspect", "--format", "{{json .Config.Env}}", id], dockerSocketPath);
+  let tz: string | null = null;
+  if (inspect.code === 0) {
+    try {
+      const env = JSON.parse(inspect.stdout.trim()) as string[] | null;
+      const found = (env ?? []).filter((e) => e.startsWith("TZ=")).at(-1);
+      tz = found ? found.slice(3) : null;
+    } catch {
+      tz = null;
+    }
+  }
+  const check = tz ?? zone;
+  if (!check) return { tz, zoneinfo: null };
+  let code: number;
+  let stderr = "";
+  try {
+    await execFileAsync("docker", ["exec", id, "test", "-e", `/usr/share/zoneinfo/${check}`], {
+      timeout: 20_000,
+      env: { ...process.env, DOCKER_HOST: dockerHostFromSocketPath(dockerSocketPath) },
+    });
+    code = 0;
+  } catch (err) {
+    const e = err as { code?: number | string; stderr?: string };
+    code = typeof e.code === "number" ? e.code : -1;
+    stderr = e.stderr ?? "";
+  }
+  // `test` falso sai com 1 e não escreve nada; o Docker também sai com 1 em
+  // container parado, mas com a mensagem do daemon no stderr.
+  return { tz, zoneinfo: code === 0 ? true : code === 1 && !stderr.trim() ? false : null };
+}
+
 const COMPOSE_SERVICE_LABEL = "com.docker.compose.service";
 
 /** Saúde do healthcheck lida do status do `docker ps` ("Up 2 minutes (healthy)"). */

@@ -60,6 +60,10 @@ import { DockerCli } from "./services/backup-docker.js";
 import { SevenZip } from "./services/backup-archive.js";
 import { S3Storage } from "./services/backup-s3.js";
 import { verifyPasswordTimingSafe } from "./services/password.js";
+import timezoneRoutes from "./routes/timezone.js";
+import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
+import { startupTimezone } from "./services/host-timezone.js";
+import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
 import { PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
 declare module "fastify" {
@@ -208,8 +212,45 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       app.log.warn("Backups: reiniciando o painel para terminar a restauração.");
       process.kill(process.pid, "SIGTERM");
     },
+    timezoneName: () => timezoneService.current(),
   });
   app.decorate("backupService", backupService);
+  // Fuso horário da VPS (Configurações → Fuso horário) no escopo RAIZ: as
+  // rotas de fuso, os projetos ("Igual ao da VPS") e a agenda dos backups.
+  // Com PAAS_TARGET=host o fuso é lido e trocado pelo host bridge (comandos
+  // da allowlist, auditados); fora disso só dá para ver (dev/teste).
+  const timezoneService: TimezoneService = new TimezoneService({
+    dataDir: config.dataDir,
+    bridge:
+      config.securityTarget === "host"
+        ? createHostTimezoneBridge(
+            new NsenterHostRunner({
+              image: config.hostHelperImage,
+              onAudit: (detail) => void app.auditService.record({ action: "timezone.host-exec", detail }).catch(() => undefined),
+            }),
+            { read: HOST_TIMEZONE_READ_CMD, set: buildSetTimezoneCommand, parse: parseHostTimezoneOutput },
+          )
+        : null,
+    startup: startupTimezone(),
+    projects: {
+      list: () => app.deployService.listProjects(),
+      setTimezone: (id, setting, actor) => app.deployService.setProjectTimezone(id, setting, actor),
+      recreate: (id, actor) => app.deployService.startRecreate(id, actor),
+    },
+    audit: app.auditService,
+    log: (m) => app.log.warn(m),
+    onChange: (zone, previous) => {
+      app.log.info("Fuso horário: %s → %s (a agenda dos backups recalcula).", previous, zone);
+      void backupService.timezoneChanged().catch((err: unknown) => {
+        app.log.warn("backups: agenda não recalculada (%s)", err instanceof Error ? err.message : String(err));
+      });
+    },
+  });
+  app.decorate("timezoneService", timezoneService);
+  app.deployService.setHostTimezoneProvider(() => timezoneService.vpsZone());
+  // A montagem /host/etc/localtime congela quando o fuso muda na VPS: lê de
+  // novo pelo host bridge logo depois de subir (em segundo plano).
+  void timezoneService.refresh();
   // Certificados manuais (página Certificados): no escopo raiz porque o
   // proxy (Caddyfile com `tls`) e o e-mail (Stalwart) usam o mesmo par.
   const certificateStore = new ManualCertificateStore(config.dataDir);
@@ -334,6 +375,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(panelDomainRoutes);
   await app.register(notificationsRoutes);
   await app.register(backupsRoutes);
+  await app.register(timezoneRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(setupRestartRoutes);

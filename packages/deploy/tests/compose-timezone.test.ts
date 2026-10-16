@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { composeOverrideYaml } from "../src/compose-override.js";
-import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "../src/compose-timezone.js";
+import { composeEnvFiles, composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "../src/compose-timezone.js";
 
 const COMPOSE = `services:
   web:
@@ -68,6 +68,12 @@ describe("composeTimezoneDefinitions", () => {
     expect(composeTimezoneDefinitions("", {}, () => null)).toEqual([]);
     expect(composeTimezoneDefinitions("services:\n  a:\n", {}, () => null)).toEqual([]);
     expect(composeTimezoneDefinitions("services:\n  a:\n    environment: [1, 2]\n", {}, () => null)).toEqual([]);
+  });
+
+  it("lista os env_file dos serviços (menos o .env, que vem das Variáveis)", () => {
+    expect(composeEnvFiles(COMPOSE)).toEqual(["./config/cron.env", "./sem-tz.env", "./nao-existe.env"]);
+    expect(composeEnvFiles("services: [")).toEqual([]);
+    expect(composeEnvFiles("services:\n  a:\n  b:\n    env_file: [{ required: false }]\n")).toEqual([]);
   });
 
   it("lê o TZ de um .env (última definição, sem aspas)", () => {

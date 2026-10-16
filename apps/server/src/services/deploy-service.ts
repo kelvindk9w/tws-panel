@@ -33,7 +33,16 @@ import {
   type SetPortsRequest,
   type SetProjectCredentialRequest,
   type UpdateProjectRequest,
+  type ProjectTimezoneDefinition,
+  type ProjectTimezoneRequest,
+  type ProjectTimezoneService,
+  type ProjectTimezoneSetting,
+  type ProjectTimezoneView,
+  effectiveProjectZone,
+  isKnownTimezone,
+  isSafeTimezoneName,
   missingComposeVariables,
+  timezoneOptions,
 } from "@paas/core";
 import {
   DeployEngine,
@@ -43,6 +52,8 @@ import {
   projectWorkDir,
   runGuardrails,
   composeVariables,
+  composeEnvFiles,
+  composeTimezoneDefinitions,
   composeNetworkModes,
   composePortEntries,
   readEnvExamples,
@@ -61,7 +72,7 @@ import type { ServerConfig } from "../config.js";
 import type { AlertsService } from "./alerts-service.js";
 import type { AuditService } from "./audit-service.js";
 import { CredentialVault } from "./credential-vault.js";
-import { listContainers } from "./docker-service.js";
+import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 
 const MAX_JOBS = 100;
@@ -196,6 +207,11 @@ export class DeployService {
   private projects: Project[] = [];
   private jobs: DeployJob[] = [];
   private loaded = false;
+  /** Fuso da VPS em uso (Configurações → Fuso horário), para "Igual ao da VPS". */
+  private hostTimezoneProvider: () => string = () => process.env.TZ || "UTC";
+  /** TZ e base de fusos de um container (trocado nos testes). */
+  private timezoneProbe: (id: string, zone: string | null) => Promise<{ tz: string | null; zoneinfo: boolean | null }> = (id, zone) =>
+    containerTimezone(id, zone);
 
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
@@ -246,6 +262,8 @@ export class DeployService {
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
       injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
+      // Fuso do projeto: TZ nos serviços que não definem TZ (compose-timezone.ts).
+      timezoneForProject: async (project: Project) => this.projectZone(project),
       // O Caddy serve mail.<domínio> para emitir o certificado do Stalwart.
       mailHosts: async () => (await this.mailHostsProvider?.()) ?? [],
       // Certificado manual: o Caddy usa o par enviado (`tls`) para o nome.
@@ -1037,6 +1055,8 @@ export class DeployService {
         // a configuração sem publicar em seguida.
         project.deployedBranch = project.branch;
         project.deployedSource = project.source;
+        // O fuso que entrou nos containers (a tela compara com a escolha atual).
+        project.timezoneApplied = this.projectZone(project);
         // persiste detecção feita durante o deploy
         project.updatedAt = new Date().toISOString();
         // primeira publicação: sem resposta do app, a página passa de
@@ -1331,6 +1351,167 @@ export class DeployService {
   }
 
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // Fuso horário do projeto
+  // -------------------------------------------------------------------------
+
+  /** Quem informa o fuso da VPS em uso (o TimezoneService, em app.ts). */
+  setHostTimezoneProvider(provider: () => string): void {
+    this.hostTimezoneProvider = provider;
+  }
+
+  /** O fuso que o projeto recebe agora (null = o da imagem; site estático não usa). */
+  private projectZone(project: Project): string | null {
+    const type = project.detection?.type;
+    if (type === "static" || type === "static-node") return null;
+    return effectiveProjectZone(project.timezone, this.hostTimezoneProvider());
+  }
+
+  /** Onde o próprio projeto já define TZ (compose, Variáveis ou env_file). */
+  private async timezoneDefinitions(project: Project): Promise<ProjectTimezoneDefinition[]> {
+    const vars = (await this.engineCtx.envForProject?.(project)) ?? {};
+    if (project.detection?.type === "dockerfile") {
+      return vars.TZ ? [{ service: "app", value: vars.TZ, where: "variables" }] : [];
+    }
+    const composeFile = project.detection?.composeFile;
+    const dir = this.sourceDirOf(project);
+    if (project.detection?.type !== "compose" || !composeFile || !dir) return [];
+    let content: string;
+    try {
+      content = await readFile(path.join(dir, composeFile), "utf8");
+    } catch {
+      return [];
+    }
+    const root = path.resolve(dir);
+    const files = new Map<string, string | null>();
+    for (const rel of composeEnvFiles(content)) {
+      const file = path.resolve(root, rel);
+      if (!file.startsWith(root + path.sep)) continue;
+      files.set(rel, await readFile(file, "utf8").catch(() => null));
+    }
+    return composeTimezoneDefinitions(content, vars, (rel) => files.get(rel) ?? null);
+  }
+
+  /** Campo "Fuso horário" do projeto: a escolha, o que está nos containers e o aviso do tzdata. */
+  async timezoneView(id: string): Promise<ProjectTimezoneView> {
+    const project = await this.requireProject(id);
+    const type = project.detection?.type;
+    const supported = type === "compose" || type === "dockerfile";
+    const hostZone = this.hostTimezoneProvider();
+    const setting: ProjectTimezoneSetting = project.timezone ?? { mode: "image" };
+    const effectiveZone = this.projectZone(project);
+    const appliedZone = project.timezoneApplied ?? null;
+    const deployed = project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
+    let services: ProjectTimezoneService[] = [];
+    try {
+      const mine = (await listContainers()).filter((c) => c.projectSlug === project.slug);
+      services = await Promise.all(
+        mine.map(async (c) => {
+          const running = c.state === "running";
+          const probe = running ? await this.timezoneProbe(c.id, effectiveZone).catch(() => ({ tz: null, zoneinfo: null })) : { tz: null, zoneinfo: null };
+          return { service: c.service ?? c.name, container: c.name, running, tz: probe.tz, zoneinfo: probe.zoneinfo };
+        }),
+      );
+    } catch {
+      services = [];
+    }
+    return {
+      setting,
+      effectiveZone,
+      hostZone,
+      definedByProject: supported ? await this.timezoneDefinitions(project) : [],
+      appliedZone,
+      pendingRestart: supported && deployed && effectiveZone !== appliedZone,
+      supported,
+      services,
+      options: timezoneOptions(),
+    };
+  }
+
+  async setProjectTimezone(id: string, req: ProjectTimezoneRequest, actor?: string): Promise<Project> {
+    const project = await this.requireProject(id);
+    let setting: ProjectTimezoneSetting;
+    if (req.mode === "zone") {
+      if (!req.zone || !isKnownTimezone(req.zone)) throw httpError(400, "invalid_timezone", "Escolha um fuso da lista.");
+      setting = { mode: "zone", zone: req.zone };
+    } else if (req.mode === "host" || req.mode === "image") {
+      setting = { mode: req.mode };
+    } else {
+      throw httpError(400, "invalid_timezone", "Escolha uma das opções de fuso.");
+    }
+    const label = setting.mode === "image" ? "padrão da imagem" : setting.mode === "host" ? "igual ao da VPS" : setting.zone!;
+    if (setting.mode === "image") delete project.timezone;
+    else project.timezone = setting;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({
+      action: "project.timezone",
+      ...(actor ? { actor } : {}),
+      target: project.slug,
+      detail: `Fuso horário de "${project.name}": ${label}.`,
+    });
+    return project;
+  }
+
+  /**
+   * "Reiniciar com o fuso novo": recria os containers com a configuração
+   * atual, sem baixar código nem refazer o build (o TZ só entra num container
+   * novo; `docker restart` mantém o ambiente antigo). Vira um job, como o
+   * deploy, e aparece na aba Deploys.
+   */
+  async startRecreate(id: string, actor?: string): Promise<DeployJob> {
+    const project = await this.requireProject(id);
+    if (this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) {
+      throw httpError(409, "deploy_in_progress", "Já existe um deploy em andamento para este projeto.");
+    }
+    const deployed = project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
+    if (!deployed) throw httpError(409, "not_deployed", "Faça o primeiro deploy do projeto: o fuso entra junto.");
+    const zone = this.projectZone(project);
+    if (zone !== null && !isSafeTimezoneName(zone)) throw httpError(400, "invalid_timezone", "Escolha um fuso da lista.");
+    await this.hooks.audit?.record({
+      action: "project.recreate",
+      ...(actor ? { actor } : {}),
+      target: project.slug,
+      detail: `Containers de "${project.name}" recriados com a configuração atual (fuso: ${zone ?? "padrão da imagem"}).`,
+    });
+    const now = new Date().toISOString();
+    const job: DeployJob = {
+      id: randomBytes(8).toString("hex"),
+      projectId: project.id,
+      kind: "recreate",
+      status: "running",
+      createdAt: now,
+      startedAt: now,
+      finishedAt: null,
+      steps: [{ name: "Recriar os containers com a configuração atual", status: "running" }],
+      log: "=== Reinício com a configuração atual (sem baixar código nem refazer o build) ===\n",
+      error: null,
+    };
+    this.jobs.push(job);
+    await this.saveJobs();
+    const appendLog = (chunk: string) => {
+      job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+    };
+    void (async () => {
+      try {
+        await this.engine.recreate(project, appendLog);
+        job.status = "success";
+        project.timezoneApplied = zone;
+        project.updatedAt = new Date().toISOString();
+      } catch (err) {
+        job.status = "failed";
+        job.error = err instanceof Error ? err.message : String(err);
+        appendLog(`\n✖ Reinício falhou: ${job.error}\n`);
+      } finally {
+        job.finishedAt = new Date().toISOString();
+        for (const step of job.steps) step.status = job.status === "success" ? "done" : "failed";
+        await this.saveProjects();
+        await this.saveJobs();
+      }
+    })();
+    return job;
+  }
 
   private async requireProject(id: string): Promise<Project> {
     const project = await this.getProject(id);
