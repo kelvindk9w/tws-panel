@@ -222,6 +222,8 @@ function BackupChecks({ record, onVerify }: { record: BackupRecord; onVerify: ()
       .finally(() => setBusy(false));
   }
 
+  // A cópia externa já é baixada e testada logo depois do envio.
+  const verifiedOnUpload = record.remote === "verified";
   if (!record.local && !hasRemote) return null;
   return (
     <span className="mt-1 flex flex-col gap-1 text-xs" data-testid="backup-checks">
@@ -231,8 +233,8 @@ function BackupChecks({ record, onVerify }: { record: BackupRecord; onVerify: ()
         </span>
       )}
       {hasRemote && (
-        <span className={record.remoteCheck ? CHECK_COLOR[record.remoteCheck.status] : "text-muted-foreground"}>
-          Cópia externa: {checkText(record.remoteCheck)}
+        <span className={record.remoteCheck ? CHECK_COLOR[record.remoteCheck.status] : verifiedOnUpload ? "text-emerald-400" : "text-muted-foreground"}>
+          Cópia externa: {!record.remoteCheck && verifiedOnUpload ? "Íntegro — conferida no envio" : checkText(record.remoteCheck)}
         </span>
       )}
       <span className="flex flex-wrap items-center gap-2">
