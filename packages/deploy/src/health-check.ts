@@ -40,6 +40,11 @@ function isLocal(domain: string): boolean {
   return domain.endsWith(".localhost") || domain === "localhost";
 }
 
+/** 4xx: o app respondeu (a raiz pode pedir login, outro método, etc.). */
+function isClientError(result: ProbeResult): boolean {
+  return !result.ok && result.status !== undefined && result.status >= 400 && result.status < 500;
+}
+
 /**
  * Redirecionamento do próprio Caddy da porta 80 para o HTTPS do mesmo host:
  * o backend nem foi consultado, então não prova nada sobre a aplicação.
@@ -62,6 +67,9 @@ export function isHttpsRedirect(result: ProbeResult, domain: string): boolean {
  *    certificado pendente (aviso, o DNS pode estar propagando); 5xx com
  *    certificado válido até o prazo é o backend fora do ar — o deploy falha;
  *    4xx na raiz é o app respondendo (aviso, sem falhar).
+ *  - qualquer 4xx (HTTP ou HTTPS) é o app respondendo: avisa e segue na
+ *    primeira resposta, sem reprovar nem esperar o prazo inteiro. Só 5xx e
+ *    falta de resposta reprovam.
  */
 export async function waitHealthy(opts: HealthCheckOptions): Promise<void> {
   const { host, httpPort, httpsPort, domain, onLog } = opts;
@@ -76,11 +84,20 @@ export async function waitHealthy(opts: HealthCheckOptions): Promise<void> {
   let lastError = "";
   let ok = false;
   let appConfirmed = false;
+  let warnedClientError = false;
   while (now() < deadline) {
     const result = await probeHttp(host, httpPort, domain);
     if (result.ok) {
       ok = true;
       appConfirmed = !isHttpsRedirect(result, domain);
+      break;
+    }
+    if (isClientError(result)) {
+      // 4xx direto: o app respondeu (a raiz pode pedir login etc.) — não reprova.
+      ok = true;
+      appConfirmed = true;
+      warnedClientError = true;
+      onLog(`⚠ O app respondeu HTTP ${result.status} na raiz por ${domain}; ele está no ar, confira se é o esperado.\n`);
       break;
     }
     lastError = result.error ?? `HTTP ${result.status}`;
@@ -90,7 +107,7 @@ export async function waitHealthy(opts: HealthCheckOptions): Promise<void> {
     onLog(`Última resposta do health check: ${lastError}\n`);
     throw new Error(`health check falhou após ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
   }
-  if (appConfirmed) onLog(`Health check OK — o proxy responde por ${domain}.\n`);
+  if (appConfirmed && !warnedClientError) onLog(`Health check OK — o proxy responde por ${domain}.\n`);
   else onLog(`O proxy responde por ${domain} e redireciona para o HTTPS — a aplicação é conferida por lá.\n`);
   if (isLocal(domain)) return;
 
@@ -99,6 +116,7 @@ export async function waitHealthy(opts: HealthCheckOptions): Promise<void> {
   let last: ProbeResult = { ok: false, error: "sem resposta" };
   while (now() < httpsDeadline) {
     last = await probeHttps(host, httpsPort, domain);
+    if (isClientError(last)) break; // certificado válido e o app respondeu 4xx: não há o que esperar
     if (last.ok) {
       onLog(`HTTPS pronto (certificado válido) — o site está no ar em https://${domain}\n`);
       return;

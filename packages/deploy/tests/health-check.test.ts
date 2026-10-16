@@ -115,6 +115,46 @@ describe("waitHealthy — o backend precisa responder", () => {
     expect(log.join("")).toMatch(/respondeu HTTP 404/);
   });
 
+  // Qualquer status abaixo de 500 é o app respondendo (a raiz pode exigir
+  // login, pedir outro método, etc.): avisa, sem reprovar e sem esperar o prazo.
+  it("HTTP 404/401 direto do app (domínio local): passa com aviso na primeira resposta", async () => {
+    const http = seq({ ok: false, status: 401 });
+    const { done, log } = run(http, seq(), "loja.localhost");
+    await done;
+    expect(http.calls).toBe(1);
+    expect(log.join("")).toMatch(/respondeu HTTP 401/);
+  });
+
+  it("HTTP 4xx direto do app e depois HTTPS 200: passa", async () => {
+    const http = seq({ ok: false, status: 404 });
+    const https = seq({ ok: true, status: 200 });
+    const { done, log } = run(http, https);
+    await done;
+    expect(http.calls).toBe(1);
+    expect(log.join("")).toMatch(/HTTPS pronto/);
+  });
+
+  it("HTTPS 4xx na raiz: avisa na primeira resposta, sem esperar os 90 s", async () => {
+    const https = seq({ ok: false, status: 403 });
+    const { done, log } = run(seq(REDIRECT), https);
+    await done;
+    expect(https.calls).toBe(1);
+    expect(log.join("")).toMatch(/respondeu HTTP 403/);
+  });
+
+  it("HTTPS 502 seguido de 404: continua tentando e termina no aviso", async () => {
+    const https = seq({ ok: false, status: 502 }, { ok: false, status: 404 });
+    const { done, log } = run(seq(REDIRECT), https);
+    await done;
+    expect(https.calls).toBe(2);
+    expect(log.join("")).toMatch(/respondeu HTTP 404/);
+  });
+
+  it("HTTP 5xx continua reprovando", async () => {
+    const { done } = run(seq({ ok: false, status: 500 }), seq());
+    await expect(done).rejects.toThrow(/HTTP 500/);
+  });
+
   it("redirecionamento do próprio app para outro endereço HTTPS conta como resposta do app", async () => {
     const { done, log } = run(
       seq({ ok: true, status: 302, location: "https://login.outro.test/" }),
