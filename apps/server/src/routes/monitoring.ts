@@ -8,6 +8,7 @@ import {
   ALERT_SEVERITIES,
   ALERT_SOURCES,
   ALERT_STATUSES,
+  MONITOR_MAX_INTERVAL_MS,
   MONITOR_MIN_INTERVAL_MS,
   type AlertListResponse,
   type AlertResponse,
@@ -68,8 +69,9 @@ const monitorConfigSchema = {
     required: ["intervalMs"],
     additionalProperties: false,
     properties: {
-      // MONITOR_MIN_INTERVAL_MS evita busy-loop de scans.
-      intervalMs: { type: "integer", minimum: MONITOR_MIN_INTERVAL_MS },
+      // MONITOR_MIN_INTERVAL_MS evita busy-loop de scans; o teto (168 h)
+      // evita passar do limite do timer do Node, que viraria 1 ms.
+      intervalMs: { type: "integer", minimum: MONITOR_MIN_INTERVAL_MS, maximum: MONITOR_MAX_INTERVAL_MS },
     },
   },
 } as const;

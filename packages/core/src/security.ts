@@ -180,6 +180,12 @@ export interface SecurityJob {
   /** Rollback automático agendado no alvo (fases de risco). */
   rollbackScheduled: boolean;
   rollbackDeadline: string | null;
+  /**
+   * Só nas respostas da API (não é persistido): milissegundos até
+   * `rollbackDeadline`, medidos no relógio do servidor no momento da resposta.
+   * A tela conta a partir daqui — nunca compara o prazo com o relógio local.
+   */
+  rollbackRemainingMs?: number | null;
   error: string | null;
   /** Fase 01: usuário não-root criado (para a UI instruir o teste de login). */
   sshUser?: string;

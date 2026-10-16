@@ -631,10 +631,18 @@ export function SecurityStep({
         method: "POST",
         body: JSON.stringify({ jobId: job.id }),
       });
+      setError(null); // apaga o aviso de uma tentativa anterior que falhou
       confirmResolver.current?.(true);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao confirmar acesso.");
-      confirmResolver.current?.(false);
+      // Não encerra a espera: uma falha (rede, servidor reiniciando) não diz
+      // que a fase foi desfeita — o servidor segue aguardando. O operador
+      // tenta de novo, e o vigia de polling continua: se o prazo acabar, é o
+      // status do servidor que encerra a espera (achado 20).
+      setError(
+        err instanceof ApiRequestError
+          ? `${err.message} Tente confirmar de novo.`
+          : "Não foi possível confirmar o acesso agora (falha de conexão). Tente de novo — a fase continua aguardando.",
+      );
     } finally {
       setAccessBusy(false);
     }
@@ -1084,13 +1092,13 @@ export function SecurityStep({
       {stage === "run" && (
         <>
           {/* ALERTA GRANDE DE AÇÃO DO USUÁRIO — bloqueia a continuação */}
-          {job?.status === "awaiting_confirmation" && job.rollbackDeadline && (
+          {job?.status === "awaiting_confirmation" && typeof job.rollbackRemainingMs === "number" && (
             <AccessTestAlert
               phase={job.phase}
               phaseTitle={job.title}
               user={job.sshUser ?? (isValidSshUsername(sshUser.trim()) ? sshUser.trim() : null)}
               host={vpsSshHost(pageLocation(), vpsAddress)}
-              deadline={job.rollbackDeadline}
+              remainingMs={job.rollbackRemainingMs}
               busy={accessBusy}
               onConfirm={() => void confirmAccess()}
               onUndo={() => void undoAccess()}

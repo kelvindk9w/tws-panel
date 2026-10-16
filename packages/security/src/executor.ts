@@ -141,8 +141,26 @@ export class SecurityExecutor {
     return [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  /**
+   * Trava do executor: um job rodando OU uma fase aguardando confirmação.
+   *
+   * Antes a trava saía assim que a fase entrava em "awaiting_confirmation" e
+   * um segundo job (outra aba, chamada direta à API) era aceito: a segunda
+   * execução sobrescrevia o backup e a reversão agendada da primeira, e
+   * confirmar a antiga cancelava a proteção da nova (achado 23). Agora a trava
+   * só sai quando a fase termina de verdade — confirmada, desfeita ou com o
+   * prazo vencido (o status sai de "awaiting_confirmation").
+   */
   get isBusy(): boolean {
-    return this.busy;
+    return this.busy || this.pendingConfirmation() !== null;
+  }
+
+  /** Job que ainda espera o operador confirmar ou desfazer (no máximo um). */
+  private pendingConfirmation(): SecurityJob | null {
+    for (const job of this.jobs.values()) {
+      if (job.status === "awaiting_confirmation") return job;
+    }
+    return null;
   }
 
   /** Mapa job.id → runId, para o servidor persistir junto dos jobs. */
@@ -162,6 +180,12 @@ export class SecurityExecutor {
     const phaseDef = SECURITY_PHASES.find((p) => p.id === phase);
     if (!phaseDef) throw new Error(`fase desconhecida: ${phase}`);
     if (this.busy) throw new Error("já existe um job de hardening em andamento");
+    const pending = this.pendingConfirmation();
+    if (pending) {
+      throw new Error(
+        `a fase ${pending.phase} (${pending.title}) está aguardando a confirmação de acesso — confirme ou desfaça antes de rodar outra fase`,
+      );
+    }
     // Usuário: fases 01 (criar/validar) e 02 (PermitRootLogin no + AllowUsers).
     // Chave pública: só a 01, que é quem a instala. Mesma regra da rota
     // /api/security/apply — as duas camadas precisam concordar.
@@ -501,7 +525,7 @@ export class SecurityExecutor {
     for (const job of jobs) {
       if (job.status === "queued" || job.status === "running") {
         const runId = this.runIds.get(job.id);
-        if (runId && !this.busy) {
+        if (runId && !this.isBusy) {
           this.jobs.set(job.id, job);
           job.status = "running";
           this.appendLog(
