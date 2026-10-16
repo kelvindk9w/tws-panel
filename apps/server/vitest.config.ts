@@ -49,6 +49,7 @@ export default defineConfig({
         "src/services/backup-schedule.ts",
         "src/services/backup-service.ts",
         "src/services/host-timezone.ts",
+        "src/services/json-file.ts",
         "src/services/login-limiter.ts",
         "src/services/mail-envios-service.ts",
         "src/services/mail-reputation-service.ts",
