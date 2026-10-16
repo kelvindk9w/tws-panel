@@ -17,6 +17,7 @@ import { isIP } from "node:net";
 import path from "node:path";
 import {
   PAAS_CADDY_CONTAINER,
+  certificateFileId,
   PAAS_LABEL_MANAGED,
   PAAS_NETWORK,
   type Project,
@@ -92,10 +93,8 @@ export interface CaddyApplyOptions {
 /** Pasta dos certificados manuais dentro do container do Caddy. */
 export const CADDY_MANUAL_CERTS_DIR = "/etc/caddy/certs";
 
-/** Nome de arquivo seguro para um host (mesma regra do Stalwart: certificateId). */
-function fileIdOf(host: string): string {
-  return host.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-}
+/** Nome de arquivo do host: a mesma regra do painel e do Stalwart, sem colisão (@paas/core). */
+const fileIdOf = certificateFileId;
 
 /** Onde ficam (dentro do container do Caddy) o certificado e a chave manuais de `host`. */
 export function manualCertificatePaths(host: string): { cert: string; key: string } {

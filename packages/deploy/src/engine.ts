@@ -12,8 +12,6 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import http from "node:http";
-import https from "node:https";
 import path from "node:path";
 import {
   PAAS_LABEL_MANAGED,
@@ -36,6 +34,7 @@ import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
+import { waitHealthy } from "./health-check.js";
 
 export interface EngineContext extends IngestContext {
   /** Diretório data/caddy. */
@@ -829,42 +828,7 @@ export class DeployEngine {
     const target = healthCheckTarget(this.ctx);
     // O painel precisa estar na rede do Caddy para alcançá-lo pelo nome.
     if (this.ctx.panelContainer) await this.caddy.connectToNetwork(this.ctx.panelContainer);
-    const deadline = Date.now() + timeoutMs;
-    let lastError = "";
-    let ok = false;
-    while (Date.now() < deadline) {
-      const result = await httpGet(target.host, target.httpPort, domain);
-      if (result.ok) {
-        ok = true;
-        break;
-      }
-      lastError = result.error ?? `HTTP ${result.status}`;
-      await new Promise((r) => setTimeout(r, 2_000));
-    }
-    if (!ok) {
-      onLog(`Última resposta do health check: ${lastError}\n`);
-      throw new Error(`health check falhou após ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
-    }
-    onLog(`Health check OK — o proxy responde por ${domain}.\n`);
-    if (domain.endsWith(".localhost") || domain === "localhost") return;
-
-    // HTTPS: o Caddy emite o certificado na primeira visita (Let's Encrypt).
-    // Confere com o certificado de verdade; se ainda não saiu, avisa sem falhar.
-    const httpsDeadline = Date.now() + 90_000;
-    let httpsError = "";
-    while (Date.now() < httpsDeadline) {
-      const result = await httpsGet(target.host, target.httpsPort, domain);
-      if (result.ok) {
-        onLog(`HTTPS pronto (certificado válido) — o site está no ar em https://${domain}\n`);
-        return;
-      }
-      httpsError = result.error ?? `HTTP ${result.status}`;
-      await new Promise((r) => setTimeout(r, 3_000));
-    }
-    onLog(
-      `⚠ O site responde, mas o certificado HTTPS ainda não ficou pronto (${httpsError}). ` +
-        `Se o domínio acabou de ser apontado, o DNS pode estar propagando: o Caddy tenta de novo sozinho.\n`,
-    );
+    await waitHealthy({ ...target, domain, onLog, timeoutMs });
   }
 }
 
@@ -878,52 +842,4 @@ async function composeServiceNames(src: string, composeFile: string): Promise<st
   } catch {
     return [];
   }
-}
-
-/** GET http://<host>:<port>/ com Host: <domain> (passa pelo Caddy central). */
-function httpGet(
-  host: string,
-  port: number,
-  domain: string,
-): Promise<{ ok: boolean; status?: number; error?: string }> {
-  return new Promise((resolve) => {
-    const req = http.request(
-      { host, port, path: "/", method: "GET", headers: { Host: domain }, timeout: 5_000 },
-      (res) => {
-        res.resume();
-        const status = res.statusCode ?? 0;
-        resolve({ ok: status >= 200 && status < 400, status });
-      },
-    );
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({ ok: false, error: "timeout" });
-    });
-    req.on("error", (err) => resolve({ ok: false, error: err.message }));
-    req.end();
-  });
-}
-
-/** GET https://<host>:<port>/ com SNI e Host = <domain>: exige o certificado válido do domínio. */
-function httpsGet(
-  host: string,
-  port: number,
-  domain: string,
-): Promise<{ ok: boolean; status?: number; error?: string }> {
-  return new Promise((resolve) => {
-    const req = https.request(
-      { host, port, path: "/", method: "GET", servername: domain, headers: { Host: domain }, timeout: 10_000 },
-      (res) => {
-        res.resume();
-        const status = res.statusCode ?? 0;
-        resolve({ ok: status >= 200 && status < 400, status });
-      },
-    );
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({ ok: false, error: "timeout" });
-    });
-    req.on("error", (err) => resolve({ ok: false, error: err.message }));
-    req.end();
-  });
 }

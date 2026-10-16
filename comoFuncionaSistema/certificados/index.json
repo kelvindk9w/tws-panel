@@ -67,6 +67,7 @@
     "A emissão real (Let's Encrypt) e o formato exato das linhas de erro do Caddy só dão para confirmar na VPS. Os testes usam as duas linhas reais conhecidas ('certificate obtained successfully' e 'trying to solve challenge') e exemplos de erro montados pelo formato documentado do certmagic/ACME.",
     "'Tentar emitir agora' recarrega o Caddy inteiro (sem queda — é um reload) e recomeça a emissão de TODOS os nomes sem certificado. O limite de 1 por minuto é por nome; o servidor também recusa quando o certificado já é válido e quando o limite do Let's Encrypt (rateLimited com 'retry after') ainda vale.",
     "Manual com wildcard cobre os outros nomes do mesmo nível: o Caddy deixa de emitir automático para eles enquanto o manual existir.",
-    "O certificado servido para mail.<domínio> na página Certificados é o do Caddy (porta 443). O que o Stalwart apresenta nas portas de e-mail aparece no card do e-mail (GET /api/mail/tls)."
+    "O certificado servido para mail.<domínio> na página Certificados é o do Caddy (porta 443). O que o Stalwart apresenta nas portas de e-mail aparece no card do e-mail (GET /api/mail/tls).",
+    "Nome dos arquivos de certificado (painel, Caddy, Stalwart): sempre certificateFileId do @paas/core (sem colisão entre ponto e hífen). Não reintroduzir a regra antiga (trocar tudo que não é letra/número por hífen) — ela existe só como legacyCertificateFileId, para migrar."
   ]
 }

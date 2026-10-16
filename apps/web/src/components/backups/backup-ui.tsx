@@ -599,6 +599,58 @@ const RESTORE_WARNING: Record<RestoreTarget["kind"], string> = {
 };
 
 /**
+ * Acompanhamento do reinício do painel depois de preparar a restauração
+ * (achado 22 da revisão). A troca do estado só termina na subida seguinte;
+ * durante o reinício a API some e, na volta, a sessão e o próprio registro
+ * podem não existir mais (usuários e histórico voltam do backup).
+ *  - waiting: o painel ainda vai reiniciar (prazo: restartTimeoutMs, desde
+ *    `since`; passado o prazo sem reiniciar, vira timeout);
+ *  - down: fora do ar (sem conexão ou 5xx) — reiniciando;
+ *  - relogin: voltou e não reconhece a sessão (401, só depois de ter caído)
+ *    ou o registro (404): o estado do backup está no lugar;
+ *  - expired: 401 sem o painel ter caído antes — é a sessão que expirou, não
+ *    prova reinício;
+ *  - success / undone: voltou com a sessão valendo e o histórico diz como
+ *    terminou a troca na subida;
+ *  - back: voltou, mas sem registro da subida no histórico (confirmação
+ *    parcial: aviso, não sucesso);
+ *  - timeout: não reiniciou (neverRestarted) ou não voltou dentro do prazo.
+ */
+type PanelWatch =
+  | { phase: "waiting"; since: number }
+  | { phase: "down"; since: number; downSince: number }
+  | { phase: "timeout"; neverRestarted: boolean }
+  | { phase: "relogin" | "expired" | "success" | "back" }
+  | { phase: "undone"; error: string | null };
+
+/** Erros seguidos ao acompanhar uma restauração (que não é a do painel) antes de desistir. */
+const MAX_POLL_ERRORS = 30;
+
+function isFinal(record: BackupRecord): boolean {
+  return record.status === "success" || record.status === "warning" || record.status === "failed";
+}
+
+/** O que a troca na subida registrou no histórico (o registro mais novo depois do pedido). */
+async function bootOutcome(record: BackupRecord): Promise<PanelWatch> {
+  try {
+    const { history } = await apiFetch<{ history: BackupRecord[] }>("/api/backups");
+    const since = record.startedAt ?? record.queuedAt;
+    const boot = history.find(
+      (h) =>
+        h.id !== record.id &&
+        h.target === "panel" &&
+        h.operation === "restore" &&
+        h.steps.some((st) => st.label.includes("na subida")) &&
+        (h.finishedAt ?? "") >= since,
+    );
+    if (!boot) return { phase: "back" };
+    return boot.status === "failed" ? { phase: "undone", error: boot.error } : { phase: "success" };
+  } catch {
+    return { phase: "back" };
+  }
+}
+
+/**
  * Janela de restauração: escolhe a data, confirma digitando o nome e
  * acompanha as etapas até o fim.
  */
@@ -609,6 +661,8 @@ export function RestoreDialog({
   allowRedeploy = false,
   defaultRedeploy = false,
   points: givenPoints,
+  pollMs = 2000,
+  restartTimeoutMs = 5 * 60_000,
 }: {
   target: RestoreTarget;
   onClose: () => void;
@@ -617,6 +671,13 @@ export function RestoreDialog({
   defaultRedeploy?: boolean;
   /** Datas já conhecidas (catálogo de outro servidor); sem elas, busca. */
   points?: BackupPoint[];
+  /** Intervalo do acompanhamento (testes usam um curto). */
+  pollMs?: number;
+  /**
+   * Prazo (padrão 5 min) para o painel reiniciar depois de preparada a troca,
+   * e outro igual para ele voltar depois de cair, antes de desistir.
+   */
+  restartTimeoutMs?: number;
 }) {
   const [points, setPoints] = useState<BackupPoint[] | null>(givenPoints ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -629,7 +690,10 @@ export function RestoreDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [record, setRecord] = useState<BackupRecord | null>(null);
+  const [watch, setWatch] = useState<PanelWatch | null>(null);
+  const [lost, setLost] = useState(false);
   const finished = useRef(false);
+  const pollErrors = useRef(0);
 
   useEffect(() => {
     if (givenPoints) return;
@@ -647,22 +711,74 @@ export function RestoreDialog({
     }
   }, [points, fileName]);
 
+  /** Próximo passo do acompanhamento do painel depois de um erro ao consultar. */
+  const afterError = (err: unknown, current: PanelWatch): PanelWatch => {
+    const status = err instanceof ApiRequestError ? err.status : 0;
+    const fell = current.phase === "down";
+    if (status === 404) return { phase: "relogin" };
+    if (status === 401) return fell ? { phase: "relogin" } : { phase: "expired" };
+    const since = current.phase === "waiting" || current.phase === "down" ? current.since : Date.now();
+    const downSince = current.phase === "down" ? current.downSince : Date.now();
+    if (Date.now() - downSince >= restartTimeoutMs) return { phase: "timeout", neverRestarted: false };
+    return { phase: "down", since, downSince };
+  };
+
   // Acompanha a restauração até terminar.
   useEffect(() => {
-    if (!record || record.status === "success" || record.status === "warning" || record.status === "failed") {
-      if (record && !finished.current) {
+    if (!record || watch || lost) return;
+    if (isFinal(record)) {
+      if (!finished.current) {
         finished.current = true;
         onFinished?.(record);
       }
+      // Painel: "vai reiniciar" ainda não é o fim — acompanha o reinício.
+      if (target.kind === "panel" && record.status === "warning") setWatch({ phase: "waiting", since: Date.now() });
       return;
     }
     const t = setTimeout(() => {
       apiFetch<BackupRecord>(`/api/backups/records/${record.id}`)
-        .then(setRecord)
-        .catch(() => setRecord({ ...record }));
-    }, 2000);
+        .then((r) => {
+          pollErrors.current = 0;
+          setRecord(r);
+        })
+        .catch((err: unknown) => {
+          if (target.kind === "panel") {
+            setWatch(afterError(err, { phase: "waiting", since: Date.now() }));
+            return;
+          }
+          pollErrors.current++;
+          if (pollErrors.current >= MAX_POLL_ERRORS) setLost(true);
+          else setRecord({ ...record });
+        });
+    }, pollMs);
     return () => clearTimeout(t);
-  }, [record, onFinished]);
+    // afterError só depende de restartTimeoutMs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [record, watch, lost, onFinished, pollMs, target.kind]);
+
+  // Painel: acompanha o reinício até ele voltar (ou desistir).
+  useEffect(() => {
+    if (!record || !watch || (watch.phase !== "waiting" && watch.phase !== "down")) return;
+    const t = setTimeout(() => {
+      apiFetch<BackupRecord>(`/api/backups/records/${record.id}`)
+        .then(async (r) => {
+          if (watch.phase === "waiting") {
+            // ainda não reiniciou: segue esperando até o prazo (ou volta ao acompanhamento normal)
+            setRecord(r);
+            if (r.status !== "warning") setWatch(null);
+            else if (Date.now() - watch.since >= restartTimeoutMs) setWatch({ phase: "timeout", neverRestarted: true });
+            else setWatch({ ...watch });
+            return;
+          }
+          // voltou e a sessão ainda vale: o histórico diz como terminou a troca
+          setRecord(r);
+          setWatch(await bootOutcome(record));
+        })
+        .catch((err: unknown) => setWatch(afterError(err, watch)));
+    }, pollMs);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [record, watch, pollMs]);
 
   const chosen = points?.find((p) => p.fileName === fileName) ?? null;
   const word = confirmWord(target);
@@ -683,7 +799,16 @@ export function RestoreDialog({
     }
   }
 
-  const done = record && (record.status === "success" || record.status === "warning" || record.status === "failed");
+  const done = record && isFinal(record);
+  const watching = watch !== null && (watch.phase === "waiting" || watch.phase === "down");
+  const concluded = watch !== null && !watching;
+  // O registro de antes do reinício não sabe como a troca terminou: o acompanhamento sabe.
+  const shown: BackupRecord | null =
+    record && watch?.phase === "undone"
+      ? { ...record, status: "failed" }
+      : record && watch && (watch.phase === "relogin" || watch.phase === "success")
+        ? { ...record, status: "success" }
+        : record;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div
@@ -788,7 +913,7 @@ export function RestoreDialog({
         {record && (
           <>
             <div className="flex items-center gap-2 text-sm">
-              <RecordBadge record={record} />
+              <RecordBadge record={shown ?? record} />
               <span className="text-muted-foreground">{record.fileName}</span>
             </div>
             <StepList record={record} />
@@ -798,9 +923,59 @@ export function RestoreDialog({
                 {w}
               </p>
             ))}
-            {!done && <p className="text-xs text-muted-foreground">Pode fechar esta janela: a restauração continua no servidor.</p>}
+            {watch?.phase === "waiting" && (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="panel-restart">
+                <Loader2 className="h-4 w-4 animate-spin" /> O painel vai reiniciar em instantes para terminar a restauração. Esta janela acompanha até ele voltar.
+              </p>
+            )}
+            {watch?.phase === "down" && (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="panel-restart">
+                <Loader2 className="h-4 w-4 animate-spin" /> O painel está reiniciando para terminar a restauração…
+              </p>
+            )}
+            {watch?.phase === "relogin" && (
+              <p className="text-sm text-emerald-400" data-testid="panel-restart">
+                O painel reiniciou com o estado do backup. Entre de novo com o usuário e a senha do backup (a sessão de antes não vale mais).
+              </p>
+            )}
+            {watch?.phase === "success" && (
+              <p className="text-sm text-emerald-400" data-testid="panel-restart">
+                Painel restaurado: a troca terminou na subida. O estado anterior ficou guardado na pasta de backups do painel.
+              </p>
+            )}
+            {watch?.phase === "undone" && (
+              <p className="text-sm text-destructive" data-testid="panel-restart">
+                A troca falhou na subida e foi desfeita: o painel voltou ao estado de antes.
+                {watch.error ? ` Motivo: ${watch.error}` : ""}
+              </p>
+            )}
+            {watch?.phase === "back" && (
+              <p className="text-sm text-amber-400" data-testid="panel-restart">
+                O painel voltou, mas não deu para confirmar o resultado da troca. Confira no histórico de backups.
+              </p>
+            )}
+            {watch?.phase === "expired" && (
+              <p className="text-sm text-amber-400" data-testid="panel-restart">
+                Sua sessão expirou. Entre de novo e confira no histórico de backups se a restauração terminou.
+              </p>
+            )}
+            {watch?.phase === "timeout" && (
+              <p className="text-sm text-destructive" data-testid="panel-restart">
+                {watch.neverRestarted
+                  ? `O painel ainda não reiniciou depois de ${Math.max(1, Math.round(restartTimeoutMs / 60_000))} minuto(s). A troca ficou preparada: reinicie o container do painel na VPS (docker restart) para terminar a restauração.`
+                  : `O painel não voltou depois de ${Math.max(1, Math.round(restartTimeoutMs / 60_000))} minuto(s). Confira o container do painel na VPS (docker logs) — se a troca ficou pela metade, ele explica o que fazer.`}
+              </p>
+            )}
+            {lost && (
+              <p className="text-sm text-amber-400">
+                Sem resposta do servidor há algum tempo. A restauração continua lá: confira o resultado no histórico de backups.
+              </p>
+            )}
+            {!done && !watch && !lost && (
+              <p className="text-xs text-muted-foreground">Pode fechar esta janela: a restauração continua no servidor.</p>
+            )}
             <div className="flex justify-end gap-2">
-              {done && target.kind === "panel" && record.status !== "failed" && (
+              {target.kind === "panel" && (concluded || (done && record.status !== "failed")) && (
                 <Button onClick={() => window.location.reload()}>Recarregar a página</Button>
               )}
               <Button variant="outline" onClick={onClose}>

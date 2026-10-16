@@ -19,7 +19,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,13 @@ const TARGET_CONTAINER = "paas-fase4-target";
 const PUBLIC_IP = "203.0.113.10";
 
 const DATA_DIR = await mkdtemp(path.join(tmpdir(), "paas-fase4-e2e-"));
-const FIXTURE_DIR = await mkdtemp(path.join(tmpdir(), "paas-fase4-app-"));
+// A API só aceita projeto "existing" dentro da pasta de projetos (achado do
+// E2E da fase 4 na revisão: a fixture em /tmp era recusada com
+// source_outside_projects_dir e a cadeia test:e2e parava antes do test:mail).
+// A pasta de projetos do servidor de teste é isolada e a fixture fica nela.
+const PROJECTS_DIR = await mkdtemp(path.join(tmpdir(), "paas-fase4-projects-"));
+const FIXTURE_DIR = path.join(PROJECTS_DIR, "app-inseguro");
+await mkdir(FIXTURE_DIR, { recursive: true });
 let server: ChildProcess | null = null;
 let passed = 0;
 
@@ -159,6 +165,7 @@ server = spawn("pnpm", ["--filter", "@paas/server", "exec", "tsx", "src/index.ts
     PORT: String(API_PORT),
     SETUP_TOKEN: TOKEN,
     PAAS_DATA_DIR: DATA_DIR,
+    PAAS_PROJECTS_DIR: PROJECTS_DIR,
     PAAS_TARGET_CONTAINER: TARGET_CONTAINER,
     PAAS_CADDY_HTTP_PORT: "18280",
     PAAS_CADDY_HTTPS_PORT: "18281",
@@ -348,8 +355,11 @@ try {
 
   // Mock determinístico: 127.0.0.2 é reservado para teste em várias DNSBLs.
   const listedResolver: BlacklistResolverLike = { resolve4: async () => ["127.0.0.2"] };
+  // "Limpo" exige que o ponto de teste da lista (2.0.0.127, sempre listado)
+  // responda — sem ele a lista não é confiável e o status é unknown.
   const cleanResolver: BlacklistResolverLike = {
-    resolve4: async () => {
+    resolve4: async (name: string) => {
+      if (name.startsWith("2.0.0.127.")) return ["127.0.0.2"];
       const err = new Error("queryA ENOTFOUND") as Error & { code: string };
       err.code = "ENOTFOUND";
       throw err;
@@ -397,15 +407,18 @@ try {
 
   // -------------------------------------------------------------------------
   step("8. Scheduler: intervalo configurável, roda e persiste última execução");
-  await api("PUT", "/api/security/monitor/config", { intervalMs: 10_000 });
+  // O serviço aplica um piso de 60 s ao intervalo (um scan completo leva
+  // dezenas de segundos; ver monitor-service.ts): o E2E usa o próprio piso.
+  const INTERVAL_MS = 60_000;
+  await api("PUT", "/api/security/monitor/config", { intervalMs: INTERVAL_MS });
   const stateBefore = await api<{ schedulerRunning: boolean; lastRunAt: string | null; config: { intervalMs: number } }>(
     "GET",
     "/api/security/monitor/last",
   );
   assert.equal(stateBefore.schedulerRunning, true, "agendador deveria estar ativo");
-  assert.equal(stateBefore.config.intervalMs, 10_000);
+  assert.equal(stateBefore.config.intervalMs, INTERVAL_MS);
   const firstRunAt = stateBefore.lastRunAt;
-  await sleep(25_000);
+  await sleep(INTERVAL_MS + 20_000);
   const stateAfter = await api<{ lastRunAt: string | null; lastResult: { id: string } | null }>(
     "GET",
     "/api/security/monitor/last",
@@ -415,7 +428,7 @@ try {
   const monitorFile = JSON.parse(
     await readFile(path.join(DATA_DIR, "security", "monitor.json"), "utf8"),
   ) as { intervalMs: number; lastRunAt: string | null; lastResult: unknown };
-  assert.equal(monitorFile.intervalMs, 10_000, "intervalo persistido em disco");
+  assert.equal(monitorFile.intervalMs, INTERVAL_MS, "intervalo persistido em disco");
   assert.equal(monitorFile.lastRunAt, stateAfter.lastRunAt, "última execução persistida em disco");
   assert.ok(monitorFile.lastResult, "último resultado persistido em disco");
   ok("agendador rodou sozinho (novo lastRunAt) e persistiu config+resultado em data/security/monitor.json");
@@ -461,7 +474,7 @@ try {
     await run("docker", ["network", "rm", "paas-net"]).catch(() => undefined);
   }
   await rm(DATA_DIR, { recursive: true, force: true });
-  await rm(FIXTURE_DIR, { recursive: true, force: true });
+  await rm(PROJECTS_DIR, { recursive: true, force: true });
   // fixture continua no host (modo existing não copia); removida acima
   console.log("  containers/rede/dirs de teste removidos");
 }

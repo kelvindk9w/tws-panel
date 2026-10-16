@@ -67,6 +67,15 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+describe("manualCertificatePaths — um par de arquivos por domínio", () => {
+  // Achado 7 da revisão: a-b.exemplo.com e a.b-exemplo.com caíam nos mesmos
+  // /etc/caddy/certs/a-b-exemplo-com.crt/.key — um certificado sobrescrevia o outro.
+  it("domínios que só diferem na posição de ponto e hífen não dividem arquivos", () => {
+    expect(manualCertificatePaths("a-b.exemplo.com")).not.toEqual(manualCertificatePaths("a.b-exemplo.com"));
+    expect(manualCertificatePaths("a-b.exemplo.com").cert).toBe("/etc/caddy/certs/a--b-exemplo-com.crt");
+  });
+});
+
 describe("renderCaddyfile — certificado manual", () => {
   it("nome manual sai do bloco automático e ganha bloco próprio com tls <cert> <key>", () => {
     const out = renderCaddyfile(

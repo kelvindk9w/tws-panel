@@ -64,9 +64,11 @@
     "TimezoneService.apply (projetos marcados)"
   ],
   "testes": [
-    "apps/server/tests/deploy-timezone.test.ts"
+    "apps/server/tests/deploy-timezone.test.ts",
+    "apps/server/tests/deploy-concurrency.test.ts"
   ],
   "observacoes": [
-    "Se a imagem foi apagada do servidor, o reinício falha com o motivo no job; aí é preciso um deploy."
+    "Se a imagem foi apagada do servidor, o reinício falha com o motivo no job; aí é preciso um deploy.",
+    "16/10/2026 — achado 10 da revisão: startRecreate usa a mesma reserva do deploy (DeployService.reserveProject). Um reinício e um deploy (ou dois reinícios) pedidos juntos: o segundo recebe 409 deploy_in_progress. Teste: apps/server/tests/deploy-concurrency.test.ts."
   ]
 }
