@@ -21,7 +21,7 @@
  *
  * Este módulo é propositalmente livre de I/O para ser 100% testável.
  */
-import { isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
+import { isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
 import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
 
@@ -50,6 +50,58 @@ export const LYNIS_RUN_CMD = "lynis audit system --quick >/dev/null 2>&1 || true
 export const LYNIS_REPORT_CMD =
   "grep -E '^hardening_index=' /var/log/lynis-report.dat 2>/dev/null | tail -1";
 
+// ---------------------------------------------------------------------------
+// Fuso horário da VPS (Configurações → Fuso horário)
+// ---------------------------------------------------------------------------
+
+/**
+ * Lê o nome do fuso do host. O timedatectl é a fonte certa no Ubuntu; sem
+ * systemd (container, LXC), o alvo do link /etc/localtime diz o mesmo.
+ * Somente leitura. Lido pelo host bridge porque a montagem
+ * /etc/localtime:/host/etc/localtime congela: o timedatectl troca o LINK, e
+ * a montagem continua presa ao arquivo antigo até recriar o container.
+ */
+export const HOST_TIMEZONE_READ_CMD = "timedatectl show -p Timezone --value 2>/dev/null || readlink -f /etc/localtime";
+
+/** Nome do fuso na saída de HOST_TIMEZONE_READ_CMD (null = não reconhecido). */
+export function parseHostTimezoneOutput(output: string): string | null {
+  const line = output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .at(-1);
+  if (!line) return null;
+  const name = line.replace(/^\/usr\/share\/zoneinfo\//, "").replace(/^(?:posix|right)\//, "");
+  return isSafeTimezoneName(name) ? name : null;
+}
+
+/**
+ * Troca o fuso do host. O nome precisa estar na lista IANA fechada
+ * (isKnownTimezone) — nunca texto livre — e entra entre aspas simples (a
+ * regex do nome não admite aspas). Sem timedatectl funcionando, troca o link
+ * /etc/localtime direto, só se o arquivo do fuso existir. O /etc/timezone,
+ * quando existe (Debian/Ubuntu), acompanha.
+ */
+export function buildSetTimezoneCommand(zone: string): string {
+  if (!isKnownTimezone(zone)) throw new Error(`fuso fora da lista IANA: ${zone.slice(0, 60)}`);
+  const file = `/usr/share/zoneinfo/${zone}`;
+  return (
+    `{ timedatectl set-timezone '${zone}' 2>/dev/null || { test -f '${file}' && ln -sf '${file}' /etc/localtime; }; } ` +
+    `&& { test ! -f /etc/timezone || echo '${zone}' > /etc/timezone; }`
+  );
+}
+
+/** true só para um comando que o próprio buildSetTimezoneCommand montaria. */
+export function isSetTimezoneCommand(cmd: string): boolean {
+  const m = /^\{ timedatectl set-timezone '([^']{1,80})' /.exec(cmd);
+  if (!m) return false;
+  try {
+    return buildSetTimezoneCommand(m[1]!) === cmd;
+  } catch {
+    return false;
+  }
+}
+
 /** Conjunto completo de comandos fixos somente-leitura permitidos no host. */
 export function fixedReadOnlyCommands(): Set<string> {
   return new Set<string>([
@@ -60,6 +112,7 @@ export function fixedReadOnlyCommands(): Set<string> {
     LYNIS_MTIME_CMD,
     LYNIS_RUN_CMD,
     LYNIS_REPORT_CMD,
+    HOST_TIMEZONE_READ_CMD,
   ]);
 }
 
@@ -196,7 +249,9 @@ export function buildPhaseFollowCommand(opts: {
 /**
  * true se o comando pode ser executado no host real pelo host bridge.
  * Permitidos:
- *  1. comandos fixos somente-leitura (checks do scanner, baseline, Lynis);
+ *  1. comandos fixos somente-leitura (checks do scanner, baseline, Lynis e
+ *     a leitura do fuso);
+ *  1b. a troca do fuso, com um nome da lista IANA (isSetTimezoneCommand);
  *  2. invocações dos scripts de fase (reconstruídas e validadas via parsing) —
  *     na forma direta, na forma DESTACADA (lib.sh --paas-run-detached) e no
  *     reatache somente-leitura (lib.sh --paas-run-follow).
@@ -204,6 +259,7 @@ export function buildPhaseFollowCommand(opts: {
  */
 export function isAllowedHostCommand(cmd: string, remoteDir: string, runDir?: string): boolean {
   if (fixedReadOnlyCommands().has(cmd)) return true;
+  if (isSetTimezoneCommand(cmd)) return true;
   return parsePhaseScriptCommand(cmd, remoteDir, runDir) !== null;
 }
 
