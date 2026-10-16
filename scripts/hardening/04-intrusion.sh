@@ -33,6 +33,9 @@ for port in $EXTRA_SSH_PORTS; do
   case "$port" in
     ''|*[!0-9]*) die "porta inválida: $port" ;;
   esac
+  if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    die "porta fora do intervalo 1-65535: $port"
+  fi
 done
 
 if [ "$MODE" = "rollback" ]; then

@@ -229,6 +229,16 @@ describe.skipIf(!HAS_DOCKER)("fases 03/04 e lib.sh num Ubuntu real", { timeout: 
       }
     });
 
+    it("--ssh-port fora de 1-65535 ou não numérico é recusado nas fases 03 e 04", () => {
+      for (const script of ["03-firewall.sh", "04-intrusion.sh"]) {
+        for (const ruim of ["0", "70000", "abc", "-5"]) {
+          const r = sh(`bash /opt/h/${script} --dry-run --ssh-port ${ruim} 2>&1; echo EXIT=$?`);
+          expect(r.out, `${script} ${ruim}`).toContain("EXIT=1");
+          expect(r.out, `${script} ${ruim}`).toMatch(/porta (inválida|fora do intervalo)/);
+        }
+      }
+    });
+
     it("fail2ban (fase 04) vigia a porta real do SSH", () => {
       startSshd([2222]);
       const r = sh("bash /opt/h/04-intrusion.sh --dry-run");
