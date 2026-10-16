@@ -605,6 +605,37 @@ describe("backup de projeto", () => {
     expect(files).toEqual(expect.arrayContaining(["codigo/codigo.tar", "pastas/web__app_storage.tar", "bancos/cache-redis.tar"]));
   });
 
+  it("nomes que colidem depois de normalizados ganham sufixo: nenhum dump ou pasta sobrescreve outro (achado 13)", async () => {
+    const capture = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script) => (script.includes("pg_database") ? "a b\na/b\na_b\nA_B\n" : capture(c, script));
+    await service.updateTarget(
+      projectTargetId("p1"),
+      { extraFolders: [{ service: "web", path: "/data/x" }, { service: "web", path: "/data_x" }] },
+      "admin",
+    );
+    const r = await backup();
+    expect(r.status).toBe("success");
+    const arquivo = JSON.parse(await readFile(path.join(dir, "backups", "loja", r.fileName!), "utf8")) as { files: Record<string, string> };
+    const conteudo = (f: string) => Buffer.from(arquivo.files[f]!, "base64").toString();
+    const manifest = JSON.parse(conteudo("manifesto.json")) as {
+      items: Array<{ type: string; destination?: string; file?: string; databases?: Array<{ name: string; file: string }> }>;
+    };
+    const dbs = manifest.items.find((i) => i.type === "database")!.databases!;
+    expect(new Set(dbs.map((d) => d.file)).size).toBe(4);
+    for (const d of dbs) expect(conteudo(d.file)).toBe(`dump c-db ${d.name} banco`);
+    expect(dbs.map((d) => d.file)).toEqual(["bancos/db/a_b.sql", "bancos/db/a_b-2.sql", "bancos/db/a_b-3.sql", "bancos/db/A_B-4.sql"]);
+    const extras = manifest.items.filter((i) => i.type === "extra");
+    expect(new Set(extras.map((e) => e.file)).size).toBe(2);
+    for (const e of extras) expect(conteudo(e.file!)).toBe(`tar c-web ${e.destination}`);
+    // e a restauração devolve cada um ao seu lugar
+    const rr = await service.restore(projectTargetId("p1"), { fileName: r.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(rr.id)).status).not.toBe("failed");
+    expect(docker.dbInput.find((d) => d.args[0] === "a/b")!.content).toBe("dump c-db a/b banco");
+    expect(docker.dbInput.find((d) => d.args[0] === "A_B")!.content).toBe("dump c-db A_B banco");
+    expect(docker.restored.map((x) => x.content)).toEqual(expect.arrayContaining(["tar c-web /data/x", "tar c-web /data_x"]));
+  });
+
   it("o primeiro deploy vem antes; e-mail sem servidor", async () => {
     projects = [project({ lastDeployAt: null })];
     await expect(service.runNow(projectTargetId("p1"), "admin")).rejects.toMatchObject({ code: "not_deployed" });

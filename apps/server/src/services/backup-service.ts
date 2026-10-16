@@ -1398,6 +1398,18 @@ export class BackupService {
     await this.ensureSpace(estimate, this.remoteFactor());
 
     const items: ManifestItem[] = [];
+    // Nomes de arquivo dentro do .7z: a troca de caracteres ("a b" e "a/b"
+    // viram "a_b") podia dar o mesmo nome a dois itens, e o segundo
+    // sobrescrevia o primeiro. Repetido (sem diferenciar maiúsculas, por
+    // causa do Windows) ganha sufixo: a_b.sql, a_b-2.sql… O manifesto guarda
+    // o arquivo de cada item, então a restauração não muda.
+    const used = new Set<string>();
+    const unique = (dir: string, base: string, ext: string): string => {
+      let name = base;
+      for (let n = 2; used.has(`${dir}/${name}${ext}`.toLowerCase()); n++) name = `${base}-${n}`;
+      used.add(`${dir}/${name}${ext}`.toLowerCase());
+      return `${dir}/${name}${ext}`;
+    };
     if (dbs.length > 0) {
       this.step(r, "Copiar os bancos de dados");
       await mkdir(path.join(content, "bancos"), { recursive: true });
@@ -1410,6 +1422,7 @@ export class BackupService {
           const names = (await docker.execCapture(c.id, list!.script, [])).split("\n").map((s) => s.trim()).filter(Boolean);
           const dir = path.join(content, "bancos", base);
           await mkdir(dir, { recursive: true });
+          used.add(`bancos/${base}/_papeis.sql`.toLowerCase());
           const item: ManifestItem = { type: "database", service: db.service, engine: "postgres", databases: [] };
           try {
             await docker.execToFile(c.id, globals!.script, [], path.join(dir, "_papeis.sql"));
@@ -1418,9 +1431,9 @@ export class BackupService {
             r.warnings.push(`${db.service}: os papéis (usuários) do Postgres não foram copiados; os bancos foram.`);
           }
           for (const name of names) {
-            const file = `${name.replace(/[^A-Za-z0-9._-]+/g, "_")}.sql`;
-            await this.dumpTo(c.id, one!.script, [name], path.join(dir, file), db.service);
-            item.databases!.push({ name, file: `bancos/${base}/${file}` });
+            const file = unique(`bancos/${base}`, name.replace(/[^A-Za-z0-9._-]+/g, "_"), ".sql");
+            await this.dumpTo(c.id, one!.script, [name], path.join(content, file), db.service);
+            item.databases!.push({ name, file });
           }
           items.push(item);
         } else if (db.engine === "redis") {
@@ -1437,12 +1450,12 @@ export class BackupService {
             );
             this.incomplete.add(r);
           }
-          const file = `bancos/${base}-redis.tar`;
+          const file = unique("bancos", `${base}-redis`, ".tar");
           await docker.copyOut(c.id, "/data", path.join(content, file));
           items.push({ type: "database", service: db.service, engine: "redis", file, destination: "/data" });
         } else {
           const [all] = dumpPlan(db.engine);
-          const file = `bancos/${base}${all!.ext}`;
+          const file = unique("bancos", base, all!.ext ?? "");
           await this.dumpTo(c.id, all!.script, [], path.join(content, file), db.service);
           items.push({ type: "database", service: db.service, engine: db.engine, file });
         }
@@ -1452,14 +1465,14 @@ export class BackupService {
       this.step(r, "Copiar os arquivos");
       for (const m of mounts) {
         const c = need(m.service);
-        const file = `volumes/${itemFileName(m.service, m.destination)}.tar`;
+        const file = unique("volumes", itemFileName(m.service, m.destination), ".tar");
         await mkdir(path.join(content, "volumes"), { recursive: true });
         await docker.copyOut(c.id, m.destination, path.join(content, file));
         items.push({ type: "mount", service: m.service, destination: m.destination, mountType: m.type, source: m.source, isFile: m.isFile, file });
       }
       for (const x of extras) {
         const c = need(x.service);
-        const file = `pastas/${itemFileName(x.service, x.path)}.tar`;
+        const file = unique("pastas", itemFileName(x.service, x.path), ".tar");
         await mkdir(path.join(content, "pastas"), { recursive: true });
         await docker.copyOut(c.id, x.path, path.join(content, file));
         items.push({ type: "extra", service: x.service, destination: x.path, file });
