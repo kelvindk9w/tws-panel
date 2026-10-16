@@ -170,8 +170,14 @@ describe("sendTestEmail — envio", () => {
       subject: "Teste do TWS Panel",
     });
     expect(o.text).toContain("servidor de e-mail da sua VPS");
-    expect(o.envId).toBe(`tws-teste-${test.id}`);
+    // O ENVID é segredo do painel: o destinatário vê o id, o Message-ID e o
+    // texto, e nenhum deles pode permitir montá-lo (recibo forjado, achado 19).
+    expect(o.envId).toMatch(/^tws-teste-[0-9a-f]{16}-[0-9a-f]{24}$/);
     expect(o.messageId).toBe(`<tws-teste-${test.id}@${DOMAIN}>`);
+    expect(o.envId).not.toBe(`tws-teste-${test.id}`);
+    expect(o.messageId).not.toContain(o.envId);
+    expect(o.text).not.toContain(o.envId);
+    expect(JSON.stringify(test)).not.toContain(o.envId);
     expect(test).toMatchObject({
       domain: DOMAIN,
       from: `postmaster@${DOMAIN}`,
@@ -291,7 +297,7 @@ describe("testEmailStatus — destino da mensagem", () => {
   async function sendOne() {
     const s = service();
     const test = await s.sendTestEmail(DOMAIN, TO);
-    return { s, test, envId: `tws-teste-${test.id}` };
+    return { s, test, envId: sent.at(-1)!.envId };
   }
 
   it("na fila, sem tentativa ainda → 'queued' (consulta a fila pelo destinatário)", async () => {

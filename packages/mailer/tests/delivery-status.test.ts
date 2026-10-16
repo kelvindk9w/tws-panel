@@ -141,6 +141,24 @@ describe("interpretDeliveryReport (texto do aviso de entrega do Stalwart)", () =
 describe("findDeliveryReport (JMAP na caixa postmaster@)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  const USER = "postmaster@envio.exemplo.com.br";
+  const SECRET = "tws-teste-0123456789abcdef-aaaaaaaaaaaaaaaaaaaaaaaa";
+  const OK_TEXT = `<${TO}> (delivered to 'mx' with code 250 (2.0.0) 'OK')`;
+  const BOUNCE_TEXT = `<${TO}> (host 'mx' rejected command 'RCPT TO' with code 550 (5.1.1) 'No such user')`;
+  const dsnOf = (envId: string) => `Reporting-MTA: dns;mail.envio.exemplo.com.br\r\nOriginal-Envelope-Id: ${envId}\r\n\r\n`;
+  const opts = { baseUrl: "http://paas-stalwart:8080", username: USER, password: "senha", to: TO, envId: SECRET, since: new Date() };
+
+  interface Mail {
+    subject: string;
+    text: string;
+    /** Remetente do JMAP (padrão: o MAILER-DAEMON do domínio do painel). */
+    from?: string | null;
+    /** Corpo da parte message/delivery-status. */
+    dsn?: string;
+    /** Cabeçalhos originais (message/rfc822). */
+    headers?: string;
+  }
+
   /**
    * JMAP de mentira no formato do aviso do Stalwart (dsn.rs v0.11.8): o texto
    * por destinatário em textBody; o message/delivery-status (`dsn`) e o
@@ -148,11 +166,11 @@ describe("findDeliveryReport (JMAP na caixa postmaster@)", () => {
    * pelo download do JMAP.
    */
   function stubJmap(
-    emails: Array<{ subject: string; text: string; receivedAt?: string; headers?: string; dsn?: string }>,
-    calls: Array<{ url: string; body?: unknown; auth?: string | null }>,
+    emails: Mail[],
+    calls: Array<{ url: string; body?: unknown; auth?: string | null }> = [],
     session: Record<string, unknown> = {
       primaryAccounts: { "urn:ietf:params:jmap:mail": "acc1" },
-      downloadUrl: "https://mail.exemplo.com.br/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
+      downloadUrl: "http://mail.envio.exemplo.com.br:8080/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
     },
   ) {
     const blobs = new Map<string, string>();
@@ -187,7 +205,8 @@ describe("findDeliveryReport (JMAP na caixa postmaster@)", () => {
                   return {
                     id: `e${i}`,
                     subject: e.subject,
-                    receivedAt: e.receivedAt ?? "2026-10-01T12:00:05Z",
+                    from: e.from === null ? null : [{ name: "x", email: e.from ?? "MAILER-DAEMON@envio.exemplo.com.br" }],
+                    receivedAt: "2026-10-01T12:00:05Z",
                     textBody: [{ partId: `p${i}` }],
                     bodyValues: { [`p${i}`]: { value: e.text } },
                     attachments,
@@ -202,172 +221,142 @@ describe("findDeliveryReport (JMAP na caixa postmaster@)", () => {
     );
   }
 
-  it("autentica como a caixa, consulta só o que chegou depois do envio e acha o aviso do destinatário", async () => {
+  const legit: Mail = { subject: "Successfully delivered message", text: OK_TEXT, dsn: dsnOf(SECRET) };
+
+  it("autentica como a caixa, consulta só o que chegou depois do envio e acha o aviso do servidor", async () => {
     const calls: Array<{ url: string; body?: unknown; auth?: string | null }> = [];
-    stubJmap(
-      [
-        { subject: "Relatório DMARC", text: "nada" },
-        {
-          subject: "Successfully delivered message",
-          text: `<${TO}> (delivered to 'mx' with code 250 (2.0.0) 'OK')`,
-          headers: "Message-ID: <tws-teste-x@envio.exemplo.com.br>",
-        },
-      ],
-      calls,
-    );
-    const report = await findDeliveryReport({
-      baseUrl: "http://paas-stalwart:8080",
-      username: "postmaster@envio.exemplo.com.br",
-      password: "senha",
-      to: TO,
-      envId: "tws-teste-x",
-      since: new Date("2026-10-01T12:00:00.123Z"),
-    });
+    stubJmap([{ subject: "Relatório DMARC", text: "nada" }, legit], calls);
+    const report = await findDeliveryReport({ ...opts, since: new Date("2026-10-01T12:00:00.123Z") });
     expect(report).toMatchObject({ state: "delivered" });
     expect(calls[0]!.url).toBe("http://paas-stalwart:8080/.well-known/jmap");
     expect(calls[1]!.url).toBe("http://paas-stalwart:8080/jmap/");
-    const expectedAuth = `Basic ${Buffer.from("postmaster@envio.exemplo.com.br:senha").toString("base64")}`;
+    const expectedAuth = `Basic ${Buffer.from(`${USER}:senha`).toString("base64")}`;
     expect(calls.every((c) => c.auth === expectedAuth)).toBe(true);
     const body = calls[1]!.body as { methodCalls: Array<[string, Record<string, unknown>, string]> };
     expect(body.methodCalls[0]![1]).toMatchObject({ accountId: "acc1", filter: { after: "2026-10-01T12:00:00Z" } });
-  });
-
-  // Achado 19 da revisão: o aviso era casado só pelo destinatário. Dois testes
-  // ao mesmo endereço com ~30 s de intervalo: o recibo do ANTERIOR (mais novo
-  // na caixa que o do atual, ainda não chegado) virava o resultado do atual.
-  // O aviso do Stalwart traz o ENVID (Original-Envelope-Id) e os cabeçalhos
-  // originais (Message-ID) — o painel exige o da própria mensagem.
-  it("com envId: o aviso de OUTRA mensagem ao mesmo destinatário não serve; o da própria serve", async () => {
-    const outro = {
-      subject: "Failed to deliver message",
-      text: `<${TO}> (host 'mx' rejected command 'RCPT TO' with code 550 (5.1.1) 'No such user')`,
-      dsn: "Reporting-MTA: dns;mail.exemplo.com.br\r\nOriginal-Envelope-Id: tws-teste-aaaa\r\n",
-      headers: "Message-ID: <tws-teste-aaaa@envio.exemplo.com.br>\r\n",
-    };
-    const proprio = {
-      subject: "Successfully delivered message",
-      text: `<${TO}> (delivered to 'mx' with code 250 (2.0.0) 'OK')`,
-      dsn: "Reporting-MTA: dns;mail.exemplo.com.br\r\nOriginal-Envelope-Id: tws-teste-bbbb\r\n",
-    };
-    const opts = { baseUrl: "http://paas-stalwart:8080", username: "u", password: "p", to: TO, since: new Date(), envId: "tws-teste-bbbb" };
-
-    stubJmap([outro], []);
-    await expect(findDeliveryReport(opts)).resolves.toBeNull();
-
-    const calls: Array<{ url: string; body?: unknown }> = [];
-    stubJmap([outro, proprio], calls);
-    await expect(findDeliveryReport(opts)).resolves.toMatchObject({ state: "delivered" });
-    // pede as partes anexas e baixa pelo endereço interno, no caminho da sessão
-    const body = calls[1]!.body as { methodCalls: Array<[string, Record<string, unknown>, string]> };
-    expect(body.methodCalls[1]![1]).toMatchObject({ properties: expect.arrayContaining(["attachments"]) });
+    expect(body.methodCalls[1]![1]).toMatchObject({ properties: expect.arrayContaining(["from", "attachments"]) });
+    // baixa pelo endereço interno, no caminho que a sessão anuncia
     expect(calls.some((c) => c.url === "http://paas-stalwart:8080/jmap/download/acc1/b-dsn-1/aviso?accept=application%2Foctet-stream")).toBe(true);
   });
 
-  it("ENVID só nos cabeçalhos originais (Message-ID), ou já no texto do aviso: serve", async () => {
-    const opts = { baseUrl: "http://x", username: "u", password: "p", to: TO, since: new Date(), envId: "tws-teste-cccc" };
-    stubJmap(
-      [
-        {
-          subject: "Failed to deliver message",
-          text: `<${TO}> (host 'mx' rejected command 'RCPT TO' with code 550 (5.1.1) 'No such user')`,
-          dsn: "Reporting-MTA: dns;mail.exemplo.com.br\r\n",
-          headers: "Message-ID: <tws-teste-cccc@envio.exemplo.com.br>\r\n",
-        },
-      ],
-      [],
-      { primaryAccounts: { "urn:ietf:params:jmap:mail": "acc1" } }, // sessão sem downloadUrl: caminho padrão
-    );
-    await expect(findDeliveryReport(opts)).resolves.toMatchObject({ state: "bounced" });
-
-    stubJmap([{ subject: "Successfully delivered message", text: `<${TO}> (delivered to 'mx' with code 250 'OK') tws-teste-cccc` }], []);
+  // Achado 19: aviso de OUTRA mensagem ao mesmo destinatário.
+  it("o aviso de OUTRA mensagem ao mesmo destinatário não serve; o da própria serve", async () => {
+    const outro: Mail = { subject: "Failed to deliver message", text: BOUNCE_TEXT, dsn: dsnOf("tws-teste-aaaa-bbbb") };
+    stubJmap([outro]);
+    await expect(findDeliveryReport(opts)).resolves.toBeNull();
+    stubJmap([outro, legit]);
     await expect(findDeliveryReport(opts)).resolves.toMatchObject({ state: "delivered" });
   });
 
-  it("anexo que não é parte do aviso (ou sem blobId) não é baixado; download recusado vira erro", async () => {
-    const opts = { baseUrl: "http://x", username: "u", password: "p", to: TO, since: new Date(), envId: "tws-teste-dddd" };
-    const calls: Array<{ url: string }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        calls.push({ url });
-        if (url.endsWith("/.well-known/jmap")) return Response.json({ primaryAccounts: { "urn:ietf:params:jmap:mail": "a" } });
-        if (url.includes("/jmap/download/")) return new Response("", { status: 403 });
-        return Response.json({
-          methodResponses: [
-            [
-              "Email/get",
-              {
-                list: [
-                  {
-                    subject: "Successfully delivered message",
-                    textBody: [{ partId: "1" }],
-                    bodyValues: { "1": { value: `<${TO}> (delivered to 'mx' with code 250 'OK')` } },
-                    attachments: [
-                      { blobId: "img", type: "image/png" },
-                      { type: "message/delivery-status" },
-                      { blobId: "sem-tipo" },
-                    ],
-                  },
-                ],
-              },
-              "g",
-            ],
-          ],
-        });
-      }),
-    );
-    await expect(findDeliveryReport(opts)).resolves.toBeNull();
-    expect(calls.some((c) => c.url.includes("/jmap/download/"))).toBe(false);
+  // Recibo forjado: um destinatário externo vê o Message-ID e o texto e
+  // responde ao postmaster@ com assunto de falha.
+  describe("recibo forjado por quem recebeu o teste", () => {
+    it("remetente externo, mesmo com o ENVID certo na parte delivery-status: recusado", async () => {
+      stubJmap([{ subject: "Failed to deliver message", text: BOUNCE_TEXT, from: "atacante@gmail.com", dsn: dsnOf(SECRET) }]);
+      await expect(findDeliveryReport(opts)).resolves.toBeNull();
+    });
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith("/.well-known/jmap")) return Response.json({ primaryAccounts: { "urn:ietf:params:jmap:mail": "a" } });
-        if (url.includes("/jmap/download/")) return new Response("", { status: 403 });
-        return Response.json({
-          methodResponses: [
-            [
-              "Email/get",
-              {
-                list: [
-                  {
-                    subject: "Successfully delivered message",
-                    textBody: [{ partId: "1" }],
-                    bodyValues: { "1": { value: `<${TO}> (delivered to 'mx' with code 250 'OK')` } },
-                    attachments: [{ blobId: "b", type: "message/delivery-status" }],
-                  },
-                ],
-              },
-              "g",
-            ],
-          ],
-        });
-      }),
-    );
-    await expect(findDeliveryReport(opts)).rejects.toThrow(/403/);
+    it("remetente que só imita o nome (mailer-daemon@dominio-alheio): recusado", async () => {
+      stubJmap([{ subject: "Failed to deliver message", text: BOUNCE_TEXT, from: "MAILER-DAEMON@gmail.com", dsn: dsnOf(SECRET) }]);
+      await expect(findDeliveryReport(opts)).resolves.toBeNull();
+    });
+
+    it("sem remetente no JMAP: recusado", async () => {
+      stubJmap([{ subject: "Failed to deliver message", text: BOUNCE_TEXT, from: null, dsn: dsnOf(SECRET) }]);
+      await expect(findDeliveryReport(opts)).resolves.toBeNull();
+    });
+
+    it("do remetente certo, mas com o ENVID só em texto livre (corpo ou cabeçalho original): recusado", async () => {
+      stubJmap([
+        { subject: "Failed to deliver message", text: `${BOUNCE_TEXT}\n${SECRET}` },
+        { subject: "Failed to deliver message", text: BOUNCE_TEXT, headers: `Message-ID: <${SECRET}@envio.exemplo.com.br>` },
+        { subject: "Failed to deliver message", text: BOUNCE_TEXT, dsn: `Reporting-MTA: dns;x\r\nX-Nota: ${SECRET}\r\n` },
+        { subject: "Failed to deliver message", text: BOUNCE_TEXT, dsn: `Reporting-MTA: dns;x\r\nOriginal-Envelope-Id: ${SECRET}-extra\r\n` },
+      ]);
+      await expect(findDeliveryReport(opts)).resolves.toBeNull();
+    });
+
+    it("ENVID só no texto que o atacante controla, de remetente externo e com anexo: recusado", async () => {
+      stubJmap([{ subject: "Failed to deliver message", text: `${BOUNCE_TEXT} ${SECRET}`, from: "atacante@gmail.com", headers: `Message-ID: <${SECRET}@x>` }]);
+      await expect(findDeliveryReport(opts)).resolves.toBeNull();
+    });
+  });
+
+  it("remetentes do próprio servidor aceitos: MAILER-DAEMON do domínio, do host mail. e o padrão do Stalwart", async () => {
+    for (const from of ["MAILER-DAEMON@envio.exemplo.com.br", "mailer-daemon@mail.envio.exemplo.com.br", "MAILER-DAEMON@mail.localhost", "postmaster@envio.exemplo.com.br"]) {
+      stubJmap([{ ...legit, from }]);
+      await expect(findDeliveryReport(opts)).resolves.toMatchObject({ state: "delivered" });
+    }
+  });
+
+  it("bounce legítimo (recusa) é lido do aviso do servidor", async () => {
+    stubJmap([{ subject: "Failed to deliver message", text: BOUNCE_TEXT, dsn: dsnOf(SECRET) }]);
+    await expect(findDeliveryReport(opts)).resolves.toMatchObject({ state: "bounced" });
   });
 
   it("sem aviso ainda → null", async () => {
-    stubJmap([], []);
-    await expect(
-      findDeliveryReport({ baseUrl: "http://x", username: "u", password: "p", to: TO, envId: "tws-teste-x", since: new Date() }),
-    ).resolves.toBeNull();
+    stubJmap([]);
+    await expect(findDeliveryReport(opts)).resolves.toBeNull();
   });
 
-  it("e-mail sem partes de texto, sem assunto, ou resposta sem Email/get → null", async () => {
+  it("sessão sem downloadUrl usa o caminho padrão do JMAP", async () => {
+    const calls: Array<{ url: string }> = [];
+    stubJmap([legit], calls, { primaryAccounts: { "urn:ietf:params:jmap:mail": "acc1" } });
+    await expect(findDeliveryReport(opts)).resolves.toMatchObject({ state: "delivered" });
+    expect(calls.some((c) => c.url.startsWith("http://paas-stalwart:8080/jmap/download/acc1/"))).toBe(true);
+  });
+
+  it("anexo que não é delivery-status (ou sem blobId) não é baixado; download recusado vira erro", async () => {
+    const calls: Array<{ url: string }> = [];
+    const respond = (attachments: unknown[], download: Response) =>
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          calls.push({ url });
+          if (url.endsWith("/.well-known/jmap")) return Response.json({ primaryAccounts: { "urn:ietf:params:jmap:mail": "a" } });
+          if (url.includes("/jmap/download/")) return download;
+          return Response.json({
+            methodResponses: [
+              [
+                "Email/get",
+                {
+                  list: [
+                    {
+                      subject: "Successfully delivered message",
+                      from: [{ email: "MAILER-DAEMON@envio.exemplo.com.br" }],
+                      textBody: [{ partId: "1" }],
+                      bodyValues: { "1": { value: OK_TEXT } },
+                      attachments,
+                    },
+                  ],
+                },
+                "g",
+              ],
+            ],
+          });
+        }),
+      );
+    respond(
+      [{ blobId: "img", type: "image/png" }, { type: "message/delivery-status" }, { blobId: "sem-tipo" }, { blobId: "r", type: "message/rfc822" }],
+      new Response("", { status: 403 }),
+    );
+    await expect(findDeliveryReport(opts)).resolves.toBeNull();
+    expect(calls.some((c) => c.url.includes("/jmap/download/"))).toBe(false);
+    respond([{ blobId: "b", type: "message/delivery-status" }], new Response("", { status: 403 }));
+    await expect(findDeliveryReport(opts)).rejects.toThrow(/403/);
+  });
+
+  it("e-mail sem remetente/partes, ou resposta sem Email/get → null", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) =>
         String(input).endsWith("/.well-known/jmap")
           ? Response.json({ primaryAccounts: { "urn:ietf:params:jmap:mail": "a" } })
-          : Response.json({ methodResponses: [["Email/get", { list: [{ id: "1" }, { id: "2", textBody: [{}], bodyValues: { p: {} } }] }, "g"]] }),
+          : Response.json({ methodResponses: [["Email/get", { list: [{ id: "1" }, { id: "2", from: [{}], textBody: [{}], bodyValues: { p: {} } }] }, "g"]] }),
       ),
     );
-    const opts = { baseUrl: "http://x", username: "u", password: "p", to: TO, envId: "tws-teste-x", since: new Date(), timeoutMs: 1000 };
     await expect(findDeliveryReport(opts)).resolves.toBeNull();
-
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) =>
@@ -378,7 +367,6 @@ describe("findDeliveryReport (JMAP na caixa postmaster@)", () => {
   });
 
   it("caixa sem conta de e-mail ou consulta recusada → erro", async () => {
-    const opts = { baseUrl: "http://x", username: "u", password: "p", to: TO, envId: "tws-teste-x", since: new Date() };
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({})));
     await expect(findDeliveryReport(opts)).rejects.toThrow(/conta de e-mail/);
     vi.stubGlobal(
@@ -394,9 +382,7 @@ describe("findDeliveryReport (JMAP na caixa postmaster@)", () => {
 
   it("falha na API → erro", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 401 })));
-    await expect(
-      findDeliveryReport({ baseUrl: "http://x", username: "u", password: "p", to: TO, envId: "tws-teste-x", since: new Date() }),
-    ).rejects.toThrow(/401/);
+    await expect(findDeliveryReport(opts)).rejects.toThrow(/401/);
   });
 });
 

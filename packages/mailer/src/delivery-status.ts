@@ -26,16 +26,17 @@
  *    O painel lê esse aviso pela API JMAP do próprio Stalwart, com a senha da
  *    caixa postmaster@ (que ele já guarda).
  *
- *    Um aviso só vale para a mensagem que o gerou: o painel exige o ENVID
- *    dela no aviso. O dsn.rs (v0.11.8) monta multipart/report com três
- *    partes: text/plain (as linhas por destinatário), message/delivery-status
- *    (com "Original-Envelope-Id: <envid>" quando o envio tinha ENVID) e
- *    message/rfc822 só com os cabeçalhos originais (o Message-ID do teste é
- *    `<envid@domínio>`). As duas últimas não são text/*, então o JMAP não as
- *    devolve em bodyValues: vêm em `attachments`, e o painel baixa cada uma
- *    (pequenas) pelo download do próprio JMAP para procurar o ENVID. Casar
- *    só pelo destinatário fazia um teste herdar o recibo do teste anterior
- *    ao mesmo endereço.
+ *    Um aviso só vale se for MESMO do servidor e da mensagem certa. O
+ *    destinatário externo vê o Message-ID e o texto do teste e pode responder
+ *    ao postmaster@ com assunto "Failed to deliver message"; por isso:
+ *    (1) o ENVID é um segredo do painel (aleatório, só no envelope SMTP, nunca
+ *    no texto nem no Message-ID); (2) ele só é lido da linha
+ *    "Original-Envelope-Id:" da parte message/delivery-status (anexo no JMAP,
+ *    baixado pelo download do próprio JMAP), nunca de texto livre; (3) o
+ *    remetente precisa ser MAILER-DAEMON/postmaster do domínio do próprio
+ *    painel (o campo `from` do JMAP). O item 3 NÃO autentica sozinho: o From
+ *    de e-mail que chega de fora é falsificável (com DMARC em p=none nada o
+ *    barra). Quem segura a fraude é o item 1: sem o ENVID, não há recibo.
  */
 import type { MailTestState } from "@paas/core";
 
@@ -154,8 +155,9 @@ export interface FindDeliveryReportOptions {
   password: string;
   to: string;
   /**
-   * ENVID da mensagem (o mesmo do MAIL FROM ... ENVID=). Só um aviso que o
-   * cita (Original-Envelope-Id ou Message-ID original) conta.
+   * ENVID da mensagem (o mesmo do MAIL FROM ... ENVID=). Segredo do painel:
+   * só vale o aviso do servidor cuja parte delivery-status o traz em
+   * Original-Envelope-Id.
    */
   envId: string;
   /** Só avisos que chegaram depois disto. */
@@ -163,8 +165,22 @@ export interface FindDeliveryReportOptions {
   timeoutMs?: number;
 }
 
-/** Partes do aviso que identificam a mensagem original. */
-const REPORT_PART = /^(message\/(delivery-status|global-delivery-status|rfc822|global-headers)|text\/rfc822-headers)$/i;
+/** Parte do aviso que traz o Original-Envelope-Id. */
+const STATUS_PART = /^message\/(global-)?delivery-status$/i;
+
+/** Quem o Stalwart usa como remetente dos avisos (nome fixo, domínio do painel ou o padrão dele). */
+const REPORT_SENDER_LOCALS = new Set(["mailer-daemon", "postmaster"]);
+
+function isReportSender(email: string | undefined, mailboxUser: string): boolean {
+  if (!email) return false;
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return false;
+  const local = email.slice(0, at).toLowerCase();
+  const host = email.slice(at + 1).toLowerCase();
+  const domain = mailboxUser.slice(mailboxUser.lastIndexOf("@") + 1).toLowerCase();
+  const allowed = new Set([domain, `mail.${domain}`, "localhost", "mail.localhost"]);
+  return REPORT_SENDER_LOCALS.has(local) && allowed.has(host);
+}
 
 interface JmapBodyPart {
   partId?: string;
@@ -218,7 +234,7 @@ export async function findDeliveryReport(
           {
             accountId,
             "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
-            properties: ["subject", "receivedAt", "textBody", "bodyValues", "attachments"],
+            properties: ["subject", "from", "receivedAt", "textBody", "bodyValues", "attachments"],
             fetchTextBodyValues: true,
           },
           "g",
@@ -231,6 +247,7 @@ export async function findDeliveryReport(
   const get = payload.methodResponses?.find((r) => r[0] === "Email/get");
   const list = (get?.[1]?.list ?? []) as Array<{
     subject?: string;
+    from?: Array<{ email?: string }> | null;
     textBody?: JmapBodyPart[];
     attachments?: JmapBodyPart[];
     bodyValues?: Record<string, { value?: string }>;
@@ -242,9 +259,9 @@ export async function findDeliveryReport(
     /^[a-z]+:\/\/[^/]+/i,
     "",
   );
-  const mentionsEnvId = async (parts: JmapBodyPart[]): Promise<boolean> => {
+  const hasEnvelopeId = async (parts: JmapBodyPart[]): Promise<boolean> => {
     for (const part of parts) {
-      if (!part.blobId || !REPORT_PART.test(part.type ?? "")) continue;
+      if (!part.blobId || !STATUS_PART.test(part.type ?? "")) continue;
       const url =
         opts.baseUrl +
         template
@@ -254,16 +271,21 @@ export async function findDeliveryReport(
           .replace("{type}", encodeURIComponent("application/octet-stream"));
       const blob = await fetch(url, { headers: { authorization: auth }, signal: timeout() });
       if (!blob.ok) throw new Error(`JMAP: download do aviso recusado (HTTP ${blob.status}).`);
-      if ((await blob.text()).includes(opts.envId)) return true;
+      const matches = (await blob.text())
+        .split(/\r?\n/)
+        .some((line) => /^original-envelope-id:/i.test(line) && line.slice(line.indexOf(":") + 1).trim() === opts.envId);
+      if (matches) return true;
     }
     return false;
   };
 
   for (const email of list) {
+    // Remetente do próprio servidor? (defesa em camadas, ver o cabeçalho do arquivo)
+    if (!isReportSender(email.from?.[0]?.email, opts.username)) continue;
     const text = (email.textBody ?? []).map((p) => email.bodyValues?.[p.partId ?? ""]?.value ?? "").join("\n");
     const report = interpretDeliveryReport(email.subject ?? "", text, opts.to);
-    // Do destinatário certo, mas de qual mensagem? Só vale se citar o ENVID.
-    if (report && (text.includes(opts.envId) || (await mentionsEnvId(email.attachments ?? [])))) return report;
+    // Do destinatário certo, mas de qual mensagem? Só se o delivery-status disser o ENVID.
+    if (report && (await hasEnvelopeId(email.attachments ?? []))) return report;
   }
   return null;
 }

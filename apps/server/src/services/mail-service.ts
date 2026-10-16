@@ -1104,7 +1104,10 @@ export class MailService {
     const fromName = owner?.fromName ?? undefined;
 
     const id = randomBytes(8).toString("hex");
-    const envId = `tws-teste-${id}`;
+    // O ENVID é segredo do painel (só no envelope SMTP e na memória): quem recebe
+    // o teste vê o id, o Message-ID e o texto, e não pode montá-lo para forjar
+    // o recibo de entrega. O Message-ID usa só o id público.
+    const envId = `tws-teste-${id}-${randomBytes(12).toString("hex")}`;
     const sentAt = new Date(this.now());
     try {
       await this.sendMail({
@@ -1120,7 +1123,7 @@ export class MailService {
         subject: "Teste do TWS Panel",
         text: testEmailText(domain.name, from, id, sentAt),
         envId,
-        messageId: `<${envId}@${domain.name}>`,
+        messageId: `<tws-teste-${id}@${domain.name}>`,
         date: sentAt,
       });
     } catch (err) {
