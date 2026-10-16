@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { apiFetch, clearSetupToken } from "@/lib/api";
+import { ApiRequestError, apiFetch, clearSetupToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { ChevronDown, KeyRound, LogOut, Settings, ShieldCheck, UserRound } from "lucide-react";
@@ -9,11 +9,19 @@ import { ChevronDown, KeyRound, LogOut, Settings, ShieldCheck, UserRound } from 
  * Menu do usuário: atalhos para Configurações (a conta mora lá) e sair.
  * No topo abre para baixo; na lateral (Configurações → Aparência), fica no
  * rodapé dela e abre para cima.
+ *
+ * "Sair" só leva ao login quando o servidor confirma o fim da sessão. Se a
+ * revogação falha (ex.: 500 storage_write_failed, disco do servidor), a sessão
+ * e o cookie continuam valendo: o menu fica aberto com o erro e um botão para
+ * tentar de novo, em vez de parecer que saiu. 401 = a sessão já não valia, e
+ * aí ir para o login é verdade.
  */
 export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-left" | "sidebar-right" }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // fecha o menu ao clicar fora
@@ -22,6 +30,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
     function onClickOutside(event: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setOpen(false);
+        setLogoutError(null);
       }
     }
     document.addEventListener("mousedown", onClickOutside);
@@ -29,10 +38,17 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
   }, [open]);
 
   async function logout() {
+    setLeaving(true);
+    setLogoutError(null);
     try {
       await apiFetch("/api/auth/logout", { method: "POST", body: "{}" });
-    } catch {
-      // best-effort: mesmo falhando, segue para o login
+    } catch (err) {
+      if (!(err instanceof ApiRequestError && err.status === 401)) {
+        const detail = err instanceof ApiRequestError ? err.message : "Erro inesperado ao falar com o servidor.";
+        setLogoutError(detail);
+        setLeaving(false);
+        return;
+      }
     }
     clearSetupToken();
     navigate("/login");
@@ -83,9 +99,30 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
           <button type="button" className={item} onClick={() => go("/settings/security#two-factor")}>
             <ShieldCheck className="h-4 w-4" /> Verificação em duas etapas
           </button>
-          <button type="button" className={cn(item, "text-red-400")} onClick={() => void logout()}>
-            <LogOut className="h-4 w-4" /> Sair
-          </button>
+          {logoutError ? (
+            <div role="alert" className="m-1 rounded-sm border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">
+              <p>
+                <strong>Você continua conectado.</strong> O servidor não confirmou a saída: {logoutError}
+              </p>
+              <button
+                type="button"
+                disabled={leaving}
+                className={cn(item, "mt-1 text-red-400")}
+                onClick={() => void logout()}
+              >
+                <LogOut className="h-4 w-4" /> Tentar sair de novo
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={leaving}
+              className={cn(item, "text-red-400")}
+              onClick={() => void logout()}
+            >
+              <LogOut className="h-4 w-4" /> {leaving ? "Saindo…" : "Sair"}
+            </button>
+          )}
         </div>
       )}
     </div>
