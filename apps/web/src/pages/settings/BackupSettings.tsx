@@ -193,32 +193,37 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
               </label>
             </div>
             {provider === "r2" ? (
-              <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
-                <li>
-                  No painel da Cloudflare, abra <strong className="text-foreground">R2 Object Storage</strong>. Na primeira vez, ative o R2
-                  (o plano gratuito cobre 10 GB por mês).
-                </li>
-                <li>
-                  Clique em <strong className="text-foreground">Create bucket</strong>, dê um nome (ex.: tws-backups) e crie.
-                </li>
-                <li>
-                  Na página do R2, no canto direito, ache <strong className="text-foreground">API Tokens</strong> e clique em{" "}
-                  <strong className="text-foreground">Manage</strong>. Depois, em{" "}
-                  <strong className="text-foreground">Create Account API token</strong> (ou “Create User API token”).
-                </li>
-                <li>
-                  No formulário: um nome (ex.: tws-panel-backups); em Permissions,{" "}
-                  <strong className="text-foreground">Object Read &amp; Write</strong>; em Specify bucket(s),{" "}
-                  <strong className="text-foreground">Apply to specific buckets only</strong> e escolha o bucket; TTL{" "}
-                  <strong className="text-foreground">Forever</strong>. Clique em Create API Token.
-                </li>
-                <li>
-                  A tela seguinte mostra as chaves uma única vez. Copie a <strong className="text-foreground">Access Key ID</strong>, a{" "}
-                  <strong className="text-foreground">Secret Access Key</strong> e o endpoint que termina em .r2.cloudflarestorage.com (o
-                  “Token value” não é usado). Perdeu o endpoint? Ele fica no bucket → Settings → S3 API.
-                </li>
-                <li>Cole tudo aqui, com a região auto, e clique em Testar e salvar.</li>
-              </ol>
+              <>
+                <p className="text-muted-foreground">
+                  Os nomes aparecem em inglês ou em português, conforme o idioma da sua conta na Cloudflare: os dois vêm abaixo (inglês /
+                  português).
+                </p>
+                <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
+                  <li>
+                    No painel da Cloudflare, abra <strong className="text-foreground">R2 Object Storage</strong> / <strong className="text-foreground">Armazenamento de objetos R2</strong>. Na primeira vez, ative o R2 (o plano
+                    gratuito cobre 10 GB por mês).
+                  </li>
+                  <li>
+                    Clique em <strong className="text-foreground">Create bucket</strong> / <strong className="text-foreground">Criar bucket</strong>, dê um nome (ex.: tws-backups) e crie.
+                  </li>
+                  <li>
+                    Na página do R2, no canto direito, ache <strong className="text-foreground">API Tokens</strong> / <strong className="text-foreground">Tokens de API</strong> e clique em <strong className="text-foreground">Manage</strong> / <strong className="text-foreground">Gerenciar</strong>. Depois, em 
+                    <strong className="text-foreground">Create Account API token</strong> / <strong className="text-foreground">Criar token de API da conta</strong> (ou o de usuário, se só ele aparecer).
+                  </li>
+                  <li>
+                    No formulário: um nome (ex.: tws-panel-backups); em Permissions / Permissões, 
+                    <strong className="text-foreground">Object Read &amp; Write</strong> / <strong className="text-foreground">Leitura e gravação de objetos</strong>; em Specify bucket(s) / Especificar bucket(s), 
+                    <strong className="text-foreground">Apply to specific buckets only</strong> / <strong className="text-foreground">Aplicar somente a buckets específicos</strong> e escolha o bucket; TTL 
+                    <strong className="text-foreground">Forever</strong> / <strong className="text-foreground">Para sempre</strong>. Confirme no botão de criar o token, no fim da página.
+                  </li>
+                  <li>
+                    A tela seguinte mostra as chaves uma única vez. Copie a <strong className="text-foreground">Access Key ID</strong> / <strong className="text-foreground">ID da chave de acesso</strong>, a 
+                    <strong className="text-foreground">Secret Access Key</strong> / <strong className="text-foreground">Chave de acesso secreta</strong> e o endpoint que termina em .r2.cloudflarestorage.com (o “Token value” /
+                    “Valor do token” não é usado). Perdeu o endpoint? Ele fica no bucket → Settings / Configurações → S3 API.
+                  </li>
+                  <li>Cole tudo aqui, com a região auto, e clique em Testar e salvar.</li>
+                </ol>
+              </>
             ) : (
               <p className="text-muted-foreground">
                 Use os dados do seu provedor: o endpoint (ex.: https://s3.us-west-004.backblazeb2.com ou https://eu2.contabostorage.com), a
