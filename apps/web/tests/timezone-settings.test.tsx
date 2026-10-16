@@ -17,7 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import { ApiRequestError } from "@/lib/api";
-import { TimezoneSettings, settingText, sourceText } from "@/pages/settings/TimezoneSettings";
+import { TimezoneSettings, settingText, sourceText, useServerClock } from "@/pages/settings/TimezoneSettings";
 import { SetupTimezoneCard } from "@/components/setup/SetupTimezoneCard";
 import { ProjectTimezoneCard } from "@/components/project/ProjectTimezoneCard";
 import { SETTINGS_SECTIONS } from "@/pages/settings/SettingsLayout";
@@ -241,6 +241,20 @@ describe("assistente de instalação", () => {
     render(<SetupTimezoneCard />);
     expect(await screen.findByText("Troque o fuso pelo SSH.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Trocar o fuso" })).not.toBeInTheDocument();
+  });
+});
+
+describe("relógio da VPS", () => {
+  it("já no primeiro render mostra a hora do servidor, não a do navegador", () => {
+    const seen: number[] = [];
+    function Probe({ now }: { now?: string }) {
+      seen.push(useServerClock(now).getTime());
+      return null;
+    }
+    const { rerender } = render(<Probe />);
+    seen.length = 0;
+    rerender(<Probe now="2026-01-01T17:00:00Z" />);
+    expect(seen[0]).toBe(Date.parse("2026-01-01T17:00:00Z"));
   });
 });
 

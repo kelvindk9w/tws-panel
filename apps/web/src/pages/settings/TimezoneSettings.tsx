@@ -3,7 +3,7 @@
  * fuso (aplica na VPS pelo host bridge, vale na hora para o painel e para a
  * agenda dos backups) e, junto, reiniciar os projetos marcados com o fuso novo.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { ProjectTimezoneSetting, SetTimezoneResponse, TimezoneProjectResult, TimezoneStatus } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
@@ -41,21 +41,16 @@ export function sourceText(st: TimezoneStatus): string | null {
 
 /** Relógio que anda a cada 30 s, alinhado com a hora do servidor. */
 export function useServerClock(serverNow: string | undefined): Date {
-  // hora do servidor quando chegou + quanto andou desde então no navegador
-  const [base, setBase] = useState<{ server: number; local: number } | null>(null);
+  // Hora do servidor quando chegou + quanto andou desde então no navegador.
+  // A base é calculada já no render em que a hora chega (useMemo), não num
+  // efeito depois: senão o primeiro render mostrava a hora do navegador.
+  const base = useMemo(() => (serverNow ? { server: Date.parse(serverNow), local: Date.now() } : null), [serverNow]);
   const [tick, setTick] = useState(() => Date.now());
-  useEffect(() => {
-    if (serverNow) {
-      const local = Date.now();
-      setBase({ server: Date.parse(serverNow), local });
-      setTick(local);
-    }
-  }, [serverNow]);
   useEffect(() => {
     const t = setInterval(() => setTick(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
-  return new Date(base ? base.server + (tick - base.local) : tick);
+  return new Date(base ? base.server + Math.max(0, tick - base.local) : tick);
 }
 
 export function ProjectRestartResults({ results }: { results: TimezoneProjectResult[] }) {
