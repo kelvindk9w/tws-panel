@@ -752,10 +752,16 @@ export class DeployService {
     // clone, o compose project, a imagem, o alias de rede e os containers.
     // Renomear o projeto é uma mudança de rótulo; mexer no slug seria uma
     // migração de infraestrutura.
+    // Tudo é validado ANTES de tocar no projeto (achado 11 da revisão): as
+    // mudanças vão para `changes` e só são aplicadas no fim. Antes, nome,
+    // fonte e branch eram gravados no objeto compartilhado e um erro no
+    // domínio ou no serviço de entrada deixava a memória alterada — e o
+    // próximo save (de qualquer deploy) levava isso para o disco.
+    const changes: Partial<Project> = {};
     if (req.name !== undefined) {
       const name = req.name.trim();
       if (!name) throw httpError(400, "invalid_name", "Informe o nome do projeto.");
-      project.name = name;
+      changes.name = name;
     }
     if (req.source !== undefined) {
       const source = project.ingestMode === "git" ? validateGitSource(req.source) : req.source.trim();
@@ -766,10 +772,10 @@ export class DeployService {
           `A pasta precisa estar dentro da pasta de projetos (${this.projectsDir}).`,
         );
       }
-      project.source = source;
+      changes.source = source;
     }
     if (req.branch !== undefined) {
-      project.branch = validateBranch(req.branch);
+      changes.branch = validateBranch(req.branch);
     }
     let domainChanged = false;
     if (req.domain !== undefined) {
@@ -779,15 +785,16 @@ export class DeployService {
         throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
       }
       domainChanged = domain !== project.domain;
-      project.domain = domain;
+      changes.domain = domain;
     }
-    if (req.websocket !== undefined) project.websocket = Boolean(req.websocket);
+    if (req.websocket !== undefined) changes.websocket = Boolean(req.websocket);
     if (req.proxyService !== undefined) {
       const service = req.proxyService?.trim() || null;
       if (service) validateComposeEntry(project, service);
-      project.proxyService = service;
+      changes.proxyService = service;
     }
-    if (req.proxyPort !== undefined) project.proxyPort = req.proxyPort;
+    if (req.proxyPort !== undefined) changes.proxyPort = req.proxyPort;
+    Object.assign(project, changes);
     project.updatedAt = new Date().toISOString();
     await this.saveProjects();
     if (domainChanged) await this.applyProxy();
