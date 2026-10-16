@@ -6,6 +6,7 @@
 
 | Doc | Conteúdo |
 |---|---|
+| [guia-completo.md](guia-completo.md) | Do zero ao painel pronto: um roteiro único, em ordem, da VPS contratada ao painel configurado (segurança, domínio, fuso, e-mail, notificações, backups, primeiro projeto e teste de restauração), com o que conferir em cada passo. |
 | [instalacao.md](instalacao.md) | Instalação passo a passo numa VPS limpa (Passos 1 a 8): SSH, usuário, chave, instalador, acesso por túnel, wizard. |
 | [wizard-seguranca.md](wizard-seguranca.md) | Como conduzir a etapa Segurança do wizard: as 8 fases, a confirmação de acesso e o rollback automático. |
 | [funcionalidades.md](funcionalidades.md) | O que o painel faz, módulo por módulo: deploy, portas, certificados, domínio do painel, e-mail, notificações, backups, segurança, terminal e roteiro. |

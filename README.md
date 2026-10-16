@@ -142,6 +142,9 @@ No primeiro acesso, o Dashboard mostra o roteiro **Deixe o painel pronto**. O es
 Os passos opcionais aceitam "Não vou usar". O roteiro inteiro fica também em
 **Configurações → Primeiros passos**.
 
+Quer seguir tudo de uma vez, em ordem, até o primeiro projeto no ar e um backup restaurado? Use o
+guia **[Do zero ao painel pronto](docs/guia-completo.md)**.
+
 <table>
   <tr>
     <td><img src="docs/imagens/projeto.png" alt="Página de um projeto: serviços do compose, domínios com HTTPS válido e e-mail do projeto ativo"></td>
