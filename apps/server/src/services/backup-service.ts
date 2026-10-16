@@ -34,7 +34,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { chmod, mkdir, readFile, readdir, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, statfs, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   BACKUP_ALL_TARGETS,
@@ -93,6 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
+import { withFileLock } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 
@@ -342,6 +343,47 @@ async function sha256File(file: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
   return hash.digest("hex");
+}
+
+/** Temporários de gravação (atômica ou parcial): nunca entram no backup do painel. */
+const TEMP_FILE_RE = /\.(tmp|partial)$/;
+
+/**
+ * Copia `src` para `dst` para o backup do painel compactar uma foto parada,
+ * e não os arquivos em uso. Cada arquivo é copiado dentro da fila de
+ * gravação dele (services/json-file.ts): um store que grava pelo helper
+ * nunca é copiado no meio de uma gravação. Arquivo que sumiu entre listar e
+ * copiar foi apagado de propósito (não faz parte do estado); arquivo que
+ * existe e não pode ser lido faz o backup FALHAR, dizendo qual.
+ */
+async function snapshotTree(src: string, dst: string, rel: string): Promise<void> {
+  let info;
+  try {
+    info = await lstat(src);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  try {
+    if (info.isSymbolicLink()) {
+      await symlink(await readlink(src), dst);
+    } else if (info.isDirectory()) {
+      await mkdir(dst, { mode: info.mode & 0o777 });
+      for (const name of await readdir(src)) {
+        if (TEMP_FILE_RE.test(name)) continue;
+        await snapshotTree(path.join(src, name), path.join(dst, name), `${rel}/${name}`);
+      }
+    } else if (info.isFile()) {
+      await withFileLock(src, () => copyFile(src, dst));
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" && !existsSync(src)) return;
+    if (err instanceof BackupFailure) throw err;
+    throw new BackupFailure(
+      `Não foi possível copiar "${rel}" do diretório de dados do painel (${code === "EACCES" ? "sem permissão de leitura" : reasonOf(err)}). O backup não foi feito e as cópias anteriores foram mantidas.`,
+    );
+  }
 }
 
 async function dirSize(dir: string, skip: (name: string) => boolean = () => false): Promise<number> {
@@ -1252,7 +1294,7 @@ export class BackupService {
       let manifest: Manifest;
       if (kind === "project") ({ inputs, manifest } = await this.collectProject(r, project!, content));
       else if (kind === "email") ({ inputs, manifest } = await this.collectEmail(r, content));
-      else ({ inputs, manifest } = await this.collectPanel(r));
+      else ({ inputs, manifest } = await this.collectPanel(r, staging));
       await writeFile(path.join(content, "manifesto.json"), JSON.stringify(manifest, null, 2) + "\n");
       await writeFile(path.join(content, "LEIA-ME.txt"), readme(manifest));
       inputs.push(path.join(content, "manifesto.json"), path.join(content, "LEIA-ME.txt"));
@@ -1452,20 +1494,31 @@ export class BackupService {
     const legacyProjects = path.resolve(path.join(this.opts.dataDir, "projects")) === path.resolve(this.opts.projectsDir);
     const names = await readdir(this.opts.dataDir);
     return names
-      .filter((n) => n !== "backups" && !(n === "projects" && legacyProjects) && !/\.(tmp|partial)$/.test(n))
+      .filter((n) => n !== "backups" && !(n === "projects" && legacyProjects) && !TEMP_FILE_RE.test(n))
       .map((n) => path.join(this.opts.dataDir, n));
   };
 
-  private async collectPanel(r: BackupRecord): Promise<{ inputs: string[]; manifest: Manifest }> {
+  private async collectPanel(r: BackupRecord, staging: string): Promise<{ inputs: string[]; manifest: Manifest }> {
     this.step(r, "Conferir o espaço em disco");
-    const inputs = await this.panelEntries();
+    const live = await this.panelEntries();
     let size = 0;
-    for (const p of inputs) {
-      const s = await stat(p);
-      size += s.isDirectory() ? await dirSize(p) : s.size;
+    for (const p of live) {
+      const s = await stat(p).catch(() => null);
+      if (s) size += s.isDirectory() ? await dirSize(p) : s.size;
     }
     await this.ensureSpace(size, this.remoteFactor());
     this.step(r, "Copiar o diretório de dados do painel");
+    // O 7-Zip compacta uma cópia: com os arquivos em uso, um que some ou muda
+    // no meio sai do .7z sem aviso (código 1 do 7-Zip, achado 3 da revisão).
+    const copy = path.join(staging, "painel");
+    await mkdir(copy, { recursive: true, mode: 0o700 });
+    const inputs: string[] = [];
+    for (const p of live) {
+      const name = path.basename(p);
+      await snapshotTree(p, path.join(copy, name), name);
+      // o que sumiu entre listar e copiar não entra (foi apagado de propósito)
+      if (await lstat(path.join(copy, name)).catch(() => null)) inputs.push(path.join(copy, name));
+    }
     return { inputs, manifest: { version: 1, kind: "panel", name: "Painel", createdAt: new Date(this.now()).toISOString(), items: [] } };
   }
 

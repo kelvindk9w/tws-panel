@@ -148,8 +148,9 @@ class FakeDocker implements BackupDocker {
     await writeFile(outFile, `dump ${container} ${args.join(",")} ${script.includes("globals-only") ? "papeis" : "banco"}`);
     return { stderr: "" };
   }
-  async execCapture(container: string, script: string) {
+  async execCapture(container: string, script: string): Promise<string> {
     this.calls.push(`execCapture ${container}`);
+    if (script.includes("SAVE")) return "OK\n";
     return script.includes("pg_database") ? "app\npostgres\n" : "";
   }
   async execFromFile(container: string, script: string, args: string[], inFile: string) {
@@ -1456,5 +1457,124 @@ describe("conferir backups", () => {
     const cfg = (service as unknown as { config: { checks: Record<string, unknown> } }).config;
     expect(Object.keys(cfg.checks)).toHaveLength(1);
     expect(cfg.checks[`loja/${a.fileName}`]).toBeUndefined();
+  });
+});
+
+/**
+ * Backup incompleto nunca conta como completo (achados 3 e 14 da revisão).
+ * O 7-Zip de verdade sai com código 1 quando um arquivo some ou não pode ser
+ * lido (reproduzido com o 7zz 24.09: o .7z sai sem o arquivo e o teste do
+ * arquivo passa). Aqui um 7zz de mentira imita essa saída, o SevenZip é o de
+ * verdade e o disco também.
+ */
+describe("backup incompleto não entra na retenção como completo", () => {
+  const P1 = projectTargetId("p1");
+
+  async function seteZipQueAvisa(): Promise<string> {
+    const bin = path.join(dir, "7zz-aviso");
+    await writeFile(
+      bin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+process.stdin.resume();
+process.stdin.on("end", () => {
+  if (args[0] === "i") process.exit(0);
+  const archive = args.find((a) => a.endsWith(".7z"));
+  fs.writeFileSync(archive, "parcial");
+  const first = args.filter((a) => a.startsWith("/") && !a.endsWith(".7z"))[0];
+  process.stderr.write("Scan WARNINGS for files and folders:\\n\\n" + first + "/app.sql : errno=2 : No such file or directory\\n");
+  process.exit(1);
+});
+`,
+    );
+    const { chmod } = await import("node:fs/promises");
+    await chmod(bin, 0o755);
+    return bin;
+  }
+
+  it("7-Zip com código 1: o backup falha com os arquivos no motivo e a retenção não apaga a cópia completa", async () => {
+    await service.updateTarget(P1, { localKeep: 1 }, "admin");
+    const completa = await backup();
+    expect(completa.status).toBe("success");
+    const { SevenZip } = await import("../src/services/backup-archive.js");
+    service = build({ archiver: new SevenZip({ bin: await seteZipQueAvisa() }) });
+    now += H;
+    const r = await backup();
+    expect(r.status).toBe("failed");
+    expect(r.error).toMatch(/não conseguiu ler 1 arquivo\(s\): bancos\/app\.sql \(não encontrado\)/);
+    expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([completa.fileName]);
+    expect((await service.status()).targets.find((t) => t.id === P1)!.lastSuccessAt).toBe(completa.finishedAt);
+    expect(notices.at(-1)).toMatchObject({ kind: "backup_failed" });
+  });
+
+  it("painel: compacta uma cópia do diretório de dados, não os arquivos em uso", async () => {
+    // 7-Zip de mentira que, no meio da compactação, vê um arquivo do painel
+    // sumir (gravação atômica de outro serviço, limpeza) — como o real, pula o que sumiu.
+    const vistos: string[] = [];
+    archiver.create = async (archive, inputs) => {
+      await rm(path.join(dir, "users.json"), { force: true });
+      const files: Record<string, string> = {};
+      for (const i of inputs) {
+        vistos.push(i);
+        if (!existsSync(i)) continue;
+        const s = await stat(i);
+        if (s.isFile()) files[path.basename(i)] = (await readFile(i)).toString("base64");
+      }
+      await writeFile(archive, JSON.stringify({ password: null, files }));
+    };
+    await mkdir(path.join(dir, "mail"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "config.json.123-abcd.tmp"), "meia gravação");
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(vistos.every((i) => !i.startsWith(dir + path.sep + "users.json"))).toBe(true);
+    const files = Object.keys((JSON.parse(await readFile(path.join(dir, "backups", "_painel", r.fileName!), "utf8")) as { files: Record<string, string> }).files);
+    expect(files).toContain("users.json");
+  });
+
+  it("painel: arquivo do diretório de dados que não pode ser lido faz o backup falhar dizendo qual", async () => {
+    const { chmod } = await import("node:fs/promises");
+    await writeFile(path.join(dir, "trancado.json"), "{}");
+    await chmod(path.join(dir, "trancado.json"), 0o000);
+    try {
+      const r = await backup("panel");
+      expect(r.status).toBe("failed");
+      expect(r.error).toMatch(/trancado\.json/);
+    } finally {
+      await chmod(path.join(dir, "trancado.json"), 0o600);
+    }
+  });
+
+  it("painel: arquivo que some entre listar e copiar fica de fora sem falhar; links e subpastas são copiados", async () => {
+    await writeFile(path.join(dir, "sumiu.json"), "{}");
+    await mkdir(path.join(dir, "certificados", "site"), { recursive: true });
+    await writeFile(path.join(dir, "certificados", "site", "cert.pem"), "pem");
+    await symlink("certificados/site/cert.pem", path.join(dir, "atalho.pem"));
+    // o statfs roda depois de listar e antes de copiar: é o momento de "sumir"
+    service = build({
+      statfs: async () => {
+        await rm(path.join(dir, "sumiu.json"), { force: true });
+        return { bavail: free, bsize: 1, blocks: 100 * 1024 ** 3 };
+      },
+    });
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    const files = Object.keys((JSON.parse(await readFile(path.join(dir, "backups", "_painel", r.fileName!), "utf8")) as { files: Record<string, string> }).files);
+    expect(files).toEqual(expect.arrayContaining(["certificados/site/cert.pem", "atalho.pem", "users.json"]));
+    expect(files).not.toContain("sumiu.json");
+  });
+
+  it("painel: arquivo ilegível numa subpasta: o motivo diz o caminho dele", async () => {
+    const { chmod } = await import("node:fs/promises");
+    await mkdir(path.join(dir, "mail", "sub"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "sub", "chave.key"), "x");
+    await chmod(path.join(dir, "mail", "sub", "chave.key"), 0o000);
+    try {
+      const r = await backup("panel");
+      expect(r.status).toBe("failed");
+      expect(r.error).toMatch(/"mail\/sub\/chave\.key" do diretório de dados do painel \(sem permissão de leitura\)/);
+    } finally {
+      await chmod(path.join(dir, "mail", "sub", "chave.key"), 0o600);
+    }
   });
 });
