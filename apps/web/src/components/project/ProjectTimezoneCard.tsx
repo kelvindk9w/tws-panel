@@ -33,6 +33,12 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
   const [restarted, setRestarted] = useState(false);
 
   const show = useCallback((v: ProjectTimezoneView) => {
+    // Resposta fora do formato (versão do servidor diferente, proxy no meio):
+    // erro no cartão, sem derrubar a página de Configurações inteira.
+    if (!v?.setting?.mode || !Array.isArray(v.services)) {
+      setError("Não deu para ler o fuso horário deste projeto agora. Recarregue a página.");
+      return;
+    }
     setView(v);
     setMode(v.setting.mode);
     if (v.setting.mode === "zone" && v.setting.zone) setZone(v.setting.zone);

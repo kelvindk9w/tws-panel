@@ -254,6 +254,12 @@ describe("Fuso horário do projeto", () => {
     return onChanged;
   }
 
+  it("resposta sem o formato esperado mostra erro no cartão em vez de derrubar a página", async () => {
+    project = {} as ProjectTimezoneView;
+    renderCard();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/fuso/i);
+  });
+
   it("três escolhas; salvar pede reiniciar; o botão reinicia e aponta Deploys", async () => {
     const onChanged = renderCard();
     const card = await screen.findByTestId("project-timezone-card");
