@@ -10,7 +10,7 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ComposeVariable } from "@paas/core";
@@ -55,31 +55,60 @@ async function excludeFromGit(src: string): Promise<void> {
   }
 }
 
-/** Grava as variáveis para o compose. Devolve argumentos extras do `docker compose`. */
+/** Primeira linha de todo `.env` que o painel grava: é por ela que ele reconhece o que é seu. */
+const GENERATED_HEADER = "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.";
+
+/** Apaga o `.env` da pasta do projeto só se foi o painel que o gerou (o do dono fica). */
+async function removeGeneratedDotenv(src: string): Promise<void> {
+  const file = path.join(src, ".env");
+  let current: string;
+  try {
+    current = await readFile(file, "utf8");
+  } catch {
+    return; // não existe
+  }
+  if (current.startsWith(GENERATED_HEADER)) await rm(file, { force: true });
+}
+
+/**
+ * Grava as variáveis para o compose. Devolve argumentos extras do `docker compose`.
+ *
+ * Sem variáveis, o estado vazio também é gravado: o `.env` gerado pelo painel
+ * e o `paas.env` do workDir são apagados — o clone fica entre deploys, e um
+ * arquivo velho faria o container subir com o valor que o dono acabou de
+ * excluir (achado 9 da revisão).
+ */
 export async function writeProjectDotenv(
   src: string,
   workDir: string,
   vars: Record<string, string>,
 ): Promise<{ envFileArgs: string[]; note: string | null }> {
   const keys = Object.keys(vars);
-  if (keys.length === 0) return { envFileArgs: [], note: null };
+  const separate = path.join(workDir, "paas.env");
+  if (keys.length === 0) {
+    await rm(separate, { force: true });
+    if (!(await isTracked(src, ".env"))) await removeGeneratedDotenv(src);
+    return { envFileArgs: [], note: null };
+  }
   const content =
-    "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.\n" +
+    GENERATED_HEADER +
+    "\n" +
     keys.map((k) => dotenvLine(k, vars[k]!)).join("\n") +
     "\n";
 
   if (await isTracked(src, ".env")) {
-    const file = path.join(workDir, "paas.env");
     await mkdir(workDir, { recursive: true });
-    await writeFile(file, content, { encoding: "utf8", mode: 0o600 });
-    await chmod(file, 0o600);
+    await writeFile(separate, content, { encoding: "utf8", mode: 0o600 });
+    await chmod(separate, 0o600);
     return {
-      envFileArgs: ["--env-file", file],
+      envFileArgs: ["--env-file", separate],
       note:
         "O repositório tem um .env versionado: ele não foi sobrescrito. As variáveis do painel valem para os ${VAR} do " +
         "compose (--env-file); um `env_file: .env` continua lendo o arquivo do repositório.",
     };
   }
+  // o .env deixou de ser versionado: o paas.env antigo não pode continuar valendo
+  await rm(separate, { force: true });
   const file = path.join(src, ".env");
   await writeFile(file, content, { encoding: "utf8", mode: 0o600 });
   await chmod(file, 0o600);
