@@ -16,6 +16,7 @@ import { DeployDetailModal } from "@/components/project/DeployDetailModal";
 import { DeployHistory } from "@/components/project/DeployHistory";
 import { MissingEnvModal } from "@/components/project/MissingEnvModal";
 import { ProjectEmailCard } from "@/components/project/ProjectEmailCard";
+import { ProjectTimezoneCard } from "@/components/project/ProjectTimezoneCard";
 import { ProjectBackupsCard } from "@/components/project/ProjectBackupsCard";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { Badge } from "@/components/ui/badge";
@@ -568,6 +569,7 @@ export function ProjectDetailPage() {
         project={project}
         onSaved={() => void refresh()}
       />
+      <ProjectTimezoneCard projectId={project.id} onChanged={() => void refresh()} />
       <Card className="border-destructive/40">
         <CardHeader className="pb-2">
           <CardTitle className="text-base text-destructive">Zona de perigo</CardTitle>

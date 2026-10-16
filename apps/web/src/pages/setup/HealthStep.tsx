@@ -5,6 +5,7 @@ import { formatBytes, formatUptime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { SetupTimezoneCard } from "@/components/setup/SetupTimezoneCard";
 import {
   ArrowLeft,
   ArrowRight,
@@ -255,6 +256,8 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
               </CardContent>
             </Card>
           </div>
+
+          <SetupTimezoneCard />
 
           {hasWarnings && (
             <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
