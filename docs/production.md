@@ -70,9 +70,12 @@ errado.
 
 ### 1.4 PTR (rDNS)
 
-O registro PTR (IP reverso → `mail.seudominio.com`) **só o provedor da VPS pode configurar**
-(painel do provedor ou chamado). O painel detecta a ausência e gera o texto pronto para abrir
-o chamado. Sem PTR correto, Gmail e Outlook rebaixam ou rejeitam suas mensagens.
+O registro PTR (IP reverso → nome do servidor de e-mail) **só o provedor da VPS pode configurar**.
+O checklist mostra o PTR em três níveis: verde (o nome reverso é o do servidor), azul (um nome
+genérico do provedor que aponta de volta para o IP: funciona, mas é recomendado trocar) e amarelo
+(sem nome reverso válido: Gmail, Yahoo e Microsoft podem recusar). Para Contabo, Hetzner e Vultr a
+tela diz onde trocar no painel do provedor; para os demais, gera o texto pronto para abrir o
+chamado. O PTR é um só para o servidor inteiro, mesmo com vários domínios.
 
 ### 1.5 Domínios reais vs `.localhost`
 
@@ -108,17 +111,18 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
                         com a chave instalada, e o alerta pulsante pede para testar
                         o login em OUTRA janela SSH antes de confirmar (rollback
                         automático em 5 min se você não confirmar).
-2. PAINEL             → conclua o wizard (conta admin) e garanta que o painel
-                        responde na porta 9000.
-3. DOMÍNIO DO PAINEL  → aponte painel.seudominio.com para a VPS e acesse o painel
-                        via HTTPS atrás do Caddy.
+2. PAINEL             → conclua o wizard (conta admin). O painel abre em
+                        https://SEU-IP-COM-HÍFENS.sslip.io, atrás do Caddy.
+3. DOMÍNIO DO PAINEL  → Configurações → Domínio do painel: aponte
+                        painel.seudominio.com para a VPS, verifique o DNS e
+                        abra o painel pelo endereço novo.
 4. PROJETOS           → cadastre e faça deploy dos projetos; para cada domínio,
                         use o botão "verificar DNS" antes de emitir o certificado.
 5. E-MAIL             → libere a porta 25 no provedor → inicie o servidor Stalwart
                         pelo painel → adicione o domínio de e-mail.
 6. VERIFICAR DNS      → crie os registros do checklist (A, MX, SPF, DKIM, DMARC)
                         no seu provedor de DNS e clique em "verificar" até fechar ✅.
-                        Abra o chamado de PTR em paralelo (pode demorar).
+                        Ajuste o PTR no provedor em paralelo (pode demorar).
 7. MONITORAMENTO      → crie o baseline de segurança (POST /api/security/baseline
                         ou pela UI em Segurança) e confirme o scan recorrente ativo.
                         Só monitore depois que tudo estiver configurado — assim o
@@ -132,14 +136,14 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
 - [ ] Hardening concluído e acesso SSH confirmado (rollback cancelado)
 - [ ] Score Lynis verificado em **Segurança** (antes vs depois)
 - [ ] Painel acessível apenas via HTTPS no domínio próprio
-- [ ] Porta 9000 fechada para a internet (apenas localhost/VPN), se aplicável
+- [ ] Painel escutando só em 127.0.0.1 (o padrão; quem atende de fora é o Caddy, nas portas 80/443)
 - [ ] Porta 25 liberada pelo provedor + UFW
-- [ ] PTR configurado pelo provedor (chamado aberto/confirmado)
+- [ ] PTR verde ou azul no checklist (de preferência, verde)
 - [ ] Checklist DNS de e-mail 100% ✅ (A, MX, SPF, DKIM, DMARC)
 - [ ] Teste de envio: [mail-tester](https://www.mail-tester.com) ≥ 9/10
 - [ ] DMARC em `p=none` coletando relatórios → endurecer para `quarantine`/`reject` depois
 - [ ] Baseline de segurança criado + monitoramento recorrente ativo
-- [ ] Blacklist verificada em **E-mail → Blacklist** (tudo clean)
+- [ ] Listas de bloqueio conferidas em **Envios → Reputação** (tudo limpo)
 - [ ] Nenhum alerta crítico aberto em **Alertas**
 
 ---
@@ -153,12 +157,14 @@ O token é impresso UMA vez no fim do `install.sh`, mas fica persistido no volum
 momento — sem reinstalar nada:
 
 ```bash
-./scripts/show-token.sh
+cd /opt/tws-panel
+sudo ./scripts/show-token.sh
 ```
 
 O script lê o volume (fallback: `SETUP_TOKEN` do container em execução), detecta o IP
 público (best-effort; use `PAAS_PUBLIC_IP=<ip>` para fixar) e imprime o banner com a
-URL completa `http://IP:9000/?token=...`.
+URL completa `https://SEU-IP-COM-HÍFENS.sslip.io/?token=...` (no acesso por túnel, o comando
+do túnel e o endereço `http://localhost:PORTA/?token=...`).
 
 > Lembrete: depois que a conta admin é criada (passo 4 do wizard), o setup token é
 > invalidado de propósito — a partir daí o acesso é pelo login normal.
@@ -166,12 +172,12 @@ URL completa `http://IP:9000/?token=...`.
 ### Resetar o setup (recomeçar o wizard do zero)
 
 ```bash
-./scripts/reset-setup.sh           # volta o wizard ao passo 0 (conta admin mantida)
-./scripts/reset-setup.sh --full    # + apaga usuários admin e sessões ativas
+sudo ./scripts/reset-setup.sh           # volta o wizard ao passo 0 (conta admin mantida)
+sudo ./scripts/reset-setup.sh --full    # + apaga usuários admin e sessões ativas
 ```
 
 Ambos pedem confirmação interativa (digitar `resetar`) e reiniciam o painel ao final.
 O que é apagado fica restrito ao volume `paas_data`: `setup-state.json` (sempre) e, no
 modo `--full`, também `users.json` e `sessions.json`. **Projetos, domínios, e-mail,
 histórico de segurança e o setup token NÃO são tocados.** Depois do reset, use
-`./scripts/show-token.sh` para pegar o link do wizard de novo.
+`sudo ./scripts/show-token.sh` para pegar o link do wizard de novo.
