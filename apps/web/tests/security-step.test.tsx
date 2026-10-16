@@ -1409,3 +1409,74 @@ describe("SecurityStep — falha de elevação (sudo)", () => {
     }
   });
 });
+
+/**
+ * Achado 20: uma falha de rede no POST de confirmação era tratada como se o
+ * operador tivesse desfeito a fase — a fila parava e a tela dizia "falhou, o
+ * rollback foi executado", embora o servidor continuasse aguardando. Um
+ * segundo clique confirmava no servidor, mas a tela ficava presa no erro.
+ */
+describe("SecurityStep — falha transitória ao confirmar o acesso", () => {
+  let base: Parameters<typeof apiFetchMock.mockImplementation>[0] | undefined;
+
+  afterEach(() => {
+    if (base) apiFetchMock.mockImplementation(base);
+    base = undefined;
+  });
+
+  it("mantém a espera, deixa tentar de novo e segue quando a segunda tentativa confirma", async () => {
+    detectedSudoUsers = ["kelvin"];
+    base = apiFetchMock.getMockImplementation()!;
+    const original = base;
+    let confirmCalls = 0;
+    let confirmed = false;
+    const job = (status: string) => ({
+      id: "job-1",
+      phase: "01",
+      phaseKey: "user",
+      title: "Usuário não-root",
+      dryRun: false,
+      status,
+      createdAt: "",
+      startedAt: null,
+      finishedAt: null,
+      steps: [],
+      log: "",
+      rollbackScheduled: status === "awaiting_confirmation",
+      rollbackDeadline: status === "awaiting_confirmation" ? new Date(Date.now() + 300_000).toISOString() : null,
+      rollbackRemainingMs: status === "awaiting_confirmation" ? 300_000 : null,
+      error: null,
+      sshUser: "kelvin",
+    });
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/security/confirm-access") {
+        confirmCalls += 1;
+        if (confirmCalls === 1) throw new TypeError("Failed to fetch");
+        confirmed = true;
+        return { confirmed: true, job: job("success") };
+      }
+      if (path === "/api/security/apply") return { job: job("awaiting_confirmation") };
+      if (path.startsWith("/api/security/jobs/")) return { job: job(confirmed ? "success" : "awaiting_confirmation") };
+      return original(path, init);
+    });
+    render(<SecurityStep onNext={() => undefined} vpsAddress="203.0.113.10" />);
+    fireEvent.click(await screen.findByText("Iniciar verificação"));
+    fireEvent.click(await screen.findByText("Gerar plano de correção"));
+    await screen.findByText(/Fase 00 — Atualizações do sistema/);
+    fireEvent.click(screen.getAllByRole("button", { name: /Executar apenas esta fase/ })[1]!);
+    await screen.findByTestId("access-test-alert");
+
+    // 1ª tentativa: a rede falha — a tela avisa, mas continua esperando
+    fireEvent.click(screen.getByRole("button", { name: /Entrei — confirmar/ }));
+    await waitFor(() => expect(confirmCalls).toBe(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Entrei — confirmar/ })).toBeEnabled());
+    expect(screen.queryByTestId("run-failed")).not.toBeInTheDocument();
+    expect(screen.getByTestId("access-test-alert")).toBeInTheDocument();
+
+    // 2ª tentativa: confirma no servidor e a fase termina com sucesso
+    fireEvent.click(screen.getByRole("button", { name: /Entrei — confirmar/ }));
+    await waitFor(() => expect(confirmCalls).toBe(2));
+    await waitFor(() => expect(screen.queryByTestId("access-test-alert")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("run-failed")).not.toBeInTheDocument();
+  }, 15_000);
+});
