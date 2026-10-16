@@ -2,6 +2,8 @@
  * Tipos compartilhados do módulo de deploy (Fase 2 — Deploy + Domínios).
  * Spec: plano seções 5.1/5.2 e docs/projects-analysis.md.
  */
+import type { ProjectTimezoneSetting } from "./timezone";
+
 
 // ---------------------------------------------------------------------------
 // Projetos
@@ -148,6 +150,16 @@ export interface Project {
    * paas.override.yml. Ausente = tudo como está no compose.
    */
   portOverrides?: Record<string, PortOverride[]>;
+  /**
+   * Fuso horário dos serviços (campo "Fuso horário" do projeto). Ausente =
+   * "Padrão da imagem": o painel não injeta TZ.
+   */
+  timezone?: ProjectTimezoneSetting;
+  /**
+   * TZ que o último deploy (ou reinício com o fuso novo) injetou. null =
+   * nenhum; ausente = projeto publicado antes desta opção existir.
+   */
+  timezoneApplied?: string | null;
 }
 
 /** Endereço de escuta de uma porta publicada que o painel aceita escolher. */
@@ -238,6 +250,12 @@ export interface DeployJobStep {
 export interface DeployJob {
   id: string;
   projectId: string;
+  /**
+   * deploy = publicação completa; recreate = só recria os containers com a
+   * configuração atual (ex.: fuso novo), sem baixar código nem rebuild.
+   * Ausente = deploy (registros antigos).
+   */
+  kind?: "deploy" | "recreate";
   status: DeployJobStatus;
   createdAt: string;
   startedAt: string | null;
