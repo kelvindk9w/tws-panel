@@ -247,7 +247,19 @@ svc_disable_mask() {
 # Pacotes
 # ---------------------------------------------------------------------------
 
-pkg_installed() { dpkg -s "$1" >/dev/null 2>&1; }
+# pkg_installed <pkg> — instalado DE FATO (estado "ii" do dpkg).
+# `dpkg -s` também sai 0 no estado "rc" (removido sem purge, só restam os
+# arquivos de configuração): apt_install pulava a reinstalação e a fase caía
+# depois por falta do binário (achado 25). Mesma regra do scanner
+# (packages/security/src/checks.ts, DPKG_INSTALLED).
+# shellcheck disable=SC2016 # ${db:...} é formato do dpkg-query, não variável do shell
+pkg_installed() {
+  dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null | grep -q '^ii '
+}
+
+# pkg_known <pkg> — o dpkg ainda guarda algo do pacote (instalado OU só a
+# configuração, "rc"). Usado pelo purge, que também limpa esses restos.
+pkg_known() { dpkg -s "$1" >/dev/null 2>&1; }
 
 # apt_install <pkgs...> — instala se ausente (idempotente).
 apt_install() {
@@ -357,7 +369,7 @@ apt_purge_if_installed() {
   local installed=()
   local pkg
   for pkg in "$@"; do
-    pkg_installed "$pkg" && installed+=("$pkg")
+    pkg_known "$pkg" && installed+=("$pkg")
   done
   if [ "${#installed[@]}" -eq 0 ]; then
     info "nenhum dos pacotes está instalado: $*"
