@@ -35,6 +35,7 @@ import { composeOverrideYaml, hardenComposeModel, strippedProxyPortServices } fr
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
+import { isRegularFile, readFileNoFollow } from "./safe-fs.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
 import { composeEnv, loadCanonicalCompose } from "./compose-config.js";
@@ -481,8 +482,9 @@ export class DeployEngine {
   ): Promise<string> {
     await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
     const { proxyPort, composeContent, mailServices } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
-    const args = this.composeArgs(project, src);
     await this.assertInputsSafe(src, [".env"]);
+    await this.writeComposeEnv(project, src);
+    const args = this.composeArgs(project, src);
     const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices);
     // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
     const upArgs = await this.canonicalArgs(project, src, model);
@@ -586,10 +588,31 @@ export class DeployEngine {
   }
 
   /**
+   * Monta o ambiente do compose (`<projeto>/paas.up.env`, 0600, fora do src): cópia
+   * do `.env` do projeto (só se for arquivo comum, lido sem seguir link) seguida do
+   * `paas.env` com as Variáveis do painel, que vem por último e vence. O `config`
+   * (--no-env-resolution deixa `environment: [VAR]` e `${VAR}` de env_file para o
+   * `up`) e o `up` recebem ESTE arquivo: o compose nunca lê `src/.env` por conta
+   * própria, nem seguindo link (A2).
+   */
+  private async writeComposeEnv(project: Project, src: string): Promise<void> {
+    const workDir = projectWorkDir(this.ctx, project);
+    await mkdir(workDir, { recursive: true });
+    const parts: string[] = [];
+    const dotenv = path.join(src, ".env");
+    if (await isRegularFile(dotenv)) parts.push(await readFileNoFollow(dotenv));
+    const panelEnv = path.join(workDir, "paas.env");
+    if (existsSync(panelEnv)) parts.push(await readFile(panelEnv, "utf8"));
+    const merged = parts.map((p) => (p.endsWith("\n") ? p : `${p}\n`)).join("");
+    const target = path.join(workDir, "paas.up.env");
+    await writeFile(target, merged, { encoding: "utf8", mode: 0o600 });
+    await chmod(target, 0o600);
+  }
+
+  /**
    * Grava o modelo conferido em `paas.canonical.json` (fora do src, 0600) e
-   * devolve os argumentos do `docker compose` para subir DELE. O `--env-file`
-   * é um arquivo vazio do painel: o modelo já está interpolado e o compose
-   * não lê o `.env` de dentro do src.
+   * devolve os argumentos do `docker compose` para subir DELE, com o mesmo
+   * ambiente do `config` (`paas.up.env`, ver writeComposeEnv).
    */
   private async canonicalArgs(project: Project, src: string, model: unknown): Promise<string[]> {
     const workDir = projectWorkDir(this.ctx, project);
@@ -597,9 +620,8 @@ export class DeployEngine {
     const canonical = path.join(workDir, "paas.canonical.json");
     await writeFile(canonical, JSON.stringify(hardenComposeModel(model)), { encoding: "utf8", mode: 0o600 });
     await chmod(canonical, 0o600);
-    const emptyEnv = path.join(workDir, "paas.up.env");
-    await writeFile(emptyEnv, "", { encoding: "utf8", mode: 0o600 });
-    return ["compose", "-p", composeProjectName(project), "--env-file", emptyEnv, "--project-directory", src, "-f", canonical];
+    const envFile = path.join(workDir, "paas.up.env");
+    return ["compose", "-p", composeProjectName(project), "--env-file", envFile, "--project-directory", src, "-f", canonical];
   }
 
   /** Mesmo contexto para a checagem sobre o YAML cru. */
@@ -788,8 +810,9 @@ export class DeployEngine {
         (await this.ctx.injectEnvForProject?.(project)) ?? {},
         timezone,
       );
-      const args = this.composeArgs(project, src);
       await this.assertInputsSafe(src, [".env"]);
+      await this.writeComposeEnv(project, src);
+      const args = this.composeArgs(project, src);
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
       const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices);
       const upArgs = await this.canonicalArgs(project, src, model);
@@ -823,7 +846,8 @@ export class DeployEngine {
     const overrideFile = path.join(workDir, "paas.override.yml");
     // .env versionado no repositório: as variáveis do painel ficam à parte
     // (ver project-dotenv.ts) e todo comando do compose precisa delas.
-    const envFile = path.join(workDir, "paas.env");
+    const upEnv = path.join(workDir, "paas.up.env");
+    const envFile = existsSync(upEnv) ? upEnv : path.join(workDir, "paas.env");
     return [
       "compose",
       "-p",

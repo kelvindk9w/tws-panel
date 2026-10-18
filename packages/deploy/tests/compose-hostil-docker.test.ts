@@ -5,7 +5,7 @@
  * resolvidos. Roda só onde há `docker compose` (`config` não cria nada).
  */
 import { execFileSync } from "node:child_process";
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,27 @@ describe.skipIf(!DOCKER)("compose hostil — pelo docker compose config real", (
     ]);
     expect(volta.ok).toBe(true);
     expect(volta.ok ? volta.model : null).toEqual(loaded.ok ? loaded.model : undefined);
+  });
+
+  it("variável só com o nome e ${VAR} de env_file resolvem no up pelo env-file do painel (config real + JSON canônico)", async () => {
+    await mkdir(src, { recursive: true });
+    await writeFile(
+      path.join(src, "docker-compose.yml"),
+      "services:\n  web:\n    image: nginx:1.27\n    environment: [DATABASE_URL]\n    env_file: [vars.env]\n",
+    );
+    await writeFile(path.join(src, "vars.env"), "DERIVADA=${PAINEL_VAR}-ok\n");
+    // ambiente montado pelo painel: .env do projeto + Variáveis do painel (por último)
+    const ambiente = path.join(root, "paas.up.env");
+    await writeFile(ambiente, "DATABASE_URL=postgres://do-repo\nDATABASE_URL=postgres://painel\nPAINEL_VAR=valor\n");
+    const cabecalho = ["compose", "-p", "paas-atacante", "--env-file", ambiente, "--project-directory", src];
+    const loaded = await loadCanonicalCompose([...cabecalho, "-f", path.join(src, "docker-compose.yml")]);
+    expect(loaded.ok).toBe(true);
+    const canonico = path.join(root, "paas.canonical.json");
+    await writeFile(canonico, JSON.stringify(loaded.ok ? loaded.model : null));
+    // o que o `up` vai ver: o JSON conferido + o env-file do painel, com o ambiente resolvido
+    const texto = execFileSync("docker", [...cabecalho, "-f", canonico, "config", "--format", "json"], { env: composeEnv(), encoding: "utf8" });
+    expect(texto).toContain("postgres://painel");
+    expect(texto).toContain("valor-ok");
   });
 
   it("o ambiente do painel NÃO entra na interpolação: ${SETUP_TOKEN} chega vazio", async () => {

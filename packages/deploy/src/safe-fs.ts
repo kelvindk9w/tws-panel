@@ -30,6 +30,16 @@ export async function isRegularFile(file: string): Promise<boolean> {
   }
 }
 
+/** Lê `file` por inteiro SEM seguir link simbólico no último nome (ELOOP se for link). */
+export async function readFileNoFollow(file: string): Promise<string> {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * Grava `file` por inteiro SEM seguir link simbólico: escreve num arquivo
  * novo (`O_EXCL|O_NOFOLLOW`, nome aleatório ao lado) e o põe no lugar com

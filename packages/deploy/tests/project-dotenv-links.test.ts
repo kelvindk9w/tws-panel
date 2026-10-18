@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeProjectDotenv } from "../src/project-dotenv.js";
-import { appendNoFollow, isRealDirectory, isRegularFile, writeFileNoFollow } from "../src/safe-fs.js";
+import { appendNoFollow, isRealDirectory, isRegularFile, readFileNoFollow, writeFileNoFollow } from "../src/safe-fs.js";
 
 let root: string;
 let src: string;
@@ -155,5 +155,12 @@ describe("safe-fs", () => {
     expect(await isRegularFile(alvo)).toBe(true);
     expect(await isRegularFile(link)).toBe(false);
     expect(await isRegularFile(path.join(root, "nada"))).toBe(false);
+  });
+
+  it("readFileNoFollow lê arquivo comum e recusa link (não devolve o conteúdo do alvo)", async () => {
+    const link = path.join(root, "atalho");
+    await symlink(alvo, link);
+    expect(await readFileNoFollow(alvo)).toBe("NAO-MEXA\n");
+    await expect(readFileNoFollow(link)).rejects.toThrow();
   });
 });
