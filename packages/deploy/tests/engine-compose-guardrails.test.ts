@@ -105,14 +105,15 @@ const HOSTIL = JSON.stringify({
 const LIMPO = JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27" } } });
 
 describe("DeployEngine.deployCompose — guardrails sobre o compose resolvido", () => {
-  it("confere com os mesmos -p, --project-directory e -f do up, ANTES do up", async () => {
+  it("confere o compose resolvido ANTES do up, com o mesmo -p e --project-directory (o up roda do JSON conferido: engine-canonico.test.ts)", async () => {
     configResult = { code: 0, stdout: LIMPO, stderr: "" };
     await privado().deployCompose(project(), src, () => undefined, {}, {}, null, false);
     const config = calls.find((c) => c.args.includes("config"))!;
     const up = calls.find((c) => c.args.includes("up"))!;
     expect(calls.indexOf(config)).toBeLessThan(calls.indexOf(up));
-    const cabecalho = (a: string[]) => a.slice(0, a.indexOf("config") === -1 ? a.indexOf("up") : a.indexOf("config"));
-    expect(cabecalho(config.args)).toEqual(cabecalho(up.args));
+    const valor = (a: string[], flag: string) => a[a.indexOf(flag) + 1];
+    expect(valor(config.args, "-p")).toBe(valor(up.args, "-p"));
+    expect(valor(config.args, "--project-directory")).toBe(valor(up.args, "--project-directory"));
     expect(config.args).toEqual(expect.arrayContaining(["--format", "json", "--no-env-resolution"]));
   });
 

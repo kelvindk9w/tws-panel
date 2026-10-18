@@ -11,7 +11,7 @@
  *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
  */
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   PAAS_LABEL_MANAGED,
@@ -37,7 +37,7 @@ import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.j
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
 import { composeEnv, loadCanonicalCompose } from "./compose-config.js";
-import { HARD_RULES, checkComposeModel } from "./compose-model.js";
+import { HARD_RULES, checkComposeModel, resolveRealPath } from "./compose-model.js";
 import { waitHealthy } from "./health-check.js";
 
 export interface EngineContext extends IngestContext {
@@ -477,15 +477,19 @@ export class DeployEngine {
     timezone: string | null = null,
     guardrailOverride = false,
   ): Promise<string> {
+    await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
     const { proxyPort, composeContent, mailServices } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
     const args = this.composeArgs(project, src);
-    await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices);
+    await this.assertInputsSafe(src, [".env"]);
+    const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices);
+    // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
+    const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
-    const code = await runStream("docker", [...args, "up", "-d", "--build"], (chunk) => {
+    const code = await runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
       output += chunk;
       onLog(chunk);
     }, { env: composeEnv() });
-    if (code !== 0) await this.composeUpFailed(args, output, code, composeContent, onLog);
+    if (code !== 0) await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
     return `${project.slug}:${proxyPort}`;
   }
 
@@ -514,7 +518,7 @@ export class DeployEngine {
     onLog: LogFn,
     guardrailOverride: boolean,
     mailServices: readonly string[] = [],
-  ): Promise<void> {
+  ): Promise<unknown> {
     const loaded = await loadCanonicalCompose(args);
     if (!loaded.ok) {
       if (loaded.missing.length > 0) throw this.missingVariablesError(loaded.missing);
@@ -531,7 +535,7 @@ export class DeployEngine {
     onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
     if (findings.length === 0) {
       onLog("O compose resolvido só pede o que um projeto pode pedir.\n");
-      return;
+      return loaded.model;
     }
     for (const f of findings) onLog(`✖ BLOCK [${f.rule}] ${f.title} — ${f.evidence}\n`);
     const hard = findings.filter((f) => HARD_RULES.has(f.rule));
@@ -548,6 +552,50 @@ export class DeployEngine {
       );
     }
     onLog(`⚠ Override explícito do operador: prosseguindo com ${findings.length} bloqueio(s).\n`);
+    return loaded.model;
+  }
+
+  /**
+   * Arquivos do projeto que o `docker compose` lê seguindo links (o `.env`
+   * da interpolação, o próprio compose): precisam ser arquivos de verdade,
+   * com caminho real DENTRO do src. Um `.env` que é link para /etc ou para um
+   * segredo do painel seria lido pelo compose (achado A2).
+   */
+  private async assertInputsSafe(src: string, files: string[]): Promise<void> {
+    const root = resolveRealPath(src);
+    for (const rel of files) {
+      const file = path.join(src, rel);
+      let info;
+      try {
+        info = await lstat(file);
+      } catch {
+        continue; // não existe: a ausência é problema de quem lê (mensagem própria do compose)
+      }
+      const real = resolveRealPath(file);
+      if (info.isSymbolicLink() || !info.isFile() || !real.startsWith(root + path.sep)) {
+        throw new Error(
+          `o arquivo ${rel} do projeto não é um arquivo comum dentro da pasta do projeto (link simbólico ou fora dela). ` +
+            "O docker compose o leria seguindo o link — troque por um arquivo de verdade e faça o deploy de novo.",
+        );
+      }
+    }
+  }
+
+  /**
+   * Grava o modelo conferido em `paas.canonical.json` (fora do src, 0600) e
+   * devolve os argumentos do `docker compose` para subir DELE. O `--env-file`
+   * é um arquivo vazio do painel: o modelo já está interpolado e o compose
+   * não lê o `.env` de dentro do src.
+   */
+  private async canonicalArgs(project: Project, src: string, model: unknown): Promise<string[]> {
+    const workDir = projectWorkDir(this.ctx, project);
+    await mkdir(workDir, { recursive: true });
+    const canonical = path.join(workDir, "paas.canonical.json");
+    await writeFile(canonical, JSON.stringify(model), { encoding: "utf8", mode: 0o600 });
+    await chmod(canonical, 0o600);
+    const emptyEnv = path.join(workDir, "paas.up.env");
+    await writeFile(emptyEnv, "", { encoding: "utf8", mode: 0o600 });
+    return ["compose", "-p", composeProjectName(project), "--env-file", emptyEnv, "--project-directory", src, "-f", canonical];
   }
 
   /** Mesmo contexto para a checagem sobre o YAML cru. */
@@ -727,6 +775,7 @@ export class DeployEngine {
     const extraEnv = (await this.ctx.envForProject?.(project)) ?? {};
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
     if (type === "compose") {
+      await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
       const { composeContent, mailServices } = await this.writeComposeFiles(
         project,
         src,
@@ -736,10 +785,12 @@ export class DeployEngine {
         timezone,
       );
       const args = this.composeArgs(project, src);
+      await this.assertInputsSafe(src, [".env"]);
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
-      await this.assertComposeAllowed(project, src, args, onLog, false, mailServices);
+      const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices);
+      const upArgs = await this.canonicalArgs(project, src, model);
       let output = "";
-      const code = await runStream("docker", [...args, "up", "-d", "--no-build"], (chunk) => {
+      const code = await runStream("docker", [...upArgs, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
         onLog(chunk);
       }, { env: composeEnv() });
@@ -747,7 +798,7 @@ export class DeployEngine {
         if (/no such image|image .* not found|must be built|pull access denied/i.test(output)) {
           throw new Error("a imagem de um serviço não existe mais no servidor. Faça um deploy para construir de novo.");
         }
-        await this.composeUpFailed(args, output, code, composeContent, onLog);
+        await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
       }
       onLog("Containers recriados com a configuração atual.\n");
       return;

@@ -92,6 +92,22 @@ describe.skipIf(!DOCKER)("compose hostil — pelo docker compose config real", (
     expect(await resolvido("legitimo")).toEqual([]);
   });
 
+  it("o JSON canônico gravado fora do src volta igual pelo compose (é dele que o up roda) e ignora o .env do src", async () => {
+    await cp(path.join(FIXTURES, "legitimo"), src, { recursive: true });
+    await writeFile(path.join(src, ".env"), "IMAGEM=hostil\n");
+    const loaded = await loadCanonicalCompose(args());
+    expect(loaded.ok).toBe(true);
+    const canonico = path.join(root, "paas.canonical.json");
+    const vazio = path.join(root, "paas.up.env");
+    await writeFile(canonico, JSON.stringify(loaded.ok ? loaded.model : null));
+    await writeFile(vazio, "");
+    const volta = await loadCanonicalCompose([
+      "compose", "-p", "paas-atacante", "--env-file", vazio, "--project-directory", src, "-f", canonico,
+    ]);
+    expect(volta.ok).toBe(true);
+    expect(volta.ok ? volta.model : null).toEqual(loaded.ok ? loaded.model : undefined);
+  });
+
   it("o ambiente do painel NÃO entra na interpolação: ${SETUP_TOKEN} chega vazio", async () => {
     await cp(path.join(FIXTURES, "legitimo"), src, { recursive: true });
     await writeFile(
