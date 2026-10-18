@@ -10,7 +10,7 @@
  *     docker-socket.ts) — agora vira DOCKER_HOST do subprocesso `docker`.
  */
 import { describe, expect, it } from "vitest";
-import { DockerUnavailableError, listContainers } from "../src/services/docker-service.js";
+import { DockerUnavailableError, classifyContainer, listContainers } from "../src/services/docker-service.js";
 
 describe("listContainers", () => {
   // Estes dois casos falam com o Docker REAL da máquina: levam ~1,5s sozinhos e
@@ -42,5 +42,31 @@ describe("listContainers", () => {
       expect((err as Error).message.length).toBeGreaterThan(10);
       expect((err as Error).message).toContain("/tmp/paas-test-does-not-exist.sock");
     }
+  });
+});
+
+describe("classifyContainer — labels forjadas (M9)", () => {
+  const labels = (o: Record<string, string>) => new Map(Object.entries(o));
+
+  it("imagem com LABEL paas.project=vitima num container do compose do atacante: é do atacante", () => {
+    expect(
+      classifyContainer(labels({ "com.docker.compose.project": "paas-atacante", "paas.project": "vitima", "paas.managed": "true" })),
+    ).toEqual({ managed: true, projectSlug: "atacante", composeProject: "paas-atacante" });
+  });
+
+  it("container do painel (docker run) segue identificado pela label do painel", () => {
+    expect(classifyContainer(labels({ "paas.managed": "true", "paas.project": "loja" }))).toEqual({
+      managed: true,
+      projectSlug: "loja",
+      composeProject: null,
+    });
+  });
+
+  it("stack externa continua externa, mesmo com labels do painel herdadas", () => {
+    expect(classifyContainer(labels({ "com.docker.compose.project": "blog", "paas.managed": "true", "paas.project": "loja" }))).toEqual({
+      managed: false,
+      projectSlug: null,
+      composeProject: "blog",
+    });
   });
 });

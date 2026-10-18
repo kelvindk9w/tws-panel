@@ -824,16 +824,38 @@ export class DeployEngine {
   // Stop / start / remove
   // -------------------------------------------------------------------------
 
-  /** IDs dos containers do projeto (por label do painel + compose project). */
+  /**
+   * IDs dos containers do projeto. O dono vem da label do compose
+   * (`com.docker.compose.project`, que o compose grava por cima de qualquer
+   * label da imagem). `paas.project` só vale em container SEM label do
+   * compose (criado pelo painel com `docker run`) e marcado `paas.managed`:
+   * uma imagem com `LABEL paas.project=<outro>` não captura nem é capturada (M9).
+   */
   async projectContainers(project: Project): Promise<string[]> {
     const ids = new Set<string>();
-    for (const filter of [
-      `label=${PAAS_LABEL_PROJECT}=${project.slug}`,
+    const lines = (out: string): string[] => out.split("\n").map((l) => l.trim()).filter(Boolean);
+    const compose = await run("docker", [
+      "ps",
+      "-a",
+      "-q",
+      "--filter",
       `label=com.docker.compose.project=${composeProjectName(project)}`,
-    ]) {
-      const r = await run("docker", ["ps", "-a", "-q", "--filter", filter]);
-      if (r.code === 0) {
-        for (const line of r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) ids.add(line);
+    ]);
+    if (compose.code === 0) for (const id of lines(compose.stdout)) ids.add(id);
+    const direct = await run("docker", [
+      "ps",
+      "-a",
+      "--filter",
+      `label=${PAAS_LABEL_PROJECT}=${project.slug}`,
+      "--filter",
+      `label=${PAAS_LABEL_MANAGED}=true`,
+      "--format",
+      '{{.ID}} {{.Label "com.docker.compose.project"}}',
+    ]);
+    if (direct.code === 0) {
+      for (const line of lines(direct.stdout)) {
+        const [id, owner] = line.split(/\s+/);
+        if (id && !owner) ids.add(id);
       }
     }
     return [...ids];
