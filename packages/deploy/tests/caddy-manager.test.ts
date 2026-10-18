@@ -15,6 +15,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CADDY_IMAGE } from "@paas/core";
 
 type Result = { code: number; stdout: string; stderr: string };
 const ok = (stdout = ""): Result => ({ code: 0, stdout, stderr: "" });
@@ -94,7 +95,7 @@ describe("CaddyManager — criação do container", () => {
     expect(volumes).toEqual(["paas_caddy_data:/data", "paas_caddy_config:/config"]);
     expect(create!.join(" ")).not.toContain(dir);
     expect(create!.join(" ")).not.toContain("/etc/caddy");
-    expect(create).toEqual(expect.arrayContaining(["9080:80", "9443:443", "paas-caddy", "caddy:2-alpine"]));
+    expect(create).toEqual(expect.arrayContaining(["9080:80", "9443:443", "paas-caddy", CADDY_IMAGE]));
 
     const ordem = calls.map((a) => a[0]);
     expect(ordem.indexOf("create")).toBeLessThan(ordem.indexOf("<cp>"));

@@ -10,6 +10,7 @@ import {
   type MailServerPorts,
   type TerminalAccess,
   type TerminalRootMode,
+  HOST_HELPER_IMAGE,
 } from "@paas/core";
 
 /** Configuração inválida: a inicialização para com uma mensagem acionável. */
@@ -243,7 +244,7 @@ export function loadConfig(): ServerConfig {
     securityTarget: process.env.PAAS_TARGET === "host" ? "host" : "container",
     securityTargetContainer: process.env.PAAS_TARGET_CONTAINER ?? "paas-target-test",
     hardeningScriptsDir: path.resolve(process.env.PAAS_SCRIPTS_DIR ?? "../../scripts/hardening"),
-    hostHelperImage: process.env.PAAS_HOST_HELPER_IMAGE ?? "alpine:3",
+    hostHelperImage: process.env.PAAS_HOST_HELPER_IMAGE ?? HOST_HELPER_IMAGE,
     hostRepoDir: process.env.PAAS_HOST_REPO_DIR ?? "/opt/tws-panel",
     caddyHttpPort: envInt("PAAS_CADDY_HTTP_PORT", 80),
     caddyHttpsPort: envInt("PAAS_CADDY_HTTPS_PORT", 443),

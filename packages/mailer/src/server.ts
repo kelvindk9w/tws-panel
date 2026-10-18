@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  STALWART_IMAGE_REF,
   PAAS_LABEL_MANAGED,
   PAAS_NETWORK,
   PAAS_STALWART_CONTAINER,
@@ -30,7 +31,7 @@ import {
 import { run } from "./exec.js";
 import { certificateId, type MailCertificate } from "./tls-certificates.js";
 
-export const STALWART_IMAGE = "stalwartlabs/mail-server:v0.11.8";
+export const STALWART_IMAGE = STALWART_IMAGE_REF;
 
 /**
  * Raiz do Stalwart na imagem (VOLUME anônimo da imagem; `data` recebe o

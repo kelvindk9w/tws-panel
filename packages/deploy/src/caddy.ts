@@ -16,6 +16,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
 import {
+  CADDY_IMAGE,
   PAAS_CADDY_CONTAINER,
   certificateFileId,
   PAAS_LABEL_MANAGED,
@@ -159,7 +160,7 @@ export class CaddyManager {
   constructor(
     /** Diretório data/caddy (espelho do último Caddyfile aplicado, só para inspeção). */
     private readonly caddyDir: string,
-    private readonly image = "caddy:2-alpine",
+    private readonly image = CADDY_IMAGE,
     /** Portas publicadas no host (configurável para dev, ex.: 9080/9443). */
     private readonly ports: CaddyPorts = { http: 80, https: 443 },
     options: CaddyManagerOptions = {},
