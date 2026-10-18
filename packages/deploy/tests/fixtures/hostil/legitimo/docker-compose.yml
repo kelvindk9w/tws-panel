@@ -1,0 +1,31 @@
+services:
+  web:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8080:3000"
+    environment:
+      DATABASE_URL: postgres://app:Zq8vK2mXp91RtLw@db:5432/app
+      NODE_ENV: production
+    env_file:
+      - ./dados/.keep
+    volumes:
+      - ./dados:/app/dados
+      - uploads:/app/uploads
+      - type: tmpfs
+        target: /tmp
+    depends_on: [db]
+    networks: [backend]
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: Zq8vK2mXp91RtLw
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+volumes:
+  uploads:
+  pgdata:
+networks:
+  backend:

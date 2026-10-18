@@ -1,0 +1,182 @@
+/**
+ * DeployEngine (compose) — o compose é conferido COMO O DOCKER O VAI EXECUTAR
+ * (`docker compose config` com os mesmos -p/--env-file/-f do `up`) antes de
+ * qualquer `up` (achado A1). Sem Docker: `run` e `runStream` são dublês; a
+ * saída do `config` é o modelo canônico que cada teste escolhe.
+ */
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Project } from "@paas/core";
+
+type Result = { code: number; stdout: string; stderr: string };
+const calls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = [];
+let configResult: Result = { code: 0, stdout: "{}", stderr: "" };
+
+vi.mock("../src/exec.js", () => ({
+  run: vi.fn(async (_file: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }): Promise<Result> => {
+    calls.push({ args, ...(opts?.env ? { env: opts.env } : {}) });
+    if (args.includes("config")) return configResult;
+    return { code: 0, stdout: "", stderr: "" };
+  }),
+  runStream: vi.fn(async (_file: string, args: string[], _onData: unknown, opts?: { env?: NodeJS.ProcessEnv }) => {
+    calls.push({ args, ...(opts?.env ? { env: opts.env } : {}) });
+    return 0;
+  }),
+}));
+
+const { DeployEngine } = await import("../src/engine.js");
+
+let root: string;
+let projectsDir: string;
+let src: string;
+
+beforeEach(async () => {
+  calls.length = 0;
+  configResult = { code: 0, stdout: "{}", stderr: "" };
+  root = await mkdtemp(path.join(tmpdir(), "paas-engine-guardrails-"));
+  projectsDir = path.join(root, "projects");
+  src = path.join(projectsDir, "loja", "src");
+  await mkdir(src, { recursive: true });
+  await writeFile(path.join(src, "compose.yml"), "services:\n  web:\n    image: nginx:1.27\n");
+});
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+function project(): Project {
+  return {
+    id: "p1",
+    name: "Loja",
+    slug: "loja",
+    ingestMode: "git",
+    source: "https://example.com/loja.git",
+    branch: "main",
+    domain: "loja.localhost",
+    websocket: false,
+    detection: {
+      type: "compose",
+      composeFile: "compose.yml",
+      outputDir: null,
+      packageManager: null,
+      buildCommand: null,
+      proxyService: "web",
+      proxyPort: 80,
+      warnings: [],
+      details: [],
+    },
+    proxyService: null,
+    proxyPort: null,
+    createdAt: "",
+    updatedAt: "",
+    lastDeployAt: null,
+    lastDeployStatus: null,
+    deployedBranch: null,
+    deployedSource: null,
+  };
+}
+
+function engine() {
+  return new DeployEngine({
+    projectsDir,
+    caddyDir: path.join(projectsDir, "caddy"),
+    nodeImage: "node:22",
+    staticImage: "nginx:alpine",
+    caddyHttpPort: 80,
+    caddyHttpsPort: 443,
+  });
+}
+
+type Privado = {
+  deployCompose(p: Project, src: string, onLog: (c: string) => void, dotenv: Record<string, string>, extra: Record<string, string>, tz: string | null, override: boolean): Promise<string>;
+  assertComposeAllowed(p: Project, src: string, args: string[], onLog: (c: string) => void, override: boolean): Promise<void>;
+};
+const privado = () => engine() as unknown as Privado;
+
+function sobe(): boolean {
+  return calls.some((c) => c.args.includes("up"));
+}
+
+const HOSTIL = JSON.stringify({
+  name: "paas-loja",
+  services: { web: { image: "nginx:1.27", privileged: true, cap_add: ["SYS_ADMIN"], volumes: [{ type: "bind", source: "/", target: "/host" }] } },
+});
+const LIMPO = JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27" } } });
+
+describe("DeployEngine.deployCompose — guardrails sobre o compose resolvido", () => {
+  it("confere com os mesmos -p, --project-directory e -f do up, ANTES do up", async () => {
+    configResult = { code: 0, stdout: LIMPO, stderr: "" };
+    await privado().deployCompose(project(), src, () => undefined, {}, {}, null, false);
+    const config = calls.find((c) => c.args.includes("config"))!;
+    const up = calls.find((c) => c.args.includes("up"))!;
+    expect(calls.indexOf(config)).toBeLessThan(calls.indexOf(up));
+    const cabecalho = (a: string[]) => a.slice(0, a.indexOf("config") === -1 ? a.indexOf("up") : a.indexOf("config"));
+    expect(cabecalho(config.args)).toEqual(cabecalho(up.args));
+    expect(config.args).toEqual(expect.arrayContaining(["--format", "json", "--no-env-resolution"]));
+  });
+
+  it("compose resolvido hostil: aborta antes do up e lista o que foi achado", async () => {
+    configResult = { code: 0, stdout: HOSTIL, stderr: "" };
+    let log = "";
+    await expect(privado().deployCompose(project(), src, (c) => (log += c), {}, {}, null, false)).rejects.toThrow(/guardrail_blocked/);
+    expect(sobe()).toBe(false);
+    expect(log).toContain("Container privilegiado");
+    expect(log).toContain("cap_add");
+    expect(log).toContain("monta / de fora da pasta do projeto");
+  });
+
+  it("com override explícito do operador, os bloqueios comuns passam (e ficam no log)", async () => {
+    configResult = { code: 0, stdout: HOSTIL, stderr: "" };
+    let log = "";
+    await privado().deployCompose(project(), src, (c) => (log += c), {}, {}, null, true);
+    expect(sobe()).toBe(true);
+    expect(log).toContain("Override explícito do operador");
+  });
+
+  it("docker compose, up e config rodam SEM os segredos do painel no ambiente", async () => {
+    const antes = process.env.SETUP_TOKEN;
+    process.env.SETUP_TOKEN = "segredo";
+    try {
+      configResult = { code: 0, stdout: LIMPO, stderr: "" };
+      await privado().deployCompose(project(), src, () => undefined, {}, {}, null, false);
+    } finally {
+      if (antes === undefined) delete process.env.SETUP_TOKEN;
+      else process.env.SETUP_TOKEN = antes;
+    }
+    for (const c of calls.filter((x) => x.args.includes("config") || x.args.includes("up"))) {
+      expect(c.env).toBeDefined();
+      expect(c.env).not.toHaveProperty("SETUP_TOKEN");
+    }
+  });
+
+  it("variável obrigatória faltando: a mesma mensagem de antes, sem tentar subir", async () => {
+    configResult = { code: 1, stdout: "", stderr: "required variable POSTGRES_PASSWORD is missing a value: defina" };
+    await expect(privado().deployCompose(project(), src, () => undefined, {}, {}, null, false)).rejects.toThrow(
+      /faltam variáveis obrigatórias do compose: POSTGRES_PASSWORD/,
+    );
+    expect(sobe()).toBe(false);
+  });
+
+  it("compose que o docker não consegue interpretar: erro claro, sem subir", async () => {
+    configResult = { code: 1, stdout: "", stderr: "yaml: line 3: mapping values are not allowed" };
+    await expect(privado().deployCompose(project(), src, () => undefined, {}, {}, null, false)).rejects.toThrow(
+      /não conseguiu interpretar o compose do projeto: yaml: line 3/,
+    );
+    expect(sobe()).toBe(false);
+  });
+});
+
+describe("DeployEngine.recreate — o app pode ter mexido no compose desde o último deploy", () => {
+  it("recreate também confere o compose resolvido e NÃO aceita override", async () => {
+    configResult = { code: 0, stdout: HOSTIL, stderr: "" };
+    await expect(engine().recreate(project(), () => undefined)).rejects.toThrow(/guardrail_blocked/);
+    expect(sobe()).toBe(false);
+  });
+
+  it("recreate de compose limpo segue normalmente", async () => {
+    configResult = { code: 0, stdout: LIMPO, stderr: "" };
+    await engine().recreate(project(), () => undefined);
+    expect(sobe()).toBe(true);
+  });
+});

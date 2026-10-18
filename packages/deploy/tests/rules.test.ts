@@ -507,12 +507,16 @@ describe("relatório agregado", () => {
     expect(report.blockers).toBe(0);
   });
 
-  it("catálogo GUARDRAIL_RULES lista as 7 regras com níveis corretos", () => {
+  it("catálogo GUARDRAIL_RULES lista as regras com níveis corretos", () => {
     expect(GUARDRAIL_RULES.map((r) => [r.rule, r.level])).toEqual([
       ["db-port-exposed", "block"],
       ["proxy-port-conflict", "block"],
       ["weak-credentials", "block"],
       ["privileged-container", "block"],
+      ["host-namespace", "block"],
+      ["host-mount", "block"],
+      ["shared-resource", "block"],
+      ["build-outside-src", "block"],
       ["dev-service-in-prod", "warn"],
       ["secret-in-code", "warn"],
       ["latest-tag", "info"],

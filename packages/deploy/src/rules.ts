@@ -13,17 +13,22 @@
  * Regras:
  *  - db-port-exposed      (block) porta de banco publicada no host
  *  - weak-credentials     (block) credenciais triviais no compose/env
- *  - privileged-container (block) privileged: true ou docker.sock montado
+ *  - privileged-container (block) privileged (qualquer forma), cap_add, devices, security_opt, sysctls, docker.sock
+ *  - host-namespace       (block) pid/ipc/network_mode/userns/cgroup/uts do host ou de outro container
+ *  - host-mount           (block) bind mount fora da pasta do projeto
+ *  - shared-resource      (block) volume ou rede externo / de outro projeto
+ *  - build-outside-src    (block) build, env_file ou segredo fora da pasta do projeto
  *  - dev-service-in-prod  (warn)  mailhog/phpmyadmin/adminer/debug tools
  *  - secret-in-code       (warn)  padrões de secrets no diretório fonte
  *  - latest-tag           (info)  imagens com tag :latest
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { GuardrailFinding, GuardrailLevel, GuardrailReport, PortOverride } from "@paas/core";
+import { PAAS_NETWORK, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
 import { parse } from "yaml";
 import { DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
+import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
 
@@ -227,24 +232,6 @@ function isWeakSecret(value: string | null): boolean {
   return v.length > 0 && v.length < 6;
 }
 
-/**
- * Volume que monta o socket do Docker (acesso total ao host).
- * Exportada para guardrails.ts (preview do wizard/detecção) reutilizar a
- * MESMA lógica da regra "privileged-container" que bloqueia o deploy, em vez
- * de duplicá-la — ver comentário em analyzeCompose (guardrails.ts).
- */
-export function mountsDockerSock(volumes: unknown): boolean {
-  if (!Array.isArray(volumes)) return false;
-  return volumes.some((entry) => {
-    if (typeof entry === "string") return entry.includes("/var/run/docker.sock");
-    if (entry && typeof entry === "object") {
-      const source = String((entry as { source?: unknown }).source ?? "");
-      return source.includes("/var/run/docker.sock");
-    }
-    return false;
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Regras sobre o compose
 // ---------------------------------------------------------------------------
@@ -252,10 +239,14 @@ export function mountsDockerSock(volumes: unknown): boolean {
 function analyzeComposeRules(
   content: string,
   fileName: string,
+  srcRoot: string,
   portOverrides?: Record<string, PortOverride[]>,
+  isolation?: IsolationContext,
 ): GuardrailFinding[] {
   const findings: GuardrailFinding[] = [];
-  const doc = parse(content) as ComposeFile;
+  // merge: true resolve `<<: *âncora` como o Compose resolve (sem isso um
+  // `privileged: true` herdado por merge passava despercebido)
+  const doc = parse(content, { merge: true }) as ComposeFile;
   const services = doc.services ?? {};
   // As trocas de porta do painel (modal Portas) valem também aqui: banco com a
   // publicação removida no painel não fica mais exposto no deploy.
@@ -349,28 +340,6 @@ function analyzeComposeRules(
       });
     }
 
-    // privileged-container (block)
-    if (service.privileged === true) {
-      findings.push({
-        rule: "privileged-container",
-        level: "block",
-        title: "Container privilegiado",
-        evidence: `${fileName}: serviço "${name}" define privileged: true`,
-        fix: "Remova `privileged: true` — equivale a root no host. Se o serviço precisa de uma capability específica, use `cap_add` com o mínimo necessário.",
-        service: name,
-      });
-    }
-    if (mountsDockerSock(service.volumes)) {
-      findings.push({
-        rule: "privileged-container",
-        level: "block",
-        title: "Socket do Docker montado no container",
-        evidence: `${fileName}: serviço "${name}" monta /var/run/docker.sock`,
-        fix: "Evite montar o docker.sock — dá controle total sobre o host. Se indispensável, monte read-only (:ro) e restrinja o serviço.",
-        service: name,
-      });
-    }
-
     // weak-credentials (block)
     const env = envEntries(service.environment);
     for (const [key, value] of env) {
@@ -403,6 +372,18 @@ function analyzeComposeRules(
       }
     }
   }
+
+  // O que o compose pode pedir ao Docker (lista do que se PERMITE): privilégios,
+  // namespaces, montagens, redes, volumes e build — ver compose-model.ts.
+  findings.push(
+    ...checkComposeModel(doc, {
+      fileName,
+      srcRoot,
+      mode: "raw",
+      panelNetwork: PAAS_NETWORK,
+      ...(isolation?.projectName ? { projectName: isolation.projectName } : {}),
+    }),
+  );
 
   return findings;
 }
@@ -490,6 +471,12 @@ async function scanSecrets(dir: string): Promise<GuardrailFinding[]> {
 // API pública
 // ---------------------------------------------------------------------------
 
+/** Quem é o projeto, para as regras de isolamento (nomes, volumes e redes que são dele). */
+export interface IsolationContext {
+  /** Nome do projeto no compose (`paas-<slug>`). */
+  projectName?: string;
+}
+
 export interface GuardrailRuleInfo {
   rule: string;
   level: GuardrailLevel;
@@ -501,7 +488,11 @@ export const GUARDRAIL_RULES: readonly GuardrailRuleInfo[] = [
   { rule: "db-port-exposed", level: "block", title: "Porta de banco de dados publicada no host" },
   { rule: "proxy-port-conflict", level: "block", title: "Projeto publica as portas 80/443 do proxy do painel" },
   { rule: "weak-credentials", level: "block", title: "Credenciais triviais no compose/env" },
-  { rule: "privileged-container", level: "block", title: "Container privilegiado ou docker.sock montado" },
+  { rule: "privileged-container", level: "block", title: "Container privilegiado, com capabilities, devices ou docker.sock montado" },
+  { rule: "host-namespace", level: "block", title: "Container compartilha pid, ipc, rede ou usuário com o host" },
+  { rule: "host-mount", level: "block", title: "Pasta do servidor montada fora do código do projeto" },
+  { rule: "shared-resource", level: "block", title: "Volume ou rede que não é do próprio projeto" },
+  { rule: "build-outside-src", level: "block", title: "Build, env_file ou segredo lido de fora do código do projeto" },
   { rule: "dev-service-in-prod", level: "warn", title: "Serviço de desenvolvimento em produção" },
   { rule: "secret-in-code", level: "warn", title: "Possível secret comitado no código" },
   { rule: "latest-tag", level: "info", title: "Imagem com tag :latest" },
@@ -527,6 +518,7 @@ export async function runGuardrails(
   dir: string,
   projectComposeFile?: string | null,
   portOverrides?: Record<string, PortOverride[]>,
+  isolation?: IsolationContext,
 ): Promise<GuardrailReport> {
   const findings: GuardrailFinding[] = [];
 
@@ -547,7 +539,7 @@ export async function runGuardrails(
   if (composeFile) {
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
-      findings.push(...analyzeComposeRules(content, composeFile, portOverrides));
+      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation));
     } catch {
       findings.push({
         rule: "invalid-compose",

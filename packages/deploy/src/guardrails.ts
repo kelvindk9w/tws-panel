@@ -8,9 +8,9 @@
  *  - serviços de dev em produção (Mailhog na 8025).
  */
 import { parse } from "yaml";
-import type { GuardrailWarning } from "@paas/core";
+import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
 import { DATABASE_PORTS, describeHostSide, publishedPorts } from "./compose-ports.js";
-import { mountsDockerSock } from "./rules.js";
+import { checkComposeModel } from "./compose-model.js";
 
 /** Imagens de serviços típicos de desenvolvimento. */
 const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
@@ -97,9 +97,9 @@ function isWeakSecret(value: string | null): boolean {
  * Analisa o conteúdo de um arquivo compose e retorna os warnings de guardrails.
  * Lança erro se o YAML for inválido.
  */
-export function analyzeCompose(content: string, fileName: string): GuardrailWarning[] {
+export function analyzeCompose(content: string, fileName: string, srcRoot?: string): GuardrailWarning[] {
   const warnings: GuardrailWarning[] = [];
-  const doc = parse(content) as ComposeFile;
+  const doc = parse(content, { merge: true }) as ComposeFile;
   const services = doc.services ?? {};
 
   for (const [name, service] of Object.entries(services)) {
@@ -144,28 +144,19 @@ export function analyzeCompose(content: string, fileName: string): GuardrailWarn
       }
     }
 
-    // 4) container privilegiado ou com o socket do Docker montado — mesma
-    // regra "privileged-container" (block) de rules.ts, o que realmente
-    // barra o deploy. Antes desta checagem, um projeto passava limpo aqui
-    // (preview do wizard/detecção) e só era barrado depois, no deploy —
-    // reutilizamos mountsDockerSock() de rules.ts em vez de duplicar a
-    // lógica para os dois pararem de divergir.
-    if (service.privileged === true) {
-      warnings.push({
-        id: "compose.privileged-container",
-        severity: "critical",
-        service: name,
-        message: `Serviço "${name}" define privileged: true — equivale a root no host e vai BLOQUEAR o deploy até ser corrigido.`,
-      });
-    }
-    if (mountsDockerSock(service.volumes)) {
-      warnings.push({
-        id: "compose.privileged-container",
-        severity: "critical",
-        service: name,
-        message: `Serviço "${name}" monta /var/run/docker.sock — equivale a root no host e vai BLOQUEAR o deploy até ser corrigido.`,
-      });
-    }
+  }
+
+  // 4) o que o compose pode pedir ao Docker (privilégios, namespaces, montagens,
+  // redes e build) — a MESMA lista de compose-model.ts que barra o deploy
+  // (rules.ts). Sem a pasta do projeto só dá para conferir os privilégios.
+  for (const f of checkComposeModel(doc, { fileName, srcRoot: srcRoot ?? ".", mode: "raw", panelNetwork: PAAS_NETWORK })) {
+    if (!srcRoot && f.rule !== "privileged-container" && f.rule !== "host-namespace") continue;
+    warnings.push({
+      id: `compose.${f.rule}`,
+      severity: "critical",
+      ...(f.service ? { service: f.service } : {}),
+      message: `${f.title} — ${f.evidence}. Isso vai BLOQUEAR o deploy até ser corrigido.`,
+    });
   }
 
   if (Object.keys(services).length === 0) {

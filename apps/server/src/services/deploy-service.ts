@@ -46,6 +46,7 @@ import {
 } from "@paas/core";
 import {
   DeployEngine,
+  composeProjectName,
   detectProject,
   ingestCode,
   projectSrcDir,
@@ -897,7 +898,10 @@ export class DeployService {
         note: "Código ainda não ingerido (modo git). Os guardrails rodarão automaticamente no deploy, após o clone.",
       };
     }
-    return { report: await runGuardrails(dir, project.detection?.composeFile, project.portOverrides), note: null };
+    const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, {
+      projectName: composeProjectName(project),
+    });
+    return { report, note: null };
   }
 
   async detect(id: string): Promise<DetectResult> {
@@ -980,7 +984,9 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides);
+      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, {
+        projectName: composeProjectName(project),
+      });
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",

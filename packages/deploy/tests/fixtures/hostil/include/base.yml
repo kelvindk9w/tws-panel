@@ -1,0 +1,3 @@
+services:
+  b:
+    privileged: true

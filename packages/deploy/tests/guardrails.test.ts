@@ -307,6 +307,35 @@ describe("analyzeCompose — compose.privileged-container (convergência com rul
   });
 });
 
+describe("analyzeCompose — o preview vê o mesmo que o bloqueio (A1)", () => {
+  it("privileged escrito como texto, cap_add e pid: host aparecem como críticos", () => {
+    const w = analyzeCompose(
+      compose('  app:\n    image: app\n    privileged: "true"\n    cap_add: [SYS_ADMIN]\n    pid: host'),
+      "compose.yml",
+    );
+    const ids = w.map((x) => x.id);
+    expect(ids.filter((i) => i === "compose.privileged-container").length).toBeGreaterThanOrEqual(2);
+    expect(ids).toContain("compose.host-namespace");
+    expect(w.every((x) => x.severity === "critical")).toBe(true);
+  });
+
+  it("privileged herdado por merge (<<: *x) é visto", () => {
+    const w = analyzeCompose(
+      "x-base: &base\n  privileged: true\nservices:\n  app:\n    image: app\n    <<: *base\n",
+      "compose.yml",
+    );
+    expect(w.map((x) => x.id)).toContain("compose.privileged-container");
+  });
+
+  it("sem a pasta do projeto só os privilégios são conferidos; com ela, também as montagens", () => {
+    const yaml = compose('  app:\n    image: app\n    volumes: ["/etc:/host"]');
+    expect(analyzeCompose(yaml, "compose.yml")).toEqual([]);
+    const com = analyzeCompose(yaml, "compose.yml", "/opt/tws-projects/x/src");
+    expect(com.map((x) => x.id)).toEqual(["compose.host-mount"]);
+    expect(com[0]!.message).toContain("BLOQUEAR");
+  });
+});
+
 describe("analyzeCompose — casos gerais", () => {
   it("compose sem serviços gera info compose.no-services", () => {
     const warnings = analyzeCompose("services: {}\n", "compose.yml");

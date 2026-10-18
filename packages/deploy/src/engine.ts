@@ -34,6 +34,8 @@ import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
+import { composeEnv, loadCanonicalCompose } from "./compose-config.js";
+import { HARD_RULES, checkComposeModel } from "./compose-model.js";
 import { waitHealthy } from "./health-check.js";
 
 export interface EngineContext extends IngestContext {
@@ -213,7 +215,7 @@ export class DeployEngine {
     // vez antes de criar o job. Quando o modo de ingestão garante que o
     // diretório não mudou desde então (ver comentário no chamador), ele passa
     // esse resultado pronto aqui em vez de escanear a árvore de novo.
-    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides));
+    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, { projectName: composeProjectName(project) }));
     if (opts?.precomputedGuardrailReport) {
       onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
     }
@@ -276,6 +278,7 @@ export class DeployEngine {
           extraEnv,
           (await this.ctx.injectEnvForProject?.(project)) ?? {},
           timezone,
+          opts?.guardrailOverride === true,
         );
         break;
       case "dockerfile":
@@ -466,35 +469,93 @@ export class DeployEngine {
     dotenv: Record<string, string> = {},
     extraEnv: Record<string, string> = {},
     timezone: string | null = null,
+    guardrailOverride = false,
   ): Promise<string> {
     const { proxyPort, composeContent } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
     const args = this.composeArgs(project, src);
+    await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride);
     let output = "";
     const code = await runStream("docker", [...args, "up", "-d", "--build"], (chunk) => {
       output += chunk;
       onLog(chunk);
-    });
+    }, { env: composeEnv() });
     if (code !== 0) await this.composeUpFailed(args, output, code, composeContent, onLog);
     return `${project.slug}:${proxyPort}`;
+  }
+
+  /** Erro de variáveis obrigatórias do compose sem valor. */
+  private missingVariablesError(missing: string[]): Error {
+    return new Error(
+      `faltam variáveis obrigatórias do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto` +
+        (missing.some((m) => m.startsWith("SMTP_") || m === "MAIL_FROM")
+          ? " (SMTP_* e MAIL_FROM o painel preenche sozinho se você ativar a seção E-mail do projeto)"
+          : "") +
+        " e faça o deploy de novo.",
+    );
+  }
+
+  /**
+   * Confere o compose COMO O DOCKER O VAI EXECUTAR (`docker compose config`
+   * com os mesmos -p, --env-file, --project-directory e -f do `up`: merge,
+   * include, extends e ${VAR} já resolvidos) contra a lista do que um projeto
+   * pode pedir (compose-model.ts). É a checagem que vale: a da tela olha o
+   * YAML cru. Bloqueios de isolamento do painel (HARD_RULES) não têm override.
+   */
+  private async assertComposeAllowed(
+    project: Project,
+    src: string,
+    args: string[],
+    onLog: LogFn,
+    guardrailOverride: boolean,
+  ): Promise<void> {
+    const loaded = await loadCanonicalCompose(args);
+    if (!loaded.ok) {
+      if (loaded.missing.length > 0) throw this.missingVariablesError(loaded.missing);
+      throw new Error(`o docker compose não conseguiu interpretar o compose do projeto: ${loaded.error.slice(0, 1500)}`);
+    }
+    const findings = checkComposeModel(loaded.model, {
+      fileName: project.detection?.composeFile ?? "compose.yml",
+      srcRoot: src,
+      projectName: composeProjectName(project),
+      mode: "canonical",
+      panelNetwork: PAAS_NETWORK,
+    });
+    onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
+    if (findings.length === 0) {
+      onLog("O compose resolvido só pede o que um projeto pode pedir.\n");
+      return;
+    }
+    for (const f of findings) onLog(`✖ BLOCK [${f.rule}] ${f.title} — ${f.evidence}\n`);
+    const hard = findings.filter((f) => HARD_RULES.has(f.rule));
+    if (hard.length > 0) {
+      onLog("Estes bloqueios protegem o próprio painel e não têm override.\n");
+      throw new Error(
+        `guardrail_blocked: ${hard.length} bloqueio(s) de isolamento do painel no compose resolvido — sem override possível.`,
+      );
+    }
+    if (!guardrailOverride) {
+      onLog("Deploy abortado pelos guardrails. Corrija os bloqueios ou faça override explícito na interface.\n");
+      throw new Error(
+        `guardrail_blocked: ${findings.length} bloqueio(s) de segurança no compose resolvido — deploy requer override explícito.`,
+      );
+    }
+    onLog(`⚠ Override explícito do operador: prosseguindo com ${findings.length} bloqueio(s).\n`);
   }
 
   /** O compose falhou: variáveis faltando ou "por que falhou" de cada serviço. */
   private async composeUpFailed(args: string[], output: string, code: number, composeContent: string, onLog: LogFn): Promise<never> {
     const missing = missingFromComposeOutput(output);
-    if (missing.length > 0) {
-      throw new Error(
-        `faltam variáveis obrigatórias do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto` +
-          (missing.some((m) => m.startsWith("SMTP_") || m === "MAIL_FROM")
-            ? " (SMTP_* e MAIL_FROM o painel preenche sozinho se você ativar a seção E-mail do projeto)"
-            : "") +
-          " e faça o deploy de novo.",
-      );
-    }
+    if (missing.length > 0) throw this.missingVariablesError(missing);
     // Por que falhou: estado de cada serviço, fim do log e healthcheck de
     // quem ficou unhealthy/parou (validação real: "wallet is unhealthy"
     // sem nenhuma linha do wallet no log do painel).
     onLog("\n=== Diagnóstico: estado dos serviços depois da falha ===\n");
-    const summary = await diagnoseComposeFailure(args, startableServices(composeContent), onLog, run);
+    const summary = await diagnoseComposeFailure(
+      args,
+      startableServices(composeContent),
+      onLog,
+      (file, a, o) => run(file, a, { ...o, env: composeEnv() }),
+    );
     throw new Error(summary ? `docker compose up falhou: ${summary}.` : `docker compose up falhou (exit ${code}).`);
   }
 
@@ -619,11 +680,13 @@ export class DeployEngine {
         timezone,
       );
       const args = this.composeArgs(project, src);
+      // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
+      await this.assertComposeAllowed(project, src, args, onLog, false);
       let output = "";
       const code = await runStream("docker", [...args, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
         onLog(chunk);
-      });
+      }, { env: composeEnv() });
       if (code !== 0) {
         if (/no such image|image .* not found|must be built|pull access denied/i.test(output)) {
           throw new Error("a imagem de um serviço não existe mais no servidor. Faça um deploy para construir de novo.");
@@ -796,7 +859,7 @@ export class DeployEngine {
       const down = await run(
         "docker",
         [...this.composeArgs(project, src), "down", "--rmi", "local", "--remove-orphans"],
-        { timeoutMs: 180_000 },
+        { timeoutMs: 180_000, env: composeEnv() },
       );
       onLog(down.code === 0 ? "Stack compose removida.\n" : `compose down: ${down.stderr}\n`);
     }
