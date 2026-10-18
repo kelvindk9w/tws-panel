@@ -362,6 +362,17 @@ describe("panel-resource: /proc, /sys, sockets de /run e as pastas do próprio p
     "/var/run/qualquer.sock",
     "/run/containerd",
     "/var/run/docker",
+    // toda a árvore /run e /var/run, não só nomes terminados em .sock
+    "/run/dbus/system_bus_socket",
+    "/var/run/dbus/system_bus_socket",
+    "/run/dbus",
+    "/run/systemd/private",
+    "/run/systemd",
+    "/run/user/0",
+    "/run/user/1000/bus",
+    "/run/qualquer-coisa",
+    "/var/run/qualquer/coisa/aninhada",
+    "//run//dbus/../dbus/system_bus_socket",
   ])("bind de %s é regra dura", (source) => {
     expect(bindEm(source), source).toEqual(["panel-resource"]);
     expect(regras(servico({ volumes: [`${source}:/x`] })), source).toContain("panel-resource");

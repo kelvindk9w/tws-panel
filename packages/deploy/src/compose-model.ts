@@ -329,9 +329,11 @@ function normalizeHostPath(p: string): string {
   return n === "" ? "/" : n;
 }
 
-/** Sockets de controle do host em /run e /var/run (docker, containerd, crio, podman…) e as pastas deles. */
-const RUN_SOCKET = /^\/(var\/)?run\/(.*\/)?[^/]*\.sock$/;
-const RUN_CONTROL_DIRS = /^\/(var\/)?run\/(containerd|docker|podman|crio|buildkit)(\/|$)/;
+/**
+ * TODA a árvore /run e /var/run: ali moram os sockets de controle do host (docker, containerd, crio,
+ * dbus do sistema, systemd/private, /run/user/0) com ou sem sufixo `.sock`; ninguém monta isso num projeto.
+ */
+const RUN_TREE = /^\/(var\/)?run(\/|$)/;
 
 /**
  * O caminho É o socket do Docker, CONTÉM o socket (`/`, `/run`, `/var`, `/var/run`), é a pasta de
@@ -351,7 +353,7 @@ function touchesPanelHost(p: string, insideSrc: boolean, protectedPaths: readonl
   }
   const n = normalizeHostPath(p);
   if (isDockerSocket(n) || ["/", "/run", "/var", "/var/run", "/var/lib"].includes(n)) return true;
-  if (RUN_SOCKET.test(n) || RUN_CONTROL_DIRS.test(n)) return true;
+  if (RUN_TREE.test(n)) return true;
   if (n === "/var/lib/docker" || n.startsWith("/var/lib/docker/")) return true;
   if (insideSrc) return false;
   if (n === "/data" || n.startsWith("/data/")) return true;
