@@ -40,6 +40,36 @@ export function strippedProxyPortServices(compose: string): string[] {
   return Object.keys(portsWithoutProxyPorts(compose)).filter((name) => !hasOwnHttpsProxy(compose, name));
 }
 
+/**
+ * Endurece TODO serviço do modelo já resolvido (inclusive os de `include` e
+ * `extends`, que o override por nome não alcança): sem NET_RAW (nenhum
+ * container forja ARP/DNS na rede do proxy) e com `no-new-privileges`. Só
+ * acrescenta; o que o projeto já pedia fica. Não altera o objeto recebido.
+ */
+export function hardenComposeModel(model: unknown): unknown {
+  if (typeof model !== "object" || model === null || Array.isArray(model)) return model;
+  const services = (model as { services?: unknown }).services;
+  if (typeof services !== "object" || services === null || Array.isArray(services)) return model;
+  const hardened: Record<string, unknown> = {};
+  for (const [name, def] of Object.entries(services)) {
+    if (typeof def !== "object" || def === null || Array.isArray(def)) {
+      hardened[name] = def;
+      continue;
+    }
+    const service = def as Record<string, unknown>;
+    const merge = (current: unknown, add: string) => {
+      const list = Array.isArray(current) ? current.map(String) : [];
+      return list.includes(add) ? list : [...list, add];
+    };
+    hardened[name] = {
+      ...service,
+      cap_drop: merge(service.cap_drop, "NET_RAW"),
+      security_opt: merge(service.security_opt, "no-new-privileges:true"),
+    };
+  }
+  return { ...(model as Record<string, unknown>), services: hardened };
+}
+
 export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
   const env = opts.env ?? {};
   const services: Record<string, Record<string, unknown>> = {

@@ -39,6 +39,8 @@ let src: string;
 let workDir: string;
 
 const LIMPO = JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27" } } });
+/** O que sobe: o conferido, mais NET_RAW fora e no-new-privileges em todo serviço. */
+const ENDURECIDO = { name: "paas-loja", services: { web: { image: "nginx:1.27", cap_drop: ["NET_RAW"], security_opt: ["no-new-privileges:true"] } } };
 
 beforeEach(async () => {
   calls.length = 0;
@@ -120,7 +122,7 @@ describe("o up roda do JSON canônico gravado fora do src (A1: corrida entre con
   it("o arquivo tem exatamente o modelo que foi conferido, com permissão 0600", async () => {
     await deploy();
     const arquivo = path.join(workDir, "paas.canonical.json");
-    expect(JSON.parse(await readFile(arquivo, "utf8"))).toEqual(JSON.parse(LIMPO));
+    expect(JSON.parse(await readFile(arquivo, "utf8"))).toEqual(ENDURECIDO);
     expect((await stat(arquivo)).mode & 0o777).toBe(0o600);
   });
 
@@ -131,7 +133,7 @@ describe("o up roda do JSON canônico gravado fora do src (A1: corrida entre con
     };
     await deploy();
     expect(arquivosF(sobe()!.args)).not.toContain(path.join(src, "compose.yml"));
-    expect(JSON.parse(await readFile(path.join(workDir, "paas.canonical.json"), "utf8"))).toEqual(JSON.parse(LIMPO));
+    expect(JSON.parse(await readFile(path.join(workDir, "paas.canonical.json"), "utf8"))).toEqual(ENDURECIDO);
   });
 
   it("o up não lê o .env do src: --env-file é um arquivo do painel, fora do src", async () => {

@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  COMPOSE_PROJECT_LABEL,
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
   PAAS_MAIL_NETWORK,
@@ -30,7 +31,7 @@ import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
-import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
+import { composeOverrideYaml, hardenComposeModel, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
@@ -406,6 +407,7 @@ export class DeployEngine {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       `${PAAS_LABEL_PROJECT}=${project.slug}`,
+      ...CONTAINER_HARDENING,
       this.ctx.staticImage,
     ]);
     if (runRes.code !== 0) throw new Error(`falha ao subir o servidor estático: ${runRes.stderr}`);
@@ -593,7 +595,7 @@ export class DeployEngine {
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
     const canonical = path.join(workDir, "paas.canonical.json");
-    await writeFile(canonical, JSON.stringify(model), { encoding: "utf8", mode: 0o600 });
+    await writeFile(canonical, JSON.stringify(hardenComposeModel(model)), { encoding: "utf8", mode: 0o600 });
     await chmod(canonical, 0o600);
     const emptyEnv = path.join(workDir, "paas.up.env");
     await writeFile(emptyEnv, "", { encoding: "utf8", mode: 0o600 });
@@ -900,6 +902,7 @@ export class DeployEngine {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       `${PAAS_LABEL_PROJECT}=${project.slug}`,
+      ...CONTAINER_HARDENING,
       image,
     ]);
     if (runRes.code !== 0) throw new Error(`falha ao subir o container: ${runRes.stderr}`);
@@ -1036,6 +1039,20 @@ export class DeployEngine {
     await waitHealthy({ ...target, domain, onLog, timeoutMs });
   }
 }
+
+/**
+ * Opções de todo `docker run` do painel para código de projeto: sem NET_RAW,
+ * no-new-privileges e a label do compose VAZIA (a do `LABEL` da imagem não
+ * pode fazer o container passar por outro projeto: ver container-identity.ts).
+ */
+const CONTAINER_HARDENING = [
+  "--cap-drop",
+  "NET_RAW",
+  "--security-opt",
+  "no-new-privileges",
+  "--label",
+  `${COMPOSE_PROJECT_LABEL}=`,
+];
 
 /** Nomes dos serviços declarados no compose adotado (para injeção de env vars). */
 async function composeServiceNames(src: string, composeFile: string): Promise<string[]> {

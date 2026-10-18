@@ -13,7 +13,8 @@
  *  - container com label do compose: o dono é só o projeto do compose
  *    (`paas-<slug>`); `paas.project` é ignorada;
  *  - container sem label do compose (criado pelo painel com `docker run`,
- *    modos node/estático): vale `paas.project`, e só com `paas.managed=true`.
+ *    modos node/estático; o painel a grava VAZIA, o que vale como ausente):
+ *    vale `paas.project`, e só com `paas.managed=true`.
  */
 import { PAAS_LABEL_MANAGED, PAAS_LABEL_PROJECT } from "./deploy.js";
 
@@ -35,7 +36,9 @@ export interface ContainerIdentity {
 }
 
 export function containerIdentity(labels: Labels): ContainerIdentity {
-  const composeProject = get(labels, COMPOSE_PROJECT_LABEL) ?? null;
+  // vazia = ausente: o painel grava a label VAZIA nos containers de `docker run` para que a label
+  // herdada de uma imagem (`LABEL com.docker.compose.project=paas-vitima`) não valha
+  const composeProject = get(labels, COMPOSE_PROJECT_LABEL)?.trim() || null;
   if (composeProject !== null) {
     const ours = composeProject.startsWith("paas-") && composeProject.length > 5;
     return { managed: ours, projectSlug: ours ? composeProject.slice(5) : null, composeProject };

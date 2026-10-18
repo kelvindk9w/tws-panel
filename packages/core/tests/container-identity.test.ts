@@ -45,3 +45,23 @@ describe("containerIdentity", () => {
     expect(containerIdentity({ "com.docker.compose.project": "paas-x" }).projectSlug).toBe("x");
   });
 });
+
+describe("label do compose vazia (o painel a grava vazia nos containers de docker run)", () => {
+  it("vazia vale como ausente: o dono vem de paas.project + paas.managed=true", () => {
+    expect(containerIdentity(labels({ "com.docker.compose.project": "", "paas.managed": "true", "paas.project": "loja" }))).toEqual({
+      managed: true,
+      projectSlug: "loja",
+      composeProject: null,
+    });
+  });
+
+  it("vazia sem as labels do painel: de ninguém", () => {
+    expect(containerIdentity(labels({ "com.docker.compose.project": "" }))).toEqual({ managed: false, projectSlug: null, composeProject: null });
+  });
+
+  it("imagem que forja a label do compose da vítima e o painel a zerou: o container é do slug registrado, não da vítima", () => {
+    // `docker run --label com.docker.compose.project=` vence o LABEL da imagem
+    const id = containerIdentity(labels({ "com.docker.compose.project": "", "paas.managed": "true", "paas.project": "atacante" }));
+    expect(id.projectSlug).toBe("atacante");
+  });
+});
