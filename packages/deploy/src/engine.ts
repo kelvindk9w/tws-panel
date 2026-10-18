@@ -366,6 +366,22 @@ export class DeployEngine {
     }
   }
 
+  /**
+   * Hosts do servidor de e-mail para a checagem do compose (um serviço não pode ter o nome DNS
+   * deles na rede de e-mail). Falha FECHADA: sem a lista, um hostname que não começa por
+   * `mail.` ficaria sem proteção; então o deploy com e-mail espera a leitura funcionar.
+   */
+  private async requiredMailHosts(): Promise<string[]> {
+    try {
+      return (await this.ctx.mailHosts?.()) ?? [];
+    } catch (err) {
+      throw new Error(
+        `não consegui ler os hosts do servidor de e-mail (${err instanceof Error ? err.message : String(err)}); ` +
+          "o deploy de um projeto com e-mail só segue com essa conferência. Tente de novo em instantes.",
+      );
+    }
+  }
+
   /** Upstream (host:porta na rede paas-net) conforme o tipo do projeto. */
   upstreamFor(project: Project): string {
     const type = project.detection?.type;
@@ -536,7 +552,7 @@ export class DeployEngine {
       panelNetwork: PAAS_NETWORK,
       ...this.isolationFor(project, mailServices),
       // os hosts que o Stalwart responde na rede de e-mail: nome de serviço de projeto nenhum pode repeti-los
-      ...(mailServices.length > 0 ? { mailAliases: await this.mailHosts(onLog) } : {}),
+      ...(mailServices.length > 0 ? { mailAliases: await this.requiredMailHosts() } : {}),
     });
     onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
     if (findings.length === 0) {

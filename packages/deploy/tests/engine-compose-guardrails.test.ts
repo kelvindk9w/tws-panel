@@ -253,6 +253,29 @@ describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", 
     }
   });
 
+  it("falha ao ler os hosts do servidor de e-mail: o deploy com e-mail NÃO segue sem a checagem (falha fechada)", async () => {
+    const motor = new DeployEngine({
+      projectsDir,
+      caddyDir: path.join(projectsDir, "caddy"),
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      mailHosts: async () => {
+        throw new Error("mail.json ilegível");
+      },
+    }) as unknown as Privado;
+    configResult = { code: 0, stdout: COM_MAIL, stderr: "" };
+    calls.length = 0;
+    await expect(motor.deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "x" }, null, true)).rejects.toThrow(/hosts do servidor de e-mail/);
+    expect(sobe()).toBe(false);
+    // projeto SEM e-mail não depende desses hosts
+    calls.length = 0;
+    configResult = { code: 0, stdout: LIMPO, stderr: "" };
+    await motor.deployCompose(project(), src, () => undefined, {}, {}, null, false);
+    expect(sobe()).toBe(true);
+  });
+
   it("paas-panel e paas-mail-admin são barradas sempre", async () => {
     for (const rede of ["paas-panel", "paas-mail-admin"]) {
       configResult = {
