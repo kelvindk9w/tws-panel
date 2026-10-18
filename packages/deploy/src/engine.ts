@@ -26,7 +26,7 @@ import { parse } from "yaml";
 import { CaddyManager, projectDomain, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
-import { preparePublishDir } from "./static-site.js";
+import { preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
@@ -447,7 +447,12 @@ export class DeployEngine {
     );
     if (code !== 0) throw new Error(`build estático falhou (exit ${code}).`);
 
-    return this.serveStaticDir(project, path.join(src, outputDir), outputDir, onLog);
+    // O nginx não monta a pasta do build direto (poderia ser um link para o
+    // host, achado M8): serve uma cópia criada pelo painel, fora do src.
+    const site = path.join(projectWorkDir(this.ctx, project), "site");
+    await publishBuildOutput(src, outputDir, site);
+    onLog(`Saída do build (${outputDir}/) copiada para a pasta de publicação, sem links simbólicos.\n`);
+    return this.serveStaticDir(project, site, outputDir, onLog);
   }
 
   // -------------------------------------------------------------------------
