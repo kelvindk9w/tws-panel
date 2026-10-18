@@ -74,7 +74,8 @@ describe.skipIf(!DOCKER)("compose hostil — pelo docker compose config real", (
   });
 
   it("bind relativo que sobe da pasta, / e /run/docker.sock são barrados", async () => {
-    expect((await resolvido("bindlong")).filter((x) => x.rule === "host-mount").length).toBeGreaterThanOrEqual(2);
+    // a raiz e /var/run são panel-resource (regra mais rígida, sem override); o restante, host-mount
+    expect((await resolvido("bindlong")).filter((x) => x.rule === "host-mount" || x.rule === "panel-resource").length).toBeGreaterThanOrEqual(2);
     expect((await resolvido("rootmount")).filter((x) => x.rule === "host-mount" || x.rule === "panel-resource")).not.toHaveLength(0);
   });
 
