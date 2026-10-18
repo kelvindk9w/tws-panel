@@ -41,6 +41,11 @@ export interface ServerConfig {
    * silêncio.
    */
   projectsDir: string;
+  /**
+   * Pasta de instalação do painel no host (onde ficam o docker-compose.yml e o .env). Nenhum
+   * compose de projeto pode montá-la (regra dura). PAAS_INSTALL_DIR; padrão do instalador.
+   */
+  panelInstallDir?: string;
   /** Diretório do build do frontend (SPA). */
   webDist: string;
   /** Origens extras permitidas no CORS (ex.: dev do Vite). */
@@ -235,6 +240,7 @@ export function loadConfig(): ServerConfig {
     host: process.env.HOST ?? "0.0.0.0",
     dataDir,
     projectsDir: path.resolve(process.env.PAAS_PROJECTS_DIR ?? path.join(dataDir, "projects")),
+    panelInstallDir: path.resolve(process.env.PAAS_INSTALL_DIR || "/opt/tws-panel"),
     webDist: path.resolve(process.env.WEB_DIST ?? "../web/dist"),
     allowedOrigins: (process.env.ALLOWED_ORIGINS ?? "")
       .split(",")

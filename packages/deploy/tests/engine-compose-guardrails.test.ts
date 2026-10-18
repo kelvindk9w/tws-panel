@@ -276,6 +276,28 @@ describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", 
     expect(sobe()).toBe(true);
   });
 
+  it("pasta de projetos e pasta de instalação do painel (da configuração) não se montam, nem com override do operador", async () => {
+    const motor = new DeployEngine({
+      projectsDir,
+      caddyDir: path.join(projectsDir, "caddy"),
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      panelInstallDir: "/opt/painel-do-operador",
+    }) as unknown as Privado;
+    for (const source of [projectsDir, path.join(projectsDir, "outro", "src"), "/opt/painel-do-operador", "/opt/painel-do-operador/.env"]) {
+      configResult = {
+        code: 0,
+        stdout: JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27", volumes: [{ type: "bind", source, target: "/x" }] } } }),
+        stderr: "",
+      };
+      calls.length = 0;
+      await expect(motor.deployCompose(project(), src, () => undefined, {}, {}, null, true), source).rejects.toThrow(/sem override possível/);
+      expect(sobe(), source).toBe(false);
+    }
+  });
+
   it("paas-panel e paas-mail-admin são barradas sempre", async () => {
     for (const rede of ["paas-panel", "paas-mail-admin"]) {
       configResult = {

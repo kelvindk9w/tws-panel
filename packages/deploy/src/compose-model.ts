@@ -51,6 +51,8 @@ export interface ComposeCheckOptions {
   mailServices?: readonly string[];
   /** Hosts que o servidor de e-mail responde (`mail.<domínio>`): nome de serviço da rede de e-mail não pode ser nenhum. */
   mailAliases?: readonly string[];
+  /** Pastas do próprio painel (pasta de projetos e de instalação), da configuração: nenhum bind as alcança fora do código do projeto. */
+  protectedPaths?: readonly string[];
   /** Redes internas do painel (painel↔Caddy, painel↔Stalwart): nenhum compose de projeto as toca. */
   restrictedNetworks?: readonly string[];
   /** (interno) redes do topo do modelo, para resolver o nome efetivo das ligações do serviço. */
@@ -315,30 +317,54 @@ function isDockerSocket(source: string): boolean {
   return /(^|\/)docker\.sock$/.test(normal);
 }
 
-/** Caminho absoluto normalizado (`//`, `..`, barra final e `/proc/<pid>/root` resolvidos). */
-function normalizeHostPath(p: string): string {
-  const n = path.posix.normalize(p.trim().toLowerCase()).replace(/^\/proc\/[^/]+\/root(?=\/|$)/, "").replace(/\/+$/, "");
+/** Caminho absoluto normalizado (`//`, `..` e barra final resolvidos), em minúsculas. */
+function cleanHostPath(p: string): string {
+  const n = path.posix.normalize(p.trim().toLowerCase()).replace(/\/+$/, "");
   return n === "" ? "/" : n;
 }
 
+/** Mesmo caminho, sem o prefixo `/proc/<pid>/root` (que é o próprio `/`). */
+function normalizeHostPath(p: string): string {
+  const n = cleanHostPath(p).replace(/^\/proc\/[^/]+\/root(?=\/|$)/, "");
+  return n === "" ? "/" : n;
+}
+
+/** Sockets de controle do host em /run e /var/run (docker, containerd, crio, podman…) e as pastas deles. */
+const RUN_SOCKET = /^\/(var\/)?run\/(.*\/)?[^/]*\.sock$/;
+const RUN_CONTROL_DIRS = /^\/(var\/)?run\/(containerd|docker|podman|crio|buildkit)(\/|$)/;
+
 /**
- * O caminho É o socket do Docker, CONTÉM o socket (`/`, `/run`, `/var`, `/var/run`) ou é a pasta
- * de dados do Docker (`/var/lib/docker…`, onde moram os volumes do painel) ou o /data do painel.
- * `insideSrc`: o /data do painel contém as pastas dos projetos; dentro do código do próprio
- * projeto não conta.
+ * O caminho É o socket do Docker, CONTÉM o socket (`/`, `/run`, `/var`, `/var/run`), é a pasta de
+ * dados do Docker (`/var/lib/docker…`, onde moram os volumes do painel), o /data do painel,
+ * `/proc` (`/proc/1/root` é a raiz do host) ou `/sys` (`uevent_helper` executa como root), um
+ * socket de controle em /run, ou uma das pastas do próprio painel que vêm da configuração
+ * (`protectedPaths`: a pasta de projetos e a de instalação), dentro ou acima.
+ * `insideSrc`: o código do próprio projeto vive dentro de /data/projects e da pasta de projetos;
+ * dentro dele nada disso conta.
  */
-function touchesPanelHost(p: string, insideSrc: boolean): boolean {
+function touchesPanelHost(p: string, insideSrc: boolean, protectedPaths: readonly string[] = []): boolean {
   if (!p.startsWith("/") && !p.startsWith("\\")) return false;
+  const raw = cleanHostPath(p);
+  if (raw === "/proc" || raw.startsWith("/proc/") || raw === "/sys" || raw.startsWith("/sys/")) {
+    // /proc/<pid>/root é a raiz: o que vem depois é avaliado abaixo, mas o próprio /proc/…/root já é o host
+    return true;
+  }
   const n = normalizeHostPath(p);
   if (isDockerSocket(n) || ["/", "/run", "/var", "/var/run", "/var/lib"].includes(n)) return true;
+  if (RUN_SOCKET.test(n) || RUN_CONTROL_DIRS.test(n)) return true;
   if (n === "/var/lib/docker" || n.startsWith("/var/lib/docker/")) return true;
-  return !insideSrc && (n === "/data" || n.startsWith("/data/"));
+  if (insideSrc) return false;
+  if (n === "/data" || n.startsWith("/data/")) return true;
+  return protectedPaths.some((prot) => {
+    const base = cleanHostPath(prot);
+    return base !== "/" && (n === base || n.startsWith(base + "/") || base.startsWith(n + "/"));
+  });
 }
 
 /** O caminho (ou um link no caminho) leva ao socket, à pasta do Docker ou ao /data do painel? Segue links mesmo que o destino não exista aqui. */
-function pointsToPanelHost(source: string, root: string): boolean {
+function pointsToPanelHost(source: string, root: string, protectedPaths: readonly string[] = []): boolean {
   const inside = (abs: string) => abs === root || abs.startsWith(root + path.sep);
-  if (touchesPanelHost(source, source.startsWith("/") && inside(path.resolve(source)))) return true;
+  if (touchesPanelHost(source, source.startsWith("/") && inside(path.resolve(source)), protectedPaths)) return true;
   let current = path.resolve(root, source);
   for (let i = 0; i < 8; i++) {
     let target: string;
@@ -348,11 +374,11 @@ function pointsToPanelHost(source: string, root: string): boolean {
       break;
     }
     const abs = path.resolve(path.dirname(current), target);
-    if (touchesPanelHost(abs, inside(abs))) return true;
+    if (touchesPanelHost(abs, inside(abs), protectedPaths)) return true;
     current = abs;
   }
   const real = resolveRealPath(path.resolve(root, source));
-  return touchesPanelHost(real, inside(real));
+  return touchesPanelHost(real, inside(real), protectedPaths);
 }
 
 /** Nome do espaço do painel: `paas-*`, `paas_*`, `tws-*` e os nomes reservados. */
@@ -515,7 +541,7 @@ function checkService(
     const vol = parseVolume(entry);
     if (!vol) continue;
     if (unresolved(vol.source) || unresolved(vol.raw)) continue;
-    if (vol.type === "bind" && vol.source && pointsToPanelHost(vol.source, root)) {
+    if (vol.type === "bind" && vol.source && pointsToPanelHost(vol.source, root, opts.protectedPaths)) {
       out.push(
         finding(
           "panel-resource",

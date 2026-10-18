@@ -65,6 +65,8 @@ export interface EngineContext extends IngestContext {
    * 127.0.0.1 não tem proxy nenhum. Ausente = painel fora de container (dev).
    */
   panelContainer?: string;
+  /** Pasta de instalação do painel no host (ex.: /opt/tws-panel): nenhum projeto a monta. */
+  panelInstallDir?: string;
   /**
    * Env vars extras por projeto (Fase 3 — injeção SMTP). Chamado no início de
    * cada deploy; o mapa é injetado no compose override (todos os serviços) ou
@@ -650,6 +652,8 @@ export class DeployEngine {
     return {
       mailServices,
       slug: project.slug,
+      // pastas do próprio painel: projetos (paas.env, paas.canonical.json, repo.git dos outros) e instalação
+      protectedPaths: [this.ctx.projectsDir, ...(this.ctx.panelInstallDir ? [this.ctx.panelInstallDir] : [])],
       ...((project.proxyService ?? project.detection?.proxyService)
         ? { proxyService: (project.proxyService ?? project.detection?.proxyService)! }
         : {}),

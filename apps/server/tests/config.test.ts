@@ -20,6 +20,7 @@ const KEYS = [
   "PAAS_HOST_HELPER_IMAGE",
   "PAAS_HOST_REPO_DIR",
   "PAAS_PROJECTS_DIR",
+  "PAAS_INSTALL_DIR",
   "PAAS_CADDY_HTTP_PORT",
   "PAAS_CADDY_HTTPS_PORT",
   "PAAS_STALWART_PORT_SMTP",
@@ -104,6 +105,12 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.projectsDir).toBe(path.join("/data", "projects"));
     expect(config.projectsDir).toBe(path.join(config.dataDir, "projects"));
+  });
+
+  it("pasta de instalação do painel: /opt/tws-panel por padrão, ou PAAS_INSTALL_DIR (nenhum projeto a monta)", () => {
+    expect(loadConfig().panelInstallDir).toBe("/opt/tws-panel");
+    setEnv("PAAS_INSTALL_DIR", "/srv/painel");
+    expect(loadConfig().panelInstallDir).toBe("/srv/painel");
   });
 
   it("com PAAS_PROJECTS_DIR, o diretório dos projetos é o valor da variável", () => {

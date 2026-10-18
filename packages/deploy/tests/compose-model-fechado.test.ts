@@ -344,6 +344,63 @@ describe("panel-resource: bind que CONTÉM o socket, a pasta do Docker ou o /dat
   });
 });
 
+describe("panel-resource: /proc, /sys, sockets de /run e as pastas do próprio painel (da configuração)", () => {
+  const protegidos = () => ({ protectedPaths: ["/opt/tws-projects", "/opt/tws-panel"] });
+  const bindEm = (source: string, extra: Partial<ComposeCheckOptions> = {}) =>
+    regras(servico({ volumes: [{ type: "bind", source, target: "/x" }] }), { ...protegidos(), ...extra });
+
+  it.each([
+    "/proc",
+    "/proc/1/root",
+    "/proc/self/root/etc",
+    "/proc/sys/kernel",
+    "/sys",
+    "/sys/kernel/uevent_helper",
+    "/run/containerd/containerd.sock",
+    "/var/run/containerd/containerd.sock",
+    "/run/crio/crio.sock",
+    "/var/run/qualquer.sock",
+    "/run/containerd",
+    "/var/run/docker",
+  ])("bind de %s é regra dura", (source) => {
+    expect(bindEm(source), source).toEqual(["panel-resource"]);
+    expect(regras(servico({ volumes: [`${source}:/x`] })), source).toContain("panel-resource");
+  });
+
+  it.each([
+    "/opt/tws-projects",
+    "/opt/tws-projects/outro-projeto/src",
+    "/opt/tws-projects/outro-projeto",
+    "/opt/tws-projects/outro-projeto/repo.git",
+    "/opt/tws-panel",
+    "/opt/tws-panel/.env",
+    "/opt",
+    "/opt//tws-projects/../tws-projects/x",
+  ])("pasta de projetos e instalação do painel (da configuração): %s", (source) => {
+    expect(bindEm(source), source).toEqual(["panel-resource"]);
+  });
+
+  it("as pastas protegidas vêm da configuração, não do código: sem protectedPaths, /opt/tws-panel é um host-mount comum", () => {
+    expect(regras(servico({ volumes: [{ type: "bind", source: "/opt/tws-panel", target: "/x" }] }))).toEqual(["host-mount"]);
+    expect(bindEm("/srv/painel-em-outro-lugar", { protectedPaths: ["/srv/painel-em-outro-lugar"] })).toEqual(["panel-resource"]);
+  });
+
+  it("o código do PRÓPRIO projeto (dentro da pasta de projetos) continua montável; a pasta de cima e a dos outros, não", async () => {
+    const projetos = path.dirname(src);
+    const o = { protectedPaths: [projetos] };
+    expect(bindEm(path.join(src, "dados"), o)).toEqual([]);
+    expect(bindEm(src, o)).toEqual([]);
+    expect(bindEm(projetos, o)).toEqual(["panel-resource"]);
+    expect(bindEm(path.join(projetos, "outro", "src"), o)).toEqual(["panel-resource"]);
+  });
+
+  it("o restante do servidor segue como host-mount (o operador pode liberar): /var/log/meuapp, /srv/x, /etc, /home", () => {
+    for (const source of ["/var/log/meuapp", "/srv/x", "/etc", "/home/app", "/mnt/dados"]) {
+      expect(bindEm(source), source).toEqual(["host-mount"]);
+    }
+  });
+});
+
 describe("o que o painel lê dentro de um bind gravável (o app troca a pasta por um link entre a conferência e o uso)", () => {
   const bind = (source: string, ro = false) => ({ type: "bind", source: path.join(src, source), target: "/app", ...(ro ? { read_only: true } : {}) });
   const abs = (...p: string[]) => path.join(src, ...p);

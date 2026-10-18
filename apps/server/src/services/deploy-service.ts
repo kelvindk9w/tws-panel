@@ -247,6 +247,7 @@ export class DeployService {
     this.env = new ProjectEnvStore(config.dataDir);
     this.engineCtx = {
       projectsDir: this.projectsDir,
+      ...(config.panelInstallDir ? { panelInstallDir: config.panelInstallDir } : {}),
       // A ingestão pede a credencial na hora do clone. O valor em claro só
       // existe em memória e no ambiente do processo git (ver ingest.ts).
       credentialFor: (project: Project) => this.credentialFor(project),
