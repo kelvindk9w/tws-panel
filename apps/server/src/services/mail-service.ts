@@ -279,6 +279,31 @@ export class MailService {
     await this.networkReady;
   }
 
+  /** Projetos com e-mail habilitado (os que alcançam o Stalwart pela rede de e-mail). */
+  async emailProjectIds(): Promise<string[]> {
+    await this.ensureLoaded();
+    return Object.keys(this.data.projects);
+  }
+
+  /**
+   * Migração (A4), parte 1: liga o Stalwart que já roda às redes novas
+   * (administração e e-mail) sem reiniciá-lo, e o painel à da administração.
+   * Servidor nunca criado: nada a fazer.
+   */
+  async joinMailNetworks(): Promise<void> {
+    await this.ensureLoaded();
+    if (!this.data.adminSecret) return;
+    await this.manager().joinMailNetworks();
+    await this.ensureNetworkAccess();
+  }
+
+  /** Migração (A4), parte 2: tira o Stalwart da paas-net dos projetos. */
+  async leaveProjectNetwork(): Promise<void> {
+    await this.ensureLoaded();
+    if (!this.data.adminSecret) return;
+    await this.manager().leaveProjectNetwork();
+  }
+
   private resolver(): DnsResolverLike {
     return this.resolverOverride ?? publicResolver();
   }

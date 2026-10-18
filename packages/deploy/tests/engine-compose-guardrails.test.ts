@@ -4,7 +4,7 @@
  * qualquer `up` (achado A1). Sem Docker: `run` e `runStream` são dublês; a
  * saída do `config` é o modelo canônico que cada teste escolhe.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -195,6 +195,44 @@ describe("regras duras não têm override do operador", () => {
       stderr: "",
     };
     await expect(e.deployCompose(project(), src, () => undefined, {}, {}, null, true)).rejects.toThrow(/guardrail_blocked/);
+    expect(sobe()).toBe(false);
+  });
+});
+
+describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", () => {
+  const COM_MAIL = JSON.stringify({
+    name: "paas-loja",
+    services: { web: { image: "nginx:1.27", networks: { default: null, "paas-mail": null } } },
+    networks: { default: { name: "paas-loja_default" }, "paas-mail": { name: "paas-mail", external: true } },
+  });
+
+  it("e-mail habilitado: o override liga o web à paas-mail e o compose resolvido passa", async () => {
+    configResult = { code: 0, stdout: COM_MAIL, stderr: "" };
+    await privado().deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
+    expect(sobe()).toBe(true);
+    const override = await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8");
+    expect(override).toContain("paas-mail");
+  });
+
+  it("SEM e-mail habilitado, um compose que se liga à paas-mail é barrado, mesmo com override do operador", async () => {
+    configResult = { code: 0, stdout: COM_MAIL, stderr: "" };
+    await expect(privado().deployCompose(project(), src, () => undefined, {}, {}, null, true)).rejects.toThrow(/guardrail_blocked/);
+    expect(sobe()).toBe(false);
+  });
+
+  it("paas-panel e paas-mail-admin são barradas sempre", async () => {
+    for (const rede of ["paas-panel", "paas-mail-admin"]) {
+      configResult = {
+        code: 0,
+        stdout: JSON.stringify({
+          name: "paas-loja",
+          services: { web: { image: "nginx:1.27", networks: { [rede]: null } } },
+          networks: { [rede]: { name: rede, external: true } },
+        }),
+        stderr: "",
+      };
+      await expect(privado().deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "x" }, null, true), rede).rejects.toThrow(/guardrail_blocked/);
+    }
     expect(sobe()).toBe(false);
   });
 });

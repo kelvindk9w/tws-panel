@@ -122,6 +122,39 @@ describe("regra dura network-hijack", () => {
   });
 });
 
+describe("regra dura network-hijack: redes internas do painel e rede de e-mail (A4)", () => {
+  const o = () =>
+    opts({
+      proxyService: "web",
+      slug: "app",
+      restrictedNetworks: ["paas-panel", "paas-mail-admin"],
+      mailNetwork: "paas-mail",
+      mailServices: [],
+    });
+  const externa = (nome: string) => ({ networks: { [nome]: { name: nome, external: true } } });
+
+  it("nenhum serviço entra em paas-panel nem em paas-mail-admin, nem a declara", () => {
+    for (const rede of ["paas-panel", "paas-mail-admin"]) {
+      const m = servico({ networks: [rede] }, externa(rede));
+      expect(regras(m, o).filter((r) => r === "network-hijack").length, rede).toBeGreaterThanOrEqual(2);
+      expect(regras(servico({}, externa(rede)), o), rede).toEqual(["network-hijack"]);
+    }
+  });
+
+  it("paas-mail sem e-mail habilitado: nem ligar nem declarar", () => {
+    expect(regras(servico({ networks: ["paas-mail"] }, externa("paas-mail")), o)).toEqual(["network-hijack", "network-hijack"]);
+  });
+
+  it("paas-mail com e-mail habilitado: só os serviços do painel, sem aliases", () => {
+    const com = () => opts({ proxyService: "web", slug: "app", mailNetwork: "paas-mail", mailServices: ["web"] });
+    expect(regras(servico({ networks: { "paas-mail": null } }, externa("paas-mail")), com)).toEqual([]);
+    expect(regras(servico({ networks: { "paas-mail": { aliases: ["paas-stalwart"] } } }, externa("paas-mail")), com)).toEqual(["network-hijack"]);
+    const outro = { services: { web: { image: "a" }, worker: { image: "b", networks: ["paas-mail"] } }, ...externa("paas-mail") };
+    expect(regras(outro, com)).toEqual(["network-hijack"]);
+    expect(regras(servico({}, { networks: { "paas-mail": { name: "paas-mail", external: true, driver: "host" } } }), com)).toEqual(["network-hijack"]);
+  });
+});
+
 describe("regra dura panel-image", () => {
   const o = () => opts({ protectedImages: ["alpine:3@sha256:abc", "node:22", "nginx:alpine", "docker.io/library/caddy:2-alpine"] });
 
@@ -129,6 +162,12 @@ describe("regra dura panel-image", () => {
     for (const image of ["alpine:3", "docker.io/library/alpine:3.20", "library/alpine", "node:22", "nginx:alpine", "caddy:2-alpine"]) {
       expect(regras(servico({ image, build: "." }), o), image).toEqual(["panel-image"]);
     }
+  });
+
+  it("lista de imagens do painel com entradas vazias/indefinidas (config incompleta) não derruba a checagem", () => {
+    const o2 = () => opts({ protectedImages: [undefined as unknown as string, "", "alpine:3"] });
+    expect(regras(servico({ image: "alpine:3", build: "." }), o2)).toEqual(["panel-image"]);
+    expect(regras(servico({ image: "nginx:1.27" }), o2)).toEqual([]);
   });
 
   it("build.tags com tag do painel", () => {

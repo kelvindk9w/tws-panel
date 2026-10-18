@@ -2,6 +2,7 @@
  * compose-override.ts — o arquivo complementar (paas.override.yml) que o painel
  * gera para o compose adotado. NÃO reescreve o compose do repositório; apenas:
  *  - anexa o serviço web à rede do painel com um alias estável para o Caddy;
+ *  - com e-mail habilitado, liga os serviços que recebem o SMTP_* à rede de e-mail;
  *  - injeta env extra (ex.: SMTP do painel) nos serviços indicados;
  *  - injeta o TZ do fuso do projeto nos serviços que não definem TZ;
  *  - em app comum, troca a lista de portas por uma sem 80/443 do host
@@ -20,6 +21,10 @@ export interface ComposeOverrideOptions {
   proxyService: string;
   slug: string;
   network: string;
+  /** Rede de e-mail (paas-mail): só entram nela os `mailServices`, sem aliases. */
+  mailNetwork?: string;
+  /** Serviços de um projeto com e-mail habilitado (os que recebem o SMTP_*). */
+  mailServices?: string[];
   env?: Record<string, string>;
   envServices?: string[];
   /** Trocas da porta do servidor por serviço (Project.portOverrides). */
@@ -52,7 +57,14 @@ export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
     services[name] = { ...(services[name] ?? {}), environment: { ...current, ...extra } };
   }
 
-  const doc = new Document({ networks: { [opts.network]: { external: true } }, services });
+  const mailServices = opts.mailNetwork ? (opts.mailServices ?? []) : [];
+  for (const name of mailServices) {
+    const current = (services[name]?.networks as Record<string, unknown> | undefined) ?? { default: null };
+    services[name] = { ...(services[name] ?? {}), networks: { ...current, [opts.mailNetwork!]: null } };
+  }
+  const topNetworks: Record<string, unknown> = { [opts.network]: { external: true } };
+  if (mailServices.length > 0) topNetworks[opts.mailNetwork!] = { external: true };
+  const doc = new Document({ networks: topNetworks, services });
   const { ports } = effectiveServicePorts(opts.compose, opts.portOverrides, { stripProxyPorts: true });
   for (const [name, list] of Object.entries(ports)) {
     const node = doc.createNode(list);

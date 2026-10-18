@@ -16,6 +16,7 @@ import path from "node:path";
 import {
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
+  PAAS_MAIL_NETWORK,
   PAAS_NETWORK,
   PANEL_IMAGE_REPOSITORIES,
   type DomainHttpsStatus,
@@ -476,9 +477,9 @@ export class DeployEngine {
     timezone: string | null = null,
     guardrailOverride = false,
   ): Promise<string> {
-    const { proxyPort, composeContent } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
+    const { proxyPort, composeContent, mailServices } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
     const args = this.composeArgs(project, src);
-    await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride);
+    await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices);
     let output = "";
     const code = await runStream("docker", [...args, "up", "-d", "--build"], (chunk) => {
       output += chunk;
@@ -512,6 +513,7 @@ export class DeployEngine {
     args: string[],
     onLog: LogFn,
     guardrailOverride: boolean,
+    mailServices: readonly string[] = [],
   ): Promise<void> {
     const loaded = await loadCanonicalCompose(args);
     if (!loaded.ok) {
@@ -524,7 +526,7 @@ export class DeployEngine {
       projectName: composeProjectName(project),
       mode: "canonical",
       panelNetwork: PAAS_NETWORK,
-      ...this.isolationFor(project),
+      ...this.isolationFor(project, mailServices),
     });
     onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
     if (findings.length === 0) {
@@ -554,8 +556,9 @@ export class DeployEngine {
   }
 
   /** Quem é o projeto e o que é do painel, para as regras de isolamento. */
-  private isolationFor(project: Project) {
+  private isolationFor(project: Project, mailServices: readonly string[] = []) {
     return {
+      mailServices,
       slug: project.slug,
       ...((project.proxyService ?? project.detection?.proxyService)
         ? { proxyService: (project.proxyService ?? project.detection?.proxyService)! }
@@ -619,7 +622,7 @@ export class DeployEngine {
     dotenv: Record<string, string>,
     extraEnv: Record<string, string>,
     timezone: string | null,
-  ): Promise<{ proxyPort: number; composeContent: string }> {
+  ): Promise<{ proxyPort: number; composeContent: string; mailServices: string[] }> {
     const composeFile = project.detection?.composeFile;
     if (!composeFile) throw new Error("Nenhum arquivo compose detectado.");
     const proxyService = project.proxyService ?? project.detection?.proxyService;
@@ -631,6 +634,9 @@ export class DeployEngine {
     // compose do usuário; anexa o serviço web à rede paas-net, injeta env
     // extra (Fase 3 — SMTP) e, em app comum, retira a publicação de 80/443.
     const envServices = Object.keys(extraEnv).length > 0 ? await composeServiceNames(src, composeFile) : [];
+    // e-mail habilitado (SMTP_HOST injetado): esses serviços entram na rede de e-mail, a única que alcança o Stalwart (A4)
+    const mailServices = extraEnv.SMTP_HOST ? envServices : [];
+    if (mailServices.length > 0) await this.ensureMailNetwork();
     const composeContent = await readFile(path.join(src, composeFile), "utf8");
 
     const workDir = projectWorkDir(this.ctx, project);
@@ -641,6 +647,8 @@ export class DeployEngine {
       proxyService,
       slug: project.slug,
       network: PAAS_NETWORK,
+      mailNetwork: PAAS_MAIL_NETWORK,
+      mailServices,
       env: extraEnv,
       envServices,
       ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
@@ -678,7 +686,32 @@ export class DeployEngine {
       onLog(`Variáveis gravadas no .env do projeto (${dotenvKeys.join(", ")}).\n`);
     }
     if (env.note) onLog(`Aviso: ${env.note}\n`);
-    return { proxyPort, composeContent };
+    return { proxyPort, composeContent, mailServices };
+  }
+
+  /**
+   * Liga os containers JÁ rodando de um projeto com e-mail à rede de e-mail.
+   * Migração (A4): o Stalwart sai da paas-net, e o projeto só o alcançaria
+   * depois do próximo deploy. Devolve quantos containers foram ligados.
+   */
+  async joinMailNetwork(project: Project): Promise<number> {
+    const ids = await this.projectContainers(project);
+    if (ids.length === 0) return 0;
+    await this.ensureMailNetwork();
+    for (const id of ids) {
+      const join = await run("docker", ["network", "connect", PAAS_MAIL_NETWORK, id]);
+      if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
+        throw new Error(`falha ao ligar ${id} à rede ${PAAS_MAIL_NETWORK}: ${join.stderr.trim()}`);
+      }
+    }
+    return ids.length;
+  }
+
+  /** Garante a rede de e-mail (idempotente): `compose up` com rede externa inexistente falharia. */
+  private async ensureMailNetwork(): Promise<void> {
+    if ((await run("docker", ["network", "inspect", PAAS_MAIL_NETWORK])).code === 0) return;
+    const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, PAAS_MAIL_NETWORK]);
+    if (create.code !== 0) throw new Error(`falha ao criar a rede ${PAAS_MAIL_NETWORK}: ${create.stderr.trim()}`);
   }
 
   /**
@@ -694,7 +727,7 @@ export class DeployEngine {
     const extraEnv = (await this.ctx.envForProject?.(project)) ?? {};
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
     if (type === "compose") {
-      const { composeContent } = await this.writeComposeFiles(
+      const { composeContent, mailServices } = await this.writeComposeFiles(
         project,
         src,
         onLog,
@@ -704,7 +737,7 @@ export class DeployEngine {
       );
       const args = this.composeArgs(project, src);
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
-      await this.assertComposeAllowed(project, src, args, onLog, false);
+      await this.assertComposeAllowed(project, src, args, onLog, false, mailServices);
       let output = "";
       const code = await runStream("docker", [...args, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
@@ -818,6 +851,12 @@ export class DeployEngine {
     ]);
     if (runRes.code !== 0) throw new Error(`falha ao subir o container: ${runRes.stderr}`);
     onLog(`Container ${app} rodando na rede ${PAAS_NETWORK}.\n`);
+    if (extraEnv.SMTP_HOST) {
+      await this.ensureMailNetwork();
+      const join = await run("docker", ["network", "connect", PAAS_MAIL_NETWORK, app]);
+      if (join.code !== 0) throw new Error(`falha ao ligar ${app} à rede ${PAAS_MAIL_NETWORK}: ${join.stderr.trim()}`);
+      onLog(`Container ${app} ligado à rede de e-mail ${PAAS_MAIL_NETWORK}.\n`);
+    }
   }
 
   // -------------------------------------------------------------------------

@@ -21,7 +21,7 @@
  */
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import type { GuardrailFinding } from "@paas/core";
+import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_PANEL_NETWORK, type GuardrailFinding } from "@paas/core";
 
 /** Regras desta família que NENHUM override do operador libera (isolamento do painel). */
 export const HARD_RULES: ReadonlySet<string> = new Set(["panel-image", "network-hijack", "reserved-name"]);
@@ -45,6 +45,12 @@ export interface ComposeCheckOptions {
   otherSlugs?: readonly string[];
   /** Repositórios de imagem do painel (alpine, caddy, nginx, node, stalwart…): um build não pode regravar a tag deles. */
   protectedImages?: readonly string[];
+  /** Rede de e-mail dos projetos (`paas-mail`): só os serviços de `mailServices` entram, sem aliases. */
+  mailNetwork?: string;
+  /** Serviços que o painel liga à rede de e-mail (projeto com e-mail habilitado). */
+  mailServices?: readonly string[];
+  /** Redes internas do painel (painel↔Caddy, painel↔Stalwart): nenhum compose de projeto as toca. */
+  restrictedNetworks?: readonly string[];
   /** (interno) redes do topo do modelo, para resolver o nome efetivo das ligações do serviço. */
   topNetworks?: unknown;
 }
@@ -434,7 +440,21 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
     const d = isDict(def) ? def : {};
     const effective = str(d.name) || (isOn(d.external) || opts.projectName === undefined ? key : `${opts.projectName}_${key}`);
     const aliases = (isDict(cfg) ? asList(cfg.aliases) : []).map(str).filter((a) => !skip(a));
-    if (opts.panelNetwork !== undefined && effective === opts.panelNetwork) {
+    if ((opts.restrictedNetworks ?? []).includes(effective)) {
+      out.push(
+        finding("network-hijack", "Rede interna do painel", opts, name, `entra na rede ${effective}, que é só do painel`, "Remova a rede do serviço: ela liga o painel ao Caddy e ao servidor de e-mail."),
+      );
+    } else if (opts.mailNetwork !== undefined && effective === opts.mailNetwork) {
+      if (!(opts.mailServices ?? []).includes(name)) {
+        out.push(
+          finding("network-hijack", "Serviço ligado à rede de e-mail do painel", opts, name, `entra na rede ${effective}, que só o painel liga (a projetos com e-mail habilitado)`, "Remova a rede do serviço: o painel liga os serviços do projeto a ela quando o e-mail está habilitado."),
+        );
+      } else if (aliases.length > 0) {
+        out.push(
+          finding("network-hijack", "Alias na rede de e-mail do painel", opts, name, `define aliases ${aliases.join(", ")} na rede ${effective}`, "Remova os aliases: um alias desviaria o tráfego do servidor de e-mail para este container."),
+        );
+      }
+    } else if (opts.panelNetwork !== undefined && effective === opts.panelNetwork) {
       if (!isProxy) {
         out.push(
           finding("network-hijack", "Serviço ligado à rede do proxy do painel", opts, name, `entra na rede ${opts.panelNetwork}, que só o painel liga (ao serviço web)`, "Remova a rede do serviço: o painel liga o serviço web a ela sozinho."),
@@ -456,7 +476,7 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
   const build = service.build;
   const image = str(service.image);
   const tags = isDict(build) ? asList(build.tags).map(str) : [];
-  const protectedRepos = new Set((opts.protectedImages ?? []).map(imageRepository));
+  const protectedRepos = new Set((opts.protectedImages ?? []).filter((r) => typeof r === "string" && r !== "").map(imageRepository));
   const ownImage = opts.projectName ? `${opts.projectName}-${name}` : null;
   for (const ref of [image, ...tags]) {
     if (!ref || skip(ref)) continue;
@@ -605,8 +625,21 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     const cfg = isDict(def) ? def : {};
     const effective = str(cfg.name) || (opts.projectName && !isOn(cfg.external) ? `${opts.projectName}_${key}` : key);
     if (unresolved(effective)) continue;
-    // a rede do proxy, do jeito que o override do painel a declara
-    if (opts.panelNetwork !== undefined && effective === opts.panelNetwork) {
+    if ((opts.restrictedNetworks ?? []).includes(effective)) {
+      out.push(
+        finding("network-hijack", "Rede interna do painel declarada no compose", opts, undefined, `a rede "${key}" (${effective}) é só do painel`, "Não declare essa rede: ela liga o painel ao Caddy e ao servidor de e-mail."),
+      );
+      continue;
+    }
+    // a rede do proxy e a de e-mail, do jeito que o override do painel as declara
+    const mailNet = opts.mailNetwork !== undefined && effective === opts.mailNetwork;
+    if (mailNet && (opts.mailServices ?? []).length === 0) {
+      out.push(
+        finding("network-hijack", "Rede de e-mail do painel declarada no compose", opts, undefined, `a rede "${key}" (${effective}) só é ligada pelo painel, em projetos com e-mail habilitado`, "Não declare essa rede."),
+      );
+      continue;
+    }
+    if (mailNet || (opts.panelNetwork !== undefined && effective === opts.panelNetwork)) {
       // só a declaração do override do painel: externa, sem driver nem opções
       const extras = ["driver", "driver_opts", "internal", "attachable", "enable_ipv6", "labels"].filter((k) => cfg[k] !== undefined);
       if (isDict(cfg.ipam) && Object.keys(cfg.ipam).length > 0) extras.push("ipam");
@@ -680,7 +713,14 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
  * Confere o modelo do compose (cru ou canônico) e devolve os bloqueios.
  * `model` é o resultado de `parse()` do YAML ou do JSON do `docker compose config`.
  */
-export function checkComposeModel(model: unknown, opts: ComposeCheckOptions): GuardrailFinding[] {
+export function checkComposeModel(given: unknown, options: ComposeCheckOptions): GuardrailFinding[] {
+  const model = given;
+  // As redes internas do painel são reservadas em TODA checagem, com ou sem contexto de projeto.
+  const opts: ComposeCheckOptions = {
+    restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK],
+    mailNetwork: PAAS_MAIL_NETWORK,
+    ...options,
+  };
   const out: GuardrailFinding[] = [];
   if (!isDict(model)) return out;
   const root = resolveRealPath(opts.srcRoot);

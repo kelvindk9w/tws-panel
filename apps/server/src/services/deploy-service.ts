@@ -740,6 +740,15 @@ export class DeployService {
   }
 
   /**
+   * Liga os containers que já rodam de um projeto com e-mail à rede de e-mail
+   * (migração A4). Projeto que não existe mais ou sem containers: 0.
+   */
+  async joinMailNetwork(projectId: string): Promise<number> {
+    const project = await this.getProject(projectId);
+    return project ? this.engine.joinMailNetwork(project) : 0;
+  }
+
+  /**
    * Recarrega o Caddy com todos os projetos. Falha aqui não desfaz o que foi
    * gravado: o próximo ajuste (ou deploy) tenta de novo.
    */

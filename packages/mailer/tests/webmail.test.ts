@@ -284,19 +284,25 @@ describe("WebmailManager", () => {
       const r = extra(args);
       if (r) return r;
       if (args[0] === "network") return ok();
+      // redes do container: já nas duas redes novas
+      if (args[0] === "inspect" && (args[2] ?? "").includes("Networks")) {
+        return state ? ok(JSON.stringify({ "paas-panel": {}, "paas-mail": {} })) : fail("No such object");
+      }
       if (args[0] === "inspect") return state ? ok(`${state.running}\n`) : fail("No such object");
       return ok();
     };
   }
 
-  it("cria sem porta publicada, na paas-net, com volume, limites e a config antes do start", async () => {
+  it("cria sem porta publicada, na paas-panel e na paas-mail (nunca na paas-net), com volume, limites e a config antes do start", async () => {
     responder = daemon(null);
     await manager().start();
     // o plugin vai para a fonte da imagem (o entrypoint o copia ao subir pela 1ª vez); depois config e nomes
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "create", "<cp>", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "create", "network", "<cp>", "<cp>", "start"]);
     const create = calls.find((c) => c[0] === "create")!;
     expect(create).not.toContain("-p");
-    expect(create.join(" ")).toContain("--network paas-net");
+    expect(create.join(" ")).toContain("--network paas-panel");
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "paas-webmail"]);
+    expect(JSON.stringify(calls)).not.toContain('"paas-net"');
     expect(create.join(" ")).toContain("-v paas_webmail_data:/var/roundcube");
     expect(create).toEqual(expect.arrayContaining(["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]));
     expect(create.join(" ")).toContain("--memory 256m");
@@ -348,26 +354,26 @@ describe("WebmailManager", () => {
   it("cria a rede ausente; falha ao criá-la é erro claro", async () => {
     responder = daemon(null, (a) => (a[0] === "network" && a[1] === "inspect" ? fail("no") : undefined));
     await manager().start();
-    expect(calls[1]).toEqual(["network", "create", "--label", "paas.managed=true", "paas-net"]);
+    expect(calls[1]).toEqual(["network", "create", "--label", "paas.managed=true", "paas-panel"]);
     responder = daemon(null, (a) => (a[0] === "network" ? fail("negado") : undefined));
-    await expect(manager().start()).rejects.toThrow(/falha ao criar a rede paas-net: negado/);
+    await expect(manager().start()).rejects.toThrow(/falha ao criar a rede paas-panel: negado/);
   });
 
   it("existente e parado: regrava a config e inicia; rodando: só regrava", async () => {
     responder = daemon({ running: false });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "<cp>", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start"]);
     calls.length = 0;
     responder = daemon({ running: true });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "<cp>", "<cp>"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "<cp>", "<cp>", "<cp>", "inspect"]);
   });
 
   it("não inicia o existente: remove e recria", async () => {
     let starts = 0;
     responder = daemon({ running: false }, (a) => (a[0] === "start" && starts++ === 0 ? fail("quebrado") : undefined));
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "inspect", "<cp>", "<cp>", "<cp>", "start", "rm", "create", "<cp>", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "<cp>", "start"]);
     expect(calls.find((c) => c[0] === "rm")).toEqual(["rm", "-f", "paas-webmail"]);
   });
 
@@ -421,12 +427,12 @@ describe("WebmailManager", () => {
     expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail"]);
   });
 
-  it("internalIp: o IP na paas-net (para a isenção no Stalwart)", async () => {
-    responder = () => ok(JSON.stringify({ "paas-net": { IPAddress: "172.18.0.9" }, bridge: { IPAddress: "172.17.0.2" } }));
+  it("internalIp: o IP na paas-mail (o que o Stalwart enxerga, para a isenção)", async () => {
+    responder = () => ok(JSON.stringify({ "paas-panel": { IPAddress: "172.19.0.3" }, "paas-mail": { IPAddress: "172.18.0.9" }, bridge: { IPAddress: "172.17.0.2" } }));
     await expect(manager().internalIp()).resolves.toBe("172.18.0.9");
     responder = () => ok(JSON.stringify({ bridge: { IPAddress: "172.17.0.2" } }));
     await expect(manager().internalIp()).resolves.toBeNull();
-    responder = () => ok(JSON.stringify({ "paas-net": { IPAddress: "" } }));
+    responder = () => ok(JSON.stringify({ "paas-mail": { IPAddress: "" } }));
     await expect(manager().internalIp()).resolves.toBeNull();
     responder = () => ok("não é json");
     await expect(manager().internalIp()).resolves.toBeNull();
@@ -440,5 +446,33 @@ describe("WebmailManager", () => {
     expect(calls.at(-1)).toEqual(["logs", "--since", "1700000000", "paas-webmail"]);
     responder = () => fail("no such");
     await expect(manager().logsSince(1)).resolves.toBe("");
+  });
+
+  it("instalação antiga (paas-net): entra na paas-panel e na paas-mail e sai da paas-net", async () => {
+    responder = daemon({ running: true }, (a) => (a[0] === "inspect" && (a[2] ?? "").includes("Networks") ? ok(JSON.stringify({ "paas-net": {} })) : undefined));
+    await manager().start();
+    expect(calls).toContainEqual(["network", "connect", "paas-panel", "paas-webmail"]);
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "paas-webmail"]);
+    expect(calls).toContainEqual(["network", "disconnect", "paas-net", "paas-webmail"]);
+  });
+
+  it("migração: falha ao conectar ou ao sair da paas-net é erro claro; 'not connected' é tolerado", async () => {
+    const antigo = (a: string[]) => (a[0] === "inspect" && (a[2] ?? "").includes("Networks") ? ok(JSON.stringify({ "paas-net": {} })) : undefined);
+    responder = daemon({ running: true }, (a) => antigo(a) ?? (a[1] === "connect" ? fail("negado") : undefined));
+    await expect(manager().start()).rejects.toThrow(/falha ao conectar paas-webmail à rede paas-panel: negado/);
+    responder = daemon({ running: true }, (a) => antigo(a) ?? (a[1] === "disconnect" ? fail("is not connected to network paas-net") : undefined));
+    await expect(manager().start()).resolves.toBeUndefined();
+    responder = daemon({ running: true }, (a) => antigo(a) ?? (a[1] === "disconnect" ? fail("busy") : undefined));
+    await expect(manager().start()).rejects.toThrow(/falha ao tirar paas-webmail da rede paas-net: busy/);
+    // saída ilegível: tenta conectar nas duas (o daemon recusa se já estiver)
+    calls.length = 0;
+    responder = daemon({ running: true }, (a) => (a[0] === "inspect" && (a[2] ?? "").includes("Networks") ? ok("ilegível") : undefined));
+    await manager().start();
+    expect(calls.filter((c) => c[1] === "connect")).toHaveLength(2);
+  });
+
+  it("criado novo: falha ao ligar a paas-mail antes do start é erro claro", async () => {
+    responder = daemon(null, (a) => (a[1] === "connect" ? fail("negado") : undefined));
+    await expect(manager().start()).rejects.toThrow(/falha ao conectar paas-webmail à rede paas-mail: negado/);
   });
 });

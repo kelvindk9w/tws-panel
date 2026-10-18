@@ -63,6 +63,7 @@ import { verifyPasswordTimingSafe } from "./services/password.js";
 import timezoneRoutes from "./routes/timezone.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
+import { TrustedProxies } from "./services/trusted-proxies.js";
 import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
 import { PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
@@ -82,6 +83,7 @@ export interface BuildAppOptions {
 
 export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstance> {
   const config = loadConfig();
+  const trustedProxies = new TrustedProxies();
 
   const app = Fastify({
     ajv: AJV_OPTIONS,
@@ -98,8 +100,15 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
         censor: "[redacted]",
       },
     },
-    trustProxy: true,
+    // Só o Caddy (e o loopback) informa o IP do cliente — ver trusted-proxies.ts (A4).
+    trustProxy: trustedProxies.isTrusted,
   });
+  if (existsSync("/.dockerenv")) {
+    void trustedProxies.refresh();
+    const trustedProxiesTimer = setInterval(() => void trustedProxies.refresh(), 60_000);
+    trustedProxiesTimer.unref();
+    app.addHook("onClose", async () => clearInterval(trustedProxiesTimer));
+  }
 
   app.decorate("config", config);
   app.decorate("setupState", new SetupStateStore(config.dataDir));

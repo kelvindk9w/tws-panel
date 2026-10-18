@@ -62,6 +62,10 @@ function daemon(state: { running: boolean; mounts: string } | null, extra: (a: s
     const r = extra(args);
     if (r) return r;
     if (args[0] === "network") return ok();
+    // redes do container (o Caddy já está nas duas, salvo o teste dizer o contrário)
+    if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Networks}}")) {
+      return state ? ok('{"paas-net":{},"paas-panel":{}}\n') : fail("No such object");
+    }
     if (args[0] === "inspect") return state ? ok(`${state.running}|${state.mounts}\n`) : fail("No such object");
     return ok();
   };
@@ -142,20 +146,20 @@ describe("CaddyManager — container existente", () => {
   it("rodando com a montagem nova: não mexe em nada", async () => {
     responder = daemon({ running: true, mounts: NEW });
     await manager().ensureRunning("x");
-    expect(calls.map((a) => a[0])).toEqual(["network", "inspect"]);
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect"]);
   });
 
   it("parado com a montagem nova: regrava o Caddyfile recebido e inicia", async () => {
     responder = daemon({ running: false, mounts: NEW });
     await manager().ensureRunning("novo");
-    expect(calls.map((a) => a[0])).toEqual(["network", "inspect", "<cp>", "start"]);
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "start"]);
     expect(copies[0]!.files[0]!.content).toBe("novo");
   });
 
   it("parado sem conteúdo informado: inicia com o arquivo que já está no container", async () => {
     responder = daemon({ running: false, mounts: NEW });
     await manager().ensureRunning();
-    expect(calls.map((a) => a[0])).toEqual(["network", "inspect", "start"]);
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "start"]);
   });
 
   it("parado e o start falha: erro claro", async () => {
@@ -169,7 +173,7 @@ describe("CaddyManager — container existente", () => {
   ])("com a montagem ANTIGA %s: remove e recria", async (_nome, running) => {
     responder = daemon({ running, mounts: LEGACY });
     await manager().ensureRunning();
-    expect(calls.map((a) => a[0])).toEqual(["network", "inspect", "rm", "create", "<cp>", "start"]);
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "rm", "create", "inspect", "<cp>", "start"]);
     expect(calls.find((a) => a[0] === "rm")).toEqual(["rm", "-f", "paas-caddy"]);
   });
 
@@ -186,7 +190,7 @@ describe("CaddyManager.apply — recarga", () => {
     const logs: string[] = [];
     await manager().apply(alvo, (c) => logs.push(c));
 
-    expect(calls.map((a) => a[0])).toEqual(["network", "inspect", "<cp>", "exec"]);
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "exec"]);
     expect(String(copies[0]!.files[0]!.content)).toContain("reverse_proxy paas-loja:3000");
     expect(calls.at(-1)).toEqual(["exec", "paas-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]);
     expect(logs.join("")).toContain("Caddyfile aplicado com 1 domínio(s)");
@@ -239,32 +243,59 @@ describe("CaddyManager.apply — recarga", () => {
 });
 
 /**
- * Acesso ao painel por HTTPS: o Caddy alcança o painel pela rede paas-net.
+ * Acesso ao painel por HTTPS: o Caddy alcança o painel pela rede paas-panel
+ * (só os dois; o painel NÃO fica na paas-net dos projetos — A4).
  * O docker-compose.yml NÃO declara essa rede (quem atualiza com git pull numa
- * instalação que nunca fez deploy não tem a rede, e o `compose up` falharia):
+ * instalação que nunca fez deploy não a tem, e o `compose up` falharia):
  * é o próprio apply que conecta o container do painel a ela.
  */
 describe("CaddyManager — site do painel", () => {
   const PANEL = { domain: "203-0-113-10.sslip.io", upstream: "tws-panel:9000" };
   const running = { running: true, mounts: NEW };
+  const painel = () => new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL });
 
   function comRedes(redes: string) {
     return daemon(running, (a) =>
       a[0] === "inspect" && a[a.length - 1] === "tws-panel" ? ok(`${redes}\n`) : undefined,
     );
   }
+  const posicao = (pred: (a: string[]) => boolean) => calls.findIndex(pred);
 
-  it("conecta o painel à paas-net quando ele ainda não está nela", async () => {
+  it("conecta o painel à paas-panel quando ele ainda não está nela", async () => {
     responder = comRedes('{"tws-panel_default":{}}');
-    await new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL }).apply([]);
-    expect(calls).toContainEqual(["network", "connect", "paas-net", "tws-panel"]);
+    await painel().apply([]);
+    expect(calls).toContainEqual(["network", "connect", "paas-panel", "tws-panel"]);
     expect(String(copies.at(-1)!.files[0]!.content)).toContain("203-0-113-10.sslip.io {");
   });
 
-  it("não reconecta quando o painel já está na paas-net", async () => {
+  it("instalação antiga (painel na paas-net): entra na paas-panel e SÓ DEPOIS do reload sai da paas-net", async () => {
     responder = comRedes('{"paas-net":{},"tws-panel_default":{}}');
-    await new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL }).apply([]);
-    expect(calls.some((a) => a[0] === "network" && a[1] === "connect")).toBe(false);
+    await painel().apply([]);
+    const entra = posicao((a) => a[0] === "network" && a[1] === "connect" && a[2] === "paas-panel");
+    const reload = posicao((a) => a[0] === "exec");
+    const sai = posicao((a) => a[0] === "network" && a[1] === "disconnect");
+    expect(calls[sai]).toEqual(["network", "disconnect", "paas-net", "tws-panel"]);
+    expect(entra).toBeGreaterThan(-1);
+    expect(entra).toBeLessThan(reload);
+    expect(reload).toBeLessThan(sai);
+  });
+
+  it("o Caddy antigo (só na paas-net) entra na paas-panel antes do painel", async () => {
+    responder = daemon(running, (a) => {
+      if (a[0] !== "inspect" || !a.includes("{{json .NetworkSettings.Networks}}")) return undefined;
+      return ok('{"paas-net":{}}\n');
+    });
+    await painel().apply([]);
+    const caddy = posicao((a) => a[0] === "network" && a[1] === "connect" && a[3] === "paas-caddy");
+    const pan = posicao((a) => a[0] === "network" && a[1] === "connect" && a[3] === "tws-panel");
+    expect(calls[caddy]).toEqual(["network", "connect", "paas-panel", "paas-caddy"]);
+    expect(caddy).toBeLessThan(pan);
+  });
+
+  it("não reconecta nem desconecta quando o painel já está só na paas-panel", async () => {
+    responder = comRedes('{"paas-panel":{},"tws-panel_default":{}}');
+    await painel().apply([]);
+    expect(calls.some((a) => a[0] === "network" && (a[1] === "connect" || a[1] === "disconnect"))).toBe(false);
   });
 
   it("falha ao conectar o painel é erro explícito (o painel ficaria sem endereço)", async () => {
@@ -273,14 +304,30 @@ describe("CaddyManager — site do painel", () => {
       if (a[0] === "network" && a[1] === "connect") return fail("permission denied");
       return undefined;
     });
-    await expect(
-      new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL }).apply([]),
-    ).rejects.toThrow(/paas-net.*tws-panel|tws-panel.*paas-net/);
+    await expect(painel().apply([])).rejects.toThrow(/falha ao conectar tws-panel à rede paas-panel/);
+  });
+
+  it("falha ao sair da paas-net no fim do apply só avisa (o Caddyfile já foi aplicado)", async () => {
+    responder = daemon(running, (a) => {
+      if (a[0] === "inspect" && a[a.length - 1] === "tws-panel") return ok('{"paas-net":{},"paas-panel":{}}\n');
+      if (a[0] === "network" && a[1] === "disconnect") return fail("busy");
+      return undefined;
+    });
+    const logs: string[] = [];
+    await painel().apply([], (c) => logs.push(c));
+    expect(logs.join("")).toMatch(/aviso: o painel continua na rede paas-net/);
+  });
+
+  it("sem site do painel (túnel), connectToNetwork já tira o painel da paas-net", async () => {
+    responder = comRedes('{"paas-net":{},"tws-panel_default":{}}');
+    await manager().connectToNetwork("tws-panel");
+    expect(calls).toContainEqual(["network", "connect", "paas-panel", "tws-panel"]);
+    expect(calls).toContainEqual(["network", "disconnect", "paas-net", "tws-panel"]);
   });
 
   it("setPanelSite troca os endereços do painel na próxima aplicação (sem recriar o gerenciador)", async () => {
-    responder = comRedes('{"paas-net":{}}');
-    const m = new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL });
+    responder = comRedes('{"paas-panel":{}}');
+    const m = painel();
     m.setPanelSite({ domain: "painel.exemplo.com.br", aliases: ["203-0-113-10.sslip.io"], upstream: "tws-panel:9000" });
     await m.apply([]);
     expect(String(copies.at(-1)!.files[0]!.content)).toContain("painel.exemplo.com.br, 203-0-113-10.sslip.io {");
@@ -289,9 +336,9 @@ describe("CaddyManager — site do painel", () => {
     expect(m.currentPanelSite).toBeUndefined();
   });
 
-  it("sem site do painel, não mexe em rede de container nenhum", async () => {
+  it("sem site do painel, o apply não mexe em rede de container nenhum", async () => {
     responder = daemon(running);
     await manager().apply(alvo);
-    expect(calls.some((a) => a[0] === "network" && a[1] === "connect")).toBe(false);
+    expect(calls.some((a) => a[0] === "network" && (a[1] === "connect" || a[1] === "disconnect"))).toBe(false);
   });
 });
