@@ -55,7 +55,7 @@ describe("compose hostil — o que passava com 0 bloqueios agora é barrado", ()
     const r = await guardar("merge");
     const titulos = bloqueios(r, "privileged-container").map((f) => f.title);
     expect(titulos).toContain("Container privilegiado");
-    expect(titulos).toContain("Socket do Docker montado no container");
+    expect(bloqueios(r, "panel-resource").map((f) => f.title)).toContain("Socket do Docker montado no container");
   });
 
   it("volume /:/host, /run/docker.sock, cap_add, devices, security_opt, pid: host e network_mode: host", async () => {
@@ -63,12 +63,12 @@ describe("compose hostil — o que passava com 0 bloqueios agora é barrado", ()
     const priv = bloqueios(r, "privileged-container").map((f) => f.title);
     expect(priv).toEqual(
       expect.arrayContaining([
-        "Socket do Docker montado no container",
         "Capabilities extras no container (cap_add)",
         "Acesso a dispositivos do host (devices)",
         "Proteções do container desligadas (security_opt)",
       ]),
     );
+    expect(bloqueios(r, "panel-resource").map((f) => f.title)).toContain("Socket do Docker montado no container");
     const mounts = bloqueios(r, "host-mount");
     expect(mounts.map((f) => f.evidence).join("\n")).toContain("monta / de fora da pasta do projeto");
     const ns = bloqueios(r, "host-namespace").map((f) => f.evidence).join("\n");
@@ -90,7 +90,7 @@ describe("compose hostil — o que passava com 0 bloqueios agora é barrado", ()
 
   it("volume externo paas_data (o /data do painel) e rede externa de outro projeto são barrados", async () => {
     const r = await guardar("namedvol");
-    const shared = bloqueios(r, "shared-resource").map((f) => f.evidence).join("\n");
+    const shared = bloqueios(r, "panel-resource").map((f) => f.evidence).join("\n");
     expect(shared).toContain('o volume "paas_data"');
     expect(shared).toContain('a rede "other"');
   });

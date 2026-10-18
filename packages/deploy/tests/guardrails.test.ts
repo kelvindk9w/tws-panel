@@ -285,7 +285,7 @@ describe("analyzeCompose — compose.privileged-container (convergência com rul
       ),
       "compose.yml",
     );
-    const hit = warnings.find((w) => w.id === "compose.privileged-container");
+    const hit = warnings.find((w) => w.id === "compose.panel-resource");
     expect(hit).toBeDefined();
     expect(hit?.severity).toBe("critical");
   });

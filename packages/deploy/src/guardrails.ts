@@ -150,7 +150,7 @@ export function analyzeCompose(content: string, fileName: string, srcRoot?: stri
   // redes e build) — a MESMA lista de compose-model.ts que barra o deploy
   // (rules.ts). Sem a pasta do projeto só dá para conferir os privilégios.
   for (const f of checkComposeModel(doc, { fileName, srcRoot: srcRoot ?? ".", mode: "raw", panelNetwork: PAAS_NETWORK })) {
-    if (!srcRoot && f.rule !== "privileged-container" && f.rule !== "host-namespace") continue;
+    if (!srcRoot && !["privileged-container", "host-namespace", "panel-resource", "unsupported-field"].includes(f.rule)) continue;
     warnings.push({
       id: `compose.${f.rule}`,
       severity: "critical",

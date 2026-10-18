@@ -273,7 +273,7 @@ describe("privileged-container (block)", () => {
         "  b:\n    image: app:1\n    volumes:\n      - type: bind\n        source: /var/run/docker.sock\n        target: /sock",
     );
     const report = await runGuardrails(dir);
-    const hits = report.findings.filter((f) => f.rule === "privileged-container");
+    const hits = report.findings.filter((f) => f.rule === "panel-resource");
     expect(hits).toHaveLength(2);
     expect(hits.every((f) => f.level === "block")).toBe(true);
   });
@@ -517,9 +517,11 @@ describe("relatório agregado", () => {
       ["host-mount", "block"],
       ["shared-resource", "block"],
       ["build-outside-src", "block"],
+      ["unsupported-field", "block"],
       ["panel-image", "block"],
       ["network-hijack", "block"],
       ["reserved-name", "block"],
+      ["panel-resource", "block"],
       ["dev-service-in-prod", "warn"],
       ["secret-in-code", "warn"],
       ["latest-tag", "info"],

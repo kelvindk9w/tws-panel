@@ -1,0 +1,257 @@
+/**
+ * compose-model.ts — LISTA FECHADA (revisão do lote 5): chave que o painel não
+ * conhece BLOQUEIA, em todos os níveis (topo, serviço, deploy, ganchos). Cada
+ * contorno que passava com 0 bloqueios tem um teste hostil aqui.
+ */
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { HARD_RULES, checkComposeModel, type ComposeCheckOptions } from "../src/compose-model.js";
+
+let root: string;
+let src: string;
+
+beforeEach(async () => {
+  root = await mkdtemp(path.join(tmpdir(), "paas-model-fechado-"));
+  src = path.join(root, "src");
+  await mkdir(path.join(src, "dados", "sub"), { recursive: true });
+});
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+const opts = (extra: Partial<ComposeCheckOptions> = {}): ComposeCheckOptions => ({
+  fileName: "compose.yml",
+  srcRoot: src,
+  projectName: "paas-app",
+  mode: "canonical",
+  panelNetwork: "paas-net",
+  ...extra,
+});
+const servico = (def: Record<string, unknown>, top: Record<string, unknown> = {}) => ({
+  services: { web: { image: "nginx:1.27", ...def } },
+  ...top,
+});
+const regras = (model: unknown, extra: Partial<ComposeCheckOptions> = {}) => checkComposeModel(model, opts(extra)).map((f) => f.rule);
+
+describe("chaves do serviço: o que não está na lista bloqueia", () => {
+  it.each([
+    ["use_api_socket", { use_api_socket: true }, "privileged-container"],
+    ["gpus", { gpus: "all" }, "privileged-container"],
+    ["runtime", { runtime: "nvidia" }, "privileged-container"],
+    ["cgroup_parent", { cgroup_parent: "/system.slice" }, "privileged-container"],
+    ["storage_opt", { storage_opt: { size: "1G" } }, "privileged-container"],
+    ["label_file", { label_file: "/etc/shadow" }, "host-mount"],
+    ["deploy.resources.reservations.devices", { deploy: { resources: { reservations: { devices: [{ capabilities: ["gpu"] }] } } } }, "privileged-container"],
+  ])("%s", (_nome, def, regra) => {
+    expect(regras(servico(def))).toContain(regra);
+  });
+
+  it("use_api_socket desligado não é pedido nenhum", () => {
+    expect(regras(servico({ use_api_socket: false }))).toEqual([]);
+  });
+
+  it("campo desconhecido (inclusive de versão futura do Compose) bloqueia", () => {
+    expect(regras(servico({ campo_novo_do_compose: 1 }))).toEqual(["unsupported-field"]);
+    expect(regras(servico({ develop: { watch: [{ path: "/", action: "sync", target: "/x" }] } }))).toEqual(["unsupported-field"]);
+  });
+
+  it("extensão x-* é livre", () => {
+    expect(regras(servico({ "x-meu": { a: 1 } }, { "x-global": 1 }))).toEqual([]);
+  });
+
+  it("campo desconhecido no topo do compose bloqueia", () => {
+    expect(regras({ ...servico({}), models: { m: {} } })).toEqual(["unsupported-field"]);
+  });
+
+  it("um serviço comum completo passa", () => {
+    expect(
+      regras(
+        servico({
+          command: ["node", "x.js"],
+          entrypoint: ["/e"],
+          environment: { A: "1" },
+          env_file: [],
+          ports: [{ target: 80, published: "8080", protocol: "tcp", mode: "ingress" }],
+          healthcheck: { test: ["CMD", "true"], interval: "5s" },
+          depends_on: { db: { condition: "service_started" } },
+          restart: "unless-stopped",
+          user: "1000:1000",
+          working_dir: "/app",
+          read_only: true,
+          cap_drop: ["ALL"],
+          security_opt: ["no-new-privileges:true"],
+          mem_limit: "512m",
+          pids_limit: 100,
+          ulimits: { nofile: 1024 },
+          tmpfs: ["/tmp"],
+          init: true,
+          stop_grace_period: "10s",
+          labels: { "traefik.enable": "true" },
+          logging: { driver: "json-file", options: { "max-size": "10m" } },
+          deploy: { replicas: 1, resources: { limits: { cpus: "1", memory: "512M" }, reservations: { cpus: "0.5", memory: "256M" } } },
+          post_start: [{ command: ["/bin/true"], user: "root" }],
+          pre_stop: [{ command: "/bin/true" }],
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("deploy: lista fechada", () => {
+  it("chave desconhecida em deploy, resources, limits ou reservations bloqueia", () => {
+    expect(regras(servico({ deploy: { x: 1 } }))).toEqual(["unsupported-field"]);
+    expect(regras(servico({ deploy: { resources: { x: 1 } } }))).toEqual(["unsupported-field"]);
+    expect(regras(servico({ deploy: { resources: { limits: { devices: [] } } } }))).toEqual(["unsupported-field"]);
+    expect(regras(servico({ deploy: { resources: { reservations: { x: 1 } } } }))).toEqual(["unsupported-field"]);
+  });
+  it("labels reservadas em deploy.labels", () => {
+    expect(regras(servico({ deploy: { labels: { "paas.project": "v" } } }))).toContain("reserved-name");
+  });
+});
+
+describe("ganchos post_start / pre_stop / pre_start: mesma checagem por recursão", () => {
+  it.each(["post_start", "pre_stop", "pre_start"])("%s com privileged: true", (gancho) => {
+    expect(regras(servico({ [gancho]: [{ command: "/x", privileged: true }] }))).toContain("privileged-container");
+  });
+  it.each(["post_start", "pre_stop"])("%s com user root + volumes ou campo desconhecido", (gancho) => {
+    expect(regras(servico({ [gancho]: [{ command: "/x", user: "root", volumes: ["/:/host"] }] }))).toEqual(["unsupported-field"]);
+    expect(regras(servico({ [gancho]: [{ command: "/x", cap_add: ["SYS_ADMIN"] }] }))).toEqual(["unsupported-field"]);
+  });
+  it("gancho com privileged: false ou só user root é comum", () => {
+    expect(regras(servico({ post_start: [{ command: "/x", user: "root", privileged: false }] }))).toEqual([]);
+  });
+  it("pre_start não existe no Compose: bloqueia mesmo sem privileged", () => {
+    expect(regras(servico({ pre_start: [{ command: "/x" }] }))).toEqual(["unsupported-field"]);
+  });
+});
+
+describe("bind dentro de outro bind gravável (o app troca a pasta por link)", () => {
+  const bind = (source: string, target: string, ro = false) => ({ type: "bind", source: path.join(src, source), target, ...(ro ? { read_only: true } : {}) });
+
+  it("./ e ./dados do mesmo serviço: bloqueia", () => {
+    const m = servico({ volumes: [bind(".", "/app"), bind("dados", "/data")] });
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("em serviços diferentes também", () => {
+    const m = { services: { web: { image: "a", volumes: [bind(".", "/app")] }, db: { image: "b", volumes: [bind("dados", "/data")] } } };
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("aninhado: ./dados e ./dados/sub", () => {
+    const m = servico({ volumes: [bind("dados", "/data"), bind("dados/sub", "/sub")] });
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("forma curta (./:/app e ./dados:/data)", () => {
+    const m = servico({ volumes: [`${src}:/app`, `${src}/dados:/data`] });
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("o pai só leitura não deixa o app trocar nada: passa", () => {
+    expect(regras(servico({ volumes: [bind(".", "/app", true), bind("dados", "/data")] }))).toEqual([]);
+    expect(regras(servico({ volumes: [`${src}:/app:ro`, `${src}/dados:/data`] }))).toEqual([]);
+  });
+  it("pastas irmãs e o mesmo bind repetido passam", () => {
+    expect(regras(servico({ volumes: [bind("dados", "/a"), bind("dados", "/b")] }))).toEqual([]);
+  });
+  it("um bind só, mesmo de ./dados, passa (o app não escreve no pai)", () => {
+    expect(regras(servico({ volumes: [bind("dados", "/data")] }))).toEqual([]);
+  });
+  it("irmão com o mesmo prefixo de nome não conta como aninhado", async () => {
+    await mkdir(path.join(src, "dados2"), { recursive: true });
+    expect(regras(servico({ volumes: [bind("dados", "/a"), bind("dados2", "/b")] }))).toEqual([]);
+  });
+  it("pasta que já é link para fora continua barrada pelo caminho real", async () => {
+    await symlink("/", path.join(src, "raiz"));
+    expect(regras(servico({ volumes: [bind("raiz", "/r")] }))).toContain("host-mount");
+  });
+});
+
+describe("rede de e-mail: nomes do DNS dela (A4)", () => {
+  const mail = { proxyService: "web", slug: "app", mailNetwork: "paas-mail", mailAliases: ["mail.exemplo.com"] };
+  const topo = { networks: { "paas-mail": { name: "paas-mail", external: true } } };
+  const com = (nome: string, def: Record<string, unknown> = {}) => ({
+    services: { [nome]: { image: "a", networks: { default: null, "paas-mail": null }, ...def } },
+    ...topo,
+  });
+  const m = (nome: string, def: Record<string, unknown> = {}) =>
+    regras(com(nome, def), { ...mail, mailServices: [nome] });
+
+  it.each(["paas-stalwart", "paas-webmail", "paas-caddy", "tws-panel", "stalwart", "caddy", "tws-qualquer", "paas-outra", "mail.exemplo.com", "mail.qualquer.org"])(
+    "serviço chamado %s na rede de e-mail",
+    (nome) => {
+      expect(m(nome)).toContain("network-hijack");
+    },
+  );
+
+  it("container_name e alias reservados num serviço da rede de e-mail", () => {
+    expect(m("web", { container_name: "paas-stalwart" })).toContain("network-hijack");
+    expect(m("web", { container_name: "mail.exemplo.com" })).toContain("network-hijack");
+    expect(m("web", { networks: { "paas-mail": { aliases: ["mail.exemplo.com"] } } })).toContain("network-hijack");
+    expect(m("web", { networks: { "paas-mail": null, outra: { aliases: ["paas-stalwart"] } } })).toContain("network-hijack");
+  });
+
+  it("slug de outro projeto como nome de serviço", () => {
+    const r = regras(com("vitima"), { ...mail, mailServices: ["vitima"], otherSlugs: ["vitima"] });
+    expect(r).toContain("network-hijack");
+  });
+
+  it("nomes comuns passam (web, worker, db, redis)", () => {
+    for (const nome of ["web", "worker", "db", "redis"]) expect(m(nome), nome).toEqual([]);
+  });
+
+  it("serviço reservado FORA da rede de e-mail continua só reserved-name (a regra nova é da rede)", () => {
+    const r = regras(servico({ container_name: "paas-stalwart" }), { ...mail, mailServices: [] });
+    expect(r).toEqual(["reserved-name"]);
+  });
+});
+
+describe("panel-resource: volume, rede e socket do painel (regra dura)", () => {
+  it("é regra dura", () => {
+    expect(HARD_RULES.has("panel-resource")).toBe(true);
+  });
+
+  it("volume paas_data, paas_* ou de outro projeto (externo ou por name:)", () => {
+    for (const name of ["paas_data", "paas_caddy_data", "paas_stalwart_data", "paas-vitima_dados", "tws_x"]) {
+      for (const external of [true, false]) {
+        const r = regras(servico({}, { volumes: { v: { name, ...(external ? { external: true } : {}) } } }));
+        expect(r, `${name} external=${external}`).toContain("panel-resource");
+      }
+    }
+  });
+  it("volume do próprio projeto e volume comum não são do painel", () => {
+    expect(regras(servico({}, { volumes: { dados: { name: "paas-app_dados" } } }))).toEqual([]);
+    expect(regras(servico({}, { volumes: { v: { name: "outra-coisa" } } }))).toEqual(["shared-resource"]);
+  });
+  it("rede paas_* / paas-* de outro projeto", () => {
+    expect(regras(servico({}, { networks: { n: { name: "paas-vitima_default", external: true } } }))).toContain("panel-resource");
+    expect(regras(servico({}, { networks: { n: { name: "paas_qualquer", external: true } } }))).toContain("panel-resource");
+  });
+  it("redes paas-panel e paas-mail-admin seguem como regra dura (network-hijack)", () => {
+    for (const n of ["paas-panel", "paas-mail-admin"]) {
+      const r = regras(servico({ networks: [n] }, { networks: { [n]: { name: n, external: true } } }));
+      expect(r.every((x) => HARD_RULES.has(x)), n).toBe(true);
+      expect(r.length).toBeGreaterThan(0);
+    }
+  });
+  it.each([
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "//var//run//docker.sock",
+    "/var/run/../run/docker.sock",
+    "/proc/self/root/var/run/docker.sock",
+    "/var/run/docker.sock/",
+    "/VAR/RUN/DOCKER.SOCK",
+  ])("docker.sock em qualquer grafia: %s", (source) => {
+    const longa = regras(servico({ volumes: [{ type: "bind", source, target: "/s" }] }));
+    const curta = regras(servico({ volumes: [`${source}:/s`] }));
+    expect(longa).toContain("panel-resource");
+    expect(curta).toContain("panel-resource");
+  });
+  it("link dentro do src que aponta para o docker.sock", async () => {
+    await symlink("/var/run/docker.sock", path.join(src, "sock"));
+    expect(regras(servico({ volumes: [{ type: "bind", source: path.join(src, "sock"), target: "/s" }] }))).toContain("panel-resource");
+  });
+  it("DOCKER_HOST apontando para o socket não é montagem: não entra aqui", () => {
+    expect(regras(servico({ environment: { DOCKER_HOST: "unix:///var/run/docker.sock" } }))).toEqual([]);
+  });
+});

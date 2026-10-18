@@ -75,12 +75,12 @@ describe.skipIf(!DOCKER)("compose hostil — pelo docker compose config real", (
 
   it("bind relativo que sobe da pasta, / e /run/docker.sock são barrados", async () => {
     expect((await resolvido("bindlong")).filter((x) => x.rule === "host-mount").length).toBeGreaterThanOrEqual(2);
-    expect((await resolvido("rootmount")).filter((x) => x.rule === "host-mount" || x.rule === "privileged-container")).not.toHaveLength(0);
+    expect((await resolvido("rootmount")).filter((x) => x.rule === "host-mount" || x.rule === "panel-resource")).not.toHaveLength(0);
   });
 
   it("volume externo do painel e rede externa são barrados", async () => {
     const f = await resolvido("namedvol");
-    expect(f.filter((x) => x.rule === "shared-resource")).toHaveLength(2);
+    expect(f.filter((x) => x.rule === "panel-resource")).toHaveLength(2);
   });
 
   it("env_file e build.context de fora da pasta são barrados sem ler o conteúdo", async () => {

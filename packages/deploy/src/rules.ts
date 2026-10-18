@@ -18,7 +18,8 @@
  *  - host-mount           (block) bind mount fora da pasta do projeto
  *  - shared-resource      (block) volume ou rede externo / de outro projeto
  *  - build-outside-src    (block) build, env_file ou segredo fora da pasta do projeto
- *  - panel-image / network-hijack / reserved-name (block, SEM override) isolamento do painel
+ *  - unsupported-field    (block) campo do compose que o painel não conhece (lista fechada)
+ *  - panel-image / network-hijack / reserved-name / panel-resource (block, SEM override) isolamento do painel
  *  - dev-service-in-prod  (warn)  mailhog/phpmyadmin/adminer/debug tools
  *  - secret-in-code       (warn)  padrões de secrets no diretório fonte
  *  - latest-tag           (info)  imagens com tag :latest
@@ -502,9 +503,11 @@ export const GUARDRAIL_RULES: readonly GuardrailRuleInfo[] = [
   { rule: "host-mount", level: "block", title: "Pasta do servidor montada fora do código do projeto" },
   { rule: "shared-resource", level: "block", title: "Volume ou rede que não é do próprio projeto" },
   { rule: "build-outside-src", level: "block", title: "Build, env_file ou segredo lido de fora do código do projeto" },
+  { rule: "unsupported-field", level: "block", title: "Campo do compose fora da lista aceita pelo painel" },
   { rule: "panel-image", level: "block", title: "Imagem do painel ou de outro projeto (sem override)" },
   { rule: "network-hijack", level: "block", title: "Alias ou ligação indevida à rede do proxy (sem override)" },
   { rule: "reserved-name", level: "block", title: "Nome ou label reservados do painel (sem override)" },
+  { rule: "panel-resource", level: "block", title: "Volume, rede ou docker.sock do painel (sem override)" },
   { rule: "dev-service-in-prod", level: "warn", title: "Serviço de desenvolvimento em produção" },
   { rule: "secret-in-code", level: "warn", title: "Possível secret comitado no código" },
   { rule: "latest-tag", level: "info", title: "Imagem com tag :latest" },

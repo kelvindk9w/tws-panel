@@ -43,17 +43,17 @@ describe("posse por nome EXATO (app, app-outro e app_x não tocam recursos um do
 
   it("volume e rede de 'paas-app-outro' ou 'paas-app_x' não são do projeto 'paas-app'", () => {
     for (const name of ["paas-app-outro_dados", "paas-app_x_dados", "paas-app-dados", "paas-app_outra"]) {
-      expect(regras(servico({}, { volumes: { dados: { name } } }), dono("paas-app")), name).toEqual(["shared-resource"]);
+      expect(regras(servico({}, { volumes: { dados: { name } } }), dono("paas-app")), name).toEqual(["panel-resource"]);
     }
-    expect(regras(servico({}, { networks: { rede: { name: "paas-app-outro_rede" } } }), dono("paas-app"))).toEqual(["shared-resource"]);
-    expect(regras(servico({}, { networks: { rede: { name: "paas-app_x_rede" } } }), dono("paas-app"))).toEqual(["shared-resource"]);
+    expect(regras(servico({}, { networks: { rede: { name: "paas-app-outro_rede" } } }), dono("paas-app"))).toEqual(["panel-resource"]);
+    expect(regras(servico({}, { networks: { rede: { name: "paas-app_x_rede" } } }), dono("paas-app"))).toEqual(["panel-resource"]);
   });
 
   it("o nome que é de 'paas-app-outro' passa para ele, e só para ele", () => {
     const model = servico({}, { volumes: { dados: { name: "paas-app-outro_dados" } } });
     expect(regras(model, dono("paas-app-outro"))).toEqual([]);
-    expect(regras(model, dono("paas-app"))).toEqual(["shared-resource"]);
-    expect(regras(model, dono("paas-app_x"))).toEqual(["shared-resource"]);
+    expect(regras(model, dono("paas-app"))).toEqual(["panel-resource"]);
+    expect(regras(model, dono("paas-app_x"))).toEqual(["panel-resource"]);
   });
 
   it("o nome exato <projeto>_<chave> passa", () => {
@@ -148,7 +148,7 @@ describe("regra dura network-hijack: redes internas do painel e rede de e-mail (
   it("paas-mail com e-mail habilitado: só os serviços do painel, sem aliases", () => {
     const com = () => opts({ proxyService: "web", slug: "app", mailNetwork: "paas-mail", mailServices: ["web"] });
     expect(regras(servico({ networks: { "paas-mail": null } }, externa("paas-mail")), com)).toEqual([]);
-    expect(regras(servico({ networks: { "paas-mail": { aliases: ["paas-stalwart"] } } }, externa("paas-mail")), com)).toEqual(["network-hijack"]);
+    expect(regras(servico({ networks: { "paas-mail": { aliases: ["paas-stalwart"] } } }, externa("paas-mail")), com)).toEqual(["network-hijack", "network-hijack"]);
     const outro = { services: { web: { image: "a" }, worker: { image: "b", networks: ["paas-mail"] } }, ...externa("paas-mail") };
     expect(regras(outro, com)).toEqual(["network-hijack"]);
     expect(regras(servico({}, { networks: { "paas-mail": { name: "paas-mail", external: true, driver: "host" } } }), com)).toEqual(["network-hijack"]);
@@ -188,18 +188,30 @@ describe("regra dura panel-image", () => {
 
 describe("HARD_RULES: toda regra declarada é exercitada por um compose hostil", () => {
   const o = () => opts({ proxyService: "web", slug: "app", otherSlugs: ["vitima"], protectedImages: ["alpine"] });
-  const hostis: Record<string, unknown> = {
-    "reserved-name": servico({ labels: { "paas.project": "vitima" } }),
-    "network-hijack": servico(
-      { networks: { "paas-net": { aliases: ["tws-panel"] } } },
-      { networks: { "paas-net": { name: "paas-net", external: true } } },
-    ),
-    "panel-image": servico({ image: "alpine:3", build: "." }),
+  const mail = () => opts({ proxyService: "web", slug: "app", mailNetwork: "paas-mail", mailServices: ["paas-stalwart"] });
+  const hostis: Record<string, Array<[unknown, (() => ComposeCheckOptions)?]>> = {
+    "reserved-name": [[servico({ labels: { "paas.project": "vitima" } })]],
+    "network-hijack": [
+      [servico({ networks: { "paas-net": { aliases: ["tws-panel"] } } }, { networks: { "paas-net": { name: "paas-net", external: true } } })],
+      // serviço de projeto com e-mail chamado como o servidor de e-mail: viraria `paas-stalwart` no DNS da rede
+      [
+        { services: { "paas-stalwart": { image: "a", networks: { default: null, "paas-mail": null } } }, networks: { "paas-mail": { name: "paas-mail", external: true } } },
+        mail,
+      ],
+    ],
+    "panel-image": [[servico({ image: "alpine:3", build: "." })]],
+    "panel-resource": [
+      [servico({}, { volumes: { v: { name: "paas_data", external: true } } })],
+      [servico({ volumes: ["/var/run/docker.sock:/s"] })],
+    ],
   };
 
   it("cada regra de HARD_RULES tem um hostil que a dispara", () => {
     expect([...HARD_RULES].sort()).toEqual(Object.keys(hostis).sort());
-    for (const regra of HARD_RULES) expect(regras(hostis[regra], o), regra).toContain(regra);
+    for (const regra of HARD_RULES) {
+      expect(hostis[regra]?.length ?? 0, regra).toBeGreaterThan(0);
+      for (const [model, own] of hostis[regra] ?? []) expect(regras(model, own ?? o), regra).toContain(regra);
+    }
   });
 });
 

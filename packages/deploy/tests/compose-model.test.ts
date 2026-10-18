@@ -107,15 +107,15 @@ describe("namespaces", () => {
 
 describe("montagens", () => {
   it("bind dentro da pasta do projeto passa (curto, longo, relativo e o próprio src)", () => {
-    const model = servico({
-      volumes: [
-        "./dados:/d",
-        { type: "bind", source: path.join(src, "dados"), target: "/e" },
-        { type: "bind", source: src, target: "/app" },
-        "./ainda-nao-existe/sub:/f",
-      ],
-    });
-    expect(regras(model)).toEqual([]);
+    // um de cada vez: pasta dentro de outra pasta gravável é barrada (compose-model-fechado)
+    for (const volume of [
+      "./dados:/d",
+      { type: "bind", source: path.join(src, "dados"), target: "/e" },
+      { type: "bind", source: src, target: "/app" },
+      "./ainda-nao-existe/sub:/f",
+    ]) {
+      expect(regras(servico({ volumes: [volume] }))).toEqual([]);
+    }
   });
 
   it("bind fora do projeto é barrado: /, ~, pasta irmã e prefixo parecido", () => {
@@ -132,8 +132,8 @@ describe("montagens", () => {
 
   it("docker.sock em qualquer caminho é privileged-container, uma vez só", () => {
     expect(regras(servico({ volumes: ["/var/run/docker.sock:/s", "/run/docker.sock:/t"] }))).toEqual([
-      "privileged-container",
-      "privileged-container",
+      "panel-resource",
+      "panel-resource",
     ]);
   });
 
@@ -157,8 +157,8 @@ describe("volumes e redes do topo", () => {
   it("volume do projeto (nome gerado pelo compose) passa; externo, de nome estranho e com driver_opts não", () => {
     const ok = servico({}, { volumes: { dados: { name: "paas-app_dados" } } });
     expect(regras(ok)).toEqual([]);
-    expect(regras(servico({}, { volumes: { v: { name: "paas_data", external: true } } }))).toEqual(["shared-resource"]);
-    expect(regras(servico({}, { volumes: { v: { name: "paas_data" } } }))).toEqual(["shared-resource"]);
+    expect(regras(servico({}, { volumes: { v: { name: "paas_data", external: true } } }))).toEqual(["panel-resource"]);
+    expect(regras(servico({}, { volumes: { v: { name: "paas_data" } } }))).toEqual(["panel-resource"]);
     expect(
       regras(servico({}, { volumes: { v: { name: "paas-app_v", driver_opts: { type: "none", o: "bind", device: "/" } } } })),
     ).toEqual(["shared-resource"]);
@@ -172,7 +172,7 @@ describe("volumes e redes do topo", () => {
 
   it("rede própria passa; externa, de nome estranho e com driver_opts/driver não", () => {
     expect(regras(servico({}, { networks: { default: { name: "paas-app_default" } } }))).toEqual([]);
-    expect(regras(servico({}, { networks: { x: { name: "paas-vitima_default", external: true } } }))).toEqual(["shared-resource"]);
+    expect(regras(servico({}, { networks: { x: { name: "paas-vitima_default", external: true } } }))).toEqual(["panel-resource"]);
     expect(regras(servico({}, { networks: { x: { name: "bridge" } } }))).toEqual(["shared-resource"]);
     expect(regras(servico({}, { networks: { x: { name: "paas-app_x", driver: "host" } } }))).toEqual(["shared-resource"]);
     expect(regras(servico({}, { networks: { x: { name: "paas-app_x", driver_opts: { "com.docker.network.bridge.name": "docker0" } } } }))).toEqual([

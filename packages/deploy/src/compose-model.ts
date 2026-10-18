@@ -19,12 +19,12 @@
  * pastas DENTRO do código do projeto, redes do próprio projeto, build com
  * contexto dentro do código.
  */
-import { realpathSync } from "node:fs";
+import { readlinkSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_PANEL_NETWORK, type GuardrailFinding } from "@paas/core";
 
 /** Regras desta família que NENHUM override do operador libera (isolamento do painel). */
-export const HARD_RULES: ReadonlySet<string> = new Set(["panel-image", "network-hijack", "reserved-name"]);
+export const HARD_RULES: ReadonlySet<string> = new Set(["panel-image", "network-hijack", "reserved-name", "panel-resource"]);
 
 export interface ComposeCheckOptions {
   /** Nome do arquivo para a evidência (ex.: "docker-compose.yml"). */
@@ -49,6 +49,8 @@ export interface ComposeCheckOptions {
   mailNetwork?: string;
   /** Serviços que o painel liga à rede de e-mail (projeto com e-mail habilitado). */
   mailServices?: readonly string[];
+  /** Hosts que o servidor de e-mail responde (`mail.<domínio>`): nome de serviço da rede de e-mail não pode ser nenhum. */
+  mailAliases?: readonly string[];
   /** Redes internas do painel (painel↔Caddy, painel↔Stalwart): nenhum compose de projeto as toca. */
   restrictedNetworks?: readonly string[];
   /** (interno) redes do topo do modelo, para resolver o nome efetivo das ligações do serviço. */
@@ -125,19 +127,21 @@ interface VolumeEntry {
   source: string;
   target: string;
   raw: string;
+  readOnly: boolean;
 }
 
 function parseVolume(entry: unknown): VolumeEntry | null {
   if (typeof entry === "string") {
     const parts = entry.split(":");
-    if (parts.length < 2) return { type: "volume", source: "", target: entry, raw: entry };
+    if (parts.length < 2) return { type: "volume", source: "", target: entry, raw: entry, readOnly: false };
     const source = parts[0] ?? "";
     const named = !/^([./~]|[A-Za-z]:[\\/])/.test(source);
-    return { type: named ? "volume" : "bind", source, target: parts[1] ?? "", raw: entry };
+    const options = (parts[2] ?? "").split(",");
+    return { type: named ? "volume" : "bind", source, target: parts[1] ?? "", raw: entry, readOnly: options.includes("ro") };
   }
   if (isDict(entry)) {
     const source = str(entry.source);
-    return { type: str(entry.type) || (source.startsWith("/") || source.startsWith(".") ? "bind" : "volume"), source, target: str(entry.target), raw: JSON.stringify(entry) };
+    return { type: str(entry.type) || (source.startsWith("/") || source.startsWith(".") ? "bind" : "volume"), source, target: str(entry.target), raw: JSON.stringify(entry), readOnly: isOn(entry.read_only) };
   }
   return null;
 }
@@ -179,7 +183,140 @@ const NAMESPACE_LABEL: Record<string, string> = {
   userns_mode: "userns_mode",
 };
 
-/** Mensagem curta do que cada campo perigoso permite (para o texto do bloqueio). */
+
+/**
+ * LISTA FECHADA de chaves por nível. O Compose ganha campo novo a cada versão
+ * (`use_api_socket`, `gpus`, `post_start`…) e cada um pode ser um caminho para
+ * root: o que o painel não conhece BLOQUEIA (`unsupported-field`). Campos que
+ * têm checagem própria estão na lista e são tratados nas funções abaixo.
+ */
+const SERVICE_KEYS: ReadonlySet<string> = new Set([
+  "annotations", "attach", "blkio_config", "build", "cap_add", "cap_drop", "cgroup", "command", "configs",
+  "container_name", "cpu_count", "cpu_percent", "cpu_period", "cpu_quota", "cpu_rt_period", "cpu_rt_runtime",
+  "cpu_shares", "cpus", "cpuset", "depends_on", "deploy", "device_cgroup_rules", "devices", "dns", "dns_opt",
+  "dns_search", "domainname", "entrypoint", "env_file", "environment", "expose", "extends", "external_links",
+  "extra_hosts", "group_add", "healthcheck", "hostname", "image", "init", "ipc", "isolation", "labels", "links",
+  "logging", "mac_address", "mem_limit", "mem_reservation", "mem_swappiness", "memswap_limit", "network_mode",
+  "networks", "oom_kill_disable", "oom_score_adj", "pid", "pids_limit", "platform", "ports", "post_start",
+  "pre_stop", "privileged", "profiles", "provider", "pull_policy", "read_only", "restart", "scale", "secrets",
+  "security_opt", "shm_size", "stdin_open", "stop_grace_period", "stop_signal", "sysctls", "tmpfs", "tty",
+  "ulimits", "user", "userns_mode", "uts", "volumes", "volumes_from", "working_dir",
+]);
+/** Campos que dão acesso ao host: sempre bloqueados quando ligados. */
+const DANGEROUS_KEYS: Record<string, { rule: string; title: string; fix: string }> = {
+  use_api_socket: { rule: "privileged-container", title: "Socket da API do Docker injetado (use_api_socket)", fix: "Remova `use_api_socket`: o Compose monta o docker.sock no container." },
+  gpus: { rule: "privileged-container", title: "Acesso a GPU do host (gpus)", fix: "Remova `gpus`: expõe dispositivos do servidor ao container." },
+  runtime: { rule: "privileged-container", title: "Runtime de container alternativo (runtime)", fix: "Remova `runtime`: runtimes como nvidia dão acesso a dispositivos do host." },
+  cgroup_parent: { rule: "privileged-container", title: "cgroup do host (cgroup_parent)", fix: "Remova `cgroup_parent`: coloca o container no cgroup do sistema." },
+  storage_opt: { rule: "privileged-container", title: "Opções de armazenamento do Docker (storage_opt)", fix: "Remova `storage_opt`." },
+  credential_spec: { rule: "privileged-container", title: "Credenciais do host (credential_spec)", fix: "Remova `credential_spec`." },
+  label_file: { rule: "host-mount", title: "Arquivo de labels lido do servidor (label_file)", fix: "Remova `label_file`: lê um arquivo qualquer do servidor." },
+};
+const HOOK_KEYS: ReadonlySet<string> = new Set(["command", "user", "privileged", "working_dir", "environment"]);
+const DEPLOY_KEYS: ReadonlySet<string> = new Set(["replicas", "resources", "restart_policy", "labels", "mode", "update_config", "rollback_config", "placement", "endpoint_mode"]);
+const LOGGING_DRIVERS: ReadonlySet<string> = new Set(["json-file", "local", "none"]);
+const TOP_KEYS: ReadonlySet<string> = new Set(["name", "services", "networks", "volumes", "secrets", "configs"]);
+
+function checkKeys(name: string, service: Dict, opts: ComposeCheckOptions, out: GuardrailFinding[]): void {
+  const raw = opts.mode === "raw";
+  const unresolved = (value: unknown) => raw && typeof value === "string" && value.includes("$");
+  const unknown = (where: string, key: string) =>
+    out.push(
+      finding(
+        "unsupported-field",
+        "Campo do compose que o painel não conhece",
+        opts,
+        name,
+        `usa ${where}${key}, que não está na lista de campos aceitos`,
+        "Remova o campo. O painel só aceita os campos que sabe que não dão acesso ao servidor; um campo novo do Compose precisa ser avaliado antes de entrar.",
+      ),
+    );
+
+  for (const key of Object.keys(service)) {
+    if (key.startsWith("x-")) continue;
+    const danger = DANGEROUS_KEYS[key];
+    if (danger) {
+      const value = service[key];
+      const on = Array.isArray(value) ? value.length > 0 : isDict(value) ? Object.keys(value).length > 0 : isOn(value);
+      if (on && !unresolved(value)) out.push(finding(danger.rule, danger.title, opts, name, `define ${key}`, danger.fix));
+      continue;
+    }
+    if (!SERVICE_KEYS.has(key) && key !== "pre_start") unknown("", key);
+  }
+  if (service.pre_start !== undefined) unknown("", "pre_start");
+
+  // ganchos: o mesmo rigor, por recursão (um gancho `privileged` é root no host)
+  for (const hook of ["post_start", "pre_stop", "pre_start"]) {
+    for (const entry of asList(service[hook])) {
+      if (!isDict(entry)) continue;
+      for (const key of Object.keys(entry)) {
+        if (!HOOK_KEYS.has(key)) unknown(`${hook}.`, key);
+      }
+      if (!unresolved(entry.privileged) && isOn(entry.privileged)) {
+        out.push(
+          finding("privileged-container", "Gancho privilegiado", opts, name, `${hook} define privileged: ${str(entry.privileged)}`, `Remova \`privileged\` do ${hook}: equivale a root no host.`),
+        );
+      }
+    }
+  }
+
+  const deploy = service.deploy;
+  if (isDict(deploy)) {
+    for (const key of Object.keys(deploy)) if (!DEPLOY_KEYS.has(key) && !key.startsWith("x-")) unknown("deploy.", key);
+    const resources = deploy.resources;
+    if (isDict(resources)) {
+      for (const key of Object.keys(resources)) if (key !== "limits" && key !== "reservations" && !key.startsWith("x-")) unknown("deploy.resources.", key);
+      if (isDict(resources.limits)) {
+        for (const key of Object.keys(resources.limits)) if (!["cpus", "memory", "pids"].includes(key)) unknown("deploy.resources.limits.", key);
+      }
+      if (isDict(resources.reservations)) {
+        for (const key of Object.keys(resources.reservations)) {
+          if (key === "devices") {
+            if (asList(resources.reservations.devices).length > 0) {
+              out.push(
+                finding("privileged-container", "Acesso a dispositivos do host (deploy.resources.reservations.devices)", opts, name, "reserva devices (GPU etc.)", "Remova `deploy.resources.reservations.devices`: expõe dispositivos do servidor ao container."),
+              );
+            }
+          } else if (!["cpus", "memory"].includes(key)) {
+            unknown("deploy.resources.reservations.", key);
+          }
+        }
+      }
+    }
+  }
+  const driver = isDict(service.logging) ? str(service.logging.driver) : "";
+  if (driver && !unresolved(driver) && !LOGGING_DRIVERS.has(driver)) unknown("logging.driver: ", driver);
+}
+
+/** Caminho do socket do Docker em qualquer grafia (`//var//run/../run/docker.sock`, `/proc/self/root/…`, maiúsculas). */
+function isDockerSocket(source: string): boolean {
+  const normal = path.posix.normalize(source.trim().toLowerCase()).replace(/\/+$/, "");
+  return /(^|\/)docker\.sock$/.test(normal);
+}
+
+/** O caminho (ou um link no caminho) aponta para o socket do Docker? Segue links mesmo que o destino não exista aqui. */
+function pointsToDockerSocket(source: string, root: string): boolean {
+  if (isDockerSocket(source)) return true;
+  let current = path.resolve(root, source);
+  for (let i = 0; i < 8; i++) {
+    let target: string;
+    try {
+      target = readlinkSync(current);
+    } catch {
+      break;
+    }
+    if (isDockerSocket(target)) return true;
+    current = path.resolve(path.dirname(current), target);
+  }
+  return isDockerSocket(resolveRealPath(path.resolve(root, source)));
+}
+
+/** Nome do espaço do painel: `paas-*`, `paas_*`, `tws-*` e os nomes reservados. */
+function inPanelNamespace(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return RESERVED_NAMES.includes(n) || /^(paas|tws)[-_]/.test(n);
+}
+
 const NO_NEW_PRIVS = /^no-new-privileges(?:[:=]true)?$/;
 
 /**
@@ -334,15 +471,15 @@ function checkService(
     const vol = parseVolume(entry);
     if (!vol) continue;
     if (unresolved(vol.source) || unresolved(vol.raw)) continue;
-    if (vol.source.includes("/var/run/docker.sock") || vol.source.includes("/run/docker.sock")) {
+    if (vol.type === "bind" && vol.source && pointsToDockerSocket(vol.source, root)) {
       out.push(
         finding(
-          "privileged-container",
+          "panel-resource",
           "Socket do Docker montado no container",
           opts,
           name,
-          "monta /var/run/docker.sock",
-          "Evite montar o docker.sock — dá controle total sobre o host.",
+          `monta ${vol.source} (o socket do Docker)`,
+          "Remova a montagem do docker.sock — dá controle total sobre o host e não pode ser liberada.",
         ),
       );
       continue;
@@ -376,6 +513,7 @@ function checkService(
     }
   }
 
+  checkKeys(name, service, opts, out);
   checkBuild(name, service, opts, root, out);
   checkEnvFiles(name, service, opts, root, out);
   checkIsolation(name, service, services, opts, out);
@@ -412,7 +550,7 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
       ),
     );
 
-  const bad = reservedLabels(service.labels);
+  const bad = [...reservedLabels(service.labels), ...reservedLabels(isDict(service.deploy) ? service.deploy.labels : undefined)];
   if (bad.length > 0) {
     out.push(
       finding("reserved-name", "Label reservada do painel", opts, name, `define a label ${bad.join(", ")}`, "Remova as labels `paas.*` e `com.docker.compose.*`: o painel identifica os containers do projeto por elas."),
@@ -469,6 +607,28 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
       }
     } else {
       for (const alias of aliases) if (isReservedName(alias, opts, name)) reserved(`define o alias (rede ${key})`, alias);
+    }
+  }
+
+  // rede de e-mail: o nome do serviço, o container_name, o hostname e os aliases viram nomes no DNS
+  // dela (onde moram o Stalwart e o webmail), em TODAS as redes do serviço
+  if ((opts.mailServices ?? []).includes(name)) {
+    const mailAliases = (opts.mailAliases ?? []).map((a) => a.toLowerCase());
+    const taken = (value: string) => {
+      const n = value.trim().toLowerCase();
+      return n !== "" && (isReservedName(n, opts, name) || n.startsWith("mail.") || mailAliases.includes(n));
+    };
+    const candidates: Array<[string, string]> = [
+      ["tem o nome de serviço", name],
+      ["usa container_name", containerName],
+      ["usa hostname", str(service.hostname)],
+      ...attached.flatMap(([key, cfg]) => (isDict(cfg) ? asList(cfg.aliases) : []).map((a) => [`define o alias (rede ${key})`, str(a)] as [string, string])),
+    ];
+    for (const [what, value] of candidates) {
+      if (!value || skip(value) || !taken(value)) continue;
+      out.push(
+        finding("network-hijack", "Nome reservado na rede de e-mail do painel", opts, name, `${what} "${value}" na rede de e-mail`, "Escolha outro nome: na rede de e-mail ele responderia no lugar do servidor de e-mail, do webmail ou de outro projeto."),
+      );
     }
   }
 
@@ -602,7 +762,11 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     if (unresolved(effective)) continue;
     const owned = ownedByProject(effective, opts.projectName, key);
     const reasons: string[] = [];
-    if (!owned && (isOn(cfg.external) || opts.projectName !== undefined)) {
+    if (!owned && inPanelNamespace(effective)) {
+      out.push(
+        finding("panel-resource", "Volume do painel ou de outro projeto", opts, undefined, `o volume "${key}" usa "${effective}", que é do painel ou de outro projeto`, "Esse volume guarda dados do painel (banco, certificados, e-mails) ou de outro projeto e não pode ser usado. Declare um volume com outro nome."),
+      );
+    } else if (!owned && (isOn(cfg.external) || opts.projectName !== undefined)) {
       reasons.push(isOn(cfg.external) ? `é externo (${effective}) e não é do projeto` : `se chama "${effective}", fora do nome do projeto`);
     }
     if (cfg.driver !== undefined && str(cfg.driver) !== "local") reasons.push(`usa o driver "${str(cfg.driver)}"`);
@@ -659,7 +823,11 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     }
     const owned = ownedByProject(effective, opts.projectName, key);
     const reasons: string[] = [];
-    if (!owned && (isOn(cfg.external) || opts.projectName !== undefined)) {
+    if (!owned && inPanelNamespace(effective)) {
+      out.push(
+        finding("panel-resource", "Rede do painel ou de outro projeto", opts, undefined, `a rede "${key}" usa "${effective}", que é do painel ou de outro projeto`, "Não use redes do painel nem de outros projetos: elas dariam acesso aos containers deles."),
+      );
+    } else if (!owned && (isOn(cfg.external) || opts.projectName !== undefined)) {
       reasons.push(isOn(cfg.external) ? `é externa (${effective}) e não é do projeto` : `se chama "${effective}", fora do nome do projeto`);
     }
     if (cfg.driver !== undefined && !/^(bridge|overlay)?$/.test(str(cfg.driver))) reasons.push(`usa o driver "${str(cfg.driver)}"`);
@@ -710,6 +878,47 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
 }
 
 /**
+ * Um bind DENTRO de outro bind gravável deixa o app trocar a subpasta por um
+ * link (ex.: `./:/app` + `./dados:/data`, e o app faz `src/dados -> /`): o
+ * Docker segue o link a CADA start do container, não só no deploy. O pai só
+ * pode conter outro bind se for somente leitura.
+ */
+function checkNestedBinds(services: Dict, opts: ComposeCheckOptions, root: string, out: GuardrailFinding[]): void {
+  const raw = opts.mode === "raw";
+  interface Bind { service: string; path: string; source: string; readOnly: boolean }
+  const binds: Bind[] = [];
+  for (const [service, def] of Object.entries(services)) {
+    if (!isDict(def)) continue;
+    for (const entry of asList(def.volumes)) {
+      const vol = parseVolume(entry);
+      if (!vol || vol.type !== "bind" || !vol.source || vol.source.startsWith("~")) continue;
+      if (raw && (vol.source.includes("$") || vol.raw.includes("$"))) continue;
+      const abs = path.resolve(root, vol.source);
+      // o último componente NÃO é seguido: é ele que o app pode trocar por um link
+      binds.push({ service, path: path.join(resolveRealPath(path.dirname(abs)), path.basename(abs)), source: vol.source, readOnly: vol.readOnly });
+    }
+  }
+  const seen = new Set<string>();
+  for (const inner of binds) {
+    const parent = binds.find((b) => !b.readOnly && b.path !== inner.path && inner.path.startsWith(b.path.endsWith(path.sep) ? b.path : b.path + path.sep));
+    if (!parent) continue;
+    const key = `${inner.service}:${inner.source}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(
+      finding(
+        "host-mount",
+        "Pasta montada dentro de outra pasta montada com escrita",
+        opts,
+        inner.service,
+        `monta ${inner.source}, que fica dentro de ${parent.source} (serviço "${parent.service}"), montada com escrita`,
+        "O app pode trocar a subpasta por um link para qualquer lugar do servidor e o Docker o seguiria. Monte a pasta de cima como somente leitura (:ro) ou separe as pastas.",
+      ),
+    );
+  }
+}
+
+/**
  * Confere o modelo do compose (cru ou canônico) e devolve os bloqueios.
  * `model` é o resultado de `parse()` do YAML ou do JSON do `docker compose config`.
  */
@@ -730,6 +939,13 @@ export function checkComposeModel(given: unknown, options: ComposeCheckOptions):
   for (const [name, service] of Object.entries(services)) {
     if (isDict(service)) checkService(name, service, services, topVolumes, withNets, root, out);
   }
+  checkNestedBinds(services, withNets, root, out);
   checkTopLevel(model, opts, root, out);
+  for (const key of Object.keys(model)) {
+    if (key.startsWith("x-") || TOP_KEYS.has(key) || (opts.mode === "raw" && (key === "version" || key === "include"))) continue;
+    out.push(
+      finding("unsupported-field", "Campo do compose que o painel não conhece", opts, undefined, `usa ${key} no topo do arquivo, que não está na lista de campos aceitos`, "Remova o campo: o painel só aceita name, services, networks, volumes, secrets e configs."),
+    );
+  }
   return out;
 }
