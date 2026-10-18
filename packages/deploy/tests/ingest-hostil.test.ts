@@ -128,6 +128,7 @@ describe("ingestCode — git sobre clone gravável pelo projeto (A2)", () => {
     execFileSync("git", ["config", "-f", config, "core.gitProxy", script]);
     execFileSync("git", ["config", "-f", config, "credential.helper", `!${script}`]);
     execFileSync("git", ["config", "-f", config, "include.path", path.join(tmp, "outro-config")]);
+    execFileSync("git", ["config", "-f", config, "core.alternateRefsCommand", script]);
     await novoCommit("app.txt", "v3 legitimo\n");
 
     const src = await ingestCode(ctx, p, () => {});
@@ -135,7 +136,7 @@ describe("ingestCode — git sobre clone gravável pelo projeto (A2)", () => {
     expect(existsSync(sentinela)).toBe(false);
     expect(await readFile(path.join(src, "app.txt"), "utf8")).toBe("v3 legitimo\n");
     const texto = await readFile(config, "utf8");
-    for (const proibido of ["insteadOf", "uploadpack", "sshCommand", "gitProxy", "helper", "include"]) {
+    for (const proibido of ["insteadOf", "uploadpack", "sshCommand", "gitProxy", "helper", "include", "alternateRefsCommand"]) {
       expect(texto, proibido).not.toMatch(new RegExp(proibido, "i"));
     }
     // o que o painel precisa continua lá

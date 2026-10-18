@@ -50,7 +50,7 @@ export const GIT_SAFE_CONFIG: readonly string[] = [
  */
 const CHAVES_PERIGOSAS =
   "^(url\\..*|include.*|credential\\..*|filter\\..*|alias\\..*|http\\..*|protocol\\..*|uploadpack\\..*" +
-  "|core\\.(sshcommand|gitproxy|fsmonitor|hookspath|pager|editor|askpass|attributesfile|excludesfile)" +
+  "|core\\.(sshcommand|gitproxy|alternaterefscommand|fsmonitor|hookspath|pager|editor|askpass|attributesfile|excludesfile)" +
   "|remote\\..*\\.(uploadpack|receivepack|proxy|proxyauthmethod|vcs|pushurl))$";
 
 type Executar = (file: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => Promise<{ code: number; stdout: string }>;
