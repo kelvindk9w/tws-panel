@@ -23,12 +23,23 @@
     "COMPOSE INVÁLIDO: se o arquivo compose encontrado não parsear como YAML, gera um finding próprio 'invalid-compose' (block) em vez de abortar a análise; o scan de secrets roda de qualquer forma.",
     "ORDENAÇÃO: findings são ordenados block → warn → info antes de retornar no GuardrailReport.",
     "GuardrailReport = { ranAt, dir, findings: GuardrailFinding[], blockers, warnings, infos } — cada GuardrailFinding tem { rule, level, title, evidence, fix, service? }.",
-    "GATE NO DEPLOY (DeployEngine.deploy, packages/deploy/src/engine.ts:97): após a ingestão do código, roda runGuardrails(src) de novo (o código pode ter mudado desde a checagem prévia, especialmente relevante no modo git). Se blockers>0 e !opts.guardrailOverride, lança Error com prefixo 'guardrail_blocked:' e ABORTA o deploy antes de qualquer build/subida. Se override=true, loga um aviso e prossegue mesmo com os bloqueios."
+    "GATE NO DEPLOY (DeployEngine.deploy, packages/deploy/src/engine.ts:97): após a ingestão do código, roda runGuardrails(src) de novo (o código pode ter mudado desde a checagem prévia, especialmente relevante no modo git). Se blockers>0 e !opts.guardrailOverride, lança Error com prefixo 'guardrail_blocked:' e ABORTA o deploy antes de qualquer build/subida. Se override=true, loga um aviso e prossegue mesmo com os bloqueios.",
+    "LOTE 5 (isolamento) — LISTA DO QUE SE PERMITE: o que um compose pode pedir ao Docker é decidido por packages/deploy/src/compose-model.ts (checkComposeModel), que lê o modelo e aceita só o que está numa lista. Ele roda em dois modos: 'raw' (YAML cru, com merge `<<` resolvido; valores com `$` são pulados) na prévia/pré-check, e 'canonical' sobre a saída de `docker compose config --format json --no-env-resolution` — o compose COMO O DOCKER O VAI EXECUTAR (merge, include, extends e ${VAR} resolvidos, mesmos -p/--env-file/-f do `up`). A checagem canônica roda no engine antes de qualquer `up` (deploy e recriar); o recriar nunca aceita override.",
+    "Regras da lista: privileged-container (privileged em qualquer forma, cap_add, devices, security_opt fora de no-new-privileges, sysctls, provider, docker.sock), host-namespace (pid/ipc/network_mode/userns/cgroup/uts, volumes_from container:, external_links), host-mount (bind fora da pasta do projeto, pelo caminho REAL), shared-resource (volume/rede externo, name: de fora, driver/driver_opts; posse só pelo nome EXATO `<projeto>_<chave>` — o projeto 'app' não possui 'app-outro' nem 'app_x'), build-outside-src (context, dockerfile, additional_contexts, env_file, secrets/configs fora da pasta).",
+    "REGRAS DURAS (HARD_RULES — sem override do operador, no deploy e no recriar): reserved-name (labels paas.* e com.docker.compose.*; container_name, hostname, nome do serviço web e aliases que sejam do painel — tws-panel, paas-caddy, paas-stalwart, paas-webmail —, de outro projeto ou do espaço paas-/tws-), network-hijack (qualquer serviço fora do web ligado à paas-net; alias a mais na paas-net; paas-net declarada com driver/ipam/sem external; paas-panel e paas-mail-admin em qualquer compose; paas-mail fora dos serviços que o painel liga com o e-mail habilitado) e panel-image (build que grava a tag de uma imagem do painel — alpine, caddy, nginx, node, stalwart, roundcube — e imagem tws-panel / paas-* de outro projeto). Há um teste de compose hostil para cada regra e um meta-teste que garante que toda regra de HARD_RULES é disparada por algum hostil.",
+    "Variáveis ${VAR} do compose são interpoladas com o ambiente FILTRADO (composeEnv: PATH, HOME, DOCKER_*, proxy, locale) — SETUP_TOKEN, SESSION_SECRET e demais segredos do painel não chegam ao compose do projeto."
   ],
   "catalogoRegras": [
     { "rule": "db-port-exposed", "level": "block", "title": "Porta de banco de dados publicada no host" },
     { "rule": "weak-credentials", "level": "block", "title": "Credenciais triviais no compose/env" },
     { "rule": "privileged-container", "level": "block", "title": "Container privilegiado ou docker.sock montado" },
+    { "rule": "host-namespace", "level": "block", "title": "Namespace do host (pid, ipc, rede, userns, cgroup, uts) ou volumes_from de container" },
+    { "rule": "host-mount", "level": "block", "title": "Pasta do servidor montada fora do código do projeto" },
+    { "rule": "shared-resource", "level": "block", "title": "Volume ou rede que não é do próprio projeto" },
+    { "rule": "build-outside-src", "level": "block", "title": "Build, env_file ou segredo lido de fora do código do projeto" },
+    { "rule": "panel-image", "level": "block", "title": "Imagem do painel ou de outro projeto (SEM override)" },
+    { "rule": "network-hijack", "level": "block", "title": "Alias ou ligação indevida às redes do painel (SEM override)" },
+    { "rule": "reserved-name", "level": "block", "title": "Nome ou label reservados do painel (SEM override)" },
     { "rule": "dev-service-in-prod", "level": "warn", "title": "Serviço de desenvolvimento em produção" },
     { "rule": "secret-in-code", "level": "warn", "title": "Possível secret comitado no código" },
     { "rule": "latest-tag", "level": "info", "title": "Imagem com tag :latest" }
@@ -38,7 +49,13 @@
     { "referencia": "POST /api/projects/:id/deploy", "arquivo": "apps/server/src/services/deploy-service.ts:343", "doc": "projetos/deploy.json", "nota": "checagem síncrona antes de criar o job, mais uma checagem dentro do engine após a ingestão" },
     { "referencia": "POST /api/projects/:id/detect (via analyzeCompose, sistema reduzido)", "arquivo": "packages/deploy/src/detect.ts:131", "doc": "projetos/detectar.json" }
   ],
-  "testes": ["packages/deploy/tests/rules.test.ts", "packages/deploy/tests/guardrails.test.ts", "packages/deploy/tests/engine-guardrail-reuse.test.ts", "apps/web/tests/guardrail-modal.test.tsx"],
+  "testes": ["packages/deploy/tests/rules.test.ts", "packages/deploy/tests/guardrails.test.ts", "packages/deploy/tests/engine-guardrail-reuse.test.ts", "apps/web/tests/guardrail-modal.test.tsx",
+    "packages/deploy/tests/compose-model.test.ts",
+    "packages/deploy/tests/compose-model-isolamento.test.ts",
+    "packages/deploy/tests/guardrails-hostil.test.ts",
+    "packages/deploy/tests/compose-hostil-docker.test.ts",
+    "packages/deploy/tests/engine-compose-guardrails.test.ts"
+  ],
   "observacoes": [
     "IMPORTANTE — correção de um entendimento anterior: GET /api/projects/:id/guardrails e o pré-check de POST /api/projects/:id/deploy SEMPRE usaram runGuardrails() (rules.ts), que já inclui o scan de secrets — o preview de guardrails nunca foi o sistema 'reduzido'. guardrails.ts (analyzeCompose) é um módulo com propósito DIFERENTE: análise do compose durante a DETECÇÃO DE STACK (POST /api/projects/:id/detect), produzindo GuardrailWarning (avisos informativos na tela de detecção), não GuardrailFinding (o que efetivamente bloqueia o deploy). Os dois sistemas continuam tendo listas de portas de banco LIGEIRAMENTE DIFERENTES (rules.ts não inclui Oracle/CouchDB/Elasticsearch que guardrails.ts inclui) e catálogos de regra distintos — mas nesta rodada a checagem de container privilegiado/docker.sock foi alinhada entre os dois (guardrails.ts agora reaproveita mountsDockerSock de rules.ts), reduzindo a divergência que mais importava: um projeto que a detecção mostrava 'limpo' quanto a privileged-container e era bloqueado no deploy por essa mesma regra.",
     "O scan de secrets (scanSecrets) é custoso em projetos grandes: percorre recursivamente até 2000 arquivos de texto, lendo cada um por completo (até 512KB) e rodando ~7 regexes por linha. É reexecutado do zero em toda chamada de GET /guardrails e a cada tentativa de deploy nos modos 'git'/'upload' (até 3x por deploy); no modo 'existing' o engine reaproveita o relatório do pré-check em vez de re-escanear (ver projetos/deploy.json) — não há cache/incrementalidade nos demais modos.",
