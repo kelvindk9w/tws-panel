@@ -194,7 +194,7 @@ const SERVICE_KEYS: ReadonlySet<string> = new Set([
   "annotations", "attach", "blkio_config", "build", "cap_add", "cap_drop", "cgroup", "command", "configs",
   "container_name", "cpu_count", "cpu_percent", "cpu_period", "cpu_quota", "cpu_rt_period", "cpu_rt_runtime",
   "cpu_shares", "cpus", "cpuset", "depends_on", "deploy", "device_cgroup_rules", "devices", "dns", "dns_opt",
-  "dns_search", "domainname", "entrypoint", "env_file", "environment", "expose", "extends", "external_links",
+  "develop", "dns_search", "domainname", "entrypoint", "env_file", "environment", "expose", "extends", "external_links",
   "extra_hosts", "group_add", "healthcheck", "hostname", "image", "init", "ipc", "isolation", "labels", "links",
   "logging", "mac_address", "mem_limit", "mem_reservation", "mem_swappiness", "memswap_limit", "network_mode",
   "networks", "oom_kill_disable", "oom_score_adj", "pid", "pids_limit", "platform", "ports", "post_start",
@@ -214,7 +214,7 @@ const DANGEROUS_KEYS: Record<string, { rule: string; title: string; fix: string 
 };
 const HOOK_KEYS: ReadonlySet<string> = new Set(["command", "user", "privileged", "working_dir", "environment"]);
 const DEPLOY_KEYS: ReadonlySet<string> = new Set(["replicas", "resources", "restart_policy", "labels", "mode", "update_config", "rollback_config", "placement", "endpoint_mode"]);
-const LOGGING_DRIVERS: ReadonlySet<string> = new Set(["json-file", "local", "none"]);
+const LOGGING_DRIVERS: ReadonlySet<string> = new Set(["json-file", "local", "none", "journald", "syslog"]);
 const TOP_KEYS: ReadonlySet<string> = new Set(["name", "services", "networks", "volumes", "secrets", "configs"]);
 
 function checkKeys(name: string, service: Dict, opts: ComposeCheckOptions, out: GuardrailFinding[]): void {

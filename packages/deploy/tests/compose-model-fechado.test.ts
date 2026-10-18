@@ -54,7 +54,20 @@ describe("chaves do serviço: o que não está na lista bloqueia", () => {
 
   it("campo desconhecido (inclusive de versão futura do Compose) bloqueia", () => {
     expect(regras(servico({ campo_novo_do_compose: 1 }))).toEqual(["unsupported-field"]);
-    expect(regras(servico({ develop: { watch: [{ path: "/", action: "sync", target: "/x" }] } }))).toEqual(["unsupported-field"]);
+    expect(regras(servico({ gerenciador_novo: { watch: true } }))).toEqual(["unsupported-field"]);
+  });
+
+  it("develop (o up ignora; só o `compose watch` o usa) e logging journald/syslog são aceitos", () => {
+    expect(regras(servico({ develop: { watch: [{ path: "./src", action: "sync", target: "/app" }] } }))).toEqual([]);
+    for (const driver of ["journald", "syslog", "json-file", "local", "none"]) {
+      expect(regras(servico({ logging: { driver } })), driver).toEqual([]);
+    }
+  });
+
+  it("driver de log que manda para outro lugar (gelf, fluentd, splunk…) segue barrado", () => {
+    for (const driver of ["gelf", "fluentd", "splunk", "awslogs"]) {
+      expect(regras(servico({ logging: { driver } })), driver).toEqual(["unsupported-field"]);
+    }
   });
 
   it("extensão x-* é livre", () => {
