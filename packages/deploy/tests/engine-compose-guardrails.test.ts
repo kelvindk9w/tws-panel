@@ -221,6 +221,38 @@ describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", 
     expect(sobe()).toBe(false);
   });
 
+  it("serviço de projeto com e-mail não pode ter o nome DNS do servidor de e-mail (nome de serviço, container_name, hostname, alias)", async () => {
+    const motor = new DeployEngine({
+      projectsDir,
+      caddyDir: path.join(projectsDir, "caddy"),
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      mailHosts: async () => ["correio.exemplo.com"],
+    }) as unknown as Privado;
+    const hostis: Array<Record<string, unknown>> = [
+      { hostname: "correio.exemplo.com" },
+      { container_name: "paas-stalwart" },
+      { networks: { default: { aliases: ["correio.exemplo.com"] }, "paas-mail": null } },
+      { hostname: "mail.qualquer.com" },
+    ];
+    for (const extra of hostis) {
+      configResult = {
+        code: 0,
+        stdout: JSON.stringify({
+          name: "paas-loja",
+          services: { web: { image: "nginx:1.27", networks: { default: null, "paas-mail": null }, ...extra } },
+          networks: { default: { name: "paas-loja_default" }, "paas-mail": { name: "paas-mail", external: true } },
+        }),
+        stderr: "",
+      };
+      calls.length = 0;
+      await expect(motor.deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "x" }, null, true), JSON.stringify(extra)).rejects.toThrow(/guardrail_blocked/);
+      expect(sobe()).toBe(false);
+    }
+  });
+
   it("paas-panel e paas-mail-admin são barradas sempre", async () => {
     for (const rede of ["paas-panel", "paas-mail-admin"]) {
       configResult = {

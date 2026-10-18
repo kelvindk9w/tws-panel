@@ -531,6 +531,8 @@ export class DeployEngine {
       mode: "canonical",
       panelNetwork: PAAS_NETWORK,
       ...this.isolationFor(project, mailServices),
+      // os hosts que o Stalwart responde na rede de e-mail: nome de serviço de projeto nenhum pode repeti-los
+      ...(mailServices.length > 0 ? { mailAliases: await this.mailHosts(onLog) } : {}),
     });
     onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
     if (findings.length === 0) {
