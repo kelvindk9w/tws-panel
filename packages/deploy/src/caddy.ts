@@ -30,6 +30,7 @@ import {
   INSPECT_RUNNING_AND_MOUNTS,
   parseContainerInspect,
 } from "./container-files.js";
+import { RESERVED_NAMES } from "./compose-model.js";
 import { run } from "./exec.js";
 
 /** Diretório da configuração dentro do container do Caddy (existe na imagem). */
@@ -242,6 +243,41 @@ export class CaddyManager {
     if (out.code !== 0 && !/is not connected/i.test(out.stderr)) {
       throw new Error(`falha ao tirar ${container} da rede ${this.network}: ${out.stderr.trim()}`);
     }
+  }
+
+  /**
+   * Containers antigos na rede dos projetos com um alias que é nome do painel
+   * (`tws-panel`, `paas-*`…) sem ser o dono do nome: antes das regras duras, um
+   * compose podia pôr esse alias e receber o tráfego do painel pelo DNS da
+   * rede. O painel só avisa (derrubar container de projeto é decisão do
+   * operador). Falha do Docker ou saída ilegível = lista vazia.
+   */
+  async reservedAliases(): Promise<Array<{ container: string; alias: string }>> {
+    const ps = await run("docker", ["ps", "-q", "--filter", `network=${this.network}`]);
+    const ids = ps.code === 0 ? ps.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+    if (ids.length === 0) return [];
+    const template = `{{.Name}}|{{json (index .NetworkSettings.Networks "${this.network}").Aliases}}`;
+    const inspect = await run("docker", ["inspect", "-f", template, ...ids]);
+    if (inspect.code !== 0) return [];
+    const found: Array<{ container: string; alias: string }> = [];
+    for (const line of inspect.stdout.split("\n")) {
+      const at = line.indexOf("|");
+      if (at < 0) continue;
+      const container = line.slice(1, at);
+      let aliases: unknown;
+      try {
+        aliases = JSON.parse(line.slice(at + 1));
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(aliases)) continue;
+      for (const alias of aliases) {
+        if (typeof alias !== "string" || alias === container) continue;
+        const n = alias.toLowerCase();
+        if (RESERVED_NAMES.includes(n) || /^(paas|tws)[-_]/.test(n)) found.push({ container, alias });
+      }
+    }
+    return found;
   }
 
   /**

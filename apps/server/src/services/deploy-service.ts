@@ -40,6 +40,7 @@ import {
   type ProjectTimezoneService,
   type ProjectTimezoneSetting,
   type ProjectTimezoneView,
+  PAAS_NETWORK,
   effectiveProjectZone,
   isKnownTimezone,
   isSafeTimezoneName,
@@ -285,6 +286,25 @@ export class DeployService {
       ...(existsSync("/.dockerenv") ? { panelContainer: PANEL_CONTAINER } : {}),
     };
     this.engine = new DeployEngine(this.engineCtx);
+  }
+
+  /**
+   * Migração (A4): containers antigos na rede dos projetos com alias que é
+   * nome do painel. Só avisa — parar container de projeto é decisão do
+   * operador. Nunca lança (roda no boot).
+   */
+  async warnReservedNetworkAliases(log: { warn: (msg: string) => void }): Promise<void> {
+    try {
+      for (const { container, alias } of await this.engine.caddy.reservedAliases()) {
+        log.warn(
+          `Rede ${PAAS_NETWORK}: o container ${container} responde pelo nome "${alias}", que é do painel — ele poderia receber o tráfego do painel. ` +
+            `Confira o compose do projeto e, para tirá-lo da rede agora: docker network disconnect ${PAAS_NETWORK} ${container}. ` +
+            "O próximo deploy do projeto já é barrado por esse alias.",
+        );
+      }
+    } catch (err) {
+      log.warn(`Rede ${PAAS_NETWORK}: não consegui conferir os nomes dos containers (${err instanceof Error ? err.message : String(err)}).`);
+    }
   }
 
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */

@@ -342,3 +342,39 @@ describe("CaddyManager — site do painel", () => {
     expect(calls.some((a) => a[0] === "network" && (a[1] === "connect" || a[1] === "disconnect"))).toBe(false);
   });
 });
+
+describe("CaddyManager.reservedAliases — containers antigos na paas-net com nome do painel (A4)", () => {
+  const rede = (inspect: string, ids = "aaa\nbbb\nccc\n"): ((a: string[]) => Result) => (args) => {
+    if (args[0] === "ps") return ok(ids);
+    if (args[0] === "inspect") return ok(inspect);
+    return ok();
+  };
+
+  it("acusa quem tem alias tws-panel/paas-*/tws-* e não é o dono do nome; ignora o próprio painel e os aliases comuns", async () => {
+    responder = rede(
+      [
+        '/atacante-web-1|["web","tws-panel","abc123"]',
+        '/tws-panel|["tws-panel"]',
+        '/loja-web-1|["loja","web"]',
+        '/outro-app-1|["paas-caddy","paas_x"]',
+        "/sem-alias|null",
+      ].join("\n"),
+    );
+    expect(await manager().reservedAliases()).toEqual([
+      { container: "atacante-web-1", alias: "tws-panel" },
+      { container: "outro-app-1", alias: "paas-caddy" },
+      { container: "outro-app-1", alias: "paas_x" },
+    ]);
+    const ps = calls.find((a) => a[0] === "ps")!;
+    expect(ps).toEqual(expect.arrayContaining(["--filter", "network=paas-net"]));
+  });
+
+  it("rede vazia, docker fora do ar ou saída ilegível: lista vazia, sem exceção", async () => {
+    responder = rede("", "");
+    expect(await manager().reservedAliases()).toEqual([]);
+    responder = () => fail("daemon fora do ar");
+    expect(await manager().reservedAliases()).toEqual([]);
+    responder = rede("lixo sem separador\n/x|{não é json");
+    expect(await manager().reservedAliases()).toEqual([]);
+  });
+});

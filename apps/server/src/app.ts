@@ -281,6 +281,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     info: (msg) => app.log.info(msg),
     warn: (msg) => app.log.warn(msg),
   });
+  // A4: containers antigos na paas-net com nome de painel como alias recebem aviso (só aviso)
+  // (só no painel em container: é onde a migração de rede existe; testes e dev local não tocam o Docker)
+  if (existsSync("/.dockerenv")) void app.deployService.warnReservedNetworkAliases({ warn: (msg) => app.log.warn(msg) });
   // Terminal web embutido: uma sessão de PTY no alvo (host via host bridge ou
   // container de dev), compartilhada entre o WS do painel e o executor de
   // hardening. Relay puro — input do usuário nunca é logado/auditado.
