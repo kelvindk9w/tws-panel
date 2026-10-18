@@ -778,8 +778,10 @@ function badCacheEntry(entry: unknown): boolean {
     });
   }
   const keys = pairs.map(([k]) => k);
+  // chave repetida: o buildx fica com a ÚLTIMA (type=registry,…,type=local grava em disco); recusa-se qualquer repetição
+  if (new Set(keys).size !== keys.length) return true;
   if (keys.includes("src") || keys.includes("dest")) return true;
-  const type = pairs.find(([k]) => k === "type")?.[1];
+  const type = [...pairs].reverse().find(([k]) => k === "type")?.[1];
   return type !== "registry" && type !== "inline";
 }
 

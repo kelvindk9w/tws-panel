@@ -480,6 +480,20 @@ describe("build: lista fechada e cache só em registro", () => {
     expect(regras(build({ cache_from: lista })), "cache_from").toContain("build-outside-src");
   });
 
+  it.each([
+    ["type=registry primeiro e type=local depois (o buildx usa o último)", ["type=registry,ref=x,type=local,dest=/data"]],
+    ["type=local primeiro e type=registry depois", ["type=local,dest=/data,type=registry,ref=x"]],
+    ["dest duplicado", ["type=registry,ref=x,dest=/a,dest=/data"]],
+    ["type duplicado com maiúsculas diferentes", ["Type=registry,ref=x,type=local"]],
+    ["type duplicado igual (também recusado)", ["type=registry,type=registry,ref=x"]],
+    ["ref duplicado", ["type=registry,ref=a,ref=b"]],
+    ["duplicado com aspas de CSV", ['"type=registry","ref=x","TYPE=local"']],
+    ["objeto com Type e type", [{ Type: "registry", type: "local" }]],
+  ])("chave duplicada é recusada: %s", (_nome, lista) => {
+    expect(regras(build({ cache_to: lista })), "cache_to").toContain("build-outside-src");
+    expect(regras(build({ cache_from: lista })), "cache_from").toContain("build-outside-src");
+  });
+
   it("cache em registro, inline e referência de imagem continuam passando (CSV com aspas e espaços)", () => {
     for (const ok of ["minha-loja:cache", "type=registry,ref=ghcr.io/x/y:cache", '"type=registry","ref=ghcr.io/x/y:cache"', " type = inline ", "type=inline"]) {
       expect(regras(build({ cache_to: [ok] })), ok).toEqual([]);
