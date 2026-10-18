@@ -18,7 +18,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAIL_DEFAULT_PORTS, type Project } from "@paas/core";
+import { MAIL_DEFAULT_PORTS, STALWART_IMAGE_REF, type Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 
 // -----------------------------------------------------------------------
@@ -808,5 +808,13 @@ describe("MailService — redes do e-mail (A4)", () => {
     await seed({});
     await new MailService(config).leaveProjectNetwork();
     expect(netCalls).toEqual(["leave"]);
+  });
+
+  it("status do servidor nunca criado mostra a imagem fixada por digest, não a tag solta", async () => {
+    await seed({}, null);
+    const status = await new MailService(config).status();
+    expect(status.installed).toBe(false);
+    expect(status.image).toBe(STALWART_IMAGE_REF);
+    expect(status.image).toMatch(/@sha256:[0-9a-f]{64}$/);
   });
 });
