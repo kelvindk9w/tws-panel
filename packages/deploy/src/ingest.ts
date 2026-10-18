@@ -4,10 +4,13 @@
  *  - upload:   copia um diretório local para data/projects/<slug>/src
  *  - existing: usa um caminho já existente (modo dev local; src = o próprio path)
  */
-import { cp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
+import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv } from "./git-safe.js";
+import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
 
 /** Diretórios/arquivos excluídos ao copiar código no modo upload. */
 const UPLOAD_EXCLUDES = new Set(["node_modules", ".git", "dist", "out", "build", ".next", ".turbo"]);
@@ -173,83 +176,117 @@ export async function ingestCode(
   }
 }
 
+/** Diretório do repositório git do painel para o projeto (fora de `src`, ver git-safe.ts). */
+export function projectGitDir(ctx: IngestContext, project: Project): string {
+  return path.join(projectWorkDir(ctx, project), GIT_DIR_NAME);
+}
+
+/**
+ * Deixa em `src/.git` só um ponteiro para o repositório do painel (o operador
+ * continua usando `git status` ali). O que estiver lá — um clone antigo ou o
+ * que um app invadido plantou — é apagado, sem seguir link simbólico: o painel
+ * nunca mais lê esse `.git`.
+ */
+async function substituirGitDeSrcPorPonteiro(src: string, gitDir: string): Promise<void> {
+  const ponteiro = path.join(src, ".git");
+  if (!(await isRegularFile(ponteiro))) {
+    await rm(ponteiro, { recursive: true, force: true });
+  }
+  await writeFileNoFollow(ponteiro, `gitdir: ${gitDir}\n`, 0o644);
+}
+
 async function ingestGit(
   ctx: IngestContext,
   project: Project,
   onLogBruto: (chunk: string) => void,
 ): Promise<string> {
   const src = projectSrcDir(ctx, project);
+  const gitDir = projectGitDir(ctx, project);
   const branch = project.branch ?? "main";
+  if (project.source.startsWith("-")) {
+    throw new Error("Fonte de código inválida: o endereço do repositório não pode começar com \"-\".");
+  }
 
   const cred = (await ctx.credentialFor?.(project)) ?? null;
   const ambiente = prepararAmbienteGit(cred);
-  const git = (args: string[]) => [...ambiente.configArgs, ...args];
+  // Todo git do painel aponta para o repositório DELE (fora de `src`), com
+  // hooks e fsmonitor desligados: nada que esteja em `src` é executado nem
+  // lido como configuração (git-safe.ts, achado A2).
+  const git = (args: string[]) => [
+    ...GIT_SAFE_CONFIG,
+    ...ambiente.configArgs,
+    "--git-dir",
+    gitDir,
+    "--work-tree",
+    src,
+    ...args,
+  ];
   // Todo texto que sai daqui passa pelo filtro: o log do deploy é transmitido
   // ao operador e persistido em disco, e uma mensagem de erro do git pode
   // ecoar o que recebeu.
   const onLog = (chunk: string) => onLogBruto(ambiente.ocultar(chunk));
-  const gitEnv = { env: ambiente.env };
+  const gitEnv = { env: gitSafeEnv(ambiente.env) };
 
   if (ambiente.temCredencial) {
     onLog("Usando a credencial de leitura cadastrada para este projeto (acesso somente leitura).\n");
   }
 
-  const inside = await run("git", git(["-C", src, "rev-parse", "--is-inside-work-tree"]), gitEnv);
-  // Um clone existente só pode ser reaproveitado se ainda corresponder ao que
-  // está configurado. O clone é --single-branch: se a branch mudou, o checkout
-  // falharia porque a nova branch nem existe localmente. E se a URL do
-  // repositório mudou, o fetch traria o código do repositório ANTIGO sem erro
-  // algum — falha silenciosa. Nos dois casos, re-clonar é a saída correta.
-  if (inside.code === 0 && inside.stdout.trim() === "true") {
-    const origemAtual = await run("git", git(["-C", src, "remote", "get-url", "origin"]), gitEnv);
-    const branchAtual = await run("git", git(["-C", src, "rev-parse", "--abbrev-ref", "HEAD"]), gitEnv);
-    const mesmoRepositorio = origemAtual.stdout.trim() === project.source;
-    const mesmaBranch = branchAtual.stdout.trim() === branch;
+  await mkdir(src, { recursive: true });
+  await substituirGitDeSrcPorPonteiro(src, gitDir);
 
-    if (!mesmoRepositorio) {
-      onLog(
-        `Repositório configurado mudou (${origemAtual.stdout.trim()} → ${project.source}). ` +
-          `Refazendo o clone do zero…\n`,
-      );
-    } else if (!mesmaBranch) {
-      onLog(
-        `Branch configurada mudou (${branchAtual.stdout.trim()} → ${branch}). ` +
-          `Refazendo o clone do zero…\n`,
-      );
-    }
+  const novo = !existsSync(path.join(gitDir, "HEAD"));
+  if (novo) {
+    const init = await run("git", git(["init", "-q"]), gitEnv);
+    if (init.code !== 0) throw falhaGit("git init", init, ambiente);
+  }
+  // Um repositório já existente só é reaproveitado como está se ainda
+  // corresponder ao que está configurado: se a URL mudou, o fetch traria o
+  // código do repositório ANTIGO sem erro algum; se a branch mudou, o
+  // checkout precisa trocar a branch. Nos dois casos o código novo entra por
+  // cima (checkout forçado), SEM apagar o que não é versionado (dados,
+  // uploads, .env): ele mora em `src` e é do projeto.
+  const origemAtual = (await run("git", git(["config", "--get", "remote.origin.url"]), gitEnv)).stdout.trim();
+  const branchAtual = (await run("git", git(["symbolic-ref", "-q", "--short", "HEAD"]), gitEnv)).stdout.trim();
+  const temBranch = (await run("git", git(["rev-parse", "-q", "--verify", `refs/heads/${branch}`]), gitEnv)).code === 0;
+  const mesmoRepositorio = origemAtual === project.source;
+  const mesmaBranch = branchAtual === branch && temBranch;
 
-    if (mesmoRepositorio && mesmaBranch) {
-      onLog(`Atualizando clone existente (git fetch + checkout ${branch})…\n`);
-      // fetch/pull também precisam da credencial: repositório privado não
-      // deixa nem atualizar sem autenticar, só o primeiro clone.
-      const fetch = await run("git", git(["-C", src, "fetch", "--all", "--prune"]), {
-        ...gitEnv,
-        timeoutMs: 600_000,
-      });
-      if (fetch.code !== 0) throw falhaGit("git fetch", fetch, ambiente);
-      const checkout = await run("git", git(["-C", src, "checkout", branch]), gitEnv);
-      if (checkout.code !== 0) throw falhaGit(`git checkout ${branch}`, checkout, ambiente);
-      const pull = await run("git", git(["-C", src, "pull", "--ff-only", "origin", branch]), {
-        ...gitEnv,
-        timeoutMs: 600_000,
-      });
-      if (pull.code !== 0) throw falhaGit("git pull", pull, ambiente);
-      onLog(pull.stdout);
-      return src;
-    }
+  for (const [chave, valor] of [
+    ["remote.origin.url", project.source],
+    ["remote.origin.fetch", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+  ] as const) {
+    const set = await run("git", git(["config", chave, valor]), gitEnv);
+    if (set.code !== 0) throw falhaGit("git config", set, ambiente);
   }
 
-  onLog(`Clonando ${project.source} (branch ${branch})…\n`);
-  await rm(src, { recursive: true, force: true });
-  // A URL vai como argumento LIMPA, sem credencial embutida: é ela que fica
-  // gravada no remote.origin.url do clone.
-  const clone = await run(
-    "git",
-    git(["clone", "--branch", branch, "--single-branch", project.source, src]),
-    { ...gitEnv, timeoutMs: 900_000 },
-  );
-  if (clone.code !== 0) throw falhaGit("git clone", clone, ambiente);
-  onLog(clone.stderr || clone.stdout);
+  if (novo) {
+    onLog(`Baixando ${project.source} (branch ${branch})…\n`);
+  } else if (!mesmoRepositorio) {
+    onLog(`Repositório configurado mudou (${origemAtual} → ${project.source}). Trocando o código…\n`);
+  } else if (!mesmaBranch) {
+    onLog(`Branch configurada mudou (${branchAtual} → ${branch}). Trocando o código…\n`);
+  } else {
+    onLog(`Atualizando clone existente (git fetch + merge ${branch})…\n`);
+  }
+
+  // fetch também precisa da credencial: repositório privado não deixa nem
+  // atualizar sem autenticar, só o primeiro clone.
+  const fetch = await run("git", git(["fetch", "--prune", "origin"]), { ...gitEnv, timeoutMs: 900_000 });
+  if (fetch.code !== 0) throw falhaGit("git fetch", fetch, ambiente);
+
+  const remoto = `refs/remotes/origin/${branch}`;
+  if (!novo && mesmoRepositorio && mesmaBranch) {
+    const merge = await run("git", git(["merge", "--ff-only", remoto]), { ...gitEnv, timeoutMs: 600_000 });
+    if (merge.code !== 0) throw falhaGit("git pull", merge, ambiente);
+    onLog(merge.stdout);
+    return src;
+  }
+  const checkout = await run("git", git(["checkout", "-q", "-f", "-B", branch, remoto]), {
+    ...gitEnv,
+    timeoutMs: 600_000,
+  });
+  if (checkout.code !== 0) throw falhaGit(`git checkout ${branch}`, checkout, ambiente);
+  onLog(checkout.stderr || checkout.stdout || "Código baixado.\n");
   return src;
 }
 

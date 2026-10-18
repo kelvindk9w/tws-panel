@@ -96,7 +96,7 @@ describe("ingestão git — mensagem que chega ao operador", () => {
     } as Project;
   }
 
-  it("o erro do clone nunca termina em dois-pontos sem texto", async () => {
+  it("o erro do download do repositório nunca termina em dois-pontos sem texto", async () => {
     let erro: unknown;
     try {
       await ingestCode({ projectsDir }, projeto(), () => {});
@@ -106,7 +106,8 @@ describe("ingestão git — mensagem que chega ao operador", () => {
 
     expect(erro).toBeInstanceOf(Error);
     const msg = (erro as Error).message;
-    expect(msg).toContain("git clone falhou");
+    // o painel não faz mais `git clone` em src (git-safe.ts): quem baixa é o fetch
+    expect(msg).toContain("git fetch falhou");
     // O defeito original produzia exatamente "git clone falhou:" e nada mais.
     expect(msg.trim()).not.toMatch(/:$/);
     expect(msg.split("falhou:")[1]?.trim()).not.toBe("");

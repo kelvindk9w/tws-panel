@@ -226,9 +226,11 @@ describe("ingestCode — repositório privado com credencial de leitura", () => 
     ).rejects.toThrow();
     const novos = (await readdir(tmpdir())).filter((n) => !antes.has(n) && n.startsWith("paas-git-cred-"));
     expect(novos).toEqual([]);
-    const clone = chamadas.find((c) => c.args.includes("clone"))!;
-    expect(clone.args.join(" ")).toContain("credential.helper=");
-    expect(clone.args.join(" ")).not.toContain(TOKEN);
+    // o painel não faz mais `git clone` dentro de src (ver git-safe.ts): quem fala
+    // com o servidor do repositório é o `git fetch`, e é ele que leva o helper.
+    const fetch = chamadas.find((c) => c.args.includes("fetch"))!;
+    expect(fetch.args.join(" ")).toContain("credential.helper=");
+    expect(fetch.args.join(" ")).not.toContain(TOKEN);
   }, 60_000);
 });
 
