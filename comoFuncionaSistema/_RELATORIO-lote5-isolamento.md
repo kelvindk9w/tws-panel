@@ -229,6 +229,27 @@ Um commit por item. Cada hostil falhou antes e passa agora.
 - Reexecução dos testes que dependem do Docker (engine-lifecycle, engine-guardrail-reuse, docker-service,
   routes-misc-schema): o Docker continuou sem responder; não deu para tentar reiniciá-lo sem sair do escopo.
 
+## Terceira revisão rigorosa (cache do build, panel-resource, git)
+
+- **Cache do build lido como CSV.** `cache_from`/`cache_to` são interpretados como o buildx interpreta: pares
+  `chave=valor` separados por vírgula, chaves sem distinção de maiúsculas (`Type=local,Dest=/data`). Só passam
+  `registry`, `inline` ou a referência de imagem pura; `src`/`dest` e tipos desconhecidos são recusados.
+  Chave repetida (sem distinção de maiúsculas) é recusada, porque o buildx vale-se da ÚLTIMA
+  (`type=registry,ref=x,type=local,dest=/data` gravaria no host). Teste: `compose-model-fechado.test.ts`.
+- **panel-resource (regra dura, sem override).** Passam a ser recursos do painel os binds que são ou contêm
+  `/proc`, `/sys`, qualquer `*.sock` em `/run` e `/var/run`, a pasta dos projetos (`PAAS_PROJECTS_DIR`) fora do `src`
+  do próprio projeto e a pasta de instalação do painel (`PAAS_INSTALL_DIR`, padrão `/opt/tws-panel`). As duas
+  últimas vêm da configuração, não são fixas no código. `/var/log/meuapp`, `/srv/x` e `/etc` continuam
+  `host-mount` (liberáveis pelo operador).
+- **Git, segunda defesa.** A cada ingestão de um repositório já existente o painel remove de `repo.git/config`
+  as chaves que executam programa ou trocam a origem (`url.*.insteadOf`, `include*`, `credential.*`,
+  `core.sshCommand`, `core.gitProxy`, `remote.*.uploadpack/receivepack/proxy/vcs/pushurl`, `filter.*`, `alias.*`,
+  `http.*`...), mantendo `remote.origin.url`; `GIT_SAFE_CONFIG` também zera `core.gitProxy` e `credential.helper`.
+  `core.sshCommand=` vazio NÃO foi colocado no `-c`: o git o executaria como comando vazio e quebraria clones por
+  ssh; essa chave só é tratada pela limpeza do arquivo. Teste: `ingest-hostil.test.ts`.
+- **Não testado:** clone por ssh real com a limpeza ativa (só git local); `docker compose` real continua sem
+  Docker na máquina.
+
 ## Riscos residuais
 
 - Serviços de projetos com e-mail habilitado alcançam o Stalwart inteiro pela `paas-mail` (portas de SMTP/IMAP
