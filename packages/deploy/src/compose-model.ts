@@ -214,7 +214,21 @@ const DANGEROUS_KEYS: Record<string, { rule: string; title: string; fix: string 
 };
 const HOOK_KEYS: ReadonlySet<string> = new Set(["command", "user", "privileged", "working_dir", "environment"]);
 const DEPLOY_KEYS: ReadonlySet<string> = new Set(["replicas", "resources", "restart_policy", "labels", "mode", "update_config", "rollback_config", "placement", "endpoint_mode"]);
-const LOGGING_DRIVERS: ReadonlySet<string> = new Set(["json-file", "local", "none", "journald", "syslog"]);
+/**
+ * Drivers de log aceitos e as opções de cada um (lista fechada). Nenhum driver de rede (gelf,
+ * fluentd, awslogs, splunk, loki…) nem plugin. `syslog-address` e `syslog-tls-*` ficam de fora de
+ * propósito: com tcp://, udp:// ou tcp+tls:// o daemon manda os logs do projeto (e os segredos que
+ * passam por eles) para fora da VPS, e um caminho unix:// escolhido pelo projeto não teria ganho
+ * (o padrão do driver já é o /dev/log local).
+ */
+const LOG_COMMON = ["labels", "labels-regex", "env", "env-regex"];
+const LOGGING_DRIVERS: Readonly<Record<string, ReadonlySet<string>>> = {
+  "json-file": new Set(["max-size", "max-file", "compress", "tag", ...LOG_COMMON]),
+  local: new Set(["max-size", "max-file", "compress"]),
+  none: new Set(),
+  journald: new Set(["tag", ...LOG_COMMON]),
+  syslog: new Set(["tag", "facility", "syslog-format", ...LOG_COMMON]),
+};
 const TOP_KEYS: ReadonlySet<string> = new Set(["name", "services", "networks", "volumes", "secrets", "configs"]);
 
 function checkKeys(name: string, service: Dict, opts: ComposeCheckOptions, out: GuardrailFinding[]): void {
@@ -285,7 +299,14 @@ function checkKeys(name: string, service: Dict, opts: ComposeCheckOptions, out: 
     }
   }
   const driver = isDict(service.logging) ? str(service.logging.driver) : "";
-  if (driver && !unresolved(driver) && !LOGGING_DRIVERS.has(driver)) unknown("logging.driver: ", driver);
+  if (driver && !unresolved(driver) && !Object.hasOwn(LOGGING_DRIVERS, driver)) {
+    unknown("logging.driver: ", driver);
+  } else if (isDict(service.logging) && isDict(service.logging.options) && !unresolved(driver)) {
+    const allowed = LOGGING_DRIVERS[driver || "json-file"]!;
+    for (const key of Object.keys(service.logging.options)) {
+      if (!allowed.has(key)) unknown(`logging.options (driver ${driver || "json-file"}): `, key);
+    }
+  }
 }
 
 /** Caminho do socket do Docker em qualquer grafia (`//var//run/../run/docker.sock`, `/proc/self/root/…`, maiúsculas). */

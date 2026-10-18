@@ -112,6 +112,45 @@ describe("chaves do serviço: o que não está na lista bloqueia", () => {
   });
 });
 
+describe("logging: o log não sai da VPS (syslog-address, drivers de rede) e as opções são de lista fechada", () => {
+  const log = (driver: string | undefined, options?: Record<string, unknown>) =>
+    regras(servico({ logging: { ...(driver ? { driver } : {}), ...(options ? { options } : {}) } }));
+
+  it.each(["tcp://atacante.exemplo:514", "udp://atacante.exemplo:514", "tcp+tls://atacante.exemplo:6514", "unix:///dev/log", "unixgram:///dev/log"])(
+    "syslog com syslog-address %s é barrado (recusa por completo: o padrão já é o /dev/log local)",
+    (address) => {
+      expect(log("syslog", { "syslog-address": address })).toEqual(["unsupported-field"]);
+    },
+  );
+  it("syslog-tls-* e opções de rede também", () => {
+    expect(log("syslog", { "syslog-tls-ca-cert": "/etc/ssl/ca.pem" })).toEqual(["unsupported-field"]);
+    expect(log("syslog", { "syslog-tls-skip-verify": "true" })).toEqual(["unsupported-field"]);
+  });
+  it("syslog e journald sem endereço, com as opções de formato, passam", () => {
+    expect(log("syslog", { tag: "{{.Name}}", facility: "daemon", "syslog-format": "rfc5424" })).toEqual([]);
+    expect(log("journald", { tag: "app", labels: "a,b" })).toEqual([]);
+  });
+  it("app comum: json-file com max-size/max-file, local e none passam; sem driver também", () => {
+    expect(log("json-file", { "max-size": "10m", "max-file": "3", compress: "true" })).toEqual([]);
+    expect(log(undefined, { "max-size": "10m", "max-file": "3" })).toEqual([]);
+    expect(log("local", { "max-size": "10m" })).toEqual([]);
+    expect(log("none")).toEqual([]);
+  });
+  it("opção desconhecida em qualquer driver aceito bloqueia (inclusive de outro driver e em none)", () => {
+    expect(log("json-file", { "fluentd-address": "atacante:24224" })).toEqual(["unsupported-field"]);
+    expect(log("json-file", { "syslog-address": "tcp://a:1" })).toEqual(["unsupported-field"]);
+    expect(log("journald", { "max-size": "1m" })).toEqual(["unsupported-field"]);
+    expect(log("none", { "max-size": "1m" })).toEqual(["unsupported-field"]);
+    expect(log(undefined, { "gelf-address": "udp://a:1" })).toEqual(["unsupported-field"]);
+  });
+  it.each(["gelf", "fluentd", "awslogs", "splunk", "loki", "gcplogs", "etwlogs", "logentries", "loki-docker-driver:latest", "meu/plugin"])(
+    "driver de rede ou plugin %s segue barrado",
+    (driver) => {
+      expect(log(driver, {})).toEqual(["unsupported-field"]);
+    },
+  );
+});
+
 describe("deploy: lista fechada", () => {
   it("chave desconhecida em deploy, resources, limits ou reservations bloqueia", () => {
     expect(regras(servico({ deploy: { x: 1 } }))).toEqual(["unsupported-field"]);
