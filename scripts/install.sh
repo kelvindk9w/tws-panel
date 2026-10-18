@@ -1141,7 +1141,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -f "$SCRIPT_DIR/../$COMPOSE_FILE" ] && [ -f "$SCRIPT_DIR/../Dockerfile" ]; then
   # Script rodando de dentro do repo clonado — usa o próprio diretório.
-  APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
   log "Repo detectado em $APP_DIR — usando o diretório atual."
 else
   APP_DIR="$TARGET_DIR"
@@ -1154,6 +1154,8 @@ else
   fi
 fi
 cd "$APP_DIR"
+# Caminho REAL e absoluto (PAAS_DIR relativo ou pasta que é link): é o que o painel grava em PAAS_HOST_REPO_DIR.
+APP_DIR="$(pwd -P)"
 
 # --- 5. Setup token ------------------------------------------------------------------
 # O token fica no volume paas_data (/data/setup-token dentro do container).
@@ -1193,6 +1195,16 @@ if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/
 fi
 log "Grupo do docker.sock no host: GID $DOCKER_GID (gravado em .env)"
 
+# env_set <CHAVE> <valor> — grava no .env sem sed: o valor pode ter qualquer caractere (#, &, |, \).
+env_set() {
+  local tmp
+  tmp="$(mktemp)"
+  { grep -v "^$1=" .env 2>/dev/null || true; } > "$tmp"
+  printf '%s=%s\n' "$1" "$2" >> "$tmp"
+  cat "$tmp" > .env
+  rm -f "$tmp"
+}
+
 # --- 5c. Diretório dos projetos no host -----------------------------------------------
 # Os arquivos dos projetos implantados NÃO ficam num volume Docker: ficam num
 # diretório de verdade do host, montado no container com o MESMO caminho dos
@@ -1223,11 +1235,7 @@ fi
 chown 10001:10001 "$PROJECTS_DIR"
 chmod 755 "$PROJECTS_DIR"
 
-if [ -f .env ] && grep -q '^PAAS_PROJECTS_DIR=' .env; then
-  sed -i "s#^PAAS_PROJECTS_DIR=.*#PAAS_PROJECTS_DIR=$PROJECTS_DIR#" .env
-else
-  printf 'PAAS_PROJECTS_DIR=%s\n' "$PROJECTS_DIR" >> .env
-fi
+env_set PAAS_PROJECTS_DIR "$PROJECTS_DIR"
 if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
   chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
 fi
@@ -1238,13 +1246,6 @@ log "Arquivos dos projetos no host: $PROJECTS_DIR (gravado em .env)"
 # modo vazio). Com root, o modo fica vazio de propósito. No caminho "legado"
 # (automação sem escolha) nada é gravado: o painel segue abrindo como root,
 # exatamente como antes, e uma instalação existente não muda sozinha.
-env_set() { # env_set <CHAVE> <valor> — mesmo padrão do DOCKER_GID/PAAS_PROJECTS_DIR
-  if [ -f .env ] && grep -q "^$1=" .env; then
-    sed -i "s#^$1=.*#$1=$2#" .env
-  else
-    printf '%s=%s\n' "$1" "$2" >> .env
-  fi
-}
 # Onde a instalação mora NO HOST (o .env com os segredos fica aqui). O painel recusa que um compose de
 # projeto monte esta pasta; sem isto ele só protegeria /opt/tws-panel. Sempre o caminho real de agora.
 env_set PAAS_HOST_REPO_DIR "$APP_DIR"
