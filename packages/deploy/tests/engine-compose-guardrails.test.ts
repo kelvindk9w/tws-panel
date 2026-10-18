@@ -167,6 +167,38 @@ describe("DeployEngine.deployCompose — guardrails sobre o compose resolvido", 
   });
 });
 
+describe("regras duras não têm override do operador", () => {
+  const DURO = JSON.stringify({
+    name: "paas-loja",
+    services: { web: { image: "nginx:1.27", labels: { "paas.project": "vitima" }, container_name: "tws-panel" } },
+  });
+
+  it("reserved-name: mesmo com override explícito, aborta antes do up", async () => {
+    configResult = { code: 0, stdout: DURO, stderr: "" };
+    await expect(privado().deployCompose(project(), src, () => undefined, {}, {}, null, true)).rejects.toThrow(/guardrail_blocked/);
+    expect(sobe()).toBe(false);
+  });
+
+  it("panel-image: build que grava a tag da imagem auxiliar do painel", async () => {
+    const e = new DeployEngine({
+      projectsDir,
+      caddyDir: path.join(projectsDir, "caddy"),
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      protectedImages: ["alpine:3@sha256:abc"],
+    }) as unknown as Privado;
+    configResult = {
+      code: 0,
+      stdout: JSON.stringify({ name: "paas-loja", services: { web: { image: "alpine:3", build: { context: src } } } }),
+      stderr: "",
+    };
+    await expect(e.deployCompose(project(), src, () => undefined, {}, {}, null, true)).rejects.toThrow(/guardrail_blocked/);
+    expect(sobe()).toBe(false);
+  });
+});
+
 describe("DeployEngine.recreate — o app pode ter mexido no compose desde o último deploy", () => {
   it("recreate também confere o compose resolvido e NÃO aceita override", async () => {
     configResult = { code: 0, stdout: HOSTIL, stderr: "" };

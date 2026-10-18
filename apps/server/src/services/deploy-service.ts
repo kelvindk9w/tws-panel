@@ -24,6 +24,8 @@ import {
   type GuardrailReport,
   type EnvExampleVariable,
   type Project,
+  NODE_BUILD_IMAGE,
+  STATIC_SERVER_IMAGE,
   type ProjectCredentialInfo,
   type ProjectEmailValueKey,
   type ProjectStatus,
@@ -248,8 +250,10 @@ export class DeployService {
       // existe em memória e no ambiente do processo git (ver ingest.ts).
       credentialFor: (project: Project) => this.credentialFor(project),
       caddyDir: path.join(config.dataDir, "caddy"),
-      nodeImage: process.env.PAAS_NODE_IMAGE ?? "node:22",
-      staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
+      nodeImage: process.env.PAAS_NODE_IMAGE ?? NODE_BUILD_IMAGE,
+      staticImage: process.env.PAAS_STATIC_IMAGE ?? STATIC_SERVER_IMAGE,
+      protectedImages: [config.hostHelperImage],
+      projectSlugs: () => this.projects.map((p) => p.slug),
       caddyHttpPort: config.caddyHttpPort,
       caddyHttpsPort: config.caddyHttpsPort,
       // E-mail (SMTP), as Variáveis do projeto e as ligadas ao e-mail. Nome
@@ -898,9 +902,7 @@ export class DeployService {
         note: "Código ainda não ingerido (modo git). Os guardrails rodarão automaticamente no deploy, após o clone.",
       };
     }
-    const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, {
-      projectName: composeProjectName(project),
-    });
+    const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project));
     return { report, note: null };
   }
 
@@ -984,9 +986,7 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, {
-        projectName: composeProjectName(project),
-      });
+      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project));
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",

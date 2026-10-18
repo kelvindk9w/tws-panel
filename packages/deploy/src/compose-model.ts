@@ -37,6 +37,36 @@ export interface ComposeCheckOptions {
   mode: "raw" | "canonical";
   /** Rede compartilhada do proxy (`paas-net`): o override do painel a declara como externa. */
   panelNetwork?: string;
+  /** Slug do projeto: o único alias que o override do painel dá ao serviço web na rede do proxy. */
+  slug?: string;
+  /** Serviço web que o painel liga à rede do proxy (único autorizado a entrar nela). */
+  proxyService?: string;
+  /** Slugs dos OUTROS projetos: nomes que o DNS da rede do proxy já responde. */
+  otherSlugs?: readonly string[];
+  /** Repositórios de imagem do painel (alpine, caddy, nginx, node, stalwart…): um build não pode regravar a tag deles. */
+  protectedImages?: readonly string[];
+  /** (interno) redes do topo do modelo, para resolver o nome efetivo das ligações do serviço. */
+  topNetworks?: unknown;
+}
+
+/** Nomes que o painel usa na rede e no Docker: nenhum projeto pode se chamar assim. */
+export const RESERVED_NAMES: readonly string[] = [
+  "tws-panel",
+  "paas-caddy",
+  "paas-stalwart",
+  "paas-webmail",
+  "stalwart",
+  "caddy",
+  "localhost",
+];
+
+/** Repositório da imagem, sem registro padrão, tag nem digest (`docker.io/library/alpine:3@sha256:…` → `alpine`). */
+export function imageRepository(ref: string): string {
+  let repo = ref.trim().toLowerCase().split("@")[0] ?? "";
+  const colon = repo.lastIndexOf(":");
+  if (colon > repo.lastIndexOf("/")) repo = repo.slice(0, colon);
+  repo = repo.replace(/^(index\.|registry-1\.)?docker\.io\//, "");
+  return repo.replace(/^library\//, "");
 }
 
 type Dict = Record<string, unknown>;
@@ -146,9 +176,13 @@ const NAMESPACE_LABEL: Record<string, string> = {
 /** Mensagem curta do que cada campo perigoso permite (para o texto do bloqueio). */
 const NO_NEW_PRIVS = /^no-new-privileges(?:[:=]true)?$/;
 
-/** Volume do próprio projeto: o nome efetivo começa com o nome do projeto no compose. */
-function ownedByProject(name: string, projectName: string | undefined): boolean {
-  return projectName !== undefined && (name.startsWith(`${projectName}_`) || name.startsWith(`${projectName}-`));
+/**
+ * Recurso do próprio projeto: o nome é EXATAMENTE o que o compose geraria
+ * (`<projeto>_<chave>`). Prefixo não serve: "paas-app" não pode "possuir"
+ * "paas-app-outro_dados" nem "paas-app_x_dados" (de um projeto "app_x").
+ */
+function ownedByProject(name: string, projectName: string | undefined, key: string): boolean {
+  return projectName !== undefined && name === `${projectName}_${key}`;
 }
 
 function checkService(
@@ -338,6 +372,110 @@ function checkService(
 
   checkBuild(name, service, opts, root, out);
   checkEnvFiles(name, service, opts, root, out);
+  checkIsolation(name, service, services, opts, out);
+}
+
+/** Labels `paas.*` (do painel) e `com.docker.compose.*` (do Compose) não vêm do compose do usuário. */
+function reservedLabels(labels: unknown): string[] {
+  const keys = isDict(labels) ? Object.keys(labels) : asList(labels).map((l) => str(l).split("=")[0] ?? "");
+  return keys.filter((k) => k.startsWith("paas.") || k.startsWith("com.docker.compose."));
+}
+
+/** Nome que o painel ou outro projeto já usa no DNS e no Docker. */
+function isReservedName(candidate: string, opts: ComposeCheckOptions, service: string): boolean {
+  const n = candidate.trim().toLowerCase();
+  if (!n) return false;
+  const own = opts.projectName ? `${opts.projectName}-${service}` : null;
+  if (n === own || (own !== null && n.startsWith(`${own}-`) && /^\d+$/.test(n.slice(own.length + 1)))) return false;
+  if (opts.slug !== undefined && n === opts.slug) return false;
+  return RESERVED_NAMES.includes(n) || (opts.otherSlugs ?? []).includes(n) || /^(paas|tws)[-_]/.test(n);
+}
+
+function checkIsolation(name: string, service: Dict, services: Dict, opts: ComposeCheckOptions, out: GuardrailFinding[]): void {
+  const raw = opts.mode === "raw";
+  const skip = (v: string) => raw && v.includes("$");
+  const reserved = (what: string, value: string) =>
+    out.push(
+      finding(
+        "reserved-name",
+        "Nome reservado do painel ou de outro projeto",
+        opts,
+        name,
+        `${what} "${value}"`,
+        "Escolha outro nome: este é usado pelo painel (tws-panel, paas-*) ou por outro projeto, e dois containers com o mesmo nome na rede do proxy dividiriam o tráfego.",
+      ),
+    );
+
+  const bad = reservedLabels(service.labels);
+  if (bad.length > 0) {
+    out.push(
+      finding("reserved-name", "Label reservada do painel", opts, name, `define a label ${bad.join(", ")}`, "Remova as labels `paas.*` e `com.docker.compose.*`: o painel identifica os containers do projeto por elas."),
+    );
+  }
+  const containerName = str(service.container_name);
+  if (containerName && !skip(containerName) && isReservedName(containerName, opts, name)) reserved("usa container_name", containerName);
+  const isProxy = opts.proxyService !== undefined && name === opts.proxyService;
+  if (isProxy) {
+    // o nome do serviço e o hostname viram nomes na rede do proxy
+    if (isReservedName(name, opts, name)) reserved("tem o nome de serviço", name);
+    const hostname = str(service.hostname);
+    if (hostname && !skip(hostname) && isReservedName(hostname, opts, name)) reserved("usa hostname", hostname);
+  }
+
+  // redes: só o override do painel liga um serviço à rede do proxy, e só com o alias do slug
+  const topNetworks = isDict(opts.topNetworks) ? opts.topNetworks : {};
+  const attached: Array<[string, unknown]> = Array.isArray(service.networks)
+    ? service.networks.map((k) => [str(k), null] as [string, unknown])
+    : isDict(service.networks)
+      ? Object.entries(service.networks)
+      : [];
+  for (const [key, cfg] of attached) {
+    const def = topNetworks[key];
+    const d = isDict(def) ? def : {};
+    const effective = str(d.name) || (isOn(d.external) || opts.projectName === undefined ? key : `${opts.projectName}_${key}`);
+    const aliases = (isDict(cfg) ? asList(cfg.aliases) : []).map(str).filter((a) => !skip(a));
+    if (opts.panelNetwork !== undefined && effective === opts.panelNetwork) {
+      if (!isProxy) {
+        out.push(
+          finding("network-hijack", "Serviço ligado à rede do proxy do painel", opts, name, `entra na rede ${opts.panelNetwork}, que só o painel liga (ao serviço web)`, "Remova a rede do serviço: o painel liga o serviço web a ela sozinho."),
+        );
+      } else {
+        const extra = aliases.filter((a) => a !== opts.slug);
+        if (extra.length > 0) {
+          out.push(
+            finding("network-hijack", "Alias na rede do proxy do painel", opts, name, `define aliases ${extra.join(", ")} na rede ${opts.panelNetwork}`, "Remova os aliases: um alias igual ao nome do painel, do e-mail ou de outro projeto desviaria o tráfego deles para este container."),
+          );
+        }
+      }
+    } else {
+      for (const alias of aliases) if (isReservedName(alias, opts, name)) reserved(`define o alias (rede ${key})`, alias);
+    }
+  }
+
+  // imagem: um build não pode regravar a tag de imagem do painel, e imagem de outro projeto não se reutiliza
+  const build = service.build;
+  const image = str(service.image);
+  const tags = isDict(build) ? asList(build.tags).map(str) : [];
+  const protectedRepos = new Set((opts.protectedImages ?? []).map(imageRepository));
+  const ownImage = opts.projectName ? `${opts.projectName}-${name}` : null;
+  for (const ref of [image, ...tags]) {
+    if (!ref || skip(ref)) continue;
+    const repo = imageRepository(ref);
+    const panelNamespace = repo === "tws-panel" || (/^paas[-_]/.test(repo) && repo !== ownImage);
+    const rewritesPanelTag = build !== undefined && build !== null && protectedRepos.has(repo);
+    if (panelNamespace || rewritesPanelTag) {
+      out.push(
+        finding(
+          "panel-image",
+          "Imagem do painel ou de outro projeto",
+          opts,
+          name,
+          `${rewritesPanelTag ? "constrói e grava a imagem" : "usa a imagem"} "${ref}"`,
+          "Dê outro nome à imagem construída. O painel roda como root as imagens alpine, caddy, nginx, node, stalwart e tws-panel, e um build com o mesmo nome as substituiria no servidor.",
+        ),
+      );
+    }
+  }
 }
 
 function checkBuild(name: string, service: Dict, opts: ComposeCheckOptions, root: string, out: GuardrailFinding[]): void {
@@ -442,7 +580,7 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     const cfg = isDict(def) ? def : {};
     const effective = str(cfg.name) || (opts.projectName && !isOn(cfg.external) ? `${opts.projectName}_${key}` : key);
     if (unresolved(effective)) continue;
-    const owned = ownedByProject(effective, opts.projectName);
+    const owned = ownedByProject(effective, opts.projectName, key);
     const reasons: string[] = [];
     if (!owned && (isOn(cfg.external) || opts.projectName !== undefined)) {
       reasons.push(isOn(cfg.external) ? `é externo (${effective}) e não é do projeto` : `se chama "${effective}", fora do nome do projeto`);
@@ -468,10 +606,27 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     const effective = str(cfg.name) || (opts.projectName && !isOn(cfg.external) ? `${opts.projectName}_${key}` : key);
     if (unresolved(effective)) continue;
     // a rede do proxy, do jeito que o override do painel a declara
-    if (opts.panelNetwork !== undefined && effective === opts.panelNetwork && isOn(cfg.external)) continue;
-    const owned = ownedByProject(effective, opts.projectName);
+    if (opts.panelNetwork !== undefined && effective === opts.panelNetwork) {
+      // só a declaração do override do painel: externa, sem driver nem opções
+      const extras = ["driver", "driver_opts", "internal", "attachable", "enable_ipv6", "labels"].filter((k) => cfg[k] !== undefined);
+      if (isDict(cfg.ipam) && Object.keys(cfg.ipam).length > 0) extras.push("ipam");
+      if (!isOn(cfg.external) || extras.length > 0) {
+        out.push(
+          finding(
+            "network-hijack",
+            "Rede do proxy do painel declarada de outro jeito",
+            opts,
+            undefined,
+            `a rede "${key}" (${effective}) ${isOn(cfg.external) ? `traz ${extras.join(", ")}` : "não é externa"}`,
+            "Não declare a rede do proxy no compose: o painel liga o serviço web a ela sozinho.",
+          ),
+        );
+      }
+      continue;
+    }
+    const owned = ownedByProject(effective, opts.projectName, key);
     const reasons: string[] = [];
-    if (!owned && (isOn(cfg.external) || (opts.projectName !== undefined && key !== "default"))) {
+    if (!owned && (isOn(cfg.external) || opts.projectName !== undefined)) {
       reasons.push(isOn(cfg.external) ? `é externa (${effective}) e não é do projeto` : `se chama "${effective}", fora do nome do projeto`);
     }
     if (cfg.driver !== undefined && !/^(bridge|overlay)?$/.test(str(cfg.driver))) reasons.push(`usa o driver "${str(cfg.driver)}"`);
@@ -487,6 +642,17 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
           "Use apenas redes criadas pelo próprio compose (sem `external` nem `name:` de fora). O painel liga o serviço web à rede do proxy sozinho.",
         ),
       );
+    }
+  }
+
+  for (const [kind, defs] of [["volume", model.volumes], ["rede", model.networks]] as const) {
+    for (const [key, def] of Object.entries(isDict(defs) ? defs : {})) {
+      const bad = reservedLabels(isDict(def) ? def.labels : undefined);
+      if (bad.length > 0) {
+        out.push(
+          finding("reserved-name", "Label reservada do painel", opts, undefined, `${kind} "${key}" define a label ${bad.join(", ")}`, "Remova as labels `paas.*` e `com.docker.compose.*`: são do painel e do Compose."),
+        );
+      }
     }
   }
 
@@ -520,8 +686,9 @@ export function checkComposeModel(model: unknown, opts: ComposeCheckOptions): Gu
   const root = resolveRealPath(opts.srcRoot);
   const services = isDict(model.services) ? model.services : {};
   const topVolumes = isDict(model.volumes) ? model.volumes : {};
+  const withNets = { ...opts, topNetworks: model.networks };
   for (const [name, service] of Object.entries(services)) {
-    if (isDict(service)) checkService(name, service, services, topVolumes, opts, root, out);
+    if (isDict(service)) checkService(name, service, services, topVolumes, withNets, root, out);
   }
   checkTopLevel(model, opts, root, out);
   return out;

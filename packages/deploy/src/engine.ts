@@ -17,6 +17,7 @@ import {
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
   PAAS_NETWORK,
+  PANEL_IMAGE_REPOSITORIES,
   type DomainHttpsStatus,
   type GuardrailReport,
   type Project,
@@ -45,6 +46,10 @@ export interface EngineContext extends IngestContext {
   nodeImage: string;
   /** Imagem nginx usada para servir estáticos. */
   staticImage: string;
+  /** Imagens extras do painel que um build de projeto não pode regravar (além das fixas e das duas acima). */
+  protectedImages?: string[];
+  /** Slugs de todos os projetos (nomes que o DNS da rede do proxy já responde). */
+  projectSlugs?: () => string[];
   /** Porta HTTP do Caddy no host (health check passa por ela). */
   caddyHttpPort: number;
   /** Porta HTTPS do Caddy no host. */
@@ -215,7 +220,7 @@ export class DeployEngine {
     // vez antes de criar o job. Quando o modo de ingestão garante que o
     // diretório não mudou desde então (ver comentário no chamador), ele passa
     // esse resultado pronto aqui em vez de escanear a árvore de novo.
-    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, { projectName: composeProjectName(project) }));
+    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project)));
     if (opts?.precomputedGuardrailReport) {
       onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
     }
@@ -519,6 +524,7 @@ export class DeployEngine {
       projectName: composeProjectName(project),
       mode: "canonical",
       panelNetwork: PAAS_NETWORK,
+      ...this.isolationFor(project),
     });
     onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
     if (findings.length === 0) {
@@ -540,6 +546,23 @@ export class DeployEngine {
       );
     }
     onLog(`⚠ Override explícito do operador: prosseguindo com ${findings.length} bloqueio(s).\n`);
+  }
+
+  /** Mesmo contexto para a checagem sobre o YAML cru. */
+  isolationForRaw(project: Project) {
+    return { projectName: composeProjectName(project), ...this.isolationFor(project) };
+  }
+
+  /** Quem é o projeto e o que é do painel, para as regras de isolamento. */
+  private isolationFor(project: Project) {
+    return {
+      slug: project.slug,
+      ...((project.proxyService ?? project.detection?.proxyService)
+        ? { proxyService: (project.proxyService ?? project.detection?.proxyService)! }
+        : {}),
+      otherSlugs: (this.ctx.projectSlugs?.() ?? []).filter((s) => s !== project.slug),
+      protectedImages: [...PANEL_IMAGE_REPOSITORIES, this.ctx.nodeImage, this.ctx.staticImage, ...(this.ctx.protectedImages ?? [])],
+    };
   }
 
   /** O compose falhou: variáveis faltando ou "por que falhou" de cada serviço. */
