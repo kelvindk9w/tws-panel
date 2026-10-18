@@ -259,6 +259,24 @@ Um commit por item. Cada hostil falhou antes e passa agora.
 - **Não testado:** clone por ssh real com a limpeza ativa (só git local); `docker compose` real continua sem
   Docker na máquina.
 
+## Quinta rodada (Docker de volta: 29.7.2, Compose v5.4.0)
+
+- **Teste desatualizado corrigido:** `compose-hostil-docker.test.ts` esperava `host-mount` para a raiz e `/var/run`
+  (`bindlong`); agora aceita `host-mount` ou `panel-resource`.
+- **Instalador:** `APP_DIR` é resolvido com `pwd -P` depois do `cd` (link ou `PAAS_DIR` relativo viram o caminho
+  real e absoluto) e `env_set` não usa mais `sed` (aceita `#`, `&`, `|`, `\` no caminho); `PAAS_PROJECTS_DIR`
+  também passa por ela. Teste executa a `env_set` extraída do script; o instalador inteiro não foi executado.
+- **Com Docker real:** suíte completa do deploy (803 testes, 0 ignorados) e do server (1786 passam, 2 ignorados)
+  verdes, incluindo `engine-lifecycle`, `engine-guardrail-reuse`, `docker-service`, `routes-misc-schema` e as
+  verificações de `docker compose config` de `compose-hostil-docker.test.ts` (que antes eram ignoradas).
+- **`config` + `up` à mão** (projeto descartável `paasval7f3a`, imagem local `ubuntu:24.04`, removido com
+  `down -v`): `config --format json --no-env-resolution --env-file paas.up.env` gerou o JSON; o `up -f
+  paas.canonical.json --env-file paas.up.env` subiu o container e ele viu `SEGREDO` (declarada só pelo nome, vinda
+  do `.env`), `VAR_PAINEL` (Variável do painel, vinda do `paas.env`) e `${VAR_PAINEL}-interpolada`. Observação: o
+  compose já preenche as variáveis só-com-nome no `config` (o JSON traz o valor), então o `up` não depende de reler
+  o env-file para elas. Não verificado à mão: a prevalência da `--label com.docker.compose.project=` vazia sobre o
+  `LABEL` de uma imagem, e o `up` pelo código do painel (`DeployEngine`) com rede/Caddy.
+
 ## Riscos residuais
 
 - Serviços de projetos com e-mail habilitado alcançam o Stalwart inteiro pela `paas-mail` (portas de SMTP/IMAP
