@@ -925,7 +925,7 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
  * Docker segue o link a CADA start do container, não só no deploy. O pai só
  * pode conter outro bind se for somente leitura.
  */
-function checkNestedBinds(services: Dict, opts: ComposeCheckOptions, root: string, out: GuardrailFinding[]): void {
+function checkNestedBinds(model: Dict, services: Dict, opts: ComposeCheckOptions, root: string, out: GuardrailFinding[]): void {
   const raw = opts.mode === "raw";
   interface Bind { service: string; path: string; source: string; readOnly: boolean }
   const binds: Bind[] = [];
@@ -939,6 +939,62 @@ function checkNestedBinds(services: Dict, opts: ComposeCheckOptions, root: strin
       // o último componente NÃO é seguido: é ele que o app pode trocar por um link
       binds.push({ service, path: path.join(resolveRealPath(path.dirname(abs)), path.basename(abs)), source: vol.source, readOnly: vol.readOnly });
     }
+  }
+  // o mesmo vale para o que o PAINEL lê: contexto de build, Dockerfile, env_file, secrets e configs
+  // dentro de um bind gravável (o app alterna a pasta com um link para /data entre a conferência e o build)
+  interface Read { service?: string; path: string; what: string; value: string }
+  const reads: Read[] = [];
+  const canonical = (value: string): string => {
+    const target = path.resolve(root, value);
+    return path.join(resolveRealPath(path.dirname(target)), path.basename(target));
+  };
+  const skip = (value: string) => value === "" || value.startsWith("~") || (raw && value.includes("$"));
+  const add = (service: string | undefined, what: string, value: string, base = root) => {
+    if (skip(value)) return;
+    const target = path.resolve(base, value);
+    reads.push({ ...(service ? { service } : {}), path: canonical(target), what, value });
+  };
+  for (const [service, def] of Object.entries(services)) {
+    if (!isDict(def)) continue;
+    const build = def.build;
+    if (build !== undefined && build !== null) {
+      const cfg: Dict = isDict(build) ? build : { context: build };
+      const context = str(cfg.context) || ".";
+      const remote = /^[a-z][a-z0-9+.-]*:\/\//i.test(context) || /^git@/.test(context);
+      if (!remote) {
+        add(service, "o contexto de build", context);
+        if (typeof cfg.dockerfile === "string") add(service, "o Dockerfile", cfg.dockerfile, path.resolve(root, context));
+      }
+      const extra: Array<unknown> = Array.isArray(cfg.additional_contexts)
+        ? cfg.additional_contexts.map((e) => str(e).slice(str(e).indexOf("=") + 1))
+        : isDict(cfg.additional_contexts)
+          ? Object.values(cfg.additional_contexts)
+          : [];
+      for (const value of extra.map(str)) {
+        if (/^(docker-image|service|target|oci-layout):/.test(value) || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) continue;
+        add(service, "um contexto adicional do build", value);
+      }
+    }
+    for (const entry of asList(def.env_file)) add(service, "o env_file", isDict(entry) ? str(entry.path) : str(entry));
+  }
+  for (const kind of ["secrets", "configs"] as const) {
+    for (const [key, d] of Object.entries(isDict(model[kind]) ? model[kind] : {})) {
+      if (isDict(d) && typeof d.file === "string") add(undefined, `${kind === "secrets" ? "o segredo" : "a config"} "${key}"`, d.file);
+    }
+  }
+  for (const read of reads) {
+    const parent = binds.find((b) => !b.readOnly && read.path !== b.path && read.path.startsWith(b.path.endsWith(path.sep) ? b.path : b.path + path.sep));
+    if (!parent) continue;
+    out.push(
+      finding(
+        "host-mount",
+        "Arquivo lido pelo painel dentro de uma pasta montada com escrita",
+        opts,
+        read.service,
+        `${read.what} ${read.value} fica dentro de ${parent.source} (serviço "${parent.service}"), montada com escrita`,
+        "O app pode trocar essa pasta por um link para qualquer lugar do servidor (como o /data do painel) e o painel o leria no build. Monte a pasta de cima como somente leitura (:ro) ou mova o arquivo para fora dela.",
+      ),
+    );
   }
   const seen = new Set<string>();
   for (const inner of binds) {
@@ -981,7 +1037,7 @@ export function checkComposeModel(given: unknown, options: ComposeCheckOptions):
   for (const [name, service] of Object.entries(services)) {
     if (isDict(service)) checkService(name, service, services, topVolumes, withNets, root, out);
   }
-  checkNestedBinds(services, withNets, root, out);
+  checkNestedBinds(model, services, withNets, root, out);
   checkTopLevel(model, opts, root, out);
   for (const key of Object.keys(model)) {
     if (key.startsWith("x-") || TOP_KEYS.has(key) || (opts.mode === "raw" && (key === "version" || key === "include"))) continue;

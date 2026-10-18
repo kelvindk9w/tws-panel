@@ -256,6 +256,53 @@ describe("panel-resource: volume, rede e socket do painel (regra dura)", () => {
   });
 });
 
+describe("o que o painel lê dentro de um bind gravável (o app troca a pasta por um link entre a conferência e o uso)", () => {
+  const bind = (source: string, ro = false) => ({ type: "bind", source: path.join(src, source), target: "/app", ...(ro ? { read_only: true } : {}) });
+  const abs = (...p: string[]) => path.join(src, ...p);
+
+  it("contexto de build ./api com ./:/app: bloqueia", async () => {
+    await mkdir(abs("api"), { recursive: true });
+    const m = { services: { web: { build: { context: abs("api") }, volumes: [bind(".")] } } };
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("o bind em OUTRO serviço vale do mesmo jeito", async () => {
+    await mkdir(abs("api"), { recursive: true });
+    const m = { services: { web: { build: { context: abs("api") } }, outro: { image: "a", volumes: [bind(".")] } } };
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("Dockerfile dentro do bind (contexto fora dele): bloqueia", async () => {
+    await mkdir(abs("dados"), { recursive: true });
+    const m = { services: { web: { build: { context: src, dockerfile: "dados/Dockerfile" }, volumes: [bind("dados")] } } };
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("contexto adicional local dentro do bind: bloqueia", async () => {
+    await mkdir(abs("dados"), { recursive: true });
+    const m = { services: { web: { build: { context: src, additional_contexts: { x: abs("dados", "extra") } }, volumes: [bind("dados")] } } };
+    expect(regras(m)).toEqual(["host-mount"]);
+  });
+  it("env_file dentro do bind (string e forma de objeto): bloqueia", async () => {
+    await mkdir(abs("dados"), { recursive: true });
+    for (const env_file of [[abs("dados", ".env")], [{ path: abs("dados", ".env"), required: true }]]) {
+      const m = { services: { web: { image: "a", env_file, volumes: [bind("dados")] } } };
+      expect(regras(m)).toEqual(["host-mount"]);
+    }
+  });
+  it("secrets e configs de arquivo dentro do bind: bloqueia", async () => {
+    await mkdir(abs("dados"), { recursive: true });
+    for (const kind of ["secrets", "configs"]) {
+      const m = { services: { web: { image: "a", volumes: [bind("dados")] } }, [kind]: { s: { file: abs("dados", "token") } } };
+      expect(regras(m), kind).toEqual(["host-mount"]);
+    }
+  });
+  it("bind só leitura, contexto igual ao próprio bind e arquivos fora de qualquer bind passam", async () => {
+    await mkdir(abs("api"), { recursive: true });
+    await mkdir(abs("dados"), { recursive: true });
+    expect(regras({ services: { web: { build: { context: abs("api") }, volumes: [bind(".", true)] } } })).toEqual([]);
+    expect(regras({ services: { web: { build: { context: abs("api") }, volumes: [bind("api")] } } })).toEqual([]);
+    expect(regras({ services: { web: { build: { context: abs("api") }, env_file: [abs("api", ".env")], volumes: [bind("dados")] } } })).toEqual([]);
+  });
+});
+
 describe("build: lista fechada e cache só em registro", () => {
   const build = (b: Record<string, unknown>) => servico({ image: undefined, build: { context: ".", ...b } });
 

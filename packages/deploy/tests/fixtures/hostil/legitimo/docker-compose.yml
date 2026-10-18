@@ -9,7 +9,7 @@ services:
       DATABASE_URL: postgres://app:Zq8vK2mXp91RtLw@db:5432/app
       NODE_ENV: production
     env_file:
-      - ./dados/.keep
+      - ./api/Dockerfile
     volumes:
       - ./dados:/app/dados
       - uploads:/app/uploads
