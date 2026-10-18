@@ -170,16 +170,44 @@ Efeitos para o operador: campo novo ou desconhecido no compose passa a ser barra
 duras); bind aninhado, volume `paas_*` e `docker.sock` deixam de existir como opção; `ping`/raw sockets e `sudo`/setuid
 dentro dos containers deixam de funcionar (sem `NET_RAW` e com `no-new-privileges`).
 
+## Segunda revisão rigorosa (A1 e panel-resource reprovados por 4 pontos + alerta de logging)
+
+Um commit por item. Cada hostil falhou antes e passa agora.
+
+1. **Variáveis (regressão).** `config --no-env-resolution` + `up` com `--env-file` vazio deixava sem valor
+   `environment: [VAR]`, `${VAR}` de `env_file` e as Variáveis do painel. Agora o painel monta
+   `<projeto>/paas.up.env` (0600, fora do `src`): cópia do `.env` conferido (arquivo comum, lido sem seguir link) mais
+   o `paas.env` (vence). O mesmo arquivo vai ao `config` e ao `up`; o compose nunca lê `src/.env` sozinho (A2 segue
+   fechado). Testes: `engine-variaveis.test.ts` (4 de 6 falhavam antes), `readFileNoFollow`. Conferência com o compose
+   real escrita em `compose-hostil-docker.test.ts` mas **não executada** (ver lacunas).
+2. **`build` fechado.** Lista de chaves de `build`; `cache_from`/`cache_to` só em registro/inline/referência de imagem
+   (`type=local`, `src=`, `dest=` bloqueiam). 7 testes falhavam antes.
+3. **Leituras do painel dentro de bind gravável.** Contexto, Dockerfile, contextos adicionais, `env_file`, secrets e
+   configs dentro de um bind gravável (de qualquer serviço) viram `host-mount`. 6 testes falhavam antes. Efeito: um
+   `.:/app` com `build: .`/`env_file: .env` na raiz passa a pedir `:ro` no bind (ou override do operador); ajustei a
+   fixture `legitimo`, que tinha um `env_file` dentro do bind `./dados`.
+4. **`panel-resource` por contenção.** Bind de `/`, `/run`, `/var`, `/var/run`, `/var/lib`, `/var/lib/docker…` ou
+   `/data…` (também por `//`, `..`, `/proc/self/root`, link no `src`) é regra dura. 16 testes falhavam antes. O `/data`
+   não conta dentro do código do próprio projeto. A regra de bind aninhado passou a olhar só binds dentro do `src`.
+5. **Falsos positivos e falha fechada.** `develop` aceito; `journald`/`syslog` aceitos (ver 6). Falha ao ler os hosts do
+   e-mail agora barra o deploy/recriar de projeto COM e-mail (`requiredMailHosts`).
+6. **Logging (alerta da revisão automática).** `syslog` com `syslog-address` `tcp://`/`udp://`/`tcp+tls://` levava o log
+   para fora da VPS. Decisão: `syslog-address` e `syslog-tls-*` são recusados por completo (não só os de rede):
+   `unix://` escolhido pelo projeto não traz ganho, pois o padrão do driver já é o `/dev/log` local, e uma lista de
+   caminhos permitidos seria mais superfície. Cada driver aceito (`json-file`, `local`, `none`, `journald`, `syslog`)
+   tem lista fechada de opções; `max-size`/`max-file` seguem passando; drivers de rede e plugins (gelf, fluentd,
+   awslogs, splunk, loki…) seguem barrados. 7 testes falhavam antes.
+
 ## Resultados
 
 - `pnpm -r run typecheck`: sem erros.
-- Cobertura (valores medidos nesta rodada): core 99,63 / 98,73; deploy 98,62 / 95,8 de ramos (mínimo 95); mailer 99,9 /
-  98,45 de ramos (mínimo 98); security 99,33 / 97,33; server 97,9 / 93,5 / 98,34 / 98,86 (mínimos 94/91/98/94). O
-  deploy só imprime a tabela com `--coverage.reportOnFailure` enquanto os testes de Docker falham.
-- Testes que falham na máquina por causa do Docker Desktop travado (`docker info` sem resposta; não é código):
-  `engine-lifecycle` (4), `engine-guardrail-reuse` (1), `docker-service` (2, Docker real) e `routes-misc-schema` (1).
-  Todos os que não dependem do Docker passam (deploy 678 de 683, server 1778 de 1785 com 4 ignorados). Passaram antes
-  da pane e passam isolados quando o Docker responde; não foi possível rodá-los de novo nesta rodada.
+- Cobertura (valores medidos na segunda revisão): core 99,63 / 98,73; deploy 98,74 / 95,84 de ramos (mínimo 95); mailer
+  99,9 / 98,45 de ramos (mínimo 98); security 99,33 / 97,33; server 97,9 / 93,5 / 98,34 / 98,86 (mínimos 94/91/98/94).
+  O deploy só imprime a tabela com `--coverage.reportOnFailure` enquanto um teste de Docker falha.
+- Sem Docker nesta máquina (o `docker` deixou de existir no PATH; o link aponta para o Docker Desktop que não está
+  mais montado): falham só os que exigem o daemon real. deploy: `engine-guardrail-reuse` (1; 735 passam, 10 ignorados
+  por falta do `docker compose`, entre eles TODOS os de `compose-hostil-docker`); server: `docker-service` (2) e
+  `routes-misc-schema` (1) (1778 passam, 4 ignorados).
 
 ## Não testado (declarado)
 
@@ -211,3 +239,8 @@ dentro dos containers deixam de funcionar (sem `NET_RAW` e com `no-new-privilege
 - Janela do `trustProxy` após recriar o Caddy: até a releitura, o IP registrado é o do Caddy (nunca um IP forjado).
 - Arquivo solto criado por engano fora do worktree: `/tmp/claude-1000/-home-kelvin/placeholder.txt` (vazio de
   significado, pode apagar).
+- **Segunda revisão, sem rodar:** o `docker compose config`/`up` reais para o ambiente montado pelo painel
+  (`environment: [VAR]`, `${VAR}` em `env_file`, Variáveis do painel): o teste existe em `compose-hostil-docker.test.ts`
+  mas foi ignorado por falta do Docker; o comportamento de resolução do compose sobre o JSON canônico + `--env-file`
+  segue sem confirmação real. Os testes de `engine-variaveis.test.ts` conferem o arquivo montado e os argumentos, não a
+  resolução feita pelo compose.
