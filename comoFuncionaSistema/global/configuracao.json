@@ -22,7 +22,7 @@
     "PAAS_TARGET_CONTAINER (config.ts:72) — nome do container-alvo quando securityTarget=container. Default: paas-target-test.",
     "PAAS_SCRIPTS_DIR (config.ts:73) — diretório local dos scripts de hardening (00-06). Default: ../../scripts/hardening.",
     "PAAS_HOST_HELPER_IMAGE (config.ts:74) — imagem Docker do helper descartável usado pelo host bridge (nsenter). Default: alpine:3 (mesmo valor de HOST_HELPER_IMAGE_DEFAULT em packages/security/src/host-bridge.ts).",
-    "PAAS_HOST_REPO_DIR (config.ts:75) — caminho do checkout do repositório NO HOST (onde install.sh clonou o projeto), usado para montar comandos do modo manual de cada fase de hardening. Default: /opt/tws-panel.",
+    "PAAS_HOST_REPO_DIR (config.ts:75) — caminho do checkout do repositório NO HOST (onde install.sh clonou o projeto), usado para montar comandos do modo manual de cada fase de hardening. Default: /opt/tws-panel. Também é a pasta de instalação que o guardrail panel-resource protege contra bind mount de projeto; o install.sh grava o caminho real no .env e o docker-compose.yml repassa ao container.",
     "PAAS_CADDY_HTTP_PORT (config.ts:76) — porta HTTP publicada do Caddy central. Default: 80.",
     "PAAS_CADDY_HTTPS_PORT (config.ts:77) — porta HTTPS publicada do Caddy central. Default: 443.",
     "PAAS_STALWART_PORT_SMTP / _SUBMISSION / _SUBMISSIONS / _IMAP / _IMAPS / _HTTP (config.ts:79-84) — portas publicadas do servidor de e-mail Stalwart no host. Defaults: MAIL_DEFAULT_PORTS (packages/core/src/mail.ts) = 25/587/465/143/993/8080 respectivamente.",

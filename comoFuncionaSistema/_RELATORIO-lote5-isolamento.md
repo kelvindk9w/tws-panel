@@ -237,16 +237,25 @@ Um commit por item. Cada hostil falhou antes e passa agora.
   Chave repetida (sem distinção de maiúsculas) é recusada, porque o buildx vale-se da ÚLTIMA
   (`type=registry,ref=x,type=local,dest=/data` gravaria no host). Teste: `compose-model-fechado.test.ts`.
 - **panel-resource (regra dura, sem override).** Passam a ser recursos do painel os binds que são ou contêm
-  `/proc`, `/sys`, qualquer `*.sock` em `/run` e `/var/run`, a pasta dos projetos (`PAAS_PROJECTS_DIR`) fora do `src`
-  do próprio projeto e a pasta de instalação do painel (`PAAS_INSTALL_DIR`, padrão `/opt/tws-panel`). As duas
+  `/proc`, `/sys`, TODA a árvore `/run/**` e `/var/run/**` (com ou sem `.sock`: dbus do sistema, `systemd/private`,
+  `/run/user/0`), a pasta dos projetos (`PAAS_PROJECTS_DIR`) fora do `src`
+  do próprio projeto e a pasta de instalação do painel (`PAAS_HOST_REPO_DIR`, padrão `/opt/tws-panel`). As duas
   últimas vêm da configuração, não são fixas no código. `/var/log/meuapp`, `/srv/x` e `/etc` continuam
   `host-mount` (liberáveis pelo operador).
+- **Pasta de instalação fora do padrão (quarta rodada).** A variável é a mesma `PAAS_HOST_REPO_DIR` (uma fonte só):
+  o `install.sh` grava o caminho real (`APP_DIR`) no `.env` a cada instalação, o `docker-compose.yml` a repassa ao
+  container e, sem ela (instalação antiga que só fez `git pull`), vale `/opt/tws-panel` até o operador rodar o
+  instalador de novo. Teste: `config.test.ts` e `install-pasta-do-painel.test.ts` (este lê o texto do script e do
+  compose; não executa o instalador).
 - **Git, segunda defesa.** A cada ingestão de um repositório já existente o painel remove de `repo.git/config`
   as chaves que executam programa ou trocam a origem (`url.*.insteadOf`, `include*`, `credential.*`,
   `core.sshCommand`, `core.gitProxy`, `remote.*.uploadpack/receivepack/proxy/vcs/pushurl`, `filter.*`, `alias.*`,
   `http.*`...), mantendo `remote.origin.url`; `GIT_SAFE_CONFIG` também zera `core.gitProxy` e `credential.helper`.
   `core.sshCommand=` vazio NÃO foi colocado no `-c`: o git o executaria como comando vazio e quebraria clones por
   ssh; essa chave só é tratada pela limpeza do arquivo. Teste: `ingest-hostil.test.ts`.
+- **Risco residual:** `/var/lib/docker` é fixo na regra; com `DockerRootDir` diferente (ler do `docker info` no boot
+  não foi feito) os volumes do painel não ficam protegidos por ela. Instalação antiga sem `PAAS_HOST_REPO_DIR` em
+  pasta diferente de `/opt/tws-panel` segue com o padrão até reinstalar/atualizar pelo `install.sh`.
 - **Não testado:** clone por ssh real com a limpeza ativa (só git local); `docker compose` real continua sem
   Docker na máquina.
 
