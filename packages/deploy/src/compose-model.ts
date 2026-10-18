@@ -658,12 +658,54 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
   }
 }
 
+/** Chaves aceitas em `build` (as que dão acesso ao host têm checagem própria abaixo). */
+const BUILD_KEYS: ReadonlySet<string> = new Set([
+  "context", "dockerfile", "dockerfile_inline", "args", "labels", "cache_from", "cache_to", "no_cache", "additional_contexts",
+  "network", "pull", "target", "shm_size", "extra_hosts", "isolation", "privileged", "secrets", "tags", "ulimits",
+  "platforms", "entitlements", "ssh", "provenance", "sbom",
+]);
+
+/** Cache de build só em registro (ou embutido na imagem): `local` grava e lê pastas do servidor, como o /data do painel. */
+function badCacheEntry(entry: unknown): boolean {
+  if (isDict(entry)) {
+    const type = str(entry.type);
+    return entry.src !== undefined || entry.dest !== undefined || (type !== "" && type !== "registry" && type !== "inline");
+  }
+  const text = str(entry);
+  if (!text.includes("=")) return false; // referência de imagem
+  const pairs = new Map(text.split(",").map((p) => [p.slice(0, p.indexOf("=")).trim(), p.slice(p.indexOf("=") + 1).trim()] as const));
+  const type = pairs.get("type") ?? "";
+  return pairs.has("src") || pairs.has("dest") || (type !== "" && type !== "registry" && type !== "inline");
+}
+
 function checkBuild(name: string, service: Dict, opts: ComposeCheckOptions, root: string, out: GuardrailFinding[]): void {
   const build = service.build;
   if (build === undefined || build === null) return;
   const raw = opts.mode === "raw";
   const unresolved = (value: unknown) => raw && typeof value === "string" && value.includes("$");
   const cfg: Dict = isDict(build) ? build : { context: build };
+  for (const key of Object.keys(cfg)) {
+    if (!BUILD_KEYS.has(key) && !key.startsWith("x-")) {
+      out.push(
+        finding("unsupported-field", "Campo do compose que o painel não conhece", opts, name, `usa build.${key}, que não está na lista de campos aceitos`, "Remova o campo. O painel só aceita os campos de build que sabe que não dão acesso ao servidor."),
+      );
+    }
+  }
+  for (const field of ["cache_from", "cache_to"] as const) {
+    const bad = asList(cfg[field]).filter((e) => !(typeof e === "string" && unresolved(e)) && badCacheEntry(e));
+    if (bad.length > 0) {
+      out.push(
+        finding(
+          "build-outside-src",
+          "Cache de build em pasta do servidor",
+          opts,
+          name,
+          `build.${field} usa ${bad.map((e) => (isDict(e) ? JSON.stringify(e) : str(e))).join(", ")}`,
+          "Use cache em registro (type=registry) ou embutido (type=inline). Cache local lê e grava pastas do servidor, inclusive os dados do painel.",
+        ),
+      );
+    }
+  }
   const outside = (what: string, value: string) => {
     out.push(
       finding(

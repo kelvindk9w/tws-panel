@@ -255,3 +255,53 @@ describe("panel-resource: volume, rede e socket do painel (regra dura)", () => {
     expect(regras(servico({ environment: { DOCKER_HOST: "unix:///var/run/docker.sock" } }))).toEqual([]);
   });
 });
+
+describe("build: lista fechada e cache só em registro", () => {
+  const build = (b: Record<string, unknown>) => servico({ image: undefined, build: { context: ".", ...b } });
+
+  it.each([
+    ["cache_to local no /data do painel", { cache_to: ["type=local,dest=/data"] }],
+    ["cache_to local relativo", { cache_to: ["type=local,dest=./cache"] }],
+    ["cache_from local no /data do painel", { cache_from: ["type=local,src=/data"] }],
+    ["cache_from com src= solto", { cache_from: ["src=/data"] }],
+    ["cache_to de tipo desconhecido (gha, s3, azblob)", { cache_to: ["type=s3,bucket=x"] }],
+    ["cache_to no formato de mapa (local)", { cache_to: { type: "local", dest: "/data" } }],
+  ])("%s", (_nome, b) => {
+    expect(regras(build(b))).toContain("build-outside-src");
+  });
+
+  it("chave desconhecida em build bloqueia", () => {
+    expect(regras(build({ novidade: "x" }))).toEqual(["unsupported-field"]);
+  });
+
+  it("build comum, cache em registro e imagem como cache_from passam", () => {
+    expect(
+      regras(
+        build({
+          dockerfile: "Dockerfile",
+          args: { A: "1" },
+          target: "prod",
+          labels: { a: "b" },
+          no_cache: true,
+          pull: true,
+          platforms: ["linux/amd64"],
+          cache_from: ["minha-loja:cache", "type=registry,ref=ghcr.io/x/y:cache"],
+          cache_to: ["type=inline", "type=registry,ref=ghcr.io/x/y:cache,mode=max"],
+          tags: ["minha-loja:1"],
+          secrets: ["token"],
+          shm_size: "1gb",
+          ulimits: { nofile: 1024 },
+          extra_hosts: ["a:1.1.1.1"],
+          network: "default",
+          provenance: false,
+          sbom: false,
+          isolation: "default",
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("build em forma curta (string) continua valendo", () => {
+    expect(regras(servico({ build: "." }))).toEqual([]);
+  });
+});
