@@ -709,17 +709,52 @@ const BUILD_KEYS: ReadonlySet<string> = new Set([
   "platforms", "entitlements", "ssh", "provenance", "sbom",
 ]);
 
-/** Cache de build só em registro (ou embutido na imagem): `local` grava e lê pastas do servidor, como o /data do painel. */
-function badCacheEntry(entry: unknown): boolean {
-  if (isDict(entry)) {
-    const type = str(entry.type);
-    return entry.src !== undefined || entry.dest !== undefined || (type !== "" && type !== "registry" && type !== "inline");
+/** Campos de um CSV (RFC 4180: aspas protegem vírgulas e `""` é uma aspa), como o buildx lê o cache. */
+function csvFields(text: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else if (c === '"') quoted = false;
+      else current += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") {
+      fields.push(current);
+      current = "";
+    } else current += c;
   }
-  const text = str(entry);
-  if (!text.includes("=")) return false; // referência de imagem
-  const pairs = new Map(text.split(",").map((p) => [p.slice(0, p.indexOf("=")).trim(), p.slice(p.indexOf("=") + 1).trim()] as const));
-  const type = pairs.get("type") ?? "";
-  return pairs.has("src") || pairs.has("dest") || (type !== "" && type !== "registry" && type !== "inline");
+  fields.push(current);
+  return fields;
+}
+
+/**
+ * Cache de build só em registro (ou embutido na imagem): `local` grava e lê pastas que o painel
+ * alcança (o /data dele, o src de outro projeto). O buildx lê a entrada como CSV e baixa as
+ * chaves (`Type=`, `Dest=`, aspas por campo valem): a conferência faz o mesmo. Aceita referência
+ * de imagem sem `=`, ou entrada cujo tipo seja exatamente `registry` ou `inline`; qualquer
+ * `src`/`dest` ou outro tipo (local, gha, s3, azblob…) é recusado.
+ */
+function badCacheEntry(entry: unknown): boolean {
+  let pairs: Array<[string, string]>;
+  if (isDict(entry)) {
+    pairs = Object.entries(entry).map(([k, v]) => [k.trim().toLowerCase(), str(v).trim()]);
+  } else {
+    const text = str(entry);
+    if (!text.includes("=")) return false; // referência de imagem
+    pairs = csvFields(text).map((field) => {
+      const at = field.indexOf("=");
+      return at < 0 ? [field.trim().toLowerCase(), ""] : [field.slice(0, at).trim().toLowerCase(), field.slice(at + 1).trim()];
+    });
+  }
+  const keys = pairs.map(([k]) => k);
+  if (keys.includes("src") || keys.includes("dest")) return true;
+  const type = pairs.find(([k]) => k === "type")?.[1];
+  return type !== "registry" && type !== "inline";
 }
 
 function checkBuild(name: string, service: Dict, opts: ComposeCheckOptions, root: string, out: GuardrailFinding[]): void {

@@ -405,6 +405,30 @@ describe("build: lista fechada e cache só em registro", () => {
     expect(regras(build(b))).toContain("build-outside-src");
   });
 
+  it.each([
+    ["Type= e Dest= maiúsculos (o buildx baixa as chaves)", ["Type=local,Dest=/data"]],
+    ["TYPE=LOCAL", ["TYPE=local,DEST=/data"]],
+    ["aspas de CSV em cada campo", ['"type=local","dest=/data"']],
+    ["aspas no valor", ['type="local",dest="/data"']],
+    ["espaços em volta", [" type = local , dest = /data "]],
+    ["maiúsculas misturadas", ["tYpE=local,dEsT=/data"]],
+    ["src com maiúscula", ["Type=local,Src=/data"]],
+    ["registry com dest escondido", ["type=registry,ref=x/y,Dest=/data"]],
+    ["sem type e com dest", ["dest=/data"]],
+    ["type gha, s3, azblob e local no mapa com maiúscula", ["type=gha", "type=s3,bucket=x", "type=azblob,account_url=x"]],
+    ["objeto com chaves em maiúsculas", [{ Type: "local", Dest: "/data" }]],
+    ["objeto com type desconhecido", [{ type: "s3" }]],
+  ])("cache_to/cache_from: %s", (_nome, lista) => {
+    expect(regras(build({ cache_to: lista })), "cache_to").toContain("build-outside-src");
+    expect(regras(build({ cache_from: lista })), "cache_from").toContain("build-outside-src");
+  });
+
+  it("cache em registro, inline e referência de imagem continuam passando (CSV com aspas e espaços)", () => {
+    for (const ok of ["minha-loja:cache", "type=registry,ref=ghcr.io/x/y:cache", '"type=registry","ref=ghcr.io/x/y:cache"', " type = inline ", "type=inline"]) {
+      expect(regras(build({ cache_to: [ok] })), ok).toEqual([]);
+    }
+  });
+
   it("chave desconhecida em build bloqueia", () => {
     expect(regras(build({ novidade: "x" }))).toEqual(["unsupported-field"]);
   });
