@@ -100,7 +100,7 @@ function sobe(): boolean {
 
 const HOSTIL = JSON.stringify({
   name: "paas-loja",
-  services: { web: { image: "nginx:1.27", privileged: true, cap_add: ["SYS_ADMIN"], volumes: [{ type: "bind", source: "/", target: "/host" }] } },
+  services: { web: { image: "nginx:1.27", privileged: true, cap_add: ["SYS_ADMIN"], volumes: [{ type: "bind", source: "/etc", target: "/host" }] } },
 });
 const LIMPO = JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27" } } });
 
@@ -124,7 +124,7 @@ describe("DeployEngine.deployCompose — guardrails sobre o compose resolvido", 
     expect(sobe()).toBe(false);
     expect(log).toContain("Container privilegiado");
     expect(log).toContain("cap_add");
-    expect(log).toContain("monta / de fora da pasta do projeto");
+    expect(log).toContain("monta /etc de fora da pasta do projeto");
   });
 
   it("com override explícito do operador, os bloqueios comuns passam (e ficam no log)", async () => {

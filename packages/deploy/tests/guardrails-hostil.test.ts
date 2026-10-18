@@ -70,7 +70,8 @@ describe("compose hostil — o que passava com 0 bloqueios agora é barrado", ()
     );
     expect(bloqueios(r, "panel-resource").map((f) => f.title)).toContain("Socket do Docker montado no container");
     const mounts = bloqueios(r, "host-mount");
-    expect(mounts.map((f) => f.evidence).join("\n")).toContain("monta / de fora da pasta do projeto");
+    expect(mounts).toEqual([]);
+    expect(bloqueios(r, "panel-resource").map((f) => f.evidence).join("\n")).toContain("monta /, que é (ou contém)");
     const ns = bloqueios(r, "host-namespace").map((f) => f.evidence).join("\n");
     expect(ns).toContain("pid: host");
     expect(ns).toContain("network_mode: host");
@@ -85,7 +86,9 @@ describe("compose hostil — o que passava com 0 bloqueios agora é barrado", ()
 
   it("bind que sobe vários níveis (../../../../) e /var/run em forma longa é barrado", async () => {
     const r = await guardar("bindlong");
-    expect(bloqueios(r, "host-mount").length).toBeGreaterThanOrEqual(2);
+    // ../../../../ sobe até a raiz do servidor e /var/run contém o docker.sock: regra dura
+    expect(bloqueios(r, "host-mount").length + bloqueios(r, "panel-resource").length).toBeGreaterThanOrEqual(2);
+    expect(bloqueios(r, "panel-resource").map((f) => f.evidence).join("\n")).toContain("/var/run");
   });
 
   it("volume externo paas_data (o /data do painel) e rede externa de outro projeto são barrados", async () => {

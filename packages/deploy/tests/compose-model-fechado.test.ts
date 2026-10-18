@@ -161,7 +161,7 @@ describe("bind dentro de outro bind gravável (o app troca a pasta por link)", (
     expect(regras(servico({ volumes: [bind("dados", "/a"), bind("dados2", "/b")] }))).toEqual([]);
   });
   it("pasta que já é link para fora continua barrada pelo caminho real", async () => {
-    await symlink("/", path.join(src, "raiz"));
+    await symlink("/etc", path.join(src, "raiz"));
     expect(regras(servico({ volumes: [bind("raiz", "/r")] }))).toContain("host-mount");
   });
 });
@@ -253,6 +253,42 @@ describe("panel-resource: volume, rede e socket do painel (regra dura)", () => {
   });
   it("DOCKER_HOST apontando para o socket não é montagem: não entra aqui", () => {
     expect(regras(servico({ environment: { DOCKER_HOST: "unix:///var/run/docker.sock" } }))).toEqual([]);
+  });
+});
+
+describe("panel-resource: bind que CONTÉM o socket, a pasta do Docker ou o /data do painel", () => {
+  it.each([
+    "/",
+    "/run",
+    "/var",
+    "/var/run",
+    "//var//run/",
+    "/var/lib",
+    "/var/lib/docker",
+    "/var/lib/docker/volumes",
+    "/var/lib/docker/volumes/paas_data/_data",
+    "/data",
+    "/data/session-secret",
+    "/proc/self/root/var/run",
+    "/var/run/../run",
+    "/var/lib/../lib/docker",
+  ])("bind de %s (forma curta e longa)", (source) => {
+    expect(regras(servico({ volumes: [{ type: "bind", source, target: "/x" }] })), source).toContain("panel-resource");
+    expect(regras(servico({ volumes: [`${source}:/x`] })), source).toContain("panel-resource");
+  });
+  it("sem override: o motivo é uma regra dura, e não aparece também como host-mount solto", () => {
+    expect(regras(servico({ volumes: [{ type: "bind", source: "/var", target: "/x" }] }))).toEqual(["panel-resource"]);
+  });
+  it("link dentro do src para /run ou /var/lib/docker", async () => {
+    await symlink("/run", path.join(src, "atalho-run"));
+    await symlink("/var/lib/docker", path.join(src, "atalho-docker"));
+    expect(regras(servico({ volumes: [`${src}/atalho-run:/x`] }))).toContain("panel-resource");
+    expect(regras(servico({ volumes: [`${src}/atalho-docker:/x`] }))).toContain("panel-resource");
+  });
+  it("outras pastas do servidor seguem como host-mount (overridável): /etc, /home, /opt", () => {
+    for (const source of ["/etc", "/home", "/opt/outra", "/var/log", "/tmp"]) {
+      expect(regras(servico({ volumes: [{ type: "bind", source, target: "/x" }] })), source).toEqual(["host-mount"]);
+    }
   });
 });
 

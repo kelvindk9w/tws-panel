@@ -294,9 +294,30 @@ function isDockerSocket(source: string): boolean {
   return /(^|\/)docker\.sock$/.test(normal);
 }
 
-/** O caminho (ou um link no caminho) aponta para o socket do Docker? Segue links mesmo que o destino não exista aqui. */
-function pointsToDockerSocket(source: string, root: string): boolean {
-  if (isDockerSocket(source)) return true;
+/** Caminho absoluto normalizado (`//`, `..`, barra final e `/proc/<pid>/root` resolvidos). */
+function normalizeHostPath(p: string): string {
+  const n = path.posix.normalize(p.trim().toLowerCase()).replace(/^\/proc\/[^/]+\/root(?=\/|$)/, "").replace(/\/+$/, "");
+  return n === "" ? "/" : n;
+}
+
+/**
+ * O caminho É o socket do Docker, CONTÉM o socket (`/`, `/run`, `/var`, `/var/run`) ou é a pasta
+ * de dados do Docker (`/var/lib/docker…`, onde moram os volumes do painel) ou o /data do painel.
+ * `insideSrc`: o /data do painel contém as pastas dos projetos; dentro do código do próprio
+ * projeto não conta.
+ */
+function touchesPanelHost(p: string, insideSrc: boolean): boolean {
+  if (!p.startsWith("/") && !p.startsWith("\\")) return false;
+  const n = normalizeHostPath(p);
+  if (isDockerSocket(n) || ["/", "/run", "/var", "/var/run", "/var/lib"].includes(n)) return true;
+  if (n === "/var/lib/docker" || n.startsWith("/var/lib/docker/")) return true;
+  return !insideSrc && (n === "/data" || n.startsWith("/data/"));
+}
+
+/** O caminho (ou um link no caminho) leva ao socket, à pasta do Docker ou ao /data do painel? Segue links mesmo que o destino não exista aqui. */
+function pointsToPanelHost(source: string, root: string): boolean {
+  const inside = (abs: string) => abs === root || abs.startsWith(root + path.sep);
+  if (touchesPanelHost(source, source.startsWith("/") && inside(path.resolve(source)))) return true;
   let current = path.resolve(root, source);
   for (let i = 0; i < 8; i++) {
     let target: string;
@@ -305,10 +326,12 @@ function pointsToDockerSocket(source: string, root: string): boolean {
     } catch {
       break;
     }
-    if (isDockerSocket(target)) return true;
-    current = path.resolve(path.dirname(current), target);
+    const abs = path.resolve(path.dirname(current), target);
+    if (touchesPanelHost(abs, inside(abs))) return true;
+    current = abs;
   }
-  return isDockerSocket(resolveRealPath(path.resolve(root, source)));
+  const real = resolveRealPath(path.resolve(root, source));
+  return touchesPanelHost(real, inside(real));
 }
 
 /** Nome do espaço do painel: `paas-*`, `paas_*`, `tws-*` e os nomes reservados. */
@@ -471,15 +494,15 @@ function checkService(
     const vol = parseVolume(entry);
     if (!vol) continue;
     if (unresolved(vol.source) || unresolved(vol.raw)) continue;
-    if (vol.type === "bind" && vol.source && pointsToDockerSocket(vol.source, root)) {
+    if (vol.type === "bind" && vol.source && pointsToPanelHost(vol.source, root)) {
       out.push(
         finding(
           "panel-resource",
           "Socket do Docker montado no container",
           opts,
           name,
-          `monta ${vol.source} (o socket do Docker)`,
-          "Remova a montagem do docker.sock — dá controle total sobre o host e não pode ser liberada.",
+          `monta ${vol.source}, que é (ou contém) o socket do Docker, a pasta de dados do Docker ou os dados do painel`,
+          "Remova a montagem: dá controle total sobre o servidor (docker.sock, volumes do Docker, /data do painel) e não pode ser liberada.",
         ),
       );
       continue;
@@ -937,7 +960,10 @@ function checkNestedBinds(model: Dict, services: Dict, opts: ComposeCheckOptions
       if (raw && (vol.source.includes("$") || vol.raw.includes("$"))) continue;
       const abs = path.resolve(root, vol.source);
       // o último componente NÃO é seguido: é ele que o app pode trocar por um link
-      binds.push({ service, path: path.join(resolveRealPath(path.dirname(abs)), path.basename(abs)), source: vol.source, readOnly: vol.readOnly });
+      const canonicalPath = path.join(resolveRealPath(path.dirname(abs)), path.basename(abs));
+      // bind fora do código do projeto já é barrado por si só (host-mount / panel-resource)
+      if (canonicalPath !== root && !canonicalPath.startsWith(root + path.sep)) continue;
+      binds.push({ service, path: canonicalPath, source: vol.source, readOnly: vol.readOnly });
     }
   }
   // o mesmo vale para o que o PAINEL lê: contexto de build, Dockerfile, env_file, secrets e configs
