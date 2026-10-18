@@ -59,6 +59,11 @@ A primeira vez baixa as imagens do Alpine, Caddy, nginx, node e Stalwart **pelo 
 registro). Conferir: o comando termina sem erro e `sudo docker ps --filter name=tws-panel --format '{{.Status}}'`
 mostra `Up`. Se o `build` falhar, o painel antigo continua rodando e **nada mudou**: veja a seção "Se falhar".
 
+Instalação fora de `/opt/tws-panel` que só faz `git pull`: o painel não sabe onde está a pasta dele e continua protegendo
+`/opt/tws-panel` (o `.env` com os segredos ficaria montável por um compose de projeto com override). Rode o
+`./scripts/install.sh` de novo, ou acrescente `PAAS_HOST_REPO_DIR=<caminho real da pasta, sem link>` ao `.env` e rode
+o `docker compose up -d`.
+
 ### Passo 2 — painel e Caddy
 
 Espere cerca de 1 minuto e confira:
