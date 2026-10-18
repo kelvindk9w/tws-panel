@@ -34,7 +34,39 @@ export const GIT_SAFE_CONFIG: readonly string[] = [
   "protocol.file.allow=user",
   "-c",
   "core.attributesFile=/dev/null",
+  // segunda defesa, caso o repo.git/config seja adulterado: nada que execute programa ou troque a origem
+  // core.sshCommand NÃO entra aqui: vazio, o git o executaria como comando e quebraria clones por ssh;
+  // ele é removido do config por sanitizeGitConfig.
+  "-c",
+  "core.gitProxy=",
+  "-c",
+  "credential.helper=",
 ];
+
+/**
+ * Chaves do `repo.git/config` que executam programa ou trocam o destino do fetch. `-c` só consegue
+ * zerar chaves de valor único; `url.<base>.insteadOf` e as demais ficam no arquivo, então elas são
+ * REMOVIDAS dele antes de cada ingestão (o painel só precisa de remote.origin.url/fetch).
+ */
+const CHAVES_PERIGOSAS =
+  "^(url\\..*|include.*|credential\\..*|filter\\..*|alias\\..*|http\\..*|protocol\\..*|uploadpack\\..*" +
+  "|core\\.(sshcommand|gitproxy|fsmonitor|hookspath|pager|editor|askpass|attributesfile|excludesfile)" +
+  "|remote\\..*\\.(uploadpack|receivepack|proxy|proxyauthmethod|vcs|pushurl))$";
+
+type Executar = (file: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => Promise<{ code: number; stdout: string }>;
+
+/** Remove do repositório do painel as chaves de configuração que executariam algo ou redirecionariam o fetch. */
+export async function sanitizeGitConfig(gitDir: string, run: Executar, env: NodeJS.ProcessEnv): Promise<string[]> {
+  const base = [...GIT_SAFE_CONFIG, "--git-dir", gitDir, "config", "--local"];
+  const listed = await run("git", [...base, "--name-only", "--get-regexp", CHAVES_PERIGOSAS], { env });
+  if (listed.code !== 0) return [];
+  const removed: string[] = [];
+  for (const key of new Set(listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean))) {
+    const out = await run("git", [...base, "--unset-all", key], { env });
+    if (out.code === 0) removed.push(key);
+  }
+  return removed;
+}
 
 /** Variáveis do git que mudariam de onde ele lê repositório e configuração. */
 const GIT_ENV_REMOVIDAS = [

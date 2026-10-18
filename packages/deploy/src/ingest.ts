@@ -9,7 +9,7 @@ import { cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
-import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv } from "./git-safe.js";
+import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
 
 /** Diretórios/arquivos excluídos ao copiar código no modo upload. */
@@ -235,6 +235,10 @@ async function ingestGit(
   await substituirGitDeSrcPorPonteiro(src, gitDir);
 
   const novo = !existsSync(path.join(gitDir, "HEAD"));
+  if (!novo) {
+    const removidas = await sanitizeGitConfig(gitDir, run, gitEnv.env);
+    if (removidas.length > 0) onLog(`Aviso: ${removidas.length} chave(s) do repositório do painel foram removidas por segurança (${removidas.join(", ")}).\n`);
+  }
   if (novo) {
     const init = await run("git", git(["init", "-q"]), gitEnv);
     if (init.code !== 0) throw falhaGit("git init", init, ambiente);

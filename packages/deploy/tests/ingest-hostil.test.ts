@@ -111,6 +111,44 @@ describe("ingestCode — git sobre clone gravável pelo projeto (A2)", () => {
     expect(await readFile(path.join(src, "app.txt"), "utf8")).toBe("v2\n");
   });
 
+  it("repo.git/config adulterado (insteadOf, uploadpack, sshCommand, gitProxy, credential.helper, include) NÃO é seguido (segunda defesa)", async () => {
+    const p = projeto();
+    const ctx = { projectsDir };
+    await ingestCode(ctx, p, () => {});
+    const config = path.join(projectGitDir(ctx, p), "config");
+    const script = path.join(tmp, "executa.sh");
+    await writeFile(script, `#!/bin/sh\necho executou >> ${sentinela}\nexec "$@"\n`, { mode: 0o755 });
+    const iscaRepo = path.join(tmp, "repo-do-atacante");
+    await criarRepo(iscaRepo);
+    await writeFile(path.join(iscaRepo, "app.txt"), "DO ATACANTE\n");
+    git(iscaRepo, "commit", "-qam", "isca");
+    execFileSync("git", ["config", "-f", config, `url.${iscaRepo}.insteadOf`, repo]);
+    execFileSync("git", ["config", "-f", config, "remote.origin.uploadpack", `${script} git-upload-pack`]);
+    execFileSync("git", ["config", "-f", config, "core.sshCommand", script]);
+    execFileSync("git", ["config", "-f", config, "core.gitProxy", script]);
+    execFileSync("git", ["config", "-f", config, "credential.helper", `!${script}`]);
+    execFileSync("git", ["config", "-f", config, "include.path", path.join(tmp, "outro-config")]);
+    await novoCommit("app.txt", "v3 legitimo\n");
+
+    const src = await ingestCode(ctx, p, () => {});
+
+    expect(existsSync(sentinela)).toBe(false);
+    expect(await readFile(path.join(src, "app.txt"), "utf8")).toBe("v3 legitimo\n");
+    const texto = await readFile(config, "utf8");
+    for (const proibido of ["insteadOf", "uploadpack", "sshCommand", "gitProxy", "helper", "include"]) {
+      expect(texto, proibido).not.toMatch(new RegExp(proibido, "i"));
+    }
+    // o que o painel precisa continua lá
+    expect(texto).toContain(repo);
+  });
+
+  it("GIT_SAFE_CONFIG zera core.gitProxy e credential.helper na linha de comando", async () => {
+    const { GIT_SAFE_CONFIG } = await import("../src/git-safe.js");
+    for (const chave of ["core.gitProxy=", "credential.helper="]) {
+      expect(GIT_SAFE_CONFIG).toContain(chave);
+    }
+  });
+
   it("o repositório git do painel fica fora de src e o .git de src vira só um ponteiro", async () => {
     const p = projeto();
     const ctx = { projectsDir };
