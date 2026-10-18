@@ -124,15 +124,62 @@ nome, label ou caminho que o projeto controla.
    - Bug achado no caminho: lista de imagens do painel com entrada indefinida derrubava a análise inteira
      (virava `invalid-compose`); corrigido com teste.
 
+## Revisão rigorosa — correções (A1, A4 e M9 reprovados na primeira rodada)
+
+Cada contorno abaixo ganhou um teste hostil que falhou antes (no `compose-model.ts` anterior: 44 dos 58 testes de
+`compose-model-fechado.test.ts`; no `engine.ts` anterior: 9 dos 12 de `engine-canonico.test.ts`; 3 de 3 em
+`container-identity.test.ts`; 5 de 5 em `engine-endurecimento.test.ts`) e passa agora.
+
+1. **A1, lista fechada** (`compose-model-fechado.test.ts`). Antes: lista de campos perigosos; `use_api_socket`, `gpus`,
+   `runtime`, `cgroup_parent`, `label_file`, `deploy.resources.reservations.devices` e ganchos `post_start`/`pre_stop`/
+   `pre_start` com `privileged` passavam com 0 bloqueios. Agora: lista de campos ACEITOS por nível (serviço, `deploy`,
+   `resources`, ganchos, topo); campo desconhecido bloqueia (`unsupported-field`, overridável); os campos que dão
+   acesso ao host têm bloqueio próprio; ganchos passam pela mesma checagem por recursão; `logging.driver` só
+   `json-file`/`local`/`none`. `x-*` segue livre.
+2. **A1, app sequestrado.**
+   - Bind dentro de bind gravável (`./:/app` + `./dados:/data`, no mesmo serviço ou em serviços diferentes) é barrado
+     (`host-mount`); pai `:ro` e pastas irmãs passam.
+   - Corrida entre `config` e `up`: o modelo conferido é gravado em `<projeto>/paas.canonical.json` (0600, fora do
+     `src`) e o `up` roda dele (`engine-canonico.test.ts`: o compose do repositório trocado depois do `config` não chega
+     ao `up`). `compose-hostil-docker.test.ts` confere com o `docker compose config` real que o JSON volta igual.
+     Limite honesto: `env_file` e contexto de build ficam no JSON como caminhos; um link trocado nesses milissegundos
+     ainda seria seguido (o bind, que persistia, está fechado).
+3. **A2, `.env`.** `.env` e arquivo compose precisam ser arquivos comuns com caminho real dentro de `src`; link (para
+   fora ou para dentro) para o deploy e o recriar antes de qualquer `docker compose`. O `up` usa `--env-file` vazio do
+   painel, nunca o `.env` de `src`.
+4. **A4, `paas-mail`.** Em projeto com e-mail, nome de serviço, `container_name`, `hostname` e todo alias de qualquer
+   rede não podem ser nomes reservados, `paas-*`/`tws-*`, slug de outro projeto, `mail.*` nem host que o Stalwart
+   responde (o engine passa `mailHosts()`); é `network-hijack` (regra dura). Entrou no meta-teste de `HARD_RULES`,
+   que agora aceita vários hostis por regra.
+5. **A4, override do painel.** `cap_drop: NET_RAW` e `no-new-privileges` em TODOS os serviços (aplicado ao modelo
+   resolvido, então cobre `include`/`extends`) e no `docker run` do estático e do Dockerfile. Migração:
+   `CaddyManager.reservedAliases` + aviso no boot (`DeployService.warnReservedNetworkAliases`) de containers antigos na
+   `paas-net` com alias do painel; só avisa e mostra o comando para tirá-los.
+6. **M9.** O `docker run` do painel grava `com.docker.compose.project=` vazia (vence o `LABEL` da imagem) e
+   `containerIdentity` trata vazia como ausente: a identidade vem só do que o painel registrou.
+7. **Regras duras que faltavam.** `panel-resource` (nova, sem override): `docker.sock` em qualquer grafia (inclui `//`,
+   `..`, `/run`, `/proc/self/root`, maiúsculas e link dentro do `src`) e volumes/redes `paas*`/`tws*` que não são do
+   projeto (`paas_data` etc.). `paas-panel` e `paas-mail-admin` já eram `network-hijack`. A mensagem antiga do
+   `docker.sock` ("privileged-container", overridável) foi trocada.
+8. **Roteiro da VPS e volta:** `docs/migracao-redes-lote5.md`. Resumo honesto da volta: o Caddy antigo religa o painel à
+   `paas-net` sozinho (acesso por domínio); o Stalwart antigo só volta à `paas-net` se houver `mail.<domínio>` (senão
+   `docker network connect` manual, com os aliases); o webmail antigo não religa (manual). Texto de status do
+   servidor nunca criado agora mostra a imagem por digest (`STALWART_IMAGE_REF`).
+
+Efeitos para o operador: campo novo ou desconhecido no compose passa a ser barrado (com override, exceto nas regras
+duras); bind aninhado, volume `paas_*` e `docker.sock` deixam de existir como opção; `ping`/raw sockets e `sudo`/setuid
+dentro dos containers deixam de funcionar (sem `NET_RAW` e com `no-new-privileges`).
+
 ## Resultados
 
 - `pnpm -r run typecheck`: sem erros.
-- Cobertura (valores medidos): core 99,63 / 98,73; deploy 98,87 / 96,11 de ramos (mínimo 95); mailer 99,9 / 98,45 de
-  ramos (mínimo 98); security 99,33 / 97,33; server 97,9 / 93,5 / 98,34 / 98,86 (mínimos 94/91/98/94).
-- Testes que falham na máquina por causa do Docker Desktop travado (não por código): `engine-lifecycle` (4),
-  `engine-guardrail-reuse` (1), `docker-service` (2, Docker real), `routes-misc-schema` (1) e, de forma
-  intermitente, `compose-hostil-docker` (o plugin `docker compose` some: "unknown shorthand flag: 'p'").
-  Passaram antes da pane e passam isolados quando o Docker responde.
+- Cobertura (valores medidos nesta rodada): core 99,63 / 98,73; deploy 98,62 / 95,8 de ramos (mínimo 95); mailer 99,9 /
+  98,45 de ramos (mínimo 98); security 99,33 / 97,33; server 97,9 / 93,5 / 98,34 / 98,86 (mínimos 94/91/98/94). O
+  deploy só imprime a tabela com `--coverage.reportOnFailure` enquanto os testes de Docker falham.
+- Testes que falham na máquina por causa do Docker Desktop travado (`docker info` sem resposta; não é código):
+  `engine-lifecycle` (4), `engine-guardrail-reuse` (1), `docker-service` (2, Docker real) e `routes-misc-schema` (1).
+  Todos os que não dependem do Docker passam (deploy 678 de 683, server 1778 de 1785 com 4 ignorados). Passaram antes
+  da pane e passam isolados quando o Docker responde; não foi possível rodá-los de novo nesta rodada.
 
 ## Não testado (declarado)
 
@@ -144,6 +191,15 @@ nome, label ou caminho que o projeto controla.
 - `trustProxy` com o IP real do Caddy: testado com Fastify e IPs simulados; a leitura por `docker inspect` não
   foi exercitada no container do painel.
 - Fluxo completo de e-mail (projeto enviando por SMTP pela `paas-mail`) não foi rodado de ponta a ponta.
+- `docker compose up` a partir do `paas.canonical.json`: só o `config` do JSON foi exercitado com o compose real
+  (ida e volta igual); o `up` real, o `docker run` com `--cap-drop NET_RAW --security-opt no-new-privileges
+  --label com.docker.compose.project=` e a prevalência da label vazia sobre o `LABEL` de uma imagem forjada foram
+  verificados só pelos argumentos nos testes (a prevalência é o comportamento documentado do `docker run --label`).
+- O roteiro de `docs/migracao-redes-lote5.md` (e a volta à versão anterior) foi escrito lendo o código das duas
+  versões, não executado: Docker travado na máquina e nenhuma VPS à mão. O ponto "o git da versão antiga segue o
+  apontador `src/.git`" também não foi testado.
+- Reexecução dos testes que dependem do Docker (engine-lifecycle, engine-guardrail-reuse, docker-service,
+  routes-misc-schema): o Docker continuou sem responder; não deu para tentar reiniciá-lo sem sair do escopo.
 
 ## Riscos residuais
 

@@ -27,12 +27,17 @@
     "LOTE 5 (isolamento) — LISTA DO QUE SE PERMITE: o que um compose pode pedir ao Docker é decidido por packages/deploy/src/compose-model.ts (checkComposeModel), que lê o modelo e aceita só o que está numa lista. Ele roda em dois modos: 'raw' (YAML cru, com merge `<<` resolvido; valores com `$` são pulados) na prévia/pré-check, e 'canonical' sobre a saída de `docker compose config --format json --no-env-resolution` — o compose COMO O DOCKER O VAI EXECUTAR (merge, include, extends e ${VAR} resolvidos, mesmos -p/--env-file/-f do `up`). A checagem canônica roda no engine antes de qualquer `up` (deploy e recriar); o recriar nunca aceita override.",
     "Regras da lista: privileged-container (privileged em qualquer forma, cap_add, devices, security_opt fora de no-new-privileges, sysctls, provider, docker.sock), host-namespace (pid/ipc/network_mode/userns/cgroup/uts, volumes_from container:, external_links), host-mount (bind fora da pasta do projeto, pelo caminho REAL), shared-resource (volume/rede externo, name: de fora, driver/driver_opts; posse só pelo nome EXATO `<projeto>_<chave>` — o projeto 'app' não possui 'app-outro' nem 'app_x'), build-outside-src (context, dockerfile, additional_contexts, env_file, secrets/configs fora da pasta).",
     "REGRAS DURAS (HARD_RULES — sem override do operador, no deploy e no recriar): reserved-name (labels paas.* e com.docker.compose.*; container_name, hostname, nome do serviço web e aliases que sejam do painel — tws-panel, paas-caddy, paas-stalwart, paas-webmail —, de outro projeto ou do espaço paas-/tws-), network-hijack (qualquer serviço fora do web ligado à paas-net; alias a mais na paas-net; paas-net declarada com driver/ipam/sem external; paas-panel e paas-mail-admin em qualquer compose; paas-mail fora dos serviços que o painel liga com o e-mail habilitado) e panel-image (build que grava a tag de uma imagem do painel — alpine, caddy, nginx, node, stalwart, roundcube — e imagem tws-panel / paas-* de outro projeto). Há um teste de compose hostil para cada regra e um meta-teste que garante que toda regra de HARD_RULES é disparada por algum hostil.",
-    "Variáveis ${VAR} do compose são interpoladas com o ambiente FILTRADO (composeEnv: PATH, HOME, DOCKER_*, proxy, locale) — SETUP_TOKEN, SESSION_SECRET e demais segredos do painel não chegam ao compose do projeto."
+    "Variáveis ${VAR} do compose são interpoladas com o ambiente FILTRADO (composeEnv: PATH, HOME, DOCKER_*, proxy, locale) — SETUP_TOKEN, SESSION_SECRET e demais segredos do painel não chegam ao compose do projeto.",
+    "LOTE 5, REVISÃO RIGOROSA — LISTA FECHADA: compose-model.ts não tem mais uma lista de campos perigosos; tem uma lista de campos ACEITOS por nível (SERVICE_KEYS no serviço, DEPLOY_KEYS/resources.limits/resources.reservations em deploy, HOOK_KEYS nos ganchos, TOP_KEYS no topo — x-* sempre livre; no modo cru também version e include). Campo que não está na lista bloqueia com a regra `unsupported-field` (overridável pelo operador): um campo novo do Compose (ex.: develop, models) precisa ser avaliado antes de entrar. Campos que dão acesso ao host têm bloqueio próprio quando ligados: use_api_socket, gpus, runtime, cgroup_parent, storage_opt, credential_spec (privileged-container), label_file (host-mount) e deploy.resources.reservations.devices (privileged-container). logging.driver só json-file, local ou none.",
+    "Ganchos post_start / pre_stop / pre_start recebem a mesma checagem por recursão: só command, user, privileged, working_dir e environment; `privileged` ligado é privileged-container; qualquer outra chave (volumes, cap_add…) é unsupported-field; pre_start não existe no Compose e bloqueia sempre.",
+    "BIND DENTRO DE BIND (host-mount): o Docker segue um link simbólico a CADA start do container, então `./:/app` + `./dados:/data` deixaria o app trocar src/dados por um link para `/`. checkNestedBinds junta os binds de TODOS os serviços (sem seguir o último componente) e barra o que está dentro de outro bind gravável; pai com :ro / read_only não conta.",
+    "REGRA DURA NOVA panel-resource (HARD_RULES agora tem 4): docker.sock em qualquer grafia (// duplas, ../, /run, /proc/self/root, maiúsculas, barra final, e link dentro do src que aponte para ele — segue a cadeia de readlink mesmo com destino inexistente), e volume ou rede do espaço do painel que não seja do projeto (paas_data, paas_caddy_*, paas-*, tws-*, nomes reservados). Substitui o antigo bloqueio overridável de docker.sock; as redes paas-panel e paas-mail-admin seguem como network-hijack.",
+    "REDE DE E-MAIL (network-hijack, dura): em projeto com e-mail habilitado, nome de serviço, container_name, hostname e QUALQUER alias de qualquer rede viram nomes no DNS da paas-mail (onde moram Stalwart e webmail). Barra os nomes reservados, paas-*/tws-*, slugs de outros projetos, `mail.*` e os hosts que o engine pede ao MailService (mailHosts, opts.mailAliases)."
   ],
   "catalogoRegras": [
     { "rule": "db-port-exposed", "level": "block", "title": "Porta de banco de dados publicada no host" },
     { "rule": "weak-credentials", "level": "block", "title": "Credenciais triviais no compose/env" },
-    { "rule": "privileged-container", "level": "block", "title": "Container privilegiado ou docker.sock montado" },
+    { "rule": "privileged-container", "level": "block", "title": "Container privilegiado, capabilities, devices, gancho privilegiado, use_api_socket, gpus, runtime" },
     { "rule": "host-namespace", "level": "block", "title": "Namespace do host (pid, ipc, rede, userns, cgroup, uts) ou volumes_from de container" },
     { "rule": "host-mount", "level": "block", "title": "Pasta do servidor montada fora do código do projeto" },
     { "rule": "shared-resource", "level": "block", "title": "Volume ou rede que não é do próprio projeto" },
@@ -42,7 +47,9 @@
     { "rule": "reserved-name", "level": "block", "title": "Nome ou label reservados do painel (SEM override)" },
     { "rule": "dev-service-in-prod", "level": "warn", "title": "Serviço de desenvolvimento em produção" },
     { "rule": "secret-in-code", "level": "warn", "title": "Possível secret comitado no código" },
-    { "rule": "latest-tag", "level": "info", "title": "Imagem com tag :latest" }
+    { "rule": "latest-tag", "level": "info", "title": "Imagem com tag :latest" },
+    {"rule": "unsupported-field", "level": "block", "title": "Campo do compose fora da lista aceita pelo painel"},
+    {"rule": "panel-resource", "level": "block", "title": "Volume, rede ou docker.sock do painel (SEM override)"}
   ],
   "usadoPor": [
     { "referencia": "GET /api/projects/:id/guardrails", "arquivo": "apps/server/src/services/deploy-service.ts:290", "doc": "projetos/guardrails.json" },
@@ -54,7 +61,10 @@
     "packages/deploy/tests/compose-model-isolamento.test.ts",
     "packages/deploy/tests/guardrails-hostil.test.ts",
     "packages/deploy/tests/compose-hostil-docker.test.ts",
-    "packages/deploy/tests/engine-compose-guardrails.test.ts"
+    "packages/deploy/tests/engine-compose-guardrails.test.ts",
+    "packages/deploy/tests/compose-model-fechado.test.ts",
+    "packages/deploy/tests/engine-canonico.test.ts",
+    "packages/deploy/tests/engine-endurecimento.test.ts"
   ],
   "observacoes": [
     "IMPORTANTE — correção de um entendimento anterior: GET /api/projects/:id/guardrails e o pré-check de POST /api/projects/:id/deploy SEMPRE usaram runGuardrails() (rules.ts), que já inclui o scan de secrets — o preview de guardrails nunca foi o sistema 'reduzido'. guardrails.ts (analyzeCompose) é um módulo com propósito DIFERENTE: análise do compose durante a DETECÇÃO DE STACK (POST /api/projects/:id/detect), produzindo GuardrailWarning (avisos informativos na tela de detecção), não GuardrailFinding (o que efetivamente bloqueia o deploy). Os dois sistemas continuam tendo listas de portas de banco LIGEIRAMENTE DIFERENTES (rules.ts não inclui Oracle/CouchDB/Elasticsearch que guardrails.ts inclui) e catálogos de regra distintos — mas nesta rodada a checagem de container privilegiado/docker.sock foi alinhada entre os dois (guardrails.ts agora reaproveita mountsDockerSock de rules.ts), reduzindo a divergência que mais importava: um projeto que a detecção mostrava 'limpo' quanto a privileged-container e era bloqueado no deploy por essa mesma regra.",
