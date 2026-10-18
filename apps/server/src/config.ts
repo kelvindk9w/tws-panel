@@ -43,7 +43,7 @@ export interface ServerConfig {
   projectsDir: string;
   /**
    * Pasta de instalação do painel no host (onde ficam o docker-compose.yml e o .env). Nenhum
-   * compose de projeto pode montá-la (regra dura). PAAS_INSTALL_DIR; padrão do instalador.
+   * compose de projeto pode montá-la (regra dura). Mesma fonte de hostRepoDir (PAAS_HOST_REPO_DIR).
    */
   panelInstallDir?: string;
   /** Diretório do build do frontend (SPA). */
@@ -240,7 +240,7 @@ export function loadConfig(): ServerConfig {
     host: process.env.HOST ?? "0.0.0.0",
     dataDir,
     projectsDir: path.resolve(process.env.PAAS_PROJECTS_DIR ?? path.join(dataDir, "projects")),
-    panelInstallDir: path.resolve(process.env.PAAS_INSTALL_DIR || "/opt/tws-panel"),
+    panelInstallDir: path.resolve(process.env.PAAS_HOST_REPO_DIR || "/opt/tws-panel"),
     webDist: path.resolve(process.env.WEB_DIST ?? "../web/dist"),
     allowedOrigins: (process.env.ALLOWED_ORIGINS ?? "")
       .split(",")
@@ -251,7 +251,7 @@ export function loadConfig(): ServerConfig {
     securityTargetContainer: process.env.PAAS_TARGET_CONTAINER ?? "paas-target-test",
     hardeningScriptsDir: path.resolve(process.env.PAAS_SCRIPTS_DIR ?? "../../scripts/hardening"),
     hostHelperImage: process.env.PAAS_HOST_HELPER_IMAGE ?? HOST_HELPER_IMAGE,
-    hostRepoDir: process.env.PAAS_HOST_REPO_DIR ?? "/opt/tws-panel",
+    hostRepoDir: process.env.PAAS_HOST_REPO_DIR || "/opt/tws-panel",
     caddyHttpPort: envInt("PAAS_CADDY_HTTP_PORT", 80),
     caddyHttpsPort: envInt("PAAS_CADDY_HTTPS_PORT", 443),
     mailPorts: {

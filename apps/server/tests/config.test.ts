@@ -20,7 +20,6 @@ const KEYS = [
   "PAAS_HOST_HELPER_IMAGE",
   "PAAS_HOST_REPO_DIR",
   "PAAS_PROJECTS_DIR",
-  "PAAS_INSTALL_DIR",
   "PAAS_CADDY_HTTP_PORT",
   "PAAS_CADDY_HTTPS_PORT",
   "PAAS_STALWART_PORT_SMTP",
@@ -107,10 +106,16 @@ describe("loadConfig", () => {
     expect(config.projectsDir).toBe(path.join(config.dataDir, "projects"));
   });
 
-  it("pasta de instalação do painel: /opt/tws-panel por padrão, ou PAAS_INSTALL_DIR (nenhum projeto a monta)", () => {
+  it("pasta de instalação do painel: uma fonte só, PAAS_HOST_REPO_DIR (padrão /opt/tws-panel); vazio também cai no padrão", () => {
     expect(loadConfig().panelInstallDir).toBe("/opt/tws-panel");
-    setEnv("PAAS_INSTALL_DIR", "/srv/painel");
-    expect(loadConfig().panelInstallDir).toBe("/srv/painel");
+    setEnv("PAAS_HOST_REPO_DIR", "/home/x/tws-panel");
+    const config = loadConfig();
+    expect(config.hostRepoDir).toBe("/home/x/tws-panel");
+    expect(config.panelInstallDir).toBe("/home/x/tws-panel");
+    // o docker-compose repassa a variável vazia quando o .env não a tem
+    setEnv("PAAS_HOST_REPO_DIR", "");
+    expect(loadConfig().panelInstallDir).toBe("/opt/tws-panel");
+    expect(loadConfig().hostRepoDir).toBe("/opt/tws-panel");
   });
 
   it("com PAAS_PROJECTS_DIR, o diretório dos projetos é o valor da variável", () => {

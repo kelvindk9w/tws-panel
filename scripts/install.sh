@@ -1245,6 +1245,10 @@ env_set() { # env_set <CHAVE> <valor> — mesmo padrão do DOCKER_GID/PAAS_PROJE
     printf '%s=%s\n' "$1" "$2" >> .env
   fi
 }
+# Onde a instalação mora NO HOST (o .env com os segredos fica aqui). O painel recusa que um compose de
+# projeto monte esta pasta; sem isto ele só protegeria /opt/tws-panel. Sempre o caminho real de agora.
+env_set PAAS_HOST_REPO_DIR "$APP_DIR"
+export PAAS_HOST_REPO_DIR="$APP_DIR"
 if [ "$TERMINAL_SOURCE" != "legado" ]; then
   env_set PAAS_TERMINAL_USER "$TERMINAL_USER"
   env_set PAAS_ROOT_MODE "$ROOT_MODE"
