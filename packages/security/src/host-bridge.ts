@@ -21,12 +21,12 @@
  *
  * Este módulo é propositalmente livre de I/O para ser 100% testável.
  */
-import { isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
+import { HOST_HELPER_IMAGE, isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
 import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
 
 /** Imagem do helper descartável (mínima; só precisa de nsenter/tar/sh). */
-export const HOST_HELPER_IMAGE_DEFAULT = "alpine:3";
+export const HOST_HELPER_IMAGE_DEFAULT = HOST_HELPER_IMAGE;
 
 // ---------------------------------------------------------------------------
 // Comandos fixos do Lynis (usados pelo scanner — reexportados para a allowlist)

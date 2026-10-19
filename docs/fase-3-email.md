@@ -18,7 +18,9 @@
   Auth (`admin:<secret>` — secret forte gerado na 1ª inicialização e persistido
   em `data/mail/mail.json`, modo 0600). Não há fallback para CLI porque a imagem
   não inclui `stalwart-cli`.
-- **Container**: `paas-stalwart` na rede `paas-net` (aliases `paas-stalwart` e
+- **Container**: `paas-stalwart` nas redes `paas-mail-admin` (só ele e o painel) e `paas-mail`
+  (SMTP/IMAP para o webmail e para os projetos com e-mail habilitado) — nunca na `paas-net` dos
+  projetos (aliases `paas-stalwart` e
   `mail.<domínio>` de cada domínio cadastrado),
   volume `paas_stalwart_data` → `/opt/stalwart-mail/data`, config renderizada em
   `data/mail/stalwart/config.toml` → `/opt/stalwart-mail/etc` (read-only).
@@ -64,7 +66,7 @@ automaticamente (exigência das boas práticas).
 `POST /api/projects/:id/email {domain}` cria a caixa técnica `<slug>@<domínio>`
 (se necessário) e registra o vínculo. No próximo deploy, o engine injeta
 `SMTP_HOST=mail.<domínio>` (o nome do certificado; alias do Stalwart na
-`paas-net`, então a conexão fica dentro da rede Docker), `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS`,
+`paas-mail`, a rede em que o painel liga os serviços do projeto quando o e-mail está habilitado; a conexão fica dentro da rede Docker), `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS`,
 `MAIL_FROM` — no override compose (**todos os serviços**) ou via `-e` no
 pipeline Dockerfile. Estáticos não recebem (sem runtime). `DELETE` no mesmo
 endpoint desativa. Senhas são base64url (YAML/env-safe).

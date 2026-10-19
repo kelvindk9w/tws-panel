@@ -525,6 +525,19 @@ export const PAAS_LABEL_PROJECT = "paas.project";
 /** Rede Docker dedicada dos projetos gerenciados + Caddy central. */
 export const PAAS_NETWORK = "paas-net";
 
+/**
+ * Redes internas do painel (achado A4): os projetos hospedados ficam só na
+ * paas-net, SEM o painel e SEM o Stalwart — senão alcançariam a API do painel
+ * e a administração do e-mail. Cada ligação tem a sua rede:
+ *  - paas-panel: só Caddy ↔ painel (o Caddy serve o domínio do painel);
+ *  - paas-mail-admin: só painel ↔ Stalwart (API de administração);
+ *  - paas-mail: Stalwart (SMTP), webmail e os serviços dos projetos com e-mail
+ *    habilitado (o SMTP_HOST injetado aponta para o alias do Stalwart nela).
+ */
+export const PAAS_PANEL_NETWORK = "paas-panel";
+export const PAAS_MAIL_ADMIN_NETWORK = "paas-mail-admin";
+export const PAAS_MAIL_NETWORK = "paas-mail";
+
 /** Nome do container do Caddy central. */
 export const PAAS_CADDY_CONTAINER = "paas-caddy";
 

@@ -24,6 +24,8 @@ import {
   type GuardrailReport,
   type EnvExampleVariable,
   type Project,
+  NODE_BUILD_IMAGE,
+  STATIC_SERVER_IMAGE,
   type ProjectCredentialInfo,
   type ProjectEmailValueKey,
   type ProjectStatus,
@@ -38,6 +40,7 @@ import {
   type ProjectTimezoneService,
   type ProjectTimezoneSetting,
   type ProjectTimezoneView,
+  PAAS_NETWORK,
   effectiveProjectZone,
   isKnownTimezone,
   isSafeTimezoneName,
@@ -46,6 +49,7 @@ import {
 } from "@paas/core";
 import {
   DeployEngine,
+  composeProjectName,
   detectProject,
   ingestCode,
   projectSrcDir,
@@ -243,12 +247,15 @@ export class DeployService {
     this.env = new ProjectEnvStore(config.dataDir);
     this.engineCtx = {
       projectsDir: this.projectsDir,
+      ...(config.panelInstallDir ? { panelInstallDir: config.panelInstallDir } : {}),
       // A ingestão pede a credencial na hora do clone. O valor em claro só
       // existe em memória e no ambiente do processo git (ver ingest.ts).
       credentialFor: (project: Project) => this.credentialFor(project),
       caddyDir: path.join(config.dataDir, "caddy"),
-      nodeImage: process.env.PAAS_NODE_IMAGE ?? "node:22",
-      staticImage: process.env.PAAS_STATIC_IMAGE ?? "nginx:alpine",
+      nodeImage: process.env.PAAS_NODE_IMAGE ?? NODE_BUILD_IMAGE,
+      staticImage: process.env.PAAS_STATIC_IMAGE ?? STATIC_SERVER_IMAGE,
+      protectedImages: [config.hostHelperImage],
+      projectSlugs: () => this.projects.map((p) => p.slug),
       caddyHttpPort: config.caddyHttpPort,
       caddyHttpsPort: config.caddyHttpsPort,
       // E-mail (SMTP), as Variáveis do projeto e as ligadas ao e-mail. Nome
@@ -280,6 +287,25 @@ export class DeployService {
       ...(existsSync("/.dockerenv") ? { panelContainer: PANEL_CONTAINER } : {}),
     };
     this.engine = new DeployEngine(this.engineCtx);
+  }
+
+  /**
+   * Migração (A4): containers antigos na rede dos projetos com alias que é
+   * nome do painel. Só avisa — parar container de projeto é decisão do
+   * operador. Nunca lança (roda no boot).
+   */
+  async warnReservedNetworkAliases(log: { warn: (msg: string) => void }): Promise<void> {
+    try {
+      for (const { container, alias } of await this.engine.caddy.reservedAliases()) {
+        log.warn(
+          `Rede ${PAAS_NETWORK}: o container ${container} responde pelo nome "${alias}", que é do painel — ele poderia receber o tráfego do painel. ` +
+            `Confira o compose do projeto e, para tirá-lo da rede agora: docker network disconnect ${PAAS_NETWORK} ${container}. ` +
+            "O próximo deploy do projeto já é barrado por esse alias.",
+        );
+      }
+    } catch (err) {
+      log.warn(`Rede ${PAAS_NETWORK}: não consegui conferir os nomes dos containers (${err instanceof Error ? err.message : String(err)}).`);
+    }
   }
 
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
@@ -735,6 +761,15 @@ export class DeployService {
   }
 
   /**
+   * Liga os containers que já rodam de um projeto com e-mail à rede de e-mail
+   * (migração A4). Projeto que não existe mais ou sem containers: 0.
+   */
+  async joinMailNetwork(projectId: string): Promise<number> {
+    const project = await this.getProject(projectId);
+    return project ? this.engine.joinMailNetwork(project) : 0;
+  }
+
+  /**
    * Recarrega o Caddy com todos os projetos. Falha aqui não desfaz o que foi
    * gravado: o próximo ajuste (ou deploy) tenta de novo.
    */
@@ -897,7 +932,8 @@ export class DeployService {
         note: "Código ainda não ingerido (modo git). Os guardrails rodarão automaticamente no deploy, após o clone.",
       };
     }
-    return { report: await runGuardrails(dir, project.detection?.composeFile, project.portOverrides), note: null };
+    const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project));
+    return { report, note: null };
   }
 
   async detect(id: string): Promise<DetectResult> {
@@ -980,7 +1016,7 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides);
+      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project));
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",

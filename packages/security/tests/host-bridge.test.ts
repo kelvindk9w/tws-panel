@@ -418,7 +418,7 @@ describe("gramática da execução DESTACADA (lib.sh --paas-run-detached / --paa
 });
 
 describe("constantes do helper", () => {
-  it("imagem padrão é alpine:3", () => {
-    expect(HOST_HELPER_IMAGE_DEFAULT).toBe("alpine:3");
+  it("imagem padrão é alpine:3, fixada por digest (A3: a tag sozinha pode ser regravada por um projeto)", () => {
+    expect(HOST_HELPER_IMAGE_DEFAULT).toMatch(/^alpine:3@sha256:[0-9a-f]{64}$/);
   });
 });

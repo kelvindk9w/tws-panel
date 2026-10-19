@@ -136,4 +136,26 @@ describe("composeOverrideYaml", () => {
     const ports = JSON.parse(out).services.web.ports as Array<{ published: string; target: number }>;
     expect(ports.map((p) => `${p.published}:${p.target}`)).toEqual(["8010:8010"]);
   });
+
+  it("projeto com e-mail: os serviços de mailServices entram na rede de e-mail, sem alias, e o web segue na rede do proxy", () => {
+    const doc = parse(
+      composeOverrideYaml({
+        compose: APP,
+        proxyService: "web",
+        slug: "loja",
+        network: "paas-net",
+        mailNetwork: "paas-mail",
+        mailServices: ["web", "worker"],
+      }),
+    );
+    expect(doc.networks).toEqual({ "paas-net": { external: true }, "paas-mail": { external: true } });
+    expect(doc.services.web.networks).toEqual({ default: null, "paas-net": { aliases: ["loja"] }, "paas-mail": null });
+    expect(doc.services.worker.networks).toEqual({ default: null, "paas-mail": null });
+  });
+
+  it("sem e-mail habilitado: a rede de e-mail nem é declarada", () => {
+    const doc = parse(composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-net", mailNetwork: "paas-mail", mailServices: [] }));
+    expect(doc.networks).toEqual({ "paas-net": { external: true } });
+    expect(doc.services.worker).toBeUndefined();
+  });
 });

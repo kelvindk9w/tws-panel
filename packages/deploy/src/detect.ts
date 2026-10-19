@@ -134,7 +134,7 @@ export async function detectProject(dir: string): Promise<DetectResult> {
     }
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
-      warnings.push(...analyzeCompose(content, composeFile));
+      warnings.push(...analyzeCompose(content, composeFile, dir));
     } catch {
       warnings.push({
         id: "compose.invalid-yaml",

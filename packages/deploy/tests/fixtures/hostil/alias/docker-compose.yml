@@ -1,0 +1,13 @@
+services:
+  web:
+    image: nginx:1.27
+    networks:
+      paas-net:
+        aliases: [paas-stalwart, tws-panel, vitima, paas-caddy]
+  side:
+    image: alpine:3.20
+    container_name: paas-webmail
+    labels: {paas.project: vitima, paas.managed: "true", com.docker.compose.project: paas-vitima}
+    networks: [paas-net]
+networks:
+  paas-net: {external: true}

@@ -38,6 +38,9 @@ interface MockState {
   waitStatusCodes: number[];
   /** Status de POST /containers/create (201 = criado). */
   createStatus: number;
+  /** Imagem ausente no daemon: o GET /images/.../json dá 404 e o POST /images/create é registrado. */
+  imageMissing: boolean;
+  pulls: string[];
 }
 
 let server: http.Server | null = null;
@@ -49,7 +52,7 @@ let upgradedSockets: Set<import("node:stream").Duplex>;
 beforeEach(async () => {
   tmp = await mkdtemp(path.join(tmpdir(), "paas-docker-mock-"));
   socketPath = path.join(tmp, "docker.sock");
-  state = { containers: [], deleted: [], listStatus: 200, created: [], waitStatusCode: 0, waitStatusCodes: [], createStatus: 201 };
+  state = { containers: [], deleted: [], listStatus: 200, created: [], waitStatusCode: 0, waitStatusCodes: [], createStatus: 201, imageMissing: false, pulls: [] };
   upgradedSockets = new Set();
   server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url?.startsWith("/containers/json")) {
@@ -62,6 +65,17 @@ beforeEach(async () => {
       return;
     }
     // imagem "sempre presente" — o teste do helper ativo não exercita pull.
+    if (req.method === "POST" && req.url?.startsWith("/images/create")) {
+      state.pulls.push(decodeURIComponent(req.url));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "Pulled" }));
+      return;
+    }
+    if (req.method === "GET" && req.url?.startsWith("/images/") && state.imageMissing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ message: "no such image" }));
+      return;
+    }
     if (req.method === "GET" && req.url?.startsWith("/images/")) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ Id: "sha256:fake" }));
@@ -421,5 +435,30 @@ describe("acesso do usuário do terminal ao Docker do host", () => {
         ...NSENTER, "runuser", "-u", "kelvin", "--", "test", "-w", "/var/run/docker.sock",
       ]);
     });
+  });
+});
+
+describe("ensureImage — referência por digest (A3)", () => {
+  const DIGEST = "sha256:294b683c1e4f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d";
+
+  it("repo:tag@sha256 vai inteiro em fromImage, sem tag separada", async () => {
+    state.imageMissing = true;
+    await checkHostDockerAccess(socketPath, `alpine:3@${DIGEST}`, "kelvin");
+    expect(state.pulls[0]).toBe(`/images/create?fromImage=alpine@${DIGEST}`);
+  });
+
+  it("repo@sha256 e registro com porta também", async () => {
+    state.imageMissing = true;
+    await checkHostDockerAccess(socketPath, `localhost:5000/img@${DIGEST}`, "kelvin");
+    expect(state.pulls[0]).toBe(`/images/create?fromImage=localhost:5000/img@${DIGEST}`);
+  });
+
+  it("tag comum continua com fromImage e tag", async () => {
+    state.imageMissing = true;
+    await checkHostDockerAccess(socketPath, "alpine:3", "kelvin");
+    expect(state.pulls[0]).toBe("/images/create?fromImage=alpine&tag=3");
+    state.pulls.length = 0;
+    await checkHostDockerAccess(socketPath, "alpine", "kelvin");
+    expect(state.pulls[0]).toBe("/images/create?fromImage=alpine&tag=latest");
   });
 });

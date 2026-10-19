@@ -1,0 +1,4 @@
+services:
+  web:
+    build: {context: /, dockerfile: /etc/passwd}
+    env_file: ["/data/vault.key", "../../../etc/shadow"]

@@ -5,15 +5,9 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  PAAS_LABEL_MANAGED,
-  PAAS_LABEL_PROJECT,
-  type DockerContainerInfo,
-} from "@paas/core";
+import { containerIdentity, type DockerContainerInfo } from "@paas/core";
 
 const execFileAsync = promisify(execFile);
-
-const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
 
 /**
  * Falha de domínio: Docker ausente/inacessível. NUNCA deve ser confundida
@@ -98,13 +92,8 @@ export function classifyContainer(labels: Map<string, string>): {
   projectSlug: string | null;
   composeProject: string | null;
 } {
-  const composeProject = labels.get(COMPOSE_PROJECT_LABEL) ?? null;
-  const directProject = labels.get(PAAS_LABEL_PROJECT) ?? null;
-  const managedByLabel = labels.get(PAAS_LABEL_MANAGED) === "true";
-  const managedByCompose = composeProject?.startsWith("paas-") ?? false;
-  const managed = managedByLabel || managedByCompose;
-  const projectSlug = directProject ?? (managedByCompose ? composeProject!.slice(5) : null);
-  return { managed, projectSlug, composeProject };
+  // M9: o dono vem da label que o projeto não consegue forjar (ver containerIdentity).
+  return containerIdentity(labels);
 }
 
 /**

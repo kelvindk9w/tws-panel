@@ -150,14 +150,17 @@ async function ensureImage(socketPath: string, image: string): Promise<void> {
   if (inspect.status === 200) return;
   // tag = trecho após o último ":", somente se depois da última "/" (evita
   // confundir porta de registry, ex.: localhost:5000/img, com tag).
-  const colon = image.lastIndexOf(":");
-  const hasTag = colon > image.lastIndexOf("/");
-  const name = hasTag ? image.slice(0, colon) : image;
-  const tag = hasTag ? image.slice(colon + 1) : "latest";
+  // Por digest (`repo[:tag]@sha256:…`): o pull leva `repo@sha256:…` inteiro em fromImage, sem tag.
+  const at = image.indexOf("@");
+  const base = at === -1 ? image : image.slice(0, at);
+  const colon = base.lastIndexOf(":");
+  const hasTag = colon > base.lastIndexOf("/");
+  const name = at !== -1 ? `${hasTag ? base.slice(0, colon) : base}${image.slice(at)}` : hasTag ? base.slice(0, colon) : base;
+  const tag = at !== -1 ? "" : hasTag ? base.slice(colon + 1) : "latest";
   const pull = await request(
     socketPath,
     "POST",
-    `/images/create?fromImage=${encodeURIComponent(name)}&tag=${encodeURIComponent(tag)}`,
+    `/images/create?fromImage=${encodeURIComponent(name)}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`,
     {},
   );
   if (pull.status < 200 || pull.status >= 300) {
