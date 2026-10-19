@@ -124,6 +124,20 @@ describe("o ambiente do compose é montado pelo painel e é o mesmo no config e 
     expect(texto.slice(texto.lastIndexOf("DATABASE_URL"))).toContain("postgres://painel");
   });
 
+  it("o log diz ONDE as variáveis foram gravadas: no .env do projeto, ou no paas.env quando o .env é do dono", async () => {
+    const run = async () => {
+      const log: string[] = [];
+      await (engine() as unknown as Privado).deployCompose(project(), src, (c: string) => log.push(c), { A: "1" }, {}, null, false);
+      return log.join("");
+    };
+    expect(await run()).toMatch(/Variáveis gravadas no \.env do projeto \(A\)/);
+    await rm(path.join(src, ".env"), { force: true });
+    await writeFile(path.join(src, ".env"), "DO_DONO=1\n");
+    const separado = await run();
+    expect(separado).toMatch(/gravadas em .*paas\.env.*--env-file.*NÃO foi alterado/);
+    expect(separado).not.toMatch(/gravadas no \.env do projeto/);
+  });
+
   it("sem .env nem variáveis: o env-file existe e é do painel (o compose não procura src/.env sozinho)", async () => {
     await deploy();
     const arquivo = envFileDe(sobe());

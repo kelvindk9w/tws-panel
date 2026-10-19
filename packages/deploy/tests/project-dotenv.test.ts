@@ -159,6 +159,53 @@ describe("writeProjectDotenv", () => {
   });
 });
 
+describe("writeProjectDotenv — .env que o dono editou depois de o painel gerar (A6)", () => {
+  it("o painel guarda o que gravou; arquivo editado pelo dono (mesmo com o cabeçalho) NÃO é sobrescrito", async () => {
+    gitInit();
+    const primeira = await writeProjectDotenv(src, work, { A: "1" });
+    expect(primeira.target).toBe(".env");
+    await writeFile(path.join(src, ".env"), (await readFile(path.join(src, ".env"), "utf8")) + "MINHA_CHAVE='do-dono'\n");
+    const segunda = await writeProjectDotenv(src, work, { A: "2" });
+    expect(segunda.target).toBe("paas.env");
+    expect(await readFile(path.join(src, ".env"), "utf8")).toMatch(/MINHA_CHAVE='do-dono'/);
+    expect(await readFile(path.join(src, ".env"), "utf8")).not.toMatch(/A='2'/);
+    expect(await readFile(path.join(work, "paas.env"), "utf8")).toMatch(/A='2'/);
+    expect(segunda.envFileArgs).toEqual(["--env-file", path.join(work, "paas.env")]);
+    expect(segunda.note).toMatch(/editado/);
+  });
+
+  it("arquivo que o painel gerou e ninguém mexeu continua sendo regravado a cada deploy", async () => {
+    gitInit();
+    await writeProjectDotenv(src, work, { A: "1" });
+    const r = await writeProjectDotenv(src, work, { A: "2", B: "3" });
+    expect(r.target).toBe(".env");
+    expect(await readFile(path.join(src, ".env"), "utf8")).toMatch(/A='2'[\s\S]*B='3'/);
+    expect(existsSync(path.join(work, "paas.env"))).toBe(false);
+  });
+
+  it("todas as variáveis excluídas: .env editado pelo dono fica; o intacto é apagado junto com o registro", async () => {
+    gitInit();
+    await writeProjectDotenv(src, work, { A: "1" });
+    await writeFile(path.join(src, ".env"), (await readFile(path.join(src, ".env"), "utf8")) + "MINHA='x'\n");
+    await writeProjectDotenv(src, work, {});
+    expect(existsSync(path.join(src, ".env"))).toBe(true);
+
+    await rm(path.join(src, ".env"));
+    await writeProjectDotenv(src, work, { A: "1" });
+    await writeProjectDotenv(src, work, {});
+    expect(existsSync(path.join(src, ".env"))).toBe(false);
+    expect(existsSync(path.join(work, "paas.dotenv.hash"))).toBe(false);
+  });
+
+  it(".env gerado por versão antiga do painel (cabeçalho, sem registro): segue sendo do painel", async () => {
+    gitInit();
+    await writeProjectDotenv(src, work, { A: "1" });
+    await rm(path.join(work, "paas.dotenv.hash"), { force: true });
+    const r = await writeProjectDotenv(src, work, { A: "2" });
+    expect(r.target).toBe(".env");
+  });
+});
+
 describe("composeVariables — o que o compose espera", () => {
   it("lista as variáveis, dizendo quais são obrigatórias e quais têm padrão", () => {
     const vars = composeVariables(`services:
