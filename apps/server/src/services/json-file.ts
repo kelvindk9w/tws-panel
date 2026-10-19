@@ -26,6 +26,7 @@
  * Os temporários terminam em `.tmp`: o backup do painel já os ignora.
  */
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { chmod, link, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
@@ -143,7 +144,7 @@ export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
     if (existing.present) {
       // conteúdo que não é chave (vazio, truncado, não-hexa): vai para o lado,
       // nunca é apagado — se era a chave de alguém, o dono ainda pode recuperá-la
-      await rename(file, `${file}.corrompido-${stamp()}`);
+      await rename(file, asideName(file));
     }
     if (await createFileOnce(file, text)) return generated;
     // outro processo criou entre a leitura e a criação: vale a dele
@@ -156,6 +157,18 @@ export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
 /** Data em formato seguro para nome de arquivo (2026-10-16T12-00-00-000Z). */
 function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/**
+ * Nome para guardar um arquivo ilegível à parte. Nunca o de um que já foi
+ * guardado (o rename sobrescreveria a cópia anterior): no mesmo instante, o
+ * nome ganha um número.
+ */
+function asideName(file: string): string {
+  const base = `${file}.corrompido-${stamp()}`;
+  let name = base;
+  for (let i = 2; existsSync(name); i++) name = `${base}-${i}`;
+  return name;
 }
 
 export interface LoadJsonOptions<T> {
@@ -206,7 +219,7 @@ export async function loadJsonInLock<T>(file: string, opts: LoadJsonOptions<T>):
       `O arquivo ${path.basename(file)} está ilegível e não foi alterado. Restaure uma cópia ou renomeie-o para o painel recomeçar do zero.`,
     );
   }
-  const aside = `${file}.corrompido-${stamp()}`;
+  const aside = asideName(file);
   await rename(file, aside);
   opts.log?.(`${path.basename(file)} estava ilegível; guardei como ${path.basename(aside)} e comecei do zero.`);
   return opts.empty();
@@ -271,7 +284,7 @@ export class JsonFile<T> {
       const { value, unreadable } = await this.readRaw();
       const next = await change(value);
       if (next === value) return next;
-      if (unreadable) await rename(this.file, `${this.file}.corrompido-${stamp()}`);
+      if (unreadable) await rename(this.file, asideName(this.file));
       await this.write(next);
       return next;
     });
