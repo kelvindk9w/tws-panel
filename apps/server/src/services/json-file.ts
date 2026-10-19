@@ -118,15 +118,18 @@ export async function createFileOnce(file: string, data: string | Buffer, opts: 
  * Chave de cifra guardada em hexa num arquivo próprio (0600). Lê; se não
  * existe, cria — dentro da fila do arquivo e com criação exclusiva, então
  * chamadas paralelas na primeira vez (e outro processo) recebem TODAS a
- * mesma chave. Conteúdo que não é uma chave do tamanho certo (nada pode ter
- * sido cifrado com ele) é trocado por uma nova, como os stores já faziam.
- * Guarde a promessa devolvida: ela é a "carga única" do store.
+ * mesma chave. Erro de leitura que não seja "não existe" (E/S, permissão)
+ * é LANÇADO: gerar outra chave por cima tornaria ilegível tudo o que a antiga
+ * cifrou. Conteúdo que não é uma chave do tamanho certo é guardado à parte
+ * (`<arquivo>.corrompido-<data>`) e uma chave nova é criada. Guarde a
+ * promessa devolvida: ela é a "carga única" do store.
  */
 export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
   const read = async (): Promise<{ key: Buffer | null; present: boolean }> => {
     try {
-      const raw = Buffer.from((await readFile(file, "utf8")).trim(), "hex");
-      return { key: raw.length === bytes ? raw : null, present: true };
+      const hex = (await readFile(file, "utf8")).trim();
+      const ok = hex.length === bytes * 2 && /^[0-9a-fA-F]+$/.test(hex);
+      return { key: ok ? Buffer.from(hex, "hex") : null, present: true };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return { key: null, present: false };
       throw err;
@@ -138,8 +141,9 @@ export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
     const generated = randomBytes(bytes);
     const text = generated.toString("hex") + "\n";
     if (existing.present) {
-      await writeFileAtomic(file, text);
-      return generated;
+      // conteúdo que não é chave (vazio, truncado, não-hexa): vai para o lado,
+      // nunca é apagado — se era a chave de alguém, o dono ainda pode recuperá-la
+      await rename(file, `${file}.corrompido-${stamp()}`);
     }
     if (await createFileOnce(file, text)) return generated;
     // outro processo criou entre a leitura e a criação: vale a dele

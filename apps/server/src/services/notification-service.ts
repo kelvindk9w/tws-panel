@@ -38,7 +38,7 @@ import {
 import { isSingleEmailAddress } from "@paas/mailer";
 import { httpError } from "./http-error.js";
 import { TelegramError, type TelegramClient } from "./telegram-client.js";
-import { writeFileAtomic } from "./json-file.js";
+import { loadOrCreateKey, writeFileAtomic } from "./json-file.js";
 
 /** Um aviso pedido por algum módulo do painel. */
 export interface NotificationEvent {
@@ -253,19 +253,9 @@ export class NotificationService {
     return this.loading;
   }
 
+  /** Chave de cifra: lida (ou criada) uma vez; erro de leitura falha a carga (json-file.ts). */
   private async loadKey(): Promise<void> {
-    try {
-      const raw = Buffer.from((await readFile(this.keyFile, "utf8")).trim(), "hex");
-      if (raw.length === KEY_BYTES) {
-        this.key = raw;
-        return;
-      }
-    } catch {
-      // sem chave ainda — gera abaixo
-    }
-    const fresh = randomBytes(KEY_BYTES);
-    await writeFileAtomic(this.keyFile, fresh.toString("hex") + "\n");
-    this.key = fresh;
+    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES);
   }
 
   private seal(secret: string): SealedBox {

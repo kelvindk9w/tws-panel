@@ -93,7 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 
@@ -578,19 +578,9 @@ export class BackupService {
     return this.loading;
   }
 
+  /** Chave de cifra: lida (ou criada) uma vez; erro de leitura falha a carga (json-file.ts). */
   private async loadKey(): Promise<void> {
-    try {
-      const raw = Buffer.from((await readFile(this.keyFile, "utf8")).trim(), "hex");
-      if (raw.length === KEY_BYTES) {
-        this.key = raw;
-        return;
-      }
-    } catch {
-      // sem chave ainda — gera abaixo
-    }
-    const fresh = randomBytes(KEY_BYTES);
-    await writeFileAtomic(this.keyFile, fresh.toString("hex") + "\n");
-    this.key = fresh;
+    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES);
   }
 
   private seal(secret: string): SealedBox {

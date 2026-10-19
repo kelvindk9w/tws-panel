@@ -136,6 +136,16 @@ describe("loadOrCreateKey", () => {
     await mkdir(path.join(dir, "pasta"));
     await expect(loadOrCreateKey(path.join(dir, "pasta"), 16)).rejects.toThrow();
   });
+
+  it("conteúdo inválido (não-hexa, tamanho errado) é guardado à parte, nunca apagado", async () => {
+    const file = path.join(dir, "k");
+    await writeFile(file, "z".repeat(40) + "\n");
+    const k = await loadOrCreateKey(file, 32);
+    expect(k.toString("hex")).toMatch(/^[0-9a-f]{64}$/);
+    const aparte = (await readdir(dir)).filter((n) => n.startsWith("k.corrompido-"));
+    expect(aparte).toHaveLength(1);
+    expect(await readFile(path.join(dir, aparte[0]!), "utf8")).toBe("z".repeat(40) + "\n");
+  });
 });
 
 describe("JsonFile", () => {
