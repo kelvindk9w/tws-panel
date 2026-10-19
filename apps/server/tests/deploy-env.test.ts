@@ -215,7 +215,7 @@ describe("variáveis que o compose espera", () => {
   it("lê o compose do projeto e lista as variáveis (obrigatórias e com padrão)", async () => {
     const { mkdir, writeFile } = await import("node:fs/promises");
     const p = await projeto();
-    const src = path.join(dataDir, "projects", p.slug, "src");
+    const src = path.join(dataDir, "projects", ".paas", p.id, "src");
     await mkdir(src, { recursive: true });
     await writeFile(path.join(src, "compose.prod.yaml"), "services:\n  db:\n    environment:\n      A: ${POSTGRES_USER:?defina}\n      B: ${SMTP_HOST:-mailpit}\n");
     const proj = (await svc.getProject(p.id))!;
@@ -242,7 +242,7 @@ describe("deploy barrado antes de começar quando falta variável obrigatória",
   async function composeProject(compose: string) {
     const { mkdir, writeFile } = await import("node:fs/promises");
     const p = await projeto();
-    const src = path.join(dataDir, "projects", p.slug, "src");
+    const src = path.join(dataDir, "projects", ".paas", p.id, "src");
     await mkdir(src, { recursive: true });
     await writeFile(path.join(src, "compose.paas.yaml"), compose);
     const proj = (await svc.getProject(p.id))!;
@@ -280,7 +280,7 @@ describe("nomes do .env.example do código", () => {
   async function comCodigo(files: Record<string, string>, composeFile?: string, name = "api") {
     const { mkdir, writeFile } = await import("node:fs/promises");
     const p = await projeto(name);
-    const src = path.join(dataDir, "projects", p.slug, "src");
+    const src = path.join(dataDir, "projects", ".paas", p.id, "src");
     for (const [rel, content] of Object.entries(files)) {
       await mkdir(path.dirname(path.join(src, rel)), { recursive: true });
       await writeFile(path.join(src, rel), content);

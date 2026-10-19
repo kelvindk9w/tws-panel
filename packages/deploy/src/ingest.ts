@@ -11,6 +11,7 @@ import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
 import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
+import { uploadOverlapBlocker } from "./workdir-safety.js";
 
 /** Diretórios/arquivos excluídos ao copiar código no modo upload. */
 const UPLOAD_EXCLUDES = new Set(["node_modules", ".git", "dist", "out", "build", ".next", ".turbo"]);
@@ -143,9 +144,34 @@ export interface IngestContext {
   credentialFor?: (project: Project) => Promise<GitReadCredential | null>;
 }
 
-/** Diretório de trabalho do projeto (data/projects/<slug>). */
+/** Pasta reservada ao painel dentro da pasta de projetos (nunca é de usuário: o nome tem ponto no começo e os projetos dentro dela têm id gerado). */
+export const RESERVED_DIRNAME = ".paas";
+
+/** `<pasta de projetos>/.paas`. */
+export function reservedRoot(ctx: IngestContext): string {
+  return path.join(ctx.projectsDir, RESERVED_DIRNAME);
+}
+
+/**
+ * Diretório de trabalho do projeto: onde o painel guarda o que GERA (clone,
+ * repositório do painel, paas.*). Projeto novo: `<projetos>/.paas/<id>`.
+ * Projeto de antes da área reservada: `<projetos>/<slug>` (ver Project.storageLayout).
+ */
 export function projectWorkDir(ctx: IngestContext, project: Project): string {
+  if (project.storageLayout === "reserved") {
+    if (!/^[A-Za-z0-9_-]+$/.test(project.id)) throw new Error(`Identificador de projeto inválido: ${project.id}`);
+    return path.join(reservedRoot(ctx), project.id);
+  }
   return path.join(ctx.projectsDir, project.slug);
+}
+
+/** a e b são o mesmo caminho, ou um está dentro do outro (caminhos já resolvidos). */
+export function pathsOverlap(a: string, b: string): boolean {
+  const within = (root: string, p: string) => {
+    const rel = path.relative(root, p);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  };
+  return within(a, b) || within(b, a);
 }
 
 /** Diretório do código-fonte efetivo do projeto. */
@@ -301,6 +327,10 @@ async function ingestUpload(
 ): Promise<string> {
   const from = path.resolve(project.source);
   const to = projectSrcDir(ctx, project);
+  // a cópia apaga `to` antes de copiar: se a origem é (ou contém, ou está
+  // dentro de) a pasta do painel para este projeto, o código do usuário se perderia
+  const blocker = await uploadOverlapBlocker(ctx, project);
+  if (blocker) throw new Error(blocker);
   onLog(`Copiando ${from} → ${to} (excluindo ${[...UPLOAD_EXCLUDES].join(", ")})…\n`);
   await rm(to, { recursive: true, force: true });
   await cp(from, to, {

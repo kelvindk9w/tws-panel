@@ -7,7 +7,10 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { isInsideProjectsDir } from "./projects-dir.js";
+import { isInsideProjectsDir, isPanelArea, sameFolder } from "./projects-dir.js";
+
+const PANEL_AREA_MESSAGE =
+  "Essa pasta é a própria pasta de projetos ou a área interna do painel (.paas). Escolha a pasta do código dentro da pasta de projetos.";
 import { httpError, type HttpError } from "./http-error.js";
 import { GithubIntegration } from "./github-integration.js";
 import { ProjectEnvStore, type EnvVar } from "./project-env.js";
@@ -55,6 +58,7 @@ import {
   projectSrcDir,
   projectWorkDir,
   runGuardrails,
+  workDirRemovalBlocker,
   composeVariables,
   composeEnvFiles,
   composeTimezoneDefinitions,
@@ -226,7 +230,8 @@ export class DeployService {
     this.currentPanelSite = config.panelDomain
       ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
       : null;
-    this.projectsDir = config.projectsDir;
+    // o mesmo padrão de config.ts (PAAS_PROJECTS_DIR ?? <dataDir>/projects)
+    this.projectsDir = config.projectsDir ?? path.join(config.dataDir, "projects");
     this.projectsFile = path.join(config.dataDir, "projects.json");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
     this.caddyHttpPort = config.caddyHttpPort;
@@ -732,6 +737,9 @@ export class DeployService {
         `A pasta precisa estar dentro da pasta de projetos (${this.projectsDir}).`,
       );
     }
+    if ((req.ingestMode === "upload" || req.ingestMode === "existing") && (await isPanelArea(this.projectsDir, source))) {
+      throw httpError(400, "source_reserved", PANEL_AREA_MESSAGE);
+    }
     if ((req.ingestMode === "upload" || req.ingestMode === "existing") && !existsSync(path.resolve(source))) {
       throw httpError(400, "source_not_found", `Caminho não encontrado: ${source}`);
     }
@@ -741,6 +749,18 @@ export class DeployService {
 
     let slug = slugify(name);
     while (this.projects.some((p) => p.slug === slug)) slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
+    // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
+    // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
+    // do projeto (nome igual ao da pasta é o caso comum).
+    const slugFolder = path.join(this.projectsDir, slug);
+    if (existsSync(slugFolder) && !(req.ingestMode !== "git" && (await sameFolder(slugFolder, source)))) {
+      throw httpError(
+        409,
+        "slug_folder_exists",
+        `Já existe uma pasta "${slug}" na pasta de projetos (${this.projectsDir}). Escolha outro nome para o projeto.`,
+      );
+    }
     if (this.domainInUse(domain, null)) {
       throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso por outro projeto.`);
     }
@@ -764,6 +784,8 @@ export class DeployService {
       lastDeployStatus: null,
       deployedBranch: null,
       deployedSource: null,
+      // o que o painel gera mora em <projetos>/.paas/<id>, longe das pastas do usuário
+      storageLayout: "reserved",
     };
     this.projects.push(project);
     await this.saveProjects();
@@ -819,6 +841,9 @@ export class DeployService {
           `A pasta precisa estar dentro da pasta de projetos (${this.projectsDir}).`,
         );
       }
+      if (project.ingestMode !== "git" && (await isPanelArea(this.projectsDir, source))) {
+        throw httpError(400, "source_reserved", PANEL_AREA_MESSAGE);
+      }
       changes.source = source;
     }
     if (req.branch !== undefined) {
@@ -871,11 +896,16 @@ export class DeployService {
       onLog("Credencial de leitura do repositório removida do cofre.\n");
     }
     if (deleteSource && project.ingestMode !== "existing") {
-      await rm(projectWorkDir({ projectsDir: this.projectsDir }, project), {
-        recursive: true,
-        force: true,
-      });
-      onLog("Código-fonte removido.\n");
+      // O alvo é conferido ANTES (A5): não pode ser a pasta do usuário, conter a
+      // fonte deste projeto ou a de outro, nem ficar dentro delas.
+      const ctx = { projectsDir: this.projectsDir };
+      const blocker = await workDirRemovalBlocker(ctx, project, this.projects);
+      if (blocker) {
+        onLog(`Código-fonte NÃO removido: ${blocker} Confira a pasta e apague à mão, se for o caso.\n`);
+      } else {
+        await rm(projectWorkDir(ctx, project), { recursive: true, force: true });
+        onLog("Código-fonte removido.\n");
+      }
     }
     await this.saveProjects();
   }
