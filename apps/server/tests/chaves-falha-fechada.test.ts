@@ -135,4 +135,30 @@ describe("M6 — chave ilegível por erro passageiro", () => {
     falha.arquivo = null;
     expect(await lerChave("backups-key")).toBe(antes);
   });
+
+  it("cofre: chave truncada com credenciais já gravadas → a carga falha e a chave ruim não é trocada", async () => {
+    const primeiro = new CredentialVault(dir);
+    await primeiro.set("p1", { username: "u", token: "token-secreto-1234" });
+    await writeFile(path.join(dir, "credentials-key"), "abcd\n");
+    await expect(new CredentialVault(dir).get("p1")).rejects.toThrow(/1 credencial.*restaurar-painel\.sh/s);
+    expect(await lerChave("credentials-key")).toBe("abcd\n");
+  });
+
+  it("backups: chave inválida com senha/destino já gravados → falha, sem trocar a chave", async () => {
+    const opcoes = {
+      dataDir: dir,
+      projectsDir: path.join(dir, "projects"),
+      docker: {},
+      archiver: { available: async () => true },
+      storage: () => ({}),
+      projects: { list: async () => [], get: async () => null, srcDir: () => dir, redeploy: async () => undefined },
+      mail: {},
+      verifyLogin: async () => true,
+      log: () => undefined,
+    } as unknown as ConstructorParameters<typeof BackupService>[0];
+    await writeFile(path.join(dir, "backups-key"), "abcd\n");
+    await writeFile(path.join(dir, "backups.json"), JSON.stringify({ encryption: { enabled: true, password: { iv: "a", tag: "b", data: "c" } } }));
+    await expect(new BackupService(opcoes).status()).rejects.toThrow(/senha dos backups.*restaurar-painel\.sh/s);
+    expect(await lerChave("backups-key")).toBe("abcd\n");
+  });
 });

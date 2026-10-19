@@ -146,6 +146,35 @@ describe("loadOrCreateKey", () => {
     expect(aparte).toHaveLength(1);
     expect(await readFile(path.join(dir, aparte[0]!), "utf8")).toBe("z".repeat(40) + "\n");
   });
+
+  it("chave inválida trocada: registra um aviso claro dizendo onde ficou o conteúdo e o que se perde", async () => {
+    const file = path.join(dir, "k");
+    await writeFile(file, "abcd\n");
+    const avisos: string[] = [];
+    await loadOrCreateKey(file, 32, { log: (m) => avisos.push(m) });
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0]).toMatch(/k não tinha uma chave válida.*k\.corrompido-.*não poderá mais ser lido/s);
+  });
+
+  it("chave inválida com dados cifrados que dependem dela: falha fechada, nada é trocado", async () => {
+    const file = path.join(dir, "k");
+    await writeFile(file, "abcd\n");
+    await expect(loadOrCreateKey(file, 32, { dependents: async () => "2 credenciais de repositório" })).rejects.toThrow(
+      /2 credenciais de repositório.*restaurar-painel\.sh/s,
+    );
+    expect(await readFile(file, "utf8")).toBe("abcd\n");
+    expect(await readdir(dir)).toEqual(["k"]);
+    // sem dependentes, segue o caminho normal
+    expect(await loadOrCreateKey(file, 32, { dependents: async () => null })).toHaveLength(32);
+  });
+
+  it("erro de disco (permissão) vira mensagem em português sobre as permissões da pasta de dados", async () => {
+    const file = path.join(dir, "pasta", "k");
+    await writeFile(path.join(dir, "pasta"), "arquivo no lugar da pasta"); // mkdir/criação falha com ENOTDIR
+    await expect(loadOrCreateKey(file, 32)).rejects.toThrow(/Não consegui (ler|gravar) .*k.*permiss/s);
+    await mkdir(path.join(dir, "d"));
+    await expect(loadOrCreateKey(path.join(dir, "d"), 32)).rejects.toThrow(/Não consegui ler d.*permiss/s);
+  });
 });
 
 describe("JsonFile", () => {

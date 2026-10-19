@@ -21,6 +21,7 @@
  * 4 últimos caracteres como dica de conferência.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_GIT_CREDENTIAL_USERNAME,
@@ -71,7 +72,17 @@ export class CredentialVault {
    */
   async init(): Promise<void> {
     if (this.key) return;
-    this.key = await (this.keyLoading ??= loadOrCreateKey(this.keyFile, KEY_BYTES).catch((err: unknown) => {
+    this.key = await (this.keyLoading ??= loadOrCreateKey(this.keyFile, KEY_BYTES, {
+      log: (m) => console.warn(m),
+      dependents: async () => {
+        try {
+          const n = (JSON.parse(await readFile(this.file, "utf8")) as Partial<CredentialsFile>).credentials?.length ?? 0;
+          return n > 0 ? `${n} credencial(is) de repositório` : null;
+        } catch {
+          return null;
+        }
+      },
+    }).catch((err: unknown) => {
       this.keyLoading = null;
       throw err;
     }));

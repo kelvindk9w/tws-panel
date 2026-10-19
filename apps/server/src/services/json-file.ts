@@ -125,7 +125,28 @@ export async function createFileOnce(file: string, data: string | Buffer, opts: 
  * (`<arquivo>.corrompido-<data>`) e uma chave nova é criada. Guarde a
  * promessa devolvida: ela é a "carga única" do store.
  */
-export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
+export interface LoadKeyOptions {
+  /** Aviso quando uma chave inválida é guardada à parte e substituída. */
+  log?: (message: string) => void;
+  /**
+   * Descreve o que está cifrado com esta chave (ou null se nada). Com conteúdo
+   * inválido E dados que dependem dela, a carga FALHA: uma chave nova os
+   * tornaria ilegíveis para sempre.
+   */
+  dependents?: () => Promise<string | null>;
+}
+
+/** Erro de disco ao ler/gravar a chave, em português e dizendo o que conferir. */
+function keyDiskError(file: string, action: "ler" | "gravar", err: unknown): Error {
+  const code = (err as NodeJS.ErrnoException).code ?? "erro";
+  return new Error(
+    `Não consegui ${action} ${path.basename(file)} (${code}). Confira as permissões da pasta de dados do painel (/data no Docker): ` +
+      "o dono do processo precisa poder ler e gravar nela. O painel não cria outra chave por cima para não perder o que está cifrado.",
+    { cause: err },
+  );
+}
+
+export function loadOrCreateKey(file: string, bytes: number, opts: LoadKeyOptions = {}): Promise<Buffer> {
   const read = async (): Promise<{ key: Buffer | null; present: boolean }> => {
     try {
       const hex = (await readFile(file, "utf8")).trim();
@@ -133,23 +154,43 @@ export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
       return { key: ok ? Buffer.from(hex, "hex") : null, present: true };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return { key: null, present: false };
-      throw err;
+      throw keyDiskError(file, "ler", err);
     }
   };
   return withFileLock(file, async () => {
     const existing = await read();
     if (existing.key) return existing.key;
+    const name = path.basename(file);
+    if (existing.present) {
+      const dependents = await opts.dependents?.();
+      if (dependents) {
+        throw new Error(
+          `O arquivo ${name} existe, mas não tem uma chave válida, e há ${dependents} cifrado(s) com ela. ` +
+            "O painel não gera outra chave sozinho (tudo isso ficaria ilegível). Restaure o arquivo a partir de um backup do painel " +
+            "ou rode scripts/restaurar-painel.sh no servidor.",
+        );
+      }
+    }
     const generated = randomBytes(bytes);
     const text = generated.toString("hex") + "\n";
-    if (existing.present) {
-      // conteúdo que não é chave (vazio, truncado, não-hexa): vai para o lado,
-      // nunca é apagado — se era a chave de alguém, o dono ainda pode recuperá-la
-      await rename(file, asideName(file));
+    try {
+      if (existing.present) {
+        // conteúdo que não é chave (vazio, truncado, não-hexa): vai para o lado,
+        // nunca é apagado — se era a chave de alguém, o dono ainda pode recuperá-la
+        const aside = asideName(file);
+        await rename(file, aside);
+        opts.log?.(
+          `Aviso: ${name} não tinha uma chave válida; guardei o conteúdo como ${path.basename(aside)} e criei uma chave nova. ` +
+            "O que tiver sido cifrado com a chave antiga não poderá mais ser lido.",
+        );
+      }
+      if (await createFileOnce(file, text)) return generated;
+    } catch (err) {
+      throw keyDiskError(file, "gravar", err);
     }
-    if (await createFileOnce(file, text)) return generated;
     // outro processo criou entre a leitura e a criação: vale a dele
     const other = await read();
-    if (!other.key) throw new Error(`A chave ${path.basename(file)} está ilegível.`);
+    if (!other.key) throw new Error(`A chave ${name} está ilegível.`);
     return other.key;
   });
 }

@@ -262,7 +262,7 @@ export class NotificationService {
 
   /** Chave de cifra: lida (ou criada) uma vez; erro de leitura falha a carga (json-file.ts). */
   private async loadKey(): Promise<void> {
-    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES);
+    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES, { log: this.log });
   }
 
   private seal(secret: string): SealedBox {

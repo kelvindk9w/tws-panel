@@ -143,7 +143,7 @@ export class TwoFactorService {
 
   /** Lida (ou criada) uma vez só: pedidos paralelos no primeiro uso nunca geram duas chaves. */
   private loadKey(): Promise<Buffer> {
-    this.keyLoading ??= loadOrCreateKey(this.keyFile, KEY_BYTES).catch((err: unknown) => {
+    this.keyLoading ??= loadOrCreateKey(this.keyFile, KEY_BYTES, { log: (m) => console.warn(m) }).catch((err: unknown) => {
       this.keyLoading = null;
       throw err;
     });

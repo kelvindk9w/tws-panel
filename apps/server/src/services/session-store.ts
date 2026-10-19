@@ -60,7 +60,7 @@ export class SessionStore {
    */
   async init(): Promise<void> {
     if (this.secret) return;
-    this.secret = await (this.secretLoading ??= loadOrCreateKey(this.secretFile, 32).catch((err: unknown) => {
+    this.secret = await (this.secretLoading ??= loadOrCreateKey(this.secretFile, 32, { log: (m) => console.warn(m) }).catch((err: unknown) => {
       this.secretLoading = null;
       throw err;
     }));

@@ -605,7 +605,19 @@ export class BackupService {
 
   /** Chave de cifra: lida (ou criada) uma vez; erro de leitura falha a carga (json-file.ts). */
   private async loadKey(): Promise<void> {
-    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES);
+    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES, {
+      log: this.log,
+      dependents: async () => {
+        try {
+          const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<StoredConfig>;
+          const itens = [raw.destination?.secret ? "a chave de acesso ao armazenamento externo" : null, raw.encryption?.password ? "a senha dos backups" : null];
+          const achados = itens.filter((i): i is string => i !== null);
+          return achados.length > 0 ? achados.join(" e ") : null;
+        } catch {
+          return null;
+        }
+      },
+    });
   }
 
   private seal(secret: string): SealedBox {
