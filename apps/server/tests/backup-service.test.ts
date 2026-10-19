@@ -14,7 +14,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Project } from "@paas/core";
+import { backupFileStamp, type Project } from "@paas/core";
 import { ArchiveError } from "../src/services/backup-archive.js";
 import type { ContainerInspect } from "../src/services/backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "../src/services/backup-docker.js";
@@ -1722,6 +1722,49 @@ describe("retenção nunca apaga o backup recém-criado (M5)", () => {
     expect(segundo.fileName).toBe(primeiro.fileName!.replace(".7z", "-2.7z"));
     expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([segundo.fileName]);
     expect((await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key))).toEqual([segundo.fileName]);
+  });
+
+  it("nome já usado só no armazenamento externo (a cópia local saiu pela retenção): o novo ganha outro nome e a cópia externa antiga NÃO é sobrescrita", async () => {
+    await connect();
+    await service.updateTarget(P1, { localKeep: 1, remoteKeep: 5 }, "admin");
+    const a = await backup();
+    const b = await backup(); // mesmo minuto; a cópia local de `a` sai (localKeep 1), a externa fica
+    expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([b.fileName]);
+    const chave = `TWS Panel Backups/loja/${a.fileName}`;
+    const original = Buffer.from(storage.objects.get(chave)!);
+    const c = await backup();
+    expect(new Set([a.fileName, b.fileName, c.fileName]).size).toBe(3);
+    expect(storage.objects.get(chave)!.equals(original)).toBe(true);
+    expect((await storage.list("TWS Panel Backups/loja/")).length).toBe(3);
+  });
+
+  it("nome que existe no histórico (cópia já apagada dos dois lados) também não é reaproveitado", async () => {
+    await connect();
+    await service.updateTarget(P1, { localKeep: 1, remoteKeep: 1 }, "admin");
+    const a = await backup();
+    const b = await backup();
+    const c = await backup();
+    expect(new Set([a.fileName, b.fileName, c.fileName]).size).toBe(3);
+  });
+
+  it("se o nome sorteado já existir fora na hora do envio, o envio é recusado em vez de sobrescrever", async () => {
+    await connect();
+    const gets = storage.list.bind(storage);
+    let primeira = true;
+    // a listagem de antes do nome não vê o objeto (corrida/consistência eventual); a conferência do envio vê
+    storage.list = async (prefix: string) => {
+      if (primeira) {
+        primeira = false;
+        return [];
+      }
+      return gets(prefix);
+    };
+    const nome = `${backupFileStamp(new Date(now))}.7z`;
+    storage.objects.set(`TWS Panel Backups/loja/${nome}`, Buffer.from("copia antiga"));
+    const r = await backup();
+    expect(r.remote).toBe("failed");
+    expect(r.remoteDetail).toMatch(/Já existe/);
+    expect(storage.objects.get(`TWS Panel Backups/loja/${nome}`)!.toString()).toBe("copia antiga");
   });
 
   it("fuso trocado entre dois backups (o nome novo ordena antes do antigo): o novo fica, o antigo sai", async () => {

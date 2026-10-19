@@ -1615,10 +1615,31 @@ export class BackupService {
   /** Backups em andamento que ficaram incompletos (ver StoredCopyInfo.incomplete). */
   private readonly incomplete = new WeakSet<BackupRecord>();
 
-  private uniqueName(dir: string): string {
+  /**
+   * Nome que NENHUMA cópia conhecida usa: nem a pasta da VPS, nem o
+   * armazenamento externo, nem o histórico deste alvo (M5). Sem isso, depois que
+   * a retenção apaga a cópia local, um backup no mesmo minuto reaproveitava o
+   * nome e o envio sobrescrevia a cópia externa antiga. Se o armazenamento não
+   * responder à listagem, vale o resto — e o envio ainda confere antes de gravar.
+   */
+  private async uniqueName(dir: string, folder: string, target: string): Promise<string> {
+    const used = new Set<string>();
+    for (const f of await this.localFiles(folder)) used.add(f);
+    for (const h of this.history) if (h.target === target && h.fileName) used.add(h.fileName);
+    const prefix = `${folder}/`;
+    for (const key of Object.keys(this.config.checks)) if (key.startsWith(prefix)) used.add(key.slice(prefix.length));
+    const storage = this.storage();
+    if (storage) {
+      const remotePrefix = `${BACKUP_ROOT_FOLDER}/${folder}/`;
+      try {
+        for (const o of await storage.list(remotePrefix)) used.add(o.key.slice(remotePrefix.length));
+      } catch {
+        /* sem listagem: a conferência antes do envio ainda protege a cópia externa */
+      }
+    }
     const stamp = backupFileStamp(new Date(this.now()));
     let name = `${stamp}.7z`;
-    for (let i = 2; existsSync(path.join(dir, name)); i++) name = `${stamp}-${i}.7z`;
+    for (let i = 2; used.has(name) || existsSync(path.join(dir, name)); i++) name = `${stamp}-${i}.7z`;
     return name;
   }
 
@@ -1649,7 +1670,7 @@ export class BackupService {
     this.step(r, "Compactar (.7z)");
     const localDir = path.join(this.backupsDir, folder);
     await mkdir(localDir, { recursive: true });
-    const name = this.uniqueName(localDir);
+    const name = await this.uniqueName(localDir, folder, r.target);
     const plain = path.join(staging, "local.7z");
     await this.opts.archiver.create(plain, inputs, {});
     const localPath = path.join(localDir, name);
@@ -1691,6 +1712,10 @@ export class BackupService {
       }
       const hash = await sha256File(upload);
       const uploadSize = (await stat(upload)).size;
+      // Nunca sobrescreve uma cópia externa que já exista com esse nome.
+      if ((await storage.list(key)).some((o) => o.key === key)) {
+        throw new BackupFailure(`Já existe uma cópia externa com o nome ${name}. O envio foi recusado para não sobrescrevê-la.`);
+      }
       await storage.upload(key, upload);
       this.copyInfo(folder, name, "remote", { createdAt, sha256: hash, size: uploadSize, encrypted: encrypt, ...mark });
       r.remote = "uploaded";
