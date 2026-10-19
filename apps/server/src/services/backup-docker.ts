@@ -81,6 +81,14 @@ const RESTORE_PATH_SCRIPT = [
   "fi",
 ].join("\n");
 
+/** Mensagem para erro de gravação/leitura dos arquivos do backup (sem caminho do servidor). */
+function fileFailure(action: "gravar" | "ler", err: NodeJS.ErrnoException): Error {
+  if (err.code === "ENOSPC") {
+    return new Error("o disco do servidor ficou sem espaço ao gravar o backup — libere espaço e faça de novo");
+  }
+  return new Error(`não foi possível ${action} o arquivo temporário do backup (${err.code ?? err.message})`);
+}
+
 export class DockerCli implements BackupDocker {
   private readonly env: NodeJS.ProcessEnv;
   private readonly timeoutMs: number;
@@ -101,9 +109,23 @@ export class DockerCli implements BackupDocker {
         timedOut = true;
         child.kill("SIGKILL");
       }, o.timeoutMs ?? this.timeoutMs);
+      // Erro nos arquivos do backup (disco cheio, permissão, arquivo sumido) NÃO
+      // pode ser uma exceção sem ouvinte: derrubaria o painel no meio do backup.
+      // Encerra o docker e rejeita a promessa do comando com a causa.
+      let fileError: Error | null = null;
+      const failFile = (err: Error): void => {
+        if (fileError) return;
+        fileError = err;
+        child.kill("SIGKILL");
+      };
       const sink = o.stdoutFile ? createWriteStream(o.stdoutFile, { mode: 0o600 }) : null;
       let sinkDone: Promise<void> = Promise.resolve();
       if (sink) {
+        sink.on("error", (err: NodeJS.ErrnoException) => {
+          child.stdout.unpipe(sink);
+          child.stdout.resume();
+          failFile(fileFailure("gravar", err));
+        });
         child.stdout.pipe(sink);
         sinkDone = new Promise((r) => sink.on("close", () => r()));
       } else {
@@ -121,14 +143,21 @@ export class DockerCli implements BackupDocker {
       child.on("close", (code) => {
         clearTimeout(timer);
         void sinkDone.then(() => {
+          if (fileError) return reject(fileError);
           if (timedOut) return reject(new Error("o comando passou do prazo e foi interrompido"));
           if (code !== 0) return reject(new Error(stderr.trim().split("\n").slice(-3).join(" ") || `docker saiu com código ${code}`));
           resolve({ stdout, stderr });
         });
       });
       child.stdin.on("error", () => undefined);
-      if (o.stdinFile) createReadStream(o.stdinFile).pipe(child.stdin);
-      else child.stdin.end();
+      if (o.stdinFile) {
+        const input = createReadStream(o.stdinFile);
+        input.on("error", (err: NodeJS.ErrnoException) => {
+          failFile(fileFailure("ler", err));
+          child.stdin.destroy();
+        });
+        input.pipe(child.stdin);
+      } else child.stdin.end();
     });
   }
 
