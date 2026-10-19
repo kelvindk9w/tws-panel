@@ -105,7 +105,7 @@ nenhum item dela foi triado neste lote. Itens parecidos que vi no código e deix
     conter nem ficar dentro da fonte do projeto, da fonte de outro nem da pasta de trabalho de outro (links
     resolvidos com `realpath`). Se coincidir, nada é apagado e o log diz "Código-fonte NÃO removido: <motivo>".
   - `ingestUpload` recusa quando a origem coincide, contém ou está dentro da pasta de trabalho, ANTES de apagar `src`.
-- **Migração (compatibilidade, nada é movido):** projetos existentes continuam em `<pasta de projetos>/<slug>`
+- **Migração (CORRIGIDO na revisão — ver "Segunda rodada"):** esta frase da primeira entrega foi superada. Projetos existentes continuavam em `<pasta de projetos>/<slug>`
   (campo `storageLayout` ausente). Mover um diretório com bind mounts relativos de produção, containers rodando e
   `--project-directory` seria o oposto de seguro; por isso não há migração automática. Idempotente por construção
   (não faz nada), reversível por construção. Quem quiser migrar um projeto à mão: parar, mover `<slug>` para
@@ -113,6 +113,61 @@ nenhum item dela foi triado neste lote. Itens parecidos que vi no código e deix
 - **Risco que permanece:** num projeto ANTIGO cujo slug já coincide com uma pasta do usuário, o deploy em modo git
   continua gravando `src`, `repo.git` e `paas.*` dentro dessa pasta (como antes); só a REMOÇÃO e a cópia de upload
   foram protegidas. Os testes cobrem o novo layout e o antigo (compatibilidade e bloqueio).
+
+## Segunda rodada (revisão que reprovou o lote)
+
+Cada item abaixo tem commit próprio. "Falhou antes" = teste escrito antes da correção e visto falhar.
+
+1. **A5, remoção de projeto antigo ("blog").** Falhou antes: `deploy-area-reservada.test.ts`, cenário `blog`
+   (`notas-do-usuario.txt` e `backup.sql` sumiam com a pasta). Agora `removeProjectWorkDir`
+   (`packages/deploy/src/workdir-safety.ts`) apaga só o que o painel cria (`src`, `repo.git`, `site`, `paas.*`),
+   a pasta só some se ficar vazia e o log diz "Os arquivos que ficaram na pasta (...)". Os `paas.*` (segredos) saem
+   sempre; `existing` novo limpa `.paas/<id>`. Testes de unidade em `workdir-reservado.test.ts`.
+2. **A5, site estático e migração ("meusite").** Falhou antes: cenário `meusite` (o deploy apagava
+   `site/pagina-do-usuario.html` porque `site` era a pasta do usuário). Os testes de `static-site.test.ts` (destino
+   dentro do código) foram escritos junto com a correção, sem rodar antes contra o código velho (o código velho
+   apagava a pasta por construção). Agora: `preparePublishDir` e `publishBuildOutput` recusam destino que coincide,
+   está dentro ou contém o código (qualquer modo); projetos `existing`/`upload` antigos migram sozinhos no próximo
+   deploy (`migrateLegacyWorkDir`): só MOVE `paas.env`, `paas.up.env`, `paas.canonical.json`, `paas.dotenv.hash`
+   (e, no upload, `src`, `repo.git`, `site`) para `.paas/<id>`, grava `storageLayout="reserved"`, é idempotente e
+   registra no log do deploy; nada é apagado nem sobrescrito. Projetos git antigos NÃO migram (têm repositório e
+   bind mounts em produção); só a remoção é cuidadosa. Clone antigo com `.git` dentro de `src`: a pasta é guardada
+   em `.git-antigo-<data>` ao lado (falhou antes: `ingest-hostil.test.ts`), não apagada.
+3. **M5, nome único.** Falhou antes: `backup-service.test.ts` (os 3 novos; no da recusa no envio a primeira falha
+   foi um erro de import do próprio teste, então não vi esse falhar pelo motivo certo contra o código velho): depois que a retenção apagava
+   a cópia local, o novo backup do mesmo minuto reusava o nome e o PUT sobrescrevia a cópia externa. `uniqueName`
+   agora considera pasta da VPS, armazenamento externo, histórico e `checks`; e o envio recusa gravar se a chave já
+   existe fora ("Já existe uma cópia externa...").
+4. **M7.** Falhou antes: `security-jobs-persistence.test.ts` (ilegível não era guardado à parte; erro de leitura
+   era engolido), `json-file.test.ts` / `stores-falha-fechada.test.ts` (mensagem mandava renomear o arquivo;
+   `setup-state.json` ilegível virava "setup não concluído"). Agora `restoreJobsFromDisk` usa `loadJson`; a
+   mensagem estrita é por arquivo (padrão: restaurar backup ou `scripts/restaurar-painel.sh`; `users.json`:
+   `docs/recuperar-acesso.md`); `setup-state.json` é estrito. **Risco:** um `setup-state.json` ou
+   `security-jobs.json` com erro de leitura agora impede o painel de subir/carregar a rota (antes seguia).
+5. **M6.** Falhou antes: `json-file.test.ts` (3) e `chaves-falha-fechada.test.ts` (cofre e backups com chave
+   inválida e dados cifrados). `loadOrCreateKey` registra aviso ao trocar chave inválida (diz onde ficou o conteúdo
+   e o que não lê mais); no cofre e nos backups falha em vez de gerar chave nova quando há credenciais/senha/destino
+   cifrados; erros de disco viram "Não consegui ler/gravar <arquivo> (EACCES)... confira as permissões da pasta
+   de dados (/data)". Aviso de chave trocada vai ao `console.warn` nos stores sem logger próprio.
+6. **A6.** Falhou antes: `project-dotenv.test.ts` (4) e `engine-variaveis.test.ts` (texto do log). (a) o painel
+   guarda o sha256 do que gravou em `paas.dotenv.hash`; `.env` com cabeçalho mas conteúdo diferente é do dono e
+   não é sobrescrito; sem registro (versão antiga) vale o cabeçalho. (b) o log diz "gravadas em .../paas.env ...
+   o .env NÃO foi alterado" quando foi o caso. (c) **Indicador na tela Variáveis NÃO feito**: exigiria expor o
+   estado do `.env` pela API e uma mudança de tela; ficou só no log do deploy.
+7. **Baixos.** B10 feito (falha de gravação de `backups.json` chega a quem pediu; gravações do agendador seguem
+   silenciosas; teste escrito junto, não visto falhar antes). B12 feito (`reset-2fa.mjs` grava por
+   temporário+rename mantendo dono e modo; falha ao gravar o estado no fim do deploy não vira rejeição sem
+   tratamento: falhou antes). I9 feito (nome com aspas/barra no pedido de restauração gera JSON válido; testado com
+   `sh` real fora da suíte). **B9 NÃO feito** (pasta de backup por id): troca o caminho de todas as cópias
+   existentes (VPS, S3, `checks`) e exigiria migração; o risco real é um slug reaproveitado depois de apagar um
+   projeto, que mistura backups. **B11 NÃO feito** (restauração de volume extrair em pasta temporária e trocar): o
+   destino costuma ser um ponto de montagem, que não se renomeia; fica o alerta de que uma restauração
+   interrompida deixa o destino pela metade.
+
+Verificação final: `pnpm -r run typecheck` limpo; cobertura em todos os pacotes: server 1849 testes
+(97,8/93,3/98,2/98,9), deploy 831 (95,7% de ramos), mailer 362 (98,45%), security 215, web 746. Não testado de
+verdade: `docker compose` real, VPS, S3/R2 reais, migração com containers de projeto rodando (o teste migra
+arquivos, não sobe nada), e a troca de dono do `reset-2fa.mjs` como root.
 
 ## Testado de verdade e o que não foi
 
@@ -129,9 +184,10 @@ nenhum item dela foi triado neste lote. Itens parecidos que vi no código e deix
 
 ## Fora do lote (visto, não alterado)
 
-- `security-service.restoreJobsFromDisk`, `loadSecurityHistory` (só leitura para tela) e `readSavedTimezone`
-  (cache que é regravado pelo host bridge) ainda tratam erro de leitura como vazio; nenhum deles regrava o arquivo
-  a partir do valor vazio.
+- `loadSecurityHistory` (só leitura para tela) e `readSavedTimezone` (cache regravado pelo host bridge) ainda tratam
+  erro de leitura como vazio; nenhum deles regrava o arquivo a partir do valor vazio. (A frase da primeira entrega
+  de que `restoreJobsFromDisk` também ficava assim estava ERRADA para o caso de arquivo ilegível: ele era regravado
+  pelo próximo `persistJobs`. Corrigido na segunda rodada.)
 - A seção BAIXO/INFORMATIVO da auditoria (não encontrada, ver acima).
 
 ## Roteiro curto para o Kelvin validar na VPS

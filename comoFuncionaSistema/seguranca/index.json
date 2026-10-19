@@ -75,7 +75,7 @@
     {
       "arquivo": "data/security-jobs.json",
       "formato": "json",
-      "conteudo": "NOVO nesta rodada. { jobs: SecurityJob[] } — snapshot dos jobs em memória do SecurityExecutor, regravado a CADA mudança de status (não só ao finalizar). Jobs não-terminais (queued/running/awaiting_confirmation) nunca são descartados pelo teto; jobs terminais ficam limitados a MAX_PERSISTED_JOBS=100 (mais recentes por createdAt). Restaurado uma vez no boot por SecurityService.restoreJobsFromDisk (routes/security.ts, antes de aceitar tráfego). Best-effort. Arquivo criado com chmod 600."
+      "conteudo": "NOVO nesta rodada. { jobs: SecurityJob[] } — snapshot dos jobs em memória do SecurityExecutor, regravado a CADA mudança de status (não só ao finalizar). Jobs não-terminais (queued/running/awaiting_confirmation) nunca são descartados pelo teto; jobs terminais ficam limitados a MAX_PERSISTED_JOBS=100 (mais recentes por createdAt). Restaurado uma vez no boot por SecurityService.restoreJobsFromDisk (routes/security.ts, antes de aceitar tráfego). Arquivo ausente = primeira execução; JSON quebrado é guardado em security-jobs.json.corrompido-<data> (não é sobrescrito); erro de leitura (permissão, E/S) FALHA a carga. A gravação dos jobs segue best-effort. Arquivo criado com chmod 600."
     },
     {
       "arquivo": "/etc/paas/pending-rollback-<id>.{pid,at}",
