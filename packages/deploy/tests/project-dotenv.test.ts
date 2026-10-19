@@ -204,6 +204,20 @@ describe("writeProjectDotenv — .env que o dono editou depois de o painel gerar
     const r = await writeProjectDotenv(src, work, { A: "2" });
     expect(r.target).toBe(".env");
   });
+
+  it("primeira regravação de um .env antigo sem registro: guarda uma cópia do arquivo (uma vez só)", async () => {
+    gitInit();
+    await writeFile(
+      path.join(src, ".env"),
+      "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.\nA='velho'\nEXTRA='que o dono pôs'\n",
+    );
+    await writeProjectDotenv(src, work, { A: "2" });
+    const copia = path.join(work, "paas.dotenv.antigo");
+    expect(await readFile(copia, "utf8")).toMatch(/EXTRA='que o dono pôs'/);
+    expect((await stat(copia)).mode & 0o777).toBe(0o600);
+    await writeProjectDotenv(src, work, { A: "3" });
+    expect(await readFile(copia, "utf8")).toMatch(/A='velho'/);
+  });
 });
 
 describe("composeVariables — o que o compose espera", () => {

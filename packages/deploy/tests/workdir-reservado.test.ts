@@ -210,4 +210,30 @@ describe("removeProjectWorkDir e migrateLegacyWorkDir", () => {
     expect(await readFile(path.join(projetos, ".paas", "e1", "paas.env"), "utf8")).toBe("novo");
     expect(await readFile(path.join(dir, "paas.env"), "utf8")).toBe("velho");
   });
+
+  it("paas.override.yml (senha SMTP) é do painel: sai com a pasta antiga, é migrado e é limpo em .paas/<id>", async () => {
+    const dir = path.join(projetos, "comp");
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "paas.override.yml"), "SMTP_PASS: x");
+    const r = await removeProjectWorkDir(ctx(), projeto({ id: "c1", slug: "comp", ingestMode: "git" }), [], { deleteSource: true });
+    expect(r.kept).toEqual([]);
+    expect(r.folderRemoved).toBe(true);
+    expect(existsSync(dir)).toBe(false);
+
+    const dir2 = path.join(projetos, "ex");
+    await mkdir(dir2, { recursive: true });
+    await writeFile(path.join(dir2, "paas.override.yml"), "SMTP_PASS: y");
+    const ex = projeto({ id: "e9", slug: "ex", ingestMode: "existing", source: dir2 });
+    expect(await migrateLegacyWorkDir(ctx(), ex)).toEqual(["paas.override.yml"]);
+    expect(existsSync(path.join(dir2, "paas.override.yml"))).toBe(false);
+    expect(existsSync(path.join(projetos, ".paas", "e9", "paas.override.yml"))).toBe(true);
+
+    const p = projeto({ id: "r2", slug: "r2", ingestMode: "git", storageLayout: "reserved" });
+    const wd = projectWorkDir(ctx(), p);
+    await mkdir(path.join(wd, "src"), { recursive: true });
+    await writeFile(path.join(wd, "paas.override.yml"), "SMTP_PASS: z");
+    await removeProjectWorkDir(ctx(), p, [], { deleteSource: false });
+    expect(existsSync(path.join(wd, "paas.override.yml"))).toBe(false);
+    expect(existsSync(path.join(wd, "src"))).toBe(true);
+  });
 });

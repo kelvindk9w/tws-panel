@@ -91,7 +91,7 @@ describe("SecurityService — restoreJobsFromDisk (restart durante awaiting_conf
     // uma pasta no lugar do arquivo: a leitura dá EISDIR, não ENOENT
     await mkdir(path.join(dir, "security-jobs.json"));
     const service = freshService();
-    await expect(service.restoreJobsFromDisk()).rejects.toThrow();
+    await expect(service.restoreJobsFromDisk()).rejects.toThrow(/security-jobs\.json.*permiss.*restaurar-painel\.sh/s);
     expect((await stat(path.join(dir, "security-jobs.json"))).isDirectory()).toBe(true);
   });
 

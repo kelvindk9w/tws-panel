@@ -178,6 +178,7 @@ export class DeployService {
   private readonly engineCtx: EngineContext;
   private readonly projectsDir: string;
   private readonly projectsFile: string;
+  private readonly backupsDir: string;
   private readonly jobsFile: string;
   private readonly caddyHttpPort: number;
   private readonly caddyHttpsPort: number;
@@ -233,6 +234,7 @@ export class DeployService {
     // o mesmo padrão de config.ts (PAAS_PROJECTS_DIR ?? <dataDir>/projects)
     this.projectsDir = config.projectsDir ?? path.join(config.dataDir, "projects");
     this.projectsFile = path.join(config.dataDir, "projects.json");
+    this.backupsDir = path.join(config.dataDir, "backups");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
     this.caddyHttpPort = config.caddyHttpPort;
     this.caddyHttpsPort = config.caddyHttpsPort;
@@ -748,7 +750,8 @@ export class DeployService {
     if (!domain) throw httpError(400, "invalid_domain", "Informe o domínio desejado.");
 
     let slug = slugify(name);
-    while (this.projects.some((p) => p.slug === slug)) slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
+    while (this.projects.some((p) => p.slug === slug) || existsSync(path.join(this.backupsDir, slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
     // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
     // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
     // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte

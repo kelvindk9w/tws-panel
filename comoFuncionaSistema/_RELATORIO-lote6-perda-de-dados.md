@@ -206,3 +206,18 @@ arquivos, não sobe nada), e a troca de dono do `reset-2fa.mjs` como root.
 6. M7/M6: (opcional, num ambiente de teste) `chmod 000 /var/lib/docker/volumes/<volume>/_data/users.json` e
    reinicie: o painel deve recusar subir com erro de leitura, sem reabrir o assistente; devolva a permissão.
 7. M4: não há como simular disco cheio com segurança na produção; confie nos testes (`/dev/full`).
+
+## Terceira rodada (revisão da segunda)
+
+- **A5 (obrigatório):** `paas.override.yml` (tem a senha SMTP) faltava nas listas do painel em `workdir-safety.ts`.
+  Teste escrito antes e visto falhar (a pasta antiga ficava com o override e o log dizia que "não foi criado pelo
+  painel"). Agora o arquivo sai com a pasta antiga, é movido na migração e é limpo em `.paas/<id>` mesmo sem apagar
+  o código. Pasta antiga só com arquivos do painel continua saindo inteira.
+- **B9:** slug que já tem pasta em `data/backups/<slug>` é tratado como ocupado na criação (ganha o sufixo
+  aleatório de sempre). Não migra cópias; só olha a pasta local (a do armazenamento externo não é consultada).
+- **B11:** a restauração de pasta/volume guarda um `.paas-antes-da-restauracao-<data>.tar` dentro do destino antes
+  de esvaziá-lo; se a cópia falhar, nada é apagado. Testado com `sh` e `tar` reais. Custo: o tar ocupa espaço no
+  volume até alguém apagá-lo.
+- **A6:** primeira regravação de `.env` antigo sem registro guarda `paas.dotenv.antigo` (0600, uma vez, sai com o projeto).
+- **M7:** erro de leitura do `security-jobs.json` agora tem mensagem em português (permissões/restaurar backup).
+- Cobertura: server 1852 testes (97,8/93,3), deploy 833 (95,7% de ramos); typecheck limpo.

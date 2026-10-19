@@ -88,6 +88,8 @@ const GENERATED_HEADER = "# Gerado pelo painel (seção Variáveis do projeto) �
 
 /** Registro do que o painel gravou no `.env` (sha256): é como ele percebe que o dono editou depois. */
 const HASH_FILE = "paas.dotenv.hash";
+/** Cópia do .env de versão antiga do painel, guardada antes da primeira regravação. */
+const OLD_COPY = "paas.dotenv.antigo";
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -178,6 +180,16 @@ export async function writeProjectDotenv(
   // o .env deixou de ser versionado: o paas.env antigo não pode continuar valendo
   await rm(separate, { force: true });
   const file = path.join(src, ".env");
+  // .env de versão antiga do painel (cabeçalho, sem registro do que foi gravado):
+  // pode ter linhas do dono; guarda uma cópia na primeira regravação.
+  if (state === "panel" && !existsSync(path.join(workDir, HASH_FILE)) && !existsSync(path.join(workDir, OLD_COPY))) {
+    try {
+      await mkdir(workDir, { recursive: true });
+      await writeFile(path.join(workDir, OLD_COPY), await readFile(file, "utf8"), { encoding: "utf8", mode: 0o600 });
+    } catch {
+      /* sem a cópia o deploy segue: o .env era do painel */
+    }
+  }
   // sem seguir link: um `.env` que aponte para fora de `src` é trocado, nunca atravessado
   await writeFileNoFollow(file, content, 0o600);
   await mkdir(workDir, { recursive: true });

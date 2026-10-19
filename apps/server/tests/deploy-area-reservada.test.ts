@@ -51,6 +51,14 @@ describe("A5 — área reservada para o que o painel gera", () => {
     expect(svc.backupSourceDir(p)).toBe(path.join(projectsDir, ".paas", p.id, "src"));
   });
 
+  it("slug que já tem pasta de backups (projeto apagado antes) é tratado como ocupado: ganha sufixo e não mistura cópias (B9)", async () => {
+    const svc = novoServico();
+    await mkdir(path.join(dataDir, "backups", "loja"), { recursive: true });
+    await writeFile(path.join(dataDir, "backups", "loja", "2026-01-01_10-00.7z"), "antigo");
+    const p = await svc.createProject(git("Loja"));
+    expect(p.slug).toMatch(/^loja-[0-9a-f]{4}$/);
+  });
+
   it("slug que já existe como pasta é RECUSADO na criação (409), e a pasta do usuário não é tocada", async () => {
     const svc = novoServico();
     await mkdir(path.join(projectsDir, "app"));

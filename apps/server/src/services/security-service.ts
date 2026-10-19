@@ -241,10 +241,20 @@ export class SecurityService {
   async restoreJobsFromDisk(): Promise<void> {
     // Erro de leitura (permissão, E/S) lança: não se confunde com "sem jobs" nem
     // se grava por cima. JSON quebrado vai para security-jobs.json.corrompido-<data>.
-    const parsed = await loadJson<Partial<JobsFile>>(this.jobsFile, {
-      empty: () => ({}),
-      parse: (raw) => (typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Partial<JobsFile>) : null),
-    });
+    let parsed: Partial<JobsFile>;
+    try {
+      parsed = await loadJson<Partial<JobsFile>>(this.jobsFile, {
+        empty: () => ({}),
+        parse: (raw) => (typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Partial<JobsFile>) : null),
+      });
+    } catch (err) {
+      throw new Error(
+        "Não consegui ler o security-jobs.json (jobs da tela Segurança), então a rota de segurança não subiu. " +
+          "Confira as permissões da pasta de dados do painel (/data no Docker) ou restaure o arquivo de um backup " +
+          "(scripts/restaurar-painel.sh). O arquivo não foi alterado.",
+        { cause: err },
+      );
+    }
     // Os runIds entram ANTES dos jobs: restoreJobs() decide reatachar ou não
     // com base neles.
     if (parsed.runs && typeof parsed.runs === "object") {

@@ -68,7 +68,7 @@ interface RunOptions {
   timeoutMs?: number;
 }
 
-const RESTORE_PATH_SCRIPT = [
+export const RESTORE_PATH_SCRIPT = [
   "set -e",
   'd="$1"',
   'if [ "$2" = "file" ]; then',
@@ -76,7 +76,12 @@ const RESTORE_PATH_SCRIPT = [
   '  tar -xf - -C "$(dirname "$d")"',
   "else",
   '  mkdir -p "$d"',
-  '  find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +',
+  // Cópia de segurança do que existe, no próprio destino, ANTES de esvaziar;
+  // se a cópia falhar (disco cheio), o set -e aborta e nada é apagado.
+  '  if [ -n "$(find "$d" -mindepth 1 -maxdepth 1 ! -name ".paas-antes-da-restauracao-*" | head -n 1)" ]; then',
+  '    tar -cf "$d/.paas-antes-da-restauracao-$(date +%Y%m%d-%H%M%S).tar" -C "$d" --exclude="./.paas-antes-da-restauracao-*" .',
+  "  fi",
+  '  find "$d" -mindepth 1 -maxdepth 1 ! -name ".paas-antes-da-restauracao-*" -exec rm -rf {} +',
   '  tar -xf - -C "$d" --strip-components=1',
   "fi",
 ].join("\n");
