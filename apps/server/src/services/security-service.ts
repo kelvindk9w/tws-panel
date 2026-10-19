@@ -26,7 +26,7 @@ import {
 import { resolveTerminalAccess, type ServerConfig } from "../config.js";
 import { BackgroundMirrorRunner, TerminalRelayRunner } from "./terminal-runner.js";
 import type { TerminalService } from "./terminal-service.js";
-import { loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Callback de auditoria para comandos executados no host real. */
 export type SecurityAuditHook = (action: string, detail: string) => void;
@@ -235,22 +235,23 @@ export class SecurityService {
    * GET /api/security/jobs/:id responder 404 enquanto o rollback agendado
    * NO ALVO continuava correndo de forma independente: o operador perdia
    * visibilidade exatamente no momento em que precisa confirmar acesso.
-   * Best-effort: falha ao ler o arquivo nunca impede o servidor de subir.
+   * Arquivo ausente = primeira execução; ilegível é guardado à parte; erro de
+   * leitura falha a carga (o painel não sobe com um estado que não conseguiu ler).
    */
   async restoreJobsFromDisk(): Promise<void> {
-    try {
-      const raw = await readFile(this.jobsFile, "utf8");
-      const parsed = JSON.parse(raw) as Partial<JobsFile>;
-      // Os runIds entram ANTES dos jobs: restoreJobs() decide reatachar ou não
-      // com base neles.
-      if (parsed.runs && typeof parsed.runs === "object") {
-        this.executor.restoreRunIds(parsed.runs as Record<string, string>);
-      }
-      if (Array.isArray(parsed.jobs) && parsed.jobs.length > 0) {
-        this.executor.restoreJobs(parsed.jobs);
-      }
-    } catch {
-      // primeira execução ou arquivo ausente/corrompido — nada a restaurar
+    // Erro de leitura (permissão, E/S) lança: não se confunde com "sem jobs" nem
+    // se grava por cima. JSON quebrado vai para security-jobs.json.corrompido-<data>.
+    const parsed = await loadJson<Partial<JobsFile>>(this.jobsFile, {
+      empty: () => ({}),
+      parse: (raw) => (typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Partial<JobsFile>) : null),
+    });
+    // Os runIds entram ANTES dos jobs: restoreJobs() decide reatachar ou não
+    // com base neles.
+    if (parsed.runs && typeof parsed.runs === "object") {
+      this.executor.restoreRunIds(parsed.runs as Record<string, string>);
+    }
+    if (Array.isArray(parsed.jobs) && parsed.jobs.length > 0) {
+      this.executor.restoreJobs(parsed.jobs);
     }
   }
 

@@ -26,11 +26,9 @@ describe("SetupStateStore", () => {
     expect(state.updatedAt).toBeTruthy();
   });
 
-  it("JSON corrompido → estado inicial sem lançar", async () => {
+  it("JSON corrompido → falha (não vira 'setup não concluído') e o arquivo fica como está", async () => {
     await writeFile(path.join(dir, "setup-state.json"), "{json quebrado");
-    const state = await new SetupStateStore(dir).load();
-    expect(state.currentStep).toBe(0);
-    expect(state.completed).toBe(false);
+    await expect(new SetupStateStore(dir).load()).rejects.toThrow(/ilegível/);
   });
 
   it("save persiste e load recupera o estado exato", async () => {

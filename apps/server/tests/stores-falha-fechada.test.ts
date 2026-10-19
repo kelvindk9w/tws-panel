@@ -152,9 +152,17 @@ describe("M7 — arquivo ilegível é guardado à parte, não sobrescrito", () =
 
   it("contas: users.json ilegível NÃO é movido nem vira 'sem admin' — a carga falha com mensagem clara", async () => {
     await writeFile(path.join(dir, "users.json"), "{quebrado");
-    await expect(new UserStore(dir).hasAdmin()).rejects.toThrow(/users\.json está ilegível/);
+    await expect(new UserStore(dir).hasAdmin()).rejects.toThrow(/users\.json está ilegível.*docs\/recuperar-acesso\.md/s);
     expect(await ler("users.json")).toBe("{quebrado");
     expect(await aparte("users.json")).toEqual([]);
+  });
+
+  it("setup-state.json ilegível: NÃO volta a 'setup não concluído' (reabriria o assistente) — falha e o arquivo fica", async () => {
+    await writeFile(path.join(dir, "setup-state.json"), "{quebrado");
+    await expect(new SetupStateStore(dir).load()).rejects.toThrow(/setup-state\.json está ilegível/);
+    await expect(new SetupStateStore(dir).complete()).rejects.toThrow(/ilegível/);
+    expect(await ler("setup-state.json")).toBe("{quebrado");
+    expect(await aparte("setup-state.json")).toEqual([]);
   });
 });
 
@@ -192,7 +200,7 @@ describe("M7 — lista de projetos (deploy-service) e o Caddyfile do boot", () =
   it("projects.json com JSON quebrado: a carga falha, o arquivo fica como está e o Caddy não é tocado", async () => {
     await writeFile(path.join(dir, "projects.json"), "{quebrado");
     const { svc, syncCaddy } = criar();
-    await expect(svc.ensurePanelRoute()).rejects.toThrow(/projects\.json está ilegível/);
+    await expect(svc.ensurePanelRoute()).rejects.toThrow(/projects\.json está ilegível.*restaurar-painel\.sh/s);
     expect(syncCaddy).not.toHaveBeenCalled();
     expect(await ler("projects.json")).toBe("{quebrado");
   });

@@ -260,4 +260,15 @@ describe("loadJson", () => {
     expect(await readFile(file, "utf8")).toBe("{quebrado");
     await expect(withFileLock(file, () => loadJsonInLock(file, { ...opts, strict: true }))).rejects.toThrow(/ilegível/);
   });
+
+  it("strict: a mensagem diz como recuperar ESTE arquivo (restaurar cópia / script), sem mandar apagar", async () => {
+    const file = path.join(dir, "d.json");
+    await writeFile(file, "{quebrado");
+    const padrao = await loadJson(file, { ...opts, strict: true }).catch((e: Error) => e.message);
+    expect(padrao).toMatch(/restaurar-painel\.sh/);
+    expect(padrao).not.toMatch(/renomeie/);
+    const contas = await loadJson(file, { ...opts, strict: true, recovery: "Para recuperar o acesso siga docs/recuperar-acesso.md." }).catch((e: Error) => e.message);
+    expect(contas).toMatch(/docs\/recuperar-acesso\.md/);
+    expect(contas).not.toMatch(/restaurar-painel/);
+  });
 });

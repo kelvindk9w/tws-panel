@@ -183,6 +183,11 @@ export interface LoadJsonOptions<T> {
    * o store começa vazio.
    */
   strict?: boolean;
+  /**
+   * Só com `strict`: como recuperar ESTE arquivo (vai na mensagem de erro).
+   * Padrão: restaurar uma cópia dele ou rodar scripts/restaurar-painel.sh.
+   */
+  recovery?: string;
   /** Aviso ao guardar um arquivo ilegível à parte. */
   log?: (message: string) => void;
 }
@@ -216,7 +221,9 @@ export async function loadJsonInLock<T>(file: string, opts: LoadJsonOptions<T>):
   }
   if (opts.strict) {
     throw new Error(
-      `O arquivo ${path.basename(file)} está ilegível e não foi alterado. Restaure uma cópia ou renomeie-o para o painel recomeçar do zero.`,
+      `O arquivo ${path.basename(file)} está ilegível e não foi alterado. ` +
+        (opts.recovery ??
+          "Restaure uma cópia dele (um backup do painel) ou rode scripts/restaurar-painel.sh no servidor. O painel não recomeça do zero sozinho para não perder os dados."),
     );
   }
   const aside = asideName(file);

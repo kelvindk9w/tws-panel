@@ -29,6 +29,9 @@ export class SetupStateStore {
 
   private read(loader: typeof loadJson): Promise<SetupState> {
     return loader<SetupState>(this.file, {
+      // Ilegível NÃO vira "setup não concluído": o assistente reabriria e
+      // permitiria criar outro administrador. Falha e deixa o arquivo como está.
+      strict: true,
       empty: () => ({ ...DEFAULT_STATE, updatedAt: new Date().toISOString() }),
       parse: (value) => {
         if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
