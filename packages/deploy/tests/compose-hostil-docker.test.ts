@@ -5,6 +5,7 @@
  * resolvidos. Roda só onde há `docker compose` (`config` não cria nada).
  */
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,6 +23,29 @@ function temComposeReal(): boolean {
   }
 }
 const DOCKER = temComposeReal();
+
+/**
+ * Compose mais antigos ignoram `--no-env-resolution` e tentam ler o `env_file`
+ * (falham em arquivo ausente ou lêem o Dockerfile como se fosse env). Os testes
+ * que dependem de não ler o conteúdo só valem onde o compose respeita a opção.
+ */
+function composeIgnoraEnvFile(): boolean {
+  if (!DOCKER) return false;
+  const dir = mkdtempSync(path.join(tmpdir(), "paas-probe-env-"));
+  try {
+    writeFileSync(path.join(dir, "c.yml"), 'services:\n  a:\n    image: x\n    env_file: ["/nao/existe/paas.env"]\n');
+    execFileSync("docker", ["compose", "-f", path.join(dir, "c.yml"), "config", "--format", "json", "--no-env-resolution"], {
+      stdio: "ignore",
+      timeout: 15_000,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const SEM_LEITURA_ENV = composeIgnoraEnvFile();
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "hostil");
 let root: string;
@@ -84,16 +108,16 @@ describe.skipIf(!DOCKER)("compose hostil — pelo docker compose config real", (
     expect(f.filter((x) => x.rule === "panel-resource")).toHaveLength(2);
   });
 
-  it("env_file e build.context de fora da pasta são barrados sem ler o conteúdo", async () => {
+  it.skipIf(!SEM_LEITURA_ENV)("env_file e build.context de fora da pasta são barrados sem ler o conteúdo", async () => {
     const f = await resolvido("dockerfile_ctx");
     expect(f.filter((x) => x.rule === "build-outside-src").length).toBeGreaterThanOrEqual(3);
   });
 
-  it("compose legítimo (build local, volume nomeado, pasta ./dados, rede própria) passa", async () => {
+  it.skipIf(!SEM_LEITURA_ENV)("compose legítimo (build local, volume nomeado, pasta ./dados, rede própria) passa", async () => {
     expect(await resolvido("legitimo")).toEqual([]);
   });
 
-  it("o JSON canônico gravado fora do src volta igual pelo compose (é dele que o up roda) e ignora o .env do src", async () => {
+  it.skipIf(!SEM_LEITURA_ENV)("o JSON canônico gravado fora do src volta igual pelo compose (é dele que o up roda) e ignora o .env do src", async () => {
     await cp(path.join(FIXTURES, "legitimo"), src, { recursive: true });
     await writeFile(path.join(src, ".env"), "IMAGEM=hostil\n");
     const loaded = await loadCanonicalCompose(args());
