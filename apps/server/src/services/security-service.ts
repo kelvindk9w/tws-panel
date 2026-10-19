@@ -26,7 +26,7 @@ import {
 import { resolveTerminalAccess, type ServerConfig } from "../config.js";
 import { BackgroundMirrorRunner, TerminalRelayRunner } from "./terminal-runner.js";
 import type { TerminalService } from "./terminal-service.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Callback de auditoria para comandos executados no host real. */
 export type SecurityAuditHook = (action: string, detail: string) => void;
@@ -428,7 +428,15 @@ export class SecurityService {
       // ler → acrescentar → gravar na fila do arquivo (services/json-file.ts):
       // varredura e fase terminando juntas não apagam o registro uma da outra
       await withFileLock(this.historyFile, async () => {
-        const entries = await this.loadHistory();
+        // Aqui um erro de leitura NÃO pode virar "histórico vazio" (a gravação
+        // logo abaixo apagaria o registro todo): o erro sobe e o arquivo fica.
+        const entries = await loadJsonInLock<SecurityHistoryEntry[]>(this.historyFile, {
+          empty: () => [],
+          parse: (raw) => {
+            const list = (raw as Partial<HistoryFile> | null)?.entries;
+            return Array.isArray(list) ? list : null;
+          },
+        });
         entries.push(entry);
         const trimmed = trimHistoryPreservingBefore(entries);
         await writeFileAtomic(this.historyFile, JSON.stringify({ entries: trimmed }, null, 2) + "\n");

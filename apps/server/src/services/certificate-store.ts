@@ -17,7 +17,7 @@ import path from "node:path";
 import { certificateFileId, legacyCertificateFileId } from "@paas/core";
 import type { ManualCaddyCertificate } from "@paas/deploy";
 import type { InspectedCertificate, MailCertificate } from "@paas/mailer";
-import { writeFileAtomic } from "./json-file.js";
+import { loadJson, writeFileAtomic } from "./json-file.js";
 
 export interface ManualCertificateMeta {
   host: string;
@@ -69,12 +69,15 @@ export class ManualCertificateStore {
   }
 
   async list(): Promise<ManualCertificateMeta[]> {
-    try {
-      const raw = JSON.parse(await readFile(this.indexFile, "utf8")) as Partial<IndexFile>;
-      return Array.isArray(raw.certificates) ? raw.certificates.filter((c) => HOST_RE.test(c.host)) : [];
-    } catch {
-      return [];
-    }
+    // erro de leitura é lançado: a instalação de outro certificado regravaria o índice sem os que já existem
+    const certificates = await loadJson<ManualCertificateMeta[]>(this.indexFile, {
+      empty: () => [],
+      parse: (raw) => {
+        const list = (raw as Partial<IndexFile> | null)?.certificates;
+        return Array.isArray(list) ? list : null;
+      },
+    });
+    return certificates.filter((c) => HOST_RE.test(c.host));
   }
 
   async get(host: string): Promise<ManualCertificateMeta | null> {

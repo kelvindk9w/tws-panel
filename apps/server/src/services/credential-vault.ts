@@ -21,14 +21,13 @@
  * 4 últimos caracteres como dica de conferência.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_GIT_CREDENTIAL_USERNAME,
   type GitReadCredential,
   type ProjectCredentialInfo,
 } from "@paas/core";
-import { loadOrCreateKey, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadOrCreateKey, writeFileAtomic } from "./json-file.js";
 
 /** Registro persistido: metadados em claro, segredo cifrado. */
 interface CredentialRecord {
@@ -82,13 +81,17 @@ export class CredentialVault {
   private ensureLoaded(): Promise<void> {
     this.loading ??= (async () => {
       await this.init();
-      try {
-        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<CredentialsFile>;
-        this.records = Array.isArray(raw.credentials) ? raw.credentials : [];
-      } catch {
-        this.records = [];
-      }
-    })();
+      this.records = await loadJson<CredentialRecord[]>(this.file, {
+        empty: () => [],
+        parse: (raw) => {
+          const credentials = (raw as Partial<CredentialsFile> | null)?.credentials;
+          return Array.isArray(credentials) ? credentials : null;
+        },
+      });
+    })().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 

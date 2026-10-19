@@ -8,7 +8,6 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 import {
   MAILBOX_PASSWORD_MIN,
   DKIM_SELECTOR,
@@ -63,7 +62,7 @@ import {
 import type { ServerConfig } from "../config.js";
 import { isCloudflareIp, publicIpFromPanelDomain } from "../routes/domains.js";
 import { httpError } from "./deploy-service.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
 const PANEL_CONTAINER = "tws-panel";
@@ -319,14 +318,21 @@ export class MailService {
    * Stalwart e gravar o mail.json inteiro por cima do de verdade.
    */
   private ensureLoaded(): Promise<void> {
+    // mail.json guarda a senha de admin do Stalwart: erro de leitura (ou
+    // arquivo ilegível) falha a carga em vez de gerar outra senha por cima.
     this.loadedPromise ??= (async () => {
-      try {
-        const raw = JSON.parse(await readFile(this.mailFile, "utf8")) as Partial<MailFile>;
-        this.data = { ...structuredClone(EMPTY_FILE), ...raw };
-      } catch {
-        this.data = structuredClone(EMPTY_FILE);
-      }
-    })();
+      this.data = await loadJson<MailFile>(this.mailFile, {
+        empty: () => structuredClone(EMPTY_FILE),
+        parse: (value) =>
+          typeof value === "object" && value !== null && !Array.isArray(value)
+            ? { ...structuredClone(EMPTY_FILE), ...(value as Partial<MailFile>) }
+            : null,
+        strict: true,
+      });
+    })().catch((err: unknown) => {
+      this.loadedPromise = null;
+      throw err;
+    });
     return this.loadedPromise;
   }
 

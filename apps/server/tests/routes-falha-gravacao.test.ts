@@ -91,6 +91,7 @@ describe("auth e setup com falha de gravação", () => {
     app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie } });
 
   it("criação do admin que não chega ao disco → 500, nenhum admin, setup aberto e sem auditoria", async () => {
+    await ctx.userStore.hasAdmin(); // carrega antes: o que falha aqui é a GRAVAÇÃO
     await quebrarGravacao("users.json");
     const res = await createAdmin();
     expect(res.statusCode).toBe(500);
@@ -110,6 +111,7 @@ describe("auth e setup com falha de gravação", () => {
 
   it("login cuja sessão não é gravada → 500, sem cookie e sem auditoria de login", async () => {
     await createAdmin();
+    await ctx.sessionStore.resolve("x.y"); // carrega antes: o que falha aqui é a GRAVAÇÃO
     await quebrarGravacao("sessions.json");
     const res = await login();
     expect(res.statusCode).toBe(500);

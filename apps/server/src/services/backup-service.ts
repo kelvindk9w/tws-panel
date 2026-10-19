@@ -93,7 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
-import { loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 
@@ -518,20 +518,25 @@ export class BackupService {
   private ensureLoaded(): Promise<void> {
     this.loading ??= (async () => {
       await this.loadKey();
-      try {
-        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<StoredConfig>;
-        const base = emptyConfig();
-        this.config = {
-          destination: raw.destination ?? null,
-          encryption: { ...base.encryption, ...(raw.encryption ?? {}) },
-          targets: raw.targets ?? {},
-          projectDefaults: { ...INITIAL_DEFAULTS, ...(raw.projectDefaults ?? {}) },
-          detections: raw.detections ?? {},
-          checks: raw.checks ?? {},
-        };
-      } catch {
-        this.config = emptyConfig();
-      }
+      // Erro de leitura NÃO vira "sem configuração": a carga falha e o arquivo
+      // fica como está (o destino e a senha dos backups estão nele).
+      this.config = await loadJson<StoredConfig>(this.file, {
+        empty: emptyConfig,
+        parse: (value) => {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+          const raw = value as Partial<StoredConfig>;
+          const base = emptyConfig();
+          return {
+            destination: raw.destination ?? null,
+            encryption: { ...base.encryption, ...(raw.encryption ?? {}) },
+            targets: raw.targets ?? {},
+            projectDefaults: { ...INITIAL_DEFAULTS, ...(raw.projectDefaults ?? {}) },
+            detections: raw.detections ?? {},
+            checks: raw.checks ?? {},
+          };
+        },
+        log: this.log,
+      });
       // Instalação de antes do "Padrão dos projetos": quem está como o painel
       // criava sozinho (ligado, 24 h, 2 e 5) segue o padrão; o resto ficou
       // assim porque alguém mudou, então é configuração própria.
@@ -556,12 +561,14 @@ export class BackupService {
           this.config.encryption.passwordSetAt = null;
         }
       }
-      try {
-        const raw = JSON.parse(await readFile(this.historyFile, "utf8")) as { entries?: BackupRecord[] };
-        this.history = Array.isArray(raw.entries) ? raw.entries : [];
-      } catch {
-        this.history = [];
-      }
+      this.history = await loadJson<BackupRecord[]>(this.historyFile, {
+        empty: () => [],
+        parse: (raw) => {
+          const entries = (raw as { entries?: BackupRecord[] } | null)?.entries;
+          return Array.isArray(entries) ? entries : null;
+        },
+        log: this.log,
+      });
       // O painel caiu no meio de uma operação: ela não vai continuar sozinha.
       let interrupted = false;
       for (const r of this.history) {
@@ -574,7 +581,10 @@ export class BackupService {
       }
       if (interrupted) await this.persist({ history: true });
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
-    })();
+    })().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 

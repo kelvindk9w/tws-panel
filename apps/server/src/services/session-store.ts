@@ -19,10 +19,9 @@
  * `expiresAt` por conta própria (ver isSessionExpired).
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { SESSION_TTL_MS } from "@paas/core";
-import { loadOrCreateKey, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadOrCreateKey, writeFileAtomic } from "./json-file.js";
 
 export interface Session {
   id: string;
@@ -81,18 +80,22 @@ export class SessionStore {
 
   /** Carga única e compartilhada (chamadas concorrentes esperam a mesma leitura). */
   private ensureLoaded(): Promise<void> {
-    this.loading ??= this.load();
+    this.loading ??= this.load().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 
   private async load(): Promise<void> {
     if (!this.secret) await this.init();
-    try {
-      const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<SessionsFile>;
-      this.sessions = Array.isArray(raw.sessions) ? raw.sessions : [];
-    } catch {
-      this.sessions = [];
-    }
+    this.sessions = await loadJson<Session[]>(this.file, {
+      empty: () => [],
+      parse: (raw) => {
+        const sessions = (raw as Partial<SessionsFile> | null)?.sessions;
+        return Array.isArray(sessions) ? sessions : null;
+      },
+    });
     // descarta sessões expiradas no boot
     const now = Date.now();
     await this.persist(() => {

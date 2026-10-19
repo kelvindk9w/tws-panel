@@ -78,7 +78,7 @@ import type { AuditService } from "./audit-service.js";
 import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 const MAX_JOBS = 100;
 
@@ -634,30 +634,42 @@ export class DeployService {
    * chamada seguia com a lista vazia e a gravação dela apagava os projetos.
    */
   private ensureLoaded(): Promise<void> {
-    this.loadedPromise ??= this.load();
+    this.loadedPromise ??= this.load().catch((err: unknown) => {
+      // falha de leitura NÃO é "sem projetos": a próxima chamada tenta de novo
+      this.loadedPromise = null;
+      throw err;
+    });
     return this.loadedPromise;
   }
 
   private async load(): Promise<void> {
-    try {
-      const raw = JSON.parse(await readFile(this.projectsFile, "utf8")) as Partial<ProjectsFile>;
-      this.projects = Array.isArray(raw.projects) ? raw.projects : [];
-    } catch {
-      this.projects = [];
-    }
-    try {
-      const raw = JSON.parse(await readFile(this.jobsFile, "utf8")) as Partial<JobsFile>;
-      this.jobs = Array.isArray(raw.jobs) ? raw.jobs : [];
-      // jobs "running" de uma execução anterior do processo são marcados como falhos
-      for (const job of this.jobs) {
-        if (job.status === "running" || job.status === "queued") {
-          job.status = "failed";
-          job.error = "Servidor reiniciado durante o deploy.";
-          job.finishedAt = new Date().toISOString();
-        }
+    // A lista de projetos é o que o Caddyfile e o resto do painel usam: erro de
+    // leitura (ou arquivo ilegível) falha a carga e o arquivo não é tocado —
+    // nunca "sem projetos", que recalcularia o Caddyfile sem eles e seria
+    // gravado por cima na próxima alteração.
+    this.projects = await loadJson<Project[]>(this.projectsFile, {
+      empty: () => [],
+      parse: (raw) => {
+        const projects = (raw as Partial<ProjectsFile> | null)?.projects;
+        return Array.isArray(projects) ? projects : null;
+      },
+      strict: true,
+    });
+    // Histórico de deploys: ilegível vai para o lado e recomeça (não é a lista de projetos).
+    this.jobs = await loadJson<DeployJob[]>(this.jobsFile, {
+      empty: () => [],
+      parse: (raw) => {
+        const jobs = (raw as Partial<JobsFile> | null)?.jobs;
+        return Array.isArray(jobs) ? jobs : null;
+      },
+    });
+    // jobs "running" de uma execução anterior do processo são marcados como falhos
+    for (const job of this.jobs) {
+      if (job.status === "running" || job.status === "queued") {
+        job.status = "failed";
+        job.error = "Servidor reiniciado durante o deploy.";
+        job.finishedAt = new Date().toISOString();
       }
-    } catch {
-      this.jobs = [];
     }
   }
 

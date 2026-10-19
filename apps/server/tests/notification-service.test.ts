@@ -661,8 +661,9 @@ describe("defesas", () => {
 
   it("falha ao gravar no disco: vai para o log, sem derrubar a ação", async () => {
     const { mkdir } = await import("node:fs/promises");
-    await mkdir(path.join(dir, "notifications.json"));
     const s = service();
+    await s.status(); // carrega antes: o que falha aqui é a GRAVAÇÃO
+    await mkdir(path.join(dir, "notifications.json"));
     await connected(s);
     await s.flush();
     expect((await s.status()).telegram.state).toBe("connected");

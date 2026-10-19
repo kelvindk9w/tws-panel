@@ -195,7 +195,7 @@ describe("falha de gravação", () => {
 
   it("create que falha REJEITA e a sessão não existe; a gravação seguinte persiste só a nova", async () => {
     const store = new SessionStore(dir);
-    await store.init();
+    await store.resolve("x.y"); // carrega antes: o que falha aqui é a GRAVAÇÃO
     // sessions.json vira diretório: a escrita falha com EISDIR
     await mkdir(arquivo());
     await expect(store.create(USER)).rejects.toMatchObject({ code: "storage_write_failed" });

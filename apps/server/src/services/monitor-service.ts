@@ -29,7 +29,7 @@ import {
 } from "@paas/security";
 import type { ServerConfig } from "../config.js";
 import type { AlertsService } from "./alerts-service.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 interface MonitorFile {
   intervalMs: number;
@@ -365,19 +365,24 @@ export class MonitorService {
   /** Carga única e compartilhada (uma flag marcada antes de ler deixava a segunda chamada com os padrões). */
   private ensureStateLoaded(): Promise<void> {
     this.stateLoading ??= (async () => {
-      try {
-        const raw = JSON.parse(await readFile(this.monitorFile, "utf8")) as Partial<MonitorFile>;
-        this.state = {
-          intervalMs: clampInterval(
-            typeof raw.intervalMs === "number" && raw.intervalMs > 0 ? raw.intervalMs : this.state.intervalMs,
-          ),
-          lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
-          lastResult: raw.lastResult ?? null,
-        };
-      } catch {
-        // primeira execução — mantém defaults
-      }
-    })();
+      // sem arquivo: mantém os padrões; erro de leitura falha a carga (não regrava os padrões por cima)
+      const defaults = this.state;
+      this.state = await loadJson<MonitorFile>(this.monitorFile, {
+        empty: () => defaults,
+        parse: (value) => {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+          const raw = value as Partial<MonitorFile>;
+          return {
+            intervalMs: clampInterval(typeof raw.intervalMs === "number" && raw.intervalMs > 0 ? raw.intervalMs : defaults.intervalMs),
+            lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
+            lastResult: raw.lastResult ?? null,
+          };
+        },
+      });
+    })().catch((err: unknown) => {
+      this.stateLoading = null;
+      throw err;
+    });
     return this.stateLoading;
   }
 

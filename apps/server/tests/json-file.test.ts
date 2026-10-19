@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { JsonFile, createFileOnce, loadOrCreateKey, withFileLock, writeFileAtomic } from "../src/services/json-file.js";
+import { JsonFile, createFileOnce, loadJson, loadJsonInLock, loadOrCreateKey, withFileLock, writeFileAtomic } from "../src/services/json-file.js";
 
 let dir: string;
 
@@ -218,5 +218,46 @@ describe("JsonFile", () => {
     await f.update((n) => n + 41);
     expect(await readFile(file, "utf8")).toBe("41");
     expect((await stat(file)).mode & 0o777).toBe(0o640);
+  });
+});
+
+describe("loadJson", () => {
+  const opts = {
+    empty: () => ({ n: 0 }),
+    parse: (raw: unknown) => (typeof raw === "object" && raw !== null && "n" in raw ? (raw as { n: number }) : null),
+  };
+
+  it("sem arquivo: o vazio; arquivo bom: o conteúdo", async () => {
+    const file = path.join(dir, "a.json");
+    expect(await loadJson(file, opts)).toEqual({ n: 0 });
+    await writeFile(file, '{"n":3}');
+    expect(await loadJson(file, opts)).toEqual({ n: 3 });
+  });
+
+  it("erro de leitura que não é 'não existe' é lançado e o arquivo não é tocado", async () => {
+    const file = path.join(dir, "pasta.json");
+    await mkdir(file);
+    await expect(loadJson(file, opts)).rejects.toThrow(/EISDIR/);
+    expect(await readdir(dir)).toEqual(["pasta.json"]);
+  });
+
+  it("JSON quebrado ou formato desconhecido: guardado à parte, avisado, devolve o vazio", async () => {
+    const file = path.join(dir, "b.json");
+    const avisos: string[] = [];
+    await writeFile(file, "{quebrado");
+    expect(await loadJson(file, { ...opts, log: (m) => void avisos.push(m) })).toEqual({ n: 0 });
+    await writeFile(file, '{"outro":1}');
+    expect(await loadJson(file, opts)).toEqual({ n: 0 });
+    const guardados = (await readdir(dir)).filter((n) => n.startsWith("b.json.corrompido-"));
+    expect(guardados).toHaveLength(2);
+    expect(avisos[0]).toMatch(/b\.json estava ilegível/);
+  });
+
+  it("strict: ilegível lança e não mexe no arquivo; loadJsonInLock serve a quem já está na fila", async () => {
+    const file = path.join(dir, "c.json");
+    await writeFile(file, "{quebrado");
+    await expect(loadJson(file, { ...opts, strict: true })).rejects.toThrow(/c\.json está ilegível/);
+    expect(await readFile(file, "utf8")).toBe("{quebrado");
+    await expect(withFileLock(file, () => loadJsonInLock(file, { ...opts, strict: true }))).rejects.toThrow(/ilegível/);
   });
 });

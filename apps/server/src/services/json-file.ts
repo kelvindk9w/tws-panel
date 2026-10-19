@@ -158,6 +158,60 @@ function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+export interface LoadJsonOptions<T> {
+  /** Valor quando o arquivo não existe (ou foi guardado à parte). */
+  empty: () => T;
+  /** Converte o JSON lido; null = formato que o store não reconhece. */
+  parse: (raw: unknown) => T | null;
+  /**
+   * true: arquivo ilegível LANÇA erro (o arquivo não é mexido) — para dados
+   * sem os quais seguir é perigoso (contas, lista de projetos, senha do
+   * servidor de e-mail). false (padrão): o arquivo ruim é guardado à parte e
+   * o store começa vazio.
+   */
+  strict?: boolean;
+  /** Aviso ao guardar um arquivo ilegível à parte. */
+  log?: (message: string) => void;
+}
+
+/**
+ * Carga de um arquivo JSON que NUNCA transforma "não consegui ler" em "está
+ * vazio" para depois gravar por cima:
+ *  - não existe (ENOENT): vale o vazio;
+ *  - erro de disco (E/S, permissão): é lançado, o arquivo não é tocado;
+ *  - JSON inválido ou formato desconhecido: guardado em
+ *    `<arquivo>.corrompido-<data>` (ou lançado, se `strict`).
+ * Roda na fila do arquivo; quem já está dentro da fila usa loadJsonInLock.
+ */
+export function loadJson<T>(file: string, opts: LoadJsonOptions<T>): Promise<T> {
+  return withFileLock(file, () => loadJsonInLock(file, opts));
+}
+
+export async function loadJsonInLock<T>(file: string, opts: LoadJsonOptions<T>): Promise<T> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return opts.empty();
+    throw err;
+  }
+  try {
+    const value = opts.parse(JSON.parse(text));
+    if (value !== null) return value;
+  } catch {
+    // JSON inválido: cai abaixo
+  }
+  if (opts.strict) {
+    throw new Error(
+      `O arquivo ${path.basename(file)} está ilegível e não foi alterado. Restaure uma cópia ou renomeie-o para o painel recomeçar do zero.`,
+    );
+  }
+  const aside = `${file}.corrompido-${stamp()}`;
+  await rename(file, aside);
+  opts.log?.(`${path.basename(file)} estava ilegível; guardei como ${path.basename(aside)} e comecei do zero.`);
+  return opts.empty();
+}
+
 export interface JsonFileOptions<T> {
   /** Valor quando o arquivo não existe (ou foi guardado à parte). */
   empty: () => T;

@@ -75,12 +75,13 @@ describe("UserStore", () => {
     expect(onDisk.users[0].passwordHash).toBe("$argon2id$hash");
   });
 
-  it("users.json corrompido ou sem array → store vazio sem lançar", async () => {
+  it("users.json corrompido ou sem array → a carga FALHA e o arquivo não é tocado (nunca vira 'sem admin')", async () => {
     await writeFile(path.join(dir, "users.json"), "{quebrado", "utf8");
-    expect(await new UserStore(dir).hasAdmin()).toBe(false);
+    await expect(new UserStore(dir).hasAdmin()).rejects.toThrow(/ilegível/);
+    expect(await readFile(path.join(dir, "users.json"), "utf8")).toBe("{quebrado");
 
     await writeFile(path.join(dir, "users.json"), JSON.stringify({ users: "oops" }), "utf8");
-    expect(await new UserStore(dir).hasAdmin()).toBe(false);
+    await expect(new UserStore(dir).hasAdmin()).rejects.toThrow(/ilegível/);
   });
 });
 
@@ -89,6 +90,7 @@ describe("UserStore — falha de gravação", () => {
 
   it("create que não chega ao disco REJEITA e não deixa admin em memória; a tentativa seguinte funciona", async () => {
     const store = new UserStore(dir);
+    await store.hasAdmin(); // carrega antes: o que falha aqui é a GRAVAÇÃO
     // users.json vira diretório: a escrita falha com EISDIR
     await mkdir(arquivo());
     await expect(store.create("admin", "$argon2id$hash-1")).rejects.toMatchObject({
@@ -106,6 +108,7 @@ describe("UserStore — falha de gravação", () => {
 
   it("a mensagem do erro não vaza caminho nem código do sistema de arquivos", async () => {
     const store = new UserStore(dir);
+    await store.hasAdmin();
     await mkdir(arquivo());
     const err = (await store.create("admin", "h").catch((e: unknown) => e)) as Error;
     expect(err.message).not.toContain(dir);
