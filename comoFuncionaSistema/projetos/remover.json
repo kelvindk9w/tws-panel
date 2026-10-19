@@ -9,7 +9,7 @@
   "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
   "parametros": {
     "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
-    "query": [{ "nome": "deleteSource", "tipo": "string", "obrigatorio": false, "regras": "comparado com a string exata 'true'; qualquer outro valor (inclusive ausente) equivale a false", "descricao": "Se 'true', também apaga data/projects/<slug>/src (ignorado em ingestMode='existing', onde o código nunca foi copiado)." }],
+    "query": [{ "nome": "deleteSource", "tipo": "string", "obrigatorio": false, "regras": "comparado com a string exata 'true'; qualquer outro valor (inclusive ausente) equivale a false", "descricao": "Se 'true', também apaga a pasta de trabalho do projeto (<pasta de projetos>/.paas/<id> nos projetos novos; <pasta de projetos>/<slug> nos de antes do lote 6), ignorado em ingestMode='existing', onde o código nunca foi copiado. ANTES de apagar, workDirRemovalBlocker confere que o alvo está estritamente dentro da pasta de projetos e não contém nem fica dentro da fonte do projeto nem da fonte/pasta de trabalho de outro projeto; se coincidir, NADA é apagado e o log diz 'Código-fonte NÃO removido: <motivo>'." }],
     "body": [],
     "headers": []
   },
@@ -31,7 +31,7 @@
     "3. engine.remove(project, onLog): se type=compose, roda 'docker compose down --rmi local --remove-orphans' (best-effort — código de saída não interrompe o fluxo, só é logado); resolve os IDs de container do projeto e roda 'docker rm -f'; roda 'docker image rm -f paas-<slug>:latest' (best-effort).",
     "4. Remove o projeto do array em memória (this.projects) ANTES de recalcular o Caddy, para que o domínio removido não apareça no novo Caddyfile.",
     "5. engine.syncCaddy(this.projects) — best-effort: se falhar, apenas loga 'Aviso: não foi possível recarregar o Caddy após a remoção.' e continua (não propaga erro).",
-    "6. Se deleteSource=true e ingestMode≠'existing', apaga recursivamente data/projects/<slug> (rm force+recursive).",
+    "6. Se deleteSource=true e ingestMode≠'existing': workDirRemovalBlocker(projeto, outros) — se devolver motivo, só loga 'Código-fonte NÃO removido' (lote 6, A5); senão apaga recursivamente a pasta de trabalho (rm force+recursive).",
     "7. Persiste data/projects.json sem o projeto removido."
   ],
   "dependencias": [
