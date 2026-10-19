@@ -751,7 +751,7 @@ export class DeployService {
 
     let slug = slugify(name);
     // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
-    while (this.projects.some((p) => p.slug === slug) || existsSync(path.join(this.backupsDir, slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    while (this.projects.some((p) => p.slug === slug) || (await this.slugHasBackups(slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
     // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
     // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
     // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
@@ -1583,6 +1583,29 @@ export class DeployService {
   }
 
   /**
+   * O slug já aparece em backups (pasta local, conferências `<slug>/arquivo` ou
+   * histórico de um projeto de mesmo nome)? Então é de um projeto apagado.
+   */
+  private async slugHasBackups(slug: string): Promise<boolean> {
+    if (existsSync(path.join(this.backupsDir, slug))) return true;
+    const dataDir = path.dirname(this.backupsDir);
+    try {
+      const cfg = JSON.parse(await readFile(path.join(dataDir, "backups.json"), "utf8")) as { checks?: Record<string, unknown> };
+      if (Object.keys(cfg.checks ?? {}).some((k) => k.startsWith(`${slug}/`))) return true;
+    } catch {
+      /* sem configuração de backups */
+    }
+    try {
+      const hist = JSON.parse(await readFile(path.join(dataDir, "backups-history.json"), "utf8")) as {
+        entries?: Array<{ target?: string; targetName?: string }>;
+      };
+      return (hist.entries ?? []).some((e) => e.target?.startsWith("project:") && typeof e.targetName === "string" && slugify(e.targetName) === slug);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * "Reiniciar com o fuso novo": recria os containers com a configuração
    * atual, sem baixar código nem refazer o build (o TZ só entra num container
    * novo; `docker restart` mantém o ambiente antigo). Vira um job, como o
@@ -1609,6 +1632,9 @@ export class DeployService {
       target: project.slug,
       detail: `Containers de "${project.name}" recriados com a configuração atual (fuso: ${zone ?? "padrão da imagem"}).`,
     });
+    // Projeto "existing"/"upload" antigo: os arquivos do painel saem da pasta do usuário antes de recriar.
+    const movedEntries = await migrateLegacyWorkDir({ projectsDir: this.projectsDir }, project);
+    if (movedEntries) await this.saveProjects();
     const now = new Date().toISOString();
     const job: DeployJob = {
       id: randomBytes(8).toString("hex"),
@@ -1619,7 +1645,9 @@ export class DeployService {
       startedAt: now,
       finishedAt: null,
       steps: [{ name: "Recriar os containers com a configuração atual", status: "running" }],
-      log: "=== Reinício com a configuração atual (sem baixar código nem refazer o build) ===\n",
+      log:
+        "=== Reinício com a configuração atual (sem baixar código nem refazer o build) ===\n" +
+        (movedEntries ? `Projeto migrado para a área do painel (${path.join(this.projectsDir, ".paas", project.id)}). Nenhum arquivo seu foi apagado.\n` : ""),
       error: null,
     };
     this.jobs.push(job);

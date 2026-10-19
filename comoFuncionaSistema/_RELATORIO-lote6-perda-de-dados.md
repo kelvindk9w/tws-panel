@@ -215,9 +215,15 @@ arquivos, não sobe nada), e a troca de dono do `reset-2fa.mjs` como root.
   o código. Pasta antiga só com arquivos do painel continua saindo inteira.
 - **B9:** slug que já tem pasta em `data/backups/<slug>` é tratado como ocupado na criação (ganha o sufixo
   aleatório de sempre). Não migra cópias; só olha a pasta local (a do armazenamento externo não é consultada).
-- **B11:** a restauração de pasta/volume guarda um `.paas-antes-da-restauracao-<data>.tar` dentro do destino antes
-  de esvaziá-lo; se a cópia falhar, nada é apagado. Testado com `sh` e `tar` reais. Custo: o tar ocupa espaço no
-  volume até alguém apagá-lo.
+- **B11: DESCARTADO.** A cópia de segurança (.tar) ficava dentro do destino da restauração: num volume servido pela
+  web ficaria baixável (com segredos), acumularia a cada restauração, entraria nos backups seguintes e deixaria tar
+  parcial sem disco. Revertido por completo; a restauração volta ao comportamento anterior (que já avisa que
+  sobrescreve). **Trabalho futuro:** cópia FORA do volume (área do painel), retenção de uma, limpeza do parcial e
+  checagem de espaço antes.
 - **A6:** primeira regravação de `.env` antigo sem registro guarda `paas.dotenv.antigo` (0600, uma vez, sai com o projeto).
 - **M7:** erro de leitura do `security-jobs.json` agora tem mensagem em português (permissões/restaurar backup).
 - Cobertura: server 1852 testes (97,8/93,3), deploy 833 (95,7% de ramos); typecheck limpo.
+- **B9 (ampliado):** o slug também é ocupado se aparece como `<slug>/` nas conferências (`backups.json`) ou se o
+  nome de um alvo de projeto do histórico gera esse slug (o histórico não guarda a pasta; é aproximação pelo nome).
+- **A6 (ampliado):** reiniciar por mudança de fuso agora migra projeto "existing"/"upload" antigo antes de recriar,
+  para nada do painel (inclusive `paas.dotenv.antigo`) ser gravado na pasta do usuário.

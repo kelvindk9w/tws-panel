@@ -59,6 +59,17 @@ describe("A5 — área reservada para o que o painel gera", () => {
     expect(p.slug).toMatch(/^loja-[0-9a-f]{4}$/);
   });
 
+  it("slug que só aparece em backups do histórico/conferências (pasta local já saiu) também é ocupado (B9)", async () => {
+    const svc = novoServico();
+    await writeFile(
+      path.join(dataDir, "backups-history.json"),
+      JSON.stringify({ entries: [{ id: "h", target: "project:x", fileName: "a.7z", targetName: "Vendas" }] }),
+    );
+    await writeFile(path.join(dataDir, "backups.json"), JSON.stringify({ checks: { "pedidos/2026-01-01_10-00.7z": { remote: {} } } }));
+    expect((await svc.createProject(git("Vendas"))).slug).toMatch(/^vendas-[0-9a-f]{4}$/);
+    expect((await svc.createProject(git("Pedidos"))).slug).toMatch(/^pedidos-[0-9a-f]{4}$/);
+  });
+
   it("slug que já existe como pasta é RECUSADO na criação (409), e a pasta do usuário não é tocada", async () => {
     const svc = novoServico();
     await mkdir(path.join(projectsDir, "app"));
@@ -120,6 +131,22 @@ describe("A5 — projetos antigos (<projetos>/<slug>) e a conferência antes de 
     await writeFile(path.join(dataDir, "projects.json"), JSON.stringify({ projects: projetos.map((p) => ({ ...base, ...p })) }));
     return novoServico();
   }
+
+  it("reiniciar por mudança de fuso migra projeto 'existing' antigo antes de recriar (o .env antigo não vai para a pasta do usuário)", async () => {
+    const pasta = path.join(projectsDir, "legado");
+    await mkdir(pasta, { recursive: true });
+    await writeFile(path.join(pasta, "paas.override.yml"), "SMTP_PASS: x");
+    const svc = await comProjetosAntigos([
+      { id: "lg", name: "Legado", slug: "legado", ingestMode: "existing", source: pasta, domain: "legado.localhost", lastDeployStatus: "success" },
+    ]);
+    (svc as unknown as { engine: { recreate: unknown } }).engine.recreate = vi.fn(async () => undefined);
+    const job = await svc.startRecreate("lg");
+    await vi.waitFor(() => expect(job.finishedAt).not.toBeNull());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(path.join(projectsDir, ".paas", "lg", "paas.override.yml"))).toBe(true);
+    expect(existsSync(path.join(pasta, "paas.override.yml"))).toBe(false);
+    expect(job.log).toMatch(/migrado para a área do painel/);
+  });
 
   it("slug de um projeto antigo coincide com a pasta-fonte de OUTRO projeto: remover não apaga a pasta do outro", async () => {
     const fonteDoOutro = path.join(projectsDir, "app");
