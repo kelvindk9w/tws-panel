@@ -19,7 +19,7 @@ export { runGuardrails, GUARDRAIL_RULES, type GuardrailRuleInfo, type IsolationC
 export { HARD_RULES, checkComposeModel } from "./compose-model.js";
 export { composeEnv, loadCanonicalCompose } from "./compose-config.js";
 export { ingestCode, pathsOverlap, projectSrcDir, projectWorkDir, reservedRoot, RESERVED_DIRNAME, type IngestContext } from "./ingest.js";
-export { uploadOverlapBlocker, workDirRemovalBlocker } from "./workdir-safety.js";
+export { migrateLegacyWorkDir, removeProjectWorkDir, uploadOverlapBlocker, workDirRemovalBlocker } from "./workdir-safety.js";
 export {
   CaddyManager,
   renderCaddyfile,

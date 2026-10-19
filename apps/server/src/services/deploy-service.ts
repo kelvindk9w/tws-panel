@@ -5,7 +5,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isInsideProjectsDir, isPanelArea, sameFolder } from "./projects-dir.js";
 
@@ -56,9 +56,9 @@ import {
   detectProject,
   ingestCode,
   projectSrcDir,
-  projectWorkDir,
   runGuardrails,
-  workDirRemovalBlocker,
+  migrateLegacyWorkDir,
+  removeProjectWorkDir,
   composeVariables,
   composeEnvFiles,
   composeTimezoneDefinitions,
@@ -895,17 +895,19 @@ export class DeployService {
     if (await this.credentials.remove(project.id)) {
       onLog("Credencial de leitura do repositório removida do cofre.\n");
     }
-    if (deleteSource && project.ingestMode !== "existing") {
-      // O alvo é conferido ANTES (A5): não pode ser a pasta do usuário, conter a
-      // fonte deste projeto ou a de outro, nem ficar dentro delas.
-      const ctx = { projectsDir: this.projectsDir };
-      const blocker = await workDirRemovalBlocker(ctx, project, this.projects);
-      if (blocker) {
-        onLog(`Código-fonte NÃO removido: ${blocker} Confira a pasta e apague à mão, se for o caso.\n`);
-      } else {
-        await rm(projectWorkDir(ctx, project), { recursive: true, force: true });
-        onLog("Código-fonte removido.\n");
-      }
+    // Só se apaga o que o PAINEL criou (A5): numa pasta antiga compartilhada com
+    // arquivos do usuário, ficam os dele e o log diz quais. Os arquivos com
+    // segredos (paas.*) saem sempre, mesmo sem apagar o código.
+    const removal = await removeProjectWorkDir({ projectsDir: this.projectsDir }, project, this.projects, {
+      deleteSource: deleteSource && project.ingestMode !== "existing",
+    });
+    if (removal.folderRemoved && deleteSource) onLog("Código-fonte removido.\n");
+    else if (removal.removed.length > 0) onLog(`Removido da pasta do projeto: ${removal.removed.join(", ")}.\n`);
+    if (removal.kept.length > 0 && deleteSource) {
+      onLog(`Os arquivos que ficaram na pasta (não foram criados pelo painel): ${removal.kept.join(", ")}.\n`);
+    }
+    for (const s of removal.skipped) {
+      onLog(`NÃO removido: ${s}. Confira a pasta e apague à mão, se for o caso.\n`);
     }
     await this.saveProjects();
   }
@@ -1018,6 +1020,20 @@ export class DeployService {
   }
 
   private async startDeployReserved(project: Project, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
+    // Projeto "existing"/"upload" de antes da área reservada: o que o painel gera
+    // (paas.*, site) sai da pasta do usuário e vai para .paas/<id>. Só move,
+    // nunca apaga; roda uma vez (depois o projeto já é "reserved").
+    let migrationNote = "";
+    const movedEntries = await migrateLegacyWorkDir({ projectsDir: this.projectsDir }, project);
+    if (movedEntries) {
+      await this.saveProjects();
+      migrationNote =
+        `Projeto migrado para a área do painel (${path.join(this.projectsDir, ".paas", project.id)}). ` +
+        (movedEntries.length > 0
+          ? `Movidos da pasta antiga: ${movedEntries.join(", ")}. `
+          : "Não havia arquivos do painel na pasta antiga. ") +
+        "Nenhum arquivo seu foi apagado.\n";
+    }
 
     // Re-roda a detecção se necessário (código mudou desde a última).
     if (!project.detection) {
@@ -1129,7 +1145,7 @@ export class DeployService {
         { name: "Proxy reverso (Caddy)", status: "running" },
         { name: "Health check", status: "running" },
       ].map((s, i) => ({ name: s.name, status: i === 0 ? "running" : ("skipped" as const) })),
-      log: "",
+      log: migrationNote,
       error: null,
     };
     // steps começam "skipped" (pendentes) e avançam conforme o log

@@ -9,7 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Project } from "@paas/core";
 import { ingestCode, pathsOverlap, projectSrcDir, projectWorkDir, reservedRoot } from "../src/ingest.js";
-import { uploadOverlapBlocker, workDirRemovalBlocker } from "../src/workdir-safety.js";
+import { migrateLegacyWorkDir, removeProjectWorkDir, uploadOverlapBlocker, workDirRemovalBlocker } from "../src/workdir-safety.js";
 
 let projetos: string;
 const ctx = () => ({ projectsDir: projetos });
@@ -130,5 +130,84 @@ describe("workDirRemovalBlocker", () => {
     const outro = projeto({ id: "o2", slug: "outro", name: "Outro", ingestMode: "existing", source: path.join(projetos, "atalho") });
     const antigo = projeto({ id: "a2", slug: "real", ingestMode: "git", source: "https://x/r.git" });
     expect(await workDirRemovalBlocker(ctx(), antigo, [outro])).toMatch(/projeto "Outro"/);
+  });
+});
+
+describe("removeProjectWorkDir e migrateLegacyWorkDir", () => {
+  it("pasta antiga compartilhada: apaga só src/repo.git/site/paas.* e lista o que ficou", async () => {
+    const dir = path.join(projetos, "blog");
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "paas.env"), "x");
+    await writeFile(path.join(dir, "notas.txt"), "meu");
+    const r = await removeProjectWorkDir(ctx(), projeto({ id: "b", slug: "blog", ingestMode: "git" }), [], { deleteSource: true });
+    expect(r.removed.sort()).toEqual(["paas.env", "src"]);
+    expect(r.kept).toEqual(["notas.txt"]);
+    expect(r.folderRemoved).toBe(false);
+    expect(existsSync(path.join(dir, "notas.txt"))).toBe(true);
+  });
+
+  it("pasta antiga só com o que é do painel: a pasta sai; sem nada para apagar, devolve vazio", async () => {
+    const dir = path.join(projetos, "blog");
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    const p = projeto({ id: "b", slug: "blog", ingestMode: "git" });
+    expect((await removeProjectWorkDir(ctx(), p, [], { deleteSource: true })).folderRemoved).toBe(true);
+    expect(existsSync(dir)).toBe(false);
+    expect(await removeProjectWorkDir(ctx(), p, [], { deleteSource: true })).toEqual({ removed: [], kept: [], folderRemoved: false, skipped: [] });
+  });
+
+  it("entrada que coincide com a fonte de outro projeto não é apagada; pasta fora dos projetos é recusada", async () => {
+    const dir = path.join(projetos, "app");
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    const outro = projeto({ id: "o", slug: "outro", name: "Outro", ingestMode: "existing", source: path.join(dir, "src") });
+    const r = await removeProjectWorkDir(ctx(), projeto({ id: "b", slug: "app", ingestMode: "git" }), [outro], { deleteSource: true });
+    expect(r.skipped[0]).toMatch(/Outro/);
+    expect(existsSync(path.join(dir, "src"))).toBe(true);
+    expect(r.folderRemoved).toBe(false);
+    const raiz = await removeProjectWorkDir(ctx(), projeto({ id: "b", slug: ".", ingestMode: "git" }), [], { deleteSource: true });
+    expect(raiz.skipped[0]).toMatch(/estritamente dentro/);
+  });
+
+  it("pasta reservada: sem apagar o código só saem os paas.*; com apagar sai inteira", async () => {
+    const p = projeto({ id: "r1", slug: "r", ingestMode: "git", storageLayout: "reserved" });
+    const dir = projectWorkDir(ctx(), p);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "paas.env"), "x");
+    await removeProjectWorkDir(ctx(), p, [], { deleteSource: false });
+    expect(existsSync(path.join(dir, "paas.env"))).toBe(false);
+    expect(existsSync(path.join(dir, "src"))).toBe(true);
+    await removeProjectWorkDir(ctx(), p, [], { deleteSource: true });
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("migra upload antigo (src, site, paas.*) e existing (só paas.*); idempotente; git não migra", async () => {
+    const dir = path.join(projetos, "meu");
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await mkdir(path.join(dir, "site"), { recursive: true });
+    await writeFile(path.join(dir, "paas.env"), "x");
+    const up = projeto({ id: "u1", slug: "meu", ingestMode: "upload", source: "/fora/origem" });
+    expect((await migrateLegacyWorkDir(ctx(), up))?.sort()).toEqual(["paas.env", "site", "src"]);
+    expect(up.storageLayout).toBe("reserved");
+    expect(existsSync(path.join(projetos, ".paas", "u1", "src"))).toBe(true);
+    expect(await migrateLegacyWorkDir(ctx(), up)).toBeNull();
+
+    await writeFile(path.join(dir, "paas.env"), "y");
+    await mkdir(path.join(dir, "site"), { recursive: true });
+    const ex = projeto({ id: "e1", slug: "meu", ingestMode: "existing", source: dir });
+    expect(await migrateLegacyWorkDir(ctx(), ex)).toEqual(["paas.env"]);
+    expect(existsSync(path.join(dir, "site"))).toBe(true);
+
+    expect(await migrateLegacyWorkDir(ctx(), projeto({ id: "g1", slug: "meu", ingestMode: "git", source: "u" }))).toBeNull();
+    expect(await migrateLegacyWorkDir(ctx(), projeto({ id: "v1", slug: "nao-existe", ingestMode: "existing", source: "/x" }))).toEqual([]);
+  });
+
+  it("migração não sobrescreve o que já existe no destino", async () => {
+    const dir = path.join(projetos, "meu");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "paas.env"), "velho");
+    await mkdir(path.join(projetos, ".paas", "e1"), { recursive: true });
+    await writeFile(path.join(projetos, ".paas", "e1", "paas.env"), "novo");
+    expect(await migrateLegacyWorkDir(ctx(), projeto({ id: "e1", slug: "meu", ingestMode: "existing", source: dir }))).toEqual([]);
+    expect(await readFile(path.join(projetos, ".paas", "e1", "paas.env"), "utf8")).toBe("novo");
+    expect(await readFile(path.join(dir, "paas.env"), "utf8")).toBe("velho");
   });
 });

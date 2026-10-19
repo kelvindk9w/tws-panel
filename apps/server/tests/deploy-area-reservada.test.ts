@@ -124,7 +124,7 @@ describe("A5 — projetos antigos (<projetos>/<slug>) e a conferência antes de 
     const log: string[] = [];
     await svc.deleteProject("b", true, (c) => void log.push(c));
     expect(await readFile(path.join(fonteDoOutro, "codigo.js"), "utf8")).toBe("importante");
-    expect(log.join("")).toMatch(/Código-fonte NÃO removido/);
+    expect(log.join("")).toMatch(/ficaram na pasta.*codigo\.js/s);
     expect((await svc.listProjects()).map((p) => p.id)).toEqual(["a"]);
   });
 
@@ -138,7 +138,7 @@ describe("A5 — projetos antigos (<projetos>/<slug>) e a conferência antes de 
     const log: string[] = [];
     await svc.deleteProject("u", true, (c) => void log.push(c));
     expect(await readFile(path.join(pasta, "index.html"), "utf8")).toBe("original do usuario");
-    expect(log.join("")).toMatch(/Código-fonte NÃO removido/);
+    expect(log.join("")).toMatch(/NÃO removido: src/);
   });
 
   it("projeto antigo sem nenhuma coincidência: continua removendo a pasta do slug como sempre (compatibilidade)", async () => {
@@ -153,5 +153,92 @@ describe("A5 — projetos antigos (<projetos>/<slug>) e a conferência antes de 
     await svc.deleteProject("v", true, (c) => void log.push(c));
     expect(existsSync(pasta)).toBe(false);
     expect(log.join("")).toMatch(/Código-fonte removido/);
+  });
+
+  // Revisão do lote 6: pasta COMUM do usuário (não cadastrada em nenhum projeto) com o nome do slug.
+  it("cenário 'blog': projeto git antigo + arquivos do usuário na mesma pasta — remover apaga SÓ o que o painel criou", async () => {
+    const pasta = path.join(projectsDir, "blog");
+    await mkdir(path.join(pasta, "src"), { recursive: true });
+    await mkdir(path.join(pasta, "repo.git"), { recursive: true });
+    await writeFile(path.join(pasta, "src", "app.js"), "clone");
+    await writeFile(path.join(pasta, "paas.env"), "SEGREDO='1'\n");
+    await writeFile(path.join(pasta, "paas.up.env"), "SEGREDO='1'\n");
+    await writeFile(path.join(pasta, "notas-do-usuario.txt"), "minhas notas");
+    await writeFile(path.join(pasta, "backup.sql"), "dump do usuario");
+    const svc = await comProjetosAntigos([
+      { id: "bl", name: "Blog", slug: "blog", ingestMode: "git", source: "https://github.com/k/r.git", branch: "main", domain: "blog.localhost" },
+    ]);
+    const log: string[] = [];
+    await svc.deleteProject("bl", true, (c) => void log.push(c));
+    expect(await readFile(path.join(pasta, "notas-do-usuario.txt"), "utf8")).toBe("minhas notas");
+    expect(await readFile(path.join(pasta, "backup.sql"), "utf8")).toBe("dump do usuario");
+    for (const gerado of ["src", "repo.git", "paas.env", "paas.up.env"]) expect(existsSync(path.join(pasta, gerado))).toBe(false);
+    const texto = log.join("");
+    expect(texto).toMatch(/ficaram na pasta.*notas-do-usuario\.txt/s);
+    expect(texto).not.toMatch(/Código-fonte removido\./);
+  });
+
+  it("remover sem apagar o código tira só os paas.* (segredos) da pasta antiga; src e arquivos do usuário ficam", async () => {
+    const pasta = path.join(projectsDir, "blog");
+    await mkdir(path.join(pasta, "src"), { recursive: true });
+    await writeFile(path.join(pasta, "paas.env"), "SEGREDO='1'\n");
+    await writeFile(path.join(pasta, "notas.txt"), "n");
+    const svc = await comProjetosAntigos([
+      { id: "bl", name: "Blog", slug: "blog", ingestMode: "git", source: "https://github.com/k/r.git", branch: "main", domain: "blog.localhost" },
+    ]);
+    await svc.deleteProject("bl", false, () => undefined);
+    expect(existsSync(path.join(pasta, "paas.env"))).toBe(false);
+    expect(existsSync(path.join(pasta, "src"))).toBe(true);
+    expect(existsSync(path.join(pasta, "notas.txt"))).toBe(true);
+  });
+
+  it("projeto novo de pasta existente: remover (mesmo sem apagar o código) limpa .paas/<id> com os segredos", async () => {
+    const svc = novoServico();
+    const fonte = path.join(projectsDir, "meu-app");
+    await mkdir(fonte);
+    const p = await svc.createProject({ name: "Meu App", ingestMode: "existing", source: fonte, domain: "meu.localhost" });
+    const area = path.join(projectsDir, ".paas", p.id);
+    await mkdir(area, { recursive: true });
+    await writeFile(path.join(area, "paas.env"), "SEGREDO='1'\n");
+    await writeFile(path.join(area, "paas.up.env"), "SEGREDO='1'\n");
+    await svc.deleteProject(p.id, false, () => undefined);
+    expect(existsSync(area)).toBe(false);
+    expect(existsSync(fonte)).toBe(true);
+  });
+
+  it("cenário 'meusite': projeto 'existing' antigo migra sozinho para .paas/<id> no próximo deploy, sem apagar nada do usuário", async () => {
+    const pasta = path.join(projectsDir, "meusite");
+    await mkdir(path.join(pasta, "site"), { recursive: true });
+    await writeFile(path.join(pasta, "index.html"), "<h1>meu site</h1>");
+    await writeFile(path.join(pasta, "site", "pagina-do-usuario.html"), "pagina do usuario");
+    await writeFile(path.join(pasta, "paas.env"), "SEGREDO='1'\n");
+    await writeFile(path.join(pasta, "paas.up.env"), "SEGREDO='1'\n");
+    await writeFile(path.join(pasta, "paas.canonical.json"), "{}");
+    const svc = await comProjetosAntigos([
+      {
+        id: "ms", name: "meusite", slug: "meusite", ingestMode: "existing", source: pasta, branch: null, domain: "meusite.localhost",
+        detection: { type: "static", warnings: [], details: [] },
+      },
+    ]);
+    const engine = (svc as unknown as { engine: { deploy: unknown } }).engine;
+    engine.deploy = vi.fn(async () => undefined);
+    (svc as unknown as { applyProxy: () => Promise<void> }).applyProxy = async () => undefined;
+    const job = await svc.startDeploy("ms");
+    await vi.waitFor(async () => expect((await svc.getJob("ms", job.id))?.status).toBe("success"));
+    const projeto = (await svc.getProject("ms"))!;
+    expect(projeto.storageLayout).toBe("reserved");
+    expect(svc.backupSourceDir(projeto)).toBe(pasta);
+    expect(existsSync(path.join(projectsDir, ".paas", "ms"))).toBe(true);
+    expect(await readFile(path.join(pasta, "site", "pagina-do-usuario.html"), "utf8")).toBe("pagina do usuario");
+    expect(await readFile(path.join(pasta, "index.html"), "utf8")).toBe("<h1>meu site</h1>");
+    for (const gerado of ["paas.env", "paas.up.env", "paas.canonical.json"]) expect(existsSync(path.join(pasta, gerado))).toBe(false);
+    expect((await svc.getJob("ms", job.id))!.log).toMatch(/migrado para a área do painel/);
+    // gravado no disco: o próximo boot já lê o novo layout
+    expect(JSON.parse(await readFile(path.join(dataDir, "projects.json"), "utf8")).projects[0].storageLayout).toBe("reserved");
+    // idempotente: um segundo deploy não migra de novo
+    const job2 = await svc.startDeploy("ms");
+    await vi.waitFor(async () => expect((await svc.getJob("ms", job2.id))?.status).toBe("success"));
+    expect((await svc.getJob("ms", job2.id))!.log).not.toMatch(/migrado/);
+    await new Promise((r) => setTimeout(r, 100)); // deixa o job terminar de gravar antes de apagar o diretório do teste
   });
 });
