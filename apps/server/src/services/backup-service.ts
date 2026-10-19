@@ -594,7 +594,7 @@ export class BackupService {
           interrupted = true;
         }
       }
-      if (interrupted) await this.persist({ history: true });
+      if (interrupted) await this.persistQuiet({ history: true });
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
     })().catch((err: unknown) => {
       this.loading = null;
@@ -637,18 +637,30 @@ export class BackupService {
     await writeFileAtomic(file, JSON.stringify(data, null, 2) + "\n");
   }
 
+  /**
+   * Grava o que mudou. Falha de gravação é PROPAGADA a quem pediu a mudança
+   * (configurar destino, senha, frequência…): dizer "salvo" sem ter salvo
+   * perderia a configuração no próximo reinício. A fila segue para o próximo.
+   */
   private persist(what: { config?: boolean; history?: boolean }): Promise<void> {
     const config = what.config ? structuredClone(this.config) : null;
     const history = what.history ? this.history.slice(-MAX_HISTORY) : null;
-    this.writing = this.writing.then(async () => {
+    const run = this.writing.then(async () => {
       try {
         if (config) await this.writeJson(this.file, config);
         if (history) await this.writeJson(this.historyFile, { entries: history });
       } catch (err) {
         this.log(`Backups: não foi possível gravar no disco (${(err as Error).message}).`);
+        throw err;
       }
     });
-    return this.writing;
+    this.writing = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Para gravações internas (agendador, fim de operação): registra a falha e segue, sem derrubar quem roda. */
+  private persistQuiet(what: { config?: boolean; history?: boolean }): Promise<void> {
+    return this.persist(what).catch(() => undefined);
   }
 
   async flush(): Promise<void> {
@@ -1223,7 +1235,7 @@ export class BackupService {
     if (dup) return dup.record;
     this.queue.push({ record, run });
     this.history.push(record);
-    void this.persist({ history: true });
+    void this.persistQuiet({ history: true });
     void this.pump();
     return record;
   }
@@ -1268,7 +1280,7 @@ export class BackupService {
         path: r.target.startsWith("project:") ? `/projects/${r.target.slice(8)}/backups` : "/settings/backups",
       });
     }
-    await this.persist({ config: true, history: true });
+    await this.persistQuiet({ config: true, history: true });
     this.running = null;
     void this.pump();
   }
@@ -1903,7 +1915,7 @@ export class BackupService {
       else if (result.status === "failed") summary.failed++;
       else if (result.status === "missing") summary.missing++;
       else summary.needsPassword++;
-      await this.persist({ config: true });
+      await this.persistQuiet({ config: true });
     }
     const parts = [
       `${summary.ok} íntegra(s)`,
@@ -2355,7 +2367,7 @@ export class BackupService {
       const slot = currentSlot(now, t.frequencyHours, this.hour);
       if (t.lastSlot === null || slot > t.lastSlot) {
         t.lastSlot = slot;
-        await this.persist({ config: true });
+        await this.persistQuiet({ config: true });
         await this.runNow(id, null).catch((err: unknown) => this.log(`Backups: agendado de ${id} não entrou na fila (${reasonOf(err)}).`));
       }
       // Externo atrasado (2 dias ou 2× a frequência), avisado no máximo 1×/dia.
@@ -2366,7 +2378,7 @@ export class BackupService {
       const noticed = t.lastStaleNoticeAt ? Date.parse(t.lastStaleNoticeAt) : 0;
       if (isRemoteStale({ lastVerifiedAt: verified, since, now, frequencyHours: t.frequencyHours }) && now - noticed > 24 * HOUR_MS) {
         t.lastStaleNoticeAt = new Date(now).toISOString();
-        await this.persist({ config: true });
+        await this.persistQuiet({ config: true });
         const name = id === "panel" ? "Painel" : id === "email" ? "E-mail" : project!.name;
         const days = Math.floor((now - (verified ?? since)) / (24 * HOUR_MS));
         this.opts.notify?.({
@@ -2390,7 +2402,7 @@ export class BackupService {
       })
     ) {
       e.lastReminderAt = new Date(now).toISOString();
-      await this.persist({ config: true });
+      await this.persistQuiet({ config: true });
       this.opts.notify?.({
         kind: "backup_reminder",
         key: "backup-reminder",
@@ -2414,7 +2426,7 @@ export class BackupService {
       const slot = currentSlot(now, t.frequencyHours, this.hour);
       if (t.lastSlot === null || slot > t.lastSlot) t.lastSlot = slot;
     }
-    await this.persist({ config: true });
+    await this.persistQuiet({ config: true });
   }
 
   start(intervalMs = 60_000): void {

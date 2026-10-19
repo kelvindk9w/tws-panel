@@ -1711,6 +1711,20 @@ process.stdin.on("end", () => {
   });
 });
 
+describe("falha ao gravar a configuração dos backups (B10)", () => {
+  it("quem pediu a mudança fica sabendo: a falha de gravação é propagada, e o serviço segue funcionando depois", async () => {
+    await connect();
+    const P1 = projectTargetId("p1");
+    // uma pasta no lugar do backups.json: a gravação atômica falha
+    await rm(path.join(dir, "backups.json"), { force: true });
+    await mkdir(path.join(dir, "backups.json"));
+    await expect(service.updateTarget(P1, { localKeep: 3 }, "admin")).rejects.toThrow();
+    await rm(path.join(dir, "backups.json"), { recursive: true });
+    await service.updateTarget(P1, { localKeep: 4 }, "admin");
+    expect(JSON.parse(await readFile(path.join(dir, "backups.json"), "utf8")).targets[P1].localKeep).toBe(4);
+  });
+});
+
 describe("retenção nunca apaga o backup recém-criado (M5)", () => {
   const P1 = projectTargetId("p1");
 
