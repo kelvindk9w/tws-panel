@@ -30,6 +30,7 @@ import webmailRoutes from "./webmail.js";
 import { MailEnviosService } from "../services/mail-envios-service.js";
 import { MailReputationService } from "../services/mail-reputation-service.js";
 import { readStalwartLogs } from "../services/stalwart-logs.js";
+import { migrateMailNetworks } from "../services/mail-network-migration.js";
 import { mailEnviosRoutes } from "./mail-envios.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
@@ -352,7 +353,22 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
    * a resposta; falha fica no log (e a página mostra o estado em /api/mail/tls).
    */
   let lastProxyHosts: string | null = null;
+  // A4: tira o e-mail da paas-net dos projetos (uma vez por processo; falha tenta de novo na próxima rodada)
+  let networksMigrated = false;
+  const migrateNetworks = async (): Promise<void> => {
+    if (networksMigrated) return;
+    await migrateMailNetworks({
+      mail: service,
+      joinProject: (id) => app.deployService.joinMailNetwork(id),
+      syncWebmail: () => webmail.sync(),
+      log: (message) => app.log.warn(message),
+    });
+    networksMigrated = true;
+  };
   const refreshMailTls = async (opts: { force: boolean }): Promise<void> => {
+    await migrateNetworks().catch((err: unknown) => {
+      app.log.warn(`E-mail: migração para as redes separadas falhou (${err instanceof Error ? err.message : String(err)}); tento de novo depois.`);
+    });
     const hosts = (await service.mailHosts()).join(",");
     if (opts.force || hosts !== lastProxyHosts) {
       await app.deployService.refreshProxy();

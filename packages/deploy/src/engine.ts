@@ -11,12 +11,15 @@
  *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
  */
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  COMPOSE_PROJECT_LABEL,
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
+  PAAS_MAIL_NETWORK,
   PAAS_NETWORK,
+  PANEL_IMAGE_REPOSITORIES,
   type DomainHttpsStatus,
   type GuardrailReport,
   type Project,
@@ -26,14 +29,17 @@ import { parse } from "yaml";
 import { CaddyManager, projectDomain, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
-import { preparePublishDir } from "./static-site.js";
+import { preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
-import { composeOverrideYaml, strippedProxyPortServices } from "./compose-override.js";
+import { composeOverrideYaml, hardenComposeModel, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
+import { isRegularFile, readFileNoFollow } from "./safe-fs.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
+import { composeEnv, loadCanonicalCompose } from "./compose-config.js";
+import { HARD_RULES, checkComposeModel, resolveRealPath } from "./compose-model.js";
 import { waitHealthy } from "./health-check.js";
 
 export interface EngineContext extends IngestContext {
@@ -43,6 +49,10 @@ export interface EngineContext extends IngestContext {
   nodeImage: string;
   /** Imagem nginx usada para servir estáticos. */
   staticImage: string;
+  /** Imagens extras do painel que um build de projeto não pode regravar (além das fixas e das duas acima). */
+  protectedImages?: string[];
+  /** Slugs de todos os projetos (nomes que o DNS da rede do proxy já responde). */
+  projectSlugs?: () => string[];
   /** Porta HTTP do Caddy no host (health check passa por ela). */
   caddyHttpPort: number;
   /** Porta HTTPS do Caddy no host. */
@@ -55,6 +65,8 @@ export interface EngineContext extends IngestContext {
    * 127.0.0.1 não tem proxy nenhum. Ausente = painel fora de container (dev).
    */
   panelContainer?: string;
+  /** Pasta de instalação do painel no host (ex.: /opt/tws-panel): nenhum projeto a monta. */
+  panelInstallDir?: string;
   /**
    * Env vars extras por projeto (Fase 3 — injeção SMTP). Chamado no início de
    * cada deploy; o mapa é injetado no compose override (todos os serviços) ou
@@ -213,7 +225,7 @@ export class DeployEngine {
     // vez antes de criar o job. Quando o modo de ingestão garante que o
     // diretório não mudou desde então (ver comentário no chamador), ele passa
     // esse resultado pronto aqui em vez de escanear a árvore de novo.
-    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides));
+    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project)));
     if (opts?.precomputedGuardrailReport) {
       onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
     }
@@ -276,6 +288,7 @@ export class DeployEngine {
           extraEnv,
           (await this.ctx.injectEnvForProject?.(project)) ?? {},
           timezone,
+          opts?.guardrailOverride === true,
         );
         break;
       case "dockerfile":
@@ -355,6 +368,22 @@ export class DeployEngine {
     }
   }
 
+  /**
+   * Hosts do servidor de e-mail para a checagem do compose (um serviço não pode ter o nome DNS
+   * deles na rede de e-mail). Falha FECHADA: sem a lista, um hostname que não começa por
+   * `mail.` ficaria sem proteção; então o deploy com e-mail espera a leitura funcionar.
+   */
+  private async requiredMailHosts(): Promise<string[]> {
+    try {
+      return (await this.ctx.mailHosts?.()) ?? [];
+    } catch (err) {
+      throw new Error(
+        `não consegui ler os hosts do servidor de e-mail (${err instanceof Error ? err.message : String(err)}); ` +
+          "o deploy de um projeto com e-mail só segue com essa conferência. Tente de novo em instantes.",
+      );
+    }
+  }
+
   /** Upstream (host:porta na rede paas-net) conforme o tipo do projeto. */
   upstreamFor(project: Project): string {
     const type = project.detection?.type;
@@ -397,6 +426,7 @@ export class DeployEngine {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       `${PAAS_LABEL_PROJECT}=${project.slug}`,
+      ...CONTAINER_HARDENING,
       this.ctx.staticImage,
     ]);
     if (runRes.code !== 0) throw new Error(`falha ao subir o servidor estático: ${runRes.stderr}`);
@@ -447,7 +477,12 @@ export class DeployEngine {
     );
     if (code !== 0) throw new Error(`build estático falhou (exit ${code}).`);
 
-    return this.serveStaticDir(project, path.join(src, outputDir), outputDir, onLog);
+    // O nginx não monta a pasta do build direto (poderia ser um link para o
+    // host, achado M8): serve uma cópia criada pelo painel, fora do src.
+    const site = path.join(projectWorkDir(this.ctx, project), "site");
+    await publishBuildOutput(src, outputDir, site);
+    onLog(`Saída do build (${outputDir}/) copiada para a pasta de publicação, sem links simbólicos.\n`);
+    return this.serveStaticDir(project, site, outputDir, onLog);
   }
 
   // -------------------------------------------------------------------------
@@ -461,35 +496,186 @@ export class DeployEngine {
     dotenv: Record<string, string> = {},
     extraEnv: Record<string, string> = {},
     timezone: string | null = null,
+    guardrailOverride = false,
   ): Promise<string> {
-    const { proxyPort, composeContent } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
+    await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
+    const { proxyPort, composeContent, mailServices } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
+    await this.assertInputsSafe(src, [".env"]);
+    await this.writeComposeEnv(project, src);
     const args = this.composeArgs(project, src);
+    const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices);
+    // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
+    const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
-    const code = await runStream("docker", [...args, "up", "-d", "--build"], (chunk) => {
+    const code = await runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
       output += chunk;
       onLog(chunk);
-    });
-    if (code !== 0) await this.composeUpFailed(args, output, code, composeContent, onLog);
+    }, { env: composeEnv() });
+    if (code !== 0) await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
     return `${project.slug}:${proxyPort}`;
+  }
+
+  /** Erro de variáveis obrigatórias do compose sem valor. */
+  private missingVariablesError(missing: string[]): Error {
+    return new Error(
+      `faltam variáveis obrigatórias do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto` +
+        (missing.some((m) => m.startsWith("SMTP_") || m === "MAIL_FROM")
+          ? " (SMTP_* e MAIL_FROM o painel preenche sozinho se você ativar a seção E-mail do projeto)"
+          : "") +
+        " e faça o deploy de novo.",
+    );
+  }
+
+  /**
+   * Confere o compose COMO O DOCKER O VAI EXECUTAR (`docker compose config`
+   * com os mesmos -p, --env-file, --project-directory e -f do `up`: merge,
+   * include, extends e ${VAR} já resolvidos) contra a lista do que um projeto
+   * pode pedir (compose-model.ts). É a checagem que vale: a da tela olha o
+   * YAML cru. Bloqueios de isolamento do painel (HARD_RULES) não têm override.
+   */
+  private async assertComposeAllowed(
+    project: Project,
+    src: string,
+    args: string[],
+    onLog: LogFn,
+    guardrailOverride: boolean,
+    mailServices: readonly string[] = [],
+  ): Promise<unknown> {
+    const loaded = await loadCanonicalCompose(args);
+    if (!loaded.ok) {
+      if (loaded.missing.length > 0) throw this.missingVariablesError(loaded.missing);
+      throw new Error(`o docker compose não conseguiu interpretar o compose do projeto: ${loaded.error.slice(0, 1500)}`);
+    }
+    const findings = checkComposeModel(loaded.model, {
+      fileName: project.detection?.composeFile ?? "compose.yml",
+      srcRoot: src,
+      projectName: composeProjectName(project),
+      mode: "canonical",
+      panelNetwork: PAAS_NETWORK,
+      ...this.isolationFor(project, mailServices),
+      // os hosts que o Stalwart responde na rede de e-mail: nome de serviço de projeto nenhum pode repeti-los
+      ...(mailServices.length > 0 ? { mailAliases: await this.requiredMailHosts() } : {}),
+    });
+    onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
+    if (findings.length === 0) {
+      onLog("O compose resolvido só pede o que um projeto pode pedir.\n");
+      return loaded.model;
+    }
+    for (const f of findings) onLog(`✖ BLOCK [${f.rule}] ${f.title} — ${f.evidence}\n`);
+    const hard = findings.filter((f) => HARD_RULES.has(f.rule));
+    if (hard.length > 0) {
+      onLog("Estes bloqueios protegem o próprio painel e não têm override.\n");
+      throw new Error(
+        `guardrail_blocked: ${hard.length} bloqueio(s) de isolamento do painel no compose resolvido — sem override possível.`,
+      );
+    }
+    if (!guardrailOverride) {
+      onLog("Deploy abortado pelos guardrails. Corrija os bloqueios ou faça override explícito na interface.\n");
+      throw new Error(
+        `guardrail_blocked: ${findings.length} bloqueio(s) de segurança no compose resolvido — deploy requer override explícito.`,
+      );
+    }
+    onLog(`⚠ Override explícito do operador: prosseguindo com ${findings.length} bloqueio(s).\n`);
+    return loaded.model;
+  }
+
+  /**
+   * Arquivos do projeto que o `docker compose` lê seguindo links (o `.env`
+   * da interpolação, o próprio compose): precisam ser arquivos de verdade,
+   * com caminho real DENTRO do src. Um `.env` que é link para /etc ou para um
+   * segredo do painel seria lido pelo compose (achado A2).
+   */
+  private async assertInputsSafe(src: string, files: string[]): Promise<void> {
+    const root = resolveRealPath(src);
+    for (const rel of files) {
+      const file = path.join(src, rel);
+      let info;
+      try {
+        info = await lstat(file);
+      } catch {
+        continue; // não existe: a ausência é problema de quem lê (mensagem própria do compose)
+      }
+      const real = resolveRealPath(file);
+      if (info.isSymbolicLink() || !info.isFile() || !real.startsWith(root + path.sep)) {
+        throw new Error(
+          `o arquivo ${rel} do projeto não é um arquivo comum dentro da pasta do projeto (link simbólico ou fora dela). ` +
+            "O docker compose o leria seguindo o link — troque por um arquivo de verdade e faça o deploy de novo.",
+        );
+      }
+    }
+  }
+
+  /**
+   * Monta o ambiente do compose (`<projeto>/paas.up.env`, 0600, fora do src): cópia
+   * do `.env` do projeto (só se for arquivo comum, lido sem seguir link) seguida do
+   * `paas.env` com as Variáveis do painel, que vem por último e vence. O `config`
+   * (--no-env-resolution deixa `environment: [VAR]` e `${VAR}` de env_file para o
+   * `up`) e o `up` recebem ESTE arquivo: o compose nunca lê `src/.env` por conta
+   * própria, nem seguindo link (A2).
+   */
+  private async writeComposeEnv(project: Project, src: string): Promise<void> {
+    const workDir = projectWorkDir(this.ctx, project);
+    await mkdir(workDir, { recursive: true });
+    const parts: string[] = [];
+    const dotenv = path.join(src, ".env");
+    if (await isRegularFile(dotenv)) parts.push(await readFileNoFollow(dotenv));
+    const panelEnv = path.join(workDir, "paas.env");
+    if (existsSync(panelEnv)) parts.push(await readFile(panelEnv, "utf8"));
+    const merged = parts.map((p) => (p.endsWith("\n") ? p : `${p}\n`)).join("");
+    const target = path.join(workDir, "paas.up.env");
+    await writeFile(target, merged, { encoding: "utf8", mode: 0o600 });
+    await chmod(target, 0o600);
+  }
+
+  /**
+   * Grava o modelo conferido em `paas.canonical.json` (fora do src, 0600) e
+   * devolve os argumentos do `docker compose` para subir DELE, com o mesmo
+   * ambiente do `config` (`paas.up.env`, ver writeComposeEnv).
+   */
+  private async canonicalArgs(project: Project, src: string, model: unknown): Promise<string[]> {
+    const workDir = projectWorkDir(this.ctx, project);
+    await mkdir(workDir, { recursive: true });
+    const canonical = path.join(workDir, "paas.canonical.json");
+    await writeFile(canonical, JSON.stringify(hardenComposeModel(model)), { encoding: "utf8", mode: 0o600 });
+    await chmod(canonical, 0o600);
+    const envFile = path.join(workDir, "paas.up.env");
+    return ["compose", "-p", composeProjectName(project), "--env-file", envFile, "--project-directory", src, "-f", canonical];
+  }
+
+  /** Mesmo contexto para a checagem sobre o YAML cru. */
+  isolationForRaw(project: Project) {
+    return { projectName: composeProjectName(project), ...this.isolationFor(project) };
+  }
+
+  /** Quem é o projeto e o que é do painel, para as regras de isolamento. */
+  private isolationFor(project: Project, mailServices: readonly string[] = []) {
+    return {
+      mailServices,
+      slug: project.slug,
+      // pastas do próprio painel: projetos (paas.env, paas.canonical.json, repo.git dos outros) e instalação
+      protectedPaths: [this.ctx.projectsDir, ...(this.ctx.panelInstallDir ? [this.ctx.panelInstallDir] : [])],
+      ...((project.proxyService ?? project.detection?.proxyService)
+        ? { proxyService: (project.proxyService ?? project.detection?.proxyService)! }
+        : {}),
+      otherSlugs: (this.ctx.projectSlugs?.() ?? []).filter((s) => s !== project.slug),
+      protectedImages: [...PANEL_IMAGE_REPOSITORIES, this.ctx.nodeImage, this.ctx.staticImage, ...(this.ctx.protectedImages ?? [])],
+    };
   }
 
   /** O compose falhou: variáveis faltando ou "por que falhou" de cada serviço. */
   private async composeUpFailed(args: string[], output: string, code: number, composeContent: string, onLog: LogFn): Promise<never> {
     const missing = missingFromComposeOutput(output);
-    if (missing.length > 0) {
-      throw new Error(
-        `faltam variáveis obrigatórias do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto` +
-          (missing.some((m) => m.startsWith("SMTP_") || m === "MAIL_FROM")
-            ? " (SMTP_* e MAIL_FROM o painel preenche sozinho se você ativar a seção E-mail do projeto)"
-            : "") +
-          " e faça o deploy de novo.",
-      );
-    }
+    if (missing.length > 0) throw this.missingVariablesError(missing);
     // Por que falhou: estado de cada serviço, fim do log e healthcheck de
     // quem ficou unhealthy/parou (validação real: "wallet is unhealthy"
     // sem nenhuma linha do wallet no log do painel).
     onLog("\n=== Diagnóstico: estado dos serviços depois da falha ===\n");
-    const summary = await diagnoseComposeFailure(args, startableServices(composeContent), onLog, run);
+    const summary = await diagnoseComposeFailure(
+      args,
+      startableServices(composeContent),
+      onLog,
+      (file, a, o) => run(file, a, { ...o, env: composeEnv() }),
+    );
     throw new Error(summary ? `docker compose up falhou: ${summary}.` : `docker compose up falhou (exit ${code}).`);
   }
 
@@ -530,7 +716,7 @@ export class DeployEngine {
     dotenv: Record<string, string>,
     extraEnv: Record<string, string>,
     timezone: string | null,
-  ): Promise<{ proxyPort: number; composeContent: string }> {
+  ): Promise<{ proxyPort: number; composeContent: string; mailServices: string[] }> {
     const composeFile = project.detection?.composeFile;
     if (!composeFile) throw new Error("Nenhum arquivo compose detectado.");
     const proxyService = project.proxyService ?? project.detection?.proxyService;
@@ -542,6 +728,9 @@ export class DeployEngine {
     // compose do usuário; anexa o serviço web à rede paas-net, injeta env
     // extra (Fase 3 — SMTP) e, em app comum, retira a publicação de 80/443.
     const envServices = Object.keys(extraEnv).length > 0 ? await composeServiceNames(src, composeFile) : [];
+    // e-mail habilitado (SMTP_HOST injetado): esses serviços entram na rede de e-mail, a única que alcança o Stalwart (A4)
+    const mailServices = extraEnv.SMTP_HOST ? envServices : [];
+    if (mailServices.length > 0) await this.ensureMailNetwork();
     const composeContent = await readFile(path.join(src, composeFile), "utf8");
 
     const workDir = projectWorkDir(this.ctx, project);
@@ -552,6 +741,8 @@ export class DeployEngine {
       proxyService,
       slug: project.slug,
       network: PAAS_NETWORK,
+      mailNetwork: PAAS_MAIL_NETWORK,
+      mailServices,
       env: extraEnv,
       envServices,
       ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
@@ -589,7 +780,32 @@ export class DeployEngine {
       onLog(`Variáveis gravadas no .env do projeto (${dotenvKeys.join(", ")}).\n`);
     }
     if (env.note) onLog(`Aviso: ${env.note}\n`);
-    return { proxyPort, composeContent };
+    return { proxyPort, composeContent, mailServices };
+  }
+
+  /**
+   * Liga os containers JÁ rodando de um projeto com e-mail à rede de e-mail.
+   * Migração (A4): o Stalwart sai da paas-net, e o projeto só o alcançaria
+   * depois do próximo deploy. Devolve quantos containers foram ligados.
+   */
+  async joinMailNetwork(project: Project): Promise<number> {
+    const ids = await this.projectContainers(project);
+    if (ids.length === 0) return 0;
+    await this.ensureMailNetwork();
+    for (const id of ids) {
+      const join = await run("docker", ["network", "connect", PAAS_MAIL_NETWORK, id]);
+      if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
+        throw new Error(`falha ao ligar ${id} à rede ${PAAS_MAIL_NETWORK}: ${join.stderr.trim()}`);
+      }
+    }
+    return ids.length;
+  }
+
+  /** Garante a rede de e-mail (idempotente): `compose up` com rede externa inexistente falharia. */
+  private async ensureMailNetwork(): Promise<void> {
+    if ((await run("docker", ["network", "inspect", PAAS_MAIL_NETWORK])).code === 0) return;
+    const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, PAAS_MAIL_NETWORK]);
+    if (create.code !== 0) throw new Error(`falha ao criar a rede ${PAAS_MAIL_NETWORK}: ${create.stderr.trim()}`);
   }
 
   /**
@@ -605,7 +821,8 @@ export class DeployEngine {
     const extraEnv = (await this.ctx.envForProject?.(project)) ?? {};
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
     if (type === "compose") {
-      const { composeContent } = await this.writeComposeFiles(
+      await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
+      const { composeContent, mailServices } = await this.writeComposeFiles(
         project,
         src,
         onLog,
@@ -613,17 +830,22 @@ export class DeployEngine {
         (await this.ctx.injectEnvForProject?.(project)) ?? {},
         timezone,
       );
+      await this.assertInputsSafe(src, [".env"]);
+      await this.writeComposeEnv(project, src);
       const args = this.composeArgs(project, src);
+      // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
+      const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices);
+      const upArgs = await this.canonicalArgs(project, src, model);
       let output = "";
-      const code = await runStream("docker", [...args, "up", "-d", "--no-build"], (chunk) => {
+      const code = await runStream("docker", [...upArgs, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
         onLog(chunk);
-      });
+      }, { env: composeEnv() });
       if (code !== 0) {
         if (/no such image|image .* not found|must be built|pull access denied/i.test(output)) {
           throw new Error("a imagem de um serviço não existe mais no servidor. Faça um deploy para construir de novo.");
         }
-        await this.composeUpFailed(args, output, code, composeContent, onLog);
+        await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
       }
       onLog("Containers recriados com a configuração atual.\n");
       return;
@@ -644,7 +866,8 @@ export class DeployEngine {
     const overrideFile = path.join(workDir, "paas.override.yml");
     // .env versionado no repositório: as variáveis do painel ficam à parte
     // (ver project-dotenv.ts) e todo comando do compose precisa delas.
-    const envFile = path.join(workDir, "paas.env");
+    const upEnv = path.join(workDir, "paas.up.env");
+    const envFile = existsSync(upEnv) ? upEnv : path.join(workDir, "paas.env");
     return [
       "compose",
       "-p",
@@ -723,26 +946,55 @@ export class DeployEngine {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       `${PAAS_LABEL_PROJECT}=${project.slug}`,
+      ...CONTAINER_HARDENING,
       image,
     ]);
     if (runRes.code !== 0) throw new Error(`falha ao subir o container: ${runRes.stderr}`);
     onLog(`Container ${app} rodando na rede ${PAAS_NETWORK}.\n`);
+    if (extraEnv.SMTP_HOST) {
+      await this.ensureMailNetwork();
+      const join = await run("docker", ["network", "connect", PAAS_MAIL_NETWORK, app]);
+      if (join.code !== 0) throw new Error(`falha ao ligar ${app} à rede ${PAAS_MAIL_NETWORK}: ${join.stderr.trim()}`);
+      onLog(`Container ${app} ligado à rede de e-mail ${PAAS_MAIL_NETWORK}.\n`);
+    }
   }
 
   // -------------------------------------------------------------------------
   // Stop / start / remove
   // -------------------------------------------------------------------------
 
-  /** IDs dos containers do projeto (por label do painel + compose project). */
+  /**
+   * IDs dos containers do projeto. O dono vem da label do compose
+   * (`com.docker.compose.project`, que o compose grava por cima de qualquer
+   * label da imagem). `paas.project` só vale em container SEM label do
+   * compose (criado pelo painel com `docker run`) e marcado `paas.managed`:
+   * uma imagem com `LABEL paas.project=<outro>` não captura nem é capturada (M9).
+   */
   async projectContainers(project: Project): Promise<string[]> {
     const ids = new Set<string>();
-    for (const filter of [
-      `label=${PAAS_LABEL_PROJECT}=${project.slug}`,
+    const lines = (out: string): string[] => out.split("\n").map((l) => l.trim()).filter(Boolean);
+    const compose = await run("docker", [
+      "ps",
+      "-a",
+      "-q",
+      "--filter",
       `label=com.docker.compose.project=${composeProjectName(project)}`,
-    ]) {
-      const r = await run("docker", ["ps", "-a", "-q", "--filter", filter]);
-      if (r.code === 0) {
-        for (const line of r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) ids.add(line);
+    ]);
+    if (compose.code === 0) for (const id of lines(compose.stdout)) ids.add(id);
+    const direct = await run("docker", [
+      "ps",
+      "-a",
+      "--filter",
+      `label=${PAAS_LABEL_PROJECT}=${project.slug}`,
+      "--filter",
+      `label=${PAAS_LABEL_MANAGED}=true`,
+      "--format",
+      '{{.ID}} {{.Label "com.docker.compose.project"}}',
+    ]);
+    if (direct.code === 0) {
+      for (const line of lines(direct.stdout)) {
+        const [id, owner] = line.split(/\s+/);
+        if (id && !owner) ids.add(id);
       }
     }
     return [...ids];
@@ -791,7 +1043,7 @@ export class DeployEngine {
       const down = await run(
         "docker",
         [...this.composeArgs(project, src), "down", "--rmi", "local", "--remove-orphans"],
-        { timeoutMs: 180_000 },
+        { timeoutMs: 180_000, env: composeEnv() },
       );
       onLog(down.code === 0 ? "Stack compose removida.\n" : `compose down: ${down.stderr}\n`);
     }
@@ -831,6 +1083,20 @@ export class DeployEngine {
     await waitHealthy({ ...target, domain, onLog, timeoutMs });
   }
 }
+
+/**
+ * Opções de todo `docker run` do painel para código de projeto: sem NET_RAW,
+ * no-new-privileges e a label do compose VAZIA (a do `LABEL` da imagem não
+ * pode fazer o container passar por outro projeto: ver container-identity.ts).
+ */
+const CONTAINER_HARDENING = [
+  "--cap-drop",
+  "NET_RAW",
+  "--security-opt",
+  "no-new-privileges",
+  "--label",
+  `${COMPOSE_PROJECT_LABEL}=`,
+];
 
 /** Nomes dos serviços declarados no compose adotado (para injeção de env vars). */
 async function composeServiceNames(src: string, composeFile: string): Promise<string[]> {

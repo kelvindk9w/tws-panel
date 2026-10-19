@@ -18,7 +18,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAIL_DEFAULT_PORTS, type Project } from "@paas/core";
+import { MAIL_DEFAULT_PORTS, STALWART_IMAGE_REF, type Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 
 // -----------------------------------------------------------------------
@@ -33,10 +33,21 @@ const createdMailboxCalls: { email: string; password: string }[] = [];
 const aliasCalls: string[] = [];
 /** Ordem das chamadas que mexem em caixas/endereços no Stalwart. */
 const order: string[] = [];
+/** Chamadas de rede ao manager do Stalwart (A4). */
+const netCalls: string[] = [];
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
   class FakeStalwartManager {
+    async joinMailNetworks() {
+      netCalls.push("join");
+    }
+    async leaveProjectNetwork() {
+      netCalls.push("leave");
+    }
+    async connectContainer(container: string) {
+      netCalls.push(`connect ${container}`);
+    }
     async status() {
       return {
         installed: true,
@@ -122,6 +133,7 @@ beforeEach(async () => {
   createdMailboxCalls.length = 0;
   aliasCalls.length = 0;
   order.length = 0;
+  netCalls.length = 0;
   deleteMailboxImpl = async () => undefined;
   config = {
     dataDir: dir,
@@ -754,5 +766,55 @@ describe("MailService — caixas do projeto (dono)", () => {
     expect(passwordCalls).toEqual([{ email: "suporte@exemplo.com", password: "outra-senha-forte-1" }]);
     await svc.deleteMailbox("exemplo.com", "suporte@exemplo.com");
     expect(await svc.listMailboxes("exemplo.com", { projectId: "p1" })).toEqual([]);
+  });
+});
+
+describe("MailService — redes do e-mail (A4)", () => {
+  async function seed(projects: Record<string, unknown>, adminSecret: string | null = "secret-de-teste") {
+    const mailDir = path.join(dir, "mail");
+    await mkdir(mailDir, { recursive: true });
+    await writeFile(
+      path.join(mailDir, "mail.json"),
+      JSON.stringify({ adminSecret, hostname: "mail.test", domains: {}, mailboxes: {}, projects }),
+      "utf8",
+    );
+  }
+
+  it("emailProjectIds: só os projetos com e-mail habilitado", async () => {
+    await seed({ p1: { mailbox: "a@x.com", domain: "x.com" }, p2: { mailbox: "b@x.com", domain: "x.com" } });
+    expect((await new MailService(config).emailProjectIds()).sort()).toEqual(["p1", "p2"]);
+    await seed({});
+    expect(await new MailService(config).emailProjectIds()).toEqual([]);
+  });
+
+  it("joinMailNetworks: liga o Stalwart às redes novas e, em container, o painel à da administração", async () => {
+    await seed({});
+    await new MailService(config, { inContainer: true }).joinMailNetworks();
+    expect(netCalls).toEqual(["join", "connect tws-panel"]);
+    netCalls.length = 0;
+    await new MailService(config, { inContainer: false }).joinMailNetworks();
+    expect(netCalls).toEqual(["join"]);
+  });
+
+  it("servidor de e-mail nunca criado: nada a migrar", async () => {
+    await seed({}, null);
+    const svc = new MailService(config, { inContainer: true });
+    await svc.joinMailNetworks();
+    await svc.leaveProjectNetwork();
+    expect(netCalls).toEqual([]);
+  });
+
+  it("leaveProjectNetwork: tira o Stalwart da paas-net", async () => {
+    await seed({});
+    await new MailService(config).leaveProjectNetwork();
+    expect(netCalls).toEqual(["leave"]);
+  });
+
+  it("status do servidor nunca criado mostra a imagem fixada por digest, não a tag solta", async () => {
+    await seed({}, null);
+    const status = await new MailService(config).status();
+    expect(status.installed).toBe(false);
+    expect(status.image).toBe(STALWART_IMAGE_REF);
+    expect(status.image).toMatch(/@sha256:[0-9a-f]{64}$/);
   });
 });

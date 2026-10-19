@@ -10,10 +10,12 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ComposeVariable } from "@paas/core";
+import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitLocation, gitSafeEnv } from "./git-safe.js";
+import { appendNoFollow, isRealDirectory, isRegularFile, writeFileNoFollow } from "./safe-fs.js";
 
 export type { ComposeVariable };
 
@@ -35,23 +37,48 @@ export function dotenvLine(key: string, value: string): string {
   return `${key}="${escaped}"`;
 }
 
-async function isTracked(src: string, file: string): Promise<boolean> {
+/**
+ * Onde está o repositório git do projeto: o do painel (modo git, fora de
+ * `src`) ou, nos demais modos, o `.git` da própria pasta. Em qualquer caso o
+ * git roda sem hooks nem fsmonitor (git-safe.ts).
+ */
+function gitDirDoPainel(workDir: string): string | null {
+  const dir = path.join(workDir, GIT_DIR_NAME);
+  return existsSync(path.join(dir, "HEAD")) ? dir : null;
+}
+
+async function isTracked(src: string, workDir: string, file: string): Promise<boolean> {
+  const where = gitDirDoPainel(workDir) ? gitLocation(workDir, src) : ["-C", src];
   try {
-    await execFileAsync("git", ["-C", src, "ls-files", "--error-unmatch", file]);
+    await execFileAsync("git", [...GIT_SAFE_CONFIG, ...where, "ls-files", "--error-unmatch", file], {
+      env: gitSafeEnv(),
+    });
     return true;
   } catch {
     return false;
   }
 }
 
-async function excludeFromGit(src: string): Promise<void> {
-  const infoDir = path.join(src, ".git", "info");
-  if (!existsSync(path.join(src, ".git"))) return;
+/** Põe `/.env` no exclude do repositório, sem seguir link simbólico plantado em `src`. */
+async function excludeFromGit(src: string, workDir: string): Promise<void> {
+  let infoDir: string;
+  const dirDoPainel = gitDirDoPainel(workDir);
+  if (dirDoPainel) {
+    infoDir = path.join(dirDoPainel, "info");
+  } else {
+    // repositório da própria pasta (modo existing): `src/.git` e `info` precisam ser pastas de verdade
+    const gitDir = path.join(src, ".git");
+    infoDir = path.join(gitDir, "info");
+    if (!(await isRealDirectory(gitDir))) return;
+    if (existsSync(infoDir) && !(await isRealDirectory(infoDir))) return;
+  }
   await mkdir(infoDir, { recursive: true });
   const exclude = path.join(infoDir, "exclude");
-  const current = existsSync(exclude) ? await readFile(exclude, "utf8") : "";
+  const existe = existsSync(exclude);
+  if (existe && !(await isRegularFile(exclude))) return;
+  const current = existe ? await readFile(exclude, "utf8") : "";
   if (!/^\/\.env$/m.test(current)) {
-    await appendFile(exclude, `${current && !current.endsWith("\n") ? "\n" : ""}/.env\n`);
+    await appendNoFollow(exclude, `${current && !current.endsWith("\n") ? "\n" : ""}/.env\n`);
   }
 }
 
@@ -61,6 +88,8 @@ const GENERATED_HEADER = "# Gerado pelo painel (seção Variáveis do projeto) �
 /** Apaga o `.env` da pasta do projeto só se foi o painel que o gerou (o do dono fica). */
 async function removeGeneratedDotenv(src: string): Promise<void> {
   const file = path.join(src, ".env");
+  // link simbólico (ou outra coisa que não um arquivo) não é do painel: fica
+  if (!(await isRegularFile(file))) return;
   let current: string;
   try {
     current = await readFile(file, "utf8");
@@ -87,7 +116,7 @@ export async function writeProjectDotenv(
   const separate = path.join(workDir, "paas.env");
   if (keys.length === 0) {
     await rm(separate, { force: true });
-    if (!(await isTracked(src, ".env"))) await removeGeneratedDotenv(src);
+    if (!(await isTracked(src, workDir, ".env"))) await removeGeneratedDotenv(src);
     return { envFileArgs: [], note: null };
   }
   const content =
@@ -96,7 +125,7 @@ export async function writeProjectDotenv(
     keys.map((k) => dotenvLine(k, vars[k]!)).join("\n") +
     "\n";
 
-  if (await isTracked(src, ".env")) {
+  if (await isTracked(src, workDir, ".env")) {
     await mkdir(workDir, { recursive: true });
     await writeFile(separate, content, { encoding: "utf8", mode: 0o600 });
     await chmod(separate, 0o600);
@@ -110,9 +139,9 @@ export async function writeProjectDotenv(
   // o .env deixou de ser versionado: o paas.env antigo não pode continuar valendo
   await rm(separate, { force: true });
   const file = path.join(src, ".env");
-  await writeFile(file, content, { encoding: "utf8", mode: 0o600 });
-  await chmod(file, 0o600);
-  await excludeFromGit(src);
+  // sem seguir link: um `.env` que aponte para fora de `src` é trocado, nunca atravessado
+  await writeFileNoFollow(file, content, 0o600);
+  await excludeFromGit(src, workDir);
   return { envFileArgs: [], note: null };
 }
 

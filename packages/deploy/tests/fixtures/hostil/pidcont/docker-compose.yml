@@ -1,0 +1,6 @@
+services:
+  web:
+    image: alpine:3.20
+    user: "10001:10001"
+    pid: "container:tws-panel"
+    network_mode: "container:paas-stalwart"

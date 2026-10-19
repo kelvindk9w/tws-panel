@@ -1,0 +1,5 @@
+services:
+  web:
+    image: nginx:1.27
+    privileged: ${PRIV:-true}
+    volumes: ["${SOCK:-/var/run/docker}.sock:/s"]

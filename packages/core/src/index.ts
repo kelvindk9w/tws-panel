@@ -167,3 +167,5 @@ export * from "./panel-domain";
 export * from "./notifications";
 export * from "./backups";
 export * from "./timezone";
+export * from "./images";
+export * from "./container-identity";

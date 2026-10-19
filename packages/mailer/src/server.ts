@@ -14,7 +14,10 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  STALWART_IMAGE_REF,
   PAAS_LABEL_MANAGED,
+  PAAS_MAIL_ADMIN_NETWORK,
+  PAAS_MAIL_NETWORK,
   PAAS_NETWORK,
   PAAS_STALWART_CONTAINER,
   PAAS_STALWART_VOLUME,
@@ -30,7 +33,7 @@ import {
 import { run } from "./exec.js";
 import { certificateId, type MailCertificate } from "./tls-certificates.js";
 
-export const STALWART_IMAGE = "stalwartlabs/mail-server:v0.11.8";
+export const STALWART_IMAGE = STALWART_IMAGE_REF;
 
 /**
  * Raiz do Stalwart na imagem (VOLUME anônimo da imagem; `data` recebe o
@@ -60,8 +63,13 @@ export interface StalwartManagerOptions {
   ports: MailServerPorts;
   image?: string;
   containerName?: string;
-  /** Rede Docker (padrão paas-net). */
+  /**
+   * Rede da administração (padrão paas-mail-admin): só o Stalwart e o painel.
+   * Os projetos hospedados NÃO a alcançam (A4).
+   */
   network?: string;
+  /** Rede do SMTP/IMAP dos projetos com e-mail e do webmail (padrão paas-mail). */
+  mailNetwork?: string;
   /** Volume nomeado dos dados (padrão paas_stalwart_data). */
   dataVolume?: string;
   /**
@@ -89,25 +97,23 @@ export class StalwartManager {
   readonly image: string;
   readonly containerName: string;
   private readonly network: string;
+  private readonly mailNetwork: string;
 
   constructor(private readonly opts: StalwartManagerOptions) {
     this.image = opts.image ?? STALWART_IMAGE;
     this.containerName = opts.containerName ?? PAAS_STALWART_CONTAINER;
-    this.network = opts.network ?? PAAS_NETWORK;
+    this.network = opts.network ?? PAAS_MAIL_ADMIN_NETWORK;
+    this.mailNetwork = opts.mailNetwork ?? PAAS_MAIL_NETWORK;
   }
 
-  /** Garante a rede dedicada do painel (idempotente). */
+  /** Garante as redes do Stalwart (idempotente): administração e e-mail. */
   private async ensureNetwork(): Promise<void> {
-    const inspect = await run("docker", ["network", "inspect", this.network]);
-    if (inspect.code === 0) return;
-    const create = await run("docker", [
-      "network",
-      "create",
-      "--label",
-      `${PAAS_LABEL_MANAGED}=true`,
-      this.network,
-    ]);
-    if (create.code !== 0) throw new Error(`falha ao criar a rede ${this.network}: ${create.stderr}`);
+    for (const name of [this.network, this.mailNetwork]) {
+      const inspect = await run("docker", ["network", "inspect", name]);
+      if (inspect.code === 0) continue;
+      const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+      if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr}`);
+    }
   }
 
   /** Renderiza o config.toml do Stalwart (idempotente, sobrescreve). */
@@ -266,6 +272,8 @@ export class StalwartManager {
     if (create.code !== 0) {
       throw new Error(`falha ao criar ${this.containerName}: ${create.stderr}`);
     }
+    // O Docker só aceita uma rede no create: a de e-mail entra antes do start.
+    await this.connectWithAliases(this.mailNetwork);
     await this.pushConfig();
     const start = await run("docker", ["start", this.containerName]);
     if (start.code !== 0) {
@@ -277,43 +285,82 @@ export class StalwartManager {
     return [...new Set(["paas-stalwart", ...(this.opts.aliases ?? [])])];
   }
 
-  /**
-   * Garante os aliases mail.<domínio> num container que já existe (criado
-   * antes deles, ou antes de um domínio novo). O Docker não acrescenta alias
-   * a uma conexão existente: desconecta e reconecta com a lista completa
-   * (segundos sem rede interna; as portas publicadas no host não caem).
-   */
-  private async ensureAliases(): Promise<void> {
-    const wanted = this.allAliases();
-    if (wanted.length === 1) return;
-    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", this.containerName]);
-    let current: string[] | null = null;
-    try {
-      const networks = JSON.parse(inspect.stdout.trim() || "{}") as Record<string, { Aliases?: string[] | null }>;
-      const net = networks[this.network];
-      current = net ? (net.Aliases ?? []) : null;
-    } catch {
-      current = null;
-    }
-    if (current && wanted.every((a) => current.includes(a))) return;
-    if (current) await run("docker", ["network", "disconnect", this.network, this.containerName]);
+  /** Liga o container a `network` com todos os aliases (sem desconectar nada). */
+  private async connectWithAliases(network: string): Promise<void> {
     const connect = await run("docker", [
       "network",
       "connect",
-      ...wanted.flatMap((a) => ["--alias", a]),
-      this.network,
+      ...this.allAliases().flatMap((a) => ["--alias", a]),
+      network,
       this.containerName,
     ]);
     if (connect.code !== 0) {
       throw new Error(
-        `falha ao conectar ${this.containerName} à rede ${this.network} com os aliases: ${connect.stderr.trim()}`,
+        `falha ao conectar ${this.containerName} à rede ${network} com os aliases: ${connect.stderr.trim()}`,
       );
     }
   }
 
+  /** Redes do container e os aliases de cada uma (null = container sem leitura). */
+  private async networksOfContainer(): Promise<Record<string, { Aliases?: string[] | null }> | null> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", this.containerName]);
+    try {
+      return JSON.parse(inspect.stdout.trim() || "{}") as Record<string, { Aliases?: string[] | null }>;
+    } catch {
+      return null;
+    }
+  }
+
   /**
-   * Liga outro container (o do painel) à rede do Stalwart — de dentro dele é
-   * por ela que a API e o TLS do servidor de e-mail são alcançados.
+   * Garante o container nas duas redes (administração e e-mail) e com os
+   * aliases mail.<domínio> em cada uma. O Docker não acrescenta alias a uma
+   * conexão existente: desconecta e reconecta com a lista completa (segundos
+   * sem rede interna; as portas publicadas no host não caem). Instalação
+   * antiga (só na paas-net dos projetos) entra nas duas aqui; a saída da
+   * paas-net é leaveProjectNetwork, depois de o webmail mudar de rede.
+   */
+  private async ensureAliases(): Promise<void> {
+    const wanted = this.allAliases();
+    const networks = await this.networksOfContainer();
+    for (const network of [this.network, this.mailNetwork]) {
+      const net = networks?.[network];
+      const current = net ? (net.Aliases ?? []) : null;
+      if (current && wanted.every((a) => current.includes(a) || a === this.containerName)) continue;
+      if (current) await run("docker", ["network", "disconnect", network, this.containerName]);
+      await this.connectWithAliases(network);
+    }
+  }
+
+  /**
+   * Migração de instalação antiga, sem recriar nem reiniciar o container: cria
+   * as redes novas e liga o Stalwart (rodando) às duas, com os aliases.
+   * Container que não existe: nada a fazer (o start() já o cria certo).
+   */
+  async joinMailNetworks(): Promise<void> {
+    const exists = await run("docker", ["inspect", "-f", "{{.State.Running}}", this.containerName]);
+    if (exists.code !== 0) return;
+    await this.ensureNetwork();
+    await this.ensureAliases();
+  }
+
+  /**
+   * Tira o Stalwart da rede dos projetos (paas-net). Os projetos hospedados
+   * não alcançam a administração do e-mail; o SMTP chega a eles pela
+   * paas-mail, só para os que têm e-mail habilitado (A4).
+   */
+  async leaveProjectNetwork(): Promise<void> {
+    const networks = await this.networksOfContainer();
+    if (!networks || !Object.prototype.hasOwnProperty.call(networks, PAAS_NETWORK)) return;
+    const out = await run("docker", ["network", "disconnect", PAAS_NETWORK, this.containerName]);
+    if (out.code !== 0 && !/is not connected/i.test(out.stderr)) {
+      throw new Error(`falha ao tirar ${this.containerName} da rede ${PAAS_NETWORK}: ${out.stderr.trim()}`);
+    }
+  }
+
+  /**
+   * Liga outro container (o do painel) à rede da ADMINISTRAÇÃO do Stalwart —
+   * de dentro dele é por ela que a API e o TLS do servidor de e-mail são
+   * alcançados. É uma rede só dos dois: nenhum projeto entra nela.
    */
   async connectContainer(container: string): Promise<void> {
     const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", container]);

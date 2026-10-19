@@ -20,6 +20,8 @@ let psOutput = "";
 vi.mock("../src/exec.js", () => ({
   run: vi.fn(async (_file: string, args: string[]): Promise<Result> => {
     calls.push(args);
+    // docker compose config (guardrails sobre o compose resolvido): modelo inofensivo
+    if (args.includes("config")) return { code: 0, stdout: JSON.stringify({ name: "paas-loja", services: { wallet: { image: "app" } } }), stderr: "" };
     if (args.includes("ps")) return { code: 0, stdout: psOutput, stderr: "" };
     if (args.includes("logs")) return { code: 0, stdout: "wallet-1  | erro ao migrar o banco\n", stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .State.Health}}")) {

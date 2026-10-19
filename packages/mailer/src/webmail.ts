@@ -28,7 +28,14 @@
  */
 import { randomBytes } from "node:crypto";
 import { BlockList, isIP } from "node:net";
-import { PAAS_LABEL_MANAGED, PAAS_NETWORK, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
+import {
+  PAAS_LABEL_MANAGED,
+  PAAS_MAIL_NETWORK,
+  PAAS_NETWORK,
+  PAAS_PANEL_NETWORK,
+  PAAS_WEBMAIL_CONTAINER,
+  PAAS_WEBMAIL_VOLUME,
+} from "@paas/core";
 import { copyFilesToContainer } from "./container-files.js";
 import { run } from "./exec.js";
 
@@ -309,7 +316,10 @@ export interface WebmailManagerOptions {
   identities?: string;
   image?: string;
   containerName?: string;
+  /** Rede em que o Caddy alcança o webmail (padrão paas-panel — não a paas-net dos projetos). */
   network?: string;
+  /** Rede em que o webmail alcança o Stalwart (padrão paas-mail). */
+  mailNetwork?: string;
   dataVolume?: string;
 }
 
@@ -317,19 +327,52 @@ export class WebmailManager {
   readonly image: string;
   readonly containerName: string;
   private readonly network: string;
+  private readonly mailNetwork: string;
   private readonly dataVolume: string;
 
   constructor(private readonly opts: WebmailManagerOptions) {
     this.image = opts.image ?? ROUNDCUBE_IMAGE;
     this.containerName = opts.containerName ?? PAAS_WEBMAIL_CONTAINER;
-    this.network = opts.network ?? PAAS_NETWORK;
+    this.network = opts.network ?? PAAS_PANEL_NETWORK;
+    this.mailNetwork = opts.mailNetwork ?? PAAS_MAIL_NETWORK;
     this.dataVolume = opts.dataVolume ?? PAAS_WEBMAIL_VOLUME;
   }
 
   private async ensureNetwork(): Promise<void> {
-    if ((await run("docker", ["network", "inspect", this.network])).code === 0) return;
-    const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, this.network]);
-    if (create.code !== 0) throw new Error(`falha ao criar a rede ${this.network}: ${create.stderr}`);
+    for (const name of [this.network, this.mailNetwork]) {
+      if ((await run("docker", ["network", "inspect", name])).code === 0) continue;
+      const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+      if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr}`);
+    }
+  }
+
+  private async networkNames(): Promise<string[]> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", this.containerName]);
+    try {
+      return Object.keys(JSON.parse(inspect.stdout.trim() || "{}") as Record<string, unknown>);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * O webmail fica em duas redes: a do Caddy (paas-panel) e a do Stalwart
+   * (paas-mail). Instalação antiga (paas-net, alcançável pelos projetos)
+   * migra aqui: entra nas duas e sai da paas-net (A4).
+   */
+  private async ensureNetworks(): Promise<void> {
+    const current = await this.networkNames();
+    for (const name of [this.network, this.mailNetwork]) {
+      if (current.includes(name)) continue;
+      const connect = await run("docker", ["network", "connect", name, this.containerName]);
+      if (connect.code !== 0) throw new Error(`falha ao conectar ${this.containerName} à rede ${name}: ${connect.stderr.trim()}`);
+    }
+    if (current.includes(PAAS_NETWORK)) {
+      const out = await run("docker", ["network", "disconnect", PAAS_NETWORK, this.containerName]);
+      if (out.code !== 0 && !/is not connected/i.test(out.stderr)) {
+        throw new Error(`falha ao tirar ${this.containerName} da rede ${PAAS_NETWORK}: ${out.stderr.trim()}`);
+      }
+    }
   }
 
   async status(): Promise<{ installed: boolean; running: boolean }> {
@@ -379,6 +422,7 @@ export class WebmailManager {
     const current = await this.status();
     if (current.installed) {
       await this.pushConfig();
+      await this.ensureNetworks();
       if (current.running) return;
       if ((await run("docker", ["start", this.containerName])).code === 0) return;
       // não sobe (imagem trocada, estado quebrado): recria — os dados ficam no volume
@@ -392,7 +436,7 @@ export class WebmailManager {
       "unless-stopped",
       "--network",
       this.network,
-      // sem -p: só o Caddy (paas-net) alcança o webmail
+      // sem -p: só o Caddy (paas-panel) alcança o webmail
       "-v",
       `${this.dataVolume}:${WEBMAIL_DATA_DIR}`,
       "--cap-drop",
@@ -408,6 +452,9 @@ export class WebmailManager {
       this.image,
     ]);
     if (create.code !== 0) throw new Error(`falha ao criar ${this.containerName}: ${create.stderr}`);
+    // o create só aceita uma rede: a do Stalwart entra antes do start
+    const join = await run("docker", ["network", "connect", this.mailNetwork, this.containerName]);
+    if (join.code !== 0) throw new Error(`falha ao conectar ${this.containerName} à rede ${this.mailNetwork}: ${join.stderr.trim()}`);
     await this.pushConfig({ served: false });
     const start = await run("docker", ["start", this.containerName]);
     if (start.code !== 0) throw new Error(`falha ao iniciar ${this.containerName}: ${start.stderr}`);
@@ -428,13 +475,13 @@ export class WebmailManager {
     }
   }
 
-  /** IP do webmail na paas-net (null se não estiver nela). */
+  /** IP do webmail na rede do Stalwart (é o que o Stalwart enxerga; null se não estiver nela). */
   async internalIp(): Promise<string | null> {
     const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", this.containerName]);
     if (inspect.code !== 0) return null;
     try {
       const networks = JSON.parse(inspect.stdout.trim()) as Record<string, { IPAddress?: string }>;
-      const ip = networks[this.network]?.IPAddress ?? "";
+      const ip = networks[this.mailNetwork]?.IPAddress ?? "";
       return isIP(ip) ? ip : null;
     } catch {
       return null;

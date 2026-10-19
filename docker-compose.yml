@@ -51,6 +51,9 @@ services:
       # Mesmo caminho da montagem abaixo — o processo precisa enxergar a
       # variável, senão volta ao default antigo (/data/projects).
       PAAS_PROJECTS_DIR: ${PAAS_PROJECTS_DIR:-/opt/tws-projects}
+      # Pasta da instalação NO HOST (o caminho não precisa existir aqui dentro). O painel a protege contra
+      # bind mount de projeto e a usa nos comandos manuais do hardening. O install.sh grava no .env.
+      PAAS_HOST_REPO_DIR: ${PAAS_HOST_REPO_DIR:-/opt/tws-panel}
       # Com qual usuário da VPS o terminal ao vivo abre, e como os comandos
       # que precisam de root são executados quando ele não é root
       # ("senha" = sudo dentro do terminal, com a senha digitada pelo

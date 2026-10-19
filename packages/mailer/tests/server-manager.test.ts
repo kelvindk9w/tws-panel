@@ -60,6 +60,10 @@ function daemon(state: { running: boolean; mounts: string } | null, extra: (a: s
     const r = extra(args);
     if (r) return r;
     if (args[0] === "network") return ok();
+    // redes do container: já nas duas, só com o alias do nome (sem mail.<domínio>)
+    if (args[0] === "inspect" && (args[2] ?? "").includes("Networks")) {
+      return state ? ok(JSON.stringify({ "paas-mail-admin": { Aliases: ["paas-stalwart"] }, "paas-mail": { Aliases: ["paas-stalwart"] } })) : fail("No such object");
+    }
     if (args[0] === "inspect") return state ? ok(`${state.running}|${state.mounts}\n`) : fail("No such object");
     return ok();
   };
@@ -88,7 +92,7 @@ describe("StalwartManager.start — criação", () => {
     responder = daemon(null);
     await manager().start();
 
-    expect(ordem()).toEqual(["network", "inspect", "create", "<cp>", "start"]);
+    expect(ordem()).toEqual(["network", "network", "inspect", "create", "network", "<cp>", "start"]);
     const create = calls.find((a) => a[0] === "create")!;
     const volumes = create.flatMap((a, i) => (create[i - 1] === "-v" ? [a] : []));
     expect(volumes).toEqual(["paas_stalwart_data:/opt/stalwart-mail/data"]);
@@ -134,10 +138,11 @@ describe("StalwartManager.start — criação", () => {
   it("cria a rede ausente; falha ao criá-la é erro claro", async () => {
     responder = daemon(null, (a) => (a[0] === "network" && a[1] === "inspect" ? fail("no") : undefined));
     await manager().start();
-    expect(calls[1]).toEqual(["network", "create", "--label", "paas.managed=true", "paas-net"]);
+    expect(calls[1]).toEqual(["network", "create", "--label", "paas.managed=true", "paas-mail-admin"]);
+    expect(calls[3]).toEqual(["network", "create", "--label", "paas.managed=true", "paas-mail"]);
 
     responder = daemon(null, (a) => (a[0] === "network" && a[1] === "inspect" ? fail("no") : a[0] === "network" ? fail("negado") : undefined));
-    await expect(manager().start()).rejects.toThrow(/falha ao criar a rede paas-net: negado/);
+    await expect(manager().start()).rejects.toThrow(/falha ao criar a rede paas-mail-admin: negado/);
   });
 
   it("propaga falhas de create, cp e start", async () => {
@@ -158,26 +163,26 @@ describe("StalwartManager.start — container existente", () => {
   it("parado com montagem nova: regrava a config e inicia", async () => {
     responder = daemon({ running: false, mounts: NEW });
     await manager().start();
-    expect(ordem()).toEqual(["network", "inspect", "<cp>", "start"]);
+    expect(ordem()).toEqual(["network", "network", "inspect", "<cp>", "inspect", "start"]);
   });
 
   it("rodando com montagem nova: regrava a config e não recria", async () => {
     responder = daemon({ running: true, mounts: NEW });
     await manager().start();
-    expect(ordem()).toEqual(["network", "inspect", "<cp>"]);
+    expect(ordem()).toEqual(["network", "network", "inspect", "<cp>", "inspect"]);
   });
 
   it("start responde 'already in use': considera no ar", async () => {
     responder = daemon({ running: false, mounts: NEW }, (a) => (a[0] === "start" ? fail("container already in use") : undefined));
     await manager().start();
-    expect(ordem()).toEqual(["network", "inspect", "<cp>", "start"]);
+    expect(ordem()).toEqual(["network", "network", "inspect", "<cp>", "inspect", "start"]);
   });
 
   it("start falha por outro motivo: remove (com o volume anônimo) e recria", async () => {
     let starts = 0;
     responder = daemon({ running: false, mounts: NEW }, (a) => (a[0] === "start" && starts++ === 0 ? fail("imagem antiga") : undefined));
     await manager().start();
-    expect(ordem()).toEqual(["network", "inspect", "<cp>", "start", "rm", "create", "<cp>", "start"]);
+    expect(ordem()).toEqual(["network", "network", "inspect", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "start"]);
     expect(calls.find((a) => a[0] === "rm")).toEqual(["rm", "-f", "-v", "paas-stalwart"]);
   });
 
@@ -187,7 +192,7 @@ describe("StalwartManager.start — container existente", () => {
   ])("montagem ANTIGA %s: remove e recria com a config entregue pelo daemon", async (_n, running) => {
     responder = daemon({ running, mounts: LEGACY });
     await manager().start();
-    expect(ordem()).toEqual(["network", "inspect", "rm", "create", "<cp>", "start"]);
+    expect(ordem()).toEqual(["network", "network", "inspect", "rm", "create", "network", "<cp>", "start"]);
     expect(calls.find((a) => a[0] === "rm")).toEqual(["rm", "-f", "-v", "paas-stalwart"]);
   });
 });
@@ -199,7 +204,8 @@ describe("StalwartManager.start — container existente", () => {
 
 const CERT = { host: "mail.exemplo.com", cert: "CERT-PEM", key: "CHAVE-PEM" };
 const CERT2 = { host: "mail.outro.com", cert: "CERT2-PEM", key: "CHAVE2-PEM" };
-const ALL_ALIASES = JSON.stringify({ "paas-net": { Aliases: ["paas-stalwart", "mail.exemplo.com", "mail.outro.com"] } });
+const TODOS = ["paas-stalwart", "mail.exemplo.com", "mail.outro.com"];
+const ALL_ALIASES = JSON.stringify({ "paas-mail-admin": { Aliases: TODOS }, "paas-mail": { Aliases: TODOS } });
 const isNetworksInspect = (a: string[]) => a[0] === "inspect" && (a[2] ?? "").includes("Networks");
 
 const tlsManager = (extra: Record<string, unknown> = {}) =>
@@ -327,15 +333,17 @@ describe("StalwartManager — certificados e alias", () => {
   });
 
   it("container existente sem o alias novo: reconecta à rede com todos os aliases", async () => {
-    const networks = JSON.stringify({ "paas-net": { Aliases: ["paas-stalwart", "abc123"] } });
+    const networks = JSON.stringify({ "paas-mail-admin": { Aliases: ["paas-stalwart", "abc123"] }, "paas-mail": { Aliases: TODOS } });
     responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok(networks) : undefined));
     await tlsManager().start();
-    expect(calls).toContainEqual(["network", "disconnect", "paas-net", "paas-stalwart"]);
+    expect(calls).toContainEqual(["network", "disconnect", "paas-mail-admin", "paas-stalwart"]);
     expect(calls).toContainEqual([
       "network", "connect",
       "--alias", "paas-stalwart", "--alias", "mail.exemplo.com", "--alias", "mail.outro.com",
-      "paas-net", "paas-stalwart",
+      "paas-mail-admin", "paas-stalwart",
     ]);
+    // a rede de e-mail já estava certa
+    expect(calls.some((a) => a[1] === "disconnect" && a[2] === "paas-mail")).toBe(false);
   });
 
   it("container existente já com os aliases: não mexe na rede", async () => {
@@ -348,12 +356,12 @@ describe("StalwartManager — certificados e alias", () => {
     responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok("{}") : undefined));
     await tlsManager().start();
     expect(calls.some((a) => a[1] === "disconnect")).toBe(false);
-    expect(calls.some((a) => a[1] === "connect")).toBe(true);
+    expect(calls.filter((a) => a[1] === "connect").map((a) => a[a.length - 2])).toEqual(["paas-mail-admin", "paas-mail"]);
 
     responder = daemon({ running: true, mounts: NEW }, (a) =>
       isNetworksInspect(a) ? ok("não é json") : a[1] === "connect" ? fail("negado") : undefined,
     );
-    await expect(tlsManager().start()).rejects.toThrow(/falha ao conectar paas-stalwart à rede paas-net com os aliases: negado/);
+    await expect(tlsManager().start()).rejects.toThrow(/falha ao conectar paas-stalwart à rede paas-mail-admin com os aliases: negado/);
   });
 
   it("applyTls com troca de certificado: entrega os arquivos e recarrega pela API, sem reiniciar", async () => {
@@ -393,22 +401,89 @@ describe("StalwartManager — certificados e alias", () => {
   it("applyTls com seção nova (primeiro certificado, hostname mudou): reinicia — o reload do Stalwart não relê o config.toml", async () => {
     responder = daemon({ running: true, mounts: NEW });
     expect(await manager().applyTls({ restart: true })).toBe("restarted");
-    expect(ordem()).toEqual(["<cp>", "restart"]);
+    expect(ordem()).toEqual(["<cp>", "inspect", "restart"]);
 
     responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "restart" ? fail("sem container") : undefined));
     await expect(manager().applyTls({ restart: true })).rejects.toThrow(/falha ao reiniciar paas-stalwart: sem container/);
   });
 
   it("connectContainer: liga o painel à rede do Stalwart (idempotente)", async () => {
-    responder = daemon(null, (a) => (a[0] === "inspect" ? ok(JSON.stringify({ "paas-net": {} })) : undefined));
+    responder = daemon(null, (a) => (a[0] === "inspect" ? ok(JSON.stringify({ "paas-mail-admin": {} })) : undefined));
     await manager().connectContainer("tws-panel");
     expect(calls.some((a) => a[1] === "connect")).toBe(false);
 
     responder = daemon(null, (a) => (a[0] === "inspect" ? ok("{}") : undefined));
     await manager().connectContainer("tws-panel");
-    expect(calls).toContainEqual(["network", "connect", "paas-net", "tws-panel"]);
+    expect(calls).toContainEqual(["network", "connect", "paas-mail-admin", "tws-panel"]);
 
     responder = daemon(null, (a) => (a[0] === "inspect" ? fail("x") : a[1] === "connect" ? fail("negado") : undefined));
-    await expect(manager().connectContainer("tws-panel")).rejects.toThrow(/falha ao conectar tws-panel à rede paas-net: negado/);
+    await expect(manager().connectContainer("tws-panel")).rejects.toThrow(/falha ao conectar tws-panel à rede paas-mail-admin: negado/);
+  });
+});
+
+/**
+ * A4: os projetos hospedados ficam só na paas-net. O Stalwart (e a administração
+ * dele) fica em redes à parte: paas-mail-admin (só ele e o painel) e paas-mail
+ * (SMTP/IMAP para o webmail e os projetos com e-mail habilitado).
+ */
+describe("StalwartManager — redes separadas da paas-net (A4)", () => {
+  it("nasce na rede da administração e na de e-mail, nunca na paas-net", async () => {
+    responder = daemon(null);
+    await tlsManager().start();
+    const create = calls.find((a) => a[0] === "create")!;
+    expect(create[create.indexOf("--network") + 1]).toBe("paas-mail-admin");
+    expect(calls).toContainEqual([
+      "network", "connect",
+      "--alias", "paas-stalwart", "--alias", "mail.exemplo.com", "--alias", "mail.outro.com",
+      "paas-mail", "paas-stalwart",
+    ]);
+    expect(JSON.stringify(calls)).not.toContain('"paas-net"');
+  });
+
+  it("instalação antiga (só na paas-net): entra nas duas redes novas, mas só sai da paas-net quando mandarem", async () => {
+    const antigo = JSON.stringify({ "paas-net": { Aliases: TODOS } });
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok(antigo) : undefined));
+    const m = tlsManager();
+    await m.start();
+    const entrou = calls.filter((a) => a[1] === "connect").map((a) => a[a.length - 2]);
+    expect(entrou).toEqual(["paas-mail-admin", "paas-mail"]);
+    expect(calls.some((a) => a[1] === "disconnect")).toBe(false);
+
+    calls.length = 0;
+    await m.leaveProjectNetwork();
+    expect(calls).toContainEqual(["network", "disconnect", "paas-net", "paas-stalwart"]);
+  });
+
+  it("leaveProjectNetwork: já fora da paas-net não faz nada; 'not connected' é tolerado; outra falha é erro", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok(ALL_ALIASES) : undefined));
+    await manager().leaveProjectNetwork();
+    expect(calls.some((a) => a[1] === "disconnect")).toBe(false);
+
+    const comNet = JSON.stringify({ "paas-net": {}, "paas-mail": {} });
+    responder = daemon({ running: true, mounts: NEW }, (a) =>
+      isNetworksInspect(a) ? ok(comNet) : a[1] === "disconnect" ? fail("container is not connected to network paas-net") : undefined,
+    );
+    await expect(manager().leaveProjectNetwork()).resolves.toBeUndefined();
+
+    responder = daemon({ running: true, mounts: NEW }, (a) =>
+      isNetworksInspect(a) ? ok(comNet) : a[1] === "disconnect" ? fail("busy") : undefined,
+    );
+    await expect(manager().leaveProjectNetwork()).rejects.toThrow(/falha ao tirar paas-stalwart da rede paas-net: busy/);
+
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok("ilegível") : undefined));
+    await expect(manager().leaveProjectNetwork()).resolves.toBeUndefined();
+  });
+
+  it("joinMailNetworks: container que não existe → não faz nada; existente → cria as redes e liga às duas", async () => {
+    responder = daemon(null);
+    await manager().joinMailNetworks();
+    expect(ordem()).toEqual(["inspect"]);
+
+    calls.length = 0;
+    const antigo = JSON.stringify({ "paas-net": { Aliases: ["paas-stalwart"] } });
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isNetworksInspect(a) ? ok(antigo) : undefined));
+    await manager().joinMailNetworks();
+    expect(calls.filter((a) => a[1] === "connect").map((a) => a[a.length - 2])).toEqual(["paas-mail-admin", "paas-mail"]);
+    expect(calls.some((a) => a[1] === "disconnect")).toBe(false);
   });
 });

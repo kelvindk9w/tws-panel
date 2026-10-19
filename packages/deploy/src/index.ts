@@ -15,7 +15,9 @@ export {
   type ComposePortEntry,
 } from "./port-overrides.js";
 export { analyzeCompose, guessProxyTarget } from "./guardrails.js";
-export { runGuardrails, GUARDRAIL_RULES, type GuardrailRuleInfo } from "./rules.js";
+export { runGuardrails, GUARDRAIL_RULES, type GuardrailRuleInfo, type IsolationContext } from "./rules.js";
+export { HARD_RULES, checkComposeModel } from "./compose-model.js";
+export { composeEnv, loadCanonicalCompose } from "./compose-config.js";
 export { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 export {
   CaddyManager,

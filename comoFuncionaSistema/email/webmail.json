@@ -89,6 +89,7 @@
     "Sem CSP do Caddy (ver comoFunciona). O Roundcube teve muitas correções de XSS em 2025–2026: manter a imagem atualizada é a principal defesa — trocar ROUNDCUBE_IMAGE (tag e digest) a cada versão de segurança.",
     "Dois domínios: o login funciona em qualquer mail.<domínio> (todas as caixas estão no mesmo Stalwart). O cookie de sessão é por nome: entrar por mail.a não vale em mail.b.",
     "Nome de exibição: o painel só preenche o nome da identidade quando ele está vazio (primeiro login ou identidade sem nome). Se o dono mudar o nome de exibição do projeto depois, quem já tem nome no webmail continua com o antigo e troca no Roundcube (Configurações → Identidades). Escolha deliberada: o pedido foi não sobrescrever o que a pessoa mudou, e o Roundcube não guarda se o nome veio do painel ou da pessoa.",
-    "Trocar a versão do Roundcube: conferir que os hooks user_create (campo user_name) e login_after continuam com o mesmo contrato (validação no container real descrita no _RELATORIO-webmail.md, seção 'Nome de exibição')."
+    "Trocar a versão do Roundcube: conferir que os hooks user_create (campo user_name) e login_after continuam com o mesmo contrato (validação no container real descrita no _RELATORIO-webmail.md, seção 'Nome de exibição').",
+    "A4: o webmail fica na paas-panel (o Caddy chega nele) e na paas-mail (chega no Stalwart), nunca na paas-net dos projetos. internalIp() devolve o IP na paas-mail — é o que o Stalwart enxerga e isenta do limite de login. Instalação antiga migra em start(): entra nas duas redes e sai da paas-net."
   ]
 }
