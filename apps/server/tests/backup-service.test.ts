@@ -10,7 +10,7 @@
  * lembrete da senha.
  */
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ import { ArchiveError } from "../src/services/backup-archive.js";
 import type { ContainerInspect } from "../src/services/backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "../src/services/backup-docker.js";
 import { StorageError, type BackupStorage, type StoredObject } from "../src/services/backup-s3.js";
-import { BackupService, projectTargetId, retentionVictims, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
+import { BackupService, orderBackups, projectTargetId, retentionVictims, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
 import type { NotificationEvent } from "../src/services/notification-service.js";
 
 // ---------------------------------------------------------------------------
@@ -1708,5 +1708,72 @@ process.stdin.on("end", () => {
     expect(nova.status).toBe("success");
     expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([nova.fileName]);
     expect((await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key))).toEqual([nova.fileName]);
+  });
+});
+
+describe("retenção nunca apaga o backup recém-criado (M5)", () => {
+  const P1 = projectTargetId("p1");
+
+  it("dois backups no mesmo minuto: o de sufixo -2 é o mais NOVO e fica; o original (mais antigo) é que sai", async () => {
+    await connect();
+    await service.updateTarget(P1, { localKeep: 1, remoteKeep: 1 }, "admin");
+    const primeiro = await backup();
+    const segundo = await backup(); // mesmo `now`: o nome ganha o sufixo -2
+    expect(segundo.fileName).toBe(primeiro.fileName!.replace(".7z", "-2.7z"));
+    expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([segundo.fileName]);
+    expect((await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key))).toEqual([segundo.fileName]);
+  });
+
+  it("fuso trocado entre dois backups (o nome novo ordena antes do antigo): o novo fica, o antigo sai", async () => {
+    const prev = process.env.TZ;
+    try {
+      await connect();
+      await service.updateTarget(P1, { localKeep: 1, remoteKeep: 1 }, "admin");
+      process.env.TZ = "Europe/Berlin"; // 12:00 no nome
+      now = Date.parse("2026-10-14T10:00:00Z");
+      const antigo = await backup();
+      process.env.TZ = "America/Sao_Paulo"; // uma hora depois, o nome diz 08:00 (ordena antes de 12:00)
+      now += H;
+      const novo = await backup();
+      expect(novo.fileName! < antigo.fileName!).toBe(true);
+      expect(await readdir(path.join(dir, "backups", "loja"))).toEqual([novo.fileName]);
+      expect((await storage.list("TWS Panel Backups/loja/")).map((o) => path.basename(o.key))).toEqual([novo.fileName]);
+    } finally {
+      process.env.TZ = prev;
+    }
+  });
+
+  it("cópias de antes desta correção (sem data registrada): a ordem vem da data do arquivo, não do nome", async () => {
+    const pasta = path.join(dir, "backups", "loja");
+    await mkdir(pasta, { recursive: true });
+    // nome "12-00" é do dia anterior em UTC-1; o arquivo "08-00" é o mais novo de verdade
+    await writeFile(path.join(pasta, "2026-10-14_12-00.7z"), "velho");
+    await writeFile(path.join(pasta, "2026-10-14_08-00.7z"), "novo");
+    await utimes(path.join(pasta, "2026-10-14_12-00.7z"), new Date("2026-10-14T10:00:00Z"), new Date("2026-10-14T10:00:00Z"));
+    await utimes(path.join(pasta, "2026-10-14_08-00.7z"), new Date("2026-10-14T11:00:00Z"), new Date("2026-10-14T11:00:00Z"));
+    now = Date.parse("2026-10-14T12:00:00Z");
+    await service.updateTarget(P1, { localKeep: 2 }, "admin");
+    const feito = await backup();
+    expect((await readdir(pasta)).sort()).toEqual(["2026-10-14_08-00.7z", feito.fileName].sort());
+  });
+
+  it("retentionVictims: o arquivo protegido nunca é candidato, mesmo que a ordem o ponha como o mais velho", () => {
+    expect(retentionVictims(["novo", "b", "c"], 1, () => true, "novo")).toEqual(["b"]);
+  });
+
+  it("orderBackups: data UTC registrada manda; sem ela, a data do nome; empate pelo número do sufixo", () => {
+    const quando: Record<string, number> = {
+      "2026-10-14_08-00.7z": Date.parse("2026-10-14T11:00:00Z"),
+      "2026-10-14_12-00.7z": Date.parse("2026-10-14T10:00:00Z"),
+    };
+    expect(orderBackups(["2026-10-14_08-00.7z", "2026-10-14_12-00.7z"], (n) => quando[n] ?? null)).toEqual([
+      "2026-10-14_12-00.7z",
+      "2026-10-14_08-00.7z",
+    ]);
+    expect(orderBackups(["2026-10-14_10-00-3.7z", "2026-10-14_10-00.7z", "2026-10-14_10-00-2.7z"], () => null)).toEqual([
+      "2026-10-14_10-00.7z",
+      "2026-10-14_10-00-2.7z",
+      "2026-10-14_10-00-3.7z",
+    ]);
   });
 });

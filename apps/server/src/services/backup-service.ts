@@ -238,6 +238,8 @@ const INITIAL_DEFAULTS: StoredDefaults = { enabled: true, frequencyHours: 24, lo
 
 /** O que o painel sabe de uma cópia (gravado no backup) e a última conferência. */
 interface StoredCopyInfo {
+  /** Quando a cópia foi criada (UTC, ISO): a retenção ordena por aqui, não pelo nome (hora local). */
+  createdAt?: string;
   sha256?: string;
   size?: number;
   /** Cópia externa: saiu cifrada. */
@@ -364,11 +366,24 @@ async function sha256File(file: string): Promise<string> {
  * se nenhuma das que ficam for completa. Cópias incompletas seguidas nunca
  * levam embora a última completa.
  */
-export function retentionVictims(files: string[], keep: number, isComplete: (file: string) => boolean): string[] {
+export function retentionVictims(files: string[], keep: number, isComplete: (file: string) => boolean, protect?: string): string[] {
   const victims = files.slice(0, Math.max(0, files.length - keep));
-  if (files.slice(victims.length).some(isComplete)) return victims;
+  const candidates = (list: string[]): string[] => list.filter((f) => f !== protect);
+  if (files.slice(victims.length).some(isComplete)) return candidates(victims);
   const lastComplete = [...victims].reverse().find(isComplete);
-  return lastComplete ? victims.filter((f) => f !== lastComplete) : victims;
+  return candidates(lastComplete ? victims.filter((f) => f !== lastComplete) : victims);
+}
+
+/**
+ * Do mais antigo ao mais novo. O nome tem a hora LOCAL (e muda com o fuso da
+ * VPS) e o sufixo de colisão (`-2`) ordena ANTES do original como texto, então
+ * o nome sozinho não serve: manda a data UTC que o painel registrou (`when`);
+ * sem ela, a data do nome; no empate, o número do sufixo (sem sufixo = 1).
+ */
+export function orderBackups(names: string[], when: (name: string) => number | null): string[] {
+  const time = (n: string): number => when(n) ?? parseBackupFileStamp(n)?.getTime() ?? 0;
+  const seq = (n: string): number => Number(/_\d{2}-\d{2}-(\d{1,3})\.7z$/.exec(n)?.[1] ?? 1);
+  return [...names].sort((a, b) => time(a) - time(b) || seq(a) - seq(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** Temporários de gravação (atômica ou parcial): nunca entram no backup do painel. */
@@ -1607,6 +1622,18 @@ export class BackupService {
     return name;
   }
 
+  /** Cópias da VPS do mais antigo ao mais novo (data registrada; sem ela, a do arquivo; sem ela, a do nome). */
+  private async orderedLocalFiles(folder: string): Promise<string[]> {
+    const names = await this.localFiles(folder);
+    const when = new Map<string, number>();
+    for (const n of names) {
+      const recorded = this.config.checks[BackupService.checkKey(folder, n)]?.local?.createdAt;
+      const at = recorded ? Date.parse(recorded) : (await stat(path.join(this.backupsDir, folder, n)).then((s) => s.mtimeMs).catch(() => NaN));
+      if (!Number.isNaN(at)) when.set(n, at);
+    }
+    return orderBackups(names, (n) => when.get(n) ?? null);
+  }
+
   private async localFiles(folder: string): Promise<string[]> {
     try {
       return (await readdir(path.join(this.backupsDir, folder))).filter(isValidBackupFileName).sort();
@@ -1631,11 +1658,13 @@ export class BackupService {
     r.local = true;
     r.sizeBytes = (await stat(localPath)).size;
     // Hash e tamanho guardados: o "Conferir" compara com eles depois.
-    this.copyInfo(folder, name, "local", { sha256: await sha256File(localPath), size: r.sizeBytes, ...mark });
+    const createdAt = new Date(this.now()).toISOString();
+    this.copyInfo(folder, name, "local", { createdAt, sha256: await sha256File(localPath), size: r.sizeBytes, ...mark });
     if (complete) t.lastSuccessAt = new Date(this.now()).toISOString();
     // Cópias na VPS além das N mais recentes (nunca a última completa).
-    const local = await this.localFiles(folder);
-    for (const old of retentionVictims(local, t.localKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.local?.incomplete)) {
+    // (nunca a recém-criada, qualquer que seja a ordem dos nomes)
+    const local = await this.orderedLocalFiles(folder);
+    for (const old of retentionVictims(local, t.localKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.local?.incomplete, name)) {
       await rm(path.join(localDir, old), { force: true });
       this.dropCopy(folder, old, "local");
     }
@@ -1663,7 +1692,7 @@ export class BackupService {
       const hash = await sha256File(upload);
       const uploadSize = (await stat(upload)).size;
       await storage.upload(key, upload);
-      this.copyInfo(folder, name, "remote", { sha256: hash, size: uploadSize, encrypted: encrypt, ...mark });
+      this.copyInfo(folder, name, "remote", { createdAt, sha256: hash, size: uploadSize, encrypted: encrypt, ...mark });
       r.remote = "uploaded";
       this.step(r, "Conferir a cópia externa (baixar e abrir)");
       const back = path.join(staging, "conferencia.7z");
@@ -1681,8 +1710,17 @@ export class BackupService {
       t.lastStaleNoticeAt = null;
       this.step(r, "Apagar os backups externos mais antigos");
       const prefix = `${BACKUP_ROOT_FOLDER}/${folder}/`;
-      const remote = (await storage.list(prefix)).map((o) => o.key.slice(prefix.length)).filter(isValidBackupFileName).sort();
-      for (const old of retentionVictims(remote, t.remoteKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.remote?.incomplete)) {
+      const listed = (await storage.list(prefix)).filter((o) => isValidBackupFileName(o.key.slice(prefix.length)));
+      const modified = new Map(listed.map((o) => [o.key.slice(prefix.length), o.lastModified ? Date.parse(o.lastModified) : NaN]));
+      const remote = orderBackups(
+        listed.map((o) => o.key.slice(prefix.length)),
+        (f) => {
+          const recorded = this.config.checks[BackupService.checkKey(folder, f)]?.remote?.createdAt;
+          const at = recorded ? Date.parse(recorded) : (modified.get(f) ?? NaN);
+          return Number.isNaN(at) ? null : at;
+        },
+      );
+      for (const old of retentionVictims(remote, t.remoteKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.remote?.incomplete, name)) {
         await storage.remove(`${prefix}${old}`);
         this.dropCopy(folder, old, "remote");
       }
