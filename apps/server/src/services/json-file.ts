@@ -26,6 +26,7 @@
  * Os temporários terminam em `.tmp`: o backup do painel já os ignora.
  */
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { chmod, link, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
@@ -118,33 +119,78 @@ export async function createFileOnce(file: string, data: string | Buffer, opts: 
  * Chave de cifra guardada em hexa num arquivo próprio (0600). Lê; se não
  * existe, cria — dentro da fila do arquivo e com criação exclusiva, então
  * chamadas paralelas na primeira vez (e outro processo) recebem TODAS a
- * mesma chave. Conteúdo que não é uma chave do tamanho certo (nada pode ter
- * sido cifrado com ele) é trocado por uma nova, como os stores já faziam.
- * Guarde a promessa devolvida: ela é a "carga única" do store.
+ * mesma chave. Erro de leitura que não seja "não existe" (E/S, permissão)
+ * é LANÇADO: gerar outra chave por cima tornaria ilegível tudo o que a antiga
+ * cifrou. Conteúdo que não é uma chave do tamanho certo é guardado à parte
+ * (`<arquivo>.corrompido-<data>`) e uma chave nova é criada. Guarde a
+ * promessa devolvida: ela é a "carga única" do store.
  */
-export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
+export interface LoadKeyOptions {
+  /** Aviso quando uma chave inválida é guardada à parte e substituída. */
+  log?: (message: string) => void;
+  /**
+   * Descreve o que está cifrado com esta chave (ou null se nada). Com conteúdo
+   * inválido E dados que dependem dela, a carga FALHA: uma chave nova os
+   * tornaria ilegíveis para sempre.
+   */
+  dependents?: () => Promise<string | null>;
+}
+
+/** Erro de disco ao ler/gravar a chave, em português e dizendo o que conferir. */
+function keyDiskError(file: string, action: "ler" | "gravar", err: unknown): Error {
+  const code = (err as NodeJS.ErrnoException).code ?? "erro";
+  return new Error(
+    `Não consegui ${action} ${path.basename(file)} (${code}). Confira as permissões da pasta de dados do painel (/data no Docker): ` +
+      "o dono do processo precisa poder ler e gravar nela. O painel não cria outra chave por cima para não perder o que está cifrado.",
+    { cause: err },
+  );
+}
+
+export function loadOrCreateKey(file: string, bytes: number, opts: LoadKeyOptions = {}): Promise<Buffer> {
   const read = async (): Promise<{ key: Buffer | null; present: boolean }> => {
     try {
-      const raw = Buffer.from((await readFile(file, "utf8")).trim(), "hex");
-      return { key: raw.length === bytes ? raw : null, present: true };
+      const hex = (await readFile(file, "utf8")).trim();
+      const ok = hex.length === bytes * 2 && /^[0-9a-fA-F]+$/.test(hex);
+      return { key: ok ? Buffer.from(hex, "hex") : null, present: true };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return { key: null, present: false };
-      throw err;
+      throw keyDiskError(file, "ler", err);
     }
   };
   return withFileLock(file, async () => {
     const existing = await read();
     if (existing.key) return existing.key;
+    const name = path.basename(file);
+    if (existing.present) {
+      const dependents = await opts.dependents?.();
+      if (dependents) {
+        throw new Error(
+          `O arquivo ${name} existe, mas não tem uma chave válida, e há ${dependents} cifrado(s) com ela. ` +
+            "O painel não gera outra chave sozinho (tudo isso ficaria ilegível). Restaure o arquivo a partir de um backup do painel " +
+            "ou rode scripts/restaurar-painel.sh no servidor.",
+        );
+      }
+    }
     const generated = randomBytes(bytes);
     const text = generated.toString("hex") + "\n";
-    if (existing.present) {
-      await writeFileAtomic(file, text);
-      return generated;
+    try {
+      if (existing.present) {
+        // conteúdo que não é chave (vazio, truncado, não-hexa): vai para o lado,
+        // nunca é apagado — se era a chave de alguém, o dono ainda pode recuperá-la
+        const aside = asideName(file);
+        await rename(file, aside);
+        opts.log?.(
+          `Aviso: ${name} não tinha uma chave válida; guardei o conteúdo como ${path.basename(aside)} e criei uma chave nova. ` +
+            "O que tiver sido cifrado com a chave antiga não poderá mais ser lido.",
+        );
+      }
+      if (await createFileOnce(file, text)) return generated;
+    } catch (err) {
+      throw keyDiskError(file, "gravar", err);
     }
-    if (await createFileOnce(file, text)) return generated;
     // outro processo criou entre a leitura e a criação: vale a dele
     const other = await read();
-    if (!other.key) throw new Error(`A chave ${path.basename(file)} está ilegível.`);
+    if (!other.key) throw new Error(`A chave ${name} está ilegível.`);
     return other.key;
   });
 }
@@ -152,6 +198,79 @@ export function loadOrCreateKey(file: string, bytes: number): Promise<Buffer> {
 /** Data em formato seguro para nome de arquivo (2026-10-16T12-00-00-000Z). */
 function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/**
+ * Nome para guardar um arquivo ilegível à parte. Nunca o de um que já foi
+ * guardado (o rename sobrescreveria a cópia anterior): no mesmo instante, o
+ * nome ganha um número.
+ */
+function asideName(file: string): string {
+  const base = `${file}.corrompido-${stamp()}`;
+  let name = base;
+  for (let i = 2; existsSync(name); i++) name = `${base}-${i}`;
+  return name;
+}
+
+export interface LoadJsonOptions<T> {
+  /** Valor quando o arquivo não existe (ou foi guardado à parte). */
+  empty: () => T;
+  /** Converte o JSON lido; null = formato que o store não reconhece. */
+  parse: (raw: unknown) => T | null;
+  /**
+   * true: arquivo ilegível LANÇA erro (o arquivo não é mexido) — para dados
+   * sem os quais seguir é perigoso (contas, lista de projetos, senha do
+   * servidor de e-mail). false (padrão): o arquivo ruim é guardado à parte e
+   * o store começa vazio.
+   */
+  strict?: boolean;
+  /**
+   * Só com `strict`: como recuperar ESTE arquivo (vai na mensagem de erro).
+   * Padrão: restaurar uma cópia dele ou rodar scripts/restaurar-painel.sh.
+   */
+  recovery?: string;
+  /** Aviso ao guardar um arquivo ilegível à parte. */
+  log?: (message: string) => void;
+}
+
+/**
+ * Carga de um arquivo JSON que NUNCA transforma "não consegui ler" em "está
+ * vazio" para depois gravar por cima:
+ *  - não existe (ENOENT): vale o vazio;
+ *  - erro de disco (E/S, permissão): é lançado, o arquivo não é tocado;
+ *  - JSON inválido ou formato desconhecido: guardado em
+ *    `<arquivo>.corrompido-<data>` (ou lançado, se `strict`).
+ * Roda na fila do arquivo; quem já está dentro da fila usa loadJsonInLock.
+ */
+export function loadJson<T>(file: string, opts: LoadJsonOptions<T>): Promise<T> {
+  return withFileLock(file, () => loadJsonInLock(file, opts));
+}
+
+export async function loadJsonInLock<T>(file: string, opts: LoadJsonOptions<T>): Promise<T> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return opts.empty();
+    throw err;
+  }
+  try {
+    const value = opts.parse(JSON.parse(text));
+    if (value !== null) return value;
+  } catch {
+    // JSON inválido: cai abaixo
+  }
+  if (opts.strict) {
+    throw new Error(
+      `O arquivo ${path.basename(file)} está ilegível e não foi alterado. ` +
+        (opts.recovery ??
+          "Restaure uma cópia dele (um backup do painel) ou rode scripts/restaurar-painel.sh no servidor. O painel não recomeça do zero sozinho para não perder os dados."),
+    );
+  }
+  const aside = asideName(file);
+  await rename(file, aside);
+  opts.log?.(`${path.basename(file)} estava ilegível; guardei como ${path.basename(aside)} e comecei do zero.`);
+  return opts.empty();
 }
 
 export interface JsonFileOptions<T> {
@@ -213,7 +332,7 @@ export class JsonFile<T> {
       const { value, unreadable } = await this.readRaw();
       const next = await change(value);
       if (next === value) return next;
-      if (unreadable) await rename(this.file, `${this.file}.corrompido-${stamp()}`);
+      if (unreadable) await rename(this.file, asideName(this.file));
       await this.write(next);
       return next;
     });

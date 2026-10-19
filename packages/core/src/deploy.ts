@@ -160,6 +160,14 @@ export interface Project {
    * nenhum; ausente = projeto publicado antes desta opção existir.
    */
   timezoneApplied?: string | null;
+  /**
+   * Onde o painel guarda o que gera para o projeto (código clonado, repositório
+   * do painel, arquivos paas.*). "reserved" = `<pasta de projetos>/.paas/<id>`,
+   * área que nunca coincide com pasta do usuário. Ausente = projeto de antes
+   * desta mudança: `<pasta de projetos>/<slug>` (mantido como está, sem mover
+   * dados; a remoção confere o alvo antes de apagar).
+   */
+  storageLayout?: "reserved";
 }
 
 /** Endereço de escuta de uma porta publicada que o painel aceita escolher. */

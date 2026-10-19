@@ -228,6 +228,7 @@ describe("persistência", () => {
   });
 
   it("uma gravação que falha não trava as seguintes: o próximo alerta persiste os dois", async () => {
+    await service.list(); // carrega antes: o que falha aqui é a GRAVAÇÃO
     // alerts.json vira diretório: a escrita falha com EISDIR
     await mkdir(path.join(dir, "alerts.json"));
     await expect(service.create({ ...INPUT, title: "durante a falha" })).resolves.toBeDefined();

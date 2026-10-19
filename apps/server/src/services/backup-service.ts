@@ -93,7 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 
@@ -238,6 +238,8 @@ const INITIAL_DEFAULTS: StoredDefaults = { enabled: true, frequencyHours: 24, lo
 
 /** O que o painel sabe de uma cópia (gravado no backup) e a última conferência. */
 interface StoredCopyInfo {
+  /** Quando a cópia foi criada (UTC, ISO): a retenção ordena por aqui, não pelo nome (hora local). */
+  createdAt?: string;
   sha256?: string;
   size?: number;
   /** Cópia externa: saiu cifrada. */
@@ -364,11 +366,24 @@ async function sha256File(file: string): Promise<string> {
  * se nenhuma das que ficam for completa. Cópias incompletas seguidas nunca
  * levam embora a última completa.
  */
-export function retentionVictims(files: string[], keep: number, isComplete: (file: string) => boolean): string[] {
+export function retentionVictims(files: string[], keep: number, isComplete: (file: string) => boolean, protect?: string): string[] {
   const victims = files.slice(0, Math.max(0, files.length - keep));
-  if (files.slice(victims.length).some(isComplete)) return victims;
+  const candidates = (list: string[]): string[] => list.filter((f) => f !== protect);
+  if (files.slice(victims.length).some(isComplete)) return candidates(victims);
   const lastComplete = [...victims].reverse().find(isComplete);
-  return lastComplete ? victims.filter((f) => f !== lastComplete) : victims;
+  return candidates(lastComplete ? victims.filter((f) => f !== lastComplete) : victims);
+}
+
+/**
+ * Do mais antigo ao mais novo. O nome tem a hora LOCAL (e muda com o fuso da
+ * VPS) e o sufixo de colisão (`-2`) ordena ANTES do original como texto, então
+ * o nome sozinho não serve: manda a data UTC que o painel registrou (`when`);
+ * sem ela, a data do nome; no empate, o número do sufixo (sem sufixo = 1).
+ */
+export function orderBackups(names: string[], when: (name: string) => number | null): string[] {
+  const time = (n: string): number => when(n) ?? parseBackupFileStamp(n)?.getTime() ?? 0;
+  const seq = (n: string): number => Number(/_\d{2}-\d{2}-(\d{1,3})\.7z$/.exec(n)?.[1] ?? 1);
+  return [...names].sort((a, b) => time(a) - time(b) || seq(a) - seq(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** Temporários de gravação (atômica ou parcial): nunca entram no backup do painel. */
@@ -518,20 +533,25 @@ export class BackupService {
   private ensureLoaded(): Promise<void> {
     this.loading ??= (async () => {
       await this.loadKey();
-      try {
-        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<StoredConfig>;
-        const base = emptyConfig();
-        this.config = {
-          destination: raw.destination ?? null,
-          encryption: { ...base.encryption, ...(raw.encryption ?? {}) },
-          targets: raw.targets ?? {},
-          projectDefaults: { ...INITIAL_DEFAULTS, ...(raw.projectDefaults ?? {}) },
-          detections: raw.detections ?? {},
-          checks: raw.checks ?? {},
-        };
-      } catch {
-        this.config = emptyConfig();
-      }
+      // Erro de leitura NÃO vira "sem configuração": a carga falha e o arquivo
+      // fica como está (o destino e a senha dos backups estão nele).
+      this.config = await loadJson<StoredConfig>(this.file, {
+        empty: emptyConfig,
+        parse: (value) => {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+          const raw = value as Partial<StoredConfig>;
+          const base = emptyConfig();
+          return {
+            destination: raw.destination ?? null,
+            encryption: { ...base.encryption, ...(raw.encryption ?? {}) },
+            targets: raw.targets ?? {},
+            projectDefaults: { ...INITIAL_DEFAULTS, ...(raw.projectDefaults ?? {}) },
+            detections: raw.detections ?? {},
+            checks: raw.checks ?? {},
+          };
+        },
+        log: this.log,
+      });
       // Instalação de antes do "Padrão dos projetos": quem está como o painel
       // criava sozinho (ligado, 24 h, 2 e 5) segue o padrão; o resto ficou
       // assim porque alguém mudou, então é configuração própria.
@@ -556,12 +576,14 @@ export class BackupService {
           this.config.encryption.passwordSetAt = null;
         }
       }
-      try {
-        const raw = JSON.parse(await readFile(this.historyFile, "utf8")) as { entries?: BackupRecord[] };
-        this.history = Array.isArray(raw.entries) ? raw.entries : [];
-      } catch {
-        this.history = [];
-      }
+      this.history = await loadJson<BackupRecord[]>(this.historyFile, {
+        empty: () => [],
+        parse: (raw) => {
+          const entries = (raw as { entries?: BackupRecord[] } | null)?.entries;
+          return Array.isArray(entries) ? entries : null;
+        },
+        log: this.log,
+      });
       // O painel caiu no meio de uma operação: ela não vai continuar sozinha.
       let interrupted = false;
       for (const r of this.history) {
@@ -572,25 +594,30 @@ export class BackupService {
           interrupted = true;
         }
       }
-      if (interrupted) await this.persist({ history: true });
+      if (interrupted) await this.persistQuiet({ history: true });
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
-    })();
+    })().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 
+  /** Chave de cifra: lida (ou criada) uma vez; erro de leitura falha a carga (json-file.ts). */
   private async loadKey(): Promise<void> {
-    try {
-      const raw = Buffer.from((await readFile(this.keyFile, "utf8")).trim(), "hex");
-      if (raw.length === KEY_BYTES) {
-        this.key = raw;
-        return;
-      }
-    } catch {
-      // sem chave ainda — gera abaixo
-    }
-    const fresh = randomBytes(KEY_BYTES);
-    await writeFileAtomic(this.keyFile, fresh.toString("hex") + "\n");
-    this.key = fresh;
+    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES, {
+      log: this.log,
+      dependents: async () => {
+        try {
+          const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<StoredConfig>;
+          const itens = [raw.destination?.secret ? "a chave de acesso ao armazenamento externo" : null, raw.encryption?.password ? "a senha dos backups" : null];
+          const achados = itens.filter((i): i is string => i !== null);
+          return achados.length > 0 ? achados.join(" e ") : null;
+        } catch {
+          return null;
+        }
+      },
+    });
   }
 
   private seal(secret: string): SealedBox {
@@ -610,18 +637,30 @@ export class BackupService {
     await writeFileAtomic(file, JSON.stringify(data, null, 2) + "\n");
   }
 
+  /**
+   * Grava o que mudou. Falha de gravação é PROPAGADA a quem pediu a mudança
+   * (configurar destino, senha, frequência…): dizer "salvo" sem ter salvo
+   * perderia a configuração no próximo reinício. A fila segue para o próximo.
+   */
   private persist(what: { config?: boolean; history?: boolean }): Promise<void> {
     const config = what.config ? structuredClone(this.config) : null;
     const history = what.history ? this.history.slice(-MAX_HISTORY) : null;
-    this.writing = this.writing.then(async () => {
+    const run = this.writing.then(async () => {
       try {
         if (config) await this.writeJson(this.file, config);
         if (history) await this.writeJson(this.historyFile, { entries: history });
       } catch (err) {
         this.log(`Backups: não foi possível gravar no disco (${(err as Error).message}).`);
+        throw err;
       }
     });
-    return this.writing;
+    this.writing = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Para gravações internas (agendador, fim de operação): registra a falha e segue, sem derrubar quem roda. */
+  private persistQuiet(what: { config?: boolean; history?: boolean }): Promise<void> {
+    return this.persist(what).catch(() => undefined);
   }
 
   async flush(): Promise<void> {
@@ -1196,7 +1235,7 @@ export class BackupService {
     if (dup) return dup.record;
     this.queue.push({ record, run });
     this.history.push(record);
-    void this.persist({ history: true });
+    void this.persistQuiet({ history: true });
     void this.pump();
     return record;
   }
@@ -1241,7 +1280,7 @@ export class BackupService {
         path: r.target.startsWith("project:") ? `/projects/${r.target.slice(8)}/backups` : "/settings/backups",
       });
     }
-    await this.persist({ config: true, history: true });
+    await this.persistQuiet({ config: true, history: true });
     this.running = null;
     void this.pump();
   }
@@ -1600,11 +1639,44 @@ export class BackupService {
   /** Backups em andamento que ficaram incompletos (ver StoredCopyInfo.incomplete). */
   private readonly incomplete = new WeakSet<BackupRecord>();
 
-  private uniqueName(dir: string): string {
+  /**
+   * Nome que NENHUMA cópia conhecida usa: nem a pasta da VPS, nem o
+   * armazenamento externo, nem o histórico deste alvo (M5). Sem isso, depois que
+   * a retenção apaga a cópia local, um backup no mesmo minuto reaproveitava o
+   * nome e o envio sobrescrevia a cópia externa antiga. Se o armazenamento não
+   * responder à listagem, vale o resto — e o envio ainda confere antes de gravar.
+   */
+  private async uniqueName(dir: string, folder: string, target: string): Promise<string> {
+    const used = new Set<string>();
+    for (const f of await this.localFiles(folder)) used.add(f);
+    for (const h of this.history) if (h.target === target && h.fileName) used.add(h.fileName);
+    const prefix = `${folder}/`;
+    for (const key of Object.keys(this.config.checks)) if (key.startsWith(prefix)) used.add(key.slice(prefix.length));
+    const storage = this.storage();
+    if (storage) {
+      const remotePrefix = `${BACKUP_ROOT_FOLDER}/${folder}/`;
+      try {
+        for (const o of await storage.list(remotePrefix)) used.add(o.key.slice(remotePrefix.length));
+      } catch {
+        /* sem listagem: a conferência antes do envio ainda protege a cópia externa */
+      }
+    }
     const stamp = backupFileStamp(new Date(this.now()));
     let name = `${stamp}.7z`;
-    for (let i = 2; existsSync(path.join(dir, name)); i++) name = `${stamp}-${i}.7z`;
+    for (let i = 2; used.has(name) || existsSync(path.join(dir, name)); i++) name = `${stamp}-${i}.7z`;
     return name;
+  }
+
+  /** Cópias da VPS do mais antigo ao mais novo (data registrada; sem ela, a do arquivo; sem ela, a do nome). */
+  private async orderedLocalFiles(folder: string): Promise<string[]> {
+    const names = await this.localFiles(folder);
+    const when = new Map<string, number>();
+    for (const n of names) {
+      const recorded = this.config.checks[BackupService.checkKey(folder, n)]?.local?.createdAt;
+      const at = recorded ? Date.parse(recorded) : (await stat(path.join(this.backupsDir, folder, n)).then((s) => s.mtimeMs).catch(() => NaN));
+      if (!Number.isNaN(at)) when.set(n, at);
+    }
+    return orderBackups(names, (n) => when.get(n) ?? null);
   }
 
   private async localFiles(folder: string): Promise<string[]> {
@@ -1622,7 +1694,7 @@ export class BackupService {
     this.step(r, "Compactar (.7z)");
     const localDir = path.join(this.backupsDir, folder);
     await mkdir(localDir, { recursive: true });
-    const name = this.uniqueName(localDir);
+    const name = await this.uniqueName(localDir, folder, r.target);
     const plain = path.join(staging, "local.7z");
     await this.opts.archiver.create(plain, inputs, {});
     const localPath = path.join(localDir, name);
@@ -1631,11 +1703,13 @@ export class BackupService {
     r.local = true;
     r.sizeBytes = (await stat(localPath)).size;
     // Hash e tamanho guardados: o "Conferir" compara com eles depois.
-    this.copyInfo(folder, name, "local", { sha256: await sha256File(localPath), size: r.sizeBytes, ...mark });
+    const createdAt = new Date(this.now()).toISOString();
+    this.copyInfo(folder, name, "local", { createdAt, sha256: await sha256File(localPath), size: r.sizeBytes, ...mark });
     if (complete) t.lastSuccessAt = new Date(this.now()).toISOString();
     // Cópias na VPS além das N mais recentes (nunca a última completa).
-    const local = await this.localFiles(folder);
-    for (const old of retentionVictims(local, t.localKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.local?.incomplete)) {
+    // (nunca a recém-criada, qualquer que seja a ordem dos nomes)
+    const local = await this.orderedLocalFiles(folder);
+    for (const old of retentionVictims(local, t.localKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.local?.incomplete, name)) {
       await rm(path.join(localDir, old), { force: true });
       this.dropCopy(folder, old, "local");
     }
@@ -1662,8 +1736,12 @@ export class BackupService {
       }
       const hash = await sha256File(upload);
       const uploadSize = (await stat(upload)).size;
+      // Nunca sobrescreve uma cópia externa que já exista com esse nome.
+      if ((await storage.list(key)).some((o) => o.key === key)) {
+        throw new BackupFailure(`Já existe uma cópia externa com o nome ${name}. O envio foi recusado para não sobrescrevê-la.`);
+      }
       await storage.upload(key, upload);
-      this.copyInfo(folder, name, "remote", { sha256: hash, size: uploadSize, encrypted: encrypt, ...mark });
+      this.copyInfo(folder, name, "remote", { createdAt, sha256: hash, size: uploadSize, encrypted: encrypt, ...mark });
       r.remote = "uploaded";
       this.step(r, "Conferir a cópia externa (baixar e abrir)");
       const back = path.join(staging, "conferencia.7z");
@@ -1681,8 +1759,17 @@ export class BackupService {
       t.lastStaleNoticeAt = null;
       this.step(r, "Apagar os backups externos mais antigos");
       const prefix = `${BACKUP_ROOT_FOLDER}/${folder}/`;
-      const remote = (await storage.list(prefix)).map((o) => o.key.slice(prefix.length)).filter(isValidBackupFileName).sort();
-      for (const old of retentionVictims(remote, t.remoteKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.remote?.incomplete)) {
+      const listed = (await storage.list(prefix)).filter((o) => isValidBackupFileName(o.key.slice(prefix.length)));
+      const modified = new Map(listed.map((o) => [o.key.slice(prefix.length), o.lastModified ? Date.parse(o.lastModified) : NaN]));
+      const remote = orderBackups(
+        listed.map((o) => o.key.slice(prefix.length)),
+        (f) => {
+          const recorded = this.config.checks[BackupService.checkKey(folder, f)]?.remote?.createdAt;
+          const at = recorded ? Date.parse(recorded) : (modified.get(f) ?? NaN);
+          return Number.isNaN(at) ? null : at;
+        },
+      );
+      for (const old of retentionVictims(remote, t.remoteKeep, (f) => !this.config.checks[BackupService.checkKey(folder, f)]?.remote?.incomplete, name)) {
         await storage.remove(`${prefix}${old}`);
         this.dropCopy(folder, old, "remote");
       }
@@ -1828,7 +1915,7 @@ export class BackupService {
       else if (result.status === "failed") summary.failed++;
       else if (result.status === "missing") summary.missing++;
       else summary.needsPassword++;
-      await this.persist({ config: true });
+      await this.persistQuiet({ config: true });
     }
     const parts = [
       `${summary.ok} íntegra(s)`,
@@ -2280,7 +2367,7 @@ export class BackupService {
       const slot = currentSlot(now, t.frequencyHours, this.hour);
       if (t.lastSlot === null || slot > t.lastSlot) {
         t.lastSlot = slot;
-        await this.persist({ config: true });
+        await this.persistQuiet({ config: true });
         await this.runNow(id, null).catch((err: unknown) => this.log(`Backups: agendado de ${id} não entrou na fila (${reasonOf(err)}).`));
       }
       // Externo atrasado (2 dias ou 2× a frequência), avisado no máximo 1×/dia.
@@ -2291,7 +2378,7 @@ export class BackupService {
       const noticed = t.lastStaleNoticeAt ? Date.parse(t.lastStaleNoticeAt) : 0;
       if (isRemoteStale({ lastVerifiedAt: verified, since, now, frequencyHours: t.frequencyHours }) && now - noticed > 24 * HOUR_MS) {
         t.lastStaleNoticeAt = new Date(now).toISOString();
-        await this.persist({ config: true });
+        await this.persistQuiet({ config: true });
         const name = id === "panel" ? "Painel" : id === "email" ? "E-mail" : project!.name;
         const days = Math.floor((now - (verified ?? since)) / (24 * HOUR_MS));
         this.opts.notify?.({
@@ -2315,7 +2402,7 @@ export class BackupService {
       })
     ) {
       e.lastReminderAt = new Date(now).toISOString();
-      await this.persist({ config: true });
+      await this.persistQuiet({ config: true });
       this.opts.notify?.({
         kind: "backup_reminder",
         key: "backup-reminder",
@@ -2339,7 +2426,7 @@ export class BackupService {
       const slot = currentSlot(now, t.frequencyHours, this.hour);
       if (t.lastSlot === null || slot > t.lastSlot) t.lastSlot = slot;
     }
-    await this.persist({ config: true });
+    await this.persistQuiet({ config: true });
   }
 
   start(intervalMs = 60_000): void {

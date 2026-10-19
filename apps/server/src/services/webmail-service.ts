@@ -20,8 +20,6 @@
  *
  * Estado em data/mail/webmail.json (0600: guarda a chave da sessão).
  */
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_WEBMAIL_CONTAINER, WEBMAIL_INTERNAL_PORT, webmailUrl, type WebmailStatus } from "@paas/core";
 import {
@@ -35,7 +33,7 @@ import {
 import type { ServerConfig } from "../config.js";
 import { httpError } from "./http-error.js";
 import type { MailAuditSink } from "./mail-service.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** O que o webmail usa do servidor de e-mail (MailService). */
 export interface WebmailMailSource {
@@ -115,13 +113,18 @@ export class WebmailService {
   /** Carga única e compartilhada (uma flag marcada antes de ler deixava a segunda chamada com os dados vazios). */
   private ensureLoaded(): Promise<void> {
     this.loadedPromise ??= (async () => {
-      if (!existsSync(this.file)) return;
-      try {
-        this.data = { ...EMPTY, ...(JSON.parse(await readFile(this.file, "utf8")) as Partial<WebmailFile>) };
-      } catch {
-        this.data = { ...EMPTY };
-      }
-    })();
+      this.data = await loadJson<WebmailFile>(this.file, {
+        empty: () => this.data,
+        parse: (value) =>
+          typeof value === "object" && value !== null && !Array.isArray(value)
+            ? { ...EMPTY, ...(value as Partial<WebmailFile>) }
+            : null,
+        log: this.log,
+      });
+    })().catch((err: unknown) => {
+      this.loadedPromise = null;
+      throw err;
+    });
     return this.loadedPromise;
   }
 

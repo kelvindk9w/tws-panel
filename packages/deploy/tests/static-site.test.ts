@@ -9,7 +9,7 @@ import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { preparePublishDir } from "../src/static-site.js";
+import { preparePublishDir, publishBuildOutput } from "../src/static-site.js";
 
 let root: string;
 let src: string;
@@ -50,5 +50,31 @@ describe("preparePublishDir", () => {
     await rm(path.join(src, "assets", "logo.svg"));
     await preparePublishDir(src, dest);
     expect(await readdir(path.join(dest, "assets"))).toEqual([]);
+  });
+});
+
+describe("pasta de publicação dentro (ou igual) à pasta do código (A5: nunca apagar arquivo do usuário)", () => {
+  it("preparePublishDir recusa quando o destino fica dentro do código e não apaga nada", async () => {
+    const dentro = path.join(src, "site");
+    await mkdir(dentro, { recursive: true });
+    await writeFile(path.join(dentro, "pagina-do-usuario.html"), "do usuario");
+    await expect(preparePublishDir(src, dentro)).rejects.toThrow(/coincide|dentro/);
+    expect(await readFile(path.join(dentro, "pagina-do-usuario.html"), "utf8")).toBe("do usuario");
+  });
+
+  it("preparePublishDir recusa quando o destino é o próprio código ou contém o código", async () => {
+    await expect(preparePublishDir(src, src)).rejects.toThrow(/coincide|dentro/);
+    await expect(preparePublishDir(src, root)).rejects.toThrow(/coincide|dentro/);
+    expect(await readFile(path.join(src, "index.html"), "utf8")).toBe("<h1>oi</h1>");
+  });
+
+  it("publishBuildOutput também recusa destino dentro do código", async () => {
+    const dentro = path.join(src, "site");
+    await mkdir(path.join(src, "dist"), { recursive: true });
+    await writeFile(path.join(src, "dist", "a.html"), "a");
+    await mkdir(dentro, { recursive: true });
+    await writeFile(path.join(dentro, "pagina-do-usuario.html"), "do usuario");
+    await expect(publishBuildOutput(src, "dist", dentro)).rejects.toThrow(/coincide|dentro/);
+    expect(await readFile(path.join(dentro, "pagina-do-usuario.html"), "utf8")).toBe("do usuario");
   });
 });

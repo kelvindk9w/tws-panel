@@ -54,7 +54,7 @@ describe("diretório dos projetos vem da configuração", () => {
     expect(antes.report).toBeNull();
 
     // Colocando o código no diretório CONFIGURADO, ele passa a ser encontrado.
-    const src = path.join(projectsDir, project.slug, "src");
+    const src = path.join(projectsDir, ".paas", project.id, "src");
     await mkdir(src, { recursive: true });
     await writeFile(path.join(src, "package.json"), '{"name":"loja"}\n', "utf8");
 

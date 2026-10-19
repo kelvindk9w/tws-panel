@@ -78,7 +78,7 @@ async function lojaComCodigo() {
     warnings: [],
     details: [],
   };
-  const src = path.join(dataDir, "projects", "loja", "src");
+  const src = path.join(dataDir, "projects", ".paas", p.id, "src");
   await mkdir(src, { recursive: true });
   await writeFile(path.join(src, "compose.yaml"), COMPOSE);
   return p;
@@ -175,7 +175,7 @@ describe("DeployService — portas", () => {
   it("serviço na rede de outro (lido do compose): não publica porta própria", async () => {
     const p = await lojaComCodigo();
     await writeFile(
-      path.join(dataDir, "projects", "loja", "src", "compose.yaml"),
+      path.join(dataDir, "projects", ".paas", p.id, "src", "compose.yaml"),
       COMPOSE + "  web:\n    image: web:1\n    network_mode: service:api\n",
     );
     const view = await svc.projectPorts(p.id);

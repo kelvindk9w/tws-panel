@@ -43,7 +43,7 @@ import {
   type QueueMessageRaw,
 } from "@paas/mailer";
 import { httpError } from "./http-error.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 
 export interface SenderEntry {
   address: string;
@@ -269,20 +269,22 @@ export class MailEnviosService {
   // Leitura do registro
   // -------------------------------------------------------------------------
 
-  private async loadState(): Promise<EnviosState> {
-    try {
-      const raw = JSON.parse(await readFile(this.stateFile, "utf8")) as Partial<EnviosState>;
-      return { ...structuredClone(EMPTY_STATE), ...raw };
-    } catch {
-      return structuredClone(EMPTY_STATE);
-    }
+  /** Erro de leitura é lançado (o registro não é regravado vazio); arquivo ruim vai para o lado. */
+  private loadState(inLock = false): Promise<EnviosState> {
+    return (inLock ? loadJsonInLock : loadJson)<EnviosState>(this.stateFile, {
+      empty: () => structuredClone(EMPTY_STATE),
+      parse: (value) =>
+        typeof value === "object" && value !== null && !Array.isArray(value)
+          ? { ...structuredClone(EMPTY_STATE), ...(value as Partial<EnviosState>) }
+          : null,
+    });
   }
 
   /** Lê, altera e grava o estado numa fila só (e gravação atômica). */
   private async updateState(change: (state: EnviosState) => void): Promise<void> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     await withFileLock(this.stateFile, async () => {
-      const state = await this.loadState();
+      const state = await this.loadState(true);
       change(state);
       await writeFileAtomic(this.stateFile, JSON.stringify(state, null, 2) + "\n");
     });

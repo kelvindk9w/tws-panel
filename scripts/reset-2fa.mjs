@@ -4,7 +4,8 @@
 // Não toca em usuário, senha, sessões nem em mais nada.
 //
 // Uso: node reset-2fa.mjs /data/users.json
-import { readFileSync, writeFileSync } from "node:fs";
+import { closeSync, fchownSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import path from "node:path";
 
 const file = process.argv[2];
 if (!file) {
@@ -21,7 +22,23 @@ if (affected.length === 0) {
 }
 const now = new Date().toISOString();
 data.users = users.map((u) => (u && u.twoFactor ? { ...u, twoFactor: null, updatedAt: now } : u));
-writeFileSync(file, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+// Gravação atômica: arquivo temporário na mesma pasta + rename. Uma queda no
+// meio nunca deixa o users.json pela metade (ninguém mais entraria no painel).
+const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
+const original = statSync(file);
+const fd = openSync(tmp, "wx", 0o600);
+try {
+  // o novo arquivo fica com o mesmo dono do antigo (o painel precisa conseguir lê-lo)
+  try { fchownSync(fd, original.uid, original.gid); } catch {}
+  writeSync(fd, JSON.stringify(data, null, 2) + "\n");
+  fsyncSync(fd);
+  closeSync(fd);
+  renameSync(tmp, file);
+} catch (err) {
+  try { closeSync(fd); } catch {}
+  try { unlinkSync(tmp); } catch {}
+  throw err;
+}
 for (const u of affected) {
   console.log(`Verificação em duas etapas desligada para: ${u.username}`);
 }

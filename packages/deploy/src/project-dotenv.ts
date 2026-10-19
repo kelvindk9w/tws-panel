@@ -9,6 +9,7 @@
  * passado com `--env-file` (vale para a interpolação).
  */
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -85,18 +86,49 @@ async function excludeFromGit(src: string, workDir: string): Promise<void> {
 /** Primeira linha de todo `.env` que o painel grava: é por ela que ele reconhece o que é seu. */
 const GENERATED_HEADER = "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.";
 
-/** Apaga o `.env` da pasta do projeto só se foi o painel que o gerou (o do dono fica). */
-async function removeGeneratedDotenv(src: string): Promise<void> {
+/** Registro do que o painel gravou no `.env` (sha256): é como ele percebe que o dono editou depois. */
+const HASH_FILE = "paas.dotenv.hash";
+/** Cópia do .env de versão antiga do painel, guardada antes da primeira regravação. */
+const OLD_COPY = "paas.dotenv.antigo";
+
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+type DotenvState = "absent" | "panel" | "edited" | "other";
+
+/**
+ * Quem é o dono do `.env` da pasta:
+ *  - absent: não há arquivo comum;
+ *  - panel: tem o cabeçalho do painel e é exatamente o que ele gravou (ou é de
+ *    uma versão antiga, sem registro — nesse caso vale o cabeçalho);
+ *  - edited: tem o cabeçalho, mas o conteúdo mudou desde que o painel gravou
+ *    (o dono acrescentou ou alterou algo): é DELE, o painel não o sobrescreve;
+ *  - other: arquivo do dono, sem o cabeçalho (ou que não dá para ler).
+ * Link simbólico não conta como arquivo do dono (é trocado, nunca seguido).
+ */
+async function dotenvState(src: string, workDir: string): Promise<DotenvState> {
   const file = path.join(src, ".env");
-  // link simbólico (ou outra coisa que não um arquivo) não é do painel: fica
-  if (!(await isRegularFile(file))) return;
+  if (!(await isRegularFile(file))) return "absent";
   let current: string;
   try {
     current = await readFile(file, "utf8");
   } catch {
-    return; // não existe
+    return "other";
   }
-  if (current.startsWith(GENERATED_HEADER)) await rm(file, { force: true });
+  if (!current.startsWith(GENERATED_HEADER)) return "other";
+  let recorded: string | null = null;
+  try {
+    recorded = (await readFile(path.join(workDir, HASH_FILE), "utf8")).trim();
+  } catch {
+    /* sem registro: versão antiga do painel */
+  }
+  return recorded !== null && recorded !== sha256(current) ? "edited" : "panel";
+}
+
+/** Apaga o `.env` da pasta do projeto só se foi o painel que o gerou e ninguém o editou (o do dono fica). */
+async function removeGeneratedDotenv(src: string, workDir: string): Promise<void> {
+  const state = await dotenvState(src, workDir);
+  if (state === "panel") await rm(path.join(src, ".env"), { force: true });
+  if (state === "panel" || state === "absent") await rm(path.join(workDir, HASH_FILE), { force: true });
 }
 
 /**
@@ -111,13 +143,13 @@ export async function writeProjectDotenv(
   src: string,
   workDir: string,
   vars: Record<string, string>,
-): Promise<{ envFileArgs: string[]; note: string | null }> {
+): Promise<{ envFileArgs: string[]; note: string | null; target: ".env" | "paas.env" | null }> {
   const keys = Object.keys(vars);
   const separate = path.join(workDir, "paas.env");
   if (keys.length === 0) {
     await rm(separate, { force: true });
-    if (!(await isTracked(src, workDir, ".env"))) await removeGeneratedDotenv(src);
-    return { envFileArgs: [], note: null };
+    if (!(await isTracked(src, workDir, ".env"))) await removeGeneratedDotenv(src, workDir);
+    return { envFileArgs: [], note: null, target: null };
   }
   const content =
     GENERATED_HEADER +
@@ -125,24 +157,45 @@ export async function writeProjectDotenv(
     keys.map((k) => dotenvLine(k, vars[k]!)).join("\n") +
     "\n";
 
-  if (await isTracked(src, workDir, ".env")) {
+  const tracked = await isTracked(src, workDir, ".env");
+  const state = await dotenvState(src, workDir);
+  if (tracked || state === "other" || state === "edited") {
     await mkdir(workDir, { recursive: true });
     await writeFile(separate, content, { encoding: "utf8", mode: 0o600 });
     await chmod(separate, 0o600);
+    const quem = tracked
+      ? "O repositório tem um .env versionado"
+      : state === "edited"
+        ? "O .env da pasta foi gerado pelo painel mas editado depois (não bate mais com o que o painel gravou)"
+        : "A pasta do projeto já tem um .env que não foi gerado pelo painel";
     return {
       envFileArgs: ["--env-file", separate],
+      target: "paas.env",
       note:
-        "O repositório tem um .env versionado: ele não foi sobrescrito. As variáveis do painel valem para os ${VAR} do " +
-        "compose (--env-file); um `env_file: .env` continua lendo o arquivo do repositório.",
+        `${quem}: ele não foi sobrescrito. As variáveis do painel valem para os \${VAR} do ` +
+        "compose (--env-file); um `env_file: .env` continua lendo o arquivo da pasta, sem as variáveis do painel. " +
+        "Para o container recebê-las, use `environment:` no compose ou apague o .env da pasta (o painel passa a gerar o dele).",
     };
   }
   // o .env deixou de ser versionado: o paas.env antigo não pode continuar valendo
   await rm(separate, { force: true });
   const file = path.join(src, ".env");
+  // .env de versão antiga do painel (cabeçalho, sem registro do que foi gravado):
+  // pode ter linhas do dono; guarda uma cópia na primeira regravação.
+  if (state === "panel" && !existsSync(path.join(workDir, HASH_FILE)) && !existsSync(path.join(workDir, OLD_COPY))) {
+    try {
+      await mkdir(workDir, { recursive: true });
+      await writeFile(path.join(workDir, OLD_COPY), await readFile(file, "utf8"), { encoding: "utf8", mode: 0o600 });
+    } catch {
+      /* sem a cópia o deploy segue: o .env era do painel */
+    }
+  }
   // sem seguir link: um `.env` que aponte para fora de `src` é trocado, nunca atravessado
   await writeFileNoFollow(file, content, 0o600);
+  await mkdir(workDir, { recursive: true });
+  await writeFile(path.join(workDir, HASH_FILE), sha256(content) + "\n", { encoding: "utf8", mode: 0o600 });
   await excludeFromGit(src, workDir);
-  return { envFileArgs: [], note: null };
+  return { envFileArgs: [], note: null, target: ".env" };
 }
 
 /**

@@ -23,7 +23,6 @@
  * troca IPs e endereços …sslip.io — que têm o IP no nome — por um marcador).
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_NOTIFICATION_KINDS,
@@ -38,7 +37,7 @@ import {
 import { isSingleEmailAddress } from "@paas/mailer";
 import { httpError } from "./http-error.js";
 import { TelegramError, type TelegramClient } from "./telegram-client.js";
-import { writeFileAtomic } from "./json-file.js";
+import { loadJson, loadOrCreateKey, writeFileAtomic } from "./json-file.js";
 
 /** Um aviso pedido por algum módulo do painel. */
 export interface NotificationEvent {
@@ -221,20 +220,23 @@ export class NotificationService {
   private ensureLoaded(): Promise<void> {
     this.loading ??= (async () => {
       await this.loadKey();
-      try {
-        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<StoredConfig>;
-        const base = emptyConfig();
-        this.config = {
-          telegram: raw.telegram ?? null,
-          email: {
-            recipients: Array.isArray(raw.email?.recipients) ? raw.email.recipients : [],
-            testedAt: raw.email?.testedAt ?? null,
-          },
-          kinds: { ...base.kinds, ...(raw.kinds ?? {}) },
-        };
-      } catch {
-        this.config = emptyConfig();
-      }
+      this.config = await loadJson<StoredConfig>(this.file, {
+        empty: emptyConfig,
+        parse: (value) => {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+          const raw = value as Partial<StoredConfig>;
+          const base = emptyConfig();
+          return {
+            telegram: raw.telegram ?? null,
+            email: {
+              recipients: Array.isArray(raw.email?.recipients) ? raw.email.recipients : [],
+              testedAt: raw.email?.testedAt ?? null,
+            },
+            kinds: { ...base.kinds, ...(raw.kinds ?? {}) },
+          };
+        },
+        log: this.log,
+      });
       if (this.config.telegram) {
         try {
           this.token = this.open(this.config.telegram.token);
@@ -243,29 +245,24 @@ export class NotificationService {
           this.config.telegram = null;
         }
       }
-      try {
-        const raw = JSON.parse(await readFile(this.historyFile, "utf8")) as { entries?: NotificationHistoryEntry[] };
-        this.history = Array.isArray(raw.entries) ? raw.entries : [];
-      } catch {
-        this.history = [];
-      }
-    })();
+      this.history = await loadJson<NotificationHistoryEntry[]>(this.historyFile, {
+        empty: () => [],
+        parse: (raw) => {
+          const entries = (raw as { entries?: NotificationHistoryEntry[] } | null)?.entries;
+          return Array.isArray(entries) ? entries : null;
+        },
+        log: this.log,
+      });
+    })().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 
+  /** Chave de cifra: lida (ou criada) uma vez; erro de leitura falha a carga (json-file.ts). */
   private async loadKey(): Promise<void> {
-    try {
-      const raw = Buffer.from((await readFile(this.keyFile, "utf8")).trim(), "hex");
-      if (raw.length === KEY_BYTES) {
-        this.key = raw;
-        return;
-      }
-    } catch {
-      // sem chave ainda — gera abaixo
-    }
-    const fresh = randomBytes(KEY_BYTES);
-    await writeFileAtomic(this.keyFile, fresh.toString("hex") + "\n");
-    this.key = fresh;
+    this.key = await loadOrCreateKey(this.keyFile, KEY_BYTES, { log: this.log });
   }
 
   private seal(secret: string): SealedBox {

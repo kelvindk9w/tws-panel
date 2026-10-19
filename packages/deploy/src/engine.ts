@@ -777,7 +777,11 @@ export class DeployEngine {
     const env = await writeProjectDotenv(src, workDir, dotenv);
     const dotenvKeys = Object.keys(dotenv);
     if (dotenvKeys.length > 0) {
-      onLog(`Variáveis gravadas no .env do projeto (${dotenvKeys.join(", ")}).\n`);
+      onLog(
+        env.target === "paas.env"
+          ? `Variáveis gravadas em ${path.join(workDir, "paas.env")} e passadas ao compose com --env-file (${dotenvKeys.join(", ")}); o .env da pasta do projeto NÃO foi alterado.\n`
+          : `Variáveis gravadas no .env do projeto (${dotenvKeys.join(", ")}).\n`,
+      );
     }
     if (env.note) onLog(`Aviso: ${env.note}\n`);
     return { proxyPort, composeContent, mailServices };

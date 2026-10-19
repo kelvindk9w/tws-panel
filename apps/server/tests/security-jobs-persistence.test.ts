@@ -9,7 +9,7 @@
  * em que precisa confirmar que ainda tem acesso. Segue o padrão de
  * audit-service.ts/alerts-service.ts: JSON com mode 0o600 no dataDir.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -77,11 +77,22 @@ describe("SecurityService — restoreJobsFromDisk (restart durante awaiting_conf
     expect(service.getJob("qualquer")).toBeNull();
   });
 
-  it("job.json corrompido → não lança, nada é restaurado", async () => {
+  it("job.json corrompido → nada é restaurado e o arquivo é guardado à parte (não é sobrescrito depois)", async () => {
     await writeFile(path.join(dir, "security-jobs.json"), "{quebrado", "utf8");
     const service = freshService();
     await expect(service.restoreJobsFromDisk()).resolves.toBeUndefined();
     expect(service.getJob("job-restart")).toBeNull();
+    const aparte = (await readdir(dir)).filter((n) => n.startsWith("security-jobs.json.corrompido-"));
+    expect(aparte).toHaveLength(1);
+    expect(await readFile(path.join(dir, aparte[0]!), "utf8")).toBe("{quebrado");
+  });
+
+  it("erro de leitura do arquivo de jobs (não é 'ausente') → a carga FALHA e o arquivo não é tocado", async () => {
+    // uma pasta no lugar do arquivo: a leitura dá EISDIR, não ENOENT
+    await mkdir(path.join(dir, "security-jobs.json"));
+    const service = freshService();
+    await expect(service.restoreJobsFromDisk()).rejects.toThrow(/security-jobs\.json.*permiss.*restaurar-painel\.sh/s);
+    expect((await stat(path.join(dir, "security-jobs.json"))).isDirectory()).toBe(true);
   });
 
   it("job 'awaiting_confirmation' persistido volta a ser visível via getJob() após restoreJobsFromDisk", async () => {

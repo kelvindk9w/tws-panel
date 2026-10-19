@@ -76,7 +76,7 @@ export class ProjectEnvStore {
 
   /** Chave de cifra: lida (ou criada) uma vez só (services/json-file.ts). */
   private loadKey(): Promise<Buffer> {
-    this.keyLoading ??= loadOrCreateKey(this.keyFile, 32).catch((err: unknown) => {
+    this.keyLoading ??= loadOrCreateKey(this.keyFile, 32, { log: (m) => console.warn(m) }).catch((err: unknown) => {
       this.keyLoading = null;
       throw err;
     });

@@ -13,7 +13,6 @@
  *
  * Arquivo: data/mail/reputacao.json (0600 — guarda a chave DQS).
  */
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   BlacklistCheckResponse,
@@ -24,7 +23,7 @@ import type {
 } from "@paas/core";
 import { checkDomainBlacklists, checkIpBlacklists, isValidDqsKey, type BlacklistOptions } from "@paas/mailer";
 import { httpError } from "./http-error.js";
-import { writeFileAtomic } from "./json-file.js";
+import { loadJson, writeFileAtomic } from "./json-file.js";
 
 export interface DeliverabilityFacts {
   domains: Array<{ name: string; dnsOk: number | null; dnsTotal: number | null; ptr: PtrCheckStatus | null }>;
@@ -96,13 +95,15 @@ export class MailReputationService {
    */
   private async load(): Promise<ReputationFile> {
     if (this.cache) return this.cache;
-    let data: ReputationFile;
-    try {
-      const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<ReputationFile>;
-      data = { ...structuredClone(EMPTY), ...raw, marks: { ...EMPTY.marks, ...raw.marks } };
-    } catch {
-      data = structuredClone(EMPTY);
-    }
+    // erro de leitura falha a operação (a chave DQS está aí); arquivo ruim vai para o lado
+    const data = await loadJson<ReputationFile>(this.file, {
+      empty: () => structuredClone(EMPTY),
+      parse: (value) => {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+        const raw = value as Partial<ReputationFile>;
+        return { ...structuredClone(EMPTY), ...raw, marks: { ...EMPTY.marks, ...raw.marks } };
+      },
+    });
     this.cache ??= data;
     return this.cache;
   }

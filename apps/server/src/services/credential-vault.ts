@@ -28,7 +28,7 @@ import {
   type GitReadCredential,
   type ProjectCredentialInfo,
 } from "@paas/core";
-import { writeFileAtomic } from "./json-file.js";
+import { loadJson, loadOrCreateKey, writeFileAtomic } from "./json-file.js";
 
 /** Registro persistido: metadados em claro, segredo cifrado. */
 interface CredentialRecord {
@@ -57,6 +57,7 @@ export class CredentialVault {
   private records: CredentialRecord[] = [];
   private loading: Promise<void> | null = null;
   private key: Buffer | null = null;
+  private keyLoading: Promise<Buffer> | null = null;
   private writing: Promise<void> = Promise.resolve();
 
   constructor(dataDir: string) {
@@ -64,36 +65,44 @@ export class CredentialVault {
     this.keyFile = path.join(dataDir, "credentials-key");
   }
 
-  /** Carrega (ou gera no primeiro uso) a chave do cofre. */
+  /**
+   * Carrega (ou gera no primeiro uso) a chave do cofre. Erro de leitura que não
+   * seja "não existe" é lançado: uma chave nova tornaria as credenciais
+   * ilegíveis para sempre (services/json-file.ts, loadOrCreateKey).
+   */
   async init(): Promise<void> {
     if (this.key) return;
-    try {
-      const raw = (await readFile(this.keyFile, "utf8")).trim();
-      const chave = Buffer.from(raw, "hex");
-      if (chave.length === KEY_BYTES) {
-        this.key = chave;
-        return;
-      }
-    } catch {
-      // arquivo inexistente ou ilegível — gera uma nova abaixo
-    }
-    const gerada = randomBytes(KEY_BYTES);
-    // atômica: chave pela metade seria trocada por outra e as credenciais ficariam ilegíveis
-    await writeFileAtomic(this.keyFile, gerada.toString("hex") + "\n");
-    this.key = gerada;
+    this.key = await (this.keyLoading ??= loadOrCreateKey(this.keyFile, KEY_BYTES, {
+      log: (m) => console.warn(m),
+      dependents: async () => {
+        try {
+          const n = (JSON.parse(await readFile(this.file, "utf8")) as Partial<CredentialsFile>).credentials?.length ?? 0;
+          return n > 0 ? `${n} credencial(is) de repositório` : null;
+        } catch {
+          return null;
+        }
+      },
+    }).catch((err: unknown) => {
+      this.keyLoading = null;
+      throw err;
+    }));
   }
 
   /** Carga única e compartilhada (chamadas concorrentes esperam a mesma leitura). */
   private ensureLoaded(): Promise<void> {
     this.loading ??= (async () => {
       await this.init();
-      try {
-        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<CredentialsFile>;
-        this.records = Array.isArray(raw.credentials) ? raw.credentials : [];
-      } catch {
-        this.records = [];
-      }
-    })();
+      this.records = await loadJson<CredentialRecord[]>(this.file, {
+        empty: () => [],
+        parse: (raw) => {
+          const credentials = (raw as Partial<CredentialsFile> | null)?.credentials;
+          return Array.isArray(credentials) ? credentials : null;
+        },
+      });
+    })().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 

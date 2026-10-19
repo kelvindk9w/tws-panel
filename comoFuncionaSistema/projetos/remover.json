@@ -9,7 +9,7 @@
   "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
   "parametros": {
     "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
-    "query": [{ "nome": "deleteSource", "tipo": "string", "obrigatorio": false, "regras": "comparado com a string exata 'true'; qualquer outro valor (inclusive ausente) equivale a false", "descricao": "Se 'true', também apaga data/projects/<slug>/src (ignorado em ingestMode='existing', onde o código nunca foi copiado)." }],
+    "query": [{ "nome": "deleteSource", "tipo": "string", "obrigatorio": false, "regras": "comparado com a string exata 'true'; qualquer outro valor (inclusive ausente) equivale a false", "descricao": "Se 'true', também apaga a pasta de trabalho do projeto (<pasta de projetos>/.paas/<id> nos projetos novos; <pasta de projetos>/<slug> nos de antes do lote 6), ignorado em ingestMode='existing', onde o código nunca foi copiado. Só se apaga o que o PAINEL criou (removeProjectWorkDir): em .paas/<id> a pasta toda; em <pasta de projetos>/<slug> (projeto antigo, pasta que pode ter arquivos do usuário) apenas src, repo.git, site e paas.* — a pasta só some se ficar vazia e o log lista 'Os arquivos que ficaram na pasta (não foram criados pelo painel): ...'. Entrada que coincide com a fonte/pasta de outro projeto não é apagada e o log diz 'NÃO removido: <motivo>'. Os arquivos paas.* (com segredos) saem sempre, mesmo sem deleteSource, e num projeto 'existing' novo a pasta .paas/<id> inteira é limpa." }],
     "body": [],
     "headers": []
   },
@@ -31,7 +31,7 @@
     "3. engine.remove(project, onLog): se type=compose, roda 'docker compose down --rmi local --remove-orphans' (best-effort — código de saída não interrompe o fluxo, só é logado); resolve os IDs de container do projeto e roda 'docker rm -f'; roda 'docker image rm -f paas-<slug>:latest' (best-effort).",
     "4. Remove o projeto do array em memória (this.projects) ANTES de recalcular o Caddy, para que o domínio removido não apareça no novo Caddyfile.",
     "5. engine.syncCaddy(this.projects) — best-effort: se falhar, apenas loga 'Aviso: não foi possível recarregar o Caddy após a remoção.' e continua (não propaga erro).",
-    "6. Se deleteSource=true e ingestMode≠'existing', apaga recursivamente data/projects/<slug> (rm force+recursive).",
+    "6. removeProjectWorkDir(projeto, outros, {deleteSource}) (lote 6, A5): só apaga o que o painel cria; em pasta antiga compartilhada deixa os arquivos do usuário e os lista no log; os paas.* saem sempre; entrada que coincide com a de outro projeto fica e é avisada.",
     "7. Persiste data/projects.json sem o projeto removido."
   ],
   "dependencias": [

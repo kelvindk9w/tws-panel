@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { JsonFile, createFileOnce, loadOrCreateKey, withFileLock, writeFileAtomic } from "../src/services/json-file.js";
+import { JsonFile, createFileOnce, loadJson, loadJsonInLock, loadOrCreateKey, withFileLock, writeFileAtomic } from "../src/services/json-file.js";
 
 let dir: string;
 
@@ -136,6 +136,45 @@ describe("loadOrCreateKey", () => {
     await mkdir(path.join(dir, "pasta"));
     await expect(loadOrCreateKey(path.join(dir, "pasta"), 16)).rejects.toThrow();
   });
+
+  it("conteúdo inválido (não-hexa, tamanho errado) é guardado à parte, nunca apagado", async () => {
+    const file = path.join(dir, "k");
+    await writeFile(file, "z".repeat(40) + "\n");
+    const k = await loadOrCreateKey(file, 32);
+    expect(k.toString("hex")).toMatch(/^[0-9a-f]{64}$/);
+    const aparte = (await readdir(dir)).filter((n) => n.startsWith("k.corrompido-"));
+    expect(aparte).toHaveLength(1);
+    expect(await readFile(path.join(dir, aparte[0]!), "utf8")).toBe("z".repeat(40) + "\n");
+  });
+
+  it("chave inválida trocada: registra um aviso claro dizendo onde ficou o conteúdo e o que se perde", async () => {
+    const file = path.join(dir, "k");
+    await writeFile(file, "abcd\n");
+    const avisos: string[] = [];
+    await loadOrCreateKey(file, 32, { log: (m) => avisos.push(m) });
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0]).toMatch(/k não tinha uma chave válida.*k\.corrompido-.*não poderá mais ser lido/s);
+  });
+
+  it("chave inválida com dados cifrados que dependem dela: falha fechada, nada é trocado", async () => {
+    const file = path.join(dir, "k");
+    await writeFile(file, "abcd\n");
+    await expect(loadOrCreateKey(file, 32, { dependents: async () => "2 credenciais de repositório" })).rejects.toThrow(
+      /2 credenciais de repositório.*restaurar-painel\.sh/s,
+    );
+    expect(await readFile(file, "utf8")).toBe("abcd\n");
+    expect(await readdir(dir)).toEqual(["k"]);
+    // sem dependentes, segue o caminho normal
+    expect(await loadOrCreateKey(file, 32, { dependents: async () => null })).toHaveLength(32);
+  });
+
+  it("erro de disco (permissão) vira mensagem em português sobre as permissões da pasta de dados", async () => {
+    const file = path.join(dir, "pasta", "k");
+    await writeFile(path.join(dir, "pasta"), "arquivo no lugar da pasta"); // mkdir/criação falha com ENOTDIR
+    await expect(loadOrCreateKey(file, 32)).rejects.toThrow(/Não consegui (ler|gravar) .*k.*permiss/s);
+    await mkdir(path.join(dir, "d"));
+    await expect(loadOrCreateKey(path.join(dir, "d"), 32)).rejects.toThrow(/Não consegui ler d.*permiss/s);
+  });
 });
 
 describe("JsonFile", () => {
@@ -208,5 +247,57 @@ describe("JsonFile", () => {
     await f.update((n) => n + 41);
     expect(await readFile(file, "utf8")).toBe("41");
     expect((await stat(file)).mode & 0o777).toBe(0o640);
+  });
+});
+
+describe("loadJson", () => {
+  const opts = {
+    empty: () => ({ n: 0 }),
+    parse: (raw: unknown) => (typeof raw === "object" && raw !== null && "n" in raw ? (raw as { n: number }) : null),
+  };
+
+  it("sem arquivo: o vazio; arquivo bom: o conteúdo", async () => {
+    const file = path.join(dir, "a.json");
+    expect(await loadJson(file, opts)).toEqual({ n: 0 });
+    await writeFile(file, '{"n":3}');
+    expect(await loadJson(file, opts)).toEqual({ n: 3 });
+  });
+
+  it("erro de leitura que não é 'não existe' é lançado e o arquivo não é tocado", async () => {
+    const file = path.join(dir, "pasta.json");
+    await mkdir(file);
+    await expect(loadJson(file, opts)).rejects.toThrow(/EISDIR/);
+    expect(await readdir(dir)).toEqual(["pasta.json"]);
+  });
+
+  it("JSON quebrado ou formato desconhecido: guardado à parte, avisado, devolve o vazio", async () => {
+    const file = path.join(dir, "b.json");
+    const avisos: string[] = [];
+    await writeFile(file, "{quebrado");
+    expect(await loadJson(file, { ...opts, log: (m) => void avisos.push(m) })).toEqual({ n: 0 });
+    await writeFile(file, '{"outro":1}');
+    expect(await loadJson(file, opts)).toEqual({ n: 0 });
+    const guardados = (await readdir(dir)).filter((n) => n.startsWith("b.json.corrompido-"));
+    expect(guardados).toHaveLength(2);
+    expect(avisos[0]).toMatch(/b\.json estava ilegível/);
+  });
+
+  it("strict: ilegível lança e não mexe no arquivo; loadJsonInLock serve a quem já está na fila", async () => {
+    const file = path.join(dir, "c.json");
+    await writeFile(file, "{quebrado");
+    await expect(loadJson(file, { ...opts, strict: true })).rejects.toThrow(/c\.json está ilegível/);
+    expect(await readFile(file, "utf8")).toBe("{quebrado");
+    await expect(withFileLock(file, () => loadJsonInLock(file, { ...opts, strict: true }))).rejects.toThrow(/ilegível/);
+  });
+
+  it("strict: a mensagem diz como recuperar ESTE arquivo (restaurar cópia / script), sem mandar apagar", async () => {
+    const file = path.join(dir, "d.json");
+    await writeFile(file, "{quebrado");
+    const padrao = await loadJson(file, { ...opts, strict: true }).catch((e: Error) => e.message);
+    expect(padrao).toMatch(/restaurar-painel\.sh/);
+    expect(padrao).not.toMatch(/renomeie/);
+    const contas = await loadJson(file, { ...opts, strict: true, recovery: "Para recuperar o acesso siga docs/recuperar-acesso.md." }).catch((e: Error) => e.message);
+    expect(contas).toMatch(/docs\/recuperar-acesso\.md/);
+    expect(contas).not.toMatch(/restaurar-painel/);
   });
 });
