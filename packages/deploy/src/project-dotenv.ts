@@ -100,6 +100,22 @@ async function removeGeneratedDotenv(src: string): Promise<void> {
 }
 
 /**
+ * O `.env` da pasta é do DONO (arquivo comum que não começa com o cabeçalho do
+ * painel)? Então o painel nunca o sobrescreve: só o que ele mesmo gerou é dele.
+ * Link simbólico não conta como arquivo do dono (é trocado, nunca seguido);
+ * arquivo que não dá para ler fica como está, por precaução.
+ */
+async function isUserDotenv(src: string): Promise<boolean> {
+  const file = path.join(src, ".env");
+  if (!(await isRegularFile(file))) return false;
+  try {
+    return !(await readFile(file, "utf8")).startsWith(GENERATED_HEADER);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Grava as variáveis para o compose. Devolve argumentos extras do `docker compose`.
  *
  * Sem variáveis, o estado vazio também é gravado: o `.env` gerado pelo painel
@@ -125,15 +141,18 @@ export async function writeProjectDotenv(
     keys.map((k) => dotenvLine(k, vars[k]!)).join("\n") +
     "\n";
 
-  if (await isTracked(src, workDir, ".env")) {
+  const tracked = await isTracked(src, workDir, ".env");
+  if (tracked || (await isUserDotenv(src))) {
     await mkdir(workDir, { recursive: true });
     await writeFile(separate, content, { encoding: "utf8", mode: 0o600 });
     await chmod(separate, 0o600);
+    const quem = tracked ? "O repositório tem um .env versionado" : "A pasta do projeto já tem um .env que não foi gerado pelo painel";
     return {
       envFileArgs: ["--env-file", separate],
       note:
-        "O repositório tem um .env versionado: ele não foi sobrescrito. As variáveis do painel valem para os ${VAR} do " +
-        "compose (--env-file); um `env_file: .env` continua lendo o arquivo do repositório.",
+        `${quem}: ele não foi sobrescrito. As variáveis do painel valem para os \${VAR} do ` +
+        "compose (--env-file); um `env_file: .env` continua lendo o arquivo da pasta, sem as variáveis do painel. " +
+        "Para o container recebê-las, use `environment:` no compose ou apague o .env da pasta (o painel passa a gerar o dele).",
     };
   }
   // o .env deixou de ser versionado: o paas.env antigo não pode continuar valendo
