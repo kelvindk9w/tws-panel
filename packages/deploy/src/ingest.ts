@@ -5,7 +5,7 @@
  *  - existing: usa um caminho já existente (modo dev local; src = o próprio path)
  */
 import { existsSync } from "node:fs";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
@@ -210,13 +210,22 @@ export function projectGitDir(ctx: IngestContext, project: Project): string {
 /**
  * Deixa em `src/.git` só um ponteiro para o repositório do painel (o operador
  * continua usando `git status` ali). O que estiver lá — um clone antigo ou o
- * que um app invadido plantou — é apagado, sem seguir link simbólico: o painel
- * nunca mais lê esse `.git`.
+ * que um app invadido plantou — sai de `src` sem seguir link simbólico e o painel
+ * nunca mais o lê. Uma PASTA `.git` (o clone do usuário, com histórico e commits
+ * locais) não é apagada: vai para `<pasta do projeto>/.git-antigo-<data>`, fora
+ * do `src` que os containers gravam. Link ou outro tipo de arquivo é removido.
  */
-async function substituirGitDeSrcPorPonteiro(src: string, gitDir: string): Promise<void> {
+async function substituirGitDeSrcPorPonteiro(src: string, gitDir: string, onLog: (chunk: string) => void): Promise<void> {
   const ponteiro = path.join(src, ".git");
   if (!(await isRegularFile(ponteiro))) {
-    await rm(ponteiro, { recursive: true, force: true });
+    const info = await lstat(ponteiro).catch(() => null);
+    if (info?.isDirectory()) {
+      const guardado = path.join(path.dirname(src), `.git-antigo-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      await rename(ponteiro, guardado);
+      onLog(`O .git que estava no código foi guardado em ${guardado} (o painel passou a usar o próprio repositório, fora do código). Apague quando não precisar mais.\n`);
+    } else {
+      await rm(ponteiro, { recursive: true, force: true });
+    }
   }
   await writeFileNoFollow(ponteiro, `gitdir: ${gitDir}\n`, 0o644);
 }
@@ -258,7 +267,7 @@ async function ingestGit(
   }
 
   await mkdir(src, { recursive: true });
-  await substituirGitDeSrcPorPonteiro(src, gitDir);
+  await substituirGitDeSrcPorPonteiro(src, gitDir, onLog);
 
   const novo = !existsSync(path.join(gitDir, "HEAD"));
   if (!novo) {

@@ -11,7 +11,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -181,6 +181,30 @@ describe("ingestCode — git sobre clone gravável pelo projeto (A2)", () => {
     expect(await readFile(path.join(src, "app.txt"), "utf8")).toBe("v2\n");
     expect(await readFile(path.join(src, "dados", "banco.db"), "utf8")).toBe("dados do usuario");
     expect(await readFile(path.join(src, ".env"), "utf8")).toBe("SEGREDO=1\n");
+  });
+
+  it("clone antigo: o .git do usuário (histórico, stash, commits locais) é guardado ao lado, não apagado", async () => {
+    const p = projeto();
+    const ctx = { projectsDir };
+    const src = projectSrcDir(ctx, p);
+    await mkdir(path.dirname(src), { recursive: true });
+    execFileSync("git", ["clone", "-q", repo, src]);
+    git(src, "config", "user.email", "t@e.com");
+    git(src, "config", "user.name", "T");
+    await writeFile(path.join(src, "local.txt"), "commit so local\n");
+    git(src, "add", ".");
+    git(src, "commit", "-q", "-m", "commit local do usuario");
+
+    const log: string[] = [];
+    await ingestCode(ctx, p, (c) => void log.push(c));
+
+    const guardado = (await readdir(path.dirname(src))).find((n) => n.startsWith(".git-antigo-"));
+    expect(guardado).toBeDefined();
+    const antigo = path.join(path.dirname(src), guardado!);
+    expect(git(antigo, "log", "--format=%s", "-1").trim()).toBe("commit local do usuario");
+    expect(log.join("")).toMatch(/\.git-antigo-/);
+    // e o painel nunca lê o .git guardado: src/.git é só o ponteiro
+    expect((await lstat(path.join(src, ".git"))).isFile()).toBe(true);
   });
 
   it("atualização normal preserva arquivos não versionados e remove os que saíram do repositório", async () => {
