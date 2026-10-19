@@ -1191,8 +1191,15 @@ export class DeployService {
         for (const step of job.steps) {
           if (step.status === "running") step.status = job.status === "success" ? "done" : "failed";
         }
-        await this.saveProjects();
-        await this.saveJobs();
+        // Gravar o estado pode falhar (disco cheio): nunca vira rejeição sem
+        // tratamento (derrubaria o processo) e não impede o aviso de fim de deploy.
+        for (const gravar of [() => this.saveProjects(), () => this.saveJobs()]) {
+          try {
+            await gravar();
+          } catch (err) {
+            console.warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
+          }
+        }
         try {
           this.hooks.onDeployFinished?.({
             projectId: project.id,

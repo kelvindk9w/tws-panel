@@ -206,6 +206,38 @@ describe("A5 — projetos antigos (<projetos>/<slug>) e a conferência antes de 
     expect(existsSync(fonte)).toBe(true);
   });
 
+  it("falha ao gravar o estado no fim do deploy não vira rejeição sem tratamento e o aviso de fim de deploy ainda sai (B12)", async () => {
+    const pasta = path.join(projectsDir, "meusite");
+    await mkdir(pasta, { recursive: true });
+    await writeFile(path.join(pasta, "index.html"), "x");
+    const svc = await comProjetosAntigos([
+      { id: "ms", name: "meusite", slug: "meusite", ingestMode: "existing", source: pasta, branch: null, domain: "meusite.localhost", storageLayout: "reserved", detection: { type: "static", warnings: [], details: [] } },
+    ]);
+    const terminou = vi.fn();
+    (svc as unknown as { hooks: { onDeployFinished: unknown } }).hooks = { onDeployFinished: terminou };
+    const internos = svc as unknown as { engine: { deploy: unknown }; applyProxy: () => Promise<void>; saveProjects: () => Promise<void> };
+    internos.engine.deploy = vi.fn(async () => undefined);
+    internos.applyProxy = async () => undefined;
+    const rejeicoes: unknown[] = [];
+    const ouvir = (e: unknown) => rejeicoes.push(e);
+    process.on("unhandledRejection", ouvir);
+    try {
+      const original = internos.saveProjects.bind(svc);
+      let chamadas = 0;
+      internos.saveProjects = async () => {
+        // a gravação antes do job passa; a do fim do deploy falha
+        if (++chamadas > 1) throw new Error("ENOSPC: sem espaço");
+        return original();
+      };
+      await svc.startDeploy("ms");
+      await vi.waitFor(() => expect(terminou).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(rejeicoes).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", ouvir);
+    }
+  });
+
   it("cenário 'meusite': projeto 'existing' antigo migra sozinho para .paas/<id> no próximo deploy, sem apagar nada do usuário", async () => {
     const pasta = path.join(projectsDir, "meusite");
     await mkdir(path.join(pasta, "site"), { recursive: true });
