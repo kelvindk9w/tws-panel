@@ -10,6 +10,7 @@ import type {
   ProjectStatus,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { formatDate, Trans, useI18n, type Key } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
@@ -20,12 +21,12 @@ import { PortsModal } from "./PortsModal";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
 import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
 
-const STATUS_TEXT: Record<ProjectStatus, string> = {
-  running: "No ar — os containers estão rodando.",
-  deploying: "Deploy em andamento.",
-  stopped: "Parado — os containers estão desligados. Use Iniciar para religar.",
-  error: "Com erro — veja o último deploy abaixo.",
-  created: "Ainda sem deploy. Clique em Deploy, no topo, para publicar.",
+const STATUS_TEXT: Record<ProjectStatus, Key> = {
+  running: "projects.overview.statusText.running",
+  deploying: "projects.overview.statusText.deploying",
+  stopped: "projects.overview.statusText.stopped",
+  error: "projects.overview.statusText.error",
+  created: "projects.overview.statusText.created",
 };
 
 function urlOf(domain: string): string {
@@ -33,13 +34,14 @@ function urlOf(domain: string): string {
 }
 
 function HttpsLine({ status }: { status: DomainHttpsStatus | undefined }) {
-  if (!status) return <span className="text-muted-foreground">verificando o certificado…</span>;
+  const { t } = useI18n();
+  if (!status) return <span className="text-muted-foreground">{t("projects.overview.https.checking")}</span>;
   if (status.ok) {
     return (
       <span className="flex items-center gap-1 text-emerald-400">
-        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> HTTPS válido
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> {t("projects.overview.https.valid")}
         {status.issuer ? ` · ${status.issuer}` : ""}
-        {status.validTo ? ` · até ${new Date(status.validTo).toLocaleDateString("pt-BR", { timeZone: "UTC" })}` : ""}
+        {status.validTo ? t("projects.overview.https.until", { date: formatDate(status.validTo, { timeZone: "UTC" }) }) : ""}
       </span>
     );
   }
@@ -47,8 +49,8 @@ function HttpsLine({ status }: { status: DomainHttpsStatus | undefined }) {
     <span className="flex items-start gap-1 text-amber-300" title={status.error ?? undefined}>
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>
-        ainda sem certificado válido — sai sozinho depois do deploy, com o DNS apontando para a VPS
-        {status.error ? <span className="block text-xs text-muted-foreground">detalhe: {status.error}</span> : null}
+        {t("projects.overview.https.pending")}
+        {status.error ? <span className="block text-xs text-muted-foreground">{t("projects.overview.https.detail", { error: status.error })}</span> : null}
       </span>
     </span>
   );
@@ -81,6 +83,7 @@ export function ProjectOverview({
   /** Deploy pelo caminho de sempre (guardrails) — "Fazer deploy agora" do modal Portas. */
   onDeploy?: () => void;
 }) {
+  const { t } = useI18n();
   const [https, setHttps] = useState<DomainHttpsStatus[] | null>(null);
   const [email, setEmail] = useState<ProjectEmailResponse["email"] | null>(null);
   const [portsOpen, setPortsOpen] = useState(false);
@@ -116,7 +119,7 @@ export function ProjectOverview({
         <Card data-testid="overview-status">
           <CardContent className="flex flex-wrap items-center gap-3 py-4">
             <StatusBadge status={status} />
-            <span className="text-sm">{STATUS_TEXT[status]}</span>
+            <span className="text-sm">{t(STATUS_TEXT[status])}</span>
           </CardContent>
         </Card>
       )}
@@ -125,28 +128,28 @@ export function ProjectOverview({
         <CardHeader className="pb-2">
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle className="flex items-center gap-2 text-base">
-              <Rocket className="h-4 w-4" /> {active ? "Deploy em andamento" : "Último deploy"}
+              <Rocket className="h-4 w-4" /> {active ? t("projects.overview.deploy.active") : t("projects.overview.deploy.last")}
             </CardTitle>
             {job && <JobStatusBadge status={job.status} />}
             {job && (
               <span className="text-xs text-muted-foreground">
-                {formatDateTime(job.createdAt)} · {active ? "rodando há" : "duração"} {deployDuration(job)}
+                {formatDateTime(job.createdAt)} · {active ? t("projects.overview.deploy.runningFor", { duration: deployDuration(job) }) : t("projects.history.duration", { duration: deployDuration(job) })}
               </span>
             )}
             {job && (
               <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">
                 <Button variant="outline" size="sm" onClick={() => onOpenJob(job.id)}>
-                  Ver detalhes
+                  {t("projects.overview.deploy.details")}
                 </Button>
                 <Button asChild variant="ghost" size="sm">
-                  <Link to={`/projects/${project.id}/deploys`}>Histórico</Link>
+                  <Link to={`/projects/${project.id}/deploys`}>{t("projects.overview.deploy.history")}</Link>
                 </Button>
               </div>
             )}
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
-          {!job && <p className="text-sm text-muted-foreground">Nenhum deploy ainda.</p>}
+          {!job && <p className="text-sm text-muted-foreground">{t("projects.history.empty")}</p>}
           {job && active && (
             <>
               <DeploySteps job={job} />
@@ -165,7 +168,7 @@ export function ProjectOverview({
         <Card data-testid="overview-domains">
           <CardHeader className="pb-2">
             <CardDescription className="flex items-center gap-1.5">
-              <Globe className="h-3.5 w-3.5" /> Domínios · HTTPS automático
+              <Globe className="h-3.5 w-3.5" /> {t("projects.overview.domains.title")}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
@@ -182,7 +185,7 @@ export function ProjectOverview({
                   </a>
                   {d === project.domain && domains.length > 1 && (
                     <span className="whitespace-nowrap rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-400">
-                      principal
+                      {t("projects.overview.domains.primary")}
                     </span>
                   )}
                 </div>
@@ -192,7 +195,7 @@ export function ProjectOverview({
               </div>
             ))}
             <Link to={`/projects/${project.id}/domains`} className="text-xs text-sky-400 hover:underline">
-              Gerenciar domínios
+              {t("projects.overview.domains.manage")}
             </Link>
           </CardContent>
         </Card>
@@ -200,7 +203,7 @@ export function ProjectOverview({
         <Card data-testid="overview-email">
           <CardHeader className="pb-2">
             <CardDescription className="flex items-center gap-1.5">
-              <Mail className="h-3.5 w-3.5" /> E-mail do projeto
+              <Mail className="h-3.5 w-3.5" /> {t("projects.overview.email.title")}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-1 text-sm">
@@ -209,16 +212,16 @@ export function ProjectOverview({
             ) : email.enabled ? (
               <>
                 <span className="flex items-center gap-1 text-emerald-400">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Ativo
+                  <CheckCircle2 className="h-3.5 w-3.5" /> {t("projects.overview.email.active")}
                 </span>
                 <span className="font-mono text-xs">{email.mailbox}</span>
-                <span className="text-xs text-muted-foreground">SMTP_* e MAIL_FROM entram sozinhos no deploy.</span>
+                <span className="text-xs text-muted-foreground">{t("projects.overview.email.autoFill")}</span>
               </>
             ) : (
               <>
-                <span className="text-muted-foreground">E-mail não ativado — o app não tem por onde enviar.</span>
+                <span className="text-muted-foreground">{t("projects.overview.email.off")}</span>
                 <Link to={`/projects/${project.id}/email`} className="text-xs text-sky-400 hover:underline">
-                  Ativar o e-mail do projeto
+                  {t("projects.overview.email.enable")}
                 </Link>
               </>
             )}
@@ -230,15 +233,15 @@ export function ProjectOverview({
             <div className="flex items-start justify-between gap-2">
               <div className="flex flex-col gap-1.5">
                 <CardDescription className="flex items-center gap-1.5">
-                  <Box className="h-3.5 w-3.5" /> Containers
+                  <Box className="h-3.5 w-3.5" /> {t("projects.overview.containers.title")}
                 </CardDescription>
                 <CardTitle className="text-base">
-                  {runningContainers}/{containers.length} rodando
+                  {t("projects.overview.containers.running", { running: runningContainers, total: containers.length })}
                 </CardTitle>
               </div>
               {/* portas deste projeto e de todo o servidor; trocar a publicada */}
               <Button variant="secondary" size="sm" onClick={() => setPortsOpen(true)}>
-                <Plug className="h-4 w-4" /> Portas
+                <Plug className="h-4 w-4" /> {t("projects.overview.containers.ports")}
               </Button>
             </div>
           </CardHeader>
@@ -251,30 +254,30 @@ export function ProjectOverview({
                 {c.name} — {c.status}
               </span>
             ))}
-            {containers.length === 0 && <span>nenhum container ainda</span>}
+            {containers.length === 0 && <span>{t("projects.overview.containers.none")}</span>}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
             <CardDescription className="flex items-center gap-1.5">
-              <Code2 className="h-3.5 w-3.5" /> Código
+              <Code2 className="h-3.5 w-3.5" /> {t("projects.overview.code.title")}
             </CardDescription>
             <CardTitle className="text-base">
-              {project.detection ? TYPE_LABELS[project.detection.type] : "não detectado"}
+              {project.detection ? t(TYPE_LABELS[project.detection.type]) : t("dashboard.type.undetected")}
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             <span>
-              {project.ingestMode === "git" ? "repositório git" : project.ingestMode}
-              {project.branch ? ` · branch ${project.branch}` : ""}
+              {project.ingestMode === "git" ? t("projects.overview.code.git") : project.ingestMode}
+              {project.branch ? t("projects.overview.code.branch", { branch: project.branch }) : ""}
             </span>
             {project.detection?.composeFile && (
               <span data-testid="compose-file">
-                arquivo <code>{project.detection.composeFile}</code>
+                <Trans k="projects.overview.code.file" params={{ file: project.detection.composeFile }} components={{ code: <code /> }} />
               </span>
             )}
-            {project.websocket && <span>WebSocket habilitado</span>}
+            {project.websocket && <span>{t("projects.overview.code.websocket")}</span>}
           </CardContent>
         </Card>
       </div>

@@ -1,3 +1,4 @@
+import { t } from "@/i18n/react";
 import { SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY, type ApiError } from "@paas/core";
 
 const STORAGE_KEY = "paas.setup-token";
@@ -83,12 +84,12 @@ export async function apiFetch<T>(path: string, options?: ApiFetchInit): Promise
   try {
     response = await fetch(path, { ...init, headers });
   } catch {
-    throw new ApiRequestError(0, "network_error", "Não foi possível conectar ao servidor.");
+    throw new ApiRequestError(0, "network_error", t("common.api.networkError"));
   }
 
   if (!response.ok) {
     let code = "http_error";
-    let message = `Erro ${response.status} ao falar com o servidor.`;
+    let message = t("common.api.httpError", { status: response.status });
     let data: Record<string, unknown> | undefined;
     try {
       const body = (await response.json()) as Partial<ApiError> & Record<string, unknown>;

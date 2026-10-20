@@ -1,15 +1,17 @@
 import { useState } from "react";
 import type { NavLayout, UpdatePreferencesResponse, UserPreferences } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { useI18n, type Key } from "@/i18n";
+import { LanguageSelect } from "@/components/LanguageSelect";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, Loader2 } from "lucide-react";
 
-const NAV_OPTIONS: Array<{ value: NavLayout; label: string; hint: string }> = [
-  { value: "top", label: "Topo", hint: "Como um site: o menu numa faixa no alto da página." },
-  { value: "left", label: "Lateral esquerda", hint: "Como um sistema: o menu numa coluna à esquerda." },
-  { value: "right", label: "Lateral direita", hint: "O menu numa coluna à direita." },
+const NAV_OPTIONS: Array<{ value: NavLayout; label: Key; hint: Key }> = [
+  { value: "top", label: "settings.appearance.nav.top.label", hint: "settings.appearance.nav.top.hint" },
+  { value: "left", label: "settings.appearance.nav.left.label", hint: "settings.appearance.nav.left.hint" },
+  { value: "right", label: "settings.appearance.nav.right.label", hint: "settings.appearance.nav.right.hint" },
 ];
 
 /** Miniatura do formato — mostra, sem precisar ler, onde o menu vai ficar. */
@@ -39,6 +41,7 @@ function LayoutPreview({ value }: { value: NavLayout }) {
  * hora e fica salva na conta (vale em qualquer computador).
  */
 export function AppearanceSettings() {
+  const { t } = useI18n();
   const { preferences, setPreferences } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -61,9 +64,9 @@ export function AppearanceSettings() {
     } catch (err) {
       setPreferences(before);
       setError(
-        `Não foi possível salvar a escolha — o menu voltou ao que era.${
-          err instanceof ApiRequestError && err.message ? ` (${err.message})` : ""
-        }`,
+        t("settings.appearance.error.save", {
+          detail: err instanceof ApiRequestError && err.message ? ` (${err.message})` : "",
+        }),
       );
     } finally {
       setSaving(false);
@@ -74,11 +77,11 @@ export function AppearanceSettings() {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Aparência</CardTitle>
-          <CardDescription>Onde fica o menu de navegação. Em telas pequenas, ele fica sempre no topo.</CardDescription>
+          <CardTitle className="text-base">{t("settings.appearance.title")}</CardTitle>
+          <CardDescription>{t("settings.appearance.description")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <div role="radiogroup" aria-label="Menu de navegação" className="grid gap-3 sm:grid-cols-3">
+          <div role="radiogroup" aria-label={t("settings.appearance.navLabel")} className="grid gap-3 sm:grid-cols-3">
             {NAV_OPTIONS.map((opt) => {
               const checked = preferences.navLayout === opt.value;
               return (
@@ -87,7 +90,7 @@ export function AppearanceSettings() {
                   type="button"
                   role="radio"
                   aria-checked={checked}
-                  aria-label={opt.label}
+                  aria-label={t(opt.label)}
                   onClick={() => void choose(opt.value)}
                   className={cn(
                     "flex flex-col items-start gap-2 rounded-md border p-3 text-left transition-colors",
@@ -95,8 +98,8 @@ export function AppearanceSettings() {
                   )}
                 >
                   <LayoutPreview value={opt.value} />
-                  <span className="text-sm font-medium">{opt.label}</span>
-                  <span className="text-xs text-muted-foreground">{opt.hint}</span>
+                  <span className="text-sm font-medium">{t(opt.label)}</span>
+                  <span className="text-xs text-muted-foreground">{t(opt.hint)}</span>
                 </button>
               );
             })}
@@ -104,12 +107,12 @@ export function AppearanceSettings() {
           <div className="min-h-5 text-xs">
             {saving && (
               <span className="flex items-center gap-1 text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" /> Salvando…
+                <Loader2 className="h-3 w-3 animate-spin" /> {t("settings.appearance.saving")}
               </span>
             )}
             {saved && !saving && (
               <span className="flex items-center gap-1 text-emerald-400">
-                <CheckCircle2 className="h-3 w-3" /> Salvo na sua conta.
+                <CheckCircle2 className="h-3 w-3" /> {t("settings.appearance.saved")}
               </span>
             )}
             {error && (
@@ -118,6 +121,15 @@ export function AppearanceSettings() {
               </p>
             )}
           </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t("settings.appearance.language.title")}</CardTitle>
+          <CardDescription>{t("settings.appearance.language.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <LanguageSelect />
         </CardContent>
       </Card>
     </div>

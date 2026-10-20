@@ -24,6 +24,7 @@ import type {
   MailboxResponse,
   WebmailStatus,
 } from "@paas/core";
+import { apiErrorText, formatDateTime, useI18n } from "@/i18n";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +59,7 @@ function CredentialRow({ label, value, mono = true }: { label: string; value: st
 }
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const { t } = useI18n();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
@@ -69,7 +71,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
       >
         <div className="mb-4 flex items-start justify-between gap-2">
           <h2 className="min-w-0 break-words text-lg font-semibold">{title}</h2>
-          <Button variant="ghost" size="icon" aria-label="Fechar" onClick={onClose}>
+          <Button variant="ghost" size="icon" aria-label={t("mail.common.close")} onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -91,6 +93,7 @@ function ChangePasswordModal({
   onClose: () => void;
   onDone: (email: string) => void;
 }) {
+  const { t } = useI18n();
   const [choice, setChoice] = useState<PasswordChoiceState>(EMPTY_PASSWORD_CHOICE);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,29 +111,28 @@ function ChangePasswordModal({
       if (res.generatedPassword) setGenerated(res.generatedPassword);
       else onDone(email);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível trocar a senha.");
+      setError(apiErrorText(err, "mail.boxes.changePassword.error"));
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <ModalShell title={`Trocar senha — ${email}`} onClose={onClose}>
+    <ModalShell title={t("mail.boxes.changePassword.title", { email })} onClose={onClose}>
       <div className="flex flex-col gap-3 text-sm">
         <p className="text-muted-foreground">
-          Defina uma senha nova. Por segurança o painel nunca mostra a senha: guarde-a no seu gerenciador de senhas.
-          Depois, atualize a senha no app de e-mail onde a caixa estiver configurada.
-          {projectMailbox && " O projeto que envia por esta caixa só recebe a senha nova no próximo deploy."}
+          {t("mail.boxes.changePassword.intro")}
+          {projectMailbox && t("mail.boxes.changePassword.projectNote")}
         </p>
         {generated ? (
           <GeneratedPasswordNotice password={generated} onDone={() => onDone(email)} />
         ) : (
           <>
-            <PasswordChoice value={choice} onChange={setChoice} passwordLabel="Nova senha" />
+            <PasswordChoice value={choice} onChange={setChoice} passwordLabel={t("mail.boxes.changePassword.newLabel")} />
             {error && <p className="text-destructive">{error}</p>}
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="ghost" onClick={onClose}>
-                Cancelar
+                {t("mail.common.cancel")}
               </Button>
               <Button
                 variant="success"
@@ -138,7 +140,7 @@ function ChangePasswordModal({
                 onClick={() => void save()}
               >
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-                Salvar nova senha
+                {t("mail.boxes.changePassword.save")}
               </Button>
             </div>
           </>
@@ -159,46 +161,47 @@ function CredentialsModal({
   onChangePassword: () => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   return (
-    <ModalShell title={`Configurar no app de e-mail — ${credentials.email}`} onClose={onClose}>
+    <ModalShell title={t("mail.boxes.credentials.title", { email: credentials.email })} onClose={onClose}>
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conta</p>
-            <CredentialRow label="Usuário" value={credentials.username} />
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("mail.boxes.credentials.account")}</p>
+            <CredentialRow label={t("mail.boxes.credentials.user")} value={credentials.username} />
             <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <span className="text-muted-foreground">Senha</span>
+              <span className="text-muted-foreground">{t("mail.boxes.credentials.password")}</span>
               <span className="text-right text-xs text-muted-foreground">
-                a que você definiu ao criar a caixa (o painel não mostra senhas)
+                {t("mail.boxes.credentials.passwordNote")}
               </span>
             </div>
             {canChangePassword && (
               <div>
                 <Button variant="outline" size="sm" onClick={onChangePassword}>
-                  <KeyRound className="h-4 w-4" /> Trocar senha
+                  <KeyRound className="h-4 w-4" /> {t("mail.boxes.changePassword.button")}
                 </Button>
               </div>
             )}
           </div>
           <div className="flex flex-col gap-1.5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Recebimento (IMAP)
+              {t("mail.boxes.credentials.incoming")}
             </p>
-            <CredentialRow label="Servidor" value={credentials.imap.host} />
-            <CredentialRow label="Porta" value={credentials.imap.port} />
-            <CredentialRow label="Segurança" value="SSL/TLS" mono={false} />
+            <CredentialRow label={t("mail.boxes.credentials.server")} value={credentials.imap.host} />
+            <CredentialRow label={t("mail.boxes.credentials.port")} value={credentials.imap.port} />
+            <CredentialRow label={t("mail.boxes.credentials.security")} value="SSL/TLS" mono={false} />
             <p className="text-xs text-muted-foreground">
-              Alternativa: porta {credentials.imapAlt.port} com STARTTLS.
+              {t("mail.boxes.credentials.altStarttls", { port: credentials.imapAlt.port })}
             </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Envio (SMTP)
+              {t("mail.boxes.credentials.outgoing")}
             </p>
-            <CredentialRow label="Servidor" value={credentials.smtp.host} />
-            <CredentialRow label="Porta" value={credentials.smtp.port} />
-            <CredentialRow label="Segurança" value="STARTTLS" mono={false} />
+            <CredentialRow label={t("mail.boxes.credentials.server")} value={credentials.smtp.host} />
+            <CredentialRow label={t("mail.boxes.credentials.port")} value={credentials.smtp.port} />
+            <CredentialRow label={t("mail.boxes.credentials.security")} value="STARTTLS" mono={false} />
             <p className="text-xs text-muted-foreground">
-              Alternativa: porta {credentials.smtpAlt.port} com SSL/TLS.
+              {t("mail.boxes.credentials.altSsl", { port: credentials.smtpAlt.port })}
             </p>
           </div>
           <ul className="list-disc pl-5 text-xs text-muted-foreground">
@@ -230,6 +233,7 @@ export function MailboxesPanel({
   /** Avisa quem usa o painel a cada carga (a página mostra "Caixas (n)"). */
   onMailboxesChange?: (mailboxes: Mailbox[]) => void;
 }) {
+  const { t } = useI18n();
   const name = domain;
   const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -259,7 +263,7 @@ export function MailboxesPanel({
       onMailboxesChange?.(res.mailboxes);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar as caixas.");
+      setError(apiErrorText(err, "mail.boxes.loadError"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, projectId]);
@@ -305,13 +309,13 @@ export function MailboxesPanel({
       setChangedMailbox(null);
       if (res.generatedPassword) {
         setGenerated({ email: res.mailbox.id, password: res.generatedPassword });
-        setNotice(`Caixa ${res.mailbox.id} criada.`);
+        setNotice(t("mail.boxes.created", { email: res.mailbox.id }));
       } else {
-        setNotice(`Caixa ${res.mailbox.id} criada. Use a senha que você definiu (o painel não mostra senhas).`);
+        setNotice(t("mail.boxes.createdWithPassword", { email: res.mailbox.id }));
       }
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao criar a caixa.");
+      setError(apiErrorText(err, "mail.boxes.createError"));
     } finally {
       setBusy(null);
     }
@@ -325,7 +329,7 @@ export function MailboxesPanel({
       );
       setCredentials(res.credentials);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao obter as credenciais.");
+      setError(apiErrorText(err, "mail.boxes.credentialsError"));
     } finally {
       setBusy(null);
     }
@@ -342,7 +346,7 @@ export function MailboxesPanel({
       setConfirmRemove(null);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao remover a caixa.");
+      setError(apiErrorText(err, "mail.boxes.removeError"));
     } finally {
       setBusy(null);
     }
@@ -351,7 +355,7 @@ export function MailboxesPanel({
   if (!mailboxes) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> {error ?? "Carregando…"}
+        <Loader2 className="h-4 w-4 animate-spin" /> {error ?? t("mail.common.loading")}
       </p>
     );
   }
@@ -361,22 +365,20 @@ export function MailboxesPanel({
       <Card>
         <CardHeader className="px-4 pb-2 sm:px-6">
           <CardTitle className="flex items-center gap-2 text-base">
-            <Inbox className="h-4 w-4" /> Caixas de e-mail
+            <Inbox className="h-4 w-4" /> {t("mail.boxes.title")}
           </CardTitle>
           <CardDescription>
-            {projectId &&
-              "Caixas deste projeto: a de envio e as criadas aqui. As outras caixas do domínio ficam na página E-mail. "}
-            Você define a senha de cada caixa; o painel nunca a mostra. Esqueceu? Use "Trocar senha". Para Outlook,
-            Gmail ou Thunderbird, veja "Configurar no app".
+            {projectId && t("mail.boxes.descriptionProject")}
+            {t("mail.boxes.description")}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 px-4 sm:px-6">
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="flex flex-col gap-2 rounded-lg border p-3 sm:p-4">
-            <p className="text-sm font-medium">Nova caixa</p>
+            <p className="text-sm font-medium">{t("mail.boxes.new")}</p>
             <div className="flex min-w-0 max-w-md items-center">
               <Input
-                placeholder="contato"
+                placeholder={t("mail.boxes.newPlaceholder")}
                 value={newMailbox}
                 onChange={(e) => setNewMailbox(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void addMailbox()}
@@ -391,8 +393,7 @@ export function MailboxesPanel({
             </div>
             {newChoice.mode === "type" && (
               <p className="text-xs text-muted-foreground">
-                Mínimo de {MAILBOX_PASSWORD_MIN} caracteres. Guarde a senha no seu gerenciador: o painel não a mostra
-                depois.
+                {t("mail.boxes.passwordHint", { min: MAILBOX_PASSWORD_MIN })}
               </p>
             )}
             <div>
@@ -402,7 +403,7 @@ export function MailboxesPanel({
                 onClick={() => void addMailbox()}
               >
                 {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailPlus className="h-4 w-4" />}
-                Criar caixa
+                {t("mail.boxes.create")}
               </Button>
             </div>
           </div>
@@ -417,14 +418,14 @@ export function MailboxesPanel({
                 <span className="break-words">{notice}</span>
                 {changedMailbox && (
                   <Button variant="deploy" size="sm" onClick={() => setTestingFrom(changedMailbox)}>
-                    <Send className="h-4 w-4" /> Enviar e-mail de teste
+                    <Send className="h-4 w-4" /> {t("mail.boxes.sendTest")}
                   </Button>
                 )}
               </div>
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Fechar aviso"
+                aria-label={t("mail.boxes.closeNotice")}
                 onClick={() => {
                   setNotice(null);
                   setChangedMailbox(null);
@@ -437,7 +438,7 @@ export function MailboxesPanel({
 
           {mailboxes.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              {projectId ? "Nenhuma caixa deste projeto ainda." : "Nenhuma caixa neste domínio ainda."}
+              {projectId ? t("mail.boxes.emptyProject") : t("mail.boxes.emptyDomain")}
             </p>
           ) : (
             <div className="flex flex-col divide-y rounded-lg border">
@@ -460,21 +461,21 @@ export function MailboxesPanel({
                     <p className="break-all font-medium">{mailbox.id}</p>
                     {mailbox.id === highlight && (
                       <Badge variant="outline" className="mt-0.5 border-sky-500/40 text-sky-300">
-                        deste projeto
+                        {t("mail.boxes.thisProject")}
                       </Badge>
                     )}
                     {/* página do domínio: de qual projeto a caixa é */}
                     {!projectId && mailbox.projectId && (
                       <Badge variant="outline" className="mt-0.5 max-w-full whitespace-normal break-words">
-                        {mailbox.projectName ? `do projeto ${mailbox.projectName}` : "de um projeto removido"}
+                        {mailbox.projectName ? t("mail.boxes.ofProject", { name: mailbox.projectName }) : t("mail.boxes.ofRemovedProject")}
                       </Badge>
                     )}
                     <p className="text-xs text-muted-foreground">
                       {mailbox.kind === "system"
-                        ? "sistema (postmaster/abuse)"
+                        ? t("mail.boxes.kindSystem")
                         : mailbox.kind === "project"
-                          ? "caixa do projeto (o projeto envia por ela)"
-                          : `criada em ${new Date(mailbox.createdAt).toLocaleString("pt-BR")}`}
+                          ? t("mail.boxes.kindProject")
+                          : t("mail.boxes.createdAt", { date: formatDateTime(mailbox.createdAt) })}
                     </p>
                   </div>
                   <Button
@@ -488,7 +489,7 @@ export function MailboxesPanel({
                     ) : (
                       <Settings2 className="h-4 w-4" />
                     )}
-                    Configurar no app
+                    {t("mail.boxes.configure")}
                   </Button>
                   <Button
                     variant="outline"
@@ -496,7 +497,7 @@ export function MailboxesPanel({
                     disabled={busy !== null}
                     onClick={() => setTestingFrom(mailbox.id)}
                   >
-                    <Send className="h-4 w-4" /> Testar envio
+                    <Send className="h-4 w-4" /> {t("mail.boxes.testSend")}
                   </Button>
                   <Button
                     variant="outline"
@@ -504,13 +505,13 @@ export function MailboxesPanel({
                     disabled={busy !== null}
                     onClick={() => setChangingPassword(mailbox.id)}
                   >
-                    <KeyRound className="h-4 w-4" /> Trocar senha
+                    <KeyRound className="h-4 w-4" /> {t("mail.boxes.changePassword.button")}
                   </Button>
                   {webmailHost && (
                     // usuário preenchido pela URL; a senha a pessoa digita (nunca vai na URL)
                     <Button variant="info" size="sm" asChild>
                       <a href={webmailUrl(webmailHost, mailbox.id)} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-4 w-4" /> Abrir webmail
+                        <ExternalLink className="h-4 w-4" /> {t("mail.webmail.open")}
                       </a>
                     </Button>
                   )}
@@ -523,10 +524,10 @@ export function MailboxesPanel({
                           disabled={busy !== null}
                           onClick={() => void removeMailbox(mailbox.id)}
                         >
-                          {busy === `rm-${mailbox.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirmar"}
+                          {busy === `rm-${mailbox.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : t("mail.common.confirm")}
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => setConfirmRemove(null)}>
-                          Cancelar
+                          {t("mail.common.cancel")}
                         </Button>
                       </div>
                     ) : (
@@ -559,9 +560,7 @@ export function MailboxesPanel({
           onDone={(email) => {
             setChangingPassword(null);
             setChangedMailbox(email);
-            setNotice(
-              `Senha de ${email} trocada. Atualize a senha no app de e-mail onde a caixa estiver configurada. Para confirmar, envie um e-mail de teste a partir dela.`,
-            );
+            setNotice(t("mail.boxes.passwordChanged", { email }));
           }}
         />
       )}

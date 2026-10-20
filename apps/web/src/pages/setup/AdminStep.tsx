@@ -14,15 +14,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { ArrowLeft, ArrowRight, CheckCircle2, Circle, Loader2, PartyPopper, UserRound } from "lucide-react";
+import { apiErrorText, useI18n } from "@/i18n";
 
 /** Checklist ao vivo das regras de senha (mesma validação do backend). */
 function PasswordRules({ password }: { password: string }) {
+  const { t } = useI18n();
   const { checks } = validatePasswordStrength(password);
   const rules = [
-    { ok: checks.minLength, label: `Mínimo de ${PASSWORD_MIN_LENGTH} caracteres` },
-    { ok: checks.hasUpper, label: "Ao menos uma letra maiúscula" },
-    { ok: checks.hasLower, label: "Ao menos uma letra minúscula" },
-    { ok: checks.hasNumber, label: "Ao menos um número" },
+    { ok: checks.minLength, label: t("setup.admin.rule.minLength", { min: PASSWORD_MIN_LENGTH }) },
+    { ok: checks.hasUpper, label: t("setup.admin.rule.upper") },
+    { ok: checks.hasLower, label: t("setup.admin.rule.lower") },
+    { ok: checks.hasNumber, label: t("setup.admin.rule.number") },
   ];
   return (
     <ul className="flex flex-col gap-1 text-xs">
@@ -42,6 +44,7 @@ function PasswordRules({ password }: { password: string }) {
 
 
 export function AdminStep({ onBack }: { onBack?: () => void }) {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -79,7 +82,7 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
       clearSetupToken();
       setDone(true);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível criar a conta. Tente novamente.");
+      setError(err instanceof ApiRequestError ? apiErrorText(err, "setup.admin.createFailed") : t("setup.admin.createFailed"));
     } finally {
       setLoading(false);
     }
@@ -94,23 +97,22 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
             <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 shadow-[0_0_32px_rgba(52,211,153,0.18)] ring-1 ring-emerald-500/30 motion-safe:animate-scale-in">
               <PartyPopper className="h-7 w-7 text-emerald-400" />
             </div>
-            <CardTitle className="text-2xl tracking-tight">Setup concluído!</CardTitle>
+            <CardTitle className="text-2xl tracking-tight">{t("setup.admin.done.title")}</CardTitle>
             <CardDescription className="max-w-md">
-              A conta de administrador foi criada e o modo de setup foi encerrado — o setup token
-              não funciona mais. A partir de agora, o acesso ao painel exige login.
+              {t("setup.admin.done.description")}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-6">
             {score && (
               <div className="flex flex-col items-center gap-2.5">
                 <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-                  Score de segurança
+                  {t("setup.admin.done.score")}
                 </span>
                 <IndexGauge value={score.value} source={score.source} size="sm" />
               </div>
             )}
             <Button onClick={() => navigate("/login")}>
-              Ir para o login <ArrowRight className="h-4 w-4" />
+              {t("setup.admin.done.login")} <ArrowRight className="h-4 w-4" />
             </Button>
           </CardContent>
         </Card>
@@ -124,13 +126,12 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
       <div>
         {onBack && (
           <Button variant="ghost" size="sm" onClick={onBack} className="-ml-2 mb-1">
-            <ArrowLeft className="h-4 w-4" /> Voltar para Segurança
+            <ArrowLeft className="h-4 w-4" /> {t("setup.admin.backToSecurity")}
           </Button>
         )}
-        <h2 className="text-xl font-semibold tracking-tight">Conta de administrador</h2>
+        <h2 className="text-xl font-semibold tracking-tight">{t("setup.admin.title")}</h2>
         <p className="text-sm text-muted-foreground">
-          Último passo: crie o acesso ao painel. Ao concluir, o modo de setup é encerrado e todo
-          acesso passa a exigir login.
+          {t("setup.admin.description")}
         </p>
       </div>
 
@@ -139,40 +140,39 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
             <UserRound className="h-6 w-6" />
           </div>
-          <CardTitle>Criar conta admin</CardTitle>
+          <CardTitle>{t("setup.admin.card.title")}</CardTitle>
           <CardDescription className="max-w-md">
-            Única conta do painel. A senha é armazenada com hash argon2id — nunca em texto claro.
+            {t("setup.admin.card.description")}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={(e) => void onSubmit(e)} className="mx-auto flex max-w-md flex-col gap-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="admin-username" className="text-sm font-medium">
-                Usuário
+                {t("setup.admin.username.label")}
               </label>
               <Input
                 id="admin-username"
                 autoComplete="username"
-                placeholder="Usuário administrador"
+                placeholder={t("setup.admin.username.placeholder")}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
               />
               {username.length > 0 && !usernameOk && (
                 <p className="text-xs text-amber-400">
-                  3 a 32 caracteres, começando com letra ou número (letras, números, &quot;_&quot;,
-                  &quot;.&quot;, &quot;-&quot;).
+                  {t("setup.admin.username.hint")}
                 </p>
               )}
             </div>
 
             <div className="flex flex-col gap-1.5">
               <label htmlFor="admin-password" className="text-sm font-medium">
-                Senha
+                {t("setup.admin.password.label")}
               </label>
               <PasswordInput
                 id="admin-password"
                 autoComplete="new-password"
-                placeholder="Senha forte"
+                placeholder={t("setup.admin.password.placeholder")}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
@@ -181,17 +181,17 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
 
             <div className="flex flex-col gap-1.5">
               <label htmlFor="admin-confirm" className="text-sm font-medium">
-                Confirmar senha
+                {t("setup.admin.confirm.label")}
               </label>
               <PasswordInput
                 id="admin-confirm"
                 autoComplete="new-password"
-                placeholder="Repita a senha"
+                placeholder={t("setup.admin.confirm.placeholder")}
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
               />
               {confirm.length > 0 && !confirmOk && (
-                <p className="text-xs text-amber-400">As senhas não coincidem.</p>
+                <p className="text-xs text-amber-400">{t("setup.admin.confirm.mismatch")}</p>
               )}
             </div>
 
@@ -203,7 +203,7 @@ export function AdminStep({ onBack }: { onBack?: () => void }) {
 
             <Button type="submit" disabled={!canSubmit}>
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              {loading ? "Criando conta…" : "Concluir setup"}
+              {loading ? t("setup.admin.submitting") : t("setup.admin.submit")}
             </Button>
           </form>
         </CardContent>

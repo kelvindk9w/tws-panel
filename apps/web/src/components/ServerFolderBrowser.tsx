@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, Trans, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { ArrowUp, FileCode2, Folder, Loader2, X } from "lucide-react";
 
@@ -15,6 +16,7 @@ interface DirListing {
  * computador que o painel enxerga de dentro do container.
  */
 export function ServerFolderBrowser({ onChoose, onClose }: { onChoose: (path: string) => void; onClose: () => void }) {
+  const { t } = useI18n();
   const [listing, setListing] = useState<DirListing | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,7 +24,7 @@ export function ServerFolderBrowser({ onChoose, onClose }: { onChoose: (path: st
     setError(null);
     apiFetch<DirListing>(path ? `/api/fs/dirs?path=${encodeURIComponent(path)}` : "/api/fs/dirs")
       .then(setListing)
-      .catch((err: unknown) => setError(err instanceof ApiRequestError ? err.message : "Não foi possível abrir a pasta."));
+      .catch((err: unknown) => setError(apiErrorText(err, "projects.folderBrowser.openError")));
   }
 
   useEffect(() => open(), []);
@@ -31,16 +33,18 @@ export function ServerFolderBrowser({ onChoose, onClose }: { onChoose: (path: st
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
       <div className="flex max-h-[80vh] w-full max-w-lg flex-col gap-3 rounded-lg border bg-card p-5 shadow-lg">
         <div className="flex items-center justify-between">
-          <h2 className="font-semibold">Escolher pasta no servidor</h2>
-          <button type="button" onClick={onClose} aria-label="Fechar" className="text-muted-foreground hover:text-foreground">
+          <h2 className="font-semibold">{t("projects.folderBrowser.title")}</h2>
+          <button type="button" onClick={onClose} aria-label={t("projects.folderBrowser.close")} className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </div>
         {listing && (
           <p className="text-xs text-muted-foreground">
-            Só aparecem pastas dentro de <code className="font-mono text-foreground">{listing.root}</code> — a pasta de
-            projetos deste servidor. Para colocar código aqui, use "Enviar do meu computador" ou clone o repositório
-            nela pelo terminal.
+            <Trans
+              k="projects.folderBrowser.hint"
+              params={{ root: listing.root }}
+              components={{ code: <code className="font-mono text-foreground" /> }}
+            />
           </p>
         )}
         <div className="flex items-center gap-2 rounded bg-black/40 px-2 py-1.5">
@@ -49,7 +53,7 @@ export function ServerFolderBrowser({ onChoose, onClose }: { onChoose: (path: st
           </code>
           {listing?.parent && (
             <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => open(listing.parent!)}>
-              <ArrowUp className="h-3.5 w-3.5" /> Voltar
+              <ArrowUp className="h-3.5 w-3.5" /> {t("projects.folderBrowser.back")}
             </Button>
           )}
         </div>
@@ -61,7 +65,7 @@ export function ServerFolderBrowser({ onChoose, onClose }: { onChoose: (path: st
             </p>
           )}
           {listing && listing.dirs.length === 0 && (
-            <p className="text-sm text-muted-foreground">Nenhuma subpasta aqui.</p>
+            <p className="text-sm text-muted-foreground">{t("projects.folderBrowser.empty")}</p>
           )}
           <ul className="flex flex-col">
             {listing?.dirs.map((d) => (
@@ -84,10 +88,10 @@ export function ServerFolderBrowser({ onChoose, onClose }: { onChoose: (path: st
         </div>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
-            Cancelar
+            {t("projects.folderBrowser.cancel")}
           </Button>
           <Button type="button" disabled={!listing || listing.path === listing.root} onClick={() => listing && onChoose(listing.path)}>
-            Usar esta pasta
+            {t("projects.folderBrowser.choose")}
           </Button>
         </div>
       </div>

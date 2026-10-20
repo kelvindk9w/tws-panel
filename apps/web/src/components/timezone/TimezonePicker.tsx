@@ -5,6 +5,7 @@
  */
 import { useMemo } from "react";
 import type { TimezoneOption } from "@paas/core";
+import { formatTime, t, useI18n } from "@/i18n";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 
 /** "America/Sao_Paulo" → "America/Sao Paulo" (o nome continua o oficial). */
@@ -14,7 +15,7 @@ export function zoneLabel(zone: string): string {
 
 /** Texto de um fuso na lista: nome, onde vale (Brasil) e o deslocamento. */
 export function optionLabel(o: TimezoneOption): string {
-  return `${zoneLabel(o.zone)}${o.place ? ` — Brasil: ${o.place}` : ""}`;
+  return o.place ? t("timezone.picker.optionWithPlace", { zone: zoneLabel(o.zone), place: o.place }) : zoneLabel(o.zone);
 }
 
 /** "America/Sao_Paulo (UTC−3)" para frases. */
@@ -26,9 +27,9 @@ export function zoneWithOffset(zone: string, options: TimezoneOption[]): string 
 /** Hora de agora num fuso, ex.: "14:05". */
 export function clockIn(zone: string, at: Date): string {
   try {
-    return at.toLocaleTimeString("pt-BR", { timeZone: zone, hour: "2-digit", minute: "2-digit" });
+    return formatTime(at, { timeZone: zone, hour: "2-digit", minute: "2-digit" });
   } catch {
-    return at.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    return formatTime(at, { hour: "2-digit", minute: "2-digit" });
   }
 }
 
@@ -38,7 +39,7 @@ export function TimezonePicker({
   onChange,
   disabled,
   id,
-  "aria-label": ariaLabel = "Fuso horário",
+  "aria-label": ariaLabel,
 }: {
   options: TimezoneOption[];
   value: string;
@@ -47,9 +48,11 @@ export function TimezonePicker({
   id?: string;
   "aria-label"?: string;
 }) {
+  const { t: tr } = useI18n();
   const items = useMemo<ComboboxOption[]>(
     () => options.map((o) => ({ value: o.zone, label: optionLabel(o), ...(o.offset ? { hint: o.offset } : {}) })),
-    [options],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `tr` muda com o idioma e refaz os rótulos
+    [options, tr],
   );
   return (
     <Combobox
@@ -58,8 +61,8 @@ export function TimezonePicker({
       onChange={onChange}
       disabled={disabled}
       id={id}
-      aria-label={ariaLabel}
-      placeholder="Busque pela cidade ou pelo nome do fuso"
+      aria-label={ariaLabel ?? tr("timezone.picker.ariaLabel")}
+      placeholder={tr("timezone.picker.placeholder")}
     />
   );
 }

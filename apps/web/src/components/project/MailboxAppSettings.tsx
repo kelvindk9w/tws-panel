@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import type { MailboxCredentials, MailboxCredentialsResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { Loader2 } from "lucide-react";
+import { apiErrorText, useI18n } from "@/i18n";
 
 function Row({ label, value }: { label: string; value: string | number }) {
   return (
@@ -19,13 +20,14 @@ function Row({ label, value }: { label: string; value: string | number }) {
 }
 
 export function MailboxAppSettings({ mailbox }: { mailbox: string }) {
+  const { t } = useI18n();
   const [credentials, setCredentials] = useState<MailboxCredentials | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch<MailboxCredentialsResponse>(`/api/mail/mailboxes/${encodeURIComponent(mailbox)}/credentials`)
       .then((r) => setCredentials(r.credentials))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Falha ao carregar a configuração."));
+      .catch((err: unknown) => setError(apiErrorText(err, "projects.mailboxApp.loadError")));
   }, [mailbox]);
 
   if (error) return <p className="text-sm text-destructive">{error}</p>;
@@ -33,22 +35,21 @@ export function MailboxAppSettings({ mailbox }: { mailbox: string }) {
   return (
     <div data-testid="mailbox-app-settings" className="flex flex-col gap-3 rounded-lg border p-3 text-sm">
       <p className="text-muted-foreground">
-        Para ler as respostas, adicione esta caixa num app de e-mail (Outlook, Thunderbird, app do celular ou o Gmail em
-        "Verificar e-mails de outras contas"):
+        {t("projects.mailboxApp.intro")}
       </p>
       <div className="flex flex-col gap-1">
-        <Row label="Usuário" value={credentials.username} />
-        <Row label="Senha" value="a da caixa (esqueceu? Trocar senha)" />
+        <Row label={t("projects.mailboxApp.user")} value={credentials.username} />
+        <Row label={t("projects.mailboxApp.password")} value={t("projects.mailboxApp.passwordValue")} />
       </div>
       <div className="flex flex-col gap-1">
-        <p className="font-medium">Receber (IMAP)</p>
-        <Row label="Servidor" value={credentials.imap.host} />
-        <Row label="Porta" value={`${credentials.imap.port} (SSL/TLS)`} />
+        <p className="font-medium">{t("projects.mailboxApp.receive")}</p>
+        <Row label={t("projects.mailboxApp.server")} value={credentials.imap.host} />
+        <Row label={t("projects.mailboxApp.port")} value={`${credentials.imap.port} (SSL/TLS)`} />
       </div>
       <div className="flex flex-col gap-1">
-        <p className="font-medium">Enviar (SMTP)</p>
-        <Row label="Servidor" value={credentials.smtp.host} />
-        <Row label="Porta" value={`${credentials.smtp.port} (STARTTLS) ou ${credentials.smtpAlt.port} (SSL/TLS)`} />
+        <p className="font-medium">{t("projects.mailboxApp.send")}</p>
+        <Row label={t("projects.mailboxApp.server")} value={credentials.smtp.host} />
+        <Row label={t("projects.mailboxApp.port")} value={t("projects.mailboxApp.smtpPorts", { port: credentials.smtp.port, altPort: credentials.smtpAlt.port })} />
       </div>
     </div>
   );

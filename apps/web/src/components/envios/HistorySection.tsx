@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import type { MailDeliveryState, MailHistoryResponse } from "@paas/core";
-import { ApiRequestError, apiFetch } from "@/lib/api";
-import { formatDateTime, HISTORY_STATE_LABELS, rejectionHint, senderLabel, stateVariant } from "@/lib/envios";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, useI18n } from "@/i18n";
+import { formatDateTime, HISTORY_STATE_KEYS, rejectionHint, senderLabel, stateVariant } from "@/lib/envios";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,6 +35,7 @@ function Field({ id, label, children }: { id: string; label: string; children: R
 
 /** Histórico: entregues, recusadas e adiadas, com o motivo devolvido pelo destino. */
 export function HistorySection() {
+  const { t } = useI18n();
   const [filters, setFilters] = useState<Filters>({ days: "7", state: "", projectId: "", mailbox: "", domain: "", q: "" });
   const [search, setSearch] = useState("");
   const [data, setData] = useState<MailHistoryResponse | null>(null);
@@ -45,8 +47,8 @@ export function HistorySection() {
 
   // Busca digitada: espera a pessoa parar de digitar.
   useEffect(() => {
-    const t = setTimeout(() => setFilters((f) => (f.q === search ? f : { ...f, q: search })), 300);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setFilters((f) => (f.q === search ? f : { ...f, q: search })), 300);
+    return () => clearTimeout(timer);
   }, [search]);
 
   useEffect(() => {
@@ -65,7 +67,7 @@ export function HistorySection() {
         if (!cancelled) setData(res);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof ApiRequestError ? err.message : "Não deu para ler o histórico.");
+        if (!cancelled) setError(apiErrorText(err, "envios.history.error.load"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -83,46 +85,45 @@ export function HistorySection() {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Histórico</CardTitle>
+        <CardTitle className="text-base">{t("envios.history.title")}</CardTitle>
         <CardDescription>
-          O resultado de cada entrega, com a resposta do servidor do destinatário. Guardamos só o envelope (remetente, destino e
-          resposta), nunca o conteúdo, por {data?.retentionDays ?? 30} dias.
+          {t("envios.history.desc", { days: data?.retentionDays ?? 30 })}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <Field id="h-days" label="Período">
+          <Field id="h-days" label={t("envios.history.field.period")}>
             <select id="h-days" className={selectClass} value={filters.days} onChange={set("days")}>
-              <option value="1">Últimas 24 horas</option>
-              <option value="7">Últimos 7 dias</option>
-              <option value="14">Últimos 14 dias</option>
-              <option value="30">Últimos 30 dias</option>
+              <option value="1">{t("envios.history.period.1")}</option>
+              <option value="7">{t("envios.history.period.7")}</option>
+              <option value="14">{t("envios.history.period.14")}</option>
+              <option value="30">{t("envios.history.period.30")}</option>
             </select>
           </Field>
-          <Field id="h-state" label="Estado">
+          <Field id="h-state" label={t("envios.history.field.state")}>
             <select id="h-state" className={selectClass} value={filters.state} onChange={set("state")}>
-              <option value="">Todos</option>
-              {(Object.keys(HISTORY_STATE_LABELS) as MailDeliveryState[]).map((s) => (
+              <option value="">{t("envios.history.all")}</option>
+              {(Object.keys(HISTORY_STATE_KEYS) as MailDeliveryState[]).map((s) => (
                 <option key={s} value={s}>
-                  {HISTORY_STATE_LABELS[s]}
+                  {t(HISTORY_STATE_KEYS[s])}
                 </option>
               ))}
             </select>
           </Field>
-          <Field id="h-project" label="Projeto">
+          <Field id="h-project" label={t("envios.history.field.project")}>
             <select id="h-project" className={selectClass} value={filters.projectId} onChange={set("projectId")}>
-              <option value="">Todos</option>
+              <option value="">{t("envios.history.all")}</option>
               {data?.projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
               ))}
-              <option value="none">Sem projeto</option>
+              <option value="none">{t("envios.history.noProject")}</option>
             </select>
           </Field>
-          <Field id="h-mailbox" label="Caixa">
+          <Field id="h-mailbox" label={t("envios.history.field.mailbox")}>
             <select id="h-mailbox" className={selectClass} value={filters.mailbox} onChange={set("mailbox")}>
-              <option value="">Todas</option>
+              <option value="">{t("envios.history.allMailboxes")}</option>
               {data?.mailboxes.map((m) => (
                 <option key={m} value={m}>
                   {m}
@@ -130,9 +131,9 @@ export function HistorySection() {
               ))}
             </select>
           </Field>
-          <Field id="h-domain" label="Domínio de destino">
+          <Field id="h-domain" label={t("envios.history.field.domain")}>
             <select id="h-domain" className={selectClass} value={filters.domain} onChange={set("domain")}>
-              <option value="">Todos</option>
+              <option value="">{t("envios.history.all")}</option>
               {data?.domains.map((d) => (
                 <option key={d} value={d}>
                   {d}
@@ -140,29 +141,29 @@ export function HistorySection() {
               ))}
             </select>
           </Field>
-          <Field id="h-q" label="Buscar">
-            <Input id="h-q" value={search} placeholder="endereço ou motivo" maxLength={100} onChange={(e) => setSearch(e.target.value)} />
+          <Field id="h-q" label={t("envios.history.field.search")}>
+            <Input id="h-q" value={search} placeholder={t("envios.history.search.placeholder")} maxLength={100} onChange={(e) => setSearch(e.target.value)} />
           </Field>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" disabled={loading} onClick={() => setReloadKey((k) => k + 1)}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Atualizar
+            {t("envios.history.refresh")}
           </Button>
-          {data?.collectedAt && <span className="text-xs text-muted-foreground">Registro lido em {formatDateTime(data.collectedAt)}</span>}
+          {data?.collectedAt && <span className="text-xs text-muted-foreground">{t("envios.history.collectedAt", { date: formatDateTime(data.collectedAt) })}</span>}
         </div>
         {data?.collectError && (
           <p className="break-words rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            Não deu para ler o registro do servidor de e-mail: {data.collectError}
+            {t("envios.history.collectError", { error: data.collectError })}
           </p>
         )}
         {error && <p className="text-sm text-destructive">{error}</p>}
-        {data && data.items.length === 0 && <p className="text-sm text-muted-foreground">Nenhum envio encontrado com esses filtros.</p>}
+        {data && data.items.length === 0 && <p className="text-sm text-muted-foreground">{t("envios.history.empty")}</p>}
         {data && data.items.length > 0 && (
           <>
             <p className="text-xs text-muted-foreground">
-              Mostrando {data.items.length} de {data.total}.
+              {t("envios.history.showing", { shown: data.items.length, total: data.total })}
             </p>
             <ul className="flex flex-col gap-2">
               {data.items.map((i, idx) => {
@@ -170,19 +171,19 @@ export function HistorySection() {
                 return (
                   <li key={`${i.queueId}-${i.to}-${i.at}-${idx}`} data-testid={`history-${i.queueId}-${i.to}`} className="flex flex-col gap-1 rounded-lg border p-3 text-sm">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant={stateVariant(i.state)}>{HISTORY_STATE_LABELS[i.state]}</Badge>
+                      <Badge variant={stateVariant(i.state)}>{t(HISTORY_STATE_KEYS[i.state])}</Badge>
                       <span className="break-all font-medium">{i.to}</span>
                       <span className="text-xs text-muted-foreground">{formatDateTime(i.at)}</span>
                     </div>
-                    <p className="break-words text-xs text-muted-foreground">De: {senderLabel(i.sender)}</p>
+                    <p className="break-words text-xs text-muted-foreground">{t("envios.sender.from", { sender: senderLabel(i.sender) })}</p>
                     {i.detail && (
                       <p className="break-words text-xs">
-                        {i.remoteHost ? `${i.remoteHost} respondeu: ` : "Motivo: "}
+                        {i.remoteHost ? t("envios.history.item.replied", { host: i.remoteHost }) : t("envios.history.item.reason")}
                         {i.detail}
                       </p>
                     )}
                     {i.state === "deferred" && i.nextRetryAt && (
-                      <p className="text-xs text-muted-foreground">Nova tentativa marcada para {formatDateTime(i.nextRetryAt)}.</p>
+                      <p className="text-xs text-muted-foreground">{t("envios.history.item.nextRetry", { date: formatDateTime(i.nextRetryAt) })}</p>
                     )}
                     {hint && <p className="text-xs text-amber-300">{hint}</p>}
                   </li>
@@ -192,7 +193,7 @@ export function HistorySection() {
             {data.total > data.items.length && (
               <div>
                 <Button size="sm" variant="outline" disabled={loading} onClick={() => setLimit((l) => l + PAGE)}>
-                  Carregar mais
+                  {t("envios.history.loadMore")}
                 </Button>
               </div>
             )}

@@ -6,9 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { LanguageSelect } from "@/components/LanguageSelect";
+import { apiErrorText, useI18n } from "@/i18n";
 import { Loader2, ShieldCheck } from "lucide-react";
 
 export function LoginPage() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   // destino original salvo pelo guard de rotas
@@ -40,7 +43,7 @@ export function LoginPage() {
         setNeedsCode(true); // próximo passo, não erro
         return;
       }
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível entrar. Tente novamente.");
+      setError(err instanceof ApiRequestError ? apiErrorText(err, "auth.login.failed") : t("auth.login.failed"));
     } finally {
       setLoading(false);
     }
@@ -56,13 +59,13 @@ export function LoginPage() {
           <CardTitle>
             TWS <span className="text-muted-foreground">Panel</span>
           </CardTitle>
-          <CardDescription>Entre com a conta de administrador criada no setup.</CardDescription>
+          <CardDescription>{t("auth.login.subtitle")}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="login-username" className="text-sm font-medium">
-                Usuário
+                {t("auth.login.username")}
               </label>
               <Input
                 id="login-username"
@@ -75,7 +78,7 @@ export function LoginPage() {
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="login-password" className="text-sm font-medium">
-                Senha
+                {t("auth.login.password")}
               </label>
               <PasswordInput
                 id="login-password"
@@ -89,7 +92,7 @@ export function LoginPage() {
             {needsCode && (
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="login-code" className="text-sm font-medium">
-                  Código de verificação
+                  {t("auth.login.code")}
                 </label>
                 <Input
                   id="login-code"
@@ -102,8 +105,7 @@ export function LoginPage() {
                   className="font-mono tracking-widest"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Abra o app autenticador do seu celular e digite o código de 6 dígitos do TWS Panel.
-                  Sem o celular? Use um dos seus códigos de recuperação.
+                  {t("auth.login.codeHelp")}
                 </p>
               </div>
             )}
@@ -116,9 +118,12 @@ export function LoginPage() {
 
             <Button type="submit" disabled={loading || !username.trim() || !password || (needsCode && !code.trim())}>
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              {loading ? "Entrando…" : "Entrar"}
+              {loading ? t("auth.login.submitting") : t("auth.login.submit")}
             </Button>
           </form>
+          <div className="mt-4 flex justify-center">
+            <LanguageSelect />
+          </div>
         </CardContent>
       </Card>
     </div>

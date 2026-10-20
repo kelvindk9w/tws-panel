@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { BACKUP_ENGINE_LABELS, type BackupRecord, type BackupsStatus, type ProjectBackupView } from "@paas/core";
+import { Trans, useI18n } from "@/i18n";
 import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import { AlertTriangle, Database, FolderPlus, HardDrive, Loader2, RefreshCw, Rot
  * e cópias, "Fazer backup agora", o histórico e "Restaurar".
  */
 export function ProjectBackupsCard({ projectId, projectName }: { projectId: string; projectName: string }) {
+  const { t } = useI18n();
   const [view, setView] = useState<ProjectBackupView | null>(null);
   const [status, setStatus] = useState<BackupsStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -68,7 +70,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-destructive">{loadError}</span>
         <Button variant="outline" size="sm" onClick={load}>
-          Tentar de novo
+          {t("backups.action.retry")}
         </Button>
       </div>
     );
@@ -101,7 +103,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
     act(
       "save",
       () => apiFetch(`/api/backups/targets/project:${projectId}`, { method: "PUT", body: JSON.stringify({ choices, extraFolders: extras }) }),
-      "Itens salvos. Valem a partir do próximo backup.",
+      t("backups.project.itemsSaved"),
     );
 
   return (
@@ -109,14 +111,12 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Database className="h-4 w-4 text-sky-400" /> O que entra no backup
+            <Database className="h-4 w-4 text-sky-400" /> {t("backups.project.items.title")}
           </CardTitle>
-          <CardDescription>
-            O painel olha os containers depois de cada deploy. O código vem do GitHub e não entra; entram os bancos e as pastas com dados.
-          </CardDescription>
+          <CardDescription>{t("backups.project.items.description")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm">
-          {!d && <p className="text-muted-foreground">Ainda não detectado. Isso acontece sozinho depois do deploy; dá para fazer agora também.</p>}
+          {!d && <p className="text-muted-foreground">{t("backups.project.notDetected")}</p>}
           {d?.error && (
             <p className="flex items-start gap-2 text-amber-400">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {d.error}
@@ -125,8 +125,8 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           {d && (
             <>
               <section className="flex flex-col gap-2">
-                <h3 className="font-medium">Bancos de dados</h3>
-                {d.databases.length === 0 && <p className="text-muted-foreground">Nenhum banco encontrado (PostgreSQL, MySQL, MariaDB, MongoDB ou Redis).</p>}
+                <h3 className="font-medium">{t("backups.project.databases")}</h3>
+                {d.databases.length === 0 && <p className="text-muted-foreground">{t("backups.project.noDatabases")}</p>}
                 {d.databases.map((db) => (
                   <label key={db.id} className="flex items-start gap-2">
                     <input
@@ -137,12 +137,12 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                     />
                     <span className="min-w-0">
                       <span className="font-medium">
-                        {BACKUP_ENGINE_LABELS[db.engine]} · serviço {db.service}
+                        {t("backups.project.dbService", { engine: BACKUP_ENGINE_LABELS[db.engine], service: db.service })}
                       </span>
-                      {db.databaseName && <span className="text-muted-foreground"> · banco {db.databaseName}</span>}
+                      {db.databaseName && <span className="text-muted-foreground">{t("backups.project.dbName", { name: db.databaseName })}</span>}
                       <span className="block text-muted-foreground">{db.method}</span>
                       {db.engine === "redis" && (
-                        <span className="block text-muted-foreground">Costuma ser cache. Marque só se ele guarda dados que não dá para recriar.</span>
+                        <span className="block text-muted-foreground">{t("backups.project.redisHint")}</span>
                       )}
                     </span>
                   </label>
@@ -150,8 +150,8 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
               </section>
 
               <section className="flex flex-col gap-2">
-                <h3 className="font-medium">Volumes e pastas</h3>
-                {d.mounts.length === 0 && !d.sourceFolder && <p className="text-muted-foreground">Nenhuma pasta montada nos containers.</p>}
+                <h3 className="font-medium">{t("backups.project.mounts")}</h3>
+                {d.mounts.length === 0 && !d.sourceFolder && <p className="text-muted-foreground">{t("backups.project.noMounts")}</p>}
                 {d.sourceFolder && (
                   <label className="flex items-start gap-2">
                     <input
@@ -161,8 +161,8 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                       onChange={(e) => setChoices({ ...choices, src: e.target.checked })}
                     />
                     <span className="min-w-0 break-words">
-                      <span className="font-medium">Código do projeto</span> <span className="text-muted-foreground">· {formatBytes(d.sourceFolder.sizeBytes)}</span>
-                      <span className="block text-muted-foreground">Este projeto não vem do GitHub: sem o backup, o código só existe nesta VPS.</span>
+                      <span className="font-medium">{t("backups.project.sourceCode")}</span> <span className="text-muted-foreground">· {formatBytes(d.sourceFolder.sizeBytes)}</span>
+                      <span className="block text-muted-foreground">{t("backups.project.sourceHint")}</span>
                     </span>
                   </label>
                 )}
@@ -178,7 +178,11 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                     <span className="min-w-0 break-words">
                       <span className="font-medium">{m.destination}</span>{" "}
                       <span className="text-muted-foreground">
-                        · serviço {m.service} · {m.type === "volume" ? `volume ${m.source}` : `pasta ${m.source}`} · {formatBytes(m.sizeBytes)}
+                        {t(m.type === "volume" ? "backups.project.mountVolume" : "backups.project.mountFolder", {
+                          service: m.service,
+                          source: m.source,
+                          size: formatBytes(m.sizeBytes),
+                        })}
                       </span>
                       <span className="block text-muted-foreground">{m.reason}</span>
                     </span>
@@ -187,14 +191,14 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
               </section>
 
               <section className="flex flex-col gap-2">
-                <h3 className="font-medium">Pastas adicionadas</h3>
-                {extras.length === 0 && <p className="text-muted-foreground">Nenhuma. Use para uma pasta dentro do container que não é volume.</p>}
+                <h3 className="font-medium">{t("backups.project.extras")}</h3>
+                {extras.length === 0 && <p className="text-muted-foreground">{t("backups.project.noExtras")}</p>}
                 {extras.map((x, i) => (
                   <div key={`${x.service}:${x.path}`} className="flex items-center gap-2">
                     <span className="min-w-0 flex-1 break-words">
-                      <code>{x.path}</code> <span className="text-muted-foreground">· serviço {x.service}</span>
+                      <code>{x.path}</code> <span className="text-muted-foreground">{t("backups.project.extraService", { service: x.service })}</span>
                     </span>
-                    <Button variant="ghost" size="sm" aria-label={`Remover ${x.path}`} onClick={() => setExtras(extras.filter((_, j) => j !== i))}>
+                    <Button variant="ghost" size="sm" aria-label={t("backups.project.removeExtra", { path: x.path })} onClick={() => setExtras(extras.filter((_, j) => j !== i))}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -203,7 +207,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                     <div className="flex flex-col gap-1.5">
                       <label htmlFor="bk-extra-service" className="text-muted-foreground">
-                        Serviço
+                        {t("backups.project.service")}
                       </label>
                       <select
                         id="bk-extra-service"
@@ -220,7 +224,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                     </div>
                     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                       <label htmlFor="bk-extra-path" className="text-muted-foreground">
-                        Caminho dentro do container
+                        {t("backups.project.containerPath")}
                       </label>
                       <Input id="bk-extra-path" placeholder="/app/storage" value={newPath} onChange={(e) => setNewPath(e.target.value)} spellCheck={false} />
                     </div>
@@ -232,7 +236,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                         setNewPath("");
                       }}
                     >
-                      <FolderPlus className="h-4 w-4" /> Adicionar pasta
+                      <FolderPlus className="h-4 w-4" /> {t("backups.project.addFolder")}
                     </Button>
                   </div>
                 )}
@@ -241,34 +245,36 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
               {d.unsavedWrites.length > 0 && (
                 <div data-testid="unsaved-writes" className="flex flex-col gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200">
                   <p className="flex items-start gap-2 font-medium">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> Arquivos gravados fora de volume
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {t("backups.project.unsavedTitle")}
                   </p>
                   {d.unsavedWrites.map((u) => (
                     <p key={u.service}>
-                      Serviço {u.service}: {u.count} arquivo(s), por exemplo <code>{u.samples.slice(0, 3).join(", ")}</code>.
+                      <Trans
+                        k="backups.project.unsavedLine"
+                        params={{ service: u.service, count: u.count, samples: u.samples.slice(0, 3).join(", ") }}
+                        components={{ code: <code /> }}
+                      />
                     </p>
                   ))}
-                  <p className="text-amber-200/80">
-                    Eles somem no próximo deploy e não entram no backup. Declare um volume no compose ou use Adicionar pasta.
-                  </p>
+                  <p className="text-amber-200/80">{t("backups.project.unsavedHint")}</p>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground">Detectado em {when(d.detectedAt)}.</p>
+              <p className="text-xs text-muted-foreground">{t("backups.project.detectedAt", { when: when(d.detectedAt) })}</p>
             </>
           )}
           <Feedback error={error} notice={notice} />
           <div className="flex flex-wrap gap-2">
             {d && (
               <Button onClick={() => void saveItems()} disabled={!dirty || busy !== null}>
-                {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} Salvar itens
+                {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.project.saveItems")}
               </Button>
             )}
             <Button
               variant="outline"
-              onClick={() => void act("detect", () => apiFetch(`/api/backups/projects/${projectId}/detect`, { method: "POST" }), "Detecção atualizada.")}
+              onClick={() => void act("detect", () => apiFetch(`/api/backups/projects/${projectId}/detect`, { method: "POST" }), t("backups.project.detectionUpdated"))}
               disabled={busy !== null}
             >
-              {busy === "detect" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Detectar de novo
+              {busy === "detect" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} {t("backups.project.detectAgain")}
             </Button>
           </div>
         </CardContent>
@@ -277,16 +283,16 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <HardDrive className="h-4 w-4 text-violet-400" /> Frequência e cópias
+            <HardDrive className="h-4 w-4 text-violet-400" /> {t("backups.project.frequency.title")}
           </CardTitle>
           <CardDescription>
             {view.destinationConnected ? (
-              "Cada backup fica na VPS e vai também para o armazenamento externo."
+              t("backups.project.frequency.connected")
             ) : (
               <>
-                Por enquanto os backups ficam só na VPS.{" "}
+                {t("backups.project.frequency.vpsOnly")}{" "}
                 <Link to="/settings/backups" className="underline underline-offset-2">
-                  Conectar um armazenamento externo
+                  {t("backups.project.frequency.connect")}
                 </Link>
               </>
             )}
@@ -296,18 +302,23 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           <div className="flex flex-wrap items-center gap-2" data-testid="project-settings-source">
             {view.target.followsDefaults !== false ? (
               <>
-                <Badge variant="secondary">Seguindo o padrão do painel</Badge>
+                <Badge variant="secondary">{t("backups.project.followsDefaults")}</Badge>
                 <span className="text-muted-foreground">
-                  Muda junto com o{" "}
-                  <Link to="/settings/backups" className="underline underline-offset-2">
-                    padrão dos projetos
-                  </Link>
-                  . Salvar aqui passa a usar uma configuração própria.
+                  <Trans
+                    k="backups.project.followsDefaultsHelp"
+                    components={{
+                      link: (children) => (
+                        <Link to="/settings/backups" className="underline underline-offset-2">
+                          {children}
+                        </Link>
+                      ),
+                    }}
+                  />
                 </span>
               </>
             ) : (
               <>
-                <Badge variant="outline">Configuração própria</Badge>
+                <Badge variant="outline">{t("backups.project.ownSettings")}</Badge>
                 <Button
                   variant="outline"
                   size="sm"
@@ -316,11 +327,11 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                     void act(
                       "defaults",
                       () => apiFetch(`/api/backups/targets/project:${projectId}/use-defaults`, { method: "POST" }),
-                      "O projeto voltou ao padrão do painel.",
+                      t("backups.project.backToDefaultsDone"),
                     )
                   }
                 >
-                  {busy === "defaults" && <Loader2 className="h-4 w-4 animate-spin" />} Voltar ao padrão
+                  {busy === "defaults" && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.project.backToDefaults")}
                 </Button>
               </>
             )}
@@ -334,28 +345,28 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
             onSaved={load}
           />
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-muted-foreground">Último backup:</span>
+            <span className="text-muted-foreground">{t("backups.lastBackup.label")}</span>
             {last ? (
               <>
                 <RecordBadge record={last} /> <span>{when(last.finishedAt ?? last.queuedAt)}</span>
               </>
             ) : (
-              <span>nenhum ainda</span>
+              <span>{t("backups.lastBackup.none")}</span>
             )}
-            {view.target.lastRemoteVerifiedAt && <Badge variant="success">Externo conferido em {when(view.target.lastRemoteVerifiedAt)}</Badge>}
+            {view.target.lastRemoteVerifiedAt && <Badge variant="success">{t("backups.project.remoteVerifiedAt", { when: when(view.target.lastRemoteVerifiedAt) })}</Badge>}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               variant="info"
               disabled={busy !== null || running || !status.archiverAvailable}
               onClick={() =>
-                void act("run", () => apiFetch<BackupRecord>(`/api/backups/targets/project:${projectId}/run`, { method: "POST" }), "Backup na fila. Acompanhe abaixo.")
+                void act("run", () => apiFetch<BackupRecord>(`/api/backups/targets/project:${projectId}/run`, { method: "POST" }), t("backups.project.queued"))
               }
             >
-              {busy === "run" || running ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />} Fazer backup agora
+              {busy === "run" || running ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />} {t("backups.action.backupNow")}
             </Button>
             <Button variant="outline" onClick={() => setRestoring(true)}>
-              <RotateCcw className="h-4 w-4" /> Restaurar
+              <RotateCcw className="h-4 w-4" /> {t("backups.action.restore")}
             </Button>
             <VerifyAllButton target={`project:${projectId}`} onQueued={load} disabled={!status.archiverAvailable || !last} />
           </div>
@@ -365,10 +376,10 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Histórico</CardTitle>
+          <CardTitle className="text-base">{t("backups.project.history")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <HistoryList records={view.history} showTarget={false} empty="Nenhum backup deste projeto ainda." onVerify={load} />
+          <HistoryList records={view.history} showTarget={false} empty={t("backups.project.historyEmpty")} onVerify={load} />
         </CardContent>
       </Card>
 

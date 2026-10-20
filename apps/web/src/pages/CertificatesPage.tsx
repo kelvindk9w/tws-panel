@@ -6,7 +6,8 @@ import type {
   CertificateRetryResponse,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
-import { formatDay, modeLabel, ownerLabel, STATE_LABELS, stateVariant } from "@/lib/certificates";
+import { apiErrorText, Trans, useI18n } from "@/i18n";
+import { formatDay, modeLabel, ownerLabel, STATE_KEYS, stateVariant } from "@/lib/certificates";
 import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,10 +16,6 @@ import { AlertTriangle, CheckCircle2, FileUp, Loader2, RefreshCw, RotateCcw, Shi
 
 const textareaClass =
   "min-h-28 w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
-
-function errorText(err: unknown, fallback: string): string {
-  return err instanceof ApiRequestError ? err.message : fallback;
-}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -36,6 +33,7 @@ function PemField({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { t } = useI18n();
   async function load(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) onChange(await file.text());
@@ -47,7 +45,7 @@ function PemField({
           {label}
         </label>
         <label className="inline-flex cursor-pointer items-center gap-1 text-xs text-sky-400 hover:underline">
-          <FileUp className="h-3.5 w-3.5" /> Carregar arquivo
+          <FileUp className="h-3.5 w-3.5" /> {t("certificates.pem.loadFile")}
           <input type="file" accept={accept} className="sr-only" onChange={(e) => void load(e)} />
         </label>
       </div>
@@ -65,6 +63,7 @@ function ManualForm({
   onDone: (item: CertificateItem) => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   const [cert, setCert] = useState("");
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,7 +81,7 @@ function ManualForm({
       setKey("");
       onDone(r.item);
     } catch (err) {
-      setError(errorText(err, "Não foi possível instalar o certificado."));
+      setError(apiErrorText(err, "certificates.manual.error"));
     } finally {
       setBusy(false);
     }
@@ -91,12 +90,10 @@ function ManualForm({
   return (
     <div className="flex flex-col gap-3 rounded-md border p-3">
       <p className="text-sm text-muted-foreground">
-        Use quando você já tem um certificado (comprado ou o wildcard da empresa). Cole o certificado com a cadeia
-        (os intermediários) e a chave privada sem senha. A chave fica guardada só no servidor e nunca é mostrada de
-        novo. Certificado próprio <strong>não renova sozinho</strong>: o painel avisa 30 e 7 dias antes de vencer.
+        <Trans k="certificates.manual.intro" components={{ strong: <strong /> }} />
       </p>
-      <PemField id={`cert-${id}`} label="Certificado (PEM, com a cadeia)" accept=".crt,.pem,.cer" value={cert} onChange={setCert} />
-      <PemField id={`key-${id}`} label="Chave privada (PEM)" accept=".key,.pem" value={key} onChange={setKey} />
+      <PemField id={`cert-${id}`} label={t("certificates.manual.certLabel")} accept=".crt,.pem,.cer" value={cert} onChange={setCert} />
+      <PemField id={`key-${id}`} label={t("certificates.manual.keyLabel")} accept=".key,.pem" value={key} onChange={setKey} />
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -104,10 +101,10 @@ function ManualForm({
       )}
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={onCancel} disabled={busy}>
-          Cancelar
+          {t("certificates.manual.cancel")}
         </Button>
         <Button variant="success" disabled={busy || !cert.trim() || !key.trim()} onClick={() => void install()}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Instalar certificado
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} {t("certificates.manual.install")}
         </Button>
       </div>
     </div>
@@ -137,6 +134,7 @@ export function CertificateCard({
   pollMs: number;
   pollMaxMs: number;
 }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState<"retry" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tracking, setTracking] = useState<Tracking | null>(null);
@@ -177,7 +175,7 @@ export function CertificateCard({
     setTracking(null);
     try {
       const r = await apiFetch<CertificateRetryResponse>(`${path}/retry`, { method: "POST" });
-      setTracking({ phase: "running", message: `${r.message} Acompanhando por até 2 minutos…` });
+      setTracking({ phase: "running", message: t("certificates.card.tracking.running", { message: r.message }) });
       const started = Date.now();
       while (alive.current && Date.now() - started < pollMaxMs) {
         await sleep(pollMs);
@@ -186,12 +184,12 @@ export function CertificateCard({
         if (!current || !alive.current) continue;
         onItem(current);
         if (current.state === "valid" || current.state === "expiring") {
-          setTracking({ phase: "done", ok: true, message: "Certificado emitido! O endereço já abre com HTTPS válido." });
+          setTracking({ phase: "done", ok: true, message: t("certificates.card.tracking.issued") });
           await onValid?.();
           return;
         }
         if (current.state === "failed") {
-          setTracking({ phase: "done", ok: false, message: "A emissão falhou de novo. Veja a causa acima, corrija e tente outra vez." });
+          setTracking({ phase: "done", ok: false, message: t("certificates.card.tracking.failedAgain") });
           return;
         }
       }
@@ -199,12 +197,12 @@ export function CertificateCard({
         setTracking({
           phase: "done",
           ok: false,
-          message: "Ainda não ficou pronto. O proxy continua tentando sozinho; confira de novo em alguns minutos.",
+          message: t("certificates.card.tracking.notReady"),
         });
       }
     } catch (err) {
-      if (err instanceof ApiRequestError && err.code === "already_valid") await alreadyValid(err.message);
-      else setError(errorText(err, "Não foi possível pedir a emissão."));
+      if (err instanceof ApiRequestError && err.code === "already_valid") await alreadyValid(apiErrorText(err, "certificates.card.error.retry"));
+      else setError(apiErrorText(err, "certificates.card.error.retry"));
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -218,7 +216,7 @@ export function CertificateCard({
       setConfirmRemove(false);
       onItem(r.item);
     } catch (err) {
-      setError(errorText(err, "Não foi possível voltar para o automático."));
+      setError(apiErrorText(err, "certificates.card.error.backToAuto"));
     } finally {
       setBusy(null);
     }
@@ -232,7 +230,7 @@ export function CertificateCard({
     <li data-testid={`cert-${item.host}`} className="flex flex-col gap-3 rounded-lg border px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="break-all font-mono text-sm">{item.host}</span>
-        <Badge variant={stateVariant(item.state)}>{STATE_LABELS[item.state]}</Badge>
+        <Badge variant={stateVariant(item.state)}>{t(STATE_KEYS[item.state])}</Badge>
         <Badge variant="outline">{modeLabel(item)}</Badge>
         <span className="text-xs text-muted-foreground">{ownerLabel(item)}</span>
       </div>
@@ -240,21 +238,23 @@ export function CertificateCard({
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
         {item.validTo && (
           <p>
-            Emitido por {item.issuer ?? "—"} · válido até {formatDay(item.validTo)}
+            {t("certificates.card.issuedBy", { issuer: item.issuer ?? "—", date: formatDay(item.validTo) })}
           </p>
         )}
         {item.mode === "automatic" && item.renewsAround && (
           <p>
-            Automático: renova sozinho por volta de {formatDay(item.renewsAround)} (data aproximada — o Let&apos;s
-            Encrypt renova cerca de 30 dias antes do fim).
+            {t("certificates.card.renewsAround", { date: formatDay(item.renewsAround) })}
           </p>
         )}
-        {item.coveredBy && <p>Usa o certificado próprio instalado em {item.coveredBy} (ele cobre este nome).</p>}
+        {item.coveredBy && <p>{t("certificates.card.coveredBy", { host: item.coveredBy })}</p>}
         {item.mode === "manual" && (
           <p className="text-amber-400">
-            Certificado próprio: não renova sozinho
-            {item.validTo || item.manual ? ` — envie um novo antes de ${formatDay((item.manual?.validTo ?? item.validTo)!)}` : ""}. O painel
-            gera um alerta 30 e 7 dias antes do fim.
+            {t("certificates.card.manualWarning", {
+              extra:
+                item.validTo || item.manual
+                  ? t("certificates.card.manualWarning.extra", { date: formatDay((item.manual?.validTo ?? item.validTo)!) })
+                  : "",
+            })}
           </p>
         )}
       </div>
@@ -267,7 +267,7 @@ export function CertificateCard({
           </p>
           {item.lastError.detail && (
             <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer">Detalhe técnico{item.lastError.at ? ` (${formatDay(item.lastError.at)})` : ""}</summary>
+              <summary className="cursor-pointer">{t("certificates.card.errorDetail")}{item.lastError.at ? ` (${formatDay(item.lastError.at)})` : ""}</summary>
               <p className="mt-1 break-all font-mono">{item.lastError.detail}</p>
             </details>
           )}
@@ -296,8 +296,7 @@ export function CertificateCard({
       )}
       {explainRenew && (
         <p className="text-sm text-muted-foreground">
-          Não é preciso renovar: este certificado está válido e o painel renova sozinho perto do fim. Pedir
-          certificados repetidos pode até bloquear o nome por uma semana no Let&apos;s Encrypt (limite de 5 iguais).
+          {t("certificates.card.explainRenew")}
         </p>
       )}
       {error && (
@@ -310,39 +309,38 @@ export function CertificateCard({
         {item.canRetry && (
           <Button variant="info" size="sm" disabled={busy !== null} onClick={() => void retry()}>
             {busy === "retry" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
-            Tentar emitir agora
+            {t("certificates.card.retry")}
           </Button>
         )}
         {validAuto && (
           <Button variant="ghost" size="sm" onClick={() => setExplainRenew((v) => !v)}>
-            Renovar agora?
+            {t("certificates.card.renewQ")}
           </Button>
         )}
         {(canUseOwn || ownManual) && !showForm && (
           <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => setShowForm(true)}>
-            <Upload className="h-4 w-4" /> {ownManual ? "Trocar certificado" : "Usar certificado próprio"}
+            <Upload className="h-4 w-4" /> {ownManual ? t("certificates.card.replaceCert") : t("certificates.card.useOwn")}
           </Button>
         )}
         {ownManual && !confirmRemove && (
           <Button variant="danger" size="sm" disabled={busy !== null} onClick={() => setConfirmRemove(true)}>
-            <RotateCcw className="h-4 w-4" /> Voltar para automático
+            <RotateCcw className="h-4 w-4" /> {t("certificates.card.backToAuto")}
           </Button>
         )}
         {ownManual && confirmRemove && (
           <>
             <Button variant="outline" size="sm" onClick={() => setConfirmRemove(false)}>
-              Cancelar
+              {t("certificates.card.cancel")}
             </Button>
             <Button variant="danger" size="sm" disabled={busy !== null} onClick={() => void backToAutomatic()}>
-              {busy === "remove" && <Loader2 className="h-4 w-4 animate-spin" />} Confirmar e apagar
+              {busy === "remove" && <Loader2 className="h-4 w-4 animate-spin" />} {t("certificates.card.confirmRemove")}
             </Button>
           </>
         )}
       </div>
       {confirmRemove && (
         <p className="text-xs text-muted-foreground">
-          O certificado próprio é apagado do servidor e o painel volta a emitir um automático (Let&apos;s Encrypt). Leva de
-          segundos a alguns minutos; nesse meio-tempo o endereço pode mostrar aviso de segurança.
+          {t("certificates.card.removeNote")}
         </p>
       )}
 
@@ -372,6 +370,7 @@ export function CertificateCard({
  * (lib/auto-refresh.ts), pausando com a aba oculta.
  */
 export function CertificatesPage({ pollMs = 10_000, pollMaxMs = 120_000 }: { pollMs?: number; pollMaxMs?: number }) {
+  const { t } = useI18n();
   const [data, setData] = useState<CertificateListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -382,7 +381,7 @@ export function CertificatesPage({ pollMs = 10_000, pollMaxMs = 120_000 }: { pol
       setData(await apiFetch<CertificateListResponse>("/api/certificates"));
       setError(null);
     } catch (err) {
-      setError(errorText(err, "Não foi possível carregar os certificados."));
+      setError(apiErrorText(err, "certificates.page.error.load"));
     } finally {
       setLoading(false);
     }
@@ -408,15 +407,14 @@ export function CertificatesPage({ pollMs = 10_000, pollMaxMs = 120_000 }: { pol
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
-            <ShieldCheck className="h-6 w-6" /> Certificados
+            <ShieldCheck className="h-6 w-6" /> {t("certificates.page.title")}
           </h1>
           <p className="text-sm text-muted-foreground">
-            O cadeado do HTTPS de cada endereço que este painel serve. No modo automático, o painel emite e renova
-            sozinho (Let&apos;s Encrypt). No manual, você envia o seu certificado.
+            {t("certificates.page.subtitle")}
           </p>
         </div>
         <Button variant="outline" disabled={loading} onClick={() => void load()}>
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Conferir de novo
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} {t("certificates.page.recheck")}
         </Button>
       </div>
 
@@ -424,22 +422,20 @@ export function CertificatesPage({ pollMs = 10_000, pollMaxMs = 120_000 }: { pol
       {data && !data.proxyRunning && (
         <p role="alert" className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-400">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          O proxy (Caddy) que serve os endereços não está rodando, então não dá para conferir os certificados. Ele sobe
-          sozinho com o painel e a cada deploy; se continuar assim, reinicie o painel.
+          {t("certificates.page.proxyDown")}
         </p>
       )}
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Endereços com HTTPS</CardTitle>
-          <CardDescription>Conferido agora, do jeito que um navegador confere.</CardDescription>
+          <CardTitle className="text-base">{t("certificates.list.title")}</CardTitle>
+          <CardDescription>{t("certificates.list.desc")}</CardDescription>
         </CardHeader>
         <CardContent>
-          {!data && !error && <p className="text-sm text-muted-foreground">conferindo…</p>}
+          {!data && !error && <p className="text-sm text-muted-foreground">{t("certificates.list.checking")}</p>}
           {data && data.items.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              Nenhum endereço com HTTPS ainda. Eles aparecem aqui quando você conecta um domínio a um projeto, ao
-              painel ou ao e-mail.
+              {t("certificates.list.empty")}
             </p>
           )}
           {data && data.items.length > 0 && (

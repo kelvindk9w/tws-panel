@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Check, ChevronDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/i18n";
 
 export interface ComboboxOption {
   value: string;
@@ -64,7 +65,7 @@ export function Combobox({
   value,
   onChange,
   allowCreate = false,
-  createLabel = (q) => `Usar "${q}"`,
+  createLabel,
   normalizeCreate = (q) => q.trim(),
   placeholder,
   disabled,
@@ -72,6 +73,7 @@ export function Combobox({
   className,
   ...aria
 }: ComboboxProps) {
+  const { t } = useI18n();
   const autoId = React.useId();
   const inputId = id ?? `${autoId}-input`;
   const listId = `${autoId}-list`;
@@ -177,7 +179,7 @@ export function Combobox({
       <button
         type="button"
         tabIndex={-1}
-        aria-label={open ? "Fechar a lista" : "Abrir a lista"}
+        aria-label={open ? t("common.combobox.close") : t("common.combobox.open")}
         disabled={disabled}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => {
@@ -200,7 +202,7 @@ export function Combobox({
           onMouseDown={(e) => e.preventDefault()}
           className="absolute left-0 right-0 z-50 mt-1 max-h-[17rem] overflow-y-auto rounded-md border bg-background p-1 shadow-lg"
         >
-          {items.length === 0 && <li className="px-2 py-1.5 text-sm text-muted-foreground">Nada encontrado.</li>}
+          {items.length === 0 && <li className="px-2 py-1.5 text-sm text-muted-foreground">{t("common.combobox.empty")}</li>}
           {items.map((item, i) => {
             const isActive = i === active;
             const isSelected = item.kind === "option" && item.option.value === value;
@@ -223,7 +225,7 @@ export function Combobox({
                 {item.kind === "create" ? (
                   <>
                     <Plus className="h-4 w-4 shrink-0 text-sky-400" />
-                    <span>{createLabel(item.value)}</span>
+                    <span>{createLabel ? createLabel(item.value) : t("common.combobox.create", { query: item.value })}</span>
                   </>
                 ) : (
                   <>

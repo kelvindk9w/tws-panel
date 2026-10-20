@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { CopyButton } from "@/components/CopyButton";
+import { Trans, useI18n } from "@/i18n";
 import { ChevronDown, ChevronRight, KeyRound } from "lucide-react";
 
 function CommandRow({ cmd }: { cmd: string }) {
@@ -24,6 +25,9 @@ function CommandRow({ cmd }: { cmd: string }) {
  * precisa. Quem nunca usou chave SSH abre o resumo e vê o passo a passo.
  */
 export function SshKeyGuide() {
+  const { t } = useI18n();
+  const b = <strong className="text-foreground" />;
+  const code = <code className="font-mono text-foreground" />;
   const [open, setOpen] = useState(false);
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-secondary/20 p-4 text-sm">
@@ -39,22 +43,17 @@ export function SshKeyGuide() {
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
         <KeyRound className="h-4 w-4 shrink-0 text-amber-400" />
-        Nunca usou chave SSH? Veja como gerar em 2 minutos.
+        {t("hardening.sshGuide.toggle")}
       </button>
 
       {open && (
       <>
       <div className="flex flex-col gap-1 text-xs leading-relaxed text-muted-foreground">
         <p>
-          <strong className="text-foreground">O que é:</strong> um par de chaves criptográficas. A{" "}
-          <strong className="text-foreground">chave privada</strong> fica guardada no SEU computador
-          (nunca saia dela nem compartilhe) e a <strong className="text-foreground">chave pública</strong>{" "}
-          é instalada no servidor — é ela que você cola aqui.
+          <Trans k="hardening.sshGuide.whatIs" components={{ b }} />
         </p>
         <p>
-          <strong className="text-foreground">Para que serve:</strong> é assim que você vai entrar na
-          VPS por SSH <strong className="text-foreground">depois que o acesso root for desativado</strong>{" "}
-          pelo hardening. Sem ela instalada, o painel NÃO trava o root (proteção anti-lockout).
+          <Trans k="hardening.sshGuide.purpose" components={{ b }} />
         </p>
       </div>
 
@@ -62,52 +61,52 @@ export function SshKeyGuide() {
         {/* ------------------------------------------------ Windows */}
         <div className="flex flex-col gap-2 rounded-md border border-border/60 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            🪟 Windows (PowerShell)
+            {t("hardening.sshGuide.windows.title")}
           </p>
           <ol className="flex list-decimal flex-col gap-2 pl-4 text-xs text-muted-foreground">
             <li>
-              Abra o <strong className="text-foreground">PowerShell</strong> e gere o par de chaves
-              (aperte Enter para aceitar o local padrão; a senha da chave é opcional, mas recomendada):
+              <Trans k="hardening.sshGuide.windows.step1" components={{ b }} />
               <CommandRow cmd="ssh-keygen -t ed25519" />
             </li>
             <li>
-              Exiba a chave pública para copiar (ela fica em{" "}
-              <code className="font-mono text-foreground">C:\Users\SEU_USUARIO\.ssh\id_ed25519.pub</code>):
-              <CommandRow cmd="Get-Content ~\.ssh\id_ed25519.pub" />
+              <Trans
+                k="hardening.sshGuide.windows.step2"
+                params={{ path: "C:\\Users\\SEU_USUARIO\\.ssh\\id_ed25519.pub" }}
+                components={{ code }}
+              />
+              <CommandRow cmd="Get-Content ~\\.ssh\\id_ed25519.pub" />
             </li>
-            <li>Copie a linha inteira exibida (começa com ssh-ed25519) e cole no campo abaixo.</li>
+            <li>{t("hardening.sshGuide.windows.step3")}</li>
           </ol>
         </div>
 
         {/* ---------------------------------------------- Linux/macOS */}
         <div className="flex flex-col gap-2 rounded-md border border-border/60 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            🐧 Linux / 🍎 macOS (Terminal)
+            {t("hardening.sshGuide.unix.title")}
           </p>
           <ol className="flex list-decimal flex-col gap-2 pl-4 text-xs text-muted-foreground">
             <li>
-              Abra o <strong className="text-foreground">Terminal</strong> e gere o par de chaves
-              (aperte Enter para aceitar o local padrão; a senha da chave é opcional, mas recomendada):
+              <Trans k="hardening.sshGuide.unix.step1" components={{ b }} />
               <CommandRow cmd="ssh-keygen -t ed25519" />
             </li>
             <li>
-              Exiba a chave pública para copiar (ela fica em{" "}
-              <code className="font-mono text-foreground">~/.ssh/id_ed25519.pub</code>):
+              <Trans k="hardening.sshGuide.unix.step2" params={{ path: "~/.ssh/id_ed25519.pub" }} components={{ code }} />
               <CommandRow cmd="cat ~/.ssh/id_ed25519.pub" />
             </li>
             <li>
-              Copie a linha inteira exibida (começa com ssh-ed25519) e cole no campo abaixo. No Mac,
-              dá para copiar direto com{" "}
-              <code className="font-mono text-foreground">pbcopy &lt; ~/.ssh/id_ed25519.pub</code>.
+              <Trans
+                k="hardening.sshGuide.unix.step3"
+                params={{ command: "pbcopy < ~/.ssh/id_ed25519.pub" }}
+                components={{ code }}
+              />
             </li>
           </ol>
         </div>
       </div>
 
       <p className="text-xs text-muted-foreground">
-        💡 <strong className="text-foreground">Já tem uma chave?</strong> Se o comando de exibição
-        acima mostrar uma linha começando com ssh-ed25519 ou ssh-rsa, não precisa gerar outra — use
-        a que você já tem.
+        <Trans k="hardening.sshGuide.alreadyHave" components={{ b }} />
       </p>
       </>
       )}

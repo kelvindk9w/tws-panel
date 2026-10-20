@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { createBrowserRouter, Navigate, Outlet } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { Layout } from "@/components/Layout";
@@ -27,6 +28,7 @@ import { BackupSettings } from "@/pages/settings/BackupSettings";
 import { TimezoneSettings } from "@/pages/settings/TimezoneSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { useI18n } from "@/i18n";
 
 const router = createBrowserRouter([
   {
@@ -84,10 +86,13 @@ const router = createBrowserRouter([
 ]);
 
 export function App() {
+  const { locale } = useI18n();
+  // Trocar de idioma remonta a árvore: nada fica com texto do idioma anterior
+  // (inclusive texto montado fora de hooks). O estado da rota é do `router`.
   return (
-    <>
+    <Fragment key={locale}>
       <RouterProvider router={router} />
       <UpdateBanner />
-    </>
+    </Fragment>
   );
 }

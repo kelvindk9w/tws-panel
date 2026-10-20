@@ -23,6 +23,7 @@ import type {
   UpdateProjectRequest,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { apiErrorText, formatDateTime, t as tGlobal, Trans, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -69,20 +70,21 @@ function CredencialSection({
   credential: ProjectCredentialInfo;
   onSaved: () => void;
 }) {
+  const { t } = useI18n();
   const [token, setToken] = useState("");
   const [username, setUsername] = useState("");
   // formulário sempre aberto quando não há credencial; para substituir, o
   // operador precisa pedir — assim o estado "já cadastrada" fica evidente.
   const [editando, setEditando] = useState(false);
   const [confirmandoRemocao, setConfirmandoRemocao] = useState(false);
-  const [busy, setBusy] = useState<"salvar" | "remover" | null>(null);
+  const [busy, setBusy] = useState<"save" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const cadastrando = !credential.configured || editando;
 
   async function salvar() {
     if (token.trim().length === 0) return;
-    setBusy("salvar");
+    setBusy("save");
     setError(null);
     try {
       const req: SetProjectCredentialRequest = { token: token.trim() };
@@ -97,21 +99,21 @@ function CredencialSection({
       setEditando(false);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao salvar a credencial.");
+      setError(apiErrorText(err, "projects.config.cred.saveError"));
     } finally {
       setBusy(null);
     }
   }
 
   async function remover() {
-    setBusy("remover");
+    setBusy("remove");
     setError(null);
     try {
       await apiFetch(`/api/projects/${projectId}/credential`, { method: "DELETE" });
       setConfirmandoRemocao(false);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao remover a credencial.");
+      setError(apiErrorText(err, "projects.config.cred.removeError"));
     } finally {
       setBusy(null);
     }
@@ -121,11 +123,10 @@ function CredencialSection({
     <div className="mt-6 flex flex-col gap-3 border-t pt-5">
       <div className="flex flex-col gap-1">
         <h3 className="flex items-center gap-2 text-sm font-medium">
-          <KeyRound className="h-4 w-4" /> Credencial do repositório privado
+          <KeyRound className="h-4 w-4" /> {t("projects.config.cred.title")}
         </h3>
         <p className="text-xs text-muted-foreground">
-          Só é necessária para clonar repositórios privados. Fica cifrada no servidor e o valor
-          nunca é exibido de volta.
+          {t("projects.config.cred.description")}
         </p>
       </div>
 
@@ -135,21 +136,22 @@ function CredencialSection({
           className="flex flex-col gap-1 rounded-md border bg-secondary/40 px-3 py-2 text-sm"
         >
           <span>
-            Credencial cadastrada — token terminado em{" "}
-            <code className="rounded bg-background px-1.5 py-0.5 font-mono text-xs">
-              ••••{credential.hint ?? "????"}
-            </code>
+            <Trans
+              k="projects.config.cred.saved"
+              params={{ hint: credential.hint ?? "????" }}
+              components={{ code: <code className="rounded bg-background px-1.5 py-0.5 font-mono text-xs" /> }}
+            />
           </span>
           <span className="text-xs text-muted-foreground">
-            Usuário: {credential.username ?? "—"}
+            {t("projects.config.cred.user", { user: credential.username ?? "—" })}
             {credential.updatedAt
-              ? ` · atualizada em ${new Date(credential.updatedAt).toLocaleString("pt-BR")}`
+              ? t("projects.config.cred.updatedAt", { date: formatDateTime(credential.updatedAt) })
               : ""}
           </span>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Nenhuma credencial cadastrada. Repositórios públicos não precisam de uma.
+          {t("projects.config.cred.none")}
         </p>
       )}
 
@@ -165,39 +167,39 @@ function CredencialSection({
           >
             <Eye className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
-              <strong>Acesso somente leitura.</strong> O painel apenas clona o repositório — nunca
-              escreve, nunca commita, nunca faz push. Use um token de leitura de escopo mínimo: no
-              GitHub, um <em>fine-grained personal access token</em> com a permissão{" "}
-              <code className="rounded bg-background/60 px-1 py-0.5 font-mono text-xs">
-                Contents: Read
-              </code>{" "}
-              apenas para este repositório. Em outros provedores (GitLab, Bitbucket, Gitea), gere um
-              token de acesso de leitura ao repositório.
+              <Trans
+                k="projects.config.cred.readOnly"
+                components={{
+                  b: <strong />,
+                  em: <em />,
+                  code: <code className="rounded bg-background/60 px-1 py-0.5 font-mono text-xs" />,
+                }}
+              />
             </span>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="cfg-token" className="text-sm font-medium">
-                Token de leitura
+                {t("projects.config.cred.tokenLabel")}
               </label>
               <PasswordInput
                 id="cfg-token"
-                revealLabel="token"
+                revealLabel={t("projects.config.cred.revealToken")}
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="cole o token aqui"
+                placeholder={t("projects.config.cred.tokenPlaceholder")}
               />
               <span className="text-xs text-muted-foreground">
-                Guardado cifrado. Depois de salvo, só a dica dos últimos caracteres volta a aparecer.
+                {t("projects.config.cred.tokenHint")}
               </span>
             </div>
 
             <div className="flex flex-col gap-1.5">
               <label htmlFor="cfg-cred-usuario" className="text-sm font-medium">
-                Usuário do git (opcional)
+                {t("projects.config.cred.usernameLabel")}
               </label>
               <Input
                 id="cfg-cred-usuario"
@@ -207,8 +209,7 @@ function CredencialSection({
                 placeholder={DEFAULT_GIT_CREDENTIAL_USERNAME}
               />
               <span className="text-xs text-muted-foreground">
-                No GitHub qualquer valor serve com um PAT; em branco usa{" "}
-                {DEFAULT_GIT_CREDENTIAL_USERNAME}.
+                {t("projects.config.cred.usernameHint", { user: DEFAULT_GIT_CREDENTIAL_USERNAME })}
               </span>
             </div>
           </div>
@@ -220,8 +221,7 @@ function CredencialSection({
       {confirmandoRemocao ? (
         <div className="flex flex-col gap-3 rounded-md border border-destructive/40 px-3 py-3">
           <p className="text-sm">
-            Remover a credencial de leitura deste projeto? O próximo deploy de um repositório
-            privado vai falhar até que uma nova seja cadastrada.
+            {t("projects.config.cred.removeConfirm")}
           </p>
           <div className="flex gap-2">
             <Button
@@ -231,7 +231,7 @@ function CredencialSection({
               disabled={busy !== null}
               onClick={() => setConfirmandoRemocao(false)}
             >
-              Cancelar
+              {t("projects.config.cancel")}
             </Button>
             <Button
               type="button"
@@ -240,12 +240,12 @@ function CredencialSection({
               disabled={busy !== null}
               onClick={() => void remover()}
             >
-              {busy === "remover" ? (
+              {busy === "remove" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Trash2 className="h-4 w-4" />
               )}
-              Confirmar remoção
+              {t("projects.config.cred.confirmRemove")}
             </Button>
           </div>
         </div>
@@ -253,12 +253,12 @@ function CredencialSection({
         <div className="flex flex-wrap gap-2">
           {cadastrando ? (
             <Button type="button" size="sm" disabled={busy !== null} onClick={() => void salvar()}>
-              {busy === "salvar" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Salvar credencial
+              {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {t("projects.config.cred.save")}
             </Button>
           ) : (
             <Button type="button" size="sm" variant="outline" onClick={() => setEditando(true)}>
-              Substituir credencial
+              {t("projects.config.cred.replace")}
             </Button>
           )}
           {credential.configured ? (
@@ -269,7 +269,7 @@ function CredencialSection({
               disabled={busy !== null}
               onClick={() => setConfirmandoRemocao(true)}
             >
-              <Trash2 className="h-4 w-4" /> Remover credencial
+              <Trash2 className="h-4 w-4" /> {t("projects.config.cred.remove")}
             </Button>
           ) : null}
           {credential.configured && editando ? (
@@ -283,7 +283,7 @@ function CredencialSection({
                 setEditando(false);
               }}
             >
-              Descartar
+              {t("projects.config.cred.discard")}
             </Button>
           ) : null}
         </div>
@@ -297,31 +297,32 @@ function divergencia(project: Project): string | null {
   if (project.deployedBranch === null && project.deployedSource === null) {
     // Houve tentativa e ela falhou: dizer isso, não "nunca houve deploy".
     if (project.lastDeployStatus === "failed") {
-      return "O último deploy falhou — o motivo está no log do deploy, mais abaixo. Corrija e clique em Deploy de novo.";
+      return tGlobal("projects.config.divergence.lastFailed");
     }
-    return "Nenhum deploy publicado ainda — a configuração abaixo vale para o primeiro deploy.";
+    return tGlobal("projects.config.divergence.neverDeployed");
   }
   const partes: string[] = [];
   if (project.deployedBranch !== project.branch) {
-    partes.push(`branch ${project.deployedBranch ?? "—"}`);
+    partes.push(tGlobal("projects.config.divergence.partBranch", { value: project.deployedBranch ?? "—" }));
   }
   if (project.deployedSource !== project.source) {
-    partes.push(`repositório ${project.deployedSource ?? "—"}`);
+    partes.push(tGlobal("projects.config.divergence.partSource", { value: project.deployedSource ?? "—" }));
   }
   if (partes.length === 0) return null;
   const quando = project.lastDeployAt
-    ? new Date(project.lastDeployAt).toLocaleString("pt-BR")
-    : "data desconhecida";
-  return `No ar: ${partes.join(" e ")} (deploy de ${quando}). Publique para aplicar as mudanças.`;
+    ? formatDateTime(project.lastDeployAt)
+    : tGlobal("projects.config.divergence.unknownDate");
+  return tGlobal("projects.config.divergence.live", { parts: partes.join(tGlobal("projects.config.divergence.and")), when: quando });
 }
 
 export function ProjectConfigCard({ section, project, repoVisibility = "unknown", credential, onSaved }: ProjectConfigCardProps) {
+  const { t } = useI18n();
   const [name, setName] = useState(project.name);
   const [source, setSource] = useState(project.source);
   const [branch, setBranch] = useState(project.branch ?? "");
   const [websocket, setWebsocket] = useState(project.websocket);
   const git = section === "git";
-  const [busy, setBusy] = useState<"salvar" | "publicar" | null>(null);
+  const [busy, setBusy] = useState<"save" | "publish" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const aviso = git ? divergencia(project) : null;
@@ -345,7 +346,7 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
     const req = alteracoes();
     if (Object.keys(req).length === 0 && !publicar) return;
 
-    setBusy(publicar ? "publicar" : "salvar");
+    setBusy(publicar ? "publish" : "save");
     setError(null);
     try {
       if (Object.keys(req).length > 0) {
@@ -362,7 +363,7 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
       }
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao salvar a configuração.");
+      setError(apiErrorText(err, "projects.config.saveError"));
     } finally {
       setBusy(null);
     }
@@ -373,12 +374,12 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           {git ? <GitBranch className="h-4 w-4" /> : <Settings className="h-4 w-4" />}
-          {git ? "Git" : "Configurações gerais"}
+          {git ? t("projects.config.titleGit") : t("projects.config.titleGeneral")}
         </CardTitle>
         <CardDescription>
           {git
-            ? "De onde o painel baixa o código. Mudanças de repositório ou branch valem no próximo deploy."
-            : "Nome de exibição e comportamento do projeto."}
+            ? t("projects.config.descriptionGit")
+            : t("projects.config.descriptionGeneral")}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -397,18 +398,18 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="cfg-nome" className="text-sm font-medium">
-                Nome
+                {t("projects.config.name")}
               </label>
               <Input id="cfg-nome" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium">Slug</span>
+              <span className="text-sm font-medium">{t("projects.config.slug")}</span>
               <p className="flex h-9 items-center rounded-md border border-dashed px-3 font-mono text-sm text-muted-foreground">
                 {project.slug}
               </p>
               <span className="text-xs text-muted-foreground">
-                Fixo: identifica containers, imagem e diretório do projeto.
+                {t("projects.config.slugHint")}
               </span>
             </div>
           </div>
@@ -422,13 +423,13 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
                 onChange={(e) => setWebsocket(e.target.checked)}
                 className="h-4 w-4"
               />
-              Projeto usa WebSocket / conexões longas (ex.: chat, jogos, SSE)
+              {t("projects.config.websocket")}
             </label>
           )}
 
           {git && !ehGit && (
             <p className="text-sm text-muted-foreground">
-              Este projeto usa uma pasta do servidor ({project.source}), não um repositório git.
+              {t("projects.config.serverFolder", { source: project.source })}
             </p>
           )}
 
@@ -436,21 +437,21 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="cfg-repo" className="text-sm font-medium">
-                  Repositório
+                  {t("projects.config.repository")}
                 </label>
                 <Input id="cfg-repo" value={source} onChange={(e) => setSource(e.target.value)} />
                 <span className="text-xs text-muted-foreground">
-                  Trocar o repositório refaz o clone do zero no próximo deploy.
+                  {t("projects.config.repositoryHint")}
                 </span>
               </div>
 
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="cfg-branch" className="text-sm font-medium">
-                  Branch
+                  {t("projects.config.branch")}
                 </label>
                 <Input id="cfg-branch" value={branch} onChange={(e) => setBranch(e.target.value)} />
                 <span className="text-xs text-muted-foreground">
-                  Ex.: main para produção, sandbox para testes.
+                  {t("projects.config.branchHint")}
                 </span>
               </div>
             </div>
@@ -460,12 +461,12 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
 
           <div className="flex flex-wrap gap-2">
             <Button type="button" disabled={busy !== null} onClick={(e) => void salvar(true, e)}>
-              {busy === "publicar" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Salvar e publicar
+              {busy === "publish" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {t("projects.config.saveAndPublish")}
             </Button>
             <Button type="submit" variant="outline" disabled={busy !== null}>
-              {busy === "salvar" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Salvar
+              {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {t("projects.config.save")}
             </Button>
           </div>
         </form>
@@ -479,7 +480,7 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
         ) : null}
         {git && ehGit && !mostrarCredencial ? (
           <p className="mt-6 border-t pt-5 text-xs text-muted-foreground">
-            Repositório público: o painel baixa o código sem precisar de token.
+            {t("projects.config.publicRepo")}
           </p>
         ) : null}
       </CardContent>

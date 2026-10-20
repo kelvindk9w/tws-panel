@@ -11,6 +11,7 @@ import {
   type BackupTargetStatus,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { Trans, t, useI18n, type Key } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,9 +47,19 @@ type OnStatus = (s: BackupsStatus) => void;
 // Armazenamento externo
 // ---------------------------------------------------------------------------
 
-const PROVIDER_LABEL: Record<BackupProvider, string> = { r2: "Cloudflare R2", s3: "Compatível com S3" };
+const PROVIDER_LABEL: Record<BackupProvider, Key> = { r2: "backups.provider.r2", s3: "backups.provider.s3" };
+
+const R2_STEPS: Key[] = [
+  "backups.destination.r2Step1",
+  "backups.destination.r2Step2",
+  "backups.destination.r2Step3",
+  "backups.destination.r2Step4",
+  "backups.destination.r2Step5",
+  "backups.destination.r2Step6",
+];
 
 function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus: OnStatus }) {
+  const { t } = useI18n();
   const d = status.destination;
   const [editing, setEditing] = useState(false);
   const [provider, setProvider] = useState<BackupProvider>(d?.provider ?? "r2");
@@ -87,7 +98,7 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
       accessKeyId: accessKeyId.trim(),
     };
     if (secret) body.secretAccessKey = secret;
-    const ok = await run("save", "/api/backups/destination", { method: "PUT", body: JSON.stringify(body) }, "Conexão testada e salva.");
+    const ok = await run("save", "/api/backups/destination", { method: "PUT", body: JSON.stringify(body) }, t("backups.destination.saved"));
     if (ok) {
       setSecret("");
       setEditing(false);
@@ -99,32 +110,37 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
     <Card data-testid="destination-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <CloudUpload className="h-4 w-4 text-sky-400" /> Armazenamento externo
+          <CloudUpload className="h-4 w-4 text-sky-400" /> {t("backups.destination.title")}
         </CardTitle>
-        <CardDescription>
-          Uma cópia fora da VPS: se o servidor for perdido, os backups continuam lá. A cópia na VPS é sempre feita, sem senha, com
-          as mais recentes.
-        </CardDescription>
+        <CardDescription>{t("backups.destination.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         {d && !editing && (
           <>
             <p className="break-words">
-              Conectado ao <strong>{PROVIDER_LABEL[d.provider]}</strong>: bucket <strong>{d.bucket}</strong> em{" "}
-              <span className="break-all text-muted-foreground">{d.endpoint}</span> (chave de acesso {d.accessKeyHint}).
+              <Trans
+                k="backups.destination.connected"
+                params={{ provider: t(PROVIDER_LABEL[d.provider]), bucket: d.bucket, endpoint: d.endpoint, hint: d.accessKeyHint }}
+                components={{ b: <strong />, endpoint: <span className="break-all text-muted-foreground" /> }}
+              />
             </p>
             <p className="text-muted-foreground">
-              Os arquivos ficam em <code className="text-foreground">{BACKUP_ROOT_FOLDER}/</code>, uma pasta por projeto, mais{" "}
-              <code className="text-foreground">_painel/</code> e <code className="text-foreground">_email/</code>.
+              <Trans k="backups.destination.files" params={{ root: BACKUP_ROOT_FOLDER }} components={{ code: <code className="text-foreground" /> }} />
             </p>
-            <div>{d.testedAt ? <Badge variant="success">Testado em {when(d.testedAt)}</Badge> : <Badge variant="warning">Falta testar</Badge>}</div>
+            <div>
+              {d.testedAt ? (
+                <Badge variant="success">{t("backups.destination.tested", { when: when(d.testedAt) })}</Badge>
+              ) : (
+                <Badge variant="warning">{t("backups.destination.untested")}</Badge>
+              )}
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="info"
-                onClick={() => void run("test", "/api/backups/destination/test", { method: "POST" }, "Conexão funcionando: o painel gravou, leu e apagou um arquivo de teste.")}
+                onClick={() => void run("test", "/api/backups/destination/test", { method: "POST" }, t("backups.destination.testOk"))}
                 disabled={busy !== null}
               >
-                {busy === "test" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />} Testar conexão
+                {busy === "test" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />} {t("backups.destination.testButton")}
               </Button>
               <Button
                 variant="outline"
@@ -137,15 +153,15 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
                 }}
                 disabled={busy !== null}
               >
-                Editar
+                {t("backups.destination.edit")}
               </Button>
               {!confirmRemove ? (
                 <Button variant="outline" onClick={() => setConfirmRemove(true)} disabled={busy !== null}>
-                  Desconectar
+                  {t("backups.destination.disconnect")}
                 </Button>
               ) : (
                 <span className="flex flex-wrap items-center gap-2">
-                  <span className="text-muted-foreground">Parar de enviar para fora? Os backups que já estão lá continuam lá.</span>
+                  <span className="text-muted-foreground">{t("backups.destination.disconnectConfirm")}</span>
                   <Button
                     variant="danger"
                     size="sm"
@@ -154,10 +170,10 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
                       void run("rm", "/api/backups/destination", { method: "DELETE" });
                     }}
                   >
-                    Sim, desconectar
+                    {t("backups.destination.disconnectYes")}
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setConfirmRemove(false)}>
-                    Não
+                    {t("backups.action.no")}
                   </Button>
                 </span>
               )}
@@ -179,7 +195,7 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
                     setRegion("auto");
                   }}
                 />
-                Cloudflare R2 <Badge variant="success">Recomendado</Badge>
+                {t("backups.provider.r2")} <Badge variant="success">{t("backups.destination.recommended")}</Badge>
               </label>
               <label className="flex items-center gap-1.5">
                 <input
@@ -192,46 +208,22 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
                     if (region === "auto") setRegion("");
                   }}
                 />
-                Outro compatível com S3 (Backblaze B2, Contabo, MinIO, Amazon S3…)
+                {t("backups.destination.otherS3")}
               </label>
             </div>
             {provider === "r2" ? (
               <>
-                <p className="text-muted-foreground">
-                  Os nomes aparecem em inglês ou em português, conforme o idioma da sua conta na Cloudflare: os dois vêm abaixo (inglês /
-                  português).
-                </p>
+                <p className="text-muted-foreground">{t("backups.destination.r2Names")}</p>
                 <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
-                  <li>
-                    No painel da Cloudflare, abra <strong className="text-foreground">R2 Object Storage</strong> / <strong className="text-foreground">Armazenamento de objetos R2</strong>. Na primeira vez, ative o R2 (o plano
-                    gratuito cobre 10 GB por mês).
-                  </li>
-                  <li>
-                    Clique em <strong className="text-foreground">Create bucket</strong> / <strong className="text-foreground">Criar bucket</strong>, dê um nome (ex.: tws-backups) e crie.
-                  </li>
-                  <li>
-                    Na página do R2, no canto direito, ache <strong className="text-foreground">API Tokens</strong> / <strong className="text-foreground">Tokens de API</strong> e clique em <strong className="text-foreground">Manage</strong> / <strong className="text-foreground">Gerenciar</strong>. Depois, em 
-                    <strong className="text-foreground">Create Account API token</strong> / <strong className="text-foreground">Criar token de API da conta</strong> (ou o de usuário, se só ele aparecer).
-                  </li>
-                  <li>
-                    No formulário: um nome (ex.: tws-panel-backups); em Permissions / Permissões, 
-                    <strong className="text-foreground">Object Read &amp; Write</strong> / <strong className="text-foreground">Leitura e gravação de objetos</strong>; em Specify bucket(s) / Especificar bucket(s), 
-                    <strong className="text-foreground">Apply to specific buckets only</strong> / <strong className="text-foreground">Aplicar somente a buckets específicos</strong> e escolha o bucket; TTL 
-                    <strong className="text-foreground">Forever</strong> / <strong className="text-foreground">Para sempre</strong>. Confirme no botão de criar o token, no fim da página.
-                  </li>
-                  <li>
-                    A tela seguinte mostra as chaves uma única vez. Copie a <strong className="text-foreground">Access Key ID</strong> / <strong className="text-foreground">ID da chave de acesso</strong>, a 
-                    <strong className="text-foreground">Secret Access Key</strong> / <strong className="text-foreground">Chave de acesso secreta</strong> e o endpoint que termina em .r2.cloudflarestorage.com (o “Token value” /
-                    “Valor do token” não é usado). Perdeu o endpoint? Ele fica no bucket → Settings / Configurações → S3 API.
-                  </li>
-                  <li>Cole tudo aqui, com a região auto, e clique em Testar e salvar.</li>
+                  {R2_STEPS.map((k) => (
+                    <li key={k}>
+                      <Trans k={k} components={{ b: <strong className="text-foreground" /> }} />
+                    </li>
+                  ))}
                 </ol>
               </>
             ) : (
-              <p className="text-muted-foreground">
-                Use os dados do seu provedor: o endpoint (ex.: https://s3.us-west-004.backblazeb2.com ou https://eu2.contabostorage.com), a
-                região (se ele pedir), o bucket e um par de chaves com permissão de ler e gravar nesse bucket.
-              </p>
+              <p className="text-muted-foreground">{t("backups.destination.s3Help")}</p>
             )}
             <form
               className="grid gap-3 sm:grid-cols-2"
@@ -242,32 +234,32 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
             >
               <div className="flex flex-col gap-1.5 sm:col-span-2">
                 <label htmlFor="bk-endpoint" className="font-medium">
-                  Endpoint
+                  {t("backups.destination.endpoint")}
                 </label>
                 <Input
                   id="bk-endpoint"
                   value={endpoint}
                   onChange={(e) => setEndpoint(e.target.value)}
-                  placeholder={provider === "r2" ? "https://<id-da-conta>.r2.cloudflarestorage.com" : "https://s3.exemplo.com"}
+                  placeholder={provider === "r2" ? t("backups.destination.endpointPlaceholderR2") : t("backups.destination.endpointPlaceholderS3")}
                   autoComplete="off"
                   spellCheck={false}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="bk-bucket" className="font-medium">
-                  Bucket
+                  {t("backups.destination.bucket")}
                 </label>
                 <Input id="bk-bucket" value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="tws-backups" autoComplete="off" spellCheck={false} />
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="bk-region" className="font-medium">
-                  Região
+                  {t("backups.destination.region")}
                 </label>
                 <Input id="bk-region" value={region} onChange={(e) => setRegion(e.target.value)} placeholder={provider === "r2" ? "auto" : "us-east-1"} autoComplete="off" />
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="bk-access" className="font-medium">
-                  Access Key ID
+                  {t("backups.destination.accessKey")}
                 </label>
                 <Input
                   id="bk-access"
@@ -279,32 +271,29 @@ function DestinationCard({ status, onStatus }: { status: BackupsStatus; onStatus
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="bk-secret" className="font-medium">
-                  Secret Access Key
+                  {t("backups.destination.secretKey")}
                 </label>
                 <PasswordInput
                   id="bk-secret"
-                  revealLabel="chave secreta"
+                  revealLabel={t("backups.destination.secretReveal")}
                   value={secret}
                   onChange={(e) => setSecret(e.target.value)}
-                  placeholder={d ? "deixe vazio para manter a guardada" : ""}
+                  placeholder={d ? t("backups.destination.secretPlaceholder") : ""}
                   autoComplete="off"
                 />
               </div>
               <div className="flex flex-wrap gap-2 sm:col-span-2">
                 <Button type="submit" disabled={busy !== null || !endpoint.trim() || !bucket.trim() || !accessKeyId.trim() || (!secret && !d)}>
-                  {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} Testar e salvar
+                  {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.destination.testAndSave")}
                 </Button>
                 {editing && (
                   <Button type="button" variant="outline" onClick={() => setEditing(false)}>
-                    Cancelar
+                    {t("backups.action.cancel")}
                   </Button>
                 )}
               </div>
             </form>
-            <p className="text-xs text-muted-foreground">
-              O painel testa a conexão antes de salvar (grava, lê e apaga um arquivo pequeno). A chave secreta fica guardada cifrada e não
-              volta para a tela.
-            </p>
+            <p className="text-xs text-muted-foreground">{t("backups.destination.note")}</p>
           </>
         )}
         <Feedback error={error} notice={notice} />
@@ -326,6 +315,7 @@ function reminderDue(status: BackupsStatus): boolean {
 }
 
 function TestPassword({ onDone }: { onDone: () => void }) {
+  const { t } = useI18n();
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -349,12 +339,12 @@ function TestPassword({ onDone }: { onDone: () => void }) {
       }}
     >
       <label htmlFor="bk-test-pw" className="font-medium">
-        Testar minha senha
+        {t("backups.testPassword.label")}
       </label>
       <div className="flex flex-col gap-2 sm:flex-row">
         <PasswordInput id="bk-test-pw" autoComplete="off" value={pw} onChange={(e) => setPw(e.target.value)} containerClassName="min-w-0 flex-1" />
         <Button type="submit" variant="outline" disabled={!pw || busy}>
-          {busy && <Loader2 className="h-4 w-4 animate-spin" />} Testar
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.testPassword.button")}
         </Button>
       </div>
       {result && <p className={result.ok ? "text-emerald-400" : "text-amber-400"}>{result.message}</p>}
@@ -364,6 +354,7 @@ function TestPassword({ onDone }: { onDone: () => void }) {
 }
 
 function RevealPassword({ status }: { status: BackupsStatus }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [login, setLogin] = useState("");
   const [revealed, setRevealed] = useState<string | null>(null);
@@ -373,7 +364,7 @@ function RevealPassword({ status }: { status: BackupsStatus }) {
     return (
       <div>
         <Button variant="outline" onClick={() => setOpen(true)}>
-          <KeyRound className="h-4 w-4" /> Ver a senha
+          <KeyRound className="h-4 w-4" /> {t("backups.reveal.button")}
         </Button>
       </div>
     );
@@ -387,7 +378,7 @@ function RevealPassword({ status }: { status: BackupsStatus }) {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="info" size="sm" onClick={() => downloadRecoveryKit(revealed, status)}>
-            <Download className="h-4 w-4" /> Baixar kit de recuperação
+            <Download className="h-4 w-4" /> {t("backups.password.downloadKit")}
           </Button>
           <Button
             variant="outline"
@@ -397,7 +388,7 @@ function RevealPassword({ status }: { status: BackupsStatus }) {
               setOpen(false);
             }}
           >
-            Esconder
+            {t("backups.reveal.hide")}
           </Button>
         </div>
       </div>
@@ -420,24 +411,25 @@ function RevealPassword({ status }: { status: BackupsStatus }) {
       }}
     >
       <label htmlFor="bk-login-pw" className="font-medium">
-        Confirme a sua senha de login para ver a senha dos backups
+        {t("backups.reveal.label")}
       </label>
       <div className="flex flex-col gap-2 sm:flex-row">
         <PasswordInput id="bk-login-pw" autoComplete="current-password" value={login} onChange={(e) => setLogin(e.target.value)} containerClassName="min-w-0 flex-1" />
         <Button type="submit" disabled={!login || busy}>
-          {busy && <Loader2 className="h-4 w-4 animate-spin" />} Ver a senha
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.reveal.button")}
         </Button>
         <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-          Cancelar
+          {t("backups.action.cancel")}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">Fica registrado na Auditoria. Depois de várias tentativas erradas, espere 15 minutos.</p>
+      <p className="text-xs text-muted-foreground">{t("backups.reveal.note")}</p>
       <Feedback error={error} notice={null} />
     </form>
   );
 }
 
 function EncryptionCard({ status, onStatus, reload }: { status: BackupsStatus; onStatus: OnStatus; reload: () => void }) {
+  const { t } = useI18n();
   const e = status.encryption;
   const [changing, setChanging] = useState(false);
   const [confirmOff, setConfirmOff] = useState(false);
@@ -461,20 +453,19 @@ function EncryptionCard({ status, onStatus, reload }: { status: BackupsStatus; o
     <Card data-testid="encryption-card" className={e.enabled && !e.passwordSet ? "border-amber-500/50" : undefined}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Lock className="h-4 w-4 text-emerald-400" /> Criptografia da cópia externa
+          <Lock className="h-4 w-4 text-emerald-400" /> {t("backups.encryption.title")}
         </CardTitle>
-        <CardDescription>
-          Seus backups podem ter dados pessoais de clientes. Cifrar a cópia que sai da VPS protege esses dados (LGPD) se alguém tiver
-          acesso ao armazenamento. A cópia na VPS fica sem senha, para restaurar rápido.
-        </CardDescription>
+        <CardDescription>{t("backups.encryption.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         <div className="flex flex-wrap items-center gap-2">
-          {e.enabled ? <Badge variant="success">Ligada (AES-256)</Badge> : <Badge variant="warning">Desligada</Badge>}
-          {e.enabled && e.passwordSet && e.passwordSetAt && <span className="text-muted-foreground">Senha definida em {when(e.passwordSetAt)}.</span>}
+          {e.enabled ? <Badge variant="success">{t("backups.encryption.on")}</Badge> : <Badge variant="warning">{t("backups.encryption.off")}</Badge>}
+          {e.enabled && e.passwordSet && e.passwordSetAt && <span className="text-muted-foreground">{t("backups.encryption.passwordSetAt", { when: when(e.passwordSetAt) })}</span>}
           {e.lastTestAt && (
             <Badge variant={e.lastTestOk ? "success" : "warning"}>
-              {e.lastTestOk ? "Senha testada" : "Último teste não abriu"} em {when(e.lastTestAt)}
+              {e.lastTestOk
+                ? t("backups.encryption.testedAt", { when: when(e.lastTestAt) })
+                : t("backups.encryption.testFailedAt", { when: when(e.lastTestAt) })}
             </Badge>
           )}
         </div>
@@ -496,13 +487,13 @@ function EncryptionCard({ status, onStatus, reload }: { status: BackupsStatus; o
         {e.enabled && e.passwordSet && !changing && (
           <>
             {!status.destination && (
-              <p className="text-muted-foreground">Conecte o armazenamento externo acima para os backups cifrados começarem a sair da VPS.</p>
+              <p className="text-muted-foreground">{t("backups.encryption.connectFirst")}</p>
             )}
             {status.destination && <TestPassword onDone={reload} />}
             <RevealPassword status={status} />
             <div>
               <Button variant="outline" onClick={() => setChanging(true)}>
-                Trocar a senha
+                {t("backups.password.change")}
               </Button>
             </div>
           </>
@@ -511,12 +502,11 @@ function EncryptionCard({ status, onStatus, reload }: { status: BackupsStatus; o
         {!e.enabled && (
           <div className="flex flex-col gap-2">
             <p className="flex items-start gap-2 text-amber-300">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> A cópia externa vai sem senha: quem tiver acesso ao armazenamento consegue
-              abrir os backups.
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {t("backups.encryption.offWarning")}
             </p>
             <div>
               <Button onClick={() => void setEnabled(true)} disabled={busy}>
-                {busy && <Loader2 className="h-4 w-4 animate-spin" />} Ligar a criptografia
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.encryption.turnOn")}
               </Button>
             </div>
           </div>
@@ -525,16 +515,16 @@ function EncryptionCard({ status, onStatus, reload }: { status: BackupsStatus; o
           <div className="flex flex-wrap items-center gap-2">
             {!confirmOff ? (
               <Button variant="ghost" size="sm" onClick={() => setConfirmOff(true)}>
-                Desligar a criptografia
+                {t("backups.encryption.turnOff")}
               </Button>
             ) : (
               <>
-                <span className="text-muted-foreground">Os próximos backups externos vão sem senha. Desligar mesmo assim?</span>
+                <span className="text-muted-foreground">{t("backups.encryption.turnOffConfirm")}</span>
                 <Button variant="danger" size="sm" onClick={() => void setEnabled(false)} disabled={busy}>
-                  Sim, desligar
+                  {t("backups.encryption.turnOffYes")}
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setConfirmOff(false)}>
-                  Não
+                  {t("backups.action.no")}
                 </Button>
               </>
             )}
@@ -551,31 +541,33 @@ function EncryptionCard({ status, onStatus, reload }: { status: BackupsStatus; o
 // ---------------------------------------------------------------------------
 
 function LastBackup({ target }: { target: BackupTargetStatus }) {
+  const { t } = useI18n();
   const last = target.lastBackup;
   return (
     <div className="flex flex-col gap-1 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-muted-foreground">Último backup:</span>
+        <span className="text-muted-foreground">{t("backups.lastBackup.label")}</span>
         {last ? (
           <>
             <RecordBadge record={last} />
             <span>{when(last.finishedAt ?? last.queuedAt)}</span>
           </>
         ) : (
-          <span>nenhum ainda</span>
+          <span>{t("backups.lastBackup.none")}</span>
         )}
       </div>
       {last?.error && <p className="text-xs text-red-400">{last.error}</p>}
       {last?.remoteDetail && <p className="text-xs text-amber-400">{last.remoteDetail}</p>}
       {target.lastRemoteVerifiedAt && (
-        <p className="text-xs text-muted-foreground">Última cópia externa conferida: {when(target.lastRemoteVerifiedAt)}.</p>
+        <p className="text-xs text-muted-foreground">{t("backups.lastBackup.remoteVerified", { when: when(target.lastRemoteVerifiedAt) })}</p>
       )}
-      {target.nextRunAt && <p className="text-xs text-muted-foreground">Próximo: {when(target.nextRunAt)}.</p>}
+      {target.nextRunAt && <p className="text-xs text-muted-foreground">{t("backups.lastBackup.next", { when: when(target.nextRunAt) })}</p>}
     </div>
   );
 }
 
 function RunNowButton({ targetId, onQueued, disabled }: { targetId: string; onQueued: () => void; disabled?: boolean }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -592,7 +584,7 @@ function RunNowButton({ targetId, onQueued, disabled }: { targetId: string; onQu
             .finally(() => setBusy(false));
         }}
       >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />} Fazer backup agora
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />} {t("backups.action.backupNow")}
       </Button>
       {error && (
         <p role="alert" className="basis-full text-sm text-destructive">
@@ -618,6 +610,7 @@ function TargetCard({
   description: string;
   icon: ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <Card data-testid={`target-${target.id}`}>
       <CardHeader>
@@ -629,9 +622,9 @@ function TargetCard({
       <CardContent className="flex flex-col gap-4">
         {!target.available ? (
           <p className="text-sm text-muted-foreground">
-            O servidor de e-mail não está instalado nesta VPS.{" "}
+            {t("backups.target.mailMissing")}{" "}
             <Link to="/mail" className="underline underline-offset-2">
-              Abrir E-mail
+              {t("backups.target.openMail")}
             </Link>
           </p>
         ) : (
@@ -648,7 +641,7 @@ function TargetCard({
             <div className="flex flex-wrap gap-2">
               <RunNowButton targetId={target.id} onQueued={reload} disabled={!status.archiverAvailable} />
               <Button variant="outline" onClick={() => onRestore({ id: target.id, kind: target.kind, name: target.name })}>
-                <RotateCcw className="h-4 w-4" /> Restaurar
+                <RotateCcw className="h-4 w-4" /> {t("backups.action.restore")}
               </Button>
               <VerifyAllButton target={target.id} onQueued={reload} disabled={!status.archiverAvailable || !target.lastBackup} />
             </div>
@@ -659,10 +652,10 @@ function TargetCard({
   );
 }
 
-function settingsText(t: BackupTargetStatus): string {
-  if (t.followsDefaults !== false) return "segue o padrão";
-  const freq = t.enabled ? `a cada ${t.frequencyHours} h` : "desligado";
-  return `configuração própria (${freq}, ${t.localKeep} na VPS, ${t.remoteKeep} fora)`;
+function settingsText(target: BackupTargetStatus): string {
+  if (target.followsDefaults !== false) return t("backups.settings.followsDefaults");
+  const frequency = target.enabled ? t("backups.settings.freqEvery", { hours: target.frequencyHours }) : t("backups.settings.off");
+  return t("backups.settings.own", { frequency, local: target.localKeep, remote: target.remoteKeep });
 }
 
 /**
@@ -671,6 +664,7 @@ function settingsText(t: BackupTargetStatus): string {
  * que passam a seguir o padrão. Itens marcados no backup não mudam.
  */
 function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () => void }) {
+  const { t } = useI18n();
   const projects = status.targets.filter((t) => t.kind === "project");
   const [marked, setMarked] = useState<Set<string>>(new Set());
   const toggle = (id: string, on: boolean) =>
@@ -685,7 +679,7 @@ function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () =>
     const parts: string[] = [];
     if (changed) {
       await apiFetch("/api/backups/defaults", { method: "PUT", body: JSON.stringify(settings) });
-      parts.push("Padrão salvo.");
+      parts.push(t("backups.defaults.saved"));
     }
     if (marked.size > 0) {
       const ids = projects.filter((p) => marked.has(p.id)).map((p) => p.id.slice("project:".length));
@@ -694,7 +688,7 @@ function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () =>
         body: JSON.stringify({ projectIds: ids }),
       });
       const names = r.applied.map((a) => a.name).join(", ");
-      parts.push(changed ? `Aplicado em: ${names}.` : `Padrão aplicado em: ${names}.`);
+      parts.push(changed ? t("backups.defaults.appliedAlso", { names }) : t("backups.defaults.applied", { names }));
       setMarked(new Set());
     }
     return parts.join(" ");
@@ -703,16 +697,14 @@ function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () =>
   const list =
     projects.length > 0 ? (
       <fieldset className="flex flex-col gap-2" data-testid="defaults-projects">
-        <legend className="mb-1 font-medium">Aplicar também nestes projetos</legend>
-        <p className="text-xs text-muted-foreground">
-          Os marcados recebem o padrão e passam a segui-lo. Os outros mantêm o que têm.
-        </p>
+        <legend className="mb-1 font-medium">{t("backups.defaults.applyTitle")}</legend>
+        <p className="text-xs text-muted-foreground">{t("backups.defaults.applyHint")}</p>
         <div className="flex gap-2">
           <Button type="button" size="sm" variant="outline" onClick={() => setMarked(new Set(projects.map((p) => p.id)))}>
-            Marcar todos
+            {t("backups.defaults.markAll")}
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={() => setMarked(new Set())}>
-            Nenhum
+            {t("backups.defaults.markNone")}
           </Button>
         </div>
         <ul className="flex flex-col gap-1">
@@ -721,7 +713,7 @@ function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () =>
               <label className="flex items-center gap-2">
                 <input type="checkbox" className="h-4 w-4" checked={marked.has(p.id)} onChange={(e) => toggle(p.id, e.target.checked)} />
                 <span className="min-w-0 break-words">
-                  {p.name} <span className="text-xs text-muted-foreground">— hoje: {settingsText(p)}</span>
+                  {p.name} <span className="text-xs text-muted-foreground">{t("backups.defaults.today", { settings: settingsText(p) })}</span>
                 </span>
               </label>
             </li>
@@ -734,12 +726,9 @@ function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () =>
     <Card data-testid="defaults-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Server className="h-4 w-4 text-sky-400" /> Padrão dos projetos
+          <Server className="h-4 w-4 text-sky-400" /> {t("backups.defaults.title")}
         </CardTitle>
-        <CardDescription>
-          Projeto novo nasce com este padrão. Quem segue o padrão muda junto. Um projeto passa a ter configuração própria quando você salva
-          na aba Backups dele. Os bancos e as pastas escolhidos não mudam.
-        </CardDescription>
+        <CardDescription>{t("backups.defaults.description")}</CardDescription>
       </CardHeader>
       <CardContent>
         <TargetSettings
@@ -758,30 +747,28 @@ function DefaultsCard({ status, reload }: { status: BackupsStatus; reload: () =>
 }
 
 function ProjectsCard({ status }: { status: BackupsStatus }) {
+  const { t } = useI18n();
   const projects = status.targets.filter((t) => t.kind === "project");
   return (
     <Card data-testid="projects-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Server className="h-4 w-4 text-violet-400" /> Projetos
+          <Server className="h-4 w-4 text-violet-400" /> {t("backups.projects.title")}
         </CardTitle>
-        <CardDescription>
-          Cada projeto tem a sua aba Backups: lá você escolhe os bancos e as pastas, a frequência e restaura. O código vem do GitHub e não
-          entra no backup.
-        </CardDescription>
+        <CardDescription>{t("backups.projects.description")}</CardDescription>
       </CardHeader>
       <CardContent className="text-sm">
         {projects.length === 0 ? (
-          <p className="text-muted-foreground">Nenhum projeto ainda.</p>
+          <p className="text-muted-foreground">{t("backups.projects.empty")}</p>
         ) : (
           <ul className="flex flex-col divide-y divide-border">
             {projects.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center gap-2 py-2">
                 <span className="min-w-0 flex-1 font-medium">{p.name}</span>
-                {!p.enabled && <Badge variant="secondary">Desligado</Badge>}
-                {p.lastBackup ? <RecordBadge record={p.lastBackup} /> : <span className="text-muted-foreground">sem backup ainda</span>}
+                {!p.enabled && <Badge variant="secondary">{t("backups.projects.off")}</Badge>}
+                {p.lastBackup ? <RecordBadge record={p.lastBackup} /> : <span className="text-muted-foreground">{t("backups.projects.noBackup")}</span>}
                 <Button asChild variant="outline" size="sm">
-                  <Link to={`/projects/${p.id.slice("project:".length)}/backups`}>Abrir</Link>
+                  <Link to={`/projects/${p.id.slice("project:".length)}/backups`}>{t("backups.action.open")}</Link>
                 </Button>
               </li>
             ))}
@@ -797,6 +784,7 @@ function ProjectsCard({ status }: { status: BackupsStatus }) {
 // ---------------------------------------------------------------------------
 
 function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatus; onStatus: OnStatus; onRestore: (t: RestoreTarget, opts: { points: BackupCatalog["panel"]; redeploy?: boolean }) => void }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -812,7 +800,7 @@ function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatu
       if (!skipTest) {
         const r = await apiFetch<{ ok: boolean; message: string }>("/api/backups/password/test", { method: "POST", body: JSON.stringify({ password: pw }) });
         if (!r.ok) {
-          setError("Essa senha não abre os backups deste armazenamento. Confira o kit de recuperação da VPS antiga.");
+          setError(t("backups.other.wrongPassword"));
           return;
         }
       }
@@ -843,36 +831,32 @@ function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatu
     <Card data-testid="other-server-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <ShieldCheck className="h-4 w-4 text-sky-400" /> Restaurar de outro servidor
+          <ShieldCheck className="h-4 w-4 text-sky-400" /> {t("backups.other.title")}
         </CardTitle>
-        <CardDescription>Para quando você instalou o painel numa VPS nova e quer trazer tudo da antiga, a partir do armazenamento externo.</CardDescription>
+        <CardDescription>{t("backups.other.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         {!open ? (
           <div>
             <Button variant="outline" onClick={() => setOpen(true)}>
-              Começar
+              {t("backups.other.start")}
             </Button>
           </div>
         ) : (
           <ol className="flex flex-col gap-4">
             <li className="flex flex-col gap-1">
-              <span className="font-medium">1. Conecte o mesmo armazenamento</span>
+              <span className="font-medium">{t("backups.other.step1")}</span>
               {status.destination ? (
-                <span className="text-emerald-400">
-                  Conectado: bucket {status.destination.bucket}. Se for outro bucket, use Editar no cartão Armazenamento externo.
-                </span>
+                <span className="text-emerald-400">{t("backups.other.connected", { bucket: status.destination.bucket })}</span>
               ) : (
-                <span className="text-muted-foreground">
-                  No cartão Armazenamento externo, acima, informe o mesmo endpoint, bucket e chaves que a VPS antiga usava.
-                </span>
+                <span className="text-muted-foreground">{t("backups.other.connectAbove")}</span>
               )}
             </li>
             <li className="flex flex-col gap-2">
-              <span className="font-medium">2. Informe a senha dos backups</span>
+              <span className="font-medium">{t("backups.other.step2")}</span>
               {!needsPassword ? (
                 <span className="text-muted-foreground">
-                  {status.encryption.enabled ? "Senha já definida neste painel." : "Criptografia desligada: os backups abrem sem senha."}
+                  {status.encryption.enabled ? t("backups.other.passwordSet") : t("backups.other.encryptionOff")}
                 </span>
               ) : (
                 <form
@@ -883,54 +867,58 @@ function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatu
                   }}
                 >
                   <label htmlFor="bk-old-pw" className="text-muted-foreground">
-                    A mesma senha da VPS antiga (está no kit de recuperação).
+                    {t("backups.other.oldPasswordLabel")}
                   </label>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <PasswordInput id="bk-old-pw" autoComplete="off" value={pw} onChange={(e) => setPw(e.target.value)} containerClassName="min-w-0 flex-1" />
                     <Button type="submit" disabled={!pw || !status.destination || busy !== null}>
-                      {busy === "pw" && <Loader2 className="h-4 w-4 animate-spin" />} Conferir e usar
+                      {busy === "pw" && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.other.checkAndUse")}
                     </Button>
                   </div>
                   {noCheckFile && (
                     <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => void savePassword(true)}>
-                      Usar esta senha mesmo assim
+                      {t("backups.other.useAnyway")}
                     </Button>
                   )}
                 </form>
               )}
             </li>
             <li className="flex flex-col gap-2">
-              <span className="font-medium">3. Restaure na ordem: painel, projetos, e-mail</span>
+              <span className="font-medium">{t("backups.other.step3")}</span>
               <div>
                 <Button variant="info" onClick={() => void list()} disabled={!status.destination || busy !== null}>
-                  {busy === "list" && <Loader2 className="h-4 w-4 animate-spin" />} Ver o que existe no armazenamento
+                  {busy === "list" && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.other.listStorage")}
                 </Button>
               </div>
               {catalog && (
                 <div className="flex flex-col gap-3" data-testid="catalog">
                   <div className="rounded-md border border-border p-3">
-                    <p className="font-medium">Painel {catalog.panel.length > 0 && <span className="text-muted-foreground">({catalog.panel.length} data(s), a mais recente em {when(catalog.panel[0]!.at)})</span>}</p>
-                    <p className="text-muted-foreground">
-                      Primeiro. Traz usuários, projetos cadastrados e configurações. O painel reinicia; entre de novo com o usuário e a senha da
-                      VPS antiga e volte aqui.
+                    <p className="font-medium">
+                      {t("backups.target.panelName")}{" "}
+                      {catalog.panel.length > 0 && (
+                        <span className="text-muted-foreground">
+                          {t("backups.other.panelDates", { count: catalog.panel.length, when: when(catalog.panel[0]!.at) })}
+                        </span>
+                      )}
                     </p>
+                    <p className="text-muted-foreground">{t("backups.other.panelHelp")}</p>
                     {catalog.panel.length > 0 ? (
-                      <Button size="sm" className="mt-2" onClick={() => onRestore({ id: "panel", kind: "panel", name: "Painel" }, { points: catalog.panel })}>
-                        Restaurar o painel
+                      <Button size="sm" className="mt-2" onClick={() => onRestore({ id: "panel", kind: "panel", name: t("backups.target.panelName") }, { points: catalog.panel })}>
+                        {t("backups.other.restorePanel")}
                       </Button>
                     ) : (
-                      <p className="text-amber-400">Nenhum backup do painel no armazenamento.</p>
+                      <p className="text-amber-400">{t("backups.other.noPanel")}</p>
                     )}
                   </div>
                   <div className="rounded-md border border-border p-3">
-                    <p className="font-medium">Projetos</p>
-                    <p className="text-muted-foreground">O painel publica cada projeto do GitHub e depois põe os bancos e as pastas de volta.</p>
-                    {catalog.projects.length === 0 && <p className="text-amber-400">Nenhum backup de projeto no armazenamento.</p>}
+                    <p className="font-medium">{t("backups.projects.title")}</p>
+                    <p className="text-muted-foreground">{t("backups.other.projectsHelp")}</p>
+                    {catalog.projects.length === 0 && <p className="text-amber-400">{t("backups.other.noProjects")}</p>}
                     <ul className="mt-2 flex flex-col gap-2">
                       {catalog.projects.map((p) => (
                         <li key={p.folder} className="flex flex-wrap items-center gap-2">
                           <span className="min-w-0 flex-1">
-                            {p.projectName ?? p.folder} <span className="text-muted-foreground">({p.points.length} data(s))</span>
+                            {p.projectName ?? p.folder} <span className="text-muted-foreground">{t("backups.other.projectDates", { count: p.points.length })}</span>
                           </span>
                           {p.projectId ? (
                             <Button
@@ -940,24 +928,24 @@ function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatu
                                 onRestore({ id: `project:${p.projectId}`, kind: "project", name: p.projectName ?? p.folder }, { points: p.points, redeploy: true })
                               }
                             >
-                              Restaurar
+                              {t("backups.action.restore")}
                             </Button>
                           ) : (
-                            <span className="text-xs text-muted-foreground">Não cadastrado aqui: restaure o painel primeiro.</span>
+                            <span className="text-xs text-muted-foreground">{t("backups.other.notRegistered")}</span>
                           )}
                         </li>
                       ))}
                     </ul>
                   </div>
                   <div className="rounded-md border border-border p-3">
-                    <p className="font-medium">E-mail</p>
-                    <p className="text-muted-foreground">Por último. Depois aponte o DNS (A, MX e o PTR no provedor) para o IP desta VPS.</p>
+                    <p className="font-medium">{t("backups.target.emailName")}</p>
+                    <p className="text-muted-foreground">{t("backups.other.emailHelp")}</p>
                     {catalog.email.length > 0 ? (
-                      <Button size="sm" variant="outline" className="mt-2" onClick={() => onRestore({ id: "email", kind: "email", name: "E-mail" }, { points: catalog.email })}>
-                        Restaurar o e-mail
+                      <Button size="sm" variant="outline" className="mt-2" onClick={() => onRestore({ id: "email", kind: "email", name: t("backups.target.emailName") }, { points: catalog.email })}>
+                        {t("backups.other.restoreEmail")}
                       </Button>
                     ) : (
-                      <p className="text-muted-foreground">Nenhum backup de e-mail no armazenamento.</p>
+                      <p className="text-muted-foreground">{t("backups.other.noEmail")}</p>
                     )}
                   </div>
                 </div>
@@ -976,6 +964,7 @@ function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatu
 // ---------------------------------------------------------------------------
 
 export function BackupSettings() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<BackupsStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [restore, setRestore] = useState<{ target: RestoreTarget; points?: BackupCatalog["panel"]; redeploy?: boolean } | null>(null);
@@ -1004,15 +993,12 @@ export function BackupSettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <p className="text-sm text-muted-foreground">
-        Cópias do painel, do e-mail e dos bancos e arquivos de cada projeto, feitas sozinhas no horário escolhido. Uma fica na VPS e outra pode ir
-        para um armazenamento externo, cifrada.
-      </p>
+      <p className="text-sm text-muted-foreground">{t("backups.page.intro")}</p>
       {loadError && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-destructive">{loadError}</span>
           <Button variant="outline" size="sm" onClick={load}>
-            Tentar de novo
+            {t("backups.action.retry")}
           </Button>
         </div>
       )}
@@ -1021,21 +1007,25 @@ export function BackupSettings() {
         <>
           {!status.archiverAvailable && (
             <p role="alert" className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> O 7-Zip não está instalado no container do painel, então os backups não
-              rodam. Atualize o painel (sudo git pull e sudo docker compose up -d --build em /opt/tws-panel).
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {t("backups.page.noArchiver")}
             </p>
           )}
           {reminderDue(status) && (
             <p data-testid="reminder" className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
-              <KeyRound className="mt-0.5 h-4 w-4 shrink-0" /> Você ainda tem sua senha de backup? Teste aqui, no cartão Criptografia.
+              <KeyRound className="mt-0.5 h-4 w-4 shrink-0" /> {t("backups.page.reminder")}
             </p>
           )}
           {status.running && (
             <p className="flex items-center gap-2 text-sm text-sky-300">
               <Loader2 className="h-4 w-4 animate-spin" />{" "}
-              {status.running.operation === "restore" ? "Restaurando" : status.running.operation === "verify" ? "Conferindo" : "Fazendo backup de"}{" "}
-              {status.running.operation === "verify" && status.running.target === "all" ? "todos os backups" : status.running.targetName}
-              {status.queued.length > 0 && `; ${status.queued.length} na fila`}.
+              {status.running.operation === "restore"
+                ? t("backups.running.restore", { name: status.running.targetName })
+                : status.running.operation === "verify"
+                  ? status.running.target === "all"
+                    ? t("backups.running.verifyAll")
+                    : t("backups.running.verify", { name: status.running.targetName })
+                  : t("backups.running.backup", { name: status.running.targetName })}
+              {status.queued.length > 0 && t("backups.running.queued", { count: status.queued.length })}.
             </p>
           )}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 [&>*]:min-w-0">
@@ -1050,7 +1040,7 @@ export function BackupSettings() {
                 reload={load}
                 onRestore={(target) => setRestore({ target })}
                 icon={<ShieldCheck className="h-4 w-4 text-sky-400" />}
-                description="Contas, projetos cadastrados, configurações, certificados próprios e as chaves que cifram os segredos do painel."
+                description={t("backups.target.panelDescription")}
               />
             )}
             {email && (
@@ -1060,7 +1050,7 @@ export function BackupSettings() {
                 reload={load}
                 onRestore={(target) => setRestore({ target })}
                 icon={<Mail className="h-4 w-4 text-violet-400" />}
-                description="O servidor de e-mail inteiro: caixas, mensagens, contas, regras e chaves DKIM. Ele para por alguns segundos durante a cópia."
+                description={t("backups.target.emailDescription")}
               />
             )}
           </div>
@@ -1073,18 +1063,17 @@ export function BackupSettings() {
           />
           <Card data-testid="backup-history">
             <CardHeader>
-              <CardTitle className="text-base">Últimos backups</CardTitle>
+              <CardTitle className="text-base">{t("backups.history.title")}</CardTitle>
               <CardDescription>
-                Backups, restaurações e conferências, com o motivo quando algo falhou. Cópias na VPS em <span className="break-all">{status.localPath}</span>.
-                Conferir abre cada cópia com o 7-Zip; a externa é baixada e comparada com o que foi enviado.
+                <Trans k="backups.history.description" params={{ localPath: status.localPath }} components={{ path: <span className="break-all" /> }} />
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center gap-2">
-                <VerifyAllButton target="all" onQueued={load} label="Conferir todos os backups" disabled={!status.archiverAvailable} />
+                <VerifyAllButton target="all" onQueued={load} label={t("backups.history.verifyAll")} disabled={!status.archiverAvailable} />
               </div>
               <BackupTimezoneNote status={status} />
-              <HistoryList records={status.history.slice(0, 30)} empty="Nenhum backup feito ainda." onVerify={load} />
+              <HistoryList records={status.history.slice(0, 30)} empty={t("backups.history.empty")} onVerify={load} />
             </CardContent>
           </Card>
         </>

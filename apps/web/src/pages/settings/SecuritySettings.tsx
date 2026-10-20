@@ -3,9 +3,11 @@ import { useLocation } from "react-router";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChangePasswordForm } from "@/components/settings/ChangePasswordForm";
 import { TwoFactorPanel } from "@/components/settings/TwoFactorPanel";
+import { useI18n } from "@/i18n";
 
 /** Configurações → Segurança da conta: senha e verificação em duas etapas. */
 export function SecuritySettings() {
+  const { t } = useI18n();
   const location = useLocation();
   // "Verificação em duas etapas" no menu do usuário e o aviso do Dashboard
   // chegam com #two-factor: leva direto ao card.
@@ -16,8 +18,8 @@ export function SecuritySettings() {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Senha</CardTitle>
-          <CardDescription>Trocar a senha encerra as outras sessões abertas; esta continua.</CardDescription>
+          <CardTitle className="text-base">{t("settings.security.password.title")}</CardTitle>
+          <CardDescription>{t("settings.security.password.description")}</CardDescription>
         </CardHeader>
         <CardContent>
           <ChangePasswordForm />
@@ -25,8 +27,8 @@ export function SecuritySettings() {
       </Card>
       <Card id="two-factor">
         <CardHeader>
-          <CardTitle className="text-base">Verificação em duas etapas</CardTitle>
-          <CardDescription>Exige também um código do seu celular para entrar no painel.</CardDescription>
+          <CardTitle className="text-base">{t("settings.security.twoFactor.title")}</CardTitle>
+          <CardDescription>{t("settings.security.twoFactor.description")}</CardDescription>
         </CardHeader>
         <CardContent>
           <TwoFactorPanel />

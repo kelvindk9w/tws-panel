@@ -2,19 +2,24 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
   NOTIFICATION_KINDS,
-  NOTIFICATION_KIND_LABELS,
   type MonitorStateResponse,
   type NotificationHistoryEntry,
   type NotificationKind,
   type NotificationsStatus,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiErrorText, formatDateTime, Trans, useI18n, type Key } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { CheckCircle2, Loader2, Mail, MessageCircle, Send } from "lucide-react";
+
+/** Só erro da API traz mensagem própria; qualquer outro vira o texto padrão. */
+function errorText(err: unknown, fallback: Key): string {
+  return apiErrorText(err instanceof ApiRequestError ? err : null, fallback);
+}
 
 /**
  * Configurações → Notificações: avisos fora do painel quando algo precisa de
@@ -23,12 +28,10 @@ import { CheckCircle2, Loader2, Mail, MessageCircle, Send } from "lucide-react";
  * últimos envios. A verificação automática de segurança continua aqui.
  */
 
-function errorText(err: unknown): string {
-  return err instanceof ApiRequestError ? err.message : "Não foi possível concluir agora. Tente de novo em instantes.";
-}
+const GENERIC_ERROR: Key = "notifications.error.generic";
 
 function when(iso: string): string {
-  return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  return formatDateTime(iso, { dateStyle: "short", timeStyle: "short" });
 }
 
 const textareaClass =
@@ -50,7 +53,7 @@ function useAction(onStatus: (s: NotificationsStatus) => void) {
       if (okMessage) setNotice(okMessage);
       return true;
     } catch (err) {
-      setError(errorText(err));
+      setError(errorText(err, GENERIC_ERROR));
       return false;
     } finally {
       setBusy(null);
@@ -77,10 +80,11 @@ function Feedback({ error, notice }: { error: string | null; notice: string | nu
 }
 
 function TestedBadge({ testedAt }: { testedAt: string | null }) {
+  const { t } = useI18n();
   return testedAt ? (
-    <Badge variant="success">Testado em {when(testedAt)}</Badge>
+    <Badge variant="success">{t("notifications.tested.at", { when: when(testedAt) })}</Badge>
   ) : (
-    <Badge variant="warning">Falta enviar o teste</Badge>
+    <Badge variant="warning">{t("notifications.tested.missing")}</Badge>
   );
 }
 
@@ -89,33 +93,40 @@ function TestedBadge({ testedAt }: { testedAt: string | null }) {
 // ---------------------------------------------------------------------------
 
 function TelegramCard({ status, onStatus }: { status: NotificationsStatus; onStatus: (s: NotificationsStatus) => void }) {
-  const t = status.telegram;
+  const tg = status.telegram;
+  const { t } = useI18n();
   const { busy, error, notice, run } = useAction(onStatus);
   const [token, setToken] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const bot = t.botUsername ?? "";
+  const bot = tg.botUsername ?? "";
 
   return (
     <Card data-testid="telegram-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <MessageCircle className="h-4 w-4 text-sky-400" /> Telegram
+          <MessageCircle className="h-4 w-4 text-sky-400" /> {t("notifications.telegram.title")}
         </CardTitle>
-        <CardDescription>Os avisos chegam numa conversa do Telegram, por um robô seu.</CardDescription>
+        <CardDescription>{t("notifications.telegram.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
-        {t.state === "none" && (
+        {tg.state === "none" && (
           <>
             <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
               <li>
-                No Telegram, abra a conversa com o{" "}
-                <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-2">
-                  @BotFather
-                </a>{" "}
-                e mande <code className="text-foreground">/newbot</code>.
+                <Trans
+                  k="notifications.telegram.step1"
+                  components={{
+                    link: (c) => (
+                      <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-2">
+                        {c}
+                      </a>
+                    ),
+                    code: <code className="text-foreground" />,
+                  }}
+                />
               </li>
-              <li>Escolha um nome e um @ que termine em “bot” (ex.: avisos_do_meu_painel_bot).</li>
-              <li>Ele responde com o token: uma linha como 123456789:ABC… Copie a linha inteira e cole aqui.</li>
+              <li>{t("notifications.telegram.step2")}</li>
+              <li>{t("notifications.telegram.step3")}</li>
             </ol>
             <form
               className="flex flex-col gap-2 sm:flex-row sm:items-end"
@@ -128,11 +139,11 @@ function TelegramCard({ status, onStatus }: { status: NotificationsStatus; onSta
             >
               <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <label htmlFor="tg-token" className="font-medium">
-                  Token do robô
+                  {t("notifications.telegram.tokenLabel")}
                 </label>
                 <PasswordInput
                   id="tg-token"
-                  revealLabel="token"
+                  revealLabel={t("notifications.telegram.tokenReveal")}
                   autoComplete="off"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
@@ -140,64 +151,71 @@ function TelegramCard({ status, onStatus }: { status: NotificationsStatus; onSta
                 />
               </div>
               <Button type="submit" disabled={!token.trim() || busy !== null}>
-                {busy && <Loader2 className="h-4 w-4 animate-spin" />} Salvar token
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("notifications.telegram.saveToken")}
               </Button>
             </form>
-            <p className="text-xs text-muted-foreground">O token fica guardado cifrado no servidor e não aparece mais na tela.</p>
+            <p className="text-xs text-muted-foreground">{t("notifications.telegram.tokenNote")}</p>
           </>
         )}
 
-        {t.state === "awaiting_chat" && (
+        {tg.state === "awaiting_chat" && (
           <>
             <p>
-              Robô <strong>@{bot}</strong> conferido. Agora ligue a conversa onde os avisos vão chegar:
+              <Trans k="notifications.telegram.botChecked" params={{ bot }} components={{ b: <strong /> }} />
             </p>
             <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
               <li>
-                <a href={`https://t.me/${bot}`} target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-2">
-                  Abrir @{bot}
-                </a>{" "}
-                no Telegram e tocar em “Começar” (ou mandar <code className="text-foreground">/start</code>). Para um grupo,
-                adicione o robô ao grupo e mande uma mensagem lá.
+                <Trans
+                  k="notifications.telegram.awaitingStep1"
+                  params={{ bot }}
+                  components={{
+                    link: (c) => (
+                      <a href={`https://t.me/${bot}`} target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-2">
+                        {c}
+                      </a>
+                    ),
+                    code: <code className="text-foreground" />,
+                  }}
+                />
               </li>
-              <li>Volte aqui e clique em Conectar: o painel mostra o nome da conversa para você conferir.</li>
+              <li>{t("notifications.telegram.awaitingStep2")}</li>
             </ol>
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => void run("/api/notifications/telegram/connect", { method: "POST" })} disabled={busy !== null}>
-                {busy?.endsWith("/connect") && <Loader2 className="h-4 w-4 animate-spin" />} Conectar
+                {busy?.endsWith("/connect") && <Loader2 className="h-4 w-4 animate-spin" />} {t("notifications.telegram.connect")}
               </Button>
               <Button variant="outline" onClick={() => void run("/api/notifications/telegram", { method: "DELETE" })} disabled={busy !== null}>
-                Trocar robô
+                {t("notifications.telegram.changeBot")}
               </Button>
             </div>
           </>
         )}
 
-        {t.state === "connected" && (
+        {tg.state === "connected" && (
           <>
             <p className="break-words">
-              Conectado à conversa <strong>{t.chatTitle}</strong> pelo robô @{bot}.
+              <Trans k="notifications.telegram.connected" params={{ chat: tg.chatTitle ?? "", bot }} components={{ b: <strong /> }} />
             </p>
             <div>
-              <TestedBadge testedAt={t.testedAt} />
+              <TestedBadge testedAt={tg.testedAt} />
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="info"
                 onClick={() =>
-                  void run("/api/notifications/telegram/test", { method: "POST" }, "Mensagem de teste enviada. Confira no Telegram.")
+                  void run("/api/notifications/telegram/test", { method: "POST" }, t("notifications.telegram.testSent"))
                 }
                 disabled={busy !== null}
               >
-                {busy?.endsWith("/test") ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Enviar teste
+                {busy?.endsWith("/test") ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {t("notifications.telegram.sendTest")}
               </Button>
               {!confirmRemove ? (
                 <Button variant="outline" onClick={() => setConfirmRemove(true)} disabled={busy !== null}>
-                  Desconectar
+                  {t("notifications.telegram.disconnect")}
                 </Button>
               ) : (
                 <span className="flex flex-wrap items-center gap-2">
-                  <span className="text-muted-foreground">Apagar o token e parar os avisos?</span>
+                  <span className="text-muted-foreground">{t("notifications.telegram.disconnectQuestion")}</span>
                   <Button
                     variant="danger"
                     size="sm"
@@ -206,10 +224,10 @@ function TelegramCard({ status, onStatus }: { status: NotificationsStatus; onSta
                       void run("/api/notifications/telegram", { method: "DELETE" });
                     }}
                   >
-                    Sim, desconectar
+                    {t("notifications.telegram.disconnectYes")}
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setConfirmRemove(false)}>
-                    Não
+                    {t("notifications.telegram.disconnectNo")}
                   </Button>
                 </span>
               )}
@@ -235,6 +253,7 @@ function parseRecipients(text: string): string[] {
 
 function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus: (s: NotificationsStatus) => void }) {
   const e = status.email;
+  const { t } = useI18n();
   const { busy, error, notice, run } = useAction(onStatus);
   const [text, setText] = useState(e.recipients.join("\n"));
   const saved = e.recipients.length > 0;
@@ -243,22 +262,22 @@ function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus
     <Card data-testid="email-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Mail className="h-4 w-4 text-violet-400" /> E-mail
+          <Mail className="h-4 w-4 text-violet-400" /> {t("notifications.email.title")}
         </CardTitle>
-        <CardDescription>Os avisos chegam por e-mail, enviados pelo servidor de e-mail do próprio painel.</CardDescription>
+        <CardDescription>{t("notifications.email.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         {!e.available && (
           <div className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
             <p className="break-words">
-              {saved ? "Os e-mails de aviso não vão sair enquanto isto não for resolvido: " : ""}
+              {saved ? t("notifications.email.unavailablePrefix") : ""}
               {e.unavailableReason}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Button asChild variant="outline" size="sm">
-                <Link to="/mail">Abrir E-mail</Link>
+                <Link to="/mail">{t("notifications.email.openMail")}</Link>
               </Button>
-              {!saved && <span className="text-muted-foreground">Enquanto isso, dá para usar só o Telegram.</span>}
+              {!saved && <span className="text-muted-foreground">{t("notifications.email.telegramOnly")}</span>}
             </div>
           </div>
         )}
@@ -267,7 +286,7 @@ function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus
           <>
             {e.from && (
               <p className="break-words text-muted-foreground">
-                Os avisos saem de <strong className="text-foreground">{e.from}</strong>.
+                <Trans k="notifications.email.sentFrom" params={{ from: e.from }} components={{ b: <strong className="text-foreground" /> }} />
               </p>
             )}
             <form
@@ -278,19 +297,19 @@ function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus
               }}
             >
               <label htmlFor="nt-recipients" className="font-medium">
-                Endereços que recebem (até 5, um por linha ou separados por vírgula)
+                {t("notifications.email.recipientsLabel")}
               </label>
               <textarea
                 id="nt-recipients"
                 className={textareaClass}
                 value={text}
                 onChange={(ev) => setText(ev.target.value)}
-                placeholder="voce@exemplo.com.br"
+                placeholder={t("notifications.email.recipientsPlaceholder")}
                 spellCheck={false}
               />
               <div>
                 <Button type="submit" disabled={!text.trim() || busy !== null}>
-                  {busy === "PUT /api/notifications/email" && <Loader2 className="h-4 w-4 animate-spin" />} Salvar endereços
+                  {busy === "PUT /api/notifications/email" && <Loader2 className="h-4 w-4 animate-spin" />} {t("notifications.email.saveRecipients")}
                 </Button>
               </div>
             </form>
@@ -306,12 +325,12 @@ function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus
                       void run(
                         "/api/notifications/email/test",
                         { method: "POST" },
-                        "E-mail de teste enviado. Confira a caixa de entrada (e o spam, no primeiro envio).",
+                        t("notifications.email.testSent"),
                       )
                     }
                     disabled={busy !== null || !e.available}
                   >
-                    {busy?.endsWith("/test") ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Enviar teste
+                    {busy?.endsWith("/test") ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {t("notifications.email.sendTest")}
                   </Button>
                   <Button
                     variant="outline"
@@ -320,7 +339,7 @@ function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus
                     }}
                     disabled={busy !== null}
                   >
-                    Desligar e-mail
+                    {t("notifications.email.turnOff")}
                   </Button>
                 </div>
               </>
@@ -337,7 +356,20 @@ function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus
 // O que avisa
 // ---------------------------------------------------------------------------
 
+const KIND_LABELS: Record<NotificationKind, { title: Key; description: Key }> = {
+  security: { title: "notifications.kinds.security.title", description: "notifications.kinds.security.description" },
+  deploy: { title: "notifications.kinds.deploy.title", description: "notifications.kinds.deploy.description" },
+  certificate: { title: "notifications.kinds.certificate.title", description: "notifications.kinds.certificate.description" },
+  blacklist: { title: "notifications.kinds.blacklist.title", description: "notifications.kinds.blacklist.description" },
+  disk: { title: "notifications.kinds.disk.title", description: "notifications.kinds.disk.description" },
+  panel: { title: "notifications.kinds.panel.title", description: "notifications.kinds.panel.description" },
+  backup_failed: { title: "notifications.kinds.backup_failed.title", description: "notifications.kinds.backup_failed.description" },
+  backup_stale: { title: "notifications.kinds.backup_stale.title", description: "notifications.kinds.backup_stale.description" },
+  backup_reminder: { title: "notifications.kinds.backup_reminder.title", description: "notifications.kinds.backup_reminder.description" },
+};
+
 function KindsCard({ status, onStatus }: { status: NotificationsStatus; onStatus: (s: NotificationsStatus) => void }) {
+  const { t } = useI18n();
   const { busy, error, run } = useAction(onStatus);
   const anyChannel = status.telegram.state === "connected" || status.email.recipients.length > 0;
 
@@ -348,13 +380,11 @@ function KindsCard({ status, onStatus }: { status: NotificationsStatus; onStatus
   return (
     <Card data-testid="kinds-card">
       <CardHeader>
-        <CardTitle className="text-base">O que avisa</CardTitle>
-        <CardDescription>
-          Repetidos do mesmo assunto em 10 minutos viram um resumo, e cada canal manda no máximo 20 avisos por hora.
-        </CardDescription>
+        <CardTitle className="text-base">{t("notifications.kinds.title")}</CardTitle>
+        <CardDescription>{t("notifications.kinds.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
-        {!anyChannel && <p className="text-muted-foreground">Conecte o Telegram ou o e-mail acima para os avisos começarem a sair.</p>}
+        {!anyChannel && <p className="text-muted-foreground">{t("notifications.kinds.noChannel")}</p>}
         <ul className="flex flex-col gap-3">
           {NOTIFICATION_KINDS.map((kind) => (
             <li key={kind} className="flex items-start gap-3">
@@ -367,8 +397,8 @@ function KindsCard({ status, onStatus }: { status: NotificationsStatus; onStatus
                 onChange={(ev) => toggle(kind, ev.target.checked)}
               />
               <label htmlFor={`kind-${kind}`} className="min-w-0">
-                <span className="font-medium">{NOTIFICATION_KIND_LABELS[kind].title}</span>
-                <span className="block text-muted-foreground">{NOTIFICATION_KIND_LABELS[kind].description}</span>
+                <span className="font-medium">{t(KIND_LABELS[kind].title)}</span>
+                <span className="block text-muted-foreground">{t(KIND_LABELS[kind].description)}</span>
               </label>
             </li>
           ))}
@@ -383,22 +413,23 @@ function KindsCard({ status, onStatus }: { status: NotificationsStatus; onStatus
 // Histórico
 // ---------------------------------------------------------------------------
 
-const STATUS_BADGE: Record<NotificationHistoryEntry["status"], { label: string; variant: "success" | "destructive" | "warning" }> = {
-  sent: { label: "Enviado", variant: "success" },
-  failed: { label: "Falhou", variant: "destructive" },
-  retrying: { label: "Tentando de novo", variant: "warning" },
+const STATUS_BADGE: Record<NotificationHistoryEntry["status"], { label: Key; variant: "success" | "destructive" | "warning" }> = {
+  sent: { label: "notifications.history.status.sent", variant: "success" },
+  failed: { label: "notifications.history.status.failed", variant: "destructive" },
+  retrying: { label: "notifications.history.status.retrying", variant: "warning" },
 };
 
 function HistoryCard({ history }: { history: NotificationHistoryEntry[] }) {
+  const { t } = useI18n();
   return (
     <Card data-testid="history-card">
       <CardHeader>
-        <CardTitle className="text-base">Últimos envios</CardTitle>
-        <CardDescription>Só o assunto de cada aviso; o conteúdo não fica guardado.</CardDescription>
+        <CardTitle className="text-base">{t("notifications.history.title")}</CardTitle>
+        <CardDescription>{t("notifications.history.description")}</CardDescription>
       </CardHeader>
       <CardContent className="text-sm">
         {history.length === 0 ? (
-          <p className="text-muted-foreground">Nenhum aviso enviado ainda.</p>
+          <p className="text-muted-foreground">{t("notifications.history.empty")}</p>
         ) : (
           <ul className="flex flex-col divide-y divide-border">
             {history.slice(0, 20).map((h) => {
@@ -406,13 +437,13 @@ function HistoryCard({ history }: { history: NotificationHistoryEntry[] }) {
               return (
                 <li key={h.id} className="flex flex-col gap-1 py-2 sm:flex-row sm:items-start sm:gap-3">
                   <span className="shrink-0 text-xs text-muted-foreground sm:w-28">{when(h.at)}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground sm:w-16">{h.channel === "telegram" ? "Telegram" : "E-mail"}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground sm:w-16">{h.channel === "telegram" ? t("notifications.telegram.title") : t("notifications.history.channelEmail")}</span>
                   <span className="min-w-0 flex-1 break-words">
                     {h.title}
                     {h.detail && <span className="block text-xs text-muted-foreground">{h.detail}</span>}
                   </span>
                   <span className="shrink-0">
-                    <Badge variant={badge.variant}>{badge.label}</Badge>
+                    <Badge variant={badge.variant}>{t(badge.label)}</Badge>
                   </span>
                 </li>
               );
@@ -429,6 +460,7 @@ function HistoryCard({ history }: { history: NotificationHistoryEntry[] }) {
 // ---------------------------------------------------------------------------
 
 function MonitorIntervalCard() {
+  const { t } = useI18n();
   const [hours, setHours] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -437,13 +469,13 @@ function MonitorIntervalCard() {
   useEffect(() => {
     apiFetch<MonitorStateResponse>("/api/security/monitor/last")
       .then((res) => setHours(String(Math.round(res.config.intervalMs / 3_600_000))))
-      .catch(() => setError("Não foi possível carregar a frequência da verificação automática."));
-  }, []);
+      .catch(() => setError(t("notifications.monitor.loadError")));
+  }, [t]);
 
   async function save() {
     const value = Number(hours);
     if (!Number.isFinite(value) || value < 1 || value > 168) {
-      setError("Informe um número de horas entre 1 e 168 (uma semana).");
+      setError(t("notifications.monitor.rangeError"));
       return;
     }
     setSaving(true);
@@ -456,7 +488,7 @@ function MonitorIntervalCard() {
       });
       setSaved(true);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível salvar.");
+      setError(errorText(err, "notifications.monitor.saveError"));
     } finally {
       setSaving(false);
     }
@@ -465,11 +497,8 @@ function MonitorIntervalCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Verificação automática de segurança</CardTitle>
-        <CardDescription>
-          De tempos em tempos o painel confere a VPS sozinho (pacotes, portas abertas e mudanças desde a última vez) e
-          abre um alerta se achar algo — e o alerta vira aviso, se “Alertas de segurança” estiver ligado acima.
-        </CardDescription>
+        <CardTitle className="text-base">{t("notifications.monitor.title")}</CardTitle>
+        <CardDescription>{t("notifications.monitor.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {hours === null && !error ? (
@@ -478,7 +507,7 @@ function MonitorIntervalCard() {
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="nt-hours" className="text-sm font-medium">
-                A cada quantas horas
+                {t("notifications.monitor.hoursLabel")}
               </label>
               <Input
                 id="nt-hours"
@@ -494,11 +523,11 @@ function MonitorIntervalCard() {
               />
             </div>
             <Button onClick={() => void save()} disabled={saving || hours === null}>
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />} {t("notifications.monitor.save")}
             </Button>
             {saved && (
               <span className="flex items-center gap-1 pb-2 text-xs text-emerald-400">
-                <CheckCircle2 className="h-3 w-3" /> Salvo.
+                <CheckCircle2 className="h-3 w-3" /> {t("notifications.monitor.saved")}
               </span>
             )}
           </div>
@@ -514,6 +543,7 @@ function MonitorIntervalCard() {
 }
 
 export function NotificationSettings() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<NotificationsStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -521,7 +551,7 @@ export function NotificationSettings() {
     setLoadError(null);
     apiFetch<NotificationsStatus>("/api/notifications")
       .then(setStatus)
-      .catch((err: unknown) => setLoadError(errorText(err)));
+      .catch((err: unknown) => setLoadError(errorText(err, GENERIC_ERROR)));
   }, []);
 
   useEffect(load, [load]);
@@ -529,17 +559,16 @@ export function NotificationSettings() {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground">
-        Receba um aviso fora do painel quando algo precisar da sua atenção — sem precisar abrir o painel para ver os{" "}
-        <Link to="/alerts" className="underline underline-offset-2">
-          Alertas
-        </Link>
-        . Use o Telegram, o e-mail ou os dois.
+        <Trans
+          k="notifications.intro"
+          components={{ alerts: (c) => <Link to="/alerts" className="underline underline-offset-2">{c}</Link> }}
+        />
       </p>
       {loadError && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-destructive">{loadError}</span>
           <Button variant="outline" size="sm" onClick={load}>
-            Tentar de novo
+            {t("notifications.retry")}
           </Button>
         </div>
       )}

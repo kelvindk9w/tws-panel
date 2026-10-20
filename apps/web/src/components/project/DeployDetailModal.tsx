@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DeployJob, DeployJobResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Loader2, X } from "lucide-react";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
@@ -19,6 +20,7 @@ export function DeployDetailModal({
   jobId: string;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [job, setJob] = useState<DeployJob | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +34,7 @@ export function DeployDetailModal({
         setJob(res.job);
         if (isActiveJob(res.job)) timer = setTimeout(() => void tick(), 1_500);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Não foi possível carregar o deploy.");
+        if (!cancelled) setError(apiErrorText(err, "projects.detailModal.loadError"));
       }
     }
     void tick();
@@ -56,23 +58,23 @@ export function DeployDetailModal({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Detalhes do deploy"
+        aria-label={t("projects.detailModal.aria")}
         data-testid="deploy-detail"
         className="flex max-h-[90dvh] w-full max-w-4xl flex-col gap-3 rounded-xl border bg-background p-4 shadow-2xl sm:p-6"
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-col gap-1">
             <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
-              {job?.kind === "recreate" ? "Reinício" : "Deploy"} <code className="text-sm text-muted-foreground">{jobId.slice(0, 8)}</code>
+              {job?.kind === "recreate" ? t("projects.detailModal.titleRecreate") : t("projects.detailModal.titleDeploy")} <code className="text-sm text-muted-foreground">{jobId.slice(0, 8)}</code>
               {job && <JobStatusBadge status={job.status} />}
             </h2>
             {job && (
               <p className="text-xs text-muted-foreground">
-                {formatDateTime(job.createdAt)} · duração {deployDuration(job)}
+                {formatDateTime(job.createdAt)} · {t("projects.history.duration", { duration: deployDuration(job) })}
               </p>
             )}
           </div>
-          <Button variant="ghost" size="icon" aria-label="Fechar" onClick={onClose}>
+          <Button variant="ghost" size="icon" aria-label={t("projects.detailModal.close")} onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>

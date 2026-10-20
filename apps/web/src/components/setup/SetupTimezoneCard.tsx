@@ -11,8 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TimezonePicker, clockIn, zoneWithOffset } from "@/components/timezone/TimezonePicker";
 import { CheckCircle2, Clock, Loader2 } from "lucide-react";
+import { apiErrorText, Trans, useI18n } from "@/i18n";
 
 export function SetupTimezoneCard() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<TimezoneStatus | null>(null);
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -40,7 +42,9 @@ export function SetupTimezoneCard() {
       setSaved(true);
     } catch (err) {
       setError(
-        `${err instanceof ApiRequestError ? err.message : "Não foi possível trocar agora."} Você pode continuar e trocar depois em Configurações → Fuso horário.`,
+        t("setup.timezone.applyError", {
+          reason: err instanceof ApiRequestError ? apiErrorText(err, "setup.timezone.applyFailed") : t("setup.timezone.applyFailed"),
+        }),
       );
     } finally {
       setBusy(false);
@@ -53,34 +57,37 @@ export function SetupTimezoneCard() {
     <Card data-testid="setup-timezone">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-sm font-medium">
-          <Clock className="h-4 w-4 text-muted-foreground" /> Fuso horário
+          <Clock className="h-4 w-4 text-muted-foreground" /> {t("setup.timezone.title")}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-sm">
         {failed ? (
           <p className="text-muted-foreground">
-            Não deu para ler o fuso agora. Você pode continuar e ajustar depois em Configurações → Fuso horário.
+            {t("setup.timezone.readFailed")}
           </p>
         ) : !status || !vps ? (
           <p className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Lendo o fuso da VPS…
+            <Loader2 className="h-4 w-4 animate-spin" /> {t("setup.timezone.reading")}
           </p>
         ) : (
           <>
             <p>
-              A VPS está em <strong>{zoneWithOffset(vps, status.options)}</strong> ({clockIn(vps, new Date(status.now))} agora). Os
-              backups rodam às 03:00 nesse fuso.
+              <Trans
+                k="setup.timezone.current"
+                params={{ zone: zoneWithOffset(vps, status.options), clock: clockIn(vps, new Date(status.now)) }}
+                components={{ b: <strong /> }}
+              />
             </p>
             {saved && (
               <p className="flex items-start gap-1.5 text-emerald-400">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> Fuso trocado.
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> {t("setup.timezone.changed")}
               </p>
             )}
             {!editing ? (
               status.canApply ? (
                 <div>
                   <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-                    Trocar o fuso
+                    {t("setup.timezone.change")}
                   </Button>
                 </div>
               ) : (
@@ -91,10 +98,10 @@ export function SetupTimezoneCard() {
                 <TimezonePicker options={status.options} value={zone} onChange={setZone} disabled={busy} />
                 <div className="flex gap-2">
                   <Button size="sm" onClick={() => void apply()} disabled={busy || zone === vps}>
-                    {busy && <Loader2 className="h-4 w-4 animate-spin" />} Aplicar na VPS
+                    {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("setup.timezone.apply")}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={busy}>
-                    Cancelar
+                    {t("setup.timezone.cancel")}
                   </Button>
                 </div>
               </div>

@@ -31,6 +31,8 @@ export default defineConfig({
         "src/components/backups/**",
         "src/components/project/ProjectBackupsCard.tsx",
         "src/lib/**",
+        "src/i18n/**",
+        "src/components/LanguageSelect.tsx",
       ],
       reporter: ["text", "html"],
     },

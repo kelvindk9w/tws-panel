@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, Trans, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Github, Loader2, Lock } from "lucide-react";
@@ -21,6 +22,7 @@ export interface GithubRepo {
  * convida a conectar. Colar a URL continua funcionando igual.
  */
 export function GithubRepoPicker({ onPick }: { onPick: (repo: GithubRepo) => void }) {
+  const { t } = useI18n();
   const [connected, setConnected] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
   const [repos, setRepos] = useState<GithubRepo[] | null>(null);
@@ -38,7 +40,7 @@ export function GithubRepoPicker({ onPick }: { onPick: (repo: GithubRepo) => voi
     if (repos) return;
     apiFetch<{ repos: GithubRepo[] }>("/api/integrations/github/repos")
       .then((r) => setRepos(r.repos))
-      .catch((err: unknown) => setError(err instanceof ApiRequestError ? err.message : "Não foi possível listar os repositórios."));
+      .catch((err: unknown) => setError(apiErrorText(err, "projects.repoPicker.listError")));
   }
 
   const filtered = useMemo(
@@ -50,10 +52,16 @@ export function GithubRepoPicker({ onPick }: { onPick: (repo: GithubRepo) => voi
   if (!connected) {
     return (
       <p className="text-xs text-muted-foreground">
-        Prefere escolher numa lista?{" "}
-        <Link to="/settings/integrations" className="text-sky-400 hover:underline">
-          Conectar minha conta do GitHub
-        </Link>
+        <Trans
+          k="projects.repoPicker.connectHint"
+          components={{
+            link: (c) => (
+              <Link to="/settings/integrations" className="text-sky-400 hover:underline">
+                {c}
+              </Link>
+            ),
+          }}
+        />
       </p>
     );
   }
@@ -62,12 +70,12 @@ export function GithubRepoPicker({ onPick }: { onPick: (repo: GithubRepo) => voi
     <div className="flex flex-col gap-2">
       {!open && (
         <Button type="button" variant="outline" className="self-start" onClick={openList}>
-          <Github className="h-4 w-4" /> Escolher dos meus repositórios
+          <Github className="h-4 w-4" /> {t("projects.repoPicker.choose")}
         </Button>
       )}
       {open && (
         <div className="flex flex-col gap-2 rounded-md border p-3">
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar repositório…" autoFocus />
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("projects.repoPicker.search")} autoFocus />
           {!repos && !error && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           {error && (
             <p role="alert" className="text-sm text-destructive">
@@ -91,13 +99,13 @@ export function GithubRepoPicker({ onPick }: { onPick: (repo: GithubRepo) => voi
                   </span>
                   {r.private && (
                     <span className="flex items-center gap-1 text-xs text-amber-400">
-                      <Lock className="h-3 w-3" /> privado
+                      <Lock className="h-3 w-3" /> {t("projects.repoPicker.private")}
                     </span>
                   )}
                 </button>
               </li>
             ))}
-            {repos && filtered.length === 0 && <li className="px-2 text-sm text-muted-foreground">Nenhum repositório encontrado.</li>}
+            {repos && filtered.length === 0 && <li className="px-2 text-sm text-muted-foreground">{t("projects.repoPicker.empty")}</li>}
           </ul>
         </div>
       )}

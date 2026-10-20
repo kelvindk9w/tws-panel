@@ -64,7 +64,7 @@ export default defineConfig({
         {
           label: 'Development',
           translations: { 'pt-BR': 'Desenvolvimento' },
-          items: [{ slug: 'development/local-development' }],
+          items: [{ slug: 'development/local-development' }, { slug: 'development/translating-the-interface' }],
         },
       ],
     }),
