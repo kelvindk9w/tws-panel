@@ -61,7 +61,7 @@ If the old VPS used another projects folder, install with the same one (`./scrip
 
 **Do not start the mail server on the new VPS** before step 8, even though the "Get the panel ready" checklist on the Dashboard suggests it. The scheduled email backup would send an empty mail server to `_email/`, count as a finished backup and, since the container would already exist, the email would not enter the hold after the panel is restored.
 
-**Turn off the panel's automatic backup if the new VPS stays on for a night before step 3 or if step 5 may take more than 7 days.** In **Settings → Backups**, in the **Panel** card, clear **Automatic backup on** and save. A new panel has the schedule on and runs at 03:00 even with no storage connected. That local-only backup counts as a finished backup of this VPS and cancels the protection described in step 3. From then on, an empty panel goes to `_painel/` every day and the retention (5 copies) deletes the good backups in about 5 days. The restore of the panel brings the old schedule back, so the setting does not stay off by itself.
+The new panel has the backup schedule on and runs at 03:00 even with no storage connected. That is harmless: the copy stays on the VPS only and does **not** count as a panel backup for the protection described in step 3, which only considers a backup already **sent to the storage**. You can install on one day and connect the storage on another.
 
 Check that ports **80 and 443** are open at the provider, and port **25** if you will use email
 (see [Complete guide, Step 6.1](../getting-started/complete-guide.md#etapa-6)).
@@ -100,7 +100,8 @@ Click **Test and save**.
 > The scheduled backup of the new panel is on by default, and the panel holds it only under
 > these conditions:
 >
-> - no project is registered, no panel backup was made on this VPS and no email backup has finished; and
+> - no project is registered, the panel was not restored and no panel or email backup was
+>   **sent to the storage** by this VPS (a copy only on the VPS does not count); and
 > - the storage already holds panel backups in `_painel/`; and
 > - less than **7 days** have passed since you connected the storage.
 >
@@ -109,10 +110,9 @@ Click **Test and save**.
 > servidor" (a server message, in Portuguese). Expect it. If the panel cannot list the storage, it
 > does not send the backup either, and a notification warns you on the third failure in a row.
 > **If more than 7 days pass between step 3 and step 5**, the hold ends by itself and the
-> next scheduled backup can put an empty panel over the good backup. The hold also does not exist
-> if the new panel already made a backup that only stayed on the VPS (the 03:00 run with no storage
-> connected): that counts as a finished backup. In both cases, turn off **Automatic backup on** in
-> the **Panel** card before step 3, as step 1 says.
+> next scheduled backup can put an empty panel over the good backup. If you already know it will take
+> more than 7 days, turn off **Automatic backup on** in the **Panel** card before connecting the
+> storage and turn it on again at the end (extra care, only for that case).
 
 ### 4. Enter the backup password
 
@@ -253,7 +253,7 @@ first: the new IP has no reputation yet.
   one of a project that is deployed but whose data has not come back yet can send a backup without
   the data. Restore the projects soon after the panel.
 - Email: the DNS checklist is 6/6, the test email arrives, and a mailbox can sign in to the webmail.
-- In **Settings → Backups**, the **Panel** card has **Automatic backup on** checked. If you turned it off in step 1 and the panel backup was an old one, without the backup settings, turn it on again: the restore brings the old schedule back only when the backup has those settings.
+- In **Settings → Backups**, the **Panel** card has **Automatic backup on** checked. If you turned it off as extra care in step 3, turn it on again: the restore brings the old schedule back only when the backup has the backup settings, and an old backup without them leaves the schedule as it was.
 - **Settings → Time zone** shows the time zone you want. Backups run
   at 03:00 in the VPS time zone.
 - Run **Back up now** on the panel and see "external copy verified". Then run a project
