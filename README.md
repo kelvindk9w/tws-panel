@@ -77,7 +77,7 @@ item in detail.
 - Mailboxes with ready-to-use credentials for Outlook, Gmail or a phone, and a test email.
 - Project email: a dedicated mailbox, with `SMTP_*` variables injected at deploy.
 - Webmail (Roundcube) at `https://mail.<domain>/`.
-- A **Envios** (Sends) page for outgoing mail: queue, history, volume, blocklists and a deliverability score.
+- An **Envios** (Sends) page for outgoing mail: queue, history, volume, blocklists and a deliverability score.
 
 ### Notifications
 
