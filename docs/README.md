@@ -19,6 +19,7 @@ and are published as the documentation website. This folder keeps what is not pa
 | [projects-analysis.md](internal/projects-analysis.md) | Requirements taken from three real projects that defined the ingestion modes and pipelines. |
 | [fase-3-email.md](internal/fase-3-email.md) | Stalwart integration (image, REST API, bootstrap), DNS checklist, SMTP injection. |
 | [fase-4-guardrails-monitoramento.md](internal/fase-4-guardrails-monitoramento.md) | Guardrail rules, baseline + diff, DNSBL, alert center and audit. |
+| [allowed-origins.md](internal/allowed-origins.md) | Running the panel behind another reverse proxy: the `ALLOWED_ORIGINS` variable and `403 forbidden_origin`. |
 | [github-security.md](internal/github-security.md) | Hardening the GitHub repository itself (rulesets, supply chain). |
 | [phase1-evidence/](internal/phase1-evidence/) | Screenshots and JSON of the security scan before and after hardening (phase 1). |
 

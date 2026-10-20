@@ -75,6 +75,14 @@ services:
       # install.sh como <ip-com-hífens>.sslip.io. Vazio = acesso por túnel.
       PAAS_PANEL_DOMAIN: ${PAAS_PANEL_DOMAIN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Origens extras que podem chamar a API do painel, separadas por vírgula
+      # (ex.: ALLOWED_ORIGINS=https://painel.exemplo.com), gravadas no .env.
+      # Vazio (o padrão) = só a própria origem do painel, como sempre foi.
+      # Serve a quem abre o painel atrás de OUTRO proxy que remove o cabeçalho
+      # Sec-Fetch-Site ou muda o Origin: sem isso, as ações de escrita voltam
+      # "403 forbidden_origin" (guarda contra CSRF). A lista libera a CORS e
+      # essa guarda para exatamente essas origens; não use "*".
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       # Fuso horário (ex.: America/Sao_Paulo). Vazio = o da VPS, lido de
       # /host/etc/localtime (ver volumes).
       TZ: ${TZ:-}
