@@ -31,8 +31,13 @@ URLs and numbers. Only the prose, the code comments and the placeholders are tra
 1. Copy `src/content/docs/en/` to `src/content/docs/<code>/` (for example `es`) and translate it.
    A page that is missing is shown in English, with a notice.
 2. Add one entry to `locales` in `astro.config.mjs`, for example `es: { label: 'Español', lang: 'es' }`.
-3. Add the translated section labels in `sidebar` (`translations: { es: '…' }`) and, in
-   `src/pages/index.astro`, the language check that redirects the site root.
+3. Add the translated section labels in `sidebar`. The key of `translations` is the `lang` value of
+   the locale, not the locale key: for `pt-br` it is `'pt-BR'`, so for the example it is
+   `translations: { es: '…' }` because `lang` is `'es'`. In `src/pages/index.astro`, add the
+   language check that redirects the site root.
+4. Add a block for the language in `src/content/docs/404.md` (a `<div data-lang-block="<code>">`)
+   and the matching entry in the script at the end of that file. GitHub Pages serves a single
+   404 page, and the script chooses the block from the first folder of the address.
 
 Sidebar entries use slugs, so they are the same in every language.
 

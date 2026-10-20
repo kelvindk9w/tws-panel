@@ -44,22 +44,49 @@ Antes: um parágrafo de duas linhas no fim da Etapa 10 do guia completo e um ite
 2. **Armadilha do domínio do painel:** `panel-domain.json` volta com o backup do painel; se o painel antigo estava com o acesso pelo IP desativado, o novo só responde no domínio, que ainda aponta para o IP antigo, e o operador fica sem entrar (saída: apontar o DNS antes, ou `reativar-acesso-ip.sh`). Lido em `panel-restore.ts` e `panel-domain.ts`.
 3. **Dois servidores gravando no mesmo bucket** (as configurações de backup voltam): o passo 2 manda parar o painel antigo.
 4. **Registro SPF** carrega o IP antigo; o PTR e a porta 25 também dependem da VPS nova.
-5. Ordem (painel → projetos → e-mail), a senha "da época", a caixa "Publicar do GitHub antes de restaurar", a espera de até 45 min e o que fica de fora (itens não marcados na aba Backups, fora de volumes; branch atual do GitHub, não a da data do backup).
+5. Ordem (painel → projetos → e-mail), a senha usada quando aquele backup foi feito, a caixa "Publicar do GitHub antes de restaurar", a espera de até 45 min e o que fica de fora (itens não marcados na aba Backups, fora de volumes; branch atual do GitHub, não a da data do backup).
+
+Correções da segunda rodada (revisor reprovou a primeira):
+6. **Perda de dados:** o passo 2 agora manda fazer **Fazer backup agora** no painel antigo (Painel, cada projeto, E-mail), esperar "cópia externa conferida" e anotar a data, só então rodar `docker compose stop`; avisa que o que for gravado ou recebido depois não migra até o DNS mudar.
+7. **Chaves do armazenamento voltam as antigas** depois do passo 5 (`backups.json` e a chave vêm no backup do painel): aviso de reinformar as chaves em Armazenamento externo → Editar, e, em caso de invasão, revogar o token antigo e trocar as senhas depois.
+8. **Escolha da data e agenda:** a data é a do último backup da VPS antiga; os passos 3 a 8 sem pausa; não clicar em "Fazer backup agora" no painel novo antes do passo 5 (o backup automático vem ligado, pode subir um painel vazio para `_painel/` e a retenção de 5 cópias apagar a mais antiga); nas conferências finais, ver a aba Backups de cada projeto (o painel desliga o automático de projeto sem containers, `disableEmptyProject`).
+9. **Projetos que não vêm do GitHub não são restaurados por este fluxo** (ver "Tarefas de código descobertas", item 1): a linha da tabela deixou de prometer o código desses projetos e a página descreve o caminho manual (extrair `codigo/codigo.tar` do `.7z` para a pasta do projeto, publicar, restaurar os dados).
+10. Detalhes de interface conferidos no código: "Tentar emitir agora" fica na página Certificados; aviso "abra a página E-mail e clique em Iniciar" com o botão **Iniciar servidor**; cartão "Criptografia da cópia externa"; o baseline fica em Segurança → "Atualizar retrato de referência".
+
+Outras páginas corrigidas na segunda rodada: `troubleshooting` e `production` (sem modo DNS-01 no painel; botões reais **Verificar agora** e **Verificar DNS**), `features` (webmail: 10 logins errados do mesmo IP em 10 minutos bloqueiam esse IP, só no webmail), `security` (privilegiado, `docker.sock` e bind fora da pasta bloqueiam mas aceitam override auditado; só as regras de isolamento do painel, `panel-image`, `network-hijack`, `reserved-name` e `panel-resource`, não têm override), `installation` e `complete-guide` (etapas "Boas-vindas e token" e "Conta de administrador", como em `setup-state.ts`), trechos em inglês reescritos (instrução ao autor em `security`, "#1 cause", "send low, growing volume", "the commit version", contrações). No site: o 404 escolhe o idioma por `^/tws-panel/(en|pt-br)(/|$)` e ajusta `lang` e título; o `site/README.md` corrige a chave de `translations` (valor de `lang`, ex.: `'pt-BR'`) e lista o bloco do 404 ao adicionar idioma.
 
 ## O que NÃO consegui confirmar contra o código
 
 - Se o baseline de monitoramento volta no backup do painel e gera alertas na VPS nova (a página manda recriá-lo "se houver diferenças").
-- Como um projeto que **não** vem do GitHub é republicado numa VPS nova (o backup guarda o código, mas o fluxo usa `projects.redeploy`; só li o caso GitHub).
+- O caminho manual para projetos que não vêm do GitHub (extrair `codigo/codigo.tar` para a pasta do projeto e publicar) foi montado pela leitura do código (`tar.create(dirname(src), basename(src))`, destino `projectSrcDir`); não foi executado. Não confirmei se a publicação de um projeto `upload`/`existing` a partir da pasta já extraída funciona pelo botão Deploy.
 - Que o fuso da VPS nova segue o que o painel restaurado espera (a página manda conferir).
 - Texto exato "Conexão testada e salva" e demais mensagens dinâmicas da interface (conferi os rótulos fixos).
 - Afirmações sobre provedores que ficaram: PTR (Contabo/Hetzner/Vultr, existe em `dns-checklist.ts`), "Hetzner, AWS, OCI bloqueiam a 25" (troubleshooting e produção), e o link "Fale com a TWS".
 - Não executei nenhum script de shell nem os comandos de VPS; a leitura foi do código.
 
+## Tarefas de código descobertas
+
+1. **Bug: `restoreProject` republica ANTES de devolver o código** (`backup-service.ts` ~2221). Em projetos `upload`/`existing` o caminho do código-fonte é da VPS antiga e a republicação falha. Solução: restaurar o item `source` (`codigo/codigo.tar`) antes de chamar o redeploy, quando o modo não for `git`.
+2. **Pausar a agenda de backup durante e logo depois da restauração do painel.** O `backups.json` volta com o `lastSlot` antigo e o agendador (60 s) pode disparar backups de projetos ainda sem containers; o resultado é `NothingToBackup` e o painel desliga o backup automático deles (`disableEmptyProject`). Além disso, o backup automático do painel vem ligado de fábrica e, depois de definida a senha, uma VPS nova pode enviar um painel vazio para `_painel/`, e a retenção apagar o backup bom.
+3. **Restaurar o painel mantendo as chaves do armazenamento atuais** (ou, no mínimo, avisar na tela): hoje as chaves voltam as antigas e o download de projetos e e-mail falha quando o token foi trocado ou revogado.
+4. **Kit de recuperação sem as chaves de acesso** (só endpoint e bucket): incluir as chaves ou dizer na tela que elas precisam ser guardadas à parte.
+5. **Aviso ou solução na tela para o acesso pelo IP desativado ao restaurar** (`panel-domain.json` volta com `ipAccessDisabled`).
+6. **`docker-compose.yml` não repassa `ALLOWED_ORIGINS`** ao painel (ver sugestão abaixo): quem usa outro proxy e recebe `403 forbidden_origin` não consegue configurar.
+
+## Ajuste necessário no merge com a branch da interface (página "Translating the interface")
+
+A branch da interface cria `development/` "Translating the interface" (não toquei nela). Ao juntar:
+- A página nova precisa de `description` e `sidebar.label` no frontmatter (regra do `site/README.md`) e do mesmo título em sentence case.
+- Ela diz que a interface em inglês já existe; as minhas páginas dizem "está sendo traduzida". Como o inglês chega no mesmo PR, as notas devem ser removidas ou trocadas pelos rótulos reais:
+  - a nota `> [!NOTE]` "The panel interface is being translated" / "A interface do painel está sendo traduzida para o inglês" em `getting-started/installation`, `getting-started/security-wizard`, `getting-started/complete-guide`, `guides/features`, `guides/production`, `guides/troubleshooting`, `guides/recover-access`, `guides/network-migration`, `guides/restore-new-server`, `reference/security`, `reference/host-bridge` (en e pt-br);
+  - a frase da página inicial (`index.md`, en e pt-br) que diz que a interface está sendo traduzida e por ora aparece em português;
+  - em `site/README.md`, a regra de rótulos da interface ("rótulo em português com a tradução entre parênteses") e a convenção "Interface labels";
+  - os textos "(tradução em inglês)" entre parênteses nos rótulos, que passam a ser o rótulo real em inglês.
+
 ## Sugestões que dependem do Kelvin
 
 1. **`ALLOWED_ORIGINS` não é repassada pelo `docker-compose.yml`** (nem `docker-compose.dev.yml`, não verifiquei): quem usa o painel atrás de outro proxy e recebe `403 forbidden_origin` não tem como configurar. Decidir se passa a repassar; só então documentar a variável em "Solução de problemas".
-2. Incluir as chaves do armazenamento (ou instrução explícita) no kit de recuperação; hoje a restauração numa VPS nova exige um passo a mais.
-3. Avisar na tela de restauração do painel sobre o acesso pelo IP desativado (armadilha do passo 5).
+2. Ver "Tarefas de código descobertas", itens 4 e 5 (chaves no kit; aviso do acesso pelo IP desativado).
 4. Os guias citam `tws.tec.br` ("Fale com a TWS") e nomes de provedores: manter ou tirar.
 5. Os links para `blob/main/...` só funcionam depois que a `main` tiver esses arquivos.
 6. Quando a interface em inglês sair, trocar o padrão "rótulo em português (tradução)" pelos rótulos reais e remover a nota das páginas.
