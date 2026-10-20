@@ -9,7 +9,7 @@ import {
   type SetupStatusResponse,
   type VerifyTokenResponse,
 } from "@paas/core";
-import { tokenMatches } from "../services/setup-token.js";
+import { removeSetupTokenFile, tokenMatches } from "../services/setup-token.js";
 import { hashPassword } from "../services/password.js";
 import { SETUP_STEPS } from "../services/setup-state.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
@@ -178,6 +178,22 @@ const setupRoutes: FastifyPluginAsync = async (app) => {
     }
 
     await app.setupState.complete();
+    // O token só serve ao assistente: some do arquivo e da memória. A variável
+    // SETUP_TOKEN do contêiner não é mais lida (loadSetupToken, setup concluído).
+    app.revokeSetupToken();
+    delete process.env.SETUP_TOKEN;
+    if (app.hasDecorator("config")) {
+      try {
+        await removeSetupTokenFile(app.config.setupTokenFile);
+      } catch (err) {
+        request.log.warn({ err }, "não foi possível apagar o arquivo do setup token");
+        await app.auditService.record({
+          actor: user.username,
+          action: "setup.token_cleanup_failed",
+          detail: "O arquivo do setup token não pôde ser apagado; o token já não vale (setup concluído).",
+        });
+      }
+    }
     await app.auditService.record({
       actor: user.username,
       action: "setup.admin_created",
