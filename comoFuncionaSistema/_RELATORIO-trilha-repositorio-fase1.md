@@ -1,6 +1,6 @@
 # Relatório — trilha do repositório, fase 1
 
-Branch: `worktree-agent-afb387f62f8c4d5ad` (a partir de `origin/dev`). Sem push. Commits pequenos, na ordem do escopo.
+Branch: `worktree-agent-afb387f62f8c4d5ad`. Nasceu do commit 5f50609 (o squash da `main`, árvore idêntica à da `dev`, histórico não) e, na revisão, recebeu o merge de `origin/dev` (c2b5e7e), com o `pnpm-lock.yaml` resolvido pela versão desta branch e conferido com `pnpm install --frozen-lockfile` (os overrides `undici`, `source-map-js` e `postcss-selector-parser` continuam no lockfile). Sem push. Commits pequenos, na ordem do escopo.
 
 ## O que foi feito
 
@@ -12,6 +12,17 @@ Branch: `worktree-agent-afb387f62f8c4d5ad` (a partir de `origin/dev`). Sem push.
 6. **`ROADMAP.md`** curto e sem datas (tradução es, Google Drive, templates, API/OpenAPI, MCP, aquecimento de IP, MTA-STS, BIMI; multi-servidor como fase futura). Entrada em "Documentação e comunidade" no CHANGELOG.
 
 Extras necessários: `scripts/check-doc-links.mjs` (`pnpm docs:links`, sem dependências; confere arquivos, âncoras e links do próprio repositório em todos os `.md`), scripts `docs:dev`/`docs:build`/`docs:links`, e `"vite": "^6.4.3"` como devDependency da raiz (sem isso o lockfile passava a resolver o vitest da raiz com o vite 8 do Astro, mudando o ambiente de testes dos pacotes).
+
+## Correções da revisão
+
+- **Alertas do GitHub no site**: `site/plugins/remark-github-alerts.mjs` converte `> [!NOTE]`/`TIP`/`IMPORTANT`/`WARNING`/`CAUTION` em asides do Starlight sem tocar no Markdown (NOTE→note, TIP→tip, IMPORTANT→note com título "Important", WARNING→caution, CAUTION→danger; títulos em pt-br traduzidos). `pnpm --filter site check:build` (`site/scripts/check-build.mjs`) falha se sobrar `[!X]` literal no HTML ou se faltar aside do tipo esperado; roda no `docs.yml`. No build atual: 0 literais; 26 note, 9 tip, 9 caution, 2 danger só em `/en`.
+- **security.md (en e pt-br)**: SameSite=Strict, cookie `__Host-paas_session` em HTTPS, arquivo do setup token apagado ao concluir, escrita cross-origin recusada com `403 forbidden_origin`. Conferidos contra o código: limite de 5 tentativas/min por IP com lockout progressivo, senha mínima de 12 com maiúscula/minúscula/número, expiração de 12 h, troca de senha invalida as outras sessões. Nenhum outro doc cita SameSite.
+- **PR template**: link absoluto para `blob/dev/CONTRIBUTING.md` (a branch padrão real do repositório é `dev`).
+- **host-bridge**: "Why it is designed to be safe" e "desenhado para que o quoting não possa ser quebrado" (e equivalentes em pt-br).
+- **CONTRIBUTING**: cobertura de `packages/deploy` corrigida para funções ≥ 97,5% (lê-se de `vitest.config.ts`: linhas 97, funções 97,5, ramos 95); `apps/web` não tem threshold configurado.
+- **docs.yml**: `workflow_dispatch` (build manual); o upload do artefato e o deploy exigem push em `refs/heads/main`.
+- **Domínios de teste**: `loja.com.br` / `envio.loja.com.br` → `loja.example.com` / `envio.loja.example.com` em `project-email-card.test.tsx`.
+- Nota: como a branch padrão do repositório é `dev`, o comando do README (`--branch main`) e os links `blob/main` dependem de a `main` estar atualizada.
 
 ## O que NÃO foi feito
 

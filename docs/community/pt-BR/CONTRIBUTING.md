@@ -79,7 +79,7 @@ cobertura por package (thresholds no `vitest.config.ts` — o CI falha se regred
 | `packages/core`    | ≥ 98%  | ≥ 98%    | ≥ 98%   |
 | `packages/security`| ≥ 98%  | ≥ 96%    | ≥ 98%   |
 | `packages/mailer`  | ≥ 98%  | ≥ 98%    | ≥ 98%   |
-| `packages/deploy`  | ≥ 97%  | ≥ 95%    | ≥ 98%   |
+| `packages/deploy`  | ≥ 97%  | ≥ 95%    | ≥ 97,5% |
 | `apps/server`      | ≥ 94%  | ≥ 91%    | ≥ 98%   |
 
 Os resíduos conhecidos (branches defensivas inalcançáveis, catches de TOCTOU em scans

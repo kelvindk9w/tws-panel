@@ -162,7 +162,7 @@ function bodyOf(path: string, method: string): unknown {
 function renderCard() {
   return render(
     <MemoryRouter>
-      <ProjectEmailCard projectId="p1" projectName="Loja Royal" projectSlug="loja" projectDomain="loja.com.br" />
+      <ProjectEmailCard projectId="p1" projectName="Loja Royal" projectSlug="loja" projectDomain="loja.example.com" />
     </MemoryRouter>,
   );
 }
@@ -245,7 +245,7 @@ describe("ProjectEmailCard — ativar", () => {
     serve(OFF, { domains: [] });
     renderCard();
     expect(await screen.findByText(/Nenhum domínio de e-mail/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Seu domínio")).toHaveValue("loja.com.br");
+    expect(screen.getByLabelText("Seu domínio")).toHaveValue("loja.example.com");
   });
 });
 
@@ -491,9 +491,9 @@ describe("ProjectEmailCard — cadastrar o domínio do próprio projeto", () => 
       if (path === "/api/mail/domains" && method === "POST") {
         const body = JSON.parse(String(init?.body)) as { domain: string; confirmExistingMail?: boolean };
         posts.push(body);
-        if (opts.receivesMail && body.domain === "loja.com.br" && !body.confirmExistingMail) {
+        if (opts.receivesMail && body.domain === "loja.example.com" && !body.confirmExistingMail) {
           throw new ApiRequestError(409, "domain_receives_mail", "Este domínio já recebe e-mail.", {
-            existingMail: { status: "elsewhere", servers: ["mx.provedor.com"], suggestedDomain: "envio.loja.com.br" },
+            existingMail: { status: "elsewhere", servers: ["mx.provedor.com"], suggestedDomain: "envio.loja.example.com" },
           });
         }
         domains.push({ ...domain(body.domain, 0), lastVerify: null });
@@ -517,13 +517,13 @@ describe("ProjectEmailCard — cadastrar o domínio do próprio projeto", () => 
     renderCard();
     await user.click(await screen.findByRole("button", { name: /Usar um domínio meu/ }));
     const input = screen.getByLabelText("Seu domínio");
-    expect(input).toHaveValue("loja.com.br");
+    expect(input).toHaveValue("loja.example.com");
     await user.click(screen.getByRole("button", { name: /Cadastrar domínio/ }));
-    await waitFor(() => expect(posts).toEqual([{ domain: "loja.com.br" }]));
-    expect(await screen.findByLabelText("Domínio de e-mail")).toHaveValue("loja.com.br");
-    expect(screen.getByRole("link", { name: /Ver os registros DNS/ })).toHaveAttribute("href", "/mail/loja.com.br?aba=dns");
+    await waitFor(() => expect(posts).toEqual([{ domain: "loja.example.com" }]));
+    expect(await screen.findByLabelText("Domínio de e-mail")).toHaveValue("loja.example.com");
+    expect(screen.getByRole("link", { name: /Ver os registros DNS/ })).toHaveAttribute("href", "/mail/loja.example.com?aba=dns");
     await user.click(screen.getByRole("button", { name: /Verificar agora/ }));
-    expect(await screen.findByRole("option", { name: /loja\.com\.br — DNS 6\/6 OK/ })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /loja\.example\.com — DNS 6\/6 OK/ })).toBeInTheDocument();
   });
 
   it("o campo é editável: outro domínio vai no cadastro", async () => {
@@ -533,9 +533,9 @@ describe("ProjectEmailCard — cadastrar o domínio do próprio projeto", () => 
     await user.click(await screen.findByRole("button", { name: /Usar um domínio meu/ }));
     const input = screen.getByLabelText("Seu domínio");
     await user.clear(input);
-    await user.type(input, "envio.loja.com.br");
+    await user.type(input, "envio.loja.example.com");
     await user.click(screen.getByRole("button", { name: /Cadastrar domínio/ }));
-    await waitFor(() => expect(posts).toEqual([{ domain: "envio.loja.com.br" }]));
+    await waitFor(() => expect(posts).toEqual([{ domain: "envio.loja.example.com" }]));
   });
 
   it("domínio que já recebe e-mail em outro lugar: avisa e oferece o subdomínio de envio", async () => {
@@ -545,9 +545,9 @@ describe("ProjectEmailCard — cadastrar o domínio do próprio projeto", () => 
     await user.click(await screen.findByRole("button", { name: /Usar um domínio meu/ }));
     await user.click(screen.getByRole("button", { name: /Cadastrar domínio/ }));
     expect(await screen.findByText(/já recebe e-mail em outro servidor/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Usar envio\.loja\.com\.br/ }));
-    await waitFor(() => expect(posts.at(-1)).toEqual({ domain: "envio.loja.com.br" }));
-    expect(await screen.findByLabelText("Domínio de e-mail")).toHaveValue("envio.loja.com.br");
+    await user.click(screen.getByRole("button", { name: /Usar envio\.loja\.example\.com/ }));
+    await waitFor(() => expect(posts.at(-1)).toEqual({ domain: "envio.loja.example.com" }));
+    expect(await screen.findByLabelText("Domínio de e-mail")).toHaveValue("envio.loja.example.com");
   });
 
   it("sem nenhum domínio: o cadastro aparece direto", async () => {
@@ -575,7 +575,7 @@ function Where() {
 function renderAt(url: string) {
   return render(
     <MemoryRouter initialEntries={[url]}>
-      <ProjectEmailCard projectId="p1" projectName="Loja Royal" projectSlug="loja" projectDomain="loja.com.br" />
+      <ProjectEmailCard projectId="p1" projectName="Loja Royal" projectSlug="loja" projectDomain="loja.example.com" />
       <Where />
     </MemoryRouter>,
   );

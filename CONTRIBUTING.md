@@ -88,7 +88,7 @@ is in the comment of each package/app `vitest.config.ts`). Coverage targets per 
 | `packages/core`     | >= 98% | >= 98%   | >= 98%    |
 | `packages/security` | >= 98% | >= 96%   | >= 98%    |
 | `packages/mailer`   | >= 98% | >= 98%   | >= 98%    |
-| `packages/deploy`   | >= 97% | >= 95%   | >= 98%    |
+| `packages/deploy`   | >= 97% | >= 95%   | >= 97.5%  |
 | `apps/server`       | >= 94% | >= 91%   | >= 98%    |
 
 The known residuals (unreachable defensive branches, TOCTOU catches in disk scans, `system-info`
