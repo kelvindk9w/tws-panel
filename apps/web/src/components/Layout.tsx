@@ -5,6 +5,7 @@ import type { AlertListResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { LanguageSelect } from "@/components/LanguageSelect";
+import { HelpMenu } from "@/components/HelpMenu";
 import { UserMenu } from "@/components/UserMenu";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/i18n";
@@ -259,6 +260,7 @@ function TopBar({ className }: { className?: string }) {
         {/* idioma sempre à vista, ao lado do menu do usuário */}
         <div className="ml-auto flex items-center gap-2">
           <LanguageSelect compact />
+          <HelpMenu />
           <UserMenu />
         </div>
       </div>
@@ -320,6 +322,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-2 px-3">
           <Languages className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           <LanguageSelect className="min-w-0 flex-1" />
+          <HelpMenu placement={side === "left" ? "sidebar-left" : "sidebar-right"} />
         </div>
         <UserMenu placement={side === "left" ? "sidebar-left" : "sidebar-right"} />
       </div>

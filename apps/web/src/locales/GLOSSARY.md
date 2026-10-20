@@ -32,6 +32,9 @@ termo novo entra aqui antes de entrar nos dicionários.
 | sessão | session | |
 | configurações | settings | |
 | mais (item de menu que agrupa os demais) | more | |
+| ajuda e feedback (menu do cabeçalho) | help and feedback | |
+| relatar um problema | report a problem | formulário de bug (issue) |
+| sugerir uma funcionalidade | suggest a feature | formulário de sugestão |
 | painel | panel | "TWS Panel" é o nome do produto |
 | assistente (de instalação) | setup wizard | |
 | endurecimento / hardening | hardening | termo técnico, fica "hardening" nos dois |
