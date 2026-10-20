@@ -297,6 +297,24 @@ describe("convivência com os outros menus", () => {
   });
 });
 
+describe("painel dentro da tela (estrutura)", () => {
+  it("topo: abaixo de sm prende o painel à tela (fixed, 16px da direita, sob o cabeçalho) e limita a largura", async () => {
+    renderLayout("top");
+    await userEvent.click(helpButton());
+    const cls = screen.getByRole("dialog").className;
+    for (const c of ["max-sm:fixed", "max-sm:right-4", "max-sm:top-14", "max-sm:mt-0", "max-w-[calc(100vw-2rem)]", "w-72"]) expect(cls).toContain(c);
+  });
+
+  it("lateral: mantém a âncora no botão (sem fixed), só se abre na lateral em md+", async () => {
+    renderLayout("left");
+    const side = screen.getByTestId("nav-sidebar");
+    await userEvent.click(helpButton(side));
+    const cls = within(side).getByRole("dialog").className;
+    expect(cls).not.toContain("fixed");
+    expect(cls).toContain("left-0");
+  });
+});
+
 describe("HelpMenu isolado", () => {
   it("renderiza sem o Layout", async () => {
     render(<HelpMenu />);

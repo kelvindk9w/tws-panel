@@ -99,7 +99,8 @@ export function HelpMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
           aria-label={t("shell.help.button")}
           className={cn(
             "absolute z-50 w-72 max-w-[calc(100vw-2rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-lg",
-            placement === "top" && "right-0 top-full mt-1",
+            // abaixo de sm o painel prende à tela (16px da borda direita, logo abaixo do cabeçalho): ancorado no botão ele saía pela esquerda em 320-373px
+            placement === "top" && "right-0 top-full mt-1 max-sm:fixed max-sm:right-4 max-sm:top-14 max-sm:mt-0",
             placement === "sidebar-left" && "bottom-full left-0 mb-1",
             placement === "sidebar-right" && "bottom-full right-0 mb-1",
           )}

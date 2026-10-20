@@ -69,6 +69,16 @@ sem ela (celular) o cabeçalho cabe a partir de ~326px, então a 320px ainda pas
 Capturas com o painel aberto: topo e lateral esquerda/direita, 390/1024/1440px, pt-BR e en (área
 temporária da sessão, não versionadas): painel dentro da tela, sem rolagem horizontal.
 
+## 2ª correção da revisão: painel cortado pela esquerda
+Com o cabeçalho cabendo, o botão de ajuda ficou mais à esquerda e o painel de 288px, alinhado pela
+direita do botão, saía da tela de 320 a 373px (6px cortados de 320 a 360px, 1px a 373px). Correção:
+no cabeçalho do topo, abaixo de `sm`, o painel fica fixo a 16px da borda direita, logo abaixo do
+cabeçalho (`max-sm:fixed max-sm:right-4 max-sm:top-14 max-sm:mt-0`); de 640px para cima nada muda; a
+largura segue limitada a 100vw - 2rem. Medição própria com o painel aberto, de 320 a 1440px (de 4 em
+4px): topo, lateral esquerda e lateral direita, pt-BR e en, e topo com o menu móvel aberto: painel 100%
+dentro da viewport em todos os cenários (a lateral, com a linha de texto, é a âncora no botão e só
+aparece de 768px para cima; abaixo disso vale o cabeçalho). Teste estrutural em help-menu.test.tsx.
+
 ## Não verificado
 - Larguras abaixo de ~326px (320px passa uns 6px, mas menos que a base); leitor de tela real; Firefox/Safari.
 - Que o formulário `bug_report.yml` tenha os campos `version`/`locale` (é do executor A; o GitHub
