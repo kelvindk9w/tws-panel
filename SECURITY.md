@@ -89,6 +89,6 @@ fixes, and no older release lines are maintained. Always run the most recent ver
 - **Auditing** of every sensitive action (login, deploy, guardrail override, hardening, email
   changes, panel domain, notifications, backups and monitoring).
 - **Deploy guardrails** that block dangerous configurations (such as an exposed database port, weak
-  credentials or a privileged container) and require an explicit, audited override.
+  credentials or a privileged container) and can be bypassed only with an explicit, audited override. The rules that protect the panel's own isolation cannot be bypassed at all.
 - **Hardening with automatic rollback** on the three phases that touch access (user, SSH and
   firewall): if nobody confirms within about 5 minutes, the server undoes what it applied by itself.

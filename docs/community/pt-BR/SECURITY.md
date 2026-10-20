@@ -69,7 +69,7 @@ de segurança, e não há linhas de versões antigas mantidas. Rode sempre a ver
 
 - **Um wizard de setup protegido por um token**, comparado em tempo constante. O instalador o gera
   com permissão 0600, e ele deixa de ser aceito quando o setup termina.
-- **Um terminal web com shell real na VPS, por desenho.** Ele permite conduzir o hardening pela
+- **Um terminal web com shell real na VPS, de propósito.** Ele permite conduzir o hardening pela
   interface e é a maior superfície de ataque do sistema. Na instalação, quem instala escolhe com
   qual usuário o terminal abre. O recomendado é o seu próprio usuário comum: o que precisa de root
   passa pelo `sudo` com senha ou roda em segundo plano e fica registrado no log de auditoria. O
@@ -87,11 +87,10 @@ de segurança, e não há linhas de versões antigas mantidas. Rode sempre a ver
 - **CORS de mesma origem** por padrão, cabeçalhos de segurança (Helmet/CSP) e rate limiting.
 - **Segredos em disco com modo 0600**, com os sensíveis cifrados (variáveis de ambiente dos
   projetos, credenciais de repositório, token do Telegram, e chave e senha dos backups), e
-  **redação de tokens e senhas nos logs**.
+  **mascaramento de tokens e senhas nos logs**.
 - **Auditoria** de toda ação sensível (login, deploy, override de guardrail, hardening, mudanças no
   e-mail, domínio do painel, notificações, backups e monitoramento).
 - **Guardrails de deploy** que bloqueiam configurações perigosas (como uma porta de banco de dados
-  exposta, credenciais fracas ou um container privilegiado) e exigem um override explícito e
-  auditado.
+  exposta, credenciais fracas ou um container privilegiado) e só podem ser contornados com um override explícito e auditado. As regras que protegem o isolamento do próprio painel não podem ser contornadas de forma alguma.
 - **Hardening com rollback automático** nas três fases que mexem no acesso (usuário, SSH e
   firewall): se ninguém confirmar em cerca de 5 minutos, o servidor desfaz sozinho o que aplicou.
