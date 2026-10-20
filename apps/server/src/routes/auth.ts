@@ -18,7 +18,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import {
-  SESSION_COOKIE,
+  sessionCookieName,
   SESSION_TTL_MS,
   passwordStrengthErrors,
   DEFAULT_USER_PREFERENCES,
@@ -195,11 +195,13 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     const { session, cookieValue } = created;
-    reply.setCookie(SESSION_COOKIE, cookieValue, {
+    const secure = request.protocol === "https";
+    reply.setCookie(sessionCookieName(secure), cookieValue, {
       path: "/",
       httpOnly: true,
-      sameSite: "lax",
-      secure: request.protocol === "https",
+      // Strict + prefixo __Host- em HTTPS: ver SESSION_COOKIE_SECURE (core/auth.ts).
+      sameSite: "strict",
+      secure,
       maxAge: Math.floor(SESSION_TTL_MS / 1000),
     });
     await app.auditService.record({
@@ -238,7 +240,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         detail: "Sessão encerrada pelo usuário.",
       });
     }
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    const secure = request.protocol === "https";
+    reply.clearCookie(sessionCookieName(secure), { path: "/", secure });
     return reply.send({ ok: true });
   });
 

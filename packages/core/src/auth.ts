@@ -7,8 +7,20 @@
 // Constantes
 // ---------------------------------------------------------------------------
 
-/** Nome do cookie de sessão (httpOnly, SameSite=Lax). */
+/** Nome do cookie de sessão em HTTP simples (httpOnly, SameSite=Strict). */
 export const SESSION_COOKIE = "paas_session";
+
+/**
+ * Nome do cookie de sessão em HTTPS. O prefixo `__Host-` obriga Secure, Path=/
+ * e proíbe Domain: um site irmão (outro `*.sslip.io`) não consegue gravar um
+ * cookie com esse nome por cima do verdadeiro (cookie tossing).
+ */
+export const SESSION_COOKIE_SECURE = "__Host-paas_session";
+
+/** Nome do cookie de sessão conforme o protocolo da conexão. */
+export function sessionCookieName(secure: boolean): string {
+  return secure ? SESSION_COOKIE_SECURE : SESSION_COOKIE;
+}
 
 /** Duração da sessão: 12 horas. */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;

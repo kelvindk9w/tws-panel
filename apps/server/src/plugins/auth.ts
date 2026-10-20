@@ -16,7 +16,7 @@
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
-import { SESSION_COOKIE, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY } from "@paas/core";
+import { sessionCookieName, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY } from "@paas/core";
 import { tokenMatches } from "../services/setup-token.js";
 import { isCrossSiteWrite } from "../services/same-origin.js";
 import type { Session, SessionStore } from "../services/session-store.js";
@@ -101,7 +101,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     }
 
     // resolve a sessão em toda requisição (barato: HMAC + lookup em memória)
-    const cookieValue = request.cookies[SESSION_COOKIE];
+    const cookieValue = request.cookies[sessionCookieName(request.protocol === "https")];
     if (cookieValue) {
       request.session = await app.sessionStore.resolve(cookieValue);
     }
