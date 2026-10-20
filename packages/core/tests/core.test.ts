@@ -37,6 +37,8 @@ import {
   LOGIN_WINDOW_MS,
   PASSWORD_MIN_LENGTH,
   SESSION_COOKIE,
+  SESSION_COOKIE_SECURE,
+  sessionCookieName,
   SESSION_TTL_MS,
   USERNAME_MAX_LENGTH,
   USERNAME_MIN_LENGTH,
@@ -153,6 +155,9 @@ describe("mail contract", () => {
 describe("auth contract", () => {
   it("cookie de sessão, TTL de 12h e limites de login são os valores efetivos", () => {
     expect(SESSION_COOKIE).toBe("paas_session");
+    expect(SESSION_COOKIE_SECURE).toBe("__Host-paas_session");
+    expect(sessionCookieName(true)).toBe("__Host-paas_session");
+    expect(sessionCookieName(false)).toBe("paas_session");
     expect(SESSION_TTL_MS).toBe(12 * 60 * 60 * 1000);
     expect(LOGIN_MAX_ATTEMPTS).toBe(5);
     expect(LOGIN_WINDOW_MS).toBe(60 * 1000);

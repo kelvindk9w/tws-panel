@@ -93,9 +93,11 @@ describe("GET /api/setup/status", () => {
     expect(body.steps).toEqual(SETUP_STEPS);
   });
 
-  it("aceita o token também via query string (?token=)", async () => {
+  // Lote 7 (M3): a query só vale no WebSocket do terminal (setup-token-ciclo.test.ts);
+  // em rota comum o token na URL iria para log, histórico e Referer.
+  it("NÃO aceita o token via query string (?token=) em rota comum", async () => {
     const res = await app.inject({ method: "GET", url: `/api/setup/status?token=${TOKEN}` });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(401);
   });
 });
 

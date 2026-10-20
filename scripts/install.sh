@@ -1302,7 +1302,7 @@ SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build
 # Garante o token também em arquivo no volume (fallback caso SETUP_TOKEN não
 # seja passado nas próximas subidas — ex.: restart da máquina).
 docker run --rm -v "$VOLUME_NAME:/data" alpine sh -c \
-  "printf '%s' '$SETUP_TOKEN' > /data/setup-token && chmod 600 /data/setup-token"
+  "printf '%s' '$SETUP_TOKEN' > /data/setup-token && chmod 600 /data/setup-token && chown 10001:10001 /data/setup-token"
 
 # Garante que o usuário não-root do painel (tws, UID/GID fixo 10001) seja
 # dono de TODO o volume — volumes criados por versões antigas (root ou UIDs

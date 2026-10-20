@@ -6,18 +6,21 @@
   "tipo": "middleware",
   "api": [
     { "simbolo": "authPlugin", "assinatura": "FastifyPluginAsync (registrado via fastify-plugin, não encapsulado)", "descricao": "Registra @fastify/cookie, decora request.session (Session | null) e adiciona o hook onRequest com toda a lógica de guarda descrita em 'comportamento'." },
-    { "simbolo": "extractToken", "assinatura": "(request: FastifyRequest) => string | null", "descricao": "Lê o setup token do header x-setup-token (SETUP_TOKEN_HEADER) ou da query ?token= (SETUP_TOKEN_QUERY); header tem prioridade." },
+    { "simbolo": "extractToken", "assinatura": "(request: FastifyRequest) => string | null", "descricao": "Lê o setup token do header x-setup-token (SETUP_TOKEN_HEADER). A query ?token= só é aceita em /api/terminal/ws (o WebSocket do navegador não leva header); em qualquer outra rota é ignorada (lote 7, M3)." },
     { "simbolo": "requireSetupToken", "assinatura": "(app, request, reply) => void | FastifyReply", "descricao": "503 setup_token_missing se o servidor não tem token configurado; 401 unauthorized se o token fornecido não bate (comparação em tempo constante via tokenMatches)." }
   ],
   "comportamento": [
-    "A sessão é resolvida do cookie SESSION_COOKIE (paas_session) em TODA requisição, inclusive as públicas — request.session fica disponível (null se ausente/inválido/expirado) mesmo em rotas que não exigem sessão.",
+    "A sessão é resolvida do cookie de sessão (sessionCookieName: paas_session em HTTP simples, __Host-paas_session em HTTPS, SameSite=Strict) em TODA requisição, inclusive as públicas — request.session fica disponível (null se ausente/inválido/expirado) mesmo em rotas que não exigem sessão.",
     "GET /api/healthz e POST /api/auth/login (por prefixo /api/auth/login) são as únicas rotas 100% públicas.",
     "/api/setup/*: enquanto o wizard não foi concluído (setupState.completed === false), exige setup token válido — EXCETO /api/setup/verify-token, que é a porta de entrada (valida o token recebido no corpo da própria requisição, não no header/query). Depois de concluído, QUALQUER acesso a /api/setup/* responde 403 setup_completed, mesmo com token válido — o wizard trava permanentemente.",
     "/api/auth/* (fora de login): exige sessão válida sempre. Sem sessão, responde 401 — com código 'setup_incomplete' se o setup ainda não terminou (orienta o frontend a mandar o usuário para o wizard) ou 'unauthorized' se já terminou (sessão expirada/inválida).",
     "Todas as demais rotas /api/*: se o setup está completo, exige sessão válida (401 unauthorized sem ela); se o setup ainda está em andamento, exige setup token (mesma função requireSetupToken das rotas de setup) — é assim que o wizard (passos 1-3) e os scripts E2E conseguem chamar rotas de projeto/segurança/e-mail antes de existir uma conta admin.",
     "requireSetupToken responde 503 setup_token_missing se app.setupToken for null (nenhum token configurado nem em env nem em arquivo) — o servidor sobe mas fica inutilizável até configurar.",
     "A comparação do token usa tokenMatches (timingSafeEqual do Node), evitando timing attack; comprimentos diferentes retornam false sem comparar byte a byte.",
-    "Rotas fora de /api/ (o SPA estático e o fallback de index.html) não passam por nenhuma checagem deste plugin — o guard só olha request.url.startsWith('/api/')."
+    "Rotas fora de /api/ (o SPA estático e o fallback de index.html) não passam por nenhuma checagem deste plugin — o guard só olha o caminho da rota (routePath) e só age sob /api/.",
+    "Lote 7 (M1) — guarda de origem: ANTES de resolver sessão ou token, qualquer escrita (método diferente de GET/HEAD/OPTIONS) sob /api/ que o navegador marque como de outro site (Sec-Fetch-Site diferente de same-origin/none, inclusive same-site) ou, sem esse cabeçalho, com Origin diferente do Host, responde 403 forbidden_origin e a rota nem executa. Cliente sem esses cabeçalhos (curl, scripts) passa e segue só com a autenticação. Origens de ALLOWED_ORIGINS passam. Motivo: sslip.io não está na Public Suffix List, então outro *.sslip.io é 'mesmo site' e o cookie iria junto. Lógica em apps/server/src/services/same-origin.ts.",
+    "Lote 7 (M3) — falha fechada: se o estado do setup (setup-state.json) não puder ser lido (JSON quebrado, erro de disco), TODA rota protegida e /api/setup/* respondem 503 setup_state_unavailable. Nem o setup token nem a sessão valem enquanto não se sabe se o setup terminou; só 'arquivo inexistente' é instalação nova.",
+    "Lote 7 (I3) — toda resposta sob /api/ sai com Cache-Control: no-store (se a rota não definiu o próprio). Lote 7 (M3/I1): app.revokeSetupToken() descarta o setup token da memória (chamado ao criar o admin) e avisa quem assinou com onSetupTokenRevoked — o terminal aberto com o token fecha."
   ],
   "usadoPor": [
     { "referencia": "POST /api/auth/login", "arquivo": "apps/server/src/routes/auth.ts:32", "doc": "autenticacao/login.json" },

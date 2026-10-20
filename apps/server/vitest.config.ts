@@ -28,6 +28,7 @@ export default defineConfig({
       provider: "v8",
       include: [
         "src/config.ts",
+        "src/log-config.ts",
         "src/plugins/auth.ts",
         "src/routes/auth.ts",
         "src/routes/backups.ts",
@@ -60,6 +61,7 @@ export default defineConfig({
         "src/services/panel-restore.ts",
         "src/services/password.ts",
         "src/services/port-map.ts",
+        "src/services/same-origin.ts",
         "src/services/session-store.ts",
         "src/services/setup-state.ts",
         "src/services/setup-token.ts",

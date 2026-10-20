@@ -16,8 +16,9 @@
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
-import { SESSION_COOKIE, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY } from "@paas/core";
+import { sessionCookieName, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY } from "@paas/core";
 import { tokenMatches } from "../services/setup-token.js";
+import { isCrossSiteWrite } from "../services/same-origin.js";
 import type { Session, SessionStore } from "../services/session-store.js";
 import type { TwoFactorService } from "../services/two-factor.js";
 import type { UserStore } from "../services/user-store.js";
@@ -27,6 +28,10 @@ declare module "fastify" {
   interface FastifyInstance {
     /** Setup token carregado na inicialização (null = não configurado). */
     setupToken: string | null;
+    /** Descarta o setup token da memória (setup concluído). Age no escopo raiz. */
+    revokeSetupToken: () => void;
+    /** Avisa quando o setup token é revogado (devolve a função que cancela o aviso). */
+    onSetupTokenRevoked: (listener: () => void) => () => void;
     userStore: UserStore;
     twoFactor: TwoFactorService;
     sessionStore: SessionStore;
@@ -38,9 +43,14 @@ declare module "fastify" {
   }
 }
 
+/** Única rota que aceita o token na URL: o WebSocket do navegador não leva cabeçalho. */
+const TERMINAL_WS_PATH = "/api/terminal/ws";
+
 function extractToken(request: FastifyRequest): string | null {
   const header = request.headers[SETUP_TOKEN_HEADER];
   if (typeof header === "string" && header.length > 0) return header;
+  // Na URL o token iria para logs, histórico e Referer: só onde não há outro jeito.
+  if (routePath(request) !== TERMINAL_WS_PATH) return null;
   const query = (request.query as Record<string, unknown> | undefined)?.[SETUP_TOKEN_QUERY];
   if (typeof query === "string" && query.length > 0) return query;
   return null;
@@ -85,10 +95,42 @@ function requireSetupToken(app: { setupToken: string | null }, request: FastifyR
 const authPlugin: FastifyPluginAsync = async (app) => {
   await app.register(cookie);
   app.decorateRequest("session", null);
+  // Rotas encapsuladas só enxergam uma cópia de `setupToken`: quem revoga
+  // precisa escrever no escopo raiz, onde este plugin (fp) roda.
+  const revokedListeners = new Set<() => void>();
+  app.decorate("revokeSetupToken", () => {
+    app.setupToken = null;
+    for (const listener of [...revokedListeners]) listener();
+  });
+  app.decorate("onSetupTokenRevoked", (listener: () => void) => {
+    revokedListeners.add(listener);
+    return () => void revokedListeners.delete(listener);
+  });
+
+  // Nada da API (variáveis de projeto, sessão, segredos) fica em cache de
+  // navegador ou proxy; quem já definiu o próprio Cache-Control o mantém.
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (routePath(request).startsWith("/api/") && !reply.hasHeader("cache-control")) {
+      reply.header("cache-control", "no-store");
+    }
+    return payload;
+  });
 
   app.addHook("onRequest", async (request, reply) => {
+    // CSRF (M1): escrita que o navegador diz vir de outro site/origem nem chega
+    // à autenticação nem à rota. Vale para o login também (login CSRF).
+    if (
+      routePath(request).startsWith("/api/") &&
+      isCrossSiteWrite(request, app.hasDecorator("config") ? app.config.allowedOrigins : [])
+    ) {
+      return reply.code(403).send({
+        error: "forbidden_origin",
+        message: "Origem não permitida: o pedido não partiu do próprio painel.",
+      });
+    }
+
     // resolve a sessão em toda requisição (barato: HMAC + lookup em memória)
-    const cookieValue = request.cookies[SESSION_COOKIE];
+    const cookieValue = request.cookies[sessionCookieName(request.protocol === "https")];
     if (cookieValue) {
       request.session = await app.sessionStore.resolve(cookieValue);
     }
@@ -101,7 +143,18 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (url === "/api/healthz") return;
     if (url.startsWith("/api/auth/login")) return;
 
-    const state = await app.setupState.load();
+    // Falha fechada: sem saber se o setup terminou, nem o token nem a sessão
+    // valem. Tratar "ilegível" como "não concluído" aceitaria o setup token.
+    let state;
+    try {
+      state = await app.setupState.load();
+    } catch (err) {
+      request.log.error({ err }, "estado do setup ilegível; requisição recusada");
+      return reply.code(503).send({
+        error: "setup_state_unavailable",
+        message: "Não foi possível ler o estado do setup no servidor. Tente de novo em instantes.",
+      });
+    }
 
     // Wizard: trava depois de concluído; antes disso exige o setup token.
     if (url.startsWith("/api/setup/")) {

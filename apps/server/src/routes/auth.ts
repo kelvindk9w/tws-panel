@@ -18,7 +18,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import {
-  SESSION_COOKIE,
+  sessionCookieName,
   SESSION_TTL_MS,
   passwordStrengthErrors,
   DEFAULT_USER_PREFERENCES,
@@ -106,58 +106,32 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const { username, password } = request.body ?? {};
-    if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
-      return reply.code(400).send({
-        error: "invalid_payload",
-        message: "Informe usuário e senha.",
-      });
-    }
-
-    const user = await app.userStore.findByUsername(username);
-    // verificação em tempo constante: usuário inexistente custa o mesmo que existente
-    const ok = await verifyPasswordTimingSafe(user?.passwordHash ?? null, password);
-    if (!user || !ok) {
-      const failure = limiter.onFailure(ip);
-      await app.auditService.record({
-        actor: "anon",
-        action: "auth.login_failed",
-        target: username,
-        detail: `Login falho de ${ip}.`,
-      });
-      if (!failure.allowed) {
-        reply.header("retry-after", String(failure.retryAfterSec));
-        return reply.code(429).send({
-          error: "too_many_attempts",
-          message: `Muitas tentativas. Aguarde ${failure.retryAfterSec}s e tente novamente.`,
-          retryAfterSec: failure.retryAfterSec,
+    // A tentativa já está reservada (check). Toda saída abaixo a converte em
+    // falha, sucesso ou a devolve (release) — nunca fica reservada para sempre.
+    let settled = false;
+    const settle = <T>(fn: () => T): T => {
+      settled = true;
+      return fn();
+    };
+    try {
+      const { username, password } = request.body ?? {};
+      if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
+        return reply.code(400).send({
+          error: "invalid_payload",
+          message: "Informe usuário e senha.",
         });
       }
-      return reply.code(401).send({
-        error: "invalid_credentials",
-        message: "Credenciais inválidas.",
-      });
-    }
 
-    // Verificação em duas etapas: a senha certa não basta. O código só é
-    // conferido DEPOIS da senha — quem não sabe a senha não chega até aqui.
-    let twoFactorNote = "";
-    if (user.twoFactor) {
-      const code = request.body.code;
-      if (code === undefined) {
-        return reply.code(401).send({
-          error: "two_factor_required",
-          message: "Digite o código de 6 dígitos do seu app autenticador.",
-        });
-      }
-      const check = await app.twoFactor.verify(user, code);
-      if (!check) {
-        const failure = limiter.onFailure(ip);
+      const user = await app.userStore.findByUsername(username);
+      // verificação em tempo constante: usuário inexistente custa o mesmo que existente
+      const ok = await verifyPasswordTimingSafe(user?.passwordHash ?? null, password);
+      if (!user || !ok) {
+        const failure = settle(() => limiter.onFailure(ip));
         await app.auditService.record({
           actor: "anon",
-          action: "auth.2fa_failed",
-          target: user.username,
-          detail: `Código de verificação em duas etapas incorreto, de ${ip}.`,
+          action: "auth.login_failed",
+          target: username,
+          detail: `Login falho de ${ip}.`,
         });
         if (!failure.allowed) {
           reply.header("retry-after", String(failure.retryAfterSec));
@@ -168,51 +142,91 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           });
         }
         return reply.code(401).send({
-          error: "invalid_two_factor_code",
-          message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+          error: "invalid_credentials",
+          message: "Credenciais inválidas.",
         });
       }
-      twoFactorNote =
-        check.method === "recovery"
-          ? ` Com código de recuperação (restam ${check.recoveryCodesLeft}).`
-          : " Com verificação em duas etapas.";
-    }
 
-    limiter.onSuccess(ip);
-    let created;
-    try {
-      created = await app.sessionStore.create(user, {
-        ip,
-        userAgent: request.headers["user-agent"] ?? null,
+      // Verificação em duas etapas: a senha certa não basta. O código só é
+      // conferido DEPOIS da senha — quem não sabe a senha não chega até aqui.
+      let twoFactorNote = "";
+      if (user.twoFactor) {
+        const code = request.body.code;
+        if (code === undefined) {
+          return reply.code(401).send({
+            error: "two_factor_required",
+            message: "Digite o código de 6 dígitos do seu app autenticador.",
+          });
+        }
+        const check = await app.twoFactor.verify(user, code);
+        if (!check) {
+          const failure = settle(() => limiter.onFailure(ip));
+          await app.auditService.record({
+            actor: "anon",
+            action: "auth.2fa_failed",
+            target: user.username,
+            detail: `Código de verificação em duas etapas incorreto, de ${ip}.`,
+          });
+          if (!failure.allowed) {
+            reply.header("retry-after", String(failure.retryAfterSec));
+            return reply.code(429).send({
+              error: "too_many_attempts",
+              message: `Muitas tentativas. Aguarde ${failure.retryAfterSec}s e tente novamente.`,
+              retryAfterSec: failure.retryAfterSec,
+            });
+          }
+          return reply.code(401).send({
+            error: "invalid_two_factor_code",
+            message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+          });
+        }
+        twoFactorNote =
+          check.method === "recovery"
+            ? ` Com código de recuperação (restam ${check.recoveryCodesLeft}).`
+            : " Com verificação em duas etapas.";
+      }
+
+      settle(() => limiter.onSuccess(ip));
+      let created;
+      try {
+        created = await app.sessionStore.create(user, {
+          ip,
+          userAgent: request.headers["user-agent"] ?? null,
+        });
+      } catch (err) {
+        if (!isStorageWriteFailure(err)) throw err;
+        request.log.error({ err }, "falha ao gravar a sessão do login");
+        return reply.code(500).send({
+          error: "storage_write_failed",
+          message:
+            "Não foi possível salvar a sessão no servidor. O login não foi concluído; tente novamente.",
+        });
+      }
+      const { session, cookieValue } = created;
+      const secure = request.protocol === "https";
+      reply.setCookie(sessionCookieName(secure), cookieValue, {
+        path: "/",
+        httpOnly: true,
+        // Strict + prefixo __Host- em HTTPS: ver SESSION_COOKIE_SECURE (core/auth.ts).
+        sameSite: "strict",
+        secure,
+        maxAge: Math.floor(SESSION_TTL_MS / 1000),
       });
-    } catch (err) {
-      if (!isStorageWriteFailure(err)) throw err;
-      request.log.error({ err }, "falha ao gravar a sessão do login");
-      return reply.code(500).send({
-        error: "storage_write_failed",
-        message:
-          "Não foi possível salvar a sessão no servidor. O login não foi concluído; tente novamente.",
+      await app.auditService.record({
+        actor: user.username,
+        action: "auth.login",
+        detail: `Login bem-sucedido de ${ip}.${twoFactorNote}`,
       });
+      const response: LoginResponse = {
+        ok: true,
+        user: publicUser(user),
+        expiresAt: session.expiresAt,
+      };
+      return reply.send(response);
+
+    } finally {
+      if (!settled) limiter.release(ip);
     }
-    const { session, cookieValue } = created;
-    reply.setCookie(SESSION_COOKIE, cookieValue, {
-      path: "/",
-      httpOnly: true,
-      sameSite: "lax",
-      secure: request.protocol === "https",
-      maxAge: Math.floor(SESSION_TTL_MS / 1000),
-    });
-    await app.auditService.record({
-      actor: user.username,
-      action: "auth.login",
-      detail: `Login bem-sucedido de ${ip}.${twoFactorNote}`,
-    });
-    const response: LoginResponse = {
-      ok: true,
-      user: publicUser(user),
-      expiresAt: session.expiresAt,
-    };
-    return reply.send(response);
     },
   );
 
@@ -238,7 +252,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         detail: "Sessão encerrada pelo usuário.",
       });
     }
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    const secure = request.protocol === "https";
+    reply.clearCookie(sessionCookieName(secure), { path: "/", secure });
     return reply.send({ ok: true });
   });
 

@@ -4,7 +4,7 @@
   "resumo": "Login/logout com sessão via cookie assinado (HMAC), verificação da sessão atual e troca de senha do único usuário admin do painel. Login é público mas limitado por IP (5 tentativas/min com lockout progressivo); as demais rotas exigem sessão válida, verificada em toda requisição /api/* pelo plugin global de autenticação.",
   "pontoDeEntrada": { "api": "POST /api/auth/login", "web": "/login" },
   "comoFunciona": [
-    "O plugin global (apps/server/src/plugins/auth.ts) resolve o cookie paas_session em toda requisição e expõe request.session (null se ausente/inválido/expirado).",
+    "O plugin global (apps/server/src/plugins/auth.ts) resolve o cookie de sessão (paas_session em HTTP; __Host-paas_session em HTTPS) em toda requisição e expõe request.session (null se ausente/inválido/expirado).",
     "POST /api/auth/login é a única rota pública de auth: verifica rate limit por IP, busca o usuário, compara a senha com argon2id em tempo constante (mesmo para usuário inexistente) e, se válida, cria uma sessão e devolve o cookie httpOnly.",
     "GET /api/auth/me, POST /api/auth/logout e POST /api/auth/change-password exigem sessão válida (garantida pelo guard global antes de a rota rodar).",
     "Trocar a senha invalida todas as OUTRAS sessões do usuário (mantém a sessão atual) e força reautenticação nos demais dispositivos.",

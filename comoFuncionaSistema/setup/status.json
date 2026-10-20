@@ -8,13 +8,13 @@
   "autenticacao": {
     "exigida": true,
     "tipo": "setup-token",
-    "detalhe": "Não há isenção para /api/setup/status no hook global (apps/server/src/plugins/auth.ts): exige x-setup-token (header) ou ?token= (query) válido enquanto o setup está em andamento; responde 403 setup_completed se já concluído."
+    "detalhe": "Não há isenção para /api/setup/status no hook global (apps/server/src/plugins/auth.ts): exige x-setup-token (header) válido enquanto o setup está em andamento; responde 403 setup_completed se já concluído e 503 setup_state_unavailable se o setup-state.json não puder ser lido."
   },
   "rateLimit": null,
   "parametros": {
     "path": [],
     "query": [
-      { "nome": "token", "tipo": "string", "obrigatorio": false, "descricao": "Forma alternativa de enviar o setup token (SETUP_TOKEN_QUERY), aceita além do header x-setup-token." }
+      { "nome": "token", "tipo": "string", "obrigatorio": false, "descricao": "Não é mais aceito nesta rota (lote 7, M3): o token na URL vai para log, histórico e Referer. Use o header x-setup-token. A query só vale em /api/terminal/ws." }
     ],
     "body": [],
     "headers": [

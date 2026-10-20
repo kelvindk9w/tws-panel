@@ -38,7 +38,7 @@
   ],
   "fluxo": [
     "1. Se request.session existe (deveria sempre existir, garantido pelo guard global): destrói a sessão em SessionStore.destroy(session.id) e grava auditoria auth.logout (actor = username da sessão).",
-    "2. Limpa o cookie paas_session no cliente (clearCookie, path '/').",
+    "2. Limpa o cookie de sessão no cliente (clearCookie com o nome da conexão: paas_session em HTTP, __Host-paas_session em HTTPS, com Secure e Path=/).",
     "3. Responde 200 { ok: true }."
   ],
   "dependencias": [

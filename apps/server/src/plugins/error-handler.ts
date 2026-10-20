@@ -15,6 +15,8 @@ import type {
   FastifyRequest,
 } from "fastify";
 
+import { scrubUrl } from "../log-config.js";
+
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
     if (error.validation) {
@@ -22,7 +24,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
       // servidor. Na resposta vai só o nome do campo — suficiente para a UI
       // orientar quem preencheu o formulário, sem expor a estrutura interna.
       request.log.warn(
-        { validation: error.validation, url: request.url },
+        { validation: error.validation, url: scrubUrl(request.url) },
         "requisição recusada por validação de schema",
       );
       return reply.code(400).send({

@@ -34,7 +34,7 @@
     "PAAS_TERMINAL_IDLE_TIMEOUT_MS (config.ts:91) — timeout de inatividade da sessão do terminal web embutido. Default: 30 minutos.",
     "LOG_LEVEL (apps/server/src/app.ts:53, fora de config.ts) — nível de log do pino/Fastify. Default: 'info'.",
     "RATE_LIMIT_MAX (apps/server/src/app.ts:144, fora de config.ts) — máximo de requisições por janela de 1 minuto (rate limit global do @fastify/rate-limit). Default: 200.",
-    "SETUP_TOKEN (apps/server/src/services/setup-token.ts:9) — token de setup em texto puro via env; tem prioridade sobre o arquivo (SETUP_TOKEN_FILE). Sem valor em nenhum dos dois, o servidor sobe mas responde 503 em toda rota protegida (setup_token_missing) até ser configurado.",
+    "SETUP_TOKEN (apps/server/src/services/setup-token.ts) — token de setup em texto puro via env; é só o FALLBACK do arquivo (SETUP_TOKEN_FILE), que vale mais (lote 7, M3: o 'Recomeçar do zero' grava token novo no arquivo). Com o setup concluído nenhum token é carregado no boot e o arquivo é apagado ao criar o admin. Sem valor em nenhum dos dois, o servidor sobe mas responde 503 em toda rota protegida (setup_token_missing) até ser configurado.",
     "PAAS_NODE_IMAGE (apps/server/src/services/deploy-service.ts:91) — imagem Docker base para projetos Node detectados como estáticos. Default: node:22.",
     "PAAS_STATIC_IMAGE (apps/server/src/services/deploy-service.ts:92) — imagem Docker base para servir saída estática. Default: nginx:alpine.",
     "API_PROXY_TARGET (apps/web/vite.config.ts:16, só no dev server do Vite) — alvo do proxy de /api no dev server. Default: http://localhost:9000. docker-compose.dev.yml define http://server:9000 (nome do serviço na rede compose).",

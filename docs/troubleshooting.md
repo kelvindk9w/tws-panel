@@ -106,9 +106,11 @@ de propósito.
 **Causa:** token errado, copiado com espaço extra, ou o servidor foi reiniciado com outro
 `SETUP_TOKEN` no ambiente.
 
-**Solução:** o valor de `SETUP_TOKEN` no ambiente tem prioridade sobre o arquivo. Reexiba a
-URL + token a qualquer momento com `sudo ./scripts/show-token.sh` (lê o volume `paas_data`, sem
-reinstalar nada).
+**Solução:** o arquivo `/data/setup-token` (volume `paas_data`) tem prioridade sobre a variável
+`SETUP_TOKEN` do ambiente, que é só o ponto de partida da instalação. Reexiba a URL + token com
+`sudo ./scripts/show-token.sh` (lê o volume, sem reinstalar nada). Ao concluir o assistente o token é
+apagado de propósito; para reabrir o assistente e gerar um token novo, rode
+`sudo ./scripts/reset-setup.sh` (ou `--full`, que também apaga a conta de administrador).
 
 ### Perdi o token / quero recomeçar o wizard do zero
 
@@ -116,7 +118,8 @@ reinstalar nada).
 - **Recomeçar o wizard:** `sudo ./scripts/reset-setup.sh` — apaga `setup-state.json` do volume
   (com confirmação interativa) e o wizard volta ao passo 0; a conta admin é mantida.
   Com `--full` apaga também `users.json` e `sessions.json` (a conta admin deixa de existir
-  e todos são deslogados). Projetos, domínios, e-mail e o token NÃO são tocados.
+  e todos são deslogados). Os dois modos geram um setup token NOVO (o antigo deixa de valer; veja com
+  `show-token.sh`). Projetos, domínios e e-mail NÃO são tocados.
 
 ### Perdi o acesso SSH durante o hardening
 

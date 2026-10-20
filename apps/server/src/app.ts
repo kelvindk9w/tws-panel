@@ -63,6 +63,7 @@ import { verifyPasswordTimingSafe } from "./services/password.js";
 import timezoneRoutes from "./routes/timezone.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
+import { loggerOptions } from "./log-config.js";
 import { TrustedProxies } from "./services/trusted-proxies.js";
 import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
 import { PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
@@ -87,19 +88,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
 
   const app = Fastify({
     ajv: AJV_OPTIONS,
-    logger: {
-      level: process.env.LOG_LEVEL ?? "info",
-      // logs estruturados (pino) — nunca logar tokens
-      redact: {
-        paths: [
-          "req.headers.authorization",
-          `req.headers["x-setup-token"]`,
-          "req.headers.cookie",
-          "req.query.token",
-        ],
-        censor: "[redacted]",
-      },
-    },
+    // nível, redact e serializador de req (sem o token da URL): log-config.ts
+    logger: loggerOptions(process.env.LOG_LEVEL ?? "info"),
     // Só o Caddy (e o loopback) informa o IP do cliente — ver trusted-proxies.ts (A4).
     trustProxy: trustedProxies.isTrusted,
   });
@@ -329,7 +319,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       );
     });
 
-  const token = await loadSetupToken(config.setupTokenFile);
+  // Setup concluído: não há token a carregar (ver loadSetupToken). Estado
+  // ilegível derruba a subida, como as demais cargas estritas (M7).
+  const token = await loadSetupToken(config.setupTokenFile, {
+    setupCompleted: (await app.setupState.load()).completed,
+    hasAdmin: await userStore.hasAdmin(),
+  });
   app.decorate("setupToken", token);
   if (!token) {
     app.log.warn(
