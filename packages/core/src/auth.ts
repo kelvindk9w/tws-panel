@@ -119,6 +119,11 @@ export interface AuthMeResponse {
   preferences: UserPreferences;
 }
 
+/** GET /api/version — só a versão do painel (ex.: "0.1.0"), nada mais. */
+export interface PanelVersionResponse {
+  version: string;
+}
+
 /** GET /api/auth/2fa */
 export interface TwoFactorStatusResponse {
   enabled: boolean;

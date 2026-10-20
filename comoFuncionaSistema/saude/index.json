@@ -7,6 +7,7 @@
     "web": "wizard de setup — passo 'Saúde da máquina' (HealthStep.tsx)"
   },
   "comoFunciona": [
+    "GET /api/version (routes/health.ts, autenticada): devolve só { version } lida do package.json da raiz (readPanelVersion; 'unknown' se não der para ler). Serve o 'Ajuda e feedback' do cabeçalho, que põe a versão no link de relato de bug; não expõe nada da máquina.",
     "GET /api/healthz é liveness puro: sem autenticação, sem lógica, sempre responde { status: 'ok' } — usado pelo HEALTHCHECK do Dockerfile/compose e por monitoramento externo.",
     "GET /api/health/scan chama scanSystemHealth() (system-info.ts), que coleta TUDO via módulo `os` do Node e leitura direta de arquivos em /proc, /sys e /etc — NENHUM shell é executado para montar os dados retornados na resposta.",
     "A coleta roda em paralelo (Promise.all): informações de SO (/etc/os-release, /etc/hostname), estatística de disco (statfs('/')), informações de rede (interfaces + IP público) e detecção de virtualização (/sys/class/dmi/id/product_name, /proc/cpuinfo).",

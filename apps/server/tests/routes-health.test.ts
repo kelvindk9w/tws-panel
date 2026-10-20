@@ -8,7 +8,10 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEALTH_LIMITS, SETUP_TOKEN_HEADER } from "@paas/core";
-import healthRoutes, { HOST_PROBE_TIMEOUT_MS } from "../src/routes/health.js";
+import path from "node:path";
+import { writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import healthRoutes, { HOST_PROBE_TIMEOUT_MS, readPanelVersion } from "../src/routes/health.js";
 import { HOST_NETWORK_COMMAND, HOST_REBOOT_COMMAND } from "../src/services/system-info.js";
 import type { ServerConfig } from "../src/config.js";
 import { Duplex } from "node:stream";
@@ -91,6 +94,36 @@ describe("GET /api/healthz", () => {
     const res = await app.inject({ method: "GET", url: "/api/healthz" });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ status: "ok" });
+  });
+});
+
+describe("GET /api/version", () => {
+  it("exige autenticação", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/version" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("devolve só a versão do painel (a do package.json da raiz), sem mais nenhum dado", async () => {
+    const { readFileSync } = await import("node:fs");
+    const raiz = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+    const res = await app.inject({ method: "GET", url: "/api/version", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ version: raiz.version });
+    expect(Object.keys(res.json())).toEqual(["version"]);
+  });
+});
+
+describe("readPanelVersion", () => {
+  it("arquivo ausente, inválido ou sem versão → 'unknown'", async () => {
+    expect(readPanelVersion(new URL("file:///inexistente/package.json"))).toBe("unknown");
+    const semVersao = path.join(ctx.dir, "sem-versao.json");
+    await writeFile(semVersao, '{"name":"x"}');
+    expect(readPanelVersion(pathToFileURL(semVersao))).toBe("unknown");
+    const invalido = path.join(ctx.dir, "invalido.json");
+    await writeFile(invalido, "{");
+    expect(readPanelVersion(pathToFileURL(invalido))).toBe("unknown");
   });
 });
 
