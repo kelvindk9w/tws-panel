@@ -26,6 +26,7 @@ export function HelpMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
   const containerRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
+  const sidebar = placement !== "top";
 
   // versão do painel: uma consulta só, na primeira abertura; se falhar, segue sem ela
   useEffect(() => {
@@ -57,7 +58,7 @@ export function HelpMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
   return (
     <div
       ref={containerRef}
-      className="relative shrink-0"
+      className={cn("relative", sidebar ? "w-full" : "shrink-0")}
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
           event.stopPropagation();
@@ -81,11 +82,14 @@ export function HelpMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          "flex items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          // topo: só o ícone (cabeçalho enxuto); lateral: sobra espaço, então leva o texto
+          sidebar ? "w-full gap-2 px-3 py-1.5 text-sm" : "h-8 w-8 justify-center",
           open && "bg-accent text-foreground",
         )}
       >
-        <CircleHelp className="h-4 w-4" aria-hidden />
+        <CircleHelp className="h-4 w-4 shrink-0" aria-hidden />
+        {sidebar && <span className="truncate text-left">{t("shell.help.button")}</span>}
       </button>
 
       {open && (

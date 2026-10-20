@@ -244,7 +244,7 @@ function TopBar({ className }: { className?: string }) {
   useEffect(() => setMobileOpen(false), [location.pathname]);
   return (
     <header data-testid="nav-top" className={cn("sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md", className)}>
-      <div className="container flex min-h-14 items-center gap-3 py-2 sm:gap-4 xl:gap-6">
+      <div className="container flex min-h-14 items-center gap-2 py-2 sm:gap-4 xl:gap-6">
         <Brand />
         <div className="hidden lg:block">
           <NavItems vertical={false} />
@@ -258,7 +258,7 @@ function TopBar({ className }: { className?: string }) {
           {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />} {t("shell.nav.menu")}
         </button>
         {/* idioma sempre à vista, ao lado do menu do usuário */}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1 sm:gap-2">
           <LanguageSelect compact />
           <HelpMenu />
           <UserMenu />
@@ -322,8 +322,8 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-2 px-3">
           <Languages className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           <LanguageSelect className="min-w-0 flex-1" />
-          <HelpMenu placement={side === "left" ? "sidebar-left" : "sidebar-right"} />
         </div>
+        <HelpMenu placement={side === "left" ? "sidebar-left" : "sidebar-right"} />
         <UserMenu placement={side === "left" ? "sidebar-left" : "sidebar-right"} />
       </div>
     </aside>
