@@ -81,7 +81,7 @@ import { resolveTerminalAccess } from "../config.js";
 import type { TerminalService } from "../services/terminal-service.js";
 import { isSessionExpired } from "../services/session-store.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
-import { isCrossOrigin } from "../services/same-origin.js";
+import { isCrossSiteRequest } from "../services/same-origin.js";
 
 // Querystring do handshake do WS (não um body — upgrade não tem corpo):
 //  - clientId: gerado no browser (crypto.randomUUID() ou fallback base36),
@@ -165,7 +165,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       // handshake. Navegador SEMPRE envia Origin em WebSocket; sem ele é um
       // cliente que não é navegador (e a autenticação continua valendo).
       preValidation: async (request, reply) => {
-        if (isCrossOrigin(request.headers.origin, request.headers.host)) {
+        if (isCrossSiteRequest(request, app.hasDecorator("config") ? app.config.allowedOrigins : [])) {
           return reply.code(403).send({ error: "forbidden_origin", message: "Origem não permitida." });
         }
       },

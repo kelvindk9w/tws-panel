@@ -6,6 +6,8 @@ import { Writable } from "node:stream";
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import { loggerOptions, scrubUrl } from "../src/log-config.js";
+import terminalRoutes from "../src/routes/terminal.js";
+import { buildAuthTestApp, closeAuthTestApp } from "./test-utils.js";
 
 describe("log HTTP não registra o setup token", () => {
   it("requisição com ?token= : a linha de log não contém o segredo", async () => {
@@ -46,5 +48,31 @@ describe("scrubUrl", () => {
     ["/api/x?%E0%A4%A=1", "/api/x?%E0%A4%A=1"],
   ])("%s", (entrada, esperado) => {
     expect(scrubUrl(entrada)).toBe(esperado);
+  });
+});
+
+describe("pedido recusado por validação também não registra o token", () => {
+  it("terminal: token válido + clientId inválido → o aviso do error handler não traz o segredo", async () => {
+    const linhas: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        linhas.push(String(chunk));
+        cb();
+      },
+    });
+    const ctx = await buildAuthTestApp("SEGREDO-VALIDO", { logger: { ...loggerOptions("info"), stream } });
+    try {
+      await ctx.app.register(terminalRoutes);
+      const res = await ctx.app.inject({
+        method: "GET",
+        url: "/api/terminal/ws?token=SEGREDO-VALIDO&clientId=com%20espaco!",
+      });
+      expect(res.statusCode).toBe(400);
+      const todo = linhas.join("\n");
+      expect(todo).toContain("recusada por validação");
+      expect(todo).not.toContain("SEGREDO-VALIDO");
+    } finally {
+      await closeAuthTestApp(ctx);
+    }
   });
 });

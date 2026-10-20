@@ -89,6 +89,9 @@ describe("o que continua passando", () => {
     ["Origin igual ao host do painel", { origin: `https://${HOST}` }],
     ["Origin igual, com Sec-Fetch-Site same-origin", { origin: `https://${HOST}`, "sec-fetch-site": "same-origin" }],
     ["cliente sem cabeçalho de navegador (curl, scripts)", {}],
+    // dev nativo: o proxy do Vite reescreve o Host (localhost:9000) e o Origin segue o da página
+    // (localhost:5173), mas o navegador diz same-origin: é a palavra do navegador que vale.
+    ["proxy de dev: Origin e Host diferentes, mas Sec-Fetch-Site same-origin", { origin: "http://localhost:5173", "sec-fetch-site": "same-origin" }],
   ])("POST com %s → 200", async (_nome, headers) => {
     const res = await post(headers);
     expect(res.statusCode).toBe(200);

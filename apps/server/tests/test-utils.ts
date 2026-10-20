@@ -26,12 +26,12 @@ export interface AuthTestContext {
 
 export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
-  opts: { now?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean) } = {},
+  opts: { now?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object } = {},
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
   // Mesmas opções de validação da produção (app.ts), para que os testes de
   // rota exerçam o comportamento real do Ajv.
-  const app = Fastify({ logger: false, ajv: AJV_OPTIONS, trustProxy: opts.trustProxy ?? false });
+  const app = Fastify({ logger: opts.logger ?? false, ajv: AJV_OPTIONS, trustProxy: opts.trustProxy ?? false });
   const setupState = new SetupStateStore(dir);
   const userStore = new UserStore(dir);
   const sessionStore = new SessionStore(dir);
