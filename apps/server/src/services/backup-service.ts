@@ -225,6 +225,13 @@ interface StoredTarget {
   extraFolders: ExtraBackupFolder[];
   lastSuccessAt: string | null;
   lastRemoteVerifiedAt: string | null;
+  /**
+   * Último backup COMPLETO que esta instalação enviou ao armazenamento externo
+   * e conferiu (a regra do painel novo só olha este, nunca `lastSuccessAt`, que
+   * já é preenchido pela cópia na VPS). Painéis de antes do campo: a carga
+   * copia `lastRemoteVerifiedAt`, que era gravado nesse mesmo momento.
+   */
+  lastRemoteSentAt?: string | null;
   lastStaleNoticeAt: string | null;
   /**
    * Só projetos: segue o "Padrão dos projetos" (muda junto com ele). Vira
@@ -289,6 +296,8 @@ interface StoredConfig {
   projectDefaults: StoredDefaults;
   detections: Record<string, ProjectBackupDetection>;
   restoreHold?: RestoreHold | null;
+  /** Quando este painel foi restaurado de um backup: o conteúdo dele passou a ser o do backup, não "painel novo vazio". */
+  panelRestoredAt?: string | null;
   /** "<pasta>/<arquivo>" → hash, tamanho e a última conferência de cada cópia. */
   checks: Record<string, StoredFileChecks>;
 }
@@ -597,10 +606,14 @@ export class BackupService {
             detections: raw.detections ?? {},
             checks: raw.checks ?? {},
             restoreHold: parseRestoreHold(raw.restoreHold),
+            panelRestoredAt: typeof raw.panelRestoredAt === "string" ? raw.panelRestoredAt : null,
           };
         },
         log: this.log,
       });
+      // Instalação de antes de `lastRemoteSentAt`: quem já tinha enviado e conferido uma cópia externa continua
+      // contando como tendo conteúdo próprio; quem só tinha cópia na VPS (ou nada) não.
+      for (const t of Object.values(this.config.targets)) t.lastRemoteSentAt ??= t.lastRemoteVerifiedAt ?? null;
       // Instalação de antes do "Padrão dos projetos": quem está como o painel
       // criava sozinho (ligado, 24 h, 2 e 5) segue o padrão; o resto ficou
       // assim porque alguém mudou, então é configuração própria.
@@ -741,6 +754,7 @@ export class BackupService {
         extraFolders: [],
         lastSuccessAt: null,
         lastRemoteVerifiedAt: null,
+        lastRemoteSentAt: null,
         lastStaleNoticeAt: null,
         ...(project ? { followsDefaults: true } : {}),
       };
@@ -1372,10 +1386,16 @@ export class BackupService {
    * outro servidor: enviar agora poria um painel vazio no lugar do bom (e a
    * retenção apagaria os mais antigos). Devolve o motivo, ou null se pode enviar.
    */
+  private sentExternally(t: StoredTarget): boolean {
+    return Boolean(t.lastRemoteSentAt);
+  }
+
   private async panelFreshOverForeign(projectCount: number): Promise<string | null> {
     const t = this.target("panel");
-    // O que é desta instalação: backup do painel já feito, projeto cadastrado ou e-mail com backup concluído.
-    if (t.lastSuccessAt !== null || projectCount > 0 || this.target("email").lastSuccessAt !== null) return null;
+    // O que é desta instalação: projeto cadastrado, painel restaurado, ou um backup (do painel ou do e-mail)
+    // já ENVIADO ao armazenamento externo. Cópia só na VPS (`lastSuccessAt`) não conta: o painel novo
+    // faz uma às 03:00 mesmo sem armazenamento, e isso não pode desligar a proteção.
+    if (projectCount > 0 || this.config.panelRestoredAt || this.sentExternally(t) || this.sentExternally(this.target("email"))) return null;
     const storage = this.storage();
     const d = this.config.destination;
     if (!storage || !d) return null;
@@ -1386,7 +1406,7 @@ export class BackupService {
       const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
       delete t.heldFailures;
       if (!found) return null;
-      return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto ou de você restaurar o painel (ou fazer um backup à mão). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
+      return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto, de você restaurar o painel ou de fazer um backup à mão com o armazenamento já conectado (cópia só na VPS não conta). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
     } catch (err) {
       t.heldFailures = (t.heldFailures ?? 0) + 1;
       if (t.heldFailures === 3) {
@@ -1871,6 +1891,7 @@ export class BackupService {
       if (encrypt) await rm(upload, { force: true });
       r.remote = "verified";
       t.lastRemoteVerifiedAt = new Date(this.now()).toISOString();
+      if (complete) t.lastRemoteSentAt = t.lastRemoteVerifiedAt;
       // A conferência automática depois do envio também conta como "conferido em".
       this.copyInfo(folder, name, "remote", { check: { status: "ok", at: t.lastRemoteVerifiedAt, reason: null } });
       t.lastStaleNoticeAt = null;
@@ -2611,6 +2632,10 @@ export class BackupService {
         await copyFile(this.file, cfgFile);
         await copyFile(this.keyFile, keyFile);
         await rm(path.join(staged, "backups-history.json"), { force: true });
+        // O conteúdo do painel passa a ser o do backup: a regra do painel novo não vale mais (ver `panelFreshOverForeign`).
+        const current = JSON.parse(await readFile(cfgFile, "utf8")) as Partial<StoredConfig>;
+        current.panelRestoredAt = new Date(this.now()).toISOString();
+        await writeFileAtomic(cfgFile, JSON.stringify(current, null, 2) + "\n");
         r.warnings.push("Este backup não traz as configurações de backup: o armazenamento e a senha de agora continuam.");
       }
       return;
@@ -2655,6 +2680,7 @@ export class BackupService {
     }
     if (mailExists) released.push("email");
     cfg.restoreHold = { since: new Date(this.now()).toISOString(), released };
+    cfg.panelRestoredAt = new Date(this.now()).toISOString();
     const panel = cfg.targets?.["panel"];
     if (panel) panel.lastSlot = currentSlot(this.now(), panel.frequencyHours, this.hour);
     await writeFileAtomic(cfgFile, JSON.stringify(cfg, null, 2) + "\n");

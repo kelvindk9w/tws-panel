@@ -241,8 +241,8 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
   VPS, o que já tem containers não entra em pausa, e o e-mail só fica de fora da pausa se o
   container dele existir nesta VPS. Projeto criado depois da restauração não é pausado, e o painel também não.
 - **Um painel novo não sobrescreve os backups de outro servidor.** O backup agendado do painel não
-  sai enquanto tudo isto for verdade: nenhum projeto cadastrado, nenhum backup do painel nem do
-  e-mail feito nesta VPS, e o armazenamento já guarda backups do painel em `_painel/`. A pausa acaba
+  sai enquanto tudo isto for verdade: nenhum projeto cadastrado, painel não restaurado, nenhum backup do painel nem do
+  e-mail **enviado ao armazenamento** por esta VPS (a cópia só na VPS não conta), e o armazenamento já guarda backups do painel em `_painel/`. A pausa acaba
   sozinha 7 dias depois de o armazenamento ser conectado, e o painel manda uma notificação quando ela
   começa. Se o painel não conseguir listar o armazenamento, também não envia o backup, e uma
   notificação avisa na terceira falha seguida. **Fazer backup agora** sempre funciona.

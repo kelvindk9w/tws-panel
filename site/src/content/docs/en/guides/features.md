@@ -242,8 +242,8 @@ to `restaurar-painel.sh`.
   if its container exists on this VPS. A project created after the restore is not held, and neither is
   the panel.
 - **A new panel does not overwrite the backups of another server.** The scheduled backup of the panel
-  does not go out while all of this is true: no project is registered, no panel backup and no email
-  backup was made on this VPS, and the storage already holds panel backups in `_painel/`. The hold
+  does not go out while all of this is true: no project is registered, the panel was not restored, no panel backup and no email
+  backup was **sent to the storage** by this VPS (a copy only on the VPS does not count), and the storage already holds panel backups in `_painel/`. The hold
   ends by itself 7 days after the storage is connected, and the panel sends one notification when it
   starts. If the panel cannot list the storage, it does not send the backup either, and a
   notification warns you on the third failure in a row. **Back up now** always works.

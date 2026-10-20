@@ -1395,6 +1395,223 @@ describe("restaurar o painel em outra VPS", () => {
       expect((await backup("panel")).status).not.toBe("failed");
     });
   });
+
+  describe("lote 9: backup só na VPS não cancela a proteção do painel novo", () => {
+    const OTHER = `${BACKUP_ROOT_FOLDER}/_painel/2026-10-13_03-00.7z`;
+    const panelKeys = () => [...storage.objects.keys()].filter((k) => k.includes("/_painel/"));
+    const dayAt = (d: number) => new Date(2026, 9, d, 3, 1).getTime();
+    async function tickAt(ms: number): Promise<void> {
+      now = ms;
+      await service.tick();
+      await service.idle();
+    }
+    /** Painel instalado num dia, sem armazenamento: roda as 03:00 só na VPS (a agenda nasce ligada). */
+    async function installedWithLocalBackupsOnly(): Promise<void> {
+      projects = [];
+      await service.updateTarget("email", { enabled: false }, "a");
+      await tickAt(now); // primeira passagem: o painel nasce com o horário de hoje já atendido
+      for (const d of [15, 16, 17]) await tickAt(dayAt(d));
+      expect((await service.status()).history.filter((r) => r.target === "panel" && r.trigger === "schedule")).toHaveLength(3);
+      expect(storage.objects.size).toBe(0);
+    }
+    /** Mais tarde, o passo "conectar o armazenamento", que já guarda backups de outro servidor. */
+    async function connectLaterWithForeignBackups(): Promise<void> {
+      now = new Date(2026, 9, 17, 10, 0).getTime();
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+    }
+    /** Lê o backups.json gravado, deixa `edit` mexer e sobe um serviço novo (painel que já existia antes do campo novo). */
+    async function rewriteConfig(edit: (cfg: Record<string, any>) => void): Promise<void> {
+      await service.flush();
+      const file = path.join(dir, "backups.json");
+      const cfg = JSON.parse(await readFile(file, "utf8")) as Record<string, any>;
+      edit(cfg);
+      await writeFile(file, JSON.stringify(cfg));
+      service = build();
+    }
+
+    it("vários dias só na VPS e armazenamento conectado depois com backups de outro servidor: o painel segura", async () => {
+      await installedWithLocalBackupsOnly();
+      await connectLaterWithForeignBackups();
+      for (const d of [18, 19, 20, 21, 22, 23]) await tickAt(dayAt(d));
+      expect(panelKeys()).toEqual([OTHER]);
+      expect((await service.status()).history.filter((r) => r.target === "panel" && r.trigger === "schedule")).toHaveLength(3);
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason).toMatch(/outro servidor/);
+      expect(notices.filter((n) => n.key === "backup-panel-held")).toHaveLength(1);
+    });
+
+    it("a proteção continua depois de reiniciar o painel", async () => {
+      await installedWithLocalBackupsOnly();
+      await connectLaterWithForeignBackups();
+      await tickAt(dayAt(18));
+      await service.flush();
+      service = build();
+      await tickAt(dayAt(19));
+      expect(panelKeys()).toEqual([OTHER]);
+      expect(notices.filter((n) => n.key === "backup-panel-held")).toHaveLength(1);
+    });
+
+    it("um backup à mão com o armazenamento conectado sai e libera os agendados seguintes", async () => {
+      await installedWithLocalBackupsOnly();
+      await connectLaterWithForeignBackups();
+      await tickAt(dayAt(18));
+      expect(panelKeys()).toEqual([OTHER]);
+      const b = await backup("panel");
+      expect(b.status).not.toBe("failed");
+      expect(b.remote).toBe("verified");
+      expect(panelKeys()).toHaveLength(2);
+      await tickAt(dayAt(19));
+      expect(panelKeys()).toHaveLength(3);
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason ?? null).toBeNull();
+    });
+
+    it("backup à mão só na VPS (sem armazenamento) não libera: o armazenamento conectado depois continua protegido", async () => {
+      projects = [];
+      await service.updateTarget("email", { enabled: false }, "a");
+      expect((await backup("panel")).status).not.toBe("failed");
+      await connectLaterWithForeignBackups();
+      await tickAt(dayAt(18));
+      expect(panelKeys()).toEqual([OTHER]);
+    });
+
+    it("o envio externo concluído persiste: depois de reiniciar a regra não volta a valer", async () => {
+      projects = [];
+      await connect();
+      await service.updateTarget("email", { enabled: false }, "a");
+      expect((await backup("panel")).remote).toBe("verified");
+      storage.objects.set(OTHER, Buffer.from("de outro servidor"));
+      await service.flush();
+      service = build();
+      await tickAt(dayAt(15));
+      expect((await service.status()).history.filter((r) => r.trigger === "schedule" && r.target === "panel")).toHaveLength(1);
+    });
+
+    it("envio que falha ou fica sem conferência não conta como backup externo concluído", async () => {
+      projects = [];
+      await connect();
+      await service.updateTarget("email", { enabled: false }, "a");
+      storage.failUpload = true;
+      expect((await backup("panel")).remote).toBe("failed");
+      storage.failUpload = false;
+      storage.objects.set(OTHER, Buffer.from("de outro servidor"));
+      await tickAt(dayAt(15));
+      expect(panelKeys()).toEqual([OTHER]);
+    });
+
+    it("e-mail só na VPS não conta como conteúdo próprio; com cópia externa concluída, conta", async () => {
+      projects = [];
+      await service.updateTarget("email", { enabled: true }, "a");
+      expect((await backup("email")).status).not.toBe("failed"); // sem armazenamento: só na VPS
+      await connectLaterWithForeignBackups();
+      await tickAt(dayAt(18));
+      expect((await service.status()).history.some((r) => r.target === "panel" && r.trigger === "schedule")).toBe(false);
+      expect((await backup("email")).remote).toBe("verified");
+      await tickAt(dayAt(19));
+      expect((await service.status()).history.some((r) => r.target === "panel" && r.trigger === "schedule")).toBe(true);
+    });
+
+    it("não fica bloqueado para sempre: 7 dias depois da conexão o painel envia, mesmo com histórico só local", async () => {
+      await installedWithLocalBackupsOnly();
+      await connectLaterWithForeignBackups();
+      await tickAt(dayAt(18));
+      expect(panelKeys()).toEqual([OTHER]);
+      await tickAt(new Date(2026, 9, 17, 10, 0).getTime() + 8 * 24 * H);
+      expect(panelKeys()).toHaveLength(2);
+    });
+
+    describe("migração: backups.json de antes do campo novo", () => {
+      it("painel antigo que já enviou ao armazenamento (lastRemoteVerifiedAt) não perde nem ganha proteção: segue enviando", async () => {
+        projects = [];
+        await connect();
+        await service.updateTarget("email", { enabled: false }, "a");
+        expect((await backup("panel")).remote).toBe("verified");
+        await rewriteConfig((cfg) => {
+          delete cfg.targets.panel.lastRemoteSentAt;
+          expect(cfg.targets.panel.lastRemoteVerifiedAt).toEqual(expect.any(String));
+        });
+        await tickAt(dayAt(15));
+        expect((await service.status()).history.filter((r) => r.trigger === "schedule" && r.target === "panel")).toHaveLength(1);
+      });
+
+      it("painel antigo só com cópia na VPS (lastSuccessAt, nada externo) e armazenamento recém-conectado com backups alheios: fica protegido", async () => {
+        await installedWithLocalBackupsOnly();
+        await connectLaterWithForeignBackups();
+        await rewriteConfig((cfg) => {
+          delete cfg.targets.panel.lastRemoteSentAt;
+          cfg.targets.panel.lastRemoteVerifiedAt = null;
+          expect(cfg.targets.panel.lastSuccessAt).toEqual(expect.any(String));
+        });
+        await tickAt(dayAt(18));
+        expect(panelKeys()).toEqual([OTHER]);
+      });
+
+      it("painel antigo só local com o armazenamento conectado há mais de 7 dias: não é bloqueado", async () => {
+        await installedWithLocalBackupsOnly();
+        await connectLaterWithForeignBackups();
+        await rewriteConfig((cfg) => {
+          delete cfg.targets.panel.lastRemoteSentAt;
+          cfg.destination.connectedAt = new Date(2026, 9, 1).toISOString();
+        });
+        await tickAt(dayAt(18));
+        expect(panelKeys()).toHaveLength(2);
+      });
+
+      it("arquivo sem nenhum dos campos do e-mail e do painel (muito antigo) carrega e segue a regra", async () => {
+        await installedWithLocalBackupsOnly();
+        await connectLaterWithForeignBackups();
+        await rewriteConfig((cfg) => {
+          for (const t of Object.values<any>(cfg.targets)) {
+            delete t.lastRemoteSentAt;
+            delete t.lastRemoteVerifiedAt;
+          }
+        });
+        await tickAt(dayAt(18));
+        expect(panelKeys()).toEqual([OTHER]);
+      });
+    });
+
+    describe("restaurar o painel conta como conteúdo próprio", () => {
+      it("a restauração marca a cópia preparada; depois da subida o painel sem projetos envia o agendado", async () => {
+        projects = [];
+        await connect();
+        await service.updateTarget("email", { enabled: false }, "a");
+        const b = await backup("panel"); // o backups.json guardado nele ainda não conhece este envio
+        await rewriteConfig((cfg) => {
+          delete cfg.targets.panel.lastRemoteSentAt;
+          cfg.targets.panel.lastRemoteVerifiedAt = null;
+        });
+        const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+        await service.idle();
+        expect((await service.record(r.id)).status).not.toBe("failed");
+        const stagedCfg = JSON.parse(await readFile(path.join(dir, "backups", ".restaurar-painel", "backups.json"), "utf8")) as Record<string, any>;
+        expect(stagedCfg.panelRestoredAt).toEqual(expect.any(String));
+        await copyFile(path.join(dir, "backups", ".restaurar-painel", "backups.json"), path.join(dir, "backups.json"));
+        await copyFile(path.join(dir, "backups", ".restaurar-painel", "backups-key"), path.join(dir, "backups-key"));
+        service = build();
+        storage.objects.set(OTHER, Buffer.from("de outro servidor"));
+        await tickAt(dayAt(16));
+        expect((await service.status()).history.some((x) => x.target === "panel" && x.trigger === "schedule")).toBe(true);
+      });
+
+      it("backup antigo sem backups.json: a cópia de agora vai marcada também", async () => {
+        projects = [];
+        await connect();
+        await service.updateTarget("email", { enabled: false }, "a");
+        const b = await backup("panel");
+        await service.flush();
+        // simula um backup de antes das configurações de backup: sem backups.json dentro
+        const archived = path.join(dir, "backups", "_painel", b.fileName!);
+        const raw = JSON.parse(await readFile(archived, "utf8")) as { files: Record<string, string> };
+        for (const k of Object.keys(raw.files)) if (/backups(-key|\.json)$/.test(k)) delete raw.files[k];
+        await writeFile(archived, JSON.stringify(raw));
+        const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+        await service.idle();
+        expect((await service.record(r.id)).status).not.toBe("failed");
+        const stagedCfg = JSON.parse(await readFile(path.join(dir, "backups", ".restaurar-painel", "backups.json"), "utf8")) as Record<string, any>;
+        expect(stagedCfg.panelRestoredAt).toEqual(expect.any(String));
+      });
+    });
+  });
 });
 
 describe("agenda, atraso e lembrete", () => {

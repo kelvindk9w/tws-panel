@@ -61,7 +61,7 @@ Se a VPS antiga usava outra pasta de projetos, instale com a mesma (`./scripts/i
 
 **Não inicie o servidor de e-mail na VPS nova** antes do passo 8, mesmo que o roteiro "Deixe o painel pronto" do Dashboard sugira. O backup agendado do e-mail enviaria um servidor de e-mail vazio para `_email/`, contaria como backup concluído e, como o container já existiria, o e-mail não entraria na pausa depois de restaurar o painel.
 
-**Desligue o backup automático do painel se a VPS nova ficar ligada por uma madrugada antes do passo 3 ou se o passo 5 puder levar mais de 7 dias.** Em **Configurações → Backups**, no cartão **Painel**, desmarque **Backup automático ligado** e salve. Um painel novo vem com a agenda ligada e roda às 03:00 mesmo sem armazenamento conectado. Esse backup só local conta como backup concluído desta VPS e cancela a proteção descrita no passo 3. A partir daí, um painel vazio vai para `_painel/` todo dia e a retenção (5 cópias) apaga os backups bons em cerca de 5 dias. A restauração do painel traz a agenda antiga de volta, então o ajuste não fica desligado sozinho.
+O painel novo vem com a agenda de backup ligada e roda às 03:00 mesmo sem armazenamento conectado. Isso é inofensivo: a cópia fica só na VPS e **não** conta como backup do painel para a proteção descrita no passo 3, que só considera backup já **enviado ao armazenamento**. Você pode instalar num dia e conectar o armazenamento em outro.
 
 Confira que as portas **80 e 443** estão abertas no provedor, e a **25** se você vai usar e-mail
 (veja o [Guia completo, Etapa 6.1](../getting-started/complete-guide.md#etapa-6)).
@@ -101,7 +101,8 @@ salvar**.
 >
 > O backup agendado do painel novo vem ligado de fábrica, e o painel só o segura nestas condições:
 >
-> - nenhum projeto cadastrado, nenhum backup do painel feito nesta VPS e nenhum backup do e-mail concluído; e
+> - nenhum projeto cadastrado, o painel não foi restaurado e nenhum backup do painel nem do e-mail foi
+>   **enviado ao armazenamento** por esta VPS (cópia só na VPS não conta); e
 > - o armazenamento já guarda backups do painel em `_painel/`; e
 > - passaram menos de **7 dias** desde que você conectou o armazenamento.
 >
@@ -110,10 +111,9 @@ salvar**.
 > servidor". Ela é esperada. Se o painel não conseguir listar o armazenamento, também não envia o
 > backup, e uma notificação avisa na terceira falha seguida. **Se passarem mais de 7 dias entre o
 > passo 3 e o passo 5**, a pausa acaba sozinha e o próximo backup agendado pode pôr um painel vazio
-> por cima do backup bom. A proteção também não existe se o painel novo já fez um backup que ficou
-> só na VPS (o das 03:00 sem armazenamento conectado): ele conta como backup concluído. Nos dois
-> casos, desligue **Backup automático ligado** no cartão **Painel** antes do passo 3, como diz o
-> passo 1.
+> por cima do backup bom. Se você já sabe que vai demorar mais de 7 dias, desligue **Backup automático
+> ligado** no cartão **Painel** antes de conectar o armazenamento e ligue de novo no fim (cuidado
+> extra, só para esse caso).
 
 ### 4. Informe a senha dos backups
 
@@ -252,7 +252,7 @@ começo: o IP novo ainda não tem reputação.
   os projetos logo depois do painel.
 - E-mail: o checklist de DNS está em 6/6, o e-mail de teste chega e uma caixa consegue entrar no
   webmail.
-- Em **Configurações → Backups**, o cartão **Painel** está com **Backup automático ligado** marcado. Se você o desligou no passo 1 e o backup do painel era antigo, sem as configurações de backup, ligue de novo: a restauração só traz a agenda antiga de volta quando o backup tem essas configurações.
+- Em **Configurações → Backups**, o cartão **Painel** está com **Backup automático ligado** marcado. Se você o desligou por cuidado extra no passo 3, ligue de novo: a restauração só traz a agenda antiga de volta quando o backup tem as configurações de backup, e um backup antigo, sem elas, deixa a agenda como estava.
 - **Configurações → Fuso horário** mostra o fuso que você quer. Os backups rodam às 03:00 no fuso
   da VPS.
 - Rode **Fazer backup agora** no painel e veja "cópia externa conferida". Depois faça um backup de
