@@ -489,6 +489,23 @@ export class PanelDomainService {
     });
   }
 
+  /**
+   * O DNS do domínio aponta para esta VPS? Só consulta (não muda nada).
+   * Usado ao restaurar o painel de outro servidor: o acesso pelo IP
+   * desativado lá só continua desativado se isto for verdade.
+   */
+  async pointsHere(domain: string): Promise<boolean> {
+    const check = await checkPanelDomainDns({
+      domain,
+      expectedIp: this.deps.serverIp,
+      expectedIpv6: this.deps.serverIpv6,
+      primary: this.deps.resolver,
+      fallback: this.deps.fallbackResolver,
+      ...(this.deps.now ? { now: this.deps.now } : {}),
+    });
+    return check.ok;
+  }
+
   /** Remove o domínio; o acesso pelo IP volta (se estava desativado) antes de o domínio sair. */
   removeDomain(actor: string): Promise<PanelDomainStatus> {
     return this.serial(async () => {

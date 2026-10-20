@@ -169,6 +169,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     docker: new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage }),
     archiver: new SevenZip(),
     storage: (cfg) => new S3Storage(cfg),
+    // O serviço do domínio nasce depois deste (linha abaixo); a função só roda numa restauração, com tudo no ar.
+    panelDomainPointsHere: (domain) => app.panelDomainService.pointsHere(domain),
     projects: {
       list: () => app.deployService.listProjects(),
       get: (id) => app.deployService.getProject(id),
