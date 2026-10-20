@@ -49,11 +49,11 @@ IP restriction). With the default HTTPS access, turn on two-step verification.
 
 **Login:** the panel starts out protected by the setup token generated at installation; in the wizard's
 **Conta de administrador** (Administrator account) step you create that account (argon2id-hashed password, at least 12 characters with
-uppercase, lowercase and numbers), which completes the setup and invalidates the token forever. From then
+uppercase, lowercase and numbers), which completes the setup, invalidates the token for good and deletes the token file from the server. From then
 on every access requires login (`/login`): sessions are revocable, persisted on the server
-(httpOnly cookie, SameSite=Lax, 12h expiry — no stateless JWT), login is rate-limited
+(httpOnly cookie, SameSite=Strict, 12h expiry — no stateless JWT; over HTTPS the cookie is named `__Host-paas_session`, which forces Secure and Path=/ and rules out a Domain attribute), login is rate-limited
 to 5 attempts/minute per IP with progressive lockout, and changing the password invalidates the other sessions.
-Login, logout, failures and creation of the admin account are recorded in the audit log.
+Write requests (POST, PUT, PATCH, DELETE) that the browser says come from another site or origin are refused with `403 forbidden_origin` before reaching authentication, login included. Login, logout, failures and creation of the admin account are recorded in the audit log.
 
 **Two-step verification (recommended):** with HTTPS access the panel is on the internet, and
 the password alone becomes the only barrier. In your user menu (top right corner),

@@ -32,13 +32,13 @@ Implementação: `NsenterHostRunner` em `packages/security/src/runner.ts`;
 a montagem dos comandos e a allowlist ficam em
 `packages/security/src/host-bridge.ts` (funções puras, 100% testadas).
 
-## 2. Por que é seguro
+## 2. Por que foi desenhado para ser seguro
 
 | Propriedade | Como é garantida |
 |---|---|
 | **Sem credencial nova** | Usa o `/var/run/docker.sock` que o painel já monta para gerenciar o Docker — nenhuma senha/chave extra é criada. Quem monta o socket já é, por definição, equivalente a root no host: o bridge não aumenta esse privilégio. |
 | **Allowlist estrita** | O runner rejeita qualquer comando que não seja: (a) um dos comandos fixos somente-leitura dos checks/baseline/Lynis (inclui a leitura do fuso, `timedatectl show -p Timezone --value`), (b) uma invocação validada de `scripts/hardening/{00..06}-*.sh` com flags conhecidas (`--dry-run/--rollback/--confirm/--user/--pubkey`), ou (c) a troca do fuso de Configurações → Fuso horário (`timedatectl set-timezone '<fuso>'`, com o `ln -sf` do `/etc/localtime` como alternativa), aceita só se for byte a byte o comando montado para um fuso da lista fechada (`isKnownTimezone`). Nada vindo da API vira shell arbitrário. |
-| **Input revalidado** | A chave pública SSH e o nome de usuário da Fase 01 são validados duas vezes (rota + builder do comando) com regex que proíbe aspas/quebras de linha — impossível quebrar o quoting. |
+| **Input revalidado** | A chave pública SSH e o nome de usuário da Fase 01 são validados duas vezes (rota + builder do comando) com regex que proíbe aspas/quebras de linha — desenhado para que o quoting não possa ser quebrado. |
 | **Descartável** | `--rm` + nome único por execução; em timeout o cliente é morto e o helper é removido com `docker rm -f`. |
 | **Timeout por comando** | `exec` tem timeout (default 120s; 300s para Lynis); streams de fase têm teto de 30 min. |
 | **Auditado** | Todo comando enviado ao host gera entrada `hardening.host-exec` no log de auditoria (tela **Auditoria**); os do fuso horário geram `timezone.host-exec`, além de `timezone.applied`/`timezone.apply_failed`. |

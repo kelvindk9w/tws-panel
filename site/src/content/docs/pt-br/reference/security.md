@@ -49,11 +49,11 @@ restrição por IP). No acesso padrão, por HTTPS, ative a verificação em duas
 
 **Login:** o painel nasce protegido pelo setup token gerado na instalação; na etapa
 **Conta de administrador** do wizard você cria essa conta (senha com hash argon2id, mínimo de 12 caracteres com
-maiúsculas, minúsculas e números), o que conclui o setup e invalida o token para sempre. Daí em
+maiúsculas, minúsculas e números), o que conclui o setup, invalida o token para sempre e apaga o arquivo do token do servidor. Daí em
 diante todo acesso exige login (`/login`): as sessões são revogáveis, persistidas no servidor
-(cookie httpOnly, SameSite=Lax, expiração de 12h — nada de JWT stateless), o login tem rate limit
+(cookie httpOnly, SameSite=Strict, expiração de 12h — nada de JWT stateless; em HTTPS o cookie se chama `__Host-paas_session`, o que obriga Secure e Path=/ e impede o atributo Domain), o login tem rate limit
 de 5 tentativas/minuto por IP com lockout progressivo, e trocar a senha invalida as demais sessões.
-Login, logout, falhas e criação da conta admin ficam registrados no log de auditoria.
+Escritas (POST, PUT, PATCH, DELETE) que o navegador diz vir de outro site ou origem são recusadas com `403 forbidden_origin` antes da autenticação, inclusive no login. Login, logout, falhas e criação da conta admin ficam registrados no log de auditoria.
 
 **Verificação em duas etapas (recomendada):** com o acesso por HTTPS o painel fica na internet, e
 a senha sozinha passa a ser a única barreira. No menu do seu usuário (canto superior direito),

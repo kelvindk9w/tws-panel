@@ -19,4 +19,4 @@
 - [ ] No secret or credential added to the code
 - [ ] Docs updated (`site/src/content/docs/`, README) when applicable; `pnpm docs:links` passes
 - [ ] Sensitive actions generate an audit record, when applicable
-- [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md), including the license terms for contributions
+- [ ] I have read [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/dev/CONTRIBUTING.md), including the license terms for contributions
