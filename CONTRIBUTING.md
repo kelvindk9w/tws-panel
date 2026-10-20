@@ -1,22 +1,22 @@
 # Contributing to TWS Panel
 
 Thank you for considering a contribution! This project exists because hosting your own
-infrastructure should not require a heavy panel or a monthly fee. Every bit of help to keep it
-light, secure and simple is welcome.
+infrastructure should not require a heavy panel or a monthly fee. Any help in keeping it light,
+secure and simple is welcome.
 
 Portuguese (Brazil) version: [docs/community/pt-BR/CONTRIBUTING.md](docs/community/pt-BR/CONTRIBUTING.md).
 
-Before you start, read the [Code of Conduct](CODE_OF_CONDUCT.md).
+Before you start, please read the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Where to start
 
-- **Questions and ideas:** use [GitHub Discussions](https://github.com/kelvindk9w/tws-panel/discussions)
-  if they are enabled for the repository, or open an issue with the question template.
-- **Bugs:** open an issue with the bug report form. Never include tokens, passwords or client
-  domains in logs.
+- **Questions and ideas:** use [GitHub Discussions](https://github.com/kelvindk9w/tws-panel/discussions),
+  or open an issue with the question form.
+- **Bugs:** open an issue with the bug report form. Remove tokens, passwords and client domains from
+  any logs you attach.
 - **Security vulnerabilities:** never open a public issue. Follow [SECURITY.md](SECURITY.md).
-- **Documentation fixes** are as valuable as code. Typos, unclear steps and missing translations are
-  great first contributions (see [Documentation](#documentation)).
+- **Documentation fixes** are as valuable as code. Typos, unclear steps and missing translations
+  make great first contributions (see [Documentation](#documentation)).
 
 ## Local setup
 
@@ -39,8 +39,8 @@ More detail on the architecture and the dev mode is in the
 
 The repository versions git hooks in `scripts/hooks/` (plain bash, **no husky and no new
 dependencies**). They are **activated automatically** by `pnpm install` (the root `prepare` script
-points `core.hooksPath` to `scripts/hooks`), so there is nothing to do. Philosophy: the hooks give
-fast feedback on your machine; **CI remains the final gate**.
+points `core.hooksPath` to `scripts/hooks`), so there is nothing to set up. The hooks give you fast
+feedback on your machine; **CI remains the final gate**.
 
 - **`pre-commit`** (fast, target < 30s), runs only on what is staged:
   1. blocks forbidden files (`.env`, `data/`, `*.pem`, `id_rsa`, etc.);
@@ -52,9 +52,9 @@ fast feedback on your machine; **CI remains the final gate**.
   step fails, the push is aborted with a summary of the error.
 
 **Emergencies:** `git commit --no-verify` skips the pre-commit and `PAAS_SKIP_PREPUSH=1 git push`
-skips the pre-push. Use them sparingly, because **CI will catch** anything that gets through.
+skips the pre-push. Use them sparingly: **CI will catch** anything that gets through.
 
-The secrets scanner is intentionally light so that it needs no system dependency. For a deeper scan
+The secrets scanner is intentionally light so that it needs no system dependency. For a deeper scan,
 we recommend installing [gitleaks](https://github.com/gitleaks/gitleaks) locally (optional).
 
 ## Tests
@@ -72,16 +72,16 @@ pnpm test:mail       # phase 3 E2E only (email)
 ```
 
 Unit tests live in `tests/` inside each package/app (for example
-`packages/deploy/tests/detect.test.ts`). Mandatory philosophy: **tests verify the RESULT of
-actions** (correct state, correct data, findings generated), never just an HTTP 200. Each
-guardrail rule or check needs: the case that triggers it, the case that does NOT trigger it and at
-least one edge case. DNS resolvers, runners and Docker services are injectable precisely so that
-mocks can be deterministic.
+`packages/deploy/tests/detect.test.ts`). The core principle: **tests verify the RESULT of an
+action** (the correct state, the correct data, the findings generated), never just an HTTP 200.
+Each guardrail rule or check needs a case that triggers it, a case that does NOT trigger it and at
+least one edge case. DNS resolvers, runners and Docker services are injectable so that mocks stay
+deterministic.
 
-Coverage (`pnpm test:coverage`) focuses on pure logic. The engine/exec/runner code talks to Docker
-and is covered by the E2E tests (the exact list of files outside the unit scope, with the reason,
-is in the comment of each package/app `vitest.config.ts`). Coverage targets per package
-(thresholds in `vitest.config.ts`; CI fails if they regress):
+Coverage (`pnpm test:coverage`) focuses on pure logic. The engine, exec and runner code talks to
+Docker and is covered by the E2E tests; the exact list of files outside the unit scope, with the
+reason, is in the comments of each package's or app's `vitest.config.ts`. The coverage thresholds
+per package are set in `vitest.config.ts`, and CI fails if they regress:
 
 | Package/App         | Lines  | Branches | Functions |
 | ------------------- | ------ | -------- | --------- |
@@ -91,26 +91,27 @@ is in the comment of each package/app `vitest.config.ts`). Coverage targets per 
 | `packages/deploy`   | >= 97% | >= 95%   | >= 97.5%  |
 | `apps/server`       | >= 94% | >= 91%   | >= 98%    |
 
-The known residuals (unreachable defensive branches, TOCTOU catches in disk scans, `system-info`
+The known residual gaps (unreachable defensive branches, TOCTOU catches in disk scans, `system-info`
 branches that depend on the host hardware) are documented in the configs themselves. When you add
 new logic, keep the thresholds green.
 
-**Convention: every PR needs tests** covering the change (unit for pure logic, component tests for
-UI, E2E for infrastructure flows), and **green CI is mandatory**. The `.github/workflows/ci.yml`
-workflow runs install, typecheck, build and unit tests with coverage (thresholds) on pushes and
-PRs to the `main` and `dev` branches.
+**Every PR needs tests** that cover the change (unit tests for pure logic, component tests for UI,
+E2E for infrastructure flows), and **CI must be green**. The `.github/workflows/ci.yml` workflow
+runs install, typecheck, build and unit tests with coverage thresholds on pushes and pull requests
+to the `main` and `dev` branches.
 
 ## Project standards
 
-- **Strict TypeScript** across the monorepo (`pnpm typecheck` must pass). Code and identifiers in
-  **English**; the panel UI and the explanatory code comments are in **Brazilian Portuguese**.
-- **Conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, in Portuguese
-  or English, in the imperative (for example `feat: add guardrail rule X`).
-- **Simple persistence**: state in JSON/SQLite under `data/` (mode 0600 when sensitive), and no new
-  external services without prior discussion.
-- **Security is not optional**: no arbitrary shell coming from the UI, no secrets in logs, no ports
-  exposed by default. Sensitive actions must produce an audit record.
-- Make **minimal, focused changes**. Do not reformat files you are not changing.
+- **Strict TypeScript** across the monorepo (`pnpm typecheck` must pass). Code and identifiers are
+  in **English**; the panel UI and the explanatory code comments are in **Brazilian Portuguese**.
+- **Conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, written in
+  Portuguese or English, in the imperative mood (for example `feat: add guardrail rule X`).
+- **Simple persistence**: state is kept in JSON files under `data/` (mode 0600 when sensitive).
+  Do not add new external services without discussing it first.
+- **Security is not optional**: no arbitrary shell commands built from user input (the web terminal
+  is the one deliberate exception), no secrets in logs, no ports exposed by default. Sensitive
+  actions must produce an audit record.
+- Keep changes **minimal and focused**. Do not reformat files you are not otherwise changing.
 
 ## Documentation
 
@@ -118,13 +119,13 @@ The guides are Markdown files in `site/src/content/docs/<language>/`, published 
 [Starlight](https://starlight.astro.build/). **English (`en`) is the main language**; Portuguese
 (`pt-br`) is secondary, and the structure accepts more languages.
 
-- A file has the **same relative path in every language**. A page that is not translated yet is
-  shown in English on the site, so a translation can be added one page at a time.
+- A page has the **same relative path in every language**. A page that is not translated yet is
+  shown in English on the site, so translations can be added one page at a time.
 - Link between guides with relative `.md` paths (`../guides/operations.md#anchor`). They work on
   GitHub and are rewritten for the website at build time.
-- Keep commands, flags and paths identical across languages; translate the explanation around them.
-  The panel UI is currently Portuguese only, so keep screen labels exactly as they appear in the UI
-  and add a translation in parentheses.
+- Keep commands, flags and paths identical across languages, and translate only the text around
+  them. The panel UI is currently Portuguese only, so write screen labels exactly as they appear in
+  the UI and add a translation in parentheses.
 - Use `example.com` and `203.0.113.x` (documentation range) in examples. Never use real domains,
   IPs, tokens or bucket endpoints.
 - Preview and check your changes:
@@ -144,17 +145,16 @@ can, and add the locale to `site/astro.config.mjs`.
 
 Checks live in `packages/security/src/checks.ts`. Each check declares an id, a severity, how to
 detect the problem (read-only) and, when applicable, how to fix it (idempotent). System fix scripts
-live in `scripts/hardening/` (see `lib.sh` for the idempotency and backup helpers). See
-`docs/internal/security-research.md` (in Portuguese): it is the spec that guides what is worth
-checking and why.
+live in `scripts/hardening/` (see `lib.sh` for the idempotency and backup helpers). The spec in
+`docs/internal/security-research.md` (in Portuguese) explains what is worth checking and why.
 
 ### Add a guardrail rule
 
 Rules live in `packages/deploy/src/rules.ts`. Each rule receives the project source (compose, env,
 files) and returns findings with a **level** (`block` | `warn` | `info`), **evidence**
-(file:service or file:line) and a **fix suggestion**. Prefer conservative regexes (a false positive
-at `block` is the worst case). Cover the rule with unit tests in `packages/deploy/tests/` (the case
-that triggers it, the case that does not, and an edge case) and validate the full flow with
+(file:service or file:line) and a **fix suggestion**. Prefer conservative regexes: a false positive
+at `block` level is the worst outcome. Cover the rule with unit tests in `packages/deploy/tests/`
+(a case that triggers it, a case that does not, and an edge case) and validate the full flow with
 `pnpm test:fase4`.
 
 ### Add a deploy pipeline
@@ -166,21 +166,21 @@ any other deploy. Use the examples in `examples/` as a reference.
 
 ## Pull request flow
 
-1. Open an **issue** before large changes (or comment on an existing one) to agree on the design,
-   which avoids rework.
-2. Fork, and create a branch from `dev` (`feat/my-improvement`).
+1. Open an **issue** before a large change (or comment on an existing one) to agree on the design
+   first. It avoids rework.
+2. Fork the repository and create a branch from `dev` (for example `feat/my-improvement`).
 3. Make sure `pnpm build` and `pnpm typecheck` are clean and **`pnpm test` is green** (plus
-   `pnpm test:e2e` if the change touches infrastructure flows). Every PR must include tests for the
-   change; CI blocks the merge without them.
-4. Open the PR filling in the template: what changes, why, how to test.
-5. Respond to the review. Small, focused PRs are accepted much faster.
+   `pnpm test:e2e` if the change touches infrastructure flows). Every PR must include tests for its
+   change.
+4. Open the PR and fill in the template: what changes, why, and how to test it.
+5. Respond to the review. Small, focused PRs are merged much faster.
 
 ## License of your contribution
 
-TWS Panel is distributed under the [MIT](LICENSE) license, and it remains so: this project is and
-will remain open source.
+TWS Panel is distributed under the [MIT](LICENSE) license. This project is open source and
+will remain so.
 
-By opening a Pull Request, you declare that:
+By opening a pull request, you declare that:
 
 1. **The contribution is yours**, or you have the right to submit it. If it contains third-party
    code, you identify the origin and the license in the PR itself.
@@ -193,15 +193,15 @@ By opening a Pull Request, you declare that:
 > [!NOTE]
 > **Why this exists, plainly.** Item 2 allows TWS to offer the panel under other conditions in the
 > future, for example a managed or paid edition that funds development. Without that permission,
-> any change in that direction would require locating and getting the agreement of every person who
-> has ever contributed; it would take a single person who cannot be found to make it impossible.
+> any change in that direction would require finding every person who has ever contributed and
+> getting their agreement, and a single contributor who cannot be found would be enough to block it.
 >
 > **What this does NOT mean:** code already published under MIT stays MIT forever. That is
 > irreversible by the nature of the license, and nobody can take away from you what is already
 > there. This repository remains open and free. If you do not agree with item 2, say so in the PR:
 > we can talk about another arrangement, or you can simply keep your contribution as a fork.
 
-There is no form to sign: opening the PR already counts as acceptance.
+There is no form to sign: opening the PR counts as acceptance.
 
 ## Reporting bugs and suggesting features
 
