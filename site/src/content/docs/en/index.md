@@ -50,7 +50,7 @@ A clean VPS with Ubuntu 22.04 or 24.04 LTS (at least 1 vCPU, 2 GB of RAM and 25 
 80 and 443 open. Docker, Node and the rest are installed by the installer.
 
 The panel interface is available in English and Portuguese. It starts in the first of your browser's languages that it has (English if none matches), and
-you can switch it with the **Language** selector (PT/EN) that is always visible in the panel header, next to your user menu, on the sign-in and setup screens, and under **Settings → Appearance**.
+you can switch it with the **Language** selector (PT/EN) that is always visible in the panel header, next to your user menu (with the side menu layout, at the bottom of the sidebar, above the user menu, showing the full language name), on the sign-in and setup screens, and under **Settings → Appearance**.
 Some messages that come from the server (health-check and security-scan results, deploy and DNS-check
 messages, alerts, audit details and many error messages) still appear in Portuguese; the guides say so when they
 quote one. See [Translating the interface](development/translating-the-interface.md) and the

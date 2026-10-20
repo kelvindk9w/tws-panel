@@ -92,6 +92,51 @@ describe("seletor de idioma no cabeçalho", () => {
   });
 });
 
+describe("menu do usuário e \"Mais\" não ficam abertos juntos", () => {
+  const sair = () => screen.queryByRole("button", { name: "Sair" });
+
+  it("abrir \"Mais\" pelo teclado fecha o menu do usuário, e o inverso", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    const conta = screen.getByRole("button", { name: /Conta:/ });
+    const more = within(top()).getByRole("button", { name: "Mais" });
+    conta.focus();
+    await user.keyboard("{Enter}");
+    expect(sair()).toBeInTheDocument();
+    more.focus();
+    await user.keyboard("{Enter}");
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    expect(sair()).not.toBeInTheDocument();
+    conta.focus();
+    await user.keyboard("{Enter}");
+    expect(sair()).toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("Esc fecha o menu do usuário e devolve o foco ao botão", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    const conta = screen.getByRole("button", { name: /Conta:/ });
+    await user.click(conta);
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Configurações" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(sair()).not.toBeInTheDocument();
+    expect(conta).toHaveFocus();
+  });
+
+  it("clicar e navegar com Tab dentro do menu do usuário não o fecha", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    await user.click(screen.getByRole("button", { name: /Conta:/ }));
+    await user.tab();
+    await user.tab();
+    expect(sair()).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Trocar senha" }).parentElement as HTMLElement);
+    expect(sair()).toBeInTheDocument();
+  });
+});
+
 describe("menu do topo com \"Mais\"", () => {
   const visible = ["Dashboard", "Novo Projeto", "E-mail", "Segurança", "Alertas"];
   const grouped = ["Envios", "Certificados", "Auditoria", "Configurações", "Setup"];
