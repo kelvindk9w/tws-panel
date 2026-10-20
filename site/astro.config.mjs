@@ -8,6 +8,8 @@ import remarkGithubAlerts from './plugins/remark-github-alerts.mjs';
 const base = '/tws-panel';
 const repo = 'https://github.com/kelvindk9w/tws-panel';
 
+// The first group follows the reader's path: the complete guide (first installation), the
+// installation details, the security wizard and the restore on a new VPS. Each page appears once.
 // Sidebar entries use the same slugs in every language. A page that exists
 // only in English is served in English under /pt-br/ with a notice (Starlight
 // fallback), so adding a new language is a matter of adding a folder under
@@ -38,9 +40,10 @@ export default defineConfig({
           label: 'Getting started',
           translations: { 'pt-BR': 'Primeiros passos' },
           items: [
+            { slug: 'getting-started/complete-guide' },
             { slug: 'getting-started/installation' },
             { slug: 'getting-started/security-wizard' },
-            { slug: 'getting-started/complete-guide' },
+            { slug: 'guides/restore-new-server' },
           ],
         },
         {
@@ -50,7 +53,6 @@ export default defineConfig({
             { slug: 'guides/features' },
             { slug: 'guides/operations' },
             { slug: 'guides/production' },
-            { slug: 'guides/restore-new-server' },
             { slug: 'guides/troubleshooting' },
             { slug: 'guides/recover-access' },
             { slug: 'guides/network-migration' },

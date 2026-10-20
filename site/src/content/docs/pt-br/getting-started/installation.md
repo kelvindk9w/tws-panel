@@ -2,12 +2,18 @@
 title: "Instalação passo a passo"
 description: "Instale o TWS Panel numa VPS Ubuntu limpa: crie um usuário, configure a chave SSH, rode o instalador e abra o assistente de configuração."
 sidebar:
-  label: "Instalação"
+  label: "Instalação (passos 1 a 8)"
 ---
 
 Guia completo para instalar o TWS Panel numa VPS limpa, do zero até o assistente de
 configuração (wizard). O [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md) tem a versão curta; este guia explica cada
 passo, o que aparece na tela e o que fazer quando algo dá errado.
+
+> [!TIP]
+> **Qual guia eu uso?** Este cobre **só a instalação**, Passos 1 a 8, com cada comando explicado.
+> Se você quer a jornada inteira, da VPS ao painel configurado e a uma restauração testada, siga o
+> [guia completo](complete-guide.md): ele volta para cá nos detalhes da instalação. Está mudando
+> para um servidor novo? Veja [Restaurar numa VPS nova](../guides/restore-new-server.md).
 
 > [!NOTE]
 > **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. O instalador e os scripts imprimem em português. Algumas mensagens que vêm do servidor também ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, alertas e detalhes da auditoria e muitas mensagens de erro.
@@ -33,6 +39,11 @@ Depois do Passo 8, a etapa de Segurança do wizard tem um guia próprio:
 
 > [!NOTE]
 > **Único pré-requisito:** uma VPS com Ubuntu 22.04 ou 24.04 LTS limpa. Docker, Node e todo o resto são instalados automaticamente — basta seguir os passos abaixo, na ordem.
+
+> [!WARNING]
+> **Reinstalou o sistema da VPS, ou está testando de novo, e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da VPS), conecte de novo e responda `yes`. [Mensagem completa e detalhes](#host-identification-changed) (bloco recolhido logo abaixo).
+>
+> **Não reinstalou nem trocou nada e o aviso apareceu do nada?** Não continue e não rode esse comando. Confira se o IP é o certo e veja no painel do provedor se houve reinstalação, modo de resgate ou troca de IP. O aviso pode ser o único sinal de que outra máquina está respondendo naquele endereço.
 
 <details>
 <summary>⚠️ <strong>Deu erro ao conectar: "REMOTE HOST IDENTIFICATION HAS CHANGED!"</strong></summary>

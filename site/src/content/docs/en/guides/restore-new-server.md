@@ -8,7 +8,8 @@ sidebar:
 Use this guide when the old VPS is lost, broken into or being replaced, and you want the panel,
 the projects and the email back on a new VPS. It relies on the **external copy** of the backups
 (Cloudflare R2 or another S3-compatible storage). Backups kept only on the old VPS disappear with
-it.
+it. Installing for the first time, with nothing to bring over? Follow the
+[complete guide](../getting-started/complete-guide.md) instead.
 
 > [!NOTE]
 > **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: backup records, mail server notices and many error messages. Whenever this page quotes one of them, it says so. The word you type to confirm a restore depends on the interface language (steps 5 and 8).
@@ -51,6 +52,11 @@ Do steps 2 to 8 **without a long pause**. The old panel is stopped in step 2 and
 come back as you restore them.
 
 ### 1. Prepare the new VPS
+
+> [!WARNING]
+> **Reinstalled the VPS operating system, or testing again, and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is expected: the VPS now has a new identity. On your computer, run `ssh-keygen -R YOUR_IP` (with the VPS IP), connect again and answer `yes`. [Full message and details](../getting-started/installation.md#host-identification-changed).
+>
+> **Did not reinstall or switch anything, and the warning appeared out of nowhere?** Do not continue and do not run that command. Check that the IP is the right one and look in the provider's dashboard for a reinstall, a rescue mode or a changed IP. The warning may be the only sign that another machine is answering at that address.
 
 Follow the [installation guide](../getting-started/installation.md) from Step 1 to Step 8 and finish
 the setup wizard, including the Security step. The restore needs a panel you are signed in to, so create a

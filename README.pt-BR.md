@@ -1,5 +1,7 @@
 <div align="center">
 
+🌐 [English](README.md) · **Português (Brasil)**
+
 # TWS Panel
 
 **Transforme uma VPS Ubuntu na sua própria plataforma de hospedagem.**<br>
@@ -10,15 +12,27 @@ Proteja o servidor, publique projetos com HTTPS e tenha o seu próprio e-mail, t
 [![CI](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml)
 
 [Documentação](https://kelvindk9w.github.io/tws-panel/) ·
-[Instalação](#instalação) ·
+[Instalação](#por-onde-começar) ·
 [Roadmap](ROADMAP.md) ·
 [Changelog](CHANGELOG.md) ·
-[Contribuir](docs/community/pt-BR/CONTRIBUTING.md) ·
-[English](README.md) | **Português (Brasil)**
+[Contribuir](docs/community/pt-BR/CONTRIBUTING.md)
 
 </div>
 
 ![Dashboard do TWS Panel com o roteiro "Deixe o painel pronto" e três projetos rodando](docs/assets/dashboard.png)
+
+<a id="por-onde-começar"></a>
+
+## Por onde começar
+
+| Sua situação | Vá para |
+|---|---|
+| 🚀 **Primeira instalação.** Você nunca instalou, ou quer cada passo explicado, da VPS contratada ao painel configurado e a uma restauração testada. | **[Do zero ao painel pronto](site/src/content/docs/pt-br/getting-started/complete-guide.md)**<br>Só a instalação, passos 1 a 8: [guia de instalação](site/src/content/docs/pt-br/getting-started/installation.md) |
+| 🔁 **Reinstalei a VPS, ou estou mudando de servidor.** Você quer o painel, os projetos e o e-mail de volta a partir dos backups externos. | **[Restaurar numa VPS nova](site/src/content/docs/pt-br/guides/restore-new-server.md)** |
+| ⚡ **Já sei o que estou fazendo.** Você tem uma VPS Ubuntu limpa e um usuário com `sudo`. | **[Instalação rápida, 1 comando](#instalação)** |
+
+**Problemas na hora de conectar por SSH?** O aviso "REMOTE HOST IDENTIFICATION HAS CHANGED!" é
+esperado depois de reinstalar a VPS. Veja [o que fazer](site/src/content/docs/pt-br/getting-started/installation.md#host-identification-changed).
 
 > [!NOTE]
 > **O TWS Panel está em beta.** A interface, os comandos e os formatos de dados ainda podem mudar
@@ -101,6 +115,10 @@ detalha cada item.
 
 ## Instalação
 
+Esta é a versão curta, para quem já se vira num servidor. Se você prefere cada passo explicado,
+siga o [guia completo](site/src/content/docs/pt-br/getting-started/complete-guide.md) (veja
+[Por onde começar](#por-onde-começar)).
+
 **Requisitos**
 
 - Uma VPS limpa com **Ubuntu 22.04 ou 24.04 LTS**. Mínimo recomendado: 1 vCPU, 2 GB de RAM e 25 GB de disco.
@@ -129,6 +147,12 @@ conta de administrador.
 > [guia de instalação](site/src/content/docs/pt-br/getting-started/installation.md) explica o
 > processo passo a passo, e o [guia do wizard de segurança](site/src/content/docs/pt-br/getting-started/security-wizard.md)
 > mostra como confirmar o acesso sem se trancar para fora.
+
+> [!WARNING]
+> **Reinstalou a VPS e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a
+> VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da
+> VPS), conecte de novo e responda `yes`. Se você **não** reinstalou nada, não continue: confira o
+> IP e o painel do provedor primeiro. [Detalhes](site/src/content/docs/pt-br/getting-started/installation.md#host-identification-changed).
 
 <a id="depois-de-instalar"></a>
 
@@ -183,9 +207,10 @@ As mesmas páginas estão neste repositório, em [`site/src/content/docs/`](site
 
 | Guia | Conteúdo |
 |---|---|
-| [Instalação](site/src/content/docs/pt-br/getting-started/installation.md) | Passo a passo numa VPS limpa (passos 1 a 8) |
+| [Do zero ao painel pronto](site/src/content/docs/pt-br/getting-started/complete-guide.md) | **Comece aqui na primeira instalação.** Um passo a passo único, da VPS contratada até uma restauração testada |
+| [Instalação](site/src/content/docs/pt-br/getting-started/installation.md) | Passo a passo numa VPS limpa (passos 1 a 8), com cada comando explicado |
+| [Restaurar numa VPS nova](site/src/content/docs/pt-br/guides/restore-new-server.md) | Para quando você reinstalou a VPS ou está mudando de servidor: o painel, os projetos e o e-mail de volta a partir dos backups externos |
 | [Wizard de segurança](site/src/content/docs/pt-br/getting-started/security-wizard.md) | As 8 fases do hardening, e como confirmar o acesso sem se trancar para fora |
-| [Do zero ao painel pronto](site/src/content/docs/pt-br/getting-started/complete-guide.md) | Um passo a passo único, da VPS contratada até uma restauração testada |
 | [Funcionalidades](site/src/content/docs/pt-br/guides/features.md) | O que cada módulo faz, em detalhe |
 | [Operação](site/src/content/docs/pt-br/guides/operations.md) | Atualizar, comandos úteis, scripts de emergência, a pasta dos projetos, e o usuário e a porta do terminal |
 | [Perdi o acesso](site/src/content/docs/pt-br/guides/recover-access.md) | Senha, celular, chave SSH ou domínio do painel perdidos, e como voltar a entrar |

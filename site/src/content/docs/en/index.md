@@ -5,44 +5,43 @@ template: splash
 hero:
   tagline: Turn an Ubuntu VPS into your own hosting platform. Harden the machine, publish projects with HTTPS and run professional email, from one panel you control.
   actions:
-    - text: Install the panel
-      link: /tws-panel/en/getting-started/installation/
+    - text: First installation, step by step
+      link: /tws-panel/en/getting-started/complete-guide/
       icon: right-arrow
+    - text: Restore on a new VPS
+      link: /tws-panel/en/guides/restore-new-server/
+      icon: right-arrow
+      variant: secondary
     - text: Source on GitHub
       link: https://github.com/kelvindk9w/tws-panel
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+## Where to start
 
-<CardGrid>
-  <Card title="Deploy" icon="rocket">
-    Git repositories, plain HTML, build projects, `Dockerfile` and `docker-compose`, with several
-    domains per project and automatic HTTPS.
-  </Card>
-  <Card title="Security first" icon="approve-check">
-    A hardening wizard with dry run and automatic rollback, deploy guardrails, continuous
-    monitoring and two-factor sign-in (TOTP).
-  </Card>
-  <Card title="Email" icon="envelope">
-    Your own mail server (Stalwart) with a verifiable DNS checklist, mailboxes, project SMTP
-    variables and webmail.
-  </Card>
-  <Card title="Backups" icon="download">
-    Scheduled `.7z` backups of the panel, email and projects, copied to the VPS and to
-    Cloudflare R2 or another S3, with optional encryption.
-  </Card>
-</CardGrid>
+| Your situation | Go to |
+|---|---|
+| **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[From zero to a configured panel](getting-started/complete-guide.md)**<br>Only the installation, steps 1 to 8: [installation guide](getting-started/installation.md) |
+| **I reinstalled the VPS, or I am moving to another server.** You want the panel, the projects and the email back from the external backups. | **[Restore on a new VPS](guides/restore-new-server.md)** |
+| **I know what I am doing.** You have a clean Ubuntu VPS and a user with `sudo`. | **[Quick install, one command](https://github.com/kelvindk9w/tws-panel#installation)** (on the repository README) |
+
+**SSH problems when connecting?** "REMOTE HOST IDENTIFICATION HAS CHANGED!" is expected after you
+reinstall the VPS. See [what to do](getting-started/installation.md#host-identification-changed).
+
+## What it does
+
+- **Deploy:** git repositories, static HTML, build projects, `Dockerfile` and `docker-compose`, with several domains per project and automatic HTTPS.
+- **Security first:** a hardening wizard with dry run and automatic rollback, deploy guardrails, continuous monitoring and two-factor sign-in (TOTP).
+- **Email:** your own mail server (Stalwart) with a verifiable DNS checklist, mailboxes, project SMTP variables and webmail.
+- **Backups:** scheduled `.7z` backups of the panel, email and projects, copied to the VPS and to Cloudflare R2 or another S3, with optional encryption.
 
 ## Where to go next
 
-- [Installation](getting-started/installation.md): step by step on a clean VPS.
-- [From zero to a configured panel](getting-started/complete-guide.md): one ordered walkthrough, up to a restored backup.
+- [Installation, steps 1 to 8](getting-started/installation.md): every command of the installation explained.
 - [Features](guides/features.md): what each module does.
 - [Security model](reference/security.md): what the panel protects, and what it requires.
 - [Troubleshooting](guides/troubleshooting.md): blocked port 25, email in spam, certificates that do not issue.
-- [Restore on a new VPS](guides/restore-new-server.md): bring the panel, projects and email back from the external backups.
 
 ## What you need
 

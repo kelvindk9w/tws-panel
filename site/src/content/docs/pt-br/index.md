@@ -5,44 +5,43 @@ template: splash
 hero:
   tagline: Transforme uma VPS Ubuntu na sua própria plataforma de hospedagem. Proteja a máquina, publique projetos com HTTPS e cuide do e-mail profissional, em um painel que você controla.
   actions:
-    - text: Instalar o painel
-      link: /tws-panel/pt-br/getting-started/installation/
+    - text: Primeira instalação, passo a passo
+      link: /tws-panel/pt-br/getting-started/complete-guide/
       icon: right-arrow
+    - text: Restaurar numa VPS nova
+      link: /tws-panel/pt-br/guides/restore-new-server/
+      icon: right-arrow
+      variant: secondary
     - text: Código no GitHub
       link: https://github.com/kelvindk9w/tws-panel
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+## Por onde começar
 
-<CardGrid>
-  <Card title="Deploy" icon="rocket">
-    Repositórios git, HTML puro, projetos com build, `Dockerfile` e `docker-compose`, com vários
-    domínios por projeto e HTTPS automático.
-  </Card>
-  <Card title="Segurança primeiro" icon="approve-check">
-    Wizard de hardening com simulação e rollback automático, guardrails de deploy, monitoramento
-    contínuo e login com verificação em duas etapas (TOTP).
-  </Card>
-  <Card title="E-mail" icon="envelope">
-    Servidor de e-mail próprio (Stalwart) com checklist de DNS verificável, caixas, variáveis
-    SMTP por projeto e webmail.
-  </Card>
-  <Card title="Backups" icon="download">
-    Backups agendados em `.7z` do painel, do e-mail e dos projetos, copiados na VPS e no
-    Cloudflare R2 ou em outro S3, com criptografia opcional.
-  </Card>
-</CardGrid>
+| Sua situação | Vá para |
+|---|---|
+| **Primeira instalação.** Você nunca instalou, ou quer cada passo explicado, da VPS contratada ao painel configurado e a uma restauração testada. | **[Do zero ao painel pronto](getting-started/complete-guide.md)**<br>Só a instalação, passos 1 a 8: [guia de instalação](getting-started/installation.md) |
+| **Reinstalei a VPS, ou estou mudando de servidor.** Você quer o painel, os projetos e o e-mail de volta a partir dos backups externos. | **[Restaurar numa VPS nova](guides/restore-new-server.md)** |
+| **Já sei o que estou fazendo.** Você tem uma VPS Ubuntu limpa e um usuário com `sudo`. | **[Instalação rápida, 1 comando](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md#instalação)** (no README do repositório) |
+
+**Problemas na hora de conectar por SSH?** O aviso "REMOTE HOST IDENTIFICATION HAS CHANGED!" é
+esperado depois de reinstalar a VPS. Veja [o que fazer](getting-started/installation.md#host-identification-changed).
+
+## O que ele faz
+
+- **Deploy:** repositórios git, HTML puro, projetos com build, `Dockerfile` e `docker-compose`, com vários domínios por projeto e HTTPS automático.
+- **Segurança primeiro:** wizard de hardening com simulação e rollback automático, guardrails de deploy, monitoramento contínuo e login com verificação em duas etapas (TOTP).
+- **E-mail:** servidor de e-mail próprio (Stalwart) com checklist de DNS verificável, caixas, variáveis SMTP por projeto e webmail.
+- **Backups:** backups agendados em `.7z` do painel, do e-mail e dos projetos, copiados na VPS e no Cloudflare R2 ou em outro S3, com criptografia opcional.
 
 ## Por onde seguir
 
-- [Instalação](getting-started/installation.md): passo a passo numa VPS limpa.
-- [Do zero ao painel pronto](getting-started/complete-guide.md): um roteiro único, em ordem, até um backup restaurado.
+- [Instalação, passos 1 a 8](getting-started/installation.md): cada comando da instalação explicado.
 - [Funcionalidades](guides/features.md): o que cada módulo faz.
 - [Modelo de segurança](reference/security.md): o que o painel protege e o que ele exige.
 - [Solução de problemas](guides/troubleshooting.md): porta 25 bloqueada, e-mail em spam, certificado que não sai.
-- [Restaurar numa VPS nova](guides/restore-new-server.md): traga o painel, os projetos e o e-mail de volta a partir dos backups externos.
 
 ## O que você precisa
 

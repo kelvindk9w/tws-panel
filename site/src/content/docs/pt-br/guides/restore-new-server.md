@@ -8,7 +8,8 @@ sidebar:
 Use este guia quando a VPS antiga foi perdida, invadida ou será substituída, e você quer o painel,
 os projetos e o e-mail de volta numa VPS nova. Ele depende da **cópia externa** dos backups
 (Cloudflare R2 ou outro armazenamento compatível com S3). Backups guardados só na VPS antiga somem
-junto com ela.
+junto com ela. Está instalando pela primeira vez, sem nada para trazer? Siga o
+[guia completo](../getting-started/complete-guide.md).
 
 > [!NOTE]
 > **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: registros de backup, avisos do servidor de e-mail e muitas mensagens de erro. Quando esta página cita uma delas, avisa. A palavra que você digita para confirmar uma restauração depende do idioma da interface (passos 5 e 8).
@@ -51,6 +52,11 @@ Faça os passos 2 a 8 **sem uma pausa longa**. O painel antigo é parado no pass
 voltam à medida que você os restaura.
 
 ### 1. Prepare a VPS nova
+
+> [!WARNING]
+> **Reinstalou o sistema da VPS, ou está testando de novo, e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da VPS), conecte de novo e responda `yes`. [Mensagem completa e detalhes](../getting-started/installation.md#host-identification-changed).
+>
+> **Não reinstalou nem trocou nada e o aviso apareceu do nada?** Não continue e não rode esse comando. Confira se o IP é o certo e veja no painel do provedor se houve reinstalação, modo de resgate ou troca de IP. O aviso pode ser o único sinal de que outra máquina está respondendo naquele endereço.
 
 Siga o [guia de instalação](../getting-started/installation.md) do Passo 1 ao Passo 8 e conclua o
 assistente de configuração, inclusive a etapa de Segurança. A restauração precisa de um painel com
