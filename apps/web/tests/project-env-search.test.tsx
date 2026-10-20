@@ -18,11 +18,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 import { ProjectEnvCard } from "@/components/ProjectEnvCard";
 
-const PROJECT = { id: "p1", name: "cassino", slug: "cassino", detection: { type: "compose" } } as unknown as Project;
+const PROJECT = { id: "p1", name: "loja", slug: "loja", detection: { type: "compose" } } as unknown as Project;
 const DELIVERED = ["MAIL_FROM", "MAIL_FROM_NAME", "SMTP_HOST", "SMTP_PASS", "SMTP_PORT", "SMTP_USER"];
 
 /** Projeto parecido com o real: compose com dezenas de variáveis, algumas preenchidas. */
-function cassino(extra: Record<string, unknown> = {}) {
+function loja(extra: Record<string, unknown> = {}) {
   return {
     vars: [
       { key: "AMBIENTE", value: "producao" },
@@ -70,7 +70,7 @@ afterEach(cleanup);
 
 describe("Variáveis — o que o e-mail do projeto entrega", () => {
   it("aviso claro com os nomes, o que fazer se o app usa outros nomes e o link para o E-mail", async () => {
-    serve(cassino());
+    serve(loja());
     renderCard();
     const box = await screen.findByTestId("env-provided");
     expect(box).toHaveTextContent(
@@ -86,7 +86,7 @@ describe("Variáveis — o que o e-mail do projeto entrega", () => {
 
   it("as entregues e as ligadas aparecem na lista como linhas do painel", async () => {
     // servidor antigo (sem providedValues): só diz que o painel fornece
-    serve(cassino());
+    serve(loja());
     renderCard();
     const senha = await screen.findByTestId("env-panel-SMTP_SENHA");
     expect(senha).toHaveTextContent("SMTP_SENHA ← SMTP_PASS");
@@ -99,7 +99,7 @@ describe("Variáveis — o que o e-mail do projeto entrega", () => {
   });
 
   it("ligada ao e-mail e também salva nas Variáveis: a linha salva avisa que é ignorada no deploy", async () => {
-    serve(cassino({ vars: [{ key: "SMTP_SENHA", value: "" }] }));
+    serve(loja({ vars: [{ key: "SMTP_SENHA", value: "" }] }));
     renderCard();
     expect(await screen.findByTestId("env-row-SMTP_SENHA")).toHaveTextContent(
       /ignorada no deploy: SMTP_SENHA está ligada ao E-mail do projeto \(← SMTP_PASS\)/,
@@ -110,7 +110,7 @@ describe("Variáveis — o que o e-mail do projeto entrega", () => {
 
 describe("Variáveis — pesquisa", () => {
   it("filtra por qualquer parte do nome, sem diferenciar maiúsculas, e mostra N de M", async () => {
-    serve(cassino());
+    serve(loja());
     renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
     const total = rowNames().length;
@@ -138,7 +138,7 @@ describe("Variáveis — pesquisa", () => {
   });
 
   it("a seta do e-mail também acha: 'pass' encontra SMTP_SENHA ← SMTP_PASS", async () => {
-    serve(cassino());
+    serve(loja());
     renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
     fireEvent.change(search(), { target: { value: "pass" } });
@@ -172,7 +172,7 @@ describe("Variáveis — pesquisa", () => {
 
 describe("Variáveis — filtros rápidos", () => {
   it("Faltando, Preenchidas e Do painel, com a contagem; Todas volta", async () => {
-    serve(cassino());
+    serve(loja());
     renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
     const missing = COMPOSE_NAMES.filter((n) => n.startsWith("CASA_") || n === "POSTGRES_PASSWORD");
@@ -192,7 +192,7 @@ describe("Variáveis — filtros rápidos", () => {
   });
 
   it("muitas obrigatórias faltando: o aviso do topo não lista dezenas de nomes, leva ao filtro Faltando", async () => {
-    serve(cassino());
+    serve(loja());
     renderCard();
     const aviso = await screen.findByTestId("compose-vars");
     expect(aviso).not.toHaveTextContent("CASA_CNPJ");
@@ -234,7 +234,7 @@ describe("Variáveis — botões do rodapé com a pesquisa ativa", () => {
 
 describe("Variáveis — densidade", () => {
   it("Lista / Compacta; a escolha fica guardada no navegador", async () => {
-    serve(cassino({ vars: [{ key: "AMBIENTE", value: "producao" }] }));
+    serve(loja({ vars: [{ key: "AMBIENTE", value: "producao" }] }));
     const { unmount } = renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
     expect(screen.getByRole("button", { name: "Lista" })).toHaveAttribute("aria-pressed", "true");
@@ -290,7 +290,7 @@ describe("Variáveis — valores do que o e-mail do projeto fornece", () => {
     EMAIL_DE: "contato@envio.exemplo.com.br",
   };
   const withValues = (extra: Record<string, unknown> = {}) =>
-    cassino({
+    loja({
       provided: [...DELIVERED, "SMTP_SENHA", "EMAIL_DE"].sort(),
       links: { SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" },
       providedValues: VALUES,
@@ -455,7 +455,7 @@ describe("Variáveis — o que falta do .env.example", () => {
   );
   const requiredMissing = COMPOSE_NAMES.filter((n) => n.startsWith("CASA_") || n === "POSTGRES_PASSWORD");
   const withExample = (extra: Record<string, unknown> = {}) =>
-    cassino({
+    loja({
       example: { files: [".env.example"], variables: ENV_EXAMPLE_NAMES.map((name) => ({ name, file: ".env.example" })) },
       ...extra,
     });
@@ -504,13 +504,13 @@ describe("Variáveis — o que falta do .env.example", () => {
   });
 
   it("um só faltando: frase no singular", async () => {
-    serve(cassino({ example: { files: [".env.example"], variables: [{ name: "IDENTIDADE_CHAVE", file: ".env.example" }] } }));
+    serve(loja({ example: { files: [".env.example"], variables: [{ name: "IDENTIDADE_CHAVE", file: ".env.example" }] } }));
     renderCard();
     expect(await screen.findByTestId("env-example-missing")).toHaveTextContent("1 variável do .env.example está sem valor");
   });
 
   it("sem nada faltando do .env.example: sem aviso", async () => {
-    serve(cassino({ example: { files: [".env.example"], variables: [{ name: "AMBIENTE", file: ".env.example" }] } }));
+    serve(loja({ example: { files: [".env.example"], variables: [{ name: "AMBIENTE", file: ".env.example" }] } }));
     renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
     expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();

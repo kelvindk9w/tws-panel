@@ -21,7 +21,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 import { NewProjectPage } from "@/pages/NewProjectPage";
 import { CASSINO_SERVICES } from "./fixtures/compose-services";
 
-const PROJECT = { id: "p1", domain: "cassino.localhost", name: "cassino" };
+const PROJECT = { id: "p1", domain: "loja.localhost", name: "loja" };
 const DETECTION = {
   type: "dockerfile",
   composeFile: null,
@@ -44,7 +44,7 @@ beforeEach(() => {
     if (path === "/api/projects" && method === "POST") return { project: PROJECT };
     if (path === "/api/projects/p1" && method === "PATCH") return { project: PROJECT };
     if (path === "/api/projects/p1/credential" && method === "PUT") return { credential: { configured: true } };
-    if (path.startsWith("/api/domains/suggest")) return { auto: "cassino.203-0-113-10.sslip.io", publicIp: "203.0.113.10" };
+    if (path.startsWith("/api/domains/suggest")) return { auto: "loja.203-0-113-10.sslip.io", publicIp: "203.0.113.10" };
     if (path === "/api/projects/p1/detect") {
       if (detectFailures > 0) {
         detectFailures -= 1;
@@ -69,10 +69,10 @@ function preencherGit() {
       <NewProjectPage />
     </MemoryRouter>,
   );
-  fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "cassino" } });
+  fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "loja" } });
   fireEvent.click(screen.getByRole("button", { name: /Repositório Git/ }));
   fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
-    target: { value: "https://github.com/usuario/cassino" },
+    target: { value: "https://github.com/usuario/loja" },
   });
 }
 
@@ -124,15 +124,15 @@ describe("NewProjectPage — repositório git", () => {
 
     // corrige a URL e tenta de novo
     fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
-      target: { value: "https://github.com/usuario/cassino.git" },
+      target: { value: "https://github.com/usuario/loja.git" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Tentar de novo/ }));
     await waitFor(() => expect(chamadas().filter((c) => c.endsWith("/detect"))).toHaveLength(2));
     expect(chamadas().filter((c) => c === "POST /api/projects")).toHaveLength(1);
     const patch = apiFetchMock.mock.calls.find(([p, i]) => p === "/api/projects/p1" && (i as RequestInit).method === "PATCH");
     expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toMatchObject({
-      name: "cassino",
-      source: "https://github.com/usuario/cassino.git",
+      name: "loja",
+      source: "https://github.com/usuario/loja.git",
       branch: "main",
     });
   });
@@ -270,9 +270,9 @@ describe("NewProjectPage — domínio do projeto", () => {
   it("o projeto nasce com o endereço automático (não .localhost) e ele vem marcado", async () => {
     await ateOPasso3();
     const create = apiFetchMock.mock.calls.find(([p, i]) => p === "/api/projects" && (i as RequestInit).method === "POST");
-    expect(JSON.parse(String((create![1] as RequestInit).body)).domain).toBe("cassino.203-0-113-10.sslip.io");
+    expect(JSON.parse(String((create![1] as RequestInit).body)).domain).toBe("loja.203-0-113-10.sslip.io");
     expect(screen.getByRole("radio", { name: /Endereço automático/ })).toBeChecked();
-    expect(screen.getByTestId("auto-domain")).toHaveTextContent("https://cassino.203-0-113-10.sslip.io");
+    expect(screen.getByTestId("auto-domain")).toHaveTextContent("https://loja.203-0-113-10.sslip.io");
   });
 
   it("domínio próprio: mostra o registro de DNS exato a criar, com o IP da VPS", async () => {
@@ -314,10 +314,10 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
         </Routes>
       </MemoryRouter>,
     );
-    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "cassino" } });
+    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "loja" } });
     fireEvent.click(screen.getByRole("button", { name: /Repositório Git/ }));
     fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
-      target: { value: "https://github.com/usuario/cassino" },
+      target: { value: "https://github.com/usuario/loja" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
     await screen.findByText(/Tipo detectado/);
@@ -366,10 +366,10 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
         <NewProjectPage />
       </MemoryRouter>,
     );
-    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "cassino" } });
+    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "loja" } });
     fireEvent.click(screen.getByRole("button", { name: /Repositório Git/ }));
     fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
-      target: { value: "https://github.com/usuario/cassino" },
+      target: { value: "https://github.com/usuario/loja" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
     await screen.findByText(/Tipo detectado/);
@@ -408,10 +408,10 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
         </Routes>
       </MemoryRouter>,
     );
-    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "cassino" } });
+    fireEvent.change(screen.getByPlaceholderText("minha-app"), { target: { value: "loja" } });
     fireEvent.click(screen.getByRole("button", { name: /Repositório Git/ }));
     fireEvent.change(screen.getByPlaceholderText("https://github.com/usuario/repo.git"), {
-      target: { value: "https://github.com/usuario/cassino" },
+      target: { value: "https://github.com/usuario/loja" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
     await screen.findByText(/Tipo detectado/);
