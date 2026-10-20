@@ -1,6 +1,8 @@
-# Funcionalidades
+---
+title: "Funcionalidades"
+---
 
-O que o TWS Panel faz, módulo por módulo. O [README](../README.md) tem a lista curta; aqui está
+O que o TWS Panel faz, módulo por módulo. O [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md) tem a lista curta; aqui está
 o detalhe de cada parte. Os exemplos usam valores fictícios (`exemplo.com.br`, `203.0.113.10`).
 
 - [Deploy de projetos](#deploy)
@@ -107,7 +109,7 @@ nome. Em **Configurações → Domínio do painel** você troca por um domínio 
 Opcional, já no endereço novo: **Desativar o acesso pelo IP**. Só é liberado com a página aberta
 pelo domínio novo, o certificado válido e o domínio digitado para confirmar. Para voltar atrás por
 SSH: `cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh` (veja
-[Recuperar o acesso](recuperar-acesso.md)).
+[Recuperar o acesso](recover-access.md)).
 
 <a id="email"></a>
 
@@ -223,7 +225,7 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
   hardening em 8 fases idempotentes (atualizações, usuário, SSH, firewall, fail2ban/AppArmor,
   minimização, auditoria e endurecimento adicional), com simulação e backup de cada arquivo. As
   fases que mexem no acesso agendam um **rollback automático** de 5 minutos. Disponível também
-  depois da instalação, em **Segurança → Proteções**. Guia: [Wizard de segurança](wizard-seguranca.md).
+  depois da instalação, em **Segurança → Proteções**. Guia: [Wizard de segurança](../getting-started/security-wizard.md).
 - **Guardrails de deploy:** 6 regras em 3 níveis (`block`, `warn`, `info`) — porta de banco
   exposta, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado
   e tag `:latest`. Um bloqueio só passa com override explícito e auditado.
@@ -236,7 +238,7 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
   códigos de recuperação.
 
 Detalhes do modelo de segurança, inclusive o que o painel **não** protege:
-[Segurança](seguranca.md).
+[Segurança](../reference/security.md).
 
 <a id="terminal"></a>
 
@@ -249,7 +251,7 @@ do hardening rodam dentro dele: você vê os comandos de verdade, como faria por
 Na instalação você escolhe com qual usuário ele abre e como roda o que precisa de root (`senha`,
 pelo `sudo`, ou `segundo-plano`, registrado na Auditoria). O backend faz relay puro do PTY e
 nunca lê, registra ou guarda o que você digita; só audita conexão e desconexão. Veja
-[o que cada escolha significa](instalacao.md#terminal-do-painel).
+[o que cada escolha significa](../getting-started/installation.md#terminal-do-painel).
 
 <a id="roteiro"></a>
 
@@ -259,4 +261,4 @@ No Dashboard, um cartão lista o que ainda falta configurar depois da instalaç�
 cada passo calculado a partir do estado real do painel. Cada passo tem um "Como fazer" e o botão
 que leva à tela certa. Os passos opcionais aceitam "Não vou usar". O roteiro inteiro fica também
 em **Configurações → Primeiros passos**. A lista dos passos está no
-[README](../README.md#depois-de-instalar).
+[README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md#depois-de-instalar).

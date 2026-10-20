@@ -11,7 +11,7 @@
 #   - volume paas_data em /data (setup-state, SQLite/JSONs)
 #
 # HARDENING DA PRÓPRIA IMAGEM (o painel precisa ser exemplo — ver
-# docs/host-bridge.md e docker-compose.yml):
+# site/src/content/docs/pt-br/reference/host-bridge.md e docker-compose.yml):
 #   - usuário NÃO-ROOT (tws) + group_add do grupo do docker.sock no compose;
 #   - cap_drop ALL, no-new-privileges e rootfs read-only no compose;
 #   - Docker CLI + compose plugin instalados de binários estáticos oficiais

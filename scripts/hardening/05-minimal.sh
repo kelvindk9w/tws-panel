@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 05-minimal.sh — Fase 05: minimização — remove snapd, pacotes e serviços desnecessários.
-# Spec: docs/security-research.md §2.12 e §5 (snapd, serviços, clientes legados,
+# Spec: docs/internal/security-research.md §2.12 e §5 (snapd, serviços, clientes legados,
 # prevenção de re-crescimento via APT::Install-Recommends).
 #
 # NUNCA remove: metapacotes ubuntu-server/ubuntu-minimal/ubuntu-standard nem kernels.
@@ -248,7 +248,7 @@ ok "Limpeza concluída"
 
 step "Prevenindo re-crescimento (APT sem Recommends/Suggests)"
 write_file "$APT_CONF" <<'EOF'
-// Gerenciado pelo painel PaaS (05-minimal.sh). Spec: docs/security-research.md §5.4
+// Gerenciado pelo painel PaaS (05-minimal.sh). Spec: docs/internal/security-research.md §5.4
 APT::Install-Recommends "false";
 APT::Install-Suggests "false";
 EOF

@@ -1,4 +1,6 @@
-# Do zero ao painel pronto
+---
+title: "Do zero ao painel pronto"
+---
 
 Um roteiro só, em ordem, da VPS contratada até o painel configurado por completo: segurança,
 domínio, fuso, e-mail, notificações, backups, o primeiro projeto no ar e uma restauração de teste.
@@ -52,7 +54,7 @@ Troque pelos seus.
 Você vai precisar de duas coisas que o provedor entrega: **o IP da VPS** e **a senha de root**.
 Antes de seguir, procure no painel do provedor por "Console", "VNC", "Rescue" ou "Modo de
 recuperação" e confirme que ele existe: é o caminho de volta se você perder o acesso SSH. Veja
-[Perdi o acesso](recuperar-acesso.md).
+[Perdi o acesso](../guides/recover-access.md).
 
 Docker, Node e o resto **não** precisam ser instalados por você: o instalador cuida disso.
 
@@ -106,17 +108,17 @@ cd /opt/tws-panel && git checkout main
 
 > [!WARNING]
 > **Já tem uma chave SSH?** Não rode o `ssh-keygen` por cima: ele apaga a antiga. O
-> [Passo 4 da instalação](instalacao.md#passo-4) mostra como conferir e qual chave usar.
+> [Passo 4 da instalação](installation.md#passo-4) mostra como conferir e qual chave usar.
 
-Nunca fez isso antes? Siga o **[guia de instalação](instalacao.md)**, Passos
-[1](instalacao.md#passo-1) a [7](instalacao.md#passo-7). Ele mostra o que aparece na tela em cada
+Nunca fez isso antes? Siga o **[guia de instalação](installation.md)**, Passos
+[1](installation.md#passo-1) a [7](installation.md#passo-7). Ele mostra o que aparece na tela em cada
 comando e o que fazer quando algo dá errado.
 
 Durante a instalação:
 
 - O instalador confere a máquina sem alterar nada e, se a VPS já estiver em uso, pede confirmação.
 - Ele pergunta **com qual usuário o terminal do painel abre**. Veja
-  [o que cada escolha significa](instalacao.md#terminal-do-painel).
+  [o que cada escolha significa](installation.md#terminal-do-painel).
 - Ele pode parar logo no começo pedindo para reiniciar a VPS. É normal em VPS nova: rode
   `sudo reboot`, espere um minuto, entre de novo e repita `cd /opt/tws-panel` e
   `./scripts/install.sh`.
@@ -132,7 +134,7 @@ sudo ./scripts/show-token.sh
 ```
 
 O instalador avisou que o endereço não respondeu em 3 minutos? Quase sempre são as portas 80 e 443
-fechadas no firewall do provedor. Veja os erros comuns no [Passo 8](instalacao.md#passo-8).
+fechadas no firewall do provedor. Veja os erros comuns no [Passo 8](installation.md#passo-8).
 
 <a id="etapa-3"></a>
 
@@ -155,7 +157,7 @@ acesso é pela tela de login, com usuário e senha. O setup token deixa de valer
 ### 3.2 A etapa Segurança (hardening)
 
 > [!IMPORTANT]
-> **Leia o [Wizard de segurança](wizard-seguranca.md) antes desta etapa.** Ela desliga o login
+> **Leia o [Wizard de segurança](security-wizard.md) antes desta etapa.** Ela desliga o login
 > por senha no SSH. Feita sem atenção, pode trancar você fora da VPS.
 
 **O que fazer, em resumo:**
@@ -175,7 +177,7 @@ acesso é pela tela de login, com usuário e senha. O setup token deixa de valer
   novo.
 
 O passo a passo completo, fase por fase, está em
-[As oito fases](wizard-seguranca.md#as-oito-fases).
+[As oito fases](security-wizard.md#as-oito-fases).
 
 **O que conferir:** no Dashboard, o passo **Proteções da VPS** do roteiro aparece como feito, com
 "8 de 8 fases". Se ficou alguma de fora, ela fica em **Segurança → Proteções** para revisar,
@@ -260,7 +262,7 @@ domínio novo** e o certificado válido.
 
   Espere a mensagem "pronto", abra `https://203-0-113-10.sslip.io` (com o seu IP) e entre de
   novo. Detalhes em
-  [O domínio do painel parou de abrir](recuperar-acesso.md#o-domínio-do-painel-parou-de-abrir).
+  [O domínio do painel parou de abrir](../guides/recover-access.md#o-domínio-do-painel-parou-de-abrir).
 
 <a id="etapa-5"></a>
 
@@ -302,7 +304,7 @@ para a [Etapa 7](#etapa-7).
 > [!IMPORTANT]
 > **Use um subdomínio só para o envio**, como `envio.exemplo.com.br`. Não use o domínio principal:
 > apontar o MX dele para a VPS desviaria o e-mail que a empresa já recebe em outro lugar (Google,
-> Microsoft, Hostinger…). Os passos abaixo usam `envio.exemplo.com.br`.
+> Microsoft ou outro serviço). Os passos abaixo usam `envio.exemplo.com.br`.
 
 ### 6.1 Conferir a porta 25
 
@@ -315,7 +317,7 @@ nc -vz -w 5 gmail-smtp-in.l.google.com 25
 **O que conferir:** `succeeded` ou `open` quer dizer liberada. `timed out` quer dizer bloqueada:
 abra um chamado no provedor pedindo a liberação da porta 25 de saída para envio de e-mail
 transacional. Sem ela, o e-mail não sai. Veja
-[Porta 25 bloqueada pelo provedor](troubleshooting.md#porta-25-bloqueada-pelo-provedor).
+[Porta 25 bloqueada pelo provedor](../guides/troubleshooting.md#porta-25-bloqueada-pelo-provedor).
 
 ### 6.2 Ligar o servidor e cadastrar o domínio de envio
 
@@ -396,7 +398,7 @@ Abra a caixa de destino e confira também a pasta Spam: num servidor novo, é co
 lá. Marque como "não é spam". Se aparecer amarelo "Adiada: Connection to … failed", a porta 25 está
 bloqueada ([6.1](#etapa-6)). Se aparecer vermelho "Recusado: …", o motivo é o que o destinatário
 respondeu (normalmente SPF, DKIM, DMARC ou o nome reverso). Veja
-[E-mail caindo em spam](troubleshooting.md#e-mail-caindo-em-spam).
+[E-mail caindo em spam](../guides/troubleshooting.md#e-mail-caindo-em-spam).
 
 ### 6.8 Webmail
 
@@ -565,7 +567,7 @@ o padrão. Os bancos e as pastas de cada projeto continuam na aba **Backups** de
 ([Etapa 9](#etapa-9)).
 
 Detalhes do que entra, de onde fica e de como restaurar numa VPS nova:
-[Funcionalidades → Backups](funcionalidades.md#backups).
+[Funcionalidades → Backups](../guides/features.md#backups).
 
 <a id="etapa-9"></a>
 
@@ -653,7 +655,7 @@ endereços (0.0.0.0)", a porta fica aberta para a internet.
 **O que conferir:** o deploy termina como **sucesso** e o endereço do projeto abre o site. Na aba
 **Deploys** fica o **Histórico de deploys**. Se um guardrail barrou o deploy (ex.: porta de banco
 exposta), a tela diz qual regra; veja
-[Deploy bloqueado por guardrail](troubleshooting.md#deploy-bloqueado-por-guardrail).
+[Deploy bloqueado por guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
 
 ### 9.7 Certificado
 
@@ -713,7 +715,7 @@ em **Configurações → Backups**.
 
 Perdeu a VPS inteira? O caminho é outro: instale o painel numa VPS nova e use **Configurações →
 Backups → Restaurar de outro servidor**, com os dados do kit de recuperação. Veja
-[Funcionalidades → Backups](funcionalidades.md#backups).
+[Funcionalidades → Backups](../guides/features.md#backups).
 
 <a id="etapa-11"></a>
 
@@ -729,7 +731,7 @@ cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker c
 
 **O que conferir:** o `git log --oneline -1` mostra o commit que ficou no ar. Seus projetos,
 domínios, e-mail e a conta continuam como estavam. O que mudou em cada versão está no
-[CHANGELOG](../CHANGELOG.md). Mais comandos em [Operação](operacao.md).
+[CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG.md). Mais comandos em [Operação](../guides/operations.md).
 
 ### Atualizar o Docker
 
@@ -741,7 +743,7 @@ sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-c
 ```
 
 O painel sai do ar por alguns segundos e volta sozinho. O porquê está no
-[Wizard de segurança](wizard-seguranca.md#as-oito-fases).
+[Wizard de segurança](security-wizard.md#as-oito-fases).
 
 ### Onde acompanhar
 
@@ -756,9 +758,9 @@ O painel sai do ar por alguns segundos e volta sozinho. O porquê está no
 ### Se perder o acesso
 
 Senha do painel, celular da verificação em duas etapas, senha do Linux, chave SSH ou domínio do
-painel: cada caso tem o seu caminho de volta em **[Perdi o acesso — e agora?](recuperar-acesso.md)**.
+painel: cada caso tem o seu caminho de volta em **[Perdi o acesso — e agora?](../guides/recover-access.md)**.
 Os comandos de emergência estão em
-[Operação → Scripts de emergência](operacao.md#scripts-de-emergência).
+[Operação → Scripts de emergência](../guides/operations.md#scripts-de-emergência).
 
 <a id="checklist"></a>
 

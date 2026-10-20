@@ -1,5 +1,7 @@
 # Código de Conduta do Pacto do Contribuidor
 
+Versão em inglês (principal): [CODE_OF_CONDUCT.md](../../../CODE_OF_CONDUCT.md).
+
 ## Nosso compromisso
 
 Nós, como membros, contribuidores e líderes, nos comprometemos a fazer da participação em nossa
@@ -52,9 +54,7 @@ atuação como representante designado em um evento online ou presencial.
 ## Aplicação
 
 Casos de comportamento abusivo, de assédio ou de outra forma inaceitável podem ser reportados aos
-líderes da comunidade responsáveis pela aplicação pelo e-mail:
-
-**[contato@tws.tec.br](mailto:contato@tws.tec.br)**
+líderes da comunidade responsáveis pela aplicação em `<CONTACT>`.
 
 Todas as reclamações serão analisadas e investigadas com rapidez e imparcialidade.
 

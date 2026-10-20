@@ -1,7 +1,9 @@
-# Instalação passo a passo
+---
+title: "Instalação passo a passo"
+---
 
 Guia completo para instalar o TWS Panel numa VPS limpa, do zero até o assistente de
-configuração (wizard). O [README](../README.md) tem a versão curta; este guia explica cada
+configuração (wizard). O [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md) tem a versão curta; este guia explica cada
 passo, o que aparece na tela e o que fazer quando algo dá errado.
 
 Os passos são numerados de 1 a 8. Os scripts do painel (`install.sh`, `uninstall.sh`) citam
@@ -19,7 +21,7 @@ esses números.
 | [8](#passo-8) | Navegador | Abrir o painel e seguir o wizard |
 
 Depois do Passo 8, a etapa de Segurança do wizard tem um guia próprio:
-[Wizard de segurança](wizard-seguranca.md).
+[Wizard de segurança](security-wizard.md).
 
 ## Antes de começar
 
@@ -591,7 +593,7 @@ Se você entrar **sem que ele peça a senha da conta**, está funcionando. Ele p
   linhas. Assim, perder um dispositivo não te deixa sem acesso.
 
 **Se você já perdeu a chave** — ou a senha, ou o acesso ao painel — veja
-[Perdi o acesso — e agora?](recuperar-acesso.md), que cobre cada caso e o caminho de volta.
+[Perdi o acesso — e agora?](../guides/recover-access.md), que cobre cada caso e o caminho de volta.
 
 </details>
 
@@ -696,7 +698,7 @@ cd /opt/tws-panel && git checkout main
 > [!TIP]
 > O clone começa na branch `dev` (default do repositório, usada pelos contribuidores). Para
 > **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
-> desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](../CONTRIBUTING.md)).
+> desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md)).
 
 <a id="passo-7"></a>
 
@@ -876,7 +878,7 @@ remover — veja [Por que o painel não te coloca no grupo docker](#grupo-docker
 Sem essas opções, com `--force` ou sem terminal interativo, o instalador **não adivinha**: mantém o
 comportamento antigo (terminal como root) e avisa. Numa reinstalação, o que você escolheu da
 primeira vez é mantido sem perguntar de novo — para trocar, veja
-[Trocar o usuário do terminal do painel](operacao.md#trocar-terminal).
+[Trocar o usuário do terminal do painel](../guides/operations.md#trocar-terminal).
 
 </details>
 
@@ -1047,7 +1049,7 @@ o wizard:
 ```
 
 A etapa **Segurança** é a que exige mais atenção: ela mexe em como você entra na VPS. Antes de
-aplicar as fases, leia o [Wizard de segurança](wizard-seguranca.md).
+aplicar as fases, leia o [Wizard de segurança](security-wizard.md).
 
 O instalador é **idempotente**: pode ser executado de novo sem quebrar nada (rebuild + restart).
 O painel roda 100% em Docker (`docker compose up -d`), com o estado persistido no volume
@@ -1127,8 +1129,8 @@ sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
 
 No primeiro acesso, o Dashboard mostra o roteiro **Deixe o painel pronto**, com o que ainda falta
 configurar (proteções, verificação em duas etapas, domínio do painel, e-mail, notificações e
-backups). Os passos estão no [README](../README.md#depois-de-instalar).
+backups). Os passos estão no [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md#depois-de-instalar).
 
 Para publicar um projeto: cadastre o projeto, aponte o DNS, e o painel cuida do build, do proxy e
-do SSL. Guia de produção em [production.md](production.md). Comandos do dia a dia, pasta dos
-projetos e troca de porta ou de usuário do terminal estão em [Operação](operacao.md).
+do SSL. Guia de produção em [production.md](../guides/production.md). Comandos do dia a dia, pasta dos
+projetos e troca de porta ou de usuário do terminal estão em [Operação](../guides/operations.md).

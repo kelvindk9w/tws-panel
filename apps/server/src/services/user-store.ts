@@ -96,7 +96,7 @@ export class UserStore {
           return Array.isArray(users) ? users : null;
         },
         strict: true,
-        recovery: "Para voltar a entrar, siga docs/recuperar-acesso.md (restaurar uma cópia do users.json ou recriar o administrador).",
+        recovery: "Para voltar a entrar, siga site/src/content/docs/pt-br/guides/recover-access.md (restaurar uma cópia do users.json ou recriar o administrador).",
       });
     })().catch((err: unknown) => {
       this.loading = null;

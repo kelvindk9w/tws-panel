@@ -1,4 +1,6 @@
-# Migração das redes do painel (lote 5) — roteiro da VPS e como desfazer
+---
+title: "Migração das redes do painel (lote 5) — roteiro da VPS e como desfazer"
+---
 
 Vale para uma instalação que já roda o painel (pasta `/opt/tws-panel`, projetos em `/opt/tws-projects`) e vai
 receber a versão com as redes separadas. Instalação nova não precisa disto: as redes nascem certas.

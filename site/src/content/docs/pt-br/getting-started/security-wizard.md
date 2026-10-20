@@ -1,6 +1,8 @@
-# Wizard de segurança
+---
+title: "Wizard de segurança"
+---
 
-Como conduzir a etapa **Segurança** do assistente de configuração (o [Passo 8](instalacao.md#passo-8)
+Como conduzir a etapa **Segurança** do assistente de configuração (o [Passo 8](installation.md#passo-8)
 da instalação). As mesmas fases ficam disponíveis depois da instalação, em
 **Segurança → Proteções** (`/security/hardening`), para revisar, simular ou reaplicar.
 
@@ -85,7 +87,7 @@ substituem o teste na janela nova**: a fase 01 só trava a senha do root se enco
 chave SSH instalada, e a fase 02 se recusa a rodar (com erro) se o usuário informado não existir
 ou não tiver chave. São redes de segurança, não uma prova de que o seu acesso específico funciona.
 
-Se mesmo assim alguma coisa der errado, veja [Perdi o acesso — e agora?](recuperar-acesso.md).
+Se mesmo assim alguma coisa der errado, veja [Perdi o acesso — e agora?](../guides/recover-access.md).
 
 ## Antes de rodar: fases que merecem atenção
 

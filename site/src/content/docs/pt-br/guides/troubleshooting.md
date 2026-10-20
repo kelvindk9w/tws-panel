@@ -1,4 +1,6 @@
-# Troubleshooting
+---
+title: "Troubleshooting"
+---
 
 Problemas prováveis ao rodar o paas em uma VPS real e como resolver cada um.
 
@@ -36,7 +38,7 @@ Gmail e Outlook).
 5. Veja a **Nota de entregabilidade** (Envios → Nota): ela lista o que falta, item por item.
 6. **IP novo sem reputação**: nas primeiras 2–4 semanas envie volume baixo e crescente
    (dezenas/dia, não milhares). Veja "warm-up de IP" em
-   [email-deliverability.md](email-deliverability.md).
+   [email-deliverability.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/email-deliverability.md).
 7. Mantenha o DMARC em `p=none` coletando relatórios até tudo estabilizar; endureça para
    `quarantine`/`reject` depois.
 
@@ -95,7 +97,7 @@ instalador avisa que ele não respondeu em 3 minutos.
    provedor (no painel da hospedagem): libere as duas e rode `sudo docker compose restart`. Para
    ver o que o proxy diz: `sudo docker logs paas-caddy --tail 50`;
 3. Enquanto isso, o acesso por túnel SSH funciona: o banner do instalador mostra o comando
-   (veja [Acesso por túnel SSH](instalacao.md#acesso-por-tunel));
+   (veja [Acesso por túnel SSH](../getting-started/installation.md#acesso-por-tunel));
 4. Token correto? Reexiba o link completo com `sudo ./scripts/show-token.sh`.
 
 O painel em si escuta só dentro da VPS (`127.0.0.1`): o endereço `http://SEU-IP:9000` não abre,
@@ -128,7 +130,7 @@ automática (via `at`) que restaura a configuração anterior em ~5 minutos **se
 confirmar o acesso** pelo painel. Aguarde o rollback, entre novamente e revise o plano de
 correções antes de reaplicar. Cada arquivo alterado tem backup em `/var/backups/paas/`.
 Perdeu a chave, a senha ou o celular da verificação em duas etapas? Veja
-[Perdi o acesso — e agora?](recuperar-acesso.md).
+[Perdi o acesso — e agora?](recover-access.md).
 
 ### Deploy bloqueado por guardrail
 
@@ -155,4 +157,4 @@ necessário `sudo systemctl enable --now docker`. O painel acessa apenas o socke
 ## Não achou seu problema?
 
 Abra uma issue no repositório com o template de bug — inclua logs (sem segredos), versão do
-commit e ambiente. Veja [CONTRIBUTING.md](../CONTRIBUTING.md).
+commit e ambiente. Veja [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md).

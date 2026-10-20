@@ -1,5 +1,8 @@
 # Contribuindo com o TWS Panel
 
+Versão em inglês (principal): [CONTRIBUTING.md](../../../CONTRIBUTING.md). Esta versão em português
+pode estar um pouco atrás da principal.
+
 Obrigado por considerar contribuir! Este projeto existe porque hospedar a própria infra não
 deveria exigir um painel pesado nem uma mensalidade — toda ajuda para mantê-lo leve, seguro e
 simples é bem-vinda.
@@ -91,7 +94,9 @@ componente para UI, E2E para fluxos de infra) e **CI verde é obrigatório** —
 ## Padrões do projeto
 
 - **TypeScript estrito** em todo o monorepo (`pnpm typecheck` precisa passar). Código e
-  identificadores em **inglês**; UI, docs e comentários explicativos em **pt-BR**.
+  identificadores em **inglês**; UI e comentários explicativos em **pt-BR**. A documentação fica em
+  `site/src/content/docs/<idioma>/` (inglês é o idioma principal, pt-BR o secundário); confira
+  as suas mudanças com `pnpm docs:build` e `pnpm docs:links`.
 - **Commits convencionais**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:` —
   em português ou inglês, na linha imperativa (ex.: `feat: adiciona regra de guardrail X`).
 - **Persistência simples**: estado em JSON/SQLite em `data/` (modo 0600 quando sensível),
@@ -107,7 +112,7 @@ componente para UI, E2E para fluxos de infra) e **CI verde é obrigatório** —
 Os checks ficam em `packages/security/src/checks.ts`. Cada check declara id, severidade,
 como detectar o problema (read-only) e, quando aplicável, como corrigi-lo (idempotente).
 Scripts de correção de sistema ficam em `scripts/hardening/` (veja `lib.sh` para os helpers
-de idempotência e backup). Consulte `docs/security-research.md` — é a spec que orienta o que
+de idempotência e backup). Consulte `docs/internal/security-research.md` — é a spec que orienta o que
 vale a pena checar e por quê.
 
 ### Adicionar uma regra de guardrail
@@ -139,7 +144,7 @@ pelos guardrails como qualquer deploy. Use os exemplos em `examples/` como refer
 
 ## Licença da sua contribuição
 
-O TWS Panel é distribuído sob a licença [MIT](LICENSE), e continua sendo — este projeto é e
+O TWS Panel é distribuído sob a licença [MIT](../../../LICENSE), e continua sendo — este projeto é e
 seguirá sendo open source.
 
 Ao abrir um Pull Request, você declara que:

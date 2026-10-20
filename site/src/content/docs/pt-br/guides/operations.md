@@ -1,4 +1,6 @@
-# Operação do painel na VPS
+---
+title: "Operação do painel na VPS"
+---
 
 O dia a dia depois da instalação: atualizar, comandos úteis, onde ficam os arquivos e como
 trocar o usuário do terminal ou a porta do painel. Todos os comandos rodam **na VPS**, conectado
@@ -14,18 +16,18 @@ cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker c
 
 O `git log --oneline -1` mostra o commit que ficou no ar, para você conferir. Seus projetos,
 domínios, e-mail e a conta de administrador continuam como estavam. O que mudou em cada versão
-está no [CHANGELOG](../CHANGELOG.md).
+está no [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG.md).
 
 ## Scripts de emergência
 
 | Situação | Comando (em `/opt/tws-panel`) | Guia |
 |---|---|---|
-| Perdeu o setup token | `sudo ./scripts/show-token.sh` | [Instalação](instalacao.md#passo-8) |
-| Quer refazer o wizard | `sudo ./scripts/reset-setup.sh` (`--full` apaga também a conta admin) | [Recuperar o acesso](recuperar-acesso.md) |
-| Perdeu o celular e os códigos da verificação em duas etapas | `sudo ./scripts/reset-2fa.sh` | [Recuperar o acesso](recuperar-acesso.md) |
-| Desativou o acesso pelo IP e o domínio do painel parou de abrir | `sudo ./scripts/reativar-acesso-ip.sh` | [Funcionalidades](funcionalidades.md#dominio-do-painel) |
-| O painel não abre e você tem um backup `.7z` dele | `sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` | [Funcionalidades](funcionalidades.md#backups) |
-| Quer remover o painel | `./scripts/uninstall.sh --dry-run` e depois `./scripts/uninstall.sh` | [Instalação](instalacao.md#remover-o-painel) |
+| Perdeu o setup token | `sudo ./scripts/show-token.sh` | [Instalação](../getting-started/installation.md#passo-8) |
+| Quer refazer o wizard | `sudo ./scripts/reset-setup.sh` (`--full` apaga também a conta admin) | [Recuperar o acesso](recover-access.md) |
+| Perdeu o celular e os códigos da verificação em duas etapas | `sudo ./scripts/reset-2fa.sh` | [Recuperar o acesso](recover-access.md) |
+| Desativou o acesso pelo IP e o domínio do painel parou de abrir | `sudo ./scripts/reativar-acesso-ip.sh` | [Funcionalidades](features.md#dominio-do-painel) |
+| O painel não abre e você tem um backup `.7z` dele | `sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` | [Funcionalidades](features.md#backups) |
+| Quer remover o painel | `./scripts/uninstall.sh --dry-run` e depois `./scripts/uninstall.sh` | [Instalação](../getting-started/installation.md#remover-o-painel) |
 
 
 ## Onde ficam os arquivos dos seus projetos
@@ -123,7 +125,7 @@ domínios, e-mail e a conta de administrador não são tocados.
 
 > [!TIP]
 > Se o problema é a porta ocupada **no seu computador** na hora de abrir o túnel, não mexa aqui:
-> troque só o número da esquerda do `ssh -L`. Veja [as duas portas do túnel](instalacao.md#duas-portas).
+> troque só o número da esquerda do `ssh -L`. Veja [as duas portas do túnel](../getting-started/installation.md#duas-portas).
 
 > [!IMPORTANT]
 > **Atualizando uma instalação anterior ao acesso por HTTPS?** Desde essa versão o painel escuta
@@ -156,4 +158,4 @@ sudo ./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga tam
 > [!NOTE]
 > Os comandos de Docker e os scripts `show-token.sh` e `reset-setup.sh` levam `sudo` porque o
 > painel não coloca ninguém no grupo docker — estar nele é ter root sem senha
-> ([entenda](instalacao.md#grupo-docker)). Sem o `sudo`, o erro é `permission denied ... docker.sock`.
+> ([entenda](../getting-started/installation.md#grupo-docker)). Sem o `sudo`, o erro é `permission denied ... docker.sock`.

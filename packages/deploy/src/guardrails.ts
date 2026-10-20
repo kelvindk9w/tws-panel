@@ -2,7 +2,7 @@
  * guardrails.ts — análise de segurança de arquivos docker-compose ao adotá-los.
  *
  * Prévia da Fase 4 (plano §5.4): motivada pelos problemas REAIS encontrados nos
- * projetos do usuário (docs/projects-analysis.md — cachetaGrok):
+ * projetos do usuário (docs/internal/projects-analysis.md — cachetaGrok):
  *  - porta de banco de dados publicada no host (5432 exposta);
  *  - credenciais fracas/hardcoded (cacheta:cacheta);
  *  - serviços de dev em produção (Mailhog na 8025).

@@ -1,6 +1,6 @@
 # Fase 3 — E-mail: notas de implementação e produção
 
-> Complementa `docs/email-deliverability.md` (spec de DNS/deliverability) com as
+> Complementa `docs/internal/email-deliverability.md` (spec de DNS/deliverability) com as
 > decisões de implementação do módulo `@paas/mailer`.
 
 ## 1. Como o Stalwart foi integrado

@@ -1,10 +1,12 @@
-# Do dev à VPS real — guia de produção
+---
+title: "Do dev à VPS real — guia de produção"
+---
 
 Este guia cobre tudo o que muda entre rodar o paas localmente (`pnpm dev`, domínios
 `.localhost`, portas altas) e rodar em uma VPS Ubuntu 22.04/24.04 exposta na internet.
 
 > Leia também: [troubleshooting.md](troubleshooting.md) para os problemas mais comuns e
-> [host-bridge.md](host-bridge.md) para entender como o scan/hardening roda na VPS real
+> [host-bridge.md](../reference/host-bridge.md) para entender como o scan/hardening roda na VPS real
 > (e por que o container do painel é endurecido daquele jeito).
 
 ---
@@ -66,7 +68,7 @@ errado.
   o DNS do domínio aponta para a VPS. Domínios `.localhost` são servidos em HTTP puro (só dev).
 - **E-mail (Stalwart)**: o Caddy central emite o certificado de `mail.<domínio>` (basta o
   registro A apontar para a VPS, nuvem cinza na Cloudflare) e o painel o instala e renova no
-  Stalwart. Estado na página E-mail. Detalhes em [fase-3-email.md](fase-3-email.md) §1.
+  Stalwart. Estado na página E-mail. Detalhes em [fase-3-email.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/fase-3-email.md) §1.
 
 ### 1.4 PTR (rDNS)
 
@@ -106,7 +108,7 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
 ```
 1. HARDENING          → rode o wizard e conclua o scan + hardening primeiro.
                         O scan/hardening roda NA VPS REAL via host bridge
-                        (nsenter — docs/host-bridge.md), não no container do painel.
+                        (nsenter — reference/host-bridge), não no container do painel.
                         Na Fase 01 cole sua CHAVE PÚBLICA SSH: o root só é travado
                         com a chave instalada, e o alerta pulsante pede para testar
                         o login em OUTRA janela SSH antes de confirmar (rollback

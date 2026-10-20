@@ -122,7 +122,7 @@ ${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP${RESE
       ele — por exemplo ssh -L $LOCAL_ALT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP — e então
       acesse http://localhost:$LOCAL_ALT/?token=$TOKEN (o endereço usa o número da
       ESQUERDA do seu túnel, não o $PORT da VPS). Para escolher um número livre antes
-      de tentar, docs/instalacao.md ensina a conferir a porta no seu computador.
+      de tentar, site/src/content/docs/pt-br/getting-started/installation.md ensina a conferir a porta no seu computador.
 
 E então acesse (o número abaixo é o da ESQUERDA do comando acima — se você trocou,
 troque aqui também):

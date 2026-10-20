@@ -1,7 +1,9 @@
-# Desenvolvimento e arquitetura
+---
+title: "Desenvolvimento e arquitetura"
+---
 
 Como rodar o painel no seu computador e como o código está organizado. Para contribuir (padrões,
-testes, fluxo de pull request), leia o [CONTRIBUTING.md](../CONTRIBUTING.md).
+testes, fluxo de pull request), leia o [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md).
 
 ## Modo dev local
 
@@ -26,7 +28,7 @@ SETUP_TOKEN=dev-token docker compose -f docker-compose.dev.yml up
 > Ao concluir o assistente o setup token é apagado e deixa de valer; para reabrir o assistente use
 > `./scripts/reset-setup.sh` (gera um token novo).
 
-Exemplos prontos para deploy em [`examples/`](../examples/README.md).
+Exemplos prontos para deploy em [`examples/`](https://github.com/kelvindk9w/tws-panel/blob/main/examples/README.md).
 
 > [!WARNING]
 > Os exemplos são **apenas para testes** — não os use como base de produção sem revisão.
@@ -35,7 +37,7 @@ Exemplos prontos para deploy em [`examples/`](../examples/README.md).
 > 🔒 **Validação automática:** o `pnpm install` ativa hooks locais de pre-commit
 > (arquivos proibidos + scan de segredos + typecheck incremental) e pre-push
 > (testes + cobertura + build). O CI no GitHub Actions é o portão final —
-> detalhes no [CONTRIBUTING.md](../CONTRIBUTING.md).
+> detalhes no [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md).
 
 ## Arquitetura
 
@@ -63,7 +65,8 @@ tws-panel/
 │   │   restaurar-painel.sh, uninstall.sh  # utilitários de operação na VPS
 │   └── test-*.mts               # suítes de verificação (Fases 3 e 4)
 ├── examples/                    # apps de exemplo para deploy (apenas testes)
-├── docs/                        # guias (instalação, operação, segurança…) e specs
+├── site/                        # site de documentação (Starlight); os guias ficam em site/src/content/docs/
+├── docs/                        # imagens do README, specs internas e textos de comunidade em pt-BR
 ├── comoFuncionaSistema/         # documentação legível por máquina (para agentes de IA)
 ├── Dockerfile                   # build multi-stage do painel (produção)
 ├── docker-compose.yml           # produção: painel em 127.0.0.1:PAAS_PORT (padrão 9000)
@@ -94,3 +97,19 @@ Como os módulos se relacionam:
         — sem banco de dados. Serviços externos só os que você ligar: GitHub,
         Telegram e o armazenamento S3/R2 dos backups.
 ```
+
+## Site de documentação
+
+Os guias moram em `site/src/content/docs/<idioma>/` (`en` é o padrão, `pt-br` o secundário) e são
+publicados com o Starlight. Os arquivos têm o mesmo caminho em cada idioma; uma página que ainda
+não foi traduzida aparece em inglês no site. Para adicionar um idioma, crie a pasta dele ao lado
+de `en/` e acrescente uma entrada em `locales` no `site/astro.config.mjs`.
+
+```bash
+pnpm docs:dev     # servidor local com recarga automática
+pnpm docs:build   # gera site/dist (mesma etapa do GitHub Pages)
+pnpm docs:links   # confere os links internos e as âncoras de todos os .md
+```
+
+Entre guias, use links relativos para o arquivo `.md` (por exemplo `../guides/operations.md#anchor`):
+eles funcionam no GitHub e são reescritos para as URLs do site no build.

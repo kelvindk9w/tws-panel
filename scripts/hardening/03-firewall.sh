@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 03-firewall.sh — Fase 03: firewall UFW (default-deny) + hardening de kernel (sysctl).
-# Spec: docs/security-research.md §1.2, §2.4 e §2.6.
+# Spec: docs/internal/security-research.md §1.2, §2.4 e §2.6.
 #
 # REGRA DE OURO: liberar SSH ANTES de `ufw enable`. Rollback automático agendado
 # (5 min) desfaz tudo caso o operador não confirme acesso com `--confirm`.
@@ -156,7 +156,7 @@ step "Hardening de kernel ($SYSCTL_FILE)"
 # Nota: net.ipv4.ip_forward NÃO é forçado a 0 — o Docker gerencia forwarding
 # automaticamente (spec §1.2, aviso).
 write_file "$SYSCTL_FILE" <<'EOF'
-# Gerenciado pelo painel PaaS (03-firewall.sh). Spec: docs/security-research.md §1.2
+# Gerenciado pelo painel PaaS (03-firewall.sh). Spec: docs/internal/security-research.md §1.2
 # --- Anti-spoofing / roteamento ---
 net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.default.rp_filter = 1

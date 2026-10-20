@@ -1,6 +1,6 @@
 # Fase 4 — Guardrails + Monitoramento contínuo: notas de implementação
 
-> Spec: plano §5.4 e `docs/security-research.md` §6.6. Padrões seguidos:
+> Spec: plano §5.4 e `docs/internal/security-research.md` §6.6. Padrões seguidos:
 > persistência JSON em `data/`, jobs assíncronos, alvo container em dev
 > (`PAAS_TARGET=container`), UI shadcn dark pt-BR.
 

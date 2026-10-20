@@ -1,4 +1,6 @@
-# Perdi o acesso — e agora?
+---
+title: "Perdi o acesso — e agora?"
+---
 
 O hardening fecha portas de propósito, e isso corta caminhos de volta. Esta seção existe para
 você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto para ele.
@@ -17,7 +19,7 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 > [!IMPORTANT]
 > **Confirme o seu caminho de recuperação ANTES de aplicar o hardening.** Entre no painel do seu
 > provedor e procure por "Console", "VNC", "Rescue" ou "Modo de recuperação". Se você não achar
-> nenhum, a prevenção descrita no [Passo 4 da instalação](instalacao.md#passo-4) deixa de ser recomendação e passa a ser obrigatória:
+> nenhum, a prevenção descrita no [Passo 4 da instalação](../getting-started/installation.md#passo-4) deixa de ser recomendação e passa a ser obrigatória:
 > sem console, não existe rede de segurança e uma chave perdida pode significar reinstalar a
 > máquina do zero.
 
@@ -83,7 +85,7 @@ antes do hardening.
 ## Perdi a chave SSH
 
 Você precisa reinstalar uma chave nova em `~/.ssh/authorized_keys` do seu usuário. Gere um par
-novo no seu computador ([Passo 4 da instalação](instalacao.md#passo-4)) e use um dos caminhos abaixo, na ordem:
+novo no seu computador ([Passo 4 da instalação](../getting-started/installation.md#passo-4)) e use um dos caminhos abaixo, na ordem:
 
 **1. Pelo terminal do painel** — se você ainda consegue entrar no painel. Se ele abre com o
 **seu usuário**, a pasta `~/.ssh` é dele, e não precisa de root nenhum:

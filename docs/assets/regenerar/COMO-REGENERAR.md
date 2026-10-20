@@ -1,6 +1,6 @@
 # Como regenerar os prints do README
 
-Os arquivos `docs/imagens/*.png` são capturas do painel (`apps/web`, Vite) com a API simulada
+Os arquivos `docs/assets/*.png` são capturas do painel (`apps/web`, Vite) com a API simulada
 pelo Playwright. Os dados são fictícios: `exemplo.com.br`, IP `203.0.113.10`, usuário `admin`.
 
 - `capturar.mjs`: abre cada tela, responde a `/api/**` com dados fictícios e salva os PNGs.
@@ -22,7 +22,7 @@ do repositório.
 2. Scripts de captura, `playwright-core` e Chromium:
 
    ```bash
-   cp $WT/docs/imagens/regenerar/{capturar.mjs,otimizar.py,package.json} $S/shots/
+   cp $WT/docs/assets/regenerar/{capturar.mjs,otimizar.py,package.json} $S/shots/
    cd $S/shots && npm install
    PLAYWRIGHT_BROWSERS_PATH=$S/browsers npx playwright-core install chromium
    ```
@@ -42,7 +42,7 @@ do repositório.
 5. Otimizar e copiar para o repositório (precisa do Pillow: `pip install pillow`):
 
    ```bash
-   python3 $S/shots/otimizar.py $S/shots/out $WT/docs/imagens
+   python3 $S/shots/otimizar.py $S/shots/out $WT/docs/assets
    ```
 
 Confira cada imagem antes de commitar: nenhuma tela com erro, carregando ou vazia, e nenhum dado

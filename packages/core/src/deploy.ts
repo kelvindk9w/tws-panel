@@ -1,6 +1,6 @@
 /**
  * Tipos compartilhados do módulo de deploy (Fase 2 — Deploy + Domínios).
- * Spec: plano seções 5.1/5.2 e docs/projects-analysis.md.
+ * Spec: plano seções 5.1/5.2 e docs/internal/projects-analysis.md.
  */
 import type { ProjectTimezoneSetting } from "./timezone";
 

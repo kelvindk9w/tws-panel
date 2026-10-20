@@ -1,11 +1,13 @@
-# Segurança: o que o painel faz e o que ele exige
+---
+title: "Segurança: o que o painel faz e o que ele exige"
+---
 
 Encontrou uma vulnerabilidade? **Não abra uma issue pública.** Leia o
-[SECURITY.md](../SECURITY.md) para saber como reportar de forma responsável.
+[SECURITY.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/SECURITY.md) para saber como reportar de forma responsável.
 
 Este documento explica o modelo de segurança do painel. Para conduzir o hardening da VPS, veja o
-[Wizard de segurança](wizard-seguranca.md). Para recuperar o acesso, veja
-[Perdi o acesso — e agora?](recuperar-acesso.md).
+[Wizard de segurança](../getting-started/security-wizard.md). Para recuperar o acesso, veja
+[Perdi o acesso — e agora?](../guides/recover-access.md).
 
 ## O que o painel protege
 
@@ -34,12 +36,12 @@ antes de instalar:
   do sistema. Na instalação você escolhe com qual usuário ele abre: com o seu usuário comum, o que
   precisa de root passa pelo `sudo` com a sua senha (modo `senha`) ou roda por trás e fica na
   Auditoria (modo `segundo-plano`); com `root`, quem tem sessão no painel tem o terminal de root
-  da máquina. Veja [o que cada escolha significa](instalacao.md#terminal-do-painel).
+  da máquina. Veja [o que cada escolha significa](../getting-started/installation.md#terminal-do-painel).
 - **O socket do Docker é montado no container do painel**, o que equivale a root no host. É uma
   propriedade do Docker, não uma falha do painel, e nenhum hardening do container altera isso.
 
 Ambos estão documentados em detalhe, junto com o que o projeto **não** protege e as dívidas de
-segurança conhecidas, em [comoFuncionaSistema/global/threat-model.json](../comoFuncionaSistema/global/threat-model.json).
+segurança conhecidas, em [comoFuncionaSistema/global/threat-model.json](https://github.com/kelvindk9w/tws-panel/blob/main/comoFuncionaSistema/global/threat-model.json).
 Se o seu caso permitir, deixe o painel fora da internet aberta (acesso por túnel SSH, VPN ou
 restrição por IP). No acesso padrão, por HTTPS, ative a verificação em duas etapas.
 

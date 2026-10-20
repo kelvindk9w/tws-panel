@@ -1,4 +1,6 @@
-# Host bridge — como o painel executa scan/hardening na VPS real
+---
+title: "Host bridge — como o painel executa scan/hardening na VPS real"
+---
 
 > Problema original (bug arquitetural encontrado em campo): o painel roda num
 > container Docker, mas o módulo de segurança executava os comandos com

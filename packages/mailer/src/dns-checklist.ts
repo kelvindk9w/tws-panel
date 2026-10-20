@@ -1,6 +1,6 @@
 /**
  * dns-checklist.ts — checklist de DNS de um domínio de e-mail e verificação
- * contra o DNS real (spec: docs/email-deliverability.md §1).
+ * contra o DNS real (spec: docs/internal/email-deliverability.md §1).
  *
  * Registros: A/AAAA (mail.<domínio>), MX, SPF (progressivo ~all → -all),
  * DKIM (RSA 2048, seletor "paas"), DMARC (progressivo none → quarantine →

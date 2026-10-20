@@ -1,15 +1,22 @@
 # Política de Segurança
 
+Versão em inglês (principal): [SECURITY.md](../../../SECURITY.md).
+
 O TWS Panel é um painel que **administra uma VPS inteira** — segurança é levada a sério por aqui.
 Se você encontrou uma vulnerabilidade, agradecemos o reporte responsável.
 
 ## Reportando uma vulnerabilidade
 
-⚠️ **Não abra uma issue pública** para vulnerabilidades de segurança.
+⚠️ **Não abra issue, pull request nem discussão pública** para vulnerabilidades de segurança.
 
-Envie um e-mail para:
+Reporte de forma privada pelos GitHub Security Advisories:
 
-**[contato@tws.tec.br](mailto:contato@tws.tec.br)**
+1. Abra a [aba Security do repositório](https://github.com/kelvindk9w/tws-panel/security).
+2. Clique em **Report a vulnerability** e preencha o formulário.
+
+Link direto: <https://github.com/kelvindk9w/tws-panel/security/advisories/new>
+
+Se você não puder usar o GitHub, escreva para **[contato@tws.tec.br](mailto:contato@tws.tec.br)**. Não coloque detalhes de exploração em lugar público.
 
 Inclua, se possível:
 
@@ -53,7 +60,7 @@ Inclua, se possível:
   pelo `sudo` com senha ou rodando em segundo plano e registrado na Auditoria; `root` é possível, mas
   desaconselhado). Com `root`, quem tem sessão no painel tem a máquina. Isso **não é uma
   vulnerabilidade a reportar** — está declarado em
-  [threat-model.json](comoFuncionaSistema/global/threat-model.json) como risco aceito, junto com o
+  [threat-model.json](../../../comoFuncionaSistema/global/threat-model.json) como risco aceito, junto com o
   socket do Docker montado no painel. Falhas que permitam chegar a esse terminal **sem sessão
   válida**, sim;
 - **Painel só em `127.0.0.1`** — o container do painel não publica porta na internet; quem atende
@@ -74,5 +81,5 @@ Inclua, se possível:
 
 ## Versões suportadas
 
-O projeto está em **beta** (`0.x`): apenas a branch `main` recebe correções de segurança.
-Recomendamos sempre rodar a versão mais recente.
+O projeto está em **beta** (`0.x`): apenas a branch `main` recebe correções de segurança; não há
+linhas de versão antigas mantidas. Recomendamos sempre rodar a versão mais recente.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 06-audit.sh — Fase 06: detecção — auditd, AIDE (baseline), rkhunter/chkrootkit,
 # Lynis e varreduras recorrentes via cron.
-# Spec: docs/security-research.md §2.8, §2.9, §2.10 e §3.
+# Spec: docs/internal/security-research.md §2.8, §2.9, §2.10 e §3.
 #
 # Uso: ./06-audit.sh [--skip-rkhunter] [--skip-aide] [--dry-run] [--rollback]
 set -euo pipefail
@@ -51,7 +51,7 @@ ok "Ferramentas de auditoria instaladas"
 
 step "Regras essenciais do auditd ($AUDIT_RULES)"
 write_file "$AUDIT_RULES" <<'EOF'
-# Gerenciado pelo painel PaaS (06-audit.sh). Spec: docs/security-research.md §2.8
+# Gerenciado pelo painel PaaS (06-audit.sh). Spec: docs/internal/security-research.md §2.8
 -w /etc/passwd -p wa -k identity
 -w /etc/group -p wa -k identity
 -w /etc/shadow -p wa -k identity
@@ -131,7 +131,7 @@ ok "Scanners de rootkit verificados"
 
 step "Cron de varreduras recorrentes ($CRON_FILE)"
 write_file "$CRON_FILE" <<'EOF'
-# Gerenciado pelo painel PaaS (06-audit.sh). Spec: docs/security-research.md §3/§6
+# Gerenciado pelo painel PaaS (06-audit.sh). Spec: docs/internal/security-research.md §3/§6
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
