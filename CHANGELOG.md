@@ -2,6 +2,8 @@
 
 Todas as mudanças relevantes do TWS Panel ficam registradas aqui.
 
+*English readers: this changelog is written in Portuguese only.*
+
 O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o projeto usa
 [Versionamento Semântico](https://semver.org/lang/pt-BR/). Enquanto a versão for `0.x`, o projeto
 está em beta e qualquer versão pode trazer mudanças incompatíveis.
@@ -45,7 +47,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Menu do projeto (Visão geral, Deploys, Domínios, Git, Variáveis, E-mail, Backups,
   Configurações), vários domínios por projeto e variáveis de ambiente cifradas.
 - Compose de verdade: variáveis no `.env`, lista do que o compose exige, importação de `.env`,
-  deploy barrado por variável faltando e retirada das portas 80/443 de app comum.
+  deploy barrado por variável faltando e retirada das portas 80/443 de apps comuns.
 - Lista de todos os serviços do compose e "Por que falhou" no log do deploy.
 - Páginas "site em configuração", "em manutenção" e "temporariamente indisponível".
 - Botão Portas: portas do projeto e de todos os containers, trocar, publicar, remover e editar
@@ -101,7 +103,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - O usuário do terminal não é mais colocado no grupo `docker`.
 - A fase 00 do hardening não atualiza o Docker, para não derrubar o próprio painel.
 - Os guardrails analisam o mesmo compose que o deploy usa.
-- A documentação foi reorganizada: README curto e guias em `docs/`.
+- A documentação foi reorganizada: README curto e guias em `site/src/content/docs/`.
 
 ### Removido
 
