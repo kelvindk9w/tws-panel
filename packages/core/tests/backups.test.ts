@@ -129,6 +129,20 @@ describe("backups: kit de recuperação", () => {
     expect(kit).toContain(base.localPath);
   });
 
+  it("diz sem ambiguidade que as chaves de acesso do armazenamento NÃO estão no kit e precisam ser guardadas à parte", () => {
+    const kit = buildRecoveryKit(base);
+    expect(kit).toContain("O QUE ESTE KIT NÃO TEM");
+    expect(kit).toContain("Access Key ID");
+    expect(kit).toContain("Secret Access Key");
+    expect(kit).toMatch(/NÃO estão neste arquivo/);
+    expect(kit).toMatch(/guarde-as à parte/i);
+    // o passo da VPS nova não sugere que as chaves estejam aqui
+    expect(kit).toMatch(/chaves de acesso[^\n]*(não estão neste kit|à parte)/i);
+    expect(kit).not.toContain("endpoint, bucket e chaves");
+    // e nenhum segredo do armazenamento entra no texto
+    expect(buildRecoveryKit({ ...base, destination: { ...base.destination, secretAccessKey: "segredo-nunca-no-kit" } as typeof base.destination })).not.toContain("segredo-nunca-no-kit");
+  });
+
   it("outro provedor compatível com S3", () => {
     const kit = buildRecoveryKit({ ...base, destination: { provider: "s3", endpoint: "https://s3.exemplo.com", bucket: "b" } });
     expect(kit).toContain("armazenamento compatível com S3");

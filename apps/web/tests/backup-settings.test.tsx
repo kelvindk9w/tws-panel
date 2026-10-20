@@ -276,6 +276,8 @@ describe("Configurações → Backups", () => {
     fireEvent.click(within(setup).getByRole("button", { name: /Baixar kit de recuperação/ }));
     expect(URL.createObjectURL).toHaveBeenCalled();
     expect(within(setup).getByText(/Kit baixado/)).toBeInTheDocument();
+    // o texto ao lado do botão diz que o kit NÃO traz as chaves de acesso do armazenamento
+    expect(setup).toHaveTextContent(/não inclui as chaves de acesso do armazenamento.*guarde-as à parte/i);
     fireEvent.click(within(setup).getByLabelText("Guardei a senha em lugar seguro"));
     expect(save).toBeEnabled();
     fireEvent.click(save);
@@ -419,6 +421,8 @@ describe("Configurações → Backups", () => {
     renderPage();
     const card = await screen.findByTestId("other-server-card");
     fireEvent.click(within(card).getByRole("button", { name: "Começar" }));
+    // as chaves de acesso não estão no kit: a tela diz isso no passo 1
+    expect(card).toHaveTextContent(/O kit de recuperação não traz as chaves de acesso.*Access Key ID e Secret Access Key/s);
     fireEvent.change(within(card).getByLabelText(/A mesma senha da VPS antiga/), { target: { value: "senha-antiga-errada" } });
     fireEvent.click(within(card).getByRole("button", { name: /Conferir e usar/ }));
     expect(await within(card).findByText(/Essa senha não abre os backups deste armazenamento/)).toBeInTheDocument();

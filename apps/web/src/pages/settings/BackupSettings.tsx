@@ -852,6 +852,7 @@ function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatu
               ) : (
                 <span className="text-muted-foreground">{t("backups.other.connectAbove")}</span>
               )}
+              <span className="text-xs text-amber-400">{t("backups.other.keysNote")}</span>
             </li>
             <li className="flex flex-col gap-2">
               <span className="font-medium">{t("backups.other.step2")}</span>
