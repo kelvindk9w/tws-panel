@@ -10,7 +10,7 @@
     { "simbolo": "requireSetupToken", "assinatura": "(app, request, reply) => void | FastifyReply", "descricao": "503 setup_token_missing se o servidor não tem token configurado; 401 unauthorized se o token fornecido não bate (comparação em tempo constante via tokenMatches)." }
   ],
   "comportamento": [
-    "A sessão é resolvida do cookie SESSION_COOKIE (paas_session) em TODA requisição, inclusive as públicas — request.session fica disponível (null se ausente/inválido/expirado) mesmo em rotas que não exigem sessão.",
+    "A sessão é resolvida do cookie de sessão (sessionCookieName: paas_session em HTTP simples, __Host-paas_session em HTTPS, SameSite=Strict) em TODA requisição, inclusive as públicas — request.session fica disponível (null se ausente/inválido/expirado) mesmo em rotas que não exigem sessão.",
     "GET /api/healthz e POST /api/auth/login (por prefixo /api/auth/login) são as únicas rotas 100% públicas.",
     "/api/setup/*: enquanto o wizard não foi concluído (setupState.completed === false), exige setup token válido — EXCETO /api/setup/verify-token, que é a porta de entrada (valida o token recebido no corpo da própria requisição, não no header/query). Depois de concluído, QUALQUER acesso a /api/setup/* responde 403 setup_completed, mesmo com token válido — o wizard trava permanentemente.",
     "/api/auth/* (fora de login): exige sessão válida sempre. Sem sessão, responde 401 — com código 'setup_incomplete' se o setup ainda não terminou (orienta o frontend a mandar o usuário para o wizard) ou 'unauthorized' se já terminou (sessão expirada/inválida).",

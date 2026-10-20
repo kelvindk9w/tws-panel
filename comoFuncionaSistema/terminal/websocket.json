@@ -38,10 +38,10 @@
         "descricao": "Alternativa ao query param `token` para autenticar durante o setup. Na prática o navegador usa a query, já que a API WebSocket não permite headers customizados. Desde o lote 7 esta é a ÚNICA rota que aceita o token na URL, e a conexão aberta com o token fecha (4401) quando o setup é concluído e o token é revogado."
       },
       {
-        "nome": "Cookie: paas_session",
+        "nome": "Cookie: paas_session (HTTP) ou __Host-paas_session (HTTPS)",
         "tipo": "string",
         "obrigatorio": false,
-        "descricao": "Cookie httpOnly de sessão admin, enviado automaticamente pelo navegador (same-origin) depois que o setup foi concluído."
+        "descricao": "Cookie httpOnly de sessão admin (SameSite=Strict), enviado automaticamente pelo navegador (same-origin) depois que o setup foi concluído. O nome depende da conexão: paas_session em HTTP simples, __Host-paas_session em HTTPS (só esse é lido em HTTPS). O handshake também passa pela guarda de origem: Sec-Fetch-Site same-site/cross-site ou Origin de outro host → 403 forbidden_origin."
       }
     ]
   },

@@ -129,10 +129,65 @@ Método: para cada achado, primeiro o teste, visto falhar contra o código anter
   existir e o setup estiver incompleto; com o setup concluído é ignorado.
 - Scripts externos que dependiam de `?token=` fora do terminal quebram (ver acima).
 
+## Correções da revisão (rodada 2)
+
+O revisor aprovou M1, M2, I1/I3 e os 3 testes alterados, e reprovou três pontos. Todos corrigidos.
+
+### 1. M3 — recuperação de acesso (o mais grave)
+
+- **Era:** ao concluir o assistente o painel apaga `/data/setup-token`, mas `reset-setup.sh` (com e sem `--full`)
+  dizia que o token "não é tocado" e mandava usar `show-token.sh`. Depois do reset e de recriar o contêiner
+  (`docker compose up -d --build` não repassa `SETUP_TOKEN`) não havia token: toda a API, inclusive
+  `/api/setup/admin`, dava 503 `setup_token_missing`, e o `show-token.sh` dizia "não encontrado". No caso inverso
+  (contêiner original da instalação), a variável `SETUP_TOKEN` revalidava o token que o lote dizia invalidado.
+- **Teste que falhou antes:** `apps/server/tests/reset-setup-token.test.ts` (8 de 10 falhavam; o docker é um
+  dublê no PATH que executa o `sh -c` do `docker run` contra uma pasta temporária): nenhum `/data/setup-token`
+  depois do reset, token que não mudava a cada reset, `show-token.sh` sem orientação, e a variável da instalação
+  autenticando com admin existente e sem arquivo.
+- **Mudou (pelo comportamento):**
+  - `reset-setup.sh`, com e sem `--full`, gera um token novo (24 bytes em hexadecimal, arquivo 0600, gravado por
+    temporário e `mv`). O token antigo deixa de valer. Os avisos do script foram corrigidos.
+  - `show-token.sh` não usa mais a variável do contêiner como fallback (mostraria um token que o painel ignora);
+    sem arquivo, explica que o token foi apagado de propósito e manda rodar `reset-setup.sh`.
+  - `loadSetupToken` só usa a variável `SETUP_TOKEN` quando não há administrador: com admin (mesmo com o
+    `setup-state.json` ausente, como após um reset sem `--full`) ela nunca revalida. Instalação nova sem arquivo
+    ainda a usa como fallback.
+  - Testes do ciclo: concluir → reset → reinício **sem** a variável (sobe com o token novo), **com** a variável
+    (o arquivo novo vale), e reinício com a variável após concluir ou com admin existente (não autentica).
+- **Não testado de verdade:** o `docker run`/`docker restart` reais e o `docker compose` (o docker do teste é um
+  dublê); o fluxo completo na VPS.
+
+### 2. M3 — token ainda ia para o log
+
+- **Era:** o error handler gravava `request.url` crua ao recusar por validação (token válido + `clientId` inválido
+  no WebSocket do terminal deixava `token=SEGREDO` em claro).
+- **Teste que falhou antes:** `apps/server/tests/log-token.test.ts` (bloco "pedido recusado por validação", com o
+  schema e a rota reais do terminal).
+- **Mudou:** `plugins/error-handler.ts` usa o mesmo `scrubUrl` do `log-config.ts`. Procurei outros
+  `request.url` indo para log em `src/`: não há.
+
+### 3. Documentação e dev nativo
+
+- `docs/troubleshooting.md`, `docs/production.md` e `docs/instalacao.md` corrigidos (arquivo vale mais que a
+  variável; token apagado ao concluir; `reset-setup.sh` gera token novo; `show-token.sh` sem fallback pela variável).
+- **Dev nativo (`SETUP_TOKEN=dev-token pnpm dev`):** o proxy do Vite reescreve o `Host` para `localhost:9000`
+  e o `Origin` segue `localhost:5173`. A guarda comparava `Origin` com `Host` mesmo quando o navegador dizia
+  `same-origin`. **Teste que falhou antes:** `csrf-origem.test.ts` ("proxy de dev: Origin e Host diferentes, mas
+  Sec-Fetch-Site same-origin" voltava 403). **Mudou:** `Sec-Fetch-Site: same-origin`/`none` agora vale por si
+  (o navegador o define e a página não o forja); `same-site`/`cross-site` continuam barrados, e `Origin` vs `Host`
+  só é conferido quando o cabeçalho falta. O WebSocket do terminal usa a mesma função (também funcionava mal no dev
+  por causa do `Host`) e agora respeita `ALLOWED_ORIGINS`. Preferi isso a mudar o proxy do Vite (seguro e sem
+  configuração); `docs/desenvolvimento.md` documenta `ALLOWED_ORIGINS=http://localhost:5173` só como reserva
+  caso algum proxy remova o cabeçalho. **Não testado:** o Vite real com navegador.
+- JSON de `comoFuncionaSistema/` com o nome do cookie: `terminal/websocket.json`, `autenticacao/index.json`,
+  `global/auth-plugin.json`. Também corrigi `global/threat-model.json`, que o commit anterior deixou com JSON
+  inválido (uma linha sem a chave `controle`), e completei o texto do vazamento em log.
+- Nos itens "O que muda" acima: o item 6 (prioridade) e o 5 valem com a regra nova (variável só sem administrador).
+
 ## Verificação
 
 - `pnpm -r run typecheck`: passou nos 6 pacotes.
-- Server: 128 arquivos, 1917 testes passando; cobertura geral 97,95% linhas / 93,4% ramos / 98,27% funções /
+- Server: 129 arquivos, 1929 testes passando; cobertura geral 97,97% linhas / 93,37% ramos / 98,28% funções /
   99,02% instruções (mínimos 94/91/98/94), rodada com `--maxWorkers=2`.
 - `@paas/core`: 26 testes do arquivo alterado e cobertura 99,6% / 98,8% ramos; `@paas/web`: 746 testes passando.
 - Deploy e mailer não foram tocados, então não rodei a cobertura deles.

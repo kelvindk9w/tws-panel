@@ -84,7 +84,7 @@
     {
       "id": "auth-bypass",
       "ameaca": "Acessar a API sem autenticação",
-      "Guarda global que exige setup token durante a instalação e sessão depois (estado do setup ilegível = 503, nunca 'instalação nova'); cookie assinado com HMAC, SameSite=Strict e __Host- em HTTPS; escrita de outro site/origem recusada (Sec-Fetch-Site/Origin); rate limit de login por IP com a tentativa reservada antes da senha e lockout progressivo; X-Forwarded-For só do Caddy.",
+      "controle": "Guarda global que exige setup token durante a instalação e sessão depois (estado do setup ilegível = 503, nunca 'instalação nova'); cookie assinado com HMAC, SameSite=Strict e __Host- em HTTPS; escrita de outro site/origem recusada (Sec-Fetch-Site/Origin); rate limit de login por IP com a tentativa reservada antes da senha e lockout progressivo; X-Forwarded-For só do Caddy.",
       "onde": "apps/server/src/plugins/auth.ts",
       "estado": "implementado"
     },
@@ -113,7 +113,7 @@
     {
       "id": "vazamento-segredo-log",
       "ameaca": "Segredos aparecendo em logs ou respostas",
-      "controle": "Redact do pino em cabeçalhos de autorização, cookies e token de query; senha nunca retornada; input do terminal nunca auditado.",
+      "controle": "Redact do pino em cabeçalhos de autorização e cookies; o serializador de req (log-config.ts) troca o valor de ?token= (e similares) por [redacted] na URL, inclusive no aviso de validação do error handler; senha nunca retornada; input do terminal nunca auditado.",
       "onde": "apps/server/src/app.ts",
       "estado": "implementado"
     },

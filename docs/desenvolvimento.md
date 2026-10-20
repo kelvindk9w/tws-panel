@@ -17,6 +17,15 @@ SETUP_TOKEN=dev-token docker compose -f docker-compose.dev.yml up
 - Wizard: `http://localhost:5173/setup` com o token `dev-token`
 - Domínios de projeto: use `*.localhost` (servidos em HTTP puro pelo Caddy, sem SSL)
 
+> [!NOTE]
+> O painel recusa escrita (`POST`, `PUT`, `PATCH`, `DELETE`) que o navegador marca como vinda de
+> outro site. No dev em `http://localhost:5173` o proxy do Vite troca o `Host` para `localhost:9000`,
+> mas o navegador informa `Sec-Fetch-Site: same-origin`, e é isso que vale — o login funciona sem
+> configurar nada. Se algum proxy no meio remover esse cabeçalho e você levar `403 forbidden_origin`,
+> libere a origem da página: `ALLOWED_ORIGINS=http://localhost:5173 SETUP_TOKEN=dev-token pnpm dev`.
+> Ao concluir o assistente o setup token é apagado e deixa de valer; para reabrir o assistente use
+> `./scripts/reset-setup.sh` (gera um token novo).
+
 Exemplos prontos para deploy em [`examples/`](../examples/README.md).
 
 > [!WARNING]
