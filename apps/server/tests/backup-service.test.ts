@@ -10,7 +10,7 @@
  * lembrete da senha.
  */
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1363,6 +1363,33 @@ describe("restaurar o painel em outra VPS", () => {
       expect(notices.filter((n) => n.key === "backup-panel-held-error")).toHaveLength(1);
     });
 
+    it("listagem falha 1x e depois encontra backups de outro servidor: o aviso de pausa sai (1x)", async () => {
+      projects = [];
+      await connect();
+      await service.updateTarget("email", { enabled: false }, "a");
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+      const list = storage.list.bind(storage);
+      let falha = true;
+      storage.list = async (p: string) => {
+        if (falha) throw new StorageError("instável", "unreachable");
+        return list(p);
+      };
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      falha = false;
+      for (const d of [16, 17]) {
+        now = new Date(2026, 9, d, 3, 1).getTime();
+        await service.tick();
+        await service.idle();
+      }
+      expect(notices.filter((n) => n.key === "backup-panel-held")).toHaveLength(1);
+      // e depois de reiniciar o painel o aviso não se repete
+      service = build();
+      now = new Date(2026, 9, 18, 3, 1).getTime();
+      await service.tick();
+      expect(notices.filter((n) => n.key === "backup-panel-held")).toHaveLength(1);
+    });
+
     it("backup pedido à mão sempre é feito", async () => {
       await emptyPanelWithForeignBackups();
       expect((await backup("panel")).status).not.toBe("failed");
@@ -1723,6 +1750,96 @@ describe("caminhos de exceção", () => {
       expect((await service.record(r.id)).status).toBe("failed");
       expect(existsSync(origem)).toBe(true);
       expect(await readdir(origem)).toEqual([]);
+      expect(redeploys).toEqual([]);
+    });
+
+    /** Serviço com tar de mentira: o backup guarda um texto; a extração cria `name/index.html` e roda o gancho. */
+    function tarComGancho(origem: string, gancho: () => Promise<void>) {
+      let armado = false;
+      const svc = build({
+        tar: {
+          create: async (_p, name, out) => writeFile(out, `codigo ${name}`),
+          extract: async (_f, parent) => {
+            const pasta = path.join(parent, path.basename(origem));
+            await mkdir(pasta, { recursive: true });
+            await writeFile(path.join(pasta, "index.html"), "do backup");
+            if (armado) await gancho();
+          },
+        },
+        projects: {
+          list: async () => projects,
+          get: async () => projects[0]!,
+          srcDir: () => origem,
+          redeploy: async (id) => void redeploys.push(id),
+        },
+      });
+      return { svc, arma: () => void (armado = true) };
+    }
+    async function restaurarSemContainers(svc: BackupService, fileName: string) {
+      docker.containers = [];
+      const r = await svc.restore(projectTargetId("p1"), { fileName, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await svc.idle();
+      return svc.record(r.id);
+    }
+
+    it("corrida: link plantado durante a extração com pastas intermediárias faltando: nada é criado fora", async () => {
+      const fora = await mkdtemp(path.join(tmpdir(), "paas-fora-"));
+      try {
+        const origem = path.join(dir, "projects", "ponte", "sub", "app");
+        projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+        const { svc, arma } = tarComGancho(origem, async () => symlink(fora, path.join(dir, "projects", "ponte")));
+        service = svc;
+        await mkdir(path.join(dir, "projects"), { recursive: true });
+        const b = await backup();
+        arma();
+        const rec = await restaurarSemContainers(svc, b.fileName!);
+        expect(rec.status).toBe("failed");
+        expect(rec.error).toMatch(/fora da pasta de projetos/);
+        expect(await readdir(fora)).toEqual([]);
+      } finally {
+        await rm(fora, { recursive: true, force: true });
+      }
+    });
+
+    it("pasta-mãe sem permissão de escrita: mensagem amigável (não erro cru) e nada apagado", async () => {
+      const mae = path.join(dir, "projects", "trancada");
+      const origem = path.join(mae, "app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      await mkdir(mae, { recursive: true });
+      await writeFile(path.join(mae, "do-usuario.txt"), "meu");
+      const { svc, arma } = tarComGancho(origem, async () => undefined);
+      service = svc;
+      await mkdir(origem);
+      const b = await backup();
+      await rm(origem, { recursive: true });
+      arma();
+      await chmod(mae, 0o555);
+      try {
+        const rec = await restaurarSemContainers(svc, b.fileName!);
+        expect(rec.status).toBe("failed");
+        expect(rec.error).toMatch(/Não foi possível gravar o código/);
+        expect(await readFile(path.join(mae, "do-usuario.txt"), "utf8")).toBe("meu");
+      } finally {
+        await chmod(mae, 0o755);
+      }
+    });
+
+    it("corrida: o usuário cria a pasta com arquivos dele durante a extração: nada dele é apagado", async () => {
+      const origem = path.join(dir, "projects", "meu-app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      const { svc, arma } = tarComGancho(origem, async () => {
+        await mkdir(origem, { recursive: true });
+        await writeFile(path.join(origem, "do-usuario.txt"), "meu trabalho");
+      });
+      service = svc;
+      await mkdir(origem, { recursive: true });
+      const b = await backup();
+      await rm(origem, { recursive: true });
+      arma();
+      const rec = await restaurarSemContainers(svc, b.fileName!);
+      expect(rec.status).toBe("failed");
+      expect(rec.error).toMatch(/Não foi possível gravar o código/);
+      expect(await readFile(path.join(origem, "do-usuario.txt"), "utf8")).toBe("meu trabalho");
       expect(redeploys).toEqual([]);
     });
 

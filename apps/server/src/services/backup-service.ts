@@ -34,7 +34,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, statfs, symlink, writeFile } from "node:fs/promises";
+import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, rmdir, stat, statfs, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   BACKUP_ALL_TARGETS,
@@ -236,6 +236,8 @@ interface StoredTarget {
   heldReason?: string;
   /** Painel: quantas vezes seguidas a listagem do armazenamento falhou na regra do painel novo. */
   heldFailures?: number;
+  /** Painel: o aviso de "backups de outro servidor no armazenamento" já foi dado. */
+  heldNotified?: boolean;
 }
 
 /**
@@ -2466,9 +2468,25 @@ export class BackupService {
       if (!(await lstat(from).catch(() => null))?.isDirectory()) {
         throw new BackupFailure(`O backup não traz a pasta do código ("${name}").`);
       }
-      // O mkdir segue links: confere de novo com o caminho real da pasta-mãe antes de copiar.
-      await mkdir(path.dirname(dest), { recursive: true });
+      // Uma pasta por vez: o mkdir recursivo segue links e criaria pastas fora da pasta de projetos
+      // se um link fosse plantado no caminho. Cada nível é conferido pelo caminho real antes do próximo.
+      const levels: string[] = [];
+      let existing = path.dirname(dest);
+      for (; !(await lstat(existing).catch(() => null)); existing = path.dirname(existing)) levels.unshift(existing);
+      await check(path.join(await realpath(existing), ...levels.map((l) => path.basename(l)), path.basename(dest)));
+      for (const level of levels) {
+        try {
+          await mkdir(level);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw new BackupFailure(`Não foi possível gravar o código em ${dest}: ${reasonOf(err)}. Confira se o painel tem permissão de escrita na pasta de projetos.`);
+          }
+        }
+        await check(path.join(await realpath(level)));
+      }
       await check(path.join(await realpath(path.dirname(dest)), path.basename(dest)));
+      // Só o que ESTA restauração copia entra na lista de desfazer: o que o usuário tenha criado ali nunca é tocado.
+      const copied: string[] = [];
       let created = false;
       try {
         if (!info) {
@@ -2476,7 +2494,9 @@ export class BackupService {
           created = true;
         }
         for (const entry of await readdir(from)) {
-          await cp(path.join(from, entry), path.join(dest, entry), { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+          const target = path.join(dest, entry);
+          if (!(await lstat(target).catch(() => null))) copied.push(target);
+          await cp(path.join(from, entry), target, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
         }
         if (project.ingestMode === "upload") {
           // O .env gerado pelo painel antigo (senhas da VPS antiga) não volta: o painel gera um novo no deploy.
@@ -2486,10 +2506,13 @@ export class BackupService {
           if (text !== null && text.startsWith(GENERATED_HEADER)) await rm(env, { force: true });
         }
       } catch (err) {
-        // só o que esta restauração criou: a pasta toda se ela não existia, senão o conteúdo copiado (a pasta estava vazia)
-        // rm com force não falha por "não existe"; erro de verdade aqui não deve esconder o motivo original
-        if (created) await rm(dest, { recursive: true, force: true });
-        else for (const entry of await readdir(dest)) await rm(path.join(dest, entry), { recursive: true, force: true });
+        try {
+          for (const target of copied) await rm(target, { recursive: true, force: true });
+          // a pasta que esta restauração criou sai se ficou vazia (rmdir não apaga pasta com arquivos)
+          if (created) await rmdir(dest);
+        } catch {
+          /* a limpeza não pode esconder o motivo da falha */
+        }
         throw new BackupFailure(`Não foi possível gravar o código em ${dest}: ${reasonOf(err)}. Confira se o painel tem permissão de escrita na pasta de projetos.`);
       }
     } finally {
@@ -2687,10 +2710,11 @@ export class BackupService {
         if (id === "panel") {
           const why = await this.panelFreshOverForeign(projects.length);
           if (why) {
-            const first = !t.heldReason;
             t.heldReason = why;
             this.log(`Backups: ${why}`);
-            if (first && !why.includes("não foi possível conferir")) {
+            // o aviso já dado fica registrado à parte: uma falha de listagem antes não o consome e ele não repete
+            if (!t.heldNotified && !why.includes("não foi possível conferir")) {
+              t.heldNotified = true;
               this.opts.notify?.({
                 kind: "backup_stale",
                 key: "backup-panel-held",
@@ -2700,7 +2724,10 @@ export class BackupService {
               });
             }
             run = false;
-          } else delete t.heldReason;
+          } else {
+            delete t.heldReason;
+            delete t.heldNotified;
+          }
         }
         await this.persistQuiet({ config: true });
         if (run) await this.runNow(id, null).catch((err: unknown) => this.log(`Backups: agendado de ${id} não entrou na fila (${reasonOf(err)}).`));
