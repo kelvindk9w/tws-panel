@@ -9,7 +9,7 @@ Vale para uma instalação que já roda o painel (pasta `/opt/tws-panel`, projet
 receber a versão com as redes separadas. Instalação nova não precisa disto: as redes nascem certas.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. As linhas de log e os avisos que esta página cita vêm do servidor e continuam em português mesmo com a interface em inglês.
 
 ## O que muda nas redes
 
