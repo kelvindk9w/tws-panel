@@ -21,6 +21,7 @@ Delivered, and listed in the [CHANGELOG](CHANGELOG.md) (in Portuguese):
 - Backups of the panel, the mail server and the projects, on the VPS and on Cloudflare R2 (or other
   S3-compatible storage), with optional encryption and restore on a new server.
 - Documentation in English and Portuguese (Brazil), published as a website.
+- Panel interface in English and Portuguese (Brazil), chosen from the browser language or with the selector in the header.
 
 ## Next
 
@@ -28,7 +29,7 @@ Ideas we intend to work on, in no particular order:
 
 | Item | Description |
 |---|---|
-| Spanish (es) translation | Documentation first. The docs structure already accepts more languages. Translating the panel interface (today Portuguese only) into English and Spanish is part of this. |
+| Spanish (es) translation | The documentation and the panel interface exist in English and Portuguese (Brazil); Spanish is still to come, documentation first. The docs structure and the interface dictionaries already accept more languages. Messages written by the server are still in Portuguese in every language. |
 | Google Drive in backups | Another destination for the off-site copy, besides Cloudflare R2 and other S3-compatible storage. |
 | One-click templates | Ready-made starting points for common apps, going through the same guardrails as any other deploy. |
 | Public API and OpenAPI | A documented, versioned API (with an OpenAPI description) for automating the panel. |

@@ -50,13 +50,18 @@ body:
   - type: input
     id: os
     attributes:
-      label: Operating system and Docker version
-      description: For example "Ubuntu 24.04, Docker 27.x" (output of `docker --version`).
+      label: VPS operating system and Docker version
+      description: For example "Ubuntu 24.04, Docker 27.x" (see `cat /etc/os-release` and `docker --version`).
+  - type: input
+    id: locale
+    attributes:
+      label: Interface language
+      description: The language the panel interface was in when it happened, for example "English" or "Português (Brasil)".
   - type: textarea
     id: logs
     attributes:
       label: Logs and evidence
-      description: Relevant log excerpts, screenshots or the deploy log. Remove anything sensitive first. To get the panel log, run `sudo docker logs tws-panel` on the VPS.
+      description: Relevant log excerpts, screenshots or the deploy log. Review them first and replace domains with example.com, IP addresses with 203.0.113.10 and tokens with REDACTED. To get the panel log, run `sudo docker logs tws-panel` on the VPS.
       render: text
   - type: textarea
     id: context

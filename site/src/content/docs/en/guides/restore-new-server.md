@@ -9,7 +9,7 @@ Use this guide when the old VPS is lost, broken into or being replaced, and you 
 the projects and the email back on a new VPS. It relies on the **external copy** of the backups
 (Cloudflare R2 or another S3-compatible storage). Backups kept only on the old VPS disappear with
 it. Installing for the first time, with nothing to bring over? Follow the
-[complete guide](../getting-started/complete-guide.md) instead.
+[step-by-step guide](../getting-started/installation.md) instead.
 
 > [!NOTE]
 > **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: backup records, mail server notices and many error messages. Whenever this page quotes one of them, it says so. The word you type to confirm a restore depends on the interface language (steps 5 and 8).
@@ -31,7 +31,7 @@ server you no longer have.
 |---|---|---|
 | **Backup password** | The recovery kit you downloaded in **Settings → Backups → External copy encryption**. The panel also shows it under **View password**, but only on a panel you can still sign in to. | There is no way around it: without the password, nobody can open the external copies. |
 | **Storage endpoint and bucket** | The recovery kit lists the bucket and the endpoint. | In Cloudflare: R2 → your bucket → Settings → S3 API. |
-| **Storage access keys** (Access Key ID and Secret Access Key) | You saw them once, when you created the token on Cloudflare. **They are not in the kit.** | Create a new R2 API token for the same bucket ([Complete guide, Step 8.1](../getting-started/complete-guide.md#etapa-8)). Old files stay readable. The keys you type in step 3 stay in use after the panel is restored from the screen (see step 5). |
+| **Storage access keys** (Access Key ID and Secret Access Key) | You saw them once, when you created the token on Cloudflare. **They are not in the kit.** | Create a new R2 API token for the same bucket ([Step-by-step guide, Part 2, Step 6.1](../getting-started/complete-guide.md#etapa-6)). Old files stay readable. The keys you type in step 3 stay in use after the panel is restored from the screen (see step 5). |
 | **Domain access** | Your DNS provider or registrar. | Recover it with the registrar. |
 | **Provider access** | The new VPS provider's dashboard (to set the PTR and unblock port 25). | — |
 
@@ -70,7 +70,7 @@ If the old VPS used another projects folder, install with the same one (`./scrip
 The new panel has the backup schedule on and runs at 03:00 even with no storage connected. That is harmless: the copy stays on the VPS only and does **not** count as a panel backup for the protection described in step 3, which only considers a backup already **sent to the storage**. You can install on one day and connect the storage on another.
 
 Check that ports **80 and 443** are open at the provider, and port **25** if you will use email
-(see [Complete guide, Step 6.1](../getting-started/complete-guide.md#etapa-6)).
+(see [Step-by-step guide, Part 2, Step 4.1](../getting-started/complete-guide.md#etapa-4)).
 
 ### 2. Make a final backup and stop the old panel
 
@@ -235,10 +235,10 @@ after that.
    - the **SPF** record, which contains the old IP (`ip4:`): copy the new value from the checklist;
    - MX, DKIM and DMARC do not change, because the names and the keys came back.
 3. Ask the provider to set the **PTR** of the new IP to `mail.send.example.com`.
-4. Check that outbound port 25 is open ([Complete guide, Step 6.1](../getting-started/complete-guide.md#etapa-6)).
+4. Check that outbound port 25 is open ([Step-by-step guide, Part 2, Step 4.1](../getting-started/complete-guide.md#etapa-4)).
 
 **What to check:** click **Verify now** until you reach **6/6 OK**, send a test email
-(Step 6.7 of the complete guide), and see **Valid** in the email certificate card. Send slowly at
+(Step 4.7 of Part 2 of the step-by-step guide), and see **Valid** in the email certificate card. Send slowly at
 first: the new IP has no reputation yet.
 
 ## Final checks

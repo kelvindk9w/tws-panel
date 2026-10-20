@@ -1,43 +1,42 @@
 ---
-title: "Do zero ao painel pronto"
-description: "Um roteiro único, em ordem, da VPS nova ao painel configurado: segurança, domínio, e-mail, notificações, backups, primeiro projeto e teste de restauração."
+title: "Guia passo a passo — Parte 2: Configurar"
+description: "Parte 2 do guia passo a passo: com o painel instalado, configure o assistente, a segurança, o domínio, o e-mail, as notificações, os backups, o primeiro projeto e uma restauração de teste."
 sidebar:
-  label: "Comece aqui: guia completo"
+  label: "Parte 2: Configurar"
 ---
 
-Um roteiro só, em ordem, da VPS contratada até o painel configurado por completo: segurança,
-domínio, fuso, e-mail, notificações, backups, o primeiro projeto no ar e uma restauração de teste.
-
 > [!TIP]
-> **Qual guia eu uso?** Este é o **caminho principal para a primeira instalação**: cobre tudo, em
-> ordem. Na Etapa 2 (instalar na VPS) ele resume os comandos e aponta para o
-> [guia de instalação](installation.md), que explica cada um dos 8 passos em detalhe. Está mudando
-> para um servidor novo que já tinha o painel? Use [Restaurar numa VPS nova](../guides/restore-new-server.md).
+> **Voltar: [Parte 1 — Instalar](installation.md).** Esta é a **Parte 2 (Configurar)** do mesmo caminho: ela começa onde a
+> Parte 1 termina, com o painel instalado e o link do assistente em mãos. Ainda não instalou? Comece pela Parte 1.
+
+Um roteiro só, em ordem, do painel recém-instalado até o painel configurado por completo: assistente,
+segurança, domínio, fuso, e-mail, notificações, backups, o primeiro projeto no ar e uma restauração de teste.
 
 > [!NOTE]
 > **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, detalhes dos passos do roteiro e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
 
-Cada passo diz **o que fazer**, **onde clicar** e **o que conferir** para saber que deu certo.
-Quando o detalhe é longo, o passo resume e manda para o guia certo. Siga na ordem: alguns passos
-dependem dos anteriores (as notificações por e-mail, por exemplo, precisam do e-mail pronto).
+Cada etapa diz **o que fazer**, **onde clicar** e **o que conferir** para saber que deu certo.
+Quando o detalhe é longo, a etapa resume e manda para o guia certo. Siga na ordem: algumas etapas
+dependem das anteriores (as notificações por e-mail, por exemplo, precisam do e-mail pronto).
 
 Os exemplos usam valores fictícios: `203.0.113.10` como IP da VPS e `example.com` como domínio.
 Troque pelos seus.
 
 | Etapa | O que você faz | Onde |
 |---|---|---|
-| [1](#etapa-1) | Contratar a VPS, o domínio e as contas | Fora do painel |
-| [2](#etapa-2) | Instalar o painel | Terminal (SSH) |
-| [3](#etapa-3) | Assistente inicial, segurança e verificação em duas etapas | Navegador |
-| [4](#etapa-4) | Domínio do painel | Configurações → Domínio do painel |
-| [5](#etapa-5) | Fuso horário | Configurações → Fuso horário |
-| [6](#etapa-6) | E-mail | E-mail, Envios |
-| [7](#etapa-7) | Notificações | Configurações → Notificações |
-| [8](#etapa-8) | Backups fora da VPS | Configurações → Backups |
-| [9](#etapa-9) | Primeiro projeto | Novo Projeto |
-| [10](#etapa-10) | Testar uma restauração | Projeto → Backups |
-| [11](#etapa-11) | Manutenção | Terminal, Alertas, Auditoria |
+| [1](#etapa-1) | Assistente inicial, segurança e verificação em duas etapas | Navegador |
+| [2](#etapa-2) | Domínio do painel | Configurações → Domínio do painel |
+| [3](#etapa-3) | Fuso horário | Configurações → Fuso horário |
+| [4](#etapa-4) | E-mail | E-mail, Envios |
+| [5](#etapa-5) | Notificações | Configurações → Notificações |
+| [6](#etapa-6) | Backups fora da VPS | Configurações → Backups |
+| [7](#etapa-7) | Primeiro projeto | Novo Projeto |
+| [8](#etapa-8) | Testar uma restauração | Projeto → Backups |
+| [9](#etapa-9) | Manutenção | Terminal, Alertas, Auditoria |
 | [✓](#checklist) | Checklist final | — |
+
+As contas que você vai usar (GitHub, Cloudflare e Telegram) e o domínio opcional estão descritos em
+[Antes de começar](installation.md#antes-de-começar), na Parte 1.
 
 > [!TIP]
 > O próprio painel acompanha boa parte disto. No Dashboard, o cartão **Deixe o painel pronto**
@@ -48,121 +47,15 @@ Troque pelos seus.
 
 <a id="etapa-1"></a>
 
-## Etapa 1 — Antes de começar
+## Etapa 1 — Assistente inicial, segurança e verificação em duas etapas
 
-### O que contratar
+### 1.1 O assistente (setup)
 
-**Uma VPS** (servidor virtual) com:
-
-- **Ubuntu 22.04 ou 24.04 LTS**, limpa (sem outros programas instalados). Na criação, prefira o
-  24.04.
-- Mínimo recomendado: **1 vCPU, 2 GB de RAM e 25 GB de disco**.
-- Portas **80 e 443** abertas para a internet. O certificado HTTPS depende delas. Se o provedor
-  tem um firewall no painel da hospedagem, libere as duas.
-- Para o e-mail: a porta **25** liberada pelo provedor. Muitos provedores a bloqueiam, principalmente
-  em contas novas. Você confere isso na [Etapa 6](#etapa-6).
-
-Você vai precisar de duas coisas que o provedor entrega: **o IP da VPS** e **a senha de root**.
-Antes de seguir, procure no painel do provedor por "Console", "VNC", "Rescue" ou "Modo de
-recuperação" e confirme que ele existe: é o caminho de volta se você perder o acesso SSH. Veja
-[Perdi o acesso](../guides/recover-access.md).
-
-Docker, Node e o resto **não** precisam ser instalados por você: o instalador cuida disso.
-
-### Domínio (opcional, mas recomendado)
-
-Sem domínio, tudo funciona com endereços automáticos `*.sslip.io` (por exemplo,
-`https://203-0-113-10.sslip.io`). Com um domínio seu, você ganha:
-
-- um endereço próprio para o painel (`painel.example.com`), em vez de um com o IP no nome;
-- o e-mail profissional, que **exige** domínio;
-- endereços próprios para os seus projetos.
-
-Você vai criar registros no DNS do domínio (no provedor onde ele está, ou no Cloudflare). Os
-exemplos deste guia usam o Cloudflare.
-
-### Contas
-
-| Conta | Para quê | Obrigatória? |
-|---|---|---|
-| **GitHub** | Publicar projetos a partir de um repositório. Repositório privado pede um token somente leitura (a tela ensina a gerar). | Só se o código está no GitHub |
-| **Cloudflare** | O R2, o armazenamento externo dos backups (o plano gratuito cobre 10 GB por mês; ele pede um cartão). Também serve de DNS do domínio. | Recomendada |
-| **Telegram** | Receber os avisos do painel no celular. | Opcional |
-
-<a id="etapa-2"></a>
-
-## Etapa 2 — Instalar o painel na VPS
-
-> [!WARNING]
-> **Reinstalou o sistema da VPS, ou reinstalou para testar de novo, e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da VPS), conecte de novo e responda `yes`. [Mensagem completa e detalhes](installation.md#host-identification-changed).
->
-> **Não reinstalou nem trocou nada e o aviso apareceu do nada?** Não continue e não rode esse comando. Confira se o IP é o certo e veja no painel do provedor se houve reinstalação, modo de resgate ou troca de IP. O aviso pode ser o único sinal de que outra máquina está respondendo naquele endereço.
-
-**O que fazer:** criar o seu usuário na VPS, instalar a sua chave SSH, clonar o painel em
-`/opt/tws-panel` e rodar o instalador. Os comandos essenciais, na ordem (troque `SEU_IP` e
-`SEU_USUARIO`):
-
-```bash
-# 1. Na VPS, como root: crie o seu usuário com permissão de administrador
-ssh root@SEU_IP
-adduser SEU_USUARIO
-usermod -aG sudo SEU_USUARIO
-exit
-
-# 2. No SEU computador: gere a chave SSH (se ainda não tiver) e instale na VPS
-ssh-keygen -t ed25519
-ssh-copy-id -i ~/.ssh/id_ed25519.pub SEU_USUARIO@SEU_IP
-
-# 3. Na VPS, com o seu usuário: instale o git, clone e rode o instalador
-ssh SEU_USUARIO@SEU_IP
-sudo apt update && sudo apt install -y git
-sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
-sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel
-./scripts/install.sh
-```
-
-> [!WARNING]
-> **Já tem uma chave SSH?** Não rode o `ssh-keygen` por cima: ele apaga a antiga. O
-> [Passo 4 da instalação](installation.md#passo-4) mostra como conferir e qual chave usar.
-
-Nunca fez isso antes? Siga o **[guia de instalação](installation.md)**, Passos
-[1](installation.md#passo-1) a [7](installation.md#passo-7). Ele mostra o que aparece na tela em cada
-comando e o que fazer quando algo dá errado.
-
-Durante a instalação:
-
-- O instalador confere a máquina sem alterar nada e, se a VPS já estiver em uso, pede confirmação.
-- Ele pergunta **com qual usuário o terminal do painel abre**. Veja
-  [o que cada escolha significa](installation.md#terminal-do-painel).
-- Ele pode parar logo no começo pedindo para reiniciar a VPS. É normal em VPS nova: rode
-  `sudo reboot`, espere um minuto, entre de novo e repita `cd /opt/tws-panel` e
-  `./scripts/install.sh`.
-
-**O que conferir:** o terminal mostra o banner **TWS PANEL INSTALADO E RODANDO COM SUCESSO!**, com
-o link `https://203-0-113-10.sslip.io/?token=…` (com o seu IP) e o **setup token**. Copie o link
-completo.
-
-Fechou o terminal e perdeu o link? Na VPS:
-
-```bash
-sudo ./scripts/show-token.sh
-```
-
-O instalador avisou que o endereço não respondeu em 3 minutos? Quase sempre são as portas 80 e 443
-fechadas no firewall do provedor. Veja os erros comuns no [Passo 8](installation.md#passo-8).
-
-<a id="etapa-3"></a>
-
-## Etapa 3 — Assistente inicial, segurança e verificação em duas etapas
-
-### 3.1 O assistente (setup)
-
-**O que fazer:** abra no navegador o link do banner. O assistente tem quatro etapas:
+**O que fazer:** abra no navegador o link do banner (o mesmo do [Passo 8 da Parte 1](installation.md#passo-8)). O assistente tem quatro etapas:
 
 1. **Boas-vindas e token:** valida o setup token (já vem no link) e libera o terminal do servidor.
 2. **Saúde da máquina:** CPU, memória, disco e rede, conferidos ao vivo no terminal embutido.
-   Esta etapa também mostra o fuso horário da VPS (veja a [Etapa 5](#etapa-5)).
+   Esta etapa também mostra o fuso horário da VPS (veja a [Etapa 3](#etapa-3)).
 3. **Segurança:** varredura (Lynis), plano e hardening em 8 fases. Explicada logo abaixo.
 4. **Conta de administrador:** o seu usuário e uma senha forte do painel. Clique em
    **Criar conta admin**.
@@ -177,7 +70,7 @@ navegador ou aparelho começa de novo pelo idioma dele.
 **O que conferir:** aparece **Setup concluído!** e você entra no Dashboard. A partir daqui, o
 acesso é pela tela de login, com usuário e senha. O setup token deixa de valer.
 
-### 3.2 A etapa Segurança (hardening)
+### 1.2 A etapa Segurança (hardening)
 
 > [!IMPORTANT]
 > **Leia o [Wizard de segurança](security-wizard.md) antes desta etapa.** Ela desliga o login
@@ -206,7 +99,7 @@ O passo a passo completo, fase por fase, está em
 "Todas as 8 fases resolvidas" (mensagem do servidor). Se ficou alguma de fora, ela fica em **Segurança → Verificar e aplicar proteções** para revisar,
 simular ou aplicar depois.
 
-### 3.3 Verificação em duas etapas
+### 1.3 Verificação em duas etapas
 
 Com ela, entrar no painel passa a pedir, além da senha, um código de 6 dígitos gerado no seu
 celular. Se a sua senha vazar, ninguém entra sem o celular.
@@ -224,9 +117,9 @@ celular. Se a sua senha vazar, ninguém entra sem o celular.
 **O que conferir:** a tela diz "Ativa: entrar no painel exige o código do app." Saia e entre de
 novo: o login pede o código. No Dashboard, o passo **Verificação em duas etapas** fica como feito.
 
-<a id="etapa-4"></a>
+<a id="etapa-2"></a>
 
-## Etapa 4 — Domínio do painel
+## Etapa 2 — Domínio do painel
 
 Troca o endereço `https://203-0-113-10.sslip.io` por um seu, como `painel.example.com`. O
 endereço automático entrega o IP da VPS no nome; um domínio seu é mais discreto e fácil de lembrar.
@@ -288,9 +181,9 @@ domínio novo** e o certificado válido.
   novo. Detalhes em
   [O domínio do painel parou de abrir](../guides/recover-access.md#o-domínio-do-painel-parou-de-abrir).
 
-<a id="etapa-5"></a>
+<a id="etapa-3"></a>
 
-## Etapa 5 — Fuso horário
+## Etapa 3 — Fuso horário
 
 O fuso da VPS define **o horário dos backups agendados, que rodam às 03:00 no fuso da VPS**, e as
 datas dos registros. Cada provedor entrega a VPS num fuso: a maioria em UTC (três horas à frente de Brasília), alguns no
@@ -316,21 +209,21 @@ Cada projeto também tem o cartão **Fuso horário**, na aba **Configurações**
 a frase da agenda diz "Roda às 03:00 (horário da VPS, …)" com o deslocamento do fuso novo (para
 Brasília, `UTC-03:00`).
 
-<a id="etapa-6"></a>
+<a id="etapa-4"></a>
 
-## Etapa 6 — E-mail
+## Etapa 4 — E-mail
 
 Um servidor de e-mail na própria VPS, para os seus projetos enviarem mensagens (recuperação de
 senha, avisos, formulários) e para caixas como `contato@`. É opcional: se os seus projetos usam um
 serviço externo de envio (Amazon SES, Resend, SendGrid…), marque **Não vou usar** no roteiro e pule
-para a [Etapa 7](#etapa-7).
+para a [Etapa 5](#etapa-5).
 
 > [!IMPORTANT]
 > **Use um subdomínio só para o envio**, como `envio.example.com`. Não use o domínio principal:
 > apontar o MX dele para a VPS desviaria o e-mail que a empresa já recebe em outro lugar (Google,
 > Microsoft ou outro serviço). Os passos abaixo usam `envio.example.com`.
 
-### 6.1 Conferir a porta 25
+### 4.1 Conferir a porta 25
 
 Na VPS, por SSH:
 
@@ -343,7 +236,7 @@ abra um chamado no provedor pedindo a liberação da porta 25 de saída para env
 transacional. Sem ela, o e-mail não sai. Veja
 [Porta 25 bloqueada pelo provedor](../guides/troubleshooting.md#porta-25-bloqueada-pelo-provedor).
 
-### 6.2 Ligar o servidor e cadastrar o domínio de envio
+### 4.2 Ligar o servidor e cadastrar o domínio de envio
 
 1. No menu, clique em **E-mail**.
 2. Se o servidor estiver parado, clique em **Iniciar servidor**.
@@ -355,7 +248,7 @@ transacional. Sem ela, o e-mail não sai. Veja
 **O que conferir:** o cartão **Servidor de e-mail** mostra o servidor rodando e o domínio aparece
 na lista.
 
-### 6.3 Criar os registros DNS
+### 4.3 Criar os registros DNS
 
 Clique no domínio cadastrado e abra a aba **Checklist DNS**. O cartão **Registros DNS esperados**
 traz os valores exatos, com o IP da sua VPS e a chave DKIM. **Copie campo a campo**, com o botão de
@@ -375,7 +268,7 @@ algumas horas.
 
 **O que conferir:** a contagem chega a **6/6 OK** (o sexto item é o PTR, logo abaixo).
 
-### 6.4 DNS reverso (PTR)
+### 4.4 DNS reverso (PTR)
 
 O PTR é o "nome" que o IP da VPS informa a quem recebe o e-mail. Ele **não** fica no Cloudflare: é
 configurado no painel do provedor da VPS. O cartão **Reverse DNS (PTR)** mostra uma de três cores:
@@ -391,7 +284,7 @@ cartão traz um texto pronto para abrir chamado, com botão de copiar.
 
 **O que conferir:** depois de trocar, **Verificar agora** deixa o PTR verde.
 
-### 6.5 Certificado do e-mail
+### 4.5 Certificado do e-mail
 
 1. Volte em **E-mail**.
 2. O cartão **Certificado do servidor de e-mail** mostra `mail.envio.example.com`.
@@ -401,7 +294,7 @@ cartão traz um texto pronto para abrir chamado, com botão de copiar.
 **O que conferir:** o estado é **Válido**. Se continuar pendente, o próprio cartão diz o que falta
 (registro A ausente, nuvem laranja ou portas 80/443 fechadas). O painel renova sozinho.
 
-### 6.6 Criar uma caixa
+### 4.6 Criar uma caixa
 
 1. Na página do domínio, abra a aba **Caixas**.
 2. Em **Nova caixa**, digite o nome (ex.: `contato`).
@@ -412,7 +305,7 @@ cartão traz um texto pronto para abrir chamado, com botão de copiar.
 **O que conferir:** a caixa aparece na lista. "Configurar no app" mostra os dados para Outlook,
 Gmail, Thunderbird ou o celular.
 
-### 6.7 Enviar um e-mail de teste
+### 4.7 Enviar um e-mail de teste
 
 1. Na aba **Checklist DNS**, no cartão **E-mail de teste**, clique em **Enviar e-mail de teste**.
 2. Digite um endereço seu (um Gmail, por exemplo) e clique em **Enviar**.
@@ -420,11 +313,11 @@ Gmail, Thunderbird ou o celular.
 **O que conferir:** em alguns segundos aparece, em verde, **"Entregue ao servidor do destinatário"**.
 Abra a caixa de destino e confira também a pasta Spam: num servidor novo, é comum o primeiro cair
 lá. Marque como "não é spam". Se aparecer amarelo "Adiada: Connection to … failed", a porta 25 está
-bloqueada ([6.1](#etapa-6)). Se aparecer vermelho "Recusado: …", o motivo é o que o destinatário
+bloqueada ([4.1](#etapa-4)). Se aparecer vermelho "Recusado: …", o motivo é o que o destinatário
 respondeu (normalmente SPF, DKIM, DMARC ou o nome reverso). Veja
 [E-mail caindo em spam](../guides/troubleshooting.md#e-mail-caindo-em-spam).
 
-### 6.8 Webmail
+### 4.8 Webmail
 
 1. Em **E-mail**, no cartão **Webmail**, clique em **Ativar webmail**. A primeira vez demora: o
    painel baixa a imagem do Roundcube (algumas centenas de MB).
@@ -435,7 +328,7 @@ respondeu (normalmente SPF, DKIM, DMARC ou o nome reverso). Veja
 português por padrão (o webmail é o Roundcube, que tem a própria configuração de idioma e não segue a do painel). Envie um e-mail para você e responda de lá: a resposta aparece na Caixa de entrada do
 webmail. Esqueceu a senha da caixa? Aba **Caixas** → **Trocar senha**.
 
-### 6.9 Página Envios
+### 4.9 Página Envios
 
 No menu (**Mais → Envios**), **Envios** mostra o que o servidor de e-mail está fazendo:
 
@@ -451,15 +344,15 @@ não chega ao verde na nota antes de uns 30 dias enviando: é de propósito.
 **No roteiro:** o passo **E-mail do servidor** fica como feito com o servidor ligado e pelo menos
 um domínio com o DNS certo.
 
-<a id="etapa-7"></a>
+<a id="etapa-5"></a>
 
-## Etapa 7 — Notificações
+## Etapa 5 — Notificações
 
 Avisos fora do painel quando algo precisa de atenção: alerta de segurança, deploy que falhou,
 certificado com problema, e-mail em lista de bloqueio, disco acima de 90%, backups que falharam ou
 atrasaram. Sem isso, os alertas só aparecem dentro do painel.
 
-### 7.1 Telegram
+### 5.1 Telegram
 
 1. No Telegram, procure **@BotFather** (com o selo azul de verificado) e abra a conversa.
 2. Mande `/newbot`. Ele pede um nome (ex.: "Avisos do meu painel") e depois um @ que termine em
@@ -474,9 +367,9 @@ atrasaram. Sem isso, os alertas só aparecem dentro do painel.
 
 **O que conferir:** a mensagem "TWS Panel: Teste de notificação" chega no Telegram (o texto do teste é escrito pelo servidor e é sempre em português). No painel, o selo vira "Testado em…" e, em **Últimos envios**, aparece uma entrada "Teste de notificação" (também texto do servidor) com o estado **Enviado**.
 
-### 7.2 E-mail (opcional)
+### 5.2 E-mail (opcional)
 
-Precisa da [Etapa 6](#etapa-6) pronta: servidor ligado e um domínio com o DNS todo certo.
+Precisa da [Etapa 4](#etapa-4) pronta: servidor ligado e um domínio com o DNS todo certo.
 
 1. Em **Configurações → Notificações**, no cartão **E-mail**, informe até 5 endereços e clique em
    **Salvar endereços**.
@@ -485,7 +378,7 @@ Precisa da [Etapa 6](#etapa-6) pronta: servidor ligado e um domínio com o DNS t
 **O que conferir:** a mensagem chega na caixa. No primeiro envio de um servidor novo, costuma cair
 no spam: marque como "não é spam".
 
-### 7.3 O que avisa
+### 5.3 O que avisa
 
 No cartão **O que avisa**, escolha os tipos. O padrão já liga tudo o que pede ação; "Painel
 reiniciado" começa desligado.
@@ -493,14 +386,14 @@ reiniciado" começa desligado.
 **No roteiro:** o passo **Notificações** fica como feito com pelo menos um canal conectado e o
 teste enviado.
 
-<a id="etapa-8"></a>
+<a id="etapa-6"></a>
 
-## Etapa 8 — Backups fora da VPS
+## Etapa 6 — Backups fora da VPS
 
 O painel já guarda cópias na própria VPS, mas elas somem junto se o servidor for perdido, invadido
 ou apagado. Com uma cópia fora, no Cloudflare R2, dá para montar tudo de novo numa VPS nova.
 
-### 8.1 Criar o bucket e as chaves no Cloudflare R2
+### 6.1 Criar o bucket e as chaves no Cloudflare R2
 
 O Cloudflare mostra os nomes em inglês ou em português, conforme o idioma da sua conta. Os dois vêm
 abaixo (inglês / português), como na tela do painel.
@@ -528,7 +421,7 @@ abaixo (inglês / português), como na tela do painel.
    O "Token value" / "Valor do token" não é usado. Perdeu o endpoint? Ele fica no bucket →
    Settings / Configurações → S3 API.
 
-### 8.2 Conectar no painel
+### 6.2 Conectar no painel
 
 1. Abra **Configurações → Backups**. No cartão **Armazenamento externo**, deixe **Cloudflare R2**
    marcado.
@@ -539,7 +432,7 @@ abaixo (inglês / português), como na tela do painel.
 **O que conferir:** aparece "Conexão testada e salva" e o selo "Testado em…". Se falhar, nada é
 salvo e a tela explica o motivo (chave recusada, bucket inexistente, sem resposta).
 
-### 8.3 Criptografia e kit de recuperação
+### 6.3 Criptografia e kit de recuperação
 
 A cópia externa vai cifrada com uma senha sua. **Sem esta senha, ninguém, nem a TWS, consegue abrir
 seus backups.**
@@ -552,10 +445,10 @@ seus backups.**
 
 **O que conferir:** o cartão mostra **Ligada (AES-256)**.
 
-### 8.4 Primeiro backup
+### 6.4 Primeiro backup
 
 1. No cartão **Painel**, clique em **Fazer backup agora**.
-2. Faça o mesmo no cartão **E-mail**, se você ligou o e-mail na [Etapa 6](#etapa-6).
+2. Faça o mesmo no cartão **E-mail**, se você ligou o e-mail na [Etapa 4](#etapa-4).
 
 **O que conferir:**
 
@@ -565,18 +458,18 @@ seus backups.**
   `.7z`;
 - no Dashboard, o passo **Backups fora da VPS** fica como feito.
 
-### 8.5 Testar a senha
+### 6.5 Testar a senha
 
 No cartão **Criptografia da cópia externa**, digite a senha do kit e clique em **Testar minha senha**.
 
 **O que conferir:** a resposta começa com "Senha certa" (resposta do servidor, sempre em português). A cada 90 dias sem teste, o painel lembra de
 repetir isto.
 
-### 8.6 Agenda
+### 6.6 Agenda
 
 Nos cartões **Painel** e **E-mail**, escolha a frequência (uma vez por dia, a cada 12 ou a cada 6
 horas) e quantas cópias ficam na VPS e fora. **O horário base é 03:00 no fuso da VPS** (veja a
-[Etapa 5](#etapa-5)).
+[Etapa 3](#etapa-3)).
 
 Os projetos têm a configuração deles. No cartão **Padrão dos projetos**, escolha o mesmo para os
 projetos: ligado ou desligado, frequência e cópias.
@@ -587,16 +480,16 @@ projetos: ligado ou desligado, frequência e cópias.
 
 **O que conferir:** cada projeto da lista mostra "hoje: segue o padrão". Projeto novo já nasce com
 o padrão. Os bancos e as pastas de cada projeto continuam na aba **Backups** dele
-([Etapa 9](#etapa-9)).
+([Etapa 7](#etapa-7)).
 
 Detalhes do que entra, de onde fica e de como restaurar numa VPS nova:
 [Funcionalidades → Backups](../guides/features.md#backups).
 
-<a id="etapa-9"></a>
+<a id="etapa-7"></a>
 
-## Etapa 9 — Primeiro projeto
+## Etapa 7 — Primeiro projeto
 
-### 9.1 Conectar o GitHub (opcional)
+### 7.1 Conectar o GitHub (opcional)
 
 Para escolher o repositório numa lista, em vez de colar a URL: abra **Configurações →
 Integrações**, cole um **Token do GitHub (somente leitura)** e clique em **Conectar**. A tela ensina
@@ -604,7 +497,7 @@ a gerar o token. Um token com permissão de escrita é recusado.
 
 **O que conferir:** a tela mostra "Conectado como …".
 
-### 9.2 Criar o projeto
+### 7.2 Criar o projeto
 
 No menu, clique em **Novo Projeto**. São três passos:
 
@@ -631,7 +524,7 @@ No menu, clique em **Novo Projeto**. São três passos:
 **O que conferir:** a página do projeto abre, com o menu Visão geral, Deploys, Domínios, Git,
 Variáveis, E-mail, Backups e Configurações.
 
-### 9.3 Variáveis
+### 7.3 Variáveis
 
 Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e sugere os nomes do
 `.env.example` do repositório, ainda sem valor.
@@ -648,9 +541,9 @@ Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e suger
 **O que conferir:** nenhum aviso de variável obrigatória faltando. O deploy é barrado quando falta
 uma obrigatória; as do `.env.example` sem valor só geram um aviso.
 
-### 9.4 E-mail do projeto
+### 7.4 E-mail do projeto
 
-Precisa da [Etapa 6](#etapa-6) pronta.
+Precisa da [Etapa 4](#etapa-4) pronta.
 
 1. Abra a aba **E-mail** do projeto e escolha o **Domínio de e-mail**.
 2. Confira o **Endereço de envio** (ex.: `contato@envio.example.com`) e o **Nome de exibição**.
@@ -663,7 +556,7 @@ Precisa da [Etapa 6](#etapa-6) pronta.
 **O que conferir:** o cartão mostra `SMTP_HOST = mail.envio.example.com`. Os valores `SMTP_*` e
 `MAIL_*` entram sozinhos no deploy. Os valores só chegam ao app no próximo deploy.
 
-### 9.5 Portas (só se precisar)
+### 7.5 Portas (só se precisar)
 
 Na **Visão geral**, no cartão Containers, o botão **Portas** abre duas abas:
 
@@ -674,7 +567,7 @@ Na **Visão geral**, no cartão Containers, o botão **Portas** abre duas abas:
 A maioria dos projetos não precisa: o site abre pelo domínio, pelo proxy. Ao escolher "Em todos os
 endereços (0.0.0.0)", a porta fica aberta para a internet.
 
-### 9.6 Deploy e logs
+### 7.6 Deploy e logs
 
 1. Clique em **Deploy**, no topo da página do projeto.
 2. Acompanhe o log ao vivo. Se um compose falhar, o log ganha um bloco "Por que falhou" (escrito pelo servidor), com as
@@ -685,7 +578,7 @@ endereços (0.0.0.0)", a porta fica aberta para a internet.
 exposta), a tela diz qual regra; veja
 [Deploy bloqueado por guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
 
-### 9.7 Certificado
+### 7.7 Certificado
 
 Na aba **Domínios**, cada domínio do projeto mostra o estado do certificado HTTPS. A página
 **Certificados** (menu **Mais → Certificados**) lista todos (painel, projetos e e-mail).
@@ -694,7 +587,7 @@ Na aba **Domínios**, cada domínio do projeto mostra o estado do certificado HT
 explica a causa provável (DNS que não aponta para a VPS, nuvem laranja, portas 80/443 fechadas) e
 tem o botão **Tentar emitir agora**.
 
-### 9.8 Aba Backups do projeto
+### 7.8 Aba Backups do projeto
 
 Depois do primeiro deploy que dá certo, o painel olha os containers e sugere o que guardar.
 
@@ -713,9 +606,9 @@ Depois do primeiro deploy que dá certo, o painel olha os containers e sugere o 
 **O que conferir:** o histórico do projeto mostra o backup concluído, com "cópia externa
 conferida". No Cloudflare, aparece a pasta `TWS Panel Backups/<nome-do-projeto>/`.
 
-<a id="etapa-10"></a>
+<a id="etapa-8"></a>
 
-## Etapa 10 — Testar uma restauração (recomendado)
+## Etapa 8 — Testar uma restauração (recomendado)
 
 Um backup que nunca foi restaurado é uma promessa. Teste agora, com dados de teste, enquanto nada
 depende dele.
@@ -745,9 +638,9 @@ Perdeu a VPS inteira? O caminho é outro: instale o painel numa VPS nova e use *
 Backups → Restaurar de outro servidor**. O passo a passo está em
 [Restaurar numa VPS nova](../guides/restore-new-server.md).
 
-<a id="etapa-11"></a>
+<a id="etapa-9"></a>
 
-## Etapa 11 — Manutenção
+## Etapa 9 — Manutenção
 
 ### Atualizar o painel
 
@@ -781,7 +674,7 @@ O painel sai do ar por alguns segundos e volta sozinho. O porquê está no
 - **Segurança** (menu): proteções da VPS, retrato de referência, monitoramento e reputação do
   e-mail.
 - **Certificados** e **Envios** (menu **Mais**): certificados e e-mail.
-- O Telegram ou o e-mail da [Etapa 7](#etapa-7), quando o painel está fechado.
+- O Telegram ou o e-mail da [Etapa 5](#etapa-5), quando o painel está fechado.
 
 ### Se perder o acesso
 

@@ -22,6 +22,10 @@ on:
       - "docs/**"
       - "*.md"
       - "scripts/check-doc-links.mjs"
+      - "scripts/check-site-url.mjs"
+      - "scripts/site-config.mjs"
+      - "apps/web/src/lib/links.ts"
+      - ".github/ISSUE_TEMPLATE/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/docs.yml"
@@ -32,6 +36,10 @@ on:
       - "docs/**"
       - "*.md"
       - "scripts/check-doc-links.mjs"
+      - "scripts/check-site-url.mjs"
+      - "scripts/site-config.mjs"
+      - "apps/web/src/lib/links.ts"
+      - ".github/ISSUE_TEMPLATE/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/docs.yml"
@@ -69,11 +77,17 @@ jobs:
       - name: Check internal links
         run: node scripts/check-doc-links.mjs
 
+      - name: Check the site address in READMEs and templates
+        run: node scripts/check-site-url.mjs
+
       - name: Build site
         run: pnpm --filter site build
 
       - name: Check build output (alerts, asides)
         run: pnpm --filter site check:build
+
+      - name: Check absolute site URLs against the build
+        run: node scripts/check-doc-links.mjs --require-dist
 
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

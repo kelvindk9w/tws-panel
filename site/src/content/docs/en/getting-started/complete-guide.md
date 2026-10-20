@@ -1,18 +1,16 @@
 ---
-title: "From zero to a fully set-up panel"
-description: "One ordered walkthrough from a new VPS to a configured panel: security, domain, email, notifications, backups, first project and a test restore."
+title: "Step-by-step guide — Part 2: Configure"
+description: "Part 2 of the step-by-step guide: with the panel installed, configure the wizard, security, domain, email, notifications, backups, your first project and a test restore."
 sidebar:
-  label: "Start here: complete guide"
+  label: "Part 2: Configure"
 ---
 
-A single roadmap, in order, from the VPS you just bought to a fully configured panel: security,
-domain, time zone, email, notifications, backups, your first project live, and a test restore.
-
 > [!TIP]
-> **Which guide do I use?** This is the **main path for a first installation**: it covers
-> everything, in order. For Step 2 (installing on the VPS) it summarizes the commands and points
-> to the [installation guide](installation.md), which explains each of the 8 steps in detail. Moving to a
-> server that already had the panel? Use [Restore on a new VPS](../guides/restore-new-server.md).
+> **Back: [Part 1 — Install](installation.md).** This is **Part 2 (Configure)** of the same path: it starts where
+> Part 1 ends, with the panel installed and the wizard link in hand. Have not installed yet? Start with Part 1.
+
+A single roadmap, in order, from the freshly installed panel to a fully configured one: wizard,
+security, domain, time zone, email, notifications, backups, your first project live, and a test restore.
 
 > [!NOTE]
 > **Interface language.** The panel is available in English and Portuguese ([how to choose](#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, mail server status and DNS checklist notes, certificate errors, alerts and audit details, backup records, the details of the roadmap steps and many error messages. Whenever this page quotes one of them, it says so.
@@ -26,18 +24,19 @@ Replace them with yours.
 
 | Step | What you do | Where |
 |---|---|---|
-| [1](#etapa-1) | Get the VPS, the domain, and the accounts | Outside the panel |
-| [2](#etapa-2) | Install the panel | Terminal (SSH) |
-| [3](#etapa-3) | Initial wizard, security, and two-factor authentication | Browser |
-| [4](#etapa-4) | Panel domain | Settings → Panel domain |
-| [5](#etapa-5) | Time zone | Settings → Time zone |
-| [6](#etapa-6) | Email | Email, Sending |
-| [7](#etapa-7) | Notifications | Settings → Notifications |
-| [8](#etapa-8) | Backups outside the VPS | Settings → Backups |
-| [9](#etapa-9) | First project | New project |
-| [10](#etapa-10) | Test a restore | Project → Backups |
-| [11](#etapa-11) | Maintenance | Terminal, Alerts, Audit log |
+| [1](#etapa-1) | Initial wizard, security, and two-factor authentication | Browser |
+| [2](#etapa-2) | Panel domain | Settings → Panel domain |
+| [3](#etapa-3) | Time zone | Settings → Time zone |
+| [4](#etapa-4) | Email | Email, Sending |
+| [5](#etapa-5) | Notifications | Settings → Notifications |
+| [6](#etapa-6) | Backups outside the VPS | Settings → Backups |
+| [7](#etapa-7) | First project | New project |
+| [8](#etapa-8) | Test a restore | Project → Backups |
+| [9](#etapa-9) | Maintenance | Terminal, Alerts, Audit log |
 | [✓](#checklist) | Final checklist | — |
+
+The accounts you will use (GitHub, Cloudflare and Telegram) and the optional domain are described in
+[Before you start](installation.md#before-you-start), in Part 1.
 
 > [!TIP]
 > The panel itself tracks much of this. On the Dashboard, the **Get the panel ready** card shows what is missing (protections, two-factor authentication, panel domain, email,
@@ -47,126 +46,16 @@ Replace them with yours.
 
 <a id="etapa-1"></a>
 
-## Step 1 — Before you start
+## Step 1 — Initial wizard, security, and two-factor authentication
 
-### What to get
+### 1.1 The wizard (setup)
 
-**A VPS** (virtual server) with:
-
-- **Ubuntu 22.04 or 24.04 LTS**, clean (no other software installed). When creating it, prefer
-  24.04.
-- Recommended minimum: **1 vCPU, 2 GB of RAM, and 25 GB of disk**.
-- Ports **80 and 443** open to the internet. The HTTPS certificate depends on them. If your
-  provider has a firewall in its hosting dashboard, open both.
-- For email: port **25** unblocked by the provider. Many providers block it, especially on new
-  accounts. You check this in [Step 6](#etapa-6).
-
-You will need two things the provider gives you: **the VPS IP** and **the root password**.
-Before going on, look in the provider's dashboard for "Console", "VNC", "Rescue", or "Recovery
-mode" and confirm it exists: it is your way back in if you lose SSH access. See
-[I lost access](../guides/recover-access.md).
-
-You do **not** need to install Docker, Node, or the rest yourself: the installer takes care of it.
-
-### Domain (optional, but recommended)
-
-Without a domain, everything works with automatic `*.sslip.io` addresses (for example,
-`https://203-0-113-10.sslip.io`). With a domain of your own, you get:
-
-- your own address for the panel (`panel.example.com`), instead of one with the IP in the name;
-- professional email, which **requires** a domain;
-- your own addresses for your projects.
-
-You will create records in the domain's DNS (at the provider where it is registered, or on
-Cloudflare). The examples in this guide use Cloudflare.
-
-### Accounts
-
-| Account | What for | Required? |
-|---|---|---|
-| **GitHub** | Publish projects from a repository. A private repository needs a read-only token (the screen teaches you how to generate one). | Only if your code is on GitHub |
-| **Cloudflare** | R2, the external storage for backups (the free plan covers 10 GB per month; it asks for a card). It also works as the domain's DNS. | Recommended |
-| **Telegram** | Receive the panel's notices on your phone. | Optional |
-
-<a id="etapa-2"></a>
-
-## Step 2 — Install the panel on the VPS
-
-> [!WARNING]
-> **Reinstalled the VPS operating system, or reinstalled it to test again, and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is expected: the VPS now has a new identity. On your computer, run `ssh-keygen -R YOUR_IP` (with the VPS IP), connect again and answer `yes`. [Full message and details](installation.md#host-identification-changed).
->
-> **Did not reinstall or switch anything, and the warning appeared out of nowhere?** Do not continue and do not run that command. Check that the IP is the right one and look in the provider's dashboard for a reinstall, a rescue mode or a changed IP. The warning may be the only sign that another machine is answering at that address.
-
-**What to do:** create your user on the VPS, install your SSH key, clone the panel into
-`/opt/tws-panel`, and run the installer. The essential commands, in order (replace `YOUR_IP` with
-your IP and `YOUR_USER` with your username):
-
-```bash
-# 1. On the VPS, as root: create your user with administrator permission
-ssh root@YOUR_IP
-adduser YOUR_USER
-usermod -aG sudo YOUR_USER
-exit
-
-# 2. On YOUR computer: generate the SSH key (if you do not have one yet) and install it on the VPS
-ssh-keygen -t ed25519
-ssh-copy-id -i ~/.ssh/id_ed25519.pub YOUR_USER@YOUR_IP
-
-# 3. On the VPS, with your user: install git, clone and run the installer
-ssh YOUR_USER@YOUR_IP
-sudo apt update && sudo apt install -y git
-sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
-sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel
-./scripts/install.sh
-```
-
-> [!WARNING]
-> **Already have an SSH key?** Don't run `ssh-keygen` over it: it erases the old one.
-> [Step 4 of the installation guide](installation.md#passo-4) shows how to check and which key to
-> use.
-
-Never done this before? Follow the **[installation guide](installation.md)**, Steps
-[1](installation.md#passo-1) to [7](installation.md#passo-7). It shows what appears on screen after
-each command and what to do when something goes wrong.
-
-During the installation:
-
-- The installer checks the machine without changing anything and, if the VPS is already in use,
-  asks for confirmation.
-- It asks **which user the panel's terminal opens as**. See
-  [what each choice means](installation.md#terminal-do-painel).
-- It may stop right at the start asking you to reboot the VPS. This is normal on a new VPS: run
-  `sudo reboot`, wait a minute, sign in again, and repeat `cd /opt/tws-panel` and
-  `./scripts/install.sh`.
-
-**What to check:** the terminal shows the banner **TWS PANEL INSTALADO E RODANDO COM SUCESSO!**
-(the installer prints it in Portuguese; it means "TWS Panel installed and running successfully!"),
-with the link `https://203-0-113-10.sslip.io/?token=…` (with your IP) and the **setup token**. Copy
-the full link.
-
-Closed the terminal and lost the link? On the VPS:
-
-```bash
-sudo ./scripts/show-token.sh
-```
-
-Did the installer warn that the address did not respond within 3 minutes? Almost always it is
-ports 80 and 443 closed in the provider's firewall. See the common errors in
-[Step 8](installation.md#passo-8).
-
-<a id="etapa-3"></a>
-
-## Step 3 — Initial wizard, security, and two-factor authentication
-
-### 3.1 The wizard (setup)
-
-**What to do:** open the banner link in your browser. The wizard has four steps:
+**What to do:** open the banner link in your browser (the same one from [Step 8 of Part 1](installation.md#passo-8)). The wizard has four steps:
 
 1. **Welcome and token**: validates the setup token (already in the link) and unlocks the
    server terminal.
 2. **Server health**: CPU, memory, disk, and network, checked live in the
-   built-in terminal. This step also shows the VPS time zone (see [Step 5](#etapa-5)).
+   built-in terminal. This step also shows the VPS time zone (see [Step 3](#etapa-3)).
 3. **Security**: scan (Lynis), plan, and hardening in 8 phases. Explained just below.
 4. **Administrator account**: your user and a strong panel password. Click
    **Create admin account**.
@@ -183,7 +72,7 @@ language.
 From here on, access is through the sign-in screen, with username and password. The setup token stops
 working.
 
-### 3.2 The Security step (hardening)
+### 1.2 The Security step (hardening)
 
 > [!IMPORTANT]
 > **Read the [Security wizard](security-wizard.md) before this step.** It turns off password login
@@ -211,7 +100,7 @@ The full step-by-step, phase by phase, is in
 shows as done, with "Todas as 8 fases resolvidas" (All 8 phases resolved; a server message, still in Portuguese). If any phase was left out, it stays in
 **Security → Scan and apply protections** for you to review, simulate, or apply later.
 
-### 3.3 Two-factor authentication
+### 1.3 Two-factor authentication
 
 With it, signing in to the panel asks for a 6-digit code generated on your phone in addition to
 the password. If your password leaks, nobody gets in without your phone.
@@ -230,9 +119,9 @@ the password. If your password leaks, nobody gets in without your phone.
 **What to check:** the screen says "Enabled: signing in to the panel requires the app code." Sign out and back in: the sign-in asks for the code.
 On the Dashboard, the **Two-factor authentication** step shows as done.
 
-<a id="etapa-4"></a>
+<a id="etapa-2"></a>
 
-## Step 4 — Panel domain
+## Step 2 — Panel domain
 
 Replaces the address `https://203-0-113-10.sslip.io` with one of your own, such as
 `panel.example.com`. The automatic address gives away the VPS IP in the name; a domain of your own
@@ -297,9 +186,9 @@ the new domain** and the certificate valid.
   sign in again. Details in
   [The panel domain stopped opening](../guides/recover-access.md#o-domínio-do-painel-parou-de-abrir).
 
-<a id="etapa-5"></a>
+<a id="etapa-3"></a>
 
-## Step 5 — Time zone
+## Step 3 — Time zone
 
 The VPS time zone defines **the time of scheduled backups, which run at 03:00 in the VPS time
 zone**, and the dates in the logs. Each provider delivers the VPS in some time zone: most in UTC
@@ -327,21 +216,21 @@ tab: "Image default (usually UTC)", "Same as the VPS", or a specific time zone.
 schedule sentence says "Runs at 03:00 (VPS time, …)" with the
 new time zone's offset (for Brasília, `UTC-03:00`).
 
-<a id="etapa-6"></a>
+<a id="etapa-4"></a>
 
-## Step 6 — Email
+## Step 4 — Email
 
 An email server on the VPS itself, so your projects can send messages (password recovery, notices,
 forms) and so you can have mailboxes such as `contato@`. It is optional: if your projects use an
 external sending service (Amazon SES, Resend, SendGrid…), check **I won't use this**
-in the roadmap and skip to [Step 7](#etapa-7).
+in the roadmap and skip to [Step 5](#etapa-5).
 
 > [!IMPORTANT]
 > **Use a subdomain just for sending**, such as `send.example.com`. Don't use the main domain:
 > pointing its MX at the VPS would divert the email the company already receives somewhere else
 > (Google, Microsoft, or another service). The steps below use `send.example.com`.
 
-### 6.1 Check port 25
+### 4.1 Check port 25
 
 On the VPS, over SSH:
 
@@ -354,7 +243,7 @@ open a ticket with the provider asking to unblock outbound port 25 for transacti
 it, email does not go out. See
 [Port 25 blocked by the provider](../guides/troubleshooting.md#porta-25-bloqueada-pelo-provedor).
 
-### 6.2 Start the server and register the sending domain
+### 4.2 Start the server and register the sending domain
 
 1. In the menu, click **Email**.
 2. If the server is stopped, click **Start server**.
@@ -368,7 +257,7 @@ it, email does not go out. See
 **What to check:** the **Mail server** card shows the server running and the
 domain appears in the list.
 
-### 6.3 Create the DNS records
+### 4.3 Create the DNS records
 
 Click the registered domain and open the **DNS checklist** tab. The **Expected DNS records** card has the exact values, with your VPS IP and the DKIM key.
 **Copy field by field**, using each one's copy button. On Cloudflare (DNS → Records → Add record),
@@ -387,7 +276,7 @@ minutes to a few hours.
 
 **What to check:** the count reaches **6/6 OK** (the sixth item is the PTR, just below).
 
-### 6.4 Reverse DNS (PTR)
+### 4.4 Reverse DNS (PTR)
 
 The PTR is the "name" the VPS IP reports to whoever receives the email. It does **not** live on
 Cloudflare: it is set in the VPS provider's dashboard. The **Reverse DNS (PTR)** card shows one of
@@ -405,7 +294,7 @@ card has ready-made text for opening a ticket, with a copy button.
 
 **What to check:** after changing it, **Verify now** turns the PTR green.
 
-### 6.5 Email certificate
+### 4.5 Email certificate
 
 1. Go back to **Email**.
 2. The **Mail server certificate** card shows
@@ -416,7 +305,7 @@ card has ready-made text for opening a ticket, with a copy button.
 **What to check:** the state is **Valid**. If it stays pending, the card itself says what is
 missing (missing A record, orange cloud, or ports 80/443 closed). The panel renews it by itself.
 
-### 6.6 Create a mailbox
+### 4.6 Create a mailbox
 
 1. On the domain's page, open the **Mailboxes** tab.
 2. Under **New mailbox**, type the name (e.g., `contato`).
@@ -427,7 +316,7 @@ missing (missing A record, orange cloud, or ports 80/443 closed). The panel rene
 **What to check:** the mailbox appears in the list. "Set up in app" shows
 the settings for Outlook, Gmail, Thunderbird, or your phone.
 
-### 6.7 Send a test email
+### 4.7 Send a test email
 
 1. In the **DNS checklist** tab, in the **Test email** card, click **Send test email**.
 2. Type an address of yours (a Gmail, for example) and click **Send**.
@@ -435,11 +324,11 @@ the settings for Outlook, Gmail, Thunderbird, or your phone.
 **What to check:** within a few seconds, **"Delivered to the recipient's server"** appears in green. Open the destination mailbox and also check the Spam
 folder: on a new server, it is common for the first one to land there. Mark it as "not spam". If
 the yellow "Deferred: Connection to … failed" appears, port 25 is
-blocked ([6.1](#etapa-6)). If the red "Rejected: …" appears, the reason is whatever
+blocked ([4.1](#etapa-4)). If the red "Rejected: …" appears, the reason is whatever
 the recipient replied (usually SPF, DKIM, DMARC, or the reverse name). See
 [Email landing in spam](../guides/troubleshooting.md#e-mail-caindo-em-spam).
 
-### 6.8 Webmail
+### 4.8 Webmail
 
 1. In **Email**, in the **Webmail** card, click **Enable webmail**. The first time
    takes a while: the panel downloads the Roundcube image (a few hundred MB).
@@ -450,7 +339,7 @@ the recipient replied (usually SPF, DKIM, DMARC, or the reverse name). See
 Portuguese by default (webmail is Roundcube, which has its own language setting; it does not follow the panel's). Send an email to yourself and reply from there: the reply shows up in the webmail
 Inbox. Forgot the mailbox password? **Mailboxes** tab → **Change password**.
 
-### 6.9 The Sending page
+### 4.9 The Sending page
 
 In the menu (**More → Sending**), **Sending** shows what the email server is doing:
 
@@ -467,15 +356,15 @@ does not reach green on the score until it has been sending for about 30 days: t
 **In the roadmap:** the **Server email** step shows as done once the server is
 running and at least one domain has correct DNS.
 
-<a id="etapa-7"></a>
+<a id="etapa-5"></a>
 
-## Step 7 — Notifications
+## Step 5 — Notifications
 
 Notices outside the panel when something needs attention: security alert, failed deploy,
 certificate problem, email on a blocklist, disk above 90%, backups that failed or ran late. Without
 this, alerts only appear inside the panel.
 
-### 7.1 Telegram
+### 5.1 Telegram
 
 1. In Telegram, search for **@BotFather** (with the blue verified badge) and open the chat.
 2. Send `/newbot`. It asks for a name (e.g., "My panel notices") and then a @ username that ends in
@@ -491,9 +380,9 @@ this, alerts only appear inside the panel.
 
 **What to check:** a "TWS Panel: Teste de notificação" message (Notification test) arrives in Telegram. The test message is written by the server and is still in Portuguese. In the panel, the badge turns to "Tested on…" and, under **Recent sends**, a "Teste de notificação" entry (also a server text) appears with the status **Sent**.
 
-### 7.2 Email (optional)
+### 5.2 Email (optional)
 
-Needs [Step 6](#etapa-6) done: server running and a domain with all DNS correct.
+Needs [Step 4](#etapa-4) done: server running and a domain with all DNS correct.
 
 1. In **Settings → Notifications**, in the **Email** card, enter up to 5 addresses and click
    **Save addresses**.
@@ -502,7 +391,7 @@ Needs [Step 6](#etapa-6) done: server running and a domain with all DNS correct.
 **What to check:** the message arrives in the mailbox. On the first send from a new server, it
 tends to land in spam: mark it as "not spam".
 
-### 7.3 What it notifies
+### 5.3 What it notifies
 
 In the **What to notify** card, choose the types. The default already turns on
 everything that calls for action; "Panel restarted" starts off.
@@ -510,15 +399,15 @@ everything that calls for action; "Panel restarted" starts off.
 **In the roadmap:** the **Notifications** step shows as done once at least one
 channel is connected and the test has been sent.
 
-<a id="etapa-8"></a>
+<a id="etapa-6"></a>
 
-## Step 8 — Backups outside the VPS
+## Step 6 — Backups outside the VPS
 
 The panel already keeps copies on the VPS itself, but they disappear along with the server if it is
 lost, broken into, or wiped. With a copy outside, on Cloudflare R2, you can rebuild everything on a
 new VPS.
 
-### 8.1 Create the bucket and keys on Cloudflare R2
+### 6.1 Create the bucket and keys on Cloudflare R2
 
 Cloudflare shows the names in English or Portuguese, depending on your account's language. Both are
 given below (English / Portuguese), as on the panel's screen.
@@ -546,7 +435,7 @@ given below (English / Portuguese), as on the panel's screen.
    The "Token value" / "Valor do token" is not used. Lost the endpoint? It is in the bucket →
    Settings / Configurações → S3 API.
 
-### 8.2 Connect it in the panel
+### 6.2 Connect it in the panel
 
 1. Open **Settings → Backups**. In the **External storage**
    (External storage) card, leave **Cloudflare R2** checked.
@@ -558,7 +447,7 @@ given below (English / Portuguese), as on the panel's screen.
 "Tested on…" badge. If it fails, nothing is saved and the screen explains the reason (key
 rejected, bucket does not exist, no response).
 
-### 8.3 Encryption and recovery kit
+### 6.3 Encryption and recovery kit
 
 The external copy goes encrypted with a password of yours. **Without this password, nobody, not
 even TWS, can open your backups.**
@@ -572,10 +461,10 @@ even TWS, can open your backups.**
 
 **What to check:** the card shows **On (AES-256)**.
 
-### 8.4 First backup
+### 6.4 First backup
 
 1. In the **Panel** card, click **Back up now**.
-2. Do the same in the **Email** card, if you turned on email in [Step 6](#etapa-6).
+2. Do the same in the **Email** card, if you turned on email in [Step 4](#etapa-4).
 
 **What to check:**
 
@@ -585,18 +474,18 @@ even TWS, can open your backups.**
   `.7z` file;
 - on the Dashboard, the **Off-VPS backups** step shows as done.
 
-### 8.5 Test the password
+### 6.5 Test the password
 
 In the **External copy encryption** card, type the kit's password and click **Test my password**.
 
 **What to check:** the answer starts with "Senha certa" (Correct password; this reply comes from the server and is still in Portuguese). Every 90 days without a test, the
 panel reminds you to repeat this.
 
-### 8.6 Schedule
+### 6.6 Schedule
 
 In the **Panel** and **Email** cards, choose the frequency (once a day, every 12 hours, or every
 6 hours) and how many copies to keep on the VPS and outside. **The base time is 03:00 in the VPS
-time zone** (see [Step 5](#etapa-5)).
+time zone** (see [Step 3](#etapa-3)).
 
 Projects have their own settings. In the **Project defaults** card, choose
 the same for projects: on or off, frequency, and copies.
@@ -606,23 +495,23 @@ the same for projects: on or off, frequency, and copies.
 3. Click **Save**.
 
 **What to check:** each project in the list shows "follows the default". A new project is born with the default. Each project's databases and folders stay in its
-**Backups** tab ([Step 9](#etapa-9)).
+**Backups** tab ([Step 7](#etapa-7)).
 
 Details on what is included, where it is kept, and how to restore on a new VPS:
 [Features → Backups](../guides/features.md#backups).
 
-<a id="etapa-9"></a>
+<a id="etapa-7"></a>
 
-## Step 9 — First project
+## Step 7 — First project
 
-### 9.1 Connect GitHub (optional)
+### 7.1 Connect GitHub (optional)
 
 To pick the repository from a list, instead of pasting the URL: open **Settings → Integrations**, paste a **GitHub token (read-only)**, and click **Connect**. The screen teaches you how to generate the token. A
 token with write permission is rejected.
 
 **What to check:** the screen shows "Connected as …".
 
-### 9.2 Create the project
+### 7.2 Create the project
 
 In the menu, click **New project**. There are three steps:
 
@@ -649,7 +538,7 @@ In the menu, click **New project**. There are three steps:
 
 **What to check:** the project page opens, with the menu Overview, Deploys, Domains, Git, Variables, Email, Backups, and Settings.
 
-### 9.3 Variables
+### 7.3 Variables
 
 Open the **Variables** tab. The screen lists the variables the compose file asks for and suggests
 the names from the repository's `.env.example`, still without values.
@@ -667,9 +556,9 @@ the names from the repository's `.env.example`, still without values.
 **What to check:** no warning about a missing required variable. The deploy is blocked when a
 required one is missing; the `.env.example` ones without a value only raise a warning.
 
-### 9.4 Project email
+### 7.4 Project email
 
-Needs [Step 6](#etapa-6) done.
+Needs [Step 4](#etapa-4) done.
 
 1. Open the project's **Email** tab and choose the **Email domain**.
 2. Check the **Sender address** (e.g., `contato@send.example.com`) and the
@@ -683,7 +572,7 @@ Needs [Step 6](#etapa-6) done.
 **What to check:** the card shows `SMTP_HOST = mail.send.example.com`. The `SMTP_*` and `MAIL_*`
 values go into the deploy automatically. The values only reach the app on the next deploy.
 
-### 9.5 Ports (only if you need to)
+### 7.5 Ports (only if you need to)
 
 In the **Overview**, in the Containers card, the **Ports** button opens two tabs:
 
@@ -693,7 +582,7 @@ In the **Overview**, in the Containers card, the **Ports** button opens two tabs
 
 Most projects don't need this: the site opens through the domain, via the proxy. If you choose "On all addresses (0.0.0.0)", the port is open to the internet.
 
-### 9.6 Deploy and logs
+### 7.6 Deploy and logs
 
 1. Click **Deploy**, at the top of the project page.
 2. Follow the live log. If a compose deploy fails, the log gets a block titled "Por que falhou" (Why it
@@ -704,7 +593,7 @@ site. In the **Deploys** tab you will find the **Deploy history**. If a
 guardrail blocked the deploy (e.g., an exposed database port), the screen says which rule; see
 [Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
 
-### 9.7 Certificate
+### 7.7 Certificate
 
 In the **Domains** tab, each of the project's domains shows its HTTPS certificate state. The
 **Certificates** page (menu **More → Certificates**) lists all of them (panel, projects, and email).
@@ -713,7 +602,7 @@ In the **Domains** tab, each of the project's domains shows its HTTPS certificat
 page explains the likely cause (DNS not pointing to the VPS, orange cloud, ports 80/443 closed) and
 has the **Try issuing now** button.
 
-### 9.8 The project's Backups tab
+### 7.8 The project's Backups tab
 
 After the first deploy that succeeds, the panel looks at the containers and suggests what to keep.
 
@@ -730,9 +619,9 @@ After the first deploy that succeeds, the panel looks at the containers and sugg
 
 **What to check:** the project's history shows the backup completed, with "external copy verified". On Cloudflare, the folder `TWS Panel Backups/<project-name>/` appears.
 
-<a id="etapa-10"></a>
+<a id="etapa-8"></a>
 
-## Step 10 — Test a restore (recommended)
+## Step 8 — Test a restore (recommended)
 
 A backup that has never been restored is a promise. Test now, with test data, while nothing depends
 on it.
@@ -762,9 +651,9 @@ Lost the entire VPS? The path is different: install the panel on a new VPS and u
 → Backups → Restore from another server**. The step-by-step is in
 [Restore on a new VPS](../guides/restore-new-server.md).
 
-<a id="etapa-11"></a>
+<a id="etapa-9"></a>
 
-## Step 11 — Maintenance
+## Step 9 — Maintenance
 
 ### Update the panel
 
@@ -798,7 +687,7 @@ The panel goes down for a few seconds and comes back by itself. The reason is ex
 - **Security** (menu): VPS protections, baseline snapshot, monitoring, and email
   reputation.
 - **Certificates** and **Sending** (menu **More**): certificates and email.
-- Telegram or the email from [Step 7](#etapa-7), when the panel is closed.
+- Telegram or the email from [Step 5](#etapa-5), when the panel is closed.
 
 ### If you lose access
 

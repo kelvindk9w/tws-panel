@@ -5,8 +5,8 @@ template: splash
 hero:
   tagline: Transforme uma VPS Ubuntu na sua própria plataforma de hospedagem. Proteja a máquina, publique projetos com HTTPS e cuide do e-mail profissional, em um painel que você controla.
   actions:
-    - text: Primeira instalação, passo a passo
-      link: /tws-panel/pt-br/getting-started/complete-guide/
+    - text: Guia passo a passo
+      link: /tws-panel/pt-br/getting-started/installation/
       icon: right-arrow
     - text: Restaurar numa VPS nova
       link: /tws-panel/pt-br/guides/restore-new-server/
@@ -22,7 +22,7 @@ hero:
 
 | Sua situação | Vá para |
 |---|---|
-| **Primeira instalação.** Você nunca instalou, ou quer cada passo explicado, da VPS contratada ao painel configurado e a uma restauração testada. | **[Do zero ao painel pronto](getting-started/complete-guide.md)**<br>Só a instalação, passos 1 a 8: [guia de instalação](getting-started/installation.md) |
+| **Primeira instalação.** Você nunca instalou, ou quer cada passo explicado, da VPS contratada ao painel configurado e a uma restauração testada. | **[Guia passo a passo](getting-started/installation.md)**<br>A Parte 1 instala o painel; a Parte 2 o configura. |
 | **Reinstalei a VPS, ou estou mudando de servidor.** Você quer o painel, os projetos e o e-mail de volta a partir dos backups externos. | **[Restaurar numa VPS nova](guides/restore-new-server.md)** |
 | **Já sei o que estou fazendo.** Você tem uma VPS Ubuntu limpa e um usuário com `sudo`. | **[Instalação rápida, 1 comando](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md#instalação)** (no README do repositório) |
 
@@ -38,10 +38,10 @@ esperado depois de reinstalar a VPS. Veja [o que fazer](getting-started/installa
 
 ## Por onde seguir
 
-- [Instalação, passos 1 a 8](getting-started/installation.md): cada comando da instalação explicado.
 - [Funcionalidades](guides/features.md): o que cada módulo faz.
 - [Modelo de segurança](reference/security.md): o que o painel protege e o que ele exige.
 - [Solução de problemas](guides/troubleshooting.md): porta 25 bloqueada, e-mail em spam, certificado que não sai.
+- [Ajuda e feedback](guides/help.md): dúvidas, bugs, sugestões e como falar com a gente.
 
 ## O que você precisa
 
