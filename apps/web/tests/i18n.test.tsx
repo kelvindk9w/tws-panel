@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LanguageSelect } from "../src/components/LanguageSelect";
@@ -30,6 +30,7 @@ function stubBrowserLanguages(langs: string[]) {
 }
 
 afterEach(() => {
+  cleanup(); // desmonta antes de tirar os dicionários de teste
   vi.restoreAllMocks();
   // dicionários de teste
   for (const loc of Object.keys(catalog)) delete catalog[loc]?.["t_"];
