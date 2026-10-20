@@ -1063,7 +1063,7 @@ the wizard. The wizard opens in the language of your browser (see [Language of t
 **Language of the interface.** The panel is available in English and Portuguese. On the first visit
 it goes through your browser's list of languages and uses the first one it has: Portuguese for any
 `pt` variant (such as `pt-BR`), English for `en`; if none matches, English. To change it, use the **Language** selector on the setup wizard and sign-in
-screens, in the panel header (next to the user menu, always visible once you are signed in), or under **Settings → Appearance**. The choice is saved in that
+screens, in the panel header (next to the user menu, always visible once you are signed in; with the side menu layout, at the bottom of the sidebar, above the user menu), or under **Settings → Appearance**. The choice is saved in that
 browser only (it is not part of your account), so another browser or device starts again from its
 own language. The messages that the server itself writes (see the note at the top of this page) are
 still in Portuguese.

@@ -81,10 +81,13 @@ describe("seletor de idioma no cabeçalho", () => {
     expect(within(top()).getByRole("combobox", { name: "Language" })).toHaveValue("en");
   });
 
-  it("não fica duplicado dentro do menu do usuário", async () => {
+  it("não fica dentro do menu do usuário (o painel dele não tem seletor de idioma)", async () => {
     const user = userEvent.setup();
     renderLayout("top");
     await user.click(screen.getByRole("button", { name: /Conta:/ }));
+    const painel = screen.getByRole("button", { name: "Sair" }).parentElement as HTMLElement;
+    expect(within(painel).getByRole("button", { name: "Trocar senha" })).toBeInTheDocument();
+    expect(within(painel).queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.getAllByRole("combobox", { name: "Idioma" })).toHaveLength(1);
   });
 });
@@ -136,6 +139,65 @@ describe("menu do topo com \"Mais\"", () => {
     await user.keyboard("{ArrowDown}");
     expect(more).toHaveAttribute("aria-expanded", "true");
     expect(within(nav).getByRole("link", { name: "Envios" })).toHaveFocus();
+  });
+
+  it("seta para cima: com o painel aberto e o foco no botão vai ao ÚLTIMO item; fechado, abre focando o último", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    const nav = desktopNav();
+    const more = within(nav).getByRole("button", { name: "Mais" });
+    await user.click(more);
+    expect(more).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(within(nav).getByRole("link", { name: "Setup" })).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(within(nav).getByRole("link", { name: "Configurações" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(more).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    expect(within(nav).getByRole("link", { name: "Setup" })).toHaveFocus();
+  });
+
+  it("seta para baixo percorre e dá a volta; Home e End vão ao primeiro e ao último", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    const nav = desktopNav();
+    const more = within(nav).getByRole("button", { name: "Mais" });
+    await user.click(more);
+    await user.keyboard("{ArrowDown}");
+    expect(within(nav).getByRole("link", { name: "Envios" })).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(within(nav).getByRole("link", { name: "Setup" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(within(nav).getByRole("link", { name: "Envios" })).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(within(nav).getByRole("link", { name: "Envios" })).toHaveFocus();
+    more.focus();
+    await user.keyboard("{End}");
+    expect(within(nav).getByRole("link", { name: "Setup" })).toHaveFocus();
+    more.focus();
+    await user.keyboard("{Home}");
+    expect(within(nav).getByRole("link", { name: "Envios" })).toHaveFocus();
+  });
+
+  it("Home e End com o painel fechado não abrem nada", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    const more = within(desktopNav()).getByRole("button", { name: "Mais" });
+    more.focus();
+    await user.keyboard("{End}{Home}");
+    expect(more).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("clicar no item da rota que já está aberta fecha o painel", async () => {
+    const user = userEvent.setup();
+    renderLayout("top", "/certificates");
+    const nav = desktopNav();
+    const more = within(nav).getByRole("button", { name: "Mais" });
+    await user.click(more);
+    await user.click(within(nav).getByRole("link", { name: "Certificados" }));
+    expect(more).toHaveAttribute("aria-expanded", "false");
   });
 
   it("clique fora fecha", async () => {

@@ -164,7 +164,7 @@ ports 80 and 443 closed in the provider's firewall. See the common errors in
 **Language.** On the first visit the panel goes through your browser's list of languages and uses the
 first one it has: Portuguese for any `pt` variant (such as `pt-BR`), English for `en`; if none matches,
 English. To change it, use the **Language**
-selector on the setup and sign-in screens, in the panel header (next to your user menu, always visible), or under **Settings → Appearance**.
+selector on the setup and sign-in screens, in the panel header (next to your user menu, always visible; with the side menu layout it sits at the bottom of the sidebar, above the user menu), or under **Settings → Appearance**.
 The choice is saved in that browser only: another browser or device starts again from its own
 language.
 

@@ -109,7 +109,8 @@ function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean
   const { t } = useI18n();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
-  const [focusFirst, setFocusFirst] = useState(false);
+  // ao abrir pelo teclado, qual ponta da lista recebe o foco
+  const [focusEdge, setFocusEdge] = useState<"first" | "last" | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -127,9 +128,12 @@ function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean
   }, [open]);
 
   useEffect(() => {
-    if (open && focusFirst) panelRef.current?.querySelector<HTMLElement>("a")?.focus();
-    setFocusFirst(false);
-  }, [open, focusFirst]);
+    if (open && focusEdge) {
+      const links = panelRef.current?.querySelectorAll<HTMLElement>("a");
+      if (links?.length) links[focusEdge === "first" ? 0 : links.length - 1]?.focus();
+    }
+    setFocusEdge(null);
+  }, [open, focusEdge]);
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && open) {
@@ -138,17 +142,23 @@ function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean
       buttonRef.current?.focus();
       return;
     }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const down = event.key === "ArrowDown";
+    const up = event.key === "ArrowUp";
+    if (!down && !up && !(open && (event.key === "Home" || event.key === "End"))) return;
     event.preventDefault();
     if (!open) {
       setOpen(true);
-      setFocusFirst(true);
+      setFocusEdge(up ? "last" : "first");
       return;
     }
     const links = Array.from(panelRef.current?.querySelectorAll<HTMLElement>("a") ?? []);
     const at = links.indexOf(document.activeElement as HTMLElement);
-    const next = event.key === "ArrowDown" ? at + 1 : at - 1;
-    links[(next + links.length) % links.length]?.focus();
+    let next: number;
+    if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = links.length - 1;
+    else if (at === -1) next = down ? 0 : links.length - 1; // foco no botão
+    else next = (at + (down ? 1 : -1) + links.length) % links.length;
+    links[next]?.focus();
   }
 
   return (
@@ -180,7 +190,7 @@ function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean
           className="absolute left-0 top-full z-50 mt-1 flex w-56 flex-col gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-lg"
         >
           {items.map((item) => (
-            <NavEntry key={item.to} item={item} enviosOpen={enviosOpen} />
+            <NavEntry key={item.to} item={item} enviosOpen={enviosOpen} onNavigate={() => setOpen(false)} />
           ))}
         </div>
       )}
@@ -188,12 +198,13 @@ function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean
   );
 }
 
-function NavEntry({ item, enviosOpen }: { item: NavItem; enviosOpen: boolean }) {
+function NavEntry({ item, enviosOpen, onNavigate }: { item: NavItem; enviosOpen: boolean; onNavigate?: () => void }) {
   const { t } = useI18n();
   return (
     <NavLink
       to={item.to}
       end={item.end}
+      onClick={onNavigate}
       className={({ isActive }) =>
         cn(linkClass, isActive && !(item.to === "/mail" && enviosOpen) ? linkActive : linkIdle)
       }
@@ -232,7 +243,7 @@ function TopBar({ className }: { className?: string }) {
   useEffect(() => setMobileOpen(false), [location.pathname]);
   return (
     <header data-testid="nav-top" className={cn("sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md", className)}>
-      <div className="container flex min-h-14 items-center gap-3 py-2 sm:gap-6">
+      <div className="container flex min-h-14 items-center gap-3 py-2 sm:gap-4 xl:gap-6">
         <Brand />
         <div className="hidden lg:block">
           <NavItems vertical={false} />

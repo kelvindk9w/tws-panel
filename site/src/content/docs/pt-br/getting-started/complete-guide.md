@@ -160,7 +160,7 @@ fechadas no firewall do provedor. Veja os erros comuns no [Passo 8](installation
 **Idioma.** Na primeira visita, o painel percorre a lista de idiomas do navegador e usa o primeiro que
 ele tem: português para qualquer variante de `pt` (como `pt-BR`), inglês para `en`; se nenhum
 combinar, inglês. Para mudar, use o seletor **Idioma** nas telas do assistente e de login, no cabeçalho do painel (ao lado do menu do
-usuário, sempre à vista) ou em **Configurações → Aparência**. A escolha fica guardada só nesse navegador: outro
+usuário, sempre à vista; na disposição lateral fica no rodapé da lateral, acima do menu do usuário) ou em **Configurações → Aparência**. A escolha fica guardada só nesse navegador: outro
 navegador ou aparelho começa de novo pelo idioma dele.
 
 **O que conferir:** aparece **Setup concluído!** e você entra no Dashboard. A partir daqui, o

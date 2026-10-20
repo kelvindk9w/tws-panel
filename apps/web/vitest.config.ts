@@ -33,6 +33,7 @@ export default defineConfig({
         "src/lib/**",
         "src/i18n/**",
         "src/components/LanguageSelect.tsx",
+        "src/components/Layout.tsx",
       ],
       reporter: ["text", "html"],
     },

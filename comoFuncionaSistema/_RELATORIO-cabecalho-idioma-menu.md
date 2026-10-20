@@ -36,6 +36,11 @@
   topo e lateral direita: sem rolagem horizontal; "Mais" aberto conferido. Um ajuste de
   espaçamento no móvel (gap menor) veio dessa conferência.
 
+## Correções da revisão
+- Topo em 1024px com nome longo e badge 99+: espaços menores em lg (gap-4, e gap-6 só em xl) e nome limitado a max-w-24 (max-w-32 em xl). Conferido a 1009 e 1014px (rolagem vertical simulada), pt-BR e en, e a 768/1023/1024/1440/390 nos três modos: sem rolagem horizontal.
+- "Mais": seta para cima parte do último item (aberto ou fechado), Home/End, e clicar na rota já aberta fecha o painel.
+- Cobertura final (web): 981 testes, 91,98% instruções / 86,37% ramos; Layout.tsx entrou na cobertura (95,9% / 93,9%).
+
 ## Não testado
 - Navegadores além do Chromium; leitor de tela real; telas entre 768 e 1023px só por regra de CSS.
 - Idiomas além de pt-BR/en.
