@@ -173,11 +173,27 @@ function checkSiteUrl(file, line, shown, u) {
   else if (hash && !distIds(html).has(hash)) report(file, line, `URL do site com âncora inexistente no build (${shown})`);
 }
 
+// O valor literal de SITE_URL no código do painel tem de ser idêntico a origem + base da config
+// (sem barra final: os modelos acrescentam "/", e uma barra a mais geraria "//").
+const SITE_URL_EXPECTED = `${SITE.origin}${SITE.basePath}`;
+function checkSiteUrlConstant(file, source) {
+  const usesTemplate = /\$\{SITE_URL\}/.test(source);
+  const def = /\b(?:const|let|var)\s+SITE_URL\b[^=\n]*=\s*(["'`])([^"'`\n]*)\1\s*[;,\n]/.exec(source);
+  if (def) {
+    const line = source.slice(0, def.index).split('\n').length;
+    if (def[2] !== SITE_URL_EXPECTED)
+      report(file, line, `SITE_URL = "${def[2]}" difere da config; o esperado é exatamente "${SITE_URL_EXPECTED}" (sem barra final), veja ${SITE.config}`);
+  } else if (usesTemplate && !/\bimport\b[^;]*\bSITE_URL\b[^;]*\bfrom\b/.test(source)) {
+    report(file, 1, 'usa ${SITE_URL}, mas não o define como literal de aspas neste arquivo nem o importa');
+  }
+}
+
 for (const file of absFiles) {
-  readFileSync(path.join(ROOT, file), 'utf8')
+  const source = readFileSync(path.join(ROOT, file), 'utf8');
+  if (/\.tsx?$/.test(file)) checkSiteUrlConstant(file, source);
+  source
     .split('\n')
     .forEach((text, i) => {
-      if (text.includes('site-url-ignore')) return; // exceção declarada na própria linha
       for (const m of text.matchAll(/https?:\/\/[A-Za-z0-9.-]+(?::\d+)?[^\s)>"'`\]<]*/g)) {
         const url = m[0].replace(/[.,;:]+$/, '');
         let u;

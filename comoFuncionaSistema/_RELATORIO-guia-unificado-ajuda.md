@@ -86,5 +86,9 @@ Capturas com Playwright: página inicial (en, 1440), Parte 1 pt-br com barra lat
   `${SITE_URL}/${idioma}/caminho/` para cada idioma do build. O B deve declarar a URL como literal completo
   ou nesse formato (só o idioma dinâmico; `SITE_URL` literal no mesmo arquivo). Testei o `links.ts` do B
   (passa, incluindo `/en/guides/help/` e `/pt-br/guides/help/`) e casos errados de propósito.
-- `docs.yml` roda também quando `apps/web/src/lib/links.ts` muda. Exceção para link de terceiro em
-  `*.github.io`: `site-url-ignore` na mesma linha.
+- `docs.yml` roda também quando `apps/web/src/lib/links.ts` muda.
+- Endurecimento final: o valor literal de `SITE_URL` no código do painel tem de ser igual a origem + base
+  do `astro.config.mjs`, sem barra final (host, base, `http`, barra final e ausência de definição
+  reprovam; importar a constante vale). A marca `site-url-ignore` só vale como comentário na linha
+  (`<!-- -->`, `//` ou `#`), só para `*.github.io` de terceiros, e não vale dentro de URL, como parte de
+  outra palavra nem para o próprio site. Testado caso a caso com arquivos temporários (removidos).

@@ -105,8 +105,16 @@ host, so the old address is caught after the move. `docs:links` (run it after th
 an anchor that does not exist. Both run in the `docs` workflow.
 
 URLs are parsed with `new URL()`, so an upper-case host or a `:443` port is compared as the same
-address. A third-party `*.github.io` link fails `docs:site-url`; to allow one, write `site-url-ignore`
-on the same line (in Markdown, inside an HTML comment: `<!-- site-url-ignore -->`).
+address. A third-party `*.github.io` link fails `docs:site-url`; to allow one, add a comment on the
+same line: `<!-- site-url-ignore -->` in Markdown, `// site-url-ignore` or `# site-url-ignore` in
+code or YAML. The mark works only as a comment, only for third-party hosts, and never inside a URL
+(`?site-url-ignore`) or as part of another word. It cannot turn off the check of the site's own
+host, base or routes.
+
+In the panel code, the literal value of `SITE_URL` must be exactly the origin plus the base of the
+config, with no trailing slash (a trailing slash would produce `//` in the templates); `docs:links`
+fails on a different host, base, `http://` or a trailing slash, and on a `${SITE_URL}` template in
+a file that neither defines nor imports the constant.
 
 **Links built in the panel code.** `docs:links` also reads the non-test `.ts`/`.tsx` files of
 `apps/web/src` (the `docs` workflow also runs when `apps/web/src/lib/links.ts` changes). Write the

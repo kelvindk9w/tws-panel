@@ -8,8 +8,9 @@
 // Links para github.com/<repo> não são endereço do site.
 //
 // Atenção: um link de terceiros em *.github.io (outro projeto hospedado no GitHub Pages) também
-// reprova. Para declarar uma exceção, escreva `site-url-ignore` na mesma linha (em Markdown, num
-// comentário HTML: `<!-- site-url-ignore -->`). O `check-doc-links.mjs` respeita a mesma marca.
+// reprova. Exceção só para esse caso: um comentário na mesma linha (`<!-- site-url-ignore -->` em
+// Markdown; `// site-url-ignore` ou `# site-url-ignore` em código/YAML). A marca não vale dentro de
+// uma URL nem como parte de outra palavra e nunca desliga a checagem do próprio site.
 //
 // Uso: node scripts/check-site-url.mjs          (ou: pnpm docs:site-url)
 //      node scripts/check-site-url.mjs --list   (lista os arquivos que têm o endereço absoluto)
@@ -18,7 +19,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ROOT, readSiteConfig } from './site-config.mjs';
+import { ROOT, hasIgnoreComment, readSiteConfig } from './site-config.mjs';
 
 const SKIP = [/^comoFuncionaSistema\//, /^docs\/internal\/phase1-evidence\//, /node_modules\//, /(^|\/)pnpm-lock\.yaml$/, /^scripts\/check-site-url\.mjs$/];
 const EXT = /\.(md|mdx|ya?ml|json|mjs|astro|html|ts|tsx|mts)$/;
@@ -39,7 +40,7 @@ for (const file of files) {
   if (file === cfg.config) continue; // é a fonte
   const lines = readFileSync(path.join(ROOT, file), 'utf8').split('\n');
   lines.forEach((text, i) => {
-    if (text.includes('site-url-ignore')) return; // exceção declarada na própria linha
+    const ignorable = hasIgnoreComment(text);
     for (const m of text.matchAll(URL_RE)) {
       const url = m[0].replace(/[.,;:]+$/, '');
       let u;
@@ -49,6 +50,7 @@ for (const file of files) {
         continue;
       }
       if (!isSiteHost(u.host)) continue;
+      if (ignorable && u.host !== cfg.host) continue; // terceiro em *.github.io, com a marca em comentário
       const withSlash = u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`;
       const inside = u.origin === cfg.origin && (u.pathname === cfg.basePath || withSlash.startsWith(`${cfg.basePath}/`));
       if (!inside) problems.push(`${file}:${i + 1}: ${url} não corresponde a ${cfg.root} (veja ${cfg.config})`);

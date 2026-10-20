@@ -26,3 +26,11 @@ export function readSiteConfig() {
     root: `${origin}${basePath}/`, // endereço raiz, com barra final
   };
 }
+
+// Marca de exceção, válida só como COMENTÁRIO na linha (`<!-- site-url-ignore -->`,
+// `// site-url-ignore` ou `# site-url-ignore`, depois de espaço ou no começo da linha) e só para
+// links de TERCEIROS em *.github.io. Nunca vale dentro de uma URL (`?site-url-ignore`,
+// `#site-url-ignore`) nem como parte de outra palavra, e não desliga a checagem do próprio site.
+export function hasIgnoreComment(text) {
+  return /<!--\s*site-url-ignore\s*-->|(?:^|\s)(?:\/\/|#)\s*site-url-ignore(?=\s|$)/.test(text);
+}
