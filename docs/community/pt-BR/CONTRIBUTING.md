@@ -37,12 +37,12 @@ Mais detalhes sobre a arquitetura e o modo de desenvolvimento estão no
 
 ## Hooks de validação locais (pre-commit / pre-push)
 
-O repositório versiona hooks do git em `scripts/hooks/` (bash puro, **sem husky e sem dependências
+O repositório inclui hooks do git em `scripts/hooks/` (bash puro, **sem husky e sem dependências
 novas**). Eles são **ativados automaticamente** pelo `pnpm install` (o script `prepare` da raiz
 aponta `core.hooksPath` para `scripts/hooks`), então não há nada a configurar. Os hooks dão
 feedback rápido na sua máquina; **o CI continua sendo o portão final**.
 
-- **`pre-commit`** (rápido, meta de menos de 30 s), roda só sobre o que está staged:
+- **`pre-commit`** (rápido, menos de 30 s) roda só sobre os arquivos staged:
   1. bloqueia arquivos proibidos (`.env`, `data/`, `*.pem`, `id_rsa` etc.);
   2. faz uma varredura leve de segredos nos arquivos staged (`scripts/hooks/scan-secrets.mjs`:
      chaves AWS, blocos `PRIVATE KEY`, tokens do Slack e do GitHub, senhas atribuídas em strings),
@@ -99,7 +99,9 @@ arquivos de configuração. Ao adicionar lógica nova, mantenha os thresholds ve
 **Todo PR precisa de testes** que cubram a mudança (unitários para lógica pura, de componente para
 a UI, E2E para fluxos de infraestrutura), e **o CI precisa estar verde**. O workflow
 `.github/workflows/ci.yml` roda install, typecheck, build e testes unitários com cobertura
-(thresholds) em pushes e pull requests nas branches `main` e `dev`.
+(thresholds) em pushes e pull requests nas branches `main` e `dev`. Ele também roda um job
+`image-scan` (Trivy) que reprova o PR quando a imagem do painel tem uma vulnerabilidade CRITICAL com
+correção disponível.
 
 ## Padrões do projeto
 
@@ -172,11 +174,11 @@ os exemplos em `examples/` como referência.
 1. Abra uma **issue** antes de uma mudança grande (ou comente em uma existente) para alinhar o
    desenho antes. Isso evita retrabalho.
 2. Faça um fork do repositório e crie uma branch a partir de `dev` (por exemplo,
-   `feat/minha-melhoria`).
+   `feat/minha-melhoria`). A `dev` é onde o trabalho é integrado; a `main` só recebe código validado.
 3. Garanta que `pnpm build` e `pnpm typecheck` estejam limpos e que **`pnpm test` esteja verde**
    (mais `pnpm test:e2e`, se a mudança tocar fluxos de infraestrutura). Todo PR precisa incluir
    testes para a sua mudança.
-4. Abra o PR e preencha o modelo: o que muda, por quê e como testar.
+4. Abra o PR **contra a `dev`** (não contra a `main`, que é a padrão) e preencha o modelo: o que muda, por quê e como testar.
 5. Responda à revisão. PRs pequenos e focados são aceitos muito mais rápido.
 
 ## Licença da sua contribuição

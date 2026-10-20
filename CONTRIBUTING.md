@@ -37,14 +37,14 @@ More detail on the architecture and the dev mode is in the
 
 ## Local validation hooks (pre-commit / pre-push)
 
-The repository versions git hooks in `scripts/hooks/` (plain bash, **no husky and no new
+The repository ships git hooks in `scripts/hooks/` (plain bash, **no husky and no new
 dependencies**). They are **activated automatically** by `pnpm install` (the root `prepare` script
 points `core.hooksPath` to `scripts/hooks`), so there is nothing to set up. The hooks give you fast
 feedback on your machine; **CI remains the final gate**.
 
-- **`pre-commit`** (fast, target < 30s), runs only on what is staged:
+- **`pre-commit`** (fast, under 30 s) runs only on staged files:
   1. blocks forbidden files (`.env`, `data/`, `*.pem`, `id_rsa`, etc.);
-  2. a light secrets scan of the staged files (`scripts/hooks/scan-secrets.mjs`: AWS keys,
+  2. a lightweight secret scan of the staged files (`scripts/hooks/scan-secrets.mjs`: AWS keys,
      `PRIVATE KEY` blocks, Slack/GitHub tokens, passwords assigned in strings), reporting
      `file:line`;
   3. incremental typecheck (`tsc --noEmit`) only in the workspaces you touched.
@@ -98,7 +98,8 @@ new logic, keep the thresholds green.
 **Every PR needs tests** that cover the change (unit tests for pure logic, component tests for UI,
 E2E for infrastructure flows), and **CI must be green**. The `.github/workflows/ci.yml` workflow
 runs install, typecheck, build and unit tests with coverage thresholds on pushes and pull requests
-to the `main` and `dev` branches.
+to the `main` and `dev` branches. It also runs an `image-scan` job (Trivy) that fails the PR when
+the panel image has a CRITICAL vulnerability with a fix available.
 
 ## Project standards
 
@@ -167,12 +168,13 @@ any other deploy. Use the examples in `examples/` as a reference.
 ## Pull request flow
 
 1. Open an **issue** before a large change (or comment on an existing one) to agree on the design
-   first. It avoids rework.
-2. Fork the repository and create a branch from `dev` (for example `feat/my-improvement`).
+   first. This avoids rework.
+2. Fork the repository and create a branch from `dev` (for example `feat/my-improvement`). `dev`
+   is where work is integrated; `main` only receives validated code.
 3. Make sure `pnpm build` and `pnpm typecheck` are clean and **`pnpm test` is green** (plus
    `pnpm test:e2e` if the change touches infrastructure flows). Every PR must include tests for its
    change.
-4. Open the PR and fill in the template: what changes, why, and how to test it.
+4. Open the PR **against `dev`** (not the default `main`) and fill in the template: what changes, why, and how to test it.
 5. Respond to the review. Small, focused PRs are merged much faster.
 
 ## License of your contribution
