@@ -9,6 +9,7 @@ export {
   initLocale,
   isSupported,
   localeName,
+  localeShort,
   setLocale,
   supportedLocales,
   translate,

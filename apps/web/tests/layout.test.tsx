@@ -2,7 +2,7 @@
  * layout.test.tsx — o menu de navegação no lugar escolhido em Configurações:
  * topo (padrão, o formato de sempre), lateral esquerda ou lateral direita.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavLayout } from "@paas/core";
@@ -66,21 +66,32 @@ describe("Layout — posição do menu", () => {
 });
 
 describe("Layout — Envios no menu", () => {
-  it("link Envios logo depois de E-mail", () => {
-    renderLayout("top");
-    const links = screen.getAllByRole("link").map((a) => a.textContent);
+  // No topo, Envios mora atrás de "Mais" (ver header-language-menu.test.tsx);
+  // na lateral e no menu móvel a lista é completa.
+  it("link Envios logo depois de E-mail (lista completa da lateral)", () => {
+    renderLayout("left");
+    const links = within(screen.getByTestId("nav-sidebar")).getAllByRole("link").map((a) => a.textContent);
     const mail = links.indexOf("E-mail");
     expect(mail).toBeGreaterThanOrEqual(0);
     expect(links[mail + 1]).toBe("Envios");
+    expect(within(screen.getByTestId("nav-sidebar")).getByRole("link", { name: "Envios" })).toHaveAttribute("href", "/mail/envios");
+  });
+
+  it("no topo, Envios abre em \"Mais\" e leva a /mail/envios", () => {
+    renderLayout("top");
+    expect(screen.queryByRole("link", { name: "Envios" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Mais" }));
     expect(screen.getByRole("link", { name: "Envios" })).toHaveAttribute("href", "/mail/envios");
   });
 
   it("em /mail/envios só Envios fica marcado; num domínio, só E-mail", () => {
     renderLayout("top", "/mail/envios");
+    fireEvent.click(screen.getByRole("button", { name: "Mais" }));
     expect(screen.getByRole("link", { name: "Envios" }).className).toContain("bg-secondary");
     expect(screen.getByRole("link", { name: "E-mail" }).className).not.toContain("bg-secondary");
     cleanup();
     renderLayout("top", "/mail/envio.exemplo.com.br");
+    fireEvent.click(screen.getByRole("button", { name: "Mais" }));
     expect(screen.getByRole("link", { name: "E-mail" }).className).toContain("bg-secondary");
     expect(screen.getByRole("link", { name: "Envios" }).className).not.toContain("bg-secondary");
   });
