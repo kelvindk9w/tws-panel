@@ -1056,7 +1056,7 @@ o wizard. O assistente abre no idioma do seu navegador (veja [Idioma da interfac
 **Idioma da interface.** O painel está disponível em português e em inglês. Na primeira visita, ele
 percorre a lista de idiomas do navegador e usa o primeiro que tem: português para qualquer variante
 de `pt` (como `pt-BR`), inglês para `en`; se nenhum combinar, inglês. Para mudar, use o seletor
-**Idioma** nas telas do assistente e de login, no menu do usuário ou, depois do setup, em
+**Idioma** nas telas do assistente e de login, no cabeçalho do painel (ao lado do menu do usuário, sempre à vista depois do login; na disposição lateral, no rodapé da lateral, acima do menu do usuário) ou em
 **Configurações → Aparência**. A escolha fica guardada só nesse navegador (não faz parte da sua
 conta); outro navegador ou aparelho começa de novo pelo idioma dele. As mensagens que o próprio
 servidor escreve (veja o aviso no topo desta página) continuam em português.

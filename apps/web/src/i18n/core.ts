@@ -45,6 +45,11 @@ export function localeName(locale: Locale): string {
   return catalog[locale]?.common?.["language.name"] ?? locale;
 }
 
+/** Código curto do idioma (PT, EN) para controles compactos; cai no próprio código. */
+export function localeShort(locale: Locale): string {
+  return catalog[locale]?.common?.["language.short"] ?? locale.toUpperCase();
+}
+
 /**
  * Escolhe o idioma: a preferência guardada (se ainda existir) vence; senão o
  * primeiro idioma do navegador que tenha tradução ("pt*" -> pt-BR); senão en.

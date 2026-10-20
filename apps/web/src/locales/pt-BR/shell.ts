@@ -12,6 +12,8 @@ export default {
   "nav.settings": "Configurações",
   "nav.setup": "Setup",
   "nav.menu": "Menu",
+  "nav.more": "Mais",
+  "nav.label": "Principal",
   "footer.poweredBy": "Powered by",
   "footer.license": "open-source (MIT)",
   // UpdateBanner

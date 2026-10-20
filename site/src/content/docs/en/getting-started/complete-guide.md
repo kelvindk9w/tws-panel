@@ -164,7 +164,7 @@ ports 80 and 443 closed in the provider's firewall. See the common errors in
 **Language.** On the first visit the panel goes through your browser's list of languages and uses the
 first one it has: Portuguese for any `pt` variant (such as `pt-BR`), English for `en`; if none matches,
 English. To change it, use the **Language**
-selector on the setup and sign-in screens, in the user menu, or under **Settings → Appearance**.
+selector on the setup and sign-in screens, in the panel header (next to your user menu, always visible; with the side menu layout it sits at the bottom of the sidebar, above the user menu), or under **Settings → Appearance**.
 The choice is saved in that browser only: another browser or device starts again from its own
 language.
 
@@ -441,7 +441,7 @@ Inbox. Forgot the mailbox password? **Mailboxes** tab → **Change password**.
 
 ### 6.9 The Sending page
 
-In the menu, **Sending** shows what the email server is doing:
+In the menu (**More → Sending**), **Sending** shows what the email server is doing:
 
 - **Queue now**: what is still being retried, with the reason for the last failure.
 - **History**: delivered, rejected, deferred, and canceled over the last 30 days.
@@ -696,7 +696,7 @@ guardrail blocked the deploy (e.g., an exposed database port), the screen says w
 ### 9.7 Certificate
 
 In the **Domains** tab, each of the project's domains shows its HTTPS certificate state. The
-**Certificates** page, in the menu, lists all of them (panel, projects, and email).
+**Certificates** page (menu **More → Certificates**) lists all of them (panel, projects, and email).
 
 **What to check:** the project's domain is **Valid**. If it failed, the **Certificates**
 page explains the likely cause (DNS not pointing to the VPS, orange cloud, ports 80/443 closed) and
@@ -783,10 +783,10 @@ The panel goes down for a few seconds and comes back by itself. The reason is ex
 
 - **Alerts** (menu): the alert center, with what monitoring found. Filter by status
   (open, acknowledged).
-- **Audit log** (menu): sensitive actions, with when, action, target, and detail.
+- **Audit log** (menu **More**): sensitive actions, with when, action, target, and detail.
 - **Security** (menu): VPS protections, baseline snapshot, monitoring, and email
   reputation.
-- **Certificates** and **Sending** (menu): certificates and email.
+- **Certificates** and **Sending** (menu **More**): certificates and email.
 - Telegram or the email from [Step 7](#etapa-7), when the panel is closed.
 
 ### If you lose access

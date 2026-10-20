@@ -3,12 +3,12 @@ import { useNavigate } from "react-router";
 import { ApiRequestError, apiFetch, clearSetupToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
-import { LanguageSelect } from "@/components/LanguageSelect";
 import { apiErrorText, useI18n } from "@/i18n";
-import { ChevronDown, KeyRound, Languages, LogOut, Settings, ShieldCheck, UserRound } from "lucide-react";
+import { ChevronDown, KeyRound, LogOut, Settings, ShieldCheck, UserRound } from "lucide-react";
 
 /**
  * Menu do usuário: atalhos para Configurações (a conta mora lá) e sair.
+ * O idioma não fica aqui: o seletor está sempre à vista no cabeçalho (Layout).
  * No topo abre para baixo; na lateral (Configurações → Aparência), fica no
  * rodapé dela e abre para cima.
  *
@@ -26,6 +26,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
 
   // fecha o menu ao clicar fora
   useEffect(() => {
@@ -64,9 +65,30 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
 
   const item = "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent";
 
+  function close() {
+    setOpen(false);
+    setLogoutError(null);
+  }
+
   return (
-    <div ref={containerRef} className={placement === "top" ? "relative ml-auto" : "relative w-full"}>
+    <div
+      ref={containerRef}
+      className={placement === "top" ? "relative" : "relative w-full"}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation();
+          close();
+          buttonRef.current?.focus();
+        }
+      }}
+      onBlur={(event) => {
+        // o foco foi para fora do menu (ex.: abriu o "Mais"): fecha, sem sobrepor
+        const to = event.relatedTarget as Node | null;
+        if (to && containerRef.current && !containerRef.current.contains(to)) close();
+      }}
+    >
       <button
+        ref={buttonRef}
         type="button"
         aria-label={t("shell.userMenu.account", { name: user.displayName || user.username })}
         onClick={() => setOpen((v) => !v)}
@@ -77,7 +99,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
       >
         <UserRound className="h-4 w-4" />
         {/* no topo, em tela de celular, só o ícone: o nome empurrava a página para o lado */}
-        <span className={cn("truncate", placement === "top" ? "hidden max-w-32 sm:inline" : "flex-1 text-left")}>
+        <span className={cn("truncate", placement === "top" ? "hidden max-w-24 sm:inline xl:max-w-32" : "flex-1 text-left")}>
           {user.displayName || user.username}
         </span>
         <ChevronDown className="h-3.5 w-3.5" />
@@ -102,10 +124,6 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
           <button type="button" className={item} onClick={() => go("/settings/security#two-factor")}>
             <ShieldCheck className="h-4 w-4" /> {t("shell.userMenu.twoFactor")}
           </button>
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <Languages className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-            <LanguageSelect className="min-w-0 flex-1" />
-          </div>
           {logoutError ? (
             <div role="alert" className="m-1 rounded-sm border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">
               <p>
