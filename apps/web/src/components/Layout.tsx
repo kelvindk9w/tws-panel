@@ -6,18 +6,20 @@ import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { UserMenu } from "@/components/UserMenu";
 import { useAuth } from "@/lib/auth";
+import { useI18n } from "@/i18n";
+import type { Key } from "@/i18n";
 
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", end: true },
-  { to: "/projects/new", label: "Novo Projeto" },
-  { to: "/mail", label: "E-mail" },
-  { to: "/mail/envios", label: "Envios" },
-  { to: "/certificates", label: "Certificados" },
-  { to: "/security", label: "Segurança" },
-  { to: "/alerts", label: "Alertas" },
-  { to: "/audit", label: "Auditoria" },
-  { to: "/settings", label: "Configurações" },
-  { to: "/setup", label: "Setup" },
+const NAV_ITEMS: Array<{ to: string; label: Key; end?: boolean }> = [
+  { to: "/", label: "shell.nav.dashboard", end: true },
+  { to: "/projects/new", label: "shell.nav.newProject" },
+  { to: "/mail", label: "shell.nav.mail" },
+  { to: "/mail/envios", label: "shell.nav.sending" },
+  { to: "/certificates", label: "shell.nav.certificates" },
+  { to: "/security", label: "shell.nav.security" },
+  { to: "/alerts", label: "shell.nav.alerts" },
+  { to: "/audit", label: "shell.nav.audit" },
+  { to: "/settings", label: "shell.nav.settings" },
+  { to: "/setup", label: "shell.nav.setup" },
 ];
 
 /** Badge com a contagem de alertas abertos (polling de 30s). */
@@ -83,6 +85,7 @@ function Brand() {
 
 /** Itens do menu — em linha (topo) ou empilhados (lateral). */
 function NavItems({ vertical }: { vertical: boolean }) {
+  const { t } = useI18n();
   // /mail/envios fica dentro de /mail: sem isto, "E-mail" ficaria marcado junto.
   const { pathname } = useLocation();
   const enviosOpen = pathname === "/mail/envios" || pathname.startsWith("/mail/envios/");
@@ -102,7 +105,7 @@ function NavItems({ vertical }: { vertical: boolean }) {
             )
           }
         >
-          {item.label}
+          {t(item.label)}
           {item.to === "/alerts" && <OpenAlertsBadge />}
         </NavLink>
       ))}
@@ -111,6 +114,7 @@ function NavItems({ vertical }: { vertical: boolean }) {
 }
 
 function TopBar({ className }: { className?: string }) {
+  const { t } = useI18n();
   // Em telas pequenas os itens não cabem numa linha: ficam atrás de "Menu".
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -128,7 +132,7 @@ function TopBar({ className }: { className?: string }) {
           onClick={() => setMobileOpen((v) => !v)}
           className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
         >
-          {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />} Menu
+          {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />} {t("shell.nav.menu")}
         </button>
         <UserMenu />
       </div>
@@ -142,10 +146,11 @@ function TopBar({ className }: { className?: string }) {
 }
 
 function Footer() {
+  const { t } = useI18n();
   return (
     <footer className="border-t py-6">
       <p className="text-center text-xs text-muted-foreground">
-        Powered by <span className="font-medium">TWS</span> · open-source (MIT)
+        {t("shell.footer.poweredBy")} <span className="font-medium">TWS</span> · {t("shell.footer.license")}
       </p>
     </footer>
   );

@@ -1,18 +1,40 @@
 import { NavLink, Outlet } from "react-router";
 import { cn } from "@/lib/utils";
-import { Bell, Clock, DatabaseBackup, Globe, ListChecks, Palette, Plug, ShieldCheck, UserRound } from "lucide-react";
+import { t, useI18n, type Key } from "@/i18n";
+import {
+  Bell,
+  Clock,
+  DatabaseBackup,
+  Globe,
+  ListChecks,
+  Palette,
+  Plug,
+  ShieldCheck,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react";
+
+function section<const T extends { to: string; labelKey: Key; icon: LucideIcon }>(s: T) {
+  return {
+    ...s,
+    /** Rótulo no idioma atual (lido na hora do acesso). */
+    get label(): string {
+      return t(s.labelKey);
+    },
+  };
+}
 
 /** Seções de Configurações — cada uma com o seu endereço. */
 export const SETTINGS_SECTIONS = [
-  { to: "/settings/profile", label: "Perfil", icon: UserRound },
-  { to: "/settings/security", label: "Segurança", icon: ShieldCheck },
-  { to: "/settings/panel-domain", label: "Domínio do painel", icon: Globe },
-  { to: "/settings/appearance", label: "Aparência", icon: Palette },
-  { to: "/settings/notifications", label: "Notificações", icon: Bell },
-  { to: "/settings/backups", label: "Backups", icon: DatabaseBackup },
-  { to: "/settings/timezone", label: "Fuso horário", icon: Clock },
-  { to: "/settings/integrations", label: "Integrações", icon: Plug },
-  { to: "/settings/onboarding", label: "Primeiros passos", icon: ListChecks },
+  section({ to: "/settings/profile", labelKey: "settings.section.profile", icon: UserRound }),
+  section({ to: "/settings/security", labelKey: "settings.section.security", icon: ShieldCheck }),
+  section({ to: "/settings/panel-domain", labelKey: "settings.section.panelDomain", icon: Globe }),
+  section({ to: "/settings/appearance", labelKey: "settings.section.appearance", icon: Palette }),
+  section({ to: "/settings/notifications", labelKey: "settings.section.notifications", icon: Bell }),
+  section({ to: "/settings/backups", labelKey: "settings.section.backups", icon: DatabaseBackup }),
+  section({ to: "/settings/timezone", labelKey: "settings.section.timezone", icon: Clock }),
+  section({ to: "/settings/integrations", labelKey: "settings.section.integrations", icon: Plug }),
+  section({ to: "/settings/onboarding", labelKey: "settings.section.onboarding", icon: ListChecks }),
 ] as const;
 
 /**
@@ -20,19 +42,20 @@ export const SETTINGS_SECTIONS = [
  * largas, faixa rolável no alto em telas pequenas) + a seção aberta.
  */
 export function SettingsLayout() {
+  const { t } = useI18n();
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Configurações</h1>
-        <p className="text-sm text-muted-foreground">Ajustes da sua conta e do painel.</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("settings.layout.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("settings.layout.subtitle")}</p>
       </div>
       <div className="flex flex-col gap-6 md:flex-row">
         <nav
           data-testid="settings-nav"
-          aria-label="Seções de configurações"
+          aria-label={t("settings.layout.navLabel")}
           className="flex shrink-0 gap-1 overflow-x-auto text-sm md:w-48 md:flex-col"
         >
-          {SETTINGS_SECTIONS.map(({ to, label, icon: Icon }) => (
+          {SETTINGS_SECTIONS.map(({ to, labelKey, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -43,7 +66,7 @@ export function SettingsLayout() {
                 )
               }
             >
-              <Icon className="h-4 w-4" /> {label}
+              <Icon className="h-4 w-4" /> {t(labelKey)}
             </NavLink>
           ))}
         </nav>

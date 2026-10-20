@@ -1,6 +1,8 @@
 /**
- * Texto de cada passo do roteiro "Deixe o painel pronto": o "Como fazer"
+ * Conteúdo de cada passo do roteiro "Deixe o painel pronto": o "Como fazer"
  * (o que é, por que importa, passo a passo) e o botão que leva à tela certa.
+ * Os textos ficam em `locales/<idioma>/onboarding.ts`; aqui só as chaves, e a
+ * tradução acontece na renderização.
  * O STATUS vem do servidor (GET /api/onboarding), calculado do estado real.
  *
  * Passo "em breve" (funcionalidade que ainda não existe): sem `action`. Quando
@@ -8,114 +10,109 @@
  * o servidor passa a devolver o status real e o resto do roteiro não muda.
  */
 import type { OnboardingStepId } from "@paas/core";
+import type { Key } from "@/i18n";
 import { Bell, DatabaseBackup, Globe, KeyRound, Mail, ShieldCheck, type LucideIcon } from "lucide-react";
 
 export interface OnboardingStepContent {
-  title: string;
+  title: Key;
   icon: LucideIcon;
-  whatIs: string;
-  why: string;
-  howTo: string[];
+  whatIs: Key;
+  why: Key;
+  howTo: Key[];
   /** Observação destacada no "Como fazer" (ex.: quando marcar "Não vou usar"). */
-  note?: string;
+  note?: Key;
   /** Botão que leva direto à tela certa; ausente nos passos "em breve". */
-  action?: { label: string; to: string };
+  action?: { label: Key; to: string };
 }
 
 export const ONBOARDING_CONTENT: Record<OnboardingStepId, OnboardingStepContent> = {
   hardening: {
-    title: "Proteções da VPS",
+    title: "onboarding.steps.hardening.title",
     icon: ShieldCheck,
-    whatIs:
-      "Ajustes de segurança no sistema da VPS, em fases: atualizações automáticas, acesso SSH só com chave, firewall, bloqueio de quem tenta adivinhar senha e auditoria.",
-    why: "A VPS fica na internet o tempo todo e recebe tentativas automáticas de invasão desde o primeiro minuto. Cada fase fecha uma porta de entrada comum.",
+    whatIs: "onboarding.steps.hardening.whatIs",
+    why: "onboarding.steps.hardening.why",
     howTo: [
-      "Abra Segurança → Proteções e rode a varredura para ver o que falta.",
-      "Simule as fases pendentes: nada muda na VPS durante a simulação.",
-      "Se a simulação estiver certa, aplique de verdade.",
-      "Nas fases de SSH e firewall, teste o acesso numa janela nova antes de confirmar — se não confirmar em 5 minutos, a fase se desfaz sozinha.",
+      "onboarding.steps.hardening.howTo.1",
+      "onboarding.steps.hardening.howTo.2",
+      "onboarding.steps.hardening.howTo.3",
+      "onboarding.steps.hardening.howTo.4",
     ],
-    action: { label: "Abrir Proteções", to: "/security/hardening" },
+    action: { label: "onboarding.steps.hardening.action", to: "/security/hardening" },
   },
   "two-factor": {
-    title: "Verificação em duas etapas",
+    title: "onboarding.steps.twoFactor.title",
     icon: KeyRound,
-    whatIs:
-      "Além da senha, entrar no painel passa a pedir um código de 6 dígitos que muda a cada 30 segundos, gerado por um app no seu celular.",
-    why: "O painel está na internet. Se a sua senha vazar, ninguém entra sem o seu celular.",
+    whatIs: "onboarding.steps.twoFactor.whatIs",
+    why: "onboarding.steps.twoFactor.why",
     howTo: [
-      "Instale no celular um app autenticador (Google Authenticator, Microsoft Authenticator, 2FAS ou parecido).",
-      "Em Configurações → Segurança, clique para ativar e leia o QR code com o app.",
-      "Digite a sua senha e o código que o app mostrar.",
-      "Guarde os códigos de recuperação num lugar seguro: são a saída se você perder o celular.",
+      "onboarding.steps.twoFactor.howTo.1",
+      "onboarding.steps.twoFactor.howTo.2",
+      "onboarding.steps.twoFactor.howTo.3",
+      "onboarding.steps.twoFactor.howTo.4",
     ],
-    action: { label: "Ativar a verificação", to: "/settings/security#two-factor" },
+    action: { label: "onboarding.steps.twoFactor.action", to: "/settings/security#two-factor" },
   },
   "panel-domain": {
-    title: "Domínio do painel",
+    title: "onboarding.steps.panelDomain.title",
     icon: Globe,
-    whatIs:
-      "Um endereço seu para abrir o painel, como painel.exemplo.com.br, no lugar do endereço automático criado na instalação.",
-    why: "O endereço atual tem o IP da VPS no nome: entrega onde o seu servidor está e é difícil de lembrar. Um domínio seu é mais discreto e fácil de guardar.",
+    whatIs: "onboarding.steps.panelDomain.whatIs",
+    why: "onboarding.steps.panelDomain.why",
     howTo: [
-      "Escolha um subdomínio para o painel (ex.: painel.exemplo.com.br) e informe em Configurações → Domínio do painel.",
-      "No seu provedor de DNS, crie o registro do tipo A que a tela mostrar, apontando para o IP da VPS. No Cloudflare, deixe a nuvem cinza (“Somente DNS”).",
-      "Clique em Verificar DNS. Com o DNS certo, o painel passa a responder nos dois endereços e emite o certificado HTTPS sozinho (costuma levar de segundos a 2 minutos).",
-      "Com o certificado válido, clique em “Abrir o painel pelo endereço novo” e entre de novo: a sessão vale só no endereço em que você entrou.",
-      "Opcional, já no endereço novo: Desativar o acesso pelo IP. Antes, anote o comando de SSH que a tela mostra para reativar, caso o domínio pare de abrir.",
+      "onboarding.steps.panelDomain.howTo.1",
+      "onboarding.steps.panelDomain.howTo.2",
+      "onboarding.steps.panelDomain.howTo.3",
+      "onboarding.steps.panelDomain.howTo.4",
+      "onboarding.steps.panelDomain.howTo.5",
     ],
-    note: "No acesso por túnel SSH o painel não tem endereço na internet: este passo já conta como feito e a tela explica como mudar para HTTPS.",
-    action: { label: "Abrir Domínio do painel", to: "/settings/panel-domain" },
+    note: "onboarding.steps.panelDomain.note",
+    action: { label: "onboarding.steps.panelDomain.action", to: "/settings/panel-domain" },
   },
   email: {
-    title: "E-mail do servidor",
+    title: "onboarding.steps.email.title",
     icon: Mail,
-    whatIs:
-      "Um servidor de e-mail na própria VPS para os seus projetos enviarem mensagens (recuperação de senha, avisos, formulários de contato).",
-    why: "Sem ele, cada projeto precisa de um serviço externo de envio. Com ele, o painel cria a caixa e entrega os dados de envio ao projeto sozinho.",
+    whatIs: "onboarding.steps.email.whatIs",
+    why: "onboarding.steps.email.why",
     howTo: [
-      "Escolha um subdomínio só para envio, como envio.exemplo.com.br. Não use o domínio principal: apontar o MX dele para a VPS desviaria o e-mail que a empresa já recebe em outro lugar.",
-      "Abra E-mail e inicie o servidor.",
-      "Adicione o domínio de envio.",
-      "Crie no seu provedor de DNS os registros que o painel mostrar e clique em Verificar DNS.",
+      "onboarding.steps.email.howTo.1",
+      "onboarding.steps.email.howTo.2",
+      "onboarding.steps.email.howTo.3",
+      "onboarding.steps.email.howTo.4",
     ],
-    note: "Opcional: se os seus projetos usam um serviço externo de envio (Amazon SES, Resend, SendGrid…), marque “Não vou usar”.",
-    action: { label: "Abrir E-mail", to: "/mail" },
+    note: "onboarding.steps.email.note",
+    action: { label: "onboarding.steps.email.action", to: "/mail" },
   },
   notifications: {
-    title: "Notificações",
+    title: "onboarding.steps.notifications.title",
     icon: Bell,
-    whatIs:
-      "Avisos fora do painel quando algo precisa da sua atenção: alerta de segurança, deploy que falhou, certificado que não renovou, e-mail em lista de bloqueio, disco quase cheio.",
-    why: "Sem isso, os alertas só aparecem dentro do painel. Com ele fechado, um problema pode passar dias sem ninguém ver.",
+    whatIs: "onboarding.steps.notifications.whatIs",
+    why: "onboarding.steps.notifications.why",
     howTo: [
-      "No Telegram, abra a conversa com o @BotFather, mande /newbot e escolha um nome e um @ terminado em “bot”.",
-      "Copie o token que ele responder (a linha inteira, como 123456789:ABC…) e cole em Configurações → Notificações → Telegram.",
-      "Abra a conversa com o seu robô, toque em “Começar” (ou mande /start) e clique em Conectar: o painel mostra o nome da conversa para você conferir.",
-      "Clique em “Enviar teste” e confira se a mensagem chegou no Telegram.",
-      "Se quiser também por e-mail (precisa do e-mail do servidor do passo anterior), informe os endereços no cartão E-mail e envie o teste.",
-      "Escolha o que avisa. O padrão já liga tudo que pede ação; “Painel reiniciado” começa desligado.",
+      "onboarding.steps.notifications.howTo.1",
+      "onboarding.steps.notifications.howTo.2",
+      "onboarding.steps.notifications.howTo.3",
+      "onboarding.steps.notifications.howTo.4",
+      "onboarding.steps.notifications.howTo.5",
+      "onboarding.steps.notifications.howTo.6",
     ],
-    note: "Conta como feito com pelo menos um canal conectado e com o teste enviado. Pode ser só o Telegram, só o e-mail ou os dois. Se preferir acompanhar só pelo painel, marque “Não vou usar”.",
-    action: { label: "Abrir Notificações", to: "/settings/notifications" },
+    note: "onboarding.steps.notifications.note",
+    action: { label: "onboarding.steps.notifications.action", to: "/settings/notifications" },
   },
   backups: {
-    title: "Backups fora da VPS",
+    title: "onboarding.steps.backups.title",
     icon: DatabaseBackup,
-    whatIs:
-      "Uma cópia automática do painel, do e-mail e dos bancos e arquivos de cada projeto, enviada para um armazenamento fora da VPS (como o Cloudflare R2) e cifrada com uma senha sua.",
-    why: "O painel já guarda cópias na própria VPS, mas elas somem junto se o servidor for perdido, invadido ou apagado por engano. Com uma cópia fora, dá para montar tudo de novo numa VPS nova.",
+    whatIs: "onboarding.steps.backups.whatIs",
+    why: "onboarding.steps.backups.why",
     howTo: [
-      "No painel da Cloudflare, abra R2 Object Storage / Armazenamento de objetos R2 e ative o R2 (o plano gratuito cobre 10 GB por mês). Os nomes aparecem em inglês ou em português, conforme o idioma da sua conta: os dois vêm aqui (inglês / português).",
-      "Clique em Create bucket / Criar bucket e crie um (ex.: tws-backups).",
-      "Na página do R2, no canto direito, ache API Tokens / Tokens de API e clique em Manage / Gerenciar. Depois, em Create Account API token / Criar token de API da conta.",
-      "No formulário: um nome (ex.: tws-panel-backups); em Permissions / Permissões, Object Read & Write / Leitura e gravação de objetos; em Specify bucket(s) / Especificar bucket(s), Apply to specific buckets only / Aplicar somente a buckets específicos e escolha o bucket; TTL Forever / Para sempre. Confirme no botão de criar o token.",
-      "A tela seguinte mostra as chaves uma única vez: copie a Access Key ID / ID da chave de acesso, a Secret Access Key / Chave de acesso secreta e o endpoint que termina em .r2.cloudflarestorage.com (o Token value / Valor do token não é usado). Perdeu o endpoint? Ele fica no bucket → Settings / Configurações → S3 API.",
-      "Em Configurações → Backups, cole os dados no cartão Armazenamento externo (região auto) e clique em Testar e salvar.",
-      "No cartão Criptografia, crie a senha (ou clique em Sugerir uma frase forte), baixe o kit de recuperação e marque “Guardei a senha em lugar seguro”.",
-      "Clique em Fazer backup agora no Painel: o passo fica feito quando a primeira cópia externa for enviada e conferida.",
+      "onboarding.steps.backups.howTo.1",
+      "onboarding.steps.backups.howTo.2",
+      "onboarding.steps.backups.howTo.3",
+      "onboarding.steps.backups.howTo.4",
+      "onboarding.steps.backups.howTo.5",
+      "onboarding.steps.backups.howTo.6",
+      "onboarding.steps.backups.howTo.7",
+      "onboarding.steps.backups.howTo.8",
     ],
-    note: "Conta como feito com o armazenamento conectado e pelo menos um backup externo conferido. Se você já tem outra rotina de backup fora da VPS, marque “Não vou usar”.",
-    action: { label: "Abrir Backups", to: "/settings/backups" },
+    note: "onboarding.steps.backups.note",
+    action: { label: "onboarding.steps.backups.action", to: "/settings/backups" },
   },
 };

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n";
 
 /** Intervalo entre conferências de versão (a aba visível também confere ao voltar). */
 const CHECK_INTERVAL_MS = 60_000;
@@ -35,6 +36,7 @@ async function servedBundle(): Promise<string | null> {
  * a aba está desatualizada.
  */
 export function UpdateBanner({ onReload = () => window.location.reload() }: { onReload?: () => void }) {
+  const { t } = useI18n();
   const [outdated, setOutdated] = useState(false);
 
   useEffect(() => {
@@ -65,9 +67,9 @@ export function UpdateBanner({ onReload = () => window.location.reload() }: { on
       role="status"
       className="fixed inset-x-0 bottom-0 z-50 flex flex-wrap items-center justify-center gap-3 border-t border-sky-500/40 bg-sky-950/95 px-4 py-3 text-sm text-sky-100"
     >
-      <span>Uma nova versão do painel foi instalada. Recarregue para usar a versão atual.</span>
+      <span>{t("shell.update.message")}</span>
       <Button size="sm" onClick={onReload}>
-        <RefreshCw className="h-3.5 w-3.5" /> Recarregar
+        <RefreshCw className="h-3.5 w-3.5" /> {t("shell.update.reload")}
       </Button>
     </div>
   );

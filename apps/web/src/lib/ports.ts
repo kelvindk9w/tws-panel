@@ -11,6 +11,7 @@ import type {
   ProjectPortService,
   ProjectPortsView,
 } from "@paas/core";
+import { compareText, lowerCase, t } from "@/i18n";
 
 export type SortDir = "asc" | "desc";
 export interface SortState<K extends string> {
@@ -23,15 +24,15 @@ export type AllSortKey = "project" | "container" | "port" | "state";
 /** "127.0.0.1:8010 → 8010"; sem porta do servidor, "80 (só interna)". */
 export function bindingText(hostIp: string | null, hostPort: number | null, containerPort: number, protocol: string): string {
   const proto = protocol === "tcp" ? "" : `/${protocol}`;
-  if (hostPort === null) return `${containerPort}${proto} (só interna)`;
+  if (hostPort === null) return t("ports.binding.internalOnly", { port: `${containerPort}${proto}` });
   const ip = hostIp === null ? "0.0.0.0" : hostIp.includes(":") ? `[${hostIp}]` : hostIp;
   return `${ip}:${hostPort} → ${containerPort}${proto}`;
 }
 
 export function ownerLabel(row: PortUsageRow): string {
-  if (row.owner === "panel") return "Painel";
-  if (row.owner === "external") return "Externo";
-  return row.projectName ?? "Projeto";
+  if (row.owner === "panel") return t("ports.owner.panel");
+  if (row.owner === "external") return t("ports.owner.external");
+  return row.projectName ?? t("ports.owner.project");
 }
 
 const STATE_RANK: Record<string, number> = { running: 0, restarting: 1, created: 2, paused: 2, exited: 3, dead: 3 };
@@ -48,8 +49,8 @@ function compareNullable(a: number | null, b: number | null, dir: SortDir): numb
   return dir === "asc" ? a - b : b - a;
 }
 
-function compareText(a: string, b: string, dir: SortDir): number {
-  const r = a.localeCompare(b, "pt-BR");
+function compareDir(a: string, b: string, dir: SortDir): number {
+  const r = compareText(a, b);
   return dir === "asc" ? r : -r;
 }
 
@@ -57,9 +58,9 @@ export function sortRows(rows: PortUsageRow[], sort: SortState<AllSortKey>): Por
   const by = (a: PortUsageRow, b: PortUsageRow): number => {
     switch (sort.key) {
       case "project":
-        return compareText(ownerLabel(a), ownerLabel(b), sort.dir);
+        return compareDir(ownerLabel(a), ownerLabel(b), sort.dir);
       case "container":
-        return compareText(a.container ?? a.service ?? "", b.container ?? b.service ?? "", sort.dir);
+        return compareDir(a.container ?? a.service ?? "", b.container ?? b.service ?? "", sort.dir);
       case "port":
         return compareNullable(a.hostPort, b.hostPort, sort.dir);
       case "state":
@@ -79,23 +80,23 @@ export function sortServices(services: ProjectPortService[], sort: SortState<Pro
   const by = (a: ProjectPortService, b: ProjectPortService): number => {
     switch (sort.key) {
       case "service":
-        return compareText(a.name, b.name, sort.dir);
+        return compareDir(a.name, b.name, sort.dir);
       case "port":
         return compareNullable(firstPort(a), firstPort(b), sort.dir);
       case "state":
         return compareNullable(stateRank(a.state), stateRank(b.state), sort.dir);
     }
   };
-  return [...services].sort((a, b) => by(a, b) || a.name.localeCompare(b.name));
+  return [...services].sort((a, b) => by(a, b) || compareText(a.name, b.name));
 }
 
 export function filterRows(rows: PortUsageRow[], query: string): PortUsageRow[] {
-  const q = query.trim().toLowerCase();
+  const q = lowerCase(query.trim());
   if (!q) return rows;
   return rows.filter((r) =>
     [ownerLabel(r), r.container, r.service, r.image, r.hostPort, r.containerPort]
       .filter((v) => v !== null && v !== undefined)
-      .some((v) => String(v).toLowerCase().includes(q)),
+      .some((v) => lowerCase(String(v)).includes(q)),
   );
 }
 
@@ -109,24 +110,24 @@ export function checkNewPort(
   reserved: number[],
   own: { projectId: string; service: string },
 ): string | null {
-  const t = text.trim();
-  if (t === "") return null;
-  if (!/^\d+$/.test(t)) return "Digite só o número da porta.";
-  const port = Number(t);
-  if (port === 80 || port === 443) return "As portas 80 e 443 são do painel (ele recebe o tráfego de todos os sites).";
-  if (port < 1024 || port > 65535) return "Use uma porta de 1024 a 65535.";
-  if (reserved.includes(port)) return `A porta ${port} é reservada ao painel. Escolha outra.`;
+  const typed = text.trim();
+  if (typed === "") return null;
+  if (!/^\d+$/.test(typed)) return t("ports.check.digitsOnly");
+  const port = Number(typed);
+  if (port === 80 || port === 443) return t("ports.check.panelPorts");
+  if (port < 1024 || port > 65535) return t("ports.check.range");
+  if (reserved.includes(port)) return t("ports.check.reserved", { port });
   const other = rows.find(
     (r) => r.hostPort === port && !(r.owner === "project" && r.projectId === own.projectId && r.service === own.service),
   );
   if (other) {
     const who =
       other.owner === "project"
-        ? `${other.projectName} · ${other.service}`
+        ? t("ports.who.project", { project: other.projectName ?? "", service: other.service ?? "" })
         : other.owner === "panel"
-          ? "o painel"
-          : `container ${other.container}`;
-    return `A porta ${port} já é usada por ${who}. Escolha outra.`;
+          ? t("ports.who.panel")
+          : t("ports.who.container", { container: other.container ?? "" });
+    return t("ports.check.inUse", { port, who });
   }
   return null;
 }
@@ -290,20 +291,20 @@ function bindIp(ip: string): string | null {
 }
 
 function usedBy(row: PortUsageRow): string {
-  if (row.owner === "project") return `por ${row.projectName} · ${row.service}`;
-  if (row.owner === "panel") return "pelo painel";
-  return `pelo container ${row.container}`;
+  if (row.owner === "project") return t("ports.usedBy.project", { project: row.projectName ?? "", service: row.service ?? "" });
+  if (row.owner === "panel") return t("ports.usedBy.panel");
+  return t("ports.usedBy.container", { container: row.container ?? "" });
 }
 
 /** Problema da porta do servidor digitada (sem olhar conflitos), ou null. */
 function hostPortProblem(text: string, reserved: number[]): string | null {
-  const t = text.trim();
-  if (t === "") return "Informe a porta do servidor.";
-  if (!/^\d+$/.test(t)) return "Digite só o número da porta.";
-  const port = Number(t);
-  if (port === 80 || port === 443) return "As portas 80 e 443 são do painel (ele recebe o tráfego de todos os sites).";
-  if (port < 1024 || port > 65535) return "Use uma porta de 1024 a 65535.";
-  if (reserved.includes(port)) return `A porta ${port} é reservada ao painel. Escolha outra.`;
+  const typed = text.trim();
+  if (typed === "") return t("ports.check.hostRequired");
+  if (!/^\d+$/.test(typed)) return t("ports.check.digitsOnly");
+  const port = Number(typed);
+  if (port === 80 || port === 443) return t("ports.check.panelPorts");
+  if (port < 1024 || port > 65535) return t("ports.check.range");
+  if (reserved.includes(port)) return t("ports.check.reserved", { port });
   return null;
 }
 
@@ -319,7 +320,7 @@ export function checkDraft(rows: DraftRow[], serverRows: PortUsageRow[], reserve
     if (r.original === null) {
       const c = r.containerPort.trim();
       if (!/^\d+$/.test(c) || Number(c) < 1 || Number(c) > 65535) {
-        errors[r.id] = "Informe a porta interna (onde o app escuta dentro do container), de 1 a 65535.";
+        errors[r.id] = t("ports.check.internalRequired");
         continue;
       }
     }
@@ -327,7 +328,7 @@ export function checkDraft(rows: DraftRow[], serverRows: PortUsageRow[], reserve
     const problem = hostPortProblem(r.hostPort, reserved);
     if (problem) errors[r.id] = problem;
     else if (!(BIND_ADDRESSES as readonly string[]).includes(r.hostIp)) {
-      errors[r.id] = "Escolha onde a porta fica aberta: 127.0.0.1 ou 0.0.0.0.";
+      errors[r.id] = t("ports.check.addressChoice");
     }
   }
 
@@ -341,11 +342,11 @@ export function checkDraft(rows: DraftRow[], serverRows: PortUsageRow[], reserve
       (o) => o !== r && Number(o.hostPort.trim()) === port && o.protocol === r.protocol && overlaps(bindIp(o.hostIp), ip),
     );
     if (twin) {
-      errors[r.id] = `A porta ${port} do servidor também está na linha de ${twin.service} (→ ${twin.containerPort}).`;
+      errors[r.id] = t("ports.check.twin", { port, service: twin.service, containerPort: twin.containerPort });
       continue;
     }
     const other = others.find((s) => s.hostPort === port && s.protocol === r.protocol && overlaps(s.hostIp, ip));
-    if (other) errors[r.id] = `A porta ${port} do servidor já é usada ${usedBy(other)}. Escolha outra.`;
+    if (other) errors[r.id] = t("ports.check.otherUsed", { port, usedBy: usedBy(other) });
   }
   return errors;
 }

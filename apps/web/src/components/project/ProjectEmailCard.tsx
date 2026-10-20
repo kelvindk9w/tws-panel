@@ -31,6 +31,7 @@ import type {
 import type { ExistingMailInfo } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
+import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
 import { EmailLinksModal } from "@/components/project/EmailLinksModal";
 import { MailboxAppSettings } from "@/components/project/MailboxAppSettings";
 import {
@@ -70,10 +71,10 @@ import {
 
 /** Abas do e-mail ativado; o valor vai na URL (?email=caixas, ?email=dns). */
 type EmailTab = "remetente" | "caixas" | "dns";
-const EMAIL_TABS: ReadonlyArray<readonly [EmailTab, string]> = [
-  ["remetente", "Remetente"],
-  ["caixas", "Caixas"],
-  ["dns", "DNS"],
+const EMAIL_TABS: ReadonlyArray<readonly [EmailTab, Key]> = [
+  ["remetente", "mail.project.tab.sender"],
+  ["caixas", "mail.project.tab.mailboxes"],
+  ["dns", "mail.project.tab.dns"],
 ];
 
 function tabFromParam(value: string | null): EmailTab {
@@ -85,8 +86,10 @@ function dnsReady(domain: MailDomainSummary | undefined): boolean {
 }
 
 function dnsLabel(domain: MailDomainSummary): string {
-  if (!domain.lastVerify) return "DNS não verificado";
-  return dnsReady(domain) ? `DNS ${domain.lastVerify.ok}/${domain.lastVerify.total} OK` : "DNS com pendências";
+  if (!domain.lastVerify) return tGlobal("mail.project.dns.notVerified");
+  return dnsReady(domain)
+    ? tGlobal("mail.project.dns.ok", { ok: domain.lastVerify.ok, total: domain.lastVerify.total })
+    : tGlobal("mail.project.dns.pending");
 }
 
 export function ProjectEmailCard({
@@ -101,6 +104,7 @@ export function ProjectEmailCard({
   /** Domínio do site do projeto: sugestão para o domínio de e-mail. */
   projectDomain?: string;
 }) {
+  const { t } = useI18n();
   const [email, setEmail] = useState<ProjectEmailConfig | null>(null);
   const [domains, setDomains] = useState<MailDomainSummary[]>([]);
   const [selectedDomain, setSelectedDomain] = useState("");
@@ -148,7 +152,7 @@ export function ProjectEmailCard({
       setEmail(res.email);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar o e-mail do projeto.");
+      setError(apiErrorText(err, "mail.project.loadError"));
     }
   }, [projectId]);
 
@@ -187,7 +191,7 @@ export function ProjectEmailCard({
           ? (err.data?.existingMail as ExistingMailInfo | undefined)
           : undefined;
       if (info) setExistingMail({ domain: name, info });
-      else setError(err instanceof Error ? err.message : "Falha ao cadastrar o domínio.");
+      else setError(apiErrorText(err, "mail.project.addDomainError"));
     } finally {
       setBusy(false);
     }
@@ -200,7 +204,7 @@ export function ProjectEmailCard({
       await apiFetch(`/api/mail/domains/${encodeURIComponent(name)}/verify`, { method: "POST" });
       await loadDomains(name);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao verificar o DNS.");
+      setError(apiErrorText(err, "mail.project.verifyError"));
     } finally {
       setVerifying(false);
     }
@@ -235,7 +239,7 @@ export function ProjectEmailCard({
       setEditing(false);
       setSaved(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao salvar o e-mail do projeto.");
+      setError(apiErrorText(err, "mail.project.saveError"));
     } finally {
       setBusy(false);
     }
@@ -264,7 +268,7 @@ export function ProjectEmailCard({
       setChangingPassword(false);
       setPasswordChanged(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao trocar a senha.");
+      setError(apiErrorText(err, "mail.project.passwordError"));
     } finally {
       setBusy(false);
     }
@@ -285,7 +289,7 @@ export function ProjectEmailCard({
       setEmail(res.email);
       setSaved(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao desativar o e-mail do projeto.");
+      setError(apiErrorText(err, "mail.project.disableError"));
     } finally {
       setBusy(false);
     }
@@ -311,13 +315,12 @@ export function ProjectEmailCard({
       <CardHeader className="pb-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base">
-            <Mail className="h-4 w-4" /> E-mail do projeto
+            <Mail className="h-4 w-4" /> {t("mail.project.title")}
           </CardTitle>
-          <Badge variant={email.enabled ? "success" : "secondary"}>{email.enabled ? "ativado" : "desativado"}</Badge>
+          <Badge variant={email.enabled ? "success" : "secondary"}>{email.enabled ? t("mail.project.enabled") : t("mail.project.disabled")}</Badge>
         </div>
         <CardDescription>
-          O painel cria a caixa de e-mail do projeto no endereço que você escolher e entrega os dados de envio (SMTP_* e
-          MAIL_FROM) no próximo deploy. Você também pode abrir essa caixa num app de e-mail para ler as respostas.
+          {t("mail.project.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -327,8 +330,8 @@ export function ProjectEmailCard({
 
         {tabbed && email.domain && (
           <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1 border-b">
-            <div role="tablist" aria-label="Partes do e-mail do projeto" className="flex gap-1">
-              {EMAIL_TABS.map(([key, label]) => (
+            <div role="tablist" aria-label={t("mail.project.tablistAria")} className="flex gap-1">
+              {EMAIL_TABS.map(([key, labelKey]) => (
                 <button
                   key={key}
                   type="button"
@@ -343,7 +346,7 @@ export function ProjectEmailCard({
                       : "border-transparent text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  {label}
+                  {t(labelKey)}
                 </button>
               ))}
             </div>
@@ -351,7 +354,7 @@ export function ProjectEmailCard({
               to={`/mail/${encodeURIComponent(email.domain)}${activeTab === "dns" ? "?aba=dns" : ""}`}
               className="mb-2 flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
-              <ExternalLink className="h-3 w-3" /> Abrir na página E-mail
+              <ExternalLink className="h-3 w-3" /> {t("mail.project.openMailPage")}
             </Link>
           </div>
         )}
@@ -359,8 +362,7 @@ export function ProjectEmailCard({
         {tabbed && email.domain && activeTab === "caixas" && (
           <div role="tabpanel" aria-labelledby="email-tab-caixas" className="flex flex-col gap-4">
             <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-              Caixas do domínio {email.domain}. A destacada é a caixa do projeto; você pode criar outras no mesmo
-              domínio (ex.: suporte@{email.domain}).
+              {t("mail.project.mailboxesIntro", { domain: email.domain })}
             </p>
             <MailboxesPanel domain={email.domain} projectId={projectId} highlight={email.mailbox} />
           </div>
@@ -374,29 +376,31 @@ export function ProjectEmailCard({
 
         {showForm && domains.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            Nenhum domínio de e-mail cadastrado ainda. Cadastre abaixo o domínio do projeto (o servidor de e-mail
-            precisa estar iniciado, na página{" "}
-            <Link to="/mail" className="text-foreground underline">
-              E-mail
-            </Link>
-            ).
+            <Trans
+              k="mail.project.noDomains"
+              components={{
+                link: (children) => (
+                  <Link to="/mail" className="text-foreground underline">
+                    {children}
+                  </Link>
+                ),
+              }}
+            />
           </p>
         )}
 
         {showForm && (adding || domains.length === 0) && (
           <div className="flex flex-col gap-2 rounded-lg border border-sky-500/30 p-3 sm:p-4">
             <p className="flex items-center gap-2 text-sm font-medium">
-              <Globe className="h-4 w-4" /> Usar um domínio seu (ex.: contato@seudominio.com.br)
+              <Globe className="h-4 w-4" /> {t("mail.project.ownDomain.title")}
             </p>
             <p className="text-xs text-muted-foreground">
-              O painel cadastra o domínio no servidor de e-mail, gera a assinatura (DKIM) e mostra os registros DNS para
-              você criar. Se o domínio já recebe e-mail em outro lugar, o painel avisa e sugere um subdomínio só para
-              envio.
+              {t("mail.project.ownDomain.description")}
             </p>
             <div className="flex flex-wrap gap-2">
               <Input
-                aria-label="Seu domínio"
-                placeholder="seudominio.com.br"
+                aria-label={t("mail.project.ownDomain.aria")}
+                placeholder={t("mail.project.ownDomain.placeholder")}
                 value={newDomain}
                 onChange={(e) => setNewDomain(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void addDomain()}
@@ -404,11 +408,11 @@ export function ProjectEmailCard({
               />
               <Button variant="info" size="sm" disabled={busy || !newDomain.trim()} onClick={() => void addDomain()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                Cadastrar domínio
+                {t("mail.project.ownDomain.register")}
               </Button>
               {domains.length > 0 && (
                 <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
-                  Cancelar
+                  {t("mail.common.cancel")}
                 </Button>
               )}
             </div>
@@ -428,7 +432,7 @@ export function ProjectEmailCard({
         {showForm && domains.length > 0 && (
           <div className="flex flex-col gap-3 rounded-lg border p-3 sm:p-4">
             <label className="flex flex-col gap-1 text-sm">
-              <span>Domínio de e-mail</span>
+              <span>{t("mail.project.domainLabel")}</span>
               <select
                 value={selectedDomain}
                 onChange={(e) => setSelectedDomain(e.target.value)}
@@ -444,26 +448,25 @@ export function ProjectEmailCard({
             {!adding && (
               <div>
                 <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
-                  <Plus className="h-4 w-4" /> Usar um domínio meu
+                  <Plus className="h-4 w-4" /> {t("mail.project.useMyDomain")}
                 </Button>
               </div>
             )}
             {domain && justAdded === domain.name && !dnsReady(domain) && (
               <div className="flex flex-col gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm [overflow-wrap:anywhere]">
-                <p className="font-medium">Domínio {domain.name} cadastrado. Próximo passo: o DNS.</p>
+                <p className="font-medium">{t("mail.project.added.title", { domain: domain.name })}</p>
                 <p className="text-muted-foreground">
-                  Crie no provedor de DNS os registros que o painel mostra (o A de mail.{domain.name} com a nuvem cinza,
-                  no Cloudflare). Depois clique em Verificar agora até ficar 6/6.
+                  {t("mail.project.added.description", { domain: domain.name })}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="info" size="sm" asChild>
                     <Link to={`/mail/${encodeURIComponent(domain.name)}?aba=dns`}>
-                      <ExternalLink className="h-4 w-4" /> Ver os registros DNS
+                      <ExternalLink className="h-4 w-4" /> {t("mail.project.added.viewRecords")}
                     </Link>
                   </Button>
                   <Button variant="outline" size="sm" disabled={verifying} onClick={() => void verifyDomain(domain.name)}>
                     {verifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                    Verificar agora
+                    {t("mail.dns.verifyNow")}
                   </Button>
                 </div>
               </div>
@@ -472,19 +475,25 @@ export function ProjectEmailCard({
               <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
-                  O DNS deste domínio ainda tem pendências: o envio pode falhar ou cair no spam.{" "}
-                  <Link to={`/mail/${encodeURIComponent(domain.name)}`} className="underline">
-                    Ver o checklist do domínio
-                  </Link>
+                  <Trans
+                    k="mail.project.dnsWarning"
+                    components={{
+                      link: (children) => (
+                        <Link to={`/mail/${encodeURIComponent(domain.name)}`} className="underline">
+                          {children}
+                        </Link>
+                      ),
+                    }}
+                  />
                 </span>
               </div>
             )}
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex min-w-0 flex-col gap-1 text-sm">
-                <span>Endereço de envio</span>
+                <span>{t("mail.project.fromLabel")}</span>
                 <div className="flex min-w-0 items-center">
                   <Input
-                    aria-label="Endereço de envio"
+                    aria-label={t("mail.project.fromLabel")}
                     placeholder={projectSlug}
                     value={fromLocal}
                     onChange={(e) => setFromLocal(e.target.value)}
@@ -496,9 +505,9 @@ export function ProjectEmailCard({
                 </div>
               </label>
               <label className="flex flex-col gap-1 text-sm">
-                <span>Nome de exibição</span>
+                <span>{t("mail.project.nameLabel")}</span>
                 <Input
-                  aria-label="Nome de exibição"
+                  aria-label={t("mail.project.nameLabel")}
                   placeholder={projectName}
                   maxLength={80}
                   value={fromName}
@@ -507,12 +516,18 @@ export function ProjectEmailCard({
               </label>
             </div>
             <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-              Quem receber vai ver: <span className="text-foreground">{`${previewName} <${previewAddress}>`}</span>. Em
-              branco, o painel usa o nome do projeto e {projectSlug}@.
+              <Trans
+                k="mail.project.preview"
+                params={{ preview: `${previewName} <${previewAddress}>`, slug: projectSlug }}
+                components={{ span: <span className="text-foreground" /> }}
+              />
             </p>
             <p data-testid="mailbox-explain" className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-              A caixa do projeto será <span className="text-foreground">{previewAddress}</span>: o app do projeto envia
-              por ela e você pode abri-la num app de e-mail (Outlook, Gmail, celular) para ler as respostas.
+              <Trans
+                k="mail.project.mailboxExplain"
+                params={{ address: previewAddress }}
+                components={{ span: <span className="text-foreground" /> }}
+              />
             </p>
             {email.enabled && email.mailbox && previewAddress !== email.mailbox && (
               <p
@@ -521,8 +536,7 @@ export function ProjectEmailCard({
               >
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
-                  Endereço novo: o painel cria a caixa {previewAddress} e a caixa {email.mailbox} será removida (com as
-                  mensagens dela), se nenhum outro projeto a usar.
+                  {t("mail.project.oldMailboxNote", { address: previewAddress, old: email.mailbox })}
                 </span>
               </p>
             )}
@@ -535,11 +549,11 @@ export function ProjectEmailCard({
                 onClick={() => void save()}
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                {email.enabled ? "Salvar" : "Ativar e-mail"}
+                {email.enabled ? t("mail.project.save") : t("mail.project.activate")}
               </Button>
               {editing && (
                 <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
-                  Cancelar
+                  {t("mail.common.cancel")}
                 </Button>
               )}
             </div>
@@ -549,10 +563,10 @@ export function ProjectEmailCard({
         {onSender && email.enabled && !editing && (
           <>
             <div className="flex flex-col gap-1 text-sm">
-              <p className="text-muted-foreground">Remetente</p>
+              <p className="text-muted-foreground">{t("mail.project.tab.sender")}</p>
               <p className="font-medium [overflow-wrap:anywhere]">{`${email.fromName ?? projectName} <${email.mailFrom}>`}</p>
               <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                Caixa do projeto: {email.mailbox}. O projeto entra no servidor de e-mail com ela.
+                {t("mail.project.mailboxLine", { mailbox: email.mailbox ?? "" })}
               </p>
             </div>
             {email.legacyAlias && (
@@ -562,9 +576,7 @@ export function ProjectEmailCard({
               >
                 <Info className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
-                  Este projeto ainda usa o modelo antigo: {email.mailFrom} é só um apelido da caixa técnica{" "}
-                  {email.mailbox}, sem senha para você abrir. O envio continua funcionando. Para {email.mailFrom} virar
-                  uma caixa que você abre num app de e-mail, clique em Alterar remetente e salve com uma senha.
+                  {t("mail.project.legacyAlias", { from: email.mailFrom ?? "", mailbox: email.mailbox ?? "" })}
                 </span>
               </p>
             )}
@@ -581,8 +593,8 @@ export function ProjectEmailCard({
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 shrink-0"
-                        aria-label={`Copiar ${key}`}
-                        title="Copiar valor"
+                        aria-label={t("mail.project.copyAria", { key })}
+                        title={t("mail.project.copyValue")}
                         onClick={() => void copyValue(key, value)}
                       >
                         {copiedKey === key ? (
@@ -598,7 +610,7 @@ export function ProjectEmailCard({
             </div>
             {links.length > 0 && (
               <div data-testid="email-links" className="flex flex-col gap-1 text-xs">
-                <p className="text-muted-foreground">Também entregues com os nomes do seu app:</p>
+                <p className="text-muted-foreground">{t("mail.project.alsoDelivered")}</p>
                 <ul className="flex flex-wrap gap-1.5 font-mono">
                   {links.map(([target, source]) => (
                     <li key={target} className="rounded border border-sky-500/30 px-2 py-0.5 text-sky-200">
@@ -617,29 +629,25 @@ export function ProjectEmailCard({
             >
               <Rocket className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                O projeto recebe estes valores no próximo deploy: depois de ativar ou alterar, faça um novo deploy. A
-                senha (SMTP_PASS) não aparece neste card: para vê-la, use o olho na seção Variáveis.
+                {t("mail.project.deployNote")}
               </span>
             </p>
             <p data-testid="display-name-note" className="text-xs text-muted-foreground">
-              O nome de exibição aparece para quem recebe quando o app do projeto usa MAIL_FROM_NAME (ou monta 'Nome
-              &lt;endereço&gt;'). O e-mail de teste já sai com ele.
+              {t("mail.project.displayNameNote")}
             </p>
             <p data-testid="email-other-names" className="text-xs text-muted-foreground">
-              Seu app usa outros nomes (ex.: <code>SMTP_SENHA</code>, <code>EMAIL_DE</code>)? Use{" "}
-              <strong>Ligar às variáveis do projeto</strong>: o painel entrega os mesmos valores com os nomes do seu app,
-              sem copiar a senha para as Variáveis.
+              <Trans k="mail.project.otherNames" components={{ code: <code />, b: <strong /> }} />
             </p>
             {passwordChanged && (
               <p className="flex items-start gap-2 rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm">
                 <Rocket className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>Senha trocada. O projeto só recebe a senha nova no próximo deploy.</span>
+                <span>{t("mail.project.passwordChanged")}</span>
               </p>
             )}
             {changingPassword && email.mailbox && (
               <div className="flex flex-col gap-3 rounded-lg border p-3 sm:p-4">
-                <p className="text-sm font-medium [overflow-wrap:anywhere]">Trocar a senha de {email.mailbox}</p>
-                <PasswordChoice value={passwordChoice} onChange={setPasswordChoice} passwordLabel="Nova senha" />
+                <p className="text-sm font-medium [overflow-wrap:anywhere]">{t("mail.project.changePasswordOf", { mailbox: email.mailbox })}</p>
+                <PasswordChoice value={passwordChoice} onChange={setPasswordChoice} passwordLabel={t("mail.boxes.changePassword.newLabel")} />
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="success"
@@ -648,10 +656,10 @@ export function ProjectEmailCard({
                     onClick={() => void changePassword(email.mailbox!)}
                   >
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-                    Salvar a senha nova
+                    {t("mail.project.saveNewPassword")}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => setChangingPassword(false)}>
-                    Cancelar
+                    {t("mail.common.cancel")}
                   </Button>
                 </div>
               </div>
@@ -659,13 +667,13 @@ export function ProjectEmailCard({
             {showAppSettings && email.mailbox && <MailboxAppSettings mailbox={email.mailbox} />}
             <div className="flex flex-wrap gap-2">
               <Button variant="deploy" size="sm" onClick={() => setTesting(true)}>
-                <Send className="h-4 w-4" /> Enviar e-mail de teste
+                <Send className="h-4 w-4" /> {t("mail.test.title")}
               </Button>
               <Button variant="info" size="sm" onClick={() => setLinking(true)}>
-                <Link2 className="h-4 w-4" /> Ligar às variáveis do projeto
+                <Link2 className="h-4 w-4" /> {t("mail.links.title")}
               </Button>
               <Button variant="outline" size="sm" onClick={() => setShowAppSettings((v) => !v)}>
-                <Smartphone className="h-4 w-4" /> Configurar no app
+                <Smartphone className="h-4 w-4" /> {t("mail.boxes.configure")}
               </Button>
               <Button
                 variant="outline"
@@ -677,14 +685,14 @@ export function ProjectEmailCard({
                 }}
               >
                 <KeyRound className="h-4 w-4" />
-                Trocar senha
+                {t("mail.boxes.changePassword.button")}
               </Button>
               <Button variant="outline" size="sm" onClick={() => startEditing(email)}>
-                <Pencil className="h-4 w-4" /> Alterar remetente
+                <Pencil className="h-4 w-4" /> {t("mail.project.editSender")}
               </Button>
               <Button variant="danger" size="sm" disabled={busy} onClick={() => void disable()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Desativar e-mail
+                {t("mail.project.disable")}
               </Button>
             </div>
           </>

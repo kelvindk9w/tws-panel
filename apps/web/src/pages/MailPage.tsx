@@ -9,6 +9,7 @@ import type {
   MailTlsStatusResponse,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
+import { apiErrorText, formatDate as formatDateI18n, useI18n, type Key } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,7 +34,7 @@ import {
 } from "lucide-react";
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("pt-BR", { timeZone: "UTC" });
+  return formatDateI18n(iso, { timeZone: "UTC" });
 }
 
 /**
@@ -43,43 +44,43 @@ function formatDate(iso: string): string {
  * que o proxy emite; aqui o operador vê se já vale ou o que falta.
  */
 function MailTlsCard({ tls, busy, onRecheck }: { tls: MailTlsStatusResponse | null; busy: boolean; onRecheck: () => void }) {
+  const { t } = useI18n();
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base">
-            <Lock className="h-4 w-4" /> Certificado do servidor de e-mail
+            <Lock className="h-4 w-4" /> {t("mail.page.tls.title")}
           </CardTitle>
           <Button variant="outline" size="sm" disabled={busy} onClick={onRecheck}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Conferir de novo
+            {t("mail.common.recheck")}
           </Button>
         </div>
         <CardDescription>
-          Os projetos enviam e-mail por mail.&lt;domínio&gt;, porta 587. Apps que conferem o certificado (o padrão
-          do nodemailer, por exemplo) só conectam com ele válido. O painel emite e renova sozinho.
+          {t("mail.page.tls.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {!tls && <p className="text-sm text-muted-foreground">conferindo…</p>}
+        {!tls && <p className="text-sm text-muted-foreground">{t("mail.page.tls.checking")}</p>}
         {tls?.syncError && (
-          <p className="text-sm text-destructive">Falha ao instalar o certificado no servidor de e-mail: {tls.syncError}</p>
+          <p className="text-sm text-destructive">{t("mail.page.tls.syncError", { error: tls.syncError })}</p>
         )}
         {tls?.hosts.map((h) => (
           <div key={h.host} className="flex flex-col gap-1 rounded-lg border px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-sm">{h.host}</span>
-              {h.ok ? <Badge variant="success">válido</Badge> : <Badge variant="warning">pendente</Badge>}
+              {h.ok ? <Badge variant="success">{t("mail.page.tls.valid")}</Badge> : <Badge variant="warning">{t("mail.page.tls.pending")}</Badge>}
             </div>
             {h.ok ? (
               <p className="text-xs text-muted-foreground">
-                Emitido por {h.issuer ?? "—"}
-                {h.validTo ? ` · válido até ${formatDate(h.validTo)} (renovado automaticamente)` : ""}
+                {t("mail.page.tls.issuedBy", { issuer: h.issuer ?? "—" })}
+                {h.validTo ? t("mail.page.tls.validUntil", { date: formatDate(h.validTo) }) : ""}
               </p>
             ) : (
               <>
                 {h.hint && <p className="text-sm text-amber-400">{h.hint}</p>}
-                {h.error && <p className="text-xs text-muted-foreground">Resposta do servidor: {h.error}</p>}
+                {h.error && <p className="text-xs text-muted-foreground">{t("mail.page.tls.serverReply", { error: h.error })}</p>}
               </>
             )}
           </div>
@@ -92,24 +93,33 @@ function MailTlsCard({ tls, busy, onRecheck }: { tls: MailTlsStatusResponse | nu
 }
 
 function DnsAggregateBadge({ domain }: { domain: MailDomainSummary }) {
+  const { t } = useI18n();
   if (!domain.lastVerify) {
-    return <Badge variant="secondary">DNS não verificado</Badge>;
+    return <Badge variant="secondary">{t("mail.page.dns.notVerified")}</Badge>;
   }
   if (domain.lastVerify.ok === domain.lastVerify.total) {
     return (
       <Badge variant="success">
-        {domain.lastVerify.ok}/{domain.lastVerify.total} registros OK
+        {t("mail.page.dns.recordsOk", { ok: domain.lastVerify.ok, total: domain.lastVerify.total })}
       </Badge>
     );
   }
   return (
     <Badge variant="warning">
-      {domain.lastVerify.ok}/{domain.lastVerify.total} registros OK — pendências
+      {t("mail.page.dns.recordsPending", { ok: domain.lastVerify.ok, total: domain.lastVerify.total })}
     </Badge>
   );
 }
 
+const ONBOARDING_STEPS: Key[] = [
+  "mail.page.onboarding.step1",
+  "mail.page.onboarding.step2",
+  "mail.page.onboarding.step3",
+  "mail.page.onboarding.step4",
+];
+
 export function MailPage() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<MailServerStatus | null>(null);
   const [domains, setDomains] = useState<MailDomainSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +151,7 @@ export function MailPage() {
       setDomains(domainList.domains);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar o módulo de e-mail.");
+      setError(apiErrorText(err, "mail.page.loadError"));
     }
   }, []);
 
@@ -163,7 +173,7 @@ export function MailPage() {
       });
       setStatus(res.status);
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Falha ao ${action === "start" ? "iniciar" : "parar"} o servidor.`);
+      setError(apiErrorText(err, action === "start" ? "mail.page.startError" : "mail.page.stopError"));
     } finally {
       setBusy(null);
     }
@@ -188,7 +198,7 @@ export function MailPage() {
       if (info) {
         setExistingMail({ domain: name, info });
       } else {
-        setError(err instanceof Error ? err.message : "Falha ao adicionar o domínio.");
+        setError(apiErrorText(err, "mail.page.addError"));
       }
     } finally {
       setBusy(null);
@@ -203,7 +213,7 @@ export function MailPage() {
       setConfirmRemove(null);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao remover o domínio.");
+      setError(apiErrorText(err, "mail.page.removeError"));
     } finally {
       setBusy(null);
     }
@@ -214,16 +224,16 @@ export function MailPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-            <Mail className="h-6 w-6" /> E-mail
+            <Mail className="h-6 w-6" /> {t("mail.page.title")}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Servidor Stalwart Mail (SMTP + IMAP + DKIM) gerenciado pelo painel.
+            {t("mail.page.subtitle")}
           </p>
         </div>
         {/* fila, histórico, volume, reputação e nota de entregabilidade */}
         <Button variant="info" size="sm" asChild>
           <Link to="/mail/envios">
-            <ChartColumn className="h-4 w-4" /> Ver envios
+            <ChartColumn className="h-4 w-4" /> {t("mail.page.viewSending")}
           </Link>
         </Button>
       </div>
@@ -234,30 +244,36 @@ export function MailPage() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-base">
-              <Server className="h-4 w-4" /> Servidor de e-mail
+              <Server className="h-4 w-4" /> {t("mail.page.server.title")}
             </CardTitle>
             {status &&
               (status.running ? (
-                <Badge variant="success">rodando{status.version ? ` · v${status.version}` : ""}</Badge>
+                <Badge variant="success">
+                  {status.version ? t("mail.page.server.runningVersion", { version: status.version }) : t("mail.page.server.running")}
+                </Badge>
               ) : (
-                <Badge variant="secondary">parado</Badge>
+                <Badge variant="secondary">{t("mail.page.server.stopped")}</Badge>
               ))}
           </div>
           <CardDescription>
             {status
-              ? `${status.containerName} · ${status.image} · hostname ${status.hostname}`
-              : "carregando…"}
+              ? t("mail.page.server.info", {
+                  container: status.containerName,
+                  image: status.image,
+                  hostname: status.hostname,
+                })
+              : t("mail.common.loadingLower")}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {status?.message && <p className="text-sm text-muted-foreground">{status.message}</p>}
           {status && (
             <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-              <span>SMTP: {status.ports.smtp}</span>
-              <span>Submission: {status.ports.submission}</span>
-              <span>SMTPS: {status.ports.submissions}</span>
-              <span>IMAP: {status.ports.imap}</span>
-              <span>IMAPS: {status.ports.imaps}</span>
+              <span>{t("mail.page.server.portSmtp", { port: status.ports.smtp })}</span>
+              <span>{t("mail.page.server.portSubmission", { port: status.ports.submission })}</span>
+              <span>{t("mail.page.server.portSmtps", { port: status.ports.submissions })}</span>
+              <span>{t("mail.page.server.portImap", { port: status.ports.imap })}</span>
+              <span>{t("mail.page.server.portImaps", { port: status.ports.imaps })}</span>
             </div>
           )}
           <div className="flex gap-2">
@@ -269,12 +285,12 @@ export function MailPage() {
                 onClick={() => void serverAction("stop")}
               >
                 {busy === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
-                Parar
+                {t("mail.page.server.stop")}
               </Button>
             ) : (
               <Button size="sm" disabled={busy !== null} onClick={() => void serverAction("start")}>
                 {busy === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                Iniciar servidor
+                {t("mail.page.server.start")}
               </Button>
             )}
           </div>
@@ -284,29 +300,19 @@ export function MailPage() {
       {domains.length === 0 && status?.running ? (
         <Card className="border-dashed">
           <CardHeader>
-            <CardTitle className="text-base">Configure seu primeiro domínio de e-mail</CardTitle>
-            <CardDescription>Em 4 passos você tem e-mail profissional no seu próprio servidor:</CardDescription>
+            <CardTitle className="text-base">{t("mail.page.onboarding.title")}</CardTitle>
+            <CardDescription>{t("mail.page.onboarding.description")}</CardDescription>
           </CardHeader>
           <CardContent>
             <ol className="flex flex-col gap-2 text-sm text-muted-foreground">
-              <li className="flex items-start gap-2">
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs">1</span>
-                Adicione o domínio abaixo — o painel provisiona no Stalwart e gera a chave DKIM (RSA 2048). Se o
-                domínio já tem e-mail funcionando em outro provedor, use um subdomínio só para o envio (ex.:
-                envio.seudominio.com.br): apontar o MX do domínio principal para cá desviaria o e-mail da empresa.
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs">2</span>
-                Copie os registros DNS do checklist (A, MX, SPF, DKIM, DMARC) para o provedor de DNS do domínio.
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs">3</span>
-                Clique em "Verificar agora" até todos os registros ficarem verdes — o PTR (reverse DNS) é configurado no provedor da VPS.
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs">4</span>
-                Crie caixas de e-mail e conecte no Outlook/Gmail/Thunderbird com as credenciais geradas.
-              </li>
+              {ONBOARDING_STEPS.map((stepKey, i) => (
+                <li key={stepKey} className="flex items-start gap-2">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs">
+                    {i + 1}
+                  </span>
+                  {t(stepKey)}
+                </li>
+              ))}
             </ol>
           </CardContent>
         </Card>
@@ -319,15 +325,15 @@ export function MailPage() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Domínios de e-mail</CardTitle>
+          <CardTitle className="text-base">{t("mail.page.domains.title")}</CardTitle>
           <CardDescription>
-            Cada domínio provisiona DKIM próprio e as caixas postmaster@/abuse@ exigidas pelas boas práticas.
+            {t("mail.page.domains.description")}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex gap-2">
             <Input
-              placeholder="exemplo.com"
+              placeholder={t("mail.page.domains.placeholder")}
               value={newDomain}
               onChange={(e) => setNewDomain(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void addDomain()}
@@ -336,11 +342,11 @@ export function MailPage() {
             />
             <Button size="sm" disabled={busy !== null || !status?.running || !newDomain.trim()} onClick={() => void addDomain()}>
               {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailPlus className="h-4 w-4" />}
-              Adicionar domínio
+              {t("mail.page.domains.add")}
             </Button>
           </div>
           {!status?.running && (
-            <p className="text-xs text-muted-foreground">Inicie o servidor de e-mail para adicionar domínios.</p>
+            <p className="text-xs text-muted-foreground">{t("mail.page.domains.startFirst")}</p>
           )}
           {existingMail && (
             <ExistingMailWarning
@@ -367,7 +373,11 @@ export function MailPage() {
                       {domain.name}
                     </Link>
                     <p className="text-xs text-muted-foreground">
-                      {domain.mailboxCount} caixa(s) · DKIM {domain.dkimKeyBits} bits · DMARC p={domain.dmarcStage}
+                      {t("mail.page.domains.meta", {
+                        count: domain.mailboxCount,
+                        bits: domain.dkimKeyBits,
+                        stage: domain.dmarcStage,
+                      })}
                     </p>
                   </div>
                   <DnsAggregateBadge domain={domain} />
@@ -379,10 +389,10 @@ export function MailPage() {
                         disabled={busy !== null}
                         onClick={() => void removeDomain(domain.name)}
                       >
-                        {busy === `rm-${domain.name}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirmar"}
+                        {busy === `rm-${domain.name}` ? <Loader2 className="h-4 w-4 animate-spin" /> : t("mail.common.confirm")}
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => setConfirmRemove(null)}>
-                        Cancelar
+                        {t("mail.common.cancel")}
                       </Button>
                     </div>
                   ) : (
@@ -402,7 +412,7 @@ export function MailPage() {
 
           {domains.length > 0 && domains.every((d) => d.lastVerify?.ok === d.lastVerify?.total) && (
             <p className="flex items-center gap-2 text-sm text-emerald-400">
-              <CheckCircle2 className="h-4 w-4" /> Todos os domínios com DNS verificado.
+              <CheckCircle2 className="h-4 w-4" /> {t("mail.page.domains.allVerified")}
             </p>
           )}
         </CardContent>

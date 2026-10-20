@@ -12,6 +12,8 @@
  * title do rótulo e no aria-label do anel, para quem passa o mouse e para
  * leitor de tela.
  */
+import { useI18n } from "@/i18n";
+
 interface IndexGaugeProps {
   value: number | null;
   source: string;
@@ -20,6 +22,7 @@ interface IndexGaugeProps {
 }
 
 export function IndexGauge({ value, source, size = "md" }: IndexGaugeProps) {
+  const { t } = useI18n();
   const v = value ?? 0;
   const hex = v >= 75 ? "#34d399" : v >= 50 ? "#fbbf24" : "#f87171";
   const color = v >= 75 ? "text-emerald-400" : v >= 50 ? "text-amber-400" : "text-red-400";
@@ -29,13 +32,13 @@ export function IndexGauge({ value, source, size = "md" }: IndexGaugeProps) {
   const box = size === "sm" ? "h-24 w-24" : "h-28 w-28";
   const number = size === "sm" ? "text-2xl" : "text-3xl";
   const lynis = source === "lynis";
-  const fonteCurta = lynis ? "Lynis" : "Interno";
-  const fonteLonga = lynis ? "Lynis Index" : "Índice interno";
+  const fonteCurta = t(lynis ? "hardening.gauge.sourceShort.lynis" : "hardening.gauge.sourceShort.internal");
+  const fonteLonga = t(lynis ? "hardening.gauge.sourceLong.lynis" : "hardening.gauge.sourceLong.internal");
   return (
     <div
       className={`relative ${box}`}
       role="img"
-      aria-label={`Índice de segurança: ${value ?? "—"} de 100 (fonte: ${fonteLonga})`}
+      aria-label={t("hardening.gauge.aria", { value: value ?? "—", source: fonteLonga })}
     >
       <svg
         viewBox="0 0 112 112"

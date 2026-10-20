@@ -9,6 +9,7 @@ import {
   type OnboardingStepStatus,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { apiErrorText, Trans, useI18n, type Key, type TFunction } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,13 +37,13 @@ import {
 } from "lucide-react";
 import { ONBOARDING_CONTENT } from "./steps-content";
 
-const STATUS_LABEL: Record<OnboardingStepStatus, string> = {
-  done: "feito",
-  in_progress: "em andamento",
-  pending: "a fazer",
-  skipped: "não vou usar",
-  soon: "em breve",
-  unknown: "não confirmado",
+const STATUS_LABEL: Record<OnboardingStepStatus, Key> = {
+  done: "onboarding.status.done",
+  in_progress: "onboarding.status.in_progress",
+  pending: "onboarding.status.pending",
+  skipped: "onboarding.status.skipped",
+  soon: "onboarding.status.soon",
+  unknown: "onboarding.status.unknown",
 };
 
 const STATUS_BADGE: Record<OnboardingStepStatus, "success" | "warning" | "outline" | "secondary"> = {
@@ -93,6 +94,7 @@ function StepItem({
   /** No compacto, a orientação do passo mostrado já vem aberta. */
   defaultOpen?: boolean;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(defaultOpen);
   const content = ONBOARDING_CONTENT[step.id];
   const Icon = content.icon;
@@ -104,11 +106,11 @@ function StepItem({
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className={cn("flex items-center gap-1.5 font-medium", muted && "text-muted-foreground")}>
             <Icon className="h-4 w-4 shrink-0" />
-            <span className="text-xs text-muted-foreground">{number}.</span> {content.title}
+            <span className="text-xs text-muted-foreground">{number}.</span> {t(content.title)}
           </span>
-          <Badge variant={STATUS_BADGE[step.status]}>{STATUS_LABEL[step.status]}</Badge>
+          <Badge variant={STATUS_BADGE[step.status]}>{t(STATUS_LABEL[step.status])}</Badge>
           {step.optional && step.status !== "skipped" && (
-            <span className="text-[11px] text-muted-foreground">opcional</span>
+            <span className="text-[11px] text-muted-foreground">{t("onboarding.step.optional")}</span>
           )}
         </div>
         <p className="break-words text-sm text-muted-foreground">{step.detail}</p>
@@ -121,49 +123,49 @@ function StepItem({
             onClick={() => setOpen((v) => !v)}
           >
             {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            Como fazer
+            {t("onboarding.step.howTo")}
           </Button>
           {canSkip(step) && (
             <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" disabled={busy} onClick={() => onSkip(true)}>
-              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Não vou usar
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {t("onboarding.step.skip")}
             </Button>
           )}
           {step.status === "skipped" && (
             <Button variant="ghost" size="sm" className="h-7 px-2" disabled={busy} onClick={() => onSkip(false)}>
-              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Desfazer
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {t("onboarding.step.undo")}
             </Button>
           )}
         </div>
         {open && (
           <div className="flex flex-col gap-3 rounded-md border bg-secondary/30 p-3 text-sm">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">O que é</p>
-              <p>{content.whatIs}</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.whatIs")}</p>
+              <p>{t(content.whatIs)}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Por que importa</p>
-              <p>{content.why}</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.why")}</p>
+              <p>{t(content.why)}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Passo a passo</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.steps")}</p>
               <ol className="ml-5 list-decimal space-y-1">
                 {content.howTo.map((line) => (
-                  <li key={line}>{line}</li>
+                  <li key={line}>{t(line)}</li>
                 ))}
               </ol>
             </div>
-            {content.note && <p className="text-muted-foreground">{content.note}</p>}
+            {content.note && <p className="text-muted-foreground">{t(content.note)}</p>}
             {content.action ? (
               <div>
                 <Button size="sm" variant="info" asChild>
                   <Link to={content.action.to} onClick={onGo}>
-                    {content.action.label} <ArrowRight className="h-4 w-4" />
+                    {t(content.action.label)} <ArrowRight className="h-4 w-4" />
                   </Link>
                 </Button>
               </div>
             ) : (
               <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Clock className="h-3.5 w-3.5" /> Em breve no painel.
+                <Clock className="h-3.5 w-3.5" /> {t("onboarding.step.soon")}
               </p>
             )}
           </div>
@@ -246,19 +248,21 @@ function Stepper({
   currentId: string | null;
   onSelect: (id: OnboardingStep["id"]) => void;
 }) {
+  const { t } = useI18n();
   return (
     <ol data-testid="onboarding-stepper" className="flex items-start">
       {steps.map((step, i) => {
-        const title = ONBOARDING_CONTENT[step.id].title;
+        const title = t(ONBOARDING_CONTENT[step.id].title);
+        const status = t(STATUS_LABEL[step.status]);
         const selected = step.id === selectedId;
         return (
           <li key={step.id} className="flex min-w-0 flex-1 items-start last:flex-none">
             <button
               type="button"
-              aria-label={`${i + 1}. ${title}: ${STATUS_LABEL[step.status]}`}
+              aria-label={t("onboarding.stepper.aria", { number: i + 1, title, status })}
               aria-current={step.id === currentId ? "step" : undefined}
               aria-pressed={selected}
-              title={`${title} — ${STATUS_LABEL[step.status]}`}
+              title={t("onboarding.stepper.title", { title, status })}
               onClick={() => onSelect(step.id)}
               className="flex w-8 flex-col items-center gap-1 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:w-20"
             >
@@ -290,31 +294,33 @@ function ProjectsDirNote({ dir }: { dir: string }) {
     <p className="flex items-start gap-2 border-t pt-3 text-xs text-muted-foreground">
       <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 break-words">
-        Pasta dos projetos na VPS: <code className="text-foreground">{dir}</code> — definida na instalação, nada a
-        fazer.
+        <Trans k="onboarding.projectsDir" params={{ dir }} components={{ code: <code className="text-foreground" /> }} />
       </span>
     </p>
   );
 }
 
-function summary(steps: OnboardingStep[]): string {
+function summary(steps: OnboardingStep[], t: TFunction): string {
   const count = (pred: (s: OnboardingStep) => boolean) => steps.filter(pred).length;
   const done = count((s) => s.status === "done");
   const skipped = count((s) => s.status === "skipped");
   const soon = count((s) => s.status === "soon");
   const todo = steps.length - done - skipped - soon;
-  const parts = [`${done} ${done === 1 ? "feito" : "feitos"}`];
-  if (skipped) parts.push(`${skipped} não vou usar`);
-  if (todo) parts.push(`${todo} a fazer`);
-  if (soon) parts.push(`${soon} em breve no painel`);
+  const parts = [t(done === 1 ? "onboarding.summary.doneOne" : "onboarding.summary.doneMany", { count: done })];
+  if (skipped) parts.push(t("onboarding.summary.skipped", { count: skipped }));
+  if (todo) parts.push(t("onboarding.summary.todo", { count: todo }));
+  if (soon) parts.push(t("onboarding.summary.soon", { count: soon }));
   return parts.join(" · ");
 }
 
 /** "Domínio do painel e Notificações chegam em breve." */
-function soonSentence(steps: OnboardingStep[]): string {
-  const titles = steps.filter((s) => s.status === "soon").map((s) => ONBOARDING_CONTENT[s.id].title);
-  const names = titles.length > 1 ? `${titles.slice(0, -1).join(", ")} e ${titles[titles.length - 1]}` : titles[0];
-  return `${names} ${titles.length > 1 ? "chegam" : "chega"} em breve.`;
+function soonSentence(steps: OnboardingStep[], t: TFunction): string {
+  const titles = steps.filter((s) => s.status === "soon").map((s) => t(ONBOARDING_CONTENT[s.id].title));
+  const names =
+    titles.length > 1
+      ? t("onboarding.soon.list", { head: titles.slice(0, -1).join(", "), last: titles[titles.length - 1]! })
+      : (titles[0] ?? "");
+  return t(titles.length > 1 ? "onboarding.soon.many" : "onboarding.soon.one", { names });
 }
 
 /**
@@ -338,6 +344,7 @@ export function OnboardingChecklist({
   /** Avisa se o roteiro ficou na tela (o Dashboard esconde o aviso de 2FA, que repetiria o passo 2). */
   onVisibleChange?: (visible: boolean) => void;
 }) {
+  const { t } = useI18n();
   const [data, setData] = useState<OnboardingResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -352,15 +359,15 @@ export function OnboardingChecklist({
     try {
       const res = await apiFetch<OnboardingResponse>("/api/onboarding");
       // Resposta fora do formato (servidor antigo, proxy): não afirma nada.
-      if (!Array.isArray(res?.steps)) throw new Error("Resposta inesperada do servidor.");
+      if (!Array.isArray(res?.steps)) throw new Error(t("onboarding.error.badResponse"));
       setData(res);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar.");
+      setError(apiErrorText(err, "onboarding.error.load"));
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
@@ -386,7 +393,7 @@ export function OnboardingChecklist({
       );
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível salvar.");
+      setError(apiErrorText(err, "onboarding.error.save"));
     } finally {
       setBusyId(null);
     }
@@ -404,7 +411,7 @@ export function OnboardingChecklist({
       );
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível salvar.");
+      setError(apiErrorText(err, "onboarding.error.save"));
     } finally {
       setHiding(false);
     }
@@ -422,7 +429,7 @@ export function OnboardingChecklist({
   if (!data) {
     return error ? (
       <p role="alert" className="text-sm text-destructive">
-        Não foi possível carregar os primeiros passos: {error}
+        {t("onboarding.loadError", { error })}
       </p>
     ) : (
       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -448,27 +455,27 @@ export function OnboardingChecklist({
             <Sparkles className="h-4 w-4 text-sky-400" />
           </div>
           <div className="min-w-0">
-            <h2 className="font-semibold tracking-tight">Deixe o painel pronto</h2>
+            <h2 className="font-semibold tracking-tight">{t("onboarding.title")}</h2>
             <p className="text-sm text-muted-foreground">
               {compact
-                ? summary(data.steps)
-                : "O que falta configurar depois da instalação, na ordem recomendada. O painel confere sozinho o que já está feito."}
+                ? summary(data.steps, t)
+                : t("onboarding.intro")}
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="ghost" size="sm" onClick={() => void load()} disabled={checking}>
-            <RefreshCw className={cn("h-4 w-4", checking && "animate-spin")} /> Conferir de novo
+            <RefreshCw className={cn("h-4 w-4", checking && "animate-spin")} /> {t("onboarding.recheck")}
           </Button>
           {variant === "dashboard" && !compact && (
             <Button variant="outline" size="sm" onClick={() => void start()}>
-              <ChevronUp className="h-4 w-4" /> Recolher
+              <ChevronUp className="h-4 w-4" /> {t("onboarding.collapse")}
             </Button>
           )}
           {compact && (shown || waiting) && (
             <Button variant="outline" size="sm" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
               {showAll ? <ChevronUp className="h-4 w-4" /> : <ListChecks className="h-4 w-4" />}
-              {showAll ? (waiting && !shown ? "Recolher a lista" : "Mostrar só o próximo") : "Ver todos os passos"}
+              {showAll ? (waiting && !shown ? t("onboarding.collapseList") : t("onboarding.showNext")) : t("onboarding.showAll")}
             </Button>
           )}
         </div>
@@ -487,13 +494,13 @@ export function OnboardingChecklist({
       ) : (
         <div className="flex flex-col gap-1.5">
           <Progress value={actionable.length ? (resolved / actionable.length) * 100 : 100} className="h-1.5" />
-          <p className="text-xs text-muted-foreground">{summary(data.steps)}</p>
+          <p className="text-xs text-muted-foreground">{summary(data.steps, t)}</p>
         </div>
       )}
 
       {data.complete && (
         <p className="flex items-center gap-2 text-sm text-emerald-400">
-          <CircleCheck className="h-4 w-4 shrink-0" /> Tudo pronto: nada mais pede a sua ação agora.
+          <CircleCheck className="h-4 w-4 shrink-0" /> {t("onboarding.allDone")}
         </p>
       )}
 
@@ -501,11 +508,11 @@ export function OnboardingChecklist({
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed px-3 py-3">
           <p data-testid="onboarding-waiting" className="flex min-w-0 items-start gap-2 text-sm">
             <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-            <span>Tudo o que dá para fazer agora está feito. {soonSentence(data.steps)}</span>
+            <span>{t("onboarding.waiting", { soon: soonSentence(data.steps, t) })}</span>
           </p>
           {variant === "dashboard" && (
             <Button variant="outline" size="sm" disabled={hiding} onClick={() => void setHidden(true)}>
-              {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <EyeOff className="h-4 w-4" />} Ocultar até ter novidade
+              {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <EyeOff className="h-4 w-4" />} {t("onboarding.hideUntilNews")}
             </Button>
           )}
         </div>
@@ -513,9 +520,9 @@ export function OnboardingChecklist({
 
       {variant === "settings" && data.hidden && (
         <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-          <p>Este roteiro está oculto no Dashboard até ter novidade.</p>
+          <p>{t("onboarding.hiddenNote")}</p>
           <Button variant="outline" size="sm" disabled={hiding} onClick={() => void setHidden(false)}>
-            {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />} Mostrar no Dashboard
+            {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />} {t("onboarding.showOnDashboard")}
           </Button>
         </div>
       )}

@@ -8,6 +8,7 @@ import type {
   ProjectResponse,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { apiErrorText, Trans, useI18n, type Key } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,25 +37,25 @@ import { ComposeEntryPicker, ComposeServicesList, validPortText } from "@/compon
 
 const INGEST_OPTIONS: Array<{
   mode: IngestMode;
-  title: string;
-  description: string;
+  title: Key;
+  description: Key;
   icon: typeof GitBranch;
 }> = [
   {
     mode: "git",
-    title: "Repositório Git",
-    description: "Clona uma URL git com branch configurável.",
+    title: "projects.new.ingest.git.title",
+    description: "projects.new.ingest.git.description",
     icon: GitBranch,
   },
   {
     mode: "existing",
-    title: "Pasta que já está no servidor",
-    description: "Usa o código de uma pasta da pasta de projetos do servidor, sem copiar.",
+    title: "projects.new.ingest.existing.title",
+    description: "projects.new.ingest.existing.description",
     icon: FolderSymlink,
   },
 ];
 
-const STEPS = ["Fonte do código", "Detecção automática", "Domínio e criação"];
+const STEPS: Key[] = ["projects.new.step.source", "projects.new.step.detection", "projects.new.step.domain"];
 
 function WarningRow({ warning }: { warning: DetectResult["warnings"][number] }) {
   const Icon =
@@ -81,6 +82,7 @@ function WarningRow({ warning }: { warning: DetectResult["warnings"][number] }) 
 }
 
 export function NewProjectPage() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -186,7 +188,7 @@ export function NewProjectPage() {
       setProxyPort(det.detection.proxyPort ? String(det.detection.proxyPort) : "");
       setStep(1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao criar o projeto.");
+      setError(apiErrorText(err, "projects.new.createError"));
     } finally {
       setBusy(false);
     }
@@ -246,7 +248,7 @@ export function NewProjectPage() {
       }
       navigate(await firstDeployPath(projectId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao salvar o projeto.");
+      setError(apiErrorText(err, "projects.new.saveError"));
     } finally {
       setBusy(false);
     }
@@ -260,9 +262,9 @@ export function NewProjectPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Novo Projeto</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{t("projects.new.title")}</h1>
         <p className="text-sm text-muted-foreground">
-          Assistente de 3 passos: fonte → detecção → domínio.
+          {t("projects.new.subtitle")}
         </p>
       </div>
 
@@ -281,7 +283,7 @@ export function NewProjectPage() {
             >
               {i + 1}
             </span>
-            <span className={i === step ? "font-medium" : "text-muted-foreground"}>{label}</span>
+            <span className={i === step ? "font-medium" : "text-muted-foreground"}>{t(label)}</span>
             {i < STEPS.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
           </li>
         ))}
@@ -296,19 +298,19 @@ export function NewProjectPage() {
       {step === 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Fonte do código</CardTitle>
-            <CardDescription>De onde vem o código deste projeto?</CardDescription>
+            <CardTitle>{t("projects.new.source.title")}</CardTitle>
+            <CardDescription>{t("projects.new.source.description")}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <label className="flex flex-col gap-1.5 text-sm">
-              Nome do projeto
+              {t("projects.new.source.name")}
               <Input
                 value={name}
                 onChange={(e) => {
                   setName(e.target.value);
                   if (!domain) setDomain("");
                 }}
-                placeholder="minha-app"
+                placeholder={t("projects.new.source.namePlaceholder")}
               />
             </label>
 
@@ -332,8 +334,8 @@ export function NewProjectPage() {
                   )}
                 >
                   <opt.icon className="h-5 w-5" />
-                  <span className="text-sm font-medium">{opt.title}</span>
-                  <span className="text-xs text-muted-foreground">{opt.description}</span>
+                  <span className="text-sm font-medium">{t(opt.title)}</span>
+                  <span className="text-xs text-muted-foreground">{t(opt.description)}</span>
                 </button>
               ))}
             </div>
@@ -350,20 +352,19 @@ export function NewProjectPage() {
                   }}
                 />
                 <label className="flex flex-col gap-1.5 text-sm">
-                  URL do repositório
+                  {t("projects.new.source.repoUrl")}
                   <Input
                     value={sourceText}
                     onChange={(e) => {
                       setSource(e.target.value);
                       setFromAccount(null);
                     }}
-                    placeholder="https://github.com/usuario/repo.git"
+                    placeholder={t("projects.new.source.repoUrlPlaceholder")}
                   />
                 </label>
                 {fromAccount?.private && (
                   <p data-testid="uses-account-token" className="text-xs text-emerald-400">
-                    Repositório privado: o painel usa o token da conta do GitHub conectada (somente leitura) — não
-                    precisa de outro.
+                    {t("projects.new.source.accountToken")}
                   </p>
                 )}
               </div>
@@ -371,21 +372,21 @@ export function NewProjectPage() {
 
             {ingestMode === "existing" && (
               <div className="flex flex-col gap-1.5 text-sm">
-                <label htmlFor="np-server-path">Caminho da pasta no servidor</label>
+                <label htmlFor="np-server-path">{t("projects.new.source.folderPath")}</label>
                 <div className="flex gap-2">
                   <Input
                     id="np-server-path"
                     value={sourceText}
                     onChange={(e) => setSource(e.target.value)}
-                    placeholder="/opt/tws-projects/meu-site"
+                    placeholder={t("projects.new.source.folderPlaceholder")}
                     className="font-mono"
                   />
                   <Button type="button" variant="outline" onClick={() => setBrowsing(true)}>
-                    Procurar…
+                    {t("projects.new.source.browse")}
                   </Button>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  Só pastas dentro da pasta de projetos do servidor. O código é usado de onde está, sem cópia.
+                  {t("projects.new.source.folderHint")}
                 </span>
                 {browsing && (
                   <ServerFolderBrowser
@@ -401,7 +402,7 @@ export function NewProjectPage() {
 
             {ingestMode === "git" && (
               <label className="flex flex-col gap-1.5 text-sm">
-                Branch
+                {t("projects.new.source.branch")}
                 <Input value={branch} onChange={(e) => setBranch(e.target.value)} />
               </label>
             )}
@@ -415,32 +416,31 @@ export function NewProjectPage() {
                     onChange={(e) => setPrivateRepo(e.target.checked)}
                     className="h-4 w-4"
                   />
-                  Repositório privado
+                  {t("projects.new.source.privateRepo")}
                 </label>
                 {privateRepo && (
                   <div className="flex flex-col gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">
                     <p className="text-emerald-800 dark:text-emerald-300">
-                      <strong>Acesso somente leitura.</strong> O painel só baixa o código — nunca escreve,
-                      commita nem faz push. No GitHub, crie um <em>fine-grained personal access token</em>{" "}
-                      com a permissão <code className="font-mono text-xs">Contents: Read</code> só para este
-                      repositório.
+                      <Trans
+                        k="projects.new.source.readOnly"
+                        components={{ b: <strong />, em: <em />, code: <code className="font-mono text-xs" /> }}
+                      />
                     </p>
                     <label htmlFor="np-token" className="font-medium">
-                      Token de leitura
+                      {t("projects.new.source.tokenLabel")}
                     </label>
                     <PasswordInput
                       id="np-token"
-                      revealLabel="token"
+                      revealLabel={t("projects.new.source.revealToken")}
                       value={token}
                       onChange={(e) => setToken(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder="cole o token aqui"
+                      placeholder={t("projects.new.source.tokenPlaceholder")}
                     />
                     <TokenGuide url={sourceText} />
                     <span className="text-xs text-muted-foreground">
-                      Guardado cifrado no servidor. Depois de salvo, só a dica dos últimos caracteres
-                      volta a aparecer (na página do projeto, onde também dá para trocar ou remover).
+                      {t("projects.new.source.tokenHint")}
                     </span>
                   </div>
                 )}
@@ -450,7 +450,7 @@ export function NewProjectPage() {
             <div className="flex justify-end">
               <Button disabled={!canNextStep0 || busy} onClick={() => void createAndDetect()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                {projectId === null ? "Criar e detectar" : "Tentar de novo"}
+                {projectId === null ? t("projects.new.source.createDetect") : t("projects.new.source.retry")}
               </Button>
             </div>
           </CardContent>
@@ -460,11 +460,11 @@ export function NewProjectPage() {
       {step === 1 && detection && (
         <Card>
           <CardHeader>
-            <CardTitle>Detecção automática</CardTitle>
+            <CardTitle>{t("projects.new.detect.title")}</CardTitle>
             <CardDescription>
-              Tipo detectado:{" "}
+              {t("projects.new.detect.type")}{" "}
               <Badge variant={detection.type === "unknown" ? "destructive" : "secondary"}>
-                {TYPE_LABELS[detection.type]}
+                {t(TYPE_LABELS[detection.type])}
               </Badge>
             </CardDescription>
           </CardHeader>
@@ -484,27 +484,24 @@ export function NewProjectPage() {
 
             {detection.type === "unknown" && (
               <div data-testid="unsupported-help" className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-                <p className="mb-1.5 font-medium text-amber-400">O painel ainda não sabe publicar este código.</p>
-                <p className="mb-1.5 text-muted-foreground">Ele publica projetos que tenham, na pasta principal:</p>
+                <p className="mb-1.5 font-medium text-amber-400">{t("projects.new.detect.unsupportedTitle")}</p>
+                <p className="mb-1.5 text-muted-foreground">{t("projects.new.detect.unsupportedIntro")}</p>
                 <ul className="flex list-disc flex-col gap-1 pl-5 text-muted-foreground">
                   <li>
-                    um <code className="font-mono text-xs">index.html</code> — site em HTML puro, publicado como está;
+                    <Trans k="projects.new.detect.unsupportedHtml" components={{ code: <code className="font-mono text-xs" /> }} />
                   </li>
                   <li>
-                    um <code className="font-mono text-xs">package.json</code> com o script{" "}
-                    <code className="font-mono text-xs">build</code> (<code className="font-mono text-xs">npm run build</code>)
-                    que gera um site (Vite, Next.js export…);
+                    <Trans k="projects.new.detect.unsupportedNode" components={{ code: <code className="font-mono text-xs" /> }} />
                   </li>
                   <li>
-                    um <code className="font-mono text-xs">Dockerfile</code> — qualquer linguagem;
+                    <Trans k="projects.new.detect.unsupportedDockerfile" components={{ code: <code className="font-mono text-xs" /> }} />
                   </li>
                   <li>
-                    um arquivo <code className="font-mono text-xs">docker-compose.yml</code> (ou compose.yml) — vários
-                    serviços, como app + banco.
+                    <Trans k="projects.new.detect.unsupportedCompose" components={{ code: <code className="font-mono text-xs" /> }} />
                   </li>
                 </ul>
                 <p className="mt-1.5 text-muted-foreground">
-                  Um servidor Node/PHP/Python sem Dockerfile precisa de um Dockerfile para ser publicado.
+                  {t("projects.new.detect.unsupportedOutro")}
                 </p>
               </div>
             )}
@@ -512,7 +509,7 @@ export function NewProjectPage() {
             {detection.warnings.length > 0 && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
                 <p className="mb-2 text-sm font-medium text-amber-400">
-                  Guardrails de segurança ({detection.warnings.length})
+                  {t("projects.new.detect.guardrails", { n: detection.warnings.length })}
                 </p>
                 <ul className="flex flex-col gap-1.5">
                   {detection.warnings.map((w, i) => (
@@ -524,7 +521,7 @@ export function NewProjectPage() {
 
             {detection.type === "compose" && detection.services && detection.services.length > 0 && (
               <div data-testid="wizard-compose-services" className="flex flex-col gap-3">
-                <p className="text-sm font-medium">Serviços do compose ({detection.services.length})</p>
+                <p className="text-sm font-medium">{t("projects.new.detect.composeServices", { n: detection.services.length })}</p>
                 <ComposeServicesList
                   services={detection.services}
                   entryService={proxyService || null}
@@ -543,11 +540,11 @@ export function NewProjectPage() {
             {detection.type === "compose" && !(detection.services && detection.services.length > 0) && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1.5 text-sm">
-                  Serviço web (upstream do proxy)
+                  {t("projects.new.detect.proxyService")}
                   <Input value={proxyService} onChange={(e) => setProxyService(e.target.value)} />
                 </label>
                 <label className="flex flex-col gap-1.5 text-sm">
-                  Porta do serviço
+                  {t("projects.new.detect.proxyPort")}
                   <Input
                     value={proxyPort}
                     onChange={(e) => setProxyPort(e.target.value)}
@@ -559,7 +556,7 @@ export function NewProjectPage() {
 
             <div className="flex justify-between">
               <Button variant="outline" onClick={() => setStep(0)}>
-                <ArrowLeft className="h-4 w-4" /> Voltar
+                <ArrowLeft className="h-4 w-4" /> {t("projects.new.back")}
               </Button>
               <Button
                 disabled={
@@ -568,7 +565,7 @@ export function NewProjectPage() {
                 }
                 onClick={() => setStep(2)}
               >
-                Continuar <ArrowRight className="h-4 w-4" />
+                {t("projects.new.detect.continue")} <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
           </CardContent>
@@ -578,41 +575,41 @@ export function NewProjectPage() {
       {step === 2 && (
         <Card>
           <CardHeader>
-            <CardTitle>Domínio e criação</CardTitle>
-            <CardDescription>Em que endereço o projeto vai abrir.</CardDescription>
+            <CardTitle>{t("projects.new.domain.title")}</CardTitle>
+            <CardDescription>{t("projects.new.domain.description")}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div role="radiogroup" aria-label="Domínio do projeto" className="grid gap-2 sm:grid-cols-2">
+            <div role="radiogroup" aria-label={t("projects.new.domain.groupAria")} className="grid gap-2 sm:grid-cols-2">
               <button
                 type="button"
                 role="radio"
                 aria-checked={domainMode === "auto"}
-                aria-label="Endereço automático"
+                aria-label={t("projects.new.domain.autoTitle")}
                 onClick={() => setDomainMode("auto")}
                 className={cn(
                   "flex flex-col gap-1 rounded-lg border p-3 text-left text-sm",
                   domainMode === "auto" ? "border-primary bg-primary/10" : "hover:border-foreground/30",
                 )}
               >
-                <span className="font-medium">Endereço automático</span>
+                <span className="font-medium">{t("projects.new.domain.autoTitle")}</span>
                 <span className="text-xs text-muted-foreground">
-                  Funciona na hora, com HTTPS, sem configurar nada. Bom para testar e para começar.
+                  {t("projects.new.domain.autoHint")}
                 </span>
               </button>
               <button
                 type="button"
                 role="radio"
                 aria-checked={domainMode === "own"}
-                aria-label="Meu domínio ou subdomínio"
+                aria-label={t("projects.new.domain.ownTitle")}
                 onClick={() => setDomainMode("own")}
                 className={cn(
                   "flex flex-col gap-1 rounded-lg border p-3 text-left text-sm",
                   domainMode === "own" ? "border-primary bg-primary/10" : "hover:border-foreground/30",
                 )}
               >
-                <span className="font-medium">Meu domínio ou subdomínio</span>
+                <span className="font-medium">{t("projects.new.domain.ownTitle")}</span>
                 <span className="text-xs text-muted-foreground">
-                  Ex.: meusite.com.br ou loja.meusite.com.br. Precisa criar um registro no seu provedor de DNS.
+                  {t("projects.new.domain.ownHint")}
                 </span>
               </button>
             </div>
@@ -627,7 +624,7 @@ export function NewProjectPage() {
             {domainMode === "own" && (
               <div className="flex flex-col gap-3">
                 <label htmlFor="np-own-domain" className="flex flex-col gap-1.5 text-sm">
-                  Seu domínio
+                  {t("projects.new.domain.yourDomain")}
                   <div className="flex gap-2">
                     <Input
                       id="np-own-domain"
@@ -636,10 +633,10 @@ export function NewProjectPage() {
                         setOwnDomain(e.target.value);
                         setDnsCheck(null);
                       }}
-                      placeholder="loja.meusite.com.br"
+                      placeholder={t("projects.new.domain.ownPlaceholder")}
                     />
                     <Button variant="outline" disabled={busy || !ownDomain.trim()} onClick={() => void checkDns()}>
-                      <Globe className="h-4 w-4" /> Verificar DNS
+                      <Globe className="h-4 w-4" /> {t("projects.new.domain.verifyDns")}
                     </Button>
                   </div>
                 </label>
@@ -660,8 +657,7 @@ export function NewProjectPage() {
                   </p>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Dá para criar o projeto antes de o DNS propagar: o site passa a abrir (com HTTPS) assim que o
-                  registro apontar para a VPS.
+                  {t("projects.new.domain.propagationHint")}
                 </p>
               </div>
             )}
@@ -673,34 +669,33 @@ export function NewProjectPage() {
                 onChange={(e) => setWebsocket(e.target.checked)}
                 className="h-4 w-4"
               />
-              Projeto usa WebSocket / conexões longas (ex.: Colyseus, SSE)
+              {t("projects.new.domain.websocket")}
             </label>
 
             <fieldset className="flex flex-col gap-1.5 text-sm" data-testid="backup-choice">
-              <legend className="mb-1 font-medium">Fazer backup</legend>
+              <legend className="mb-1 font-medium">{t("projects.new.domain.backup")}</legend>
               <div className="flex flex-wrap gap-4">
                 <label className="flex items-center gap-2">
                   <input type="radio" name="backup" className="h-4 w-4" checked={backup} onChange={() => setBackup(true)} />
-                  Sim
+                  {t("projects.new.domain.backupYes")}
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="radio" name="backup" className="h-4 w-4" checked={!backup} onChange={() => setBackup(false)} />
-                  Não
+                  {t("projects.new.domain.backupNo")}
                 </label>
               </div>
               <span className="text-xs text-muted-foreground">
-                Sim segue o padrão dos projetos, em Configurações → Backups. Depois do primeiro deploy, a aba Backups do projeto mostra os
-                bancos e as pastas encontrados para você conferir.
+                {t("projects.new.domain.backupHint")}
               </span>
             </fieldset>
 
             <div className="flex justify-between">
               <Button variant="outline" onClick={() => setStep(1)}>
-                <ArrowLeft className="h-4 w-4" /> Voltar
+                <ArrowLeft className="h-4 w-4" /> {t("projects.new.back")}
               </Button>
               <Button disabled={!chosenDomain || busy} onClick={() => void finish()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-                Criar projeto
+                {t("projects.new.domain.create")}
               </Button>
             </div>
           </CardContent>

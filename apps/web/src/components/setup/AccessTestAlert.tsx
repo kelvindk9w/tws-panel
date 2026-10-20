@@ -3,18 +3,19 @@ import type { SecurityPhaseId } from "@paas/core";
 import { CopyButton } from "@/components/CopyButton";
 import { Button } from "@/components/ui/button";
 import { VPS_ADDRESS_PLACEHOLDER } from "@/lib/terminal-info";
+import { Trans, useI18n, type TFunction } from "@/i18n";
 import { AlertTriangle, ChevronDown, ChevronRight, Clock } from "lucide-react";
 
 /** O que cada fase mudou no acesso — uma frase, no idioma de quem não é da área. */
-function whatChanged(phase: SecurityPhaseId, user: string | null): string {
-  const who = user ?? "o seu usuário";
+function whatChanged(t: TFunction, phase: SecurityPhaseId, user: string | null): string {
+  const who = user ?? t("hardening.access.whoDefault");
   switch (phase) {
     case "01":
-      return `A senha do root foi desativada. Confira que você ainda entra com ${who}.`;
+      return t("hardening.access.changed.01", { who });
     case "02":
-      return `O SSH agora aceita entrar só por chave e só ${who}. Confira que você ainda entra.`;
+      return t("hardening.access.changed.02", { who });
     default:
-      return "O firewall foi ligado. Confira que você ainda entra.";
+      return t("hardening.access.changed.other");
   }
 }
 
@@ -46,12 +47,8 @@ function useSecondsLeft(remainingMs: number): number {
   return remaining;
 }
 
-function Remaining({ remaining }: { remaining: number }) {
-  return (
-    <span className={`font-mono font-bold ${remaining < 60 ? "text-red-400" : "text-amber-300"}`}>
-      {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}
-    </span>
-  );
+function formatRemaining(remaining: number): string {
+  return `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
 }
 
 /**
@@ -91,6 +88,7 @@ export function AccessTestAlert({
   onConfirm: () => void;
   onUndo: () => void;
 }) {
+  const { t } = useI18n();
   const [details, setDetails] = useState(false);
   const remaining = useSecondsLeft(remainingMs);
   // Prazo acabou: quem decide agora é o servidor (a reversão agendada roda lá).
@@ -105,16 +103,16 @@ export function AccessTestAlert({
       className="flex flex-col gap-4 rounded-xl border-4 border-amber-500 bg-amber-500/15 p-6 text-amber-50 shadow-[0_0_60px_rgba(245,158,11,0.3)]"
     >
       <p className="flex items-center gap-2 text-xl font-bold text-amber-300">
-        <AlertTriangle className="h-6 w-6 shrink-0" /> Teste seu acesso agora — Fase {phase} ({phaseTitle})
+        <AlertTriangle className="h-6 w-6 shrink-0" /> {t("hardening.access.title", { phase, phaseTitle })}
       </p>
-      <p className="text-base">{whatChanged(phase, user)}</p>
+      <p className="text-base">{whatChanged(t, phase, user)}</p>
 
       <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm">
         <li>
-          Abra o <strong>terminal do seu computador</strong> (não o navegador), sem fechar esta página.
+          <Trans k="hardening.access.step1" components={{ b: <strong /> }} />
         </li>
         <li className="flex flex-col gap-1">
-          <span>Rode:</span>
+          <span>{t("hardening.access.step2.run")}</span>
           {command ? (
             <span className="flex items-center gap-2">
               <code
@@ -126,42 +124,54 @@ export function AccessTestAlert({
               <CopyButton text={command} />
             </span>
           ) : (
-            <span className="text-amber-200/90">ssh SEU_USUARIO@{host} (troque pelo usuário que você criou)</span>
+            <span className="text-amber-200/90">{t("hardening.access.step2.fallback", { host })}</span>
           )}
           {host === VPS_ADDRESS_PLACEHOLDER && (
             <span className="text-amber-200/90">
-              Troque {VPS_ADDRESS_PLACEHOLDER} pelo IP da sua VPS — o mesmo que você usa para entrar por SSH.
+              {t("hardening.access.step2.placeholder", { placeholder: VPS_ADDRESS_PLACEHOLDER })}
             </span>
           )}
         </li>
         <li>
-          Apareceu <code className="font-mono">{user ?? "seu-usuario"}@…$</code>? Deu certo: digite{" "}
-          <code className="font-mono">exit</code> e clique em <strong>Entrei — confirmar</strong>.
+          <Trans
+            k="hardening.access.step3"
+            params={{ user: user ?? t("hardening.access.userFallback") }}
+            components={{ code: <code className="font-mono" />, b: <strong /> }}
+          />
         </li>
       </ol>
 
       <p className="text-sm text-amber-100/90">
-        Por que testar agora: se der errado, desfazemos só esta fase — não todo o trabalho feito até aqui.
+        {t("hardening.access.why")}
       </p>
 
       {expired ? (
         <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
-          <Clock className="h-4 w-4 shrink-0" /> O prazo acabou sem confirmação: o servidor está desfazendo esta
-          fase. Em instantes a tela mostra o resultado.
+          <Clock className="h-4 w-4 shrink-0" /> {t("hardening.access.expired")}
         </p>
       ) : (
         <p className="flex items-center gap-2 text-sm">
-          <Clock className="h-4 w-4 shrink-0" /> Sem resposta, esta fase se desfaz sozinha em{" "}
-          <Remaining remaining={remaining} />.
+          <Clock className="h-4 w-4 shrink-0" />{" "}
+          <Trans
+            k="hardening.access.countdown"
+            params={{ time: formatRemaining(remaining) }}
+            components={{
+              timer: (children) => (
+                <span className={`font-mono font-bold ${remaining < 60 ? "text-red-400" : "text-amber-300"}`}>
+                  {children}
+                </span>
+              ),
+            }}
+          />
         </p>
       )}
 
       <div className="flex flex-wrap gap-3">
         <Button size="lg" onClick={onConfirm} disabled={busy || expired} className="bg-amber-500 text-black hover:bg-amber-400">
-          ✅ Entrei — confirmar
+          {t("hardening.access.confirm")}
         </Button>
         <Button size="lg" variant="outline" onClick={onUndo} disabled={busy || expired}>
-          Não consegui entrar — desfazer agora
+          {t("hardening.access.undo")}
         </Button>
       </div>
 
@@ -173,31 +183,27 @@ export function AccessTestAlert({
           className="flex items-center gap-2 text-left text-sm font-medium text-amber-200"
         >
           {details ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          Mais detalhes
+          {t("hardening.access.details")}
         </button>
         {details && (
           <div className="flex flex-col gap-2 pl-6 text-sm text-amber-100/85">
             <p>
-              <strong>Por que um teste em cada fase:</strong> as fases 01, 02 e 03 mexem em como você entra na
-              VPS — a senha do root, o SSH e o firewall. Testando uma de cada vez, se algo der errado só aquela
-              fase é desfeita e você sabe exatamente qual foi.
+              <Trans k="hardening.access.details.why" components={{ b: <strong /> }} />
             </p>
             <p>
-              <strong>Onde fica o terminal:</strong> no Windows, o PowerShell (menu Iniciar → digite
-              &quot;PowerShell&quot;); no Mac, o Terminal (Spotlight → &quot;Terminal&quot;); no Linux, o
-              Terminal. É o mesmo que você usou para entrar na VPS no começo.
+              <Trans k="hardening.access.details.where" components={{ b: <strong /> }} />
             </p>
             <p>
-              <strong>Pediu uma senha?</strong> Se for &quot;Enter passphrase for key&quot;, é a senha da
-              chave SSH que você criou no seu computador — não a senha do servidor.
+              <Trans k="hardening.access.details.password" components={{ b: <strong /> }} />
             </p>
             <p>
-              <strong>Sua chave tem outro nome?</strong> Acrescente <code className="font-mono">-i ~/.ssh/NOME</code>{" "}
-              ao comando.
+              <Trans
+                k="hardening.access.details.keyName"
+                components={{ b: <strong />, code: <code className="font-mono" /> }}
+              />
             </p>
             <p>
-              <strong>Não consegui entrar:</strong> clique em &quot;desfazer agora&quot;. Esta fase volta ao que
-              era, as seguintes não rodam, e você pode tentar de novo depois de resolver.
+              <Trans k="hardening.access.details.failed" components={{ b: <strong /> }} />
             </p>
           </div>
         )}

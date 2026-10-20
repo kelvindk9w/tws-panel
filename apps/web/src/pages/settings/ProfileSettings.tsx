@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { DISPLAY_NAME_MAX_LENGTH, type UpdateProfileRequest, type UpdateProfileResponse } from "@paas/core";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, useI18n } from "@/i18n";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,7 @@ import { CheckCircle2, Loader2 } from "lucide-react";
  * Trocar o usuário de login muda o que se digita para entrar: pede a senha.
  */
 export function ProfileSettings() {
+  const { t } = useI18n();
   const { user, setUser } = useAuth();
   const [displayName, setDisplayName] = useState(user.displayName ?? "");
   const [email, setEmail] = useState(user.email ?? "");
@@ -47,7 +49,7 @@ export function ProfileSettings() {
       setCurrentPassword("");
       setSaved(true);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível salvar o perfil.");
+      setError(apiErrorText(err, "settings.profile.error.save"));
     } finally {
       setSaving(false);
     }
@@ -56,14 +58,14 @@ export function ProfileSettings() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Perfil</CardTitle>
-        <CardDescription>Como você aparece no painel e como entra nele.</CardDescription>
+        <CardTitle className="text-base">{t("settings.profile.title")}</CardTitle>
+        <CardDescription>{t("settings.profile.description")}</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={(e) => void onSubmit(e)} className="flex max-w-sm flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <label htmlFor="pf-name" className="text-sm font-medium">
-              Nome de exibição
+              {t("settings.profile.name.label")}
             </label>
             <Input
               id="pf-name"
@@ -72,26 +74,26 @@ export function ProfileSettings() {
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder={user.username}
             />
-            <p className="text-xs text-muted-foreground">Aparece no menu. Em branco, mostra o usuário de login.</p>
+            <p className="text-xs text-muted-foreground">{t("settings.profile.name.hint")}</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="pf-email" className="text-sm font-medium">
-              E-mail
+              {t("settings.profile.email.label")}
             </label>
             <Input
               id="pf-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="voce@exemplo.com"
+              placeholder={t("settings.profile.email.placeholder")}
             />
             <p className="text-xs text-muted-foreground">
-              Contato da conta. Hoje o painel não envia e-mails — veja Configurações → Notificações.
+              {t("settings.profile.email.hint")}
             </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="pf-username" className="text-sm font-medium">
-              Usuário de login
+              {t("settings.profile.username.label")}
             </label>
             <Input
               id="pf-username"
@@ -100,12 +102,12 @@ export function ProfileSettings() {
               onChange={(e) => setUsername(e.target.value)}
               className="font-mono"
             />
-            <p className="text-xs text-muted-foreground">É o que você digita para entrar no painel.</p>
+            <p className="text-xs text-muted-foreground">{t("settings.profile.username.hint")}</p>
           </div>
           {usernameChanges && (
             <div className="flex flex-col gap-1.5">
               <label htmlFor="pf-password" className="text-sm font-medium">
-                Sua senha atual
+                {t("settings.profile.password.label")}
               </label>
               <PasswordInput
                 id="pf-password"
@@ -114,7 +116,7 @@ export function ProfileSettings() {
                 onChange={(e) => setCurrentPassword(e.target.value)}
               />
               <p className="text-xs text-amber-400">
-                Trocar o usuário de login muda o que você digita para entrar: confirme com a senha.
+                {t("settings.profile.password.warning")}
               </p>
             </div>
           )}
@@ -125,11 +127,11 @@ export function ProfileSettings() {
           )}
           <div className="flex items-center gap-3">
             <Button type="submit" disabled={!canSave}>
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />} {t("settings.profile.save")}
             </Button>
             {saved && !dirty && (
               <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircle2 className="h-3 w-3" /> Salvo.
+                <CheckCircle2 className="h-3 w-3" /> {t("settings.profile.saved")}
               </span>
             )}
           </div>

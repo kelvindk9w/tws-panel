@@ -7,11 +7,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
+import { apiErrorText, formatDateTime, Trans, useI18n } from "@/i18n";
 
 const CONFIRMATION = "recomeçar";
 
 /** "Recomeçar do zero": orientação primeiro, confirmação forte depois. */
 function RestartZone() {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [twoFactor, setTwoFactor] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
@@ -43,7 +45,7 @@ function RestartZone() {
       // recarrega a página inteira: o assistente recomeça do passo 0 com o token novo
       window.location.assign(res.setupUrl);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível recomeçar.");
+      setError(err instanceof ApiRequestError ? apiErrorText(err, "setup.done.restart.failed") : t("setup.done.restart.failed"));
       setBusy(false);
     }
   }
@@ -58,26 +60,21 @@ function RestartZone() {
           className="flex items-center gap-2 text-left font-semibold text-red-400"
         >
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          <AlertTriangle className="h-4 w-4" /> Recomeçar do zero
+          <AlertTriangle className="h-4 w-4" /> {t("setup.done.restart.title")}
         </button>
-        <CardDescription>Refaz o assistente de configuração desde o começo. Leia antes de prosseguir.</CardDescription>
+        <CardDescription>{t("setup.done.restart.description")}</CardDescription>
       </CardHeader>
       {open && (
         <CardContent data-testid="restart-zone" className="flex flex-col gap-4 text-sm">
           <div className="flex flex-col gap-2 text-muted-foreground">
             <p>
-              <strong className="text-foreground">O que acontece:</strong> o painel apaga a sua conta de
-              administrador (e a verificação em duas etapas dela), encerra todas as sessões e volta o assistente ao
-              primeiro passo. Você continua na mesma hora, com um token de setup novo — o antigo deixa de valer.
+              <Trans k="setup.done.restart.what" components={{ b: <strong className="text-foreground" /> }} />
             </p>
             <p>
-              <strong className="text-foreground">O que fica:</strong> projetos, domínios, e-mail, histórico de
-              segurança e as proteções já aplicadas na VPS. Nada disso é desfeito.
+              <Trans k="setup.done.restart.keeps" components={{ b: <strong className="text-foreground" /> }} />
             </p>
             <p>
-              <strong className="text-foreground">Quando faz sentido:</strong> para recriar a conta de administrador
-              do zero ou refazer o assistente inteiro. Para só rever a saúde da máquina ou as proteções, use os
-              botões acima — eles não apagam nada. Para trocar a senha, use Configurações → Segurança.
+              <Trans k="setup.done.restart.when" components={{ b: <strong className="text-foreground" /> }} />
             </p>
           </div>
 
@@ -85,12 +82,18 @@ function RestartZone() {
 
           {twoFactor === false && (
             <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200">
-              Para recomeçar pelo painel, ative a verificação em duas etapas em{" "}
-              <Link to="/settings/security#two-factor" className="underline">
-                Configurações → Segurança
-              </Link>
-              : ela confirma que é você. O envio de código por e-mail ainda não existe no painel. Sem ela, o
-              caminho é pela VPS, com acesso SSH: <code className="font-mono">sudo ./scripts/reset-setup.sh --full</code>
+              <Trans
+                k="setup.done.restart.needTwoFactor"
+                params={{ command: "sudo ./scripts/reset-setup.sh --full" }}
+                components={{
+                  link: (c) => (
+                    <Link to="/settings/security#two-factor" className="underline">
+                      {c}
+                    </Link>
+                  ),
+                  code: <code className="font-mono" />,
+                }}
+              />
             </p>
           )}
 
@@ -98,7 +101,7 @@ function RestartZone() {
             <form onSubmit={(e) => void restart(e)} className="flex max-w-sm flex-col gap-3">
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="rs-password" className="font-medium">
-                  Sua senha atual
+                  {t("setup.done.restart.password")}
                 </label>
                 <PasswordInput
                   id="rs-password"
@@ -109,7 +112,7 @@ function RestartZone() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="rs-code" className="font-medium">
-                  Código da verificação em duas etapas
+                  {t("setup.done.restart.code")}
                 </label>
                 <Input
                   id="rs-code"
@@ -122,7 +125,7 @@ function RestartZone() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="rs-confirm" className="font-medium">
-                  Digite recomeçar para confirmar
+                  {t("setup.done.restart.confirm", { word: CONFIRMATION })}
                 </label>
                 <Input id="rs-confirm" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" />
               </div>
@@ -132,7 +135,7 @@ function RestartZone() {
                 </p>
               )}
               <Button type="submit" variant="destructive" disabled={!canRestart}>
-                {busy && <Loader2 className="h-4 w-4 animate-spin" />} Apagar e recomeçar
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("setup.done.restart.submit")}
               </Button>
             </form>
           )}
@@ -149,37 +152,41 @@ function RestartZone() {
  * confirmação forte — "Recomeçar do zero".
  */
 export function SetupDone({ user }: { user: AdminUser }) {
-  const quando = new Date(user.createdAt).toLocaleString("pt-BR");
+  const { t } = useI18n();
+  const quando = formatDateTime(user.createdAt);
   return (
     <div data-testid="setup-done" className="flex flex-col gap-6">
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <CheckCircle2 className="h-6 w-6 text-emerald-400" /> Configuração inicial concluída
+          <CheckCircle2 className="h-6 w-6 text-emerald-400" /> {t("setup.done.title")}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Concluída em {quando}, quando a conta <strong className="text-foreground">{user.username}</strong> foi
-          criada.
+          <Trans
+            k="setup.done.completedAt"
+            params={{ when: quando, user: user.username }}
+            components={{ b: <strong className="text-foreground" /> }}
+          />
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Refazer sem apagar nada</CardTitle>
-          <CardDescription>Estes caminhos só verificam ou reaplicam — a conta e os projetos ficam como estão.</CardDescription>
+          <CardTitle className="text-base">{t("setup.done.redo.title")}</CardTitle>
+          <CardDescription>{t("setup.done.redo.description")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
             <Link to="/health">
-              <Stethoscope className="h-4 w-4" /> Verificar a saúde da máquina
+              <Stethoscope className="h-4 w-4" /> {t("setup.done.redo.health")}
             </Link>
           </Button>
           <Button asChild variant="outline">
             <Link to="/security/hardening">
-              <ShieldCheck className="h-4 w-4" /> Rever as proteções de segurança
+              <ShieldCheck className="h-4 w-4" /> {t("setup.done.redo.hardening")}
             </Link>
           </Button>
           <Button asChild>
-            <Link to="/">Ir para o Dashboard</Link>
+            <Link to="/">{t("setup.done.redo.dashboard")}</Link>
           </Button>
         </CardContent>
       </Card>

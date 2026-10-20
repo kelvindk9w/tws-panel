@@ -7,33 +7,35 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { ProjectTimezoneSetting, SetTimezoneResponse, TimezoneProjectResult, TimezoneStatus } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiErrorText, Trans, t, useI18n, type Key } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TimezonePicker, clockIn, zoneWithOffset } from "@/components/timezone/TimezonePicker";
 import { AlertTriangle, CheckCircle2, Clock, Loader2 } from "lucide-react";
 
-function errorText(err: unknown): string {
-  return err instanceof ApiRequestError ? err.message : "Não foi possível concluir agora. Tente de novo em instantes.";
+/** Só erro da API traz mensagem própria; qualquer outro vira o texto padrão. */
+function errorText(err: unknown, fallback: Key): string {
+  return apiErrorText(err instanceof ApiRequestError ? err : null, fallback);
 }
 
 /** Texto da escolha do projeto ("Padrão da imagem", "Igual ao da VPS", um fuso). */
 export function settingText(s: ProjectTimezoneSetting): string {
-  if (s.mode === "host") return "Igual ao da VPS";
+  if (s.mode === "host") return t("timezone.setting.host");
   if (s.mode === "zone" && s.zone) return s.zone;
-  return "Padrão da imagem";
+  return t("timezone.setting.image");
 }
 
 /** De onde veio o fuso que o painel usa, em uma frase. */
 export function sourceText(st: TimezoneStatus): string | null {
   switch (st.source) {
     case "env":
-      return `O arquivo /opt/tws-panel/.env define TZ=${st.envOverride}. Ele manda no painel: depois de um reinício do painel, volta a valer esse fuso. Para o painel seguir a VPS, apague a linha TZ desse arquivo.`;
+      return t("timezone.source.env", { zone: String(st.envOverride) });
     case "saved":
-      return "Último fuso lido da VPS (agora não deu para ler de novo).";
+      return t("timezone.source.saved");
     case "localtime":
-      return "Lido do /etc/localtime da VPS montado no container. Se você trocou o fuso pelo SSH, pode estar desatualizado.";
+      return t("timezone.source.localtime");
     case "default":
-      return "Não deu para descobrir o fuso da VPS; o painel usa UTC.";
+      return t("timezone.source.default");
     default:
       return null;
   }
@@ -67,15 +69,18 @@ export function ProjectRestartResults({ results }: { results: TimezoneProjectRes
           <span className="min-w-0 break-words">
             <strong className="font-medium">{r.name}</strong>
             {r.error ? (
-              <>: não reiniciou — {r.error}</>
+              <>{t("timezone.restart.failed", { error: r.error })}</>
             ) : (
-              <>
-                : reiniciando com o fuso novo.{" "}
-                <Link to={`/projects/${r.id}/deploys`} className="underline underline-offset-2">
-                  Acompanhe em Deploys
-                </Link>
-                .
-              </>
+              <Trans
+                k="timezone.restart.running"
+                components={{
+                  link: (c) => (
+                    <Link to={`/projects/${r.id}/deploys`} className="underline underline-offset-2">
+                      {c}
+                    </Link>
+                  ),
+                }}
+              />
             )}
           </span>
         </li>
@@ -85,6 +90,7 @@ export function ProjectRestartResults({ results }: { results: TimezoneProjectRes
 }
 
 export function TimezoneSettings() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<TimezoneStatus | null>(null);
   const [zone, setZone] = useState("");
   const [marked, setMarked] = useState<Set<string>>(new Set());
@@ -100,7 +106,7 @@ export function TimezoneSettings() {
       setStatus(st);
       setZone((z) => z || st.hostZone || st.zone);
     } catch (err) {
-      setError(errorText(err));
+      setError(errorText(err, "timezone.error.generic"));
     }
   }, []);
 
@@ -111,7 +117,7 @@ export function TimezoneSettings() {
   if (!status) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        {error ? <span role="alert" className="text-destructive">{error}</span> : <><Loader2 className="h-4 w-4 animate-spin" /> Carregando…</>}
+        {error ? <span role="alert" className="text-destructive">{error}</span> : <><Loader2 className="h-4 w-4 animate-spin" /> {t("timezone.loading")}</>}
       </p>
     );
   }
@@ -140,9 +146,9 @@ export function TimezoneSettings() {
       setStatus(res.status);
       setResults(res.projects);
       setMarked(new Set());
-      setNotice(`A VPS agora está em ${zoneWithOffset(zone, res.status.options)}. O painel e a agenda dos backups já usam esse fuso.`);
+      setNotice(t("timezone.applied", { zone: zoneWithOffset(zone, res.status.options) }));
     } catch (err) {
-      setError(errorText(err));
+      setError(errorText(err, "timezone.error.generic"));
     } finally {
       setBusy(false);
     }
@@ -155,22 +161,22 @@ export function TimezoneSettings() {
       <Card data-testid="timezone-card">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Clock className="h-4 w-4" /> Fuso horário
+            <Clock className="h-4 w-4" /> {t("timezone.card.title")}
           </CardTitle>
-          <CardDescription>
-            O fuso da VPS define o horário dos backups (03:00) e as datas dos registros. Trocar aqui muda o fuso da VPS
-            inteira, sem precisar de SSH.
-          </CardDescription>
+          <CardDescription>{t("timezone.card.description")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm">
           <div className="flex flex-col gap-1" data-testid="timezone-current">
             <p>
-              A VPS está em <strong>{zoneWithOffset(vpsZone, status.options)}</strong>. Agora são{" "}
-              <strong data-testid="timezone-clock">{clockIn(vpsZone, clock)}</strong> lá.
+              <Trans
+                k="timezone.current"
+                params={{ zone: zoneWithOffset(vpsZone, status.options), time: clockIn(vpsZone, clock) }}
+                components={{ b: <strong />, clock: <strong data-testid="timezone-clock" /> }}
+              />
             </p>
             {status.zone !== vpsZone && (
               <p className="text-amber-400">
-                O painel está usando {zoneWithOffset(status.zone, status.options)}.
+                {t("timezone.panelUsing", { zone: zoneWithOffset(status.zone, status.options) })}
               </p>
             )}
             {source && <p className="text-xs text-muted-foreground">{source}</p>}
@@ -179,25 +185,24 @@ export function TimezoneSettings() {
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="timezone-zone" className="font-medium">
-              Fuso novo
+              {t("timezone.newZone")}
             </label>
             <TimezonePicker id="timezone-zone" options={status.options} value={zone} onChange={setZone} disabled={busy || !status.canApply} />
-            <p className="text-xs text-muted-foreground">Os do Brasil aparecem primeiro. Busque pela cidade ou pelo estado.</p>
+            <p className="text-xs text-muted-foreground">{t("timezone.newZoneHint")}</p>
           </div>
 
           {status.projects.length > 0 && (
             <fieldset className="flex flex-col gap-2" data-testid="timezone-projects">
-              <legend className="mb-1 font-medium">Aplicar também nestes projetos</legend>
+              <legend className="mb-1 font-medium">{t("timezone.projects.legend")}</legend>
               <p className="text-xs text-muted-foreground">
-                Os marcados passam a usar “Igual ao da VPS” e reiniciam com o fuso novo (sem baixar código novo). Os outros
-                mantêm o fuso que têm.
+                {t("timezone.projects.help")}
               </p>
               <div className="flex gap-2">
                 <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setMarked(new Set(status.projects.map((p) => p.id)))}>
-                  Marcar todos
+                  {t("timezone.projects.markAll")}
                 </Button>
                 <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setMarked(new Set())}>
-                  Nenhum
+                  {t("timezone.projects.markNone")}
                 </Button>
               </div>
               <ul className="flex flex-col gap-1">
@@ -212,7 +217,7 @@ export function TimezoneSettings() {
                         onChange={(e) => toggle(p.id, e.target.checked)}
                       />
                       <span className="min-w-0 break-words">
-                        {p.name} <span className="text-xs text-muted-foreground">— hoje: {settingText(p.setting)}</span>
+                        {p.name} <span className="text-xs text-muted-foreground">{t("timezone.projects.today", { setting: settingText(p.setting) })}</span>
                       </span>
                     </label>
                   </li>
@@ -220,8 +225,7 @@ export function TimezoneSettings() {
               </ul>
               {following.length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  {following.map((p) => p.name).join(", ")} {following.length === 1 ? "segue" : "seguem"} o fuso da VPS, mas só
-                  {following.length === 1 ? " pega" : " pegam"} o fuso novo depois de reiniciar ou reimplantar.
+                  {t("timezone.projects.following", { count: following.length, names: following.map((p) => p.name).join(", ") })}
                 </p>
               )}
             </fieldset>
@@ -236,7 +240,7 @@ export function TimezoneSettings() {
           <div>
             <Button onClick={() => void apply()} disabled={busy || !status.canApply || !zone || (same && marked.size === 0)}>
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {busy ? "Aplicando…" : "Aplicar na VPS"}
+              {busy ? t("timezone.applying") : t("timezone.apply")}
             </Button>
           </div>
 

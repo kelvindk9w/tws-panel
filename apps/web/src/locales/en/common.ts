@@ -4,4 +4,14 @@ export default {
   "language.label": "Language",
   "api.networkError": "Could not reach the server.",
   "api.httpError": "Error {status} while talking to the server.",
+  // Ações genéricas
+  "copy": "Copy",
+  "copied": "Copied",
+  "combobox.close": "Close the list",
+  "combobox.open": "Open the list",
+  "combobox.empty": "Nothing found.",
+  "combobox.create": "Use \"{query}\"",
+  "password.hide": "Hide",
+  "password.show": "Show",
+  "password.defaultTarget": "password",
 } as const;

@@ -1,6 +1,15 @@
 import { Check, Lock } from "lucide-react";
 import type { SetupStepInfo } from "@paas/core";
 import { cn } from "@/lib/utils";
+import { useI18n, type Key } from "@/i18n";
+
+/** Título dos passos conhecidos, por chave (o servidor manda o título em português). */
+const STEP_TITLE: Record<string, Key> = {
+  welcome: "setup.stepper.welcome",
+  health: "setup.stepper.health",
+  security: "setup.stepper.security",
+  admin: "setup.stepper.admin",
+};
 
 interface StepperProps {
   steps: SetupStepInfo[];
@@ -12,7 +21,9 @@ interface StepperProps {
 }
 
 export function Stepper({ steps, currentStep, maxSelectable, onSelect }: StepperProps) {
+  const { t } = useI18n();
   const selectable = maxSelectable ?? currentStep;
+  const titleOf = (step: SetupStepInfo) => (STEP_TITLE[step.key] ? t(STEP_TITLE[step.key]!) : step.title);
   return (
     <ol className="flex w-full items-center gap-2">
       {steps.map((step, index) => {
@@ -42,7 +53,7 @@ export function Stepper({ steps, currentStep, maxSelectable, onSelect }: Stepper
               clickable && "hover:text-foreground",
             )}
           >
-            {step.title}
+            {titleOf(step)}
           </span>
         );
         return (
@@ -51,7 +62,7 @@ export function Stepper({ steps, currentStep, maxSelectable, onSelect }: Stepper
               <button
                 type="button"
                 onClick={() => onSelect(index)}
-                aria-label={`Voltar para ${step.title}`}
+                aria-label={t("setup.stepper.goBackTo", { title: titleOf(step) })}
                 className="flex items-center gap-2"
               >
                 {marker}

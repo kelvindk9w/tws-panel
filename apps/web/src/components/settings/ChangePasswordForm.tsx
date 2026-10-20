@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { PASSWORD_MIN_LENGTH, validatePasswordStrength, type ChangePasswordRequest } from "@paas/core";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
@@ -8,6 +9,7 @@ import { CheckCircle2, Circle, Loader2 } from "lucide-react";
 
 /** Troca de senha (exige a senha atual; encerra as demais sessões). Configurações → Segurança. */
 export function ChangePasswordForm() {
+  const { t } = useI18n();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -29,7 +31,7 @@ export function ChangePasswordForm() {
       await apiFetch("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) });
       setSuccess(true);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível trocar a senha.");
+      setError(apiErrorText(err, "settings.password.error"));
     } finally {
       setLoading(false);
     }
@@ -38,7 +40,7 @@ export function ChangePasswordForm() {
   if (success) {
     return (
       <p data-testid="password-changed" className="flex items-center gap-2 text-sm text-emerald-400">
-        <CheckCircle2 className="h-4 w-4" /> Senha alterada. As outras sessões foram encerradas; esta continua aberta.
+        <CheckCircle2 className="h-4 w-4" /> {t("settings.password.changed")}
       </p>
     );
   }
@@ -46,7 +48,7 @@ export function ChangePasswordForm() {
   return (
     <form onSubmit={(e) => void onSubmit(e)} className="flex max-w-sm flex-col gap-3">
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="cp-current" className="text-sm font-medium">Senha atual</label>
+        <label htmlFor="cp-current" className="text-sm font-medium">{t("settings.password.current")}</label>
         <PasswordInput
           id="cp-current"
           autoComplete="current-password"
@@ -55,7 +57,7 @@ export function ChangePasswordForm() {
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="cp-new" className="text-sm font-medium">Nova senha</label>
+        <label htmlFor="cp-new" className="text-sm font-medium">{t("settings.password.new")}</label>
         <PasswordInput
           id="cp-new"
           autoComplete="new-password"
@@ -66,21 +68,21 @@ export function ChangePasswordForm() {
           <ul className="flex flex-col gap-1 text-xs">
             <li className={`flex items-center gap-1.5 ${strength.checks.minLength ? "text-emerald-400" : "text-muted-foreground"}`}>
               {strength.checks.minLength ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-              Mínimo de {PASSWORD_MIN_LENGTH} caracteres
+              {t("settings.password.rule.minLength", { min: PASSWORD_MIN_LENGTH })}
             </li>
             <li className={`flex items-center gap-1.5 ${strength.checks.hasUpper && strength.checks.hasLower ? "text-emerald-400" : "text-muted-foreground"}`}>
               {strength.checks.hasUpper && strength.checks.hasLower ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-              Maiúsculas e minúsculas
+              {t("settings.password.rule.case")}
             </li>
             <li className={`flex items-center gap-1.5 ${strength.checks.hasNumber ? "text-emerald-400" : "text-muted-foreground"}`}>
               {strength.checks.hasNumber ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-              Ao menos um número
+              {t("settings.password.rule.number")}
             </li>
           </ul>
         )}
       </div>
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="cp-confirm" className="text-sm font-medium">Confirmar nova senha</label>
+        <label htmlFor="cp-confirm" className="text-sm font-medium">{t("settings.password.confirm")}</label>
         <Input
           id="cp-confirm"
           type="password"
@@ -89,7 +91,7 @@ export function ChangePasswordForm() {
           onChange={(e) => setConfirm(e.target.value)}
         />
         {confirm.length > 0 && confirm !== newPassword && (
-          <p className="text-xs text-amber-400">As senhas não coincidem.</p>
+          <p className="text-xs text-amber-400">{t("settings.password.mismatch")}</p>
         )}
       </div>
 
@@ -101,7 +103,7 @@ export function ChangePasswordForm() {
 
       <Button type="submit" disabled={!canSubmit}>
         {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-        {loading ? "Salvando…" : "Salvar nova senha"}
+        {loading ? t("settings.password.saving") : t("settings.password.submit")}
       </Button>
     </form>
   );
