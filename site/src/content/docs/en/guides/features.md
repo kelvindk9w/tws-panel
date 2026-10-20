@@ -214,7 +214,7 @@ In **Configurações → Backups** (Settings → Backups) and in each project's 
   to download and reminds you every 90 days to test the password.
 - Each external copy is downloaded back and verified before the old ones are deleted.
 
-**When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS timezone, with
+**When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS time zone, with
 the number of copies kept on the VPS and externally. **Fazer backup agora** (Back up now) at any time.
 
 **Restore.**

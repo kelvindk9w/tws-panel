@@ -93,7 +93,7 @@ text ready to open a ticket. The PTR is one per server, even with several domain
 |---|---|---|
 | Domains | `meuapp.localhost` (plain HTTP) | real domain with an A record → VPS IP |
 | SSL | none | automatic (Caddy ACME) |
-| DNS verification | disabled/test mode | confirm the pointing before issuing the cert |
+| DNS verification | disabled/test mode | confirm the DNS points to the VPS before issuing the certificate |
 
 ### 1.6 UFW in production
 

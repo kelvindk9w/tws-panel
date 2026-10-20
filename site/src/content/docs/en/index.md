@@ -5,7 +5,7 @@ template: splash
 hero:
   tagline: Turn an Ubuntu VPS into your own hosting platform. Harden the machine, publish projects with HTTPS and run professional email, from one panel you control.
   actions:
-    - text: Install in minutes
+    - text: Install the panel
       link: /tws-panel/en/getting-started/installation/
       icon: right-arrow
     - text: Source on GitHub
@@ -42,6 +42,12 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 - [Features](guides/features.md): what each module does.
 - [Security model](reference/security.md): what the panel protects, and what it requires.
 - [Troubleshooting](guides/troubleshooting.md): blocked port 25, email in spam, certificates that do not issue.
+- [Restore on a new VPS](guides/restore-new-server.md): bring the panel, projects and email back from the external backups.
 
-The panel interface is currently available in Portuguese only. Translating it is on the
+## What you need
+
+A clean VPS with Ubuntu 22.04 or 24.04 LTS (at least 1 vCPU, 2 GB of RAM and 25 GB of disk) and ports
+80 and 443 open. Docker, Node and the rest are installed by the installer.
+
+The panel interface is being translated into English; for now it is in Portuguese. See the
 [roadmap](https://github.com/kelvindk9w/tws-panel/blob/main/ROADMAP.md).
