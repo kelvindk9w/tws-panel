@@ -32,5 +32,12 @@
     "nodemailer": "^10.0.9",
     "tsx": "^4.19.2",
     "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici": "^8.10.2",
+      "source-map-js": "^1.2.2",
+      "postcss-selector-parser": "^7.1.6"
+    }
   }
 }
