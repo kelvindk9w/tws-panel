@@ -9,7 +9,7 @@ Um roteiro só, em ordem, da VPS contratada até o painel configurado por comple
 domínio, fuso, e-mail, notificações, backups, o primeiro projeto no ar e uma restauração de teste.
 
 > [!NOTE]
-> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, o texto do kit de recuperação e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, detalhes dos passos do roteiro e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
 
 Cada passo diz **o que fazer**, **onde clicar** e **o que conferir** para saber que deu certo.
 Quando o detalhe é longo, o passo resume e manda para o guia certo. Siga na ordem: alguns passos
@@ -192,7 +192,7 @@ O passo a passo completo, fase por fase, está em
 [As oito fases](security-wizard.md#as-oito-fases).
 
 **O que conferir:** no Dashboard, o passo **Proteções da VPS** do roteiro aparece como feito, com
-"8 de 8 fases". Se ficou alguma de fora, ela fica em **Segurança → Verificar e aplicar proteções** para revisar,
+"Todas as 8 fases resolvidas" (mensagem do servidor). Se ficou alguma de fora, ela fica em **Segurança → Verificar e aplicar proteções** para revisar,
 simular ou aplicar depois.
 
 ### 3.3 Verificação em duas etapas
@@ -371,7 +371,7 @@ configurado no painel do provedor da VPS. O cartão **Reverse DNS (PTR)** mostra
 
 - **Verde:** o nome reverso já é `mail.envio.example.com`. Nada a fazer.
 - **Azul:** nome genérico do provedor que aponta de volta para o IP. O envio já funciona; trocar o
-  nome é recomendado, e o caminho aparece em "Opcional: trocar o nome reverso".
+  nome é recomendado, e o caminho aparece em "Recomendado: trocar o nome reverso para …".
 - **Amarelo:** sem nome reverso válido. Gmail, Yahoo e Microsoft podem recusar: troque o nome.
 
 Onde trocar: na **Contabo**, em Reverse DNS Management; na **Hetzner**, servidor → aba Networking →

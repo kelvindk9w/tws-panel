@@ -119,7 +119,7 @@ Follow this sequence on a new VPS — each step depends on the previous one:
                         (nsenter — reference/host-bridge), not in the panel container.
                         In Phase 01 paste your SSH PUBLIC KEY: root is only locked
                         with the key installed, and the pulsing alert asks you to test
-                        the login in ANOTHER SSH window before confirming (automatic
+                        signing in in ANOTHER SSH window before confirming (automatic
                         rollback in 5 min if you don't confirm).
 2. PANEL              → finish the wizard (admin account). The panel opens at
                         https://YOUR-IP-WITH-HYPHENS.sslip.io, behind Caddy.

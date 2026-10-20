@@ -9,7 +9,7 @@ What TWS Panel does, module by module. The [README](https://github.com/kelvindk9
 the detail on each part. The examples use placeholder values (`example.com`, `203.0.113.10`).
 
 > [!NOTE]
-> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, mail server status and DNS checklist notes, certificate errors, alerts and audit details, backup records, the recovery kit text and many error messages. Whenever this page quotes one of them, it says so.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, mail server status and DNS checklist notes, certificate errors, alerts and audit details, backup records, the details of the roadmap steps and many error messages. Whenever this page quotes one of them, it says so.
 
 - [Project deploys](#deploy)
 - [Container ports](#portas)

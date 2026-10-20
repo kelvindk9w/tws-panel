@@ -11,7 +11,7 @@ os projetos e o e-mail de volta numa VPS nova. Ele depende da **cópia externa**
 junto com ela.
 
 > [!NOTE]
-> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: registros de backup, o texto do kit de recuperação, avisos do servidor de e-mail e muitas mensagens de erro. Quando esta página cita uma delas, avisa. A palavra que você digita para confirmar uma restauração depende do idioma da interface (passos 5 e 8).
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: registros de backup, avisos do servidor de e-mail e muitas mensagens de erro. Quando esta página cita uma delas, avisa. A palavra que você digita para confirmar uma restauração depende do idioma da interface (passos 5 e 8).
 
 A maior parte do tempo vai em esperar o DNS e a nova publicação dos projetos. Se a VPS antiga ainda
 funciona, mantenha-a ligada até o último passo.

@@ -11,7 +11,7 @@ the projects and the email back on a new VPS. It relies on the **external copy**
 it.
 
 > [!NOTE]
-> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: backup records, the recovery kit text, mail server notices and many error messages. Whenever this page quotes one of them, it says so. The word you type to confirm a restore depends on the interface language (steps 5 and 8).
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: backup records, mail server notices and many error messages. Whenever this page quotes one of them, it says so. The word you type to confirm a restore depends on the interface language (steps 5 and 8).
 
 Most of the time goes to waiting for DNS and for projects to be published again. If the old VPS
 still runs, keep it until the last step.
@@ -54,7 +54,7 @@ come back as you restore them.
 ### 1. Prepare the new VPS
 
 Follow the [installation guide](../getting-started/installation.md) from Step 1 to Step 8 and finish
-the setup wizard, including the Security step. The restore needs a logged-in panel, so create a
+the setup wizard, including the Security step. The restore needs a panel you are signed in to, so create a
 temporary administrator account when the wizard asks for it. The restore replaces it with the old
 accounts.
 

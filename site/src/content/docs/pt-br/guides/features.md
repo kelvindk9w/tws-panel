@@ -9,7 +9,7 @@ O que o TWS Panel faz, módulo por módulo. O [README](https://github.com/kelvin
 o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `203.0.113.10`).
 
 > [!NOTE]
-> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, o texto do kit de recuperação e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, os detalhes dos passos do roteiro e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
 
 - [Deploy de projetos](#deploy)
 - [Portas dos containers](#portas)

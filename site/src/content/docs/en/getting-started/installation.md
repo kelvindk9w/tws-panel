@@ -1142,7 +1142,7 @@ sudo docker exec tws-panel cat /data/setup-token   # shows only the token
   (run it on the right VPS, from inside `/opt/tws-panel`), or the wizard was already completed and the token was
   deleted on purpose: to reopen it with a new token, `sudo ./scripts/reset-setup.sh`.
 - **The token no longer works in the browser** — after you create the admin account (the last
-  step of the wizard), the token is **invalidated forever**. From then on, access is through the login
+  step of the wizard), the token is **invalidated forever**. From then on, access is through the sign-in
   screen, with your panel username and password.
 
 </details>

@@ -67,8 +67,10 @@ Sidebar entries use slugs, so they are the same in every language.
 - **Messages that come from the server.** Some texts are written by the server and are still
   Portuguese in both interface languages (health-check and security-scan results, deploy and DNS-check
   messages, mail server status, certificate errors, alerts, audit details, backup records, the
-  recovery kit text and many error messages; the inventory is in
-  `comoFuncionaSistema/_i18n-servidor-fase2.tsv`). When a page quotes one, keep the Portuguese text
+  details of the roadmap steps and many error messages; the inventory is in
+  `comoFuncionaSistema/_i18n-servidor-fase2.tsv`). The recovery kit text is not one of them: the
+  browser builds it (`buildRecoveryKit` in `packages/core/src/backups.ts`) and it is fixed in
+  Portuguese in both interface languages. When a page quotes one, keep the Portuguese text
   and say in the same sentence that it comes from the server and is still in Portuguese; on an
   English page add the English meaning in parentheses. Remove this rule and the notes when the
   server messages are translated.
@@ -129,8 +131,7 @@ the one the interface shows, so a guide never needs a different word for the sam
 
 Where the Portuguese guides and the Portuguese interface differ today, the interface wins for
 labels (quote it as it is) and the guides keep their own wording in prose: the guides write
-"container", while the interface glossary says "contêiner" and the Portuguese dictionaries use both
-spellings; the Portuguese interface calls two-factor authentication "Verificação em duas etapas",
+"container", as the Portuguese dictionaries do; only `GLOSSARY.md` says "contêiner". The Portuguese interface calls two-factor authentication "Verificação em duas etapas",
 while its glossary says "autenticação em dois fatores".
 
 Use "TWS Panel" for the product and "the panel" afterwards. Do not write "paas".

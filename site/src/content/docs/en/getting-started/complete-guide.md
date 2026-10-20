@@ -9,7 +9,7 @@ A single roadmap, in order, from the VPS you just bought to a fully configured p
 domain, time zone, email, notifications, backups, your first project live, and a test restore.
 
 > [!NOTE]
-> **Interface language.** The panel is available in English and Portuguese ([how to choose](#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, mail server status and DNS checklist notes, certificate errors, alerts and audit details, backup records, the recovery kit text and many error messages. Whenever this page quotes one of them, it says so.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, mail server status and DNS checklist notes, certificate errors, alerts and audit details, backup records, the details of the roadmap steps and many error messages. Whenever this page quotes one of them, it says so.
 
 Each step tells you **what to do**, **where to click**, and **what to check** to know it worked.
 When the details are long, the step summarizes and points you to the right guide. Follow the steps
@@ -197,7 +197,7 @@ The full step-by-step, phase by phase, is in
 [The eight phases](security-wizard.md#as-oito-fases).
 
 **What to check:** on the Dashboard, the **VPS hardening** step of the roadmap
-shows as done, with "8 of 8 phases". If any phase was left out, it stays in
+shows as done, with "Todas as 8 fases resolvidas" (All 8 phases resolved; a server message, still in Portuguese). If any phase was left out, it stays in
 **Security → Scan and apply protections** for you to review, simulate, or apply later.
 
 ### 3.3 Two-factor authentication
@@ -384,9 +384,7 @@ three colors:
 
 - **Green:** the reverse name is already `mail.send.example.com`. Nothing to do.
 - **Blue:** a generic provider name that points back to the IP. Sending already works; changing the
-  name is recommended, and the way to do it appears under "Opcional: trocar o nome reverso"
-  (Optional: change the reverse name; this text comes from the server and is still in
-  Portuguese).
+  name is recommended, and the way to do it appears under "Recommended: change the reverse name to …".
 - **Yellow:** no valid reverse name. Gmail, Yahoo, and Microsoft may reject your mail: change the
   name.
 
