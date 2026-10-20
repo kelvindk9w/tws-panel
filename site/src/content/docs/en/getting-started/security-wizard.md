@@ -5,12 +5,12 @@ sidebar:
   label: "Security wizard"
 ---
 
-How to walk through the **Segurança** (Security) step of the setup wizard (see [Step 8](installation.md#passo-8)
+How to walk through the **Security** step of the setup wizard (see [Step 8](installation.md#passo-8)
 of the installation). The same phases remain available after installation, under
-**Segurança → Proteções** (Security → Protections) (`/security/hardening`), so you can review, simulate or reapply them.
+**Security → Scan and apply protections** (`/security/hardening`), so you can review, simulate or reapply them.
 
 > [!NOTE]
-> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. The scan results, the plan and the hardening log are written by the server and still appear in Portuguese in both languages.
 
 ## How it works
 
@@ -22,14 +22,14 @@ terminal, and you see the real commands, just as you would over SSH.
 <a id="as-oito-fases"></a>
 ## The eight phases
 
-The **Segurança** (Security) step applies hardening in **eight phases**, one at a time: apply, confirm, and only then
+The **Security** step applies hardening in **eight phases**, one at a time: apply, confirm, and only then
 move on to the next one. Never start a new phase while the previous one is still waiting for confirmation.
 
 | Phase | What it does | Asks for confirmation? |
 |---|---|---|
 | 00 · Updates | `apt full-upgrade` + automatic updates (**except Docker**) | No |
 | 01 · Non-root user | Installs your SSH key and locks the root password | **Yes** |
-| 02 · SSH | Disables password login and root over SSH; only your user can log in. Keeps the panel tunnel (`ssh -L`) working | **Yes** |
+| 02 · SSH | Disables password login and root over SSH; only your user can sign in. Keeps the panel tunnel (`ssh -L`) working | **Yes** |
 | 03 · Firewall | Enables UFW (denies everything except what was allowed beforehand) | **Yes** |
 | 04 · Intrusion prevention | fail2ban + AppArmor | No |
 | 05 · Minimization | Removes unnecessary packages (e.g. snapd) | No |
@@ -43,7 +43,7 @@ move on to the next one. Never start a new phase while the previous one is still
 > this safeguard existed. That is why the Docker packages are left out of the `full-upgrade` and also out of the
 > automatic updates; the phase lists in the log which ones were skipped and which command to run.
 >
-> To upgrade Docker, log in **over SSH** (not through the panel's terminal) and run:
+> To upgrade Docker, sign in **over SSH** (not through the panel's terminal) and run:
 >
 > ```bash
 > sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -75,8 +75,8 @@ needed.
 >    ```
 >    (`YOUR_USER` is your user and `YOUR-IP-WITH-HYPHENS` is your server IP with dashes instead of dots.)
 > 4. **Only after the new window actually connects** (you see `YOUR_USER@…$`), type
->    `exit` and click **Entrei — confirmar** (I'm in — confirm) in the panel.
-> 5. If the new window does **not** connect: click **Não consegui entrar — desfazer agora** (I couldn't get in — undo now). The
+>    `exit` and click **I'm in — confirm** in the panel.
+> 5. If the new window does **not** connect: click **I couldn't sign in — undo now**. The
 >    server undoes **only this phase** right away — the previous ones stay in effect and the following ones
 >    do not run. That is why each of these phases has its own test: if something goes wrong, you know
 >    exactly which one it was and lose only that part. (If you do nothing, it also undoes itself
@@ -84,7 +84,7 @@ needed.
 > 6. Keep the old window open until the very end of the whole Security step, even after confirming each
 >    phase.
 >
-> **Phase 01 specific test:** the connection in the new window must log in **without asking for the
+> **Phase 01 specific test:** the connection in the new window must sign in **without asking for the
 > account password**. It may ask for your *key's passphrase* — that is a different thing, it is local and does not involve
 > the server. If the new window still asks for the account password, the key was not installed
 > correctly; **do not confirm**, and do not move on to phase 02 in that state — without a working

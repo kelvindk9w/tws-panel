@@ -9,7 +9,7 @@ Applies to an installation that already runs the panel (folder `/opt/tws-panel`,
 receive the version with separated networks. A new installation does not need this: the networks are created correctly.
 
 > [!NOTE]
-> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. The log lines and notices this page quotes come from the server and are still in Portuguese in both languages; each one comes with its English meaning.
 
 ## What changes in the networks
 
@@ -40,7 +40,7 @@ blocked **on the next deploy** (containers that are already running stay as they
 
 ## Runbook
 
-Log in to the VPS over SSH with your user. All the commands below run with `sudo`.
+Sign in to the VPS over SSH with your user. All the commands below run with `sudo`.
 
 ### Step 0 — note the current state (this is what lets you go back)
 
@@ -85,7 +85,7 @@ sudo docker network inspect paas-net --format '{{range .Containers}}{{.Name}}{{"
 Expected: `paas-panel` with `paas-caddy` and `tws-panel`; `paas-net` **without** `tws-panel`; in the log, no
 "falha ao conectar" (failed to connect) or "o painel continua na rede paas-net" (the panel is still on the paas-net network) line. Then:
 
-- open `https://<panel domain>` and log in with your credentials (the login screen has to respond);
+- open `https://<panel domain>` and sign in with your credentials (the sign-in screen has to respond);
 - open a project's site in another tab (Caddy responds);
 - `sudo docker logs --tail 40 paas-caddy` must not show any "no such host" error.
 
@@ -104,12 +104,12 @@ the containers of projects with email; `paas-net` without `paas-stalwart` or `pa
 
 Real tests:
 
-1. On the panel's **E-mail** (Email) page, the server status shows as running (the panel talks to Stalwart
+1. On the panel's **Email** page, the server status shows as running (the panel talks to Stalwart
    over `paas-mail-admin`).
-2. A project's SMTP: use the send test of the project itself / of the panel's **E-mail** page. To check only the network
+2. A project's SMTP: use the send test of the project itself / of the panel's **Email** page. To check only the network
    (replace `<domain>` with yours):
    `sudo docker run --rm --network paas-mail alpine:3 nc -zv -w 5 mail.<domain> 587` — it should say `open`.
-3. Webmail (if enabled): open its address; it has to load and let you log in.
+3. Webmail (if enabled): open its address; it has to load and let you sign in.
 4. Isolation proof (name resolution should **fail**):
    `sudo docker run --rm --network paas-net alpine:3 sh -c 'nslookup paas-stalwart; nslookup tws-panel'`
 
@@ -168,7 +168,7 @@ On the Stalwart line repeat `--alias mail.<domain>` for each registered mail dom
 server's hostname (it is by these names that projects find SMTP in the old version). If Stalwart is already on
 `paas-net` without the aliases, first run `sudo docker network disconnect paas-net paas-stalwart`.
 
-To verify: panel login; `sudo docker network inspect paas-net --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'`
+To verify: panel sign-in; `sudo docker network inspect paas-net --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'`
 lists `tws-panel`, `paas-stalwart` and `paas-webmail` again; a project's SMTP and webmail respond.
 
 To go back to the new version later: `sudo git checkout <branch noted in step 0> && sudo git pull` and the step 1

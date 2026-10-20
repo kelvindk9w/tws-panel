@@ -29,7 +29,7 @@ is in the [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELO
 |---|---|---|
 | Lost the setup token | `sudo ./scripts/show-token.sh` | [Installation](../getting-started/installation.md#passo-8) |
 | Want to redo the wizard | `sudo ./scripts/reset-setup.sh` (`--full` also deletes the admin account) | [Recover access](recover-access.md) |
-| Lost your phone and the two-step verification codes | `sudo ./scripts/reset-2fa.sh` | [Recover access](recover-access.md) |
+| Lost your phone and the two-factor authentication codes | `sudo ./scripts/reset-2fa.sh` | [Recover access](recover-access.md) |
 | Disabled access by IP and the panel domain stopped opening | `sudo ./scripts/reativar-acesso-ip.sh` | [Features](features.md#dominio-do-painel) |
 | The panel does not open and you have a `.7z` backup of it | `sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` | [Features](features.md#backups) |
 | Want to remove the panel | `./scripts/uninstall.sh --dry-run` and then `./scripts/uninstall.sh` | [Installation](../getting-started/installation.md#remover-o-painel) |

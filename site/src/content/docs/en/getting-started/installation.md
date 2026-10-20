@@ -10,7 +10,7 @@ wizard. The [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md
 step, what shows up on screen, and what to do when something goes wrong.
 
 > [!NOTE]
-> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. The installer and the scripts print in Portuguese (each sample has a short English summary). Some messages that come from the server also still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, alerts and audit details, and many error messages.
 
 The steps are numbered 1 to 8. The panel's scripts (`install.sh`, `uninstall.sh`) refer to
 these numbers.
@@ -18,7 +18,7 @@ these numbers.
 | Step | Where | What it does |
 |---|---|---|
 | [1](#passo-1) | Provider | Get a VPS |
-| [2](#passo-2) | Your computer → VPS | Log in as root and check the system |
+| [2](#passo-2) | Your computer → VPS | Sign in as root and check the system |
 | [3](#passo-3) | VPS | Create your non-root user |
 | [4](#passo-4) | Your computer | Generate the SSH key and install it on the VPS |
 | [5](#passo-5) | VPS | Install git |
@@ -50,7 +50,7 @@ IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
 Host key verification failed.
 ```
 
-**What happened.** SSH keeps the "fingerprint" of every server you have logged in to. The
+**What happened.** SSH keeps the "fingerprint" of every server you have signed in to. The
 fingerprint the server just presented is **different** from the one stored on your computer — and
 SSH would rather refuse the connection than connect you to a server that may not be yours.
 
@@ -158,9 +158,9 @@ Get a VPS running Ubuntu 24.04 LTS (recommended minimum: 1 vCPU / 2 GB RAM / 25 
 
 <a id="passo-2"></a>
 
-## Step 2 — Log in as root via SSH
+## Step 2 — Sign in as root via SSH
 
-Log in to the VPS and confirm the OS version:
+Sign in to the VPS and confirm the OS version:
 
 ```bash
 ssh root@YOUR_IP
@@ -258,7 +258,7 @@ Is the information correct? [Y/n]
 
   **What if I already answered `n`?** Then `adduser` gives up on the password but **keeps going and creates the
   user** — you will see `passwd: password unchanged` and, at the end, `Adding new user ...`.
-  The user exists, but **has no password**, and cannot log in over SSH. Nothing is lost: set the
+  The user exists, but **has no password**, and cannot sign in over SSH. Nothing is lost: set the
   password now, without recreating anything.
 
   ```bash
@@ -325,7 +325,7 @@ With `su - YOUR_USER` you stay **inside the root session** — just with another
 top. An `exit` returns you to root instead of ending access, and it is easy to forget that that
 terminal still has a root session open underneath.
 
-By logging in over SSH directly as your user, the session is theirs from start to finish: `exit` really
+By signing in over SSH directly as your user, the session is theirs from start to finish: `exit` really
 ends it, and anything that requires privilege goes through `sudo` — which asks for a password and is logged
 in the system log. It is the difference between "I'm root wearing another hat" and "I'm a
 regular user and I ask permission when I need to".
@@ -427,7 +427,7 @@ already open, you don't have to stop midway to switch windows.
 
 You just left the VPS, so you are already in the right place: the commands below run **on your
 computer**. That is where the key needs to exist so you can authenticate later — if it were
-generated on the VPS, it would be no use for logging in to it.
+generated on the VPS, it would be no use for signing in to it.
 
 **First, check whether you already have a key.** If you already use SSH for something — GitHub,
 another server, work — it probably already exists, and **generating another on top of it deletes the
@@ -456,7 +456,7 @@ what you saw:
 Why this rule, and not "pick whichever you like best":
 
 - **`id_ed25519` and `id_rsa` are names that `ssh` tries on its own** every time you connect.
-  Using one of them, logging in to the VPS works with no extra configuration on your computer.
+  Using one of them, signing in to the VPS works with no extra configuration on your computer.
   `id_rsa` is older, but the server accepts it just the same.
 - **Keys with other names were created for a specific service** (a deploy, a company,
   a tool). Don't reuse them: besides `ssh` not trying them on its own, mixing accesses
@@ -746,8 +746,8 @@ choosing a port.
 > [!TIP]
 > **It may stop right at the start asking you to restart the VPS — that's normal, especially on a
 > new VPS.** The provider delivers the system with updates that only take effect after a restart
-> (that's the `*** System restart required ***` that shows up when you log in). Nothing has been installed yet: run
-> `sudo reboot`, wait about a minute, log in again with the same `ssh` and repeat the two
+> (that's the `*** System restart required ***` that shows up when you sign in). Nothing has been installed yet: run
+> `sudo reboot`, wait about a minute, sign in again with the same `ssh` and repeat the two
 > commands, `cd /opt/tws-panel` and `./scripts/install.sh`.
 
 > [!NOTE]
@@ -842,7 +842,7 @@ terminal** works — it is where the security scan and the hardening run:
 2. **How to run what needs root.** Answer **`1` (senha, i.e. password)** — it's the recommended one: when something
    needs administrator rights, the panel uses `sudo` inside the terminal and **you type your
    password there**, as you would over SSH. The other option, `2` (segundo-plano, i.e. background), doesn't ask for a password: those
-   commands run as root behind the scenes, and you check them afterwards on the **Auditoria** (Audit) screen.
+   commands run as root behind the scenes, and you check them afterwards on the **Audit log** screen.
 
 If the user won't do (doesn't exist, has no password, has no `sudo`…), the installer explains what
 to do and asks again. Nothing is installed before you answer. The panel's port is chosen
@@ -867,9 +867,9 @@ root run **as root, behind the scenes**, through the same bridge the panel alrea
 output shows up in the terminal just so you can follow along.
 
 - **The trade-off:** it doesn't ask for a password, so you don't authorize command by command. The check
-  comes afterwards: everything is recorded on the panel's **Auditoria** (Audit) screen.
+  comes afterwards: everything is recorded on the panel's **Audit log** screen.
 - **Doesn't require `sudo`** — you can even use a user created just for the panel. The installer warns if
-  the chosen user doesn't have `sudo`, because then, logging in over SSH with it, you can't do
+  the chosen user doesn't have `sudo`, because then, signing in over SSH with it, you can't do
   anything as administrator.
 
 **In both modes**, the scheduled automatic monitoring — which runs by itself, with nobody to type a
@@ -910,7 +910,7 @@ first time is kept without asking again — to change it, see
 > sudo gpasswd -d YOUR_USER docker
 > ```
 >
-> Then leave the VPS (`exit`) and log in again over SSH: as with the `sudo` group, the change only applies in
+> Then leave the VPS (`exit`) and sign in again over SSH: as with the `sudo` group, the change only applies in
 > new sessions. Check with `groups` — `docker` must not appear in the list. In an installation with
 > nobody to answer, the installer doesn't touch groups: it only warns prominently at the end.
 
@@ -1043,29 +1043,32 @@ With the panel on HTTPS, Phase 02 also closes the SSH tunnel (it isn't used); wh
 
 Open the panel at the `https://…sslip.io` address the installer showed at the end (it already
 carries the **setup token** in the link; if you need it, the token also appears highlighted in the terminal) and follow
-the wizard. The screen labels are shown in Portuguese, with the English meaning in the list after the diagram:
+the wizard. The wizard opens in the language of your browser (see [Language of the interface](#idioma-da-interface) below).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Assistente — https://YOUR-IP.sslip.io/?token=…                      │
+│  Setup wizard — https://YOUR-IP.sslip.io/?token=…                    │
 ├──────────────────────────────────────────────────────────────────────┤
-│  1. Boas-vindas e token    → valida o setup token e libera o         │
-│                              terminal ao vivo do servidor            │
-│  2. Saúde da máquina       → CPU, RAM, disco, rede — os checks       │
-│                              rodam AO VIVO no terminal embutido      │
-│  3. Segurança              → scan Lynis → plano → hardening          │
-│                              (com rollback automático em 5 min)      │
-│  4. Conta de administrador → usuário + senha forte do painel         │
+│  1. Welcome and token      → validates the setup token and unlocks   │
+│                              the server's live terminal              │
+│  2. Server health          → CPU, RAM, disk, network — the checks    │
+│                              run LIVE in the embedded terminal       │
+│  3. Security               → Lynis scan → plan → hardening           │
+│                              (with automatic rollback in 5 min)      │
+│  4. Administrator account  → the panel's username + strong password  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Assistente** (Wizard)
-- **1. Boas-vindas e token** (Welcome and token) — validates the setup token and unlocks the server's live terminal
-- **2. Saúde da máquina** (Machine health) — CPU, RAM, disk, network; the checks run LIVE in the embedded terminal
-- **3. Segurança** (Security) — Lynis scan → plan → hardening (with automatic rollback in 5 min)
-- **4. Conta de administrador** (Administrator account) — the panel's username + strong password
+<a id="idioma-da-interface"></a>
+**Language of the interface.** The panel is available in English and Portuguese. On the first visit
+it goes through your browser's list of languages and uses the first one it has: Portuguese for any
+`pt` variant (such as `pt-BR`), English for `en`; if none matches, English. To change it, use the **Language** selector on the setup wizard and sign-in
+screens, in the user menu, or under **Settings → Appearance** after setup. The choice is saved in that
+browser only (it is not part of your account), so another browser or device starts again from its
+own language. The messages that the server itself writes (see the note at the top of this page) are
+still in Portuguese.
 
-The **Segurança** (Security) step is the one that demands the most attention: it changes how you log in to the VPS. Before
+The **Security** step is the one that demands the most attention: it changes how you sign in to the VPS. Before
 applying the phases, read the [Security wizard](security-wizard.md).
 
 The installer is **idempotent**: it can be run again without breaking anything (rebuild + restart).
@@ -1146,8 +1149,8 @@ sudo docker exec tws-panel cat /data/setup-token   # shows only the token
 
 ## After the wizard
 
-On first access, the Dashboard shows the **Deixe o painel pronto** (Get the panel ready) checklist, with what is still left to
-configure (protections, two-step verification, panel domain, email, notifications and
+On first access, the Dashboard shows the **Get the panel ready** checklist, with what is still left to
+configure (protections, two-factor authentication, panel domain, email, notifications and
 backups). The steps are in the [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md#after-installing).
 
 To publish a project: register the project, point the DNS, and the panel takes care of the build, the proxy and

@@ -1,6 +1,6 @@
 ---
 title: "I lost access: now what?"
-description: "How to get back in after losing the panel password, the two-step verification phone, the Linux password, the SSH key or the panel domain."
+description: "How to get back in after losing the panel password, the two-factor authentication phone, the Linux password, the SSH key or the panel domain."
 sidebar:
   label: "Recover access"
 ---
@@ -9,16 +9,16 @@ Hardening closes ports on purpose, and that cuts off some ways back in. This sec
 you don't find that out at the worst possible moment. Found your case in the table? Go straight to it.
 
 > [!NOTE]
-> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages (alerts, audit details, health and security-scan results, and many error messages).
 
 | What you lost | What still works | Way back in |
 |---|---|---|
-| **Panel** password (web login) | SSH into the VPS | `sudo ./scripts/reset-setup.sh --full` |
-| Your **phone** for two-step verification | Recovery codes | At login, type a recovery code instead of the app code |
+| **Panel** password (web sign-in) | SSH into the VPS | `sudo ./scripts/reset-setup.sh --full` |
+| Your **phone** for two-factor authentication | Recovery codes | At sign-in, type a recovery code instead of the app code |
 | Your **phone** and the recovery codes | SSH into the VPS | `sudo ./scripts/reset-2fa.sh` |
 | **Linux user** password (the `sudo` one) | SSH + panel | Panel terminal (if it opens as root) → `passwd YOUR_USER`; otherwise, the provider console |
 | **SSH key** | Panel reachable | Panel terminal (if it opens as your user or root) → put the key back |
-| **SSH key** | Provider console | Log in with user and password → put the key back |
+| **SSH key** | Provider console | Sign in with user and password → put the key back |
 | **Panel domain** (with IP access turned off) | SSH into the VPS | `sudo ./scripts/reativar-acesso-ip.sh` |
 | All of the above | — | The provider's rescue mode |
 
@@ -31,7 +31,7 @@ you don't find that out at the worst possible moment. Found your case in the tab
 ## I lost the panel password
 
 The panel's administrator account is independent of the operating system. With SSH access to the
-VPS, delete the account and redo the **Conta de administrador** (Administrator account) step of
+VPS, delete the account and redo the **Administrator account** step of
 the wizard:
 
 ```bash
@@ -44,17 +44,19 @@ The first command deletes the admin account and all sessions (it asks for confir
 `resetar`, Portuguese for "reset"). The second shows the setup token again, so you can reopen the
 wizard and create a new account.
 
-Can you still log into the panel and want to redo the wizard? Under **Setup** (once setup is
-complete) there is a **Recomeçar do zero** (Start over from scratch) button: it asks for the
-current password, the two-step verification code, and for you to type `recomeçar` ("start over");
+Can you still sign in to the panel and want to redo the wizard? Under **Setup** (once setup is
+complete) there is a **Start over from scratch** button: it asks for the
+current password, the two-factor authentication code, and for you to type the confirmation word
+(`restart` with the English interface, `recomeçar` with the Portuguese one; `recomeçar` is accepted
+in both) before you click **Delete and start over**;
 it deletes the account and sessions and immediately opens the wizard with a new token. Without
-two-step verification enabled, the panel doesn't offer this button — use the script above.
+two-factor authentication enabled, the panel doesn't offer this button — use the script above.
 
 **Your projects, domains, email and security history are not touched.**
 
-## I lost the phone for two-step verification
+## I lost the phone for two-factor authentication
 
-At login, type one of your **recovery codes** in the code field (each one works once). Once
+At sign-in, type one of your **recovery codes** in the code field (each one works once). Once
 inside the panel, turn the verification off and on again to register the new phone and get new
 codes.
 
@@ -66,7 +68,7 @@ sudo ./scripts/reset-2fa.sh
 ```
 
 It asks for confirmation (type `desligar`, Portuguese for "turn off"), stops the panel for a few
-seconds, turns two-step verification off, and brings the panel back up. Log in with just your
+seconds, turns two-factor authentication off, and brings the panel back up. Sign in with just your
 username and password and enable the verification again. **Nothing else is touched.**
 
 ## I lost the Linux user password
@@ -111,8 +113,8 @@ echo "PASTE_THE_NEW_PUBLIC_KEY_HERE" >> /home/YOUR_USER/.ssh/authorized_keys
 can't reach your user's folder without root — go on to path 2.)
 
 **2. Through the provider console** — browser access doesn't go through SSH, so the password
-login restriction doesn't apply there. Log in with your user and password, and run the same
-command (without the full path, since you're logged in as that user):
+login restriction doesn't apply there. Sign in with your user and password, and run the same
+command (without the full path, since you're signed in as that user):
 
 ```bash
 echo "PASTE_THE_NEW_PUBLIC_KEY_HERE" >> ~/.ssh/authorized_keys
@@ -130,7 +132,7 @@ provider; look for "rescue mode" in their documentation.
 <a id="o-domínio-do-painel-parou-de-abrir"></a>
 ## The panel domain stopped opening
 
-This applies to anyone who registered a domain under **Configurações → Domínio do painel**
+This applies to anyone who registered a domain under **Settings → Panel domain**
 (Settings → Panel domain) and then turned off IP access. If the domain stops opening (DNS
 deleted or changed, expired domain, certificate that didn't renew), turn the IP address back on
 with SSH access to the VPS:
@@ -141,7 +143,7 @@ cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh
 
 The script stops the panel, turns IP access back on (the domain stays registered), brings the
 panel up, and checks that the proxy has the IP address again. Then open
-`https://YOUR-IP-WITH-HYPHENS.sslip.io` and log in again. Username, password, projects and
+`https://YOUR-IP-WITH-HYPHENS.sslip.io` and sign in again. Username, password, projects and
 everything else stay as they are.
 
 ## The panel terminal paradox
