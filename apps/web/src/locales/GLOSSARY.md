@@ -31,6 +31,7 @@ termo novo entra aqui antes de entrar nos dicionários.
 | código de recuperação | recovery code | |
 | sessão | session | |
 | configurações | settings | |
+| mais (item de menu que agrupa os demais) | more | |
 | painel | panel | "TWS Panel" é o nome do produto |
 | assistente (de instalação) | setup wizard | |
 | endurecimento / hardening | hardening | termo técnico, fica "hardening" nos dois |

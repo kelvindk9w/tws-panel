@@ -50,7 +50,7 @@ Uma VPS limpa com Ubuntu 22.04 ou 24.04 LTS (no mínimo 1 vCPU, 2 GB de RAM e 25
 portas 80 e 443 abertas. O Docker, o Node e o resto são instalados pelo instalador.
 
 A interface do painel está disponível em português e em inglês. Ela começa no primeiro idioma do seu
-navegador que o painel tem (inglês, se nenhum combinar) e você pode trocar no menu do usuário, nas telas de
+navegador que o painel tem (inglês, se nenhum combinar) e você pode trocar no seletor **Idioma** (PT/EN), sempre visível no cabeçalho do painel, ao lado do menu do usuário, nas telas de
 login e do assistente e em **Configurações → Aparência**. Algumas mensagens que vêm do servidor
 (resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS,
 alertas, detalhes da auditoria e muitas mensagens de erro) ainda aparecem em português; os guias

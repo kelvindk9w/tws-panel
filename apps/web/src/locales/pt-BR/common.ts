@@ -2,6 +2,7 @@
 export default {
   "language.name": "Português (Brasil)",
   "language.label": "Idioma",
+  "language.short": "PT",
   "api.networkError": "Não foi possível conectar ao servidor.",
   "api.httpError": "Erro {status} ao falar com o servidor.",
   // Ações genéricas

@@ -2,6 +2,7 @@
 export default {
   "language.name": "English",
   "language.label": "Language",
+  "language.short": "EN",
   "api.networkError": "Could not reach the server.",
   "api.httpError": "Error {status} while talking to the server.",
   // Ações genéricas
