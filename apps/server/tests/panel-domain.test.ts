@@ -305,6 +305,13 @@ describe("PanelDomainService", () => {
     expect(applied).toEqual([]);
   });
 
+  it("pointsHere: só vale quando o DNS do domínio aponta para esta VPS (usado ao restaurar o painel)", async () => {
+    expect(await new PanelDomainService(deps()).pointsHere(DOMAIN)).toBe(true);
+    expect(await new PanelDomainService(deps({ resolver: resolver({ a: ["198.51.100.7"] }) })).pointsHere(DOMAIN)).toBe(false);
+    expect(await new PanelDomainService(deps({ resolver: resolver({ a: new Error("sem rede") }) })).pointsHere(DOMAIN)).toBe(false);
+    expect(await new PanelDomainService(deps({ serverIp: null })).pointsHere(DOMAIN)).toBe(false);
+  });
+
   it("verificar sem domínio cadastrado → 409", async () => {
     const svc = new PanelDomainService(deps());
     await svc.init();

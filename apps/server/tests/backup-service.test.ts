@@ -10,11 +10,12 @@
  * lembrete da senha.
  */
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { backupFileStamp, type Project } from "@paas/core";
+import { createDecipheriv } from "node:crypto";
+import { BACKUP_ROOT_FOLDER, backupFileStamp, type Project } from "@paas/core";
 import { ArchiveError } from "../src/services/backup-archive.js";
 import type { ContainerInspect } from "../src/services/backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "../src/services/backup-docker.js";
@@ -1049,6 +1050,225 @@ describe("padrão dos projetos", () => {
     await service.updateDefaults({ enabled: true }, "admin");
     expect((await service.projectView("p1")).target.enabled).toBe(true);
     expect(audits.at(-1)!.detail).toMatch(/ligado/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Restauração do painel em outra VPS (lote 8, itens 2 a 5)
+// ---------------------------------------------------------------------------
+
+describe("restaurar o painel em outra VPS", () => {
+  const staged = (f: string) => path.join(dir, "backups", ".restaurar-painel", f);
+  const readStaged = async (f: string) => JSON.parse(await readFile(staged(f), "utf8")) as Record<string, any>;
+  /** Abre uma caixa lacrada (AES-256-GCM) com a chave em hexadecimal do arquivo backups-key. */
+  const unseal = (box: { iv: string; tag: string; data: string }, keyHex: string): string => {
+    const d = createDecipheriv("aes-256-gcm", Buffer.from(keyHex.trim(), "hex"), Buffer.from(box.iv, "base64"));
+    d.setAuthTag(Buffer.from(box.tag, "base64"));
+    return Buffer.concat([d.update(Buffer.from(box.data, "base64")), d.final()]).toString("utf8");
+  };
+  async function restorePanel() {
+    const b = await backup("panel");
+    const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+
+  describe("item 4: as chaves do armazenamento em uso continuam", () => {
+    it("token novo criado na VPS nova vale depois da restauração; a senha dos backups é a do backup", async () => {
+      await connect();
+      const b = await backup("panel");
+      await service.setDestination({ ...DEST, accessKeyId: "AKIANOVO9999", secretAccessKey: "segredo-do-token-novo" }, "admin");
+      const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+      await service.idle();
+      const cfg = await readStaged("backups.json");
+      const key = await readFile(staged("backups-key"), "utf8");
+      expect(cfg.destination.accessKeyId).toBe("AKIANOVO9999");
+      expect(unseal(cfg.destination.secret, key)).toBe("segredo-do-token-novo");
+      expect(unseal(cfg.encryption.password, key)).toBe(PW);
+      expect((await service.record(r.id)).warnings.join(" ")).toMatch(/chaves do armazenamento.*mantidas/i);
+    });
+
+    it("backup sem configuração de backups: leva a configuração e a chave de agora (o painel não fica sem destino)", async () => {
+      await connect();
+      const b = await backup("panel");
+      const file = path.join(dir, "backups", "_painel", b.fileName!);
+      const raw = JSON.parse(await readFile(file, "utf8")) as { files: Record<string, string> };
+      delete raw.files["backups.json"];
+      delete raw.files["backups-key"];
+      await writeFile(file, JSON.stringify(raw));
+      await service.flush();
+      const atual = await readFile(path.join(dir, "backups.json"), "utf8");
+      await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+      await service.idle();
+      expect(JSON.parse(await readFile(staged("backups.json"), "utf8")).destination.accessKeyId).toBe(JSON.parse(atual).destination.accessKeyId);
+      expect(await readFile(staged("backups-key"), "utf8")).toBe(await readFile(path.join(dir, "backups-key"), "utf8"));
+    });
+  });
+
+  describe("item 5: acesso pelo IP desativado", () => {
+    const domainFile = (ipAccessDisabled: boolean) =>
+      JSON.stringify({ domain: "painel.exemplo.com", active: true, ipAccessDisabled, lastCheck: null, updatedAt: "2026-10-01T00:00:00Z" });
+
+    it("domínio que ainda não aponta para esta VPS: o acesso pelo IP não é herdado desativado, e a tela avisa", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(true));
+      service = build({ panelDomainPointsHere: async () => false });
+      const rec = await restorePanel();
+      const stagedDomain = await readStaged("panel-domain.json");
+      expect(stagedDomain).toMatchObject({ domain: "painel.exemplo.com", ipAccessDisabled: false });
+      expect(rec.warnings.join(" ")).toMatch(/acesso pelo IP.*ativo.*painel\.exemplo\.com/s);
+    });
+
+    it("domínio já apontando para esta VPS: continua desativado (nada enfraquece)", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(true));
+      service = build({ panelDomainPointsHere: async () => true });
+      const rec = await restorePanel();
+      expect((await readStaged("panel-domain.json")).ipAccessDisabled).toBe(true);
+      expect(rec.warnings.join(" ")).not.toMatch(/acesso pelo IP/);
+    });
+
+    it("sem como conferir o DNS: trata como não apontando (ninguém fica sem entrar)", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(true));
+      const rec = await restorePanel();
+      expect((await readStaged("panel-domain.json")).ipAccessDisabled).toBe(false);
+      expect(rec.warnings.join(" ")).toMatch(/acesso pelo IP/);
+    });
+
+    it("acesso pelo IP que já estava ativo: nada muda e nada é avisado", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(false));
+      const rec = await restorePanel();
+      expect((await readStaged("panel-domain.json")).ipAccessDisabled).toBe(false);
+      expect(rec.warnings.join(" ")).not.toMatch(/acesso pelo IP/);
+    });
+  });
+
+  describe("item 2: agenda pausada depois da restauração", () => {
+    /** Simula a subida seguinte: o que foi preparado passa a ser o estado do painel. */
+    async function applyStaged(): Promise<void> {
+      await copyFile(staged("backups.json"), path.join(dir, "backups.json"));
+      await copyFile(staged("backups-key"), path.join(dir, "backups-key"));
+      service = build();
+    }
+    async function restoredWithEmptyProject(): Promise<void> {
+      await connect();
+      await backup(projectTargetId("p1")); // backup bom do projeto, antes de desmarcar tudo
+      await service.updateTarget("email", { enabled: false }, "a");
+      await service.updateTarget(projectTargetId("p1"), { choices: { "db:db": false, "mnt:web:/app/uploads": false } }, "admin");
+      await restorePanel();
+      await applyStaged();
+    }
+
+    it("projeto da restauração não entra na agenda e NÃO tem o automático desligado", async () => {
+      await restoredWithEmptyProject();
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.filter((r) => r.target === "project:p1" && r.trigger === "schedule")).toHaveLength(0);
+      const view = await service.projectView("p1");
+      expect(view.target.enabled).toBe(true);
+      expect(view.target.pausedReason).toMatch(/restaur/i);
+      expect(notices.some((n) => n.key === "backup-empty:project:p1")).toBe(false);
+    });
+
+    it("restaurar os dados do projeto libera a agenda dele (e o horário que passou não dispara na hora)", async () => {
+      await restoredWithEmptyProject();
+      const files = await service.points("project:p1");
+      const r = await service.restore(projectTargetId("p1"), { fileName: files.find((f) => f.local)!.fileName, source: "local", confirm: "Loja" }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).not.toBe("failed");
+      expect((await service.projectView("p1")).target.pausedReason ?? null).toBeNull();
+      now = new Date(2026, 9, 15, 2, 0).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.filter((x) => x.trigger === "schedule")).toHaveLength(0);
+      now = new Date(2026, 9, 16, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((x) => x.target === "project:p1" && x.trigger === "schedule")).toBe(true);
+    });
+
+    it("um backup feito à mão no projeto também libera", async () => {
+      await restoredWithEmptyProject();
+      await service.updateTarget(projectTargetId("p1"), { choices: { "db:db": true } }, "admin");
+      const b = await backup();
+      expect(b.status).not.toBe("failed");
+      expect((await service.projectView("p1")).target.pausedReason ?? null).toBeNull();
+    });
+
+    it("sem ninguém restaurar, a pausa acaba sozinha em 7 dias (nada fica sem backup para sempre)", async () => {
+      await restoredWithEmptyProject();
+      now = new Date(2026, 9, 14, 10, 0).getTime() + 8 * 24 * H;
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((x) => x.target === "project:p1" && x.trigger === "schedule")).toBe(true);
+      expect((await service.projectView("p1")).target.pausedReason ?? null).toBeNull();
+    });
+
+    it("projeto criado depois da restauração não é pausado", async () => {
+      await restoredWithEmptyProject();
+      projects = [project({ id: "p2", slug: "novo", name: "Novo", createdAt: new Date(now + H).toISOString() })];
+      await service.initProject("p2");
+      expect((await service.projectView("p2")).target.pausedReason ?? null).toBeNull();
+    });
+
+    it("o painel continua na agenda (a pausa é só de projetos e e-mail)", async () => {
+      await restoredWithEmptyProject();
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason ?? null).toBeNull();
+    });
+  });
+
+  describe("item 3: painel recém-instalado não sobrescreve os backups de outro servidor", () => {
+    const OTHER = `${BACKUP_ROOT_FOLDER}/_painel/2026-10-13_03-00.7z`;
+    async function emptyPanelWithForeignBackups(): Promise<void> {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+      await service.updateTarget("email", { enabled: false }, "a");
+    }
+
+    it("sem projetos, sem backup feito aqui e com backups do painel já no armazenamento: o agendado não envia", async () => {
+      await emptyPanelWithForeignBackups();
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history).toHaveLength(0);
+      expect([...storage.objects.keys()].filter((k) => k.includes("/_painel/"))).toEqual([OTHER]);
+      const t = (await service.status()).targets.find((x) => x.id === "panel")!;
+      expect(t.pausedReason).toMatch(/outro servidor/);
+    });
+
+    it("nos dias seguintes continua protegido", async () => {
+      await emptyPanelWithForeignBackups();
+      for (let d = 15; d < 20; d++) {
+        now = new Date(2026, 9, d, 3, 1).getTime();
+        await service.tick();
+        await service.idle();
+      }
+      expect([...storage.objects.keys()].filter((k) => k.includes("/_painel/"))).toEqual([OTHER]);
+    });
+
+    it("armazenamento sem backup do painel: o primeiro agendado segue normalmente", async () => {
+      projects = [];
+      await connect();
+      await service.updateTarget("email", { enabled: false }, "a");
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.map((r) => r.target)).toEqual(["panel"]);
+    });
+
+    it("com projetos cadastrados o painel tem o que guardar: segue normalmente", async () => {
+      await emptyPanelWithForeignBackups();
+      projects = [project()];
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((r) => r.target === "panel")).toBe(true);
+    });
+
+    it("backup pedido à mão sempre é feito", async () => {
+      await emptyPanelWithForeignBackups();
+      expect((await backup("panel")).status).not.toBe("failed");
+    });
   });
 });
 

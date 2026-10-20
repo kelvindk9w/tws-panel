@@ -344,6 +344,13 @@ export interface BackupTargetStatus extends BackupTargetSettings {
    * Backups) e muda junto com ele; false = configuração própria.
    */
   followsDefaults?: boolean;
+  /**
+   * Por que o backup automático deste item está em pausa (texto para a tela);
+   * ausente/null = a agenda está valendo. Hoje: logo depois de restaurar o
+   * painel de outro servidor, ou painel recém-instalado que não deve
+   * sobrescrever os backups de outro servidor.
+   */
+  pausedReason?: string | null;
 }
 
 export interface BackupsStatus {

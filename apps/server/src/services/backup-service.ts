@@ -173,6 +173,12 @@ export interface BackupServiceOptions {
   restartDelayMs?: number;
   /** Nome do fuso da VPS em uso (Configurações → Fuso horário). */
   timezoneName?: () => string;
+  /**
+   * O domínio já aponta (DNS) para ESTA VPS? Usado ao restaurar o painel: o
+   * acesso pelo IP desativado no painel antigo só continua desativado se o
+   * domínio já resolve aqui. Sem a função, conta como "não aponta".
+   */
+  panelDomainPointsHere?: (domain: string) => Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +231,18 @@ interface StoredTarget {
    * na aba do projeto; "Voltar ao padrão" e "Aplicar também" põem true.
    */
   followsDefaults?: boolean;
+  /** Painel: por que a última passagem da agenda não enviou backup (ver `tick`). */
+  heldReason?: string;
+}
+
+/**
+ * Depois de restaurar o painel de outro servidor: a agenda de projetos e do
+ * e-mail fica em pausa até a pessoa restaurar os dados de cada um (ver
+ * `holdReason`). `released` = itens já liberados.
+ */
+interface RestoreHold {
+  since: string;
+  released: string[];
 }
 
 /** "Padrão dos projetos". */
@@ -265,6 +283,7 @@ interface StoredConfig {
   targets: Record<string, StoredTarget>;
   projectDefaults: StoredDefaults;
   detections: Record<string, ProjectBackupDetection>;
+  restoreHold?: RestoreHold | null;
   /** "<pasta>/<arquivo>" → hash, tamanho e a última conferência de cada cópia. */
   checks: Record<string, StoredFileChecks>;
 }
@@ -479,6 +498,16 @@ function emptyConfig(): StoredConfig {
   };
 }
 
+/** Quanto tempo a agenda espera os dados voltarem depois de restaurar o painel. */
+const RESTORE_HOLD_MS = 7 * 24 * HOUR_MS;
+
+function parseRestoreHold(v: unknown): RestoreHold | null {
+  if (typeof v !== "object" || v === null) return null;
+  const h = v as Partial<RestoreHold>;
+  if (typeof h.since !== "string" || Number.isNaN(Date.parse(h.since))) return null;
+  return { since: h.since, released: Array.isArray(h.released) ? h.released.filter((x): x is string => typeof x === "string") : [] };
+}
+
 export function projectTargetId(projectId: string): string {
   return `project:${projectId}`;
 }
@@ -549,6 +578,7 @@ export class BackupService {
             projectDefaults: { ...INITIAL_DEFAULTS, ...(raw.projectDefaults ?? {}) },
             detections: raw.detections ?? {},
             checks: raw.checks ?? {},
+            restoreHold: parseRestoreHold(raw.restoreHold),
           };
         },
         log: this.log,
@@ -621,15 +651,15 @@ export class BackupService {
     });
   }
 
-  private seal(secret: string): SealedBox {
+  private seal(secret: string, key: Buffer = this.key!): SealedBox {
     const iv = randomBytes(IV_BYTES);
-    const cipher = createCipheriv("aes-256-gcm", this.key!, iv);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
     const data = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
     return { iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), data: data.toString("base64") };
   }
 
-  private open(box: SealedBox): string {
-    const decipher = createDecipheriv("aes-256-gcm", this.key!, Buffer.from(box.iv, "base64"));
+  private open(box: SealedBox, key: Buffer = this.key!): string {
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(box.iv, "base64"));
     decipher.setAuthTag(Buffer.from(box.tag, "base64"));
     return Buffer.concat([decipher.update(Buffer.from(box.data, "base64")), decipher.final()]).toString("utf8");
   }
@@ -839,8 +869,9 @@ export class BackupService {
     return null;
   }
 
-  private targetStatus(id: string, kind: BackupTargetKind, name: string, folder: string, available: boolean): BackupTargetStatus {
+  private targetStatus(id: string, kind: BackupTargetKind, name: string, folder: string, available: boolean, createdAt?: string): BackupTargetStatus {
     const t = this.target(id);
+    const pausedReason = this.holdReason(id, createdAt) ?? t.heldReason ?? null;
     const live = [this.running, ...this.queue].find((j) => j?.record.target === id && j.record.operation === "backup")?.record;
     return {
       id,
@@ -854,8 +885,9 @@ export class BackupService {
       lastBackup: live ?? this.lastOf(id, (r) => r.operation === "backup"),
       lastSuccessAt: t.lastSuccessAt,
       lastRemoteVerifiedAt: t.lastRemoteVerifiedAt,
-      nextRunAt: t.enabled && available ? new Date(nextSlot(this.now(), t.frequencyHours, this.hour)).toISOString() : null,
+      nextRunAt: t.enabled && available && !pausedReason ? new Date(nextSlot(this.now(), t.frequencyHours, this.hour)).toISOString() : null,
       available,
+      pausedReason,
       ...(kind === "project" ? { followsDefaults: t.followsDefaults !== false } : {}),
     };
   }
@@ -892,7 +924,7 @@ export class BackupService {
     const targets = [
       this.targetStatus("panel", "panel", "Painel", "_painel", true),
       this.targetStatus("email", "email", "E-mail", "_email", email),
-      ...projects.map((p) => this.targetStatus(projectTargetId(p.id), "project", p.name, p.slug, true)),
+      ...projects.map((p) => this.targetStatus(projectTargetId(p.id), "project", p.name, p.slug, true, p.createdAt)),
     ];
     const e = this.config.encryption;
     return {
@@ -936,7 +968,7 @@ export class BackupService {
     const { name, folder, project } = await this.resolveTarget(id);
     const t = this.target(id);
     return {
-      target: this.targetStatus(id, "project", name, folder, true),
+      target: this.targetStatus(id, "project", name, folder, true, project!.createdAt),
       detection: this.config.detections[project!.id] ?? null,
       choices: { ...t.choices },
       extraFolders: [...t.extraFolders],
@@ -1272,6 +1304,11 @@ export class BackupService {
     }
     for (const s of r.steps) if (s.status === "running") s.status = "done";
     r.finishedAt = new Date(this.now()).toISOString();
+    if (r.status !== "failed" && r.trigger === "manual") {
+      // Os dados do item voltaram (restauração) ou a pessoa fez o backup à mão: a agenda dele vale de novo.
+      if (r.operation === "restore" || r.operation === "backup") this.releaseHold(r.target);
+    }
+    if (r.operation === "backup" && r.status !== "failed" && r.target === "panel") delete this.target("panel").heldReason;
     if (r.operation === "backup" && (r.status === "failed" || r.remote === "failed")) {
       this.opts.notify?.({
         kind: "backup_failed",
@@ -1284,6 +1321,52 @@ export class BackupService {
     await this.persistQuiet({ config: true, history: true });
     this.running = null;
     void this.pump();
+  }
+
+  /**
+   * Texto de por que a agenda do item está em pausa depois de restaurar o
+   * painel de outro servidor; null = vale. O painel nunca entra (o estado dele
+   * já voltou inteiro). Projeto criado depois da restauração não é afetado, e a
+   * pausa acaba sozinha em 7 dias para nada ficar sem backup para sempre.
+   */
+  private holdReason(id: string, createdAt?: string): string | null {
+    const h = this.config.restoreHold;
+    if (!h || id === "panel") return null;
+    const since = Date.parse(h.since);
+    if (this.now() - since > RESTORE_HOLD_MS) return null;
+    if (h.released.includes(id)) return null;
+    if (createdAt && Date.parse(createdAt) > since) return null;
+    return "Em pausa: o painel foi restaurado de outro servidor e os dados deste item ainda não voltaram. O backup automático começa quando você restaurar os dados dele (ou fizer um backup à mão), ou em até 7 dias.";
+  }
+
+  private releaseHold(id: string): void {
+    const h = this.config.restoreHold;
+    if (!h || h.released.includes(id)) return;
+    h.released.push(id);
+    // o horário que passou durante a pausa não dispara um backup na hora
+    const t = this.target(id);
+    t.lastSlot = currentSlot(this.now(), t.frequencyHours, this.hour);
+  }
+
+  /**
+   * Painel recém-instalado que ainda não tem nada seu (sem projetos, nenhum
+   * backup feito aqui) enquanto o armazenamento já guarda backups do painel de
+   * outro servidor: enviar agora poria um painel vazio no lugar do bom (e a
+   * retenção apagaria os mais antigos). Devolve o motivo, ou null se pode enviar.
+   */
+  private async panelFreshOverForeign(projectCount: number): Promise<string | null> {
+    const t = this.target("panel");
+    if (t.lastSuccessAt !== null || projectCount > 0) return null;
+    const storage = this.storage();
+    if (!storage) return null;
+    const prefix = `${BACKUP_ROOT_FOLDER}/_painel/`;
+    try {
+      const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
+      if (!found) return null;
+      return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto ou de você restaurar o painel (ou fazer um backup à mão).";
+    } catch (err) {
+      return `Em pausa: não foi possível conferir se o armazenamento já guarda backups de outro servidor (${reasonOf(err)}). Tentamos de novo no próximo horário.`;
+    }
   }
 
   /** Agendado sem nada para copiar: desliga o automático do projeto (configuração própria) e avisa. */
@@ -2403,10 +2486,105 @@ export class BackupService {
     await rm(target, { recursive: true, force: true });
     await rename(content, target);
     for (const name of PANEL_PRESERVED) await rm(path.join(target, name), { recursive: true, force: true });
+    await this.adaptRestoredPanel(r, target);
     const marker: PanelRestoreMarker = { requestedAt: new Date(this.now()).toISOString(), fileName, actor };
     await this.writeJson(path.join(this.backupsDir, PANEL_RESTORE_MARKER), marker);
     r.warnings.push("O painel vai reiniciar para terminar a restauração. Depois, entre de novo com o usuário e a senha do backup.");
     setTimeout(() => this.opts.restartPanel?.(), this.opts.restartDelayMs ?? 3000).unref();
+  }
+
+  /**
+   * O backup do painel traz o estado de OUTRO servidor. Antes da troca, ajusta
+   * a cópia que vai entrar no lugar (nunca o backup original) no que não vale
+   * numa VPS nova. Cada ajuste falha sozinho: o aviso diz o que conferir.
+   */
+  private async adaptRestoredPanel(r: BackupRecord, staged: string): Promise<void> {
+    try {
+      await this.adaptStagedBackupSettings(r, staged);
+    } catch (err) {
+      r.warnings.push(
+        `Não foi possível ajustar as configurações de backup que vão voltar (${reasonOf(err)}). Depois do reinício, confira em Configurações → Backups o armazenamento externo e a agenda dos projetos.`,
+      );
+    }
+    try {
+      await this.adaptStagedPanelDomain(r, staged);
+    } catch (err) {
+      r.warnings.push(
+        `Não foi possível conferir o acesso pelo IP (${reasonOf(err)}). Se o painel não abrir pelo domínio, use o endereço do IP; se também não abrir, rode scripts/reativar-acesso-ip.sh no servidor.`,
+      );
+    }
+  }
+
+  /**
+   * Configurações de backup que voltam com o painel:
+   *  - o ARMAZENAMENTO em uso nesta VPS continua (o que a restauração usou
+   *    para baixar): um token novo, ou o antigo revogado, não quebra a
+   *    restauração dos projetos e do e-mail. A senha dos backups continua a do
+   *    backup (é a que abre as cópias antigas);
+   *  - a agenda dos projetos e do e-mail fica em pausa até os dados voltarem
+   *    (ver `holdReason`), e a do painel conta o horário de agora como atendido.
+   */
+  private async adaptStagedBackupSettings(r: BackupRecord, staged: string): Promise<void> {
+    await this.flush();
+    const cfgFile = path.join(staged, "backups.json");
+    const keyFile = path.join(staged, "backups-key");
+    if (!existsSync(cfgFile) || !existsSync(keyFile)) {
+      // Backup antigo, sem as configurações de backup: leva as de agora, senão o painel ficaria sem armazenamento.
+      if (existsSync(this.file) && existsSync(this.keyFile)) {
+        await copyFile(this.file, cfgFile);
+        await copyFile(this.keyFile, keyFile);
+        await rm(path.join(staged, "backups-history.json"), { force: true });
+        r.warnings.push("Este backup não traz as configurações de backup: o armazenamento e a senha de agora continuam.");
+      }
+      return;
+    }
+    const cfg = JSON.parse(await readFile(cfgFile, "utf8")) as Partial<StoredConfig>;
+    if (typeof cfg !== "object" || cfg === null) throw new Error("backups.json do backup é inválido");
+    const hex = (await readFile(keyFile, "utf8")).trim();
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error("a chave de backups do backup é inválida");
+    const stagedKey = Buffer.from(hex, "hex");
+    const current = this.config.destination;
+    if (current) {
+      const secret = this.open(current.secret);
+      let same = false;
+      try {
+        same = cfg.destination?.accessKeyId === current.accessKeyId && this.open(cfg.destination.secret, stagedKey) === secret;
+      } catch {
+        same = false;
+      }
+      cfg.destination = { ...current, secret: this.seal(secret, stagedKey) };
+      if (!same) {
+        r.warnings.push(
+          `As chaves do armazenamento externo que você configurou nesta VPS (${current.bucket}, …${current.accessKeyId.slice(-4)}) foram mantidas: o backup trazia outras, e as de agora são as que funcionam aqui. Se o servidor antigo foi invadido, revogue o token antigo no provedor.`,
+        );
+      }
+    }
+    cfg.restoreHold = { since: new Date(this.now()).toISOString(), released: [] };
+    const panel = cfg.targets?.["panel"];
+    if (panel) panel.lastSlot = currentSlot(this.now(), panel.frequencyHours, this.hour);
+    await writeFileAtomic(cfgFile, JSON.stringify(cfg, null, 2) + "\n");
+  }
+
+  /**
+   * Acesso pelo IP desativado no painel antigo: só continua desativado se o
+   * domínio do painel já aponta para esta VPS. Senão o painel restaurado
+   * responderia só no domínio (ainda apontando para o servidor antigo) e
+   * ninguém entraria.
+   */
+  private async adaptStagedPanelDomain(r: BackupRecord, staged: string): Promise<void> {
+    const file = path.join(staged, "panel-domain.json");
+    if (!existsSync(file)) return;
+    const state = JSON.parse(await readFile(file, "utf8")) as { domain?: unknown; ipAccessDisabled?: unknown };
+    if (state.ipAccessDisabled !== true) return;
+    const domain = typeof state.domain === "string" ? state.domain : null;
+    let points = false;
+    if (domain && this.opts.panelDomainPointsHere) points = await this.opts.panelDomainPointsHere(domain).catch(() => false);
+    if (points) return;
+    state.ipAccessDisabled = false;
+    await writeFileAtomic(file, JSON.stringify(state, null, 2) + "\n");
+    r.warnings.push(
+      `O painel antigo tinha o acesso pelo IP desativado. Aqui ele fica ativo, porque ${domain ?? "o domínio do painel"} ainda não aponta para esta VPS (sem isso você não conseguiria entrar). Quando o DNS apontar, desative de novo em Configurações → Domínio do painel.`,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -2416,6 +2594,10 @@ export class BackupService {
   async tick(): Promise<void> {
     await this.ensureLoaded();
     const now = this.now();
+    if (this.config.restoreHold && now - Date.parse(this.config.restoreHold.since) > RESTORE_HOLD_MS) {
+      this.config.restoreHold = null;
+      await this.persistQuiet({ config: true });
+    }
     const projects = await this.opts.projects.list();
     const ids = ["panel", "email", ...projects.map((p) => projectTargetId(p.id))];
     for (const id of ids) {
@@ -2424,9 +2606,20 @@ export class BackupService {
       const project = id.startsWith("project:") ? projects.find((p) => projectTargetId(p.id) === id)! : null;
       if (project && !project.lastDeployAt) continue;
       if (id === "email" && !(this.emailAvailable ?? (await this.mailAvailable()))) continue;
+      if (this.holdReason(id, project?.createdAt)) continue;
       const slot = currentSlot(now, t.frequencyHours, this.hour);
       if (t.lastSlot === null || slot > t.lastSlot) {
         t.lastSlot = slot;
+        if (id === "panel") {
+          const why = await this.panelFreshOverForeign(projects.length);
+          if (why) {
+            t.heldReason = why;
+            this.log(`Backups: ${why}`);
+            await this.persistQuiet({ config: true });
+            continue;
+          }
+          delete t.heldReason;
+        }
         await this.persistQuiet({ config: true });
         await this.runNow(id, null).catch((err: unknown) => this.log(`Backups: agendado de ${id} não entrou na fila (${reasonOf(err)}).`));
       }
