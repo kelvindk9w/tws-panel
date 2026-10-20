@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 02-ssh.sh — Fase 02: hardening do OpenSSH.
-# Spec: docs/security-research.md §1.1 e §2.3 (drop-in sshd_config.d, crypto moderna,
+# Spec: docs/internal/security-research.md §1.1 e §2.3 (drop-in sshd_config.d, crypto moderna,
 # validação `sshd -t`, teste de nova sessão ANTES de fechar a atual).
 #
 # SEGURANÇA DO OPERADOR: antes de aplicar, agenda um rollback automático
@@ -24,7 +24,7 @@ TCP_FORWARDING="local"
 # de nuvem (Contabo e outras) trazem 50-cloud-init.conf com
 # "PasswordAuthentication yes": com o nome antigo (99-) o painel perdia e o
 # login por senha seguia ligado (visto em campo). 40 vence o 50 e continua
-# perdendo para o 10-local-override.conf que docs/instalacao.md ensina ao operador.
+# perdendo para o 10-local-override.conf que site/src/content/docs/pt-br/getting-started/installation.md ensina ao operador.
 DROPIN="/etc/ssh/sshd_config.d/40-paas-hardening.conf"
 OLD_DROPIN="/etc/ssh/sshd_config.d/99-paas-hardening.conf"
 REVERT_SCRIPT="${PAAS_STATE_DIR}/revert-ssh.sh"
@@ -190,7 +190,7 @@ else
 fi
 step "Aplicando drop-in de hardening ($DROPIN)"
 {
-  echo "# Gerenciado pelo painel PaaS (02-ssh.sh). Spec: docs/security-research.md §2.3"
+  echo "# Gerenciado pelo painel PaaS (02-ssh.sh). Spec: docs/internal/security-research.md §2.3"
   [ -n "$SSH_PORT" ] && echo "Port $SSH_PORT"
   cat <<'EOF'
 PubkeyAuthentication yes

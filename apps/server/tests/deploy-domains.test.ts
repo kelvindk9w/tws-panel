@@ -95,7 +95,7 @@ describe("domínios do projeto", () => {
     sync.mockClear();
     await svc.updateProject(p.id, { websocket: true });
     expect(sync).not.toHaveBeenCalled();
-    await svc.updateProject(p.id, { domain: "cassp.tws.tec.br" });
+    await svc.updateProject(p.id, { domain: "loja.example.com" });
     expect(sync).toHaveBeenCalledTimes(1);
   });
 

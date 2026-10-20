@@ -1,6 +1,6 @@
 /**
  * checks.ts — checks de segurança somente-leitura (shell de baixo custo).
- * Base: docs/security-research.md §4 (fase 0 inventário) e §6.5.
+ * Base: docs/internal/security-research.md §4 (fase 0 inventário) e §6.5.
  *
  * Cada check é um comando FIXO + avaliador. Nada de input externo.
  */
@@ -405,7 +405,7 @@ export const SECURITY_CHECKS: CheckDefinition[] = [
     title: "Inventário de portas escutando",
     severity: "info",
     description: "Lista portas TCP/UDP em escuta (ss -tulpn) — base para detectar exposições inesperadas.",
-    remediation: "Comparar com a matriz de portas esperada (docs/security-research.md §4) e fechar o excedente.",
+    remediation: "Comparar com a matriz de portas esperada (docs/internal/security-research.md §4) e fechar o excedente.",
     fixable: false,
     command: "ss -tuln 2>/dev/null | tail -n +2 | awk '{print $5}' | sort -u | tr '\\n' ' '",
     evaluate: (r) => ({ status: "pass", detail: r.stdout.trim() || "nenhuma porta em escuta" }),

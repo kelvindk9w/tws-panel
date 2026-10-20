@@ -156,19 +156,19 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const project = { id: "p1", slug: "cassino" } as Project;
+const project = { id: "p1", slug: "loja" } as Project;
 
 describe("SMTP_HOST pelo nome do certificado", () => {
   it("projeto com e-mail ativo recebe SMTP_HOST=mail.<domínio da caixa> (no próximo deploy)", async () => {
     await seed({
       domains: { "exemplo.com.br": domain("exemplo.com.br") },
       mailboxes: {
-        "cassino@exemplo.com.br": {
-          id: "cassino@exemplo.com.br", localPart: "cassino", domain: "exemplo.com.br", kind: "project",
+        "loja@exemplo.com.br": {
+          id: "loja@exemplo.com.br", localPart: "loja", domain: "exemplo.com.br", kind: "project",
           createdAt: new Date(0).toISOString(), password: "senha-forte",
         },
       },
-      projects: { p1: { domain: "exemplo.com.br", mailbox: "cassino@exemplo.com.br", enabledAt: new Date(0).toISOString() } },
+      projects: { p1: { domain: "exemplo.com.br", mailbox: "loja@exemplo.com.br", enabledAt: new Date(0).toISOString() } },
     });
     const service = new MailService(config, { inContainer: false });
     const env = await service.envForProject(project);

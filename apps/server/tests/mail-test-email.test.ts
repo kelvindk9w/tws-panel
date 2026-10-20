@@ -191,7 +191,7 @@ describe("sendTestEmail — envio", () => {
 
   /**
    * Validação real (02/10/2026): o teste da caixa do projeto chegou no Gmail
-   * como "cassino" — saía sem nome. Da caixa de um projeto, vai com o nome
+   * como "loja" — saía sem nome. Da caixa de um projeto, vai com o nome
    * de exibição dele; das outras caixas, sem nome.
    */
   it("da caixa de um projeto: From com o nome de exibição do projeto; postmaster@ sem nome", async () => {
@@ -216,12 +216,12 @@ describe("sendTestEmail — envio", () => {
           [`postmaster@${DOMAIN}`]: postmaster(),
           [contato]: { ...postmaster(), id: contato, localPart: "contato", kind: "project", password: "senha-da-caixa-do-projeto" },
         },
-        projects: { p1: { domain: DOMAIN, mailbox: contato, enabledAt: new Date(0).toISOString(), fromName: "Contato - Cassino" } },
+        projects: { p1: { domain: DOMAIN, mailbox: contato, enabledAt: new Date(0).toISOString(), fromName: "Contato - Loja" } },
       }),
     );
     const s = service();
     await s.sendTestEmail(DOMAIN, TO, contato);
-    expect(sent[0]).toMatchObject({ from: contato, username: contato, fromName: "Contato - Cassino" });
+    expect(sent[0]).toMatchObject({ from: contato, username: contato, fromName: "Contato - Loja" });
     clock += 60_000;
     await s.sendTestEmail(DOMAIN, TO);
     expect(sent[1]!.fromName).toBeUndefined();

@@ -279,7 +279,7 @@ describe("buildTestMessage", () => {
 
 /**
  * E-mail de teste da caixa de um projeto (02/10/2026): no Gmail aparecia só
- * "cassino" — o teste saía sem nome de exibição. Agora vai "Nome" <endereço>,
+ * "loja" — o teste saía sem nome de exibição. Agora vai "Nome" <endereço>,
  * com acentos codificados (RFC 2047) e sem brecha para cabeçalho extra.
  */
 describe("buildTestMessage — nome de exibição", () => {
@@ -311,10 +311,10 @@ describe("buildTestMessage — nome de exibição", () => {
   });
 
   it("acentos: palavra codificada UTF-8 (RFC 2047), tudo ASCII no fio", () => {
-    const raw = buildTestMessage({ ...base, fromName: "Contato - Cassino Ação" });
+    const raw = buildTestMessage({ ...base, fromName: "Contato - Loja Ação" });
     expect(/^[\x00-\x7f]*$/.test(raw)).toBe(true);
     const lines = fromLines(raw);
-    expect(decodeWords(lines).text).toBe("Contato - Cassino Ação");
+    expect(decodeWords(lines).text).toBe("Contato - Loja Ação");
     expect(lines.at(-1)).toMatch(/ <contato@exemplo\.com\.br>$/);
   });
 

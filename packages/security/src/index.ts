@@ -1,6 +1,6 @@
 /**
  * @paas/security — engine de scan de segurança + hardening.
- * Spec: docs/security-research.md (checklist de 6 fases/30 passos).
+ * Spec: docs/internal/security-research.md (checklist de 6 fases/30 passos).
  */
 export { stripAnsi } from "./ansi.js";
 export {

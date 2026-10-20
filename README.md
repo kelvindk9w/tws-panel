@@ -1,220 +1,220 @@
+<div align="center">
+
 # TWS Panel
 
-Painel open source que transforma uma VPS Ubuntu numa plataforma de hospedagem própria: protege
-a máquina, publica seus projetos com HTTPS e cuida do e-mail profissional.
+**Turn an Ubuntu VPS into your own hosting platform.**<br>
+Harden the machine, publish projects with HTTPS and run professional email, from one open-source panel that you control.
 
-[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green.svg)](LICENSE)
-[![Status: beta](https://img.shields.io/badge/status-beta-yellow)](#roadmap)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Status: beta](https://img.shields.io/badge/status-beta-yellow)](ROADMAP.md)
 [![CI](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml)
 
-![Dashboard do TWS Panel com o roteiro "Deixe o painel pronto" e três projetos rodando](docs/imagens/dashboard.png)
+[Documentation](https://kelvindk9w.github.io/tws-panel/) ·
+[Installation](#installation) ·
+[Roadmap](ROADMAP.md) ·
+[Changelog](CHANGELOG.md) ·
+[Contributing](CONTRIBUTING.md) ·
+**English** | [Português (Brasil)](README.pt-BR.md)
+
+</div>
+
+![TWS Panel dashboard with the "Get the panel ready" checklist and three running projects](docs/assets/dashboard.png)
+
+<!--
+  Screenshots live in docs/assets/ (see docs/assets/regenerar/COMO-REGENERAR.md for how the
+  existing ones are generated with fictional data). Add new ones there and reference them here.
+-->
 
 > [!NOTE]
-> **Projeto em beta.** A interface, os comandos e os formatos ainda podem mudar entre versões.
-> Veja o que mudou em cada uma no [CHANGELOG](CHANGELOG.md).
+> **TWS Panel is in beta.** The interface, the commands and the data formats may still change
+> between versions. See what changed in each one in the [CHANGELOG](CHANGELOG.md).
+> The panel interface is currently available in Portuguese only; the documentation is available in
+> English and Portuguese (Brazil).
 
-## Por que existe
+## Why it exists
 
-A TWS dependia de um serviço de hospedagem para publicar sites de clientes. Um dia, uma mudança
-simples num site ficou parada por dias, sem resposta do suporte. O problema não era o servidor:
-era depender de outra empresa para configurar tudo. O TWS Panel não é uma hospedagem. É o painel
-que prepara a VPS que **você** contrata, no provedor que quiser — e vai junto se você trocar.
+TWS depended on a hosting service to publish its clients' websites. One day a simple change to a
+site sat blocked for days, with no answer from support. The server was not the problem: depending
+on another company to configure everything was. TWS Panel is not a hosting company. It is the panel
+that prepares the VPS that **you** rent, from the provider you choose, and it goes with you if you
+move.
 
-**Princípios:** não-invasivo (usa o Docker da máquina e não mexe no que já funciona), segurança
-primeiro (nada entra no ar antes do hardening), minimalista (Fastify e arquivos JSON, sem banco de
-dados) e open source (licença MIT).
+**Principles:** non-invasive (it uses the Docker already on the machine and leaves what works
+alone), security first (nothing goes live before the hardening), minimalist (Fastify and JSON
+files, no external database) and open source (MIT license).
 
-## O que faz
+## What it does
 
-Lista curta. O detalhe de cada item está em [docs/funcionalidades.md](docs/funcionalidades.md).
+A short list. Each item is detailed in the [features guide](site/src/content/docs/en/guides/features.md).
 
-### 🚀 Deploy
+### Deploy
 
-- Código de um repositório git (público ou privado), da sua conta do GitHub ou de uma pasta do servidor.
-- Detecta HTML puro, projeto com build, `Dockerfile` e `docker-compose` (o compose é adotado, sem ser reescrito).
-- Vários domínios por projeto, com endereço automático `*.sslip.io` enquanto você não tem domínio.
-- Vários ambientes do mesmo repositório (produção e sandbox lado a lado).
-- Variáveis de ambiente cifradas, importação de `.env` e deploy barrado quando falta uma obrigatória.
-- Portas por container: trocar, publicar, remover e editar em lote, com conflitos à vista.
-- Logs do deploy ao vivo e "Por que falhou" com o log do serviço que ficou doente.
+- Code from a git repository (public or private), from your GitHub account or from a folder on the server.
+- Detects plain HTML, projects with a build step, `Dockerfile` and `docker-compose` (the compose file is adopted, not rewritten).
+- Several domains per project, with an automatic `*.sslip.io` address until you have a domain.
+- Several environments of the same repository (production and sandbox side by side).
+- Encrypted environment variables, `.env` import, and deploys blocked when a required variable is missing.
+- Ports per container: change, publish, remove and edit in bulk, with conflicts shown up front.
+- Live deploy logs and a "Why it failed" view with the log of the service that became unhealthy.
 
-### 🔒 HTTPS e domínio do painel
+### HTTPS and the panel domain
 
-- Certificados automáticos (Let's Encrypt) para painel, projetos e e-mail.
-- Página **Certificados** com o estado de cada um, a causa provável quando falha e "Tentar emitir agora".
-- Certificado próprio (manual) com conferência do par.
-- Domínio próprio para o painel e, opcional, desativar o acesso pelo IP.
+- Automatic certificates (Let's Encrypt) for the panel, the projects and email.
+- A **Certificates** page with the state of each one, the likely cause when issuing fails and "Try to issue now".
+- Your own (manual) certificate, with a key/certificate pair check.
+- A custom domain for the panel and, optionally, turning off access by IP.
 
-### ✉️ E-mail
+### Email
 
-- Servidor de e-mail próprio (Stalwart) com DKIM RSA 2048.
-- Checklist de DNS verificável (A, MX, SPF, DKIM, DMARC e PTR), com instrução de PTR por provedor.
-- Caixas com credenciais prontas para Outlook, Gmail ou celular, e e-mail de teste.
-- E-mail do projeto: caixa própria e variáveis `SMTP_*` injetadas no deploy.
-- Webmail (Roundcube) em `https://mail.<domínio>/`.
-- Página **Envios**: fila, histórico, volume, listas de bloqueio e nota de entregabilidade.
+- Your own email server (Stalwart) with RSA 2048 DKIM.
+- A verifiable DNS checklist (A, MX, SPF, DKIM, DMARC and PTR), with PTR instructions per provider.
+- Mailboxes with ready-made credentials for Outlook, Gmail or a phone, and a test email.
+- Project email: a dedicated mailbox and `SMTP_*` variables injected at deploy.
+- Webmail (Roundcube) at `https://mail.<domain>/`.
+- A **Sends** page: queue, history, volume, blocklists and a deliverability score.
 
-### 🔔 Notificações
+### Notifications
 
-- Avisos pelo Telegram, por e-mail ou pelos dois: segurança, deploy, certificados, lista de bloqueio, disco, backups.
-- Mensagens sem o IP da VPS, com agrupamento de repetidos e limite por hora.
+- Alerts by Telegram, email or both: security, deploys, certificates, blocklists, disk and backups.
+- Messages without the VPS IP, with grouping of repeats and an hourly limit.
 
-### 💾 Backups
+### Backups
 
-- Detecta bancos (PostgreSQL, MySQL, MariaDB, MongoDB, Redis), volumes e pastas de cada projeto.
-- Backup do painel, do e-mail e dos projetos em `.7z`, com agenda e retenção.
-- Cópia na VPS e no Cloudflare R2 (ou outro S3), conferida depois do envio.
-- Criptografia opcional da cópia externa, com kit de recuperação.
-- Restauração por item e "Restaurar de outro servidor" para montar tudo numa VPS nova.
+- Detects databases (PostgreSQL, MySQL, MariaDB, MongoDB, Redis), volumes and folders in each project.
+- Backups of the panel, the email server and the projects as `.7z`, with a schedule and retention.
+- Copy on the VPS and on Cloudflare R2 (or another S3), verified after upload.
+- Optional encryption of the off-site copy, with a recovery kit.
+- Per-item restore and "Restore from another server" to rebuild everything on a new VPS.
 
-### 🛡️ Segurança
+### Security
 
-- Wizard de hardening: Lynis, 8 fases com simulação e rollback automático nas que mexem no acesso.
-- Guardrails de deploy: 6 regras, com override explícito e auditado.
-- Monitoramento contínuo contra um baseline, central de alertas e log de auditoria.
-- Verificação de listas de bloqueio de e-mail.
-- Login com verificação em duas etapas (TOTP) e códigos de recuperação.
+- Hardening wizard: Lynis, 8 phases with a dry run and automatic rollback on the ones that touch access.
+- Deploy guardrails: 6 rules, with an explicit, audited override.
+- Continuous monitoring against a baseline, an alert center and an audit log.
+- Email blocklist checks.
+- Login with two-step verification (TOTP) and recovery codes.
 
-### 🖥️ Terminal web e roteiro
+### Web terminal and checklist
 
-- Terminal real do servidor dentro do painel, com o usuário que você escolhe na instalação.
-- Roteiro **Deixe o painel pronto** no Dashboard, com o que ainda falta configurar.
+- A real terminal of the server inside the panel, with the user you choose at install time.
+- A **Get the panel ready** checklist on the Dashboard, showing what is still left to configure.
 
-## Instalação rápida
+## Installation
 
-**Requisitos**
+**Requirements**
 
-- VPS com **Ubuntu 22.04 ou 24.04 LTS**, limpa. Mínimo recomendado: 1 vCPU, 2 GB de RAM e 25 GB de disco.
-- Portas **80 e 443** abertas para a internet (o certificado HTTPS depende delas).
-- Para o e-mail: a porta **25** liberada pelo provedor (muitos bloqueiam em contas novas).
-- Docker, Node e o resto são instalados pelo instalador.
+- A clean VPS with **Ubuntu 22.04 or 24.04 LTS**. Recommended minimum: 1 vCPU, 2 GB of RAM and 25 GB of disk.
+- Ports **80 and 443** open to the internet (the HTTPS certificate depends on them).
+- For email: port **25** unblocked by your provider (many block it on new accounts).
+- Docker, Node and everything else are installed by the installer.
 
-**Comandos essenciais, na ordem** (troque `SEU_IP` e `SEU_USUARIO`):
+**One command**, as a regular user with `sudo` (installs git first if you do not have it):
 
 ```bash
-# 1. Na VPS, como root: crie o seu usuário com permissão de administrador
-ssh root@SEU_IP
-adduser SEU_USUARIO
-usermod -aG sudo SEU_USUARIO
-exit
-
-# 2. No SEU computador: gere a chave SSH (se ainda não tiver) e instale na VPS
-ssh-keygen -t ed25519
-ssh-copy-id -i ~/.ssh/id_ed25519.pub SEU_USUARIO@SEU_IP
-
-# 3. Na VPS, com o seu usuário: instale o git, clone e rode o instalador
-ssh SEU_USUARIO@SEU_IP
-sudo apt update && sudo apt install -y git
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
-sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
-./scripts/install.sh
+sudo apt update && sudo apt install -y git \
+  && sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel \
+  && sudo chown -R $USER:$USER /opt/tws-panel \
+  && cd /opt/tws-panel && ./scripts/install.sh
 ```
 
+The installer checks the machine without changing anything, asks which user the panel terminal
+opens with, installs Docker, starts the panel and ends by printing the HTTPS address and the setup
+token, for example `https://203-0-113-10.sslip.io/?token=...` (with your IP). Open it in the browser
+and follow the wizard: welcome, machine health, security (hardening) and the administrator account.
+
 > [!WARNING]
-> **Já tem uma chave SSH?** Não rode o `ssh-keygen` por cima: ele apaga a antiga. O
-> [Passo 4 do guia](docs/instalacao.md#passo-4) mostra como conferir e qual chave usar.
+> **First time on a fresh VPS?** Create a regular user and install your SSH key *before* the
+> installer; the hardening phase turns off password login over SSH. The
+> [installation guide](site/src/content/docs/en/getting-started/installation.md) walks through it
+> step by step, and the [security wizard guide](site/src/content/docs/en/getting-started/security-wizard.md)
+> explains how to confirm access without locking yourself out.
 
-**O que acontece em seguida.** O instalador confere a máquina sem alterar nada, pergunta com qual
-usuário o terminal do painel abre, instala o Docker, sobe o painel e termina mostrando o endereço
-com HTTPS e o token de instalação: `https://203-0-113-10.sslip.io/?token=…` (com o seu IP). Abra
-no navegador e siga o assistente: boas-vindas, saúde da máquina, segurança (hardening) e conta de
-administrador.
+<a id="after-installing"></a>
 
-O passo a passo completo, com o que aparece na tela e o que fazer quando algo dá errado, está em
-**[docs/instalacao.md](docs/instalacao.md)**. Antes da etapa de segurança, leia o
-[Wizard de segurança](docs/wizard-seguranca.md): ela desliga o login por senha no SSH.
+## After installing
 
-## Depois de instalar
+On the first access, the Dashboard shows the **Get the panel ready** checklist. The panel checks
+the state of each step, and each one has a "How to" with the button to the right screen.
 
-No primeiro acesso, o Dashboard mostra o roteiro **Deixe o painel pronto**. O estado de cada passo
-é conferido pelo próprio painel, e cada um tem um "Como fazer" com o botão para a tela certa.
-
-| # | Passo | O que é |
+| # | Step | What it is |
 |---|---|---|
-| 1 | Proteções da VPS | As fases de hardening: atualizações, SSH só com chave, firewall, bloqueio de tentativas e auditoria. |
-| 2 | Verificação em duas etapas | Código de 6 dígitos do celular, além da senha, para entrar no painel. |
-| 3 | Domínio do painel | Um endereço seu (`painel.exemplo.com.br`) no lugar do endereço com o IP. |
-| 4 | E-mail do servidor *(opcional)* | Servidor de e-mail na VPS para os seus projetos enviarem mensagens. |
-| 5 | Notificações *(opcional)* | Avisos pelo Telegram ou por e-mail quando algo precisa de atenção. |
-| 6 | Backups fora da VPS *(opcional)* | Cópia cifrada no Cloudflare R2 (ou outro S3) para recuperar tudo numa VPS nova. |
+| 1 | VPS protections | The hardening phases: updates, SSH with keys only, firewall, blocking of repeated attempts and auditing. |
+| 2 | Two-step verification | A 6-digit code from your phone, in addition to the password, to sign in to the panel. |
+| 3 | Panel domain | An address of your own (`panel.example.com`) instead of the one with the IP. |
+| 4 | Server email *(optional)* | An email server on the VPS so your projects can send messages. |
+| 5 | Notifications *(optional)* | Telegram or email alerts when something needs attention. |
+| 6 | Off-VPS backups *(optional)* | An encrypted copy on Cloudflare R2 (or another S3) to recover everything on a new VPS. |
 
-Os passos opcionais aceitam "Não vou usar". O roteiro inteiro fica também em
-**Configurações → Primeiros passos**.
-
-Quer seguir tudo de uma vez, em ordem, até o primeiro projeto no ar e um backup restaurado? Use o
-guia **[Do zero ao painel pronto](docs/guia-completo.md)**.
+Want to follow everything in order, up to the first project online and a restored backup? Use
+[From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md).
 
 <table>
   <tr>
-    <td><img src="docs/imagens/projeto.png" alt="Página de um projeto: serviços do compose, domínios com HTTPS válido e e-mail do projeto ativo"></td>
-    <td><img src="docs/imagens/email-dns.png" alt="Domínio de e-mail com o checklist de DNS todo verde (6/6 OK)"></td>
-    <td><img src="docs/imagens/backups.png" alt="Configurações de backups com o Cloudflare R2 conectado e a criptografia ativa"></td>
+    <td><img src="docs/assets/projeto.png" alt="A project page: compose services, domains with valid HTTPS and the project email enabled"></td>
+    <td><img src="docs/assets/email-dns.png" alt="An email domain with the DNS checklist all green (6/6 OK)"></td>
+    <td><img src="docs/assets/backups.png" alt="Backup settings with Cloudflare R2 connected and encryption on"></td>
   </tr>
   <tr>
-    <td align="center">Projeto</td>
-    <td align="center">E-mail com DNS conferido</td>
+    <td align="center">Project</td>
+    <td align="center">Email with verified DNS</td>
     <td align="center">Backups</td>
   </tr>
 </table>
 
-## Documentação
+## Scope and trade-offs
 
-| Doc | Conteúdo |
+- **One panel, one VPS.** Managing several servers from one panel is not available (see the [roadmap](ROADMAP.md)).
+- **It needs privileged access to the server.** The web terminal is a real shell on the VPS, and
+  the Docker socket mounted into the panel is equivalent to root. This is by design, and it is
+  explained, together with what the project does **not** protect, in the
+  [security model](site/src/content/docs/en/reference/security.md).
+- **Built for a clean Ubuntu LTS VPS.** The installer checks the machine first and asks for
+  confirmation if it finds other services in the way.
+
+## Documentation
+
+The documentation website is at **<https://kelvindk9w.github.io/tws-panel/>** (English and Portuguese).
+The same pages live in this repository, under [`site/src/content/docs/`](site/src/content/docs/).
+
+| Guide | Content |
 |---|---|
-| [Instalação](docs/instalacao.md) | Passo a passo completo numa VPS limpa (Passos 1 a 8) |
-| [Wizard de segurança](docs/wizard-seguranca.md) | As 8 fases do hardening e como confirmar o acesso sem se trancar fora |
-| [Funcionalidades](docs/funcionalidades.md) | O que cada módulo faz, em detalhe |
-| [Operação](docs/operacao.md) | Atualizar, comandos úteis, scripts de emergência, pasta dos projetos, porta e usuário do terminal |
-| [Perdi o acesso](docs/recuperar-acesso.md) | Senha, celular, chave SSH ou domínio do painel perdidos: o caminho de volta |
-| [Segurança](docs/seguranca.md) | O que o painel protege e o que ele exige |
-| [Produção](docs/production.md) e [problemas comuns](docs/troubleshooting.md) | Portas de e-mail, PTR, UFW; porta 25 bloqueada, e-mail em spam, certificado que não sai |
-| [Desenvolvimento](docs/desenvolvimento.md) | Modo dev local e arquitetura |
-| [Índice completo](docs/README.md) | Toda a documentação, inclusive specs e pesquisas |
+| [Installation](site/src/content/docs/en/getting-started/installation.md) | Complete step-by-step on a clean VPS (Steps 1 to 8) |
+| [Security wizard](site/src/content/docs/en/getting-started/security-wizard.md) | The 8 hardening phases and how to confirm access without locking yourself out |
+| [From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md) | One ordered walkthrough, from the rented VPS to a tested restore |
+| [Features](site/src/content/docs/en/guides/features.md) | What each module does, in detail |
+| [Operations](site/src/content/docs/en/guides/operations.md) | Updating, useful commands, emergency scripts, project folder, terminal user and port |
+| [Lost access](site/src/content/docs/en/guides/recover-access.md) | Lost password, phone, SSH key or panel domain: the way back |
+| [Security model](site/src/content/docs/en/reference/security.md) | What the panel protects and what it requires |
+| [Production](site/src/content/docs/en/guides/production.md) and [troubleshooting](site/src/content/docs/en/guides/troubleshooting.md) | Email ports, PTR, UFW; blocked port 25, email in spam, certificates that do not issue |
+| [Local development](site/src/content/docs/en/development/local-development.md) | Local dev mode and architecture |
+| [Docs folder](docs/README.md) | Internal specs, research notes and README images |
 
-## Segurança
+## Security
 
-Encontrou uma vulnerabilidade? **Não abra uma issue pública.** Veja o [SECURITY.md](SECURITY.md).
-
-Um painel como este precisa de acesso privilegiado ao servidor: o terminal web é um shell real na
-VPS, e o socket do Docker montado no painel equivale a root. Isso está explicado, junto com o que
-o projeto **não** protege, em [docs/seguranca.md](docs/seguranca.md).
+Found a vulnerability? **Do not open a public issue.** See [SECURITY.md](SECURITY.md) for how to
+report it privately.
 
 ## Roadmap
 
-Ainda não existe:
+See [ROADMAP.md](ROADMAP.md) for what exists today and what is planned, without dates.
 
-| Item | Descrição |
-|---|---|
-| Aquecimento de IP guiado | Limitar o volume de envio de um IP novo e aumentar aos poucos (hoje a nota de entregabilidade só conta os dias enviando) |
-| Google Drive nos backups | Outro destino para a cópia externa, além do R2 e do S3 |
-| Tradução EN/ES | Interface e documentação em inglês e espanhol |
-| Multi-servidor | Gerenciar várias VPS a partir de um painel |
-| MTA-STS / TLS-RPT | Política de TLS obrigatório no e-mail e relatórios de falha |
-| BIMI | Logo verificado nas caixas de entrada (exige DMARC endurecido) |
-| MCP para IA | Permitir que assistentes de IA operem o painel |
+## Contributing
 
-Já entregue: hardening, deploy e domínios, e-mail, guardrails e monitoramento, verificação em duas
-etapas, certificados, domínio do painel, webmail, envios e entregabilidade, notificações e backups.
-Veja o [CHANGELOG](CHANGELOG.md).
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains the local setup, the tests,
+the standards and the pull request flow. To run the panel on your own computer, see the
+[local development guide](site/src/content/docs/en/development/local-development.md).
+Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-## Contribuir
+## About TWS
 
-Contribuições são bem-vindas. O [CONTRIBUTING.md](CONTRIBUTING.md) explica o setup local, os
-testes, os padrões e o fluxo de pull request. Para rodar o painel no seu computador, veja
-[docs/desenvolvimento.md](docs/desenvolvimento.md). Código de conduta:
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+**TWS Panel** is maintained by **TWS**, a software house founded and led by its CEO **Kelvin**.
+TWS builds custom web solutions, systems and automations for clients. The project was born from a
+real pain of the company itself and was opened to the community under the MIT license.
 
-## Sobre a TWS
-
-O **TWS Panel** é mantido pela **TWS**, software house fundada e liderada pelo CEO **Kelvin**.
-A TWS desenvolve soluções web, sistemas e automações sob medida para clientes. O projeto nasceu de
-uma dor real da própria empresa e foi aberto à comunidade sob licença MIT.
-
-- Site: [tws.tec.br](https://tws.tec.br/)
-- E-mail: [contato@tws.tec.br](mailto:contato@tws.tec.br)
+- Website: [tws.tec.br](https://tws.tec.br/)
+- Email: [contato@tws.tec.br](mailto:contato@tws.tec.br)
 - LinkedIn: [Kelvin Medeiros](https://www.linkedin.com/in/kelvin-medeiros-37920487)
 
-## Licença
+## License
 
 [MIT](LICENSE) © 2026 TWS — Kelvin

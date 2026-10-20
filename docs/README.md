@@ -1,59 +1,29 @@
-# Documentação do TWS Panel
+# docs/
 
-Índice de toda a documentação do projeto. Comece pelo [README](../README.md) para a visão geral.
+The user and developer guides are **not** in this folder: they live in
+[`site/src/content/docs/`](../site/src/content/docs/), one folder per language (`en`, `pt-br`),
+and are published as the documentation website. This folder keeps what is not part of the website.
 
-## Usar o painel
-
-| Doc | Conteúdo |
+| Folder | Content |
 |---|---|
-| [guia-completo.md](guia-completo.md) | Do zero ao painel pronto: um roteiro único, em ordem, da VPS contratada ao painel configurado (segurança, domínio, fuso, e-mail, notificações, backups, primeiro projeto e teste de restauração), com o que conferir em cada passo. |
-| [instalacao.md](instalacao.md) | Instalação passo a passo numa VPS limpa (Passos 1 a 8): SSH, usuário, chave, instalador, acesso por túnel, wizard. |
-| [wizard-seguranca.md](wizard-seguranca.md) | Como conduzir a etapa Segurança do wizard: as 8 fases, a confirmação de acesso e o rollback automático. |
-| [funcionalidades.md](funcionalidades.md) | O que o painel faz, módulo por módulo: deploy, portas, certificados, domínio do painel, e-mail, notificações, backups, segurança, terminal e roteiro. |
-| [operacao.md](operacao.md) | Atualizar o painel, scripts de emergência, comandos úteis, pasta dos projetos, trocar o usuário do terminal ou a porta. |
-| [recuperar-acesso.md](recuperar-acesso.md) | Perdi o acesso: senha do painel, celular da verificação em duas etapas, senha do Linux, chave SSH, domínio do painel. |
-| [seguranca.md](seguranca.md) | Modelo de segurança: o que o painel protege, o que ele exige (terminal e socket do Docker) e como funciona o login. |
-| [production.md](production.md) | Do dev à VPS real: portas de e-mail, IP público, ACME, PTR, UFW e ordem recomendada de configuração. |
-| [troubleshooting.md](troubleshooting.md) | Problemas comuns: porta 25 bloqueada, e-mail em spam, certificado não emitido, painel que não abre. |
+| [`assets/`](assets/) | Screenshots used by the README (fictional data). To regenerate them: [`assets/regenerar/COMO-REGENERAR.md`](assets/regenerar/COMO-REGENERAR.md) (Portuguese). |
+| [`community/pt-BR/`](community/pt-BR/) | Portuguese (Brazil) versions of [CONTRIBUTING](community/pt-BR/CONTRIBUTING.md), [SECURITY](community/pt-BR/SECURITY.md) and [CODE_OF_CONDUCT](community/pt-BR/CODE_OF_CONDUCT.md). The English originals are in the repository root. |
+| [`internal/`](internal/) | Design specs and research notes behind each development phase. **Portuguese only**, kept as a historical record. |
 
-## Desenvolver
+## Internal specs and research (Portuguese)
 
-| Doc | Conteúdo |
+| Doc | Summary |
 |---|---|
-| [desenvolvimento.md](desenvolvimento.md) | Modo dev local e arquitetura do monorepo. |
-| [host-bridge.md](host-bridge.md) | Como o scan e o hardening rodam na VPS real a partir do container do painel. |
-| [github-security.md](github-security.md) | Endurecimento do repositório no GitHub (rulesets, cadeia de suprimentos). |
-| [../comoFuncionaSistema/](../comoFuncionaSistema/) | Documentação legível por máquina: um JSON por endpoint, com parâmetros, erros, efeitos colaterais e testes. Escrita para agentes de IA — comece por `index.json`. |
-| [threat-model.json](../comoFuncionaSistema/global/threat-model.json) | O que o painel protege, o que não protege, quais privilégios exige e por quê. |
+| [security-research.md](internal/security-research.md) | VPS hardening spec (CIS, Lynis, 2025/2026 guides); the basis of the hardening phases. |
+| [email-deliverability.md](internal/email-deliverability.md) | DNS and deliverability spec (SPF, DKIM, DMARC, PTR, Gmail/Yahoo/Microsoft requirements). |
+| [projects-analysis.md](internal/projects-analysis.md) | Requirements taken from three real projects that defined the ingestion modes and pipelines. |
+| [fase-3-email.md](internal/fase-3-email.md) | Stalwart integration (image, REST API, bootstrap), DNS checklist, SMTP injection. |
+| [fase-4-guardrails-monitoramento.md](internal/fase-4-guardrails-monitoramento.md) | Guardrail rules, baseline + diff, DNSBL, alert center and audit. |
+| [github-security.md](internal/github-security.md) | Hardening the GitHub repository itself (rulesets, supply chain). |
+| [phase1-evidence/](internal/phase1-evidence/) | Screenshots and JSON of the security scan before and after hardening (phase 1). |
 
-## Specs e pesquisas (base das fases)
+## Machine-readable documentation
 
-| Doc | Resumo |
-|---|---|
-| [security-research.md](security-research.md) | Spec de hardening de VPS Ubuntu (fontes: CIS, Lynis, guias 2025/2026) — base da Fase 1. |
-| [email-deliverability.md](email-deliverability.md) | Spec de DNS/entregabilidade (SPF, DKIM, DMARC, PTR, requisitos Gmail/Yahoo/Microsoft) — base da Fase 3. |
-| [projects-analysis.md](projects-analysis.md) | Requisitos extraídos de 3 projetos reais que definiram os modos de ingestão e pipelines — base da Fase 2. |
-
-## Notas de implementação por fase
-
-| Doc | Resumo |
-|---|---|
-| [fase-3-email.md](fase-3-email.md) | Integração do Stalwart (imagem, API REST, bootstrap), checklist DNS, injeção SMTP e o que muda em produção. |
-| [fase-4-guardrails-monitoramento.md](fase-4-guardrails-monitoramento.md) | Regras de guardrail, baseline + diff, blacklist DNSBL, central de alertas e auditoria. |
-
-## Evidências e imagens
-
-| Pasta | Resumo |
-|---|---|
-| [phase1-evidence/](phase1-evidence/) | Prints e JSONs do scan de segurança antes/depois do hardening (Fase 1). |
-| [imagens/](imagens/) | Prints das telas usados no README (dados fictícios). Para regenerar: [imagens/regenerar/COMO-REGENERAR.md](imagens/regenerar/COMO-REGENERAR.md). |
-
-## Documentos de comunidade (raiz do repositório)
-
-| Doc | Resumo |
-|---|---|
-| [../README.md](../README.md) | Visão geral, funcionalidades, instalação rápida e roadmap. |
-| [../CHANGELOG.md](../CHANGELOG.md) | O que mudou em cada versão. |
-| [../CONTRIBUTING.md](../CONTRIBUTING.md) | Setup local, padrões e como estender o painel (checks, guardrails, pipelines). |
-| [../SECURITY.md](../SECURITY.md) | Como reportar vulnerabilidades e práticas de segurança do projeto. |
-| [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) | Código de conduta (Contributor Covenant). |
+[`comoFuncionaSistema/`](../comoFuncionaSistema/) holds one JSON file per endpoint (parameters,
+errors, side effects and tests), written for AI agents. Start with `index.json`. The panel's threat
+model is in [`threat-model.json`](../comoFuncionaSistema/global/threat-model.json).

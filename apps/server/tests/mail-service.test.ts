@@ -344,13 +344,13 @@ describe("MailService — senha das caixas nunca volta", () => {
 
 /**
  * Validação real do dono do produto (02/10/2026): ele criou "Contato -
- * Cassino <contato@...>" e não tinha como abrir essa caixa — o endereço de
+ * Loja <contato@...>" e não tinha como abrir essa caixa — o endereço de
  * envio era só um alias da caixa técnica, cuja senha nunca aparece. Agora o
  * endereço de envio É a caixa do projeto, com a senha que a pessoa digita
  * (ou que o painel gera e mostra uma única vez).
  */
 describe("MailService — o endereço de envio é a caixa do projeto", () => {
-  const project = { id: "p1", slug: "cassino", name: "Cassino Royal" } as unknown as Project;
+  const project = { id: "p1", slug: "loja", name: "Loja Royal" } as unknown as Project;
   const SENHA = "senha-forte-da-pessoa";
 
   async function seedDomain(mailboxes: Record<string, unknown> = {}, projects: Record<string, unknown> = {}) {
@@ -378,16 +378,16 @@ describe("MailService — o endereço de envio é a caixa do projeto", () => {
     const svc = new MailService(config);
     const res = await svc.enableProjectEmail(project, "exemplo.com", { password: SENHA });
     expect(res.generatedPassword).toBeUndefined();
-    expect(res.email).toMatchObject({ mailbox: "cassino@exemplo.com", mailFrom: "cassino@exemplo.com", fromName: "Cassino Royal" });
-    expect(createdMailboxCalls).toEqual([{ email: "cassino@exemplo.com", password: SENHA }]);
+    expect(res.email).toMatchObject({ mailbox: "loja@exemplo.com", mailFrom: "loja@exemplo.com", fromName: "Loja Royal" });
+    expect(createdMailboxCalls).toEqual([{ email: "loja@exemplo.com", password: SENHA }]);
     expect(aliasCalls).toEqual([]);
     expect(await svc.envForProject(project)).toEqual({
       SMTP_HOST: "mail.exemplo.com",
       SMTP_PORT: "587",
-      SMTP_USER: "cassino@exemplo.com",
+      SMTP_USER: "loja@exemplo.com",
       SMTP_PASS: SENHA,
-      MAIL_FROM: "cassino@exemplo.com",
-      MAIL_FROM_NAME: "Cassino Royal",
+      MAIL_FROM: "loja@exemplo.com",
+      MAIL_FROM_NAME: "Loja Royal",
     });
     expect(JSON.stringify(await svc.projectEmailConfig("p1"))).not.toContain(SENHA);
   });
@@ -397,11 +397,11 @@ describe("MailService — o endereço de envio é a caixa do projeto", () => {
     const svc = new MailService(config);
     const res = await svc.enableProjectEmail(project, "exemplo.com", {
       fromLocalPart: "Contato",
-      fromName: "Contato - Cassino",
+      fromName: "Contato - Loja",
       generatePassword: true,
     });
     expect(res.generatedPassword).toMatch(/^[A-Za-z0-9][A-Za-z0-9_.-]{23}$/);
-    expect(res.email).toMatchObject({ mailbox: "contato@exemplo.com", mailFrom: "contato@exemplo.com", fromName: "Contato - Cassino" });
+    expect(res.email).toMatchObject({ mailbox: "contato@exemplo.com", mailFrom: "contato@exemplo.com", fromName: "Contato - Loja" });
     expect(createdMailboxCalls).toEqual([{ email: "contato@exemplo.com", password: res.generatedPassword }]);
     expect((await stored()).mailboxes["contato@exemplo.com"]).toMatchObject({ kind: "project", password: res.generatedPassword });
     expect((await svc.envForProject(project)).SMTP_PASS).toBe(res.generatedPassword);
@@ -493,12 +493,12 @@ describe("MailService — o endereço de envio é a caixa do projeto", () => {
   });
 
   it("caixa de projeto sobrando (e-mail desativado antes): reaproveita, com a senha nova", async () => {
-    await seedDomain({ "cassino@exemplo.com": { ...mailboxFixture("cassino@exemplo.com", "exemplo.com", "user"), kind: "project" } });
+    await seedDomain({ "loja@exemplo.com": { ...mailboxFixture("loja@exemplo.com", "exemplo.com", "user"), kind: "project" } });
     const svc = new MailService(config);
     await expect(svc.enableProjectEmail(project, "exemplo.com")).rejects.toMatchObject({ code: "password_required" });
     await svc.enableProjectEmail(project, "exemplo.com", { password: SENHA });
     expect(createdMailboxCalls).toEqual([]);
-    expect(passwordCalls).toEqual([{ email: "cassino@exemplo.com", password: SENHA }]);
+    expect(passwordCalls).toEqual([{ email: "loja@exemplo.com", password: SENHA }]);
   });
 
   it("desativar: a caixa e as mensagens ficam (dá para remover na página do domínio)", async () => {
@@ -526,14 +526,14 @@ describe("MailService — o endereço de envio é a caixa do projeto", () => {
  * pessoa salvar de novo; ao salvar, o alias sai e o modelo novo vale.
  */
 describe("MailService — migração do endereço de envio antigo (alias)", () => {
-  const project = { id: "p1", slug: "cassino", name: "Cassino Royal" } as unknown as Project;
+  const project = { id: "p1", slug: "loja", name: "Loja Royal" } as unknown as Project;
   const LEGACY = {
     p1: {
       domain: "exemplo.com",
-      mailbox: "cassino@exemplo.com",
+      mailbox: "loja@exemplo.com",
       enabledAt: "2026-10-01T00:00:00.000Z",
       fromAddress: "contato@exemplo.com",
-      fromName: "Contato - Cassino",
+      fromName: "Contato - Loja",
     },
   };
 
@@ -547,7 +547,7 @@ describe("MailService — migração do endereço de envio antigo (alias)", () =
         hostname: "mail.test",
         domains: { "exemplo.com": domainFixture("exemplo.com") },
         mailboxes: {
-          "cassino@exemplo.com": { ...mailboxFixture("cassino@exemplo.com", "exemplo.com", "user", "senha-tecnica"), kind: "project" },
+          "loja@exemplo.com": { ...mailboxFixture("loja@exemplo.com", "exemplo.com", "user", "senha-tecnica"), kind: "project" },
         },
         projects: LEGACY,
       }),
@@ -559,12 +559,12 @@ describe("MailService — migração do endereço de envio antigo (alias)", () =
     await seedLegacy();
     const svc = new MailService(config);
     expect(await svc.envForProject(project)).toMatchObject({
-      SMTP_USER: "cassino@exemplo.com",
+      SMTP_USER: "loja@exemplo.com",
       SMTP_PASS: "senha-tecnica",
       MAIL_FROM: "contato@exemplo.com",
-      MAIL_FROM_NAME: "Contato - Cassino",
+      MAIL_FROM_NAME: "Contato - Loja",
     });
-    expect(await svc.projectEmailConfig("p1")).toMatchObject({ mailbox: "cassino@exemplo.com", mailFrom: "contato@exemplo.com", legacyAlias: true });
+    expect(await svc.projectEmailConfig("p1")).toMatchObject({ mailbox: "loja@exemplo.com", mailFrom: "contato@exemplo.com", legacyAlias: true });
   });
 
   it("ao salvar com o mesmo endereço: tira o alias ANTES de criar a caixa contato@ e remove a técnica", async () => {
@@ -574,7 +574,7 @@ describe("MailService — migração do endereço de envio antigo (alias)", () =
       code: "password_required",
     });
     const res = await svc.enableProjectEmail(project, "exemplo.com", { fromLocalPart: "contato", generatePassword: true });
-    expect(order).toEqual(["- alias contato@exemplo.com", "create contato@exemplo.com", "delete cassino@exemplo.com"]);
+    expect(order).toEqual(["- alias contato@exemplo.com", "create contato@exemplo.com", "delete loja@exemplo.com"]);
     expect(res.email).toMatchObject({ mailbox: "contato@exemplo.com", mailFrom: "contato@exemplo.com", legacyAlias: false });
     const file = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8"));
     expect(file.projects.p1).not.toHaveProperty("fromAddress");
@@ -587,14 +587,14 @@ describe("MailService — migração do endereço de envio antigo (alias)", () =
     const svc = new MailService(config);
     await svc.enableProjectEmail(project, "exemplo.com", {});
     expect(order).toEqual(["- alias contato@exemplo.com"]);
-    expect(await svc.projectEmailConfig("p1")).toMatchObject({ mailbox: "cassino@exemplo.com", mailFrom: "cassino@exemplo.com" });
+    expect(await svc.projectEmailConfig("p1")).toMatchObject({ mailbox: "loja@exemplo.com", mailFrom: "loja@exemplo.com" });
   });
 
   it("desativar um registro antigo tira o alias", async () => {
     await seedLegacy();
     const svc = new MailService(config);
     await svc.disableProjectEmail("p1");
-    expect(aliasCalls).toEqual(["- cassino@exemplo.com contato@exemplo.com"]);
+    expect(aliasCalls).toEqual(["- loja@exemplo.com contato@exemplo.com"]);
   });
 });
 
@@ -604,7 +604,7 @@ describe("MailService — migração do endereço de envio antigo (alias)", () =
  * a troca de senha chega sozinha no próximo deploy.
  */
 describe("MailService — ligar valores do e-mail às variáveis do projeto", () => {
-  const project = { id: "p1", slug: "cassino", name: "Cassino Royal" } as unknown as Project;
+  const project = { id: "p1", slug: "loja", name: "Loja Royal" } as unknown as Project;
 
   async function enabled() {
     await seedMailFile({ "exemplo.com": domainFixture("exemplo.com") }, {});
@@ -620,7 +620,7 @@ describe("MailService — ligar valores do e-mail às variáveis do projeto", ()
     expect(await svc.linkedEnvForProject(project)).toEqual({
       SMTP_SENHA: "senha-forte-da-pessoa",
       EMAIL_DE: "contato@exemplo.com",
-      NOME_DE: "Cassino Royal",
+      NOME_DE: "Loja Royal",
     });
     await svc.changeMailboxPassword("contato@exemplo.com", "senha-nova-forte-1");
     expect((await svc.linkedEnvForProject(project)).SMTP_SENHA).toBe("senha-nova-forte-1");
@@ -700,7 +700,7 @@ describe("MailService.createMailbox — senha gerada", () => {
  * dele; as outras não são de projeto nenhum.
  */
 describe("MailService — caixas do projeto (dono)", () => {
-  const project = { id: "p1", slug: "cassino", name: "Cassino Royal" } as unknown as Project;
+  const project = { id: "p1", slug: "loja", name: "Loja Royal" } as unknown as Project;
   const SENHA = "senha-forte-da-pessoa";
 
   async function seed(mailboxes: Record<string, unknown> = {}, projects: Record<string, unknown> = {}) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 00-update.sh — Fase 00: atualização do sistema + atualizações automáticas de segurança.
-# Spec: docs/security-research.md §2.1 (apt full-upgrade, unattended-upgrades, needrestart).
+# Spec: docs/internal/security-research.md §2.1 (apt full-upgrade, unattended-upgrades, needrestart).
 #
 # NÃO ATUALIZA O DOCKER, de propósito: esta fase roda dentro de um container
 # mantido pelo próprio daemon do Docker (PTY via nsenter — docker-socket.ts).

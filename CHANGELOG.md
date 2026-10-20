@@ -87,6 +87,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Criptografia opcional da cópia externa, kit de recuperação e lembrete trimestral da senha.
 - Restauração por item, restauração do painel por SSH e "Restaurar de outro servidor".
 
+**Documentação e comunidade**
+
+- README, CONTRIBUTING, SECURITY e CODE_OF_CONDUCT em inglês (idioma principal), com o README e os
+  textos de comunidade também em português do Brasil; `ROADMAP.md` com o que existe e o que vem.
+- Guias traduzidos para o inglês e publicados num site (Starlight, em `site/`) com busca e dois
+  idiomas, no GitHub Pages, a partir da branch `main`. `pnpm docs:links` confere os links internos.
+- Modelos de issue em formulário (bug, sugestão, pergunta ou documentação) e modelo de pull request.
+
 ### Alterado
 
 - O painel escuta só em `127.0.0.1`; quem atende de fora é o proxy, nas portas 80 e 443.

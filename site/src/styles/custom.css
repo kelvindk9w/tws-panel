@@ -1,0 +1,12 @@
+/* Minimal accent override; everything else is the Starlight default theme. */
+:root {
+  --sl-color-accent-low: #12263f;
+  --sl-color-accent: #2563eb;
+  --sl-color-accent-high: #bcd2ff;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #dbe7ff;
+  --sl-color-accent: #1d4ed8;
+  --sl-color-accent-high: #1e3a8a;
+}

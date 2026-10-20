@@ -8,7 +8,7 @@
  *  - pior: node-pty daria um shell DENTRO do container do painel — o alvo dos
  *    comandos é o HOST (ou o container descartável de dev), nunca o painel.
  *
- * A abordagem (mesma do host bridge — docs/host-bridge.md): o PTY é fornecido
+ * A abordagem (mesma do host bridge — site/src/content/docs/pt-br/reference/host-bridge.md): o PTY é fornecido
  * pelo próprio daemon Docker, que JÁ está acessível via /var/run/docker.sock:
  *  - alvo "host": container helper DESCARTÁVEL (--rm, privileged, pid=host)
  *    com Tty:true rodando `nsenter -t 1 ... -- bash -l` — um shell interativo

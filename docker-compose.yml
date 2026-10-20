@@ -16,7 +16,7 @@
 # (`docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -i -n -p`)
 # que entra nos namespaces do PID 1 do host — padrão Coolify/Portainer.
 # Somente comandos da allowlist (checks do scanner + scripts de
-# scripts/hardening/*) são executados, tudo auditado. docs/host-bridge.md.
+# scripts/hardening/*) são executados, tudo auditado. site/src/content/docs/pt-br/reference/host-bridge.md.
 #
 # ── HARDENING DESTE CONTAINER (o painel é o exemplo) ─────────────────────
 #  - usuário não-root (tws, ver Dockerfile) + group_add do GID do docker.sock;

@@ -12,12 +12,15 @@
   },
   "scripts": {
     "prepare": "node scripts/setup-hooks.mjs",
-    "dev": "pnpm -r --parallel run dev",
+    "dev": "pnpm -r --filter=!site --parallel run dev",
     "dev:server": "pnpm --filter @paas/server run dev",
     "dev:web": "pnpm --filter @paas/web run dev",
-    "build": "pnpm -r run build",
-    "typecheck": "pnpm -r run typecheck",
+    "build": "pnpm -r --filter=!site run build",
+    "typecheck": "pnpm -r --filter=!site run typecheck",
     "start": "pnpm --filter @paas/server run start",
+    "docs:dev": "pnpm --filter site run dev",
+    "docs:build": "pnpm --filter site run build",
+    "docs:links": "node scripts/check-doc-links.mjs",
     "test:mail": "tsx scripts/test-mail.mts",
     "test:fase4": "tsx scripts/test-fase4.mts",
     "test": "pnpm run test:unit",
@@ -31,6 +34,7 @@
     "imapflow": "^1.0.164",
     "nodemailer": "^10.0.9",
     "tsx": "^4.19.2",
+    "vite": "^6.4.3",
     "vitest": "^4.1.11"
   },
   "pnpm": {

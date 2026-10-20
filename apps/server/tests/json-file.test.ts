@@ -296,8 +296,8 @@ describe("loadJson", () => {
     const padrao = await loadJson(file, { ...opts, strict: true }).catch((e: Error) => e.message);
     expect(padrao).toMatch(/restaurar-painel\.sh/);
     expect(padrao).not.toMatch(/renomeie/);
-    const contas = await loadJson(file, { ...opts, strict: true, recovery: "Para recuperar o acesso siga docs/recuperar-acesso.md." }).catch((e: Error) => e.message);
-    expect(contas).toMatch(/docs\/recuperar-acesso\.md/);
+    const contas = await loadJson(file, { ...opts, strict: true, recovery: "Para recuperar o acesso siga site/src/content/docs/pt-br/guides/recover-access.md." }).catch((e: Error) => e.message);
+    expect(contas).toMatch(/guides\/recover-access\.md/);
     expect(contas).not.toMatch(/restaurar-painel/);
   });
 });
