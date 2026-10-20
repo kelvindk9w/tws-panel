@@ -107,6 +107,15 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     return () => void revokedListeners.delete(listener);
   });
 
+  // Nada da API (variáveis de projeto, sessão, segredos) fica em cache de
+  // navegador ou proxy; quem já definiu o próprio Cache-Control o mantém.
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (routePath(request).startsWith("/api/") && !reply.hasHeader("cache-control")) {
+      reply.header("cache-control", "no-store");
+    }
+    return payload;
+  });
+
   app.addHook("onRequest", async (request, reply) => {
     // CSRF (M1): escrita que o navegador diz vir de outro site/origem nem chega
     // à autenticação nem à rota. Vale para o login também (login CSRF).
