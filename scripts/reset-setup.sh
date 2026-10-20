@@ -16,7 +16,8 @@
 #
 # Em qualquer modo é gerado um SETUP TOKEN NOVO em /data/setup-token (0600): ao
 # concluir o assistente o painel apaga o token, e o assistente reaberto precisa
-# de um. O token antigo deixa de valer. Veja o novo com ./scripts/show-token.sh.
+# de um (dono 10001:10001, o usuário tws do painel; sem isso ele não consegue ler).
+# O token antigo deixa de valer. Veja o novo com ./scripts/show-token.sh.
 #
 # NADA mais é tocado: projetos, domínios, e-mail e histórico de segurança.
 #
@@ -101,7 +102,7 @@ fi
 docker run --rm -v "$VOLUME_NAME:/data" alpine:3 sh -c "
   for f in $RM_LIST; do rm -f \"/data/\$f\"; done
   umask 077
-  printf '%s' '$NEW_TOKEN' > /data/setup-token.tmp && chmod 600 /data/setup-token.tmp && mv /data/setup-token.tmp /data/setup-token
+  printf '%s' '$NEW_TOKEN' > /data/setup-token.tmp && chmod 600 /data/setup-token.tmp && chown 10001:10001 /data/setup-token.tmp && mv /data/setup-token.tmp /data/setup-token
 " || die "falha ao limpar o volume $VOLUME_NAME."
 
 # Reinicia o painel para ele reler o estado zerado (se estiver rodando).

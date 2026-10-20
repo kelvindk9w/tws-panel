@@ -43,6 +43,9 @@ beforeEach(async () => {
     "",
   ].join("\n");
   await writeFile(path.join(bin, "docker"), fake);
+  // chown de mentira (o teste não roda como root): só registra o pedido
+  await writeFile(path.join(bin, "chown"), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_DATA/../chown.log"\n');
+  await chmod(path.join(bin, "chown"), 0o755);
   await chmod(path.join(bin, "docker"), 0o755);
 });
 afterEach(async () => {
@@ -73,6 +76,25 @@ describe("scripts/reset-setup.sh gera um token novo", () => {
       expect(out).toContain("show-token.sh");
     });
   }
+
+  it("o arquivo vai para o dono do painel (10001:10001, usuário tws do Dockerfile) ANTES de assumir o nome final", async () => {
+    runReset();
+    const log = await readFile(path.join(dir, "chown.log"), "utf8");
+    expect(log).toMatch(/^10001:10001 .*setup-token(\.tmp)?$/m);
+    // o script do alpine (root) cria o arquivo: sem chown ele ficaria root:root 0600, ilegível para o painel
+    const script = await readFile(RESET, "utf8");
+    expect(script.indexOf("chown 10001:10001")).toBeLessThan(script.indexOf("mv /data/setup-token.tmp"));
+  });
+
+  it("o Dockerfile realmente roda o painel como 10001:10001 (se mudar, o script precisa mudar)", async () => {
+    const docker = await readFile(path.resolve(__dirname, "../../../Dockerfile"), "utf8");
+    expect(docker).toMatch(/--gid 10001 tws/);
+    expect(docker).toMatch(/--uid 10001 --gid tws/);
+    expect(docker).toMatch(/^USER tws$/m);
+    expect(await readFile(path.resolve(__dirname, "../../../scripts/install.sh"), "utf8")).toMatch(
+      /chmod 600 \/data\/setup-token && chown 10001:10001 \/data\/setup-token/,
+    );
+  });
 
   it("cada reset troca o token (o antigo, mesmo que vaze, não vale mais)", async () => {
     await writeFile(path.join(data, "setup-token"), "token-antigo\n");

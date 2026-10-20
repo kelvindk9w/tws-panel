@@ -184,10 +184,26 @@ O revisor aprovou M1, M2, I1/I3 e os 3 testes alterados, e reprovou três pontos
   inválido (uma linha sem a chave `controle`), e completei o texto do vazamento em log.
 - Nos itens "O que muda" acima: o item 6 (prioridade) e o 5 valem com a regra nova (variável só sem administrador).
 
+## Correção da revisão (rodada 3): dono do arquivo do token
+
+- **Defeito:** o `reset-setup.sh` gravava `/data/setup-token` por um alpine rodando como root; o arquivo nascia
+  `root:root 0600` e o painel (usuário `tws`, uid/gid 10001, confirmado no `Dockerfile`) não conseguia ler: sem token,
+  a API respondia 503 `setup_token_missing`. O mesmo comando existia no `install.sh`.
+- **Teste que falhou antes:** `reset-setup-token.test.ts` (2 novos testes): o `chown` de mentira no PATH do dublê
+  registra o pedido e o teste exige `10001:10001` sobre o arquivo antes do `mv` final; outro confere que o
+  `Dockerfile` roda o painel como 10001:10001 e que o `install.sh` também faz o `chown`. (O dublê não roda como root,
+  então a prova do dono real está no teste com Docker abaixo.)
+- **Mudou:** `reset-setup.sh` e `install.sh` dão o arquivo a 10001:10001 (mantendo 0600) antes de ele assumir o nome final.
+- **Testado de verdade (Docker real, volume descartável com nome único, removido ao final):** estado concluído
+  (admin, sem token) → `reset-setup.sh` e `reset-setup.sh --full` → `ls -ln` mostra `10001 10001 -rw-------` →
+  leitura como `--user 10001:10001` funciona → o token do `show-token.sh` é idêntico ao lido. O mesmo comando do
+  `install.sh` num volume novo também fica legível como 10001.
+- **Não testado:** o painel real lendo o arquivo (contêiner `tws-panel` completo) e o `install.sh` inteiro.
+
 ## Verificação
 
 - `pnpm -r run typecheck`: passou nos 6 pacotes.
-- Server: 129 arquivos, 1929 testes passando; cobertura geral 97,97% linhas / 93,37% ramos / 98,28% funções /
+- Server: 129 arquivos, 1931 testes passando; cobertura geral 97,96% linhas / 93,4% ramos / 98,28% funções /
   99,02% instruções (mínimos 94/91/98/94), rodada com `--maxWorkers=2`.
 - `@paas/core`: 26 testes do arquivo alterado e cobertura 99,6% / 98,8% ramos; `@paas/web`: 746 testes passando.
 - Deploy e mailer não foram tocados, então não rodei a cobertura deles.
