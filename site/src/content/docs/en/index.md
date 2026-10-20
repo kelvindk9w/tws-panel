@@ -5,8 +5,8 @@ template: splash
 hero:
   tagline: Turn an Ubuntu VPS into your own hosting platform. Harden the machine, publish projects with HTTPS and run professional email, from one panel you control.
   actions:
-    - text: First installation, step by step
-      link: /tws-panel/en/getting-started/complete-guide/
+    - text: Step-by-step guide
+      link: /tws-panel/en/getting-started/installation/
       icon: right-arrow
     - text: Restore on a new VPS
       link: /tws-panel/en/guides/restore-new-server/
@@ -22,7 +22,7 @@ hero:
 
 | Your situation | Go to |
 |---|---|
-| **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[From zero to a fully set-up panel](getting-started/complete-guide.md)**<br>Only the installation, steps 1 to 8: [installation guide](getting-started/installation.md) |
+| **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[Step-by-step guide](getting-started/installation.md)**<br>Part 1 installs the panel; Part 2 configures it. |
 | **I reinstalled the VPS, or I am moving to another server.** You want the panel, the projects and the email back from the external backups. | **[Restore on a new VPS](guides/restore-new-server.md)** |
 | **I know what I am doing.** You have a clean Ubuntu VPS and a user with `sudo`. | **[Quick install, one command](https://github.com/kelvindk9w/tws-panel#installation)** (on the repository README) |
 
@@ -38,10 +38,10 @@ reinstall the VPS. See [what to do](getting-started/installation.md#host-identif
 
 ## Where to go next
 
-- [Installation, steps 1 to 8](getting-started/installation.md): every command of the installation explained.
 - [Features](guides/features.md): what each module does.
 - [Security model](reference/security.md): what the panel protects, and what it requires.
 - [Troubleshooting](guides/troubleshooting.md): blocked port 25, email in spam, certificates that do not issue.
+- [Help and feedback](guides/help.md): questions, bugs, suggestions and how to reach us.
 
 ## What you need
 

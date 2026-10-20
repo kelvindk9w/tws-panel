@@ -7,7 +7,9 @@ GitHub Pages. This folder is not part of the panel image.
 pnpm docs:dev     # local server with live reload (from the repository root)
 pnpm docs:build   # builds site/dist
 pnpm --filter site check:build   # fails on raw [!NOTE] alerts or missing asides in the built HTML
-pnpm docs:links   # checks relative links and anchors in every .md file of the repository
+pnpm docs:links   # checks relative links and anchors in every .md file of the repository and,
+                  # when site/dist exists, that each absolute site URL has a route in the build
+pnpm docs:site-url   # fails if an absolute site address in the repository differs from the config
 ```
 
 ## Layout
@@ -48,22 +50,67 @@ Sidebar entries use slugs, so they are the same in every language.
 ## Navigation for newcomers
 
 Three paths are kept visible, in this order, on the home page (`index.md`, hero buttons and the
-"Where to start" table), in the first group of the sidebar and at the top of both READMEs:
+"Where to start" table), in the sidebar and at the top of both READMEs:
 
-1. **First installation**: the complete guide (`getting-started/complete-guide`). It is the main
-   path and sends the reader to the installation guide for the details of Step 2.
-2. **Reinstalled the VPS or moving servers**: `guides/restore-new-server`. It sits in the first
-   sidebar group even though its file lives in `guides/`.
+1. **First installation**: the **Step-by-step guide**, one path in two chained parts, with a single
+   link that opens Part 1.
+   - Part 1, **Install** (`getting-started/installation`): "Before you start" (what to get, the
+     optional domain, the accounts) and Steps 1 to 8, from the VPS to the open wizard. It ends with
+     "Next: Part 2".
+   - Part 2, **Configure** (`getting-started/complete-guide`): Steps 1 to 9, from the setup wizard
+     and security to the tested restore and maintenance. It opens with "Back: Part 1".
+   The file names stayed the same so external links keep working; only the titles changed. The
+   anchors of Part 2 were renumbered (`#etapa-1` to `#etapa-9`); the old `#etapa-3` to `#etapa-11`
+   no longer exist. Grep for `complete-guide.md#etapa` before renaming one again.
+2. **Reinstalled the VPS or moving servers**: `guides/restore-new-server`.
 3. **Quick install, one command**: the "Installation" section of the README (it exists only there).
 
-The "Getting started" sidebar group starts with the complete guide. The SSH warning ("REMOTE HOST
-IDENTIFICATION HAS CHANGED") is one alert with the same text in the complete guide, the
-installation guide, the restore guide and the README; the detailed explanation stays in the
-collapsed block `#host-identification-changed` of the installation guide. If you change the text in
-one place, change it in all of them, in both languages. The home page is plain Markdown (`.md`) on purpose. Starlight components such as `Card` only work in
+The sidebar has the group "Step-by-step guide" (Part 1, then Part 2), then "Getting started" (the
+security wizard and the restore guide). The SSH warning ("REMOTE HOST IDENTIFICATION HAS CHANGED")
+is one alert with the same text in Part 1, the restore guide and the README (it does not repeat in
+Part 2); the detailed explanation stays in the collapsed block `#host-identification-changed` of
+Part 1. If you change the text in one place, change it in all of them, in both languages. The home
+page is plain Markdown (`.md`) on purpose. Starlight components such as `Card` only work in
 `.mdx` files (Starlight already ships `@astrojs/mdx`); in an `.md` file the `import` line shows up as
 text, which is what the old home page did. The language selector comes from Starlight
 (header) and needs no configuration beyond `locales`.
+
+## The site address (changing the domain)
+
+The address is defined in **one place**: `site` and `const base` in `astro.config.mjs`. Everything
+inside the site derives from it: Starlight itself, the footer "Help and feedback" link
+(`src/components/Footer.astro`, built from the base), the remark plugin that rewrites `.md` links,
+and the scripts (`scripts/site-config.mjs` reads the file; no dependencies).
+
+Files outside the site cannot read the config, so they hold the absolute address as text. Today
+those are (`node scripts/check-site-url.mjs --list` prints the current list):
+
+- `README.md` and `README.pt-BR.md` (the links to the guides);
+- `.github/ISSUE_TEMPLATE/config.yml` and `.github/ISSUE_TEMPLATE/question.yml`;
+- the panel code, if it links to the help page (not checked by hand: the script scans `.ts`/`.tsx` too).
+
+The `/tws-panel/…` paths in the front matter of `index.md` (hero buttons) also hold the `base`.
+
+To move the site, change `site`/`base` in `astro.config.mjs`, then run:
+
+```bash
+pnpm docs:site-url                 # lists every absolute address that no longer matches the config
+sed -i 's#OLD_ADDRESS#NEW_ADDRESS#g' <the files it lists>   # then run it again
+pnpm docs:build && pnpm docs:links # every absolute URL must exist as a route in site/dist
+```
+
+`docs:site-url` treats as a site address any URL on the configured host or on any `*.github.io`
+host, so the old address is caught after the move. `docs:links` (run it after the build, with
+`--require-dist` in CI) opens `site/dist` and fails when a README or template links to a route or
+an anchor that does not exist. Both run in the `docs` workflow.
+
+## Help and feedback page
+
+`guides/help.md` (slug `help`) is the target of the panel's help menu and of the footer link, so
+keep the route `/<lang>/guides/help/`. It lists the channels (Discussions, bug report, feature
+request, private security report, contato@tws.tec.br) and how to anonymize logs. The ids of the
+bug report form that the panel pre-fills are `version`, `os` and `locale`
+(`.github/ISSUE_TEMPLATE/bug_report.yml`); do not rename them without changing the panel.
 
 ## Editorial rules
 
@@ -97,7 +144,7 @@ text, which is what the old home page did. The language selector comes from Star
 - **Interface note.** Every page that quotes the interface starts with the same `> [!NOTE]`:
   "Interface language", saying that the panel exists in English and Portuguese, which language the
   labels on the page are in, and which categories of server message are still in Portuguese. The
-  note links to the "Language" paragraph of the complete guide (`#idioma-da-interface`).
+  note links to the "Language" paragraph of Part 2 of the step-by-step guide (`complete-guide.md#idioma-da-interface`).
 - **Words the user types.** Some confirmation words depend on the language of the interface (for
   example `panel`/`email` or `painel`/`e-mail` to restore, and `restart` or `recomeçar` to start the
   wizard over). Read them from the dictionary (`restore.confirmWord.*`, `done.restart.confirmWord`)

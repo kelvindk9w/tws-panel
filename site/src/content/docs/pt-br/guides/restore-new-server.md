@@ -9,7 +9,7 @@ Use este guia quando a VPS antiga foi perdida, invadida ou será substituída, e
 os projetos e o e-mail de volta numa VPS nova. Ele depende da **cópia externa** dos backups
 (Cloudflare R2 ou outro armazenamento compatível com S3). Backups guardados só na VPS antiga somem
 junto com ela. Está instalando pela primeira vez, sem nada para trazer? Siga o
-[guia completo](../getting-started/complete-guide.md).
+[guia passo a passo](../getting-started/installation.md).
 
 > [!NOTE]
 > **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: registros de backup, avisos do servidor de e-mail e muitas mensagens de erro. Quando esta página cita uma delas, avisa. A palavra que você digita para confirmar uma restauração depende do idioma da interface (passos 5 e 8).
@@ -70,7 +70,7 @@ Se a VPS antiga usava outra pasta de projetos, instale com a mesma (`./scripts/i
 O painel novo vem com a agenda de backup ligada e roda às 03:00 mesmo sem armazenamento conectado. Isso é inofensivo: a cópia fica só na VPS e **não** conta como backup do painel para a proteção descrita no passo 3, que só considera backup já **enviado ao armazenamento**. Você pode instalar num dia e conectar o armazenamento em outro.
 
 Confira que as portas **80 e 443** estão abertas no provedor, e a **25** se você vai usar e-mail
-(veja o [Guia completo, Etapa 6.1](../getting-started/complete-guide.md#etapa-6)).
+(veja o [Guia passo a passo, Parte 2, Etapa 4.1](../getting-started/complete-guide.md#etapa-4)).
 
 ### 2. Faça um backup final e pare o painel antigo
 
@@ -234,10 +234,10 @@ IP novo. Depois disso, use **Tentar emitir agora** nessa mesma página.
    - o registro **SPF**, que contém o IP antigo (`ip4:`): copie o valor novo do checklist;
    - MX, DKIM e DMARC não mudam, porque os nomes e as chaves voltaram.
 3. Peça ao provedor para definir o **PTR** do IP novo como `mail.envio.example.com`.
-4. Confira que a porta 25 de saída está liberada ([Guia completo, Etapa 6.1](../getting-started/complete-guide.md#etapa-6)).
+4. Confira que a porta 25 de saída está liberada ([Guia passo a passo, Parte 2, Etapa 4.1](../getting-started/complete-guide.md#etapa-4)).
 
 **O que conferir:** clique em **Verificar agora** até chegar a **6/6 OK**, envie um e-mail de teste
-(Etapa 6.7 do guia completo) e veja **Válido** no cartão do certificado do e-mail. Envie devagar no
+(Etapa 4.7 da Parte 2 do guia passo a passo) e veja **Válido** no cartão do certificado do e-mail. Envie devagar no
 começo: o IP novo ainda não tem reputação.
 
 ## Conferências finais

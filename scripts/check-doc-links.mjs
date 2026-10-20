@@ -7,20 +7,25 @@
 //   - âncora (#...)    → existe um título ou <a id> correspondente no destino;
 //   - URL do próprio repositório (github.com/<repo>/blob|tree/main/…) → o
 //     arquivo/pasta existe localmente;
-//   - `link: /tws-panel/…` do frontmatter das páginas iniciais → a página existe.
+//   - `link: /tws-panel/…` do frontmatter das páginas iniciais → a página existe;
+//   - URL absoluta do próprio site (READMEs, .github/…; o endereço vem de site/astro.config.mjs)
+//     → existe a rota (e a âncora, se houver) no build em site/dist. Sem build, essa parte é
+//     pulada com um aviso; com --require-dist, a falta do build é erro.
 // Links http(s) externos não são acessados.
 //
-// Uso: node scripts/check-doc-links.mjs   (ou: pnpm docs:links)
+// Uso: node scripts/check-doc-links.mjs [--require-dist]   (ou: pnpm docs:links)
 // Sai com código 1 se houver link quebrado.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ROOT, readSiteConfig } from './site-config.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SITE = readSiteConfig();
+const DIST = path.join(ROOT, 'site', 'dist');
+const REQUIRE_DIST = process.argv.includes('--require-dist');
 const REPO_URL = /^https:\/\/github\.com\/kelvindk9w\/tws-panel\/(?:blob|tree)\/main\/?(.*)$/;
-const SITE_BASE = '/tws-panel/';
+const SITE_BASE = `${SITE.basePath}/`;
 const SKIP = [/^comoFuncionaSistema\//, /^docs\/internal\/phase1-evidence\//, /node_modules\//];
 
 const files = execFileSync('git', ['ls-files', '-co', '--exclude-standard', '*.md', '*.mdx'], { cwd: ROOT, encoding: 'utf8' })
@@ -87,7 +92,7 @@ for (const file of files) {
     if (fence) return;
     const noCode = text.replace(/`[^`]*`/g, '');
 
-    const hero = /^\s*link:\s*(\/tws-panel\/\S+)\s*$/.exec(text);
+    const hero = new RegExp(`^\\s*link:\\s*(${SITE_BASE}\\S+)\\s*$`).exec(text);
     if (hero) {
       const slug = hero[1].slice(SITE_BASE.length).replace(/\/$/, '');
       const candidates = [`site/src/content/docs/${slug}.md`, `site/src/content/docs/${slug}.mdx`, `site/src/content/docs/${slug}/index.md`];
@@ -106,7 +111,7 @@ for (const file of files) {
       }
       if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('//')) continue;
       if (url.startsWith('/')) {
-        if (!/^\/tws-panel\//.test(url)) report(file, line, `caminho absoluto não resolvível (${url})`);
+        if (!url.startsWith(SITE_BASE)) report(file, line, `caminho absoluto não resolvível (${url})`);
         continue;
       }
       const hashAt = url.indexOf('#');
@@ -118,9 +123,54 @@ for (const file of files) {
   });
 }
 
+// URLs absolutas do site: a rota (e a âncora) precisam existir no build.
+const distHtml = new Map();
+function distIds(file) {
+  if (!distHtml.has(file)) {
+    const ids = new Set();
+    for (const m of readFileSync(file, 'utf8').matchAll(/\bid="([^"]+)"/g)) ids.add(m[1]);
+    distHtml.set(file, ids);
+  }
+  return distHtml.get(file);
+}
+const haveDist = existsSync(DIST);
+if (!haveDist) {
+  if (REQUIRE_DIST) problems.push('site/dist não existe: rode `pnpm docs:build` antes (--require-dist)');
+  else console.warn('Aviso: site/dist não existe; URLs absolutas do site não foram conferidas contra o build.');
+}
+const absFiles = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], { cwd: ROOT, encoding: 'utf8' })
+  .split('\n')
+  .filter((f) => f && /\.(md|mdx|ya?ml)$/.test(f) && !SKIP.some((re) => re.test(f)) && existsSync(path.join(ROOT, f)));
+let absCount = 0;
+for (const file of absFiles) {
+  readFileSync(path.join(ROOT, file), 'utf8')
+    .split('\n')
+    .forEach((text, i) => {
+      for (const m of text.matchAll(/https?:\/\/[A-Za-z0-9.-]+[^\s)>"'`\]<]*/g)) {
+        const url = m[0].replace(/[.,;:]+$/, '');
+        if (!url.startsWith(SITE.root)) continue;
+        absCount++;
+        if (!haveDist) continue;
+        const rest = url.slice(SITE.root.length);
+        const hashAt = rest.indexOf('#');
+        const route = (hashAt === -1 ? rest : rest.slice(0, hashAt)).split('?')[0];
+        const hash = hashAt === -1 ? '' : decodeURIComponent(rest.slice(hashAt + 1));
+        if (route !== '' && !route.endsWith('/')) {
+          report(file, i + 1, `URL do site sem barra final (${url}); o site usa trailingSlash: 'always'`);
+          continue;
+        }
+        const html = path.join(DIST, route, 'index.html');
+        if (!existsSync(html)) report(file, i + 1, `URL do site sem rota no build (${url})`);
+        else if (hash && !distIds(html).has(hash)) report(file, i + 1, `URL do site com âncora inexistente no build (${url})`);
+      }
+    });
+}
+
 if (problems.length) {
   console.error(`${problems.length} problema(s) em ${files.length} arquivo(s):\n`);
   for (const p of problems) console.error(`  ${p}`);
   process.exit(1);
 }
-console.log(`OK: ${files.length} arquivo(s) Markdown, nenhum link interno quebrado.`);
+console.log(
+  `OK: ${files.length} arquivo(s) Markdown, nenhum link interno quebrado${haveDist ? `; ${absCount} URL(s) absoluta(s) do site conferida(s) contra o build` : ''}.`,
+);

@@ -1,19 +1,18 @@
 ---
-title: "Instalação passo a passo"
-description: "Instale o TWS Panel numa VPS Ubuntu limpa: crie um usuário, configure a chave SSH, rode o instalador e abra o assistente de configuração."
+title: "Guia passo a passo — Parte 1: Instalar"
+description: "Parte 1 do guia passo a passo: instale o TWS Panel numa VPS Ubuntu limpa, crie um usuário, configure a chave SSH, rode o instalador e abra o assistente de configuração."
 sidebar:
-  label: "Instalação (passos 1 a 8)"
+  label: "Parte 1: Instalar"
 ---
 
-Guia completo para instalar o TWS Panel numa VPS limpa, do zero até o assistente de
+Parte 1 do guia passo a passo: instalar o TWS Panel numa VPS limpa, do zero até o assistente de
 configuração (wizard). O [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md) tem a versão curta; este guia explica cada
 passo, o que aparece na tela e o que fazer quando algo dá errado.
 
 > [!TIP]
-> **Qual guia eu uso?** Este cobre **só a instalação**, Passos 1 a 8, com cada comando explicado.
-> Se você quer a jornada inteira, da VPS ao painel configurado e a uma restauração testada, siga o
-> [guia completo](complete-guide.md): ele volta para cá nos detalhes da instalação. Está mudando
-> para um servidor novo? Veja [Restaurar numa VPS nova](../guides/restore-new-server.md).
+> **Dois guias, um caminho só.** Esta é a **Parte 1 (Instalar)**, Passos 1 a 8, da VPS até o assistente aberto.
+> A [Parte 2 (Configurar)](complete-guide.md) continua daí: segurança, domínio, e-mail, backups e o primeiro projeto.
+> Está mudando para um servidor novo? Veja [Restaurar numa VPS nova](../guides/restore-new-server.md).
 
 > [!NOTE]
 > **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. O instalador e os scripts imprimem em português. Algumas mensagens que vêm do servidor também ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, alertas e detalhes da auditoria e muitas mensagens de erro.
@@ -33,12 +32,54 @@ esses números.
 | [8](#passo-8) | Navegador | Abrir o painel e seguir o wizard |
 
 Depois do Passo 8, a etapa de Segurança do wizard tem um guia próprio:
-[Wizard de segurança](security-wizard.md).
+[Wizard de segurança](security-wizard.md). Em seguida, a [Parte 2](complete-guide.md) continua a configuração.
 
 ## Antes de começar
 
+### O que contratar
+
+**Uma VPS** (servidor virtual) com:
+
+- **Ubuntu 22.04 ou 24.04 LTS**, limpa (sem outros programas instalados). Na criação, prefira o
+  24.04.
+- Mínimo recomendado: **1 vCPU, 2 GB de RAM e 25 GB de disco**.
+- Portas **80 e 443** abertas para a internet. O certificado HTTPS depende delas. Se o provedor
+  tem um firewall no painel da hospedagem, libere as duas.
+- Para o e-mail: a porta **25** liberada pelo provedor. Muitos provedores a bloqueiam, principalmente
+  em contas novas. Você confere isso na [Etapa 4 da Parte 2](complete-guide.md#etapa-4).
+
+Você vai precisar de duas coisas que o provedor entrega: **o IP da VPS** e **a senha de root**.
+Antes de seguir, procure no painel do provedor por "Console", "VNC", "Rescue" ou "Modo de
+recuperação" e confirme que ele existe: é o caminho de volta se você perder o acesso SSH. Veja
+[Perdi o acesso](../guides/recover-access.md).
+
 > [!NOTE]
-> **Único pré-requisito:** uma VPS com Ubuntu 22.04 ou 24.04 LTS limpa. Docker, Node e todo o resto são instalados automaticamente — basta seguir os passos abaixo, na ordem.
+> Docker, Node e o resto **não** precisam ser instalados por você: o instalador cuida disso. Basta
+> seguir os passos abaixo, na ordem.
+
+### Domínio (opcional, mas recomendado)
+
+Sem domínio, tudo funciona com endereços automáticos `*.sslip.io` (por exemplo,
+`https://203-0-113-10.sslip.io`). Com um domínio seu, você ganha:
+
+- um endereço próprio para o painel (`painel.example.com`), em vez de um com o IP no nome;
+- o e-mail profissional, que **exige** domínio;
+- endereços próprios para os seus projetos.
+
+Você vai criar registros no DNS do domínio (no provedor onde ele está, ou no Cloudflare). Os
+exemplos da Parte 2 usam o Cloudflare. Pode deixar o domínio para depois: nada na Parte 1 depende dele.
+
+### Contas
+
+| Conta | Para quê | Obrigatória? |
+|---|---|---|
+| **GitHub** | Publicar projetos a partir de um repositório. Repositório privado pede um token somente leitura (a tela ensina a gerar). | Só se o código está no GitHub |
+| **Cloudflare** | O R2, o armazenamento externo dos backups (o plano gratuito cobre 10 GB por mês; ele pede um cartão). Também serve de DNS do domínio. | Recomendada |
+| **Telegram** | Receber os avisos do painel no celular. | Opcional |
+
+Nenhuma delas é usada na Parte 1; você só precisa delas na Parte 2.
+
+### Reinstalou a VPS?
 
 > [!WARNING]
 > **Reinstalou o sistema da VPS, ou reinstalou para testar de novo, e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da VPS), conecte de novo e responda `yes`. [Mensagem completa e detalhes](#host-identification-changed) (bloco recolhido logo abaixo).
@@ -152,7 +193,7 @@ Depois disso é só seguir do Passo 1 em diante, como numa VPS nova — porque a
 
 ## Passo 1 — Contrate uma VPS
 
-Contrate uma VPS com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco).
+Contrate uma VPS com Ubuntu 24.04 LTS (mínimo recomendado: 1 vCPU / 2 GB RAM / 25 GB de disco), conforme os requisitos de [Antes de começar](#antes-de-começar).
 
 > [!NOTE]
 > **Nunca contratou uma VPS antes?** Este guia começa no momento em que você já tem **um IP e uma
@@ -1158,3 +1199,7 @@ backups). Os passos estão no [README](https://github.com/kelvindk9w/tws-panel/b
 Para publicar um projeto: cadastre o projeto, aponte o DNS, e o painel cuida do build, do proxy e
 do SSL. Guia de produção em [production.md](../guides/production.md). Comandos do dia a dia, pasta dos
 projetos e troca de porta ou de usuário do terminal estão em [Operação](../guides/operations.md).
+
+> [!TIP]
+> **Próximo: [Parte 2 — Configurar](complete-guide.md).** Com o assistente concluído, siga para a segurança
+> (hardening), a verificação em duas etapas, o domínio, o e-mail, as notificações, os backups e o primeiro projeto.

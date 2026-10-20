@@ -21,6 +21,7 @@
     "docs:dev": "pnpm --filter site run dev",
     "docs:build": "pnpm --filter site run build",
     "docs:links": "node scripts/check-doc-links.mjs",
+    "docs:site-url": "node scripts/check-site-url.mjs",
     "test:mail": "tsx scripts/test-mail.mts",
     "test:fase4": "tsx scripts/test-fase4.mts",
     "test": "pnpm run test:unit",
