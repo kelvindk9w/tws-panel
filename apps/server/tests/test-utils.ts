@@ -26,7 +26,7 @@ export interface AuthTestContext {
 
 export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
-  opts: { now?: () => number; trustProxy?: boolean } = {},
+  opts: { now?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean) } = {},
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
   // Mesmas opções de validação da produção (app.ts), para que os testes de
