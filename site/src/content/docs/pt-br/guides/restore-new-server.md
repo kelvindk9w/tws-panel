@@ -182,9 +182,10 @@ projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7
      copie o **conteúdo** de `src/` para a origem:
 
      ```bash
-     sudo mkdir -p <ORIGEM> /tmp/x
-     sudo tar -xf codigo.tar -C /tmp/x
-     sudo cp -a /tmp/x/src/. <ORIGEM>/
+     sudo mkdir -p <ORIGEM>
+     TMP=$(mktemp -d)
+     sudo tar -xf codigo.tar -C "$TMP"
+     sudo cp -a "$TMP"/src/. <ORIGEM>/
      ```
 
    - **Criado a partir de uma pasta do servidor** (o tar traz uma pasta com o nome da própria
@@ -203,9 +204,15 @@ projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7
    código por cima da pasta mais uma vez.
 
 > [!NOTE]
-> Este caminho foi escrito pela leitura do código e não foi executado numa VPS real. Em especial,
-> não confirmei se o painel recusa uma pasta de origem fora da pasta de projetos; ele apenas não a
-> enxerga.
+> O painel só aceita uma pasta de origem dentro da pasta de projetos: ele recusa qualquer outra ao
+> criar ou alterar o projeto (`source_outside_projects_dir`), e a pasta de projetos é a única pasta
+> do host que ele enxerga.
+>
+> No modo upload, o arquivo `.env` com as variáveis do projeto, gerado pelo painel, vem junto no tar
+> e vai para a origem (permissão 0600, dono 10001). No próximo deploy o painel o reconhece como
+> dele e grava as variáveis atuais por cima.
+>
+> Este caminho foi deduzido do código e não foi testado numa VPS real.
 
 ### 8. Restaure o e-mail por último
 

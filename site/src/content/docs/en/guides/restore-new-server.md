@@ -183,9 +183,10 @@ projects registered (step 5) and before you click **Restaurar** in step 7:
      copy the **contents** of `src/` to the origin:
 
      ```bash
-     sudo mkdir -p <ORIGIN> /tmp/x
-     sudo tar -xf codigo.tar -C /tmp/x
-     sudo cp -a /tmp/x/src/. <ORIGIN>/
+     sudo mkdir -p <ORIGIN>
+     TMP=$(mktemp -d)
+     sudo tar -xf codigo.tar -C "$TMP"
+     sudo cp -a "$TMP"/src/. <ORIGIN>/
      ```
 
    - **Created from a folder on the server** (the tar holds a folder with the folder's own name,
@@ -204,9 +205,15 @@ projects registered (step 5) and before you click **Restaurar** in step 7:
    code back over the folder once more.
 
 > [!NOTE]
-> This workaround was written by reading the code and has not been run on a real VPS. In particular,
-> I did not confirm that the panel refuses a source folder outside the projects folder; it just
-> cannot see it.
+> The panel only accepts a source folder inside the projects folder: it refuses any other one when
+> the project is created or changed (`source_outside_projects_dir`), and the projects folder is the
+> only host folder it can see.
+>
+> In upload mode, the `.env` file with the project's variables that the panel generated comes along
+> in the tar and goes to the origin (permissions 0600, owner 10001). On the next deploy the panel
+> recognizes it as its own and writes the current variables over it.
+>
+> This workaround was derived from the code and has not been tested on a real VPS.
 
 ### 8. Restore the email last
 
