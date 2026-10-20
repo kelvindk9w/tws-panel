@@ -11,9 +11,10 @@ This document explains the panel's security model. To carry out the VPS hardenin
 
 ## What the panel protects
 
-The panel was designed with security in mind: a wizard protected by a single-use token, Docker
-socket never exposed over TCP, same-origin CORS by default, rate limiting, schema validation on
-all API routes, logs with secret redaction and auditing of all sensitive actions.
+The panel was designed with security in mind: a wizard protected by a setup token (it stops working, and its file is deleted,
+when the setup finishes), Docker socket not exposed over TCP, same-origin CORS by default, rate
+limiting, schema validation on API routes, logs with secret redaction and an audit log of
+sensitive actions.
 
 - **Deploy guardrails:** 6 rules in 3 levels (`block`, `warn`, `info`) — database port exposed
   on the host, weak credentials, privileged container, dev service in production, secret committed

@@ -700,15 +700,14 @@ a few minutes, not even that (it "remembers" that you authenticated).
 Clone into `/opt` and give ownership of the folder to your user:
 
 ```bash
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
+cd /opt/tws-panel
 ```
 
 > [!TIP]
-> The clone starts on the `dev` branch (the repository's default, used by contributors). For
-> **real use**, always use `main` — it only receives validated and tested code. Want to help with
-> development? Stay on `dev` (see [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/CONTRIBUTING.md)).
+> The command above clones the `main` branch, which is the one to use in **real use**: it only
+> receives validated and tested code. Want to help with development? Use the `dev` branch instead (see [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/CONTRIBUTING.md)).
 
 <a id="passo-7"></a>
 

@@ -690,15 +690,14 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 Clone em `/opt` e dê a propriedade da pasta ao seu usuário:
 
 ```bash
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
+cd /opt/tws-panel
 ```
 
 > [!TIP]
-> O clone começa na branch `dev` (default do repositório, usada pelos contribuidores). Para
-> **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
-> desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md)).
+> O comando acima clona a branch `main`, que é a que se usa em **uso real**: ela só recebe
+> código validado e testado. Quer ajudar no desenvolvimento? Use a branch `dev` (veja o [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md)).
 
 <a id="passo-7"></a>
 

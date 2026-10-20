@@ -11,9 +11,10 @@ Este documento explica o modelo de segurança do painel. Para conduzir o hardeni
 
 ## O que o painel protege
 
-O painel foi desenhado com segurança em mente: wizard protegido por token de uso único, Docker
-socket nunca exposto via TCP, CORS same-origin por padrão, rate limiting, validação de schema em
-todas as rotas da API, logs com redação de segredos e auditoria de todas as ações sensíveis.
+O painel foi desenhado com segurança em mente: wizard protegido por um setup token (ele deixa de valer, e o arquivo é apagado,
+quando o setup termina), Docker socket não exposto via TCP, CORS same-origin por padrão, rate
+limiting, validação de schema nas rotas da API, logs com redação de segredos e log de auditoria
+das ações sensíveis.
 
 - **Guardrails de deploy:** 6 regras em 3 níveis (`block`, `warn`, `info`) — porta de banco exposta
   no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado

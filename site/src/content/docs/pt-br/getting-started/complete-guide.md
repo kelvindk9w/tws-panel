@@ -100,9 +100,9 @@ ssh-copy-id -i ~/.ssh/id_ed25519.pub SEU_USUARIO@SEU_IP
 # 3. Na VPS, com o seu usuário: instale o git, clone e rode o instalador
 ssh SEU_USUARIO@SEU_IP
 sudo apt update && sudo apt install -y git
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
+cd /opt/tws-panel
 ./scripts/install.sh
 ```
 
