@@ -186,7 +186,11 @@ projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7
      TMP=$(mktemp -d)
      sudo tar -xf codigo.tar -C "$TMP"
      sudo cp -a "$TMP"/src/. <ORIGEM>/
+     head -1 <ORIGEM>/.env | grep -q '^# Gerado pelo painel' && sudo rm <ORIGEM>/.env
      ```
+
+     A última linha apaga o `.env` que o painel gerou (ele começa com o comentário "Gerado pelo
+     painel"), e só ele: um `.env` escrito pelo dono do projeto não tem esse cabeçalho e fica.
 
    - **Criado a partir de uma pasta do servidor** (o tar traz uma pasta com o nome da própria
      pasta, por exemplo `meusite/`): extraia na pasta pai da origem:
@@ -208,9 +212,10 @@ projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7
 > criar ou alterar o projeto (`source_outside_projects_dir`), e a pasta de projetos é a única pasta
 > do host que ele enxerga.
 >
-> No modo upload, o arquivo `.env` com as variáveis do projeto, gerado pelo painel, vem junto no tar
-> e vai para a origem (permissão 0600, dono 10001). No próximo deploy o painel o reconhece como
-> dele e grava as variáveis atuais por cima.
+> No modo upload, o arquivo `.env` com as variáveis do projeto, gerado pelo painel, vem junto no
+> tar. Esse `.env` gerado não deve ficar na origem: o painel gera um novo no deploy. Se ele ficasse,
+> cada deploy copiaria de volta os valores antigos, e um compose com `env_file: .env` continuaria
+> lendo esses valores.
 >
 > Este caminho foi deduzido do código e não foi testado numa VPS real.
 

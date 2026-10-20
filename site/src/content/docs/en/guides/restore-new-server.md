@@ -187,7 +187,12 @@ projects registered (step 5) and before you click **Restaurar** in step 7:
      TMP=$(mktemp -d)
      sudo tar -xf codigo.tar -C "$TMP"
      sudo cp -a "$TMP"/src/. <ORIGIN>/
+     head -1 <ORIGIN>/.env | grep -q '^# Gerado pelo painel' && sudo rm <ORIGIN>/.env
      ```
+
+     The last line removes the `.env` that the panel generated (it starts with the comment
+     "Gerado pelo painel"), and only that one: a `.env` written by the project's owner has no such
+     header and stays.
 
    - **Created from a folder on the server** (the tar holds a folder with the folder's own name,
      for example `meusite/`): extract it into the parent of the origin:
@@ -210,8 +215,9 @@ projects registered (step 5) and before you click **Restaurar** in step 7:
 > only host folder it can see.
 >
 > In upload mode, the `.env` file with the project's variables that the panel generated comes along
-> in the tar and goes to the origin (permissions 0600, owner 10001). On the next deploy the panel
-> recognizes it as its own and writes the current variables over it.
+> in the tar. That generated `.env` must not stay in the origin: the panel generates a new one at
+> deploy. If it stayed, every deploy would copy the old values back, and a compose file with
+> `env_file: .env` would keep reading them.
 >
 > This workaround was derived from the code and has not been tested on a real VPS.
 
