@@ -54,7 +54,7 @@ atuação como representante designado em um evento online ou presencial.
 ## Aplicação
 
 Casos de comportamento abusivo, de assédio ou de outra forma inaceitável podem ser reportados aos
-líderes da comunidade responsáveis pela aplicação em `<CONTACT>`.
+líderes da comunidade responsáveis pela aplicação em [contato@tws.tec.br](mailto:contato@tws.tec.br).
 
 Todas as reclamações serão analisadas e investigadas com rapidez e imparcialidade.
 
