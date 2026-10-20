@@ -1,12 +1,18 @@
 ---
-title: "Troubleshooting"
+title: "Solução de problemas"
+description: "Soluções para problemas comuns: porta 25 bloqueada, e-mail em spam, certificado que não sai, painel que não abre, acesso SSH perdido e deploy bloqueado."
+sidebar:
+  label: "Solução de problemas"
 ---
 
-Problemas prováveis ao rodar o paas em uma VPS real e como resolver cada um.
+Problemas prováveis ao rodar o TWS Panel em uma VPS real e como resolver cada um.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 ---
 
-## 📧 E-mail
+## E-mail
 
 ### Porta 25 bloqueada pelo provedor
 
@@ -29,7 +35,7 @@ Gmail e Outlook).
 **Diagnóstico (nesta ordem):**
 1. Envie para [mail-tester.com](https://www.mail-tester.com) — ele aponta exatamente o que
    está faltando. Alvo: ≥ 9/10.
-2. Abra o **checklist DNS** do domínio no painel e clique em "verificar": A, MX, SPF, DKIM e
+2. Abra o **checklist DNS** do domínio no painel e clique em **Verificar agora**: A, MX, SPF, DKIM e
    DMARC precisam estar ✅.
 3. **PTR amarelo** (sem nome reverso válido) é a causa nº 1: só o provedor da VPS configura. O
    card do PTR diz onde trocar (Contabo, Hetzner, Vultr) ou gera o texto pronto do chamado.
@@ -57,9 +63,9 @@ instala e renova o certificado sozinho.
 
 ---
 
-## 🌐 Domínios e SSL
+## Domínios e SSL
 
-### Caddy não emite certificado ("DNS não propagado")
+### Caddy não emite certificado
 
 **Sintomas:** site no ar só em HTTP, erro de ACME nos logs do container `paas-caddy`
 (`docker logs paas-caddy`).
@@ -67,11 +73,12 @@ instala e renova o certificado sozinho.
 **Causa:** o registro A do domínio ainda não aponta para a VPS (ou a propagação não terminou).
 
 **Solução:**
-1. Use o botão **"verificar DNS"** no painel antes de emitir o certificado;
+1. Use o botão **Verificar DNS** no painel antes de emitir o certificado;
 2. Confira manualmente: `dig +short seudominio.com` deve retornar o IP da VPS;
 3. Se acabou de criar o registro, aguarde a propagação (minutos a horas, dependendo do TTL);
 4. Se houver proxy na frente (ex.: Cloudflare com nuvem laranja), desative-o para a emissão
-   inicial ou use o modo DNS-01 — o Caddy central espera conexão direta nas portas 80/443;
+   inicial. O painel não tem modo DNS-01: o Caddy central espera conexão direta nas portas 80/443.
+   Depois que o certificado sair, use **Tentar emitir agora** na página **Certificados** se ele ainda estiver pendente;
 5. Verifique se o UFW/liberação do provedor permite 80 e 443.
 
 ### Domínio `.localhost` não abre
@@ -84,7 +91,7 @@ nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/ho
 
 ---
 
-## 🛠️ Painel e wizard
+## Painel e wizard
 
 ### Painel não abre depois do `install.sh`
 
@@ -130,7 +137,7 @@ automática (via `at`) que restaura a configuração anterior em ~5 minutos **se
 confirmar o acesso** pelo painel. Aguarde o rollback, entre novamente e revise o plano de
 correções antes de reaplicar. Cada arquivo alterado tem backup em `/var/backups/paas/`.
 Perdeu a chave, a senha ou o celular da verificação em duas etapas? Veja
-[Perdi o acesso — e agora?](recover-access.md).
+[Perdi o acesso: e agora?](recover-access.md).
 
 ### Deploy bloqueado por guardrail
 
@@ -144,7 +151,7 @@ Auditoria (`guardrail.override`).
 
 ---
 
-## 🐳 Docker
+## Docker
 
 ### "Cannot connect to the Docker daemon"
 

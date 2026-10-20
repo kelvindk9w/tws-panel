@@ -1,9 +1,15 @@
 ---
 title: "Features"
+description: "What each TWS Panel module does: deploys, certificates, panel domain, email, notifications, backups, security and the web terminal."
+sidebar:
+  label: "Features"
 ---
 
 What TWS Panel does, module by module. The [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md) has the short list; here is
-the detail on each part. The examples use placeholder values (`example.com`, `203.0.113.10`). The panel interface is currently available only in Portuguese, so on-screen labels are shown as they appear, followed by the English translation in parentheses on first mention.
+the detail on each part. The examples use placeholder values (`example.com`, `203.0.113.10`).
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 - [Project deploys](#deploy)
 - [Container ports](#portas)
@@ -52,6 +58,8 @@ E-mail, Backups and Configurações (Settings).
   with the last lines of the service that became unhealthy and the last healthcheck results.
 - **Environment variables** encrypted on the server and injected at deploy time. The screen lists the variables
   the compose file asks for, imports a `.env` and blocks the deploy when a required one is missing.
+  A `.env` that belongs to the repository is never overwritten: the panel's variables go to
+  a separate file, and the deploy log explains the conflict.
 - **Git:** editable repository and branch; the screen shows which branch is actually live.
 - **Multiple environments:** the same repository can run more than once, on different branches and domains
   (production on `main`, sandbox on another branch), side by side on the same VPS. Each
@@ -144,7 +152,7 @@ your projects can send messages and for mailboxes such as `contato@`.
 
 **Webmail.** With one click, `https://mail.<domain>/` starts opening a webmail (**Roundcube**) in
 Portuguese to read, reply and send as the mailbox itself. The session ends after 10
-minutes of inactivity, and 10 wrong passwords lock you out for 1 hour.
+minutes of inactivity, and 10 failed logins from the same IP within 10 minutes block that IP for 1 hour, in the webmail only.
 
 **Envios** (Sends) (`/mail/envios`): what the mail server is doing.
 
@@ -206,14 +214,15 @@ In **Configurações → Backups** (Settings → Backups) and in each project's 
   to download and reminds you every 90 days to test the password.
 - Each external copy is downloaded back and verified before the old ones are deleted.
 
-**When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS timezone, with
+**When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS time zone, with
 the number of copies kept on the VPS and externally. **Fazer backup agora** (Back up now) at any time.
 
 **Restore.**
 
 - Per item (project, panel or email), choosing the date and the copy (VPS or external).
 - **Restaurar de outro servidor** (Restore from another server): on a new VPS, you connect the same storage, enter the
-  password and the panel lists what exists, in the right order.
+  password and the panel lists what exists, in the right order. Step-by-step:
+  [Restore on a new VPS](restore-new-server.md).
 - If you cannot get into the panel, over SSH:
   `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
 
@@ -226,12 +235,18 @@ the number of copies kept on the VPS and externally. **Fazer backup agora** (Bac
   minimization, auditing and additional hardening), with a dry run and a backup of each file. The
   phases that touch access schedule an **automatic rollback** after 5 minutes. Also available
   after installation, in **Segurança → Proteções** (Security → Protections). Guide: [Security wizard](../getting-started/security-wizard.md).
-- **Deploy guardrails:** 6 rules in 3 levels (`block`, `warn`, `info`) — exposed database port,
-  weak credentials, privileged container, dev service in production, committed secret
-  and `:latest` tag. A block only passes with an explicit, audited override.
+- **Deploy guardrails:** rules in 3 levels (`block`, `warn`, `info`) — exposed database port,
+  weak credentials, dev service in production, committed secret and `:latest` tag. A block only
+  passes with an explicit, audited override. The compose file is also checked the way Docker
+  runs it, against a list of what is allowed (no privileged container, no `docker.sock`, no bind
+  outside the project folder, no access to the panel's networks). The rules that protect the
+  panel itself have no override.
+- **Isolation:** the panel, the mail server and the projects sit on separate Docker networks, and
+  the proxy only trusts forwarded headers from Caddy. Details in
+  [Network migration](network-migration.md).
 - **Monitoring:** a baseline records packages, ports and hashes of critical files; recurring
   scans compare against it, and each change becomes an alert.
-- **Alert center** and **audit log** of all sensitive actions.
+- **Alert center** and **audit log** of sensitive actions.
 - **Machine health:** CPU, memory, disk and network.
 - **Login:** administrator account with a strong password (argon2id), revocable sessions and an attempt
   limit. **Two-step verification** (6-digit code from an authenticator app) with 10

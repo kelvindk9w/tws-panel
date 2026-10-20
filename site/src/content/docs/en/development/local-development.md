@@ -1,5 +1,8 @@
 ---
 title: "Development and architecture"
+description: "Run the panel on your own computer and learn how the monorepo, the modules and the documentation site are organized."
+sidebar:
+  label: "Local development"
 ---
 
 How to run the panel on your computer and how the code is organized. To contribute (standards,

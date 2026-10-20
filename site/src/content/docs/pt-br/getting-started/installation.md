@@ -1,10 +1,16 @@
 ---
 title: "Instalação passo a passo"
+description: "Instale o TWS Panel numa VPS Ubuntu limpa: crie um usuário, configure a chave SSH, rode o instalador e abra o assistente de configuração."
+sidebar:
+  label: "Instalação"
 ---
 
 Guia completo para instalar o TWS Panel numa VPS limpa, do zero até o assistente de
 configuração (wizard). O [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md) tem a versão curta; este guia explica cada
 passo, o que aparece na tela e o que fazer quando algo dá errado.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 Os passos são numerados de 1 a 8. Os scripts do painel (`install.sh`, `uninstall.sh`) citam
 esses números.
@@ -593,7 +599,7 @@ Se você entrar **sem que ele peça a senha da conta**, está funcionando. Ele p
   linhas. Assim, perder um dispositivo não te deixa sem acesso.
 
 **Se você já perdeu a chave** — ou a senha, ou o acesso ao painel — veja
-[Perdi o acesso — e agora?](../guides/recover-access.md), que cobre cada caso e o caminho de volta.
+[Perdi o acesso: e agora?](../guides/recover-access.md), que cobre cada caso e o caminho de volta.
 
 </details>
 
@@ -690,15 +696,14 @@ alguns minutos, nem isso (ele "lembra" que você se autenticou).
 Clone em `/opt` e dê a propriedade da pasta ao seu usuário:
 
 ```bash
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
+cd /opt/tws-panel
 ```
 
 > [!TIP]
-> O clone começa na branch `dev` (default do repositório, usada pelos contribuidores). Para
-> **uso real**, sempre use a `main` — ela só recebe código validado e testado. Quer ajudar no
-> desenvolvimento? Fique na `dev` (veja o [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md)).
+> O comando acima clona a branch `main`, que é a que se usa em **uso real**: ela só recebe
+> código validado e testado. Quer ajudar no desenvolvimento? Use a branch `dev` (veja o [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md)).
 
 <a id="passo-7"></a>
 
@@ -722,8 +727,7 @@ escolher porta.
 > navegador abre o painel com o cadeado, sem aviso de "Não seguro". O painel em si escuta só
 > dentro da VPS: de fora, quem atende é o proxy, nas portas 80 e 443.
 >
-> Para o certificado sair, as portas **80 e 443 precisam estar abertas** para a internet. Na
-> Contabo (e na maioria das VPS) elas já vêm abertas. Se o seu provedor tiver um firewall no
+> Para o certificado sair, as portas **80 e 443 precisam estar abertas** para a internet. Na maioria das VPS elas já vêm abertas. Se o seu provedor tiver um firewall no
 > painel da hospedagem, libere as duas antes de instalar. O instalador espera o certificado
 > ficar pronto (até 3 minutos) e, se ele não sair, diz o motivo mais provável e mostra o acesso
 > por túnel como alternativa.
@@ -1035,17 +1039,17 @@ leva o **setup token** no link; se precisar, o token também aparece em destaque
 o wizard:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Assistente — https://SEU-IP.sslip.io/?token=…              │
-├─────────────────────────────────────────────────────────────┤
-│  1. Boas-vindas      → valida o setup token e libera o      │
-│                        terminal ao vivo do servidor         │
-│  2. Saúde da máquina → CPU, RAM, disco, rede — os checks    │
-│                        rodam AO VIVO no terminal embutido   │
-│  3. Segurança        → scan Lynis → plano → hardening       │
-│                        (com rollback automático em 5 min)   │
-│  4. Conta admin      → usuário + senha forte do painel      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  Assistente — https://SEU-IP.sslip.io/?token=…                       │
+├──────────────────────────────────────────────────────────────────────┤
+│  1. Boas-vindas e token    → valida o setup token e libera o         │
+│                              terminal ao vivo do servidor            │
+│  2. Saúde da máquina       → CPU, RAM, disco, rede — os checks       │
+│                              rodam AO VIVO no terminal embutido      │
+│  3. Segurança              → scan Lynis → plano → hardening          │
+│                              (com rollback automático em 5 min)      │
+│  4. Conta de administrador → usuário + senha forte do painel         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 A etapa **Segurança** é a que exige mais atenção: ela mexe em como você entra na VPS. Antes de

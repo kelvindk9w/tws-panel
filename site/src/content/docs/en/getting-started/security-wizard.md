@@ -1,10 +1,16 @@
 ---
 title: "Security wizard"
+description: "How to apply the eight hardening phases of the setup wizard safely, with the confirmation test and the automatic rollback."
+sidebar:
+  label: "Security wizard"
 ---
 
 How to walk through the **Segurança** (Security) step of the setup wizard (see [Step 8](installation.md#passo-8)
 of the installation). The same phases remain available after installation, under
 **Segurança → Proteções** (Security → Protections) (`/security/hardening`), so you can review, simulate or reapply them.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 ## How it works
 
@@ -89,7 +95,7 @@ replace the test in the new window**: phase 01 only locks the root password if i
 SSH key installed, and phase 02 refuses to run (with an error) if the given user does not exist
 or has no key. They are safety nets, not proof that your specific access works.
 
-If something still goes wrong, see [I lost access — now what?](../guides/recover-access.md).
+If something still goes wrong, see [I lost access: now what?](../guides/recover-access.md).
 
 ## Before you run: phases that deserve attention
 

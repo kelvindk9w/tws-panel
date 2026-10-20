@@ -1,15 +1,21 @@
 ---
 title: "Do zero ao painel pronto"
+description: "Um roteiro único, em ordem, da VPS nova ao painel configurado: segurança, domínio, e-mail, notificações, backups, primeiro projeto e teste de restauração."
+sidebar:
+  label: "Guia completo"
 ---
 
 Um roteiro só, em ordem, da VPS contratada até o painel configurado por completo: segurança,
 domínio, fuso, e-mail, notificações, backups, o primeiro projeto no ar e uma restauração de teste.
 
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+
 Cada passo diz **o que fazer**, **onde clicar** e **o que conferir** para saber que deu certo.
 Quando o detalhe é longo, o passo resume e manda para o guia certo. Siga na ordem: alguns passos
 dependem dos anteriores (as notificações por e-mail, por exemplo, precisam do e-mail pronto).
 
-Os exemplos usam valores fictícios: `203.0.113.10` como IP da VPS e `exemplo.com.br` como domínio.
+Os exemplos usam valores fictícios: `203.0.113.10` como IP da VPS e `example.com` como domínio.
 Troque pelos seus.
 
 | Etapa | O que você faz | Onde |
@@ -47,9 +53,8 @@ Troque pelos seus.
 - Mínimo recomendado: **1 vCPU, 2 GB de RAM e 25 GB de disco**.
 - Portas **80 e 443** abertas para a internet. O certificado HTTPS depende delas. Se o provedor
   tem um firewall no painel da hospedagem, libere as duas.
-- Para o e-mail: a porta **25** liberada pelo provedor. Muitos bloqueiam em contas novas
-  (DigitalOcean, Vultr, Hetzner em contas novas, AWS, Google Cloud, Azure). Você confere isso na
-  [Etapa 6](#etapa-6).
+- Para o e-mail: a porta **25** liberada pelo provedor. Muitos provedores a bloqueiam, principalmente
+  em contas novas. Você confere isso na [Etapa 6](#etapa-6).
 
 Você vai precisar de duas coisas que o provedor entrega: **o IP da VPS** e **a senha de root**.
 Antes de seguir, procure no painel do provedor por "Console", "VNC", "Rescue" ou "Modo de
@@ -63,7 +68,7 @@ Docker, Node e o resto **não** precisam ser instalados por você: o instalador 
 Sem domínio, tudo funciona com endereços automáticos `*.sslip.io` (por exemplo,
 `https://203-0-113-10.sslip.io`). Com um domínio seu, você ganha:
 
-- um endereço próprio para o painel (`painel.exemplo.com.br`), em vez de um com o IP no nome;
+- um endereço próprio para o painel (`painel.example.com`), em vez de um com o IP no nome;
 - o e-mail profissional, que **exige** domínio;
 - endereços próprios para os seus projetos.
 
@@ -100,9 +105,9 @@ ssh-copy-id -i ~/.ssh/id_ed25519.pub SEU_USUARIO@SEU_IP
 # 3. Na VPS, com o seu usuário: instale o git, clone e rode o instalador
 ssh SEU_USUARIO@SEU_IP
 sudo apt update && sudo apt install -y git
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
+cd /opt/tws-panel
 ./scripts/install.sh
 ```
 
@@ -144,7 +149,7 @@ fechadas no firewall do provedor. Veja os erros comuns no [Passo 8](installation
 
 **O que fazer:** abra no navegador o link do banner. O assistente tem quatro etapas:
 
-1. **Boas-vindas:** valida o setup token (já vem no link) e libera o terminal do servidor.
+1. **Boas-vindas e token:** valida o setup token (já vem no link) e libera o terminal do servidor.
 2. **Saúde da máquina:** CPU, memória, disco e rede, conferidos ao vivo no terminal embutido.
    Esta etapa também mostra o fuso horário da VPS (veja a [Etapa 5](#etapa-5)).
 3. **Segurança:** varredura (Lynis), plano e hardening em 8 fases. Explicada logo abaixo.
@@ -205,7 +210,7 @@ novo: o login pede o código. No Dashboard, o passo **Verificação em duas etap
 
 ## Etapa 4 — Domínio do painel
 
-Troca o endereço `https://203-0-113-10.sslip.io` por um seu, como `painel.exemplo.com.br`. O
+Troca o endereço `https://203-0-113-10.sslip.io` por um seu, como `painel.example.com`. O
 endereço automático entrega o IP da VPS no nome; um domínio seu é mais discreto e fácil de lembrar.
 
 > [!NOTE]
@@ -216,12 +221,12 @@ endereço automático entrega o IP da VPS no nome; um domínio seu é mais discr
 
 1. **Crie o registro no DNS.** No Cloudflare: DNS → Registros → Adicionar registro.
    - Tipo: **A**.
-   - Nome: `painel` (para `painel.exemplo.com.br`).
+   - Nome: `painel` (para `painel.example.com`).
    - Endereço IPv4: o IP da VPS.
    - Proxy: **nuvem cinza ("Somente DNS")**. Com a nuvem laranja, o certificado não sai.
    - Salve. Se existir um registro **AAAA** com o mesmo nome, apague.
 2. **Cadastre no painel.** Ainda pelo endereço `…sslip.io`, abra **Configurações → Domínio do
-   painel**, digite `painel.exemplo.com.br` e clique em **Salvar domínio**. A tela mostra o mesmo
+   painel**, digite `painel.example.com` e clique em **Salvar domínio**. A tela mostra o mesmo
    registro A, com botão de copiar em cada campo.
 3. Clique em **Verificar DNS**. Se aparecer "ainda não aponta", espere alguns minutos e tente de
    novo.
@@ -231,7 +236,7 @@ endereço automático entrega o IP da VPS no nome; um domínio seu é mais discr
 5. Clique em **Abrir o painel pelo endereço novo** e entre de novo, com usuário, senha e código. A
    sessão vale só no endereço em que você entrou.
 
-**O que conferir:** o painel abre em `https://painel.exemplo.com.br`, com cadeado. A lista
+**O que conferir:** o painel abre em `https://painel.example.com`, com cadeado. A lista
 "Endereço do painel" mostra os dois endereços. No Dashboard, o passo **Domínio do painel** fica
 como feito, com o aviso "acesso pelo IP ainda ativo".
 
@@ -247,7 +252,7 @@ domínio novo** e o certificado válido.
 **O que conferir:**
 
 - `https://203-0-113-10.sslip.io` não abre mais o painel;
-- `https://painel.exemplo.com.br` continua abrindo;
+- `https://painel.example.com` continua abrindo;
 - em **Auditoria**, aparece `panel_domain.ip_disabled`.
 
 ### Como reativar o acesso pelo IP
@@ -269,8 +274,8 @@ domínio novo** e o certificado válido.
 ## Etapa 5 — Fuso horário
 
 O fuso da VPS define **o horário dos backups agendados, que rodam às 03:00 no fuso da VPS**, e as
-datas dos registros. Cada provedor entrega a VPS num fuso: a maioria em UTC (três horas à frente de Brasília), a Contabo
-em Berlim. Em UTC, o "03:00" dos backups seria meia-noite no horário de Brasília.
+datas dos registros. Cada provedor entrega a VPS num fuso: a maioria em UTC (três horas à frente de Brasília), alguns no
+horário local do datacenter. Em UTC, o "03:00" dos backups seria meia-noite no horário de Brasília.
 
 **Onde ver:** o assistente inicial já mostra o fuso detectado na etapa **Saúde da máquina**, com
 **Trocar o fuso**. Depois da instalação, o lugar é **Configurações → Fuso horário**.
@@ -302,9 +307,9 @@ serviço externo de envio (Amazon SES, Resend, SendGrid…), marque **Não vou u
 para a [Etapa 7](#etapa-7).
 
 > [!IMPORTANT]
-> **Use um subdomínio só para o envio**, como `envio.exemplo.com.br`. Não use o domínio principal:
+> **Use um subdomínio só para o envio**, como `envio.example.com`. Não use o domínio principal:
 > apontar o MX dele para a VPS desviaria o e-mail que a empresa já recebe em outro lugar (Google,
-> Microsoft ou outro serviço). Os passos abaixo usam `envio.exemplo.com.br`.
+> Microsoft ou outro serviço). Os passos abaixo usam `envio.example.com`.
 
 ### 6.1 Conferir a porta 25
 
@@ -323,7 +328,7 @@ transacional. Sem ela, o e-mail não sai. Veja
 
 1. No menu, clique em **E-mail**.
 2. Se o servidor estiver parado, clique em **Iniciar servidor**.
-3. No cartão **Domínios de e-mail**, digite `envio.exemplo.com.br` e clique em
+3. No cartão **Domínios de e-mail**, digite `envio.example.com` e clique em
    **Adicionar domínio**.
 4. Se aparecer o aviso vermelho "Este domínio já recebe e-mail em outro servidor", **não** siga
    com o domínio principal. Clique em **Usar envio.… (recomendado)**.
@@ -336,12 +341,12 @@ na lista.
 Clique no domínio cadastrado e abra a aba **Checklist DNS**. O cartão **Registros DNS esperados**
 traz os valores exatos, com o IP da sua VPS e a chave DKIM. **Copie campo a campo**, com o botão de
 copiar de cada um. No Cloudflare (DNS → Registros → Adicionar registro), para
-`envio.exemplo.com.br`:
+`envio.example.com`:
 
 | Tipo | Nome (no Cloudflare) | Valor | Atenção |
 |---|---|---|---|
 | A | `mail.envio` | IP da VPS | **Nuvem cinza ("Somente DNS")**. Com a laranja, o certificado não sai e o e-mail não chega. |
-| MX | `envio` | Servidor de e-mail: `mail.envio.exemplo.com.br` · Prioridade: `10` | No Cloudflare, o MX tem **dois campos separados**: Servidor de e-mail e Prioridade. A tela mostra cada um com o seu botão de copiar. Só no subdomínio: não mexa no MX do domínio principal. |
+| MX | `envio` | Servidor de e-mail: `mail.envio.example.com` · Prioridade: `10` | No Cloudflare, o MX tem **dois campos separados**: Servidor de e-mail e Prioridade. A tela mostra cada um com o seu botão de copiar. Só no subdomínio: não mexa no MX do domínio principal. |
 | TXT (SPF) | `envio` | `v=spf1 ip4:<IP> ~all`, do checklist | |
 | TXT (DKIM) | `paas._domainkey.envio` | `v=DKIM1; k=rsa; p=…`, do checklist | Copie inteiro, com o botão. |
 | TXT (DMARC) | `_dmarc.envio` | `v=DMARC1; p=none; …`, do checklist | Mantenha `p=none` nas primeiras semanas. |
@@ -356,7 +361,7 @@ algumas horas.
 O PTR é o "nome" que o IP da VPS informa a quem recebe o e-mail. Ele **não** fica no Cloudflare: é
 configurado no painel do provedor da VPS. O cartão **Reverse DNS (PTR)** mostra uma de três cores:
 
-- **Verde:** o nome reverso já é `mail.envio.exemplo.com.br`. Nada a fazer.
+- **Verde:** o nome reverso já é `mail.envio.example.com`. Nada a fazer.
 - **Azul:** nome genérico do provedor que aponta de volta para o IP. O envio já funciona; trocar o
   nome é recomendado, e o caminho aparece em "Opcional: trocar o nome reverso".
 - **Amarelo:** sem nome reverso válido. Gmail, Yahoo e Microsoft podem recusar: troque o nome.
@@ -370,7 +375,7 @@ cartão traz um texto pronto para abrir chamado, com botão de copiar.
 ### 6.5 Certificado do e-mail
 
 1. Volte em **E-mail**.
-2. O cartão **Certificado do servidor de e-mail** mostra `mail.envio.exemplo.com.br`.
+2. O cartão **Certificado do servidor de e-mail** mostra `mail.envio.example.com`.
 3. Clique em **Conferir de novo** até aparecer **válido**, "Emitido por Let's Encrypt". Na primeira
    vez, o servidor de e-mail reinicia sozinho por alguns segundos.
 
@@ -403,11 +408,11 @@ respondeu (normalmente SPF, DKIM, DMARC ou o nome reverso). Veja
 ### 6.8 Webmail
 
 1. Em **E-mail**, no cartão **Webmail**, clique em **Ativar webmail**. A primeira vez demora: o
-   painel baixa a imagem do Roundcube (cerca de 265 MB).
-2. Clique em **Abrir webmail** ao lado de `mail.envio.exemplo.com.br`.
-3. Entre com o endereço completo da caixa (ex.: `contato@envio.exemplo.com.br`) e a senha dela.
+   painel baixa a imagem do Roundcube (algumas centenas de MB).
+2. Clique em **Abrir webmail** ao lado de `mail.envio.example.com`.
+3. Entre com o endereço completo da caixa (ex.: `contato@envio.example.com`) e a senha dela.
 
-**O que conferir:** `https://mail.envio.exemplo.com.br/` abre com cadeado e a tela de login em
+**O que conferir:** `https://mail.envio.example.com/` abre com cadeado e a tela de login em
 português. Envie um e-mail para você e responda de lá: a resposta aparece na Caixa de entrada do
 webmail. Esqueceu a senha da caixa? Aba **Caixas** → **Trocar senha**.
 
@@ -617,6 +622,11 @@ Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e suger
 2. Preencha o que falta (ou use **Adicionar variável**).
 3. Clique em **Salvar variáveis**.
 
+> [!NOTE]
+> Se o repositório já tem um `.env` próprio, o painel não o sobrescreve. As variáveis que você
+> define aqui vão para um arquivo separado (`paas.env`, na pasta do projeto na VPS), e o log do
+> deploy avisa do conflito e de como fazer o container recebê-las.
+
 **O que conferir:** nenhum aviso de variável obrigatória faltando. O deploy é barrado quando falta
 uma obrigatória; as do `.env.example` sem valor só geram um aviso.
 
@@ -625,14 +635,14 @@ uma obrigatória; as do `.env.example` sem valor só geram um aviso.
 Precisa da [Etapa 6](#etapa-6) pronta.
 
 1. Abra a aba **E-mail** do projeto e escolha o **Domínio de e-mail**.
-2. Confira o **Endereço de envio** (ex.: `contato@envio.exemplo.com.br`) e o **Nome de exibição**.
+2. Confira o **Endereço de envio** (ex.: `contato@envio.example.com`) e o **Nome de exibição**.
 3. Defina a senha da caixa (digitar duas vezes ou gerar uma forte). A gerada aparece uma única vez.
 4. Clique em **Ativar e-mail**.
 5. Se o seu app usa outros nomes de variável (ex.: `SMTP_SENHA`, `EMAIL_DE`), clique em **Ligar às
    variáveis do projeto** e, em cada linha, escolha o nome que o app lê. O painel entrega o valor
    atual com esse nome a cada deploy.
 
-**O que conferir:** o cartão mostra `SMTP_HOST = mail.envio.exemplo.com.br`. Os valores `SMTP_*` e
+**O que conferir:** o cartão mostra `SMTP_HOST = mail.envio.example.com`. Os valores `SMTP_*` e
 `MAIL_*` entram sozinhos no deploy. Os valores só chegam ao app no próximo deploy.
 
 ### 9.5 Portas (só se precisar)
@@ -714,8 +724,8 @@ backup (o registro criado sumiu, o apagado voltou). A restauração aparece em *
 em **Configurações → Backups**.
 
 Perdeu a VPS inteira? O caminho é outro: instale o painel numa VPS nova e use **Configurações →
-Backups → Restaurar de outro servidor**, com os dados do kit de recuperação. Veja
-[Funcionalidades → Backups](../guides/features.md#backups).
+Backups → Restaurar de outro servidor**. O passo a passo está em
+[Restaurar numa VPS nova](../guides/restore-new-server.md).
 
 <a id="etapa-11"></a>
 
@@ -758,7 +768,7 @@ O painel sai do ar por alguns segundos e volta sozinho. O porquê está no
 ### Se perder o acesso
 
 Senha do painel, celular da verificação em duas etapas, senha do Linux, chave SSH ou domínio do
-painel: cada caso tem o seu caminho de volta em **[Perdi o acesso — e agora?](../guides/recover-access.md)**.
+painel: cada caso tem o seu caminho de volta em **[Perdi o acesso: e agora?](../guides/recover-access.md)**.
 Os comandos de emergência estão em
 [Operação → Scripts de emergência](../guides/operations.md#scripts-de-emergência).
 

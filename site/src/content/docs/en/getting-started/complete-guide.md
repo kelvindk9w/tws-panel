@@ -1,9 +1,15 @@
 ---
 title: "From zero to a fully set-up panel"
+description: "One ordered walkthrough from a new VPS to a configured panel: security, domain, email, notifications, backups, first project and a test restore."
+sidebar:
+  label: "Complete guide"
 ---
 
 A single roadmap, in order, from the VPS you just bought to a fully configured panel: security,
 domain, time zone, email, notifications, backups, your first project live, and a test restore.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 Each step tells you **what to do**, **where to click**, and **what to check** to know it worked.
 When the details are long, the step summarizes and points you to the right guide. Follow the steps
@@ -11,10 +17,6 @@ in order: some depend on earlier ones (email notifications, for example, need em
 
 The examples use made-up values: `203.0.113.10` as the VPS IP and `example.com` as the domain.
 Replace them with yours.
-
-The panel interface is currently available only in Portuguese. The screen labels below are shown
-exactly as they appear on screen, with the English translation in parentheses the first time each
-one shows up in a section.
 
 | Step | What you do | Where |
 |---|---|---|
@@ -51,9 +53,8 @@ one shows up in a section.
 - Recommended minimum: **1 vCPU, 2 GB of RAM, and 25 GB of disk**.
 - Ports **80 and 443** open to the internet. The HTTPS certificate depends on them. If your
   provider has a firewall in its hosting dashboard, open both.
-- For email: port **25** unblocked by the provider. Many block it on new accounts (DigitalOcean,
-  Vultr, Hetzner on new accounts, AWS, Google Cloud, Azure). You check this in
-  [Step 6](#etapa-6).
+- For email: port **25** unblocked by the provider. Many providers block it, especially on new
+  accounts. You check this in [Step 6](#etapa-6).
 
 You will need two things the provider gives you: **the VPS IP** and **the root password**.
 Before going on, look in the provider's dashboard for "Console", "VNC", "Rescue", or "Recovery
@@ -104,9 +105,9 @@ ssh-copy-id -i ~/.ssh/id_ed25519.pub YOUR_USER@YOUR_IP
 # 3. On the VPS, with your user: install git, clone and run the installer
 ssh YOUR_USER@YOUR_IP
 sudo apt update && sudo apt install -y git
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
+cd /opt/tws-panel
 ./scripts/install.sh
 ```
 
@@ -152,7 +153,7 @@ ports 80 and 443 closed in the provider's firewall. See the common errors in
 
 **What to do:** open the banner link in your browser. The wizard has four steps:
 
-1. **Boas-vindas** (Welcome): validates the setup token (already in the link) and unlocks the
+1. **Boas-vindas e token** (Welcome and token): validates the setup token (already in the link) and unlocks the
    server terminal.
 2. **Saúde da máquina** (Machine health): CPU, memory, disk, and network, checked live in the
    built-in terminal. This step also shows the VPS time zone (see [Step 5](#etapa-5)).
@@ -290,8 +291,8 @@ the new domain** and the certificate valid.
 
 The VPS time zone defines **the time of scheduled backups, which run at 03:00 in the VPS time
 zone**, and the dates in the logs. Each provider delivers the VPS in some time zone: most in UTC
-(three hours ahead of Brasília), Contabo in Berlin. In UTC, the backups' "03:00" would be midnight
-Brasília time.
+(three hours ahead of Brasília), some in the local time of their data center. In UTC, the backups'
+"03:00" would be midnight Brasília time.
 
 **Where to see it:** the initial wizard already shows the detected time zone in the **Saúde da
 máquina** (Machine health) step, with **Trocar o fuso** (Change the time zone). After installation,
@@ -436,7 +437,7 @@ the recipient replied (usually SPF, DKIM, DMARC, or the reverse name). See
 ### 6.8 Webmail
 
 1. In **E-mail**, in the **Webmail** card, click **Ativar webmail** (Enable webmail). The first time
-   takes a while: the panel downloads the Roundcube image (about 265 MB).
+   takes a while: the panel downloads the Roundcube image (a few hundred MB).
 2. Click **Abrir webmail** (Open webmail) next to `mail.send.example.com`.
 3. Log in with the mailbox's full address (e.g., `contato@send.example.com`) and its password.
 
@@ -668,6 +669,11 @@ the names from the repository's `.env.example`, still without values.
 2. Fill in what is missing (or use **Adicionar variável** (Add variable)).
 3. Click **Salvar variáveis** (Save variables).
 
+> [!NOTE]
+> If the repository already has its own `.env`, the panel does not overwrite it. The variables you
+> set here go to a separate file (`paas.env`, in the project folder on the VPS), and the deploy
+> log warns about the conflict and how to make the container receive them.
+
 **What to check:** no warning about a missing required variable. The deploy is blocked when a
 required one is missing; the `.env.example` ones without a value only raise a warning.
 
@@ -770,8 +776,8 @@ the backup (the record you created is gone, the deleted one is back). The restor
 **Últimos backups**, in **Configurações → Backups**.
 
 Lost the entire VPS? The path is different: install the panel on a new VPS and use **Configurações
-→ Backups → Restaurar de outro servidor** (Restore from another server), with the data from the
-recovery kit. See [Features → Backups](../guides/features.md#backups).
+→ Backups → Restaurar de outro servidor** (Restore from another server). The step-by-step is in
+[Restore on a new VPS](../guides/restore-new-server.md).
 
 <a id="etapa-11"></a>
 
@@ -814,7 +820,7 @@ The panel goes down for a few seconds and comes back by itself. The reason is ex
 ### If you lose access
 
 Panel password, two-step verification phone, Linux password, SSH key, or panel domain: each case
-has its own way back in **[I lost access — now what?](../guides/recover-access.md)**.
+has its own way back in **[I lost access: now what?](../guides/recover-access.md)**.
 The emergency commands are in
 [Operations → Emergency scripts](../guides/operations.md#scripts-de-emergência).
 
