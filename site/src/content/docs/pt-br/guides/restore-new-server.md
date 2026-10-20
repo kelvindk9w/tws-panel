@@ -57,6 +57,12 @@ assistente de configuração, inclusive a etapa de Segurança. A restauração p
 login, então crie uma conta de administrador provisória quando o assistente pedir. A restauração a
 substitui pelas contas antigas.
 
+Se a VPS antiga usava outra pasta de projetos, instale com a mesma (`./scripts/install.sh --projects-dir=<pasta>`, veja [Operação](operations.md)). Senão, os projetos criados por upload ou a partir de uma pasta do servidor falham no passo 7 com "fica fora da pasta de projetos".
+
+**Não inicie o servidor de e-mail na VPS nova** antes do passo 8, mesmo que o roteiro "Deixe o painel pronto" do Dashboard sugira. O backup agendado do e-mail enviaria um servidor de e-mail vazio para `_email/`, contaria como backup concluído e tiraria o e-mail da pausa.
+
+**Desligue o backup automático do painel se a VPS nova ficar ligada por uma madrugada antes do passo 3 ou se o passo 5 puder levar mais de 7 dias.** Em **Configurações → Backups**, no cartão **Painel**, desmarque **Backup automático ligado** e salve. Um painel novo vem com a agenda ligada e roda às 03:00 mesmo sem armazenamento conectado. Esse backup só local conta como backup concluído desta VPS e cancela a proteção descrita no passo 3. A partir daí, um painel vazio vai para `_painel/` todo dia e a retenção (5 cópias) apaga os backups bons em cerca de 5 dias. A restauração do painel traz a agenda antiga de volta, então o ajuste não fica desligado sozinho.
+
 Confira que as portas **80 e 443** estão abertas no provedor, e a **25** se você vai usar e-mail
 (veja o [Guia completo, Etapa 6.1](../getting-started/complete-guide.md#etapa-6)).
 
@@ -88,7 +94,7 @@ salvar**.
 **O que conferir:** aparece "Conexão testada e salva".
 
 > [!WARNING]
-> **Não clique em Fazer backup agora no painel novo antes do passo 5**, e não mude as agendas. O
+> **Não clique em Fazer backup agora no painel novo antes do passo 5.** O
 > backup manual sempre roda e envia um backup de um painel **vazio** para a pasta `_painel/`; a
 > retenção (5 cópias, por padrão) então apaga a mais antiga. A data mais recente da lista pode
 > acabar sendo a do painel vazio, e não a da VPS antiga.
@@ -104,7 +110,10 @@ salvar**.
 > servidor". Ela é esperada. Se o painel não conseguir listar o armazenamento, também não envia o
 > backup, e uma notificação avisa na terceira falha seguida. **Se passarem mais de 7 dias entre o
 > passo 3 e o passo 5**, a pausa acaba sozinha e o próximo backup agendado pode pôr um painel vazio
-> por cima do backup bom. Não deixe os passos se arrastarem.
+> por cima do backup bom. A proteção também não existe se o painel novo já fez um backup que ficou
+> só na VPS (o das 03:00 sem armazenamento conectado): ele conta como backup concluído. Nos dois
+> casos, desligue **Backup automático ligado** no cartão **Painel** antes do passo 3, como diz o
+> passo 1.
 
 ### 4. Informe a senha dos backups
 
@@ -196,7 +205,7 @@ No bloco **Projetos** do cartão, clique em **Restaurar** ao lado de cada projet
     código do backup à **pasta de origem** do projeto (a que está na configuração dele) e só então
     publica. Essa pasta precisa ficar dentro da pasta de projetos da VPS nova (`PAAS_PROJECTS_DIR`,
     padrão `/opt/tws-projects`), sem link simbólico apontando para fora, e o usuário do painel
-    (10001) precisa poder gravar nela. Num projeto criado por upload, o `.env` que o painel gerou
+    (10001) precisa poder gravar na pasta de projetos, onde a pasta de origem é criada. Num projeto criado por upload, o `.env` que o painel gerou
     não volta (o painel gera um novo no deploy); um `.env` escrito pelo dono do projeto volta.
   - **A pasta de origem já existe na VPS nova com arquivos:** ela fica como está, nada é
     sobrescrito, e o registro da restauração avisa. A publicação usa o que já está lá. Para usar o
@@ -210,7 +219,7 @@ IP novo. Depois disso, use **Tentar emitir agora** nessa mesma página.
 
 ### 8. Restaure o e-mail por último
 
-1. No cartão, clique em **Restaurar o e-mail** e confirme digitando a palavra que a tela mostra: `e-mail` com a interface em português, `email` com a interface em inglês. Se a restauração
+1. No cartão, clique em **Restaurar o e-mail**, escolha a data do backup do e-mail que você anotou no passo 2 e confirme digitando a palavra que a tela mostra: `e-mail` com a interface em português, `email` com a interface em inglês. Se a restauração
    terminar com o aviso "O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e
    clique em Iniciar" (aviso do servidor, sempre em português), abra **E-mail** e clique em **Iniciar servidor**. Ele sobe com os dados
    restaurados.
@@ -236,9 +245,11 @@ começo: o IP novo ainda não tem reputação.
   do servidor), no lugar de "Próximo: …". Depois de restaurar cada projeto e o e-mail, confira que
   a mensagem sumiu. Projeto criado depois da restauração não é pausado, e a pausa acaba sozinha em
   7 dias. Se você restaurou o painel com o `restaurar-painel.sh`, não há pausa: a agenda antiga
-  volta como era e pode tentar fazer backup de um projeto que ainda não tem containers, o que
-  desliga o backup automático desse projeto. Abra a aba **Backups** de cada projeto e confira que
-  o backup automático está ligado.
+  volta como era e pode tentar fazer backup de um projeto que ainda não tem containers.
+- **Não deixe os projetos esperando.** O backup agendado de um projeto que ainda não tem containers
+  falha com "Nenhum container do projeto encontrado" (mensagem do servidor), com notificação. O de
+  um projeto publicado cujos dados ainda não voltaram pode enviar um backup sem os dados. Restaure
+  os projetos logo depois do painel.
 - E-mail: o checklist de DNS está em 6/6, o e-mail de teste chega e uma caixa consegue entrar no
   webmail.
 - **Configurações → Fuso horário** mostra o fuso que você quer. Os backups rodam às 03:00 no fuso

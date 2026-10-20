@@ -32,3 +32,14 @@ Parte de `origin/dev`. Só documentação (site en e pt-br); nenhum código, dic
 - A afirmação de que, depois de publicado, esvaziar a pasta de origem não adianta vem do relatório do lote 8 e da leitura de `restoreProject`; não foi testada numa VPS real.
 - Nada foi testado em VPS real (DNS, 7-Zip e armazenamento reais), como no lote 8.
 - O achado de bind mount `:ro` do lote 8 continua aberto e não está nos guias.
+
+## Correções da revisão
+
+- Conferências finais: removida a afirmação falsa de que projeto sem containers "desliga o backup automático". Com zero containers, `buildDetection` devolve "Nenhum container do projeto encontrado" (`backup-detect.ts`): falha com notificação. Acrescentado que projeto publicado sem os dados pode enviar backup sem eles, e que se deve restaurar os projetos logo.
+- Passos 1 e 3: o painel novo roda a agenda às 03:00 mesmo sem armazenamento; o guia manda desmarcar "Automatic backup on" / "Backup automático ligado" no cartão Painel antes do passo 3 (VPS que passou uma madrugada ligada ou passo 5 com mais de 7 dias) e removeu o "não mude as agendas" contraditório.
+- Passo 1: não iniciar o servidor de e-mail antes do passo 8; usar `--projects-dir` igual ao da VPS antiga (opção confirmada em `scripts/install.sh`).
+- Passo 8: escolher a data do backup do e-mail anotada no passo 2. Passo 7: gravação na pasta de projetos (não na de origem). Parênteses repetidos removidos no guia em inglês.
+
+## Achado de código (não corrigido)
+
+Backup só local conta como backup concluído na regra `panelFreshOverForeign` (`lastSuccessAt` é preenchido em `backup-service.ts` mesmo sem cópia externa) e cancela a proteção do painel novo.

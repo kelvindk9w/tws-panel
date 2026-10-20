@@ -57,6 +57,12 @@ the setup wizard, including the Security step. The restore needs a panel you are
 temporary administrator account when the wizard asks for it. The restore replaces it with the old
 accounts.
 
+If the old VPS used another projects folder, install with the same one (`./scripts/install.sh --projects-dir=<folder>`, see [Operations](operations.md)). Otherwise projects created by upload or from a folder on the server fail in step 7 with "fica fora da pasta de projetos".
+
+**Do not start the mail server on the new VPS** before step 8, even though the "Get the panel ready" checklist on the Dashboard suggests it. The scheduled email backup would send an empty mail server to `_email/`, count as a finished backup, and take the email out of the hold.
+
+**Turn off the panel's automatic backup if the new VPS stays on for a night before step 3 or if step 5 may take more than 7 days.** In **Settings → Backups**, in the **Panel** card, clear **Automatic backup on** and save. A new panel has the schedule on and runs at 03:00 even with no storage connected. That local-only backup counts as a finished backup of this VPS and cancels the protection described in step 3. From then on, an empty panel goes to `_painel/` every day and the retention (5 copies) deletes the good backups in about 5 days. The restore of the panel brings the old schedule back, so the setting does not stay off by itself.
+
 Check that ports **80 and 443** are open at the provider, and port **25** if you will use email
 (see [Complete guide, Step 6.1](../getting-started/complete-guide.md#etapa-6)).
 
@@ -81,15 +87,13 @@ points to it.
 
 ### 3. Connect the same storage
 
-In the new panel, open **Settings → Backups**. In **External storage**
-(External storage), type the same endpoint, bucket and access keys the old VPS used. Region: `auto`.
+In the new panel, open **Settings → Backups**. In **External storage**, type the same endpoint, bucket and access keys the old VPS used. Region: `auto`.
 Click **Test and save**.
 
 **What to check:** "Connection tested and saved" appears.
 
 > [!WARNING]
-> **Do not click Back up now on the new panel before step 5**, and do not change the
-> schedules. A manual backup always runs, and it sends a backup of an **empty** panel to the
+> **Do not click Back up now on the new panel before step 5.** A manual backup always runs, and it sends a backup of an **empty** panel to the
 > `_painel/` folder; the retention (5 copies by default) then deletes the oldest one. The most
 > recent date in the list may end up being the empty panel, not the one from the old VPS.
 >
@@ -105,7 +109,10 @@ Click **Test and save**.
 > servidor" (a server message, in Portuguese). Expect it. If the panel cannot list the storage, it
 > does not send the backup either, and a notification warns you on the third failure in a row.
 > **If more than 7 days pass between step 3 and step 5**, the hold ends by itself and the
-> next scheduled backup can put an empty panel over the good backup. Do not let the steps drag on.
+> next scheduled backup can put an empty panel over the good backup. The hold also does not exist
+> if the new panel already made a backup that only stayed on the VPS (the 03:00 run with no storage
+> connected): that counts as a finished backup. In both cases, turn off **Automatic backup on** in
+> the **Panel** card before step 3, as step 1 says.
 
 ### 4. Enter the backup password
 
@@ -194,7 +201,7 @@ In the **Projects** block of the card, click **Restore** next to each project.
     the backup back into the project's **source folder** (the one in the project's configuration) and
     then deploys. That folder must be inside the projects folder of the new VPS
     (`PAAS_PROJECTS_DIR`, default `/opt/tws-projects`), without a symbolic link pointing outside it,
-    and the panel user (10001) must be able to write there. In a project created by upload, the `.env`
+    and the panel user (10001) must be able to write in the projects folder, where the source folder is created. In a project created by upload, the `.env`
     that the panel generated does not come back (the panel generates a new one at deploy); a `.env`
     written by the project's owner does.
   - **The source folder already exists on the new VPS with files in it:** it stays as it is, nothing
@@ -205,13 +212,13 @@ In the **Projects** block of the card, click **Restore** next to each project.
     source folder.
 
 **What to check:** each project opens at its domain and the data is there. The **Certificates**
-(Certificates) page shows the project's domain as **Valid**. A certificate fails until the
+page shows the project's domain as **Valid**. A certificate fails until the
 DNS from step 6 points to the new IP. Use **Try issuing now** on that page
 after that.
 
 ### 8. Restore the email last
 
-1. In the card, click **Restore email** and confirm by typing the word the screen shows: `email` with the English
+1. In the card, click **Restore email**, choose the date of the email backup you wrote down in step 2 and confirm by typing the word the screen shows: `email` with the English
    interface, `e-mail` with the Portuguese one.
    If the restore ends with the notice "O servidor de e-mail ainda não existe nesta VPS: abra a
    página E-mail e clique em Iniciar" (the mail server does not exist on this VPS yet: open the
@@ -240,8 +247,11 @@ first: the new IP has no reputation yet.
   and the email, check that the message is gone. A project created after the restore is not held,
   and the hold ends by itself after 7 days. If you restored the panel with `restaurar-painel.sh`,
   there is no hold: the old schedule comes back as it was, and it can try to back up a project that
-  has no containers yet, which turns that project's automatic backup off. Open the **Backups** tab
-  of each project and check that the automatic backup is on.
+  has no containers yet.
+- **Do not leave projects waiting.** The scheduled backup of a project that still has no containers
+  fails with "Nenhum container do projeto encontrado" (a server message), with a notification. The
+  one of a project that is deployed but whose data has not come back yet can send a backup without
+  the data. Restore the projects soon after the panel.
 - Email: the DNS checklist is 6/6, the test email arrives, and a mailbox can sign in to the webmail.
 - **Settings → Time zone** shows the time zone you want. Backups run
   at 03:00 in the VPS time zone.
