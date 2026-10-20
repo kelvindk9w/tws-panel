@@ -34,6 +34,16 @@ is in the [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELO
 | The panel does not open and you have a `.7z` backup of it | `sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` | [Features](features.md#backups) |
 | Want to remove the panel | `./scripts/uninstall.sh --dry-run` and then `./scripts/uninstall.sh` | [Installation](../getting-started/installation.md#remover-o-painel) |
 
+> [!WARNING]
+> **`restaurar-painel.sh` brings back the whole backup, with no adjustments.** Restoring the panel
+> from the screen (**Settings → Backups → Restore from another server**) keeps the storage keys of
+> this VPS, keeps access by IP turned on while the panel domain does not point here, and holds the
+> schedule of projects and email for up to 7 days. The script does none of that: the **old storage
+> keys** come back (type the new ones again in **Settings → Backups → External storage → Edit**),
+> access by IP comes back **turned off** if it was (use `reativar-acesso-ip.sh` if the panel domain
+> does not open), and the old schedule comes back without a hold. Details in
+> [Restore on a new VPS](restore-new-server.md) and in [Features](features.md#backups).
+
 
 ## Where your projects' files live
 

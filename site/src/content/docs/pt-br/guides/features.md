@@ -230,6 +230,25 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
 - Sem conseguir entrar no painel, por SSH:
   `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
 
+**Depois de restaurar o painel de outro servidor.** Vale para a restauração pela tela, não para o
+`restaurar-painel.sh`.
+
+- **A agenda dos projetos e do e-mail fica em pausa por até 7 dias.** O painel restaurado traz de
+  volta a agenda antiga, mas a VPS nova ainda não tem os dados. Por isso cada projeto cadastrado
+  antes da restauração, e o e-mail, ficam sem backup agendado até a pausa acabar: quando você
+  restaura os dados daquele item, quando faz um backup dele à mão, ou sozinha, depois de 7 dias. As
+  telas mostram o motivo, uma mensagem que começa com "Em pausa", no lugar de "Próximo: …". Na mesma
+  VPS, o que já tem containers não entra em pausa, e o e-mail só fica de fora da pausa se o
+  container dele existir nesta VPS. Projeto criado depois da restauração não é pausado, e o painel também não.
+- **Um painel novo não sobrescreve os backups de outro servidor.** O backup agendado do painel não
+  sai enquanto tudo isto for verdade: nenhum projeto cadastrado, painel não restaurado, nenhum backup do painel nem do
+  e-mail **enviado ao armazenamento** por esta VPS (a cópia só na VPS não conta), e o armazenamento já guarda backups do painel em `_painel/`. A pausa acaba
+  sozinha 7 dias depois de o armazenamento ser conectado, e o painel manda uma notificação quando ela
+  começa. Se o painel não conseguir listar o armazenamento, também não envia o backup, e uma
+  notificação avisa na terceira falha seguida. **Fazer backup agora** sempre funciona.
+- **O endereço e as chaves do armazenamento ficam os que estão em uso nesta VPS.** O resto das
+  configurações de backup volta com o painel.
+
 <a id="seguranca"></a>
 
 ## Segurança e monitoramento

@@ -110,6 +110,29 @@ instalador avisa que ele não respondeu em 3 minutos.
 O painel em si escuta só dentro da VPS (`127.0.0.1`): o endereço `http://SEU-IP:9000` não abre,
 de propósito.
 
+### Salvar ou clicar falha com `403 forbidden_origin`
+
+**Sintomas:** o painel abre, mas as ações que gravam (salvar, entrar, fazer deploy) voltam
+`403 forbidden_origin`. Acontece quando você abre o painel atrás de **outro proxy** (um balanceador,
+um túnel, um CDN) que remove o cabeçalho `Sec-Fetch-Site` ou reescreve o `Origin`. Atrás do Caddy que
+o próprio painel instala, não é preciso configurar nada.
+
+**Correção (na VPS, em `/opt/tws-panel`):**
+1. Acrescente ao `.env` a origem exata em que você abre o painel, sem barra no fim; separe várias
+   com vírgula. Não use `*`:
+
+   ```
+   ALLOWED_ORIGINS=https://painel.example.com
+   ```
+
+2. Recrie o container para ele ler a variável:
+
+   ```bash
+   sudo docker compose up -d
+   ```
+
+A variável vem vazia por padrão, e então só a origem do próprio painel é aceita.
+
 ### "Token inválido" no wizard
 
 **Sintoma:** o assistente diz "Token inválido. Confira o valor exibido pelo instalador no terminal."

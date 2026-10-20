@@ -32,6 +32,17 @@ está no [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG
 | O painel não abre e você tem um backup `.7z` dele | `sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` | [Funcionalidades](features.md#backups) |
 | Quer remover o painel | `./scripts/uninstall.sh --dry-run` e depois `./scripts/uninstall.sh` | [Instalação](../getting-started/installation.md#remover-o-painel) |
 
+> [!WARNING]
+> **O `restaurar-painel.sh` traz o backup inteiro, sem ajustes.** Restaurar o painel pela tela
+> (**Configurações → Backups → Restaurar de outro servidor**) mantém as chaves do armazenamento
+> desta VPS, mantém o acesso pelo IP ativado enquanto o domínio do painel não aponta para cá e põe
+> em pausa, por até 7 dias, a agenda dos projetos e do e-mail. O script não faz nada disso: as
+> **chaves antigas do armazenamento** voltam (informe as novas de novo em **Configurações → Backups →
+> Armazenamento externo → Editar**), o acesso pelo IP volta **desativado** se estava (use o
+> `reativar-acesso-ip.sh` se o domínio do painel não abrir) e a agenda antiga volta sem pausa.
+> Detalhes em [Restaurar numa VPS nova](restore-new-server.md) e em
+> [Funcionalidades](features.md#backups).
+
 
 ## Onde ficam os arquivos dos seus projetos
 
