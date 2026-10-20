@@ -12,6 +12,7 @@ import {
   type SecurityScanReport,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiErrorText, formatDateTime, Trans, useI18n, type Key, type TFunction } from "@/i18n";
 import {
   capitalize,
   isSudoJobError,
@@ -107,8 +108,25 @@ interface IndexSnapshot {
 const AWAITING_POLL_MS = 2_000;
 
 /** Nome da régua de uma nota, para a pessoa saber o que está comparando. */
-function scaleLabel(source: string): string {
-  return source === "lynis" ? "Lynis" : "índice interno do painel";
+function scaleLabel(t: TFunction, source: string): string {
+  return t(source === "lynis" ? "hardening.scale.lynis" : "hardening.scale.internal");
+}
+
+/** Título da fase no idioma da interface (o de @paas/core está em português). */
+const PHASE_TITLE_KEYS: Record<string, Key> = {
+  "00": "hardening.phaseTitle.00",
+  "01": "hardening.phaseTitle.01",
+  "02": "hardening.phaseTitle.02",
+  "03": "hardening.phaseTitle.03",
+  "04": "hardening.phaseTitle.04",
+  "05": "hardening.phaseTitle.05",
+  "06": "hardening.phaseTitle.06",
+  "07": "hardening.phaseTitle.07",
+};
+
+function localPhaseTitle(t: TFunction, id: string): string {
+  const key = PHASE_TITLE_KEYS[id];
+  return key ? t(key) : (SECURITY_PHASES.find((p) => p.id === id)?.title ?? id);
 }
 
 // ---------------------------------------------------------------------------
@@ -127,17 +145,18 @@ interface PhaseUiState {
 const INITIAL_PHASE_UI: PhaseUiState = { status: "pending", steps: [], log: "", jobStatus: null };
 
 function PhaseStatusIcon({ status }: { status: PhaseRunStatus }) {
+  const { t } = useI18n();
   switch (status) {
     case "pending":
-      return <Hourglass className="h-4 w-4 shrink-0 text-muted-foreground" aria-label="aguardando" />;
+      return <Hourglass className="h-4 w-4 shrink-0 text-muted-foreground" aria-label={t("hardening.phaseRun.pending")} />;
     case "running":
-      return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-400" aria-label="executando" />;
+      return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-400" aria-label={t("hardening.phaseRun.running")} />;
     case "done":
-      return <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" aria-label="concluída" />;
+      return <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" aria-label={t("hardening.phaseRun.done")} />;
     case "error":
-      return <XCircle className="h-4 w-4 shrink-0 text-red-400" aria-label="erro" />;
+      return <XCircle className="h-4 w-4 shrink-0 text-red-400" aria-label={t("hardening.phaseRun.error")} />;
     case "skipped":
-      return <SkipForward className="h-4 w-4 shrink-0 text-muted-foreground" aria-label="pulada" />;
+      return <SkipForward className="h-4 w-4 shrink-0 text-muted-foreground" aria-label={t("hardening.phaseRun.skipped")} />;
   }
 }
 
@@ -156,24 +175,26 @@ function StatusIcon({ status, severity }: { status: string; severity: string }) 
 }
 
 function SeverityBadge({ severity }: { severity: string }) {
-  if (severity === "critical") return <Badge variant="destructive">crítico</Badge>;
-  if (severity === "warning") return <Badge variant="warning">atenção</Badge>;
-  return <Badge variant="secondary">info</Badge>;
+  const { t } = useI18n();
+  if (severity === "critical") return <Badge variant="destructive">{t("hardening.severity.critical")}</Badge>;
+  if (severity === "warning") return <Badge variant="warning">{t("hardening.severity.warning")}</Badge>;
+  return <Badge variant="secondary">{t("hardening.severity.info")}</Badge>;
 }
 
 function JobStatusBadge({ status }: { status: SecurityJob["status"] }) {
+  const { t } = useI18n();
   switch (status) {
     case "queued":
     case "running":
-      return <Badge variant="secondary">executando…</Badge>;
+      return <Badge variant="secondary">{t("hardening.jobStatus.running")}</Badge>;
     case "awaiting_confirmation":
-      return <Badge variant="warning">aguardando confirmação</Badge>;
+      return <Badge variant="warning">{t("hardening.jobStatus.awaiting")}</Badge>;
     case "success":
-      return <Badge variant="success">concluído</Badge>;
+      return <Badge variant="success">{t("hardening.jobStatus.success")}</Badge>;
     case "failed":
-      return <Badge variant="destructive">falhou</Badge>;
+      return <Badge variant="destructive">{t("hardening.jobStatus.failed")}</Badge>;
     case "rolled_back":
-      return <Badge variant="destructive">revertido</Badge>;
+      return <Badge variant="destructive">{t("hardening.jobStatus.rolledBack")}</Badge>;
   }
 }
 
@@ -207,6 +228,7 @@ export function SecurityStep({
   vpsAddress,
   mode = "wizard",
 }: SecurityStepProps) {
+  const { t } = useI18n();
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
   // Falha do sudo fica separada do erro genérico: a mensagem do servidor já
@@ -358,7 +380,7 @@ export function SecurityStep({
     } catch (err) {
       const sudoMessage = sudoElevationFailure(err);
       if (sudoMessage !== null) setElevationError({ context: "scan", message: sudoMessage });
-      else setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a verificação.");
+      else setError(apiErrorText(err, "hardening.error.scan"));
       return null;
     } finally {
       setScanning(false);
@@ -373,7 +395,7 @@ export function SecurityStep({
       setPlan(p);
       setStage("plan");
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao gerar o plano.");
+      setError(apiErrorText(err, "hardening.error.plan"));
     }
   }
 
@@ -393,7 +415,7 @@ export function SecurityStep({
         const data = await apiFetch<SecurityManualCommandsResponse>(`/api/security/phases/${phase}/manual`);
         setManualData((prev) => ({ ...prev, [phase]: data }));
       } catch (err) {
-        setError(err instanceof ApiRequestError ? err.message : "Falha ao carregar os comandos manuais.");
+        setError(apiErrorText(err, "hardening.error.manualLoad"));
       }
     }
   }
@@ -409,7 +431,7 @@ export function SecurityStep({
         setPlan(p);
       }
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao verificar de novo.");
+      setError(apiErrorText(err, "hardening.error.rescan"));
     } finally {
       setManualVerifying(false);
     }
@@ -511,10 +533,10 @@ export function SecurityStep({
           }
           setError(
             finished.status === "rolled_back" && finished.log.includes("operador não conseguiu entrar")
-              ? `Você desfez a fase "${finished.title}": a configuração anterior foi restaurada. Quando resolver o acesso, rode o hardening de novo.`
+              ? t("hardening.error.undone", { title: finished.title })
               : finished.status === "rolled_back"
-                ? `O prazo da fase "${finished.title}" acabou sem confirmação, e ela foi desfeita automaticamente: a configuração anterior voltou. Rode de novo quando puder testar o acesso.`
-                : `A fase "${finished.title}" falhou. O rollback foi executado — veja o log.`,
+                ? t("hardening.error.expired", { title: finished.title })
+                : t("hardening.error.failed", { title: finished.title }),
           );
           return false;
         }
@@ -528,7 +550,7 @@ export function SecurityStep({
         if (sudoMessage !== null) {
           setElevationError({ context: "phase", title: phaseTitle(phase), message: sudoMessage });
         } else {
-          setError(err instanceof ApiRequestError ? err.message : "Falha ao aplicar a fase.");
+          setError(apiErrorText(err, "hardening.error.apply"));
         }
         return false;
       }
@@ -541,7 +563,7 @@ export function SecurityStep({
     // (ação principal por fase: "Executar apenas esta fase")
     const queue = phases ?? pendingPhases();
     if (queue.length === 0) {
-      setError("Nenhuma fase com pendência — o servidor já está endurecido.");
+      setError(t("hardening.error.nothingPending"));
       return;
     }
     // Congela o "Antes" AGORA: o scan final (pós-apply) vai sobrescrever
@@ -617,7 +639,7 @@ export function SecurityStep({
       setJob(res.job); // o alerta sai: a fase não está mais aguardando
       confirmResolver.current?.(false);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao desfazer a fase.");
+      setError(apiErrorText(err, "hardening.error.undo"));
     } finally {
       setAccessBusy(false);
     }
@@ -640,8 +662,8 @@ export function SecurityStep({
       // status do servidor que encerra a espera (achado 20).
       setError(
         err instanceof ApiRequestError
-          ? `${err.message} Tente confirmar de novo.`
-          : "Não foi possível confirmar o acesso agora (falha de conexão). Tente de novo — a fase continua aguardando.",
+          ? t("hardening.error.confirmRetry", { message: apiErrorText(err, "hardening.error.confirm") })
+          : t("hardening.error.confirmNetwork"),
       );
     } finally {
       setAccessBusy(false);
@@ -649,7 +671,7 @@ export function SecurityStep({
   }
 
   // -------------------------------------------------------------- render
-  const phaseTitle = (id: string) => SECURITY_PHASES.find((p) => p.id === id)?.title ?? id;
+  const phaseTitle = (id: string) => localPhaseTitle(t, id);
   const phase01Selected = pendingPhases().includes("01");
   // Fase da execução atual que falhou (a execução para nela).
   const failedPhase = runQueue.find((id) => phaseUi[id]?.status === "error") ?? null;
@@ -704,13 +726,12 @@ export function SecurityStep({
       <div>
         {onBack && (
           <Button variant="ghost" size="sm" onClick={onBack} className="-ml-2 mb-1">
-            <ArrowLeft className="h-4 w-4" /> {mode === "page" ? "Voltar para Segurança" : "Voltar para Saúde da máquina"}
+            <ArrowLeft className="h-4 w-4" /> {t(mode === "page" ? "hardening.header.backPage" : "hardening.header.backWizard")}
           </Button>
         )}
-        <h2 className="text-xl font-semibold tracking-tight">Segurança</h2>
+        <h2 className="text-xl font-semibold tracking-tight">{t("hardening.header.title")}</h2>
         <p className="text-sm text-muted-foreground">
-          Verificação da VPS, plano de correção e proteções em fases — com simulação, backup e reversão
-          automática.
+          {t("hardening.header.subtitle")}
         </p>
       </div>
 
@@ -731,17 +752,17 @@ export function SecurityStep({
           <p className="flex items-center gap-2 font-semibold text-amber-300">
             <KeyRound className="h-4 w-4 shrink-0" />
             {elevationError.context === "scan"
-              ? "A verificação não foi executada: o sudo não autorizou"
-              : `A fase "${elevationError.title}" parou: o sudo não executou o script`}
+              ? t("hardening.elevation.scan")
+              : t("hardening.elevation.phase", { title: elevationError.title })}
           </p>
           <p>{capitalize(elevationError.message)}</p>
           <p className="text-xs text-amber-200/80">
-            A senha é pedida no terminal ao vivo, abaixo, quando o comando começa.
+            {t("hardening.elevation.hint")}
           </p>
           {elevationError.context === "scan" && (
             <div>
               <Button size="sm" variant="outline" onClick={() => void runScan(true)} disabled={scanning}>
-                <RefreshCw className="h-3.5 w-3.5" /> Tentar a verificação de novo
+                <RefreshCw className="h-3.5 w-3.5" /> {t("hardening.elevation.retry")}
               </Button>
             </div>
           )}
@@ -757,16 +778,14 @@ export function SecurityStep({
                 <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
                   <ShieldCheck className="h-6 w-6" />
                 </div>
-                <CardTitle>Verificação de segurança</CardTitle>
+                <CardTitle>{t("hardening.scan.title")}</CardTitle>
                 <CardDescription className="max-w-md">
-                  Confere SSH, firewall, portas, pacotes e Docker e roda o Lynis, a ferramenta de auditoria
-                  de segurança. Se o Lynis ainda não estiver na VPS, ele é instalado do repositório oficial
-                  do Ubuntu — é a única coisa que a verificação altera. Leva de 2 a 5 minutos.
+                  {t("hardening.scan.description")}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex justify-center">
                 <Button onClick={() => void runScan(true)}>
-                  <Play className="h-4 w-4" /> Iniciar verificação
+                  <Play className="h-4 w-4" /> {t("hardening.scan.start")}
                 </Button>
               </CardContent>
             </Card>
@@ -774,7 +793,7 @@ export function SecurityStep({
 
           {scanning && (
             <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" /> Verificando a VPS… (o Lynis leva de 2 a 5 minutos)
+              <Loader2 className="h-5 w-5 animate-spin" /> {t("hardening.scan.running")}
             </div>
           )}
 
@@ -793,22 +812,27 @@ export function SecurityStep({
                   <div className="grid grid-cols-3 gap-6 text-center">
                     <div>
                       <p className="text-2xl font-bold text-emerald-400">{report.summary.pass}</p>
-                      <p className="text-xs text-muted-foreground">✅ ok</p>
+                      <p className="text-xs text-muted-foreground">{t("hardening.scan.ok")}</p>
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-amber-400">{report.summary.warning}</p>
-                      <p className="text-xs text-muted-foreground">⚠️ atenção</p>
+                      <p className="text-xs text-muted-foreground">{t("hardening.scan.warning")}</p>
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-red-400">{report.summary.critical}</p>
-                      <p className="text-xs text-muted-foreground">❌ crítico</p>
+                      <p className="text-xs text-muted-foreground">{t("hardening.scan.critical")}</p>
                     </div>
                   </div>
                   <div className="text-center text-xs text-muted-foreground">
-                    <p>alvo: {report.target}</p>
-                    <p>perfil: {report.profile}</p>
-                    <p>{report.summary.total} verificações em {(report.durationMs / 1000).toFixed(1)}s</p>
-                    {!report.lynisAvailable && <p>(Lynis ausente — índice interno)</p>}
+                    <p>{t("hardening.scan.target", { target: report.target })}</p>
+                    <p>{t("hardening.scan.profile", { profile: report.profile })}</p>
+                    <p>
+                      {t("hardening.scan.total", {
+                        total: report.summary.total,
+                        seconds: (report.durationMs / 1000).toFixed(1),
+                      })}
+                    </p>
+                    {!report.lynisAvailable && <p>{t("hardening.scan.noLynis")}</p>}
                   </div>
                 </CardContent>
               </Card>
@@ -827,7 +851,7 @@ export function SecurityStep({
                       onClick={() => setSkippedOpen((v) => !v)}
                     >
                       {skippedOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                      {report.skippedChecks.length} check(s) pulados neste perfil
+                      {t("hardening.scan.skipped", { count: report.skippedChecks.length })}
                     </button>
                   )}
                   {skippedOpen && (
@@ -864,12 +888,12 @@ export function SecurityStep({
                     >
                       <span className="flex items-center gap-2 font-medium">
                         {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        Fase {phase.id} — {phase.title}
+                        {t("hardening.phaseLabel", { id: phase.id, title: localPhaseTitle(t, phase.id) })}
                       </span>
                       {fails === 0 ? (
-                        <Badge variant="success">tudo ok</Badge>
+                        <Badge variant="success">{t("hardening.scan.phaseAllOk")}</Badge>
                       ) : (
-                        <Badge variant="warning">{fails} pendente(s)</Badge>
+                        <Badge variant="warning">{t("hardening.scan.phasePending", { count: fails })}</Badge>
                       )}
                     </button>
                     {expanded && (
@@ -899,10 +923,10 @@ export function SecurityStep({
 
               <div className="flex justify-between">
                 <Button variant="outline" onClick={() => void runScan(true)}>
-                  <RefreshCw className="h-4 w-4" /> Verificar de novo
+                  <RefreshCw className="h-4 w-4" /> {t("hardening.scan.again")}
                 </Button>
                 <Button onClick={() => void buildPlan()}>
-                  Gerar plano de correção <ArrowRight className="h-4 w-4" />
+                  {t("hardening.scan.buildPlan")} <ArrowRight className="h-4 w-4" />
                 </Button>
               </div>
             </>
@@ -916,14 +940,14 @@ export function SecurityStep({
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <ShieldAlert className="h-5 w-5" /> Plano de correção
+                <ShieldAlert className="h-5 w-5" /> {t("hardening.plan.title")}
               </CardTitle>
               <CardDescription>
-                {plan.actions.filter((a) => !a.alreadySatisfied).length} fase(s) com pendências.
-                Execute <strong>uma fase por vez</strong> (botão em cada fase) ou todas em sequência
-                (botão abaixo) — tudo roda primeiro em dry-run; se uma falhar, a execução para e o
-                rollback é aplicado. Prefere rodar por conta própria? Use{" "}
-                <strong>Fazer manualmente</strong> para ver o passo a passo copiável.
+                <Trans
+                  k="hardening.plan.description"
+                  params={{ count: plan.actions.filter((a) => !a.alreadySatisfied).length }}
+                  components={{ b: <strong /> }}
+                />
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -933,12 +957,12 @@ export function SecurityStep({
                     <div className="flex items-start gap-3 p-3">
                       <div className="flex-1 text-sm">
                         <p className="flex flex-wrap items-center gap-2 font-medium">
-                          Fase {a.phase} — {a.title}
-                          {a.alreadySatisfied && <Badge variant="success">já ok</Badge>}
+                          {t("hardening.phaseLabel", { id: a.phase, title: a.title })}
+                          {a.alreadySatisfied && <Badge variant="success">{t("hardening.plan.satisfied")}</Badge>}
                           {a.fixesCheckIds.length > 0 && (
-                            <Badge variant="warning">{a.fixesCheckIds.length} correção(ões)</Badge>
+                            <Badge variant="warning">{t("hardening.plan.fixes", { count: a.fixesCheckIds.length })}</Badge>
                           )}
-                          {a.hasRollback && <Badge variant="secondary">com rollback</Badge>}
+                          {a.hasRollback && <Badge variant="secondary">{t("hardening.plan.rollback")}</Badge>}
                         </p>
                         <p className="text-muted-foreground">{a.description}</p>
                         {a.impact && (
@@ -958,10 +982,7 @@ export function SecurityStep({
                               className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
                             >
                               <p>
-                                Esta fase já foi aplicada com sucesso em{" "}
-                                {new Date(appliedAt).toLocaleString("pt-BR")}, mas o item abaixo continua
-                                reprovado — aplicar de novo provavelmente não resolve. Algo no servidor está
-                                desfazendo ou sobrepondo a correção:
+                                {t("hardening.plan.alreadyApplied", { date: formatDateTime(appliedAt) })}
                               </p>
                               <ul className="mt-1 list-disc pl-5">
                                 {stillFailing.map((c) => (
@@ -984,15 +1005,11 @@ export function SecurityStep({
                               só no rodapé da página (longe demais para ser vista). */}
                           {a.phase === "01" && !sshFormValid ? (
                             <span className="text-amber-400">
-                              Informe abaixo o usuário não-root criado na instalação para habilitar
-                              esta fase (a chave SSH é opcional).
+                              {t("hardening.plan.phase01Hint")}
                             </span>
                           ) : (
                             <>
-                              Começa por uma <strong>simulação</strong> (dry-run) só desta fase, no
-                              terminal abaixo: nada é alterado no servidor. No modo senha, o sudo vai
-                              pedir a sua senha. Se a simulação passar, aparece o botão para aplicar de
-                              verdade.
+                              <Trans k="hardening.plan.dryRunHint" components={{ b: <strong /> }} />
                             </>
                           )}
                         </span>
@@ -1004,7 +1021,7 @@ export function SecurityStep({
                             onClick={() => void openManual(a.phase)}
                           >
                             <TerminalSquare className="h-3.5 w-3.5" />
-                            Fazer manualmente
+                            {t("hardening.plan.manual")}
                           </Button>
                           <Button
                             size="sm"
@@ -1013,7 +1030,7 @@ export function SecurityStep({
                             onClick={() => void startExecution([a.phase])}
                           >
                             <Play className="h-3.5 w-3.5" />
-                            Executar apenas esta fase
+                            {t("hardening.plan.runOne")}
                           </Button>
                         </div>
                       </div>
@@ -1045,24 +1062,24 @@ export function SecurityStep({
 
           <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-start sm:justify-between">
             <Button variant="outline" onClick={() => setStage("scan")}>
-              Voltar ao relatório
+              {t("hardening.plan.backToReport")}
             </Button>
             <div className="flex flex-col items-end gap-1">
               <Button onClick={() => void startExecution()} disabled={!sshFormValid}>
-                <Eye className="h-4 w-4" /> Simular todas as fases pendentes (dry-run)
+                <Eye className="h-4 w-4" /> {t("hardening.plan.simulateAll")}
               </Button>
               {/* O rótulo antigo ("Executar dry-run…") não dizia a um leigo o
                   que o clique faz. A linha abaixo responde à pergunta literal
                   do dono do produto: "se eu clicar, o que acontece?". */}
               <p data-testid="dry-run-resumo" className="max-w-md text-right text-xs text-muted-foreground">
-                <strong>Nada é alterado no servidor</strong> — é só uma simulação.{" "}
+                <Trans k="hardening.plan.dryRunSummary" components={{ b: <strong /> }} />{" "}
                 <button
                   type="button"
                   aria-expanded={dryRunHelpOpen}
                   onClick={() => setDryRunHelpOpen((v) => !v)}
                   className="font-medium text-sky-400 underline-offset-2 hover:underline"
                 >
-                  O que isso faz?
+                  {t("hardening.plan.dryRunHelp")}
                 </button>
               </p>
               {dryRunHelpOpen && (
@@ -1070,19 +1087,14 @@ export function SecurityStep({
                   data-testid="dry-run-explicacao"
                   className="max-w-md text-right text-xs text-muted-foreground"
                 >
-                  Roda a <strong>simulação</strong> de todas as fases pendentes, na ordem.{" "}
-                  <strong>Nada é alterado no servidor</strong> — você acompanha tudo no terminal abaixo. No
-                  modo senha, o sudo vai pedir a sua senha no terminal. Se a simulação passar, aparece
-                  então o botão para aplicar de verdade.
+                  <Trans k="hardening.plan.dryRunExplain" components={{ b: <strong /> }} />
                 </p>
               )}
             </div>
           </div>
           {!sshFormValid && (
             <p className="text-right text-xs text-amber-400">
-              Informe o usuário criado na instalação para executar a Fase 01 — a chave pública SSH
-              é opcional, mas se você colar uma ela precisa estar em formato válido (ou use "Fazer
-              manualmente" na fase).
+              {t("hardening.plan.invalidForm")}
             </p>
           )}
         </>
@@ -1109,15 +1121,23 @@ export function SecurityStep({
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 {runDry ? <Eye className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
-                {runDry ? "Dry-run (simulação)" : "Aplicando hardening"}
+                {t(runDry ? "hardening.run.titleDry" : "hardening.run.titleReal")}
               </CardTitle>
               <CardDescription>
                 {failedPhase ? (
-                  <>Parou na Fase {failedPhase} — {phaseTitle(failedPhase)}</>
+                  <>{t("hardening.run.stoppedAt", { id: failedPhase, title: phaseTitle(failedPhase) })}</>
                 ) : (
                   <>
-                    Fase {Math.min(runIndex + 1, runQueue.length)} de {runQueue.length}
-                    {job ? ` — ${job.title}` : ""}
+                    {job
+                      ? t("hardening.run.progressJob", {
+                          current: Math.min(runIndex + 1, runQueue.length),
+                          total: runQueue.length,
+                          title: job.title,
+                        })
+                      : t("hardening.run.progress", {
+                          current: Math.min(runIndex + 1, runQueue.length),
+                          total: runQueue.length,
+                        })}
                   </>
                 )}
               </CardDescription>
@@ -1148,12 +1168,12 @@ export function SecurityStep({
                       >
                         <PhaseStatusIcon status={ui.status} />
                         <span className={ui.status === "running" ? "font-medium" : "text-muted-foreground"}>
-                          Fase {p.id} — {phaseTitle(p.id)}
+                          {t("hardening.phaseLabel", { id: p.id, title: phaseTitle(p.id) })}
                         </span>
                         <span className="ml-auto flex items-center gap-2">
-                          {ui.status === "pending" && <span className="text-xs text-muted-foreground">aguardando</span>}
+                          {ui.status === "pending" && <span className="text-xs text-muted-foreground">{t("hardening.run.pending")}</span>}
                           {ui.status === "skipped" && (
-                            <span className="text-xs text-muted-foreground">pulada (modo manual)</span>
+                            <span className="text-xs text-muted-foreground">{t("hardening.run.skipped")}</span>
                           )}
                           {ui.jobStatus && ui.status === "running" && <JobStatusBadge status={ui.jobStatus} />}
                           {hasDetail &&
@@ -1183,13 +1203,13 @@ export function SecurityStep({
               {job && (
                 <div className="flex flex-col gap-1">
                   <p className="text-xs text-muted-foreground">
-                    Log em tempo real — {job.title} <JobStatusBadge status={job.status} />
+                    {t("hardening.run.liveLog", { title: job.title })} <JobStatusBadge status={job.status} />
                   </p>
                   <pre
                     ref={logRef}
                     className="max-h-72 overflow-auto rounded-md bg-black/60 p-3 font-mono text-xs text-emerald-100/80"
                   >
-                    {job.log || "(sem saída ainda)"}
+                    {job.log || t("hardening.run.noOutput")}
                   </pre>
                 </div>
               )}
@@ -1204,25 +1224,25 @@ export function SecurityStep({
                 >
                   <p className="flex items-center gap-2 font-semibold text-red-300">
                     <XCircle className="h-4 w-4 shrink-0" />
-                    {runDry ? "A simulação parou" : "A aplicação parou"} na Fase {failedPhase} —{" "}
-                    {phaseTitle(failedPhase)}
+                    {t(runDry ? "hardening.run.failedDry" : "hardening.run.failedReal", {
+                      id: failedPhase,
+                      title: phaseTitle(failedPhase),
+                    })}
                   </p>
                   {(error ?? elevationError?.message) && (
                     <p className="text-red-100/90">{error ?? elevationError?.message}</p>
                   )}
                   <p className="text-muted-foreground">
-                    {runDry
-                      ? "Nada foi alterado no servidor — era uma simulação. As fases seguintes não rodaram."
-                      : "As fases seguintes não rodaram. O log da fase (acima, se houver) mostra o que aconteceu."}
+                    {t(runDry ? "hardening.run.failedDryNote" : "hardening.run.failedRealNote")}
                   </p>
                   <div className="flex flex-wrap gap-2 pt-1">
                     {runDry && (
                       <Button size="sm" onClick={() => void retryDryRun()}>
-                        Tentar a simulação de novo
+                        {t("hardening.run.retryDry")}
                       </Button>
                     )}
                     <Button size="sm" variant="outline" onClick={() => setStage("plan")}>
-                      Voltar ao plano
+                      {t("hardening.run.backToPlan")}
                     </Button>
                   </div>
                 </div>
@@ -1233,22 +1253,20 @@ export function SecurityStep({
                 <div className="flex flex-col items-center gap-3 py-6 text-center">
                   <CheckCircle2 className="h-10 w-10 text-emerald-400" />
                   <p className="font-medium">
-                    Simulação concluída sem erros — nada foi alterado no servidor.
+                    {t("hardening.run.dryDone")}
                   </p>
                   <p className="max-w-md text-sm text-muted-foreground">
-                    {runQueue.length === 1
-                      ? "A simulação percorreu a fase acima sem tocar em nada. "
-                      : `A simulação percorreu as ${runQueue.length} fases acima, na ordem, sem tocar em nada. `}
-                    Ao clicar em <strong>Aplicar de verdade</strong>, os mesmos passos rodam{" "}
-                    <strong>alterando o servidor</strong>: cada arquivo modificado ganha backup antes, e
-                    as fases de SSH/firewall entram com rollback automático de 5 minutos, revertendo
-                    sozinhas se você não confirmar que ainda consegue acessar o servidor.
+                    <Trans
+                      k="hardening.run.dryDoneBody"
+                      params={{ count: runQueue.length }}
+                      components={{ b: <strong /> }}
+                    />
                   </p>
                   <p data-testid="apply-for-real-warning" className="text-sm font-semibold text-emerald-300">
-                    Agora a VPS será alterada de verdade.
+                    {t("hardening.run.realWarning")}
                   </p>
                   <Button className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => void startRealApply()}>
-                    <ShieldCheck className="h-4 w-4" /> Aplicar de verdade
+                    <ShieldCheck className="h-4 w-4" /> {t("hardening.run.applyReal")}
                   </Button>
                 </div>
               )}
@@ -1258,7 +1276,7 @@ export function SecurityStep({
           {job && TERMINAL.includes(job.status) && !failedPhase && (
             <div className="flex justify-start">
               <Button variant="outline" onClick={() => setStage("plan")}>
-                Voltar ao plano
+                {t("hardening.run.backToPlan")}
               </Button>
             </div>
           )}
@@ -1273,9 +1291,9 @@ export function SecurityStep({
               <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 shadow-[0_0_32px_rgba(52,211,153,0.18)] ring-1 ring-emerald-500/30 motion-safe:animate-scale-in">
                 <ShieldCheck className="h-7 w-7 text-emerald-400" />
               </div>
-              <CardTitle className="text-2xl tracking-tight">Proteções aplicadas</CardTitle>
+              <CardTitle className="text-2xl tracking-tight">{t("hardening.done.title")}</CardTitle>
               <CardDescription>
-                Como a VPS chegou e como ela está hoje.
+                {t("hardening.done.subtitle")}
               </CardDescription>
             </CardHeader>
             <CardContent
@@ -1284,7 +1302,7 @@ export function SecurityStep({
             >
               <div className="flex flex-col items-center gap-2.5">
                 <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-                  Quando a VPS chegou
+                  {t("hardening.done.first")}
                 </span>
                 <div className="opacity-75">
                   <IndexGauge value={journeyFirst?.index ?? null} source={journeyFirst?.source ?? "internal"} />
@@ -1293,7 +1311,7 @@ export function SecurityStep({
               <ArrowRight className="hidden h-6 w-6 text-muted-foreground sm:block" />
               <div className="flex flex-col items-center gap-2.5">
                 <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-                  Hoje
+                  {t("hardening.done.today")}
                 </span>
                 {afterReport || resumed ? (
                   <IndexGauge value={journeyToday?.index ?? null} source={journeyToday?.source ?? "internal"} />
@@ -1304,7 +1322,7 @@ export function SecurityStep({
                     </div>
                     {/* Sem isto, alguns minutos parados pareciam travamento. */}
                     <p data-testid="final-scan-wait" className="text-center text-xs text-muted-foreground">
-                      Auditoria completa com o Lynis em andamento — leva de 2 a 5 minutos.
+                      {t("hardening.done.waiting")}
                     </p>
                   </div>
                 )}
@@ -1314,39 +1332,48 @@ export function SecurityStep({
               journeyToday?.index != null &&
               journeyFirst.source !== journeyToday.source && (
                 <p data-testid="journey-scales" className="px-6 pb-4 text-center text-xs text-muted-foreground">
-                  As duas notas usam réguas diferentes ({scaleLabel(journeyFirst.source)} e{" "}
-                  {scaleLabel(journeyToday.source)}) — por isso não mostramos a diferença em pontos. Nas
-                  instalações novas, a primeira verificação já usa o Lynis.
+                  {t("hardening.done.scales", {
+                    first: scaleLabel(t, journeyFirst.source),
+                    today: scaleLabel(t, journeyToday.source),
+                  })}
                 </p>
               )}
             {showLastApply && (
               <p data-testid="last-apply" className="px-6 pb-2 text-center text-xs text-muted-foreground">
-                Última aplicação: {beforeView?.index} → {lastApplyAfter?.index} (
                 {lastApplyDelta !== null
-                  ? `${scaleLabel(lastApplyAfter?.source ?? "internal")}), ${lastApplyDelta >= 0 ? "+" : ""}${lastApplyDelta} pontos`
-                  : `${scaleLabel(beforeView?.source ?? "internal")} → ${scaleLabel(lastApplyAfter?.source ?? "internal")})`}
+                  ? t("hardening.done.lastApply", {
+                      before: beforeView?.index ?? "",
+                      after: lastApplyAfter?.index ?? "",
+                      scale: scaleLabel(t, lastApplyAfter?.source ?? "internal"),
+                      delta: `${lastApplyDelta >= 0 ? "+" : ""}${lastApplyDelta}`,
+                      count: Math.abs(lastApplyDelta),
+                    })
+                  : t("hardening.done.lastApplyScales", {
+                      before: beforeView?.index ?? "",
+                      after: lastApplyAfter?.index ?? "",
+                      scaleBefore: scaleLabel(t, beforeView?.source ?? "internal"),
+                      scaleAfter: scaleLabel(t, lastApplyAfter?.source ?? "internal"),
+                    })}
               </p>
             )}
             {drifted && (
               <p data-testid="journey-drift" className="px-6 pb-4 text-center text-xs text-amber-300">
-                A nota era {lastApplyAfter?.index} logo depois da última aplicação e hoje é {journeyToday?.index}. A
-                nota muda com o tempo: atualizações de segurança novas ainda não instaladas e um reinício pendente
-                tiram pontos até serem aplicados. Veja o relatório completo para saber o que mudou.
+                {t("hardening.done.drift", { after: lastApplyAfter?.index ?? "", today: journeyToday?.index ?? "" })}
               </p>
             )}
             {doneDelta !== null && (
               <div className="flex justify-center pb-6">
                 {doneDelta > 0 ? (
                   <Badge variant="success" className="px-3 py-1 text-xs">
-                    <TrendingUp className="h-3.5 w-3.5" /> +{doneDelta} pontos no índice
+                    <TrendingUp className="h-3.5 w-3.5" /> {t("hardening.done.deltaUp", { delta: doneDelta, count: doneDelta })}
                   </Badge>
                 ) : doneDelta === 0 ? (
                   <Badge variant="secondary" className="px-3 py-1 text-xs">
-                    <Minus className="h-3.5 w-3.5" /> índice mantido — correções aplicadas
+                    <Minus className="h-3.5 w-3.5" /> {t("hardening.done.deltaSame")}
                   </Badge>
                 ) : (
                   <Badge variant="warning" className="px-3 py-1 text-xs">
-                    <TrendingDown className="h-3.5 w-3.5" /> {doneDelta} pontos — revise o relatório
+                    <TrendingDown className="h-3.5 w-3.5" /> {t("hardening.done.deltaDown", { delta: doneDelta, count: Math.abs(doneDelta) })}
                   </Badge>
                 )}
               </div>
@@ -1361,7 +1388,7 @@ export function SecurityStep({
                 data-testid="remaining-critical"
                 className="flex flex-col gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-400"
               >
-                <p>⚠️ Ainda ficou reprovado (crítico):</p>
+                <p>{t("hardening.done.remaining")}</p>
                 <ul className="list-disc pl-5">
                   {afterReport.checks
                     .filter((c) => c.severity === "critical" && c.status === "fail")
@@ -1381,18 +1408,18 @@ export function SecurityStep({
               {/* Fora do assistente a tela abre neste resultado salvo: sem este
                   botão não havia como verificar de novo (visto em campo). */}
               <Button variant="outline" onClick={() => void verifyAgain()} disabled={scanning}>
-                <RefreshCw className="h-4 w-4" /> Verificar de novo
+                <RefreshCw className="h-4 w-4" /> {t("hardening.done.verifyAgain")}
               </Button>
               <Button variant="ghost" onClick={() => setStage("scan")}>
-                Ver relatório completo
+                {t("hardening.done.fullReport")}
               </Button>
             </div>
             <Button onClick={onNext}>
               {mode === "page" ? (
-                "Voltar para Segurança"
+                t("hardening.done.backToSecurity")
               ) : (
                 <>
-                  Continuar <ArrowRight className="h-4 w-4" />
+                  {t("hardening.done.continue")} <ArrowRight className="h-4 w-4" />
                 </>
               )}
             </Button>
@@ -1403,7 +1430,7 @@ export function SecurityStep({
       {/* ---------------------------------------------------------- MODAL MANUAL */}
       {manualModal !== null && (
         <ManualPhaseModal
-          title={`Fase ${manualModal} — ${phaseTitle(manualModal)}`}
+          title={t("hardening.phaseLabel", { id: manualModal, title: phaseTitle(manualModal) })}
           data={manualData[manualModal] ?? null}
           verifying={manualVerifying}
           satisfied={

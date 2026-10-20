@@ -8,6 +8,7 @@ import type {
   ProjectType,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { apiErrorText, useI18n, type Key } from "@/i18n";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { Badge } from "@/components/ui/badge";
@@ -24,29 +25,31 @@ import {
 } from "lucide-react";
 
 export function StatusBadge({ status }: { status: ProjectStatus }) {
+  const { t } = useI18n();
   switch (status) {
     case "running":
-      return <Badge variant="success">rodando</Badge>;
+      return <Badge variant="success">{t("dashboard.status.running")}</Badge>;
     case "stopped":
-      return <Badge variant="secondary">parado</Badge>;
+      return <Badge variant="secondary">{t("dashboard.status.stopped")}</Badge>;
     case "deploying":
-      return <Badge variant="warning">deployando…</Badge>;
+      return <Badge variant="warning">{t("dashboard.status.deploying")}</Badge>;
     case "error":
-      return <Badge variant="destructive">erro</Badge>;
+      return <Badge variant="destructive">{t("dashboard.status.error")}</Badge>;
     case "created":
-      return <Badge variant="outline">criado</Badge>;
+      return <Badge variant="outline">{t("dashboard.status.created")}</Badge>;
   }
 }
 
-export const TYPE_LABELS: Record<ProjectType, string> = {
-  static: "site estático (HTML)",
-  "static-node": "estático (Node)",
-  compose: "compose adotado",
-  dockerfile: "dockerfile",
-  unknown: "desconhecido",
+export const TYPE_LABELS: Record<ProjectType, Key> = {
+  static: "dashboard.type.static",
+  "static-node": "dashboard.type.staticNode",
+  compose: "dashboard.type.compose",
+  dockerfile: "dashboard.type.dockerfile",
+  unknown: "dashboard.type.unknown",
 };
 
 function ProjectCard({ item }: { item: ProjectResponse }) {
+  const { t } = useI18n();
   const { project, status, containers, url } = item;
   return (
     <Card className="hover:bg-accent/30">
@@ -74,12 +77,12 @@ function ProjectCard({ item }: { item: ProjectResponse }) {
       </CardHeader>
       <CardContent className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <Badge variant="outline">
-          {project.detection ? TYPE_LABELS[project.detection.type] : "não detectado"}
+          {project.detection ? t(TYPE_LABELS[project.detection.type]) : t("dashboard.type.undetected")}
         </Badge>
         <span>
-          {containers.length} container(es)
+          {t("dashboard.card.containers", { n: containers.length })}
           {containers.length > 0 &&
-            ` · ${containers.filter((c) => c.state === "running").length} ativo(s)`}
+            t("dashboard.card.active", { n: containers.filter((c) => c.state === "running").length })}
         </span>
       </CardContent>
     </Card>
@@ -87,6 +90,7 @@ function ProjectCard({ item }: { item: ProjectResponse }) {
 }
 
 export function DashboardPage() {
+  const { t } = useI18n();
   const [data, setData] = useState<ProjectListResponse | null>(null);
   const [containers, setContainers] = useState<DockerContainersResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +108,7 @@ export function DashboardPage() {
       setContainers(docker);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar.");
+      setError(apiErrorText(err, "dashboard.loadError"));
     } finally {
       setLoading(false);
     }
@@ -152,20 +156,20 @@ export function DashboardPage() {
       {checklistShown === false && <TwoFactorNudge />}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Projetos</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t("dashboard.title")}</h1>
           <p className="text-sm text-muted-foreground">
-            Deploys gerenciados pelo painel, com domínio via Caddy central.
+            {t("dashboard.subtitle")}
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => void refresh()}>
             <RefreshCw className="h-4 w-4" />
-            Atualizar
+            {t("dashboard.refresh")}
           </Button>
           <Button size="sm" asChild>
             <Link to="/projects/new">
               <Plus className="h-4 w-4" />
-              Novo Projeto
+              {t("dashboard.newProject")}
             </Link>
           </Button>
         </div>
@@ -174,7 +178,7 @@ export function DashboardPage() {
       {error && <p className="text-sm text-destructive">{error}</p>}
       {loading && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t("dashboard.loading")}
         </p>
       )}
 
@@ -185,14 +189,14 @@ export function DashboardPage() {
               <Server className="h-6 w-6 text-muted-foreground" />
             </div>
             <div className="flex flex-col gap-1">
-              <p className="font-medium">Nenhum projeto ainda</p>
+              <p className="font-medium">{t("dashboard.empty.title")}</p>
               <p className="text-sm text-muted-foreground">
-                Crie o primeiro para fazer deploy com domínio automático.
+                {t("dashboard.empty.hint")}
               </p>
             </div>
             <Button size="sm" asChild>
               <Link to="/projects/new">
-                <Plus className="h-4 w-4" /> Criar projeto
+                <Plus className="h-4 w-4" /> {t("dashboard.empty.create")}
               </Link>
             </Button>
           </CardContent>
@@ -205,25 +209,25 @@ export function DashboardPage() {
 
       <section className="flex flex-col gap-3">
         <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <Box className="h-5 w-5" /> Containers externos
+          <Box className="h-5 w-5" /> {t("dashboard.external.title")}
           <span className="text-sm font-normal text-muted-foreground">
-            (existem no Docker, mas não são gerenciados pelo painel — nunca são alterados)
+            {t("dashboard.external.note")}
           </span>
         </h2>
         <Card>
           <CardContent className="p-0">
             {external.length === 0 ? (
               <p className="px-4 py-6 text-sm text-muted-foreground">
-                Nenhum container externo encontrado.
+                {t("dashboard.external.empty")}
               </p>
             ) : (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <th className="px-4 py-2.5 font-medium">Nome</th>
-                    <th className="px-4 py-2.5 font-medium">Imagem</th>
-                    <th className="px-4 py-2.5 font-medium">Stack</th>
-                    <th className="px-4 py-2.5 font-medium">Status</th>
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colName")}</th>
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colImage")}</th>
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colStack")}</th>
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colStatus")}</th>
                   </tr>
                 </thead>
                 <tbody>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DomainCheckResponse, Project, ProjectResponse } from "@paas/core";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,6 +25,7 @@ function DomainRow({
   primary: boolean;
   onChanged: () => void;
 }) {
+  const { t } = useI18n();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +42,7 @@ function DomainRow({
       setConfirming(false);
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível alterar o domínio.");
+      setError(apiErrorText(err, "projects.domains.changeError"));
     } finally {
       setBusy(false);
     }
@@ -60,30 +62,30 @@ function DomainRow({
         </a>
         {primary && (
           <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-400">
-            <Star className="h-3 w-3" /> principal
+            <Star className="h-3 w-3" /> {t("projects.domains.primary")}
           </span>
         )}
         {domain.endsWith(".sslip.io") && (
-          <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">automático</span>
+          <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{t("projects.domains.automatic")}</span>
         )}
         <div className="ml-auto flex gap-2">
           {!primary && !confirming && (
             <>
               <Button size="sm" variant="outline" className="h-7" disabled={busy} onClick={() => void call(`${base}/primary`, "POST")}>
-                Tornar principal
+                {t("projects.domains.makePrimary")}
               </Button>
               <Button size="sm" variant="ghost" className="h-7 text-red-400" disabled={busy} onClick={() => setConfirming(true)}>
-                <Trash2 className="h-3.5 w-3.5" /> Remover
+                <Trash2 className="h-3.5 w-3.5" /> {t("projects.domains.remove")}
               </Button>
             </>
           )}
           {confirming && (
             <>
               <Button size="sm" variant="outline" className="h-7" onClick={() => setConfirming(false)}>
-                Cancelar
+                {t("projects.domains.cancel")}
               </Button>
               <Button size="sm" variant="destructive" className="h-7" disabled={busy} onClick={() => void call(base, "DELETE")}>
-                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Confirmar remoção
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {t("projects.domains.confirmRemove")}
               </Button>
             </>
           )}
@@ -91,13 +93,13 @@ function DomainRow({
       </div>
       {hasPort && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <label htmlFor={`port-${domain}`}>Porta</label>
+          <label htmlFor={`port-${domain}`}>{t("projects.domains.port")}</label>
           <input
             id={`port-${domain}`}
             inputMode="numeric"
             value={port}
             onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))}
-            placeholder={defaultPort ? String(defaultPort) : "porta"}
+            placeholder={defaultPort ? String(defaultPort) : t("projects.domains.portPlaceholder")}
             className="h-7 w-20 rounded-md border bg-transparent px-2 font-mono text-foreground"
           />
           <Button
@@ -107,9 +109,9 @@ function DomainRow({
             disabled={busy || port === (currentPort ? String(currentPort) : "")}
             onClick={() => void call(`${base}/port`, "PUT", { port: port ? Number(port) : null })}
           >
-            Salvar porta
+            {t("projects.domains.savePort")}
           </Button>
-          <span>{port ? "porta própria deste domínio" : `em branco = a do projeto (${defaultPort ?? "?"})`}</span>
+          <span>{port ? t("projects.domains.ownPort") : t("projects.domains.blankPort", { port: defaultPort ?? "?" })}</span>
         </div>
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
@@ -131,6 +133,7 @@ export function ProjectDomainsCard({
   publicIp: string | null;
   onChanged: () => void;
 }) {
+  const { t } = useI18n();
   const [adding, setAdding] = useState(false);
   const [domain, setDomain] = useState("");
   const [check, setCheck] = useState<DomainCheckResponse | null>(null);
@@ -145,7 +148,7 @@ export function ProjectDomainsCard({
     try {
       setCheck(await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(domain.trim())}`));
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível verificar o DNS.");
+      setError(apiErrorText(err, "projects.domains.verifyError"));
     } finally {
       setBusy(null);
     }
@@ -164,7 +167,7 @@ export function ProjectDomainsCard({
       setCheck(null);
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível conectar o domínio.");
+      setError(apiErrorText(err, "projects.domains.connectError"));
     } finally {
       setBusy(null);
     }
@@ -177,17 +180,11 @@ export function ProjectDomainsCard({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Globe className="h-4 w-4" /> Domínios
+          <Globe className="h-4 w-4" /> {t("projects.domains.title")}
         </CardTitle>
         <CardDescription>
-          Todos abrem o mesmo site, cada um com o seu certificado HTTPS. As mudanças valem na hora.
-          {!live && (
-            <>
-              {" "}
-              Antes do primeiro deploy, o endereço já responde com a página &quot;Site em manutenção&quot; (com HTTPS):
-              dá para conferir o DNS enquanto o projeto é configurado.
-            </>
-          )}
+          {t("projects.domains.description")}
+          {!live && <> {t("projects.domains.descriptionNotLive")}</>}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -201,14 +198,14 @@ export function ProjectDomainsCard({
 
         {!adding && (
           <Button variant="outline" className="self-start" onClick={() => setAdding(true)}>
-            <Plus className="h-4 w-4" /> Conectar novo domínio
+            <Plus className="h-4 w-4" /> {t("projects.domains.connectNew")}
           </Button>
         )}
 
         {adding && (
           <div className="flex flex-col gap-3 rounded-md border p-4">
             <label htmlFor="pd-new" className="flex flex-col gap-1.5 text-sm font-medium">
-              Novo domínio
+              {t("projects.domains.newDomain")}
               <div className="flex gap-2">
                 <Input
                   id="pd-new"
@@ -217,10 +214,10 @@ export function ProjectDomainsCard({
                     setDomain(e.target.value);
                     setCheck(null);
                   }}
-                  placeholder="loja.meusite.com.br"
+                  placeholder={t("projects.domains.newPlaceholder")}
                 />
                 <Button variant="outline" disabled={busy !== null || !domain.trim()} onClick={() => void verify()}>
-                  {busy === "check" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />} Verificar DNS
+                  {busy === "check" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />} {t("projects.domains.verify")}
                 </Button>
               </div>
             </label>
@@ -232,8 +229,7 @@ export function ProjectDomainsCard({
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              Dá para conectar antes de o DNS propagar: o domínio passa a abrir (com HTTPS) assim que o registro apontar
-              para a VPS.
+              {t("projects.domains.propagationHint")}
             </p>
             {error && (
               <p role="alert" className="text-sm text-destructive">
@@ -248,11 +244,11 @@ export function ProjectDomainsCard({
                   setError(null);
                 }}
               >
-                Cancelar
+                {t("projects.domains.cancel")}
               </Button>
               <Button disabled={busy !== null || !domain.trim()} onClick={() => void connect()}>
                 {busy === "add" && <Loader2 className="h-4 w-4 animate-spin" />}
-                Conectar
+                {t("projects.domains.connect")}
               </Button>
             </div>
           </div>

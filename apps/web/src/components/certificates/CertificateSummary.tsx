@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useInRouterContext } from "react-router";
 import type { CertificateItem, CertificateListResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
-import { formatDay, modeLabel, STATE_LABELS, stateVariant } from "@/lib/certificates";
+import { formatDay, modeLabel, STATE_KEYS, stateVariant } from "@/lib/certificates";
+import { useI18n } from "@/i18n";
 import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { ChevronRight, ShieldCheck } from "lucide-react";
@@ -18,6 +19,7 @@ import { ChevronRight, ShieldCheck } from "lucide-react";
  * resumo consulta sozinho até ele ficar válido (lib/auto-refresh.ts).
  */
 export function CertificateSummary({ query }: { query: string }) {
+  const { t } = useI18n();
   const [items, setItems] = useState<CertificateItem[] | null>(null);
   // Fora de um roteador (card renderizado sozinho), um link comum.
   const inRouter = useInRouterContext();
@@ -49,26 +51,26 @@ export function CertificateSummary({ query }: { query: string }) {
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-dashed px-4 py-3" data-testid="certificate-summary">
       <p className="flex items-center gap-2 text-sm font-medium">
-        <ShieldCheck className="h-4 w-4" /> Certificados HTTPS
+        <ShieldCheck className="h-4 w-4" /> {t("certificates.summary.title")}
       </p>
-      {items === null && <p className="text-xs text-muted-foreground">conferindo…</p>}
+      {items === null && <p className="text-xs text-muted-foreground">{t("certificates.summary.checking")}</p>}
       {items?.map((i) => (
         <div key={i.host} className="flex flex-wrap items-center gap-2 text-xs">
           <span className="break-all font-mono">{i.host}</span>
-          <Badge variant={stateVariant(i.state)}>{STATE_LABELS[i.state]}</Badge>
+          <Badge variant={stateVariant(i.state)}>{t(STATE_KEYS[i.state])}</Badge>
           <span className="text-muted-foreground">
             {modeLabel(i)}
-            {i.validTo ? ` · até ${formatDay(i.validTo)}` : ""}
+            {i.validTo ? t("certificates.summary.until", { date: formatDay(i.validTo) }) : ""}
           </span>
         </div>
       ))}
       {inRouter ? (
         <Link to="/certificates" className={linkClass}>
-          Ver em Certificados <ChevronRight className="h-3 w-3" />
+          {t("certificates.summary.link")} <ChevronRight className="h-3 w-3" />
         </Link>
       ) : (
         <a href="/certificates" className={linkClass}>
-          Ver em Certificados <ChevronRight className="h-3 w-3" />
+          {t("certificates.summary.link")} <ChevronRight className="h-3 w-3" />
         </a>
       )}
     </div>

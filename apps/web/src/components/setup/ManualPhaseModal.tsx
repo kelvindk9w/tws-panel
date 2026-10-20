@@ -2,6 +2,7 @@ import type { SecurityManualCommandsResponse } from "@paas/core";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Trans, useI18n } from "@/i18n";
 import { Loader2, RefreshCw, TerminalSquare, X } from "lucide-react";
 
 interface ManualPhaseModalProps {
@@ -25,12 +26,13 @@ interface ManualPhaseModalProps {
  * "Já executei — revarrer", que re-roda o scan e valida a fase.
  */
 export function ManualPhaseModal({ title, data, verifying, satisfied, onRescan, onClose }: ManualPhaseModalProps) {
+  const { t } = useI18n();
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
       role="dialog"
       aria-modal="true"
-      aria-label={`Execução manual — ${title}`}
+      aria-label={t("hardening.manual.aria", { title })}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -40,34 +42,32 @@ export function ManualPhaseModal({ title, data, verifying, satisfied, onRescan, 
           <div>
             <h3 className="flex items-center gap-2 text-lg font-semibold">
               <TerminalSquare className="h-5 w-5 text-muted-foreground" />
-              Fazer manualmente — {title}
+              {t("hardening.manual.heading", { title })}
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Rode os comandos abaixo no servidor, na ordem (pelo SSH ou pelo terminal embutido do
-              painel). Depois clique em <strong>Já executei — verificar de novo</strong> para o painel validar
-              a fase.
+              <Trans k="hardening.manual.intro" components={{ b: <strong /> }} />
             </p>
           </div>
-          <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0" onClick={onClose} aria-label="Fechar janela">
+          <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0" onClick={onClose} aria-label={t("hardening.manual.closeAria")}>
             <X className="h-4 w-4" />
           </Button>
         </div>
 
         {satisfied && (
           <p className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400">
-            ✅ Esta fase já aparece como concluída na última verificação.
+            {t("hardening.manual.satisfied")}
           </p>
         )}
 
         {!data ? (
           <p className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Carregando o passo a passo…
+            <Loader2 className="h-4 w-4 animate-spin" /> {t("hardening.manual.loading")}
           </p>
         ) : (
           <>
             <div className="flex flex-col gap-2">
               <p className="text-xs font-medium text-muted-foreground">
-                Passo a passo — comandos exatos (copie e execute um por um):
+                {t("hardening.manual.stepsLabel")}
               </p>
               {data.commands.map((cmd) => (
                 <div
@@ -80,14 +80,14 @@ export function ManualPhaseModal({ title, data, verifying, satisfied, onRescan, 
               ))}
               {data.notes.map((n) => (
                 <p key={n} className="text-xs text-amber-300/90">
-                  ℹ️ {n}
+                  {t("hardening.manual.note", { note: n })}
                 </p>
               ))}
             </div>
 
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">
-                Ver o script completo da fase ({data.script})
+                {t("hardening.manual.script", { script: data.script })}
               </summary>
               <div className="relative mt-1">
                 <div className="absolute right-1 top-1">
@@ -103,14 +103,14 @@ export function ManualPhaseModal({ title, data, verifying, satisfied, onRescan, 
 
         <div className="flex items-center justify-between gap-2 border-t border-border pt-4">
           <Button variant="outline" onClick={onClose}>
-            Fechar
+            {t("hardening.manual.close")}
           </Button>
           <Button onClick={onRescan} disabled={verifying || !data}>
             {verifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Já executei — verificar de novo
+            {t("hardening.manual.rescan")}
           </Button>
         </div>
-        {satisfied && <Badge variant="success" className="w-fit">✅ confirmado na última verificação</Badge>}
+        {satisfied && <Badge variant="success" className="w-fit">{t("hardening.manual.confirmed")}</Badge>}
       </div>
     </div>
   );

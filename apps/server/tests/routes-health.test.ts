@@ -165,7 +165,7 @@ describe("GET /api/health/scan", () => {
   it("alvo host: interfaces e reinicialização pendente são lidas NA VPS pelo terminal", async () => {
     semRede();
     const { term, captured, calls } = fakeTerminal("ok", {
-      [HOST_NETWORK_COMMAND]: "2: eth0    inet 169.58.235.67/24 brd 169.58.235.255 scope global eth0\r\n",
+      [HOST_NETWORK_COMMAND]: "2: eth0    inet 203.0.113.67/24 brd 203.0.113.255 scope global eth0\r\n",
       [HOST_REBOOT_COMMAND]: "PAAS_REBOOT=1\r\nlinux-image-generic\r\n",
     });
     app.decorate("terminalService", term);
@@ -177,7 +177,7 @@ describe("GET /api/health/scan", () => {
     expect(captured.sort()).toEqual([HOST_NETWORK_COMMAND, HOST_REBOOT_COMMAND].sort());
     expect(body.network).toMatchObject({
       interfacesSource: "host",
-      interfaces: [{ name: "eth0", addresses: ["169.58.235.67/24"] }],
+      interfaces: [{ name: "eth0", addresses: ["203.0.113.67/24"] }],
     });
     expect(body.reboot).toEqual({ pending: true, packages: ["linux-image-generic"] });
     expect(body.checks.reboot.level).toBe("warning");

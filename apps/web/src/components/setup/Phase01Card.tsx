@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { pageLocation } from "@/lib/page-location";
 import { isInsecureTransport } from "@/lib/terminal-info";
+import { Trans, useI18n } from "@/i18n";
 import { AlertTriangle, ChevronDown, ChevronRight, KeyRound } from "lucide-react";
 
 type UserAccess = NonNullable<SecurityScanReport["nonRootSudoUserAccess"]>[string];
@@ -53,6 +54,7 @@ export function Phase01Card({
   detectedSudoUsers: string[];
   report: SecurityScanReport | null;
 }) {
+  const { t } = useI18n();
   const user = sshUser.trim();
   const userOk = isValidSshUsername(user);
   const keyEmpty = sshPublicKey.trim() === "";
@@ -68,23 +70,25 @@ export function Phase01Card({
     if (missingKey) setKeyOpen(true);
   }, [missingKey]);
   const insecure = isInsecureTransport(pageLocation());
-  const who = userOk ? user : "seu usuário";
+  const who = userOk ? user : t("hardening.phase01.whoDefault");
+  const b = <strong />;
+  const code = <code className="font-mono" />;
+  const bm = <strong className="font-mono" />;
 
   return (
     <Card className="border-amber-500/40">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
-          <KeyRound className="h-4 w-4 text-amber-400" /> Fase 01 — desativar a senha do root
+          <KeyRound className="h-4 w-4 text-amber-400" /> {t("hardening.phase01.title")}
         </CardTitle>
         <CardDescription>
-          Depois desta fase, ninguém entra como root com senha. Você entra com a sua chave SSH e
-          administra com o seu usuário e a senha dele.
+          {t("hardening.phase01.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted-foreground" htmlFor="ssh-user">
-            Usuário não-root criado na instalação
+            {t("hardening.phase01.userLabel")}
           </label>
           <Input
             id="ssh-user"
@@ -93,17 +97,17 @@ export function Phase01Card({
             className="h-8 w-64 font-mono"
           />
           {user !== "" && !userOk && (
-            <p className="text-xs text-red-400">Nome inválido (minúsculas, sem espaços, nunca root).</p>
+            <p className="text-xs text-red-400">{t("hardening.phase01.userInvalid")}</p>
           )}
           {/* De onde veio o nome: sem isso, parece um chute do painel. */}
           {configuredSshUser !== null && user === configuredSshUser && (
             <p className="text-xs text-muted-foreground">
-              ⚙️ Nome da <strong>configuração da instalação</strong>. Se não for esse, é só editar.
+              <Trans k="hardening.phase01.userFromConfig" components={{ b }} />
             </p>
           )}
           {configuredSshUser === null && soleDetectedUser !== null && user === soleDetectedUser && (
             <p className="text-xs text-muted-foreground">
-              🔎 Nome <strong>detectado no servidor</strong>. Se não for esse, é só editar.
+              <Trans k="hardening.phase01.userDetected" components={{ b }} />
             </p>
           )}
           {/* Configurado mas fora do grupo sudo: avisa, sem trocar por outro
@@ -115,10 +119,11 @@ export function Phase01Card({
               <p data-testid="configured-user-not-detected" className="flex items-start gap-1 text-xs text-amber-400">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>
-                  A verificação <strong>não encontrou</strong>{" "}
-                  <strong className="font-mono">{configuredSshUser}</strong> com sudo neste servidor.
-                  Confira o nome e, se preciso, rode como root:{" "}
-                  <code className="font-mono">usermod -aG sudo {configuredSshUser}</code>
+                  <Trans
+                    k="hardening.phase01.userNotDetected"
+                    params={{ user: configuredSshUser }}
+                    components={{ b, bm, code }}
+                  />
                 </span>
               </p>
             )}
@@ -126,8 +131,11 @@ export function Phase01Card({
           {configuredSshUser === null && detectedSudoUsers.length > 1 && (
             <div className="flex flex-col gap-1">
               <p className="text-xs text-muted-foreground">
-                Encontramos <strong>{detectedSudoUsers.length} usuários</strong> com sudo no servidor.
-                Qual deles você criou na instalação?
+                <Trans
+                  k="hardening.phase01.userMany"
+                  params={{ n: detectedSudoUsers.length }}
+                  components={{ b }}
+                />
               </p>
               <div className="flex flex-wrap gap-2">
                 {detectedSudoUsers.map((name) => (
@@ -146,7 +154,7 @@ export function Phase01Card({
             </div>
           )}
           {detectedSudoUsers.length === 0 && user === "" && (
-            <p className="text-xs text-muted-foreground">O nome que você criou ao seguir o README (ex.: deploy).</p>
+            <p className="text-xs text-muted-foreground">{t("hardening.phase01.userHint")}</p>
           )}
         </div>
 
@@ -154,35 +162,31 @@ export function Phase01Card({
         <div data-testid="phase01-status" className="flex flex-col gap-1 rounded-md border border-border bg-secondary/20 p-3 text-sm">
           {outcome === null ? (
             <p className="text-muted-foreground">
-              Não deu para conferir {who} nesta verificação. A simulação mostra, antes de qualquer
-              mudança, se a senha do root vai ser desativada.
+              {t("hardening.phase01.unchecked", { who })}
             </p>
           ) : (
             <>
               <p>
                 {outcome.hasPassword ? "✅" : "❌"}{" "}
-                {outcome.hasPassword ? `${user} tem senha` : `${user} não tem senha`}
+                {t(outcome.hasPassword ? "hardening.phase01.hasPassword" : "hardening.phase01.noPassword", { user })}
               </p>
               <p>
                 {outcome.keys > 0 ? "✅" : "❌"}{" "}
                 {outcome.keys > 0
-                  ? `${outcome.keys} chave SSH instalada${outcome.keys > 1 ? "s" : ""}${keyOk ? " (contando a que você colou)" : ""}`
-                  : "nenhuma chave SSH instalada"}
+                  ? `${t("hardening.phase01.keys", { count: outcome.keys })}${keyOk ? t("hardening.phase01.keysPasted") : ""}`
+                  : t("hardening.phase01.noKeys")}
               </p>
               {outcome.willLock ? (
                 <p className="font-semibold text-emerald-400">
-                  Resultado: a senha do root será desativada.
+                  {t("hardening.phase01.resultLocked")}
                 </p>
               ) : !outcome.hasPassword ? (
                 <p className="font-semibold text-amber-400">
-                  Resultado: a senha do root não será desativada — sem senha, {user} ficaria sem sudo.
-                  Para corrigir, rode <code className="font-mono">sudo passwd {user}</code> no terminal
-                  abaixo e clique em “Verificar de novo”.
+                  <Trans k="hardening.phase01.resultNoPassword" params={{ user }} components={{ code }} />
                 </p>
               ) : (
                 <p className="font-semibold text-amber-400">
-                  Resultado: a senha do root não será desativada e nada muda — você continua entrando com
-                  a senha. Para ativar a proteção, instale sua chave abaixo.
+                  {t("hardening.phase01.resultNoKey")}
                 </p>
               )}
             </>
@@ -199,21 +203,18 @@ export function Phase01Card({
             className="flex items-center gap-2 text-left text-sm font-medium"
           >
             {keyOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-            {missingKey ? "Instalar minha chave SSH" : "Adicionar uma chave SSH (opcional)"}
+            {t(missingKey ? "hardening.phase01.keyToggleMissing" : "hardening.phase01.keyToggleOptional")}
           </button>
           {keyOpen && (
             <div className="flex flex-col gap-2 pl-6">
               <p className="text-xs text-muted-foreground">
-                Cole o conteúdo do arquivo <code className="font-mono">.pub</code> do seu computador — a
-                fase instala a chave no servidor para você. Se sua chave já está no servidor, deixe em
-                branco.
+                <Trans k="hardening.phase01.keyHelp" components={{ code }} />
               </p>
               <p className="text-xs text-muted-foreground">
-                <strong>A chave pública não é segredo</strong> — é feita para ser distribuída. Nunca cole
-                a <strong>chave privada</strong> (o arquivo sem <code className="font-mono">.pub</code>).
+                <Trans k="hardening.phase01.keyPublic" components={{ b, code }} />
               </p>
               <label className="text-xs text-muted-foreground" htmlFor="ssh-pubkey">
-                Chave pública SSH (conteúdo do arquivo .pub) — opcional
+                {t("hardening.phase01.keyLabel")}
               </label>
               <textarea
                 id="ssh-pubkey"
@@ -221,16 +222,15 @@ export function Phase01Card({
                 onChange={(e) => onSshPublicKeyChange(e.target.value)}
                 rows={3}
                 spellCheck={false}
-                placeholder="ssh-ed25519 AAAAC3NzaC… voce@sua-maquina"
+                placeholder={t("hardening.phase01.keyPlaceholder")}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
               />
               {!keyEmpty && !keyOk && (
                 <p className="text-xs text-red-400">
-                  Formato não reconhecido — cole o conteúdo completo do arquivo .pub (uma linha,
-                  começando com ssh-ed25519 ou ssh-rsa).
+                  {t("hardening.phase01.keyInvalid")}
                 </p>
               )}
-              {keyOk && <p className="text-xs text-emerald-400">Sua chave parece válida ✅</p>}
+              {keyOk && <p className="text-xs text-emerald-400">{t("hardening.phase01.keyValid")}</p>}
               <SshKeyGuide />
             </div>
           )}
@@ -245,30 +245,22 @@ export function Phase01Card({
             className="flex items-center gap-2 text-left text-sm font-medium"
           >
             {detailsOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-            Detalhes e emergência
+            {t("hardening.phase01.detailsToggle")}
           </button>
           {detailsOpen && (
             <div className="flex flex-col gap-2 pl-6 text-xs text-muted-foreground">
               <p>
-                Ao aplicar, abra uma <strong>nova janela SSH</strong> (sem fechar a atual) e teste o login
-                antes de confirmar. Se você não confirmar em 5 minutos, a mudança é desfeita sozinha.
+                <Trans k="hardening.phase01.details.apply" components={{ b }} />
               </p>
               <p>
-                Perdeu a chave? Entre pelo <strong>console da sua hospedagem</strong> (VNC, no painel do
-                provedor) com <strong className="font-mono">{who}</strong> e a senha dele — a senha do root
-                não funciona mais lá.
+                <Trans k="hardening.phase01.details.lostKey" params={{ who }} components={{ b, bm }} />
               </p>
               <p>
-                <strong>Não confunda:</strong> a chave SSH é como você <strong>entra</strong> na VPS pelo
-                SSH; a senha do sudo é o que <strong>autoriza</strong> comandos administrativos. Para
-                desativar a senha do root sem te trancar para fora, a fase exige pelo menos uma chave
-                instalada e a senha de {who}.
+                <Trans k="hardening.phase01.details.dontConfuse" params={{ who }} components={{ b }} />
               </p>
               {insecure && (
                 <p>
-                  Esta página está sem criptografia (http fora do túnel SSH). Colar a chave pública não
-                  vaza nada útil, mas alguém no caminho poderia <strong>alterar</strong> o que trafega —
-                  prefira o túnel SSH.
+                  <Trans k="hardening.phase01.details.insecure" components={{ b }} />
                 </p>
               )}
             </div>

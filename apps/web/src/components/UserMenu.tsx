@@ -3,7 +3,9 @@ import { useNavigate } from "react-router";
 import { ApiRequestError, apiFetch, clearSetupToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
-import { ChevronDown, KeyRound, LogOut, Settings, ShieldCheck, UserRound } from "lucide-react";
+import { LanguageSelect } from "@/components/LanguageSelect";
+import { apiErrorText, useI18n } from "@/i18n";
+import { ChevronDown, KeyRound, Languages, LogOut, Settings, ShieldCheck, UserRound } from "lucide-react";
 
 /**
  * Menu do usuário: atalhos para Configurações (a conta mora lá) e sair.
@@ -17,6 +19,7 @@ import { ChevronDown, KeyRound, LogOut, Settings, ShieldCheck, UserRound } from 
  * aí ir para o login é verdade.
  */
 export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-left" | "sidebar-right" }) {
+  const { t } = useI18n();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -44,7 +47,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
       await apiFetch("/api/auth/logout", { method: "POST", body: "{}" });
     } catch (err) {
       if (!(err instanceof ApiRequestError && err.status === 401)) {
-        const detail = err instanceof ApiRequestError ? err.message : "Erro inesperado ao falar com o servidor.";
+        const detail = err instanceof ApiRequestError ? apiErrorText(err, "shell.userMenu.unexpectedError") : t("shell.userMenu.unexpectedError");
         setLogoutError(detail);
         setLeaving(false);
         return;
@@ -65,7 +68,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
     <div ref={containerRef} className={placement === "top" ? "relative ml-auto" : "relative w-full"}>
       <button
         type="button"
-        aria-label={`Conta: ${user.displayName || user.username}`}
+        aria-label={t("shell.userMenu.account", { name: user.displayName || user.username })}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
@@ -91,18 +94,22 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
           )}
         >
           <button type="button" className={item} onClick={() => go("/settings")}>
-            <Settings className="h-4 w-4" /> Configurações
+            <Settings className="h-4 w-4" /> {t("shell.userMenu.settings")}
           </button>
           <button type="button" className={item} onClick={() => go("/settings/security")}>
-            <KeyRound className="h-4 w-4" /> Trocar senha
+            <KeyRound className="h-4 w-4" /> {t("shell.userMenu.changePassword")}
           </button>
           <button type="button" className={item} onClick={() => go("/settings/security#two-factor")}>
-            <ShieldCheck className="h-4 w-4" /> Verificação em duas etapas
+            <ShieldCheck className="h-4 w-4" /> {t("shell.userMenu.twoFactor")}
           </button>
+          <div className="flex items-center gap-2 px-2 py-1.5">
+            <Languages className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            <LanguageSelect className="min-w-0 flex-1" />
+          </div>
           {logoutError ? (
             <div role="alert" className="m-1 rounded-sm border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">
               <p>
-                <strong>Você continua conectado.</strong> O servidor não confirmou a saída: {logoutError}
+                <strong>{t("shell.userMenu.stillSignedIn")}</strong> {t("shell.userMenu.logoutUnconfirmed", { detail: logoutError })}
               </p>
               <button
                 type="button"
@@ -110,7 +117,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
                 className={cn(item, "mt-1 text-red-400")}
                 onClick={() => void logout()}
               >
-                <LogOut className="h-4 w-4" /> Tentar sair de novo
+                <LogOut className="h-4 w-4" /> {t("shell.userMenu.retryLogout")}
               </button>
             </div>
           ) : (
@@ -120,7 +127,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
               className={cn(item, "text-red-400")}
               onClick={() => void logout()}
             >
-              <LogOut className="h-4 w-4" /> {leaving ? "Saindo…" : "Sair"}
+              <LogOut className="h-4 w-4" /> {leaving ? t("shell.userMenu.signingOut") : t("shell.userMenu.signOut")}
             </button>
           )}
         </div>

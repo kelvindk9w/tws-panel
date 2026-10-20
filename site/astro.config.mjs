@@ -50,6 +50,7 @@ export default defineConfig({
             { slug: 'guides/features' },
             { slug: 'guides/operations' },
             { slug: 'guides/production' },
+            { slug: 'guides/restore-new-server' },
             { slug: 'guides/troubleshooting' },
             { slug: 'guides/recover-access' },
             { slug: 'guides/network-migration' },
@@ -63,7 +64,7 @@ export default defineConfig({
         {
           label: 'Development',
           translations: { 'pt-BR': 'Desenvolvimento' },
-          items: [{ slug: 'development/local-development' }],
+          items: [{ slug: 'development/local-development' }, { slug: 'development/translating-the-interface' }],
         },
       ],
     }),

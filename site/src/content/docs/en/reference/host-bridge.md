@@ -1,11 +1,17 @@
 ---
-title: "Host bridge — how the panel runs scan/hardening on the real VPS"
+title: "Host bridge: how the panel runs scans and hardening on the real VPS"
+description: "How the panel runs the security scan and hardening on the host through a privileged, disposable helper container, and how that is kept safe."
+sidebar:
+  label: "Host bridge"
 ---
 
 > Original problem (an architectural bug found in the field): the panel runs in a Docker
 > container, but the security module executed commands with `bash -c` in the **container's own
 > namespace** — the scan showed data from the image's Debian (`node:22-bookworm-slim`) and hardening
 > would have modified the disposable container, not the VPS. Useless and misleading.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 ## 1. Architecture
 
@@ -14,8 +20,12 @@ container** — the same pattern used by Coolify and Portainer:
 
 ```
 docker run --rm --privileged --pid=host alpine:3 \
-  nsenter -t 1 -m -u -i -n -p -- bash -c "<comando>"
+  nsenter -t 1 -m -u -i -n -p -- bash -c "<command>"
 ```
+
+(The panel uses the image pinned by digest, `alpine:3@sha256:…`, defined in
+`packages/core/src/images.ts`; `alpine:3` is shown here only for readability. This way, a hosted
+project that overwrites the `alpine:3` tag on the server cannot swap the binary that runs as root.)
 
 - `--pid=host`: the helper sees the host's PID 1 (init);
 - `nsenter -t 1 -m -u -i -n -p`: the command enters the host's **mount,
@@ -36,7 +46,7 @@ command assembly and the allowlist live in
 | Property | How it is guaranteed |
 |---|---|
 | **No new credential** | Uses the `/var/run/docker.sock` that the panel already mounts to manage Docker — no extra password/key is created. Whoever mounts the socket is, by definition, already equivalent to root on the host: the bridge does not increase that privilege. |
-| **Strict allowlist** | The runner rejects any command that is not: (a) one of the fixed read-only commands of the checks/baseline/Lynis (includes reading the time zone, `timedatectl show -p Timezone --value`), (b) a validated invocation of `scripts/hardening/{00..06}-*.sh` with known flags (`--dry-run/--rollback/--confirm/--user/--pubkey`), or (c) the time zone change from **Configurações → Fuso horário** (Settings → Time zone) (`timedatectl set-timezone '<fuso>'`, with `ln -sf` of `/etc/localtime` as a fallback), accepted only if it is byte for byte the command built for a time zone from the closed list (`isKnownTimezone`). Nothing coming from the API becomes arbitrary shell. |
+| **Strict allowlist** | The runner rejects any command that is not: (a) one of the fixed read-only commands of the checks/baseline/Lynis (includes reading the time zone, `timedatectl show -p Timezone --value`), (b) a validated invocation of `scripts/hardening/{00..07}-*.sh` with known flags (`--dry-run/--rollback/--confirm/--no-tunnel/--user/--pubkey`), or (c) the time zone change from **Configurações → Fuso horário** (Settings → Time zone) (`timedatectl set-timezone '<fuso>'`, with `ln -sf` of `/etc/localtime` as a fallback), accepted only if it is byte for byte the command built for a time zone from the closed list (`isKnownTimezone`). Nothing coming from the API becomes arbitrary shell. |
 | **Input revalidated** | The SSH public key and the user name of Phase 01 are validated twice (route + command builder) with a regex that forbids quotes/line breaks — it is designed so that the quoting cannot be broken. |
 | **Disposable** | `--rm` + a unique name per execution; on timeout the client is killed and the helper is removed with `docker rm -f`. |
 | **Per-command timeout** | `exec` has a timeout (default 120s; 300s for Lynis); phase streams have a 30 min ceiling. |

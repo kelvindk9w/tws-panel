@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { CheckCircle2, CircleDashed, CircleHelp, ExternalLink, Loader2, XCircle } from "lucide-react";
 import type { DeliverabilityItem, DeliverabilityResponse, PostmasterMarks } from "@paas/core";
-import { ApiRequestError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, Trans, useI18n, type Key } from "@/i18n";
 import { formatDateTime } from "@/lib/envios";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,16 +14,16 @@ const GOOGLE_POSTMASTER = "https://postmaster.google.com/";
 const MICROSOFT_SNDS = "https://sendersupport.olc.protection.outlook.com/snds/";
 
 const BAND = {
-  green: { text: "Pronto: siga o aquecimento e acompanhe o Postmaster Tools.", className: "text-emerald-400" },
-  yellow: { text: "Vai chegar, mas com risco de spam. Veja o que falta abaixo.", className: "text-amber-400" },
-  red: { text: "Arrume os itens que faltam antes de usar com clientes.", className: "text-red-400" },
-} as const;
+  green: { text: "envios.score.band.green", className: "text-emerald-400" },
+  yellow: { text: "envios.score.band.yellow", className: "text-amber-400" },
+  red: { text: "envios.score.band.red", className: "text-red-400" },
+} as const satisfies Record<string, { text: Key; className: string }>;
 
-const STATUS: Record<DeliverabilityItem["status"], { label: string; variant: "success" | "warning" | "destructive" | "secondary"; Icon: typeof CheckCircle2 }> = {
-  done: { label: "Feito", variant: "success", Icon: CheckCircle2 },
-  partial: { label: "Em parte", variant: "warning", Icon: CircleDashed },
-  todo: { label: "Falta", variant: "destructive", Icon: XCircle },
-  unknown: { label: "Não deu para verificar", variant: "secondary", Icon: CircleHelp },
+const STATUS: Record<DeliverabilityItem["status"], { label: Key; variant: "success" | "warning" | "destructive" | "secondary"; Icon: typeof CheckCircle2 }> = {
+  done: { label: "envios.score.status.done", variant: "success", Icon: CheckCircle2 },
+  partial: { label: "envios.score.status.partial", variant: "warning", Icon: CircleDashed },
+  todo: { label: "envios.score.status.todo", variant: "destructive", Icon: XCircle },
+  unknown: { label: "envios.score.status.unknown", variant: "secondary", Icon: CircleHelp },
 };
 
 /** ISO → AAAA-MM-DD (campo de data). */
@@ -31,6 +32,7 @@ function dateInput(iso: string | null): string {
 }
 
 function ItemRow({ item }: { item: DeliverabilityItem }) {
+  const { t } = useI18n();
   const s = STATUS[item.status];
   const external = item.link?.href.startsWith("http");
   return (
@@ -41,7 +43,7 @@ function ItemRow({ item }: { item: DeliverabilityItem }) {
         <span className="text-xs tabular-nums text-muted-foreground">
           {item.points}/{item.maxPoints}
         </span>
-        <Badge variant={s.variant}>{s.label}</Badge>
+        <Badge variant={s.variant}>{t(s.label)}</Badge>
       </div>
       <p className="break-words text-xs text-muted-foreground">{item.detail}</p>
       {item.howTo && <p className="break-words text-xs">{item.howTo}</p>}
@@ -60,6 +62,7 @@ function ItemRow({ item }: { item: DeliverabilityItem }) {
 
 /** Nota de entregabilidade: o que está feito e o que falta, com nota honesta. */
 export function ScoreSection() {
+  const { t } = useI18n();
   const [data, setData] = useState<DeliverabilityResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [marks, setMarks] = useState({ googleAt: "", microsoftAt: "", spamRateOkAt: "" });
@@ -72,7 +75,7 @@ export function ScoreSection() {
       setData(res);
       setMarks({ googleAt: dateInput(res.marks.googleAt), microsoftAt: dateInput(res.marks.microsoftAt), spamRateOkAt: dateInput(res.marks.spamRateOkAt) });
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não deu para calcular a nota.");
+      setError(apiErrorText(err, "envios.score.error.load"));
     }
   }
 
@@ -92,10 +95,10 @@ export function ScoreSection() {
         spamRateOkAt: marks.spamRateOkAt || null,
       };
       await apiFetch("/api/mail/envios/postmaster", { method: "PUT", body: JSON.stringify(body) });
-      setSaved("Marcações salvas.");
+      setSaved(t("envios.score.saved"));
       await load();
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não deu para salvar.");
+      setError(apiErrorText(err, "envios.score.error.save"));
     } finally {
       setSaving(false);
     }
@@ -114,10 +117,9 @@ export function ScoreSection() {
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Prontidão para a caixa de entrada</CardTitle>
+          <CardTitle className="text-base">{t("envios.score.ready.title")}</CardTitle>
           <CardDescription>
-            Mede o que o painel consegue conferir. A decisão final de cada provedor (Gmail, Outlook, Yahoo) não é pública: a nota é um
-            guia, não uma garantia. Um servidor novo não chega ao verde antes de cerca de 30 dias enviando — é normal.
+            {t("envios.score.ready.desc")}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -126,11 +128,11 @@ export function ScoreSection() {
             <>
               <div className="flex flex-wrap items-baseline gap-2">
                 <span className={cn("text-4xl font-bold tabular-nums", BAND[data.band].className)}>{data.score}</span>
-                <span className="text-sm text-muted-foreground">de {data.max}</span>
+                <span className="text-sm text-muted-foreground">{t("envios.score.outOf", { max: data.max })}</span>
               </div>
-              <p className={cn("text-sm", BAND[data.band].className)}>{BAND[data.band].text}</p>
+              <p className={cn("text-sm", BAND[data.band].className)}>{t(BAND[data.band].text)}</p>
               <p className="text-xs text-muted-foreground">
-                DNS, nome reverso e certificado conferidos em {formatDateTime(data.factsAt)} (junto com as listas de bloqueio, na aba Reputação).
+                {t("envios.score.factsAt", { date: formatDateTime(data.factsAt) })}
               </p>
               <ul className="flex flex-col gap-1.5">
                 {data.items.map((item) => (
@@ -144,34 +146,40 @@ export function ScoreSection() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Acompanhamento fora do painel</CardTitle>
+          <CardTitle className="text-base">{t("envios.score.external.title")}</CardTitle>
           <CardDescription>
-            O painel não consegue entrar nesses portais por você. Cadastre e marque aqui a data: a nota passa a contar.{" "}
-            <a href={GOOGLE_POSTMASTER} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">
-              Google Postmaster Tools
-            </a>{" "}
-            (domínio de envio; os gráficos só aparecem com volume) e{" "}
-            <a href={MICROSOFT_SNDS} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">
-              Microsoft SNDS
-            </a>{" "}
-            (IP da VPS).
+            <Trans
+              k="envios.score.external.desc"
+              components={{
+                google: (c) => (
+                  <a href={GOOGLE_POSTMASTER} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">
+                    {c}
+                  </a>
+                ),
+                snds: (c) => (
+                  <a href={MICROSOFT_SNDS} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">
+                    {c}
+                  </a>
+                ),
+              }}
+            />
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-3" onSubmit={(e) => void save(e)}>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {field("googleAt", "Cadastrei no Google Postmaster Tools em")}
-              {field("microsoftAt", "Cadastrei o IP no Microsoft SNDS em")}
-              {field("spamRateOkAt", "Conferi a taxa de spam abaixo de 0,1% em")}
+              {field("googleAt", t("envios.score.field.google"))}
+              {field("microsoftAt", t("envios.score.field.microsoft"))}
+              {field("spamRateOkAt", t("envios.score.field.spam"))}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" size="sm" disabled={saving}>
                 {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                Salvar marcações
+                {t("envios.score.saveMarks")}
               </Button>
               {saved && <span className="text-xs text-emerald-400">{saved}</span>}
             </div>
-            <p className="text-xs text-muted-foreground">Deixe em branco para desmarcar.</p>
+            <p className="text-xs text-muted-foreground">{t("envios.score.clearHint")}</p>
           </form>
         </CardContent>
       </Card>

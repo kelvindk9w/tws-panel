@@ -8,7 +8,7 @@ Nós, como membros, contribuidores e líderes, nos comprometemos a fazer da part
 comunidade uma experiência livre de assédio para todos, independentemente de idade, tamanho do
 corpo, deficiência visível ou invisível, etnia, características sexuais, identidade e expressão de
 gênero, nível de experiência, educação, status socioeconômico, nacionalidade, aparência pessoal,
-raça, religião ou identidade e orientação sexual.
+raça, casta, cor, religião ou identidade e orientação sexual.
 
 Comprometemo-nos a agir e interagir de maneiras que contribuam para uma comunidade aberta,
 acolhedora, diversa, inclusiva e saudável.
@@ -54,7 +54,7 @@ atuação como representante designado em um evento online ou presencial.
 ## Aplicação
 
 Casos de comportamento abusivo, de assédio ou de outra forma inaceitável podem ser reportados aos
-líderes da comunidade responsáveis pela aplicação em `<CONTACT>`.
+líderes da comunidade responsáveis pela aplicação em [contato@tws.tec.br](mailto:contato@tws.tec.br).
 
 Todas as reclamações serão analisadas e investigadas com rapidez e imparcialidade.
 
@@ -105,8 +105,8 @@ de indivíduos.
 
 ## Atribuição
 
-Este Código de Conduta é adaptado do [Contributor Covenant][homepage], versão 2.0, disponível em
-https://www.contributor-covenant.org/version/2/0/code_of_conduct.html.
+Este Código de Conduta é adaptado do [Contributor Covenant][homepage], versão 2.1, disponível em
+https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
 
 As Diretrizes de Impacto na Comunidade foram inspiradas pela
 [escada de aplicação de código de conduta da Mozilla](https://github.com/mozilla/diversity).

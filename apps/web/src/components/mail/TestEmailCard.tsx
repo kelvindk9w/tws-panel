@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MailTestResponse, MailTestStatus } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { apiErrorText, formatTime, Trans, t as tGlobal, useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,14 +25,14 @@ import { AlertTriangle, CheckCircle2, Clock, Loader2, Send, X, XCircle } from "l
 /** "pelo Gmail", "pela Microsoft (Outlook)"… a partir do domínio do destinatário. */
 function acceptedBy(to: string): string {
   const domain = to.split("@")[1]?.toLowerCase() ?? "";
-  if (["gmail.com", "googlemail.com"].includes(domain)) return "pelo Gmail";
-  if (/^(outlook|hotmail|live|msn)\.[a-z.]+$/.test(domain)) return "pela Microsoft (Outlook)";
-  if (/^(yahoo|ymail)\.[a-z.]+$/.test(domain)) return "pelo Yahoo";
-  return `pelo servidor de ${domain}`;
+  if (["gmail.com", "googlemail.com"].includes(domain)) return tGlobal("mail.test.by.gmail");
+  if (/^(outlook|hotmail|live|msn)\.[a-z.]+$/.test(domain)) return tGlobal("mail.test.by.microsoft");
+  if (/^(yahoo|ymail)\.[a-z.]+$/.test(domain)) return tGlobal("mail.test.by.yahoo");
+  return tGlobal("mail.test.by.other", { domain });
 }
 
 function hhmm(iso: string): string {
-  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return formatTime(iso, { hour: "2-digit", minute: "2-digit" });
 }
 
 const STYLE: Record<MailTestStatus["state"], string> = {
@@ -42,26 +43,27 @@ const STYLE: Record<MailTestStatus["state"], string> = {
 };
 
 function StatusBox({ test, stopped, onRetry }: { test: MailTestStatus; stopped: boolean; onRetry: () => void }) {
+  const { t } = useI18n();
   let icon;
   let title: string;
   switch (test.state) {
     case "delivered":
       icon = <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />;
-      title = `Entregue ao servidor do destinatário (aceito ${acceptedBy(test.to)}).`;
+      title = t("mail.test.delivered", { by: acceptedBy(test.to) });
       break;
     case "bounced":
       icon = <XCircle className="h-4 w-4 shrink-0 text-red-400" />;
-      title = `Recusado: ${test.detail ?? "o servidor do destinatário não aceitou a mensagem."}`;
+      title = t("mail.test.bounced", { detail: test.detail ?? t("mail.test.bouncedDefault") });
       break;
     case "deferred":
       icon = <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />;
-      title =
-        `Adiada: ${test.detail ?? "o servidor do destinatário pediu para tentar depois"}` +
-        (test.nextRetryAt ? `, nova tentativa às ${hhmm(test.nextRetryAt)}.` : ".");
+      title = test.nextRetryAt
+        ? t("mail.test.deferredRetry", { detail: test.detail ?? t("mail.test.deferredDefault"), time: hhmm(test.nextRetryAt) })
+        : t("mail.test.deferred", { detail: test.detail ?? t("mail.test.deferredDefault") });
       break;
     default:
       icon = stopped ? <Clock className="h-4 w-4 shrink-0 text-sky-400" /> : <Loader2 className="h-4 w-4 shrink-0 animate-spin text-sky-400" />;
-      title = "Na fila / tentando entregar…";
+      title = t("mail.test.queued");
   }
 
   return (
@@ -71,32 +73,30 @@ function StatusBox({ test, stopped, onRetry }: { test: MailTestStatus; stopped: 
         <span>{title}</span>
       </p>
       <p className="text-xs text-muted-foreground">
-        De {test.from} para {test.to}, enviado às {hhmm(test.sentAt)}.
+        {t("mail.test.summary", { from: test.from, to: test.to, time: hhmm(test.sentAt) })}
       </p>
       {test.state === "delivered" && test.detail && (
         <p className="break-all text-xs text-muted-foreground">
-          {test.confirmed ? `Resposta do servidor: ${test.detail}` : test.detail}
+          {test.confirmed ? t("mail.test.serverReply", { detail: test.detail }) : test.detail}
         </p>
       )}
       {test.state === "delivered" && (
         <p className="text-xs">
-          Confira também a pasta Spam. Se a mensagem estiver lá, marque como "Não é spam": isso ajuda as
-          próximas mensagens do domínio.
+          {t("mail.test.checkSpam")}
         </p>
       )}
       {test.state === "bounced" && (
         <p className="text-xs text-muted-foreground">
-          O motivo acima é o que o servidor do destinatário respondeu. Confira o checklist DNS (SPF, DKIM,
-          DMARC e o nome reverso) e tente de novo daqui a alguns minutos.
+          {t("mail.test.bouncedHint")}
         </p>
       )}
       {stopped && !test.final && (
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-xs text-muted-foreground">
-            O servidor de e-mail continua tentando sozinho. Você pode conferir de novo mais tarde.
+            {t("mail.test.stoppedHint")}
           </p>
           <Button size="sm" variant="outline" onClick={onRetry}>
-            Conferir de novo
+            {t("mail.common.recheck")}
           </Button>
         </div>
       )}
@@ -118,6 +118,7 @@ export function TestEmailForm({
   /** Tempo máximo de consulta automática antes de oferecer "Conferir de novo". */
   maxPollMs?: number;
 }) {
+  const { t } = useI18n();
   const [to, setTo] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +150,7 @@ export function TestEmailForm({
         })
         .catch((err: unknown) => {
           if (!alive.current) return;
-          setError(err instanceof Error ? err.message : "Falha ao consultar o e-mail de teste.");
+          setError(apiErrorText(err, "mail.test.pollError"));
           setStopped(true);
         });
     }, pollMs);
@@ -175,7 +176,7 @@ export function TestEmailForm({
       setStopped(false);
       setTest(res.test);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao enviar o e-mail de teste.");
+      setError(apiErrorText(err, "mail.test.sendError"));
     } finally {
       setSending(false);
     }
@@ -184,30 +185,31 @@ export function TestEmailForm({
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">
-        Manda uma mensagem simples de <code className="text-xs text-foreground">{from}</code> para o endereço que
-        você digitar (por exemplo, o seu Gmail) e mostra o que o servidor do destinatário respondeu. O painel
-        entra na caixa com a senha atual dela: se a mensagem sair, a senha está certa.
+        <Trans
+          k="mail.test.intro"
+          params={{ from }}
+          components={{ code: <code className="text-xs text-foreground" /> }}
+        />
       </p>
       <div className="flex flex-wrap gap-2">
         <Input
           type="email"
-          placeholder="voce@gmail.com"
+          placeholder={t("mail.test.placeholder")}
           value={to}
           onChange={(e) => setTo(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void send()}
           className="min-w-0 flex-1 sm:max-w-xs"
-          aria-label="Endereço de destino do teste"
+          aria-label={t("mail.test.toAria")}
         />
         <Button variant="deploy" size="sm" disabled={sending || !to.trim()} onClick={() => void send()}>
           {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          Enviar
+          {t("mail.test.send")}
         </Button>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {test && <StatusBox test={test} stopped={stopped} onRetry={retry} />}
       <p className="text-xs text-muted-foreground">
-        O teste fala com o servidor de e-mail por dentro da VPS, então funciona mesmo antes de o certificado de
-        mail.{domain} ficar pronto.
+        {t("mail.test.internalNote", { domain })}
       </p>
     </div>
   );
@@ -215,6 +217,7 @@ export function TestEmailForm({
 
 /** O formulário de teste num modal (Esc ou clique fora fecham). */
 export function TestEmailModal({ domain, from, onClose }: { domain: string; from: string; onClose: () => void }) {
+  const { t } = useI18n();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -225,15 +228,15 @@ export function TestEmailModal({ domain, from, onClose }: { domain: string; from
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`Enviar e-mail de teste — ${from}`}
+        aria-label={t("mail.test.modalAria", { from })}
         className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-lg border bg-background p-4 shadow-lg sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-2">
           <h2 className="flex min-w-0 items-center gap-2 break-all text-lg font-semibold">
-            <Send className="h-4 w-4 shrink-0" /> Enviar e-mail de teste
+            <Send className="h-4 w-4 shrink-0" /> {t("mail.test.title")}
           </h2>
-          <Button variant="ghost" size="icon" aria-label="Fechar" onClick={onClose}>
+          <Button variant="ghost" size="icon" aria-label={t("mail.common.close")} onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -245,22 +248,21 @@ export function TestEmailModal({ domain, from, onClose }: { domain: string; from
 
 /** Card do checklist: explica e abre o modal com postmaster@<domínio>. */
 export function TestEmailCard({ domain }: { domain: string }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Send className="h-4 w-4" /> E-mail de teste
+          <Send className="h-4 w-4" /> {t("mail.test.cardTitle")}
         </CardTitle>
         <CardDescription>
-          Confira se o servidor entrega de verdade: o painel manda uma mensagem para o endereço que você escolher e
-          mostra o que o servidor do destinatário respondeu. Para testar outra caixa, use "Testar envio" na aba
-          Caixas.
+          {t("mail.test.cardDescription")}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Button variant="deploy" size="sm" onClick={() => setOpen(true)}>
-          <Send className="h-4 w-4" /> Enviar e-mail de teste
+          <Send className="h-4 w-4" /> {t("mail.test.title")}
         </Button>
       </CardContent>
       {open && <TestEmailModal domain={domain} from={`postmaster@${domain}`} onClose={() => setOpen(false)} />}

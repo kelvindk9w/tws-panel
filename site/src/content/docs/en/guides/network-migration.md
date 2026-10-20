@@ -1,9 +1,15 @@
 ---
-title: "Panel network migration (batch 5) — VPS runbook and how to undo it"
+title: "Migrating to separated networks: VPS runbook and rollback"
+description: "Runbook for updating an existing installation to the version with separated Docker networks, with checks, failure handling and how to roll back."
+sidebar:
+  label: "Network migration"
 ---
 
 Applies to an installation that already runs the panel (folder `/opt/tws-panel`, projects in `/opt/tws-projects`) and is going to
 receive the version with separated networks. A new installation does not need this: the networks are created correctly.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 ## What changes in the networks
 
@@ -100,7 +106,7 @@ Real tests:
 
 1. On the panel's **E-mail** (Email) page, the server status shows as running (the panel talks to Stalwart
    over `paas-mail-admin`).
-2. A project's SMTP: use the send test of the project itself / of the panel's E-mail section. To check only the network
+2. A project's SMTP: use the send test of the project itself / of the panel's **E-mail** page. To check only the network
    (replace `<domain>` with yours):
    `sudo docker run --rm --network paas-mail alpine:3 nc -zv -w 5 mail.<domain> 587` — it should say `open`.
 3. Webmail (if enabled): open its address; it has to load and let you log in.

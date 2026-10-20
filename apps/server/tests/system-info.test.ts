@@ -61,7 +61,7 @@ const { scanSystemHealth, HOST_NETWORK_COMMAND, HOST_REBOOT_COMMAND } = await im
 
 /** Saída real de `ip -o addr show scope global` numa VPS com Docker instalado. */
 const IP_ADDR_VPS = [
-  "2: eth0    inet 169.58.235.67/24 metric 100 brd 169.58.235.255 scope global dynamic eth0\\       valid_lft 86000sec preferred_lft 86000sec",
+  "2: eth0    inet 203.0.113.67/24 metric 100 brd 203.0.113.255 scope global dynamic eth0\\       valid_lft 86000sec preferred_lft 86000sec",
   "2: eth0    inet6 2001:db8::67/64 scope global dynamic mngtmpaddr noprefixroute \\       valid_lft 86000sec preferred_lft 14000sec",
   "3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\\       valid_lft forever preferred_lft forever",
   "4: br-5f2a9c1d7e3b    inet 172.18.0.1/16 brd 172.18.255.255 scope global br-5f2a9c1d7e3b\\       valid_lft forever preferred_lft forever",
@@ -290,7 +290,7 @@ describe("rede", () => {
     expect(scan.network.interfacesSource).toBe("host");
     // pontes do Docker (docker0, br-*) ficam de fora: são redes internas
     expect(scan.network.interfaces).toEqual([
-      { name: "eth0", addresses: ["169.58.235.67/24", "2001:db8::67/64"] },
+      { name: "eth0", addresses: ["203.0.113.67/24", "2001:db8::67/64"] },
     ]);
     expect(JSON.stringify(scan.network)).not.toContain("172.18.0.2");
   });
@@ -332,7 +332,7 @@ describe("rede", () => {
   });
 
   it("IP público detectado → selo ok; sem IP público → aviso de que os domínios não chegam", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: async () => "169.58.235.67\n" })));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: async () => "203.0.113.67\n" })));
     expect((await scanSystemHealth()).checks.network.level).toBe("ok");
 
     semIpPublico();

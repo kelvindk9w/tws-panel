@@ -477,20 +477,20 @@ describe("jobs e ciclo de vida (complementos)", () => {
 describe("rotas de domínios do projeto", () => {
   it("conectar, tornar principal e remover chamam o serviço e devolvem o projeto", async () => {
     await build({
-      addDomain: vi.fn(async () => ({ ...PROJECT, aliases: ["devlink.tws.tec.br"] })),
+      addDomain: vi.fn(async () => ({ ...PROJECT, aliases: ["loja.example.com"] })),
       setPrimaryDomain: vi.fn(async () => PROJECT),
       removeDomain: vi.fn(async () => PROJECT),
     });
-    const add = await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "devlink.tws.tec.br" } });
+    const add = await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "loja.example.com" } });
     expect(add.statusCode, add.body).toBe(200);
-    expect(add.json().project.aliases).toEqual(["devlink.tws.tec.br"]);
-    expect(service.addDomain).toHaveBeenCalledWith("p1", "devlink.tws.tec.br");
-    const prim = await app.inject({ method: "POST", url: "/api/projects/p1/domains/devlink.tws.tec.br/primary", headers: auth });
+    expect(add.json().project.aliases).toEqual(["loja.example.com"]);
+    expect(service.addDomain).toHaveBeenCalledWith("p1", "loja.example.com");
+    const prim = await app.inject({ method: "POST", url: "/api/projects/p1/domains/loja.example.com/primary", headers: auth });
     expect(prim.statusCode).toBe(200);
-    expect(service.setPrimaryDomain).toHaveBeenCalledWith("p1", "devlink.tws.tec.br");
-    const del = await app.inject({ method: "DELETE", url: "/api/projects/p1/domains/devlink.tws.tec.br", headers: auth });
+    expect(service.setPrimaryDomain).toHaveBeenCalledWith("p1", "loja.example.com");
+    const del = await app.inject({ method: "DELETE", url: "/api/projects/p1/domains/loja.example.com", headers: auth });
     expect(del.statusCode).toBe(200);
-    expect(service.removeDomain).toHaveBeenCalledWith("p1", "devlink.tws.tec.br");
+    expect(service.removeDomain).toHaveBeenCalledWith("p1", "loja.example.com");
   });
 
   it("erro do serviço vira a resposta dele (ex.: domínio em uso)", async () => {

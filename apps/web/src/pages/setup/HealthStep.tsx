@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { HealthCheck, HealthScanResult } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { formatBytes, formatUptime } from "@/lib/utils";
+import { apiErrorText, formatDateTime, useI18n } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,29 +40,30 @@ interface HealthStepProps {
  *   não é nem aprovação nem falha.
  */
 function CheckBadge({ check }: { check: HealthCheck }) {
+  const { t } = useI18n();
   switch (check.level) {
     case "ok":
       return (
         <Badge variant="success" className="gap-1">
-          <CheckCircle2 className="h-3 w-3" /> OK
+          <CheckCircle2 className="h-3 w-3" /> {t("setup.health.badge.ok")}
         </Badge>
       );
     case "warning":
       return (
         <Badge variant="warning" className="gap-1">
-          <AlertTriangle className="h-3 w-3" /> Atenção
+          <AlertTriangle className="h-3 w-3" /> {t("setup.health.badge.warning")}
         </Badge>
       );
     case "critical":
       return (
         <Badge variant="destructive" className="gap-1">
-          <XCircle className="h-3 w-3" /> Crítico
+          <XCircle className="h-3 w-3" /> {t("setup.health.badge.critical")}
         </Badge>
       );
     default:
       return (
         <Badge variant="outline" className="gap-1">
-          <HelpCircle className="h-3 w-3" /> Não verificado
+          <HelpCircle className="h-3 w-3" /> {t("setup.health.badge.unknown")}
         </Badge>
       );
   }
@@ -81,6 +83,7 @@ function CheckMessage({ check }: { check: HealthCheck }) {
 }
 
 export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
+  const { t } = useI18n();
   const [scan, setScan] = useState<HealthScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,7 +96,7 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
       setScan(result);
       onPublicIp?.(result.network.publicIp);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Falha ao executar a verificação.");
+      setError(err instanceof ApiRequestError ? apiErrorText(err, "setup.health.scanFailed") : t("setup.health.scanFailed"));
     } finally {
       setLoading(false);
     }
@@ -112,15 +115,14 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
     <div className="flex animate-fade-in flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Saúde da máquina</h2>
+          <h2 className="text-xl font-semibold tracking-tight">{t("setup.health.title")}</h2>
           <p className="text-sm text-muted-foreground">
-            Diagnóstico do servidor antes da instalação. Nada é alterado — esta etapa é somente
-            leitura.
+            {t("setup.health.description")}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void runScan()} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          Verificar de novo
+          {t("setup.health.rescan")}
         </Button>
       </div>
 
@@ -132,7 +134,7 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
 
       {loading && !scan && (
         <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin" /> Analisando o servidor…
+          <Loader2 className="h-5 w-5 animate-spin" /> {t("setup.health.scanning")}
         </div>
       )}
 
@@ -142,16 +144,16 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <Monitor className="h-4 w-4 text-muted-foreground" /> Sistema operacional
+                  <Monitor className="h-4 w-4 text-muted-foreground" /> {t("setup.health.os.title")}
                 </CardTitle>
                 <CheckBadge check={scan.checks.os} />
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
                 <p className="font-medium">{scan.os.prettyName}</p>
                 <p className="text-muted-foreground">
-                  Kernel {scan.os.kernel} · {scan.os.arch}
+                  {t("setup.health.os.kernel", { kernel: scan.os.kernel, arch: scan.os.arch })}
                 </p>
-                <p className="text-muted-foreground">Host: {scan.os.hostname}</p>
+                <p className="text-muted-foreground">{t("setup.health.os.host", { host: scan.os.hostname })}</p>
                 <CheckMessage check={scan.checks.os} />
               </CardContent>
             </Card>
@@ -159,16 +161,15 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <Cpu className="h-4 w-4 text-muted-foreground" /> CPU
+                  <Cpu className="h-4 w-4 text-muted-foreground" /> {t("setup.health.cpu.title")}
                 </CardTitle>
                 <CheckBadge check={scan.checks.cpu} />
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
                 <p className="font-medium">{scan.cpu.model}</p>
-                <p className="text-muted-foreground">{scan.cpu.cores} núcleos</p>
+                <p className="text-muted-foreground">{t("setup.health.cpu.cores", { count: scan.cpu.cores })}</p>
                 <p className="text-muted-foreground">
-                  Carga (1/5/15 min):{" "}
-                  {scan.cpu.loadAvg.map((l) => l.toFixed(2)).join(" / ")}
+                  {t("setup.health.cpu.load", { values: scan.cpu.loadAvg.map((l) => l.toFixed(2)).join(" / ") })}
                 </p>
                 <CheckMessage check={scan.checks.cpu} />
               </CardContent>
@@ -177,14 +178,17 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <MemoryStick className="h-4 w-4 text-muted-foreground" /> Memória
+                  <MemoryStick className="h-4 w-4 text-muted-foreground" /> {t("setup.health.memory.title")}
                 </CardTitle>
                 <CheckBadge check={scan.checks.memory} />
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
-                <p className="font-medium">{formatBytes(scan.memory.totalBytes)} totais</p>
+                <p className="font-medium">{t("setup.health.total", { size: formatBytes(scan.memory.totalBytes) })}</p>
                 <p className="text-muted-foreground">
-                  {formatBytes(scan.memory.freeBytes)} livres · {formatBytes(scan.memory.usedBytes)} em uso
+                  {t("setup.health.freeUsed", {
+                    free: formatBytes(scan.memory.freeBytes),
+                    used: formatBytes(scan.memory.usedBytes),
+                  })}
                 </p>
                 <CheckMessage check={scan.checks.memory} />
               </CardContent>
@@ -193,14 +197,17 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <HardDrive className="h-4 w-4 text-muted-foreground" /> Disco (/)
+                  <HardDrive className="h-4 w-4 text-muted-foreground" /> {t("setup.health.disk.title")}
                 </CardTitle>
                 <CheckBadge check={scan.checks.disk} />
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
-                <p className="font-medium">{formatBytes(scan.disk.totalBytes)} totais</p>
+                <p className="font-medium">{t("setup.health.total", { size: formatBytes(scan.disk.totalBytes) })}</p>
                 <p className="text-muted-foreground">
-                  {formatBytes(scan.disk.freeBytes)} livres · {formatBytes(scan.disk.usedBytes)} em uso
+                  {t("setup.health.freeUsed", {
+                    free: formatBytes(scan.disk.freeBytes),
+                    used: formatBytes(scan.disk.usedBytes),
+                  })}
                 </p>
                 <CheckMessage check={scan.checks.disk} />
               </CardContent>
@@ -209,13 +216,15 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <Network className="h-4 w-4 text-muted-foreground" /> Rede
+                  <Network className="h-4 w-4 text-muted-foreground" /> {t("setup.health.network.title")}
                 </CardTitle>
                 <CheckBadge check={scan.checks.network} />
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
                 <p className="font-medium">
-                  IP público: {scan.network.publicIp ?? "não detectado"}
+                  {t("setup.health.network.publicIp", {
+                    ip: scan.network.publicIp ?? t("setup.health.network.notDetected"),
+                  })}
                 </p>
                 {scan.network.interfacesSource === "host" ? (
                   scan.network.interfaces.map((iface) => (
@@ -225,10 +234,10 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
                   ))
                 ) : (
                   <p className="text-muted-foreground">
-                    Interfaces da VPS: não verificadas (sem acesso de leitura ao servidor)
+                    {t("setup.health.network.interfacesUnchecked")}
                   </p>
                 )}
-                <p className="text-muted-foreground">Virtualização: {scan.virtualization}</p>
+                <p className="text-muted-foreground">{t("setup.health.network.virtualization", { value: scan.virtualization })}</p>
                 <CheckMessage check={scan.checks.network} />
               </CardContent>
             </Card>
@@ -236,21 +245,27 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <Clock className="h-4 w-4 text-muted-foreground" /> Uptime e reinicialização
+                  <Clock className="h-4 w-4 text-muted-foreground" /> {t("setup.health.reboot.title")}
                 </CardTitle>
                 <CheckBadge check={scan.checks.reboot} />
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
                 <p className="font-medium">{formatUptime(scan.uptimeSeconds)}</p>
                 <p className="text-muted-foreground">
-                  Reinicialização pendente:{" "}
-                  {scan.reboot.pending === null ? "não verificado" : scan.reboot.pending ? "sim" : "não"}
+                  {t("setup.health.reboot.pending", {
+                    value:
+                      scan.reboot.pending === null
+                        ? t("setup.health.reboot.unchecked")
+                        : scan.reboot.pending
+                          ? t("setup.health.reboot.yes")
+                          : t("setup.health.reboot.no"),
+                  })}
                 </p>
                 {scan.reboot.pending === true && scan.reboot.packages.length > 0 && (
-                  <p className="text-muted-foreground">Pedida por: {scan.reboot.packages.join(", ")}</p>
+                  <p className="text-muted-foreground">{t("setup.health.reboot.requestedBy", { packages: scan.reboot.packages.join(", ") })}</p>
                 )}
                 <p className="text-muted-foreground">
-                  Verificado em {new Date(scan.scannedAt).toLocaleString("pt-BR")}
+                  {t("setup.health.reboot.scannedAt", { when: formatDateTime(scan.scannedAt) })}
                 </p>
                 <CheckMessage check={scan.checks.reboot} />
               </CardContent>
@@ -261,21 +276,20 @@ export function HealthStep({ onNext, onBack, onPublicIp }: HealthStepProps) {
 
           {hasWarnings && (
             <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
-              ⚠️ Há pontos de atenção acima. Você pode continuar, mas recomendamos resolvê-los antes
-              de hospedar projetos em produção.
+              {t("setup.health.warnings")}
             </p>
           )}
 
           <div className="flex justify-between">
             {onBack ? (
               <Button variant="outline" onClick={onBack}>
-                <ArrowLeft className="h-4 w-4" /> Voltar
+                <ArrowLeft className="h-4 w-4" /> {t("setup.health.back")}
               </Button>
             ) : (
               <span />
             )}
             <Button onClick={onNext}>
-              Continuar <ArrowRight className="h-4 w-4" />
+              {t("setup.health.next")} <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
         </>

@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import type { TwoFactorStatusResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Trans, useI18n } from "@/i18n";
 import { ShieldAlert } from "lucide-react";
 
 /**
@@ -11,6 +12,7 @@ import { ShieldAlert } from "lucide-react";
  * Sem resposta do servidor, não afirma nada (não aparece).
  */
 export function TwoFactorNudge() {
+  const { t } = useI18n();
   const [enabled, setEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -28,12 +30,11 @@ export function TwoFactorNudge() {
       <span className="flex items-start gap-2">
         <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
-          O painel está na internet e protegido só pela senha. Ative a <strong>verificação em duas etapas</strong>:
-          entrar passa a exigir também um código do seu celular.
+          <Trans k="shell.twoFactorNudge.text" components={{ b: <strong /> }} />
         </span>
       </span>
       <Button size="sm" asChild>
-        <Link to="/settings/security#two-factor">Ativar agora</Link>
+        <Link to="/settings/security#two-factor">{t("shell.twoFactorNudge.cta")}</Link>
       </Button>
     </div>
   );

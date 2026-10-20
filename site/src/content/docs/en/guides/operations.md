@@ -1,5 +1,8 @@
 ---
 title: "Running the panel on the VPS"
+description: "Day-to-day work: update the panel, emergency scripts, where project files live, and how to change the terminal user or the panel port."
+sidebar:
+  label: "Operations"
 ---
 
 Day-to-day work after installation: updating, useful commands, where the files live and how to
@@ -34,8 +37,8 @@ is in the [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELO
 
 ## Where your projects' files live
 
-Each project you deploy has its own folder on the server, with the code cloned from Git
-and the `docker-compose.yml` the panel generates. By default these folders live in
+Each project you deploy has its own folder on the server, with the code cloned from Git (in `src/`)
+and the files the panel generates around it (such as `repo.git` and `paas.env`). By default these folders live in
 **`/opt/tws-projects`** — next to `/opt/tws-panel`, and outside any `/home`, so they do not
 disappear if you ever delete a Linux user.
 

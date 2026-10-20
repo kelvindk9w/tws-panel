@@ -1,5 +1,8 @@
 ---
-title: "Host bridge — como o painel executa scan/hardening na VPS real"
+title: "Host bridge: como o painel executa scan e hardening na VPS real"
+description: "Como o painel executa o scan e o hardening de segurança no host por meio de um container auxiliar privilegiado e descartável, e como isso é mantido seguro."
+sidebar:
+  label: "Host bridge"
 ---
 
 > Problema original (bug arquitetural encontrado em campo): o painel roda num
@@ -7,6 +10,9 @@ title: "Host bridge — como o painel executa scan/hardening na VPS real"
 > `bash -c` no **namespace do próprio container** — o scan mostrava dados do
 > Debian da imagem (`node:22-bookworm-slim`) e o hardening modificaria o
 > container descartável, não a VPS. Inútil e enganoso.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 ## 1. Arquitetura
 
@@ -17,6 +23,10 @@ privilegiado e descartável** — o mesmo padrão usado por Coolify e Portainer:
 docker run --rm --privileged --pid=host alpine:3 \
   nsenter -t 1 -m -u -i -n -p -- bash -c "<comando>"
 ```
+
+(O painel usa a imagem fixada por digest, `alpine:3@sha256:…`, definida em
+`packages/core/src/images.ts`; `alpine:3` aparece aqui só para facilitar a leitura. Assim, um
+projeto hospedado que regrave a tag `alpine:3` no servidor não troca o binário que roda como root.)
 
 - `--pid=host`: o helper enxerga o PID 1 do host (init);
 - `nsenter -t 1 -m -u -i -n -p`: o comando entra nos namespaces de **mount,
@@ -37,7 +47,7 @@ a montagem dos comandos e a allowlist ficam em
 | Propriedade | Como é garantida |
 |---|---|
 | **Sem credencial nova** | Usa o `/var/run/docker.sock` que o painel já monta para gerenciar o Docker — nenhuma senha/chave extra é criada. Quem monta o socket já é, por definição, equivalente a root no host: o bridge não aumenta esse privilégio. |
-| **Allowlist estrita** | O runner rejeita qualquer comando que não seja: (a) um dos comandos fixos somente-leitura dos checks/baseline/Lynis (inclui a leitura do fuso, `timedatectl show -p Timezone --value`), (b) uma invocação validada de `scripts/hardening/{00..06}-*.sh` com flags conhecidas (`--dry-run/--rollback/--confirm/--user/--pubkey`), ou (c) a troca do fuso de Configurações → Fuso horário (`timedatectl set-timezone '<fuso>'`, com o `ln -sf` do `/etc/localtime` como alternativa), aceita só se for byte a byte o comando montado para um fuso da lista fechada (`isKnownTimezone`). Nada vindo da API vira shell arbitrário. |
+| **Allowlist estrita** | O runner rejeita qualquer comando que não seja: (a) um dos comandos fixos somente-leitura dos checks/baseline/Lynis (inclui a leitura do fuso, `timedatectl show -p Timezone --value`), (b) uma invocação validada de `scripts/hardening/{00..07}-*.sh` com flags conhecidas (`--dry-run/--rollback/--confirm/--no-tunnel/--user/--pubkey`), ou (c) a troca do fuso de Configurações → Fuso horário (`timedatectl set-timezone '<fuso>'`, com o `ln -sf` do `/etc/localtime` como alternativa), aceita só se for byte a byte o comando montado para um fuso da lista fechada (`isKnownTimezone`). Nada vindo da API vira shell arbitrário. |
 | **Input revalidado** | A chave pública SSH e o nome de usuário da Fase 01 são validados duas vezes (rota + builder do comando) com regex que proíbe aspas/quebras de linha — desenhado para que o quoting não possa ser quebrado. |
 | **Descartável** | `--rm` + nome único por execução; em timeout o cliente é morto e o helper é removido com `docker rm -f`. |
 | **Timeout por comando** | `exec` tem timeout (default 120s; 300s para Lynis); streams de fase têm teto de 30 min. |

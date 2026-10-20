@@ -9,6 +9,7 @@ import {
   type ProjectEmailValueKey,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiErrorText, lowerCase, t, Trans, useI18n, type Key } from "@/i18n";
 import { copyText } from "@/lib/clipboard";
 import { parseDotenv } from "@/lib/dotenv";
 import { cn } from "@/lib/utils";
@@ -79,8 +80,18 @@ function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions)
   ];
 }
 
-function plural(n: number, um: string, varios: string): string {
-  return `${n} ${n === 1 ? um : varios}`;
+/** Erro da API: mensagem do servidor (ou o código traduzido); qualquer outro erro mostra a frase própria da tela. */
+function envErrorText(err: unknown, key: Key, params?: Record<string, string | number>): string {
+  return err instanceof ApiRequestError ? apiErrorText(err, key, params) : t(key, params);
+}
+
+/**
+ * Texto com número e plural ("1 variável" / "3 variáveis"). O plural escolhido é
+ * só singular (1) ou plural (qualquer outro número, inclusive 0), como sempre
+ * foi na tela; o número mostrado vem de `{n}`.
+ */
+function plural(key: Key, n: number): string {
+  return t(key, { count: n === 1 ? 1 : 2, n });
 }
 
 /** Variáveis citadas num padrão (`${MAIL_FROM:?…}` → MAIL_FROM). */
@@ -102,34 +113,37 @@ function describe(
   if (linkedTo) {
     // a ligação vence o valor salvo aqui (deploy-service.ts, envForProject)
     return {
-      label: `ignorada no deploy: ${name} está ligada ao E-mail do projeto (← ${linkedTo}) e a ligação vence. Apague esta linha ou desfaça a ligação no E-mail.`,
-      placeholder: "ignorada: vem do E-mail do projeto",
+      label: t("env.describe.ignored.label", { name, linkedTo }),
+      placeholder: t("env.describe.ignored.placeholder"),
     };
   }
   if (provided) {
     return {
-      label: "fornecida pelo E-mail do projeto — preencher aqui substitui",
-      placeholder: "fornecida pelo painel",
+      label: t("env.describe.provided.label"),
+      placeholder: t("env.describe.provided.placeholder"),
     };
   }
   if (!cv && exampleFile) {
-    return { label: `do ${exampleFile} (o app pode ler por env_file)`, placeholder: `do ${exampleFile}` };
+    return {
+      label: t("env.describe.example.label", { file: exampleFile }),
+      placeholder: t("env.describe.example.placeholder", { file: exampleFile }),
+    };
   }
   if (!cv) return null;
   if (cv.required && cv.alternatives?.length) {
-    const alt = cv.alternatives.join(" ou ");
-    return { label: `obrigatória se ${alt} estiver vazia`, placeholder: `obrigatória se ${alt} estiver vazia` };
+    const alt = cv.alternatives.join(t("env.describe.or"));
+    return { label: t("env.describe.alt", { alt }), placeholder: t("env.describe.alt", { alt }) };
   }
-  if (cv.required) return { label: "obrigatória no compose", placeholder: "obrigatória" };
+  if (cv.required) return { label: t("env.describe.required.label"), placeholder: t("env.describe.required.placeholder") };
   if (cv.defaultValue !== null && cv.defaultValue.includes("${")) {
     const from = namesIn(cv.defaultValue).join(" / ");
-    return { label: `opcional no compose · se vazia, usa ${from}`, placeholder: `se vazia, usa ${from}` };
+    return { label: t("env.describe.fallback.label", { from }), placeholder: t("env.describe.fallback.placeholder", { from }) };
   }
   if (cv.defaultValue !== null) {
-    const d = cv.defaultValue || "vazio";
-    return { label: `opcional no compose · padrão: ${d}`, placeholder: `padrão: ${d}` };
+    const d = cv.defaultValue || t("env.describe.empty");
+    return { label: t("env.describe.default.label", { value: d }), placeholder: t("env.describe.default.placeholder", { value: d }) };
   }
-  return { label: "opcional no compose", placeholder: "opcional" };
+  return { label: t("env.describe.optional.label"), placeholder: t("env.describe.optional.placeholder") };
 }
 
 type Filter = "all" | "missing" | "filled" | "panel";
@@ -190,6 +204,7 @@ const lineName = (l: Line) => (l.kind === "row" ? l.row.key.trim() : l.name);
  * valor (o app pode lê-los por env_file): aviso, não bloqueia o deploy.
  */
 export function ProjectEnvCard({ project }: { project: Project }) {
+  const { t } = useI18n();
   const [vars, setVars] = useState<EnvRow[] | null>(null);
   // O que o compose do projeto interpola (null = não é compose)
   const [composeVars, setComposeVars] = useState<ComposeVariable[] | null>(null);
@@ -242,7 +257,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       })
       .catch((err: unknown) => {
         setVars([]);
-        setError(err instanceof ApiRequestError ? err.message : "Não foi possível carregar as variáveis.");
+        setError(envErrorText(err, "env.loadFailed"));
       });
   }, [project.id]);
 
@@ -298,7 +313,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         );
         got[name] = r.value;
       } catch (err) {
-        setError(err instanceof ApiRequestError ? err.message : `Não foi possível mostrar o valor de ${name}.`);
+        setError(envErrorText(err, "env.revealFailed", { name }));
         break;
       }
     }
@@ -345,9 +360,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           .filter((v) => v.key.trim() !== "" && !(v.suggested && v.value === ""))
           .map(({ key, value }) => ({ key, value })),
       );
-      setNotice("Salvas. Valem a partir do próximo deploy.");
+      setNotice(t("env.saved"));
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível salvar.");
+      setError(envErrorText(err, "env.saveFailed"));
     } finally {
       setBusy(false);
     }
@@ -359,9 +374,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     try {
       await put([]);
       setConfirmClear(false);
-      setNotice("Variáveis apagadas. Importe o .env de novo ou preencha a lista.");
+      setNotice(t("env.cleared"));
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível apagar as variáveis.");
+      setError(envErrorText(err, "env.clearFailed"));
     } finally {
       setBusy(false);
     }
@@ -371,12 +386,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     setError(null);
     setImported(null);
     if (file.size > MAX_ENV_FILE) {
-      setError(`O arquivo ${file.name} é grande demais para um .env (máximo 256 KB).`);
+      setError(t("env.import.tooBig", { file: file.name }));
       return;
     }
     const { vars: read, skipped } = parseDotenv(await file.text());
     if (read.length === 0) {
-      setError(`Nenhuma variável encontrada em ${file.name} (esperado: NOME=valor, uma por linha).`);
+      setError(t("env.import.empty", { file: file.name }));
       return;
     }
     const current = vars ?? [];
@@ -392,12 +407,16 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     ]);
     changed();
     setImported(
-      `${plural(read.length, "variável lida", "variáveis lidas")} de ${file.name}: ` +
-        `${plural(updated, "atualizada", "atualizadas")}, ${plural(added.length, "nova", "novas")}.` +
+      t("env.import.summary", {
+        read: plural("env.import.read", read.length),
+        file: file.name,
+        updated: plural("env.import.updated", updated),
+        added: plural("env.import.added", added.length),
+      }) +
         (skipped.length > 0
-          ? ` ${skipped.length === 1 ? "Linha" : "Linhas"} ${skipped.join(", ")} ignorada${skipped.length === 1 ? "" : "s"} (não ${skipped.length === 1 ? "é" : "são"} NOME=valor).`
+          ? ` ${t("env.import.skipped", { count: skipped.length, lines: skipped.join(", ") })}`
           : "") +
-        " Nada foi gravado ainda: revise e clique em Salvar variáveis.",
+        ` ${t("env.import.notSaved")}`,
     );
   }
 
@@ -456,18 +475,18 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     if (f === "panel") return providedSet.has(lineName(l));
     return true;
   };
-  const q = query.trim().toLowerCase();
+  const q = lowerCase(query.trim());
   const inQuery = (l: Line) => {
     if (!q) return true;
     const name = lineName(l);
-    if (name.toLowerCase().includes(q)) return true;
+    if (lowerCase(name).includes(q)) return true;
     if (l.kind === "panel") {
-      if ((l.source ?? "").toLowerCase().includes(q)) return true;
+      if (lowerCase(l.source ?? "").includes(q)) return true;
       // a senha da caixa nunca entra na pesquisa, com nome nenhum
-      return visiblePanel.has(name) && !l.onDemand && !SECRET_NAME.test(name) && (l.value ?? "").toLowerCase().includes(q);
+      return visiblePanel.has(name) && !l.onDemand && !SECRET_NAME.test(name) && lowerCase(l.value ?? "").includes(q);
     }
     // valor: só o que já está à mostra, e nunca o de nome com cara de segredo
-    return visible.has(l.row.id) && !SECRET_NAME.test(name) && l.row.value.toLowerCase().includes(q);
+    return visible.has(l.row.id) && !SECRET_NAME.test(name) && lowerCase(l.row.value).includes(q);
   };
   const filtering = q !== "" || filter !== "all";
   const shownLines = lines.filter(
@@ -496,46 +515,49 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     <Card className="flex flex-col">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Variable className="h-4 w-4" /> Variáveis de ambiente
+          <Variable className="h-4 w-4" /> {t("env.title")}
         </CardTitle>
         <CardDescription>
-          Configurações e segredos que o app lê ao rodar (ex.: DATABASE_URL, API_KEY). Ficam cifradas no servidor e nunca
-          aparecem nos logs.
+          {t("env.description")}
         </CardDescription>
         {staticSite && (
           <p data-testid="env-static-note" className="flex items-start gap-2 pt-2 text-sm text-amber-300">
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            Este projeto é um site estático: não há servidor rodando para ler variáveis. Elas valem para projetos com
-            Dockerfile ou docker-compose.
+            {t("env.staticNote")}
           </p>
         )}
         {composeVars && composeVars.length > 0 && (
           <p data-testid="compose-vars" className="mt-2 rounded-md border bg-secondary/20 p-3 text-xs text-muted-foreground">
-            O compose deste projeto usa {plural(composeVars.length, "variável", "variáveis")} — todas estão na lista abaixo
-            para preencher. Sugerida que ficar vazia não é salva (vale o padrão do compose).
+            {t("env.compose.intro", { variables: plural("env.count.variables", composeVars.length) })}
             {missing.length > 0 ? (
               <>
                 {" "}
-                <strong className="text-red-400">{missing.length} obrigatória(s) ainda sem valor</strong>: o deploy não
-                começa sem elas
                 {/* poucas: os nomes aqui mesmo; muitas: o filtro Faltando mostra só elas */}
                 {missing.length <= 5 ? (
-                  ` (${missing.join(", ")}).`
+                  <Trans
+                    k="env.compose.missingNames"
+                    params={{ count: missing.length, names: missing.join(", ") }}
+                    components={{ b: <strong className="text-red-400" /> }}
+                  />
                 ) : (
                   <>
-                    .{" "}
+                    <Trans
+                      k="env.compose.missingMany"
+                      params={{ count: missing.length }}
+                      components={{ b: <strong className="text-red-400" /> }}
+                    />{" "}
                     <button
                       type="button"
                       className="text-sky-400 underline"
                       onClick={() => search("", "missing")}
                     >
-                      Ver as {missing.length} em Faltando
+                      {t("env.compose.seeMissing", { count: missing.length })}
                     </button>
                   </>
                 )}
               </>
             ) : (
-              " Todas as obrigatórias têm valor."
+              ` ${t("env.compose.allSet")}`
             )}
           </p>
         )}
@@ -545,27 +567,34 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               <p className="flex items-start gap-2 text-emerald-300">
                 <Mail className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span className="min-w-0 [overflow-wrap:anywhere]">
-                  O e-mail do projeto entrega estas variáveis no deploy: <span className="font-mono">{delivered.join(", ")}</span>.
+                  <Trans
+                    k="env.provided.delivers"
+                    params={{ names: delivered.join(", ") }}
+                    components={{ mono: <span className="font-mono" /> }}
+                  />
                 </span>
               </p>
             )}
             {linked.length > 0 && (
               <p className="mt-1 text-emerald-300 [overflow-wrap:anywhere]">
-                Ligadas a ele:{" "}
-                <span className="font-mono">
-                  {linked.map((n) => (links[n] ? `${n} ← ${links[n]}` : n)).join(", ")}
-                </span>
-                .
+                <Trans
+                  k="env.provided.linked"
+                  params={{ names: linked.map((n) => (links[n] ? `${n} ← ${links[n]}` : n)).join(", ") }}
+                  components={{ mono: <span className="font-mono" /> }}
+                />
               </p>
             )}
             <p className="mt-2 text-muted-foreground">
-              Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em{" "}
-              <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
-                E-mail → Ligar às variáveis do projeto
-              </Link>
-              . Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da
-              caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Uma variável salva aqui com o nome padrão (ex.:
-              SMTP_HOST) substitui o valor do e-mail; as ligadas vêm sempre do e-mail.
+              <Trans
+                k="env.provided.help"
+                components={{
+                  link: (c) => (
+                    <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
+                      {c}
+                    </Link>
+                  ),
+                }}
+              />
             </p>
           </div>
         )}
@@ -576,13 +605,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           >
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {exampleMissingCount === 1
-                ? "1 variável do .env.example está sem valor."
-                : `${exampleMissingCount} variáveis do .env.example estão sem valor.`}{" "}
-              O app pode lê-las pelo env_file (sem aparecerem no compose). Elas não bloqueiam o deploy, mas o app pode
-              precisar delas. Tem o .env no seu computador? Use “Importar arquivo .env”, aqui embaixo.{" "}
+              {t("env.example.count", { count: exampleMissingCount })} {t("env.example.help")}{" "}
               <button type="button" className="text-sky-400 underline" onClick={() => search("", "missing")}>
-                Ver em Faltando
+                {t("env.example.seeMissing")}
               </button>
             </span>
           </div>
@@ -600,8 +625,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   type="search"
                   value={query}
                   onChange={(e) => search(e.target.value)}
-                  placeholder="Pesquisar por nome ou valor"
-                  aria-label="Pesquisar variáveis"
+                  placeholder={t("env.search.placeholder")}
+                  aria-label={t("env.search.label")}
                   autoComplete="off"
                   spellCheck={false}
                   className="pl-8 pr-9 [&::-webkit-search-cancel-button]:hidden"
@@ -609,7 +634,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 {query && (
                   <button
                     type="button"
-                    aria-label="Apagar o texto da pesquisa"
+                    aria-label={t("env.search.clear")}
                     onClick={() => search("")}
                     className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted-foreground hover:text-foreground"
                   >
@@ -618,13 +643,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <div role="group" aria-label="Filtrar" className="flex flex-wrap gap-1.5">
+                <div role="group" aria-label={t("env.filter.label")} className="flex flex-wrap gap-1.5">
                   {(
                     [
-                      ["all", "Todas"],
-                      ["missing", `Faltando (${counts.missing})`],
-                      ["filled", `Preenchidas (${counts.filled})`],
-                      ["panel", `Do painel (${counts.panel})`],
+                      ["all", t("env.filter.all")],
+                      ["missing", t("env.filter.missing", { count: counts.missing })],
+                      ["filled", t("env.filter.filled", { count: counts.filled })],
+                      ["panel", t("env.filter.panel", { count: counts.panel })],
                     ] as const
                   ).map(([f, text]) => (
                     <button
@@ -644,11 +669,11 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                     </button>
                   ))}
                 </div>
-                <div role="group" aria-label="Exibição" className="ml-auto flex rounded-md border p-0.5">
+                <div role="group" aria-label={t("env.density.label")} className="ml-auto flex rounded-md border p-0.5">
                   {(
                     [
-                      ["list", "Lista", LayoutList],
-                      ["compact", "Compacta", Rows3],
+                      ["list", t("env.density.list"), LayoutList],
+                      ["compact", t("env.density.compact"), Rows3],
                     ] as const
                   ).map(([d, text, Icon]) => (
                     <button
@@ -671,13 +696,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               </div>
               <p data-testid="env-count" className="text-xs text-muted-foreground">
                 {filtering
-                  ? `${shownLines.length} de ${plural(lines.length, "variável", "variáveis")}`
-                  : plural(lines.length, "variável", "variáveis")}
+                  ? t("env.count.filtered", { shown: shownLines.length, total: plural("env.count.variables", lines.length) })
+                  : plural("env.count.variables", lines.length)}
               </p>
               {filtering && (
                 <p data-testid="env-filter-note" className="text-xs text-amber-300/90">
-                  Com a pesquisa ativa, “Mostrar valores” vale só para as mostradas ({shownRows.length} de{" "}
-                  {(vars ?? []).length}); “Apagar todas” e “Salvar variáveis” valem para todas.
+                  {t("env.filterNote", { shown: shownRows.length, total: (vars ?? []).length })}
                 </p>
               )}
             </div>
@@ -688,12 +712,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               data-density={density}
               className="max-h-[calc(100dvh-30rem)] min-h-[10rem] overflow-y-auto border-t px-6 py-3"
             >
-              {lines.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma variável ainda.</p>}
+              {lines.length === 0 && <p className="text-sm text-muted-foreground">{t("env.empty")}</p>}
               {lines.length > 0 && shownLines.length === 0 && (
                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                  Nenhuma variável corresponde à pesquisa.
+                  {t("env.noMatch")}
                   <Button variant="outline" size="sm" onClick={() => search("", "all")}>
-                    Limpar pesquisa
+                    {t("env.clearSearch")}
                   </Button>
                 </div>
               )}
@@ -721,26 +745,26 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                           </span>
                           <div className="flex min-w-0 flex-1 items-center gap-1">
                             {line.value === undefined ? (
-                              <span className="text-xs text-emerald-300/80">fornecida pelo e-mail do projeto no deploy</span>
+                              <span className="text-xs text-emerald-300/80">{t("env.panel.deliveredOnDeploy")}</span>
                             ) : (
                               <>
                                 <PasswordInput
                                   value={line.value}
                                   readOnly
-                                  revealLabel="valor"
+                                  revealLabel={t("env.row.valueNoun")}
                                   visible={visiblePanel.has(line.name)}
                                   onVisibleChange={(show) => void togglePanel(line, show)}
                                   {...(line.onDemand && !line.value ? { placeholder: "••••••••" } : {})}
                                   className={cn("cursor-default font-mono", compact && "h-8 text-xs")}
                                   containerClassName="flex-1"
-                                  aria-label={`Valor de ${line.name}`}
+                                  aria-label={t("env.panel.valueOf", { name: line.name })}
                                 />
                                 {visiblePanel.has(line.name) && line.value !== "" && (
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    aria-label={`Copiar valor de ${line.name}`}
-                                    title="Copiar valor"
+                                    aria-label={t("env.row.copyValueOf", { name: line.name })}
+                                    title={t("env.row.copyValue")}
                                     className={cn(compact && "h-8 w-8")}
                                     onClick={() => void copy(`panel:${line.name}`, line.value!)}
                                   >
@@ -758,16 +782,19 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                         {(!compact || copied === `panel:${line.name}`) && (
                           <span className="text-xs text-emerald-300/80">
                             {!compact && (
-                              <>
-                                vem do{" "}
-                                <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
-                                  E-mail do projeto
-                                </Link>{" "}
-                                — não se edita aqui
-                              </>
+                              <Trans
+                                k="env.panel.comesFrom"
+                                components={{
+                                  link: (c) => (
+                                    <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
+                                      {c}
+                                    </Link>
+                                  ),
+                                }}
+                              />
                             )}
                             {copied === `panel:${line.name}` && (
-                              <span className="text-emerald-400">{compact ? "" : " · "}copiado</span>
+                              <span className="text-emerald-400">{compact ? "" : " · "}{t("env.copied")}</span>
                             )}
                           </span>
                         )}
@@ -794,30 +821,30 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                         <Input
                           value={v.key}
                           onChange={(e) => update(v.id, { key: e.target.value })}
-                          placeholder="NOME_DA_VARIAVEL"
+                          placeholder={t("env.row.namePlaceholder")}
                           className={cn("font-mono sm:w-64", compact && "h-8 w-2/5 shrink-0 text-xs")}
-                          aria-label={`Nome da variável ${i + 1}`}
+                          aria-label={t("env.row.nameLabel", { n: i + 1 })}
                         />
                         <div className="flex min-w-0 flex-1 gap-1">
                           <PasswordInput
                             value={v.value}
                             onChange={(e) => update(v.id, { value: e.target.value })}
-                            placeholder={info?.placeholder ?? "valor"}
+                            placeholder={info?.placeholder ?? t("env.row.valuePlaceholder")}
                             autoComplete="off"
                             spellCheck={false}
-                            revealLabel="valor"
+                            revealLabel={t("env.row.valueNoun")}
                             visible={shown}
                             onVisibleChange={(show) => setRowVisible(v.id, show)}
                             className={cn("font-mono", compact && "h-8 text-xs")}
                             containerClassName="flex-1"
-                            aria-label={`Valor da variável ${i + 1}`}
+                            aria-label={t("env.row.valueLabel", { n: i + 1 })}
                           />
                           {shown && v.value !== "" && (
                             <Button
                               variant="ghost"
                               size="icon"
-                              aria-label={`Copiar valor de ${name || "variável"}`}
-                              title="Copiar valor"
+                              aria-label={t("env.row.copyValueOf", { name: name || t("env.row.variableFallback") })}
+                              title={t("env.row.copyValue")}
                               className={cn(compact && "h-8 w-8")}
                               onClick={() => void copy(copyKey, v.value)}
                             >
@@ -831,7 +858,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                           <Button
                             variant="ghost"
                             size="icon"
-                            aria-label={`Remover ${v.key || "variável"}`}
+                            aria-label={t("env.row.remove", { name: v.key || t("env.row.variableFallback") })}
                             className={cn(compact && "h-8 w-8")}
                             onClick={() => {
                               changed();
@@ -856,7 +883,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                           )}
                         >
                           {labelText}
-                          {copied === copyKey && <span className="text-emerald-400">{labelText ? " · " : ""}copiado</span>}
+                          {copied === copyKey && <span className="text-emerald-400">{labelText ? " · " : ""}{t("env.copied")}</span>}
                         </span>
                       )}
                     </li>
@@ -872,15 +899,15 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   className="flex flex-wrap items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm"
                 >
                   <span className="flex-1">
-                    Apagar as {plural(savedCount, "variável salva", "variáveis salvas")} deste projeto
-                    {filtering && hiddenSaved > 0 && <strong> — inclusive {hiddenSaved} que a pesquisa está escondendo</strong>}?
-                    Vale na hora; o próximo deploy usa a lista nova.
+                    {t("env.clear.confirm", { variables: plural("env.count.saved", savedCount) })}
+                    {filtering && hiddenSaved > 0 && <strong>{t("env.clear.hidden", { count: hiddenSaved })}</strong>}
+                    {t("env.clear.tail")}
                   </span>
                   <Button variant="outline" size="sm" onClick={() => setConfirmClear(false)} disabled={busy}>
-                    Cancelar
+                    {t("env.clear.cancel")}
                   </Button>
                   <Button variant="destructive" size="sm" onClick={() => void clearAll()} disabled={busy}>
-                    {busy && <Loader2 className="h-4 w-4 animate-spin" />} Sim, apagar todas
+                    {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("env.clear.yes")}
                   </Button>
                 </div>
               )}
@@ -894,10 +921,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                     setVars((prev) => [...(prev ?? []), row({ key: "", value: "" })]);
                   }}
                 >
-                  <Plus className="h-4 w-4" /> Adicionar variável
+                  <Plus className="h-4 w-4" /> {t("env.footer.add")}
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
-                  <FileUp className="h-4 w-4" /> Importar arquivo .env
+                  <FileUp className="h-4 w-4" /> {t("env.footer.import")}
                 </Button>
                 <input
                   ref={fileInput}
@@ -943,7 +970,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   }}
                 >
                   {allVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  {allVisible ? "Ocultar valores" : "Mostrar valores"}
+                  {allVisible ? t("env.footer.hideValues") : t("env.footer.showValues")}
                 </Button>
                 <Button
                   variant="outline"
@@ -952,10 +979,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   disabled={savedCount === 0 || busy}
                   onClick={() => setConfirmClear(true)}
                 >
-                  <Trash2 className="h-4 w-4" /> Apagar todas
+                  <Trash2 className="h-4 w-4" /> {t("env.footer.clearAll")}
                 </Button>
                 <Button size="sm" className="col-span-2 sm:col-span-1 sm:ml-auto" onClick={() => void save()} disabled={busy}>
-                  {busy && !confirmClear && <Loader2 className="h-4 w-4 animate-spin" />} Salvar variáveis
+                  {busy && !confirmClear && <Loader2 className="h-4 w-4 animate-spin" />} {t("env.footer.save")}
                 </Button>
               </div>
               {notice && (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { CertificateItem, PanelDomainDnsCheck, PanelDomainStatus, PanelDomainVerifyResponse } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiErrorText, lowerCase, Trans, useI18n, type Key } from "@/i18n";
 import { pageLocation } from "@/lib/page-location";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,12 +24,13 @@ import {
   Trash2,
 } from "lucide-react";
 
+/** Só erro da API traz mensagem própria; qualquer outro vira o texto padrão. */
+function errorText(err: unknown, fallback: Key): string {
+  return apiErrorText(err instanceof ApiRequestError ? err : null, fallback);
+}
+
 const PATH = "/api/settings/panel-domain";
 const SWITCH_TO_HTTPS = "cd /opt/tws-panel && sudo ./scripts/install.sh --acesso=https";
-
-function errorText(err: unknown, fallback: string): string {
-  return err instanceof ApiRequestError ? err.message : fallback;
-}
 
 function certificateValid(item: CertificateItem | null): boolean {
   return item !== null && (item.state === "valid" || item.state === "expiring");
@@ -36,21 +38,23 @@ function certificateValid(item: CertificateItem | null): boolean {
 
 /** Comando de terminal com botão de copiar (quebra a linha no celular). */
 function Command({ text, testId }: { text: string; testId?: string }) {
+  const { t } = useI18n();
   return (
     <div className="flex items-start gap-1 rounded-md border bg-muted/40 px-3 py-2" data-testid={testId}>
       <code className="min-w-0 flex-1 break-all font-mono text-xs">{text}</code>
-      <CopyButton text={text} ariaLabel="Copiar o comando" />
+      <CopyButton text={text} ariaLabel={t("panelDomain.command.copyAria")} />
     </div>
   );
 }
 
 function Field({ label, value }: { label: string; value: string }) {
+  const { t } = useI18n();
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center gap-1">
         <code className="min-w-0 break-all font-mono text-sm">{value}</code>
-        <CopyButton text={value} ariaLabel={`Copiar ${label.toLowerCase()}`} />
+        <CopyButton text={value} ariaLabel={t("panelDomain.field.copyAria", { label: lowerCase(label) })} />
       </span>
     </div>
   );
@@ -95,6 +99,7 @@ function Section({ title, icon, description, children }: { title: string; icon: 
  * pela tela ou por SSH.
  */
 export function PanelDomainSettings() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<PanelDomainStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -114,9 +119,9 @@ export function PanelDomainSettings() {
       setLastCheck(s.lastCheck);
       setLoadError(null);
     } catch {
-      if (!quiet) setLoadError("Não foi possível consultar o domínio do painel. Recarregue a página.");
+      if (!quiet) setLoadError(t("panelDomain.load.error"));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
@@ -133,7 +138,7 @@ export function PanelDomainSettings() {
     (status.certificate === null || certificatePending(status.certificate));
   useAutoRefresh(watching, () => load(true));
 
-  async function act(kind: NonNullable<typeof busy>, fn: () => Promise<void>, fallback: string) {
+  async function act(kind: NonNullable<typeof busy>, fn: () => Promise<void>, fallback: Key) {
     setBusy(kind);
     setError(null);
     try {
@@ -155,7 +160,7 @@ export function PanelDomainSettings() {
         setLastCheck(s.lastCheck);
         setEditing(false);
       },
-      "Não foi possível salvar o domínio.",
+      "panelDomain.error.save",
     );
   }
 
@@ -167,7 +172,7 @@ export function PanelDomainSettings() {
         setStatus(r.status);
         setLastCheck(r.check);
       },
-      "Não foi possível verificar o DNS.",
+      "panelDomain.error.verify",
     );
 
   const remove = () =>
@@ -180,7 +185,7 @@ export function PanelDomainSettings() {
         setConfirmRemove(false);
         setInput("");
       },
-      "Não foi possível remover o domínio.",
+      "panelDomain.error.remove",
     );
 
   const disableIp = () =>
@@ -195,17 +200,17 @@ export function PanelDomainSettings() {
         setConfirmDisable(false);
         setTyped("");
       },
-      "Não foi possível desativar o acesso pelo IP.",
+      "panelDomain.error.disableIp",
     );
 
   const enableIp = () =>
     act(
       "enable",
       async () => setStatus(await apiFetch<PanelDomainStatus>(`${PATH}/enable-ip`, { method: "POST" })),
-      "Não foi possível reativar o acesso pelo IP.",
+      "panelDomain.error.enableIp",
     );
 
-  const refresh = () => act("refresh", () => load(), "Não foi possível conferir de novo.");
+  const refresh = () => act("refresh", () => load(), "panelDomain.error.refresh");
 
   if (loadError) {
     return (
@@ -224,20 +229,15 @@ export function PanelDomainSettings() {
 
   if (status.mode === "tunnel") {
     return (
-      <Section title="Domínio do painel" icon={<Globe className="h-4 w-4" />}>
+      <Section title={t("panelDomain.tunnel.title")} icon={<Globe className="h-4 w-4" />}>
         <div data-testid="tunnel-mode" className="flex flex-col gap-3">
           <p>
-            Este painel foi instalado no modo <strong>túnel SSH</strong>: ele só abre pelo túnel, no seu computador, e não tem
-            endereço na internet. Por isso não há domínio para configurar — e nenhum IP aparece em endereço nenhum.
+            <Trans k="panelDomain.tunnel.intro" components={{ b: <strong /> }} />
           </p>
-          <p>
-            Para abrir o painel por um endereço na internet (com HTTPS) e depois usar um domínio seu, mude o acesso para
-            HTTPS rodando na VPS, por SSH:
-          </p>
+          <p>{t("panelDomain.tunnel.switch")}</p>
           <Command text={SWITCH_TO_HTTPS} />
           <p className="text-xs text-muted-foreground">
-            O instalador mantém usuários, projetos e configurações; ele só passa a publicar o painel em
-            https://&lt;ip-com-hífens&gt;.sslip.io pelas portas 80 e 443. Depois disso, volte a esta tela.
+            {t("panelDomain.tunnel.note", { host: `<${t("panelDomain.tunnel.hostPlaceholder")}>` })}
           </p>
         </div>
       </Section>
@@ -255,59 +255,58 @@ export function PanelDomainSettings() {
   return (
     <div className="flex flex-col gap-6">
       <Section
-        title="Endereço do painel"
+        title={t("panelDomain.addresses.title")}
         icon={<Globe className="h-4 w-4" />}
-        description="Por onde o painel abre hoje. O endereço automático tem o IP da VPS no nome: com um domínio seu, ele fica mais discreto e fácil de lembrar."
+        description={t("panelDomain.addresses.description")}
       >
         <ul data-testid="panel-addresses" className="flex flex-col gap-2">
           {status.addresses.map((a) => (
             <li key={a} className="flex flex-wrap items-center gap-2">
               <span className="break-all font-mono text-sm">https://{a}</span>
-              {a === status.ipAddress ? <Badge variant="warning">pelo IP</Badge> : <Badge variant="success">seu domínio</Badge>}
-              {a === status.currentHost && <Badge variant="outline">esta página</Badge>}
+              {a === status.ipAddress ? <Badge variant="warning">{t("panelDomain.addresses.badgeIp")}</Badge> : <Badge variant="success">{t("panelDomain.addresses.badgeDomain")}</Badge>}
+              {a === status.currentHost && <Badge variant="outline">{t("panelDomain.addresses.badgeCurrent")}</Badge>}
             </li>
           ))}
         </ul>
         {status.ipAccessDisabled && status.ipAddress && (
           <p className="text-xs text-muted-foreground">
-            O endereço https://{status.ipAddress} está desativado: o painel não responde mais nele.
+            {t("panelDomain.addresses.ipDisabled", { ip: status.ipAddress })}
           </p>
         )}
       </Section>
 
       <Section
-        title="Seu domínio"
+        title={t("panelDomain.domain.title")}
         icon={<Lock className="h-4 w-4" />}
-        description="Use um subdomínio só para o painel, como painel.exemplo.com.br."
+        description={t("panelDomain.domain.description")}
       >
         {showForm ? (
           <form onSubmit={save} className="flex max-w-lg flex-col gap-3">
             <label htmlFor="panel-domain" className="font-medium">
-              Domínio do painel
+              {t("panelDomain.domain.label")}
             </label>
             <Input
               id="panel-domain"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="painel.exemplo.com.br"
+              placeholder={t("panelDomain.domain.placeholder")}
               autoComplete="off"
               spellCheck={false}
               inputMode="url"
             />
             {editing && status.ipAccessDisabled && (
               <p className="text-xs text-amber-400">
-                Ao trocar, o acesso pelo IP volta (https://{status.ipAddress}) até o domínio novo ficar pronto. Você vai precisar
-                entrar de novo lá.
+                {t("panelDomain.domain.changeWarning", { ip: status.ipAddress ?? "" })}
               </p>
             )}
             <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={busy !== null || input.trim() === ""}>
                 {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />}
-                Salvar domínio
+                {t("panelDomain.domain.save")}
               </Button>
               {editing && (
                 <Button type="button" variant="outline" onClick={() => setEditing(false)}>
-                  Cancelar
+                  {t("panelDomain.domain.cancel")}
                 </Button>
               )}
             </div>
@@ -317,23 +316,22 @@ export function PanelDomainSettings() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="break-all font-mono">{domain}</span>
               {status.domainActive ? (
-                <Badge variant="success">DNS conferido</Badge>
+                <Badge variant="success">{t("panelDomain.domain.badgeActive")}</Badge>
               ) : (
-                <Badge variant="warning">aguardando o DNS</Badge>
+                <Badge variant="warning">{t("panelDomain.domain.badgePending")}</Badge>
               )}
             </div>
 
             {!status.domainActive && (
               <>
-                <p>No seu provedor de DNS, crie este registro:</p>
+                <p>{t("panelDomain.domain.createRecord")}</p>
                 <div data-testid="dns-record" className="grid grid-cols-1 gap-3 rounded-md border px-3 py-3 sm:grid-cols-3">
-                  <Field label="Tipo" value="A" />
-                  <Field label="Nome" value={domain!} />
-                  <Field label="Valor (IP da VPS)" value={status.serverIp ?? "IP da VPS"} />
+                  <Field label={t("panelDomain.domain.recordType")} value="A" />
+                  <Field label={t("panelDomain.domain.recordName")} value={domain!} />
+                  <Field label={t("panelDomain.domain.recordValue")} value={status.serverIp ?? t("panelDomain.domain.recordValueFallback")} />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  No Cloudflare, deixe a nuvem cinza (“Somente DNS”): com a nuvem laranja o certificado não sai. Se houver um
-                  registro AAAA com esse nome, apague. A propagação costuma levar de minutos a algumas horas.
+                  {t("panelDomain.domain.cloudflareNote")}
                 </p>
               </>
             )}
@@ -344,7 +342,7 @@ export function PanelDomainSettings() {
               {!status.domainActive && (
                 <Button variant="info" disabled={busy !== null} onClick={() => void verify()}>
                   {busy === "verify" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  Verificar DNS
+                  {t("panelDomain.domain.verify")}
                 </Button>
               )}
               <Button
@@ -356,11 +354,11 @@ export function PanelDomainSettings() {
                   setConfirmRemove(false);
                 }}
               >
-                Trocar domínio
+                {t("panelDomain.domain.change")}
               </Button>
               {!confirmRemove && (
                 <Button variant="danger" disabled={busy !== null} onClick={() => setConfirmRemove(true)}>
-                  <Trash2 className="h-4 w-4" /> Remover domínio
+                  <Trash2 className="h-4 w-4" /> {t("panelDomain.domain.remove")}
                 </Button>
               )}
             </div>
@@ -368,17 +366,19 @@ export function PanelDomainSettings() {
             {confirmRemove && (
               <div data-testid="remove-confirm" className="flex flex-col gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-3">
                 <p>
-                  O painel deixa de responder em https://{domain} e volta a abrir só por https://{status.ipAddress}
-                  {status.ipAccessDisabled ? " (o acesso pelo IP é reativado)" : ""}. Se você está nesta página pelo domínio,
-                  vai precisar entrar de novo no endereço do IP.
+                  {t("panelDomain.domain.removeConfirm", {
+                    domain: domain ?? "",
+                    ip: status.ipAddress ?? "",
+                    extra: status.ipAccessDisabled ? t("panelDomain.domain.removeConfirmReactivated") : "",
+                  })}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="outline" onClick={() => setConfirmRemove(false)} disabled={busy !== null}>
-                    Cancelar
+                    {t("panelDomain.domain.removeCancel")}
                   </Button>
                   <Button variant="danger" onClick={() => void remove()} disabled={busy !== null}>
                     {busy === "remove" && <Loader2 className="h-4 w-4 animate-spin" />}
-                    Sim, remover
+                    {t("panelDomain.domain.removeYes")}
                   </Button>
                 </div>
               </div>
@@ -390,9 +390,9 @@ export function PanelDomainSettings() {
 
       {domain && status.domainActive && (
         <Section
-          title="Certificado HTTPS"
+          title={t("panelDomain.certificate.title")}
           icon={<Lock className="h-4 w-4" />}
-          description="Emitido sozinho pelo Let's Encrypt assim que o domínio entra no proxy. Costuma levar de segundos a 2 minutos."
+          description={t("panelDomain.certificate.description")}
         >
           {status.certificate ? (
             <ul>
@@ -405,24 +405,23 @@ export function PanelDomainSettings() {
               />
             </ul>
           ) : (
-            <p className="text-muted-foreground">Ainda não deu para conferir o certificado. Clique em “Conferir de novo”.</p>
+            <p className="text-muted-foreground">{t("panelDomain.certificate.unknown")}</p>
           )}
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void refresh()}>
               {busy === "refresh" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Conferir de novo
+              {t("panelDomain.certificate.refresh")}
             </Button>
           </div>
           {valid && !browserOnDomain && (
             <div className="flex flex-col gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-3">
               <Button variant="info" asChild className="h-auto min-h-9 self-start whitespace-normal py-2 text-left">
                 <a href={`https://${domain}/settings/panel-domain`}>
-                  <ExternalLink className="h-4 w-4" /> Abrir o painel pelo endereço novo
+                  <ExternalLink className="h-4 w-4" /> {t("panelDomain.certificate.openNew")}
                 </a>
               </Button>
               <p className="text-xs text-muted-foreground">
-                Lá você vai precisar entrar de novo (usuário, senha e código): a sessão vale só no endereço em que você entrou.
-                Este endereço continua funcionando.
+                {t("panelDomain.certificate.openNewNote")}
               </p>
             </div>
           )}
@@ -430,16 +429,16 @@ export function PanelDomainSettings() {
       )}
 
       <Section
-        title="Acesso pelo IP"
+        title={t("panelDomain.ip.title")}
         icon={<ShieldOff className="h-4 w-4" />}
-        description={`O endereço https://${status.ipAddress} mostra o IP da VPS. Depois que o domínio novo funcionar, você pode desativá-lo.`}
+        description={t("panelDomain.ip.description", { ip: String(status.ipAddress) })}
       >
         {status.ipAccessDisabled ? (
           <div className="flex flex-col gap-3">
-            <p>O acesso pelo IP está desativado: o painel responde só em https://{domain}.</p>
+            <p>{t("panelDomain.ip.disabledInfo", { domain: domain ?? "" })}</p>
             <Button variant="success" className="self-start" disabled={busy !== null} onClick={() => void enableIp()}>
               {busy === "enable" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Reativar o acesso pelo IP
+              {t("panelDomain.ip.enable")}
             </Button>
           </div>
         ) : (
@@ -451,14 +450,14 @@ export function PanelDomainSettings() {
                 disabled={busy !== null || !canDisable}
                 onClick={() => setConfirmDisable(true)}
               >
-                <ShieldOff className="h-4 w-4" /> Desativar o acesso pelo IP
+                <ShieldOff className="h-4 w-4" /> {t("panelDomain.ip.disable")}
               </Button>
             )}
             {!canDisable && (
               <ul data-testid="disable-ip-blockers" className="flex list-disc flex-col gap-1 pl-5 text-xs text-muted-foreground">
                 {(status.disableIp.blockers.length
                   ? status.disableIp.blockers
-                  : [`Abra o painel pelo endereço novo (https://${domain ?? "seu domínio"}) para liberar o botão.`]
+                  : [t("panelDomain.ip.blockerDefault", { domain: domain ?? t("panelDomain.ip.blockerDefaultDomain") })]
                 ).map((b) => (
                   <li key={b}>{b}</li>
                 ))}
@@ -467,12 +466,15 @@ export function PanelDomainSettings() {
             {confirmDisable && (
               <div data-testid="disable-ip-confirm" className="flex flex-col gap-3 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-3">
                 <p>
-                  O painel vai responder <strong>só</strong> em https://{domain}. O endereço https://{status.ipAddress} deixa de
-                  abrir. Se um dia o domínio parar de funcionar (DNS apagado, domínio vencido), reative pelo SSH da VPS com:
+                  <Trans
+                    k="panelDomain.ip.disableConfirm"
+                    params={{ domain: domain ?? "", ip: status.ipAddress ?? "" }}
+                    components={{ b: <strong /> }}
+                  />
                 </p>
                 <Command text={status.reactivateCommand} testId="reactivate-command" />
                 <label htmlFor="disable-confirm" className="font-medium">
-                  Digite {domain} para confirmar
+                  {t("panelDomain.ip.typeToConfirm", { domain: domain ?? "" })}
                 </label>
                 <Input
                   id="disable-confirm"
@@ -483,7 +485,7 @@ export function PanelDomainSettings() {
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button variant="outline" onClick={() => setConfirmDisable(false)} disabled={busy !== null}>
-                    Cancelar
+                    {t("panelDomain.ip.cancel")}
                   </Button>
                   <Button
                     variant="danger"
@@ -491,7 +493,7 @@ export function PanelDomainSettings() {
                     onClick={() => void disableIp()}
                   >
                     {busy === "disable" && <Loader2 className="h-4 w-4 animate-spin" />}
-                    Desativar agora
+                    {t("panelDomain.ip.disableNow")}
                   </Button>
                 </div>
               </div>
@@ -501,14 +503,14 @@ export function PanelDomainSettings() {
         {!confirmDisable && (
           <div className="flex flex-col gap-2">
             <p className="flex items-center gap-2 font-medium">
-              <Terminal className="h-4 w-4" /> Se perder o acesso pelo domínio
+              <Terminal className="h-4 w-4" /> {t("panelDomain.ip.lostAccess")}
             </p>
-            <p className="text-xs text-muted-foreground">Entre na VPS por SSH e rode o comando abaixo: ele reativa o endereço pelo IP.</p>
+            <p className="text-xs text-muted-foreground">{t("panelDomain.ip.lostAccessHelp")}</p>
             <Command text={status.reactivateCommand} testId="reactivate-command" />
           </div>
         )}
         <p className="text-xs text-muted-foreground">
-          A escolha fica gravada em {status.configFile} e vale também depois de reiniciar o painel ou a VPS.
+          {t("panelDomain.ip.configNote", { file: status.configFile })}
         </p>
       </Section>
     </div>

@@ -2,6 +2,7 @@ import * as React from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { Input, type InputProps } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/i18n";
 
 export interface PasswordInputProps extends Omit<InputProps, "type"> {
   /** O que o olho revela, para o rótulo acessível ("senha", "token"…). */
@@ -22,16 +23,17 @@ export interface PasswordInputProps extends Omit<InputProps, "type"> {
  */
 const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
   (
-    { className, containerClassName, revealLabel = "senha", disabled, visible: visibleProp, onVisibleChange, ...props },
+    { className, containerClassName, revealLabel, disabled, visible: visibleProp, onVisibleChange, ...props },
     ref,
   ) => {
+    const { t } = useI18n();
     const [visibleState, setVisibleState] = React.useState(false);
     const visible = visibleProp ?? visibleState;
     const setVisible = (v: boolean) => {
       if (visibleProp === undefined) setVisibleState(v);
       onVisibleChange?.(v);
     };
-    const label = `${visible ? "Ocultar" : "Mostrar"} ${revealLabel}`;
+    const label = `${visible ? t("common.password.hide") : t("common.password.show")} ${revealLabel ?? t("common.password.defaultTarget")}`;
     return (
       <div className={cn("relative w-full", containerClassName)}>
         <Input

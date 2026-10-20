@@ -1,12 +1,18 @@
 ---
 title: "Troubleshooting"
+description: "Fixes for common problems: blocked port 25, email in spam, certificates that do not issue, a panel that does not open, lost SSH access and blocked deploys."
+sidebar:
+  label: "Troubleshooting"
 ---
 
-Likely problems when running paas on a real VPS, and how to fix each one.
+Likely problems when running TWS Panel on a real VPS, and how to fix each one.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 ---
 
-## 📧 Email
+## Email
 
 <a id="porta-25-bloqueada-pelo-provedor"></a>
 ### Port 25 blocked by the provider
@@ -31,15 +37,15 @@ Gmail and Outlook).
 **Diagnosis (in this order):**
 1. Send to [mail-tester.com](https://www.mail-tester.com) — it points out exactly what
    is missing. Target: ≥ 9/10.
-2. Open the domain's **DNS checklist** in the panel and click "verificar" (verify): A, MX, SPF, DKIM and
+2. Open the domain's **DNS checklist** in the panel and click **Verificar agora** (Check now): A, MX, SPF, DKIM and
    DMARC must all be ✅.
-3. **Yellow PTR** (no valid reverse name) is the #1 cause: only the VPS provider sets it. The
+3. **Yellow PTR** (no valid reverse name) is the most common cause: only the VPS provider sets it. The
    PTR card says where to change it (Contabo, Hetzner, Vultr) or generates the ready-made ticket text.
 4. Check the **blocklists** in the panel (Envios → Reputação — Sending → Reputation). If you're listed, use
    "Pedir remoção" (Request removal) on the corresponding list.
 5. Look at the **Nota de entregabilidade** (Deliverability score) (Envios → Nota — Sending → Score): it lists what is missing, item by item.
-6. **New IP with no reputation**: in the first 2–4 weeks send low, growing volume
-   (dozens/day, not thousands). See "IP warm-up" in
+6. **New IP with no reputation**: in the first 2–4 weeks send a low volume and raise it gradually
+   (dozens a day, not thousands). See "IP warm-up" in
    [email-deliverability.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/email-deliverability.md).
 7. Keep DMARC at `p=none` collecting reports until everything stabilizes; tighten to
    `quarantine`/`reject` later.
@@ -48,9 +54,9 @@ Gmail and Outlook).
 
 **Symptoms:** email clients warn "untrusted certificate" when connecting.
 
-**Cause:** the certificate for `mail.<domain>` hasn't been issued yet — in the meantime
+**Cause:** the certificate for `mail.<domain>` has not been issued yet — in the meantime
 Stalwart uses a self-signed one. Almost always the A record for `mail.<domain>` is missing
-or isn't pointing to the VPS, or it has the orange cloud on Cloudflare.
+or is not pointing to the VPS, or it has the orange cloud on Cloudflare.
 
 **Solution:** open **E-mail** (Email) in the panel: the "Certificado do servidor de e-mail" (Email server certificate) card says what
 is missing. Create the A record for `mail.<domain>` with the VPS IP (on Cloudflare, **grey**
@@ -59,26 +65,27 @@ installs and renews the certificate on its own.
 
 ---
 
-## 🌐 Domains and SSL
+## Domains and SSL
 
-### Caddy doesn't issue a certificate ("DNS não propagado" — DNS not propagated)
+### Caddy does not issue a certificate
 
 **Symptoms:** site up only over HTTP, ACME error in the `paas-caddy` container logs
 (`docker logs paas-caddy`).
 
-**Cause:** the domain's A record doesn't point to the VPS yet (or propagation hasn't finished).
+**Cause:** the domain's A record does not point to the VPS yet (or propagation has not finished).
 
 **Solution:**
-1. Use the **"verificar DNS"** (verify DNS) button in the panel before issuing the certificate;
+1. Use the **Verificar DNS** (Verify DNS) button in the panel before issuing the certificate;
 2. Check manually: `dig +short yourdomain.com` should return the VPS IP;
 3. If you just created the record, wait for propagation (minutes to hours, depending on the TTL);
 4. If there is a proxy in front (e.g. Cloudflare with the orange cloud), turn it off for the initial
-   issuance or use DNS-01 mode — the central Caddy expects a direct connection on ports 80/443;
+   issuance. The panel has no DNS-01 mode: the central Caddy expects a direct connection on ports 80/443.
+   After the certificate is issued, use **Tentar emitir agora** (Try to issue now) on the **Certificados** (Certificates) page if it is still pending;
 5. Check that UFW/the provider's firewall allows 80 and 443.
 
-### `.localhost` domain doesn't open
+### `.localhost` domain does not open
 
-**Symptoms:** `meuapp.localhost` doesn't resolve in the browser.
+**Symptoms:** `meuapp.localhost` does not resolve in the browser.
 
 **Solution:** `.localhost` depends on the operating system resolving to 127.0.0.1 — it works
 natively on modern Linux/macOS and in Chrome; if it fails, add this to `/etc/hosts`:
@@ -86,12 +93,12 @@ natively on modern Linux/macOS and in Chrome; if it fails, add this to `/etc/hos
 
 ---
 
-## 🛠️ Panel and wizard
+## Panel and wizard
 
-### Panel doesn't open after `install.sh`
+### Panel does not open after `install.sh`
 
-**Symptoms:** the address `https://YOUR-IP-WITH-HYPHENS.sslip.io/?token=...` doesn't open, or the
-installer warns that it didn't respond within 3 minutes.
+**Symptoms:** the address `https://YOUR-IP-WITH-HYPHENS.sslip.io/?token=...` does not open, or the
+installer warns that it did not respond within 3 minutes.
 
 **Checklist (on the VPS, in `/opt/tws-panel`):**
 1. Are the containers up? `sudo docker compose ps`;
@@ -102,7 +109,7 @@ installer warns that it didn't respond within 3 minutes.
    (see [SSH tunnel access](../getting-started/installation.md#acesso-por-tunel));
 4. Right token? Show the full link again with `sudo ./scripts/show-token.sh`.
 
-The panel itself only listens inside the VPS (`127.0.0.1`): the address `http://YOUR-IP:9000` doesn't open,
+The panel itself only listens inside the VPS (`127.0.0.1`): the address `http://YOUR-IP:9000` does not open,
 on purpose.
 
 ### "Token inválido" (invalid token) in the wizard
@@ -127,12 +134,12 @@ deleted on purpose; to reopen the wizard and generate a new token, run
 
 ### I lost SSH access during hardening
 
-**Don't panic — that's what the rollback is for.** Hardening schedules an automatic revert
-(via `at`) that restores the previous configuration in ~5 minutes **if you don't confirm access**
+**Do not panic — that's what the rollback is for.** Hardening schedules an automatic revert
+(via `at`) that restores the previous configuration in ~5 minutes **if you do not confirm access**
 through the panel. Wait for the rollback, log in again and review the fix plan before reapplying.
 Every changed file has a backup in `/var/backups/paas/`.
 Lost the key, the password or the phone for two-step verification? See
-[I lost access — now what?](recover-access.md).
+[I lost access: now what?](recover-access.md).
 
 <a id="deploy-bloqueado-por-guardrail"></a>
 ### Deploy blocked by guardrail
@@ -147,7 +154,7 @@ staging environment), check "Entendo os riscos" (I understand the risks) and con
 
 ---
 
-## 🐳 Docker
+## Docker
 
 ### "Cannot connect to the Docker daemon"
 
@@ -160,4 +167,4 @@ staging environment), check "Entendo os riscos" (I understand the risks) and con
 ## Didn't find your problem?
 
 Open an issue in the repository using the bug template — include logs (without secrets), the commit
-version and the environment. See [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/CONTRIBUTING.md).
+you are running and the environment. See [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/CONTRIBUTING.md).

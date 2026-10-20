@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { copyText } from "@/lib/clipboard";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Check, Copy } from "lucide-react";
@@ -9,6 +10,7 @@ import { Check, Copy } from "lucide-react";
  * por 1,5 s. `ariaLabel` diz o que é copiado para quem usa leitor de tela.
  */
 export function CopyButton({ text, label, ariaLabel }: { text: string; label?: string; ariaLabel?: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -26,7 +28,7 @@ export function CopyButton({ text, label, ariaLabel }: { text: string; label?: s
       size="sm"
       className={cn(!label && "h-7 w-7 shrink-0 p-0")}
       onClick={() => void copy()}
-      title={copied ? "Copiado" : (ariaLabel ?? label ?? "Copiar")}
+      title={copied ? t("mail.copy.copied") : (ariaLabel ?? label ?? t("mail.copy.default"))}
       aria-label={ariaLabel}
     >
       {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}

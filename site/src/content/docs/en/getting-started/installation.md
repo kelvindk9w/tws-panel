@@ -1,10 +1,16 @@
 ---
 title: "Step-by-step installation"
+description: "Install TWS Panel on a clean Ubuntu VPS: create a user, set up an SSH key, run the installer and open the setup wizard."
+sidebar:
+  label: "Installation"
 ---
 
 A complete guide to installing TWS Panel on a clean VPS, from scratch all the way to the setup
 wizard. The [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md) has the short version; this guide explains every
 step, what shows up on screen, and what to do when something goes wrong.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 The steps are numbered 1 to 8. The panel's scripts (`install.sh`, `uninstall.sh`) refer to
 these numbers.
@@ -99,7 +105,7 @@ cd /opt/tws-panel
 ./scripts/uninstall.sh             # shows it again and asks you to type "remover"
 ```
 
-(The script is in Portuguese: the confirmation prompt expects you to type the word `remover`, which means "remove".)
+(The script still prints in Portuguese: to confirm, type the word `remover`, which means "remove".)
 
 It deletes **everything the panel created**: the panel and its containers, the proxy (Caddy), the
 email server, the deployed projects with their data, the `/opt/tws-projects` folder, the hardening
@@ -509,8 +515,6 @@ Get-Content ~\.ssh\id_ed25519.pub
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8k2p... your-user@your-computer
 ```
 
-(`your-user@your-computer` means "your-user@your-computer": it will show your own username and machine name.)
-
 If the line showed up, the key is created.
 
 <a id="instale-a-chave-na-vps"></a>
@@ -603,7 +607,7 @@ If you get in **without it asking for the account password**, it's working. It m
   appear. That way, losing a device doesn't leave you without access.
 
 **If you have already lost the key** — or the password, or access to the panel — see
-[I lost access — now what?](../guides/recover-access.md), which covers each case and the way back.
+[I lost access: now what?](../guides/recover-access.md), which covers each case and the way back.
 
 </details>
 
@@ -700,15 +704,14 @@ a few minutes, not even that (it "remembers" that you authenticated).
 Clone into `/opt` and give ownership of the folder to your user:
 
 ```bash
-sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 sudo chown -R $USER:$USER /opt/tws-panel
-cd /opt/tws-panel && git checkout main
+cd /opt/tws-panel
 ```
 
 > [!TIP]
-> The clone starts on the `dev` branch (the repository's default, used by contributors). For
-> **real use**, always use `main` — it only receives validated and tested code. Want to help with
-> development? Stay on `dev` (see [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/CONTRIBUTING.md)).
+> The command above clones the `main` branch, which is the one to use in **real use**: it only
+> receives validated and tested code. Want to help with development? Use the `dev` branch instead (see [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/CONTRIBUTING.md)).
 
 <a id="passo-7"></a>
 
@@ -732,8 +735,7 @@ choosing a port.
 > browser opens the panel with the padlock, with no "Not secure" warning. The panel itself listens only
 > inside the VPS: from outside, the proxy answers, on ports 80 and 443.
 >
-> For the certificate to be issued, ports **80 and 443 must be open** to the internet. On
-> Contabo (and most VPSs) they already come open. If your provider has a firewall in the
+> For the certificate to be issued, ports **80 and 443 must be open** to the internet. On most VPS providers they are open by default. If your provider has a firewall in the
 > hosting panel, open both before installing. The installer waits for the certificate
 > to be ready (up to 3 minutes) and, if it isn't issued, tells you the most likely reason and shows access
 > through a tunnel as an alternative.
@@ -773,7 +775,7 @@ choosing a port.
 <summary>🩺 <strong>Pre-flight: what shows on screen and what to do in each scenario</strong></summary>
 
 **Scenario 1 — clean VPS (the expected case):** the report comes out all green and the installation
-continues on its own, without asking for anything. (The installer's output is in Portuguese; it reads roughly: "Pre-flight: inspecting the machine (nothing will be changed in this step)", then OS, RAM, free disk, Docker absent (will be installed by this script), no Docker containers running, proxy and email ports free, and "Clean machine detected — proceeding with the installation".)
+continues on its own, without asking for anything. (The installer prints in Portuguese for now. In short: the machine is being inspected without changes, then OS, RAM, free disk, Docker, running containers and ports are listed, and it ends with "clean machine detected — proceeding with the installation".)
 
 ```text
 [tws-panel] Pré-flight: inspecionando a máquina (nada será alterado nesta etapa)…
@@ -789,7 +791,7 @@ continues on its own, without asking for anything. (The installer's output is in
 You don't need to do anything — just wait for the build (it takes a few minutes the first time).
 
 **Scenario 2 — VPS already in use:** the report shows items with `⚠` and the installer **stops and
-waits for your decision**. (The output below is in Portuguese. In short, it lists the ports and services found, warns that this VPS does not look clean, explains that TWS Panel is made for a clean Ubuntu VPS and that the installer never removes or stops anything, and asks you to type "continuar" to proceed anyway, or to use `--force` / `PAAS_FORCE=1` in automation.)
+waits for your decision**. (In short: the installer lists the ports and services it found, warns that the VPS does not look clean, says it never removes or stops anything, and asks you to type "continuar" to proceed anyway.)
 
 ```text
   ⚠ Portas em uso: 80 443
@@ -925,7 +927,7 @@ address at all on the internet** — only people with SSH to the VPS reach it �
 ```
 
 In this mode the installer asks which VPS port the panel sits on and finishes by showing the SSH
-tunnel command and the address `http://localhost:PORTA/?token=…` (`PORTA` means "port"). The browser will show "Not secure"
+tunnel command and the address `http://localhost:PORT/?token=…`. The browser will show "Not secure"
 because it is `http://localhost` — and here that's fine: the traffic travels encrypted inside the SSH
 tunnel. To switch modes later, run the installer again with `--acesso=https` or `--acesso=tunel`.
 With the panel on HTTPS, Phase 02 also closes the SSH tunnel (it isn't used); when switching to
@@ -1041,27 +1043,27 @@ With the panel on HTTPS, Phase 02 also closes the SSH tunnel (it isn't used); wh
 
 Open the panel at the `https://…sslip.io` address the installer showed at the end (it already
 carries the **setup token** in the link; if you need it, the token also appears highlighted in the terminal) and follow
-the wizard. The panel's interface is currently in Portuguese only, so the screen labels below are shown in Portuguese, with the English meaning in the list after the diagram:
+the wizard. The screen labels are shown in Portuguese, with the English meaning in the list after the diagram:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Assistente — https://YOUR-IP.sslip.io/?token=…              │
-├─────────────────────────────────────────────────────────────┤
-│  1. Boas-vindas      → valida o setup token e libera o      │
-│                        terminal ao vivo do servidor         │
-│  2. Saúde da máquina → CPU, RAM, disco, rede — os checks    │
-│                        rodam AO VIVO no terminal embutido   │
-│  3. Segurança        → scan Lynis → plano → hardening       │
-│                        (com rollback automático em 5 min)   │
-│  4. Conta admin      → usuário + senha forte do painel      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  Assistente — https://YOUR-IP.sslip.io/?token=…                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  1. Boas-vindas e token    → valida o setup token e libera o         │
+│                              terminal ao vivo do servidor            │
+│  2. Saúde da máquina       → CPU, RAM, disco, rede — os checks       │
+│                              rodam AO VIVO no terminal embutido      │
+│  3. Segurança              → scan Lynis → plano → hardening          │
+│                              (com rollback automático em 5 min)      │
+│  4. Conta de administrador → usuário + senha forte do painel         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Assistente** (Wizard)
-- **1. Boas-vindas** (Welcome) — validates the setup token and unlocks the server's live terminal
+- **1. Boas-vindas e token** (Welcome and token) — validates the setup token and unlocks the server's live terminal
 - **2. Saúde da máquina** (Machine health) — CPU, RAM, disk, network; the checks run LIVE in the embedded terminal
 - **3. Segurança** (Security) — Lynis scan → plan → hardening (with automatic rollback in 5 min)
-- **4. Conta admin** (Admin account) — the panel's username + strong password
+- **4. Conta de administrador** (Administrator account) — the panel's username + strong password
 
 The **Segurança** (Security) step is the one that demands the most attention: it changes how you log in to the VPS. Before
 applying the phases, read the [Security wizard](security-wizard.md).
@@ -1077,7 +1079,7 @@ The panel runs 100% in Docker (`docker compose up -d`), with state persisted in 
 <details>
 <summary>🎫 <strong>The installer's final banner — and how to recover the token later</strong></summary>
 
-When the installation finishes, the terminal plays a "beep" and shows a banner like this. (It is real installer output, in Portuguese. It says "TWS PANEL INSTALLED AND RUNNING SUCCESSFULLY", tells you the next step is to open the panel in the browser at the link shown, explains that the connection is encrypted with HTTPS and that sslip.io only translates the name to the VPS IP, and shows the SETUP TOKEN box with two warnings: it appears highlighted ONLY NOW, so keep it until you finish the wizard, and it is invalidated after you create the admin account at the end of the wizard.)
+When the installation finishes, the terminal plays a "beep" and shows a banner like this. (This is real installer output, in Portuguese. In short: "TWS Panel installed and running successfully", the link to open in the browser, a note that the connection uses HTTPS, and the setup token box. The token is highlighted only now, so keep it until you finish the wizard; it stops working after you create the admin account.)
 
 ```text
 ██████████████████████████████████████████████████████████████████████████████
@@ -1107,7 +1109,7 @@ When the installation finishes, the terminal plays a "beep" and shows a banner l
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-(`<seu-token-de-48-caracteres>` means "your 48-character token".)
+(Where the sample shows `<seu-token-de-48-caracteres>`, the real banner shows your actual 48-character token.)
 
 **What to do:** copy the **full link** (`https://…sslip.io/?token=...`) and paste it into the browser.
 It already carries the token embedded — you don't need to type anything. Installed with `--acesso=tunel`? The banner

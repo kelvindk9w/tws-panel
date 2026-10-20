@@ -1,23 +1,38 @@
 ---
-title: "Security: what the panel does and what it requires"
+title: "Security model: what the panel does and what it requires"
+description: "What TWS Panel protects, what it requires from you (a real shell and the Docker socket), and how login and two-step verification work."
+sidebar:
+  label: "Security model"
 ---
 
 Found a vulnerability? **Do not open a public issue.** Read
 [SECURITY.md](https://github.com/kelvindk9w/tws-panel/blob/main/SECURITY.md) to learn how to report it responsibly.
 
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+
 This document explains the panel's security model. To carry out the VPS hardening, see the
 [Security wizard](../getting-started/security-wizard.md). To recover access, see
-[I lost access — now what?](../guides/recover-access.md).
+[I lost access: now what?](../guides/recover-access.md).
 
 ## What the panel protects
 
-The panel was designed with security in mind: a wizard protected by a single-use token, Docker
-socket never exposed over TCP, same-origin CORS by default, rate limiting, schema validation on
-all API routes, logs with secret redaction and auditing of all sensitive actions.
+The panel was designed with security in mind: a wizard protected by a setup token (it stops working, and its file is deleted,
+when the setup finishes), Docker socket not exposed over TCP, same-origin CORS by default, rate
+limiting, schema validation on API routes, logs with secret redaction and an audit log of
+sensitive actions.
 
-- **Deploy guardrails:** 6 rules in 3 levels (`block`, `warn`, `info`) — database port exposed
-  on the host, weak credentials, privileged container, dev service in production, secret committed
-  to the code and `:latest` tag. A block only passes with an explicit, audited override.
+- **Deploy guardrails:** rules in 3 levels (`block`, `warn`, `info`) — database port exposed
+  on the host, weak credentials, dev service in production, secret committed to the code and
+  `:latest` tag. A block only passes with an explicit, audited override. The compose file is also
+  checked the way Docker actually runs it (after merge, include, extends and interpolation).
+  Privileged containers, `docker.sock` and binds outside the project folder are blocked, but they
+  accept the same audited override. Only the rules that protect the panel itself have no override:
+  the panel's own images, networks, reserved names and resources cannot be used or taken over by a
+  project.
+- **Isolation between hosted projects and the panel:** separate Docker networks for the proxy,
+  the panel, mail administration and mail delivery; the panel's images are pinned by digest; the
+  hosted repository's git hooks and configuration never run with the panel's privileges.
 - **Monitoring:** after hardening, a baseline records packages, ports and hashes of
   critical files; recurring scans compare against it and each difference becomes an alert.
 - **Secrets encrypted on disk:** projects' environment variables, the Telegram token, the backup
@@ -27,7 +42,7 @@ all API routes, logs with secret redaction and auditing of all sensitive actions
 
 ## What it requires
 
-**Be upfront about what this requires.** A PaaS needs privileged access to the host — there is no
+A PaaS needs privileged access to the host — there is no
 way to create containers and configure a firewall without it. Two consequences you should know
 before installing:
 

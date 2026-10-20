@@ -9,6 +9,7 @@ import type {
   ProjectResponse,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
+import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
 import { ProjectConfigCard } from "@/components/ProjectConfigCard";
 import { ProjectDomainsCard } from "@/components/ProjectDomainsCard";
 import { ProjectEnvCard } from "@/components/ProjectEnvCard";
@@ -59,6 +60,7 @@ export function GuardrailOverrideModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
   const [accepted, setAccepted] = useState(false);
   // 80/443 com proxy HTTPS próprio: forçar não adianta — o `up` falharia com
   // "porta já em uso" (ou tomaria o lugar do proxy do painel)
@@ -67,12 +69,14 @@ export function GuardrailOverrideModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col gap-4 overflow-auto rounded-xl border border-red-500/40 bg-background p-6 shadow-2xl">
         <div className="flex items-center gap-2 text-lg font-semibold text-red-400">
-          <ShieldAlert className="h-5 w-5" /> Deploy bloqueado pelos guardrails
+          <ShieldAlert className="h-5 w-5" /> {t("projects.detail.guardrail.title")}
         </div>
         <p className="text-sm text-muted-foreground">
-          {report.blockers} violação(ões) de segurança do tipo <strong>block</strong> foram encontradas
-          {report.warnings > 0 ? `, além de ${report.warnings} alerta(s)` : ""}. Corrija os problemas ou
-          assuma o risco explicitamente — o override fica registrado na auditoria.
+          <Trans
+            k={report.warnings > 0 ? "projects.detail.guardrail.summaryWithWarnings" : "projects.detail.guardrail.summary"}
+            params={{ blockers: report.blockers, warnings: report.warnings }}
+            components={{ b: <strong /> }}
+          />
         </p>
         <ul className="flex flex-col gap-2 text-sm">
           {report.findings.map((f, i) => (
@@ -92,12 +96,11 @@ export function GuardrailOverrideModal({
         {noOverride ? (
           <>
             <p data-testid="no-override" className="text-sm text-amber-300">
-              Este bloqueio não tem como forçar: as portas 80 e 443 da VPS são do proxy do painel, e o deploy falharia
-              com &quot;porta já em uso&quot;. Siga a orientação acima (💡) e faça o deploy de novo.
+              {t("projects.detail.guardrail.noOverride")}
             </p>
             <div className="flex justify-end">
               <Button variant="outline" size="sm" onClick={onCancel}>
-                Fechar
+                {t("projects.detail.guardrail.close")}
               </Button>
             </div>
           </>
@@ -110,15 +113,15 @@ export function GuardrailOverrideModal({
                 onChange={(e) => setAccepted(e.target.checked)}
                 className="h-4 w-4"
               />
-              Entendo os riscos e quero fazer o deploy mesmo assim (override)
+              {t("projects.detail.guardrail.accept")}
             </label>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>
-                Cancelar
+                {t("projects.detail.guardrail.cancel")}
               </Button>
               <Button variant="destructive" size="sm" disabled={!accepted || busy} onClick={onConfirm}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
-                Deploy com override
+                {t("projects.detail.guardrail.confirm")}
               </Button>
             </div>
           </>
@@ -137,35 +140,33 @@ export function GuardrailOverrideModal({
  */
 function pollProblemText(err: unknown, deploying: boolean): string {
   if (err instanceof ApiRequestError && err.status === 429) {
-    return (
-      "O painel recebeu consultas demais desta página em pouco tempo e pediu uma pausa. A página continua " +
-      "tentando sozinha — o que aparece abaixo pode estar alguns segundos atrasado."
-    );
+    return tGlobal("projects.detail.poll.rateLimited");
   }
   if (deploying) {
-    return "O deploy está recriando os containers e o painel demorou a responder — é normal nesta etapa. A página continua acompanhando.";
+    return tGlobal("projects.detail.poll.deploying");
   }
   if (err instanceof ApiRequestError && err.status === 0) {
-    return "Sem conexão com o painel agora (ele pode estar reiniciando). Tentando de novo a cada poucos segundos.";
+    return tGlobal("projects.detail.poll.offline");
   }
   const detail = err instanceof Error ? err.message : String(err);
-  return `Não consegui atualizar o estado do projeto: ${detail} Tentando de novo a cada poucos segundos.`;
+  return tGlobal("projects.detail.poll.failed", { detail });
 }
 
 /** Seções do projeto — cada uma com o seu endereço (/projects/:id/:seção). */
 const PROJECT_SECTIONS = [
-  { key: "overview", label: "Visão geral", icon: LayoutDashboard },
-  { key: "deploys", label: "Deploys", icon: Rocket },
-  { key: "domains", label: "Domínios", icon: Globe },
-  { key: "git", label: "Git", icon: GitBranch },
-  { key: "env", label: "Variáveis", icon: Variable },
-  { key: "email", label: "E-mail", icon: Mail },
-  { key: "backups", label: "Backups", icon: DatabaseBackup },
-  { key: "settings", label: "Configurações", icon: Settings },
-] as const;
+  { key: "overview", label: "projects.detail.nav.overview", icon: LayoutDashboard },
+  { key: "deploys", label: "projects.detail.nav.deploys", icon: Rocket },
+  { key: "domains", label: "projects.detail.nav.domains", icon: Globe },
+  { key: "git", label: "projects.detail.nav.git", icon: GitBranch },
+  { key: "env", label: "projects.detail.nav.env", icon: Variable },
+  { key: "email", label: "projects.detail.nav.email", icon: Mail },
+  { key: "backups", label: "projects.detail.nav.backups", icon: DatabaseBackup },
+  { key: "settings", label: "projects.detail.nav.settings", icon: Settings },
+] as const satisfies ReadonlyArray<{ key: string; label: Key; icon: unknown }>;
 type ProjectSectionKey = (typeof PROJECT_SECTIONS)[number]["key"];
 
 export function ProjectDetailPage() {
+  const { t } = useI18n();
   const { id, section: sectionParam } = useParams<{ id: string; section?: string }>();
   const section: ProjectSectionKey = PROJECT_SECTIONS.some((s) => s.key === sectionParam)
     ? (sectionParam as ProjectSectionKey)
@@ -278,7 +279,7 @@ export function ProjectDetailPage() {
         setGuardrailReport(null);
         setMissingEnv(err.data.missing as string[]);
       } else {
-        setError(err instanceof Error ? err.message : "Falha ao executar deploy.");
+        setError(apiErrorText(err, "projects.detail.deployError"));
       }
     } finally {
       setBusy(null);
@@ -322,7 +323,7 @@ export function ProjectDetailPage() {
       await apiFetch(`/api/projects/${id}/${kind}`, { method: "POST" });
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Falha ao executar ${kind}.`);
+      setError(apiErrorText(err, kind === "stop" ? "projects.detail.stopError" : "projects.detail.startError"));
     } finally {
       setBusy(null);
     }
@@ -335,7 +336,7 @@ export function ProjectDetailPage() {
       await apiFetch(`/api/projects/${id}?deleteSource=${deleteSource}`, { method: "DELETE" });
       navigate("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao remover o projeto.");
+      setError(apiErrorText(err, "projects.detail.removeError"));
       setBusy(null);
     }
   }
@@ -343,7 +344,7 @@ export function ProjectDetailPage() {
   if (!data) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> {pollProblem ?? error ?? "Carregando…"}
+        <Loader2 className="h-4 w-4 animate-spin" /> {pollProblem ?? error ?? t("projects.detail.loading")}
       </p>
     );
   }
@@ -378,7 +379,7 @@ export function ProjectDetailPage() {
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           <Button asChild size="sm" variant="info">
             <a href={url} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="h-4 w-4" /> Abrir site
+              <ExternalLink className="h-4 w-4" /> {t("projects.detail.openSite")}
             </a>
           </Button>
           <Button
@@ -387,7 +388,7 @@ export function ProjectDetailPage() {
             disabled={busy !== null || running || status === "created" || status === "stopped"}
             onClick={() => void action("stop")}
           >
-            <Square className="h-4 w-4" /> Parar
+            <Square className="h-4 w-4" /> {t("projects.detail.stop")}
           </Button>
           <Button
             variant="success"
@@ -395,7 +396,7 @@ export function ProjectDetailPage() {
             disabled={busy !== null || running || status === "running" || status === "created"}
             onClick={() => void action("start")}
           >
-            <Play className="h-4 w-4" /> Iniciar
+            <Play className="h-4 w-4" /> {t("projects.detail.start")}
           </Button>
           <Button
             variant="deploy"
@@ -408,7 +409,7 @@ export function ProjectDetailPage() {
             ) : (
               <Rocket className="h-4 w-4" />
             )}
-            Deploy
+            {t("projects.detail.deploy")}
           </Button>
         </div>
       </div>
@@ -421,7 +422,7 @@ export function ProjectDetailPage() {
         >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
           <span className="min-w-0 flex-1 whitespace-pre-line break-words">{error}</span>
-          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" aria-label="Fechar aviso" onClick={() => setError(null)}>
+          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" aria-label={t("projects.detail.dismiss")} onClick={() => setError(null)}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -455,7 +456,7 @@ export function ProjectDetailPage() {
       <div className="flex flex-col gap-6 md:flex-row">
         <nav
           data-testid="project-nav"
-          aria-label="Seções do projeto"
+          aria-label={t("projects.detail.navAria")}
           className="flex shrink-0 gap-1 overflow-x-auto text-sm md:w-44 md:flex-col"
         >
           {PROJECT_SECTIONS.map(({ key, label, icon: Icon }) => (
@@ -472,7 +473,7 @@ export function ProjectDetailPage() {
                 )
               }
             >
-              <Icon className="h-4 w-4" /> {label}
+              <Icon className="h-4 w-4" /> {t(label)}
             </NavLink>
           ))}
         </nav>
@@ -494,7 +495,7 @@ export function ProjectDetailPage() {
         <Card className="border-amber-500/40">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-base text-amber-400">
-              <AlertTriangle className="h-4 w-4" /> Guardrails ({project.detection.warnings.length})
+              <AlertTriangle className="h-4 w-4" /> {t("projects.detail.guardrails", { n: project.detection.warnings.length })}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -542,8 +543,7 @@ export function ProjectDetailPage() {
           className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
         >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          O projeto foi criado, mas o compose exige variáveis obrigatórias que ainda não têm valor — o deploy falharia
-          sem elas. Preencha as que faltam, salve e clique em Deploy, no topo da página.
+          {t("projects.detail.deployPending")}
         </p>
       )}
       {section === "env" && <ProjectEnvCard project={project} />}
@@ -572,17 +572,17 @@ export function ProjectDetailPage() {
       <ProjectTimezoneCard projectId={project.id} onChanged={() => void refresh()} />
       <Card className="border-destructive/40">
         <CardHeader className="pb-2">
-          <CardTitle className="text-base text-destructive">Zona de perigo</CardTitle>
+          <CardTitle className="text-base text-destructive">{t("projects.detail.danger.title")}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {!confirmDelete ? (
             <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
-              <Trash2 className="h-4 w-4" /> Remover projeto
+              <Trash2 className="h-4 w-4" /> {t("projects.detail.danger.remove")}
             </Button>
           ) : (
             <div className="flex flex-col gap-3">
               <p className="text-sm">
-                Remover containers, domínio e configuração de <strong>{project.name}</strong>?
+                <Trans k="projects.detail.danger.confirm" params={{ name: project.name }} components={{ b: <strong /> }} />
               </p>
               {project.ingestMode !== "existing" && (
                 <label className="flex items-center gap-2 text-sm">
@@ -592,12 +592,12 @@ export function ProjectDetailPage() {
                     onChange={(e) => setDeleteSource(e.target.checked)}
                     className="h-4 w-4"
                   />
-                  Apagar também o código-fonte copiado pelo painel
+                  {t("projects.detail.danger.deleteSource")}
                 </label>
               )}
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => setConfirmDelete(false)}>
-                  Cancelar
+                  {t("projects.detail.danger.cancel")}
                 </Button>
                 <Button
                   variant="destructive"
@@ -610,7 +610,7 @@ export function ProjectDetailPage() {
                   ) : (
                     <Trash2 className="h-4 w-4" />
                   )}
-                  Confirmar remoção
+                  {t("projects.detail.danger.confirmRemove")}
                 </Button>
               </div>
             </div>

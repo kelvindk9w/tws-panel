@@ -115,7 +115,7 @@
  *    NÃO reconecta: sem isso duas abas disputavam a sessão em ping-pong
  *    infinito (~1 conexão/1.5s) e derrubavam execuções em andamento.
  */
-import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -133,6 +133,7 @@ import { isInsecureTransport, localhostUrl, sshTunnelCommand } from "@/lib/termi
 import { CopyButton } from "@/components/CopyButton";
 import { PasswordInput } from "@/components/ui/password-input";
 import { ChevronDown, ChevronUp, Cog, Info, KeyRound, Lock, ShieldAlert, TerminalSquare } from "lucide-react";
+import { Trans, t as translate, useI18n, type Key } from "@/i18n";
 
 /** Evento disparado pela UI (ex.: fase aguardando confirmação) para acender
  * o alerta pulsante do terminal ("olhe o terminal"). */
@@ -265,8 +266,14 @@ type SudoAlert =
  */
 const SUDO_EXPIRY_GRACE_MS = 2_000;
 
-/** Prefixo no título da aba enquanto a senha é esperada (aba em segundo plano). */
-const SUDO_TITLE_PREFIX = "⚠ senha necessária — ";
+/** Rótulo de cada estado da conexão (a chave é resolvida na renderização). */
+const STATUS_LABEL: Record<WsStatus, Key> = {
+  online: "terminal.status.online",
+  connecting: "terminal.status.connecting",
+  busy: "terminal.status.busy",
+  ended: "terminal.status.ended",
+  offline: "terminal.status.reconnecting",
+};
 
 export function TerminalPanel({
   enabled,
@@ -275,6 +282,7 @@ export function TerminalPanel({
   infoUnavailable,
   authMode = "setup-token",
 }: TerminalPanelProps) {
+  const { t } = useI18n();
   // Começa RECOLHIDO por padrão (o usuário expande se quiser acompanhar).
   const [open, setOpen] = useState(() => sessionStorage.getItem(STORAGE_KEY) === "1");
   const [attention, setAttention] = useState(false);
@@ -310,9 +318,7 @@ export function TerminalPanel({
     // perdeu em campo sem ninguém perceber.
     if (!droppedNoticeRef.current) {
       droppedNoticeRef.current = true;
-      termRef.current?.write(
-        "\r\n\x1b[31m[painel] sem conexão com a VPS — o que você digitou não foi enviado. Reconectando…\x1b[0m\r\n",
-      );
+      termRef.current?.write(`\r\n\x1b[31m${translate("terminal.droppedLine")}\x1b[0m\r\n`);
       setInputDropped(true);
     }
   }, []);
@@ -604,8 +610,9 @@ export function TerminalPanel({
   useEffect(() => {
     if (!promptOpen) return;
     const original = document.title;
+    const prefix = translate("terminal.tabTitlePrefix");
     // já prefixado (pedido repetido antes de restaurar): não empilha prefixo
-    if (!original.startsWith(SUDO_TITLE_PREFIX)) document.title = `${SUDO_TITLE_PREFIX}${original}`;
+    if (!original.startsWith(prefix)) document.title = `${prefix}${original}`;
     return () => {
       document.title = original;
     };
@@ -628,31 +635,21 @@ export function TerminalPanel({
   if (!enabled) {
     return (
       <section
-        aria-label="Terminal do servidor"
+        aria-label={t("terminal.aria")}
         data-testid="terminal-locked"
         className="overflow-hidden rounded-xl border border-dashed border-border bg-muted/20"
       >
         <div className="flex items-center gap-3 px-4 py-3 text-xs text-muted-foreground">
           <Lock className="h-4 w-4 shrink-0" />
           <p>
-            🖥️ <strong>Terminal ao vivo do servidor</strong> — bloqueado por segurança. Informe o{" "}
-            <strong>setup token</strong> na etapa de boas-vindas para liberá-lo.
+            <Trans k="terminal.locked" components={{ b: <strong /> }} />
           </p>
         </div>
       </section>
     );
   }
 
-  const statusLabel =
-    status === "online"
-      ? "conectado"
-      : status === "connecting"
-        ? "conectando…"
-        : status === "busy"
-          ? "em uso em outra aba"
-          : status === "ended"
-            ? "sessão encerrada"
-            : "reconectando…";
+  const statusLabel = t(STATUS_LABEL[status]);
   const statusColor =
     status === "online"
       ? "bg-emerald-400"
@@ -663,7 +660,7 @@ export function TerminalPanel({
   return (
     <section
       ref={sectionRef}
-      aria-label="Terminal do servidor"
+      aria-label={t("terminal.aria")}
       className="overflow-hidden rounded-xl border border-[#22302a] bg-[#0b0f0d] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_12px_40px_rgba(0,0,0,0.5)]"
     >
       {/* Barra de título estilo IDE (janela contida) */}
@@ -681,7 +678,7 @@ export function TerminalPanel({
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80" />
         </span>
         <TerminalSquare className="h-4 w-4" />
-        <span>Terminal do servidor — ao vivo</span>
+        <span>{t("terminal.titlebar")}</span>
         <span className="flex items-center gap-1.5 text-[10px] font-normal text-muted-foreground">
           <span
             className={`inline-block h-1.5 w-1.5 rounded-full transition-all duration-300 ${statusColor} ${
@@ -692,11 +689,11 @@ export function TerminalPanel({
         </span>
         {attention && (
           <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-black">
-            ⚠️ AÇÃO NECESSÁRIA — OLHE O TERMINAL
+            {t("terminal.attention")}
           </span>
         )}
         <span className="ml-auto flex items-center gap-1 text-muted-foreground">
-          <span className="text-[10px]">{open ? "recolher" : "expandir"}</span>
+          <span className="text-[10px]">{open ? t("terminal.collapse") : t("terminal.expand")}</span>
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </span>
       </button>
@@ -713,8 +710,7 @@ export function TerminalPanel({
             <p className="flex items-start gap-1.5" data-testid="terminal-monitoring-note">
               <Cog className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
               <span>
-                O monitoramento automático agendado roda sozinho como root em segundo plano (não há
-                ninguém para digitar senha) e cada comando dele fica registrado na <AuditLink />.
+                <Trans k="terminal.monitoringNote" components={{ audit: (c) => <AuditLink>{c}</AuditLink> }} />
               </span>
             </p>
           )}
@@ -722,9 +718,11 @@ export function TerminalPanel({
             <p className="flex items-start gap-1.5" data-testid="terminal-docker-unverified">
               <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
               <span>
-                Não foi possível verificar se <strong className={NAME}>{info.user}</strong> tem acesso ao
-                Docker do servidor (por exemplo, pelo grupo docker). Se tiver, ele consegue virar root sem
-                senha — confira no servidor com <code className={NAME}>id {info.user}</code>.
+                <Trans
+                  k="terminal.dockerUnverified"
+                  params={{ user: info.user }}
+                  components={{ name: <strong className={NAME} />, code: <code className={NAME} /> }}
+                />
               </span>
             </p>
           )}
@@ -735,7 +733,7 @@ export function TerminalPanel({
               title={backgroundCommand}
             >
               <Cog className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
-              <span className="shrink-0">Executando em segundo plano como root:</span>
+              <span className="shrink-0">{t("terminal.backgroundRunning")}</span>
               <code className="truncate font-mono text-amber-100/90">{backgroundCommand}</code>
             </p>
           )}
@@ -747,10 +745,10 @@ export function TerminalPanel({
           <button
             type="button"
             onClick={openUserShell}
-            title={`Abre um shell de ${userShellName} dentro desta sessão (o prompt vira ${userShellName}@…). A sessão continua sendo root por baixo — a varredura e as fases NÃO passam a rodar como ${userShellName}. Digite exit no terminal para voltar ao root.`}
+            title={t("terminal.openAs.title", { user: userShellName })}
             className="shrink-0 rounded border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100/80 transition-colors hover:bg-emerald-400/20"
           >
-            {`Abrir como ${userShellName}`}
+            {t("terminal.openAs.label", { user: userShellName })}
           </button>
         )}
       </div>
@@ -764,23 +762,31 @@ export function TerminalPanel({
           <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" aria-hidden />
           <div className="flex flex-col gap-1">
             <p className="font-semibold text-red-200">
-              Atenção: o usuário <span className="font-mono">{info.user}</span> tem acesso ao Docker do
-              servidor
+              <Trans
+                k="terminal.dockerWarning.title"
+                params={{ user: info.user }}
+                components={{ mono: <span className="font-mono" /> }}
+              />
             </p>
             <p>
-              O usuário <strong className="font-mono">{info.user}</strong> está no grupo docker (ou tem outro
-              acesso ao Docker do servidor), o que permite obter acesso de root à VPS sem senha. A proteção
-              do {info.elevation === "senha" ? "modo senha" : "modo segundo plano"} não vale enquanto isso
-              continuar: uma aba esquecida aberta com este terminal ainda dá root.
+              <Trans
+                k="terminal.dockerWarning.body"
+                params={{
+                  user: info.user,
+                  mode: info.elevation === "senha" ? t("terminal.dockerWarning.modePassword") : t("terminal.dockerWarning.modeBackground"),
+                }}
+                components={{ mono: <strong className="font-mono" /> }}
+              />
             </p>
             <p>
-              Para corrigir, rode no servidor{" "}
-              <code className="rounded bg-black/50 px-1 font-mono text-emerald-300">
-                sudo gpasswd -d {info.user} docker
-              </code>{" "}
-              e depois encerre a sessão: digite <code className="font-mono">exit</code> neste terminal e
-              saia de todas as sessões SSH de {info.user} — a mudança só vale para sessões abertas depois
-              dela.
+              <Trans
+                k="terminal.dockerWarning.fix"
+                params={{ user: info.user, command: `sudo gpasswd -d ${info.user} docker` }}
+                components={{
+                  cmd: <code className="rounded bg-black/50 px-1 font-mono text-emerald-300" />,
+                  code: <code className="font-mono" />,
+                }}
+              />
             </p>
           </div>
         </div>
@@ -792,32 +798,25 @@ export function TerminalPanel({
           data-testid="terminal-input-dropped"
           className="border-t border-red-500/40 bg-red-600/15 px-4 py-2 text-[11px] leading-relaxed text-red-200"
         >
-          ⚠️ <strong>Sem conexão com a VPS.</strong> O que você digitou no terminal não foi enviado.
-          Reconectando — quando a conexão voltar, digite de novo.
+          <Trans k="terminal.inputDropped" components={{ b: <strong /> }} />
         </p>
       )}
 
       {status === "busy" && (
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
-          ⚠️ <strong>Terminal em uso em outra aba/janela.</strong> Feche a outra aba e recarregue
-          esta página para retomar o controle. A sessão no servidor NÃO foi interrompida.
+          <Trans k="terminal.busy" components={{ b: <strong /> }} />
         </p>
       )}
 
       {status === "ended" && (
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
-          ⚠️ <strong>Sua sessão no painel terminou</strong> (saída, troca de senha ou tempo esgotado)
-          e o terminal foi desconectado. Entre de novo para voltar a usá-lo. O que estava rodando no
-          servidor NÃO foi interrompido.
+          <Trans k="terminal.ended" components={{ b: <strong /> }} />
         </p>
       )}
 
       {/* Orientação fixa — visível mesmo recolhido */}
       <p className="border-t border-white/5 px-4 py-2 text-[11px] leading-relaxed text-emerald-100/60">
-        🖥️ Terminal ao vivo do servidor — ativo e funcional. Você pode expandir para acompanhar.{" "}
-        <strong className="text-emerald-100/80">Recomendação: apenas observe; aja SOMENTE quando for
-        solicitado.</strong>{" "}
-        Interferir por conta própria pode interromper ou quebrar o processo.
+        <Trans k="terminal.guidance" components={{ b: <strong className="text-emerald-100/80" /> }} />
       </p>
 
       {/* Aviso FIXO no topo da PÁGINA: a janela do terminal pode estar
@@ -839,14 +838,16 @@ export function TerminalPanel({
           >
             <KeyRound className="h-4 w-4 shrink-0 animate-pulse" aria-hidden />
             <span className="flex-1">
-              O terminal está esperando a senha de{" "}
-              <span className="font-mono">{sudoAlert.user ?? info?.user ?? "seu usuário"}</span> para
-              continuar — clique aqui para digitar.
+              <Trans
+                k="terminal.banner.waiting"
+                params={{ who: sudoAlert.user ?? info?.user ?? t("terminal.sudo.fallbackName") }}
+                components={{ mono: <span className="font-mono" /> }}
+              />
             </span>
             {sudoAlert.expiresAt !== null && (
               <SudoCountdown expiresAt={sudoAlert.expiresAt} totalMs={sudoAlert.totalMs} variant="banner" />
             )}
-            <span className="shrink-0 rounded bg-black/20 px-2 py-0.5 text-[11px] uppercase">ir ao terminal</span>
+            <span className="shrink-0 rounded bg-black/20 px-2 py-0.5 text-[11px] uppercase">{t("terminal.banner.go")}</span>
           </button>
         </div>
       )}
@@ -879,10 +880,10 @@ export function TerminalPanel({
 // ---------------------------------------------------------------------------
 
 /** Link para a Auditoria (a página exige a conta de administrador). */
-function AuditLink() {
+function AuditLink({ children }: { children: ReactNode }) {
   return (
     <a href="/audit" className="underline decoration-dotted underline-offset-2 hover:text-emerald-100/80">
-      Auditoria
+      {children}
     </a>
   );
 }
@@ -898,67 +899,50 @@ function SessionNote({
   unavailable: boolean;
   sshUser: string | null;
 }) {
+  const { t } = useI18n();
+  const nameTag = <strong className={NAME} />;
+  const auditTag = (c: ReactNode) => <AuditLink>{c}</AuditLink>;
   if (!info) {
-    return unavailable ? (
-      <span>
-        Não foi possível confirmar com qual usuário esta sessão abre (o painel não respondeu). O
-        prompt do terminal mostra o usuário real.
-      </span>
-    ) : (
-      <span>Verificando com qual usuário esta sessão abre…</span>
-    );
+    return unavailable ? <span>{t("terminal.note.unavailable")}</span> : <span>{t("terminal.note.checking")}</span>;
   }
 
   // Na sessão root, o operador que criou um usuário na instalação precisa ler
   // que ele não foi ignorado — dizer isso no abstrato não bastava.
   const sshUserLine = sshUser ? (
-    <>
-      {" "}O usuário <strong className={NAME}>{sshUser}</strong> <strong>não foi ignorado</strong> — ele
-      continua sendo o do seu acesso por SSH.
-    </>
+    <Trans k="terminal.note.sshUser" params={{ user: sshUser }} components={{ name: nameTag, b: <strong /> }} />
   ) : null;
 
   switch (info.elevation) {
     case "senha":
       return (
         <span>
-          Esta sessão abre como <strong className={NAME}>{info.user}</strong>. Quando a verificação ou uma
-          fase precisa de root, o comando roda aqui mesmo com <strong>sudo</strong> e a senha de{" "}
-          <strong className={NAME}>{info.user}</strong> é pedida neste terminal.
+          <Trans k="terminal.note.password" params={{ user: info.user }} components={{ name: nameTag, b: <strong /> }} />
         </span>
       );
     case "segundo-plano":
       return (
         <span>
-          Esta sessão abre como <strong className={NAME}>{info.user}</strong>. Os comandos que precisam
-          de root (verificação e fases) rodam em segundo plano como root, fora deste shell: a saída
-          deles aparece aqui só para visualização e cada comando fica registrado na <AuditLink /> (a
-          página fica disponível depois de criar a conta de administrador).
+          <Trans k="terminal.note.background" params={{ user: info.user }} components={{ name: nameTag, audit: auditTag }} />
         </span>
       );
     case "root":
       return (
         <span>
-          Esta sessão abre como <strong className={NAME}>root</strong>, conforme escolhido na instalação.
-          Tudo o que for digitado aqui roda com poder total sobre o servidor — não deixe esta aba aberta
-          sem necessidade.{sshUserLine}
+          <Trans k="terminal.note.root" components={{ name: nameTag }} />
+          {sshUserLine}
         </span>
       );
     case "root-legado":
       return (
         <span>
-          Esta sessão abre como <strong className={NAME}>root</strong>: esta instalação não definiu um
-          usuário para o terminal, então ele segue como nas versões anteriores. Tudo o que for digitado
-          aqui roda com poder total sobre o servidor — não deixe esta aba aberta sem necessidade. Para
-          abrir como um usuário comum, rode no servidor{" "}
-          <code className={NAME}>./scripts/install.sh --reconfigure-terminal</code>.{sshUserLine}
+          <Trans k="terminal.note.rootLegacy" components={{ name: nameTag, code: <code className={NAME} /> }} />
+          {sshUserLine}
         </span>
       );
     case "container-dev":
       return (
         <span>
-          Ambiente de desenvolvimento: este é o terminal do container de testes descartável, não o de
-          uma VPS real. Usuário e modo de root da instalação não se aplicam aqui.
+          {t("terminal.note.containerDev")}
         </span>
       );
   }
@@ -998,6 +982,7 @@ function SudoCountdown({
     return () => clearInterval(id);
   }, [expiresAt]);
 
+  const { t } = useI18n();
   const urgente = remaining <= SUDO_URGENT_MS;
   const label = formatRemaining(remaining);
   if (variant === "banner") {
@@ -1016,7 +1001,7 @@ function SudoCountdown({
     >
       ⏳ {label}
       {totalMs !== null && (
-        <span className="font-sans text-[10px] font-normal opacity-70">de {formatRemaining(totalMs)}</span>
+        <span className="font-sans text-[10px] font-normal opacity-70">{t("terminal.sudo.countdownOf", { total: formatRemaining(totalMs) })}</span>
       )}
     </span>
   );
@@ -1045,24 +1030,23 @@ function SudoPasswordAlert({
   configuredUser?: string | null;
   onDismiss: () => void;
 }) {
+  const { t } = useI18n();
   const user = alert.user ?? fallbackUser;
-  const userLabel = user ? (
-    <strong className="font-mono text-amber-100">{user}</strong>
-  ) : (
-    <strong>do terminal</strong>
-  );
+  // o nome do usuário (ou, sem ele, "o usuário do terminal") entra nos textos pela tag <who>
+  const whoTag = user ? <strong className="font-mono text-amber-100" /> : <strong />;
+  const who = user ?? t("terminal.sudo.fallbackWho");
   // Calculado a cada render: é o endereço com que ESTA página foi aberta.
   const loc = pageLocation();
   const insecure = isInsecureTransport(loc);
   // Usuário do comando do túnel: o do pedido, o da sessão, o da instalação —
   // e, se nada disso existir, um marcador claro de "preencha aqui".
-  const tunnelUser = user ?? (configuredUser && isValidSshUsername(configuredUser) ? configuredUser : "usuario");
+  const tunnelUser = user ?? (configuredUser && isValidSshUsername(configuredUser) ? configuredUser : t("terminal.sudo.tunnelUserPlaceholder"));
   const tunnelCmd = sshTunnelCommand(loc, tunnelUser);
   const tunnelUrl = localhostUrl(loc);
   // O valor digitado vive só aqui, até o envio (então é esvaziado). Não vai a
   // storage nenhum. Sobrevive a uma queda de conexão: o alerta não é desmontado.
   const [password, setPassword] = useState("");
-  const userName = user ?? "seu usuário";
+  const userName = user ?? t("terminal.sudo.fallbackName");
   const canSend = connected && !(alert.kind === "prompt" && alert.sent);
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
@@ -1079,22 +1063,22 @@ function SudoPasswordAlert({
       {alert.kind === "prompt" ? (
         <div className="mx-auto flex max-w-2xl flex-col gap-2">
           <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-amber-200">
-            <KeyRound className="h-4 w-4 shrink-0" aria-hidden /> O sudo está pedindo a senha
+            <KeyRound className="h-4 w-4 shrink-0" aria-hidden /> {t("terminal.sudo.title")}
             {alert.expiresAt !== null && (
               <SudoCountdown expiresAt={alert.expiresAt} totalMs={alert.totalMs} variant="alert" />
             )}
           </p>
           {alert.retry && (
             <p className="rounded bg-red-500/20 px-2 py-1 font-semibold text-red-200">
-              ❌ Senha incorreta, tente de novo.
+              {t("terminal.sudo.retry")}
             </p>
           )}
           <p className="text-[13px]">
-            Digite a senha do usuário {userLabel} no campo abaixo e clique em <strong>Enviar senha</strong>.
+            <Trans k="terminal.sudo.instructions" params={{ who }} components={{ who: whoTag, b: <strong /> }} />
           </p>
           <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
             <label htmlFor="sudo-password-input" className="sr-only">
-              Senha de {userName}
+              {t("terminal.sudo.passwordLabel", { name: userName })}
             </label>
             <PasswordInput
               id="sudo-password-input"
@@ -1103,7 +1087,7 @@ function SudoPasswordAlert({
               spellCheck={false}
               value={password}
               onChange={(ev) => setPassword(ev.target.value)}
-              placeholder={`Senha de ${userName}`}
+              placeholder={t("terminal.sudo.passwordLabel", { name: userName })}
               containerClassName="min-w-0 flex-1"
               className="h-auto rounded border-amber-400/60 bg-black/60 py-1.5 font-mono text-amber-50 placeholder:text-amber-100/40 focus-visible:ring-2 focus-visible:ring-amber-400"
             />
@@ -1112,7 +1096,7 @@ function SudoPasswordAlert({
               disabled={!canSend}
               className="rounded bg-amber-400 px-3 py-1.5 text-sm font-semibold text-black hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Enviar senha
+              {t("terminal.sudo.send")}
             </button>
             <button
               type="button"
@@ -1120,44 +1104,40 @@ function SudoPasswordAlert({
               disabled={!connected}
               className="rounded border border-amber-400/50 px-3 py-1.5 text-sm font-medium text-amber-100 hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Cancelar
+              {t("terminal.sudo.cancel")}
             </button>
           </form>
           {!connected && (
             <p className="rounded bg-red-500/20 px-2 py-1 font-semibold text-red-200">
-              A conexão com o terminal caiu — reconectando. O pedido continua aberto na VPS; assim que a
-              conexão voltar, você envia a senha.
+              {t("terminal.sudo.disconnected")}
             </p>
           )}
           {connected && alert.sent && (
-            <p className="text-amber-100/90">Senha enviada — conferindo com o sudo…</p>
+            <p className="text-amber-100/90">{t("terminal.sudo.sent")}</p>
           )}
           <p className="text-amber-100/80">
-            Se preferir, ou digite direto no terminal abaixo e pressione <strong>Enter</strong> (os
-            caracteres não aparecem enquanto você digita — isso é normal).
+            <Trans k="terminal.sudo.typeDirect" components={{ b: <strong /> }} />
           </p>
           {/* Feedback de campo: o operador entendeu que o painel pedia a senha
               de root. É a senha DELE, a mesma do sudo por SSH. */}
           <p className="text-[13px] font-medium text-amber-100">
-            É a senha de {userLabel} nesta VPS — a mesma que você usa no <code className="font-mono">sudo</code>{" "}
-            quando entra por SSH. <strong>Não é a senha do root</strong> (e o painel não tem, nem pede, senha
-            de root).
+            <Trans
+              k="terminal.sudo.whose"
+              params={{ who }}
+              components={{ who: whoTag, code: <code className="font-mono" />, b: <strong /> }}
+            />
           </p>
           {alert.expiresAt !== null ? (
             <p className="text-amber-100/80">
-              O pedido tem prazo: se o tempo acabar, o painel cancela a operação e nada roda como root — dá
-              para executar de novo depois.
+              {t("terminal.sudo.deadline")}
             </p>
           ) : (
             <p className="text-amber-100/80">
-              O pedido fica aberto até você enviar a senha ou cancelar — o painel não desiste sozinho. Se
-              cancelar, nada roda como root.
+              {t("terminal.sudo.noDeadline")}
             </p>
           )}
           <p className="text-amber-100/80">
-            A senha vai do seu navegador, passa pelo painel e chega ao terminal da sua VPS. O painel não
-            grava, não registra e não envia essa senha para nenhum outro lugar. O código é aberto e pode
-            ser conferido.
+            {t("terminal.sudo.transparency")}
           </p>
           {insecure && (
             <div
@@ -1167,13 +1147,11 @@ function SudoPasswordAlert({
               <p className="flex items-start gap-2">
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden />
                 <span>
-                  Esta página foi aberta por http e fora do túnel SSH, então o que você digita aqui —
-                  inclusive a senha — trafega sem criptografia até a sua VPS.
+                  {t("terminal.insecure.fact")}
                 </span>
               </p>
               <p>
-                Dá para resolver em um minuto. No <strong>seu computador</strong>, abra um terminal e
-                rode:
+                <Trans k="terminal.insecure.runTunnel" components={{ b: <strong /> }} />
               </p>
               <span className="flex items-center gap-1">
                 <code
@@ -1184,7 +1162,7 @@ function SudoPasswordAlert({
                 </code>
                 <CopyButton text={tunnelCmd} />
               </span>
-              <p>Com o túnel aberto, volte ao painel por este endereço:</p>
+              <p>{t("terminal.insecure.openUrl")}</p>
               <span className="flex items-center gap-1">
                 <code
                   data-testid="sudo-tunnel-url"
@@ -1195,13 +1173,10 @@ function SudoPasswordAlert({
                 <CopyButton text={tunnelUrl} />
               </span>
               <p className="text-amber-100/70">
-                Sendo honesto: o setup token desta página já passou por esta mesma conexão quando você a
-                abriu. O túnel protege daqui para a frente, não o que já trafegou.
+                {t("terminal.insecure.honest")}
               </p>
               <p className="text-amber-100/70">
-                Prefere seguir agora? Pode digitar — nada aqui está bloqueado. O risco é alguém com
-                acesso à rede entre você e a VPS; numa rede doméstica ou num servidor de teste
-                descartável, essa é uma decisão razoável sua.
+                {t("terminal.insecure.proceed")}
               </p>
             </div>
           )}
@@ -1210,48 +1185,39 @@ function SudoPasswordAlert({
         <div className="mx-auto flex max-w-2xl flex-col gap-2">
           <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
             <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />
-            {alert.outcome === "exhausted" && "O sudo desistiu após 3 tentativas"}
-            {alert.outcome === "not-permitted" && "Sem permissão de sudo"}
-            {alert.outcome === "timeout" && "Tempo esgotado aguardando a senha"}
-            {alert.outcome === "cancelled" && "Você cancelou o pedido de senha"}
+            {alert.outcome === "exhausted" && t("terminal.failed.exhausted.title")}
+            {alert.outcome === "not-permitted" && t("terminal.failed.notPermitted.title")}
+            {alert.outcome === "timeout" && t("terminal.failed.timeout.title")}
+            {alert.outcome === "cancelled" && t("terminal.failed.cancelled.title")}
           </p>
           {alert.outcome === "exhausted" && (
-            <p>
-              A senha foi recusada 3 vezes e o sudo desistiu. Nada foi executado como root. Para
-              continuar, execute de novo a verificação ou a fase e digite a senha correta quando ela for
-              pedida.
-            </p>
+            <p>{t("terminal.failed.exhausted.body")}</p>
           )}
           {alert.outcome === "not-permitted" && (
             <p>
-              O usuário {userLabel} não tem permissão de sudo neste servidor, então nada foi executado
-              como root. Para corrigir, entre no servidor como root e rode{" "}
-              <code className="rounded bg-black/50 px-1 font-mono text-emerald-300">
-                usermod -aG sudo {user ?? "<usuário>"}
-              </code>
-              . Depois reconecte com uma sessão nova (digite <code className="font-mono">exit</code> neste
-              terminal e recarregue a página) — a permissão só vale para sessões abertas depois da
-              mudança — e execute de novo.
+              <Trans
+                k="terminal.failed.notPermitted.body"
+                params={{ who, command: `usermod -aG sudo ${user ?? t("terminal.failed.userPlaceholder")}` }}
+                components={{
+                  who: whoTag,
+                  cmd: <code className="rounded bg-black/50 px-1 font-mono text-emerald-300" />,
+                  code: <code className="font-mono" />,
+                }}
+              />
             </p>
           )}
           {alert.outcome === "cancelled" && (
             <p>
-              O pedido de senha foi encerrado a seu pedido e <strong>nada foi executado como root</strong>.
-              Quando quiser seguir, execute de novo a verificação ou a fase e envie a senha de {userLabel} no
-              alerta.
+              <Trans k="terminal.failed.cancelled.body" params={{ who }} components={{ who: whoTag, b: <strong /> }} />
             </p>
           )}
           {alert.outcome === "timeout" && (
             <>
               <p>
-                O sudo pediu a senha de {userLabel} neste terminal e o tempo de espera acabou sem ela: o
-                painel cancelou o pedido e <strong>nada foi executado como root</strong>. Nada quebrou — a
-                operação simplesmente não aconteceu.
+                <Trans k="terminal.failed.timeout.body1" params={{ who }} components={{ who: whoTag, b: <strong /> }} />
               </p>
               <p>
-                Para seguir, clique em <strong>“Tentar a verificação de novo”</strong> (ou execute a fase
-                outra vez) e, assim que o pedido aparecer aqui, digite a senha no terminal abaixo. Desta
-                vez o alerta mostra o tempo restante na faixa amarela no topo da página.
+                <Trans k="terminal.failed.timeout.body2" components={{ b: <strong /> }} />
               </p>
             </>
           )}
@@ -1261,7 +1227,7 @@ function SudoPasswordAlert({
               onClick={onDismiss}
               className="rounded border border-amber-400/50 bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium hover:bg-amber-400/25"
             >
-              Entendi
+              {t("terminal.failed.dismiss")}
             </button>
           </div>
         </div>

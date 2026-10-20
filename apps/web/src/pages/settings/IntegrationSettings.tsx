@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, Trans, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PasswordInput } from "@/components/ui/password-input";
@@ -19,6 +20,7 @@ interface GithubStatus {
  * privados clonam sem pedir token de novo.
  */
 export function IntegrationSettings() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,8 +29,8 @@ export function IntegrationSettings() {
   useEffect(() => {
     apiFetch<GithubStatus>("/api/integrations/github")
       .then(setStatus)
-      .catch(() => setError("Não foi possível consultar a integração com o GitHub."));
-  }, []);
+      .catch(() => setError(t("settings.integrations.github.error.load")));
+  }, [t]);
 
   async function connect(event: FormEvent) {
     event.preventDefault();
@@ -42,7 +44,7 @@ export function IntegrationSettings() {
       setToken("");
       setStatus(res);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível conectar.");
+      setError(apiErrorText(err, "settings.integrations.github.error.connect"));
     } finally {
       setBusy(false);
     }
@@ -55,7 +57,7 @@ export function IntegrationSettings() {
       await apiFetch("/api/integrations/github", { method: "DELETE" });
       setStatus({ connected: false, login: null, hint: null, updatedAt: null });
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Não foi possível desconectar.");
+      setError(apiErrorText(err, "settings.integrations.github.error.disconnect"));
     } finally {
       setBusy(false);
     }
@@ -67,10 +69,7 @@ export function IntegrationSettings() {
         <CardTitle className="flex items-center gap-2 text-base">
           <Github className="h-4 w-4" /> GitHub
         </CardTitle>
-        <CardDescription>
-          Conecte a sua conta para escolher os repositórios numa lista ao criar um projeto — públicos e privados. O
-          painel só lê o código: nunca escreve, commita nem faz push.
-        </CardDescription>
+        <CardDescription>{t("settings.integrations.github.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex max-w-lg flex-col gap-3 text-sm">
         {status === null && !error && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
@@ -78,14 +77,17 @@ export function IntegrationSettings() {
         {status?.connected && (
           <div className="flex flex-col gap-3">
             <p data-testid="github-connected" className="flex items-center gap-2 text-emerald-400">
-              <CheckCircle2 className="h-4 w-4" /> Conectado como <strong>{status.login}</strong>
-              <span className="text-xs text-muted-foreground">(token terminado em {status.hint})</span>
+              <CheckCircle2 className="h-4 w-4" />{" "}
+              <Trans k="settings.integrations.github.connectedAs" params={{ login: status.login ?? "" }} components={{ b: <strong /> }} />
+              <span className="text-xs text-muted-foreground">
+                {t("settings.integrations.github.tokenHint", { hint: status.hint ?? "" })}
+              </span>
             </p>
             <p className="text-xs text-muted-foreground">
-              Quando o token vencer, a lista para de carregar: desconecte e conecte de novo com um token novo.
+              {t("settings.integrations.github.expiredNote")}
             </p>
             <Button variant="outline" className="self-start" onClick={() => void disconnect()} disabled={busy}>
-              Desconectar
+              {t("settings.integrations.github.disconnect")}
             </Button>
           </div>
         )}
@@ -93,11 +95,11 @@ export function IntegrationSettings() {
         {status && !status.connected && (
           <form onSubmit={(e) => void connect(e)} className="flex flex-col gap-3">
             <label htmlFor="gh-token" className="font-medium">
-              Token do GitHub (somente leitura)
+              {t("settings.integrations.github.tokenLabel")}
             </label>
             <PasswordInput
               id="gh-token"
-              revealLabel="token"
+              revealLabel={t("settings.integrations.github.tokenReveal")}
               value={token}
               onChange={(e) => setToken(e.target.value)}
               autoComplete="off"
@@ -106,11 +108,11 @@ export function IntegrationSettings() {
             />
             <TokenGuide scope="account" />
             <span className="text-xs text-muted-foreground">
-              Guardado cifrado no servidor. Um token com permissão de escrita é recusado.
+              {t("settings.integrations.github.tokenNote")}
             </span>
             <Button type="submit" className="self-start" disabled={busy || token.trim() === ""}>
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              Conectar
+              {t("settings.integrations.github.connect")}
             </Button>
           </form>
         )}

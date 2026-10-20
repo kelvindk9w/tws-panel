@@ -5,7 +5,7 @@ template: splash
 hero:
   tagline: Transforme uma VPS Ubuntu na sua própria plataforma de hospedagem. Proteja a máquina, publique projetos com HTTPS e cuide do e-mail profissional, em um painel que você controla.
   actions:
-    - text: Instalar em minutos
+    - text: Instalar o painel
       link: /tws-panel/pt-br/getting-started/installation/
       icon: right-arrow
     - text: Código no GitHub
@@ -41,4 +41,13 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 - [Do zero ao painel pronto](getting-started/complete-guide.md): um roteiro único, em ordem, até um backup restaurado.
 - [Funcionalidades](guides/features.md): o que cada módulo faz.
 - [Modelo de segurança](reference/security.md): o que o painel protege e o que ele exige.
-- [Problemas comuns](guides/troubleshooting.md): porta 25 bloqueada, e-mail em spam, certificado que não sai.
+- [Solução de problemas](guides/troubleshooting.md): porta 25 bloqueada, e-mail em spam, certificado que não sai.
+- [Restaurar numa VPS nova](guides/restore-new-server.md): traga o painel, os projetos e o e-mail de volta a partir dos backups externos.
+
+## O que você precisa
+
+Uma VPS limpa com Ubuntu 22.04 ou 24.04 LTS (no mínimo 1 vCPU, 2 GB de RAM e 25 GB de disco) e as
+portas 80 e 443 abertas. O Docker, o Node e o resto são instalados pelo instalador.
+
+A interface do painel está sendo traduzida para o inglês; por enquanto ela está em português. Veja o
+[roadmap](https://github.com/kelvindk9w/tws-panel/blob/main/ROADMAP.md).

@@ -3,16 +3,18 @@ import type { DeployJob } from "@paas/core";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/i18n";
 
 export function JobStatusBadge({ status }: { status: DeployJob["status"] }) {
+  const { t } = useI18n();
   switch (status) {
     case "queued":
     case "running":
-      return <Badge variant="warning">em andamento</Badge>;
+      return <Badge variant="warning">{t("projects.jobStatus.running")}</Badge>;
     case "success":
-      return <Badge variant="success">sucesso</Badge>;
+      return <Badge variant="success">{t("projects.jobStatus.success")}</Badge>;
     case "failed":
-      return <Badge variant="destructive">falhou</Badge>;
+      return <Badge variant="destructive">{t("projects.jobStatus.failed")}</Badge>;
   }
 }
 
@@ -46,6 +48,7 @@ export function DeploySteps({ job }: { job: DeployJob }) {
  * geral); o detalhe mostra tudo. Acompanha o fim do log enquanto ele cresce.
  */
 export function DeployLogView({ job, tail, className }: { job: DeployJob; tail?: number; className?: string }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLPreElement>(null);
   const text = tail ? job.log.split("\n").filter((l, i, a) => l !== "" || i < a.length - 1).slice(-tail).join("\n") : job.log;
   useEffect(() => {
@@ -60,7 +63,7 @@ export function DeployLogView({ job, tail, className }: { job: DeployJob; tail?:
           className,
         )}
       >
-        {text || "aguardando log…"}
+        {text || t("projects.log.waiting")}
       </pre>
       {job.error && <p className="pt-2 text-sm text-destructive">{job.error}</p>}
     </>

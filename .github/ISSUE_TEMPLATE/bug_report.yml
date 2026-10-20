@@ -56,7 +56,7 @@ body:
     id: logs
     attributes:
       label: Logs and evidence
-      description: Relevant log excerpts, screenshots or the deploy log. Remove anything sensitive first. For the panel log, `sudo docker logs tws-panel` on the VPS.
+      description: Relevant log excerpts, screenshots or the deploy log. Remove anything sensitive first. To get the panel log, run `sudo docker logs tws-panel` on the VPS.
       render: text
   - type: textarea
     id: context

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { MailRate, MailVolumeDay, MailVolumeResponse } from "@paas/core";
-import { ApiRequestError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, t, useI18n, type Key } from "@/i18n";
 import { dayLabel, formatPercent } from "@/lib/envios";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,44 +14,52 @@ import { cn } from "@/lib/utils";
  * cancelada cinza.
  */
 const SERIES = [
-  { key: "delivered", label: "Entregues", one: "entregue", many: "entregues", color: "bg-emerald-500" },
-  { key: "deferred", label: "Adiadas", one: "adiada", many: "adiadas", color: "bg-amber-500" },
-  { key: "bounced", label: "Recusadas", one: "recusada", many: "recusadas", color: "bg-red-500" },
-  { key: "cancelled", label: "Canceladas", one: "cancelada", many: "canceladas", color: "bg-slate-400" },
-] as const;
+  { key: "delivered", label: "envios.volume.series.delivered", color: "bg-emerald-500" },
+  { key: "deferred", label: "envios.volume.series.deferred", color: "bg-amber-500" },
+  { key: "bounced", label: "envios.volume.series.bounced", color: "bg-red-500" },
+  { key: "cancelled", label: "envios.volume.series.cancelled", color: "bg-slate-400" },
+] as const satisfies readonly { key: string; label: Key; color: string }[];
 
-function count(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
+const COUNT_KEYS: Record<(typeof SERIES)[number]["key"], { one: Key; many: Key }> = {
+  delivered: { one: "envios.volume.count.delivered.one", many: "envios.volume.count.delivered.many" },
+  deferred: { one: "envios.volume.count.deferred.one", many: "envios.volume.count.deferred.many" },
+  bounced: { one: "envios.volume.count.bounced.one", many: "envios.volume.count.bounced.many" },
+  cancelled: { one: "envios.volume.count.cancelled.one", many: "envios.volume.count.cancelled.many" },
+};
+
+function count(kind: keyof typeof COUNT_KEYS, n: number): string {
+  return t(n === 1 ? COUNT_KEYS[kind].one : COUNT_KEYS[kind].many, { n });
 }
 
 function dayText(d: MailVolumeDay): string {
-  const parts = [count(d.delivered, "entregue", "entregues"), count(d.bounced, "recusada", "recusadas"), count(d.deferred, "adiada", "adiadas")];
-  if (d.cancelled > 0) parts.push(count(d.cancelled, "cancelada", "canceladas"));
-  return `${dayLabel(d.date)}: ${parts.join(", ")}`;
+  const parts = [count("delivered", d.delivered), count("bounced", d.bounced), count("deferred", d.deferred)];
+  if (d.cancelled > 0) parts.push(count("cancelled", d.cancelled));
+  return t("envios.volume.dayText", { day: dayLabel(d.date), parts: parts.join(", ") });
 }
 
 /** Barras empilhadas por dia, em HTML puro (sem biblioteca de gráfico). */
 function VolumeChart({ days }: { days: MailVolumeDay[] }) {
+  const { t } = useI18n();
   const total = (d: MailVolumeDay) => d.delivered + d.deferred + d.bounced + d.cancelled;
   const max = Math.max(1, ...days.map(total));
   const [hover, setHover] = useState<number | null>(null);
   return (
     <div className="flex flex-col gap-2">
-      <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-label="Legenda">
+      <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-label={t("envios.volume.legend")}>
         {SERIES.map((s) => (
           <li key={s.key} className="flex items-center gap-1.5">
             <span className={cn("inline-block h-2.5 w-2.5 rounded-sm", s.color)} aria-hidden />
-            {s.label}
+            {t(s.label)}
           </li>
         ))}
       </ul>
       <div className="relative">
         <p className="min-h-4 text-xs text-muted-foreground" aria-live="polite">
-          {hover !== null ? dayText(days[hover]!) : "Passe o dedo ou o mouse numa barra para ver os números do dia."}
+          {hover !== null ? dayText(days[hover]!) : t("envios.volume.hoverHint")}
         </p>
-        <div role="img" aria-label={`Envios por dia nos últimos ${days.length} dias`} className="flex h-40 items-end gap-1 border-b border-border/60 pt-2">
+        <div role="img" aria-label={t("envios.volume.chartLabel", { days: days.length })} className="flex h-40 items-end gap-1 border-b border-border/60 pt-2">
           {days.map((d, i) => {
-            const t = total(d);
+            const sum = total(d);
             return (
               <div
                 key={d.date}
@@ -73,7 +82,7 @@ function VolumeChart({ days }: { days: MailVolumeDay[] }) {
                   if (v === 0) return null;
                   return <div key={s.key} className={cn("w-full first:rounded-b-none last:rounded-t", s.color)} style={{ height: `${(v / max) * 100}%` }} />;
                 })}
-                {t === 0 && <div className="h-px w-full bg-border" />}
+                {sum === 0 && <div className="h-px w-full bg-border" />}
               </div>
             );
           })}
@@ -89,14 +98,15 @@ function VolumeChart({ days }: { days: MailVolumeDay[] }) {
 }
 
 function RateTile({ id, title, rate, limitText }: { id: string; title: string; rate: MailRate; limitText: string }) {
+  const { t } = useI18n();
   return (
     <div data-testid={id} className={cn("flex flex-col gap-1 rounded-lg border p-3", rate.high && "border-red-500/40 bg-red-500/5")}>
       <span className="text-xs text-muted-foreground">{title}</span>
       <span className="text-2xl font-semibold tabular-nums">{rate.value === null ? "—" : formatPercent(rate.value)}</span>
-      <span className="text-xs text-muted-foreground">Saudável: até {limitText}</span>
+      <span className="text-xs text-muted-foreground">{t("envios.volume.tile.healthy", { limit: limitText })}</span>
       {rate.high && (
         <span className="flex items-center gap-1 text-xs text-red-400">
-          <AlertTriangle className="h-3.5 w-3.5" /> Atenção: acima de {limitText}
+          <AlertTriangle className="h-3.5 w-3.5" /> {t("envios.volume.tile.warning", { limit: limitText })}
         </span>
       )}
     </div>
@@ -105,6 +115,7 @@ function RateTile({ id, title, rate, limitText }: { id: string; title: string; r
 
 /** Volume: envios por dia e por projeto nos últimos 14 dias, e as taxas. */
 export function VolumeSection() {
+  const { t } = useI18n();
   const [data, setData] = useState<MailVolumeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [table, setTable] = useState(false);
@@ -113,14 +124,14 @@ export function VolumeSection() {
     const tz = new Date().getTimezoneOffset();
     apiFetch<MailVolumeResponse>(`/api/mail/envios/volume?tz=${tz}`)
       .then(setData)
-      .catch((err: unknown) => setError(err instanceof ApiRequestError ? err.message : "Não deu para ler o volume."));
+      .catch((err: unknown) => setError(apiErrorText(err, "envios.volume.error.load")));
   }, []);
 
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Volume (últimos 14 dias)</CardTitle>
-        <CardDescription>Quantas mensagens saíram por dia e o que aconteceu com elas.</CardDescription>
+        <CardTitle className="text-base">{t("envios.volume.title")}</CardTitle>
+        <CardDescription>{t("envios.volume.desc")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -129,18 +140,18 @@ export function VolumeSection() {
             <VolumeChart days={data.days} />
             <div>
               <Button size="sm" variant="outline" onClick={() => setTable((v) => !v)}>
-                {table ? "Esconder tabela" : "Ver como tabela"}
+                {table ? t("envios.volume.table.hide") : t("envios.volume.table.show")}
               </Button>
             </div>
             {table && (
               <table className="w-full table-fixed text-left text-xs">
                 <thead className="text-muted-foreground">
                   <tr>
-                    <th className="py-1 font-medium">Dia</th>
-                    <th className="py-1 font-medium">Entregues</th>
-                    <th className="py-1 font-medium">Adiadas</th>
-                    <th className="py-1 font-medium">Recusadas</th>
-                    <th className="py-1 font-medium">Canceladas</th>
+                    <th className="py-1 font-medium">{t("envios.volume.table.day")}</th>
+                    <th className="py-1 font-medium">{t("envios.volume.series.delivered")}</th>
+                    <th className="py-1 font-medium">{t("envios.volume.series.deferred")}</th>
+                    <th className="py-1 font-medium">{t("envios.volume.series.bounced")}</th>
+                    <th className="py-1 font-medium">{t("envios.volume.series.cancelled")}</th>
                   </tr>
                 </thead>
                 <tbody className="tabular-nums">
@@ -157,33 +168,33 @@ export function VolumeSection() {
               </table>
             )}
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <RateTile id="rate-bounce" title="Taxa de recusa" rate={data.bounceRate} limitText="2%" />
-              <RateTile id="rate-defer" title="Destinatários com adiamento" rate={data.deferRate} limitText="5%" />
+              <RateTile id="rate-bounce" title={t("envios.volume.rate.bounce")} rate={data.bounceRate} limitText="2%" />
+              <RateTile id="rate-defer" title={t("envios.volume.rate.defer")} rate={data.deferRate} limitText="5%" />
               <div className="flex flex-col gap-1 rounded-lg border p-3">
-                <span className="text-xs text-muted-foreground">Reclamações (marcado como spam)</span>
+                <span className="text-xs text-muted-foreground">{t("envios.volume.complaints.title")}</span>
                 <span className="text-2xl font-semibold">—</span>
                 <span className="text-xs text-muted-foreground">
-                  O servidor não recebe esse dado. Confira no Google Postmaster Tools: saudável é abaixo de 0,1%.
+                  {t("envios.volume.complaints.note")}
                 </span>
               </div>
             </div>
             {data.lowVolume && (
               <p className="text-xs text-muted-foreground">
-                Poucos envios no período: com menos de 50 mensagens, uma ou duas recusas já mexem muito na taxa.
+                {t("envios.volume.lowVolume")}
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              Os limites seguem as recomendações do Google e do Yahoo (recusa e spam baixos); o de adiamento é uma referência do painel.
+              {t("envios.volume.limitsNote")}
             </p>
             <div className="flex flex-col gap-1">
-              <h3 className="text-sm font-medium">Por projeto</h3>
-              {data.byProject.length === 0 && <p className="text-xs text-muted-foreground">Nenhum envio no período.</p>}
+              <h3 className="text-sm font-medium">{t("envios.volume.byProject")}</h3>
+              {data.byProject.length === 0 && <p className="text-xs text-muted-foreground">{t("envios.volume.byProject.empty")}</p>}
               <ul className="flex flex-col gap-1">
                 {data.byProject.map((p) => (
                   <li key={p.projectId ?? "none"} data-testid={`project-${p.projectId ?? "none"}`} className="flex flex-wrap justify-between gap-2 rounded-md border px-3 py-2 text-xs">
                     <span className="font-medium">{p.name}</span>
                     <span className="text-muted-foreground tabular-nums">
-                      {count(p.delivered, "entregue", "entregues")} · {count(p.deferred, "adiada", "adiadas")} · {count(p.bounced, "recusada", "recusadas")}
+                      {count("delivered", p.delivered)} · {count("deferred", p.deferred)} · {count("bounced", p.bounced)}
                     </span>
                   </li>
                 ))}

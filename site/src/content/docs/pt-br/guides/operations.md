@@ -1,5 +1,8 @@
 ---
 title: "Operação do painel na VPS"
+description: "O dia a dia: atualizar o painel, scripts de emergência, onde ficam os arquivos dos projetos e como trocar o usuário do terminal ou a porta do painel."
+sidebar:
+  label: "Operação"
 ---
 
 O dia a dia depois da instalação: atualizar, comandos úteis, onde ficam os arquivos e como
@@ -32,8 +35,8 @@ está no [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG
 
 ## Onde ficam os arquivos dos seus projetos
 
-Cada projeto que você implanta tem uma pasta própria no servidor, com o código clonado do Git
-e o `docker-compose.yml` que o painel gera. Por padrão essas pastas ficam em
+Cada projeto que você implanta tem uma pasta própria no servidor, com o código clonado do Git (em `src/`)
+e os arquivos que o painel gera ao redor dele (como `repo.git` e `paas.env`). Por padrão essas pastas ficam em
 **`/opt/tws-projects`** — ao lado de `/opt/tws-panel`, e fora de qualquer `/home`, para não
 sumirem se você um dia apagar um usuário do Linux.
 

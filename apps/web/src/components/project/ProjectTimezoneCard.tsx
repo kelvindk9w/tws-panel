@@ -7,23 +7,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { DeployJobResponse, ProjectTimezoneDefinition, ProjectTimezoneMode, ProjectTimezoneView } from "@paas/core";
-import { apiFetch, ApiRequestError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TimezonePicker, zoneWithOffset } from "@/components/timezone/TimezonePicker";
 import { AlertTriangle, CheckCircle2, Clock, Loader2, RotateCcw } from "lucide-react";
 
 function errorText(err: unknown): string {
-  return err instanceof ApiRequestError ? err.message : "Não foi possível concluir agora. Tente de novo em instantes.";
+  return apiErrorText(err, "projects.timezone.error");
 }
 
-const WHERE_TEXT: Record<ProjectTimezoneDefinition["where"], string> = {
-  compose: "no compose",
-  variables: "nas Variáveis",
-  env_file: "num arquivo env_file",
+const WHERE_TEXT: Record<ProjectTimezoneDefinition["where"], Key> = {
+  compose: "projects.timezone.where.compose",
+  variables: "projects.timezone.where.variables",
+  env_file: "projects.timezone.where.envFile",
 };
 
 export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: string; onChanged?: () => void }) {
+  const { t } = useI18n();
   const [view, setView] = useState<ProjectTimezoneView | null>(null);
   const [mode, setMode] = useState<ProjectTimezoneMode>("image");
   const [zone, setZone] = useState("America/Sao_Paulo");
@@ -36,7 +38,7 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
     // Resposta fora do formato (versão do servidor diferente, proxy no meio):
     // erro no cartão, sem derrubar a página de Configurações inteira.
     if (!v?.setting?.mode || !Array.isArray(v.services)) {
-      setError("Não deu para ler o fuso horário deste projeto agora. Recarregue a página.");
+      setError(tGlobal("projects.timezone.unreadable"));
       return;
     }
     setView(v);
@@ -54,7 +56,7 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
     return (
       <Card>
         <CardContent className="p-6 text-sm text-muted-foreground">
-          {error ? <span role="alert" className="text-destructive">{error}</span> : "Carregando o fuso horário…"}
+          {error ? <span role="alert" className="text-destructive">{error}</span> : t("projects.timezone.loading")}
         </CardContent>
       </Card>
     );
@@ -70,7 +72,7 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
     try {
       const body = mode === "zone" ? { mode, zone } : { mode };
       show(await apiFetch<ProjectTimezoneView>(`/api/projects/${projectId}/timezone`, { method: "PUT", body: JSON.stringify(body) }));
-      setNotice("Fuso salvo.");
+      setNotice(t("projects.timezone.saved"));
       setRestarted(false);
     } catch (err) {
       setError(errorText(err));
@@ -98,53 +100,53 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
     <Card data-testid="project-timezone-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Clock className="h-4 w-4" /> Fuso horário
+          <Clock className="h-4 w-4" /> {t("projects.timezone.title")}
         </CardTitle>
         <CardDescription>
-          Em que horário os containers do projeto vivem: datas nos logs, tarefas agendadas e o “agora” do sistema.
+          {t("projects.timezone.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 text-sm">
         {!view.supported ? (
-          <p className="text-muted-foreground">Site estático não tem processo rodando: o fuso não se aplica.</p>
+          <p className="text-muted-foreground">{t("projects.timezone.staticSite")}</p>
         ) : (
           <>
             <fieldset className="flex flex-col gap-2" disabled={busy !== null}>
-              <legend className="sr-only">Fuso horário do projeto</legend>
+              <legend className="sr-only">{t("projects.timezone.legend")}</legend>
               <label className="flex items-start gap-2">
                 <input type="radio" name="tz-mode" className="mt-0.5 h-4 w-4" checked={mode === "image"} onChange={() => setMode("image")} />
                 <span>
-                  Padrão da imagem (geralmente UTC)
-                  <span className="block text-xs text-muted-foreground">O painel não define TZ.</span>
+                  {t("projects.timezone.mode.image")}
+                  <span className="block text-xs text-muted-foreground">{t("projects.timezone.mode.imageHint")}</span>
                 </span>
               </label>
               <label className="flex items-start gap-2">
                 <input type="radio" name="tz-mode" className="mt-0.5 h-4 w-4" checked={mode === "host"} onChange={() => setMode("host")} />
                 <span>
-                  Igual ao da VPS
+                  {t("projects.timezone.mode.host")}
                   <span className="block text-xs text-muted-foreground">
-                    Hoje {zoneWithOffset(view.hostZone, view.options)}. Acompanha quando você troca o fuso da VPS.
+                    {t("projects.timezone.mode.hostHint", { zone: zoneWithOffset(view.hostZone, view.options) })}
                   </span>
                 </span>
               </label>
               <label className="flex items-start gap-2">
                 <input type="radio" name="tz-mode" className="mt-0.5 h-4 w-4" checked={mode === "zone"} onChange={() => setMode("zone")} />
-                <span>Um fuso específico</span>
+                <span>{t("projects.timezone.mode.zone")}</span>
               </label>
               {mode === "zone" && (
                 <div className="pl-6">
-                  <TimezonePicker options={view.options} value={zone} onChange={setZone} aria-label="Fuso do projeto" />
+                  <TimezonePicker options={view.options} value={zone} onChange={setZone} aria-label={t("projects.timezone.pickerAria")} />
                 </div>
               )}
             </fieldset>
 
             {view.definedByProject.length > 0 && (
               <div className="flex flex-col gap-1" data-testid="timezone-defined">
-                <p>O próprio projeto já define TZ. Nesses serviços o painel não mexe e vale o valor do projeto:</p>
+                <p>{t("projects.timezone.definedByProject")}</p>
                 <ul className="list-disc pl-5">
                   {view.definedByProject.map((d) => (
                     <li key={`${d.service}-${d.where}`}>
-                      <code>{d.service}</code>: <code>{d.value}</code> ({WHERE_TEXT[d.where]})
+                      <code>{d.service}</code>: <code>{d.value}</code> ({t(WHERE_TEXT[d.where])})
                     </li>
                   ))}
                 </ul>
@@ -153,20 +155,20 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
 
             <div>
               <Button size="sm" onClick={() => void save()} disabled={busy !== null || !dirty}>
-                {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
+                {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} {t("projects.timezone.save")}
               </Button>
             </div>
 
             {view.pendingRestart && !restarted && (
               <div className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3" data-testid="timezone-pending">
                 <p className="text-amber-200">
-                  A escolha vale depois de reiniciar os containers
-                  {view.effectiveZone ? ` (passam a usar ${zoneWithOffset(view.effectiveZone, view.options)})` : " (voltam ao fuso da imagem)"}.
-                  O reinício não baixa código novo.
+                  {view.effectiveZone
+                    ? t("projects.timezone.pendingZone", { zone: zoneWithOffset(view.effectiveZone, view.options) })
+                    : t("projects.timezone.pendingImage")}
                 </p>
                 <div>
                   <Button size="sm" variant="outline" onClick={() => void restart()} disabled={busy !== null}>
-                    {busy === "restart" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Reiniciar com o fuso novo
+                    {busy === "restart" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} {t("projects.timezone.restart")}
                   </Button>
                 </div>
               </div>
@@ -175,11 +177,16 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
               <p className="flex items-start gap-1.5 text-sky-300" role="status">
                 <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
                 <span>
-                  Reiniciando com o fuso novo.{" "}
-                  <Link to={`/projects/${projectId}/deploys`} className="underline underline-offset-2">
-                    Acompanhe em Deploys
-                  </Link>
-                  .
+                  <Trans
+                    k="projects.timezone.restarting"
+                    components={{
+                      link: (c) => (
+                        <Link to={`/projects/${projectId}/deploys`} className="underline underline-offset-2">
+                          {c}
+                        </Link>
+                      ),
+                    }}
+                  />
                 </span>
               </p>
             )}
@@ -190,13 +197,12 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
                   <p key={s.container} className="flex items-start gap-1.5">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>
-                      <code>{s.service}</code>: este serviço ignora o fuso; instale tzdata na imagem.
+                      <Trans k="projects.timezone.noTzdata" params={{ service: s.service }} components={{ code: <code /> }} />
                     </span>
                   </p>
                 ))}
                 <p className="text-xs text-muted-foreground">
-                  A imagem não tem /usr/share/zoneinfo. Programas em Node.js costumam acertar o fuso mesmo assim; os demais
-                  ficam em UTC.
+                  {t("projects.timezone.noTzdataHint")}
                 </p>
               </div>
             )}

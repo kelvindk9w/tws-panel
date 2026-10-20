@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n";
 import { Check, Copy } from "lucide-react";
 
 /** Botão "copiar" com feedback visual (✅ Copiado por 1,5s). */
-export function CopyButton({ text, label = "Copiar" }: { text: string; label?: string }) {
+export function CopyButton({ text, label }: { text: string; label?: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   return (
     <Button
@@ -18,7 +20,7 @@ export function CopyButton({ text, label = "Copiar" }: { text: string; label?: s
       }}
     >
       {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-      {copied ? "Copiado" : label}
+      {copied ? t("common.copied") : (label ?? t("common.copy"))}
     </Button>
   );
 }

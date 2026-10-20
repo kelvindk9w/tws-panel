@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import type { DnsChecklistResponse, DnsVerifyResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { apiErrorText, useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
@@ -18,6 +19,7 @@ import { CertificateRetryNotice, DnsChecklistPanel } from "@/components/mail/Dns
 import { ArrowLeft, Loader2 } from "lucide-react";
 
 export function MailDomainPage() {
+  const { t } = useI18n();
   const { domain } = useParams<{ domain: string }>();
   const name = domain ?? "";
 
@@ -37,7 +39,7 @@ export function MailDomainPage() {
       setChecklist(await apiFetch<DnsChecklistResponse>(`/api/mail/domains/${encodeURIComponent(name)}/dns`));
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao carregar o domínio.");
+      setError(apiErrorText(err, "mail.domain.loadError"));
     }
   }, [name]);
 
@@ -48,7 +50,7 @@ export function MailDomainPage() {
   if (!checklist) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> {error ?? "Carregando…"}
+        <Loader2 className="h-4 w-4 animate-spin" /> {error ?? t("mail.common.loading")}
       </p>
     );
   }
@@ -64,7 +66,7 @@ export function MailDomainPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{checklist.domain}</h1>
           <p className="text-sm text-muted-foreground">
-            Servidor: {checklist.mailHostname} · IP {checklist.serverIp}
+            {t("mail.domain.server", { host: checklist.mailHostname, ip: checklist.serverIp })}
           </p>
         </div>
       </div>
@@ -74,8 +76,8 @@ export function MailDomainPage() {
       <div className="flex gap-1 border-b">
         {(
           [
-            ["mailboxes", `Caixas (${mailboxCount})`],
-            ["dns", "Checklist DNS"],
+            ["mailboxes", t("mail.domain.tab.mailboxes", { count: mailboxCount })],
+            ["dns", t("mail.domain.tab.dns")],
           ] as const
         ).map(([key, label]) => (
           <button

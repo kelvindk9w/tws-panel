@@ -3,6 +3,7 @@ import { Navigate, useLocation } from "react-router";
 import { DEFAULT_USER_PREFERENCES, type AdminUser, type AuthMeResponse, type UserPreferences } from "@paas/core";
 import { apiFetch, ApiRequestError, SESSION_EXPIRED_EVENT } from "@/lib/api";
 import { AuthContext } from "@/lib/auth";
+import { useI18n } from "@/i18n";
 
 type GuardState =
   | { status: "loading" }
@@ -15,6 +16,7 @@ type GuardState =
  * 401 setup_incomplete → /setup (wizard ainda não foi concluído).
  */
 export function RequireAuth({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   const location = useLocation();
   const [state, setState] = useState<GuardState>({ status: "loading" });
 
@@ -48,7 +50,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (state.status === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
-        Verificando sessão…
+        {t("shell.session.checking")}
       </div>
     );
   }

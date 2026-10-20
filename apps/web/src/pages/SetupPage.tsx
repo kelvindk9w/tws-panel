@@ -12,16 +12,22 @@ import { SetupDone } from "@/pages/setup/SetupDone";
 import { Layout } from "@/components/Layout";
 import { AuthContext } from "@/lib/auth";
 import { Progress } from "@/components/ui/progress";
+import { LanguageSelect } from "@/components/LanguageSelect";
+import { t, useI18n } from "@/i18n";
 
-const FALLBACK_STEPS: SetupStatusResponse["steps"] = [
-  { id: 0, key: "welcome", title: "Boas-vindas e token", available: true },
-  { id: 1, key: "health", title: "Saúde da máquina", available: true },
-  { id: 2, key: "security", title: "Segurança", available: true },
-  { id: 3, key: "admin", title: "Conta de administrador", available: true },
-];
+/** Passos usados até o servidor responder; o Stepper traduz o título pela chave do passo. */
+function fallbackSteps(): SetupStatusResponse["steps"] {
+  return [
+    { id: 0, key: "welcome", title: t("setup.stepper.welcome"), available: true },
+    { id: 1, key: "health", title: t("setup.stepper.health"), available: true },
+    { id: 2, key: "security", title: t("setup.stepper.security"), available: true },
+    { id: 3, key: "admin", title: t("setup.stepper.admin"), available: true },
+  ];
+}
 
 export function SetupPage() {
-  const [steps, setSteps] = useState(FALLBACK_STEPS);
+  const { t } = useI18n();
+  const [steps, setSteps] = useState(fallbackSteps);
   const [step, setStep] = useState(0);
   /** Maior passo já alcançado — passos até ele ficam montados (estado
    * preservado ao navegar de volta) e clicáveis no stepper. */
@@ -120,7 +126,10 @@ export function SetupPage() {
           <span className="font-semibold tracking-tight">
             TWS <span className="text-muted-foreground">Panel</span>
           </span>
-          <span className="text-xs text-muted-foreground">Assistente de configuração</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">{t("setup.page.header")}</span>
+            <LanguageSelect className="h-7 text-xs" />
+          </div>
         </div>
       </header>
 
@@ -160,7 +169,7 @@ export function SetupPage() {
 
         {step > 0 && !getSetupToken() && (
           <p className="text-center text-sm text-muted-foreground">
-            Sessão sem token — recarregue a página com o link fornecido pelo instalador.
+            {t("setup.page.noToken")}
           </p>
         )}
 

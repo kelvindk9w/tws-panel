@@ -4,6 +4,7 @@
  */
 import { useState } from "react";
 import type { ExistingMailInfo } from "@paas/core";
+import { Trans, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 
@@ -28,6 +29,7 @@ export function ExistingMailWarning({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   const [understood, setUnderstood] = useState(false);
   const current = info.servers[0];
   return (
@@ -35,34 +37,30 @@ export function ExistingMailWarning({
       <p className="flex items-center gap-2 font-semibold text-red-400">
         <AlertTriangle className="h-4 w-4 shrink-0" />
         {info.status === "elsewhere"
-          ? "Este domínio já recebe e-mail em outro servidor"
-          : "Não foi possível confirmar quem recebe o e-mail deste domínio"}
+          ? t("mail.existing.titleElsewhere")
+          : t("mail.existing.titleUnknown")}
       </p>
       {info.status === "elsewhere" ? (
         <>
           <p>
-            Hoje o e-mail de <strong>{domain}</strong> chega em <strong>{current}</strong>. Seguindo o checklist,
-            apontar o MX para esta VPS desviaria todo o e-mail que hoje chega em {current} — caixas da empresa
-            deixariam de receber mensagens.
+            <Trans k="mail.existing.elsewhere" params={{ domain, current: current ?? "" }} components={{ b: <strong /> }} />
           </p>
-          <p className="text-xs text-muted-foreground">Servidores atuais (MX): {info.servers.join(", ")}</p>
+          <p className="text-xs text-muted-foreground">{t("mail.existing.servers", { servers: info.servers.join(", ") })}</p>
         </>
       ) : (
         <p>
-          A consulta ao registro MX de <strong>{domain}</strong> falhou. Se o domínio já tem e-mail funcionando em
-          outro provedor, apontar o MX para esta VPS desviaria esse e-mail.
+          <Trans k="mail.existing.unknown" params={{ domain }} components={{ b: <strong /> }} />
         </p>
       )}
       <p>
-        <strong>Recomendado:</strong> use um subdomínio só para o envio, como <strong>{info.suggestedDomain}</strong>.
-        Ele não mexe no e-mail que a empresa já recebe.
+        <Trans k="mail.existing.recommended" params={{ suggested: info.suggestedDomain }} components={{ b: <strong /> }} />
       </p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={busy} onClick={onUseSuggested}>
-          Usar {info.suggestedDomain} (recomendado)
+          {t("mail.existing.useSuggested", { suggested: info.suggestedDomain })}
         </Button>
         <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
-          Cancelar
+          {t("mail.common.cancel")}
         </Button>
       </div>
       <label className="flex items-start gap-2 text-xs">
@@ -72,11 +70,11 @@ export function ExistingMailWarning({
           checked={understood}
           onChange={(e) => setUnderstood(e.target.checked)}
         />
-        Entendo que, se eu apontar o MX de {domain} para esta VPS, o e-mail deixa de chegar no servidor atual.
+        {t("mail.existing.understand", { domain })}
       </label>
       <div>
         <Button variant="destructive" size="sm" disabled={!understood || busy} onClick={onConfirm}>
-          Seguir com {domain} mesmo assim
+          {t("mail.existing.proceed", { domain })}
         </Button>
       </div>
     </div>
