@@ -323,6 +323,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // ilegível derruba a subida, como as demais cargas estritas (M7).
   const token = await loadSetupToken(config.setupTokenFile, {
     setupCompleted: (await app.setupState.load()).completed,
+    hasAdmin: await userStore.hasAdmin(),
   });
   app.decorate("setupToken", token);
   if (!token) {

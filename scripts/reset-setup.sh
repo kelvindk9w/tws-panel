@@ -14,8 +14,11 @@
 #   --full:  setup-state.json + users.json + sessions.json
 #            (a conta admin deixa de existir — crie outra no fim do wizard)
 #
-# NADA mais é tocado: projetos, domínios, e-mail, histórico de segurança e o
-# setup token permanecem intactos.
+# Em qualquer modo é gerado um SETUP TOKEN NOVO em /data/setup-token (0600): ao
+# concluir o assistente o painel apaga o token, e o assistente reaberto precisa
+# de um. O token antigo deixa de valer. Veja o novo com ./scripts/show-token.sh.
+#
+# NADA mais é tocado: projetos, domínios, e-mail e histórico de segurança.
 #
 # ⚠  Exige confirmação interativa (digitar "resetar").
 # =============================================================================
@@ -69,8 +72,8 @@ fi
 
 cat <<EOF
 
-${BOLD}NÃO será tocado:${RESET} projetos, domínios, e-mail, histórico de segurança e
-o setup token (use ./scripts/show-token.sh para vê-lo de novo).
+${BOLD}Será gerado:${RESET} um setup token NOVO (setup-token) — o antigo deixa de valer.
+${BOLD}NÃO será tocado:${RESET} projetos, domínios, e-mail e histórico de segurança.
 
 EOF
 
@@ -87,8 +90,18 @@ else
   RM_LIST="setup-state.json"
 fi
 
+# Token novo (mesmo formato do install.sh: 24 bytes em hexadecimal).
+if command -v openssl >/dev/null 2>&1; then
+  NEW_TOKEN="$(openssl rand -hex 24)"
+else
+  NEW_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+[ -n "$NEW_TOKEN" ] || die "não consegui gerar o setup token."
+
 docker run --rm -v "$VOLUME_NAME:/data" alpine:3 sh -c "
   for f in $RM_LIST; do rm -f \"/data/\$f\"; done
+  umask 077
+  printf '%s' '$NEW_TOKEN' > /data/setup-token.tmp && chmod 600 /data/setup-token.tmp && mv /data/setup-token.tmp /data/setup-token
 " || die "falha ao limpar o volume $VOLUME_NAME."
 
 # Reinicia o painel para ele reler o estado zerado (se estiver rodando).
@@ -99,6 +112,6 @@ fi
 
 cat <<EOF
 
-${BOLD}✅ Setup resetado.${RESET} Abra o painel novamente com o link do instalador —
-se não lembrar o token: ${BOLD}./scripts/show-token.sh${RESET}
+${BOLD}✅ Setup resetado.${RESET} Foi gerado um setup token NOVO (o antigo não vale mais).
+Veja o link e o token com: ${BOLD}./scripts/show-token.sh${RESET}
 EOF
