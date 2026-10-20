@@ -85,7 +85,7 @@ describe("Verificar DNS — domínio atrás do proxy da Cloudflare", () => {
   it("IPs da Cloudflare → explica a nuvem laranja e pede a cinza", async () => {
     await montar("203-0-113-10.sslip.io");
     resolve4.mockResolvedValue(["104.21.32.1", "172.67.150.2"]);
-    const res = await app.inject({ method: "GET", url: "/api/domains/check?domain=devlink.tws.tec.br", headers: auth });
+    const res = await app.inject({ method: "GET", url: "/api/domains/check?domain=loja.example.com", headers: auth });
     expect(res.json().ok).toBe(false);
     expect(res.json().message).toMatch(/Cloudflare/);
     expect(res.json().message).toMatch(/cinza/);
