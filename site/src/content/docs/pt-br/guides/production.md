@@ -33,6 +33,11 @@ O `scripts/install.sh` deixa tudo pronto; se você instala/atualiza manualmente,
   dos builds de sites estáticos: a primeira instalação precisa de acesso ao registro. VPS sem
   saída para a internet? Baixe as imagens antes ou defina `PAAS_HOST_HELPER_IMAGE` com uma
   imagem local que tenha `nsenter`/`tar`/`sh`.
+- **ALLOWED_ORIGINS no `.env` (opcional)**: deixe vazio (o padrão) atrás do Caddy que o painel
+  instala. Se você colocar **outro proxy** na frente do painel e as ações que gravam voltarem
+  `403 forbidden_origin`, acrescente a origem em que o painel abre
+  (`ALLOWED_ORIGINS=https://painel.example.com`, várias separadas por vírgula) e rode
+  `sudo docker compose up -d`. Veja a [solução de problemas](troubleshooting.md).
 - O container do painel sobe com `cap_drop ALL`, `no-new-privileges` e rootfs
   read-only — só `/data` (volume) e `/tmp` (tmpfs) são graváveis. Não remova
   essas flags: o host bridge NÃO depende de capabilities do container.
