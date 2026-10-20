@@ -746,3 +746,46 @@ describe("WS /api/terminal/ws — fim da sessão encerra o terminal conectado", 
     ws.close();
   });
 });
+
+/**
+ * Lote 7, I1: o terminal aberto com o setup token durante o assistente não
+ * tem sessão para revogar. Ao concluir o setup (token invalidado) ele fecha na
+ * hora, em vez de manter o shell na mão de quem tinha o token — e de recusar
+ * (4009) o admin que abrir o terminal depois.
+ */
+describe("WS /api/terminal/ws — fim do assistente encerra o terminal aberto com o setup token", () => {
+  it("revogar o setup token fecha o WS com 4401 e o input seguinte não chega ao PTY", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    await tick();
+    const pty = ctx.ptys[0]!;
+    ws.send("durante-o-wizard\n");
+    await tick();
+    expect(Buffer.concat(pty.inputs).toString("utf8")).toContain("durante-o-wizard");
+
+    const closed = wsClosed(ws);
+    ctx.app.revokeSetupToken();
+    try {
+      ws.send("depois-de-concluir\n");
+    } catch {
+      // já fechado no cliente
+    }
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    await tick();
+    expect(Buffer.concat(pty.inputs).toString("utf8")).not.toContain("depois-de-concluir");
+  });
+
+  it("terminal aberto com SESSÃO não é tocado pela revogação do token", async () => {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    await new Promise<void>((resolve) => ws.addEventListener("open", () => resolve(), { once: true }));
+    ctx.app.revokeSetupToken();
+    await tick();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+});

@@ -30,6 +30,8 @@ declare module "fastify" {
     setupToken: string | null;
     /** Descarta o setup token da memória (setup concluído). Age no escopo raiz. */
     revokeSetupToken: () => void;
+    /** Avisa quando o setup token é revogado (devolve a função que cancela o aviso). */
+    onSetupTokenRevoked: (listener: () => void) => () => void;
     userStore: UserStore;
     twoFactor: TwoFactorService;
     sessionStore: SessionStore;
@@ -95,8 +97,14 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   app.decorateRequest("session", null);
   // Rotas encapsuladas só enxergam uma cópia de `setupToken`: quem revoga
   // precisa escrever no escopo raiz, onde este plugin (fp) roda.
+  const revokedListeners = new Set<() => void>();
   app.decorate("revokeSetupToken", () => {
     app.setupToken = null;
+    for (const listener of [...revokedListeners]) listener();
+  });
+  app.decorate("onSetupTokenRevoked", (listener: () => void) => {
+    revokedListeners.add(listener);
+    return () => void revokedListeners.delete(listener);
   });
 
   app.addHook("onRequest", async (request, reply) => {
