@@ -1,12 +1,18 @@
 ---
-title: "Troubleshooting"
+title: "Solução de problemas"
+description: "Soluções para problemas comuns: porta 25 bloqueada, e-mail em spam, certificado que não sai, painel que não abre, acesso SSH perdido e deploy bloqueado."
+sidebar:
+  label: "Solução de problemas"
 ---
 
-Problemas prováveis ao rodar o paas em uma VPS real e como resolver cada um.
+Problemas prováveis ao rodar o TWS Panel em uma VPS real e como resolver cada um.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 ---
 
-## 📧 E-mail
+## E-mail
 
 ### Porta 25 bloqueada pelo provedor
 
@@ -57,9 +63,9 @@ instala e renova o certificado sozinho.
 
 ---
 
-## 🌐 Domínios e SSL
+## Domínios e SSL
 
-### Caddy não emite certificado ("DNS não propagado")
+### Caddy não emite certificado
 
 **Sintomas:** site no ar só em HTTP, erro de ACME nos logs do container `paas-caddy`
 (`docker logs paas-caddy`).
@@ -84,7 +90,7 @@ nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/ho
 
 ---
 
-## 🛠️ Painel e wizard
+## Painel e wizard
 
 ### Painel não abre depois do `install.sh`
 
@@ -130,7 +136,7 @@ automática (via `at`) que restaura a configuração anterior em ~5 minutos **se
 confirmar o acesso** pelo painel. Aguarde o rollback, entre novamente e revise o plano de
 correções antes de reaplicar. Cada arquivo alterado tem backup em `/var/backups/paas/`.
 Perdeu a chave, a senha ou o celular da verificação em duas etapas? Veja
-[Perdi o acesso — e agora?](recover-access.md).
+[Perdi o acesso: e agora?](recover-access.md).
 
 ### Deploy bloqueado por guardrail
 
@@ -144,7 +150,7 @@ Auditoria (`guardrail.override`).
 
 ---
 
-## 🐳 Docker
+## Docker
 
 ### "Cannot connect to the Docker daemon"
 

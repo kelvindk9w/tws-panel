@@ -1,5 +1,8 @@
 ---
 title: "Desenvolvimento e arquitetura"
+description: "Rode o painel no seu computador e conheça a organização do monorepo, dos módulos e do site de documentação."
+sidebar:
+  label: "Desenvolvimento local"
 ---
 
 Como rodar o painel no seu computador e como o código está organizado. Para contribuir (padrões,

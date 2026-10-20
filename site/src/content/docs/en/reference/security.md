@@ -1,13 +1,19 @@
 ---
-title: "Security: what the panel does and what it requires"
+title: "Security model: what the panel does and what it requires"
+description: "What TWS Panel protects, what it requires from you (a real shell and the Docker socket), and how login and two-step verification work."
+sidebar:
+  label: "Security model"
 ---
 
 Found a vulnerability? **Do not open a public issue.** Read
 [SECURITY.md](https://github.com/kelvindk9w/tws-panel/blob/main/SECURITY.md) to learn how to report it responsibly.
 
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+
 This document explains the panel's security model. To carry out the VPS hardening, see the
 [Security wizard](../getting-started/security-wizard.md). To recover access, see
-[I lost access — now what?](../guides/recover-access.md).
+[I lost access: now what?](../guides/recover-access.md).
 
 ## What the panel protects
 
@@ -16,9 +22,16 @@ when the setup finishes), Docker socket not exposed over TCP, same-origin CORS b
 limiting, schema validation on API routes, logs with secret redaction and an audit log of
 sensitive actions.
 
-- **Deploy guardrails:** 6 rules in 3 levels (`block`, `warn`, `info`) — database port exposed
-  on the host, weak credentials, privileged container, dev service in production, secret committed
-  to the code and `:latest` tag. A block only passes with an explicit, audited override.
+- **Deploy guardrails:** rules in 3 levels (`block`, `warn`, `info`) — database port exposed
+  on the host, weak credentials, dev service in production, secret committed to the code and
+  `:latest` tag. A block only passes with an explicit, audited override. The compose file is also
+  checked the way Docker actually runs it (after merge, include, extends and interpolation),
+  against a list of what is allowed: privileged containers, `docker.sock`, binds outside the
+  project folder and the panel's own networks, images and names are refused, and these last rules
+  have no override.
+- **Isolation between hosted projects and the panel:** separate Docker networks for the proxy,
+  the panel, mail administration and mail delivery; the panel's images are pinned by digest; the
+  hosted repository's git hooks and configuration never run with the panel's privileges.
 - **Monitoring:** after hardening, a baseline records packages, ports and hashes of
   critical files; recurring scans compare against it and each difference becomes an alert.
 - **Secrets encrypted on disk:** projects' environment variables, the Telegram token, the backup

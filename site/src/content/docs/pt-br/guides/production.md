@@ -1,9 +1,15 @@
 ---
-title: "Do dev à VPS real — guia de produção"
+title: "Do dev à VPS real: guia de produção"
+description: "O que muda entre rodar o painel localmente e numa VPS Ubuntu exposta à internet: portas, DNS, PTR, TLS, firewall e ordem de configuração."
+sidebar:
+  label: "Guia de produção"
 ---
 
-Este guia cobre tudo o que muda entre rodar o paas localmente (`pnpm dev`, domínios
+Este guia cobre tudo o que muda entre rodar o TWS Panel localmente (`pnpm dev`, domínios
 `.localhost`, portas altas) e rodar em uma VPS Ubuntu 22.04/24.04 exposta na internet.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 > Leia também: [troubleshooting.md](troubleshooting.md) para os problemas mais comuns e
 > [host-bridge.md](../reference/host-bridge.md) para entender como o scan/hardening roda na VPS real
@@ -22,9 +28,11 @@ O `scripts/install.sh` deixa tudo pronto; se você instala/atualiza manualmente,
   docker compose up -d --build
   ```
 - **Imagem do host bridge**: na primeira execução do scan/hardening com
-  `PAAS_TARGET=host` o painel baixa `alpine:3` (helper descartável do nsenter).
-  VPS sem saída para a internet? Faça `docker pull alpine:3` antes (ou defina
-  `PAAS_HOST_HELPER_IMAGE` para uma imagem local com `nsenter`/`tar`/`sh`).
+  `PAAS_TARGET=host` o painel baixa o helper descartável do nsenter (`alpine:3`, fixado por
+  digest em `packages/core/src/images.ts`). O mesmo vale para as imagens do Caddy, do Stalwart e
+  dos builds de sites estáticos: a primeira instalação precisa de acesso ao registro. VPS sem
+  saída para a internet? Baixe as imagens antes ou defina `PAAS_HOST_HELPER_IMAGE` com uma
+  imagem local que tenha `nsenter`/`tar`/`sh`.
 - O container do painel sobe com `cap_drop ALL`, `no-new-privileges` e rootfs
   read-only — só `/data` (volume) e `/tmp` (tmpfs) são graváveis. Não remova
   essas flags: o host bridge NÃO depende de capabilities do container.
@@ -154,22 +162,24 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
 
 ### Recuperar o setup token
 
-O token é impresso UMA vez no fim do `install.sh`, mas fica persistido no volume
-`paas_data` (`/data/setup-token` dentro do container). Para reexibi-lo a qualquer
-momento — sem reinstalar nada:
+O token é impresso no fim do `install.sh` e fica guardado no volume `paas_data`
+(`/data/setup-token` dentro do container) até o wizard terminar. Enquanto isso, você pode
+reexibi-lo a qualquer momento, sem reinstalar nada:
 
 ```bash
 cd /opt/tws-panel
 sudo ./scripts/show-token.sh
 ```
 
-O script lê o volume (sem fallback pela variável do container, que é a da instalação), detecta o IP
+O script lê o arquivo do volume (sem fallback pela variável do container, que é a da instalação e é
+ignorada quando já existe administrador), detecta o IP
 público (best-effort; use `PAAS_PUBLIC_IP=<ip>` para fixar) e imprime o banner com a
 URL completa `https://SEU-IP-COM-HÍFENS.sslip.io/?token=...` (no acesso por túnel, o comando
 do túnel e o endereço `http://localhost:PORTA/?token=...`).
 
-> Lembrete: depois que a conta admin é criada (passo 4 do wizard), o setup token é
-> invalidado de propósito — a partir daí o acesso é pelo login normal.
+> Lembrete: depois que a conta admin é criada (passo 4 do wizard), o setup token deixa de
+> valer e o arquivo é apagado, de propósito — a partir daí o acesso é pelo login normal.
+> Para abrir o wizard de novo, com um token novo, use o `reset-setup.sh` abaixo.
 
 ### Resetar o setup (recomeçar o wizard do zero)
 
@@ -181,5 +191,6 @@ sudo ./scripts/reset-setup.sh --full    # + apaga usuários admin e sessões ati
 Ambos pedem confirmação interativa (digitar `resetar`) e reiniciam o painel ao final.
 O que é apagado fica restrito ao volume `paas_data`: `setup-state.json` (sempre) e, no
 modo `--full`, também `users.json` e `sessions.json`. **Projetos, domínios, e-mail,
-histórico de segurança e o setup token NÃO são tocados.** Depois do reset, use
-`sudo ./scripts/show-token.sh` para pegar o link do wizard de novo.
+histórico de segurança NÃO são tocados.** Em qualquer modo é gerado um setup token novo (o
+antigo deixa de valer). Depois do reset, use `sudo ./scripts/show-token.sh` para pegar o link
+do wizard de novo.

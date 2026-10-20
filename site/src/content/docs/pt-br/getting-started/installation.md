@@ -1,10 +1,16 @@
 ---
 title: "Instalação passo a passo"
+description: "Instale o TWS Panel numa VPS Ubuntu limpa: crie um usuário, configure a chave SSH, rode o instalador e abra o assistente de configuração."
+sidebar:
+  label: "Instalação"
 ---
 
 Guia completo para instalar o TWS Panel numa VPS limpa, do zero até o assistente de
 configuração (wizard). O [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md) tem a versão curta; este guia explica cada
 passo, o que aparece na tela e o que fazer quando algo dá errado.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 Os passos são numerados de 1 a 8. Os scripts do painel (`install.sh`, `uninstall.sh`) citam
 esses números.
@@ -593,7 +599,7 @@ Se você entrar **sem que ele peça a senha da conta**, está funcionando. Ele p
   linhas. Assim, perder um dispositivo não te deixa sem acesso.
 
 **Se você já perdeu a chave** — ou a senha, ou o acesso ao painel — veja
-[Perdi o acesso — e agora?](../guides/recover-access.md), que cobre cada caso e o caminho de volta.
+[Perdi o acesso: e agora?](../guides/recover-access.md), que cobre cada caso e o caminho de volta.
 
 </details>
 
@@ -721,8 +727,7 @@ escolher porta.
 > navegador abre o painel com o cadeado, sem aviso de "Não seguro". O painel em si escuta só
 > dentro da VPS: de fora, quem atende é o proxy, nas portas 80 e 443.
 >
-> Para o certificado sair, as portas **80 e 443 precisam estar abertas** para a internet. Na
-> Contabo (e na maioria das VPS) elas já vêm abertas. Se o seu provedor tiver um firewall no
+> Para o certificado sair, as portas **80 e 443 precisam estar abertas** para a internet. Na maioria das VPS elas já vêm abertas. Se o seu provedor tiver um firewall no
 > painel da hospedagem, libere as duas antes de instalar. O instalador espera o certificado
 > ficar pronto (até 3 minutos) e, se ele não sair, diz o motivo mais provável e mostra o acesso
 > por túnel como alternativa.

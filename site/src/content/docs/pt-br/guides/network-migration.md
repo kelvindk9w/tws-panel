@@ -1,9 +1,15 @@
 ---
-title: "Migração das redes do painel (lote 5) — roteiro da VPS e como desfazer"
+title: "Migração para redes separadas: roteiro da VPS e como desfazer"
+description: "Roteiro para atualizar uma instalação existente para a versão com redes Docker separadas, com conferências, tratamento de falhas e como voltar atrás."
+sidebar:
+  label: "Migração de redes"
 ---
 
 Vale para uma instalação que já roda o painel (pasta `/opt/tws-panel`, projetos em `/opt/tws-projects`) e vai
 receber a versão com as redes separadas. Instalação nova não precisa disto: as redes nascem certas.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 ## O que muda nas redes
 

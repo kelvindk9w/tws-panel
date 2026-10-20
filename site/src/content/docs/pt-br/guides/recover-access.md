@@ -1,9 +1,15 @@
 ---
-title: "Perdi o acesso — e agora?"
+title: "Perdi o acesso: e agora?"
+description: "Como voltar a entrar depois de perder a senha do painel, o celular da verificação em duas etapas, a senha do Linux, a chave SSH ou o domínio do painel."
+sidebar:
+  label: "Recuperar acesso"
 ---
 
 O hardening fecha portas de propósito, e isso corta caminhos de volta. Esta seção existe para
 você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto para ele.
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 | O que você perdeu | O que ainda funciona | Caminho de volta |
 |---|---|---|

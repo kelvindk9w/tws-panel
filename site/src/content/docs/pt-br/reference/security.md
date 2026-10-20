@@ -1,13 +1,19 @@
 ---
-title: "Segurança: o que o painel faz e o que ele exige"
+title: "Modelo de segurança: o que o painel faz e o que ele exige"
+description: "O que o TWS Panel protege, o que ele exige de você (um shell real e o socket do Docker) e como funcionam o login e a verificação em duas etapas."
+sidebar:
+  label: "Modelo de segurança"
 ---
 
 Encontrou uma vulnerabilidade? **Não abra uma issue pública.** Leia o
 [SECURITY.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/SECURITY.md) para saber como reportar de forma responsável.
 
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+
 Este documento explica o modelo de segurança do painel. Para conduzir o hardening da VPS, veja o
 [Wizard de segurança](../getting-started/security-wizard.md). Para recuperar o acesso, veja
-[Perdi o acesso — e agora?](../guides/recover-access.md).
+[Perdi o acesso: e agora?](../guides/recover-access.md).
 
 ## O que o painel protege
 
@@ -16,9 +22,16 @@ quando o setup termina), Docker socket não exposto via TCP, CORS same-origin po
 limiting, validação de schema nas rotas da API, logs com redação de segredos e log de auditoria
 das ações sensíveis.
 
-- **Guardrails de deploy:** 6 regras em 3 níveis (`block`, `warn`, `info`) — porta de banco exposta
-  no host, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado
-  no código e tag `:latest`. Um bloqueio só passa com override explícito e auditado.
+- **Guardrails de deploy:** regras em 3 níveis (`block`, `warn`, `info`) — porta de banco exposta
+  no host, credenciais fracas, serviço de dev em produção, secret comitado no código e tag
+  `:latest`. Um bloqueio só passa com override explícito e auditado. O compose também é conferido
+  do jeito que o Docker de fato o executa (depois de merge, include, extends e interpolação),
+  contra uma lista do que é permitido: container privilegiado, `docker.sock`, bind fora da pasta
+  do projeto e redes, imagens e nomes do próprio painel são recusados, e estas últimas regras não
+  têm override.
+- **Isolamento entre projeto hospedado e painel:** redes Docker separadas para o proxy, o painel,
+  a administração do e-mail e a entrega de e-mail; as imagens do painel são fixadas por digest; os
+  hooks e a configuração do git do repositório hospedado nunca rodam com os privilégios do painel.
 - **Monitoramento:** depois do hardening, um baseline registra pacotes, portas e hashes de
   arquivos críticos; as varreduras recorrentes comparam com ele e cada diferença vira alerta.
 - **Segredos cifrados em disco:** variáveis de ambiente dos projetos, token do Telegram, chave do

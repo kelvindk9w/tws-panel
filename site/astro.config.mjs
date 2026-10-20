@@ -50,6 +50,7 @@ export default defineConfig({
             { slug: 'guides/features' },
             { slug: 'guides/operations' },
             { slug: 'guides/production' },
+            { slug: 'guides/restore-new-server' },
             { slug: 'guides/troubleshooting' },
             { slug: 'guides/recover-access' },
             { slug: 'guides/network-migration' },

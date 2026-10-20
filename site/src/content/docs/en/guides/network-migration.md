@@ -1,9 +1,15 @@
 ---
-title: "Panel network migration (batch 5) — VPS runbook and how to undo it"
+title: "Migrating to separated networks: VPS runbook and rollback"
+description: "Runbook for updating an existing installation to the version with separated Docker networks, with checks, failure handling and how to roll back."
+sidebar:
+  label: "Network migration"
 ---
 
 Applies to an installation that already runs the panel (folder `/opt/tws-panel`, projects in `/opt/tws-projects`) and is going to
 receive the version with separated networks. A new installation does not need this: the networks are created correctly.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 ## What changes in the networks
 

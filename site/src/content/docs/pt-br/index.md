@@ -41,4 +41,4 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 - [Do zero ao painel pronto](getting-started/complete-guide.md): um roteiro único, em ordem, até um backup restaurado.
 - [Funcionalidades](guides/features.md): o que cada módulo faz.
 - [Modelo de segurança](reference/security.md): o que o painel protege e o que ele exige.
-- [Problemas comuns](guides/troubleshooting.md): porta 25 bloqueada, e-mail em spam, certificado que não sai.
+- [Solução de problemas](guides/troubleshooting.md): porta 25 bloqueada, e-mail em spam, certificado que não sai.

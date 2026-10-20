@@ -1,9 +1,15 @@
 ---
 title: "Funcionalidades"
+description: "O que cada módulo do TWS Panel faz: deploy, certificados, domínio do painel, e-mail, notificações, backups, segurança e terminal web."
+sidebar:
+  label: "Funcionalidades"
 ---
 
 O que o TWS Panel faz, módulo por módulo. O [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md) tem a lista curta; aqui está
-o detalhe de cada parte. Os exemplos usam valores fictícios (`exemplo.com.br`, `203.0.113.10`).
+o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `203.0.113.10`).
+
+> [!NOTE]
+> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
 
 - [Deploy de projetos](#deploy)
 - [Portas dos containers](#portas)
@@ -52,6 +58,8 @@ E-mail, Backups e Configurações.
   com as últimas linhas do serviço que ficou doente e as últimas verificações do healthcheck.
 - **Variáveis de ambiente** cifradas no servidor e injetadas no deploy. A tela lista as variáveis
   que o compose pede, importa um `.env` e barra o deploy quando falta uma obrigatória.
+  O `.env` que pertence ao repositório nunca é sobrescrito: as variáveis do painel vão para um
+  arquivo separado, e o log do deploy explica o conflito.
 - **Git:** repositório e branch editáveis; a tela mostra qual branch está de fato no ar.
 - **Múltiplos ambientes:** o mesmo repositório pode rodar mais de uma vez, em branches e domínios
   diferentes (produção em `main`, sandbox em outra branch), lado a lado na mesma VPS. Cada
@@ -99,7 +107,7 @@ painel, os domínios de cada projeto e cada `mail.<domínio>`.
 
 Por padrão, o painel abre em `https://203-0-113-10.sslip.io`, um endereço com o IP da VPS no
 nome. Em **Configurações → Domínio do painel** você troca por um domínio seu
-(`painel.exemplo.com.br`):
+(`painel.example.com`):
 
 1. a tela mostra o registro A a criar;
 2. **Verificar DNS** consulta o DNS público;
@@ -129,7 +137,7 @@ seus projetos enviarem mensagens e para caixas como `contato@`.
   para os demais, traz um texto pronto para abrir chamado.
 - O certificado de `mail.<domínio>` é emitido pelo Caddy e instalado no servidor de e-mail pelo
   painel, que o renova sozinho.
-- Recomendação da tela: usar um subdomínio só de envio (`envio.exemplo.com.br`), para não desviar
+- Recomendação da tela: usar um subdomínio só de envio (`envio.example.com`), para não desviar
   o e-mail que o domínio principal já recebe em outro lugar.
 
 **Caixas.**
@@ -137,14 +145,14 @@ seus projetos enviarem mensagens e para caixas como `contato@`.
 - Criar uma caixa gera as **credenciais prontas** para Outlook, Gmail, Thunderbird ou o celular.
   A senha pode ser digitada ou gerada pelo painel, e não é mostrada de novo.
 - **Enviar e-mail de teste** a partir de qualquer caixa.
-- **E-mail do projeto:** o projeto ganha uma caixa própria (ex.: `contato@loja.exemplo.com.br`)
+- **E-mail do projeto:** o projeto ganha uma caixa própria (ex.: `contato@loja.example.com`)
   com nome de exibição, e os valores `SMTP_*` e `MAIL_*` são injetados no deploy. Se o app usa
   outros nomes de variável, **Ligar às variáveis do projeto** entrega os mesmos valores com esses
   nomes.
 
 **Webmail.** Com um clique, `https://mail.<domínio>/` passa a abrir um webmail (**Roundcube**) em
 português para ler, responder e enviar como a própria caixa. A sessão termina depois de 10
-minutos sem uso, e 10 senhas erradas bloqueiam por 1 hora.
+minutos sem uso, e 10 logins errados vindos do mesmo endereço bloqueiam esse endereço por 1 hora.
 
 **Envios** (`/mail/envios`): o que o servidor de e-mail está fazendo.
 
@@ -213,7 +221,8 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
 
 - Por item (projeto, painel ou e-mail), escolhendo a data e a cópia (VPS ou externa).
 - **Restaurar de outro servidor:** numa VPS nova, conecta-se o mesmo armazenamento, informa-se a
-  senha e o painel lista o que existe, na ordem certa.
+  senha e o painel lista o que existe, na ordem certa. Passo a passo:
+  [Restaurar numa VPS nova](restore-new-server.md).
 - Sem conseguir entrar no painel, por SSH:
   `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
 
@@ -226,12 +235,18 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
   minimização, auditoria e endurecimento adicional), com simulação e backup de cada arquivo. As
   fases que mexem no acesso agendam um **rollback automático** de 5 minutos. Disponível também
   depois da instalação, em **Segurança → Proteções**. Guia: [Wizard de segurança](../getting-started/security-wizard.md).
-- **Guardrails de deploy:** 6 regras em 3 níveis (`block`, `warn`, `info`) — porta de banco
-  exposta, credenciais fracas, container privilegiado, serviço de dev em produção, secret comitado
-  e tag `:latest`. Um bloqueio só passa com override explícito e auditado.
+- **Guardrails de deploy:** regras em 3 níveis (`block`, `warn`, `info`) — porta de banco
+  exposta, credenciais fracas, serviço de dev em produção, secret comitado e tag `:latest`. Um
+  bloqueio só passa com override explícito e auditado. O compose também é conferido do jeito que o
+  Docker o executa, contra uma lista do que é permitido (sem container privilegiado, sem
+  `docker.sock`, sem bind fora da pasta do projeto, sem acesso às redes do painel). As regras que
+  protegem o próprio painel não têm override.
+- **Isolamento:** o painel, o servidor de e-mail e os projetos ficam em redes Docker separadas, e o
+  proxy só confia nos cabeçalhos repassados pelo Caddy. Detalhes em
+  [Migração de redes](network-migration.md).
 - **Monitoramento:** um baseline registra pacotes, portas e hashes de arquivos críticos; as
   varreduras recorrentes comparam com ele, e cada mudança vira alerta.
-- **Central de alertas** e **log de auditoria** de todas as ações sensíveis.
+- **Central de alertas** e **log de auditoria** das ações sensíveis.
 - **Saúde da máquina:** CPU, memória, disco e rede.
 - **Login:** conta de administrador com senha forte (argon2id), sessões revogáveis e limite de
   tentativas. **Verificação em duas etapas** (código de 6 dígitos de um app autenticador) com 10

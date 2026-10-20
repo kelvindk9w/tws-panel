@@ -1,12 +1,18 @@
 ---
 title: "Troubleshooting"
+description: "Fixes for common problems: blocked port 25, email in spam, certificates that do not issue, a panel that does not open, lost SSH access and blocked deploys."
+sidebar:
+  label: "Troubleshooting"
 ---
 
-Likely problems when running paas on a real VPS, and how to fix each one.
+Likely problems when running TWS Panel on a real VPS, and how to fix each one.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 ---
 
-## 📧 Email
+## Email
 
 <a id="porta-25-bloqueada-pelo-provedor"></a>
 ### Port 25 blocked by the provider
@@ -59,9 +65,9 @@ installs and renews the certificate on its own.
 
 ---
 
-## 🌐 Domains and SSL
+## Domains and SSL
 
-### Caddy doesn't issue a certificate ("DNS não propagado" — DNS not propagated)
+### Caddy does not issue a certificate
 
 **Symptoms:** site up only over HTTP, ACME error in the `paas-caddy` container logs
 (`docker logs paas-caddy`).
@@ -86,7 +92,7 @@ natively on modern Linux/macOS and in Chrome; if it fails, add this to `/etc/hos
 
 ---
 
-## 🛠️ Panel and wizard
+## Panel and wizard
 
 ### Panel doesn't open after `install.sh`
 
@@ -132,7 +138,7 @@ deleted on purpose; to reopen the wizard and generate a new token, run
 through the panel. Wait for the rollback, log in again and review the fix plan before reapplying.
 Every changed file has a backup in `/var/backups/paas/`.
 Lost the key, the password or the phone for two-step verification? See
-[I lost access — now what?](recover-access.md).
+[I lost access: now what?](recover-access.md).
 
 <a id="deploy-bloqueado-por-guardrail"></a>
 ### Deploy blocked by guardrail
@@ -147,7 +153,7 @@ staging environment), check "Entendo os riscos" (I understand the risks) and con
 
 ---
 
-## 🐳 Docker
+## Docker
 
 ### "Cannot connect to the Docker daemon"
 

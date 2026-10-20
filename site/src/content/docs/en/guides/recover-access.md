@@ -1,9 +1,15 @@
 ---
-title: "I lost access — now what?"
+title: "I lost access: now what?"
+description: "How to get back in after losing the panel password, the two-step verification phone, the Linux password, the SSH key or the panel domain."
+sidebar:
+  label: "Recover access"
 ---
 
 Hardening closes ports on purpose, and that cuts off some ways back in. This section exists so
 you don't find that out at the worst possible moment. Found your case in the table? Go straight to it.
+
+> [!NOTE]
+> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
 
 | What you lost | What still works | Way back in |
 |---|---|---|
