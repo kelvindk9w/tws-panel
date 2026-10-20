@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import remarkDocLinks from './plugins/remark-doc-links.mjs';
+import remarkGithubAlerts from './plugins/remark-github-alerts.mjs';
 
 // GitHub Pages project site: https://kelvindk9w.github.io/tws-panel/
 const base = '/tws-panel';
@@ -16,7 +17,7 @@ export default defineConfig({
   base,
   trailingSlash: 'always',
   markdown: {
-    remarkPlugins: [[remarkDocLinks, { base }]],
+    remarkPlugins: [[remarkDocLinks, { base }], remarkGithubAlerts],
   },
   integrations: [
     starlight({
