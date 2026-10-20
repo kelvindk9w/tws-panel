@@ -1,0 +1,65 @@
+name: Bug report
+description: Something is not working as it should
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. You can write in English or Portuguese (Brazil).
+
+        **Security vulnerability?** Do not open a public issue. Report it privately, as described in
+        [SECURITY.md](https://github.com/kelvindk9w/tws-panel/blob/main/SECURITY.md).
+
+        **Never paste** tokens, passwords, the setup token, private keys or client domains.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect to happen, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See the error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: TWS Panel version or commit
+      description: On the VPS, the output of `git -C /opt/tws-panel rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where is it running?
+      options:
+        - Real VPS
+        - Local development (pnpm dev)
+        - WSL or a local virtual machine
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and Docker version
+      description: For example "Ubuntu 24.04, Docker 27.x" (output of `docker --version`).
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and evidence
+      description: Relevant log excerpts, screenshots or the deploy log. Remove anything sensitive first. For the panel log, `sudo docker logs tws-panel` on the VPS.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that helps, and what you already tried.

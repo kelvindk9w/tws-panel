@@ -1,21 +1,22 @@
-## O que muda
+## What changes
 
-<!-- Resumo objetivo das alterações. -->
+<!-- A short, objective summary of the changes. -->
 
-## Por quê
+## Why
 
-<!-- Motivação / issue relacionada. Fixes #___ -->
+<!-- Motivation / related issue. Fixes #___ -->
 
-## Como testar
+## How to test
 
-<!-- Passos para verificar que funciona. Comandos, cenários, prints. -->
+<!-- Steps to verify it works: commands, scenarios, screenshots. -->
 
 ## Checklist
 
-- [ ] `pnpm build` passa em todo o monorepo
-- [ ] `pnpm typecheck` passa
-- [ ] Suítes relevantes passam (`pnpm test:mail` / `pnpm test:fase4`), quando aplicável
-- [ ] Commits seguem o padrão convencional (`feat:`, `fix:`, `docs:`…)
-- [ ] Nenhum segredo/credencial adicionado ao código
-- [ ] Docs atualizadas (README/docs/), quando aplicável
-- [ ] Ações sensíveis geram registro de auditoria, quando aplicável
+- [ ] `pnpm build` passes across the monorepo
+- [ ] `pnpm typecheck` passes
+- [ ] Tests cover the change, and `pnpm test:coverage` passes (plus `pnpm test:mail` / `pnpm test:fase4` when it touches infrastructure flows)
+- [ ] Commits follow the conventional style (`feat:`, `fix:`, `docs:`...)
+- [ ] No secret or credential added to the code
+- [ ] Docs updated (`site/src/content/docs/`, README) when applicable; `pnpm docs:links` passes
+- [ ] Sensitive actions generate an audit record, when applicable
+- [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md), including the license terms for contributions
