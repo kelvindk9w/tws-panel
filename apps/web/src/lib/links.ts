@@ -40,16 +40,16 @@ export function featureRequestUrl(): string {
   return `${REPO_URL}/issues/new?template=feature_request.yml`;
 }
 
-// Formas aceitas: versão semver-like curta ("1.2.3", "1.2.3-beta.1+build.5") e
+// Formas aceitas: semver estrito (X.Y.Z, com pré-lançamento e build opcionais, até 40 caracteres)
 // código de idioma ("pt-BR", "en"). Fora disso, o campo simplesmente não vai.
-const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,39}$/;
+const VERSION_RE = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const LOCALE_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/;
 
 /** Versão no formato aceito, ou null (vazia, "unknown", hostil, longa demais). */
 export function safeVersion(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const v = value.trim();
-  return v !== "unknown" && VERSION_RE.test(v) ? v : null;
+  return v.length <= 40 && VERSION_RE.test(v) ? v : null;
 }
 
 /** Link do formulário de bug com versão e idioma preenchidos (e só isso). */

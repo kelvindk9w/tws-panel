@@ -31,12 +31,14 @@
 ## Privacidade (crítico)
 - `bugReportUrl` só lê `version` e `locale` (propriedades extras são ignoradas) e só monta
   `template`, `version`, `locale` via `URLSearchParams`.
-- Versão: precisa casar `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,39}$` e não ser "unknown"; idioma: código tipo
+- Versão: semver estrito (X.Y.Z, pré-lançamento e build opcionais, até 40 caracteres); `192.168.0.1`,
+  `painel.example.com`, "unknown", `1.2`, `v1.2.3` são descartados (testado). Idioma: código tipo
   `pt-BR`/`en`. Se não casar, o campo é descartado (não "limpo"). `&`, `#`, quebra de linha, espaços,
   `<script>`, caminho, IP, domínio e valores longos nunca chegam ao link. `+` sai como `%2B`.
 - A versão exibida no painel passa pelo mesmo filtro.
 
 ## Testes
+- Os testes novos do cabeçalho (rótulo "Menu" sr-only, classes de espaço) e do semver foram escritos junto com a correção, não antes dela (desvio do TDD, admitido).
 - `apps/web/tests/links.test.ts` (novo): idioma→pasta, links fixos, lista permitida de parâmetros
   (template/version/locale), 12 versões hostis × 6 idiomas hostis, campos extras (IP, domínio, e-mail,
   usuário, caminho, SO) ignorados.
@@ -50,13 +52,25 @@
   mailer 362 (99,9/98,45); security 215; server 1991 (+2 ignorados) 97,73/93,35/98,15/98,88.
   `check-no-real-hosts`: ok (os endereços públicos do site/repositório não reclamam).
 
-## Verificação visual
-Playwright (Vite + API simulada), topo e lateral direita, 390/1024/1440px, pt-BR e en: painel dentro da
-tela, sem rolagem horizontal. Capturas em área temporária da sessão (não versionadas).
+## Verificação visual e correção da revisão
+A primeira versão (ícone + espaços menores só abaixo de `sm`) REGREDIU a rolagem lateral, segundo o
+revisor: 360px 8px → 20px; 368-379px (inclui 375) cabia → estourava 4-12px; 1024-1031px em pt-BR com
+menu no topo cabia → estourava 3-7px. Minha frase anterior de que 360px "já estourava uns 20px" era
+falsa e foi retirada. Correção: abaixo de `sm` o texto "Menu" fica `sr-only` (o ícone permanece e o nome
+acessível continua "Menu"), e o espaço entre itens é menor só na faixa `lg` (gap-3 no cabeçalho, gap-1
+no grupo da direita; `xl` volta ao normal).
+
+Medição própria (Chromium, API simulada, nome de usuário longo, badge 150 → "99+", varredura de 2 em 2px
+de 320 a 1440px, página /mail/envios, pt-BR e en, topo e laterais esquerda/direita; as laterais usam o
+mesmo cabeçalho abaixo de 768px). Base (b713450) estoura de 320 a 368px (até 58px); HEAD corrigido
+estoura só de 320 a 334px (até 26px), ou seja, melhor que a base em toda a faixa e sem nenhum estouro de
+336 a 1440px (inclui 360, 375, 390 e 1024-1031). O navegador de teste reserva 10px de barra de rolagem;
+sem ela (celular) o cabeçalho cabe a partir de ~326px, então a 320px ainda passa uns 6px.
+Capturas com o painel aberto: topo e lateral esquerda/direita, 390/1024/1440px, pt-BR e en (área
+temporária da sessão, não versionadas): painel dentro da tela, sem rolagem horizontal.
 
 ## Não verificado
-- Lateral esquerda por captura (só por teste e por simetria de CSS); 360px (ainda estoura ~20px; pela medida em 390px, provavelmente já estourava antes: o
-  cabeçalho não cabe nessa largura com o nome do usuário e o seletor); leitor de tela real; Firefox/Safari.
+- Larguras abaixo de ~326px (320px passa uns 6px, mas menos que a base); leitor de tela real; Firefox/Safari.
 - Que o formulário `bug_report.yml` tenha os campos `version`/`locale` (é do executor A; o GitHub
   ignora parâmetro desconhecido) e que as páginas do site existam no ar.
 - Site: nenhuma página ficou falsa com o novo ícone ("ao lado do menu do usuário" segue verdadeiro); nada em `site/` foi tocado.

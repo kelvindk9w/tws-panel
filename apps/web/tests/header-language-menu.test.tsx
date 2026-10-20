@@ -339,3 +339,21 @@ describe("menu do topo com \"Mais\"", () => {
     expect(within(lateral).queryByRole("button", { name: "Mais" })).not.toBeInTheDocument();
   });
 });
+
+describe("cabeçalho estreito: sem estouro lateral (estrutura)", () => {
+  it("o texto 'Menu' fica só para leitor de tela abaixo de sm, mas segue sendo o nome do botão", () => {
+    renderLayout("top");
+    const button = within(top()).getByRole("button", { name: "Menu" });
+    const label = within(button).getByText("Menu");
+    expect(label.className).toContain("sr-only");
+    expect(label.className).toContain("sm:not-sr-only");
+  });
+
+  it("espaços do cabeçalho: menores abaixo de sm e na faixa lg, normais em sm e xl", () => {
+    renderLayout("top");
+    const row = top().firstElementChild as HTMLElement;
+    for (const c of ["gap-2", "sm:gap-4", "lg:gap-3", "xl:gap-6"]) expect(row.className).toContain(c);
+    const group = within(top()).getByRole("combobox", { name: "Idioma" }).closest("div")!.parentElement as HTMLElement;
+    for (const c of ["gap-1", "sm:gap-2", "lg:gap-1", "xl:gap-2"]) expect(group.className).toContain(c);
+  });
+});

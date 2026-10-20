@@ -98,6 +98,15 @@ describe("link de relato de problema (bug_report.yml)", () => {
     expect(params(bugReportUrl({ version: "0.1.0", locale: "en&x=1" })).has("locale")).toBe(false);
   });
 
+  it("IP, domínio e números fora do formato semver são descartados da versão", () => {
+    for (const version of ["192.168.0.1", "203.0.113.10", "painel.example.com", "1.2", "1", "01.2.3", "1.2.3.4", "v1.2.3", "1.2.3-", "1.2.3+", "1.2.3-a..b", "1.2.3-" + "a".repeat(40)]) {
+      expect(params(bugReportUrl({ version, locale: "en" })).has("version"), version).toBe(false);
+    }
+    for (const version of ["0.1.0", "10.20.30", "1.2.3-rc.1", "1.2.3-alpha-1+build.7", "1.0.0+20130313144700"]) {
+      expect(params(bugReportUrl({ version, locale: "en" })).get("version"), version).toBe(version);
+    }
+  });
+
   it("o '+' da versão sai codificado (não vira espaço no formulário)", () => {
     const url = bugReportUrl({ version: "1.2.3+build.5", locale: "en" });
     expect(url).toContain("version=1.2.3%2Bbuild.5");
