@@ -31,7 +31,7 @@ server you no longer have.
 |---|---|---|
 | **Backup password** | The recovery kit you downloaded in **Settings → Backups → External copy encryption**. The panel also shows it under **View password**, but only on a panel you can still sign in to. | There is no way around it: without the password, nobody can open the external copies. |
 | **Storage endpoint and bucket** | The recovery kit lists the bucket and the endpoint. | In Cloudflare: R2 → your bucket → Settings → S3 API. |
-| **Storage access keys** (Access Key ID and Secret Access Key) | You saw them once, when you created the token on Cloudflare. **They are not in the kit.** | Create a new R2 API token for the same bucket ([Complete guide, Step 8.1](../getting-started/complete-guide.md#etapa-8)). Old files stay readable. The keys you type in step 3 stay in use after the panel is restored from the screen (see step 5). |
+| **Storage access keys** (Access Key ID and Secret Access Key) | You saw them once, when you created the token on Cloudflare. **They are not in the kit.** | Create a new R2 API token for the same bucket ([Step-by-step guide, Part 2, Step 6.1](../getting-started/complete-guide.md#etapa-6)). Old files stay readable. The keys you type in step 3 stay in use after the panel is restored from the screen (see step 5). |
 | **Domain access** | Your DNS provider or registrar. | Recover it with the registrar. |
 | **Provider access** | The new VPS provider's dashboard (to set the PTR and unblock port 25). | — |
 

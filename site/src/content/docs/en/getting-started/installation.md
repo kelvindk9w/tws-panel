@@ -1203,12 +1203,13 @@ sudo docker exec tws-panel cat /data/setup-token   # shows only the token
 
 On first access, the Dashboard shows the **Get the panel ready** checklist, with what is still left to
 configure (protections, two-factor authentication, panel domain, email, notifications and
-backups). The steps are in the [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md#after-installing).
+backups). [Part 2](complete-guide.md) walks through each of them, in order.
 
 To publish a project: register the project, point the DNS, and the panel takes care of the build, the proxy and
 SSL. Production guide in [production.md](../guides/production.md). Everyday commands, the projects folder
 and changing the terminal's port or user are in [Operation](../guides/operations.md).
 
 > [!TIP]
-> **Next: [Part 2 — Configure](complete-guide.md).** With the wizard finished, move on to security
-> (hardening), two-factor authentication, the domain, email, notifications, backups and your first project.
+> **Next: [Part 2 — Configure](complete-guide.md).** With the wizard link in hand, go to Part 2, which starts
+> at the wizard and goes on to security (hardening), two-factor authentication, the domain, email,
+> notifications, backups and your first project.

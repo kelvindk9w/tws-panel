@@ -20,7 +20,7 @@ Harden the server, publish projects with HTTPS and run your own email, all from 
 
 </div>
 
-![TWS Panel dashboard with the "Deixe o painel pronto" (Get the panel ready) checklist and three running projects](docs/assets/dashboard.png)
+![TWS Panel dashboard (Portuguese interface) with the "Get the panel ready" checklist and three running projects](docs/assets/dashboard.png)
 
 <!--
   Screenshots live in docs/assets/ (docs/assets/regenerar/COMO-REGENERAR.md, in Portuguese, explains
@@ -46,8 +46,8 @@ reinstall the VPS. See [what to do](https://kelvindk9w.github.io/tws-panel/en/ge
 >
 > The panel interface is available in English and Portuguese (Brazil). It picks the language from
 > your browser and has a selector in the header. Some messages written by the server are still in
-> Portuguese. The documentation is also in both languages. This README writes screen names as they
-> appear in the Portuguese interface, with the English translation in parentheses on first mention.
+> Portuguese. The documentation is also in both languages. This README quotes screen names as they
+> appear in the English interface; the Portuguese README uses the Portuguese ones.
 
 ## Why it exists
 
@@ -77,12 +77,12 @@ item in detail.
 - Multiple environments from the same repository, such as production and sandbox side by side.
 - Encrypted environment variables, `.env` import, and deploys that stop when a required variable is missing.
 - Port management per container: change, publish, remove or bulk-edit ports, with conflicts shown up front.
-- Live deploy logs, with a "Por que falhou" (Why it failed) section that shows the log of the service that became unhealthy.
+- Live deploy logs, with a "Por que falhou" section (written by the server, still in Portuguese; it means "Why it failed") that shows the log of the service that became unhealthy.
 
 ### HTTPS and the panel domain
 
 - Automatic certificates (Let's Encrypt) for the panel, the projects and email.
-- A **Certificados** (Certificates) page with the status of each certificate, the likely cause when issuing fails, and a "Tentar emitir agora" (Try to issue now) button.
+- A **Certificates** page with the status of each certificate, the likely cause when issuing fails, and a "Try issuing now" button.
 - Bring your own certificate, with a check that the key and certificate match.
 - A custom domain for the panel and, optionally, the ability to turn off access by IP.
 
@@ -93,7 +93,7 @@ item in detail.
 - Mailboxes with ready-to-use credentials for Outlook, Gmail or a phone, and a test email.
 - Project email: a dedicated mailbox, with `SMTP_*` variables injected at deploy.
 - Webmail (Roundcube) at `https://mail.<domain>/`.
-- An **Envios** (Sends) page for outgoing mail: queue, history, volume, blocklists and a deliverability score.
+- A **Sending** page for outgoing mail: queue, history, volume, blocklists and a deliverability score.
 
 ### Notifications
 
@@ -106,7 +106,7 @@ item in detail.
 - Backups of the panel, the mail server and the projects as `.7z` files, with a schedule and retention.
 - A copy on the VPS and another on Cloudflare R2 (or other S3-compatible storage), verified after upload.
 - Optional encryption of the off-site copy, with a recovery kit.
-- Restore item by item, or use "Restaurar de outro servidor" (Restore from another server) to rebuild everything on a new VPS.
+- Restore item by item, or use "Restore from another server" to rebuild everything on a new VPS.
 
 ### Security
 
@@ -119,7 +119,7 @@ item in detail.
 ### Web terminal and setup checklist
 
 - A real shell on the server inside the panel, running as the user you choose at install time.
-- A **Deixe o painel pronto** (Get the panel ready) checklist on the Dashboard that shows what is still left to configure.
+- A **Get the panel ready** checklist on the Dashboard that shows what is still left to configure.
 
 ## Installation
 
@@ -165,21 +165,21 @@ the administrator account.
 
 ## After installing
 
-On your first visit, the Dashboard shows the **Deixe o painel pronto** checklist. The panel checks
-the status of each step by itself, and each step has a "Como fazer" (How to) section with a
+On your first visit, the Dashboard shows the **Get the panel ready** checklist. The panel checks
+the status of each step by itself, and each step has a "How to" section with a
 button that opens the right screen.
 
 | # | Step | What it is |
 |---|---|---|
-| 1 | **Proteções da VPS** (VPS protections) | The hardening phases: updates, SSH with keys only, firewall, blocking of repeated login attempts and auditing. |
-| 2 | **Verificação em duas etapas** (Two-step verification) | A 6-digit code from your phone, in addition to your password, to sign in to the panel. |
-| 3 | **Domínio do painel** (Panel domain) | An address of your own (`panel.example.com`) instead of the one that contains the IP. |
-| 4 | **E-mail do servidor** (Server email) *(optional)* | A mail server on the VPS so your projects can send email. |
-| 5 | **Notificações** (Notifications) *(optional)* | Telegram or email alerts when something needs your attention. |
-| 6 | **Backups fora da VPS** (Off-VPS backups) *(optional)* | An encrypted copy on Cloudflare R2 (or other S3-compatible storage), so you can recover everything on a new VPS. |
+| 1 | **VPS hardening** | The hardening phases: updates, SSH with keys only, firewall, blocking of repeated login attempts and auditing. |
+| 2 | **Two-factor authentication** | A 6-digit code from your phone, in addition to your password, to sign in to the panel. |
+| 3 | **Panel domain** | An address of your own (`panel.example.com`) instead of the one that contains the IP. |
+| 4 | **Server email** *(optional)* | A mail server on the VPS so your projects can send email. |
+| 5 | **Notifications** *(optional)* | Telegram or email alerts when something needs your attention. |
+| 6 | **Off-VPS backups** *(optional)* | An encrypted copy on Cloudflare R2 (or other S3-compatible storage), so you can recover everything on a new VPS. |
 
-Optional steps can be dismissed with "Não vou usar" (I will not use this). The whole checklist is
-also available under **Configurações → Primeiros passos** (Settings → Getting started).
+Optional steps can be dismissed with "I won't use this". The whole checklist is
+also available under **Settings → Getting started**.
 
 Prefer one ordered walkthrough, from the rented VPS to a first project online and a tested restore?
 Follow the [step-by-step guide](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/) (Part 2 covers this checklist and more).

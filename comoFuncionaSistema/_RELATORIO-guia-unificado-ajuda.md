@@ -66,7 +66,25 @@ Capturas com Playwright: página inicial (en, 1440), Parte 1 pt-br com barra lat
   depende de o executor B entregar o menu e o preenchimento; ajustar se ele mudar.
 - O painel não mostra a versão em lugar nenhum hoje (busquei no código web); a página manda rodar
   `git -C /opt/tws-panel rev-parse --short HEAD`.
-- O `docs.yml` só valida em CI; o `check-site-url` também varre `.ts/.tsx`, então o link que o B puser no
-  painel será conferido.
-- Aviso: README.md/README.pt-BR.md ainda dizem que a interface está só em português (nota de beta),
-  o que contradiz o site. Não alterei por estar fora do pedido.
+- O `docs.yml` só valida em CI. As rotas do link do painel passaram a ser conferidas contra o build
+  (ver "Correções após a revisão"), mas só foram testadas com uma cópia do `links.ts` do worktree do B.
+
+## Correções após a revisão
+
+- A nota "interface só em português" foi corrigida nos dois READMEs, nos dois CONTRIBUTING e no ROADMAP
+  (que também ganhou a interface bilíngue em "Delivered"; espanhol segue como trabalho futuro).
+- O README em inglês passou a citar os rótulos do dicionário `en` (conferidos um a um), com a nota de que
+  o README em português usa os do dicionário `pt-BR`. "Por que falhou" é texto do servidor (ainda em
+  português) e está dito assim. A imagem do dashboard continua em português e o texto alternativo avisa.
+- Guia de restauração: o token do R2 aponta para Parte 2, Etapa 6.1 (`#etapa-6`). Refiz o grep de todas
+  as referências "Etapa/Step/Passo N" e links `#etapa-*`/`#passo-*`; as de dentro da Parte 2 foram
+  conferidas por script (número do texto = número da âncora).
+- Parte 1, "Depois do wizard": o parágrafo e o aviso final apontam para a Parte 2 (que começa no assistente),
+  sem mandar para o README.
+- Links do painel: `docs:links` agora lê os `.ts/.tsx` de `apps/web/src` (menos testes), interpreta as URLs
+  com `new URL()` (host em maiúsculas ou `:443` valem como o mesmo endereço) e expande modelos
+  `${SITE_URL}/${idioma}/caminho/` para cada idioma do build. O B deve declarar a URL como literal completo
+  ou nesse formato (só o idioma dinâmico; `SITE_URL` literal no mesmo arquivo). Testei o `links.ts` do B
+  (passa, incluindo `/en/guides/help/` e `/pt-br/guides/help/`) e casos errados de propósito.
+- `docs.yml` roda também quando `apps/web/src/lib/links.ts` muda. Exceção para link de terceiro em
+  `*.github.io`: `site-url-ignore` na mesma linha.

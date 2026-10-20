@@ -17,7 +17,7 @@
 // Sai com código 1 se houver link quebrado.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { ROOT, readSiteConfig } from './site-config.mjs';
 
@@ -140,28 +140,70 @@ if (!haveDist) {
 }
 const absFiles = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], { cwd: ROOT, encoding: 'utf8' })
   .split('\n')
-  .filter((f) => f && /\.(md|mdx|ya?ml)$/.test(f) && !SKIP.some((re) => re.test(f)) && existsSync(path.join(ROOT, f)));
+  // Markdown/YAML do repositório e o código TS do painel que monta links para o site
+  // (apps/web/src, fora dos testes).
+  .filter(
+    (f) =>
+      f &&
+      (/\.(md|mdx|ya?ml)$/.test(f) || (/^apps\/web\/src\/.*\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))) &&
+      !SKIP.some((re) => re.test(f)) &&
+      existsSync(path.join(ROOT, f)),
+  );
+const SITE_ORIGIN = new URL(SITE.origin).origin;
+// Idiomas publicados = pastas de primeiro nível do build com index.html (en, pt-br…).
+const LANGS = haveDist
+  ? readdirSync(DIST).filter((d) => /^[a-z]{2}(-[a-z]{2})?$/.test(d) && existsSync(path.join(DIST, d, 'index.html')))
+  : [];
 let absCount = 0;
+
+// Confere uma URL já interpretada: origem + caminho normalizados (host em maiúsculas ou :443 também valem).
+function checkSiteUrl(file, line, shown, u) {
+  if (u.origin !== SITE_ORIGIN) return;
+  if (u.pathname !== SITE.basePath && !u.pathname.startsWith(`${SITE.basePath}/`)) return;
+  absCount++;
+  if (!haveDist) return;
+  const route = decodeURIComponent(u.pathname.slice(SITE.basePath.length)).replace(/^\//, '');
+  const hash = decodeURIComponent(u.hash.slice(1));
+  if (route !== '' && !route.endsWith('/')) {
+    report(file, line, `URL do site sem barra final (${shown}); o site usa trailingSlash: 'always'`);
+    return;
+  }
+  const html = path.join(DIST, route, 'index.html');
+  if (!existsSync(html)) report(file, line, `URL do site sem rota no build (${shown})`);
+  else if (hash && !distIds(html).has(hash)) report(file, line, `URL do site com âncora inexistente no build (${shown})`);
+}
+
 for (const file of absFiles) {
   readFileSync(path.join(ROOT, file), 'utf8')
     .split('\n')
     .forEach((text, i) => {
-      for (const m of text.matchAll(/https?:\/\/[A-Za-z0-9.-]+[^\s)>"'`\]<]*/g)) {
+      if (text.includes('site-url-ignore')) return; // exceção declarada na própria linha
+      for (const m of text.matchAll(/https?:\/\/[A-Za-z0-9.-]+(?::\d+)?[^\s)>"'`\]<]*/g)) {
         const url = m[0].replace(/[.,;:]+$/, '');
-        if (!url.startsWith(SITE.root)) continue;
-        absCount++;
-        if (!haveDist) continue;
-        const rest = url.slice(SITE.root.length);
-        const hashAt = rest.indexOf('#');
-        const route = (hashAt === -1 ? rest : rest.slice(0, hashAt)).split('?')[0];
-        const hash = hashAt === -1 ? '' : decodeURIComponent(rest.slice(hashAt + 1));
-        if (route !== '' && !route.endsWith('/')) {
-          report(file, i + 1, `URL do site sem barra final (${url}); o site usa trailingSlash: 'always'`);
+        let u;
+        try {
+          u = new URL(url);
+        } catch {
           continue;
         }
-        const html = path.join(DIST, route, 'index.html');
-        if (!existsSync(html)) report(file, i + 1, `URL do site sem rota no build (${url})`);
-        else if (hash && !distIds(html).has(hash)) report(file, i + 1, `URL do site com âncora inexistente no build (${url})`);
+        checkSiteUrl(file, i + 1, url, u);
+      }
+      // Código TS que monta o link por concatenação: `${SITE_URL}/${idioma}/guides/help/`.
+      // Só o idioma pode ser dinâmico; o resto do caminho tem de ser literal. Cada idioma
+      // publicado é expandido e conferido contra o build.
+      if (!file.endsWith('.ts') && !file.endsWith('.tsx')) return;
+      for (const m of text.matchAll(/\$\{SITE_URL\}(\/[^`"']*)/g)) {
+        const tail = m[1];
+        const lang = /^\/\$\{[^}]*\}(\/.*)$/.exec(tail);
+        const literal = lang ? lang[1] : tail;
+        if (/\$\{/.test(literal)) {
+          report(file, i + 1, `link do site com mais de um trecho dinâmico (${m[0]}); só o idioma pode ser dinâmico`);
+          continue;
+        }
+        for (const l of lang ? LANGS : ['']) {
+          const route = lang ? `/${l}${literal}` : literal;
+          checkSiteUrl(file, i + 1, `${SITE.origin}${SITE.basePath}${route}`, new URL(`${SITE.origin}${SITE.basePath}${route}`));
+        }
       }
     });
 }

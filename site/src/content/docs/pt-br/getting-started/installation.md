@@ -1194,12 +1194,13 @@ sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
 
 No primeiro acesso, o Dashboard mostra o roteiro **Deixe o painel pronto**, com o que ainda falta
 configurar (proteções, verificação em duas etapas, domínio do painel, e-mail, notificações e
-backups). Os passos estão no [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md#depois-de-instalar).
+backups). A [Parte 2](complete-guide.md) percorre cada um deles, em ordem.
 
 Para publicar um projeto: cadastre o projeto, aponte o DNS, e o painel cuida do build, do proxy e
 do SSL. Guia de produção em [production.md](../guides/production.md). Comandos do dia a dia, pasta dos
 projetos e troca de porta ou de usuário do terminal estão em [Operação](../guides/operations.md).
 
 > [!TIP]
-> **Próximo: [Parte 2 — Configurar](complete-guide.md).** Com o assistente concluído, siga para a segurança
-> (hardening), a verificação em duas etapas, o domínio, o e-mail, as notificações, os backups e o primeiro projeto.
+> **Próximo: [Parte 2 — Configurar](complete-guide.md).** Com o link do assistente em mãos, siga para a Parte 2,
+> que começa no assistente e continua com a segurança (hardening), a verificação em duas etapas, o domínio,
+> o e-mail, as notificações, os backups e o primeiro projeto.

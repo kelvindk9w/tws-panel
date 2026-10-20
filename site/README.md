@@ -87,7 +87,7 @@ those are (`node scripts/check-site-url.mjs --list` prints the current list):
 
 - `README.md` and `README.pt-BR.md` (the links to the guides);
 - `.github/ISSUE_TEMPLATE/config.yml` and `.github/ISSUE_TEMPLATE/question.yml`;
-- the panel code, if it links to the help page (not checked by hand: the script scans `.ts`/`.tsx` too).
+- `apps/web/src/lib/links.ts`, the panel module that holds the links to the site (see below).
 
 The `/tws-panel/…` paths in the front matter of `index.md` (hero buttons) also hold the `base`.
 
@@ -103,6 +103,18 @@ pnpm docs:build && pnpm docs:links # every absolute URL must exist as a route in
 host, so the old address is caught after the move. `docs:links` (run it after the build, with
 `--require-dist` in CI) opens `site/dist` and fails when a README or template links to a route or
 an anchor that does not exist. Both run in the `docs` workflow.
+
+URLs are parsed with `new URL()`, so an upper-case host or a `:443` port is compared as the same
+address. A third-party `*.github.io` link fails `docs:site-url`; to allow one, write `site-url-ignore`
+on the same line (in Markdown, inside an HTML comment: `<!-- site-url-ignore -->`).
+
+**Links built in the panel code.** `docs:links` also reads the non-test `.ts`/`.tsx` files of
+`apps/web/src` (the `docs` workflow also runs when `apps/web/src/lib/links.ts` changes). Write the
+site address there as a complete literal (`https://…`), or as a template that starts with the
+`SITE_URL` constant defined in the same file and whose only dynamic part is the language:
+``${SITE_URL}/${language}/guides/help/``. The check expands the template for each language in
+`site/dist` and fails if a route or anchor is missing, or if the path has any other `${…}`. Do
+not build the path by concatenating strings in other ways: the check cannot see it.
 
 ## Help and feedback page
 

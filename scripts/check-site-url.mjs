@@ -7,6 +7,10 @@
 // `.github.io` (o endereço antigo, depois de uma troca de domínio, continua sendo pego).
 // Links para github.com/<repo> não são endereço do site.
 //
+// Atenção: um link de terceiros em *.github.io (outro projeto hospedado no GitHub Pages) também
+// reprova. Para declarar uma exceção, escreva `site-url-ignore` na mesma linha (em Markdown, num
+// comentário HTML: `<!-- site-url-ignore -->`). O `check-doc-links.mjs` respeita a mesma marca.
+//
 // Uso: node scripts/check-site-url.mjs          (ou: pnpm docs:site-url)
 //      node scripts/check-site-url.mjs --list   (lista os arquivos que têm o endereço absoluto)
 // Sai com código 1 se algum endereço não corresponder à configuração.
@@ -35,6 +39,7 @@ for (const file of files) {
   if (file === cfg.config) continue; // é a fonte
   const lines = readFileSync(path.join(ROOT, file), 'utf8').split('\n');
   lines.forEach((text, i) => {
+    if (text.includes('site-url-ignore')) return; // exceção declarada na própria linha
     for (const m of text.matchAll(URL_RE)) {
       const url = m[0].replace(/[.,;:]+$/, '');
       let u;

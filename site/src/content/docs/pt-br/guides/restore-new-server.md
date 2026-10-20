@@ -31,7 +31,7 @@ um servidor que você não tem mais.
 |---|---|---|
 | **Senha dos backups** | O kit de recuperação que você baixou em **Configurações → Backups → Criptografia da cópia externa**. O painel também mostra a senha em **Ver a senha**, mas só num painel em que você ainda consegue entrar. | Não há atalho: sem a senha, ninguém abre as cópias externas. |
 | **Endpoint e bucket do armazenamento** | O kit de recuperação lista o bucket e o endpoint. | No Cloudflare: R2 → seu bucket → Configurações → S3 API. |
-| **Chaves de acesso do armazenamento** (ID da chave de acesso e Chave de acesso secreta) | Você as viu uma única vez, ao criar o token no Cloudflare. **Elas não estão no kit.** | Crie um novo token de API do R2 para o mesmo bucket ([Guia completo, Etapa 8.1](../getting-started/complete-guide.md#etapa-8)). Os arquivos antigos continuam legíveis. As chaves que você informar no passo 3 continuam valendo depois de restaurar o painel pela tela (veja o passo 5). |
+| **Chaves de acesso do armazenamento** (ID da chave de acesso e Chave de acesso secreta) | Você as viu uma única vez, ao criar o token no Cloudflare. **Elas não estão no kit.** | Crie um novo token de API do R2 para o mesmo bucket ([Guia passo a passo, Parte 2, Etapa 6.1](../getting-started/complete-guide.md#etapa-6)). Os arquivos antigos continuam legíveis. As chaves que você informar no passo 3 continuam valendo depois de restaurar o painel pela tela (veja o passo 5). |
 | **Acesso ao domínio** | Seu provedor de DNS ou o registrador. | Recupere o acesso com o registrador. |
 | **Acesso ao provedor** | O painel do provedor da VPS nova (para definir o PTR e liberar a porta 25). | — |
 
