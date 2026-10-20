@@ -2,11 +2,17 @@
 title: "Do zero ao painel pronto"
 description: "Um roteiro único, em ordem, da VPS nova ao painel configurado: segurança, domínio, e-mail, notificações, backups, primeiro projeto e teste de restauração."
 sidebar:
-  label: "Guia completo"
+  label: "Comece aqui: guia completo"
 ---
 
 Um roteiro só, em ordem, da VPS contratada até o painel configurado por completo: segurança,
 domínio, fuso, e-mail, notificações, backups, o primeiro projeto no ar e uma restauração de teste.
+
+> [!TIP]
+> **Qual guia eu uso?** Este é o **caminho principal para a primeira instalação**: cobre tudo, em
+> ordem. Na Etapa 2 (instalar na VPS) ele resume os comandos e aponta para o
+> [guia de instalação](installation.md), que explica cada um dos 8 passos em detalhe. Está mudando
+> para um servidor novo que já tinha o painel? Use [Restaurar numa VPS nova](../guides/restore-new-server.md).
 
 > [!NOTE]
 > **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, detalhes dos passos do roteiro e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
@@ -86,6 +92,11 @@ exemplos deste guia usam o Cloudflare.
 <a id="etapa-2"></a>
 
 ## Etapa 2 — Instalar o painel na VPS
+
+> [!WARNING]
+> **Reinstalou o sistema da VPS, ou reinstalou para testar de novo, e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da VPS), conecte de novo e responda `yes`. [Mensagem completa e detalhes](installation.md#host-identification-changed).
+>
+> **Não reinstalou nem trocou nada e o aviso apareceu do nada?** Não continue e não rode esse comando. Confira se o IP é o certo e veja no painel do provedor se houve reinstalação, modo de resgate ou troca de IP. O aviso pode ser o único sinal de que outra máquina está respondendo naquele endereço.
 
 **O que fazer:** criar o seu usuário na VPS, instalar a sua chave SSH, clonar o painel em
 `/opt/tws-panel` e rodar o instalador. Os comandos essenciais, na ordem (troque `SEU_IP` e

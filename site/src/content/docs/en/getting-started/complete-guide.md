@@ -2,11 +2,17 @@
 title: "From zero to a fully set-up panel"
 description: "One ordered walkthrough from a new VPS to a configured panel: security, domain, email, notifications, backups, first project and a test restore."
 sidebar:
-  label: "Complete guide"
+  label: "Start here: complete guide"
 ---
 
 A single roadmap, in order, from the VPS you just bought to a fully configured panel: security,
 domain, time zone, email, notifications, backups, your first project live, and a test restore.
+
+> [!TIP]
+> **Which guide do I use?** This is the **main path for a first installation**: it covers
+> everything, in order. For Step 2 (installing on the VPS) it summarizes the commands and points
+> to the [installation guide](installation.md), which explains each of the 8 steps in detail. Moving to a
+> server that already had the panel? Use [Restore on a new VPS](../guides/restore-new-server.md).
 
 > [!NOTE]
 > **Interface language.** The panel is available in English and Portuguese ([how to choose](#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, mail server status and DNS checklist notes, certificate errors, alerts and audit details, backup records, the details of the roadmap steps and many error messages. Whenever this page quotes one of them, it says so.
@@ -85,6 +91,11 @@ Cloudflare). The examples in this guide use Cloudflare.
 <a id="etapa-2"></a>
 
 ## Step 2 — Install the panel on the VPS
+
+> [!WARNING]
+> **Reinstalled the VPS operating system, or reinstalled it to test again, and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is expected: the VPS now has a new identity. On your computer, run `ssh-keygen -R YOUR_IP` (with the VPS IP), connect again and answer `yes`. [Full message and details](installation.md#host-identification-changed).
+>
+> **Did not reinstall or switch anything, and the warning appeared out of nowhere?** Do not continue and do not run that command. Check that the IP is the right one and look in the provider's dashboard for a reinstall, a rescue mode or a changed IP. The warning may be the only sign that another machine is answering at that address.
 
 **What to do:** create your user on the VPS, install your SSH key, clone the panel into
 `/opt/tws-panel`, and run the installer. The essential commands, in order (replace `YOUR_IP` with
