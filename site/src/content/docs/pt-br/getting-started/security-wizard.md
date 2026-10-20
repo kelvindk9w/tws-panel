@@ -7,10 +7,10 @@ sidebar:
 
 Como conduzir a etapa **Segurança** do assistente de configuração (o [Passo 8](installation.md#passo-8)
 da instalação). As mesmas fases ficam disponíveis depois da instalação, em
-**Segurança → Proteções** (`/security/hardening`), para revisar, simular ou reaplicar.
+**Segurança → Verificar e aplicar proteções** (`/security/hardening`), para revisar, simular ou reaplicar.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Os resultados da verificação, o plano e o log do hardening são escritos pelo servidor e continuam em português mesmo com a interface em inglês.
 
 ## Como funciona
 

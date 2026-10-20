@@ -12,7 +12,7 @@ sidebar:
 > container descartável, não a VPS. Inútil e enganoso.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês (alertas, detalhes da auditoria, resultados das verificações de saúde e de segurança e muitas mensagens de erro).
 
 ## 1. Arquitetura
 

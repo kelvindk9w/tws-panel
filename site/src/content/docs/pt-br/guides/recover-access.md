@@ -9,7 +9,7 @@ O hardening fecha portas de propósito, e isso corta caminhos de volta. Esta se�
 você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto para ele.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês (alertas, detalhes da auditoria, resultados das verificações de saúde e de segurança e muitas mensagens de erro).
 
 | O que você perdeu | O que ainda funciona | Caminho de volta |
 |---|---|---|
@@ -45,7 +45,8 @@ O segundo mostra o setup token de novo, para você reabrir o wizard e criar uma 
 
 Ainda entra no painel e quer refazer o assistente? Em **Setup** (com o setup concluído) há
 **Recomeçar do zero**: pede a senha atual, o código da verificação em duas etapas e que você digite
-`recomeçar`; apaga a conta e as sessões e já abre o assistente com um token novo. Sem a
+a palavra de confirmação (`recomeçar` com a interface em português, `restart` com a interface em
+inglês; `recomeçar` vale nos dois) antes de clicar em **Apagar e recomeçar**; apaga a conta e as sessões e já abre o assistente com um token novo. Sem a
 verificação em duas etapas ativa, o painel não oferece esse botão — use o script acima.
 
 **Seus projetos, domínios, e-mail e histórico de segurança não são tocados.**

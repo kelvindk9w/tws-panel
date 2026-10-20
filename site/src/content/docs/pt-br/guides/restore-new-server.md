@@ -11,7 +11,7 @@ os projetos e o e-mail de volta numa VPS nova. Ele depende da **cópia externa**
 junto com ela.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: registros de backup, o texto do kit de recuperação, avisos do servidor de e-mail e muitas mensagens de erro. Quando esta página cita uma delas, avisa. A palavra que você digita para confirmar uma restauração depende do idioma da interface (passos 5 e 8).
 
 A maior parte do tempo vai em esperar o DNS e a nova publicação dos projetos. Se a VPS antiga ainda
 funciona, mantenha-a ligada até o último passo.
@@ -112,7 +112,7 @@ não abre os backups, confira o kit de novo.
 1. No passo 3, clique em **Ver o que existe no armazenamento**.
 2. No bloco **Painel**, clique em **Restaurar o painel**.
 3. Escolha a data do **último backup da VPS antiga**, a que você anotou no passo 2. Não presuma que
-   a primeira data da lista é a certa. Confirme digitando `painel`.
+   a primeira data da lista é a certa. Confirme digitando a palavra que a tela mostra: `painel` com a interface em português, `panel` com a interface em inglês.
 4. Espere. O painel reinicia sozinho.
 
 **O que conferir:** abra de novo o endereço da VPS nova (`https://203-0-113-10.sslip.io`, com o IP
@@ -221,9 +221,9 @@ projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7
 
 ### 8. Restaure o e-mail por último
 
-1. No cartão, clique em **Restaurar o e-mail** e confirme digitando `e-mail`. Se a restauração
+1. No cartão, clique em **Restaurar o e-mail** e confirme digitando a palavra que a tela mostra: `e-mail` com a interface em português, `email` com a interface em inglês. Se a restauração
    terminar com o aviso "O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e
-   clique em Iniciar", abra **E-mail** e clique em **Iniciar servidor**. Ele sobe com os dados
+   clique em Iniciar" (aviso do servidor, sempre em português), abra **E-mail** e clique em **Iniciar servidor**. Ele sobe com os dados
    restaurados.
 2. Atualize o DNS (página **E-mail** → o domínio → **Checklist DNS**):
    - o registro **A** de `mail.envio.example.com` para o IP novo;
@@ -233,7 +233,7 @@ projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7
 4. Confira que a porta 25 de saída está liberada ([Guia completo, Etapa 6.1](../getting-started/complete-guide.md#etapa-6)).
 
 **O que conferir:** clique em **Verificar agora** até chegar a **6/6 OK**, envie um e-mail de teste
-(Etapa 6.7 do guia completo) e veja **válido** no cartão do certificado do e-mail. Envie devagar no
+(Etapa 6.7 do guia completo) e veja **Válido** no cartão do certificado do e-mail. Envie devagar no
 começo: o IP novo ainda não tem reputação.
 
 ## Conferências finais
