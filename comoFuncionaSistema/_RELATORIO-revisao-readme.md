@@ -96,8 +96,26 @@ segue o padrão de projetos maduros. Nada de selo, número, comparação ou depo
 | off-site copy | cópia externa |
 | beta | beta |
 
-Padrão de títulos: sentence case. Nomes de tela em inglês trazem o nome em português em itálico na
-primeira ocorrência relevante, seguindo a regra do CONTRIBUTING.
+Padrão de títulos: sentence case. Nomes de tela e botões no README.md seguem a regra do CONTRIBUTING
+(e o `features.md`): rótulo real da interface primeiro, tradução entre parênteses na primeira menção
+(`**Certificados** (Certificates)`, `"Tentar emitir agora" (Try to issue now)`). Os rótulos foram
+conferidos em `apps/web/src`. Uma primeira versão minha usava o inglês primeiro; foi corrigida na
+revisão. Observação: "Por que falhou" não é uma tela e sim uma seção que o deploy escreve no log
+(`packages/deploy/src/engine.ts`); o texto agora diz isso.
+
+## Correções da segunda rodada (revisor)
+
+- Guardrails: SECURITY (EN/pt-BR) e README agora dizem que a maioria dos bloqueios só passa com
+  override explícito e auditado e que as 4 regras de isolamento do painel (`HARD_RULES` em
+  `compose-model.ts`) não podem ser contornadas.
+- CONTRIBUTING (EN/pt-BR): descrição do CI inclui o job `image-scan` (Trivy, falha com CVE CRITICAL
+  com correção disponível); o fluxo de PR manda abrir o PR contra `dev` (a `main` é a branch padrão
+  e só recebe código validado; o `ci.yml` roda em `main` e `dev`).
+- Ajustes de inglês (hooks, pre-commit, "should run as", "This avoids rework", "lightweight secret
+  scan", "Kelvin Medeiros (CEO)", "Outgoing mail") e de português ("mascaramento", "de propósito",
+  "restauração testada", "inclui hooks").
+- Pendência sua: o HTTPS de `tws.tec.br` apresentou erro de certificado na verificação do revisor.
+  É do servidor do site da empresa, não do repositório; o link foi mantido como está.
 
 ## Verificação
 
