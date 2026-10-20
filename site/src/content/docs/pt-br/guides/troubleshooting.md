@@ -35,7 +35,7 @@ Gmail e Outlook).
 **Diagnóstico (nesta ordem):**
 1. Envie para [mail-tester.com](https://www.mail-tester.com) — ele aponta exatamente o que
    está faltando. Alvo: ≥ 9/10.
-2. Abra o **checklist DNS** do domínio no painel e clique em "verificar": A, MX, SPF, DKIM e
+2. Abra o **checklist DNS** do domínio no painel e clique em **Verificar agora**: A, MX, SPF, DKIM e
    DMARC precisam estar ✅.
 3. **PTR amarelo** (sem nome reverso válido) é a causa nº 1: só o provedor da VPS configura. O
    card do PTR diz onde trocar (Contabo, Hetzner, Vultr) ou gera o texto pronto do chamado.
@@ -73,11 +73,12 @@ instala e renova o certificado sozinho.
 **Causa:** o registro A do domínio ainda não aponta para a VPS (ou a propagação não terminou).
 
 **Solução:**
-1. Use o botão **"verificar DNS"** no painel antes de emitir o certificado;
+1. Use o botão **Verificar DNS** no painel antes de emitir o certificado;
 2. Confira manualmente: `dig +short seudominio.com` deve retornar o IP da VPS;
 3. Se acabou de criar o registro, aguarde a propagação (minutos a horas, dependendo do TTL);
 4. Se houver proxy na frente (ex.: Cloudflare com nuvem laranja), desative-o para a emissão
-   inicial ou use o modo DNS-01 — o Caddy central espera conexão direta nas portas 80/443;
+   inicial. O painel não tem modo DNS-01: o Caddy central espera conexão direta nas portas 80/443.
+   Depois que o certificado sair, use **Tentar emitir agora** na página **Certificados** se ele ainda estiver pendente;
 5. Verifique se o UFW/liberação do provedor permite 80 e 443.
 
 ### Domínio `.localhost` não abre

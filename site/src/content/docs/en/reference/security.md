@@ -25,10 +25,11 @@ sensitive actions.
 - **Deploy guardrails:** rules in 3 levels (`block`, `warn`, `info`) — database port exposed
   on the host, weak credentials, dev service in production, secret committed to the code and
   `:latest` tag. A block only passes with an explicit, audited override. The compose file is also
-  checked the way Docker actually runs it (after merge, include, extends and interpolation),
-  against a list of what is allowed: privileged containers, `docker.sock`, binds outside the
-  project folder and the panel's own networks, images and names are refused, and these last rules
-  have no override.
+  checked the way Docker actually runs it (after merge, include, extends and interpolation).
+  Privileged containers, `docker.sock` and binds outside the project folder are blocked, but they
+  accept the same audited override. Only the rules that protect the panel itself have no override:
+  the panel's own images, networks, reserved names and resources cannot be used or taken over by a
+  project.
 - **Isolation between hosted projects and the panel:** separate Docker networks for the proxy,
   the panel, mail administration and mail delivery; the panel's images are pinned by digest; the
   hosted repository's git hooks and configuration never run with the panel's privileges.
@@ -41,7 +42,7 @@ sensitive actions.
 
 ## What it requires
 
-**Be upfront about what this requires.** A PaaS needs privileged access to the host — there is no
+A PaaS needs privileged access to the host — there is no
 way to create containers and configure a firewall without it. Two consequences you should know
 before installing:
 

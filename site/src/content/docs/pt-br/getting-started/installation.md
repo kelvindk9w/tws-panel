@@ -1039,17 +1039,17 @@ leva o **setup token** no link; se precisar, o token também aparece em destaque
 o wizard:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Assistente — https://SEU-IP.sslip.io/?token=…              │
-├─────────────────────────────────────────────────────────────┤
-│  1. Boas-vindas      → valida o setup token e libera o      │
-│                        terminal ao vivo do servidor         │
-│  2. Saúde da máquina → CPU, RAM, disco, rede — os checks    │
-│                        rodam AO VIVO no terminal embutido   │
-│  3. Segurança        → scan Lynis → plano → hardening       │
-│                        (com rollback automático em 5 min)   │
-│  4. Conta admin      → usuário + senha forte do painel      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  Assistente — https://SEU-IP.sslip.io/?token=…                       │
+├──────────────────────────────────────────────────────────────────────┤
+│  1. Boas-vindas e token    → valida o setup token e libera o         │
+│                              terminal ao vivo do servidor            │
+│  2. Saúde da máquina       → CPU, RAM, disco, rede — os checks       │
+│                              rodam AO VIVO no terminal embutido      │
+│  3. Segurança              → scan Lynis → plano → hardening          │
+│                              (com rollback automático em 5 min)      │
+│  4. Conta de administrador → usuário + senha forte do painel         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 A etapa **Segurança** é a que exige mais atenção: ela mexe em como você entra na VPS. Antes de

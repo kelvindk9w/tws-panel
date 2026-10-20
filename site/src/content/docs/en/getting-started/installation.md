@@ -1046,24 +1046,24 @@ carries the **setup token** in the link; if you need it, the token also appears 
 the wizard. The screen labels are shown in Portuguese, with the English meaning in the list after the diagram:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Assistente — https://YOUR-IP.sslip.io/?token=…              │
-├─────────────────────────────────────────────────────────────┤
-│  1. Boas-vindas      → valida o setup token e libera o      │
-│                        terminal ao vivo do servidor         │
-│  2. Saúde da máquina → CPU, RAM, disco, rede — os checks    │
-│                        rodam AO VIVO no terminal embutido   │
-│  3. Segurança        → scan Lynis → plano → hardening       │
-│                        (com rollback automático em 5 min)   │
-│  4. Conta admin      → usuário + senha forte do painel      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  Assistente — https://YOUR-IP.sslip.io/?token=…                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  1. Boas-vindas e token    → valida o setup token e libera o         │
+│                              terminal ao vivo do servidor            │
+│  2. Saúde da máquina       → CPU, RAM, disco, rede — os checks       │
+│                              rodam AO VIVO no terminal embutido      │
+│  3. Segurança              → scan Lynis → plano → hardening          │
+│                              (com rollback automático em 5 min)      │
+│  4. Conta de administrador → usuário + senha forte do painel         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Assistente** (Wizard)
-- **1. Boas-vindas** (Welcome) — validates the setup token and unlocks the server's live terminal
+- **1. Boas-vindas e token** (Welcome and token) — validates the setup token and unlocks the server's live terminal
 - **2. Saúde da máquina** (Machine health) — CPU, RAM, disk, network; the checks run LIVE in the embedded terminal
 - **3. Segurança** (Security) — Lynis scan → plan → hardening (with automatic rollback in 5 min)
-- **4. Conta admin** (Admin account) — the panel's username + strong password
+- **4. Conta de administrador** (Administrator account) — the panel's username + strong password
 
 The **Segurança** (Security) step is the one that demands the most attention: it changes how you log in to the VPS. Before
 applying the phases, read the [Security wizard](security-wizard.md).

@@ -127,11 +127,11 @@ Siga esta sequência em uma VPS nova — cada passo depende do anterior:
                         painel.seudominio.com para a VPS, verifique o DNS e
                         abra o painel pelo endereço novo.
 4. PROJETOS           → cadastre e faça deploy dos projetos; para cada domínio,
-                        use o botão "verificar DNS" antes de emitir o certificado.
+                        use o botão **Verificar DNS** antes de emitir o certificado.
 5. E-MAIL             → libere a porta 25 no provedor → inicie o servidor Stalwart
                         pelo painel → adicione o domínio de e-mail.
 6. VERIFICAR DNS      → crie os registros do checklist (A, MX, SPF, DKIM, DMARC)
-                        no seu provedor de DNS e clique em "verificar" até fechar ✅.
+                        no seu provedor de DNS e clique em **Verificar agora** até fechar ✅.
                         Ajuste o PTR no provedor em paralelo (pode demorar).
 7. MONITORAMENTO      → crie o baseline de segurança (POST /api/security/baseline
                         ou pela UI em Segurança) e confirme o scan recorrente ativo.

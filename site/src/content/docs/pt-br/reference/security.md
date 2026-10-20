@@ -25,10 +25,11 @@ das ações sensíveis.
 - **Guardrails de deploy:** regras em 3 níveis (`block`, `warn`, `info`) — porta de banco exposta
   no host, credenciais fracas, serviço de dev em produção, secret comitado no código e tag
   `:latest`. Um bloqueio só passa com override explícito e auditado. O compose também é conferido
-  do jeito que o Docker de fato o executa (depois de merge, include, extends e interpolação),
-  contra uma lista do que é permitido: container privilegiado, `docker.sock`, bind fora da pasta
-  do projeto e redes, imagens e nomes do próprio painel são recusados, e estas últimas regras não
-  têm override.
+  do jeito que o Docker de fato o executa (depois de merge, include, extends e interpolação).
+  Container privilegiado, `docker.sock` e bind fora da pasta do projeto são bloqueados, mas aceitam
+  o mesmo override auditado. Só as regras que protegem o próprio painel não têm override: as
+  imagens, redes, nomes reservados e recursos do painel não podem ser usados nem tomados por um
+  projeto.
 - **Isolamento entre projeto hospedado e painel:** redes Docker separadas para o proxy, o painel,
   a administração do e-mail e a entrega de e-mail; as imagens do painel são fixadas por digest; os
   hooks e a configuração do git do repositório hospedado nunca rodam com os privilégios do painel.
@@ -41,7 +42,7 @@ das ações sensíveis.
 
 ## O que ele exige
 
-**Seja franco sobre o que isto exige.** Um PaaS precisa de acesso privilegiado ao host — não há
+Um PaaS precisa de acesso privilegiado ao host — não há
 como criar containers e configurar firewall sem ele. Duas consequências que você deve conhecer
 antes de instalar:
 

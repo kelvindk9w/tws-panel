@@ -152,7 +152,7 @@ seus projetos enviarem mensagens e para caixas como `contato@`.
 
 **Webmail.** Com um clique, `https://mail.<domínio>/` passa a abrir um webmail (**Roundcube**) em
 português para ler, responder e enviar como a própria caixa. A sessão termina depois de 10
-minutos sem uso, e 10 logins errados vindos do mesmo endereço bloqueiam esse endereço por 1 hora.
+minutos sem uso, e 10 logins errados vindos do mesmo IP em 10 minutos bloqueiam esse IP por 1 hora, só no webmail.
 
 **Envios** (`/mail/envios`): o que o servidor de e-mail está fazendo.
 

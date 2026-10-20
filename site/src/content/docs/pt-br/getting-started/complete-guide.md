@@ -149,7 +149,7 @@ fechadas no firewall do provedor. Veja os erros comuns no [Passo 8](installation
 
 **O que fazer:** abra no navegador o link do banner. O assistente tem quatro etapas:
 
-1. **Boas-vindas:** valida o setup token (já vem no link) e libera o terminal do servidor.
+1. **Boas-vindas e token:** valida o setup token (já vem no link) e libera o terminal do servidor.
 2. **Saúde da máquina:** CPU, memória, disco e rede, conferidos ao vivo no terminal embutido.
    Esta etapa também mostra o fuso horário da VPS (veja a [Etapa 5](#etapa-5)).
 3. **Segurança:** varredura (Lynis), plano e hardening em 8 fases. Explicada logo abaixo.

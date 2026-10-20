@@ -153,7 +153,7 @@ ports 80 and 443 closed in the provider's firewall. See the common errors in
 
 **What to do:** open the banner link in your browser. The wizard has four steps:
 
-1. **Boas-vindas** (Welcome): validates the setup token (already in the link) and unlocks the
+1. **Boas-vindas e token** (Welcome and token): validates the setup token (already in the link) and unlocks the
    server terminal.
 2. **Saúde da máquina** (Machine health): CPU, memory, disk, and network, checked live in the
    built-in terminal. This step also shows the VPS time zone (see [Step 5](#etapa-5)).

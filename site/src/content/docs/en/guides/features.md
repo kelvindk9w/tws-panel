@@ -152,7 +152,7 @@ your projects can send messages and for mailboxes such as `contato@`.
 
 **Webmail.** With one click, `https://mail.<domain>/` starts opening a webmail (**Roundcube**) in
 Portuguese to read, reply and send as the mailbox itself. The session ends after 10
-minutes of inactivity, and 10 failed logins from the same address block that address for 1 hour.
+minutes of inactivity, and 10 failed logins from the same IP within 10 minutes block that IP for 1 hour, in the webmail only.
 
 **Envios** (Sends) (`/mail/envios`): what the mail server is doing.
 
