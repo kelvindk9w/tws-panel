@@ -38,3 +38,11 @@ Em `apps/server/tests/backup-service.test.ts`, bloco "lote 9": só local por dia
 - Trocar de bucket não zera `lastRemoteSentAt`: painel que já enviou ao bucket A e conecta o B com backups alheios não é segurado (já tinha conteúdo próprio).
 - E-mail com cópia externa concluída ainda conta como conteúdo próprio (decisão do lote 8, mantida), mesmo que o servidor de e-mail estivesse vazio.
 - Falha da conferência após o upload deixa o item sem `lastRemoteSentAt`: o agendado segue em pausa até 7 dias (lado seguro).
+
+## Revisão do lote 9 (veredito e correção)
+
+O revisor aprovou, exceto por um defeito, já corrigido: com `"targets": {"panel": null}` (ou `email: null`) no `backups.json`, a migração da carga lançava TypeError e derrubava o serviço de backups. Agora itens que não são objeto são ignorados, e a migração só roda quando `lastRemoteSentAt` nunca foi gravado (`undefined`); um `null` já gravado não é reescrito a partir de `lastRemoteVerifiedAt`. Dois testes de guarda na seção "migração", vistos falhar antes.
+
+Veredito sobre os riscos: troca de bucket sem zerar `lastRemoteSentAt` é risco aceito; e-mail iniciado cedo e backup manual com cópias alheias no bucket já estão descritos no guia.
+
+Os números de linha de `backup-service.ts` no `_i18n-servidor-fase2.tsv` foram recalculados (conferidos pelo texto); 8 referências de mensagens só dinâmicas (`${reasonOf(err)}` etc.) não puderam ser casadas pelo texto e seguem aproximadas.

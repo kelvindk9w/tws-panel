@@ -1556,6 +1556,27 @@ describe("restaurar o painel em outra VPS", () => {
         expect(panelKeys()).toHaveLength(2);
       });
 
+      it("itens nulos em targets (arquivo editado à mão) não derrubam a carga", async () => {
+        await installedWithLocalBackupsOnly();
+        await rewriteConfig((cfg) => {
+          cfg.targets.panel = null;
+          cfg.targets.email = null;
+        });
+        const st = await service.status();
+        expect(st.targets.find((t) => t.id === "panel")).toBeDefined();
+      });
+
+      it("lastRemoteSentAt já gravado como null não é migrado de novo a partir de lastRemoteVerifiedAt", async () => {
+        await installedWithLocalBackupsOnly();
+        await connectLaterWithForeignBackups();
+        await rewriteConfig((cfg) => {
+          cfg.targets.panel.lastRemoteSentAt = null;
+          cfg.targets.panel.lastRemoteVerifiedAt = new Date(2026, 9, 16).toISOString();
+        });
+        await tickAt(dayAt(18));
+        expect(panelKeys()).toEqual([OTHER]);
+      });
+
       it("arquivo sem nenhum dos campos do e-mail e do painel (muito antigo) carrega e segue a regra", async () => {
         await installedWithLocalBackupsOnly();
         await connectLaterWithForeignBackups();

@@ -613,7 +613,10 @@ export class BackupService {
       });
       // Instalação de antes de `lastRemoteSentAt`: quem já tinha enviado e conferido uma cópia externa continua
       // contando como tendo conteúdo próprio; quem só tinha cópia na VPS (ou nada) não.
-      for (const t of Object.values(this.config.targets)) t.lastRemoteSentAt ??= t.lastRemoteVerifiedAt ?? null;
+      for (const t of Object.values(this.config.targets)) {
+        if (typeof t !== "object" || t === null || t.lastRemoteSentAt !== undefined) continue;
+        t.lastRemoteSentAt = t.lastRemoteVerifiedAt ?? null;
+      }
       // Instalação de antes do "Padrão dos projetos": quem está como o painel
       // criava sozinho (ligado, 24 h, 2 e 5) segue o padrão; o resto ficou
       // assim porque alguém mudou, então é configuração própria.
