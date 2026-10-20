@@ -113,7 +113,7 @@ echo "PASTE_THE_NEW_PUBLIC_KEY_HERE" >> /home/YOUR_USER/.ssh/authorized_keys
 can't reach your user's folder without root — go on to path 2.)
 
 **2. Through the provider console** — browser access doesn't go through SSH, so the password
-sign-in restriction doesn't apply there. Sign in with your user and password, and run the same
+password sign-in restriction doesn't apply there. Sign in with your user and password, and run the same
 command (without the full path, since you're signed in as that user):
 
 ```bash

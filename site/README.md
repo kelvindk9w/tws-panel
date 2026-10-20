@@ -131,7 +131,8 @@ the one the interface shows, so a guide never needs a different word for the sam
 
 Where the Portuguese guides and the Portuguese interface differ today, the interface wins for
 labels (quote it as it is) and the guides keep their own wording in prose: the guides write
-"container", as the Portuguese dictionaries do; only `GLOSSARY.md` says "contêiner". The Portuguese interface calls two-factor authentication "Verificação em duas etapas",
+"container", as the Portuguese dictionaries do; only `GLOSSARY.md` says "contêiner".
+The Portuguese interface calls two-factor authentication "Verificação em duas etapas",
 while its glossary says "autenticação em dois fatores".
 
 Use "TWS Panel" for the product and "the panel" afterwards. Do not write "paas".
