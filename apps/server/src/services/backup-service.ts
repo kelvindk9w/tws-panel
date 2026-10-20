@@ -34,7 +34,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { copyFile, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, statfs, symlink, writeFile } from "node:fs/promises";
+import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, statfs, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   BACKUP_ALL_TARGETS,
@@ -93,6 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
+import { isInsideProjectsDir, isPanelArea } from "./projects-dir.js";
 import { loadJson, loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
@@ -2221,11 +2222,22 @@ export class BackupService {
   private async restoreProject(r: BackupRecord, project: Project, manifest: Manifest, content: string, redeploy: boolean): Promise<void> {
     const docker = this.opts.docker;
     let containers = await docker.projectContainers(project.slug);
+    let sourceFirst = false;
     if (containers.length === 0) {
       if (!redeploy) {
         throw new BackupFailure('O projeto não tem containers nesta VPS. Marque "Publicar do GitHub antes de restaurar" ou faça o deploy primeiro.');
       }
-      this.step(r, "Publicar o projeto do GitHub");
+      // Projeto que não vem do GitHub: o código tem de estar no lugar ANTES de
+      // publicar, porque a publicação lê dele (upload copia da pasta de
+      // origem; existing usa a própria pasta). Sem isso, a pasta da VPS antiga
+      // não existe aqui e a publicação falha.
+      const sourceItem = manifest.items.find((i) => i.type === "source");
+      if (sourceItem && project.ingestMode !== "git") {
+        this.step(r, "Pôr o código de volta");
+        await this.restoreSourceBeforeDeploy(r, project, path.join(content, sourceItem.file!));
+        sourceFirst = true;
+      }
+      this.step(r, project.ingestMode === "git" ? "Publicar o projeto do GitHub" : "Publicar o projeto");
       await this.opts.projects.redeploy(project.id);
       containers = await docker.projectContainers(project.slug);
       if (containers.length === 0) throw new BackupFailure("O deploy terminou, mas o projeto não tem containers.");
@@ -2253,6 +2265,7 @@ export class BackupService {
       for (const item of manifest.items) {
         const c = item.service ? byService.get(item.service) : undefined;
         if (item.type === "source") {
+          if (sourceFirst) continue;
           this.step(r, "Pôr o código de volta");
           await this.tar.extract(path.join(content, item.file!), path.dirname(this.opts.projects.srcDir(project)));
           continue;
@@ -2297,6 +2310,53 @@ export class BackupService {
       for (const c of order) {
         if (wasRunning.has(c.id) && stopped.has(c.id)) await docker.start(c.id).catch(() => r.warnings.push(`O container ${c.name} não ligou de novo.`));
       }
+    }
+  }
+
+  /**
+   * VPS nova, projeto de upload ou de pasta do servidor: devolve o código à
+   * pasta de origem do projeto (a que o cadastro aponta) para a publicação
+   * poder ler dele. Regras:
+   *  - só grava DENTRO da pasta de projetos e nunca na área do painel (.paas);
+   *  - o destino vem do cadastro do projeto, nunca do manifesto do backup;
+   *  - pasta que já existe com arquivos é do usuário: fica como está;
+   *  - o tar é aberto numa pasta privada e só então copiado (links não são
+   *    seguidos), e o que foi criado pela metade é desfeito.
+   */
+  private async restoreSourceBeforeDeploy(r: BackupRecord, project: Project, tarFile: string): Promise<void> {
+    const dest = path.resolve(project.source);
+    const root = this.opts.projectsDir;
+    if (!(await isInsideProjectsDir(root, dest))) {
+      throw new BackupFailure(
+        `A pasta do código deste projeto (${dest}) fica fora da pasta de projetos desta VPS (${root}); o painel não grava fora dela. Ponha o código dentro da pasta de projetos e cadastre o caminho de novo.`,
+      );
+    }
+    if (await isPanelArea(root, dest)) {
+      throw new BackupFailure(`A pasta do código deste projeto (${dest}) é a área do painel (a pasta de projetos ou ".paas"); o painel não restaura o código ali.`);
+    }
+    const info = await lstat(dest).catch(() => null);
+    if (info && !info.isDirectory()) throw new BackupFailure(`${dest} existe e não é uma pasta; o código não foi restaurado.`);
+    if (info && (await readdir(dest)).length > 0) {
+      r.warnings.push(`A pasta do código (${dest}) já existe nesta VPS e tem arquivos: ficou como está, nada foi sobrescrito.`);
+      return;
+    }
+    const name = path.basename(this.opts.projects.srcDir(project));
+    const tmp = await this.tempDir("codigo");
+    try {
+      await this.tar.extract(tarFile, tmp);
+      const from = path.join(tmp, name);
+      if (!(await lstat(from).catch(() => null))?.isDirectory()) {
+        throw new BackupFailure(`O backup não traz a pasta do código ("${name}").`);
+      }
+      await mkdir(path.dirname(dest), { recursive: true });
+      try {
+        await cp(from, dest, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+      } catch (err) {
+        if (!info) await rm(dest, { recursive: true, force: true });
+        throw new BackupFailure(`Não foi possível gravar o código em ${dest}: ${reasonOf(err)}. Confira se o painel tem permissão de escrita na pasta de projetos.`);
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
     }
   }
 
