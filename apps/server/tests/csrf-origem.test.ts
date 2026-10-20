@@ -48,7 +48,7 @@ describe("escrita vinda de outro site é recusada (M1)", () => {
   it.each([
     ["Sec-Fetch-Site: same-site (outro *.sslip.io)", { "sec-fetch-site": "same-site" }],
     ["Sec-Fetch-Site: cross-site", { "sec-fetch-site": "cross-site" }],
-    ["Origin de outro host", { origin: "https://6-6-6-6.sslip.io" }],
+    ["Origin de outro host", { origin: "https://198-51-100-6.sslip.io" }],
     ["Origin: null", { origin: "null" }],
     ["Origin malformado", { origin: "lixo" }],
     ["Sec-Fetch-Site de valor desconhecido", { "sec-fetch-site": "qualquer-coisa" }],

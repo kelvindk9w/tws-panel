@@ -20,7 +20,7 @@ function scanFixture(parcial: Partial<Checks>, extra: Partial<HealthScanResult> 
     disk: { mount: "/", totalBytes: 80 * 1024 ** 3, freeBytes: 40 * 1024 ** 3, usedBytes: 40 * 1024 ** 3 },
     network: {
       publicIp: "203.0.113.10",
-      interfaces: [{ name: "eth0", addresses: ["169.58.235.67/24"] }],
+      interfaces: [{ name: "eth0", addresses: ["203.0.113.67/24"] }],
       interfacesSource: "host",
     },
     virtualization: "KVM/QEMU",
@@ -114,7 +114,7 @@ describe("HealthStep (cards de saúde)", () => {
   it("interfaces lidas no host aparecem no card de Rede", async () => {
     mockScan(scanFixture({}));
     render(<HealthStep onNext={() => undefined} />);
-    expect(await screen.findByText("eth0: 169.58.235.67/24")).toBeInTheDocument();
+    expect(await screen.findByText("eth0: 203.0.113.67/24")).toBeInTheDocument();
     expect(screen.getByText("Reinicialização pendente: não")).toBeInTheDocument();
   });
 

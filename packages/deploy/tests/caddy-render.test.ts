@@ -135,15 +135,15 @@ describe("renderCaddyfile — painel com um ou dois endereços", () => {
 
 /**
  * Vários domínios no mesmo projeto (validação real, 30/09/2026): o endereço
- * automático sslip.io e um subdomínio próprio (devlink.tws.tec.br) servidos
+ * automático sslip.io e um subdomínio próprio (loja.example.com) servidos
  * juntos, cada um com o seu certificado.
  */
 describe("renderCaddyfile — domínios adicionais do projeto", () => {
   it("todos os domínios do projeto no mesmo bloco", () => {
     const out = renderCaddyfile([
-      { domain: "devlink.203-0-113-10.sslip.io", aliases: ["devlink.tws.tec.br", "www.devlink.com"], upstream: "devlink:80", websocket: false },
+      { domain: "devlink.203-0-113-10.sslip.io", aliases: ["loja.example.com", "www.devlink.com"], upstream: "devlink:80", websocket: false },
     ]);
-    expect(out).toContain("devlink.203-0-113-10.sslip.io, devlink.tws.tec.br, www.devlink.com {");
+    expect(out).toContain("devlink.203-0-113-10.sslip.io, loja.example.com, www.devlink.com {");
   });
 
   it("domínio adicional com caractere perigoso é descartado (o resto segue)", () => {

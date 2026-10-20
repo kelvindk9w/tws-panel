@@ -216,7 +216,7 @@ pendente e por quê — informação que não está no código nem no git log.
 - O cassino exige TLS e confere o certificado (nodemailer com `requireTLS`). Por isso o e-mail do painel precisa da correção do branch `feat/email-tls`.
 - No modo demonstração, ele recusa SMTP vazio, local ou Mailpit; `paas-stalwart` passa.
 - Próximo passo com o dono, depois do e-mail:
-  1. E-mail do servidor com um SUBDOMÍNIO dedicado. NÃO usar `tws.tec.br` puro: o MX desviaria o e-mail da empresa. Ainda não sabemos onde fica o e-mail de `tws.tec.br`; perguntado, sem resposta.
+  1. E-mail do servidor com um SUBDOMÍNIO dedicado. NÃO usar o domínio raiz da empresa: o MX desviaria o e-mail da empresa. Ainda não sabemos onde fica o e-mail do domínio da empresa; perguntado, sem resposta.
   2. E-mail do projeto.
   3. Variáveis restantes.
   4. Domínios: `SITE_HOST` como principal e `CARTEIRA_HOST` como adicional, porta em branco.

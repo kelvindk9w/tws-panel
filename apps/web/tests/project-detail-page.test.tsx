@@ -244,14 +244,14 @@ describe("ProjectDetailPage — visão geral", () => {
       https: {
         domains: [
           { domain: "devlink.203-0-113-10.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
-          { domain: "devlink.tws.tec.br", ok: false, issuer: null, validTo: null, error: "unable to verify" },
+          { domain: "loja.example.com", ok: false, issuer: null, validTo: null, error: "unable to verify" },
         ],
       },
-      email: { enabled: true, domain: "tws.tec.br", mailbox: "devlink@tws.tec.br", mailFrom: "devlink@tws.tec.br", env: {} },
+      email: { enabled: true, domain: "example.com", mailbox: "loja@example.com", mailFrom: "loja@example.com", env: {} },
       extra: (p) =>
         p === "/api/projects/p1"
           ? {
-              project: { ...PROJECT, aliases: ["devlink.tws.tec.br"] },
+              project: { ...PROJECT, aliases: ["loja.example.com"] },
               status: "running",
               containers: [],
               url: "https://devlink.203-0-113-10.sslip.io",
@@ -263,8 +263,8 @@ describe("ProjectDetailPage — visão geral", () => {
     const dominios = await screen.findByTestId("overview-domains");
     await waitFor(() => expect(dominios).toHaveTextContent(/Let's Encrypt/));
     expect(dominios).toHaveTextContent(/30\/12\/2026/);
-    expect(within(dominios).getByTestId("https-devlink.tws.tec.br")).toHaveTextContent(/ainda sem certificado válido/);
-    expect(await screen.findByTestId("overview-email")).toHaveTextContent("devlink@tws.tec.br");
+    expect(within(dominios).getByTestId("https-loja.example.com")).toHaveTextContent(/ainda sem certificado válido/);
+    expect(await screen.findByTestId("overview-email")).toHaveTextContent("loja@example.com");
   });
 
   it("e-mail não ativado: diz e leva à seção E-mail", async () => {

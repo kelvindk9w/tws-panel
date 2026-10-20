@@ -1,7 +1,7 @@
 /**
  * project-sections.test.tsx — seções Domínios e Variáveis do projeto.
  *
- * Domínios (validação real): para testar devlink.tws.tec.br era preciso
+ * Domínios (validação real): para testar loja.example.com era preciso
  * editar o domínio atual; agora o projeto tem vários domínios, com "Conectar
  * novo domínio" (registro de DNS exato + verificação), tornar principal e
  * remover. Variáveis: nome/valor, valores escondidos por padrão.
@@ -25,7 +25,7 @@ const PROJECT = {
   name: "devLink",
   slug: "devlink",
   domain: "devlink.203-0-113-10.sslip.io",
-  aliases: ["devlink.tws.tec.br"],
+  aliases: ["loja.example.com"],
   lastDeployStatus: "success",
   detection: { type: "dockerfile" },
 } as unknown as Project;
@@ -41,7 +41,7 @@ describe("ProjectDomainsCard", () => {
     const principal = screen.getByTestId("domain-devlink.203-0-113-10.sslip.io");
     expect(principal).toHaveTextContent(/principal/i);
     expect(within(principal).getByRole("link")).toHaveAttribute("href", "https://devlink.203-0-113-10.sslip.io");
-    expect(screen.getByTestId("domain-devlink.tws.tec.br")).toBeInTheDocument();
+    expect(screen.getByTestId("domain-loja.example.com")).toBeInTheDocument();
   });
 
   it("conectar novo domínio: mostra o registro A com o IP da VPS e conecta", async () => {
@@ -70,12 +70,12 @@ describe("ProjectDomainsCard", () => {
     const onChanged = vi.fn();
     apiFetchMock.mockResolvedValue({ project: PROJECT });
     render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={onChanged} />);
-    const extra = screen.getByTestId("domain-devlink.tws.tec.br");
+    const extra = screen.getByTestId("domain-loja.example.com");
     fireEvent.click(within(extra).getByRole("button", { name: /Tornar principal/ }));
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/domains/devlink.tws.tec.br/primary", expect.objectContaining({ method: "POST" })));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/domains/loja.example.com/primary", expect.objectContaining({ method: "POST" })));
     fireEvent.click(within(extra).getByRole("button", { name: /Remover/ }));
     fireEvent.click(within(extra).getByRole("button", { name: /Confirmar/ }));
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/domains/devlink.tws.tec.br", expect.objectContaining({ method: "DELETE" })));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/domains/loja.example.com", expect.objectContaining({ method: "DELETE" })));
     // o principal não tem "Remover"
     expect(within(screen.getByTestId("domain-devlink.203-0-113-10.sslip.io")).queryByRole("button", { name: /Remover/ })).not.toBeInTheDocument();
   });
@@ -88,7 +88,7 @@ describe("ProjectDomainsCard", () => {
           proxyRunning: true,
           items: [
             {
-              host: "devlink.tws.tec.br",
+              host: "loja.example.com",
               owner: { kind: "project", projectId: "p1", projectName: "devLink" },
               mode: "automatic",
               coveredBy: null,
@@ -247,14 +247,14 @@ describe("ProjectDomainsCard — porta por domínio (compose/Dockerfile)", () =>
     const onChanged = vi.fn();
     const p = { ...PROJECT, proxyPort: 3200, detection: { type: "compose", proxyPort: 3200 } } as unknown as Project;
     render(<ProjectDomainsCard project={p} publicIp="203.0.113.10" onChanged={onChanged} />);
-    const extra = screen.getByTestId("domain-devlink.tws.tec.br");
+    const extra = screen.getByTestId("domain-loja.example.com");
     const porta = within(extra).getByLabelText(/Porta/);
     expect(porta).toHaveAttribute("placeholder", "3200");
     fireEvent.change(porta, { target: { value: "8009" } });
     fireEvent.click(within(extra).getByRole("button", { name: /Salvar porta/ }));
     await waitFor(() =>
       expect(apiFetchMock).toHaveBeenCalledWith(
-        "/api/projects/p1/domains/devlink.tws.tec.br/port",
+        "/api/projects/p1/domains/loja.example.com/port",
         expect.objectContaining({ method: "PUT", body: JSON.stringify({ port: 8009 }) }),
       ),
     );

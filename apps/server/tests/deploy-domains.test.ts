@@ -1,7 +1,7 @@
 /**
  * deploy-domains.test.ts — vários domínios por projeto (Domínios do projeto).
  *
- * Validação real (30/09/2026): para testar devlink.tws.tec.br era preciso
+ * Validação real (30/09/2026): para testar loja.example.com era preciso
  * "editar" o domínio atual, perdendo o endereço automático. Agora o projeto
  * tem um domínio principal e quantos adicionais quiser: conectar, remover,
  * tornar principal. Publicado, a mudança vale na hora (Caddy recarregado).
@@ -42,36 +42,36 @@ async function projeto(domain = "devlink.203-0-113-10.sslip.io") {
 describe("domínios do projeto", () => {
   it("conectar um domínio adicional mantém o principal", async () => {
     const p = await projeto();
-    const up = await svc.addDomain(p.id, "DevLink.TWS.tec.br");
+    const up = await svc.addDomain(p.id, "Loja.EXAMPLE.com");
     expect(up.domain).toBe("devlink.203-0-113-10.sslip.io");
-    expect(up.aliases).toEqual(["devlink.tws.tec.br"]);
+    expect(up.aliases).toEqual(["loja.example.com"]);
   });
 
   it("recusa domínio inválido, repetido, de outro projeto ou o do próprio painel", async () => {
     const a = await projeto();
     const b = await svc.createProject({ name: "outro", ingestMode: "git", source: "https://github.com/k/x", branch: "main", domain: "outro.203-0-113-10.sslip.io" });
-    await svc.addDomain(a.id, "devlink.tws.tec.br");
+    await svc.addDomain(a.id, "loja.example.com");
     await expect(svc.addDomain(a.id, "nao é domínio")).rejects.toMatchObject({ code: "invalid_domain" });
-    await expect(svc.addDomain(a.id, "devlink.tws.tec.br")).rejects.toMatchObject({ code: "domain_in_use" });
-    await expect(svc.addDomain(b.id, "devlink.tws.tec.br")).rejects.toMatchObject({ code: "domain_in_use" });
+    await expect(svc.addDomain(a.id, "loja.example.com")).rejects.toMatchObject({ code: "domain_in_use" });
+    await expect(svc.addDomain(b.id, "loja.example.com")).rejects.toMatchObject({ code: "domain_in_use" });
     await expect(svc.addDomain(b.id, "203-0-113-10.sslip.io")).rejects.toMatchObject({ code: "domain_in_use" });
     // e criar/editar outro projeto também enxerga os adicionais
-    await expect(svc.updateProject(b.id, { domain: "devlink.tws.tec.br" })).rejects.toMatchObject({ code: "domain_in_use" });
+    await expect(svc.updateProject(b.id, { domain: "loja.example.com" })).rejects.toMatchObject({ code: "domain_in_use" });
   });
 
   it("tornar principal troca de lugar com o antigo, que vira adicional", async () => {
     const p = await projeto();
-    await svc.addDomain(p.id, "devlink.tws.tec.br");
-    const up = await svc.setPrimaryDomain(p.id, "devlink.tws.tec.br");
-    expect(up.domain).toBe("devlink.tws.tec.br");
+    await svc.addDomain(p.id, "loja.example.com");
+    const up = await svc.setPrimaryDomain(p.id, "loja.example.com");
+    expect(up.domain).toBe("loja.example.com");
     expect(up.aliases).toEqual(["devlink.203-0-113-10.sslip.io"]);
   });
 
   it("remover um adicional; o principal só sai se outro virar principal antes", async () => {
     const p = await projeto();
-    await svc.addDomain(p.id, "devlink.tws.tec.br");
+    await svc.addDomain(p.id, "loja.example.com");
     await expect(svc.removeDomain(p.id, "devlink.203-0-113-10.sslip.io")).rejects.toMatchObject({ code: "primary_domain" });
-    const up = await svc.removeDomain(p.id, "devlink.tws.tec.br");
+    const up = await svc.removeDomain(p.id, "loja.example.com");
     expect(up.aliases).toEqual([]);
   });
 
@@ -83,10 +83,10 @@ describe("domínios do projeto", () => {
   it("cada mudança de domínio recarrega o Caddy na hora, mesmo antes do primeiro deploy", async () => {
     const p = await projeto();
     sync.mockClear();
-    await svc.addDomain(p.id, "a.tws.tec.br");
-    await svc.addDomain(p.id, "b.tws.tec.br");
-    await svc.setPrimaryDomain(p.id, "b.tws.tec.br");
-    await svc.removeDomain(p.id, "a.tws.tec.br");
+    await svc.addDomain(p.id, "a.example.com");
+    await svc.addDomain(p.id, "b.example.com");
+    await svc.setPrimaryDomain(p.id, "b.example.com");
+    await svc.removeDomain(p.id, "a.example.com");
     expect(sync).toHaveBeenCalledTimes(4);
   });
 
@@ -107,21 +107,21 @@ describe("domínios do projeto", () => {
   it("falha ao recarregar o Caddy não desfaz a mudança gravada", async () => {
     const p = await projeto();
     sync.mockRejectedValueOnce(new Error("caddy fora do ar"));
-    const up = await svc.addDomain(p.id, "c.tws.tec.br");
-    expect(up.aliases).toEqual(["c.tws.tec.br"]);
+    const up = await svc.addDomain(p.id, "c.example.com");
+    expect(up.aliases).toEqual(["c.example.com"]);
   });
 });
 
 describe("porta por domínio", () => {
   it("define e limpa a porta de um domínio; remover o domínio apaga a porta dele", async () => {
     const p = await projeto();
-    await svc.addDomain(p.id, "carteira.tws.tec.br");
-    let up = await svc.setDomainPort(p.id, "carteira.tws.tec.br", 8009);
-    expect(up.domainPorts).toEqual({ "carteira.tws.tec.br": 8009 });
-    up = await svc.setDomainPort(p.id, "carteira.tws.tec.br", null);
+    await svc.addDomain(p.id, "carteira.example.com");
+    let up = await svc.setDomainPort(p.id, "carteira.example.com", 8009);
+    expect(up.domainPorts).toEqual({ "carteira.example.com": 8009 });
+    up = await svc.setDomainPort(p.id, "carteira.example.com", null);
     expect(up.domainPorts).toEqual({});
-    await svc.setDomainPort(p.id, "carteira.tws.tec.br", 8009);
-    up = await svc.removeDomain(p.id, "carteira.tws.tec.br");
+    await svc.setDomainPort(p.id, "carteira.example.com", 8009);
+    up = await svc.removeDomain(p.id, "carteira.example.com");
     expect(up.domainPorts).toEqual({});
   });
 
