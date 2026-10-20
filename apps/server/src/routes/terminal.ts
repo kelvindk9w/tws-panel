@@ -81,6 +81,7 @@ import { resolveTerminalAccess } from "../config.js";
 import type { TerminalService } from "../services/terminal-service.js";
 import { isSessionExpired } from "../services/session-store.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { isCrossOrigin } from "../services/same-origin.js";
 
 // Querystring do handshake do WS (não um body — upgrade não tem corpo):
 //  - clientId: gerado no browser (crypto.randomUUID() ou fallback base36),
@@ -104,16 +105,6 @@ const terminalWsSchema = {
 declare module "fastify" {
   interface FastifyInstance {
     terminalService: TerminalService;
-  }
-}
-
-/** O Origin do navegador aponta para outro host que não o do painel? */
-export function isCrossOrigin(origin: string | undefined, host: string | undefined): boolean {
-  if (origin === undefined) return false;
-  try {
-    return new URL(origin).host !== (host ?? "");
-  } catch {
-    return true; // Origin malformado ("null", lixo): não é o painel
   }
 }
 

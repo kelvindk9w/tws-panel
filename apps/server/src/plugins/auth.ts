@@ -18,6 +18,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import { SESSION_COOKIE, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY } from "@paas/core";
 import { tokenMatches } from "../services/setup-token.js";
+import { isCrossSiteWrite } from "../services/same-origin.js";
 import type { Session, SessionStore } from "../services/session-store.js";
 import type { TwoFactorService } from "../services/two-factor.js";
 import type { UserStore } from "../services/user-store.js";
@@ -87,6 +88,18 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   app.decorateRequest("session", null);
 
   app.addHook("onRequest", async (request, reply) => {
+    // CSRF (M1): escrita que o navegador diz vir de outro site/origem nem chega
+    // à autenticação nem à rota. Vale para o login também (login CSRF).
+    if (
+      routePath(request).startsWith("/api/") &&
+      isCrossSiteWrite(request, app.hasDecorator("config") ? app.config.allowedOrigins : [])
+    ) {
+      return reply.code(403).send({
+        error: "forbidden_origin",
+        message: "Origem não permitida: o pedido não partiu do próprio painel.",
+      });
+    }
+
     // resolve a sessão em toda requisição (barato: HMAC + lookup em memória)
     const cookieValue = request.cookies[SESSION_COOKIE];
     if (cookieValue) {

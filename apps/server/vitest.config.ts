@@ -60,6 +60,7 @@ export default defineConfig({
         "src/services/panel-restore.ts",
         "src/services/password.ts",
         "src/services/port-map.ts",
+        "src/services/same-origin.ts",
         "src/services/session-store.ts",
         "src/services/setup-state.ts",
         "src/services/setup-token.ts",
