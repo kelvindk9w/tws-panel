@@ -22,7 +22,7 @@ hero:
 
 | Your situation | Go to |
 |---|---|
-| **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[From zero to a configured panel](getting-started/complete-guide.md)**<br>Only the installation, steps 1 to 8: [installation guide](getting-started/installation.md) |
+| **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[From zero to a fully set-up panel](getting-started/complete-guide.md)**<br>Only the installation, steps 1 to 8: [installation guide](getting-started/installation.md) |
 | **I reinstalled the VPS, or I am moving to another server.** You want the panel, the projects and the email back from the external backups. | **[Restore on a new VPS](guides/restore-new-server.md)** |
 | **I know what I am doing.** You have a clean Ubuntu VPS and a user with `sudo`. | **[Quick install, one command](https://github.com/kelvindk9w/tws-panel#installation)** (on the repository README) |
 

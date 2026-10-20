@@ -41,9 +41,13 @@ Só documentação. Nenhum código nem dicionário da interface foi alterado.
   VPS nova (que saiu do grupo Guias; cada página aparece uma vez). O seletor de idioma do Starlight já
   está no cabeçalho e não foi mexido; o tema também não.
 - **Correção encontrada:** a página inicial usava componentes do Starlight (`Card`, `CardGrid`) dentro
-  de `.md`, mas o projeto não tem `@astrojs/mdx`, e o resultado era a linha `import ...` aparecendo
-  como texto e os cartões colados em um parágrafo. Reescrevi a página em Markdown puro (lista no lugar
-  dos cartões). Adotar MDX exigiria nova dependência; não fiz.
+  de um arquivo `.md`. Componentes só funcionam em `.mdx` (o Starlight já traz o `@astrojs/mdx`); em
+  `.md` a linha `import ...` aparece como texto e os cartões saem colados num parágrafo. Bastaria
+  renomear para `.mdx`. Mesmo assim reescrevi a página em Markdown puro (lista e tabela): fica mais
+  simples de manter, os links relativos seguem sendo conferidos pelo `docs:links` e o resultado não
+  depende de componentes. Observação: na minha tentativa de renomear, o `import` continuou aparecendo
+  como texto no preview; o revisor mostrou que compila, então o meu teste provavelmente usou um build
+  antigo, e não confirmei a causa.
 - `site/README.md` descreve a navegação para iniciantes e a regra do texto único do aviso do SSH.
 
 ## Verificação

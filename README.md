@@ -32,7 +32,7 @@ Harden the server, publish projects with HTTPS and run your own email, all from 
 
 | Your situation | Go to |
 |---|---|
-| 🚀 **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md)**<br>Only the installation, steps 1 to 8: [installation guide](site/src/content/docs/en/getting-started/installation.md) |
+| 🚀 **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[From zero to a fully set-up panel](site/src/content/docs/en/getting-started/complete-guide.md)**<br>Only the installation, steps 1 to 8: [installation guide](site/src/content/docs/en/getting-started/installation.md) |
 | 🔁 **I reinstalled the VPS, or I am moving to another server.** You want the panel, the projects and the email back from the external backups. | **[Restore on a new VPS](site/src/content/docs/en/guides/restore-new-server.md)** |
 | ⚡ **I know what I am doing.** You have a clean Ubuntu VPS and a user with `sudo`. | **[Quick install, one command](#installation)** |
 
@@ -157,8 +157,8 @@ the administrator account.
 > [!WARNING]
 > **Reinstalled the VPS and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is
 > expected: the VPS has a new identity. Run `ssh-keygen -R YOUR_IP` on your computer (with the VPS
-> IP), connect again and answer `yes`. If you did **not** reinstall anything, do not continue:
-> check the IP and the provider's dashboard first. [Details](site/src/content/docs/en/getting-started/installation.md#host-identification-changed).
+> IP), connect again and answer `yes`. If you did **not** reinstall anything, do not continue and do
+> not run `ssh-keygen -R`: check the IP and the provider's dashboard first. [Details](site/src/content/docs/en/getting-started/installation.md#host-identification-changed).
 
 <a id="after-installing"></a>
 
@@ -181,7 +181,7 @@ Optional steps can be dismissed with "Não vou usar" (I will not use this). The 
 also available under **Configurações → Primeiros passos** (Settings → Getting started).
 
 Prefer one ordered walkthrough, from the rented VPS to a first project online and a tested restore?
-Follow [From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md).
+Follow [From zero to a fully set-up panel](site/src/content/docs/en/getting-started/complete-guide.md).
 
 <table>
   <tr>
@@ -213,7 +213,7 @@ The same pages live in this repository, under [`site/src/content/docs/`](site/sr
 
 | Guide | Content |
 |---|---|
-| [From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md) | **Start here for a first installation.** One ordered walkthrough, from the rented VPS to a tested restore |
+| [From zero to a fully set-up panel](site/src/content/docs/en/getting-started/complete-guide.md) | **Start here for a first installation.** One ordered walkthrough, from the rented VPS to a tested restore |
 | [Installation](site/src/content/docs/en/getting-started/installation.md) | Step-by-step setup on a clean VPS (steps 1 to 8), with every command explained |
 | [Restore on a new VPS](site/src/content/docs/en/guides/restore-new-server.md) | For when you reinstalled the VPS or are moving to another server: the panel, projects and email back from the external backups |
 | [Security wizard](site/src/content/docs/en/getting-started/security-wizard.md) | The 8 hardening phases, and how to confirm access without locking yourself out |

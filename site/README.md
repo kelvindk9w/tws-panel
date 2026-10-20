@@ -60,8 +60,9 @@ The "Getting started" sidebar group starts with the complete guide. The SSH warn
 IDENTIFICATION HAS CHANGED") is one alert with the same text in the complete guide, the
 installation guide, the restore guide and the README; the detailed explanation stays in the
 collapsed block `#host-identification-changed` of the installation guide. If you change the text in
-one place, change it in all of them, in both languages. The home page is plain Markdown on purpose: the project does not include `@astrojs/mdx`, so a Starlight
-component (`Card`, `LinkCard`) written in an `.md` or `.mdx` file shows up as text. The language selector comes from Starlight
+one place, change it in all of them, in both languages. The home page is plain Markdown (`.md`) on purpose. Starlight components such as `Card` only work in
+`.mdx` files (Starlight already ships `@astrojs/mdx`); in an `.md` file the `import` line shows up as
+text, which is what the old home page did. The language selector comes from Starlight
 (header) and needs no configuration beyond `locales`.
 
 ## Editorial rules

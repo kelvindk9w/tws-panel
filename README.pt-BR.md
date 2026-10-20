@@ -151,8 +151,8 @@ conta de administrador.
 > [!WARNING]
 > **Reinstalou a VPS e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a
 > VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da
-> VPS), conecte de novo e responda `yes`. Se você **não** reinstalou nada, não continue: confira o
-> IP e o painel do provedor primeiro. [Detalhes](site/src/content/docs/pt-br/getting-started/installation.md#host-identification-changed).
+> VPS), conecte de novo e responda `yes`. Se você **não** reinstalou nada, não continue e não rode
+> `ssh-keygen -R`: confira o IP e o painel do provedor primeiro. [Detalhes](site/src/content/docs/pt-br/getting-started/installation.md#host-identification-changed).
 
 <a id="depois-de-instalar"></a>
 

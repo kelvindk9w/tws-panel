@@ -41,7 +41,7 @@ Depois do Passo 8, a etapa de Segurança do wizard tem um guia próprio:
 > **Único pré-requisito:** uma VPS com Ubuntu 22.04 ou 24.04 LTS limpa. Docker, Node e todo o resto são instalados automaticamente — basta seguir os passos abaixo, na ordem.
 
 > [!WARNING]
-> **Reinstalou o sistema da VPS, ou está testando de novo, e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da VPS), conecte de novo e responda `yes`. [Mensagem completa e detalhes](#host-identification-changed) (bloco recolhido logo abaixo).
+> **Reinstalou o sistema da VPS, ou reinstalou para testar de novo, e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da VPS), conecte de novo e responda `yes`. [Mensagem completa e detalhes](#host-identification-changed) (bloco recolhido logo abaixo).
 >
 > **Não reinstalou nem trocou nada e o aviso apareceu do nada?** Não continue e não rode esse comando. Confira se o IP é o certo e veja no painel do provedor se houve reinstalação, modo de resgate ou troca de IP. O aviso pode ser o único sinal de que outra máquina está respondendo naquele endereço.
 

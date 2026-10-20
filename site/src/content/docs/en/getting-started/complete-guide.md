@@ -93,7 +93,7 @@ Cloudflare). The examples in this guide use Cloudflare.
 ## Step 2 — Install the panel on the VPS
 
 > [!WARNING]
-> **Reinstalled the VPS operating system, or testing again, and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is expected: the VPS now has a new identity. On your computer, run `ssh-keygen -R YOUR_IP` (with the VPS IP), connect again and answer `yes`. [Full message and details](installation.md#host-identification-changed).
+> **Reinstalled the VPS operating system, or reinstalled it to test again, and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is expected: the VPS now has a new identity. On your computer, run `ssh-keygen -R YOUR_IP` (with the VPS IP), connect again and answer `yes`. [Full message and details](installation.md#host-identification-changed).
 >
 > **Did not reinstall or switch anything, and the warning appeared out of nowhere?** Do not continue and do not run that command. Check that the IP is the right one and look in the provider's dashboard for a reinstall, a rescue mode or a changed IP. The warning may be the only sign that another machine is answering at that address.
 
