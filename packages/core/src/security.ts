@@ -1,6 +1,6 @@
 /**
  * Tipos compartilhados do módulo de segurança (Fase 1 — Hardening).
- * Spec: docs/security-research.md (checklist de 6 fases/30 passos).
+ * Spec: docs/internal/security-research.md (checklist de 6 fases/30 passos).
  */
 
 // ---------------------------------------------------------------------------

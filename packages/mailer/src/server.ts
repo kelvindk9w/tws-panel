@@ -8,7 +8,7 @@
  * última com API REST de gerenciamento (/api/principal, /api/dkim) e bootstrap
  * determinístico via config.toml (entregue ao container com `docker cp`). A linha nova (`stalwartlabs/stalwart`
  * v0.16+) removeu a API REST em favor de JMAP `x:` e exige um wizard de setup
- * interativo (config.json) — migração fica como roadmap (ver docs/fase-3-email.md).
+ * interativo (config.json) — migração fica como roadmap (ver docs/internal/fase-3-email.md).
  */
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";

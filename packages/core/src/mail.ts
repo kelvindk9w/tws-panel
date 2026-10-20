@@ -1,6 +1,6 @@
 /**
  * Tipos compartilhados do módulo de e-mail (Fase 3 — E-mail).
- * Spec: plano §5.3 e docs/email-deliverability.md.
+ * Spec: plano §5.3 e docs/internal/email-deliverability.md.
  */
 
 // ---------------------------------------------------------------------------

@@ -1,78 +1,93 @@
-# Política de Segurança
+# Security Policy
 
-O TWS Panel é um painel que **administra uma VPS inteira** — segurança é levada a sério por aqui.
-Se você encontrou uma vulnerabilidade, agradecemos o reporte responsável.
+TWS Panel is a panel that **administers an entire VPS**, so security is taken seriously here. If you
+found a vulnerability, we appreciate a responsible report.
 
-## Reportando uma vulnerabilidade
+Portuguese (Brazil) version: [docs/community/pt-BR/SECURITY.md](docs/community/pt-BR/SECURITY.md).
 
-⚠️ **Não abra uma issue pública** para vulnerabilidades de segurança.
+## Reporting a vulnerability
 
-Envie um e-mail para:
+**Do not open a public issue, pull request or discussion** for security vulnerabilities.
 
-**[contato@tws.tec.br](mailto:contato@tws.tec.br)**
+Report it privately through GitHub Security Advisories:
 
-Inclua, se possível:
+1. Go to the [Security tab of the repository](https://github.com/kelvindk9w/tws-panel/security).
+2. Click **Report a vulnerability** and fill in the form.
 
-- Descrição da vulnerabilidade e impacto potencial;
-- Passos para reproduzir (ou prova de conceito);
-- Versão/commit afetado e ambiente (SO, versão do Docker, etc.).
+Direct link: <https://github.com/kelvindk9w/tws-panel/security/advisories/new>
 
-**O que esperar:**
+If you cannot use GitHub, you can email **[contato@tws.tec.br](mailto:contato@tws.tec.br)** instead.
+Please do not include exploit details in a public place.
 
-- Confirmação de recebimento em até **72 horas**;
-- Avaliação e, se confirmada, uma correção ou mitigação em até **90 dias** (antes disso,
-  sempre que possível);
-- Crédito ao pesquisador no anúncio da correção, se desejado;
-- Pedimos que você não divulgue publicamente antes da correção estar disponível.
+Include, if possible:
 
-## Escopo
+- A description of the vulnerability and its potential impact;
+- Steps to reproduce (or a proof of concept);
+- The affected version/commit and the environment (OS, Docker version, etc.).
 
-**Dentro do escopo:**
+**What to expect:**
 
-- O código deste repositório: `apps/server`, `apps/web`, `packages/*`, `scripts/*`;
-- O instalador (`scripts/install.sh`) e os scripts de hardening (`scripts/hardening/`);
-- O wizard de setup (autenticação por token) e o acesso ao painel (HTTPS pelo proxy Caddy, túnel SSH,
-  domínio do painel);
-- A API do painel (autenticação, autorização, injeção, path traversal, etc.).
+- Acknowledgement of receipt within **72 hours**;
+- Assessment and, if confirmed, a fix or mitigation within **90 days** (earlier whenever possible);
+- Credit to the researcher in the fix announcement, if desired;
+- We ask that you do not disclose publicly before a fix is available.
 
-**Fora do escopo:**
+## Supported versions
 
-- Vulnerabilidades em dependências de terceiros sem prova de exploração através deste projeto
-  (reporte ao upstream; nós atualizamos as dependências);
-- Problemas que exigem acesso root/local à VPS (o painel assume o host como base de confiança);
-- Configurações deliberadamente inseguras marcadas como "apenas para testes" em `examples/`;
-- Negação de serviço por esgotamento de recursos da própria máquina.
+The project is in **beta** (`0.x`). Only the latest code on the `main` branch receives security
+fixes; there are no maintained older release lines. We recommend always running the most recent
+version (see [CHANGELOG.md](CHANGELOG.md) and the update instructions in the
+[operations guide](site/src/content/docs/en/guides/operations.md)).
 
-## Práticas de segurança do projeto
+| Version | Supported |
+| ------- | --------- |
+| `main` (latest) | Yes |
+| Anything older | No, please update |
 
-- **Wizard protegido por token** de uso único (comparação em tempo constante), gerado pelo
-  instalador com permissão 0600;
-- **Terminal web com shell real na VPS, por desenho** — é o que permite conduzir o hardening pela
-  interface, e é a maior superfície de ataque do sistema. Na instalação, quem instala escolhe com
-  qual usuário ele abre (o recomendado é o próprio usuário comum, com o que precisa de root passando
-  pelo `sudo` com senha ou rodando em segundo plano e registrado na Auditoria; `root` é possível, mas
-  desaconselhado). Com `root`, quem tem sessão no painel tem a máquina. Isso **não é uma
-  vulnerabilidade a reportar** — está declarado em
-  [threat-model.json](comoFuncionaSistema/global/threat-model.json) como risco aceito, junto com o
-  socket do Docker montado no painel. Falhas que permitam chegar a esse terminal **sem sessão
-  válida**, sim;
-- **Painel só em `127.0.0.1`** — o container do painel não publica porta na internet; quem atende
-  de fora é o proxy Caddy, nas portas 80/443, com HTTPS (ou o túnel SSH, no acesso por túnel);
-- **Login com verificação em duas etapas** (TOTP, com códigos de recuperação), senha com hash
-  argon2id, sessões revogáveis e limite de tentativas;
-- **Docker socket nunca exposto via TCP**; acesso somente pelo socket local;
-- **CORS same-origin** por padrão, headers de segurança (Helmet/CSP) e rate limiting;
-- **Segredos em disco com modo 0600**, os sensíveis cifrados (variáveis de ambiente dos projetos,
-  credenciais de repositório, token do Telegram, chave e senha dos backups), e **redação de
-  tokens/senhas nos logs**;
-- **Auditoria** de todas as ações sensíveis (login, deploy, override de guardrail, hardening,
-  alterações de e-mail, domínio do painel, notificações, backups e monitoramento);
-- **Guardrails de deploy** que bloqueiam configurações perigosas (porta de banco exposta,
-  credenciais fracas, container privilegiado) e exigem override explícito e auditado;
-- **Hardening com rollback automático** nas três fases que mexem no acesso (usuário, SSH e
-  firewall): se ninguém confirmar em ~5 minutos, o servidor desfaz sozinho o que aplicou.
+## Scope
 
-## Versões suportadas
+**In scope:**
 
-O projeto está em **beta** (`0.x`): apenas a branch `main` recebe correções de segurança.
-Recomendamos sempre rodar a versão mais recente.
+- The code in this repository: `apps/server`, `apps/web`, `packages/*`, `scripts/*`;
+- The installer (`scripts/install.sh`) and the hardening scripts (`scripts/hardening/`);
+- The setup wizard (token authentication) and access to the panel (HTTPS through the Caddy proxy,
+  SSH tunnel, panel domain);
+- The panel API (authentication, authorization, injection, path traversal, etc.).
+
+**Out of scope:**
+
+- Vulnerabilities in third-party dependencies without proof of exploitation through this project
+  (report them upstream; we update the dependencies);
+- Issues that require root/local access to the VPS (the panel assumes the host is the trust base);
+- Deliberately insecure configurations marked "for testing only" in `examples/`;
+- Denial of service by exhausting the machine's own resources.
+
+## Security practices of the project
+
+- **Wizard protected by a single-use token** (constant-time comparison), generated by the installer
+  with 0600 permissions;
+- **A web terminal with a real shell on the VPS, by design.** It is what allows the hardening to be
+  driven from the interface, and it is the largest attack surface of the system. At install time,
+  the person installing chooses which user it opens with (the recommended one is your own regular
+  user, with whatever needs root going through `sudo` with a password or running in the background
+  and recorded in the Audit log; `root` is possible but discouraged). With `root`, whoever has a
+  panel session has the machine. This is **not a vulnerability to report**: it is declared in
+  [threat-model.json](comoFuncionaSistema/global/threat-model.json) as an accepted risk, together
+  with the Docker socket mounted into the panel. Flaws that allow reaching this terminal **without
+  a valid session** are in scope;
+- **Panel only on `127.0.0.1`**: the panel container does not publish a port to the internet; the
+  Caddy proxy serves it from outside on ports 80/443 with HTTPS (or the SSH tunnel, in tunnel-only
+  access);
+- **Login with two-step verification** (TOTP, with recovery codes), argon2id password hashing,
+  revocable sessions and attempt limiting;
+- **Docker socket never exposed over TCP**; access only through the local socket;
+- **Same-origin CORS** by default, security headers (Helmet/CSP) and rate limiting;
+- **Secrets on disk with mode 0600**, the sensitive ones encrypted (project environment variables,
+  repository credentials, the Telegram token, backup key and password), and **redaction of
+  tokens/passwords in logs**;
+- **Auditing** of every sensitive action (login, deploy, guardrail override, hardening, email
+  changes, panel domain, notifications, backups and monitoring);
+- **Deploy guardrails** that block dangerous configurations (exposed database port, weak
+  credentials, privileged container) and require an explicit, audited override;
+- **Hardening with automatic rollback** on the three phases that touch access (user, SSH and
+  firewall): if nobody confirms within about 5 minutes, the server undoes what it applied by itself.

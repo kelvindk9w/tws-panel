@@ -32,3 +32,6 @@ docker-compose.dev.yml
 .DS_Store
 .idea
 .vscode
+
+# Site de documentação (Starlight): fora da imagem do painel
+site

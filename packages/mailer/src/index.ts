@@ -1,7 +1,7 @@
 /**
  * @paas/mailer — engine de e-mail do painel (Fase 3).
  * Stalwart Mail Server em container, DKIM 2048, checklist DNS, caixas de
- * e-mail e injeção de SMTP nos projetos. Spec: docs/email-deliverability.md.
+ * e-mail e injeção de SMTP nos projetos. Spec: docs/internal/email-deliverability.md.
  */
 export {
   StalwartManager,

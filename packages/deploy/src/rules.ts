@@ -7,7 +7,7 @@
  *  - info:  informativo.
  *
  * Motivadas pelos problemas REAIS dos projetos do usuário
- * (docs/projects-analysis.md — cachetaGrok): porta de banco exposta,
+ * (docs/internal/projects-analysis.md — cachetaGrok): porta de banco exposta,
  * credenciais triviais (cacheta:cacheta), Mailhog em produção.
  *
  * Regras:

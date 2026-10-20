@@ -156,7 +156,7 @@ export class ContainerRunner implements TargetRunner {
 // do PRÓPRIO container do painel — o scan mostrava dados do container Debian da
 // imagem e o hardening modificaria o container (inútil). O NsenterHostRunner
 // executa os comandos nos namespaces do PID 1 do HOST (padrão Coolify/
-// Portainer): ver docs/host-bridge.md.
+// Portainer): ver site/src/content/docs/pt-br/reference/host-bridge.md.
 
 export interface NsenterHostRunnerOptions {
   /** Imagem do helper descartável (default alpine:3 — precisa de nsenter/tar/sh). */

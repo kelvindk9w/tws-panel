@@ -2,7 +2,7 @@
 # =============================================================================
 # TWS Panel — instalador one-shot (100% Docker)
 #
-# Uso (VPS Ubuntu 22.04/24.04 limpa — com o usuário não-root criado no Passo 3 de docs/instalacao.md):
+# Uso (VPS Ubuntu 22.04/24.04 limpa — com o usuário não-root criado no Passo 3 de site/src/content/docs/pt-br/getting-started/installation.md):
 #   sudo apt update && sudo apt install -y git
 #   sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 #   sudo chown -R $USER:$USER /opt/tws-panel
@@ -179,7 +179,7 @@ TARGET_DIR="${TARGET_ARG:-${PAAS_DIR:-/opt/tws-panel}}"
 # Precisamos de root (apt, docker, volumes). Se o operador rodou o script com
 # o usuário comum, reexecutamos via sudo preservando as variáveis de ambiente
 # relevantes — assim tanto `./scripts/install.sh` quanto
-# `sudo ./scripts/install.sh` funcionam (docs/instalacao.md recomenda o primeiro).
+# `sudo ./scripts/install.sh` funcionam (site/src/content/docs/pt-br/getting-started/installation.md recomenda o primeiro).
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || die "Este script precisa de root. Rode como root ou instale o sudo (apt install sudo)."
   log "Privilégios de administrador necessários — reexecutando via sudo…"
@@ -550,7 +550,7 @@ check_user_basic() {
   if ! entry="$(getent passwd "$u" 2>/dev/null)" || [ -z "$entry" ]; then
     say "  ✗ O usuário \"$u\" não existe nesta VPS."
     say "    Confira o nome (é o mesmo que você usa no ssh) ou crie o usuário antes, como no"
-    say "    Passo 3 de docs/instalacao.md:  sudo adduser $u && sudo usermod -aG sudo $u"
+    say "    Passo 3 de site/src/content/docs/pt-br/getting-started/installation.md:  sudo adduser $u && sudo usermod -aG sudo $u"
     return 1
   fi
   uid="$(printf '%s' "$entry" | cut -d: -f3)"
@@ -619,9 +619,9 @@ explain_terminal() {
   say ""
   say "  O painel tem um terminal ao vivo da VPS. É nele que a varredura de segurança"
   say "  e o hardening rodam, e você pode usá-lo como usaria o SSH. Escolha agora com"
-  say "  qual usuário ele abre (dá para trocar depois, veja docs/operacao.md)."
+  say "  qual usuário ele abre (dá para trocar depois, veja site/src/content/docs/pt-br/guides/operations.md)."
   say ""
-  say "  • Recomendado: o SEU usuário comum (o que você criou no Passo 3 de docs/instalacao.md)."
+  say "  • Recomendado: o SEU usuário comum (o que você criou no Passo 3 de site/src/content/docs/pt-br/getting-started/installation.md)."
   say "  • \"root\" é possível, mas desaconselhado: uma aba do navegador esquecida aberta"
   say "    com o painel daria acesso de root à VPS para quem sentasse na frente dela."
   say "================================================================================"
@@ -743,7 +743,7 @@ if [ -z "$TERMINAL_SOURCE" ]; then
       say "  (É só uma lista para ajudar — digite o nome que você quer usar.)"
     else
       say "  Não encontrei nenhum usuário comum com sudo nesta VPS. Se ainda não criou o seu,"
-      say "  aperte Ctrl+C, siga o Passo 3 de docs/instalacao.md e rode o instalador de novo."
+      say "  aperte Ctrl+C, siga o Passo 3 de site/src/content/docs/pt-br/getting-started/installation.md e rode o instalador de novo."
     fi
     ask "  Com qual usuário o terminal do painel deve abrir? "
     if [ -z "$ANSWER" ]; then
@@ -1012,7 +1012,7 @@ if [ -z "$PORT_SOURCE" ]; then
   say "  outra coisa e você escolhe lá — o instalador explica isso no final."
   say ""
   say "  O ideal é informar uma porta que também esteja livre NO COMPUTADOR de onde você vai abrir"
-  say "  o túnel: o comando impresso no final usa o mesmo número dos dois lados. docs/instalacao.md ensina a"
+  say "  o túnel: o comando impresso no final usa o mesmo número dos dois lados. site/src/content/docs/pt-br/getting-started/installation.md ensina a"
   say "  conferir isso (\"confira, no SEU computador, um número de porta livre\")."
   say "--------------------------------------------------------------------------------"
   # A situação da porta padrão é conferida UMA vez: repetir o aviso a cada
@@ -1189,7 +1189,7 @@ else
   printf 'DOCKER_GID=%s\n' "$DOCKER_GID" >> .env
 fi
 # O .env é lido por `docker compose` rodado pelo USUÁRIO depois — devolve a
-# propriedade a quem invocou o sudo (o repo foi chown'ed para ele no Passo 6 de docs/instalacao.md).
+# propriedade a quem invocou o sudo (o repo foi chown'ed para ele no Passo 6 de site/src/content/docs/pt-br/getting-started/installation.md).
 if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
   chown "$SUDO_USER:$SUDO_USER" .env 2>/dev/null || true
 fi
@@ -1358,7 +1358,7 @@ if [ "$TERMINAL_SOURCE" != "legado" ] && [ "$TERMINAL_USER" != "root" ]; then
   TUNNEL_HOME="$(getent passwd "$TUNNEL_USER" | cut -d: -f6)"
   if [ -n "$TUNNEL_HOME" ] && [ ! -s "$TUNNEL_HOME/.ssh/authorized_keys" ]; then
     TUNNEL_NOTE="     Atenção: $TUNNEL_USER ainda não tem nenhuma chave SSH instalada nesta VPS.
-     Instale a sua nele (Passo 4 de docs/instalacao.md) — ou, se você entra com outro usuário,
+     Instale a sua nele (Passo 4 de site/src/content/docs/pt-br/getting-started/installation.md) — ou, se você entra com outro usuário,
      troque $TUNNEL_USER pelo nome dele no comando acima."
   fi
 else

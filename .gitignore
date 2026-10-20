@@ -33,3 +33,6 @@ logs/
 
 # worktrees isolados de subagentes do Claude Code
 .claude/worktrees/
+
+# Site de documentação (Astro)
+site/.astro/

@@ -1,7 +1,7 @@
 /**
  * Tipos compartilhados da Fase 4 — Guardrails de deploy, baseline +
  * monitoramento contínuo, central de alertas e auditoria.
- * Spec: plano §5.4 e docs/security-research.md §6.6.
+ * Spec: plano §5.4 e docs/internal/security-research.md §6.6.
  */
 
 // ---------------------------------------------------------------------------

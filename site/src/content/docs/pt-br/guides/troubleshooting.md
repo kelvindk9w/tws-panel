@@ -1,0 +1,160 @@
+---
+title: "Troubleshooting"
+---
+
+Problemas prováveis ao rodar o paas em uma VPS real e como resolver cada um.
+
+---
+
+## 📧 E-mail
+
+### Porta 25 bloqueada pelo provedor
+
+**Sintomas:** você envia e recebe e-mails internamente, mas nenhuma mensagem de fora chega;
+testes de conexão na porta 25 falham (`telnet SEU-IP 25` trava).
+
+**Causa:** muitos provedores (Hetzner, AWS, OCI, contas novas em geral) bloqueiam a porta 25
+de saída/entrada por padrão como medida anti-spam.
+
+**Solução:**
+1. Abra um chamado no provedor pedindo a liberação da porta 25 (alguns têm opção no painel);
+2. Confirme o UFW: `sudo ufw allow 25/tcp`;
+3. Verifique do lado de fora: `nc -zv SEU-IP 25`.
+
+### E-mail caindo em spam
+
+**Sintomas:** mensagens enviadas chegam, mas vão direto para a pasta de spam (especialmente
+Gmail e Outlook).
+
+**Diagnóstico (nesta ordem):**
+1. Envie para [mail-tester.com](https://www.mail-tester.com) — ele aponta exatamente o que
+   está faltando. Alvo: ≥ 9/10.
+2. Abra o **checklist DNS** do domínio no painel e clique em "verificar": A, MX, SPF, DKIM e
+   DMARC precisam estar ✅.
+3. **PTR amarelo** (sem nome reverso válido) é a causa nº 1: só o provedor da VPS configura. O
+   card do PTR diz onde trocar (Contabo, Hetzner, Vultr) ou gera o texto pronto do chamado.
+4. Confira as **listas de bloqueio** no painel (Envios → Reputação). Se estiver listado, use
+   "Pedir remoção" na lista correspondente.
+5. Veja a **Nota de entregabilidade** (Envios → Nota): ela lista o que falta, item por item.
+6. **IP novo sem reputação**: nas primeiras 2–4 semanas envie volume baixo e crescente
+   (dezenas/dia, não milhares). Veja "warm-up de IP" em
+   [email-deliverability.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/email-deliverability.md).
+7. Mantenha o DMARC em `p=none` coletando relatórios até tudo estabilizar; endureça para
+   `quarantine`/`reject` depois.
+
+### Certificado TLS do Stalwart inválido
+
+**Sintomas:** clientes de e-mail avisam "certificado não confiável" ao conectar.
+
+**Causa:** o certificado de `mail.<domínio>` ainda não foi emitido — enquanto isso o
+Stalwart usa um autoassinado. Quase sempre falta o registro A de `mail.<domínio>`
+apontando para a VPS, ou ele está com a nuvem laranja na Cloudflare.
+
+**Solução:** abra **E-mail** no painel: o card "Certificado do servidor de e-mail" diz o
+que falta. Crie o registro A de `mail.<domínio>` com o IP da VPS (na Cloudflare, nuvem
+**cinza**), confira as portas 80 e 443 liberadas e clique em "Conferir de novo". O painel
+instala e renova o certificado sozinho.
+
+---
+
+## 🌐 Domínios e SSL
+
+### Caddy não emite certificado ("DNS não propagado")
+
+**Sintomas:** site no ar só em HTTP, erro de ACME nos logs do container `paas-caddy`
+(`docker logs paas-caddy`).
+
+**Causa:** o registro A do domínio ainda não aponta para a VPS (ou a propagação não terminou).
+
+**Solução:**
+1. Use o botão **"verificar DNS"** no painel antes de emitir o certificado;
+2. Confira manualmente: `dig +short seudominio.com` deve retornar o IP da VPS;
+3. Se acabou de criar o registro, aguarde a propagação (minutos a horas, dependendo do TTL);
+4. Se houver proxy na frente (ex.: Cloudflare com nuvem laranja), desative-o para a emissão
+   inicial ou use o modo DNS-01 — o Caddy central espera conexão direta nas portas 80/443;
+5. Verifique se o UFW/liberação do provedor permite 80 e 443.
+
+### Domínio `.localhost` não abre
+
+**Sintomas:** `meuapp.localhost` não resolve no navegador.
+
+**Solução:** `.localhost` depende do sistema operacional resolver para 127.0.0.1 — funciona
+nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/hosts`:
+`127.0.0.1 meuapp.localhost`. Em dev, lembre-se de que `.localhost` é servido em **HTTP puro**.
+
+---
+
+## 🛠️ Painel e wizard
+
+### Painel não abre depois do `install.sh`
+
+**Sintomas:** o endereço `https://SEU-IP-COM-HÍFENS.sslip.io/?token=...` não abre, ou o
+instalador avisa que ele não respondeu em 3 minutos.
+
+**Checklist (na VPS, em `/opt/tws-panel`):**
+1. Os containers estão de pé? `sudo docker compose ps`;
+2. O certificado saiu? A causa mais comum são as portas **80 e 443 bloqueadas** num firewall do
+   provedor (no painel da hospedagem): libere as duas e rode `sudo docker compose restart`. Para
+   ver o que o proxy diz: `sudo docker logs paas-caddy --tail 50`;
+3. Enquanto isso, o acesso por túnel SSH funciona: o banner do instalador mostra o comando
+   (veja [Acesso por túnel SSH](../getting-started/installation.md#acesso-por-tunel));
+4. Token correto? Reexiba o link completo com `sudo ./scripts/show-token.sh`.
+
+O painel em si escuta só dentro da VPS (`127.0.0.1`): o endereço `http://SEU-IP:9000` não abre,
+de propósito.
+
+### "Token inválido" no wizard
+
+**Causa:** token errado, copiado com espaço extra, ou o servidor foi reiniciado com outro
+`SETUP_TOKEN` no ambiente.
+
+**Solução:** o arquivo `/data/setup-token` (volume `paas_data`) tem prioridade sobre a variável
+`SETUP_TOKEN` do ambiente, que é só o ponto de partida da instalação. Reexiba a URL + token com
+`sudo ./scripts/show-token.sh` (lê o volume, sem reinstalar nada). Ao concluir o assistente o token é
+apagado de propósito; para reabrir o assistente e gerar um token novo, rode
+`sudo ./scripts/reset-setup.sh` (ou `--full`, que também apaga a conta de administrador).
+
+### Perdi o token / quero recomeçar o wizard do zero
+
+- **Perdeu o token:** `sudo ./scripts/show-token.sh` — imprime o banner com a URL e o token.
+- **Recomeçar o wizard:** `sudo ./scripts/reset-setup.sh` — apaga `setup-state.json` do volume
+  (com confirmação interativa) e o wizard volta ao passo 0; a conta admin é mantida.
+  Com `--full` apaga também `users.json` e `sessions.json` (a conta admin deixa de existir
+  e todos são deslogados). Os dois modos geram um setup token NOVO (o antigo deixa de valer; veja com
+  `show-token.sh`). Projetos, domínios e e-mail NÃO são tocados.
+
+### Perdi o acesso SSH durante o hardening
+
+**Não entre em pânico — é para isso que existe o rollback.** O hardening agenda uma reversão
+automática (via `at`) que restaura a configuração anterior em ~5 minutos **se você não
+confirmar o acesso** pelo painel. Aguarde o rollback, entre novamente e revise o plano de
+correções antes de reaplicar. Cada arquivo alterado tem backup em `/var/backups/paas/`.
+Perdeu a chave, a senha ou o celular da verificação em duas etapas? Veja
+[Perdi o acesso — e agora?](recover-access.md).
+
+### Deploy bloqueado por guardrail
+
+**Sintomas:** deploy retorna `409 guardrail_blocked` e a UI abre o modal de blockers.
+
+**Solução:** o modal lista cada violação com **evidência** (arquivo:serviço) e **sugestão de
+correção**. Corrija o compose/código (recomendado) — ex.: remova a porta do banco publicada no
+host, troque credenciais fracas. Se tiver certeza do risco (ex.: banco exposto só em ambiente
+de homologação), marque "Entendo os riscos" e confirme o override — ele fica **auditado** em
+Auditoria (`guardrail.override`).
+
+---
+
+## 🐳 Docker
+
+### "Cannot connect to the Docker daemon"
+
+**Solução:** `systemctl status docker` — se o `install.sh` acabou de instalar, pode ser
+necessário `sudo systemctl enable --now docker`. O painel acessa apenas o socket local
+(`/var/run/docker.sock`); nunca exponha o Docker via TCP.
+
+---
+
+## Não achou seu problema?
+
+Abra uma issue no repositório com o template de bug — inclua logs (sem segredos), versão do
+commit e ambiente. Veja [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/community/pt-BR/CONTRIBUTING.md).

@@ -1,6 +1,6 @@
 /**
  * scanner.ts — executa os checks somente-leitura + integração com Lynis.
- * Spec: docs/security-research.md §3 (Lynis como motor de health-check) e §6.5.
+ * Spec: docs/internal/security-research.md §3 (Lynis como motor de health-check) e §6.5.
  */
 import { randomUUID } from "node:crypto";
 import type { SecurityCheckResult, SecurityScanReport, SecurityScanSummary } from "@paas/core";

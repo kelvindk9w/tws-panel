@@ -152,7 +152,7 @@ describe("M7 — arquivo ilegível é guardado à parte, não sobrescrito", () =
 
   it("contas: users.json ilegível NÃO é movido nem vira 'sem admin' — a carga falha com mensagem clara", async () => {
     await writeFile(path.join(dir, "users.json"), "{quebrado");
-    await expect(new UserStore(dir).hasAdmin()).rejects.toThrow(/users\.json está ilegível.*docs\/recuperar-acesso\.md/s);
+    await expect(new UserStore(dir).hasAdmin()).rejects.toThrow(/users\.json está ilegível.*guides\/recover-access\.md/s);
     expect(await ler("users.json")).toBe("{quebrado");
     expect(await aparte("users.json")).toEqual([]);
   });

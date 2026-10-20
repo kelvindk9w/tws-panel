@@ -1,0 +1,85 @@
+# Política de Segurança
+
+Versão em inglês (principal): [SECURITY.md](../../../SECURITY.md).
+
+O TWS Panel é um painel que **administra uma VPS inteira** — segurança é levada a sério por aqui.
+Se você encontrou uma vulnerabilidade, agradecemos o reporte responsável.
+
+## Reportando uma vulnerabilidade
+
+⚠️ **Não abra issue, pull request nem discussão pública** para vulnerabilidades de segurança.
+
+Reporte de forma privada pelos GitHub Security Advisories:
+
+1. Abra a [aba Security do repositório](https://github.com/kelvindk9w/tws-panel/security).
+2. Clique em **Report a vulnerability** e preencha o formulário.
+
+Link direto: <https://github.com/kelvindk9w/tws-panel/security/advisories/new>
+
+Se você não puder usar o GitHub, escreva para **[contato@tws.tec.br](mailto:contato@tws.tec.br)**. Não coloque detalhes de exploração em lugar público.
+
+Inclua, se possível:
+
+- Descrição da vulnerabilidade e impacto potencial;
+- Passos para reproduzir (ou prova de conceito);
+- Versão/commit afetado e ambiente (SO, versão do Docker, etc.).
+
+**O que esperar:**
+
+- Confirmação de recebimento em até **72 horas**;
+- Avaliação e, se confirmada, uma correção ou mitigação em até **90 dias** (antes disso,
+  sempre que possível);
+- Crédito ao pesquisador no anúncio da correção, se desejado;
+- Pedimos que você não divulgue publicamente antes da correção estar disponível.
+
+## Escopo
+
+**Dentro do escopo:**
+
+- O código deste repositório: `apps/server`, `apps/web`, `packages/*`, `scripts/*`;
+- O instalador (`scripts/install.sh`) e os scripts de hardening (`scripts/hardening/`);
+- O wizard de setup (autenticação por token) e o acesso ao painel (HTTPS pelo proxy Caddy, túnel SSH,
+  domínio do painel);
+- A API do painel (autenticação, autorização, injeção, path traversal, etc.).
+
+**Fora do escopo:**
+
+- Vulnerabilidades em dependências de terceiros sem prova de exploração através deste projeto
+  (reporte ao upstream; nós atualizamos as dependências);
+- Problemas que exigem acesso root/local à VPS (o painel assume o host como base de confiança);
+- Configurações deliberadamente inseguras marcadas como "apenas para testes" em `examples/`;
+- Negação de serviço por esgotamento de recursos da própria máquina.
+
+## Práticas de segurança do projeto
+
+- **Wizard protegido por token** de uso único (comparação em tempo constante), gerado pelo
+  instalador com permissão 0600;
+- **Terminal web com shell real na VPS, por desenho** — é o que permite conduzir o hardening pela
+  interface, e é a maior superfície de ataque do sistema. Na instalação, quem instala escolhe com
+  qual usuário ele abre (o recomendado é o próprio usuário comum, com o que precisa de root passando
+  pelo `sudo` com senha ou rodando em segundo plano e registrado na Auditoria; `root` é possível, mas
+  desaconselhado). Com `root`, quem tem sessão no painel tem a máquina. Isso **não é uma
+  vulnerabilidade a reportar** — está declarado em
+  [threat-model.json](../../../comoFuncionaSistema/global/threat-model.json) como risco aceito, junto com o
+  socket do Docker montado no painel. Falhas que permitam chegar a esse terminal **sem sessão
+  válida**, sim;
+- **Painel só em `127.0.0.1`** — o container do painel não publica porta na internet; quem atende
+  de fora é o proxy Caddy, nas portas 80/443, com HTTPS (ou o túnel SSH, no acesso por túnel);
+- **Login com verificação em duas etapas** (TOTP, com códigos de recuperação), senha com hash
+  argon2id, sessões revogáveis e limite de tentativas;
+- **Docker socket nunca exposto via TCP**; acesso somente pelo socket local;
+- **CORS same-origin** por padrão, headers de segurança (Helmet/CSP) e rate limiting;
+- **Segredos em disco com modo 0600**, os sensíveis cifrados (variáveis de ambiente dos projetos,
+  credenciais de repositório, token do Telegram, chave e senha dos backups), e **redação de
+  tokens/senhas nos logs**;
+- **Auditoria** de todas as ações sensíveis (login, deploy, override de guardrail, hardening,
+  alterações de e-mail, domínio do painel, notificações, backups e monitoramento);
+- **Guardrails de deploy** que bloqueiam configurações perigosas (porta de banco exposta,
+  credenciais fracas, container privilegiado) e exigem override explícito e auditado;
+- **Hardening com rollback automático** nas três fases que mexem no acesso (usuário, SSH e
+  firewall): se ninguém confirmar em ~5 minutos, o servidor desfaz sozinho o que aplicou.
+
+## Versões suportadas
+
+O projeto está em **beta** (`0.x`): apenas a branch `main` recebe correções de segurança; não há
+linhas de versão antigas mantidas. Recomendamos sempre rodar a versão mais recente.

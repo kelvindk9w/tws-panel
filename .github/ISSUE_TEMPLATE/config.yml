@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas (Discussions)
+    url: https://github.com/kelvindk9w/tws-panel/discussions
+    about: Ask questions and share ideas with the community.
+  - name: Report a security vulnerability
+    url: https://github.com/kelvindk9w/tws-panel/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Documentation
+    url: https://kelvindk9w.github.io/tws-panel/
+    about: Installation, operation and troubleshooting guides.

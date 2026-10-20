@@ -1,6 +1,6 @@
 /**
  * baseline.ts — snapshot pós-hardening e diff de scans recorrentes
- * (Fase 4 — spec: docs/security-research.md §6.6).
+ * (Fase 4 — spec: docs/internal/security-research.md §6.6).
  *
  * Snapshot: pacotes instalados (dpkg), portas em listen (ss -tulpn, com
  * fallback para /proc/net) e sha256 de arquivos críticos (sshd_config, UFW,

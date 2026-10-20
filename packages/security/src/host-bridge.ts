@@ -9,7 +9,7 @@
  *   docker run --rm --privileged --pid=host <imagem> \
  *     nsenter -t 1 -m -u -i -n -p -- bash -c "<comando>"
  *
- * Por que é seguro (docs/host-bridge.md):
+ * Por que é seguro (site/src/content/docs/pt-br/reference/host-bridge.md):
  *  - sem senha/chave nova: usa o docker.sock que o painel já monta;
  *  - allowlist ESTRITA: só comandos fixos dos checks/baseline/Lynis e as
  *    invocações dos scripts de scripts/hardening/* — nada vindo da API vira

@@ -1,0 +1,840 @@
+---
+title: "From zero to a fully set-up panel"
+---
+
+A single roadmap, in order, from the VPS you just bought to a fully configured panel: security,
+domain, time zone, email, notifications, backups, your first project live, and a test restore.
+
+Each step tells you **what to do**, **where to click**, and **what to check** to know it worked.
+When the details are long, the step summarizes and points you to the right guide. Follow the steps
+in order: some depend on earlier ones (email notifications, for example, need email to be ready).
+
+The examples use made-up values: `203.0.113.10` as the VPS IP and `example.com` as the domain.
+Replace them with yours.
+
+The panel interface is currently available only in Portuguese. The screen labels below are shown
+exactly as they appear on screen, with the English translation in parentheses the first time each
+one shows up in a section.
+
+| Step | What you do | Where |
+|---|---|---|
+| [1](#etapa-1) | Get the VPS, the domain, and the accounts | Outside the panel |
+| [2](#etapa-2) | Install the panel | Terminal (SSH) |
+| [3](#etapa-3) | Initial wizard, security, and two-step verification | Browser |
+| [4](#etapa-4) | Panel domain | Configurações → Domínio do painel (Settings → Panel domain) |
+| [5](#etapa-5) | Time zone | Configurações → Fuso horário (Settings → Time zone) |
+| [6](#etapa-6) | Email | E-mail (Email), Envios (Sent mail) |
+| [7](#etapa-7) | Notifications | Configurações → Notificações (Settings → Notifications) |
+| [8](#etapa-8) | Backups outside the VPS | Configurações → Backups (Settings → Backups) |
+| [9](#etapa-9) | First project | Novo Projeto (New Project) |
+| [10](#etapa-10) | Test a restore | Projeto → Backups (Project → Backups) |
+| [11](#etapa-11) | Maintenance | Terminal, Alertas (Alerts), Auditoria (Audit) |
+| [✓](#checklist) | Final checklist | — |
+
+> [!TIP]
+> The panel itself tracks much of this. On the Dashboard, the **Deixe o painel pronto** (Get the
+> panel ready) card shows what is missing (protections, two-step verification, panel domain, email,
+> notifications, and backups), with a "Como fazer" (How to) link and a button to the right screen.
+> The same list lives in **Configurações → Primeiros passos** (Settings → Getting started). This
+> guide goes beyond it: time zone, first project, and a test restore.
+
+<a id="etapa-1"></a>
+
+## Step 1 — Before you start
+
+### What to get
+
+**A VPS** (virtual server) with:
+
+- **Ubuntu 22.04 or 24.04 LTS**, clean (no other software installed). When creating it, prefer
+  24.04.
+- Recommended minimum: **1 vCPU, 2 GB of RAM, and 25 GB of disk**.
+- Ports **80 and 443** open to the internet. The HTTPS certificate depends on them. If your
+  provider has a firewall in its hosting dashboard, open both.
+- For email: port **25** unblocked by the provider. Many block it on new accounts (DigitalOcean,
+  Vultr, Hetzner on new accounts, AWS, Google Cloud, Azure). You check this in
+  [Step 6](#etapa-6).
+
+You will need two things the provider gives you: **the VPS IP** and **the root password**.
+Before going on, look in the provider's dashboard for "Console", "VNC", "Rescue", or "Recovery
+mode" and confirm it exists: it is your way back in if you lose SSH access. See
+[I lost access](../guides/recover-access.md).
+
+You do **not** need to install Docker, Node, or the rest yourself: the installer takes care of it.
+
+### Domain (optional, but recommended)
+
+Without a domain, everything works with automatic `*.sslip.io` addresses (for example,
+`https://203-0-113-10.sslip.io`). With a domain of your own, you get:
+
+- your own address for the panel (`panel.example.com`), instead of one with the IP in the name;
+- professional email, which **requires** a domain;
+- your own addresses for your projects.
+
+You will create records in the domain's DNS (at the provider where it is registered, or on
+Cloudflare). The examples in this guide use Cloudflare.
+
+### Accounts
+
+| Account | What for | Required? |
+|---|---|---|
+| **GitHub** | Publish projects from a repository. A private repository needs a read-only token (the screen teaches you how to generate one). | Only if your code is on GitHub |
+| **Cloudflare** | R2, the external storage for backups (the free plan covers 10 GB per month; it asks for a card). It also works as the domain's DNS. | Recommended |
+| **Telegram** | Receive the panel's notices on your phone. | Optional |
+
+<a id="etapa-2"></a>
+
+## Step 2 — Install the panel on the VPS
+
+**What to do:** create your user on the VPS, install your SSH key, clone the panel into
+`/opt/tws-panel`, and run the installer. The essential commands, in order (replace `YOUR_IP` with
+your IP and `YOUR_USER` with your username):
+
+```bash
+# 1. On the VPS, as root: create your user with administrator permission
+ssh root@YOUR_IP
+adduser YOUR_USER
+usermod -aG sudo YOUR_USER
+exit
+
+# 2. On YOUR computer: generate the SSH key (if you do not have one yet) and install it on the VPS
+ssh-keygen -t ed25519
+ssh-copy-id -i ~/.ssh/id_ed25519.pub YOUR_USER@YOUR_IP
+
+# 3. On the VPS, with your user: install git, clone and run the installer
+ssh YOUR_USER@YOUR_IP
+sudo apt update && sudo apt install -y git
+sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+sudo chown -R $USER:$USER /opt/tws-panel
+cd /opt/tws-panel && git checkout main
+./scripts/install.sh
+```
+
+> [!WARNING]
+> **Already have an SSH key?** Don't run `ssh-keygen` over it: it erases the old one.
+> [Step 4 of the installation guide](installation.md#passo-4) shows how to check and which key to
+> use.
+
+Never done this before? Follow the **[installation guide](installation.md)**, Steps
+[1](installation.md#passo-1) to [7](installation.md#passo-7). It shows what appears on screen after
+each command and what to do when something goes wrong.
+
+During the installation:
+
+- The installer checks the machine without changing anything and, if the VPS is already in use,
+  asks for confirmation.
+- It asks **which user the panel's terminal opens as**. See
+  [what each choice means](installation.md#terminal-do-painel).
+- It may stop right at the start asking you to reboot the VPS. This is normal on a new VPS: run
+  `sudo reboot`, wait a minute, log in again, and repeat `cd /opt/tws-panel` and
+  `./scripts/install.sh`.
+
+**What to check:** the terminal shows the banner **TWS PANEL INSTALADO E RODANDO COM SUCESSO!**
+(the installer prints it in Portuguese; it means "TWS Panel installed and running successfully!"),
+with the link `https://203-0-113-10.sslip.io/?token=…` (with your IP) and the **setup token**. Copy
+the full link.
+
+Closed the terminal and lost the link? On the VPS:
+
+```bash
+sudo ./scripts/show-token.sh
+```
+
+Did the installer warn that the address did not respond within 3 minutes? Almost always it is
+ports 80 and 443 closed in the provider's firewall. See the common errors in
+[Step 8](installation.md#passo-8).
+
+<a id="etapa-3"></a>
+
+## Step 3 — Initial wizard, security, and two-step verification
+
+### 3.1 The wizard (setup)
+
+**What to do:** open the banner link in your browser. The wizard has four steps:
+
+1. **Boas-vindas** (Welcome): validates the setup token (already in the link) and unlocks the
+   server terminal.
+2. **Saúde da máquina** (Machine health): CPU, memory, disk, and network, checked live in the
+   built-in terminal. This step also shows the VPS time zone (see [Step 5](#etapa-5)).
+3. **Segurança** (Security): scan (Lynis), plan, and hardening in 8 phases. Explained just below.
+4. **Conta de administrador** (Administrator account): your user and a strong panel password. Click
+   **Criar conta admin** (Create admin account).
+
+**What to check:** **Setup concluído!** (Setup complete!) appears and you land on the Dashboard.
+From here on, access is through the login screen, with username and password. The setup token stops
+working.
+
+### 3.2 The Security step (hardening)
+
+> [!IMPORTANT]
+> **Read the [Security wizard](security-wizard.md) before this step.** It turns off password login
+> over SSH. Done carelessly, it can lock you out of the VPS.
+
+**What to do, in short:**
+
+- Apply the phases **one at a time**. Simulate first if you like: nothing changes on the VPS during
+  a simulation.
+- Phases **01 (user), 02 (SSH), and 03 (firewall)** ask for confirmation. After applying, open
+  **a new window** of the terminal on your computer, without closing the old one, and run the `ssh`
+  command the panel shows.
+- Only if the new window connects, type `exit` and click **Entrei — confirmar** (I'm in — confirm).
+  If it doesn't connect, click **Não consegui entrar — desfazer agora** (I couldn't get in — undo
+  now). Without confirmation, the phase undoes itself after about 5 minutes.
+- In phase 01, the new window must log in **without asking for the account password**. If it asks,
+  don't confirm and don't move on to 02.
+- Phase 06 (Audit) takes several minutes. It looks stuck, but it is not.
+- **After the last phase, reboot the VPS** (`sudo reboot`), wait a minute, and open the panel
+  again.
+
+The full step-by-step, phase by phase, is in
+[The eight phases](security-wizard.md#as-oito-fases).
+
+**What to check:** on the Dashboard, the **Proteções da VPS** (VPS protections) step of the roadmap
+shows as done, with "8 de 8 fases" (8 of 8 phases). If any phase was left out, it stays in
+**Segurança → Proteções** (Security → Protections) for you to review, simulate, or apply later.
+
+### 3.3 Two-step verification
+
+With it, logging in to the panel asks for a 6-digit code generated on your phone in addition to
+the password. If your password leaks, nobody gets in without your phone.
+
+**What to do:**
+
+1. Install an authenticator app on your phone (Google Authenticator, Microsoft Authenticator,
+   2FAS, or similar).
+2. In the panel, open **Configurações → Segurança** (Settings → Security) and click **Começar**
+   (Start).
+3. Scan the QR code with the app. Can't scan it? The screen shows the key to type into the app.
+4. Type the **code shown in the app** and **your current panel password**. Click **Ativar**
+   (Enable).
+5. The screen shows the **recovery codes**, which appear only now. Store them somewhere safe, check
+   **Guardei os códigos em lugar seguro** (I saved the codes in a safe place), and click
+   **Concluir** (Finish).
+
+**What to check:** the screen says "Ativa: entrar no painel exige o código do app." (Active:
+logging in to the panel requires the app code.) Log out and back in: the login asks for the code.
+On the Dashboard, the **Verificação em duas etapas** (Two-step verification) step shows as done.
+
+<a id="etapa-4"></a>
+
+## Step 4 — Panel domain
+
+Replaces the address `https://203-0-113-10.sslip.io` with one of your own, such as
+`panel.example.com`. The automatic address gives away the VPS IP in the name; a domain of your own
+is more discreet and easier to remember.
+
+> [!NOTE]
+> Installed with SSH tunnel access? Then the panel has no address on the internet, this step
+> already counts as done, and the screen explains how to switch to HTTPS.
+
+**What to do:**
+
+1. **Create the DNS record.** On Cloudflare: DNS → Records → Add record.
+   - Type: **A**.
+   - Name: `panel` (for `panel.example.com`).
+   - IPv4 address: the VPS IP.
+   - Proxy: **gray cloud ("DNS only")**. With the orange cloud, the certificate is not issued.
+   - Save. If there is an **AAAA** record with the same name, delete it.
+2. **Register it in the panel.** Still on the `…sslip.io` address, open **Configurações → Domínio
+   do painel** (Settings → Panel domain), type `panel.example.com`, and click **Salvar domínio**
+   (Save domain). The screen shows the same A record, with a copy button on each field.
+3. Click **Verificar DNS** (Check DNS). If "ainda não aponta" (doesn't point there yet) appears,
+   wait a few minutes and try again.
+4. **Wait for the certificate.** In the certificate card, wait for it to become "Válido" (Valid)
+   (seconds to 2 minutes). Use **Conferir de novo** (Check again) to refresh. If it fails, the
+   cause shows up in the card, with the **Tentar emitir agora** (Try to issue now) button.
+5. Click **Abrir o painel pelo endereço novo** (Open the panel at the new address) and log in
+   again, with username, password, and code. The session is valid only on the address where you
+   logged in.
+
+**What to check:** the panel opens at `https://panel.example.com`, with a padlock. The "Endereço do
+painel" (Panel address) list shows both addresses. On the Dashboard, the **Domínio do painel**
+(Panel domain) step shows as done, with the notice "acesso pelo IP ainda ativo" (access by IP still
+active).
+
+### Turn off access by IP (optional)
+
+Makes the `…sslip.io` address stop opening the panel. It is only unlocked with the page open **on
+the new domain** and the certificate valid.
+
+1. Already on the new address, in **Configurações → Domínio do painel**, **write down the SSH
+   command** the screen shows (there is a **Copiar o comando** (Copy the command) button). It is
+   your way back if the domain stops opening.
+2. Click **Desativar o acesso pelo IP** (Turn off access by IP), type the domain, and click
+   **Desativar agora** (Turn off now).
+
+**What to check:**
+
+- `https://203-0-113-10.sslip.io` no longer opens the panel;
+- `https://panel.example.com` still opens;
+- in **Auditoria** (Audit), `panel_domain.ip_disabled` appears.
+
+### How to turn access by IP back on
+
+- **On screen:** in **Configurações → Domínio do painel**, click **Reativar o acesso pelo IP**
+  (Turn access by IP back on).
+- **Over SSH**, if the domain stopped opening (DNS deleted, domain expired, certificate that did
+  not renew):
+
+  ```bash
+  cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh
+  ```
+
+  Wait for the "pronto" (done) message, open `https://203-0-113-10.sslip.io` (with your IP), and
+  log in again. Details in
+  [The panel domain stopped opening](../guides/recover-access.md#o-domínio-do-painel-parou-de-abrir).
+
+<a id="etapa-5"></a>
+
+## Step 5 — Time zone
+
+The VPS time zone defines **the time of scheduled backups, which run at 03:00 in the VPS time
+zone**, and the dates in the logs. Each provider delivers the VPS in some time zone: most in UTC
+(three hours ahead of Brasília), Contabo in Berlin. In UTC, the backups' "03:00" would be midnight
+Brasília time.
+
+**Where to see it:** the initial wizard already shows the detected time zone in the **Saúde da
+máquina** (Machine health) step, with **Trocar o fuso** (Change the time zone). After installation,
+the place is **Configurações → Fuso horário** (Settings → Time zone).
+
+**What to do:**
+
+1. Open **Configurações → Fuso horário**. The screen shows the VPS time zone and the current time.
+2. Under **Fuso novo** (New time zone), pick yours. Brazil's appear first; you can search by city or
+   state (e.g., `America/Sao_Paulo`).
+3. Optional: under **Aplicar também nestes projetos** (Also apply to these projects), check the
+   projects that should follow the VPS time zone. They switch to "Igual ao da VPS" (Same as the
+   VPS) and restart with the new time zone, without pulling new code. Unchecked ones keep the time
+   zone they have.
+4. Click **Aplicar na VPS** (Apply to the VPS). The change applies to the whole VPS, with no SSH
+   needed.
+
+Each project also has the **Fuso horário** (Time zone) card, in the project's **Configurações**
+(Settings) tab: "Padrão da imagem" (Image default; usually UTC), "Igual ao da VPS" (Same as the
+VPS), or a specific time zone.
+
+**What to check:** the time shown on screen matches your clock. In **Configurações → Backups**, the
+schedule sentence says "Roda às 03:00 (horário da VPS, …)" (Runs at 03:00 (VPS time, …)) with the
+new time zone's offset (for Brasília, `UTC-03:00`).
+
+<a id="etapa-6"></a>
+
+## Step 6 — Email
+
+An email server on the VPS itself, so your projects can send messages (password recovery, notices,
+forms) and so you can have mailboxes such as `contato@`. It is optional: if your projects use an
+external sending service (Amazon SES, Resend, SendGrid…), check **Não vou usar** (I won't use it)
+in the roadmap and skip to [Step 7](#etapa-7).
+
+> [!IMPORTANT]
+> **Use a subdomain just for sending**, such as `send.example.com`. Don't use the main domain:
+> pointing its MX at the VPS would divert the email the company already receives somewhere else
+> (Google, Microsoft, or another service). The steps below use `send.example.com`.
+
+### 6.1 Check port 25
+
+On the VPS, over SSH:
+
+```bash
+nc -vz -w 5 gmail-smtp-in.l.google.com 25
+```
+
+**What to check:** `succeeded` or `open` means it is unblocked. `timed out` means it is blocked:
+open a ticket with the provider asking to unblock outbound port 25 for transactional email. Without
+it, email does not go out. See
+[Port 25 blocked by the provider](../guides/troubleshooting.md#porta-25-bloqueada-pelo-provedor).
+
+### 6.2 Start the server and register the sending domain
+
+1. In the menu, click **E-mail** (Email).
+2. If the server is stopped, click **Iniciar servidor** (Start server).
+3. In the **Domínios de e-mail** (Email domains) card, type `send.example.com` and click
+   **Adicionar domínio** (Add domain).
+4. If the red notice "Este domínio já recebe e-mail em outro servidor" (This domain already
+   receives email on another server) appears, do **not** go ahead with the main domain. Click
+   **Usar envio.… (recomendado)** (Use envio.… (recommended)).
+
+**What to check:** the **Servidor de e-mail** (Email server) card shows the server running and the
+domain appears in the list.
+
+### 6.3 Create the DNS records
+
+Click the registered domain and open the **Checklist DNS** (DNS checklist) tab. The **Registros DNS
+esperados** (Expected DNS records) card has the exact values, with your VPS IP and the DKIM key.
+**Copy field by field**, using each one's copy button. On Cloudflare (DNS → Records → Add record),
+for `send.example.com`:
+
+| Type | Name (on Cloudflare) | Value | Note |
+|---|---|---|---|
+| A | `mail.send` | VPS IP | **Gray cloud ("DNS only")**. With the orange one, the certificate is not issued and email does not arrive. |
+| MX | `send` | Mail server: `mail.send.example.com` · Priority: `10` | On Cloudflare, the MX has **two separate fields**: Mail server and Priority. The screen shows each one with its own copy button. Only on the subdomain: don't touch the main domain's MX. |
+| TXT (SPF) | `send` | `v=spf1 ip4:<IP> ~all`, from the checklist | |
+| TXT (DKIM) | `paas._domainkey.send` | `v=DKIM1; k=rsa; p=…`, from the checklist | Copy it whole, using the button. |
+| TXT (DMARC) | `_dmarc.send` | `v=DMARC1; p=none; …`, from the checklist | Keep `p=none` for the first few weeks. |
+
+Then click **Verificar agora** (Check now) until all of them turn green. Propagation takes from
+minutes to a few hours.
+
+**What to check:** the count reaches **6/6 OK** (the sixth item is the PTR, just below).
+
+### 6.4 Reverse DNS (PTR)
+
+The PTR is the "name" the VPS IP reports to whoever receives the email. It does **not** live on
+Cloudflare: it is set in the VPS provider's dashboard. The **Reverse DNS (PTR)** card shows one of
+three colors:
+
+- **Green:** the reverse name is already `mail.send.example.com`. Nothing to do.
+- **Blue:** a generic provider name that points back to the IP. Sending already works; changing the
+  name is recommended, and the way to do it appears under "Opcional: trocar o nome reverso"
+  (Optional: change the reverse name).
+- **Yellow:** no valid reverse name. Gmail, Yahoo, and Microsoft may reject your mail: change the
+  name.
+
+Where to change it: on **Contabo**, in Reverse DNS Management; on **Hetzner**, server → Networking
+tab → Reverse DNS; on **Vultr**, server → Settings → IPv4 → Reverse DNS. On other providers, the
+card has ready-made text for opening a ticket, with a copy button.
+
+**What to check:** after changing it, **Verificar agora** turns the PTR green.
+
+### 6.5 Email certificate
+
+1. Go back to **E-mail**.
+2. The **Certificado do servidor de e-mail** (Email server certificate) card shows
+   `mail.send.example.com`.
+3. Click **Conferir de novo** (Check again) until **válido** (valid), "Emitido por Let's Encrypt"
+   (Issued by Let's Encrypt), appears. The first time, the email server restarts by itself for a few
+   seconds.
+
+**What to check:** the state is **válido**. If it stays pending, the card itself says what is
+missing (missing A record, orange cloud, or ports 80/443 closed). The panel renews it by itself.
+
+### 6.6 Create a mailbox
+
+1. On the domain's page, open the **Caixas** (Mailboxes) tab.
+2. Under **Nova caixa** (New mailbox), type the name (e.g., `contato`).
+3. Choose the password: type it twice (minimum of 12 characters) or have the panel generate one.
+   The password does not show up again: store it in your password manager.
+4. Click **Criar caixa** (Create mailbox).
+
+**What to check:** the mailbox appears in the list. "Configurar no app" (Set up in an app) shows
+the settings for Outlook, Gmail, Thunderbird, or your phone.
+
+### 6.7 Send a test email
+
+1. In the **Checklist DNS** tab, in the **E-mail de teste** (Test email) card, click **Enviar
+   e-mail de teste** (Send test email).
+2. Type an address of yours (a Gmail, for example) and click **Enviar** (Send).
+
+**What to check:** within a few seconds, **"Entregue ao servidor do destinatário"** (Delivered to
+the recipient's server) appears in green. Open the destination mailbox and also check the Spam
+folder: on a new server, it is common for the first one to land there. Mark it as "not spam". If
+the yellow "Adiada: Connection to … failed" (Deferred: Connection to … failed) appears, port 25 is
+blocked ([6.1](#etapa-6)). If the red "Recusado: …" (Rejected: …) appears, the reason is whatever
+the recipient replied (usually SPF, DKIM, DMARC, or the reverse name). See
+[Email landing in spam](../guides/troubleshooting.md#e-mail-caindo-em-spam).
+
+### 6.8 Webmail
+
+1. In **E-mail**, in the **Webmail** card, click **Ativar webmail** (Enable webmail). The first time
+   takes a while: the panel downloads the Roundcube image (about 265 MB).
+2. Click **Abrir webmail** (Open webmail) next to `mail.send.example.com`.
+3. Log in with the mailbox's full address (e.g., `contato@send.example.com`) and its password.
+
+**What to check:** `https://mail.send.example.com/` opens with a padlock and the login screen in
+Portuguese. Send an email to yourself and reply from there: the reply shows up in the webmail
+Inbox (Caixa de entrada). Forgot the mailbox password? **Caixas** tab → **Trocar senha** (Change
+password).
+
+### 6.9 The Envios page
+
+In the menu, **Envios** (Sent mail) shows what the email server is doing:
+
+- **Fila agora** (Queue now): what is still being retried, with the reason for the last failure.
+- **Histórico** (History): delivered, rejected, deferred, and canceled over the last 30 days.
+- **Volume**: chart of the last 14 days and the rejection rate.
+- **Reputação** (Reputation): blocklists, checked once a day and on the **Conferir agora** (Check
+  now) button.
+- **Nota de entregabilidade** (Deliverability score): from 0 to 100, with what is done and what is
+  missing.
+
+**What to check:** in **Histórico**, the test email appears as "Entregue" (Delivered). A new server
+does not reach green on the score until it has been sending for about 30 days: this is on purpose.
+
+**In the roadmap:** the **E-mail do servidor** (Server email) step shows as done once the server is
+running and at least one domain has correct DNS.
+
+<a id="etapa-7"></a>
+
+## Step 7 — Notifications
+
+Notices outside the panel when something needs attention: security alert, failed deploy,
+certificate problem, email on a blocklist, disk above 90%, backups that failed or ran late. Without
+this, alerts only appear inside the panel.
+
+### 7.1 Telegram
+
+1. In Telegram, search for **@BotFather** (with the blue verified badge) and open the chat.
+2. Send `/newbot`. It asks for a name (e.g., "My panel notices") and then a @ username that ends in
+   `bot` (e.g., `my_panel_notices_bot`).
+3. It replies with the **token**, a line like `123456789:ABC…`. Copy the entire line.
+4. In the panel, open **Configurações → Notificações** (Settings → Notifications). In the
+   **Telegram** card, paste it into the **Token do robô** (Bot token) field and click **Salvar
+   token** (Save token). "Robô @… conferido" (Bot @… verified) should appear.
+5. Click the **Abrir @…** (Open @…) link and, in Telegram, tap **Começar** (Start) (or send
+   `/start`).
+6. Go back to the panel and click **Conectar** (Connect). Check that the chat name shown is yours
+   (or the group's).
+7. Click **Enviar teste** (Send test).
+
+**What to check:** the message "TWS Panel: Teste de notificação" (TWS Panel: Notification test)
+arrives in Telegram, and the badge turns to "Testado em…" (Tested on…). Under **Últimos envios**
+(Latest sends), "Teste de notificação · Enviado" (Notification test · Sent) appears.
+
+### 7.2 Email (optional)
+
+Needs [Step 6](#etapa-6) done: server running and a domain with all DNS correct.
+
+1. In **Configurações → Notificações**, in the **E-mail** card, enter up to 5 addresses and click
+   **Salvar endereços** (Save addresses).
+2. Click **Enviar teste**.
+
+**What to check:** the message arrives in the mailbox. On the first send from a new server, it
+tends to land in spam: mark it as "not spam".
+
+### 7.3 What it notifies
+
+In the **O que avisa** (What it notifies) card, choose the types. The default already turns on
+everything that calls for action; "Painel reiniciado" (Panel restarted) starts off.
+
+**In the roadmap:** the **Notificações** (Notifications) step shows as done once at least one
+channel is connected and the test has been sent.
+
+<a id="etapa-8"></a>
+
+## Step 8 — Backups outside the VPS
+
+The panel already keeps copies on the VPS itself, but they disappear along with the server if it is
+lost, broken into, or wiped. With a copy outside, on Cloudflare R2, you can rebuild everything on a
+new VPS.
+
+### 8.1 Create the bucket and keys on Cloudflare R2
+
+Cloudflare shows the names in English or Portuguese, depending on your account's language. Both are
+given below (English / Portuguese), as on the panel's screen.
+
+1. At dash.cloudflare.com, open **R2 Object Storage** / **Armazenamento de objetos R2**. The first
+   time, enable R2 (it asks for a card; the free plan covers 10 GB per month).
+2. Click **Create bucket** / **Criar bucket**, give it a name (e.g., `tws-backups`, only lowercase
+   letters, numbers, and hyphens), and create it.
+3. On the R2 page, on the right side, find **API Tokens** / **Tokens de API** and click **Manage** /
+   **Gerenciar**. Then, **Create Account API token** / **Criar token de API da conta** (or the user
+   one, if only that one appears).
+4. In the form:
+   - a name (e.g., `tws-panel-backups`);
+   - under Permissions / Permissões: **Object Read & Write** / **Leitura e gravação de objetos**;
+   - under Specify bucket(s) / Especificar bucket(s): **Apply to specific buckets only** / **Aplicar
+     somente a buckets específicos**, and pick the bucket;
+   - TTL: **Forever** / **Para sempre**.
+
+   Confirm with the create-token button at the bottom of the page.
+5. The next screen shows the keys **only once**. Copy:
+   - the **Access Key ID** / **ID da chave de acesso**;
+   - the **Secret Access Key** / **Chave de acesso secreta**;
+   - the endpoint that ends in `.r2.cloudflarestorage.com`.
+
+   The "Token value" / "Valor do token" is not used. Lost the endpoint? It is in the bucket →
+   Settings / Configurações → S3 API.
+
+### 8.2 Connect it in the panel
+
+1. Open **Configurações → Backups** (Settings → Backups). In the **Armazenamento externo**
+   (External storage) card, leave **Cloudflare R2** checked.
+2. Paste the endpoint, the bucket, the Access Key ID, and the Secret Access Key. Region: `auto`.
+3. Click **Testar e salvar** (Test and save). Before saving, the panel writes, reads, and deletes a
+   test file in the bucket.
+
+**What to check:** "Conexão testada e salva" (Connection tested and saved) appears, along with the
+"Testado em…" badge. If it fails, nothing is saved and the screen explains the reason (key
+rejected, bucket does not exist, no response).
+
+### 8.3 Encryption and recovery kit
+
+The external copy goes encrypted with a password of yours. **Without this password, nobody, not
+even TWS, can open your backups.**
+
+1. In the **Criptografia** (Encryption) card, create the password (minimum of 12 characters) or
+   click **Sugerir uma frase forte** (Suggest a strong passphrase).
+2. Click **Baixar kit de recuperação** (Download recovery kit) and store the file **outside the
+   VPS**. It contains the password, where the backups are kept, and how to restore.
+3. Check **Guardei a senha em lugar seguro** (I saved the password in a safe place) and click
+   **Ativar a criptografia** (Enable encryption).
+
+**What to check:** the card shows **Ligada (AES-256)** (On (AES-256)).
+
+### 8.4 First backup
+
+1. In the **Painel** (Panel) card, click **Fazer backup agora** (Back up now).
+2. Do the same in the **E-mail** card, if you turned on email in [Step 6](#etapa-6).
+
+**What to check:**
+
+- in **Últimos backups** (Latest backups), the line ends with **"na VPS · cópia externa
+  conferida"** (on the VPS · external copy verified): the panel downloaded the copy back and
+  checked it before calling it done;
+- on Cloudflare, under R2 → `tws-backups`, the folder `TWS Panel Backups/_painel/` appears with the
+  `.7z` file;
+- on the Dashboard, the **Backups fora da VPS** (Backups outside the VPS) step shows as done.
+
+### 8.5 Test the password
+
+In the **Criptografia** card, type the kit's password and click **Testar minha senha** (Test my
+password).
+
+**What to check:** the answer is "Senha certa" (Correct password). Every 90 days without a test, the
+panel reminds you to repeat this.
+
+### 8.6 Schedule
+
+In the **Painel** and **E-mail** cards, choose the frequency (once a day, every 12 hours, or every
+6 hours) and how many copies to keep on the VPS and outside. **The base time is 03:00 in the VPS
+time zone** (see [Step 5](#etapa-5)).
+
+Projects have their own settings. In the **Padrão dos projetos** (Projects default) card, choose
+the same for projects: on or off, frequency, and copies.
+
+1. Adjust the fields. The sentence below shows how many days the backups cover.
+2. Under **Aplicar também nestes projetos**, check the projects that already exist (or **Marcar
+   todos** (Check all)).
+3. Click **Salvar** (Save).
+
+**What to check:** each project in the list shows "hoje: segue o padrão" (today: follows the
+default). A new project is born with the default. Each project's databases and folders stay in its
+**Backups** tab ([Step 9](#etapa-9)).
+
+Details on what is included, where it is kept, and how to restore on a new VPS:
+[Features → Backups](../guides/features.md#backups).
+
+<a id="etapa-9"></a>
+
+## Step 9 — First project
+
+### 9.1 Connect GitHub (optional)
+
+To pick the repository from a list, instead of pasting the URL: open **Configurações →
+Integrações** (Settings → Integrations), paste a **Token do GitHub (somente leitura)** (GitHub token
+(read-only)), and click **Conectar** (Connect). The screen teaches you how to generate the token. A
+token with write permission is rejected.
+
+**What to check:** the screen shows "Conectado como …" (Connected as …).
+
+### 9.2 Create the project
+
+In the menu, click **Novo Projeto** (New Project). There are three steps:
+
+1. **Fonte do código** (Code source).
+   - Give it a **Nome do projeto** (Project name).
+   - Choose **Repositório Git** (Git repository) and paste the **URL do repositório** (Repository
+     URL), or click **Escolher dos meus repositórios** (Pick from my repositories) (with GitHub
+     connected).
+   - Check the **Branch**.
+   - Private repository without the account connected? Check **Repositório privado** (Private
+     repository) and paste a **Token de leitura** (Read token) (the screen teaches you how to
+     generate it, with the `Contents: Read` permission for that repository only).
+   - Click **Criar e detectar** (Create and detect).
+2. **Detecção automática** (Automatic detection). The panel works out the type: plain HTML, project
+   with a build, `Dockerfile`, or `docker-compose`. A compose file is adopted as is, without being
+   rewritten, and the screen shows which service and port HTTP arrives on.
+3. **Domínio e criação** (Domain and creation).
+   - **Endereço automático** (Automatic address): works right away, with HTTPS (e.g.,
+     `minha-app.203-0-113-10.sslip.io`).
+   - **Meu domínio ou subdomínio** (My domain or subdomain): type the domain and create, in your
+     DNS, the record the screen shows (type A pointing to the VPS IP, gray cloud on Cloudflare). You
+     can create the project before the DNS propagates.
+   - Check **Projeto usa WebSocket / conexões longas** (Project uses WebSocket / long-lived
+     connections) if that applies.
+   - Leave **Fazer backup** (Back up) on **Sim** (Yes).
+   - Click **Criar projeto** (Create project).
+
+**What to check:** the project page opens, with the menu Visão geral (Overview), Deploys, Domínios
+(Domains), Git, Variáveis (Variables), E-mail, Backups, and Configurações (Settings).
+
+### 9.3 Variables
+
+Open the **Variáveis** tab. The screen lists the variables the compose file asks for and suggests
+the names from the repository's `.env.example`, still without values.
+
+1. Have the `.env` on your computer? Click **Importar arquivo .env** (Import .env file). Nothing is
+   saved yet: review it.
+2. Fill in what is missing (or use **Adicionar variável** (Add variable)).
+3. Click **Salvar variáveis** (Save variables).
+
+**What to check:** no warning about a missing required variable. The deploy is blocked when a
+required one is missing; the `.env.example` ones without a value only raise a warning.
+
+### 9.4 Project email
+
+Needs [Step 6](#etapa-6) done.
+
+1. Open the project's **E-mail** tab and choose the **Domínio de e-mail** (Email domain).
+2. Check the **Endereço de envio** (Sending address) (e.g., `contato@send.example.com`) and the
+   **Nome de exibição** (Display name).
+3. Set the mailbox password (type it twice or generate a strong one). The generated one is shown
+   only once.
+4. Click **Ativar e-mail** (Enable email).
+5. If your app uses other variable names (e.g., `SMTP_SENHA`, `EMAIL_DE`), click **Ligar às
+   variáveis do projeto** (Link to the project's variables) and, on each row, choose the name the
+   app reads. The panel supplies the current value under that name on every deploy.
+
+**What to check:** the card shows `SMTP_HOST = mail.send.example.com`. The `SMTP_*` and `MAIL_*`
+values go into the deploy automatically. The values only reach the app on the next deploy.
+
+### 9.5 Ports (only if you need to)
+
+In the **Visão geral**, in the Containers card, the **Portas** (Ports) button opens two tabs:
+
+- **Este projeto** (This project): change the published port, **Publicar uma porta** (Publish a
+  port), remove the publication, or **Editar em lote** (Edit in bulk). The change applies on the
+  next deploy.
+- **Todos os projetos** (All projects): the ports in use on the server, with conflicts in red.
+
+Most projects don't need this: the site opens through the domain, via the proxy. If you choose "Em
+todos os endereços (0.0.0.0)" (On all addresses (0.0.0.0)), the port is open to the internet.
+
+### 9.6 Deploy and logs
+
+1. Click **Deploy**, at the top of the project page.
+2. Follow the live log. If a compose deploy fails, the log gets a **Por que falhou** (Why it
+   failed) block, with the last lines from the service that went unhealthy.
+
+**What to check:** the deploy ends as **sucesso** (success) and the project's address opens the
+site. In the **Deploys** tab you will find the **Histórico de deploys** (Deploy history). If a
+guardrail blocked the deploy (e.g., an exposed database port), the screen says which rule; see
+[Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
+
+### 9.7 Certificate
+
+In the **Domínios** tab, each of the project's domains shows its HTTPS certificate state. The
+**Certificados** (Certificates) page, in the menu, lists all of them (panel, projects, and email).
+
+**What to check:** the project's domain is **Válido** (Valid). If it failed, the **Certificados**
+page explains the likely cause (DNS not pointing to the VPS, orange cloud, ports 80/443 closed) and
+has the **Tentar emitir agora** (Try to issue now) button.
+
+### 9.8 The project's Backups tab
+
+After the first deploy that succeeds, the panel looks at the containers and suggests what to keep.
+
+1. Open the project's **Backups** tab.
+2. Check **Bancos de dados** (Databases) (PostgreSQL, MySQL, MariaDB, and MongoDB come checked;
+   Redis comes unchecked, because it is usually a cache) and **Volumes e pastas** (Volumes and
+   folders) (uploads and data checked; caches, logs, and `node_modules` unchecked).
+3. If the orange notice about **arquivos gravados fora de volume** (files written outside a volume)
+   appears, read it: they vanish on the next deploy. The notice does not count what Docker itself
+   creates (such as `docker-init` or the folder of a mounted file).
+4. Click **Salvar itens** (Save items).
+5. Under **Frequência e cópias** (Frequency and copies), the badge says **Seguindo o padrão do
+   painel** (Following the panel default). Changing and saving there moves the project to
+   **Configuração própria** (Own configuration); **Voltar ao padrão** (Back to default) undoes it.
+6. Click **Fazer backup agora**.
+
+**What to check:** the project's history shows the backup completed, with "cópia externa conferida"
+(external copy verified). On Cloudflare, the folder `TWS Panel Backups/<project-name>/` appears.
+
+<a id="etapa-10"></a>
+
+## Step 10 — Test a restore (recommended)
+
+A backup that has never been restored is a promise. Test now, with test data, while nothing depends
+on it.
+
+> [!WARNING]
+> **Restoring overwrites the project's data with that of the chosen backup.** Databases and folders
+> go back to the state of that date, and everything written afterward is lost. The app is stopped
+> during the restore. Do the test on a project with no real data, or at a moment when losing what
+> was written after the backup doesn't matter.
+
+1. **Make a backup.** In the project's **Backups** tab, click **Fazer backup agora** and wait for it
+   to complete.
+2. **Change something.** In the app, create a test record, delete another, or upload a file. Note
+   what changed.
+3. **Restore.** In the same tab, click **Restaurar** (Restore).
+   - Under **Escolha a data** (Choose the date), pick the backup from step 1.
+   - Under **Usar a cópia** (Use the copy), choose **VPS (mais rápido)** (VPS (faster)) or **do
+     armazenamento externo** (from external storage). Testing the external one also proves the
+     password and R2.
+   - To confirm, type the project name and click **Restaurar**.
+4. Follow the stages in the window. You can close it: the restore continues on the server.
+
+**What to check:** the app comes back up, and what you changed in step 2 is back to how it was in
+the backup (the record you created is gone, the deleted one is back). The restore appears in
+**Últimos backups**, in **Configurações → Backups**.
+
+Lost the entire VPS? The path is different: install the panel on a new VPS and use **Configurações
+→ Backups → Restaurar de outro servidor** (Restore from another server), with the data from the
+recovery kit. See [Features → Backups](../guides/features.md#backups).
+
+<a id="etapa-11"></a>
+
+## Step 11 — Maintenance
+
+### Update the panel
+
+A single line, on the VPS:
+
+```bash
+cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build
+```
+
+**What to check:** `git log --oneline -1` shows the commit that is now live. Your projects,
+domains, email, and account stay as they were. What changed in each version is in the
+[CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG.md). More commands in [Operations](../guides/operations.md).
+
+### Update Docker
+
+The hardening leaves Docker out of the automatic updates, on purpose. From time to time,
+**over SSH** (not through the panel's terminal):
+
+```bash
+sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+The panel goes down for a few seconds and comes back by itself. The reason is explained in the
+[Security wizard](security-wizard.md#as-oito-fases).
+
+### Where to keep an eye on things
+
+- **Alertas** (Alerts) (menu): the alert center, with what monitoring found. Filter by status
+  (open, acknowledged).
+- **Auditoria** (Audit) (menu): sensitive actions, with when, action, target, and detail.
+- **Segurança** (Security) (menu): VPS protections, baseline snapshot, monitoring, and email
+  reputation.
+- **Certificados** (Certificates) and **Envios** (Sent mail) (menu): certificates and email.
+- Telegram or the email from [Step 7](#etapa-7), when the panel is closed.
+
+### If you lose access
+
+Panel password, two-step verification phone, Linux password, SSH key, or panel domain: each case
+has its own way back in **[I lost access — now what?](../guides/recover-access.md)**.
+The emergency commands are in
+[Operations → Emergency scripts](../guides/operations.md#scripts-de-emergência).
+
+<a id="checklist"></a>
+
+## Final checklist: panel ready
+
+- [ ] VPS with Ubuntu 22.04/24.04, ports 80 and 443 open, and the provider's console checked
+- [ ] Panel installed and the wizard completed (administrator account created)
+- [ ] All 8 security phases applied and confirmed, and the VPS rebooted afterward
+- [ ] Two-step verification on and recovery codes stored
+- [ ] Panel domain with a valid certificate (and, if you want, access by IP turned off, with the way-back command written down)
+- [ ] VPS time zone checked (backups at 03:00 your time)
+- [ ] Email: port 25 unblocked, DNS checklist 6/6 OK, PTR green or blue, and certificate valid
+- [ ] Mailbox created, test email delivered, and webmail opening
+- [ ] Notifications: Telegram (or email) connected and test received
+- [ ] Backups: R2 connected, encryption on, recovery kit stored outside the VPS
+- [ ] First panel backup with "cópia externa conferida" and "Senha certa" on Testar minha senha
+- [ ] First project live, with variables, project email, and a valid certificate
+- [ ] Project Backups tab checked and a project backup made
+- [ ] A test restore done and verified
+- [ ] Panel update command written down
+- [ ] **Deixe o painel pronto** roadmap on the Dashboard fully done (or with "Não vou usar" on the optional ones you skipped)

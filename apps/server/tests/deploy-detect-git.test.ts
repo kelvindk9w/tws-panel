@@ -57,11 +57,11 @@ function servico() {
 
 async function projetoGit(svc: InstanceType<typeof DeployService>) {
   return svc.createProject({
-    name: "Cassino",
+    name: "Loja",
     ingestMode: "git",
-    source: "https://github.com/usuario/cassino.git",
+    source: "https://github.com/usuario/loja.git",
     branch: "main",
-    domain: "cassino.localhost",
+    domain: "loja.localhost",
   });
 }
 
@@ -83,7 +83,7 @@ describe("detecção em modo git", () => {
     const svc = servico();
     const project = await projetoGit(svc);
     await svc.detect(project.id);
-    await svc.updateProject(project.id, { source: "https://github.com/usuario/cassino-certo.git" });
+    await svc.updateProject(project.id, { source: "https://github.com/usuario/loja-certo.git" });
     await svc.detect(project.id);
     expect(ingest.calls).toBe(2);
   });

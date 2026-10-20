@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 01-user.sh — Fase 01: usuário não-root com sudo + chave SSH.
-# Spec: docs/security-research.md §2.2 e §4 (ordem usuário→chave→teste→só então travar root).
+# Spec: docs/internal/security-research.md §2.2 e §4 (ordem usuário→chave→teste→só então travar root).
 #
 # REGRA DE OURO: este script NUNCA tranca o operador para fora:
 #  - `passwd -l root` só acontece se o usuário tiver AO MENOS uma chave SSH

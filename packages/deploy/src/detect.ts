@@ -1,7 +1,7 @@
 /**
  * detect.ts — detecção automática do tipo de projeto a partir do código-fonte.
  *
- * Perfis (docs/projects-analysis.md):
+ * Perfis (docs/internal/projects-analysis.md):
  *  - static:      HTML puro (index.html na raiz, sem build) — servido como está
  *  - static-node: package.json com build que gera pasta estática (bomb: Next export → out/)
  *  - compose:     tem arquivo compose (trader: compose.prod.yml → painel ADOTA)

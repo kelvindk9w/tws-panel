@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 04-intrusion.sh — Fase 04: prevenção ativa (fail2ban) + AppArmor.
-# Spec: docs/security-research.md §2.5 (jail.local completo) e §2.7.
+# Spec: docs/internal/security-research.md §2.5 (jail.local completo) e §2.7.
 #
 # A jail sshd vigia as portas reais do SSH (detect_ssh_ports, em lib.sh);
 # `--ssh-port` soma uma porta às detectadas (achado 24).
@@ -62,7 +62,7 @@ info "jail sshd vigiando a(s) porta(s) do SSH: $SSH_PORT"
 # falta de arquivo de log.
 JAILS="$(
   cat <<EOF
-# Gerenciado pelo painel PaaS (04-intrusion.sh). Spec: docs/security-research.md §2.5
+# Gerenciado pelo painel PaaS (04-intrusion.sh). Spec: docs/internal/security-research.md §2.5
 [DEFAULT]
 bantime  = 1h
 findtime = 10m
