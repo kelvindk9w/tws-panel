@@ -35,7 +35,7 @@
         "nome": "x-setup-token",
         "tipo": "string",
         "obrigatorio": false,
-        "descricao": "Alternativa ao query param `token` para autenticar durante o setup. Na prática o navegador usa a query, já que a API WebSocket não permite headers customizados."
+        "descricao": "Alternativa ao query param `token` para autenticar durante o setup. Na prática o navegador usa a query, já que a API WebSocket não permite headers customizados. Desde o lote 7 esta é a ÚNICA rota que aceita o token na URL, e a conexão aberta com o token fecha (4401) quando o setup é concluído e o token é revogado."
       },
       {
         "nome": "Cookie: paas_session",

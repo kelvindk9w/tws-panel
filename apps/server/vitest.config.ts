@@ -28,6 +28,7 @@ export default defineConfig({
       provider: "v8",
       include: [
         "src/config.ts",
+        "src/log-config.ts",
         "src/plugins/auth.ts",
         "src/routes/auth.ts",
         "src/routes/backups.ts",
