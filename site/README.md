@@ -45,6 +45,26 @@ URLs and numbers. Only the prose, the code comments, the placeholders and the in
 
 Sidebar entries use slugs, so they are the same in every language.
 
+## Navigation for newcomers
+
+Three paths are kept visible, in this order, on the home page (`index.md`, hero buttons and the
+"Where to start" table), in the first group of the sidebar and at the top of both READMEs:
+
+1. **First installation**: the complete guide (`getting-started/complete-guide`). It is the main
+   path and sends the reader to the installation guide for the details of Step 2.
+2. **Reinstalled the VPS or moving servers**: `guides/restore-new-server`. It sits in the first
+   sidebar group even though its file lives in `guides/`.
+3. **Quick install, one command**: the "Installation" section of the README (it exists only there).
+
+The "Getting started" sidebar group starts with the complete guide. The SSH warning ("REMOTE HOST
+IDENTIFICATION HAS CHANGED") is one alert with the same text in the complete guide, the
+installation guide, the restore guide and the README; the detailed explanation stays in the
+collapsed block `#host-identification-changed` of the installation guide. If you change the text in
+one place, change it in all of them, in both languages. The home page is plain Markdown (`.md`) on purpose. Starlight components such as `Card` only work in
+`.mdx` files (Starlight already ships `@astrojs/mdx`); in an `.md` file the `import` line shows up as
+text, which is what the old home page did. The language selector comes from Starlight
+(header) and needs no configuration beyond `locales`.
+
 ## Editorial rules
 
 - **Write in the imperative, in active voice, with short sentences.** Say what to do, where to

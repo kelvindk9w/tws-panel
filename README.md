@@ -1,5 +1,7 @@
 <div align="center">
 
+🌐 **English** · [Português (Brasil)](README.pt-BR.md)
+
 # TWS Panel
 
 **Turn an Ubuntu VPS into your own hosting platform.**<br>
@@ -10,11 +12,10 @@ Harden the server, publish projects with HTTPS and run your own email, all from 
 [![CI](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml)
 
 [Documentation](https://kelvindk9w.github.io/tws-panel/) ·
-[Installation](#installation) ·
+[Installation](#start-here) ·
 [Roadmap](ROADMAP.md) ·
 [Changelog](CHANGELOG.md) ·
-[Contributing](CONTRIBUTING.md) ·
-**English** | [Português (Brasil)](README.pt-BR.md)
+[Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -24,6 +25,19 @@ Harden the server, publish projects with HTTPS and run your own email, all from 
   Screenshots live in docs/assets/ (docs/assets/regenerar/COMO-REGENERAR.md, in Portuguese, explains
   how the existing ones are generated with fictional data). Add new ones there and reference them here.
 -->
+
+<a id="start-here"></a>
+
+## Where to start
+
+| Your situation | Go to |
+|---|---|
+| 🚀 **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[From zero to a fully set-up panel](site/src/content/docs/en/getting-started/complete-guide.md)**<br>Only the installation, steps 1 to 8: [installation guide](site/src/content/docs/en/getting-started/installation.md) |
+| 🔁 **I reinstalled the VPS, or I am moving to another server.** You want the panel, the projects and the email back from the external backups. | **[Restore on a new VPS](site/src/content/docs/en/guides/restore-new-server.md)** |
+| ⚡ **I know what I am doing.** You have a clean Ubuntu VPS and a user with `sudo`. | **[Quick install, one command](#installation)** |
+
+**SSH problems when connecting?** "REMOTE HOST IDENTIFICATION HAS CHANGED!" is expected after you
+reinstall the VPS. See [what to do](site/src/content/docs/en/getting-started/installation.md#host-identification-changed).
 
 > [!NOTE]
 > **TWS Panel is in beta.** The interface, the commands and the data formats may still change
@@ -107,6 +121,10 @@ item in detail.
 
 ## Installation
 
+This is the short version for people who already know their way around a server. If you prefer
+every step explained, follow the [complete guide](site/src/content/docs/en/getting-started/complete-guide.md)
+(see [Where to start](#start-here)).
+
 **Requirements**
 
 - A clean VPS running **Ubuntu 22.04 or 24.04 LTS**. Recommended minimum: 1 vCPU, 2 GB of RAM and 25 GB of disk.
@@ -136,6 +154,12 @@ the administrator account.
 > step by step, and the [security wizard guide](site/src/content/docs/en/getting-started/security-wizard.md)
 > explains how to confirm access without locking yourself out.
 
+> [!WARNING]
+> **Reinstalled the VPS and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is
+> expected: the VPS has a new identity. Run `ssh-keygen -R YOUR_IP` on your computer (with the VPS
+> IP), connect again and answer `yes`. If you did **not** reinstall anything, do not continue and do
+> not run `ssh-keygen -R`: check the IP and the provider's dashboard first. [Details](site/src/content/docs/en/getting-started/installation.md#host-identification-changed).
+
 <a id="after-installing"></a>
 
 ## After installing
@@ -157,7 +181,7 @@ Optional steps can be dismissed with "Não vou usar" (I will not use this). The 
 also available under **Configurações → Primeiros passos** (Settings → Getting started).
 
 Prefer one ordered walkthrough, from the rented VPS to a first project online and a tested restore?
-Follow [From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md).
+Follow [From zero to a fully set-up panel](site/src/content/docs/en/getting-started/complete-guide.md).
 
 <table>
   <tr>
@@ -189,9 +213,10 @@ The same pages live in this repository, under [`site/src/content/docs/`](site/sr
 
 | Guide | Content |
 |---|---|
-| [Installation](site/src/content/docs/en/getting-started/installation.md) | Step-by-step setup on a clean VPS (steps 1 to 8) |
+| [From zero to a fully set-up panel](site/src/content/docs/en/getting-started/complete-guide.md) | **Start here for a first installation.** One ordered walkthrough, from the rented VPS to a tested restore |
+| [Installation](site/src/content/docs/en/getting-started/installation.md) | Step-by-step setup on a clean VPS (steps 1 to 8), with every command explained |
+| [Restore on a new VPS](site/src/content/docs/en/guides/restore-new-server.md) | For when you reinstalled the VPS or are moving to another server: the panel, projects and email back from the external backups |
 | [Security wizard](site/src/content/docs/en/getting-started/security-wizard.md) | The 8 hardening phases, and how to confirm access without locking yourself out |
-| [From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md) | One ordered walkthrough, from the rented VPS to a tested restore |
 | [Features](site/src/content/docs/en/guides/features.md) | What each module does, in detail |
 | [Operations](site/src/content/docs/en/guides/operations.md) | Updating, useful commands, emergency scripts, the projects folder, and the terminal user and port |
 | [Lost access](site/src/content/docs/en/guides/recover-access.md) | Lost password, phone, SSH key or panel domain, and how to get back in |
