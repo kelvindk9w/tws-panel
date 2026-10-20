@@ -240,7 +240,8 @@ export default {
   "page.domains.placeholder": "example.com",
   "page.domains.add": "Add domain",
   "page.domains.startFirst": "Start the mail server to add domains.",
-  "page.domains.meta": "{count} mailbox(es) · DKIM {bits} bits · DMARC p={stage}",
+  "page.domains.meta_one": "{count} mailbox · DKIM {bits} bits · DMARC p={stage}",
+  "page.domains.meta_other": "{count} mailboxes · DKIM {bits} bits · DMARC p={stage}",
   "page.domains.allVerified": "All domains have verified DNS.",
   // ProjectEmailCard
   "project.tab.sender": "Sender",

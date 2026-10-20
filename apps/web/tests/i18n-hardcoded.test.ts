@@ -20,18 +20,23 @@ const SKIP_DIRS = new Set(["locales", "i18n"]);
 
 interface Allowed {
   file: string;
-  /** trecho exato do texto permitido */
+  /** texto exato do literal permitido */
   text: string;
+  /** trecho da LINHA do código onde ele pode aparecer: a exceção vale só ali, não no arquivo todo */
+  line: string;
   reason: string;
 }
 const ALLOWED: Allowed[] = [
-  { file: "components/TerminalPanel.tsx", text: "senha", reason: "valor enviado pela API (elevation), não texto de interface" },
-  { file: "components/TerminalPanel.tsx", text: "sim", reason: "valor enviado pela API (hostDockerAccess), não texto de interface" },
-  { file: "lib/terminal-info.ts", text: "senha", reason: "valor enviado pela API (elevation) e modo PAAS_ROOT_MODE=senha" },
-  { file: "components/backups/backup-ui.tsx", text: "painel", reason: "palavra de confirmação que o servidor exige em português (backup-service confirmText)" },
-  { file: "lib/auth.tsx", text: "useAuth deve ser usado dentro do RequireAuth", reason: "erro de programação (desenvolvedor), nunca chega ao usuário" },
-  { file: "pages/setup/SecurityStep.tsx", text: "operador não conseguiu entrar", reason: "casa uma linha do log do executor, escrita em português no pacote security" },
-  { file: "pages/setup/SetupDone.tsx", text: "recomeçar", reason: "palavra de confirmação que o servidor compara (setup-restart)" },
+  { file: "components/TerminalPanel.tsx", text: "senha", line: 'elevation === "senha"', reason: "valor enviado pela API (elevation), não texto de interface" },
+  { file: "components/TerminalPanel.tsx", text: "senha", line: 'case "senha":', reason: "valor enviado pela API (elevation), não texto de interface" },
+  { file: "components/TerminalPanel.tsx", text: "sim", line: 'dockerAccess === "sim"', reason: "valor enviado pela API (hostDockerAccess), não texto de interface" },
+  { file: "components/TerminalPanel.tsx", text: "sim", line: 'data-urgente={urgente ? "sim" : "nao"}', reason: "atributo de estado para teste/estilo, não aparece na tela" },
+  { file: "lib/terminal-info.ts", text: "senha", line: "const ELEVATIONS", reason: "valor enviado pela API (elevation), não texto de interface" },
+  { file: "lib/terminal-info.ts", text: "senha", line: 'info.elevation === "senha"', reason: "valor enviado pela API (elevation), não texto de interface" },
+  { file: "components/backups/backup-ui.tsx", text: "painel", line: 'target.kind === "panel" ? "painel"', reason: "palavra de confirmação que o servidor exige em português (backup-service confirmText)" },
+  { file: "lib/auth.tsx", text: "useAuth deve ser usado dentro do RequireAuth", line: "throw new Error", reason: "erro de programação (desenvolvedor), nunca chega ao usuário" },
+  { file: "pages/setup/SecurityStep.tsx", text: "operador não conseguiu entrar", line: "finished.log.includes", reason: "casa uma linha do log do executor, escrita em português no pacote security" },
+  { file: "pages/setup/SetupDone.tsx", text: "recomeçar", line: "const CONFIRMATION", reason: "palavra de confirmação que o servidor compara (routes/setup-restart.ts)" },
 ];
 
 const ACCENT = /[áàâãäéèêíìîóòôõöúùûüçñ]/i;
@@ -69,15 +74,19 @@ function files(dir: string): string[] {
   });
 }
 
-function literalsOf(file: string): string[] {
+function literalsOf(file: string): Array<{ text: string; line: string }> {
   const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
-  const found: string[] = [];
+  const found: Array<{ text: string; line: string }> = [];
+  const push = (node: ts.Node, text: string) => {
+    const { line } = source.getLineAndCharacterOfPosition(node.getStart());
+    found.push({ text, line: source.text.split("\n")[line] ?? "" });
+  };
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node) || ts.isLiteralTypeNode(node)) return;
     if (ts.isJsxAttribute(node) && /^(className|data-testid|href|to|type|role|key|id|name|htmlFor)$/.test(node.name.getText())) return;
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) found.push(node.text);
-    else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) found.push(node.text);
-    else if (ts.isJsxText(node)) found.push(node.text);
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) push(node, node.text);
+    else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) push(node, node.text);
+    else if (ts.isJsxText(node)) push(node, node.text);
     ts.forEachChild(node, visit);
   };
   visit(source);
@@ -88,9 +97,9 @@ export function findHardcoded(): string[] {
   const out: string[] = [];
   for (const file of files(SRC)) {
     const rel = path.relative(SRC, file).split(path.sep).join("/");
-    for (const text of literalsOf(file)) {
+    for (const { text, line } of literalsOf(file)) {
       if (!looksPortuguese(text)) continue;
-      if (ALLOWED.some((a) => a.file === rel && text.trim() === a.text)) continue;
+      if (ALLOWED.some((a) => a.file === rel && text.trim() === a.text && line.includes(a.line))) continue;
       out.push(`${rel}: ${text.trim().replace(/\s+/g, " ").slice(0, 100)}`);
     }
   }
@@ -114,7 +123,7 @@ describe("texto fixo em português fora dos dicionários", () => {
   it("a lista de exceções tem motivo e ainda é usada", () => {
     for (const a of ALLOWED) {
       expect(a.reason.length).toBeGreaterThan(10);
-      const used = literalsOf(path.join(SRC, a.file)).some((t) => t.trim() === a.text);
+      const used = literalsOf(path.join(SRC, a.file)).some((l) => l.text.trim() === a.text && l.line.includes(a.line));
       expect(used, `exceção sem uso: ${a.file}: ${a.text}`).toBe(true);
     }
   });

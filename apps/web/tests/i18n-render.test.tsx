@@ -41,10 +41,15 @@ const auth = {
   setPreferences: () => {},
 };
 
+/** Registra a quebra da tela (em vez de escondê-la): o teste decide se era esperada. */
+const crashes: string[] = [];
 class Boundary extends Component<{ children: ReactNode }, { crashed: boolean }> {
   state = { crashed: false };
   static getDerivedStateFromError() {
     return { crashed: true };
+  }
+  componentDidCatch(error: Error) {
+    crashes.push(error.message);
   }
   render() {
     return this.state.crashed ? null : this.props.children;
@@ -74,10 +79,19 @@ const PAGES: Array<[string, () => ReactNode]> = [
   ["Onboarding", () => <OnboardingChecklist />],
 ];
 
+/**
+ * Páginas que quebram quando a API responde 200 com `{}` (corpo sem os campos
+ * que o contrato garante: `projects`, `checks`...). Não é problema de idioma
+ * nem acontece com o servidor real; acontecia antes da i18n e não é consertado
+ * aqui. Qualquer outra quebra, em qualquer estado, reprova o teste.
+ */
+const EMPTY_BODY_CRASHES = new Set<string>(["Alerts", "Audit", "Backups", "Certificates", "Dashboard", "Mail", "Notifications", "PanelDomain", "Security", "Timezone"]);
+
 const RAW_KEY = new RegExp(`\\b(?:${NAMESPACES.join("|")})\\.[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*\\b`);
 
 let warn: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
+  crashes.length = 0;
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -92,8 +106,8 @@ describe.each(["pt-BR", "en"])("páginas em %s", (locale) => {
     ["rede fora do ar", () => Promise.reject(new TypeError("offline"))],
     ["resposta vazia", () => Promise.resolve(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }))],
     ["erro 500", () => Promise.resolve(new Response(JSON.stringify({ error: "internal_error", message: "x" }), { status: 500, headers: { "Content-Type": "application/json" } }))],
-  ])("%s", (_name, respond) => {
-    it.each(PAGES)("%s sem chave crua nem aviso de chave ausente", async (_page, element) => {
+  ])("%s", (name, respond) => {
+    it.each(PAGES)("%s sem chave crua nem aviso de chave ausente", async (page, element) => {
       setLocale(locale, { persist: false });
       vi.stubGlobal("fetch", vi.fn(respond));
       const { container } = render(
@@ -117,6 +131,9 @@ describe.each(["pt-BR", "en"])("páginas em %s", (locale) => {
       ]);
       expect(texts.filter((x) => RAW_KEY.test(x))).toEqual([]);
       expect(labels.filter((l) => l && RAW_KEY.test(l))).toEqual([]);
+      if (!(name === "resposta vazia" && EMPTY_BODY_CRASHES.has(page))) {
+        expect(crashes, "a tela quebrou ao renderizar").toEqual([]);
+      }
       const missing = warn.mock.calls.filter((c) => String(c[0]).startsWith("[i18n]"));
       expect(missing).toEqual([]);
     });

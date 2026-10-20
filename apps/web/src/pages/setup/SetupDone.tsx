@@ -7,8 +7,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
-import { apiErrorText, formatDateTime, Trans, useI18n } from "@/i18n";
+import { apiErrorText, formatDateTime, lowerCase, Trans, useI18n } from "@/i18n";
 
+/** Palavra que o servidor compara (routes/setup-restart.ts); a tela aceita também a do idioma. */
 const CONFIRMATION = "recomeçar";
 
 /** "Recomeçar do zero": orientação primeiro, confirmação forte depois. */
@@ -29,8 +30,9 @@ function RestartZone() {
       .catch(() => setTwoFactor(false));
   }, [open, twoFactor]);
 
+  const localWord = lowerCase(t("setup.done.restart.confirmWord"));
   const canRestart =
-    !busy && password !== "" && code.trim() !== "" && confirm.trim().toLowerCase() === CONFIRMATION;
+    !busy && password !== "" && code.trim() !== "" && [CONFIRMATION, localWord].includes(lowerCase(confirm.trim()));
 
   async function restart(event: FormEvent) {
     event.preventDefault();
@@ -40,7 +42,7 @@ function RestartZone() {
     try {
       const res = await apiFetch<{ setupUrl: string }>("/api/settings/restart-setup", {
         method: "POST",
-        body: JSON.stringify({ currentPassword: password, code: code.trim(), confirm: confirm.trim() }),
+        body: JSON.stringify({ currentPassword: password, code: code.trim(), confirm: CONFIRMATION }),
       });
       // recarrega a página inteira: o assistente recomeça do passo 0 com o token novo
       window.location.assign(res.setupUrl);
@@ -125,7 +127,11 @@ function RestartZone() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="rs-confirm" className="font-medium">
-                  {t("setup.done.restart.confirm", { word: CONFIRMATION })}
+                  <Trans
+                    k="setup.done.restart.confirm"
+                    params={{ word: t("setup.done.restart.confirmWord") }}
+                    components={{ code: <code className="rounded bg-muted px-1 font-mono text-foreground" /> }}
+                  />
                 </label>
                 <Input id="rs-confirm" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" />
               </div>

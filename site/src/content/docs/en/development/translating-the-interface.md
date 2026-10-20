@@ -16,7 +16,8 @@ needs **only new files**: no component changes.
 - A text is read by its key, `area.key`, for example `t("projects.list.empty")`.
 - `{name}` inserts a value. Plurals use the suffixes `_one` / `_other` (and `_zero`, `_few`, `_many` when the language needs them) and a `count` value.
 - `<b>...</b>`-style tags mark bold text, code and links in a few long texts. Keep the same tags and the same `{variables}` as the source text.
-- A missing key falls back to `pt-BR` (never shows a raw key to the user).
+- A key missing in a language falls back to `pt-BR`. If it is missing there too, nothing is shown (empty text) and the browser console warns in development. The parity test and the type check keep committed dictionaries from getting there.
+- Values inserted with `{name}` are always plain text, even inside `<b>...</b>`: they never become markup.
 - The language is chosen on the first visit from the browser (`pt*` becomes `pt-BR`, anything else becomes English) and then by the language selector in the user menu, on the sign-in page and under Settings → Appearance. The choice is kept in the browser (`localStorage`, key `paas.locale`).
 - Dates, times, numbers and sorting use the language through `Intl`. The configured time zone is never changed by the language.
 

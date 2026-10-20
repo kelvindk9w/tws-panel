@@ -118,28 +118,46 @@ export function setLocale(locale: Locale, options: { persist?: boolean } = {}): 
 
 // --- tradução ---
 
+/** Só texto de dicionário: ignora `constructor`, `__proto__`, `toString`... (herdados). */
 function lookup(locale: Locale, key: string): string | undefined {
   const i = key.indexOf(".");
   if (i < 0) return undefined;
-  return catalog[locale]?.[key.slice(0, i)]?.[key.slice(i + 1)];
+  const ns = key.slice(0, i);
+  const inner = key.slice(i + 1);
+  if (!Object.hasOwn(catalog, locale)) return undefined;
+  const dicts = catalog[locale]!;
+  if (!Object.hasOwn(dicts, ns)) return undefined;
+  const dict = dicts[ns]!;
+  if (!Object.hasOwn(dict, inner)) return undefined;
+  const text = dict[inner];
+  return typeof text === "string" ? text : undefined;
 }
 
 /** Há texto para a chave neste idioma (sem fallback)? Aceita a chave-base de um plural. */
 export function hasKey(key: string, locale: Locale = current): boolean {
+  if (typeof key !== "string") return false;
   return lookup(locale, key) !== undefined || lookup(locale, `${key}_other`) !== undefined;
 }
 
-function interpolate(text: string, params?: Params): string {
+/** Troca `{nome}` pelos valores (uma passada: o valor inserido não é reinterpretado). */
+export function interpolate(text: string, params?: Params): string {
   if (!params) return text;
-  return text.replace(/\{(\w+)\}/g, (whole, name: string) => (name in params ? String(params[name]) : whole));
+  return text.replace(/\{(\w+)\}/g, (whole, name: string) => (Object.hasOwn(params, name) ? String(params[name]) : whole));
 }
 
+const pluralRules = new Map<Locale, Intl.PluralRules | null>();
+
 function pluralCategory(locale: Locale, count: number): Intl.LDMLPluralRule {
-  try {
-    return new Intl.PluralRules(locale).select(count);
-  } catch {
-    return count === 1 ? "one" : "other";
+  let rules = pluralRules.get(locale);
+  if (rules === undefined) {
+    try {
+      rules = new Intl.PluralRules(locale);
+    } catch {
+      rules = null;
+    }
+    pluralRules.set(locale, rules);
   }
+  return rules ? rules.select(count) : count === 1 ? "one" : "other";
 }
 
 function resolve(locale: Locale, key: string, params?: Params): string | undefined {
@@ -152,18 +170,36 @@ function resolve(locale: Locale, key: string, params?: Params): string | undefin
 }
 
 const warned = new Set<string>();
+const dev = import.meta.env?.DEV ?? false;
 
-/** Texto da chave no idioma (com interpolação e plural), caindo para pt-BR. */
-export function translate(key: string, params?: Params, locale: Locale = current): string {
+function warnOnce(message: string) {
+  if (dev && !warned.has(message)) {
+    warned.add(message);
+    console.warn(message);
+  }
+}
+
+/**
+ * Texto da chave com `{variáveis}` ainda NÃO substituídas (plural e fallback
+ * para pt-BR já resolvidos). Chave que não é string ou não existe: "" (nunca
+ * lança, para um valor inesperado não derrubar a tela) e aviso só em dev.
+ */
+export function translateRaw(key: unknown, params?: Params, locale: Locale = current): string {
+  if (typeof key !== "string") {
+    warnOnce(`[i18n] chave ausente: ${String(key)}`);
+    return "";
+  }
   const text = resolve(locale, key, params) ?? resolve(SOURCE_LOCALE, key, params);
   if (text === undefined) {
-    if (!warned.has(key)) {
-      warned.add(key);
-      console.warn(`[i18n] chave ausente: ${key}`);
-    }
-    return key;
+    warnOnce(`[i18n] chave ausente: ${key}`);
+    return "";
   }
-  return interpolate(text, params);
+  return text;
+}
+
+/** Texto da chave no idioma (com interpolação e plural), caindo para pt-BR. */
+export function translate(key: unknown, params?: Params, locale: Locale = current): string {
+  return interpolate(translateRaw(key, params, locale), params);
 }
 
 /** Idioma BCP 47 passado ao Intl (datas, números, ordenação). */

@@ -166,8 +166,8 @@ describe("tradução", () => {
     setLocale("en");
     expect(translate("t_.onlyPt")).toBe("Só em português");
     expect(hasKey("t_.onlyPt")).toBe(false);
-    expect(translate("t_.nope")).toBe("t_.nope");
-    expect(translate("t_.nope")).toBe("t_.nope");
+    expect(translate("t_.nope")).toBe("");
+    expect(translate("t_.nope")).toBe("");
     expect(warn).toHaveBeenCalledTimes(1);
   });
 

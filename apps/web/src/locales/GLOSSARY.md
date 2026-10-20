@@ -43,7 +43,7 @@ termo novo entra aqui antes de entrar nos dicionários.
 | integração | integration | |
 | primeiros passos | getting started | |
 | entrar / sair (da conta) | sign in / sign out | |
-| salvar / cancelar / excluir / remover | save / cancel / delete / remove | "excluir" = delete (apaga de vez); "remover" = remove (tira de uma lista/vínculo) |
+| salvar / cancelar / excluir / apagar / remover | save / cancel / delete / delete / remove | "excluir" e "apagar" = delete (apaga de vez); "remover" = remove (tira de uma lista/vínculo) |
 | conectar / desconectar | connect / disconnect | |
 | verificar | check / verify | "verify" para DNS/domínio/propriedade; "check" para estado geral |
 | ativo / inativo | active / inactive | |

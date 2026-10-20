@@ -16,7 +16,8 @@ exige **só arquivos novos**: nenhum componente muda.
 - Um texto é lido pela chave `área.chave`, por exemplo `t("projects.list.empty")`.
 - `{nome}` insere um valor. Plurais usam os sufixos `_one` / `_other` (e `_zero`, `_few`, `_many` quando o idioma pede) e o valor `count`.
 - Etiquetas como `<b>...</b>` marcam negrito, código e links em alguns textos longos. Mantenha as mesmas etiquetas e as mesmas `{variáveis}` do texto de origem.
-- Chave ausente cai para o `pt-BR` (a pessoa nunca vê uma chave crua).
+- Chave ausente em um idioma cai para o `pt-BR`. Se faltar lá também, nada aparece (texto vazio) e o console do navegador avisa em desenvolvimento. O teste de paridade e o typecheck impedem que os dicionários do repositório cheguem a esse ponto.
+- Valores inseridos com `{nome}` são sempre texto puro, mesmo dentro de `<b>...</b>`: nunca viram marcação.
 - O idioma é escolhido na primeira visita pelo navegador (`pt*` vira `pt-BR`, qualquer outro vira inglês) e depois pelo seletor de idioma no menu do usuário, na tela de login e em Configurações → Aparência. A escolha fica guardada no navegador (`localStorage`, chave `paas.locale`).
 - Datas, horas, números e ordenação seguem o idioma pelo `Intl`. O fuso horário configurado nunca muda por causa do idioma.
 
