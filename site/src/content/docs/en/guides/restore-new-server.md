@@ -59,7 +59,7 @@ accounts.
 
 If the old VPS used another projects folder, install with the same one (`./scripts/install.sh --projects-dir=<folder>`, see [Operations](operations.md)). Otherwise projects created by upload or from a folder on the server fail in step 7 with "fica fora da pasta de projetos".
 
-**Do not start the mail server on the new VPS** before step 8, even though the "Get the panel ready" checklist on the Dashboard suggests it. The scheduled email backup would send an empty mail server to `_email/`, count as a finished backup, and take the email out of the hold.
+**Do not start the mail server on the new VPS** before step 8, even though the "Get the panel ready" checklist on the Dashboard suggests it. The scheduled email backup would send an empty mail server to `_email/`, count as a finished backup and, since the container would already exist, the email would not enter the hold after the panel is restored.
 
 **Turn off the panel's automatic backup if the new VPS stays on for a night before step 3 or if step 5 may take more than 7 days.** In **Settings → Backups**, in the **Panel** card, clear **Automatic backup on** and save. A new panel has the schedule on and runs at 03:00 even with no storage connected. That local-only backup counts as a finished backup of this VPS and cancels the protection described in step 3. From then on, an empty panel goes to `_painel/` every day and the retention (5 copies) deletes the good backups in about 5 days. The restore of the panel brings the old schedule back, so the setting does not stay off by itself.
 
@@ -74,7 +74,7 @@ Skip this step if the old VPS is gone. Otherwise, on the **old** panel, in this 
    card and in the **Email** card.
 2. Open each project, go to its **Backups** tab and click **Back up now**.
 3. Wait until every backup shows "external copy verified" under
-   **Latest backups**. Write down the date and time of the panel backup.
+   **Latest backups**. Write down the date and time of the panel **and email** backups.
 4. Only then, stop the old panel, so that two servers do not write to the same bucket (the restored
    panel brings the same backup schedule back):
 
@@ -253,6 +253,7 @@ first: the new IP has no reputation yet.
   one of a project that is deployed but whose data has not come back yet can send a backup without
   the data. Restore the projects soon after the panel.
 - Email: the DNS checklist is 6/6, the test email arrives, and a mailbox can sign in to the webmail.
+- In **Settings → Backups**, the **Panel** card has **Automatic backup on** checked. If you turned it off in step 1 and the panel backup was an old one, without the backup settings, turn it on again: the restore brings the old schedule back only when the backup has those settings.
 - **Settings → Time zone** shows the time zone you want. Backups run
   at 03:00 in the VPS time zone.
 - Run **Back up now** on the panel and see "external copy verified". Then run a project

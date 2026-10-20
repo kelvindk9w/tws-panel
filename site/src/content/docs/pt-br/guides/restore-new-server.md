@@ -59,7 +59,7 @@ substitui pelas contas antigas.
 
 Se a VPS antiga usava outra pasta de projetos, instale com a mesma (`./scripts/install.sh --projects-dir=<pasta>`, veja [Operação](operations.md)). Senão, os projetos criados por upload ou a partir de uma pasta do servidor falham no passo 7 com "fica fora da pasta de projetos".
 
-**Não inicie o servidor de e-mail na VPS nova** antes do passo 8, mesmo que o roteiro "Deixe o painel pronto" do Dashboard sugira. O backup agendado do e-mail enviaria um servidor de e-mail vazio para `_email/`, contaria como backup concluído e tiraria o e-mail da pausa.
+**Não inicie o servidor de e-mail na VPS nova** antes do passo 8, mesmo que o roteiro "Deixe o painel pronto" do Dashboard sugira. O backup agendado do e-mail enviaria um servidor de e-mail vazio para `_email/`, contaria como backup concluído e, como o container já existiria, o e-mail não entraria na pausa depois de restaurar o painel.
 
 **Desligue o backup automático do painel se a VPS nova ficar ligada por uma madrugada antes do passo 3 ou se o passo 5 puder levar mais de 7 dias.** Em **Configurações → Backups**, no cartão **Painel**, desmarque **Backup automático ligado** e salve. Um painel novo vem com a agenda ligada e roda às 03:00 mesmo sem armazenamento conectado. Esse backup só local conta como backup concluído desta VPS e cancela a proteção descrita no passo 3. A partir daí, um painel vazio vai para `_painel/` todo dia e a retenção (5 cópias) apaga os backups bons em cerca de 5 dias. A restauração do painel traz a agenda antiga de volta, então o ajuste não fica desligado sozinho.
 
@@ -74,7 +74,7 @@ Pule este passo se a VPS antiga não existe mais. Caso contrário, no painel **a
    cartão **E-mail**.
 2. Abra cada projeto, vá à aba **Backups** dele e clique em **Fazer backup agora**.
 3. Espere até que todos os backups mostrem "cópia externa conferida" em **Últimos backups**.
-   Anote a data e a hora do backup do painel.
+   Anote a data e a hora dos backups do painel **e do e-mail**.
 4. Só então pare o painel antigo, para que dois servidores não gravem no mesmo bucket (o painel
    restaurado traz de volta a mesma agenda de backup):
 
@@ -252,6 +252,7 @@ começo: o IP novo ainda não tem reputação.
   os projetos logo depois do painel.
 - E-mail: o checklist de DNS está em 6/6, o e-mail de teste chega e uma caixa consegue entrar no
   webmail.
+- Em **Configurações → Backups**, o cartão **Painel** está com **Backup automático ligado** marcado. Se você o desligou no passo 1 e o backup do painel era antigo, sem as configurações de backup, ligue de novo: a restauração só traz a agenda antiga de volta quando o backup tem essas configurações.
 - **Configurações → Fuso horário** mostra o fuso que você quer. Os backups rodam às 03:00 no fuso
   da VPS.
 - Rode **Fazer backup agora** no painel e veja "cópia externa conferida". Depois faça um backup de

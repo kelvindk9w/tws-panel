@@ -43,3 +43,4 @@ Parte de `origin/dev`. Só documentação (site en e pt-br); nenhum código, dic
 ## Achado de código (não corrigido)
 
 Backup só local conta como backup concluído na regra `panelFreshOverForeign` (`lastSuccessAt` é preenchido em `backup-service.ts` mesmo sem cópia externa) e cancela a proteção do painel novo.
+- Última rodada: passo 2 anota também o backup do e-mail; o aviso do e-mail no passo 1 explica que o container já existente o deixa fora da pausa; as conferências finais mandam religar o backup automático do painel se o backup era antigo (sem configurações de backup; confirmado em adaptStagedBackupSettings, que nesse caso mantém as de agora).
