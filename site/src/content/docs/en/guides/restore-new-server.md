@@ -187,7 +187,7 @@ projects registered (step 5) and before you click **Restaurar** in step 7:
      TMP=$(mktemp -d)
      sudo tar -xf codigo.tar -C "$TMP"
      sudo cp -a "$TMP"/src/. <ORIGIN>/
-     head -1 <ORIGIN>/.env | grep -q '^# Gerado pelo painel' && sudo rm <ORIGIN>/.env
+     sudo head -1 <ORIGIN>/.env 2>/dev/null | grep -q '^# Gerado pelo painel (seção Variáveis do projeto)' && sudo rm <ORIGIN>/.env
      ```
 
      The last line removes the `.env` that the panel generated (it starts with the comment

@@ -186,7 +186,7 @@ projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7
      TMP=$(mktemp -d)
      sudo tar -xf codigo.tar -C "$TMP"
      sudo cp -a "$TMP"/src/. <ORIGEM>/
-     head -1 <ORIGEM>/.env | grep -q '^# Gerado pelo painel' && sudo rm <ORIGEM>/.env
+     sudo head -1 <ORIGEM>/.env 2>/dev/null | grep -q '^# Gerado pelo painel (seção Variáveis do projeto)' && sudo rm <ORIGEM>/.env
      ```
 
      A última linha apaga o `.env` que o painel gerou (ele começa com o comentário "Gerado pelo
