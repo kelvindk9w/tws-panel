@@ -18,7 +18,7 @@ Harden the server, publish projects with HTTPS and run your own email, all from 
 
 </div>
 
-![TWS Panel dashboard with the "Get the panel ready" checklist and three running projects](docs/assets/dashboard.png)
+![TWS Panel dashboard with the "Deixe o painel pronto" (Get the panel ready) checklist and three running projects](docs/assets/dashboard.png)
 
 <!--
   Screenshots live in docs/assets/ (docs/assets/regenerar/COMO-REGENERAR.md, in Portuguese, explains
@@ -30,14 +30,14 @@ Harden the server, publish projects with HTTPS and run your own email, all from 
 > between versions. The [CHANGELOG](CHANGELOG.md) (in Portuguese) lists what changed in each one.
 >
 > The panel interface is currently in Portuguese only. The documentation is available in English
-> and Portuguese (Brazil). Screen names in this README are translated; the Portuguese name appears
-> in italics the first time it matters.
+> and Portuguese (Brazil). This README writes screen names and buttons as they appear in the
+> interface, with the English translation in parentheses on first mention.
 
 ## Why it exists
 
 TWS used to rely on a hosting service to publish its clients' websites. One day, a simple change
-to a site sat blocked for days with no answer from support. The server was not the problem; the
-dependence on another company to configure everything was. TWS Panel is not a hosting company. It
+to a site sat blocked for days with no answer from support. The server was not the problem; depending
+on another company to configure everything was. TWS Panel is not a hosting company. It
 is the panel that sets up the VPS that **you** rent, from the provider you choose, and it moves
 with you if you switch providers.
 
@@ -61,12 +61,12 @@ item in detail.
 - Multiple environments from the same repository, such as production and sandbox side by side.
 - Encrypted environment variables, `.env` import, and deploys that stop when a required variable is missing.
 - Port management per container: change, publish, remove or bulk-edit ports, with conflicts shown up front.
-- Live deploy logs and a "Why it failed" view that shows the log of the service that became unhealthy.
+- Live deploy logs, with a "Por que falhou" (Why it failed) section that shows the log of the service that became unhealthy.
 
 ### HTTPS and the panel domain
 
 - Automatic certificates (Let's Encrypt) for the panel, the projects and email.
-- A **Certificates** (*Certificados*) page with the status of each certificate, the likely cause when issuing fails, and a "Try to issue now" button.
+- A **Certificados** (Certificates) page with the status of each certificate, the likely cause when issuing fails, and a "Tentar emitir agora" (Try to issue now) button.
 - Bring your own certificate, with a check that the key and certificate match.
 - A custom domain for the panel and, optionally, the ability to turn off access by IP.
 
@@ -77,7 +77,7 @@ item in detail.
 - Mailboxes with ready-to-use credentials for Outlook, Gmail or a phone, and a test email.
 - Project email: a dedicated mailbox, with `SMTP_*` variables injected at deploy.
 - Webmail (Roundcube) at `https://mail.<domain>/`.
-- A **Sends** (*Envios*) page: queue, history, volume, blocklists and a deliverability score.
+- A **Envios** (Sends) page for outgoing mail: queue, history, volume, blocklists and a deliverability score.
 
 ### Notifications
 
@@ -90,12 +90,12 @@ item in detail.
 - Backups of the panel, the mail server and the projects as `.7z` files, with a schedule and retention.
 - A copy on the VPS and another on Cloudflare R2 (or other S3-compatible storage), verified after upload.
 - Optional encryption of the off-site copy, with a recovery kit.
-- Restore item by item, or use "Restore from another server" to rebuild everything on a new VPS.
+- Restore item by item, or use "Restaurar de outro servidor" (Restore from another server) to rebuild everything on a new VPS.
 
 ### Security
 
 - A hardening wizard based on Lynis: 8 phases with a dry run, and automatic rollback on the phases that touch access.
-- Deploy guardrails that block dangerous configurations (such as an exposed database port or a privileged container). Most blocks accept an explicit, audited override.
+- Deploy guardrails that block dangerous configurations (such as an exposed database port or a privileged container). Most blocking rules can be bypassed with an explicit, audited override; the ones that protect the panel's own isolation cannot.
 - Continuous monitoring against a baseline, an alert center and an audit log.
 - Checks of the mail server IP against email blocklists.
 - Login with two-step verification (TOTP) and recovery codes.
@@ -103,7 +103,7 @@ item in detail.
 ### Web terminal and setup checklist
 
 - A real shell on the server inside the panel, running as the user you choose at install time.
-- A **Get the panel ready** (*Deixe o painel pronto*) checklist on the Dashboard that shows what is still left to configure.
+- A **Deixe o painel pronto** (Get the panel ready) checklist on the Dashboard that shows what is still left to configure.
 
 ## Installation
 
@@ -124,7 +124,7 @@ sudo apt update && sudo apt install -y git \
 ```
 
 The installer first checks the machine without changing anything. It then asks which user the
-panel terminal should open with, installs Docker, starts the panel and prints the HTTPS address
+panel terminal should run as, installs Docker, starts the panel and prints the HTTPS address
 with the setup token, for example `https://203-0-113-10.sslip.io/?token=...` (with your own IP).
 Open it in your browser and follow the wizard: welcome, machine health, security (hardening) and
 the administrator account.
@@ -140,21 +140,21 @@ the administrator account.
 
 ## After installing
 
-On your first visit, the Dashboard shows the **Get the panel ready** checklist. The panel checks
-the status of each step by itself, and each step has a "How to" (*Como fazer*) section with a
+On your first visit, the Dashboard shows the **Deixe o painel pronto** checklist. The panel checks
+the status of each step by itself, and each step has a "Como fazer" (How to) section with a
 button that opens the right screen.
 
 | # | Step | What it is |
 |---|---|---|
-| 1 | VPS protections | The hardening phases: updates, SSH with keys only, firewall, blocking of repeated login attempts and auditing. |
-| 2 | Two-step verification | A 6-digit code from your phone, in addition to your password, to sign in to the panel. |
-| 3 | Panel domain | An address of your own (`panel.example.com`) instead of the one that contains the IP. |
-| 4 | Server email *(optional)* | A mail server on the VPS so your projects can send email. |
-| 5 | Notifications *(optional)* | Telegram or email alerts when something needs your attention. |
-| 6 | Off-VPS backups *(optional)* | An encrypted copy on Cloudflare R2 (or other S3-compatible storage), so you can recover everything on a new VPS. |
+| 1 | **Proteções da VPS** (VPS protections) | The hardening phases: updates, SSH with keys only, firewall, blocking of repeated login attempts and auditing. |
+| 2 | **Verificação em duas etapas** (Two-step verification) | A 6-digit code from your phone, in addition to your password, to sign in to the panel. |
+| 3 | **Domínio do painel** (Panel domain) | An address of your own (`panel.example.com`) instead of the one that contains the IP. |
+| 4 | **E-mail do servidor** (Server email) *(optional)* | A mail server on the VPS so your projects can send email. |
+| 5 | **Notificações** (Notifications) *(optional)* | Telegram or email alerts when something needs your attention. |
+| 6 | **Backups fora da VPS** (Off-VPS backups) *(optional)* | An encrypted copy on Cloudflare R2 (or other S3-compatible storage), so you can recover everything on a new VPS. |
 
-Optional steps can be dismissed with "I will not use this" (*Não vou usar*). The whole checklist is
-also available under **Settings → Getting started** (*Configurações → Primeiros passos*).
+Optional steps can be dismissed with "Não vou usar" (I will not use this). The whole checklist is
+also available under **Configurações → Primeiros passos** (Settings → Getting started).
 
 Prefer one ordered walkthrough, from the rented VPS to a first project online and a tested restore?
 Follow [From zero to a configured panel](site/src/content/docs/en/getting-started/complete-guide.md).
@@ -218,7 +218,7 @@ Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT
 
 ## About TWS
 
-**TWS Panel** is maintained by **TWS**, a software company founded and led by its CEO, **Kelvin**.
+**TWS Panel** is maintained by **TWS**, a software company founded and run by **Kelvin Medeiros** (CEO).
 TWS builds custom web solutions, systems and automations for clients. The project grew out of a
 problem the company had itself, and was then opened to the community under the MIT license.
 

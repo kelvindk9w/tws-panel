@@ -55,7 +55,7 @@ detalha cada item.
 - Vários ambientes a partir do mesmo repositório, como produção e sandbox lado a lado.
 - Variáveis de ambiente cifradas, importação de `.env` e deploy interrompido quando falta uma variável obrigatória.
 - Gerenciamento de portas por container: trocar, publicar, remover ou editar em lote, com os conflitos à vista.
-- Logs do deploy ao vivo e a tela "Por que falhou", que mostra o log do serviço que ficou com problema.
+- Logs do deploy ao vivo e uma seção "Por que falhou" que mostra o log do serviço que ficou com problema.
 
 ### HTTPS e domínio do painel
 
@@ -89,7 +89,7 @@ detalha cada item.
 ### Segurança
 
 - Wizard de hardening baseado no Lynis: 8 fases com simulação e rollback automático nas fases que mexem no acesso.
-- Guardrails de deploy que bloqueiam configurações perigosas (como uma porta de banco de dados exposta ou um container privilegiado). A maioria dos bloqueios aceita um override explícito e auditado.
+- Guardrails de deploy que bloqueiam configurações perigosas (como uma porta de banco de dados exposta ou um container privilegiado). A maioria dos bloqueios só pode ser contornada com um override explícito e auditado; os que protegem o isolamento do próprio painel não podem ser contornados.
 - Monitoramento contínuo contra um baseline, central de alertas e log de auditoria.
 - Verificação do IP do servidor de e-mail em listas de bloqueio.
 - Login com verificação em duas etapas (TOTP) e códigos de recuperação.
@@ -185,7 +185,7 @@ As mesmas páginas estão neste repositório, em [`site/src/content/docs/`](site
 |---|---|
 | [Instalação](site/src/content/docs/pt-br/getting-started/installation.md) | Passo a passo numa VPS limpa (passos 1 a 8) |
 | [Wizard de segurança](site/src/content/docs/pt-br/getting-started/security-wizard.md) | As 8 fases do hardening, e como confirmar o acesso sem se trancar para fora |
-| [Do zero ao painel pronto](site/src/content/docs/pt-br/getting-started/complete-guide.md) | Um passo a passo único, da VPS contratada até um restore testado |
+| [Do zero ao painel pronto](site/src/content/docs/pt-br/getting-started/complete-guide.md) | Um passo a passo único, da VPS contratada até uma restauração testada |
 | [Funcionalidades](site/src/content/docs/pt-br/guides/features.md) | O que cada módulo faz, em detalhe |
 | [Operação](site/src/content/docs/pt-br/guides/operations.md) | Atualizar, comandos úteis, scripts de emergência, a pasta dos projetos, e o usuário e a porta do terminal |
 | [Perdi o acesso](site/src/content/docs/pt-br/guides/recover-access.md) | Senha, celular, chave SSH ou domínio do painel perdidos, e como voltar a entrar |
@@ -212,7 +212,7 @@ Esperamos que todas as pessoas que participam sigam o [Código de Conduta](docs/
 
 ## Sobre a TWS
 
-O **TWS Panel** é mantido pela **TWS**, uma software house fundada e liderada pelo CEO **Kelvin**.
+O **TWS Panel** é mantido pela **TWS**, uma software house fundada e dirigida por **Kelvin Medeiros** (CEO).
 A TWS desenvolve soluções web, sistemas e automações sob medida para clientes. O projeto nasceu de
 um problema que a própria empresa enfrentava e foi aberto à comunidade sob a licença MIT.
 
