@@ -84,7 +84,7 @@ async function excludeFromGit(src: string, workDir: string): Promise<void> {
 }
 
 /** Primeira linha de todo `.env` que o painel grava: é por ela que ele reconhece o que é seu. */
-const GENERATED_HEADER = "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.";
+export const GENERATED_HEADER = "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.";
 
 /** Registro do que o painel gravou no `.env` (sha256): é como ele percebe que o dono editou depois. */
 const HASH_FILE = "paas.dotenv.hash";

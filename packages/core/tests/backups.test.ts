@@ -139,6 +139,8 @@ describe("backups: kit de recuperação", () => {
     // o passo da VPS nova não sugere que as chaves estejam aqui
     expect(kit).toMatch(/chaves de acesso[^\n]*(não estão neste kit|à parte)/i);
     expect(kit).not.toContain("endpoint, bucket e chaves");
+    expect(kit).not.toContain("o painel publica o código do GitHub");
+    expect(kit).toMatch(/upload e de pasta do servidor/);
     // e nenhum segredo do armazenamento entra no texto
     expect(buildRecoveryKit({ ...base, destination: { ...base.destination, secretAccessKey: "segredo-nunca-no-kit" } as typeof base.destination })).not.toContain("segredo-nunca-no-kit");
   });

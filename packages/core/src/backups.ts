@@ -514,7 +514,7 @@ export function buildRecoveryKit(input: RecoveryKitInput): string {
     "3. Informe o mesmo armazenamento: o endpoint e o bucket estão acima; as chaves de acesso você guardou à parte (não estão neste kit).",
     "   Depois informe esta senha. As chaves que você digitar na VPS nova continuam valendo depois de restaurar o painel.",
     "4. Restaure primeiro o painel. Ele reinicia; entre de novo com o usuário e a senha do painel antigo.",
-    "5. Depois restaure cada projeto (o painel publica o código do GitHub e põe os dados de volta) e o e-mail.",
+    "5. Depois restaure cada projeto, marcando a publicação antes (o painel publica o projeto: do GitHub, ou a partir do código que estava no backup, nos projetos de upload e de pasta do servidor; depois põe os dados de volta) e o e-mail.",
     "6. Aponte o DNS (registros A, MX e o PTR no provedor) para o IP da VPS nova.",
     "",
     "RESTAURAR SEM O PAINEL",

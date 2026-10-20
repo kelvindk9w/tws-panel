@@ -93,6 +93,7 @@ import { suggestPassphrase } from "./backup-passphrase.js";
 import { StorageError, type BackupStorage, type StoredObject } from "./backup-s3.js";
 import { currentSlot, isReminderDue, isRemoteStale, nextSlot, timezoneLabel } from "./backup-schedule.js";
 import { httpError } from "./http-error.js";
+import { GENERATED_HEADER } from "@paas/deploy";
 import { isInsideProjectsDir, isPanelArea } from "./projects-dir.js";
 import { loadJson, loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
@@ -233,6 +234,8 @@ interface StoredTarget {
   followsDefaults?: boolean;
   /** Painel: por que a última passagem da agenda não enviou backup (ver `tick`). */
   heldReason?: string;
+  /** Painel: quantas vezes seguidas a listagem do armazenamento falhou na regra do painel novo. */
+  heldFailures?: number;
 }
 
 /**
@@ -506,6 +509,19 @@ function parseRestoreHold(v: unknown): RestoreHold | null {
   const h = v as Partial<RestoreHold>;
   if (typeof h.since !== "string" || Number.isNaN(Date.parse(h.since))) return null;
   return { since: h.since, released: Array.isArray(h.released) ? h.released.filter((x): x is string => typeof x === "string") : [] };
+}
+
+/** Caminho com os links resolvidos até onde existe; o que falta fica como está. */
+async function realWithMissingTail(p: string): Promise<string> {
+  const missing: string[] = [];
+  let cur = path.resolve(p);
+  while (!existsSync(cur)) {
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    missing.unshift(path.basename(cur));
+    cur = parent;
+  }
+  return path.join(await realpath(cur), ...missing);
 }
 
 export function projectTargetId(projectId: string): string {
@@ -1336,7 +1352,7 @@ export class BackupService {
     if (this.now() - since > RESTORE_HOLD_MS) return null;
     if (h.released.includes(id)) return null;
     if (createdAt && Date.parse(createdAt) > since) return null;
-    return "Em pausa: o painel foi restaurado de outro servidor e os dados deste item ainda não voltaram. O backup automático começa quando você restaurar os dados dele (ou fizer um backup à mão), ou em até 7 dias.";
+    return "Em pausa: o painel foi restaurado e os dados deste item ainda não voltaram nesta VPS. O backup automático começa quando você restaurar os dados dele (ou fizer um backup à mão), ou em até 7 dias.";
   }
 
   private releaseHold(id: string): void {
@@ -1356,15 +1372,30 @@ export class BackupService {
    */
   private async panelFreshOverForeign(projectCount: number): Promise<string | null> {
     const t = this.target("panel");
-    if (t.lastSuccessAt !== null || projectCount > 0) return null;
+    // O que é desta instalação: backup do painel já feito, projeto cadastrado ou e-mail com backup concluído.
+    if (t.lastSuccessAt !== null || projectCount > 0 || this.target("email").lastSuccessAt !== null) return null;
     const storage = this.storage();
-    if (!storage) return null;
+    const d = this.config.destination;
+    if (!storage || !d) return null;
+    // A regra não vale para sempre (reinstalação no mesmo armazenamento): solta 7 dias depois da conexão.
+    if (this.now() - Date.parse(d.connectedAt) > RESTORE_HOLD_MS) return null;
     const prefix = `${BACKUP_ROOT_FOLDER}/_painel/`;
     try {
       const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
+      delete t.heldFailures;
       if (!found) return null;
-      return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto ou de você restaurar o painel (ou fazer um backup à mão).";
+      return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto ou de você restaurar o painel (ou fazer um backup à mão). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
     } catch (err) {
+      t.heldFailures = (t.heldFailures ?? 0) + 1;
+      if (t.heldFailures === 3) {
+        this.opts.notify?.({
+          kind: "backup_stale",
+          key: "backup-panel-held-error",
+          title: "Backup automático do painel parado: o armazenamento não responde",
+          body: [`Não foi possível listar o armazenamento ${t.heldFailures} vezes seguidas (${reasonOf(err)}). Confira a conexão em Configurações → Backups.`.slice(0, 250)],
+          path: "/settings/backups",
+        });
+      }
       return `Em pausa: não foi possível conferir se o armazenamento já guarda backups de outro servidor (${reasonOf(err)}). Tentamos de novo no próximo horário.`;
     }
   }
@@ -2409,14 +2440,18 @@ export class BackupService {
   private async restoreSourceBeforeDeploy(r: BackupRecord, project: Project, tarFile: string): Promise<void> {
     const dest = path.resolve(project.source);
     const root = this.opts.projectsDir;
-    if (!(await isInsideProjectsDir(root, dest))) {
-      throw new BackupFailure(
-        `A pasta do código deste projeto (${dest}) fica fora da pasta de projetos desta VPS (${root}); o painel não grava fora dela. Ponha o código dentro da pasta de projetos e cadastre o caminho de novo.`,
-      );
-    }
-    if (await isPanelArea(root, dest)) {
-      throw new BackupFailure(`A pasta do código deste projeto (${dest}) é a área do painel (a pasta de projetos ou ".paas"); o painel não restaura o código ali.`);
-    }
+    /** Dentro da pasta de projetos e fora da área do painel, seguindo os links que já existem no caminho. */
+    const check = async (candidate: string): Promise<void> => {
+      if (!(await isInsideProjectsDir(root, candidate))) {
+        throw new BackupFailure(
+          `A pasta do código deste projeto (${dest}) fica fora da pasta de projetos desta VPS (${root}); o painel não grava fora dela. Ponha o código dentro da pasta de projetos e cadastre o caminho de novo.`,
+        );
+      }
+      if (await isPanelArea(root, candidate)) {
+        throw new BackupFailure(`A pasta do código deste projeto (${dest}) é a área do painel (a pasta de projetos ou ".paas"); o painel não restaura o código ali.`);
+      }
+    };
+    await check(await realWithMissingTail(dest));
     const info = await lstat(dest).catch(() => null);
     if (info && !info.isDirectory()) throw new BackupFailure(`${dest} existe e não é uma pasta; o código não foi restaurado.`);
     if (info && (await readdir(dest)).length > 0) {
@@ -2431,11 +2466,30 @@ export class BackupService {
       if (!(await lstat(from).catch(() => null))?.isDirectory()) {
         throw new BackupFailure(`O backup não traz a pasta do código ("${name}").`);
       }
+      // O mkdir segue links: confere de novo com o caminho real da pasta-mãe antes de copiar.
       await mkdir(path.dirname(dest), { recursive: true });
+      await check(path.join(await realpath(path.dirname(dest)), path.basename(dest)));
+      let created = false;
       try {
-        await cp(from, dest, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+        if (!info) {
+          await mkdir(dest);
+          created = true;
+        }
+        for (const entry of await readdir(from)) {
+          await cp(path.join(from, entry), path.join(dest, entry), { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+        }
+        if (project.ingestMode === "upload") {
+          // O .env gerado pelo painel antigo (senhas da VPS antiga) não volta: o painel gera um novo no deploy.
+          // Um .env escrito pelo dono (sem o cabeçalho do painel) fica.
+          const env = path.join(dest, ".env");
+          const text = await readFile(env, "utf8").catch(() => null);
+          if (text !== null && text.startsWith(GENERATED_HEADER)) await rm(env, { force: true });
+        }
       } catch (err) {
-        if (!info) await rm(dest, { recursive: true, force: true });
+        // só o que esta restauração criou: a pasta toda se ela não existia, senão o conteúdo copiado (a pasta estava vazia)
+        // rm com force não falha por "não existe"; erro de verdade aqui não deve esconder o motivo original
+        if (created) await rm(dest, { recursive: true, force: true });
+        else for (const entry of await readdir(dest)) await rm(path.join(dest, entry), { recursive: true, force: true });
         throw new BackupFailure(`Não foi possível gravar o código em ${dest}: ${reasonOf(err)}. Confira se o painel tem permissão de escrita na pasta de projetos.`);
       }
     } finally {
@@ -2559,7 +2613,25 @@ export class BackupService {
         );
       }
     }
-    cfg.restoreHold = { since: new Date(this.now()).toISOString(), released: [] };
+    // Mesma VPS: o que já tem containers aqui continua na agenda. VPS nova: nada está liberado.
+    const released: string[] = [];
+    for (const p of await this.opts.projects.list()) {
+      let found: ProjectContainer[] = [];
+      try {
+        found = await this.opts.docker.projectContainers(p.slug);
+      } catch {
+        /* sem resposta do Docker: o projeto fica em pausa (o lado seguro) */
+      }
+      if (found.length > 0) released.push(projectTargetId(p.id));
+    }
+    let mailExists = false;
+    try {
+      mailExists = (await this.opts.docker.state(this.opts.mail.container)).exists;
+    } catch {
+      /* idem */
+    }
+    if (mailExists) released.push("email");
+    cfg.restoreHold = { since: new Date(this.now()).toISOString(), released };
     const panel = cfg.targets?.["panel"];
     if (panel) panel.lastSlot = currentSlot(this.now(), panel.frequencyHours, this.hour);
     await writeFileAtomic(cfgFile, JSON.stringify(cfg, null, 2) + "\n");
@@ -2606,22 +2678,32 @@ export class BackupService {
       const project = id.startsWith("project:") ? projects.find((p) => projectTargetId(p.id) === id)! : null;
       if (project && !project.lastDeployAt) continue;
       if (id === "email" && !(this.emailAvailable ?? (await this.mailAvailable()))) continue;
-      if (this.holdReason(id, project?.createdAt)) continue;
+      // Em pausa só não agenda: o aviso de "sem backup externo há N dias" abaixo continua valendo.
+      const paused = this.holdReason(id, project?.createdAt) !== null;
       const slot = currentSlot(now, t.frequencyHours, this.hour);
-      if (t.lastSlot === null || slot > t.lastSlot) {
+      if (!paused && (t.lastSlot === null || slot > t.lastSlot)) {
         t.lastSlot = slot;
+        let run = true;
         if (id === "panel") {
           const why = await this.panelFreshOverForeign(projects.length);
           if (why) {
+            const first = !t.heldReason;
             t.heldReason = why;
             this.log(`Backups: ${why}`);
-            await this.persistQuiet({ config: true });
-            continue;
-          }
-          delete t.heldReason;
+            if (first && !why.includes("não foi possível conferir")) {
+              this.opts.notify?.({
+                kind: "backup_stale",
+                key: "backup-panel-held",
+                title: "Backup automático do painel em pausa: o armazenamento tem backups de outro servidor",
+                body: [why.slice(0, 250)],
+                path: "/settings/backups",
+              });
+            }
+            run = false;
+          } else delete t.heldReason;
         }
         await this.persistQuiet({ config: true });
-        await this.runNow(id, null).catch((err: unknown) => this.log(`Backups: agendado de ${id} não entrou na fila (${reasonOf(err)}).`));
+        if (run) await this.runNow(id, null).catch((err: unknown) => this.log(`Backups: agendado de ${id} não entrou na fila (${reasonOf(err)}).`));
       }
       // Externo atrasado (2 dias ou 2× a frequência), avisado no máximo 1×/dia.
       const d = this.config.destination;
