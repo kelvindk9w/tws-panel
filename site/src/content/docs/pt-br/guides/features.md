@@ -9,7 +9,7 @@ O que o TWS Panel faz, módulo por módulo. O [README](https://github.com/kelvin
 o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `203.0.113.10`).
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, os detalhes dos passos do roteiro e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
 
 - [Deploy de projetos](#deploy)
 - [Portas dos containers](#portas)
@@ -49,13 +49,14 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
   registro de DNS exato a criar.
 - **Vários domínios** no mesmo projeto: conectar, tornar principal e remover, valendo na hora.
 - Antes do primeiro deploy, o domínio responde "site em configuração". Projeto parado mostra uma
-  página neutra de "temporariamente indisponível", em vez do erro cru do servidor.
+  página neutra de "temporariamente indisponível", em vez do erro cru do servidor. Essas duas
+  páginas são servidas aos visitantes do seu site e são escritas em português.
 
 **No dia a dia.** Cada projeto tem o seu menu: Visão geral, Deploys, Domínios, Git, Variáveis,
 E-mail, Backups e Configurações.
 
 - **Logs do deploy em tempo real.** Se um compose falha, o log ganha um bloco "Por que falhou"
-  com as últimas linhas do serviço que ficou doente e as últimas verificações do healthcheck.
+  (escrito pelo servidor, sempre em português) com as últimas linhas do serviço que ficou doente e as últimas verificações do healthcheck.
 - **Variáveis de ambiente** cifradas no servidor e injetadas no deploy. A tela lista as variáveis
   que o compose pede, importa um `.env` e barra o deploy quando falta uma obrigatória.
   O `.env` que pertence ao repositório nunca é sobrescrito: as variáveis do painel vão para um
@@ -164,7 +165,7 @@ minutos sem uso, e 10 logins errados vindos do mesmo IP em 10 minutos bloqueiam 
 - **Reputação:** consulta diária às listas de bloqueio (Spamhaus ZEN e DBL, SpamCop, Barracuda),
   com o ponto de teste de cada lista para nunca dizer "limpo" sem ter conferido. Aceita a chave
   DQS gratuita da Spamhaus.
-- **Nota de entregabilidade:** de 0 a 100, com a lista do que está feito e do que falta (DNS, PTR,
+- **Nota:** a nota de entregabilidade, de 0 a 100, com a lista do que está feito e do que falta (DNS, PTR,
   certificado, listas, tempo enviando, recusas, Google Postmaster Tools, Microsoft SNDS).
 
 **Entregabilidade por padrão.** O servidor completa `Message-ID` e `Date` quando faltam, os
@@ -220,6 +221,9 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
 **Restaurar.**
 
 - Por item (projeto, painel ou e-mail), escolhendo a data e a cópia (VPS ou externa).
+- Para confirmar, você digita a palavra que a tela pede: o nome do projeto, no caso de um projeto;
+  para o painel e para o e-mail, uma palavra fixa que depende do idioma da interface: `painel` e
+  `e-mail` em português, `panel` e `email` em inglês.
 - **Restaurar de outro servidor:** numa VPS nova, conecta-se o mesmo armazenamento, informa-se a
   senha e o painel lista o que existe, na ordem certa. Passo a passo:
   [Restaurar numa VPS nova](restore-new-server.md).
@@ -234,7 +238,7 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
   hardening em 8 fases idempotentes (atualizações, usuário, SSH, firewall, fail2ban/AppArmor,
   minimização, auditoria e endurecimento adicional), com simulação e backup de cada arquivo. As
   fases que mexem no acesso agendam um **rollback automático** de 5 minutos. Disponível também
-  depois da instalação, em **Segurança → Proteções**. Guia: [Wizard de segurança](../getting-started/security-wizard.md).
+  depois da instalação, em **Segurança → Verificar e aplicar proteções**. Guia: [Wizard de segurança](../getting-started/security-wizard.md).
 - **Guardrails de deploy:** regras em 3 níveis (`block`, `warn`, `info`) — porta de banco
   exposta, credenciais fracas, serviço de dev em produção, secret comitado e tag `:latest`. Um
   bloqueio só passa com override explícito e auditado. O compose também é conferido do jeito que o

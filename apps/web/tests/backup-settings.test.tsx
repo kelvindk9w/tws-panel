@@ -276,6 +276,8 @@ describe("Configurações → Backups", () => {
     fireEvent.click(within(setup).getByRole("button", { name: /Baixar kit de recuperação/ }));
     expect(URL.createObjectURL).toHaveBeenCalled();
     expect(within(setup).getByText(/Kit baixado/)).toBeInTheDocument();
+    // o texto ao lado do botão diz que o kit NÃO traz as chaves de acesso do armazenamento
+    expect(setup).toHaveTextContent(/não inclui as chaves de acesso do armazenamento.*guarde-as à parte/i);
     fireEvent.click(within(setup).getByLabelText("Guardei a senha em lugar seguro"));
     expect(save).toBeEnabled();
     fireEvent.click(save);
@@ -333,6 +335,18 @@ describe("Configurações → Backups", () => {
     expect(await screen.findByText(/Fazendo backup de Painel/)).toBeInTheDocument();
     const email = screen.getByTestId("target-email");
     expect(email).toHaveTextContent("O servidor de e-mail não está instalado nesta VPS.");
+  });
+
+  it("agenda em pausa depois de restaurar o painel de outro servidor: mostra o motivo e não promete o próximo horário", async () => {
+    state.targets = [
+      target("panel", "panel", "Painel"),
+      target("email", "email", "E-mail", { available: true, nextRunAt: null, pausedReason: "Em pausa: o painel foi restaurado de outro servidor e os dados deste item ainda não voltaram." }),
+    ];
+    renderPage();
+    const email = await screen.findByTestId("target-email");
+    expect(email).toHaveTextContent("Em pausa: o painel foi restaurado de outro servidor");
+    expect(email).not.toHaveTextContent("Próximo:");
+    expect(screen.getByTestId("target-panel")).not.toHaveTextContent("Em pausa");
   });
 
   it("padrão dos projetos: frequência, cópias e cobertura; Aplicar também nestes projetos", async () => {
@@ -407,6 +421,8 @@ describe("Configurações → Backups", () => {
     renderPage();
     const card = await screen.findByTestId("other-server-card");
     fireEvent.click(within(card).getByRole("button", { name: "Começar" }));
+    // as chaves de acesso não estão no kit: a tela diz isso no passo 1
+    expect(card).toHaveTextContent(/O kit de recuperação não traz as chaves de acesso.*Access Key ID e Secret Access Key/s);
     fireEvent.change(within(card).getByLabelText(/A mesma senha da VPS antiga/), { target: { value: "senha-antiga-errada" } });
     fireEvent.click(within(card).getByRole("button", { name: /Conferir e usar/ }));
     expect(await within(card).findByText(/Essa senha não abre os backups deste armazenamento/)).toBeInTheDocument();

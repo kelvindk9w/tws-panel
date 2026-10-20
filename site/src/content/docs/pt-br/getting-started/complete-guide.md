@@ -9,7 +9,7 @@ Um roteiro só, em ordem, da VPS contratada até o painel configurado por comple
 domínio, fuso, e-mail, notificações, backups, o primeiro projeto no ar e uma restauração de teste.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, status do servidor de e-mail e observações do checklist de DNS, erros de certificado, alertas e detalhes da auditoria, registros de backup, detalhes dos passos do roteiro e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
 
 Cada passo diz **o que fazer**, **onde clicar** e **o que conferir** para saber que deu certo.
 Quando o detalhe é longo, o passo resume e manda para o guia certo. Siga na ordem: alguns passos
@@ -156,6 +156,13 @@ fechadas no firewall do provedor. Veja os erros comuns no [Passo 8](installation
 4. **Conta de administrador:** o seu usuário e uma senha forte do painel. Clique em
    **Criar conta admin**.
 
+<a id="idioma-da-interface"></a>
+**Idioma.** Na primeira visita, o painel percorre a lista de idiomas do navegador e usa o primeiro que
+ele tem: português para qualquer variante de `pt` (como `pt-BR`), inglês para `en`; se nenhum
+combinar, inglês. Para mudar, use o seletor **Idioma** nas telas do assistente e de login, no menu do
+usuário ou em **Configurações → Aparência**. A escolha fica guardada só nesse navegador: outro
+navegador ou aparelho começa de novo pelo idioma dele.
+
 **O que conferir:** aparece **Setup concluído!** e você entra no Dashboard. A partir daqui, o
 acesso é pela tela de login, com usuário e senha. O setup token deixa de valer.
 
@@ -185,7 +192,7 @@ O passo a passo completo, fase por fase, está em
 [As oito fases](security-wizard.md#as-oito-fases).
 
 **O que conferir:** no Dashboard, o passo **Proteções da VPS** do roteiro aparece como feito, com
-"8 de 8 fases". Se ficou alguma de fora, ela fica em **Segurança → Proteções** para revisar,
+"Todas as 8 fases resolvidas" (mensagem do servidor). Se ficou alguma de fora, ela fica em **Segurança → Verificar e aplicar proteções** para revisar,
 simular ou aplicar depois.
 
 ### 3.3 Verificação em duas etapas
@@ -228,7 +235,8 @@ endereço automático entrega o IP da VPS no nome; um domínio seu é mais discr
 2. **Cadastre no painel.** Ainda pelo endereço `…sslip.io`, abra **Configurações → Domínio do
    painel**, digite `painel.example.com` e clique em **Salvar domínio**. A tela mostra o mesmo
    registro A, com botão de copiar em cada campo.
-3. Clique em **Verificar DNS**. Se aparecer "ainda não aponta", espere alguns minutos e tente de
+3. Clique em **Verificar DNS**. Se o resultado disser que o domínio "ainda não aponta" (mensagem
+   que vem do servidor e continua em português mesmo com a interface em inglês), espere alguns minutos e tente de
    novo.
 4. **Espere o certificado.** No cartão do certificado, espere ficar "Válido" (de segundos a 2
    minutos). Use **Conferir de novo** para atualizar. Se falhar, a causa aparece no cartão, com o
@@ -238,7 +246,7 @@ endereço automático entrega o IP da VPS no nome; um domínio seu é mais discr
 
 **O que conferir:** o painel abre em `https://painel.example.com`, com cadeado. A lista
 "Endereço do painel" mostra os dois endereços. No Dashboard, o passo **Domínio do painel** fica
-como feito, com o aviso "acesso pelo IP ainda ativo".
+como feito, com o aviso "acesso pelo IP ainda ativo" (mensagem do servidor, sempre em português).
 
 ### Desativar o acesso pelo IP (opcional)
 
@@ -331,7 +339,7 @@ transacional. Sem ela, o e-mail não sai. Veja
 3. No cartão **Domínios de e-mail**, digite `envio.example.com` e clique em
    **Adicionar domínio**.
 4. Se aparecer o aviso vermelho "Este domínio já recebe e-mail em outro servidor", **não** siga
-   com o domínio principal. Clique em **Usar envio.… (recomendado)**.
+   com o domínio principal. Clique em **Usar envio.example.com (recomendado)** (o painel sempre sugere um subdomínio `envio.` do seu domínio; qualquer subdomínio serve).
 
 **O que conferir:** o cartão **Servidor de e-mail** mostra o servidor rodando e o domínio aparece
 na lista.
@@ -363,7 +371,7 @@ configurado no painel do provedor da VPS. O cartão **Reverse DNS (PTR)** mostra
 
 - **Verde:** o nome reverso já é `mail.envio.example.com`. Nada a fazer.
 - **Azul:** nome genérico do provedor que aponta de volta para o IP. O envio já funciona; trocar o
-  nome é recomendado, e o caminho aparece em "Opcional: trocar o nome reverso".
+  nome é recomendado, e o caminho aparece em "Recomendado: trocar o nome reverso para …".
 - **Amarelo:** sem nome reverso válido. Gmail, Yahoo e Microsoft podem recusar: troque o nome.
 
 Onde trocar: na **Contabo**, em Reverse DNS Management; na **Hetzner**, servidor → aba Networking →
@@ -376,10 +384,10 @@ cartão traz um texto pronto para abrir chamado, com botão de copiar.
 
 1. Volte em **E-mail**.
 2. O cartão **Certificado do servidor de e-mail** mostra `mail.envio.example.com`.
-3. Clique em **Conferir de novo** até aparecer **válido**, "Emitido por Let's Encrypt". Na primeira
+3. Clique em **Conferir de novo** até aparecer **Válido**, "Emitido por Let's Encrypt". Na primeira
    vez, o servidor de e-mail reinicia sozinho por alguns segundos.
 
-**O que conferir:** o estado é **válido**. Se continuar pendente, o próprio cartão diz o que falta
+**O que conferir:** o estado é **Válido**. Se continuar pendente, o próprio cartão diz o que falta
 (registro A ausente, nuvem laranja ou portas 80/443 fechadas). O painel renova sozinho.
 
 ### 6.6 Criar uma caixa
@@ -413,7 +421,7 @@ respondeu (normalmente SPF, DKIM, DMARC ou o nome reverso). Veja
 3. Entre com o endereço completo da caixa (ex.: `contato@envio.example.com`) e a senha dela.
 
 **O que conferir:** `https://mail.envio.example.com/` abre com cadeado e a tela de login em
-português. Envie um e-mail para você e responda de lá: a resposta aparece na Caixa de entrada do
+português por padrão (o webmail é o Roundcube, que tem a própria configuração de idioma e não segue a do painel). Envie um e-mail para você e responda de lá: a resposta aparece na Caixa de entrada do
 webmail. Esqueceu a senha da caixa? Aba **Caixas** → **Trocar senha**.
 
 ### 6.9 Página Envios
@@ -424,7 +432,7 @@ No menu, **Envios** mostra o que o servidor de e-mail está fazendo:
 - **Histórico:** entregues, recusadas, adiadas e canceladas dos últimos 30 dias.
 - **Volume:** gráfico dos últimos 14 dias e taxa de recusa.
 - **Reputação:** listas de bloqueio, conferidas uma vez por dia e no botão **Conferir agora**.
-- **Nota de entregabilidade:** de 0 a 100, com o que está feito e o que falta.
+- **Nota:** a nota de entregabilidade, de 0 a 100, com o que está feito e o que falta.
 
 **O que conferir:** em **Histórico**, o e-mail de teste aparece como "Entregue". Um servidor novo
 não chega ao verde na nota antes de uns 30 dias enviando: é de propósito.
@@ -453,8 +461,7 @@ atrasaram. Sem isso, os alertas só aparecem dentro do painel.
    do grupo).
 7. Clique em **Enviar teste**.
 
-**O que conferir:** a mensagem "TWS Panel: Teste de notificação" chega no Telegram, e o selo vira
-"Testado em…". Em **Últimos envios** aparece "Teste de notificação · Enviado".
+**O que conferir:** a mensagem "TWS Panel: Teste de notificação" chega no Telegram (o texto do teste é escrito pelo servidor e é sempre em português). No painel, o selo vira "Testado em…" e, em **Últimos envios**, aparece uma entrada "Teste de notificação" (também texto do servidor) com o estado **Enviado**.
 
 ### 7.2 E-mail (opcional)
 
@@ -526,7 +533,7 @@ salvo e a tela explica o motivo (chave recusada, bucket inexistente, sem respost
 A cópia externa vai cifrada com uma senha sua. **Sem esta senha, ninguém, nem a TWS, consegue abrir
 seus backups.**
 
-1. No cartão **Criptografia**, crie a senha (mínimo de 12 caracteres) ou clique em **Sugerir uma
+1. No cartão **Criptografia da cópia externa**, crie a senha (mínimo de 12 caracteres) ou clique em **Sugerir uma
    frase forte**.
 2. Clique em **Baixar kit de recuperação** e guarde o arquivo **fora da VPS**. Ele traz a senha,
    onde os backups ficam e como restaurar.
@@ -549,9 +556,9 @@ seus backups.**
 
 ### 8.5 Testar a senha
 
-No cartão **Criptografia**, digite a senha do kit e clique em **Testar minha senha**.
+No cartão **Criptografia da cópia externa**, digite a senha do kit e clique em **Testar minha senha**.
 
-**O que conferir:** a resposta é "Senha certa". A cada 90 dias sem teste, o painel lembra de
+**O que conferir:** a resposta começa com "Senha certa" (resposta do servidor, sempre em português). A cada 90 dias sem teste, o painel lembra de
 repetir isto.
 
 ### 8.6 Agenda
@@ -659,7 +666,7 @@ endereços (0.0.0.0)", a porta fica aberta para a internet.
 ### 9.6 Deploy e logs
 
 1. Clique em **Deploy**, no topo da página do projeto.
-2. Acompanhe o log ao vivo. Se um compose falhar, o log ganha um bloco **Por que falhou**, com as
+2. Acompanhe o log ao vivo. Se um compose falhar, o log ganha um bloco "Por que falhou" (escrito pelo servidor), com as
    últimas linhas do serviço que ficou doente.
 
 **O que conferir:** o deploy termina como **sucesso** e o endereço do projeto abre o site. Na aba
@@ -714,7 +721,7 @@ depende dele.
    mudou.
 3. **Restaure.** Na mesma aba, clique em **Restaurar**.
    - Em **Escolha a data**, marque o backup do passo 1.
-   - Em **Usar a cópia**, escolha **VPS (mais rápido)** ou **do armazenamento externo**. Testar a
+   - Em **Usar a cópia**, escolha **da VPS (mais rápido)** ou **do armazenamento externo**. Testar a
      externa prova também a senha e o R2.
    - Para confirmar, digite o nome do projeto e clique em **Restaurar**.
 4. Acompanhe as etapas na janela. Dá para fechar: a restauração continua no servidor.
@@ -786,7 +793,7 @@ Os comandos de emergência estão em
 - [ ] Caixa criada, e-mail de teste entregue e webmail abrindo
 - [ ] Notificações: Telegram (ou e-mail) conectado e teste recebido
 - [ ] Backups: R2 conectado, criptografia ligada, kit de recuperação guardado fora da VPS
-- [ ] Primeiro backup do painel com "cópia externa conferida" e "Senha certa" em Testar minha senha
+- [ ] Primeiro backup do painel com "cópia externa conferida" e "Senha certa" (mensagem do servidor) em Testar minha senha
 - [ ] Primeiro projeto no ar, com variáveis, e-mail do projeto e certificado válido
 - [ ] Aba Backups do projeto conferida e um backup do projeto feito
 - [ ] Uma restauração de teste feita e conferida

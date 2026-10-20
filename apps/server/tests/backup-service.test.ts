@@ -10,11 +10,13 @@
  * lembrete da senha.
  */
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { backupFileStamp, type Project } from "@paas/core";
+import { createDecipheriv } from "node:crypto";
+import { ingestCode, writeProjectDotenv } from "@paas/deploy";
+import { BACKUP_ROOT_FOLDER, backupFileStamp, type Project } from "@paas/core";
 import { ArchiveError } from "../src/services/backup-archive.js";
 import type { ContainerInspect } from "../src/services/backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "../src/services/backup-docker.js";
@@ -1052,6 +1054,349 @@ describe("padrão dos projetos", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Restauração do painel em outra VPS (lote 8, itens 2 a 5)
+// ---------------------------------------------------------------------------
+
+describe("restaurar o painel em outra VPS", () => {
+  const staged = (f: string) => path.join(dir, "backups", ".restaurar-painel", f);
+  const readStaged = async (f: string) => JSON.parse(await readFile(staged(f), "utf8")) as Record<string, any>;
+  /** Abre uma caixa lacrada (AES-256-GCM) com a chave em hexadecimal do arquivo backups-key. */
+  const unseal = (box: { iv: string; tag: string; data: string }, keyHex: string): string => {
+    const d = createDecipheriv("aes-256-gcm", Buffer.from(keyHex.trim(), "hex"), Buffer.from(box.iv, "base64"));
+    d.setAuthTag(Buffer.from(box.tag, "base64"));
+    return Buffer.concat([d.update(Buffer.from(box.data, "base64")), d.final()]).toString("utf8");
+  };
+  async function restorePanel() {
+    const b = await backup("panel");
+    const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+
+  describe("item 4: as chaves do armazenamento em uso continuam", () => {
+    it("token novo criado na VPS nova vale depois da restauração; a senha dos backups é a do backup", async () => {
+      await connect();
+      const b = await backup("panel");
+      await service.setDestination({ ...DEST, accessKeyId: "AKIANOVO9999", secretAccessKey: "segredo-do-token-novo" }, "admin");
+      const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+      await service.idle();
+      const cfg = await readStaged("backups.json");
+      const key = await readFile(staged("backups-key"), "utf8");
+      expect(cfg.destination.accessKeyId).toBe("AKIANOVO9999");
+      expect(unseal(cfg.destination.secret, key)).toBe("segredo-do-token-novo");
+      expect(unseal(cfg.encryption.password, key)).toBe(PW);
+      expect((await service.record(r.id)).warnings.join(" ")).toMatch(/chaves do armazenamento.*mantidas/i);
+    });
+
+    it("backup sem configuração de backups: leva a configuração e a chave de agora (o painel não fica sem destino)", async () => {
+      await connect();
+      const b = await backup("panel");
+      const file = path.join(dir, "backups", "_painel", b.fileName!);
+      const raw = JSON.parse(await readFile(file, "utf8")) as { files: Record<string, string> };
+      delete raw.files["backups.json"];
+      delete raw.files["backups-key"];
+      await writeFile(file, JSON.stringify(raw));
+      await service.flush();
+      const atual = await readFile(path.join(dir, "backups.json"), "utf8");
+      await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+      await service.idle();
+      expect(JSON.parse(await readFile(staged("backups.json"), "utf8")).destination.accessKeyId).toBe(JSON.parse(atual).destination.accessKeyId);
+      expect(await readFile(staged("backups-key"), "utf8")).toBe(await readFile(path.join(dir, "backups-key"), "utf8"));
+    });
+  });
+
+  describe("item 5: acesso pelo IP desativado", () => {
+    const domainFile = (ipAccessDisabled: boolean) =>
+      JSON.stringify({ domain: "painel.exemplo.com", active: true, ipAccessDisabled, lastCheck: null, updatedAt: "2026-10-01T00:00:00Z" });
+
+    it("domínio que ainda não aponta para esta VPS: o acesso pelo IP não é herdado desativado, e a tela avisa", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(true));
+      service = build({ panelDomainPointsHere: async () => false });
+      const rec = await restorePanel();
+      const stagedDomain = await readStaged("panel-domain.json");
+      expect(stagedDomain).toMatchObject({ domain: "painel.exemplo.com", ipAccessDisabled: false });
+      expect(rec.warnings.join(" ")).toMatch(/acesso pelo IP.*ativo.*painel\.exemplo\.com/s);
+    });
+
+    it("domínio já apontando para esta VPS: continua desativado (nada enfraquece)", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(true));
+      service = build({ panelDomainPointsHere: async () => true });
+      const rec = await restorePanel();
+      expect((await readStaged("panel-domain.json")).ipAccessDisabled).toBe(true);
+      expect(rec.warnings.join(" ")).not.toMatch(/acesso pelo IP/);
+    });
+
+    it("sem como conferir o DNS: trata como não apontando (ninguém fica sem entrar)", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(true));
+      const rec = await restorePanel();
+      expect((await readStaged("panel-domain.json")).ipAccessDisabled).toBe(false);
+      expect(rec.warnings.join(" ")).toMatch(/acesso pelo IP/);
+    });
+
+    it("acesso pelo IP que já estava ativo: nada muda e nada é avisado", async () => {
+      await writeFile(path.join(dir, "panel-domain.json"), domainFile(false));
+      const rec = await restorePanel();
+      expect((await readStaged("panel-domain.json")).ipAccessDisabled).toBe(false);
+      expect(rec.warnings.join(" ")).not.toMatch(/acesso pelo IP/);
+    });
+  });
+
+  describe("item 2: agenda pausada depois da restauração", () => {
+    /** Simula a subida seguinte: o que foi preparado passa a ser o estado do painel. */
+    async function applyStaged(): Promise<void> {
+      await copyFile(staged("backups.json"), path.join(dir, "backups.json"));
+      await copyFile(staged("backups-key"), path.join(dir, "backups-key"));
+      service = build();
+    }
+    async function restoredWithEmptyProject(): Promise<void> {
+      await connect();
+      await backup(projectTargetId("p1")); // backup bom do projeto, antes de desmarcar tudo
+      await service.updateTarget("email", { enabled: false }, "a");
+      await service.updateTarget(projectTargetId("p1"), { choices: { "db:db": false, "mnt:web:/app/uploads": false } }, "admin");
+      docker.containers = []; // VPS nova: o projeto ainda não tem containers aqui
+      docker.states = {};
+      await restorePanel();
+      await applyStaged();
+    }
+
+    it("projeto da restauração não entra na agenda e NÃO tem o automático desligado", async () => {
+      await restoredWithEmptyProject();
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.filter((r) => r.target === "project:p1" && r.trigger === "schedule")).toHaveLength(0);
+      const view = await service.projectView("p1");
+      expect(view.target.enabled).toBe(true);
+      expect(view.target.pausedReason).toMatch(/restaur/i);
+      expect(notices.some((n) => n.key === "backup-empty:project:p1")).toBe(false);
+    });
+
+    it("restaurar os dados do projeto libera a agenda dele (e o horário que passou não dispara na hora)", async () => {
+      await restoredWithEmptyProject();
+      const files = await service.points("project:p1");
+      const r = await service.restore(projectTargetId("p1"), { fileName: files.find((f) => f.local)!.fileName, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).not.toBe("failed");
+      expect((await service.projectView("p1")).target.pausedReason ?? null).toBeNull();
+      now = new Date(2026, 9, 15, 2, 0).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.filter((x) => x.trigger === "schedule")).toHaveLength(0);
+      now = new Date(2026, 9, 16, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((x) => x.target === "project:p1" && x.trigger === "schedule")).toBe(true);
+    });
+
+    it("um backup feito à mão no projeto também libera", async () => {
+      await restoredWithEmptyProject();
+      docker.containers = new FakeDocker().containers;
+      await service.updateTarget(projectTargetId("p1"), { choices: { "db:db": true } }, "admin");
+      const b = await backup();
+      expect(b.status).not.toBe("failed");
+      expect((await service.projectView("p1")).target.pausedReason ?? null).toBeNull();
+    });
+
+    it("sem ninguém restaurar, a pausa acaba sozinha em 7 dias (nada fica sem backup para sempre)", async () => {
+      await restoredWithEmptyProject();
+      now = new Date(2026, 9, 14, 10, 0).getTime() + 8 * 24 * H;
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((x) => x.target === "project:p1" && x.trigger === "schedule")).toBe(true);
+      expect((await service.projectView("p1")).target.pausedReason ?? null).toBeNull();
+    });
+
+    it("projeto criado depois da restauração não é pausado", async () => {
+      await restoredWithEmptyProject();
+      projects = [project({ id: "p2", slug: "novo", name: "Novo", createdAt: new Date(now + H).toISOString() })];
+      await service.initProject("p2");
+      expect((await service.projectView("p2")).target.pausedReason ?? null).toBeNull();
+    });
+
+    it("o painel continua na agenda (a pausa é só de projetos e e-mail)", async () => {
+      await restoredWithEmptyProject();
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason ?? null).toBeNull();
+    });
+  });
+
+  describe("mesma VPS e aviso de atraso", () => {
+    it("restaurar o painel na MESMA VPS não pausa o que já tem containers aqui (projeto e e-mail)", async () => {
+      await connect();
+      await backup(projectTargetId("p1"));
+      await restorePanel();
+      await copyFile(staged("backups.json"), path.join(dir, "backups.json"));
+      await copyFile(staged("backups-key"), path.join(dir, "backups-key"));
+      service = build();
+      const st = await service.status();
+      expect(st.targets.find((t) => t.id === "project:p1")!.pausedReason ?? null).toBeNull();
+      expect(st.targets.find((t) => t.id === "email")!.pausedReason ?? null).toBeNull();
+    });
+
+    it("projeto sem containers nesta VPS fica em pausa, e o texto não diz 'outro servidor'", async () => {
+      await connect();
+      await backup(projectTargetId("p1"));
+      docker.containers = [];
+      await restorePanel();
+      await copyFile(staged("backups.json"), path.join(dir, "backups.json"));
+      await copyFile(staged("backups-key"), path.join(dir, "backups-key"));
+      service = build();
+      const reason = (await service.status()).targets.find((t) => t.id === "project:p1")!.pausedReason;
+      expect(reason).toMatch(/Em pausa/);
+      expect(reason).not.toMatch(/outro servidor/);
+    });
+
+    it("item em pausa pela restauração continua recebendo o aviso 'sem backup externo há N dias'", async () => {
+      await connect();
+      await backup(projectTargetId("p1"));
+      docker.containers = [];
+      await service.updateTarget("panel", { enabled: false }, "a");
+      await service.updateTarget("email", { enabled: false }, "a");
+      await restorePanel();
+      await copyFile(staged("backups.json"), path.join(dir, "backups.json"));
+      await copyFile(staged("backups-key"), path.join(dir, "backups-key"));
+      service = build();
+      now += 4 * 24 * H;
+      await service.tick();
+      await service.idle();
+      expect(notices.some((n) => n.kind === "backup_stale" && n.key === "backup-stale:project:p1")).toBe(true);
+      expect((await service.status()).history.filter((r) => r.trigger === "schedule")).toHaveLength(0);
+    });
+  });
+
+  describe("item 3: painel recém-instalado não sobrescreve os backups de outro servidor", () => {
+    const OTHER = `${BACKUP_ROOT_FOLDER}/_painel/2026-10-13_03-00.7z`;
+    async function emptyPanelWithForeignBackups(): Promise<void> {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+      await service.updateTarget("email", { enabled: false }, "a");
+    }
+
+    it("sem projetos, sem backup feito aqui e com backups do painel já no armazenamento: o agendado não envia", async () => {
+      await emptyPanelWithForeignBackups();
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history).toHaveLength(0);
+      expect([...storage.objects.keys()].filter((k) => k.includes("/_painel/"))).toEqual([OTHER]);
+      const t = (await service.status()).targets.find((x) => x.id === "panel")!;
+      expect(t.pausedReason).toMatch(/outro servidor/);
+    });
+
+    it("nos dias seguintes continua protegido", async () => {
+      await emptyPanelWithForeignBackups();
+      for (let d = 15; d < 20; d++) {
+        now = new Date(2026, 9, d, 3, 1).getTime();
+        await service.tick();
+        await service.idle();
+      }
+      expect([...storage.objects.keys()].filter((k) => k.includes("/_painel/"))).toEqual([OTHER]);
+    });
+
+    it("armazenamento sem backup do painel: o primeiro agendado segue normalmente", async () => {
+      projects = [];
+      await connect();
+      await service.updateTarget("email", { enabled: false }, "a");
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.map((r) => r.target)).toEqual(["panel"]);
+    });
+
+    it("com projetos cadastrados o painel tem o que guardar: segue normalmente", async () => {
+      await emptyPanelWithForeignBackups();
+      projects = [project()];
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((r) => r.target === "panel")).toBe(true);
+    });
+
+    it("painel parado pela regra continua recebendo o aviso de backup externo atrasado, e a regra avisa uma vez", async () => {
+      await emptyPanelWithForeignBackups();
+      for (const d of [15, 16, 17, 18]) {
+        now = new Date(2026, 9, d, 3, 1).getTime();
+        await service.tick();
+        await service.idle();
+      }
+      expect(notices.filter((n) => n.key === "backup-panel-held")).toHaveLength(1);
+      expect(notices.some((n) => n.key === "backup-stale:panel")).toBe(true);
+    });
+
+    it("painel só com e-mail: o backup do e-mail concluído conta como conteúdo próprio", async () => {
+      await emptyPanelWithForeignBackups();
+      await service.updateTarget("email", { enabled: true }, "a");
+      expect((await backup("email")).status).not.toBe("failed");
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((r) => r.target === "panel" && r.trigger === "schedule")).toBe(true);
+    });
+
+    it("reinstalado no mesmo bucket: depois de 7 dias da conexão a regra solta e o backup é enviado", async () => {
+      await emptyPanelWithForeignBackups();
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history).toHaveLength(0);
+      now = new Date(2026, 9, 14, 10, 0).getTime() + 8 * 24 * H;
+      await service.tick();
+      await service.idle();
+      expect((await service.status()).history.some((r) => r.target === "panel")).toBe(true);
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason ?? null).toBeNull();
+    });
+
+    it("listagem que falha sempre: não envia, e avisa a partir da 3ª tentativa em vez de silenciar", async () => {
+      projects = [];
+      await connect();
+      await service.updateTarget("email", { enabled: false }, "a");
+      storage.list = async () => {
+        throw new StorageError("fora do ar", "unreachable");
+      };
+      for (const d of [15, 16, 17, 18]) {
+        now = new Date(2026, 9, d, 3, 1).getTime();
+        await service.tick();
+        await service.idle();
+      }
+      expect((await service.status()).history).toHaveLength(0);
+      expect(notices.filter((n) => n.key === "backup-panel-held-error")).toHaveLength(1);
+    });
+
+    it("listagem falha 1x e depois encontra backups de outro servidor: o aviso de pausa sai (1x)", async () => {
+      projects = [];
+      await connect();
+      await service.updateTarget("email", { enabled: false }, "a");
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+      const list = storage.list.bind(storage);
+      let falha = true;
+      storage.list = async (p: string) => {
+        if (falha) throw new StorageError("instável", "unreachable");
+        return list(p);
+      };
+      now = new Date(2026, 9, 15, 3, 1).getTime();
+      await service.tick();
+      falha = false;
+      for (const d of [16, 17]) {
+        now = new Date(2026, 9, d, 3, 1).getTime();
+        await service.tick();
+        await service.idle();
+      }
+      expect(notices.filter((n) => n.key === "backup-panel-held")).toHaveLength(1);
+      // e depois de reiniciar o painel o aviso não se repete
+      service = build();
+      now = new Date(2026, 9, 18, 3, 1).getTime();
+      await service.tick();
+      expect(notices.filter((n) => n.key === "backup-panel-held")).toHaveLength(1);
+    });
+
+    it("backup pedido à mão sempre é feito", async () => {
+      await emptyPanelWithForeignBackups();
+      expect((await backup("panel")).status).not.toBe("failed");
+    });
+  });
+});
+
 describe("agenda, atraso e lembrete", () => {
   it("roda no horário (03:00) e não repete o mesmo horário", async () => {
     await service.tick();
@@ -1166,6 +1511,352 @@ describe("caminhos de exceção", () => {
     await service.idle();
     expect((await service.record(r.id)).status).not.toBe("failed");
     expect(await readFile(path.join(src, "index.html"), "utf8")).toBe("<h1>loja</h1>");
+  });
+
+  describe("VPS nova: projeto que não vem do GitHub (lote 8, item 1)", () => {
+    /** Serviço com tar de verdade e um redeploy que registra o que havia em disco no instante da publicação. */
+    function realTarService(seen: Array<{ path: string; content: string | null }>, watch: string) {
+      return build({
+        tar: undefined,
+        statfs: undefined,
+        projects: {
+          list: async () => projects,
+          get: async (id) => projects.find((p) => p.id === id || p.slug === id) ?? null,
+          srcDir: (p) => (p.ingestMode === "existing" ? path.resolve(p.source) : path.join(dir, "projects", ".paas", p.id, "src")),
+          redeploy: async (id) => {
+            redeploys.push(id);
+            seen.push({ path: watch, content: await readFile(path.join(watch, "index.html"), "utf8").catch(() => null) });
+            docker.containers = [{ id: "c-web", name: "paas-loja-web-1", service: "web", running: true }];
+          },
+        },
+      });
+    }
+
+    it("upload: o código volta para a pasta de origem ANTES de publicar, e nada é apagado", async () => {
+      const origem = path.join(dir, "projects", "minha-loja");
+      projects = [project({ ingestMode: "upload", source: origem, storageLayout: "reserved" })];
+      const work = path.join(dir, "projects", ".paas", "p1", "src");
+      await mkdir(work, { recursive: true });
+      await writeFile(path.join(work, "index.html"), "<h1>loja</h1>");
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      expect(b.status).toBe("success");
+      // VPS nova: nem a origem, nem a cópia de trabalho existem
+      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await mkdir(path.join(dir, "projects"), { recursive: true });
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      const rec = await service.record(r.id);
+      expect(rec.status).not.toBe("failed");
+      expect(seen).toEqual([{ path: origem, content: "<h1>loja</h1>" }]);
+    });
+
+    it("upload: se a pasta de origem já existe nesta VPS, fica como está (nada sobrescrito)", async () => {
+      const origem = path.join(dir, "projects", "minha-loja");
+      projects = [project({ ingestMode: "upload", source: origem, storageLayout: "reserved" })];
+      const work = path.join(dir, "projects", ".paas", "p1", "src");
+      await mkdir(work, { recursive: true });
+      await writeFile(path.join(work, "index.html"), "<h1>antigo</h1>");
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      await rm(work, { recursive: true, force: true });
+      await mkdir(origem, { recursive: true });
+      await writeFile(path.join(origem, "index.html"), "<h1>do usuario</h1>");
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).not.toBe("failed");
+      expect(seen[0]!.content).toBe("<h1>do usuario</h1>");
+    });
+
+    it("existing: a pasta do usuário é recriada onde estava, antes de publicar", async () => {
+      const origem = path.join(dir, "projects", "meu-app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      await mkdir(origem, { recursive: true });
+      await writeFile(path.join(origem, "index.html"), "<h1>app</h1>");
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      expect(b.status).toBe("success");
+      await rm(origem, { recursive: true, force: true });
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).not.toBe("failed");
+      expect(seen).toEqual([{ path: origem, content: "<h1>app</h1>" }]);
+    });
+
+    it("existing: pasta que já existe com arquivos não é tocada", async () => {
+      const origem = path.join(dir, "projects", "meu-app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      await mkdir(origem, { recursive: true });
+      await writeFile(path.join(origem, "index.html"), "<h1>app</h1>");
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      await writeFile(path.join(origem, "index.html"), "<h1>versao nova do usuario</h1>");
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).not.toBe("failed");
+      expect(await readFile(path.join(origem, "index.html"), "utf8")).toBe("<h1>versao nova do usuario</h1>");
+      expect(seen[0]!.content).toBe("<h1>versao nova do usuario</h1>");
+    });
+
+    it("existing: pasta que já existe VAZIA é preenchida com o código do backup", async () => {
+      const origem = path.join(dir, "projects", "meu-app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      await mkdir(origem, { recursive: true });
+      await writeFile(path.join(origem, "index.html"), "<h1>app</h1>");
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      await rm(path.join(origem, "index.html"));
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).not.toBe("failed");
+      expect(seen[0]!.content).toBe("<h1>app</h1>");
+    });
+
+    it("origem fora da pasta de projetos: falha sem gravar nada e sem publicar", async () => {
+      const fora = await mkdtemp(path.join(tmpdir(), "paas-fora-"));
+      try {
+        const origem = path.join(fora, "app");
+        projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+        await mkdir(origem, { recursive: true });
+        await writeFile(path.join(origem, "index.html"), "x");
+        const seen: Array<{ path: string; content: string | null }> = [];
+        service = realTarService(seen, origem);
+        const b = await backup();
+        await rm(origem, { recursive: true, force: true });
+        docker.containers = [];
+        const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+        await service.idle();
+        const rec = await service.record(r.id);
+        expect(rec.status).toBe("failed");
+        expect(rec.error).toMatch(/fora da pasta de projetos/);
+        expect(existsSync(origem)).toBe(false);
+        expect(redeploys).toEqual([]);
+      } finally {
+        await rm(fora, { recursive: true, force: true });
+      }
+    });
+
+    it("pasta acima do destino que é link simbólico para fora: recusa e não grava nada fora", async () => {
+      const fora = await mkdtemp(path.join(tmpdir(), "paas-fora-"));
+      try {
+        await mkdir(path.join(dir, "projects"), { recursive: true });
+        await symlink(fora, path.join(dir, "projects", "ponte"));
+        const origem = path.join(dir, "projects", "ponte", "meu-app");
+        projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+        await mkdir(origem, { recursive: true });
+        await writeFile(path.join(origem, "index.html"), "x");
+        const seen: Array<{ path: string; content: string | null }> = [];
+        service = realTarService(seen, origem);
+        const b = await backup();
+        expect(b.status).toBe("success");
+        await rm(origem, { recursive: true, force: true });
+        docker.containers = [];
+        const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+        await service.idle();
+        const rec = await service.record(r.id);
+        expect(rec.status).toBe("failed");
+        expect(rec.error).toMatch(/fora da pasta de projetos/);
+        expect(existsSync(path.join(fora, "meu-app"))).toBe(false);
+        expect(redeploys).toEqual([]);
+      } finally {
+        await rm(fora, { recursive: true, force: true });
+      }
+    });
+
+    it("upload: o .env gerado pelo painel antigo não volta, e os deploys seguintes usam as variáveis novas", async () => {
+      const origem = path.join(dir, "projects", "minha-loja");
+      projects = [project({ ingestMode: "upload", source: origem, storageLayout: "reserved" })];
+      const ctx = { projectsDir: path.join(dir, "projects") };
+      const work = path.join(dir, "projects", ".paas", "p1");
+      await mkdir(origem, { recursive: true });
+      await writeFile(path.join(origem, "index.html"), "<h1>loja</h1>");
+      await ingestCode(ctx, projects[0]!, () => undefined);
+      await writeProjectDotenv(path.join(work, "src"), work, { SENHA: "antiga" });
+      expect(await readFile(path.join(work, "src", ".env"), "utf8")).toMatch(/SENHA=.?antiga/);
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      expect(b.status).toBe("success");
+      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await mkdir(path.join(dir, "projects"), { recursive: true });
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).not.toBe("failed");
+      expect(existsSync(path.join(origem, ".env"))).toBe(false);
+      expect(await readFile(path.join(origem, "index.html"), "utf8")).toBe("<h1>loja</h1>");
+      for (const valor of ["nova1", "nova2"]) {
+        await ingestCode(ctx, projects[0]!, () => undefined);
+        const w = await writeProjectDotenv(path.join(work, "src"), work, { SENHA: valor });
+        expect(w.target).toBe(".env");
+        expect(await readFile(path.join(work, "src", ".env"), "utf8")).toMatch(new RegExp(`SENHA=.?${valor}`));
+      }
+    });
+
+    it("upload: .env escrito pelo dono (sem o cabeçalho do painel) continua", async () => {
+      const origem = path.join(dir, "projects", "minha-loja");
+      projects = [project({ ingestMode: "upload", source: origem, storageLayout: "reserved" })];
+      const work = path.join(dir, "projects", ".paas", "p1", "src");
+      await mkdir(work, { recursive: true });
+      await writeFile(path.join(work, ".env"), "MINHA=1\n");
+      await writeFile(path.join(work, "index.html"), "x");
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await mkdir(path.join(dir, "projects"), { recursive: true });
+      docker.containers = [];
+      await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect(await readFile(path.join(origem, ".env"), "utf8")).toBe("MINHA=1\n");
+    });
+
+    it("pasta que existia vazia e a cópia falha no meio: não sobra código pela metade", async () => {
+      const origem = path.join(dir, "projects", "meu-app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      await mkdir(origem, { recursive: true });
+      // tar que entrega muitos arquivos e um que não dá para ler (o cp falha no meio)
+      service = build({
+        tar: {
+          create: async (_p, name, out) => writeFile(out, `codigo ${name}`),
+          extract: async (_f, parent) => {
+            const pasta = path.join(parent, "meu-app");
+            await mkdir(pasta, { recursive: true });
+            for (let i = 0; i < 40; i++) await writeFile(path.join(pasta, `a${i}.txt`), "x");
+            await writeFile(path.join(pasta, "zz-ilegivel"), "x", { mode: 0o000 });
+          },
+        },
+        projects: {
+          list: async () => projects,
+          get: async () => projects[0]!,
+          srcDir: () => origem,
+          redeploy: async (id) => void redeploys.push(id),
+        },
+      });
+      const b = await backup();
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).status).toBe("failed");
+      expect(existsSync(origem)).toBe(true);
+      expect(await readdir(origem)).toEqual([]);
+      expect(redeploys).toEqual([]);
+    });
+
+    /** Serviço com tar de mentira: o backup guarda um texto; a extração cria `name/index.html` e roda o gancho. */
+    function tarComGancho(origem: string, gancho: () => Promise<void>) {
+      let armado = false;
+      const svc = build({
+        tar: {
+          create: async (_p, name, out) => writeFile(out, `codigo ${name}`),
+          extract: async (_f, parent) => {
+            const pasta = path.join(parent, path.basename(origem));
+            await mkdir(pasta, { recursive: true });
+            await writeFile(path.join(pasta, "index.html"), "do backup");
+            if (armado) await gancho();
+          },
+        },
+        projects: {
+          list: async () => projects,
+          get: async () => projects[0]!,
+          srcDir: () => origem,
+          redeploy: async (id) => void redeploys.push(id),
+        },
+      });
+      return { svc, arma: () => void (armado = true) };
+    }
+    async function restaurarSemContainers(svc: BackupService, fileName: string) {
+      docker.containers = [];
+      const r = await svc.restore(projectTargetId("p1"), { fileName, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await svc.idle();
+      return svc.record(r.id);
+    }
+
+    it("corrida: link plantado durante a extração com pastas intermediárias faltando: nada é criado fora", async () => {
+      const fora = await mkdtemp(path.join(tmpdir(), "paas-fora-"));
+      try {
+        const origem = path.join(dir, "projects", "ponte", "sub", "app");
+        projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+        const { svc, arma } = tarComGancho(origem, async () => symlink(fora, path.join(dir, "projects", "ponte")));
+        service = svc;
+        await mkdir(path.join(dir, "projects"), { recursive: true });
+        const b = await backup();
+        arma();
+        const rec = await restaurarSemContainers(svc, b.fileName!);
+        expect(rec.status).toBe("failed");
+        expect(rec.error).toMatch(/fora da pasta de projetos/);
+        expect(await readdir(fora)).toEqual([]);
+      } finally {
+        await rm(fora, { recursive: true, force: true });
+      }
+    });
+
+    it("pasta-mãe sem permissão de escrita: mensagem amigável (não erro cru) e nada apagado", async () => {
+      const mae = path.join(dir, "projects", "trancada");
+      const origem = path.join(mae, "app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      await mkdir(mae, { recursive: true });
+      await writeFile(path.join(mae, "do-usuario.txt"), "meu");
+      const { svc, arma } = tarComGancho(origem, async () => undefined);
+      service = svc;
+      await mkdir(origem);
+      const b = await backup();
+      await rm(origem, { recursive: true });
+      arma();
+      await chmod(mae, 0o555);
+      try {
+        const rec = await restaurarSemContainers(svc, b.fileName!);
+        expect(rec.status).toBe("failed");
+        expect(rec.error).toMatch(/Não foi possível gravar o código/);
+        expect(await readFile(path.join(mae, "do-usuario.txt"), "utf8")).toBe("meu");
+      } finally {
+        await chmod(mae, 0o755);
+      }
+    });
+
+    it("corrida: o usuário cria a pasta com arquivos dele durante a extração: nada dele é apagado", async () => {
+      const origem = path.join(dir, "projects", "meu-app");
+      projects = [project({ ingestMode: "existing", source: origem, storageLayout: "reserved" })];
+      const { svc, arma } = tarComGancho(origem, async () => {
+        await mkdir(origem, { recursive: true });
+        await writeFile(path.join(origem, "do-usuario.txt"), "meu trabalho");
+      });
+      service = svc;
+      await mkdir(origem, { recursive: true });
+      const b = await backup();
+      await rm(origem, { recursive: true });
+      arma();
+      const rec = await restaurarSemContainers(svc, b.fileName!);
+      expect(rec.status).toBe("failed");
+      expect(rec.error).toMatch(/Não foi possível gravar o código/);
+      expect(await readFile(path.join(origem, "do-usuario.txt"), "utf8")).toBe("meu trabalho");
+      expect(redeploys).toEqual([]);
+    });
+
+    it("origem na área reservada do painel é recusada", async () => {
+      const origem = path.join(dir, "projects", ".paas", "p1");
+      projects = [project({ ingestMode: "upload", source: origem, storageLayout: "reserved" })];
+      await mkdir(path.join(dir, "projects", ".paas", "p1", "src"), { recursive: true });
+      await writeFile(path.join(dir, "projects", ".paas", "p1", "src", "index.html"), "x");
+      const seen: Array<{ path: string; content: string | null }> = [];
+      service = realTarService(seen, origem);
+      const b = await backup();
+      docker.containers = [];
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).error).toMatch(/área do painel|fora da pasta de projetos/);
+      expect(redeploys).toEqual([]);
+    });
   });
 
   it("tar que falha: o motivo do tar vai para o histórico", async () => {

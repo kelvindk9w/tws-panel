@@ -1,5 +1,8 @@
 ---
 title: "Traduzir a interface"
+description: "Como a interface do painel é traduzida e como adicionar um idioma novo copiando uma pasta de arquivos de texto."
+sidebar:
+  label: "Traduzir a interface"
 ---
 
 A interface do painel existe em inglês e em português do Brasil (`pt-BR`, o idioma de origem). Adicionar outro idioma
@@ -8,7 +11,8 @@ exige **só arquivos novos**: nenhum componente muda.
 > [!NOTE]
 > Isto vale para a interface web (`apps/web`). As mensagens que o próprio servidor devolve (erros da API, entradas de
 > auditoria, checagens de saúde) ainda são escritas em português e aparecem como chegam; estão listadas para uma fase
-> seguinte. A documentação mora em `site/` e tem pastas de idioma próprias.
+> seguinte. A documentação mora em `site/` e tem pastas de idioma próprias (veja `site/README.md`).
+> Quando um guia cita um rótulo da interface, usa o rótulo no idioma da página, como aparece na tela.
 
 ## Como funciona
 
@@ -16,9 +20,9 @@ exige **só arquivos novos**: nenhum componente muda.
 - Um texto é lido pela chave `área.chave`, por exemplo `t("projects.list.empty")`.
 - `{nome}` insere um valor. Plurais usam os sufixos `_one` / `_other` (e `_zero`, `_few`, `_many` quando o idioma pede) e o valor `count`.
 - Etiquetas como `<b>...</b>` marcam negrito, código e links em alguns textos longos. Mantenha as mesmas etiquetas e as mesmas `{variáveis}` do texto de origem.
-- Chave ausente em um idioma cai para o `pt-BR`. Se faltar lá também, nada aparece (texto vazio) e o console do navegador avisa em desenvolvimento. O teste de paridade e o typecheck impedem que os dicionários do repositório cheguem a esse ponto.
+- Chave ausente em um idioma cai para o `pt-BR`. Se faltar lá também, nada aparece (texto vazio) e o console do navegador avisa em desenvolvimento. O teste de paridade impede que uma chave falte em um idioma, e o typecheck recusa uma chave escrita errada no código, então os dicionários do repositório não chegam a esse ponto.
 - Valores inseridos com `{nome}` são sempre texto puro, mesmo dentro de `<b>...</b>`: nunca viram marcação.
-- O idioma é escolhido na primeira visita pelo navegador (`pt*` vira `pt-BR`, qualquer outro vira inglês) e depois pelo seletor de idioma no menu do usuário, na tela de login e em Configurações → Aparência. A escolha fica guardada no navegador (`localStorage`, chave `paas.locale`).
+- Na primeira visita o idioma vem do navegador: o primeiro dos idiomas dele que o painel tem (`pt*` vira `pt-BR`; se nenhum combinar, inglês). Depois disso vale o seletor de idioma no menu do usuário, nas telas de login e do assistente e em Configurações → Aparência. A escolha fica guardada no navegador (`localStorage`, chave `paas.locale`).
 - Datas, horas, números e ordenação seguem o idioma pelo `Intl`. O fuso horário configurado nunca muda por causa do idioma.
 
 ## Adicionar um idioma (por exemplo, espanhol)
@@ -34,7 +38,7 @@ exige **só arquivos novos**: nenhum componente muda.
    pnpm typecheck && pnpm build
    ```
 
-5. Abra o painel, escolha o idioma no seletor e percorra as páginas principais. Nenhuma chave crua como `projects.list.empty` deve aparecer.
+5. Abra o painel, escolha o idioma no seletor e percorra as páginas principais. Nenhuma chave crua como `projects.list.empty` deve aparecer, e nenhum rótulo ou botão pode ficar vazio. Lembre que as mensagens escritas pelo servidor continuam em português.
 6. Abra um pull request. Veja o [CONTRIBUTING.md](https://github.com/kelvindk9w/tws-panel/blob/main/CONTRIBUTING.md).
 
 O idioma novo é reconhecido sozinho: o seletor, a detecção do navegador (`es-MX` vira `es`) e o fallback leem as pastas de `locales/`.

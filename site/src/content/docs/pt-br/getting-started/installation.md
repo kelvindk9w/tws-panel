@@ -10,7 +10,7 @@ configuração (wizard). O [README](https://github.com/kelvindk9w/tws-panel/blob
 passo, o que aparece na tela e o que fazer quando algo dá errado.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. O instalador e os scripts imprimem em português. Algumas mensagens que vêm do servidor também ainda aparecem em português mesmo com a interface em inglês: resultados das verificações de saúde e de segurança, mensagens do deploy e da checagem de DNS, alertas e detalhes da auditoria e muitas mensagens de erro.
 
 Os passos são numerados de 1 a 8. Os scripts do painel (`install.sh`, `uninstall.sh`) citam
 esses números.
@@ -1036,7 +1036,7 @@ Com o painel em HTTPS, a Fase 02 fecha também o túnel SSH (não é usado); ao 
 
 Abra o painel no endereço `https://…sslip.io` que o instalador mostrou no final (ele já
 leva o **setup token** no link; se precisar, o token também aparece em destaque no terminal) e siga
-o wizard:
+o wizard. O assistente abre no idioma do seu navegador (veja [Idioma da interface](#idioma-da-interface) logo abaixo).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -1051,6 +1051,15 @@ o wizard:
 │  4. Conta de administrador → usuário + senha forte do painel         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+<a id="idioma-da-interface"></a>
+**Idioma da interface.** O painel está disponível em português e em inglês. Na primeira visita, ele
+percorre a lista de idiomas do navegador e usa o primeiro que tem: português para qualquer variante
+de `pt` (como `pt-BR`), inglês para `en`; se nenhum combinar, inglês. Para mudar, use o seletor
+**Idioma** nas telas do assistente e de login, no menu do usuário ou, depois do setup, em
+**Configurações → Aparência**. A escolha fica guardada só nesse navegador (não faz parte da sua
+conta); outro navegador ou aparelho começa de novo pelo idioma dele. As mensagens que o próprio
+servidor escreve (veja o aviso no topo desta página) continuam em português.
 
 A etapa **Segurança** é a que exige mais atenção: ela mexe em como você entra na VPS. Antes de
 aplicar as fases, leia o [Wizard de segurança](security-wizard.md).

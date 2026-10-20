@@ -11,7 +11,7 @@ sidebar:
 > would have modified the disposable container, not the VPS. Useless and misleading.
 
 > [!NOTE]
-> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages (alerts, audit details, health and security-scan results, and many error messages).
 
 ## 1. Architecture
 
@@ -46,11 +46,11 @@ command assembly and the allowlist live in
 | Property | How it is guaranteed |
 |---|---|
 | **No new credential** | Uses the `/var/run/docker.sock` that the panel already mounts to manage Docker — no extra password/key is created. Whoever mounts the socket is, by definition, already equivalent to root on the host: the bridge does not increase that privilege. |
-| **Strict allowlist** | The runner rejects any command that is not: (a) one of the fixed read-only commands of the checks/baseline/Lynis (includes reading the time zone, `timedatectl show -p Timezone --value`), (b) a validated invocation of `scripts/hardening/{00..07}-*.sh` with known flags (`--dry-run/--rollback/--confirm/--no-tunnel/--user/--pubkey`), or (c) the time zone change from **Configurações → Fuso horário** (Settings → Time zone) (`timedatectl set-timezone '<fuso>'`, with `ln -sf` of `/etc/localtime` as a fallback), accepted only if it is byte for byte the command built for a time zone from the closed list (`isKnownTimezone`). Nothing coming from the API becomes arbitrary shell. |
+| **Strict allowlist** | The runner rejects any command that is not: (a) one of the fixed read-only commands of the checks/baseline/Lynis (includes reading the time zone, `timedatectl show -p Timezone --value`), (b) a validated invocation of `scripts/hardening/{00..07}-*.sh` with known flags (`--dry-run/--rollback/--confirm/--no-tunnel/--user/--pubkey`), or (c) the time zone change from **Settings → Time zone** (`timedatectl set-timezone '<fuso>'`, with `ln -sf` of `/etc/localtime` as a fallback), accepted only if it is byte for byte the command built for a time zone from the closed list (`isKnownTimezone`). Nothing coming from the API becomes arbitrary shell. |
 | **Input revalidated** | The SSH public key and the user name of Phase 01 are validated twice (route + command builder) with a regex that forbids quotes/line breaks — it is designed so that the quoting cannot be broken. |
 | **Disposable** | `--rm` + a unique name per execution; on timeout the client is killed and the helper is removed with `docker rm -f`. |
 | **Per-command timeout** | `exec` has a timeout (default 120s; 300s for Lynis); phase streams have a 30 min ceiling. |
-| **Audited** | Every command sent to the host generates a `hardening.host-exec` entry in the audit log (**Auditoria** (Audit) screen); time zone ones generate `timezone.host-exec`, plus `timezone.applied`/`timezone.apply_failed`. |
+| **Audited** | Every command sent to the host generates a `hardening.host-exec` entry in the audit log (**Audit log** screen); time zone ones generate `timezone.host-exec`, plus `timezone.applied`/`timezone.apply_failed`. |
 | **Rollback preserved** | The existing guarantees (file backup, immediate rollback on failure, 5-minute scheduled rollback in SSH/firewall/phase 01) still hold — now on the real host. |
 
 ## 3. Scanner profiles (host vs container)

@@ -561,6 +561,7 @@ function LastBackup({ target }: { target: BackupTargetStatus }) {
       {target.lastRemoteVerifiedAt && (
         <p className="text-xs text-muted-foreground">{t("backups.lastBackup.remoteVerified", { when: when(target.lastRemoteVerifiedAt) })}</p>
       )}
+      {target.pausedReason && <p className="text-xs text-amber-400">{target.pausedReason}</p>}
       {target.nextRunAt && <p className="text-xs text-muted-foreground">{t("backups.lastBackup.next", { when: when(target.nextRunAt) })}</p>}
     </div>
   );
@@ -851,6 +852,7 @@ function OtherServerCard({ status, onStatus, onRestore }: { status: BackupsStatu
               ) : (
                 <span className="text-muted-foreground">{t("backups.other.connectAbove")}</span>
               )}
+              <span className="text-xs text-amber-400">{t("backups.other.keysNote")}</span>
             </li>
             <li className="flex flex-col gap-2">
               <span className="font-medium">{t("backups.other.step2")}</span>

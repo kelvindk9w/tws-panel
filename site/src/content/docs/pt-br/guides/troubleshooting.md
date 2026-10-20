@@ -8,7 +8,7 @@ sidebar:
 Problemas prováveis ao rodar o TWS Panel em uma VPS real e como resolver cada um.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês: mensagens da checagem de DNS e de certificado, status do servidor de e-mail, alertas, detalhes da auditoria e muitas mensagens de erro. Quando esta página cita uma delas, avisa.
 
 ---
 
@@ -39,9 +39,9 @@ Gmail e Outlook).
    DMARC precisam estar ✅.
 3. **PTR amarelo** (sem nome reverso válido) é a causa nº 1: só o provedor da VPS configura. O
    card do PTR diz onde trocar (Contabo, Hetzner, Vultr) ou gera o texto pronto do chamado.
-4. Confira as **listas de bloqueio** no painel (Envios → Reputação). Se estiver listado, use
-   "Pedir remoção" na lista correspondente.
-5. Veja a **Nota de entregabilidade** (Envios → Nota): ela lista o que falta, item por item.
+4. Confira as **listas de bloqueio** no painel (**Envios → Reputação**). Se estiver listado, use
+   **Pedir remoção** na lista correspondente.
+5. Veja a nota de entregabilidade em **Envios → Nota**: ela lista o que falta, item por item.
 6. **IP novo sem reputação**: nas primeiras 2–4 semanas envie volume baixo e crescente
    (dezenas/dia, não milhares). Veja "warm-up de IP" em
    [email-deliverability.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/email-deliverability.md).
@@ -112,6 +112,8 @@ de propósito.
 
 ### "Token inválido" no wizard
 
+**Sintoma:** o assistente diz "Token inválido. Confira o valor exibido pelo instalador no terminal."
+
 **Causa:** token errado, copiado com espaço extra, ou o servidor foi reiniciado com outro
 `SETUP_TOKEN` no ambiente.
 
@@ -146,7 +148,7 @@ Perdeu a chave, a senha ou o celular da verificação em duas etapas? Veja
 **Solução:** o modal lista cada violação com **evidência** (arquivo:serviço) e **sugestão de
 correção**. Corrija o compose/código (recomendado) — ex.: remova a porta do banco publicada no
 host, troque credenciais fracas. Se tiver certeza do risco (ex.: banco exposto só em ambiente
-de homologação), marque "Entendo os riscos" e confirme o override — ele fica **auditado** em
+de homologação), marque **Entendo os riscos e quero fazer o deploy mesmo assim (override)** e confirme o override — ele fica **auditado** em
 Auditoria (`guardrail.override`).
 
 ---

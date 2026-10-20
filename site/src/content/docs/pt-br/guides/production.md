@@ -9,7 +9,7 @@ Este guia cobre tudo o que muda entre rodar o TWS Panel localmente (`pnpm dev`, 
 `.localhost`, portas altas) e rodar em uma VPS Ubuntu 22.04/24.04 exposta na internet.
 
 > [!NOTE]
-> **A interface do painel está sendo traduzida para o inglês.** Os nomes de telas, botões e mensagens citados aqui seguem a interface atual, em português, e podem mudar quando a versão em inglês for lançada.
+> **Idioma da interface.** O painel está disponível em português e em inglês ([como escolher](../getting-started/complete-guide.md#idioma-da-interface)). Esta página cita os rótulos em português, exatamente como aparecem na tela. Algumas mensagens que vêm do servidor ainda aparecem em português mesmo com a interface em inglês (mensagens da checagem de DNS e de certificado, status do servidor de e-mail, alertas, detalhes da auditoria e muitas mensagens de erro).
 
 > Leia também: [troubleshooting.md](troubleshooting.md) para os problemas mais comuns e
 > [host-bridge.md](../reference/host-bridge.md) para entender como o scan/hardening roda na VPS real

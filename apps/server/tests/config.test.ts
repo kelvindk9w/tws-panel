@@ -2,6 +2,7 @@
  * Testes do loadConfig (config.ts): defaults de produção e overrides via
  * variáveis de ambiente — a fonte única de configuração do servidor.
  */
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAIL_DEFAULT_PORTS, MONITOR_DEFAULT_INTERVAL_MS, SETUP_PORT, SETUP_TOKEN_FILE } from "@paas/core";
@@ -116,6 +117,16 @@ describe("loadConfig", () => {
     setEnv("PAAS_HOST_REPO_DIR", "");
     expect(loadConfig().panelInstallDir).toBe("/opt/tws-panel");
     expect(loadConfig().hostRepoDir).toBe("/opt/tws-panel");
+  });
+
+  it("ALLOWED_ORIGINS: o docker-compose.yml repassa (vazio por padrão) e vazio/ausente = nenhuma origem extra", () => {
+    const compose = readFileSync(path.resolve(__dirname, "../../../docker-compose.yml"), "utf8");
+    expect(compose).toMatch(/^\s+ALLOWED_ORIGINS:\s*\$\{ALLOWED_ORIGINS:-\}\s*$/m);
+    expect(loadConfig().allowedOrigins).toEqual([]);
+    setEnv("ALLOWED_ORIGINS", "");
+    expect(loadConfig().allowedOrigins).toEqual([]);
+    setEnv("ALLOWED_ORIGINS", " https://painel.exemplo.com , http://localhost:5173 ");
+    expect(loadConfig().allowedOrigins).toEqual(["https://painel.exemplo.com", "http://localhost:5173"]);
   });
 
   it("com PAAS_PROJECTS_DIR, o diretório dos projetos é o valor da variável", () => {

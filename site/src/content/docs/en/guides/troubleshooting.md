@@ -8,7 +8,7 @@ sidebar:
 Likely problems when running TWS Panel on a real VPS, and how to fix each one.
 
 > [!NOTE]
-> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: DNS-check and certificate messages, mail server status, alerts and audit details, and many error messages. Whenever this page quotes one of them, it says so.
 
 ---
 
@@ -37,13 +37,13 @@ Gmail and Outlook).
 **Diagnosis (in this order):**
 1. Send to [mail-tester.com](https://www.mail-tester.com) — it points out exactly what
    is missing. Target: ≥ 9/10.
-2. Open the domain's **DNS checklist** in the panel and click **Verificar agora** (Check now): A, MX, SPF, DKIM and
+2. Open the domain's **DNS checklist** in the panel and click **Verify now**: A, MX, SPF, DKIM and
    DMARC must all be ✅.
 3. **Yellow PTR** (no valid reverse name) is the most common cause: only the VPS provider sets it. The
    PTR card says where to change it (Contabo, Hetzner, Vultr) or generates the ready-made ticket text.
-4. Check the **blocklists** in the panel (Envios → Reputação — Sending → Reputation). If you're listed, use
-   "Pedir remoção" (Request removal) on the corresponding list.
-5. Look at the **Nota de entregabilidade** (Deliverability score) (Envios → Nota — Sending → Score): it lists what is missing, item by item.
+4. Check the **blocklists** in the panel (**Sending → Reputation**). If you're listed, use
+   **Request removal** on the corresponding list.
+5. Look at the deliverability score in **Sending → Score**: it lists what is missing, item by item.
 6. **New IP with no reputation**: in the first 2–4 weeks send a low volume and raise it gradually
    (dozens a day, not thousands). See "IP warm-up" in
    [email-deliverability.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/email-deliverability.md).
@@ -58,9 +58,9 @@ Gmail and Outlook).
 Stalwart uses a self-signed one. Almost always the A record for `mail.<domain>` is missing
 or is not pointing to the VPS, or it has the orange cloud on Cloudflare.
 
-**Solution:** open **E-mail** (Email) in the panel: the "Certificado do servidor de e-mail" (Email server certificate) card says what
+**Solution:** open **Email** in the panel: the **Mail server certificate** card says what
 is missing. Create the A record for `mail.<domain>` with the VPS IP (on Cloudflare, **grey**
-cloud), check that ports 80 and 443 are open, and click "Conferir de novo" (Check again). The panel
+cloud), check that ports 80 and 443 are open, and click "Check again". The panel
 installs and renews the certificate on its own.
 
 ---
@@ -75,12 +75,12 @@ installs and renews the certificate on its own.
 **Cause:** the domain's A record does not point to the VPS yet (or propagation has not finished).
 
 **Solution:**
-1. Use the **Verificar DNS** (Verify DNS) button in the panel before issuing the certificate;
+1. Use the **Verify DNS** button in the panel before issuing the certificate;
 2. Check manually: `dig +short yourdomain.com` should return the VPS IP;
 3. If you just created the record, wait for propagation (minutes to hours, depending on the TTL);
 4. If there is a proxy in front (e.g. Cloudflare with the orange cloud), turn it off for the initial
    issuance. The panel has no DNS-01 mode: the central Caddy expects a direct connection on ports 80/443.
-   After the certificate is issued, use **Tentar emitir agora** (Try to issue now) on the **Certificados** (Certificates) page if it is still pending;
+   After the certificate is issued, use **Try issuing now** on the **Certificates** page if it is still pending;
 5. Check that UFW/the provider's firewall allows 80 and 443.
 
 ### `.localhost` domain does not open
@@ -112,7 +112,9 @@ installer warns that it did not respond within 3 minutes.
 The panel itself only listens inside the VPS (`127.0.0.1`): the address `http://YOUR-IP:9000` does not open,
 on purpose.
 
-### "Token inválido" (invalid token) in the wizard
+### "Invalid token" in the wizard
+
+**Symptom:** the wizard says "Invalid token. Check the value the installer printed in the terminal."
 
 **Cause:** wrong token, copied with an extra space, or the server was restarted with a different
 `SETUP_TOKEN` in the environment.
@@ -129,16 +131,16 @@ deleted on purpose; to reopen the wizard and generate a new token, run
 - **Restart the wizard:** `sudo ./scripts/reset-setup.sh` — deletes `setup-state.json` from the volume
   (with interactive confirmation) and the wizard goes back to step 0; the admin account is kept.
   With `--full` it also deletes `users.json` and `sessions.json` (the admin account ceases to exist
-  and everyone is logged out). Both modes generate a NEW setup token (the old one stops working; see it with
+  and everyone is signed out). Both modes generate a NEW setup token (the old one stops working; see it with
   `show-token.sh`). Projects, domains and email are NOT touched.
 
 ### I lost SSH access during hardening
 
 **Do not panic — that's what the rollback is for.** Hardening schedules an automatic revert
 (via `at`) that restores the previous configuration in ~5 minutes **if you do not confirm access**
-through the panel. Wait for the rollback, log in again and review the fix plan before reapplying.
+through the panel. Wait for the rollback, sign in again and review the fix plan before reapplying.
 Every changed file has a backup in `/var/backups/paas/`.
-Lost the key, the password or the phone for two-step verification? See
+Lost the key, the password or the phone for two-factor authentication? See
 [I lost access: now what?](recover-access.md).
 
 <a id="deploy-bloqueado-por-guardrail"></a>
@@ -149,8 +151,8 @@ Lost the key, the password or the phone for two-step verification? See
 **Solution:** the modal lists each violation with **evidence** (file:service) and a **suggested
 fix**. Fix the compose/code (recommended) — e.g. remove the database port published on the
 host, replace weak credentials. If you are sure of the risk (e.g. a database exposed only in a
-staging environment), check "Entendo os riscos" (I understand the risks) and confirm the override — it is **audited** under
-**Auditoria** (Audit log) (`guardrail.override`).
+staging environment), check **I understand the risks and want to deploy anyway (override)** and confirm the override — it is **audited** under
+**Audit log** (`guardrail.override`).
 
 ---
 

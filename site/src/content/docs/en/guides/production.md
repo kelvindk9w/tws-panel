@@ -9,7 +9,7 @@ This guide covers everything that changes between running TWS Panel locally (`pn
 domains, high ports) and running it on an Ubuntu 22.04/24.04 VPS exposed to the internet.
 
 > [!NOTE]
-> **The panel interface is being translated.** For now, screen names, buttons and messages appear in Portuguese, exactly as on screen, followed by the English meaning in parentheses. They may change when the English interface is released.
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages (DNS-check and certificate messages, mail server status, alerts, audit details, and many error messages).
 
 > Also read: [troubleshooting.md](troubleshooting.md) for the most common problems and
 > [host-bridge.md](../reference/host-bridge.md) to understand how the scan/hardening runs on the real VPS
@@ -76,7 +76,7 @@ wrong.
   domain's DNS points to the VPS. `.localhost` domains are served over plain HTTP (dev only).
 - **Email (Stalwart)**: the central Caddy issues the certificate for `mail.<domain>` (the A
   record just needs to point to the VPS, grey cloud on Cloudflare) and the panel installs and renews it in
-  Stalwart. Status on the **E-mail** (Email) page. Details in [fase-3-email.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/fase-3-email.md) §1.
+  Stalwart. Status on the **Email** page. Details in [fase-3-email.md](https://github.com/kelvindk9w/tws-panel/blob/main/docs/internal/fase-3-email.md) §1.
 
 ### 1.4 PTR (rDNS)
 
@@ -119,22 +119,22 @@ Follow this sequence on a new VPS — each step depends on the previous one:
                         (nsenter — reference/host-bridge), not in the panel container.
                         In Phase 01 paste your SSH PUBLIC KEY: root is only locked
                         with the key installed, and the pulsing alert asks you to test
-                        the login in ANOTHER SSH window before confirming (automatic
+                        signing in from ANOTHER SSH window before confirming (automatic
                         rollback in 5 min if you don't confirm).
 2. PANEL              → finish the wizard (admin account). The panel opens at
                         https://YOUR-IP-WITH-HYPHENS.sslip.io, behind Caddy.
-3. PANEL DOMAIN       → Configurações → Domínio do painel (Settings → Panel domain): point
+3. PANEL DOMAIN       → Settings → Panel domain: point
                         panel.yourdomain.com to the VPS, verify the DNS and
                         open the panel at the new address.
 4. PROJECTS           → register and deploy the projects; for each domain,
-                        use the **Verificar DNS** (Verify DNS) button before issuing the certificate.
+                        use the **Verify DNS** button before issuing the certificate.
 5. EMAIL              → unblock port 25 at the provider → start the Stalwart server
                         from the panel → add the email domain.
 6. VERIFY DNS         → create the checklist records (A, MX, SPF, DKIM, DMARC)
-                        at your DNS provider and click **Verificar agora** (Check now) until it closes ✅.
+                        at your DNS provider and click **Verify now** until it closes ✅.
                         Adjust the PTR at the provider in parallel (it can take a while).
 7. MONITORING         → create the security baseline (POST /api/security/baseline
-                        or through the UI under Segurança — Security) and confirm the recurring scan is active.
+                        or through the UI under Security) and confirm the recurring scan is active.
                         Only monitor after everything is configured — that way the
                         baseline reflects the "good" state.
 ```
@@ -144,7 +144,7 @@ Follow this sequence on a new VPS — each step depends on the previous one:
 ## 3. Final production checklist
 
 - [ ] Hardening finished and SSH access confirmed (rollback canceled)
-- [ ] Lynis score checked under **Segurança** (Security) (before vs after)
+- [ ] Lynis score checked under **Security** (before vs after)
 - [ ] Panel reachable only over HTTPS on its own domain
 - [ ] Panel listening only on 127.0.0.1 (the default; Caddy serves the outside world, on ports 80/443)
 - [ ] Port 25 unblocked by the provider + UFW
@@ -153,8 +153,8 @@ Follow this sequence on a new VPS — each step depends on the previous one:
 - [ ] Sending test: [mail-tester](https://www.mail-tester.com) ≥ 9/10
 - [ ] DMARC at `p=none` collecting reports → tighten to `quarantine`/`reject` later
 - [ ] Security baseline created + recurring monitoring active
-- [ ] Blocklists checked under **Envios → Reputação** (Sending → Reputation) (all clean)
-- [ ] No critical alert open under **Alertas** (Alerts)
+- [ ] Blocklists checked under **Sending → Reputation** (all clean)
+- [ ] No critical alert open under **Alerts**
 
 ---
 
@@ -177,7 +177,7 @@ prints the banner with the full URL `https://YOUR-IP-WITH-HYPHENS.sslip.io/?toke
 command and the address `http://localhost:PORT/?token=...`).
 
 > Reminder: once the admin account is created (wizard step 4), the setup token stops working
-> and its file is deleted, on purpose — from then on, access is through the normal login.
+> and its file is deleted, on purpose — from then on, access is through the normal sign-in.
 > To reopen the wizard with a new token, use `reset-setup.sh` below.
 
 ### Reset the setup (restart the wizard from scratch)

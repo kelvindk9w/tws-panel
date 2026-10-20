@@ -299,6 +299,11 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm">
+          {view.target.pausedReason && (
+            <p className="text-xs text-amber-400" data-testid="project-paused">
+              {view.target.pausedReason}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2" data-testid="project-settings-source">
             {view.target.followsDefaults !== false ? (
               <>
