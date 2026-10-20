@@ -88,8 +88,8 @@
   ],
   "protecoesPorOrigem": [
     "WebSocket do terminal (routes/terminal.ts isCrossOrigin): compara o Origin com o Host do próprio pedido. Funciona nos dois endereços sem mudança — cada um só aceita a si mesmo.",
-    "Cookie de sessão: sem atributo Domain (vale só no endereço em que a pessoa entrou), SameSite=Lax, Secure no HTTPS. Por isso é preciso entrar de novo no endereço novo — a tela avisa.",
-    "CORS: só a mesma origem (ALLOWED_ORIGINS vazio por padrão). Não há CSRF por token: SameSite=Lax + corpo JSON.",
+    "Cookie de sessão: sem atributo Domain (vale só no endereço em que a pessoa entrou), SameSite=Strict e, em HTTPS, Secure com o prefixo __Host- (__Host-paas_session): um site irmão (outro *.sslip.io) não consegue gravar um cookie com esse nome por cima do verdadeiro. Em HTTP simples (IP:porta, antes do SSL) o nome é paas_session, sem Secure. Lote 7.",
+    "CORS: só a mesma origem (ALLOWED_ORIGINS vazio por padrão). CSRF: o servidor recusa (403 forbidden_origin) qualquer escrita sob /api/ que o navegador marque como de outro site/origem (Sec-Fetch-Site, com Origin como reserva) — SameSite sozinho não basta porque sslip.io não está na Public Suffix List (lote 7, M1).",
     "Com o IP desativado o Caddy não tem bloco para o sslip.io: o nome não tem certificado (HTTPS falha) e em HTTP cai na página 'domínio ainda não configurado'. O painel continua escutando só em 127.0.0.1 e na paas-net.",
     "Links e textos: o terminal, o health check e os e-mails não citam o endereço do painel. scripts/show-token.sh passa a mostrar o domínio quando o IP está desativado. O rótulo do app autenticador do 2FA (admin@<endereço>) continua o da instalação — é só um nome no celular."
   ],

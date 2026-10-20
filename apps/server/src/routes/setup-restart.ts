@@ -19,7 +19,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, writeFile } from "node:fs/promises";
 import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-import { SESSION_COOKIE } from "@paas/core";
+import { sessionCookieName } from "@paas/core";
 import { verifyPasswordTimingSafe } from "../services/password.js";
 
 export const RESTART_CONFIRMATION = "recomeçar";
@@ -90,7 +90,8 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
     await app.userStore.removeAll();
     await app.setupState.reset();
 
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    const secure = request.protocol === "https";
+    reply.clearCookie(sessionCookieName(secure), { path: "/", secure });
     return reply.send({ setupUrl: `/setup?token=${encodeURIComponent(token)}` });
   });
 };

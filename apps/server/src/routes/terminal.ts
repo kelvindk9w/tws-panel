@@ -81,6 +81,7 @@ import { resolveTerminalAccess } from "../config.js";
 import type { TerminalService } from "../services/terminal-service.js";
 import { isSessionExpired } from "../services/session-store.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { isCrossSiteRequest } from "../services/same-origin.js";
 
 // Querystring do handshake do WS (não um body — upgrade não tem corpo):
 //  - clientId: gerado no browser (crypto.randomUUID() ou fallback base36),
@@ -104,16 +105,6 @@ const terminalWsSchema = {
 declare module "fastify" {
   interface FastifyInstance {
     terminalService: TerminalService;
-  }
-}
-
-/** O Origin do navegador aponta para outro host que não o do painel? */
-export function isCrossOrigin(origin: string | undefined, host: string | undefined): boolean {
-  if (origin === undefined) return false;
-  try {
-    return new URL(origin).host !== (host ?? "");
-  } catch {
-    return true; // Origin malformado ("null", lixo): não é o painel
   }
 }
 
@@ -174,7 +165,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       // handshake. Navegador SEMPRE envia Origin em WebSocket; sem ele é um
       // cliente que não é navegador (e a autenticação continua valendo).
       preValidation: async (request, reply) => {
-        if (isCrossOrigin(request.headers.origin, request.headers.host)) {
+        if (isCrossSiteRequest(request, app.hasDecorator("config") ? app.config.allowedOrigins : [])) {
           return reply.code(403).send({ error: "forbidden_origin", message: "Origem não permitida." });
         }
       },
@@ -209,9 +200,14 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       const session = request.session;
       let ended = false;
       let expiryTimer: NodeJS.Timeout | null = null;
+      // Aberto com o setup token (sem sessão): cai quando o assistente termina
+      // e o token é revogado — não há sessão a revogar, e o shell não pode
+      // ficar com quem só tinha o token (I1).
+      let offTokenRevoked: (() => void) | null = null;
       const endForSession = (motivo: string) => {
         if (ended) return;
         ended = true;
+        offTokenRevoked?.();
         if (expiryTimer) clearTimeout(expiryTimer);
         bySession.delete(socket);
         unsubscribe?.();
@@ -223,6 +219,11 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         });
         socket.close(WS_CLOSE_SESSION_ENDED, "sessão encerrada");
       };
+      if (!session) {
+        offTokenRevoked = app.onSetupTokenRevoked(() =>
+          endForSession("o assistente de instalação foi concluído e o setup token deixou de valer"),
+        );
+      }
       if (session) {
         bySession.set(socket, { sessionId: session.id, end: endForSession });
         // Vencimento sem nenhum frame chegando: fecha no instante em que a
@@ -322,6 +323,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       });
 
       socket.on("close", () => {
+        offTokenRevoked?.();
         if (expiryTimer) clearTimeout(expiryTimer);
         bySession.delete(socket);
         unsubscribe?.();

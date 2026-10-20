@@ -33,12 +33,9 @@ command -v docker >/dev/null 2>&1 || die "docker não encontrado — rode este s
 TOKEN="$(docker run --rm -v "$VOLUME_NAME:/data" alpine:3 \
   sh -c 'cat /data/setup-token 2>/dev/null || true' 2>/dev/null || true)"
 
-# 2) fallback: variável de ambiente do container em execução
-if [ -z "$TOKEN" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'tws-panel'; then
-  TOKEN="$(docker exec tws-panel sh -c 'printf %s "${SETUP_TOKEN:-}"' 2>/dev/null || true)"
-fi
-
-[ -n "$TOKEN" ] || die "setup token não encontrado (nem no volume $VOLUME_NAME, nem no container tws-panel). O painel está instalado?"
+# Sem fallback pela variável SETUP_TOKEN do contêiner: ela é a da instalação e
+# o painel a ignora quando há administrador (ela mostraria um token que não vale).
+[ -n "$TOKEN" ] || die "setup token não encontrado no volume $VOLUME_NAME. Se o assistente já foi concluído, o token foi apagado de propósito: para abrir o assistente de novo (e gerar um token novo) rode ./scripts/reset-setup.sh [--full]. Se o painel não está instalado, rode o instalador."
 
 # Usuário do túnel SSH: o escolhido na instalação (PAAS_TERMINAL_USER no .env do
 # repositório) quando não for root — o hardening desliga o SSH de root, então
@@ -142,7 +139,7 @@ ${YELLOW}${BOLD}┌────────────────────�
 │   $TOKEN
 │                                                                          │
 │   ⚠  Guarde-o até concluir o wizard.                                     │
-│   ⚠  Após criar a conta admin (passo 4), ele é invalidado.               │
+│   ⚠  Após criar a conta admin (passo 4), ele é invalidado e apagado.     │
 └──────────────────────────────────────────────────────────────────────────┘${RESET}
 
 ${BOLD}Para recomeçar o wizard do zero:${RESET} ./scripts/reset-setup.sh

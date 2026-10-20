@@ -20,11 +20,18 @@ afterEach(async () => {
 });
 
 describe("loadSetupToken", () => {
-  it("variável de ambiente SETUP_TOKEN tem prioridade sobre o arquivo", async () => {
+  // Lote 7 (M3): a prioridade se inverteu — o arquivo vale mais que a variável
+  // (ver setup-token-ciclo.test.ts); aqui fica só o contrato do fallback.
+  it("o arquivo tem prioridade sobre a variável de ambiente SETUP_TOKEN", async () => {
     const file = path.join(dir, "token");
     await writeFile(file, "token-do-arquivo\n");
     vi.stubEnv("SETUP_TOKEN", "token-da-env");
-    expect(await loadSetupToken(file)).toBe("token-da-env");
+    expect(await loadSetupToken(file)).toBe("token-do-arquivo");
+  });
+
+  it("sem arquivo, usa a variável de ambiente", async () => {
+    vi.stubEnv("SETUP_TOKEN", "token-da-env");
+    expect(await loadSetupToken(path.join(dir, "nao-existe"))).toBe("token-da-env");
   });
 
   it("lê o arquivo quando a env está ausente (e faz trim)", async () => {

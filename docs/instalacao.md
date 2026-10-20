@@ -1114,8 +1114,9 @@ sudo docker exec tws-panel cat /data/setup-token   # mostra só o token
 - **`permission denied while trying to connect to the Docker daemon socket`** — faltou o `sudo`
   na frente do comando. É de propósito: o painel não coloca ninguém no grupo docker (veja
   [o porquê](#grupo-docker)).
-- **`setup token não encontrado... O painel está instalado?`** — o `show-token.sh` foi rodado
-  numa máquina sem o painel instalado. Rode-o na VPS certa, de dentro de `/opt/tws-panel`.
+- **`setup token não encontrado...`** — ou o `show-token.sh` foi rodado numa máquina sem o painel
+  (rode-o na VPS certa, de dentro de `/opt/tws-panel`), ou o assistente já foi concluído e o token foi
+  apagado de propósito: para reabri-lo com um token novo, `sudo ./scripts/reset-setup.sh`.
 - **O token não funciona mais no navegador** — depois que você cria a conta admin (última
   etapa do wizard), o token é **invalidado para sempre**. A partir daí o acesso é pela tela de
   login, com seu usuário e senha do painel.

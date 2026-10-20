@@ -35,29 +35,29 @@
     { "status": 429, "codigo": "too_many_attempts", "quando": "IP atingiu o limite de tentativas (checado ANTES de validar o payload/credenciais, e também logo após uma nova falha que estoura o limite). Header Retry-After (segundos) é enviado junto.", "mensagem": "Muitas tentativas. Aguarde {retryAfterSec}s e tente novamente." }
   ],
   "fluxo": [
-    "1. limiter.check(ip): se o IP está em lockout, responde 429 too_many_attempts com Retry-After antes de tocar no corpo da requisição.",
+    "1. limiter.check(ip): se o IP está em lockout, responde 429 too_many_attempts com Retry-After antes de tocar no corpo da requisição. Lote 7 (M2): se estiver livre, a tentativa é RESERVADA aqui (falhas recentes + tentativas em andamento nunca passam de 5); 60 pedidos simultâneos avaliam a senha no máximo 5 vezes e os demais levam 429 (Retry-After 5s).",
     "2. Valida que username e password são strings não vazias no body; senão 400 invalid_payload.",
     "3. Busca o usuário por username (case-insensitive) em UserStore.findByUsername.",
     "4. Verifica a senha com verifyPasswordTimingSafe: se o usuário não existe, compara contra um hash dummy (mesmo custo de tempo) e sempre retorna false — evita timing attack para enumerar contas.",
     "5. Se usuário não existe OU senha errada: limiter.onFailure(ip) registra a falha; grava auditoria auth.login_failed (actor 'anon', target = username informado); se essa falha estourou o limite, responde 429 too_many_attempts, senão 401 invalid_credentials.",
-    "6. Se credenciais corretas: limiter.onSuccess(ip) zera o estado de rate limit do IP.",
+    "6. Se credenciais corretas: limiter.onSuccess(ip) zera o estado de rate limit do IP. Toda outra saída que não seja falha (senha certa à espera do código de 2FA, erro de gravação da sessão) devolve a reserva com limiter.release(ip) em um finally — a reserva nunca fica presa.",
     "7. Cria a sessão via SessionStore.create(user, { ip, userAgent }) — gera id aleatório (24 bytes), expiresAt = agora + 12h, e cookieValue = '<id>.<hmac>'.",
-    "8. Seta o cookie paas_session: path '/', httpOnly, sameSite 'lax', secure = (request.protocol === 'https'), maxAge = SESSION_TTL_MS/1000 (43200s).",
+    "8. Seta o cookie de sessão: em HTTP simples 'paas_session'; em HTTPS '__Host-paas_session' (Secure, Path=/, sem Domain). Sempre httpOnly, SameSite=Strict, maxAge = SESSION_TTL_MS/1000 (43200s). Lote 7: antes era SameSite=Lax e o mesmo nome nos dois casos.",
     "9. Grava auditoria auth.login (actor = username).",
     "10. Responde 200 com { ok: true, user: { username, createdAt }, expiresAt }."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "LoginLimiter", "arquivo": "apps/server/src/services/login-limiter.ts", "papel": "Rate limit por IP com lockout progressivo." },
+    { "tipo": "servico", "nome": "LoginLimiter", "arquivo": "apps/server/src/services/login-limiter.ts", "papel": "Rate limit por IP com lockout progressivo; reserva a tentativa antes da senha (check/release/onFailure/onSuccess) e poda o mapa (IPs ociosos saem em 1 min; teto de 10 mil IPs rastreados)." },
     { "tipo": "servico", "nome": "UserStore", "arquivo": "apps/server/src/services/user-store.ts", "papel": "Busca o usuário admin por username (findByUsername)." },
     { "tipo": "servico", "nome": "verifyPasswordTimingSafe / hashPassword", "arquivo": "apps/server/src/services/password.ts", "papel": "Verificação de senha argon2id em tempo constante, mesmo para usuário inexistente." },
     { "tipo": "servico", "nome": "SessionStore", "arquivo": "apps/server/src/services/session-store.ts", "papel": "Cria a sessão e gera o valor assinado do cookie." },
     { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Registra auth.login e auth.login_failed." },
-    { "tipo": "pacote", "nome": "@paas/core (auth)", "arquivo": "packages/core/src/auth.ts", "papel": "Constantes SESSION_COOKIE, SESSION_TTL_MS e tipos LoginRequest/LoginResponse." },
+    { "tipo": "pacote", "nome": "@paas/core (auth)", "arquivo": "packages/core/src/auth.ts", "papel": "Constantes SESSION_COOKIE, SESSION_COOKIE_SECURE (__Host-), sessionCookieName(secure), SESSION_TTL_MS e tipos LoginRequest/LoginResponse." },
     { "tipo": "global", "nome": "auth-plugin", "arquivo": "apps/server/src/plugins/auth.ts", "papel": "Libera esta rota do guard de sessão/setup token (é a exceção pública dentro de /api/auth/*)." }
   ],
   "efeitosColaterais": [
     "Grava data/sessions.json (nova sessão) via SessionStore.create.",
-    "Seta o cookie paas_session (httpOnly, SameSite=Lax, secure condicional, maxAge 12h).",
+    "Seta o cookie de sessão (paas_session em HTTP; __Host-paas_session em HTTPS), httpOnly, SameSite=Strict, secure condicional, maxAge 12h.",
     "Auditoria: auth.login (sucesso) ou auth.login_failed (falha), incluindo IP.",
     "Atualiza o estado em memória do LoginLimiter para o IP (contador de falhas ou reset em sucesso).",
     "Header 'Cache-Control: no-store' em toda resposta (hook onSend do arquivo)."

@@ -8,7 +8,7 @@
   "autenticacao": {
     "exigida": true,
     "tipo": "setup-token",
-    "detalhe": "Mesma regra de status: header x-setup-token ou query ?token=, exigido pelo hook global de apps/server/src/plugins/auth.ts; 403 setup_completed se o setup já terminou."
+    "detalhe": "Mesma regra de status: header x-setup-token (a query ?token= não vale aqui), exigido pelo hook global de apps/server/src/plugins/auth.ts; 403 setup_completed se o setup já terminou; 503 setup_state_unavailable se o estado do setup não puder ser lido."
   },
   "rateLimit": null,
   "parametros": {

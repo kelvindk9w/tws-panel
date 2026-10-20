@@ -161,7 +161,7 @@ cd /opt/tws-panel
 sudo ./scripts/show-token.sh
 ```
 
-O script lê o volume (fallback: `SETUP_TOKEN` do container em execução), detecta o IP
+O script lê o volume (sem fallback pela variável do container, que é a da instalação), detecta o IP
 público (best-effort; use `PAAS_PUBLIC_IP=<ip>` para fixar) e imprime o banner com a
 URL completa `https://SEU-IP-COM-HÍFENS.sslip.io/?token=...` (no acesso por túnel, o comando
 do túnel e o endereço `http://localhost:PORTA/?token=...`).

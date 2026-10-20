@@ -305,7 +305,7 @@ describe("POST /api/auth/login", () => {
     await createAdmin();
   });
 
-  it("credenciais corretas → 200, cookie httpOnly SameSite=Lax, sessão persistida e auditoria", async () => {
+  it("credenciais corretas → 200, cookie httpOnly SameSite=Strict, sessão persistida e auditoria", async () => {
     const res = await login();
     expect(res.statusCode).toBe(200);
     expect(res.json().user.username).toBe("admin");
@@ -314,7 +314,7 @@ describe("POST /api/auth/login", () => {
     const setCookie = String(res.headers["set-cookie"]);
     expect(setCookie).toContain(`${SESSION_COOKIE}=`);
     expect(setCookie).toContain("HttpOnly");
-    expect(setCookie).toContain("SameSite=Lax");
+    expect(setCookie).toContain("SameSite=Strict");
 
     // a sessão resolvida por /api/auth/me
     const me = await app.inject({

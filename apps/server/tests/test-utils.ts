@@ -26,12 +26,12 @@ export interface AuthTestContext {
 
 export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
-  opts: { now?: () => number } = {},
+  opts: { now?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object } = {},
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
   // Mesmas opções de validação da produção (app.ts), para que os testes de
   // rota exerçam o comportamento real do Ajv.
-  const app = Fastify({ logger: false, ajv: AJV_OPTIONS });
+  const app = Fastify({ logger: opts.logger ?? false, ajv: AJV_OPTIONS, trustProxy: opts.trustProxy ?? false });
   const setupState = new SetupStateStore(dir);
   const userStore = new UserStore(dir);
   const sessionStore = new SessionStore(dir);
@@ -62,7 +62,7 @@ export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {
 export function sessionCookieOf(res: { headers: Record<string, unknown> }): string {
   const raw = res.headers["set-cookie"];
   const header = Array.isArray(raw) ? raw[0] : raw;
-  const match = /^paas_session=[^;]+/.exec(String(header ?? ""));
+  const match = /^(?:__Host-)?paas_session=[^;]+/.exec(String(header ?? ""));
   if (!match) throw new Error(`set-cookie ausente/inesperado: ${String(header)}`);
   return match[0];
 }

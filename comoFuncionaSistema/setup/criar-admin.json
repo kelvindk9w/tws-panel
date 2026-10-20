@@ -8,7 +8,7 @@
   "autenticacao": {
     "exigida": true,
     "tipo": "setup-token",
-    "detalhe": "Header x-setup-token ou query ?token=, exigido pelo hook global de apps/server/src/plugins/auth.ts enquanto setupState.completed=false; 403 setup_completed se já concluído (efetivamente torna este endpoint chamável no máximo uma vez com sucesso por instalação)."
+    "detalhe": "Header x-setup-token (a query ?token= só vale no WebSocket do terminal), exigido pelo hook global de apps/server/src/plugins/auth.ts enquanto setupState.completed=false; 403 setup_completed se já concluído."
   },
   "rateLimit": null,
   "parametros": {
@@ -46,7 +46,7 @@
   "dependencias": [
     { "tipo": "servico", "nome": "UserStore.hasAdmin / UserStore.create", "arquivo": "apps/server/src/services/user-store.ts", "papel": "Garante e persiste a conta única em data/users.json; create() lança se já existir alguém." },
     { "tipo": "servico", "nome": "hashPassword", "arquivo": "apps/server/src/services/password.ts:13", "papel": "Deriva o hash argon2id da senha em claro." },
-    { "tipo": "servico", "nome": "SetupStateStore.complete", "arquivo": "apps/server/src/services/setup-state.ts:58", "papel": "Marca completed=true, encerrando o wizard e a validade do setup token." },
+    { "tipo": "servico", "nome": "SetupStateStore.complete", "arquivo": "apps/server/src/services/setup-state.ts:58", "papel": "Marca completed=true, encerrando o wizard e a validade do setup token. Lote 7 (M3): em seguida a rota chama app.revokeSetupToken(), remove o arquivo do token (SETUP_TOKEN_FILE; falha vira auditoria setup.token_cleanup_failed) e esvazia process.env.SETUP_TOKEN." },
     { "tipo": "servico", "nome": "AuditService.record", "arquivo": "apps/server/src/services/audit-service.ts:39", "papel": "Registra a entrada setup.admin_created em data/audit.json." },
     { "tipo": "pacote", "nome": "validateUsername / passwordStrengthErrors", "arquivo": "packages/core/src/auth.ts", "papel": "Regras de validação compartilhadas entre frontend (checklist ao vivo) e backend (fonte da verdade)." }
   ],
