@@ -183,6 +183,12 @@ describe("aba Backups do projeto", () => {
     await waitFor(() => expect(calls.filter((c) => c.key === "POST /api/backups/targets/project:p1/verify").at(-1)!.body).toEqual({}));
   });
 
+  it("agenda em pausa depois de restaurar o painel: o motivo aparece na aba do projeto", async () => {
+    view.target = { ...view.target, pausedReason: "Em pausa: o painel foi restaurado de outro servidor e os dados deste item ainda não voltaram." };
+    renderCard();
+    expect(await screen.findByTestId("project-paused")).toHaveTextContent("Em pausa: o painel foi restaurado de outro servidor");
+  });
+
   it("seguindo o padrão do painel ou configuração própria, com Voltar ao padrão", async () => {
     const { unmount } = renderCard();
     const freq = await screen.findByTestId("project-settings-source");

@@ -335,6 +335,18 @@ describe("Configurações → Backups", () => {
     expect(email).toHaveTextContent("O servidor de e-mail não está instalado nesta VPS.");
   });
 
+  it("agenda em pausa depois de restaurar o painel de outro servidor: mostra o motivo e não promete o próximo horário", async () => {
+    state.targets = [
+      target("panel", "panel", "Painel"),
+      target("email", "email", "E-mail", { available: true, nextRunAt: null, pausedReason: "Em pausa: o painel foi restaurado de outro servidor e os dados deste item ainda não voltaram." }),
+    ];
+    renderPage();
+    const email = await screen.findByTestId("target-email");
+    expect(email).toHaveTextContent("Em pausa: o painel foi restaurado de outro servidor");
+    expect(email).not.toHaveTextContent("Próximo:");
+    expect(screen.getByTestId("target-panel")).not.toHaveTextContent("Em pausa");
+  });
+
   it("padrão dos projetos: frequência, cópias e cobertura; Aplicar também nestes projetos", async () => {
     state.destination = { type: "s3", provider: "r2", endpoint: "https://x", region: "auto", bucket: "b", accessKeyHint: "…1", connectedAt: "", testedAt: null };
     renderPage();

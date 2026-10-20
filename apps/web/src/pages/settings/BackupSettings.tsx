@@ -561,6 +561,7 @@ function LastBackup({ target }: { target: BackupTargetStatus }) {
       {target.lastRemoteVerifiedAt && (
         <p className="text-xs text-muted-foreground">{t("backups.lastBackup.remoteVerified", { when: when(target.lastRemoteVerifiedAt) })}</p>
       )}
+      {target.pausedReason && <p className="text-xs text-amber-400">{target.pausedReason}</p>}
       {target.nextRunAt && <p className="text-xs text-muted-foreground">{t("backups.lastBackup.next", { when: when(target.nextRunAt) })}</p>}
     </div>
   );
