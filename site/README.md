@@ -24,12 +24,16 @@ site/
 ```
 
 `en/` and `pt-br/` have the same files and the same headings, anchors, commands, paths, variables,
-URLs and numbers. Only the prose, the code comments and the placeholders are translated.
+URLs and numbers. Only the prose, the code comments, the placeholders and the interface labels
+(quoted in the language of the page, see below) are translated.
 
 ## Adding a language
 
 1. Copy `src/content/docs/en/` to `src/content/docs/<code>/` (for example `es`) and translate it.
-   A page that is missing is shown in English, with a notice.
+   A page that is missing is shown in English, with a notice. Quote the interface labels from the
+   panel dictionary of that language (`apps/web/src/locales/<code>/`, see
+   [Translating the interface](src/content/docs/en/development/translating-the-interface.md));
+   until the panel has that language, quote the English labels.
 2. Add one entry to `locales` in `astro.config.mjs`, for example `es: { label: 'Español', lang: 'es' }`.
 3. Add the translated section labels in `sidebar`. The key of `translations` is the `lang` value of
    the locale, not the locale key: for `pt-br` it is `'pt-BR'`, so for the example it is
@@ -51,12 +55,32 @@ Sidebar entries use slugs, so they are the same in every language.
 - **Use the same Markdown in both languages.** Same headings in the same order, same
   `<a id="…">` anchors, same code blocks. Anchors keep the original Portuguese ids so that links
   (and the scripts that print them) do not break.
-- **Interface labels.** The panel interface is Portuguese for now. Quote the label exactly as it
-  appears on screen, in bold, and add the English meaning in parentheses on first mention in
-  each section: **Configurações → Backups** (Settings → Backups). Never invent an English label that
-  does not exist on screen. Every page that mentions the interface starts with the same note saying
-  that the interface is being translated.
-- **Scripts that print in Portuguese.** Keep the Portuguese text in samples of installer or script
+- **Interface labels.** The panel interface exists in English and Portuguese, and the dictionaries
+  live in `apps/web/src/locales/en/` and `apps/web/src/locales/pt-BR/`. Quote each label **in the
+  language of the page**, exactly as it appears on screen, in bold: **Settings → Backups** on an
+  English page, **Configurações → Backups** on a Portuguese page. Never translate a label by hand and
+  never invent one: copy it from the dictionary of that language (the same key has the English and the
+  Portuguese text). Do not add the other language in parentheses; the other language's page has it.
+  When a label is ambiguous (the same Portuguese word has two English labels), pick the one of the
+  screen you are describing. If a label in the interface looks wrong or inconsistent, fix the
+  interface and then the page; do not work around it in the docs.
+- **Messages that come from the server.** Some texts are written by the server and are still
+  Portuguese in both interface languages (health-check and security-scan results, deploy and DNS-check
+  messages, mail server status, certificate errors, alerts, audit details, backup records, the
+  recovery kit text and many error messages; the inventory is in
+  `comoFuncionaSistema/_i18n-servidor-fase2.tsv`). When a page quotes one, keep the Portuguese text
+  and say in the same sentence that it comes from the server and is still in Portuguese; on an
+  English page add the English meaning in parentheses. Remove this rule and the notes when the
+  server messages are translated.
+- **Interface note.** Every page that quotes the interface starts with the same `> [!NOTE]`:
+  "Interface language", saying that the panel exists in English and Portuguese, which language the
+  labels on the page are in, and which categories of server message are still in Portuguese. The
+  note links to the "Language" paragraph of the complete guide (`#idioma-da-interface`).
+- **Words the user types.** Some confirmation words depend on the language of the interface (for
+  example `panel`/`email` or `painel`/`e-mail` to restore, and `restart` or `recomeçar` to start the
+  wizard over). Read them from the dictionary (`restore.confirmWord.*`, `done.restart.confirmWord`)
+  and write both when the page is about that action.
+- **Scripts and installer.** The installer and the shell scripts only print in Portuguese. Keep the Portuguese text in samples of installer or script
   output, and add a one-line English summary next to it.
 - **Placeholders** are written in capitals with underscores and are translated: `YOUR_IP` /
   `SEU_IP`, `YOUR_USER` / `SEU_USUARIO`. Examples use `example.com`, `203.0.113.10` and the
@@ -86,14 +110,27 @@ Sidebar entries use slugs, so they are the same in every language.
 | host | VPS (only when contrasting with a container) | host |
 | container | docker | container |
 | setup token | install token, wizard token | setup token |
-| wizard | assistant | wizard, assistente |
+| setup wizard, wizard | assistant | assistente de configuração, wizard |
 | hardening | securing | hardening |
-| two-step verification | 2FA, MFA (2FA is fine inside a code sample) | verificação em duas etapas |
-| recovery codes | backup codes | códigos de recuperação |
+| two-factor authentication (2FA) | two-step verification, MFA (2FA is fine in prose and in code samples) | verificação em duas etapas |
+| recovery code | backup code | código de recuperação |
 | recovery kit | rescue kit | kit de recuperação |
-| external storage | remote storage, cloud | armazenamento externo |
+| external storage, external copy | remote storage, cloud | armazenamento externo, cópia externa |
+| baseline snapshot | reference snapshot | retrato de referência |
+| Sending (the menu), queue, reputation | Sent mail, outbox | Envios, fila, reputação |
+| audit log | audit (alone) | auditoria |
 | time zone | timezone | fuso horário |
 | proxy | reverse proxy (Caddy is the proxy) | proxy |
-| log in (verb), login (noun) | signin | entrar, login |
+| sign in, sign out (verbs); sign-in (noun and adjective: "the sign-in screen") | log in, login, signin | entrar, sair; login |
+
+This glossary follows `apps/web/src/locales/GLOSSARY.md`, which is the source for every term that
+is also an interface label. If the two disagree, fix this table. The English term of a label is
+the one the interface shows, so a guide never needs a different word for the same thing.
+
+Where the Portuguese guides and the Portuguese interface differ today, the interface wins for
+labels (quote it as it is) and the guides keep their own wording in prose: the guides write
+"container", while the interface glossary says "contêiner" and the Portuguese dictionaries use both
+spellings; the Portuguese interface calls two-factor authentication "Verificação em duas etapas",
+while its glossary says "autenticação em dois fatores".
 
 Use "TWS Panel" for the product and "the panel" afterwards. Do not write "paas".
