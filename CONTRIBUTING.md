@@ -125,8 +125,8 @@ The guides are Markdown files in `site/src/content/docs/<language>/`, published 
 - Link between guides with relative `.md` paths (`../guides/operations.md#anchor`). They work on
   GitHub and are rewritten for the website at build time.
 - Keep commands, flags and paths identical across languages, and translate only the text around
-  them. The panel UI is currently Portuguese only, so write screen labels exactly as they appear in
-  the UI and add a translation in parentheses.
+  them. The panel UI exists in English and Portuguese, so quote each screen label exactly as it
+  appears in the language of the page (see `site/README.md`).
 - Use `example.com` and `203.0.113.x` (documentation range) in examples. Never use real domains,
   IPs, tokens or bucket endpoints.
 - Preview and check your changes:

@@ -44,9 +44,10 @@ reinstall the VPS. See [what to do](https://kelvindk9w.github.io/tws-panel/en/ge
 > **TWS Panel is in beta.** The interface, the commands and the data formats may still change
 > between versions. The [CHANGELOG](CHANGELOG.md) (in Portuguese) lists what changed in each one.
 >
-> The panel interface is currently in Portuguese only. The documentation is available in English
-> and Portuguese (Brazil). This README writes screen names and buttons as they appear in the
-> interface, with the English translation in parentheses on first mention.
+> The panel interface is available in English and Portuguese (Brazil). It picks the language from
+> your browser and has a selector in the header. Some messages written by the server are still in
+> Portuguese. The documentation is also in both languages. This README writes screen names as they
+> appear in the Portuguese interface, with the English translation in parentheses on first mention.
 
 ## Why it exists
 

@@ -128,8 +128,8 @@ do Brasil (`pt-br`) é secundário, e a estrutura aceita mais idiomas.
 - Para ligar um guia a outro, use caminhos relativos para `.md` (`../guides/operations.md#ancora`).
   Eles funcionam no GitHub e são reescritos para o site na hora do build.
 - Mantenha comandos, flags e caminhos idênticos em todos os idiomas e traduza apenas o texto ao
-  redor. A UI do painel está, por enquanto, só em português: escreva os nomes das telas exatamente
-  como aparecem na UI e, nas outras línguas, acrescente a tradução entre parênteses.
+  redor. A UI do painel existe em português e em inglês: cite cada nome de tela exatamente como
+  aparece no idioma da página (veja `site/README.md`).
 - Use `example.com` e `203.0.113.x` (faixa reservada para documentação) nos exemplos. Nunca use
   domínios, IPs, tokens ou endpoints de bucket reais.
 - Veja e confira as suas mudanças:

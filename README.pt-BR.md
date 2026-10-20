@@ -39,8 +39,9 @@ esperado depois de reinstalar a VPS. Veja [o que fazer](https://kelvindk9w.githu
 > **O TWS Panel está em beta.** A interface, os comandos e os formatos de dados ainda podem mudar
 > entre versões. O [CHANGELOG](CHANGELOG.md) lista o que mudou em cada uma.
 >
-> A interface do painel está, por enquanto, só em português. A documentação está em inglês e em
-> português (Brasil). O [ROADMAP](ROADMAP.md) está em inglês.
+> A interface do painel existe em português (Brasil) e em inglês: ela escolhe o idioma pelo
+> navegador e tem um seletor no cabeçalho. Algumas mensagens escritas pelo servidor ainda aparecem
+> em português. A documentação também está nos dois idiomas. O [ROADMAP](ROADMAP.md) está em inglês.
 
 ## Por que existe
 
