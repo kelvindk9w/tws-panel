@@ -112,6 +112,29 @@ installer warns that it did not respond within 3 minutes.
 The panel itself only listens inside the VPS (`127.0.0.1`): the address `http://YOUR-IP:9000` does not open,
 on purpose.
 
+### Saving or clicking fails with `403 forbidden_origin`
+
+**Symptoms:** the panel opens, but actions that write (save, sign in, deploy) return
+`403 forbidden_origin`. It happens when you open the panel behind **another proxy** (a load balancer,
+a tunnel, a CDN) that removes the `Sec-Fetch-Site` header or rewrites `Origin`. Behind the Caddy
+that the panel installs, nothing needs to be configured.
+
+**Fix (on the VPS, in `/opt/tws-panel`):**
+1. Add to the `.env` the exact origin where you open the panel, with no slash at the end; separate
+   several with commas. Do not use `*`:
+
+   ```
+   ALLOWED_ORIGINS=https://panel.example.com
+   ```
+
+2. Recreate the container so it reads the variable:
+
+   ```bash
+   sudo docker compose up -d
+   ```
+
+The variable is empty by default, and then only the panel's own origin is accepted.
+
 ### "Invalid token" in the wizard
 
 **Symptom:** the wizard says "Invalid token. Check the value the installer printed in the terminal."

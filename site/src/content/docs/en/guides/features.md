@@ -230,6 +230,26 @@ the number of copies kept on the VPS and externally. **Back up now** at any time
 - If you cannot get into the panel, over SSH:
   `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
 
+**After restoring the panel from another server.** This applies to the restore from the screen, not
+to `restaurar-painel.sh`.
+
+- **The schedule of projects and email is held for up to 7 days.** The restored panel brings back
+  the old schedule, but a new VPS has no data yet. So each project registered before the restore, and
+  the email, stay without a scheduled backup until the hold ends: when you restore the data of that
+  item, when you make a backup of it by hand, or by itself after 7 days. The screens show the reason,
+  a message that starts with "Em pausa" (a server message, in Portuguese), instead of "Next: …". On
+  the same VPS, what already has containers is not held, and the email is left out of the hold only
+  if its container exists on this VPS. A project created after the restore is not held, and neither is
+  the panel.
+- **A new panel does not overwrite the backups of another server.** The scheduled backup of the panel
+  does not go out while all of this is true: no project is registered, no panel backup and no email
+  backup was made on this VPS, and the storage already holds panel backups in `_painel/`. The hold
+  ends by itself 7 days after the storage is connected, and the panel sends one notification when it
+  starts. If the panel cannot list the storage, it does not send the backup either, and a
+  notification warns you on the third failure in a row. **Back up now** always works.
+- **The storage address and keys stay the ones in use on this VPS.** The rest of the backup settings
+  comes back with the panel.
+
 <a id="seguranca"></a>
 
 ## Security and monitoring

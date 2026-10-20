@@ -30,7 +30,7 @@ server you no longer have.
 |---|---|---|
 | **Backup password** | The recovery kit you downloaded in **Settings → Backups → External copy encryption**. The panel also shows it under **View password**, but only on a panel you can still sign in to. | There is no way around it: without the password, nobody can open the external copies. |
 | **Storage endpoint and bucket** | The recovery kit lists the bucket and the endpoint. | In Cloudflare: R2 → your bucket → Settings → S3 API. |
-| **Storage access keys** (Access Key ID and Secret Access Key) | You saw them once, when you created the token on Cloudflare. **They are not in the kit.** | Create a new R2 API token for the same bucket ([Complete guide, Step 8.1](../getting-started/complete-guide.md#etapa-8)). Old files stay readable. See the warning in step 5. |
+| **Storage access keys** (Access Key ID and Secret Access Key) | You saw them once, when you created the token on Cloudflare. **They are not in the kit.** | Create a new R2 API token for the same bucket ([Complete guide, Step 8.1](../getting-started/complete-guide.md#etapa-8)). Old files stay readable. The keys you type in step 3 stay in use after the panel is restored from the screen (see step 5). |
 | **Domain access** | Your DNS provider or registrar. | Recover it with the registrar. |
 | **Provider access** | The new VPS provider's dashboard (to set the PTR and unblock port 25). | — |
 
@@ -38,13 +38,12 @@ server you no longer have.
 
 | Comes back | Does **not** come back (you redo it) |
 |---|---|
-| **Panel:** administrator accounts and two-factor authentication, registered projects, settings, notification and backup settings, panel domain and the keys that encrypt the secrets (project variables, tokens). | The operating system and its hardening: user, SSH key, firewall. Run the installation and the security wizard on the new VPS. |
-| **Projects from GitHub:** the databases and folders that were checked in each project's **Backups** tab. The code is published again from the repository. | Anything that was **not** checked in the project's Backups tab, and files written outside volumes. |
-| **Email:** mailboxes, messages, accounts, rules and DKIM keys, and the webmail settings. | DNS records, the PTR and the provider's firewall. They point to the old IP. |
-| | TLS certificates: they are issued again, once DNS points to the new VPS. |
+| **Panel:** administrator accounts and two-factor authentication, registered projects, settings, notification settings, panel domain and the keys that encrypt the secrets (project variables, tokens). | The operating system and its hardening: user, SSH key, firewall. Run the installation and the security wizard on the new VPS. |
+| **Backup settings:** schedule, frequency, number of copies and the backup password. The storage address and keys are the exception: they stay the ones you typed on this VPS. This holds when you restore from the screen. With `restaurar-painel.sh`, the whole backup settings file comes back, old keys included (see step 5). | Anything that was **not** checked in the project's Backups tab, and files written outside volumes. |
+| **Projects:** the databases and folders that were checked in each project's **Backups** tab. Projects from GitHub are deployed again from the repository. For projects created by upload or from a folder on the server, the code comes back from the backup into the project's source folder, and then the project is deployed. | DNS records, the PTR and the provider's firewall. They point to the old IP. |
+| **Email:** mailboxes, messages, accounts, rules and DKIM keys, and the webmail settings. | TLS certificates: they are issued again, once DNS points to the new VPS. |
 | | The email IP reputation: a new IP starts with none. |
-| | The project code as of the backup date: projects from GitHub come from the repository's **current** branch. |
-| | **Projects that do not come from GitHub** (created by upload or from a folder on the server): this flow does not restore them. See [Projects that do not come from GitHub](#projetos-fora-do-github). |
+| | The code of a project from GitHub as of the backup date: it comes from the repository's **current** branch. |
 
 ## Step by step
 
@@ -58,6 +57,12 @@ the setup wizard, including the Security step. The restore needs a panel you are
 temporary administrator account when the wizard asks for it. The restore replaces it with the old
 accounts.
 
+If the old VPS used another projects folder, install with the same one (`./scripts/install.sh --projects-dir=<folder>`, see [Operations](operations.md)). Otherwise projects created by upload or from a folder on the server fail in step 7 with "fica fora da pasta de projetos".
+
+**Do not start the mail server on the new VPS** before step 8, even though the "Get the panel ready" checklist on the Dashboard suggests it. The scheduled email backup would send an empty mail server to `_email/`, count as a finished backup and, since the container would already exist, the email would not enter the hold after the panel is restored.
+
+**Turn off the panel's automatic backup if the new VPS stays on for a night before step 3 or if step 5 may take more than 7 days.** In **Settings → Backups**, in the **Panel** card, clear **Automatic backup on** and save. A new panel has the schedule on and runs at 03:00 even with no storage connected. That local-only backup counts as a finished backup of this VPS and cancels the protection described in step 3. From then on, an empty panel goes to `_painel/` every day and the retention (5 copies) deletes the good backups in about 5 days. The restore of the panel brings the old schedule back, so the setting does not stay off by itself.
+
 Check that ports **80 and 443** are open at the provider, and port **25** if you will use email
 (see [Complete guide, Step 6.1](../getting-started/complete-guide.md#etapa-6)).
 
@@ -69,7 +74,7 @@ Skip this step if the old VPS is gone. Otherwise, on the **old** panel, in this 
    card and in the **Email** card.
 2. Open each project, go to its **Backups** tab and click **Back up now**.
 3. Wait until every backup shows "external copy verified" under
-   **Latest backups**. Write down the date and time of the panel backup.
+   **Latest backups**. Write down the date and time of the panel **and email** backups.
 4. Only then, stop the old panel, so that two servers do not write to the same bucket (the restored
    panel brings the same backup schedule back):
 
@@ -82,18 +87,32 @@ points to it.
 
 ### 3. Connect the same storage
 
-In the new panel, open **Settings → Backups**. In **External storage**
-(External storage), type the same endpoint, bucket and access keys the old VPS used. Region: `auto`.
+In the new panel, open **Settings → Backups**. In **External storage**, type the same endpoint, bucket and access keys the old VPS used. Region: `auto`.
 Click **Test and save**.
 
 **What to check:** "Connection tested and saved" appears.
 
 > [!WARNING]
-> **Do not click Back up now on the new panel before step 5**, and do not change the
-> schedules. The automatic backup of the panel is on by default. Once the password is set (step 4),
-> the new VPS can send a backup of an **empty** panel to the `_painel/` folder, and the retention
-> (5 copies by default) deletes the oldest one. The most recent date in the list may then be the empty panel,
-> not the one from the old VPS.
+> **Do not click Back up now on the new panel before step 5.** A manual backup always runs, and it sends a backup of an **empty** panel to the
+> `_painel/` folder; the retention (5 copies by default) then deletes the oldest one. The most
+> recent date in the list may end up being the empty panel, not the one from the old VPS.
+>
+> The scheduled backup of the new panel is on by default, and the panel holds it only under
+> these conditions:
+>
+> - no project is registered, no panel backup was made on this VPS and no email backup has finished; and
+> - the storage already holds panel backups in `_painel/`; and
+> - less than **7 days** have passed since you connected the storage.
+>
+> While the hold lasts, **Settings → Backups** shows the reason, and the panel sends one
+> notification, "Backup automático do painel em pausa: o armazenamento tem backups de outro
+> servidor" (a server message, in Portuguese). Expect it. If the panel cannot list the storage, it
+> does not send the backup either, and a notification warns you on the third failure in a row.
+> **If more than 7 days pass between step 3 and step 5**, the hold ends by itself and the
+> next scheduled backup can put an empty panel over the good backup. The hold also does not exist
+> if the new panel already made a backup that only stayed on the VPS (the 03:00 run with no storage
+> connected): that counts as a finished backup. In both cases, turn off **Automatic backup on** in
+> the **Panel** card before step 3, as step 1 says.
 
 ### 4. Enter the backup password
 
@@ -118,25 +137,48 @@ the password does not open the backups, check the kit again.
 and sign in with the **old** administrator username and password, plus the two-factor code from the old
 phone. Go back to **Settings → Backups → Restore from another server**.
 
+If you already pointed the panel domain's A record to the new IP and the old panel had access by IP
+turned off, the `…sslip.io` address does not open (the access stays off because the domain points to
+this VPS). In that case, sign in at the panel domain.
+
+> [!NOTE]
+> **The storage keys you typed in step 3 stay in use.** When you restore from the screen, the backup
+> settings come back with the panel, but the storage endpoint, bucket and keys stay the ones of this
+> VPS, because those are the ones that just downloaded the backup. If the backup held other keys, the
+> record of the restore says so (a server message, in Portuguese): "As chaves do armazenamento
+> externo que você configurou nesta VPS (…) foram mantidas…". If the old VPS was broken into, revoke
+> the old token on Cloudflare and change the passwords (panel, mailboxes, databases, Git tokens)
+> after the restore.
+
+> [!NOTE]
+> **Access by IP.** If the old panel had access by IP turned off, the restored panel turns it back
+> **on** while the panel domain does not point to this VPS, so you can sign in. The record of the
+> restore says so (a server message, in Portuguese): "O painel antigo tinha o acesso pelo IP
+> desativado. Aqui ele fica ativo…". If the domain already points to this VPS, the access stays
+> off. After the DNS points here, turn it off again in **Settings → Panel domain** (**Turn off
+> IP access**). Changing the domain's A record before this step is optional.
+
+If the panel does not open at all, restore it from a file instead:
+`cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` (see
+[Operations](operations.md)). That path skips the adjustments above, so the next two warnings apply
+**only to it**. It also does not hold the schedules (see the final checks).
+
 > [!WARNING]
-> **The storage keys go back to the old ones.** The backup settings and their keys come back with
-> the panel. If you created a new token in step 3 (because you lost the keys, or because you revoked
-> the old token after a break-in), the restored panel holds the old keys and the download of
-> projects and email fails. Go to **Settings → Backups → External storage → Edit**,
+> **With `restaurar-painel.sh`, the storage keys go back to the old ones.** The whole backup
+> settings file comes back. If you created a new token in step 3 (because you lost the keys, or
+> because you revoked the old token after a break-in), the restored panel holds the old keys and the
+> download of projects and email fails. Go to **Settings → Backups → External storage → Edit**,
 > type the new keys again and click **Test and save**, before step 7. If the old VPS was
 > broken into, revoke the old token on Cloudflare and change the passwords (panel, mailboxes,
 > databases, Git tokens) after the restore.
 
 > [!WARNING]
-> **If the old panel had access by IP turned off**, that setting comes back too. The new panel then
-> answers only on the panel domain, which still points to the old VPS, and you cannot sign in. Two
-> ways out: point the domain's A record to the new IP and wait for DNS, or run, on the new VPS,
-> `cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh` and use the `…sslip.io` address.
-> To avoid it, change the panel domain's A record to the new IP **before** this step.
-
-If the panel does not open at all, restore it from a file instead:
-`cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` (see
-[Operations](operations.md)).
+> **With `restaurar-painel.sh`, if the old panel had access by IP turned off**, that setting comes
+> back too. The new panel then answers only on the panel domain, which still points to the old VPS,
+> and you cannot sign in. Two ways out: point the domain's A record to the new IP and wait for DNS,
+> or run, on the new VPS, `cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh` and use the
+> `…sslip.io` address. To avoid it, change the panel domain's A record to the new IP **before** this
+> step.
 
 ### 6. Point the DNS to the new IP
 
@@ -150,76 +192,33 @@ In the **Projects** block of the card, click **Restore** next to each project.
 
 - A project shown as "Not registered here: restore the panel first" means step 5 did not finish.
 - Choose the date and confirm by typing the project name.
-- On a new VPS the project has no containers. Keep **Deploy from GitHub before restoring** checked: the panel publishes the project again from its
-  repository and then puts the databases and folders back. This can take several minutes per
-  project, and the panel waits up to 45 minutes.
+- On a new VPS the project has no containers. Keep **Deploy from GitHub before restoring** checked
+  (the box also serves projects that do not come from GitHub). The panel deploys the project and
+  then puts the databases and folders back. This can take several minutes per project, and the panel
+  waits up to 45 minutes.
+  - **Project from GitHub:** the panel deploys it again from its repository.
+  - **Project created by upload or from a folder on the server:** the panel first puts the code from
+    the backup back into the project's **source folder** (the one in the project's configuration) and
+    then deploys. That folder must be inside the projects folder of the new VPS
+    (`PAAS_PROJECTS_DIR`, default `/opt/tws-projects`), without a symbolic link pointing outside it,
+    and the panel user (10001) must be able to write in the projects folder, where the source folder is created. In a project created by upload, the `.env`
+    that the panel generated does not come back (the panel generates a new one at deploy); a `.env`
+    written by the project's owner does.
+  - **The source folder already exists on the new VPS with files in it:** it stays as it is, nothing
+    is overwritten, and the restore record warns about it. The deploy uses what is already there. To
+    use the code from the backup instead, rename or empty that folder **before** you click
+    **Restore**. Doing it afterwards does not help: in a project created by upload, a new restore
+    puts the code back only in the panel's working copy, and the next deploy fails without the
+    source folder.
 
 **What to check:** each project opens at its domain and the data is there. The **Certificates**
-(Certificates) page shows the project's domain as **Valid**. A certificate fails until the
+page shows the project's domain as **Valid**. A certificate fails until the
 DNS from step 6 points to the new IP. Use **Try issuing now** on that page
 after that.
 
-<a id="projetos-fora-do-github"></a>
-
-#### Projects that do not come from GitHub
-
-Projects created by upload or from a folder on the server cannot be restored by the steps above.
-The panel publishes the project **before** it puts the code back, and for these projects the
-source was a folder on the old VPS, so the publication fails. The workaround, per project, with the
-projects registered (step 5) and before you click **Restore** in step 7:
-
-1. Download, from the storage (`TWS Panel Backups/<project>/`), the `.7z` of the **last backup made
-   on the old VPS** (the same moment as the panel backup from step 5) and open it with 7-Zip, using
-   the backup password. Take out `codigo/codigo.tar` and copy it to the new VPS.
-2. Find the project's **source folder** (`<ORIGIN>` below) in the project's configuration tab: the
-   screen says "This project uses a folder on the server (…), not a Git repository". It must be inside the projects folder of the new VPS (`PAAS_PROJECTS_DIR`, default
-   `/opt/tws-projects`), the only host folder the panel can see.
-3. Put the code in `<ORIGIN>`, according to how the project was created:
-   - **Created by upload** (the tar holds a folder called `src/`): extract to a temporary folder and
-     copy the **contents** of `src/` to the origin:
-
-     ```bash
-     sudo mkdir -p <ORIGIN>
-     TMP=$(mktemp -d)
-     sudo tar -xf codigo.tar -C "$TMP"
-     sudo cp -a "$TMP"/src/. <ORIGIN>/
-     sudo head -1 <ORIGIN>/.env 2>/dev/null | grep -q '^# Gerado pelo painel (seção Variáveis do projeto)' && sudo rm <ORIGIN>/.env
-     ```
-
-     The last line removes the `.env` that the panel generated (it starts with the comment
-     "Gerado pelo painel"), and only that one: a `.env` written by the project's owner has no such
-     header and stays.
-
-   - **Created from a folder on the server** (the tar holds a folder with the folder's own name,
-     for example `meusite/`): extract it into the parent of the origin:
-
-     ```bash
-     sudo tar -xf codigo.tar -C "$(dirname <ORIGIN>)"
-     ```
-4. In both cases, give the folder to the panel user (it runs as user 10001):
-
-   ```bash
-   sudo chown -R 10001:10001 <ORIGIN>
-   ```
-5. Click **Deploy** in the project to publish it.
-6. Only then restore the data: **Backups** tab of the project → **Restore**. The restore puts the
-   code back over the folder once more.
-
-> [!NOTE]
-> The panel only accepts a source folder inside the projects folder: it refuses any other one when
-> the project is created or changed (`source_outside_projects_dir`), and the projects folder is the
-> only host folder it can see.
->
-> In upload mode, the `.env` file with the project's variables that the panel generated comes along
-> in the tar. That generated `.env` must not stay in the origin: the panel generates a new one at
-> deploy. If it stayed, every deploy would copy the old values back, and a compose file with
-> `env_file: .env` would keep reading them.
->
-> This workaround was derived from the code and has not been tested on a real VPS.
-
 ### 8. Restore the email last
 
-1. In the card, click **Restore email** and confirm by typing the word the screen shows: `email` with the English
+1. In the card, click **Restore email**, choose the date of the email backup you wrote down in step 2 and confirm by typing the word the screen shows: `email` with the English
    interface, `e-mail` with the Portuguese one.
    If the restore ends with the notice "O servidor de e-mail ainda não existe nesta VPS: abra a
    página E-mail e clique em Iniciar" (the mail server does not exist on this VPS yet: open the
@@ -241,10 +240,20 @@ first: the new IP has no reputation yet.
 - The panel opens at its domain with a padlock, and sign-in and two-factor authentication work.
 - **Certificates** shows every address as **Valid**.
 - Every project opens and has its data.
-- **Automatic backups are still on.** Open the **Backups** tab of each project and check that the
-  automatic backup is on. The restored schedule can try to back up a project that has no containers
-  yet, and then the panel turns that project's automatic backup off.
+- **The schedules are back.** After the panel is restored, the automatic backup of the projects and
+  of the email stays on hold until the data of each one comes back. The hold shows in
+  **Settings → Backups** and in the project's **Backups** tab, as a message that starts with "Em
+  pausa" (a server message, in Portuguese), in place of "Next: …". After you restore each project
+  and the email, check that the message is gone. A project created after the restore is not held,
+  and the hold ends by itself after 7 days. If you restored the panel with `restaurar-painel.sh`,
+  there is no hold: the old schedule comes back as it was, and it can try to back up a project that
+  has no containers yet.
+- **Do not leave projects waiting.** The scheduled backup of a project that still has no containers
+  fails with "Nenhum container do projeto encontrado" (a server message), with a notification. The
+  one of a project that is deployed but whose data has not come back yet can send a backup without
+  the data. Restore the projects soon after the panel.
 - Email: the DNS checklist is 6/6, the test email arrives, and a mailbox can sign in to the webmail.
+- In **Settings → Backups**, the **Panel** card has **Automatic backup on** checked. If you turned it off in step 1 and the panel backup was an old one, without the backup settings, turn it on again: the restore brings the old schedule back only when the backup has those settings.
 - **Settings → Time zone** shows the time zone you want. Backups run
   at 03:00 in the VPS time zone.
 - Run **Back up now** on the panel and see "external copy verified". Then run a project
@@ -258,8 +267,18 @@ first: the new IP has no reputation yet.
   password change, the restore window has a link, **Was this backup made before a password change?**
   where you type the password in use when that
   backup was made.
-- **The download fails in step 7 or 8:** the storage keys are probably the old ones. See the warning
-  in step 5.
+- **The download fails in step 7 or 8:** the token may be revoked or wrong. Go to
+  **Settings → Backups → External storage → Edit**, type the keys again and click **Test and save**.
+  If you restored the panel with `restaurar-painel.sh`, this is also the effect of the old keys that
+  came back (see the warning in step 5).
+- **"A pasta do código deste projeto (…) fica fora da pasta de projetos desta VPS" (a server
+  message: the project's code folder is outside this VPS's projects folder):** the panel does not
+  write outside the projects folder. Put the code inside it, with no symbolic link pointing outside,
+  and register the path again in the project's configuration.
+- **"A pasta do código (…) já existe nesta VPS e tem arquivos: ficou como está, nada foi
+  sobrescrito" (a server message: the code folder already exists with files and was left as it is):**
+  the deploy uses what is already there. If you want the code from the backup, rename or empty the
+  source folder **before** clicking **Restore**, never afterwards (see step 7).
 - **A restore fails halfway:** the panel keeps the previous state in
   `/data/backups/_painel/antes-da-restauracao/` and undoes a failed panel swap by itself. Read the
   error in **Latest backups** and run the step again.

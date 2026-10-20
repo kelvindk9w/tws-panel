@@ -33,6 +33,11 @@ domains, high ports) and running it on an Ubuntu 22.04/24.04 VPS exposed to the 
   build images: the first installation needs access to the registry. VPS with no outbound
   internet access? Download the images beforehand, or set `PAAS_HOST_HELPER_IMAGE` to a local
   image that has `nsenter`/`tar`/`sh`.
+- **ALLOWED_ORIGINS in `.env` (optional)**: leave it empty (the default) behind the Caddy that the
+  panel installs. If you put **another proxy** in front of the panel and writes return
+  `403 forbidden_origin`, add the origin where the panel opens (`ALLOWED_ORIGINS=https://panel.example.com`,
+  several separated by commas) and run `sudo docker compose up -d`. See
+  [Troubleshooting](troubleshooting.md).
 - The panel container starts with `cap_drop ALL`, `no-new-privileges` and a read-only
   rootfs — only `/data` (volume) and `/tmp` (tmpfs) are writable. Don't remove
   these flags: the host bridge does NOT depend on container capabilities.
