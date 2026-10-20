@@ -8,7 +8,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -73,11 +73,45 @@ describe("writeProjectDotenv", () => {
     expect(await readFile(path.join(src, ".git", "info", "exclude"), "utf8")).toBe("*.log\n/.env\n");
   });
 
-  it("regrava o .env existente, trocando a permissão para 0600", async () => {
-    await writeFile(path.join(src, ".env"), "VELHO=1\n", { mode: 0o644 });
+  it("regrava o .env que o próprio painel gerou (começa com o cabeçalho), trocando a permissão para 0600", async () => {
+    await writeProjectDotenv(src, work, { VELHO: "1" });
+    await chmod(path.join(src, ".env"), 0o644);
     await writeProjectDotenv(src, work, { NOVO: "1" });
     expect(await readFile(path.join(src, ".env"), "utf8")).not.toContain("VELHO");
+    expect(await readFile(path.join(src, ".env"), "utf8")).toContain("NOVO='1'");
     expect((await stat(path.join(src, ".env"))).mode & 0o777).toBe(0o600);
+  });
+
+  // A6 do lote 6: o .env do dono, NÃO versionado, era sobrescrito sem cópia.
+  it("`.env` do dono (não versionado, sem o cabeçalho do painel): NÃO é sobrescrito; as variáveis vão à parte e há aviso", async () => {
+    await writeFile(path.join(src, ".env"), "MEU_SEGREDO=abc\nOUTRO=2\n", { mode: 0o644 });
+    const r = await writeProjectDotenv(src, work, { A: "1" });
+    expect(await readFile(path.join(src, ".env"), "utf8")).toBe("MEU_SEGREDO=abc\nOUTRO=2\n");
+    expect(r.envFileArgs).toEqual(["--env-file", path.join(work, "paas.env")]);
+    expect(await readFile(path.join(work, "paas.env"), "utf8")).toContain("A='1'");
+    expect(r.note).toMatch(/\.env/);
+    expect(r.note).toMatch(/não foi sobrescrito/);
+    expect(r.note).toMatch(/env_file/);
+  });
+
+  it("`.env` do dono + todas as variáveis excluídas: o .env do dono fica e o paas.env some", async () => {
+    await writeFile(path.join(src, ".env"), "MEU_SEGREDO=abc\n");
+    await writeProjectDotenv(src, work, { A: "1" });
+    const r = await writeProjectDotenv(src, work, {});
+    expect(r.envFileArgs).toEqual([]);
+    expect(await readFile(path.join(src, ".env"), "utf8")).toBe("MEU_SEGREDO=abc\n");
+    expect(existsSync(path.join(work, "paas.env"))).toBe(false);
+  });
+
+  it("o dono apaga o .env dele: na vez seguinte o painel volta a gerar o seu (com cabeçalho) e o paas.env antigo sai", async () => {
+    await writeFile(path.join(src, ".env"), "MEU_SEGREDO=abc\n");
+    await writeProjectDotenv(src, work, { A: "1" });
+    await rm(path.join(src, ".env"));
+    const r = await writeProjectDotenv(src, work, { A: "1" });
+    expect(r.envFileArgs).toEqual([]);
+    expect(r.note).toBeNull();
+    expect(await readFile(path.join(src, ".env"), "utf8")).toMatch(/^# Gerado pelo painel/);
+    expect(existsSync(path.join(work, "paas.env"))).toBe(false);
   });
 
   it("sem variáveis: não cria nada", async () => {
@@ -122,6 +156,67 @@ describe("writeProjectDotenv", () => {
     expect(r.envFileArgs).toEqual([]);
     expect(existsSync(path.join(work, "paas.env"))).toBe(false);
     expect(await readFile(path.join(src, ".env"), "utf8")).toContain("A='1'");
+  });
+});
+
+describe("writeProjectDotenv — .env que o dono editou depois de o painel gerar (A6)", () => {
+  it("o painel guarda o que gravou; arquivo editado pelo dono (mesmo com o cabeçalho) NÃO é sobrescrito", async () => {
+    gitInit();
+    const primeira = await writeProjectDotenv(src, work, { A: "1" });
+    expect(primeira.target).toBe(".env");
+    await writeFile(path.join(src, ".env"), (await readFile(path.join(src, ".env"), "utf8")) + "MINHA_CHAVE='do-dono'\n");
+    const segunda = await writeProjectDotenv(src, work, { A: "2" });
+    expect(segunda.target).toBe("paas.env");
+    expect(await readFile(path.join(src, ".env"), "utf8")).toMatch(/MINHA_CHAVE='do-dono'/);
+    expect(await readFile(path.join(src, ".env"), "utf8")).not.toMatch(/A='2'/);
+    expect(await readFile(path.join(work, "paas.env"), "utf8")).toMatch(/A='2'/);
+    expect(segunda.envFileArgs).toEqual(["--env-file", path.join(work, "paas.env")]);
+    expect(segunda.note).toMatch(/editado/);
+  });
+
+  it("arquivo que o painel gerou e ninguém mexeu continua sendo regravado a cada deploy", async () => {
+    gitInit();
+    await writeProjectDotenv(src, work, { A: "1" });
+    const r = await writeProjectDotenv(src, work, { A: "2", B: "3" });
+    expect(r.target).toBe(".env");
+    expect(await readFile(path.join(src, ".env"), "utf8")).toMatch(/A='2'[\s\S]*B='3'/);
+    expect(existsSync(path.join(work, "paas.env"))).toBe(false);
+  });
+
+  it("todas as variáveis excluídas: .env editado pelo dono fica; o intacto é apagado junto com o registro", async () => {
+    gitInit();
+    await writeProjectDotenv(src, work, { A: "1" });
+    await writeFile(path.join(src, ".env"), (await readFile(path.join(src, ".env"), "utf8")) + "MINHA='x'\n");
+    await writeProjectDotenv(src, work, {});
+    expect(existsSync(path.join(src, ".env"))).toBe(true);
+
+    await rm(path.join(src, ".env"));
+    await writeProjectDotenv(src, work, { A: "1" });
+    await writeProjectDotenv(src, work, {});
+    expect(existsSync(path.join(src, ".env"))).toBe(false);
+    expect(existsSync(path.join(work, "paas.dotenv.hash"))).toBe(false);
+  });
+
+  it(".env gerado por versão antiga do painel (cabeçalho, sem registro): segue sendo do painel", async () => {
+    gitInit();
+    await writeProjectDotenv(src, work, { A: "1" });
+    await rm(path.join(work, "paas.dotenv.hash"), { force: true });
+    const r = await writeProjectDotenv(src, work, { A: "2" });
+    expect(r.target).toBe(".env");
+  });
+
+  it("primeira regravação de um .env antigo sem registro: guarda uma cópia do arquivo (uma vez só)", async () => {
+    gitInit();
+    await writeFile(
+      path.join(src, ".env"),
+      "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.\nA='velho'\nEXTRA='que o dono pôs'\n",
+    );
+    await writeProjectDotenv(src, work, { A: "2" });
+    const copia = path.join(work, "paas.dotenv.antigo");
+    expect(await readFile(copia, "utf8")).toMatch(/EXTRA='que o dono pôs'/);
+    expect((await stat(copia)).mode & 0o777).toBe(0o600);
+    await writeProjectDotenv(src, work, { A: "3" });
+    expect(await readFile(copia, "utf8")).toMatch(/A='velho'/);
   });
 });
 

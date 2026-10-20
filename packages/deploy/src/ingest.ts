@@ -5,12 +5,13 @@
  *  - existing: usa um caminho já existente (modo dev local; src = o próprio path)
  */
 import { existsSync } from "node:fs";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
 import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
+import { uploadOverlapBlocker } from "./workdir-safety.js";
 
 /** Diretórios/arquivos excluídos ao copiar código no modo upload. */
 const UPLOAD_EXCLUDES = new Set(["node_modules", ".git", "dist", "out", "build", ".next", ".turbo"]);
@@ -143,9 +144,34 @@ export interface IngestContext {
   credentialFor?: (project: Project) => Promise<GitReadCredential | null>;
 }
 
-/** Diretório de trabalho do projeto (data/projects/<slug>). */
+/** Pasta reservada ao painel dentro da pasta de projetos (nunca é de usuário: o nome tem ponto no começo e os projetos dentro dela têm id gerado). */
+export const RESERVED_DIRNAME = ".paas";
+
+/** `<pasta de projetos>/.paas`. */
+export function reservedRoot(ctx: IngestContext): string {
+  return path.join(ctx.projectsDir, RESERVED_DIRNAME);
+}
+
+/**
+ * Diretório de trabalho do projeto: onde o painel guarda o que GERA (clone,
+ * repositório do painel, paas.*). Projeto novo: `<projetos>/.paas/<id>`.
+ * Projeto de antes da área reservada: `<projetos>/<slug>` (ver Project.storageLayout).
+ */
 export function projectWorkDir(ctx: IngestContext, project: Project): string {
+  if (project.storageLayout === "reserved") {
+    if (!/^[A-Za-z0-9_-]+$/.test(project.id)) throw new Error(`Identificador de projeto inválido: ${project.id}`);
+    return path.join(reservedRoot(ctx), project.id);
+  }
   return path.join(ctx.projectsDir, project.slug);
+}
+
+/** a e b são o mesmo caminho, ou um está dentro do outro (caminhos já resolvidos). */
+export function pathsOverlap(a: string, b: string): boolean {
+  const within = (root: string, p: string) => {
+    const rel = path.relative(root, p);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  };
+  return within(a, b) || within(b, a);
 }
 
 /** Diretório do código-fonte efetivo do projeto. */
@@ -184,13 +210,22 @@ export function projectGitDir(ctx: IngestContext, project: Project): string {
 /**
  * Deixa em `src/.git` só um ponteiro para o repositório do painel (o operador
  * continua usando `git status` ali). O que estiver lá — um clone antigo ou o
- * que um app invadido plantou — é apagado, sem seguir link simbólico: o painel
- * nunca mais lê esse `.git`.
+ * que um app invadido plantou — sai de `src` sem seguir link simbólico e o painel
+ * nunca mais o lê. Uma PASTA `.git` (o clone do usuário, com histórico e commits
+ * locais) não é apagada: vai para `<pasta do projeto>/.git-antigo-<data>`, fora
+ * do `src` que os containers gravam. Link ou outro tipo de arquivo é removido.
  */
-async function substituirGitDeSrcPorPonteiro(src: string, gitDir: string): Promise<void> {
+async function substituirGitDeSrcPorPonteiro(src: string, gitDir: string, onLog: (chunk: string) => void): Promise<void> {
   const ponteiro = path.join(src, ".git");
   if (!(await isRegularFile(ponteiro))) {
-    await rm(ponteiro, { recursive: true, force: true });
+    const info = await lstat(ponteiro).catch(() => null);
+    if (info?.isDirectory()) {
+      const guardado = path.join(path.dirname(src), `.git-antigo-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      await rename(ponteiro, guardado);
+      onLog(`O .git que estava no código foi guardado em ${guardado} (o painel passou a usar o próprio repositório, fora do código). Apague quando não precisar mais.\n`);
+    } else {
+      await rm(ponteiro, { recursive: true, force: true });
+    }
   }
   await writeFileNoFollow(ponteiro, `gitdir: ${gitDir}\n`, 0o644);
 }
@@ -232,7 +267,7 @@ async function ingestGit(
   }
 
   await mkdir(src, { recursive: true });
-  await substituirGitDeSrcPorPonteiro(src, gitDir);
+  await substituirGitDeSrcPorPonteiro(src, gitDir, onLog);
 
   const novo = !existsSync(path.join(gitDir, "HEAD"));
   if (!novo) {
@@ -301,6 +336,10 @@ async function ingestUpload(
 ): Promise<string> {
   const from = path.resolve(project.source);
   const to = projectSrcDir(ctx, project);
+  // a cópia apaga `to` antes de copiar: se a origem é (ou contém, ou está
+  // dentro de) a pasta do painel para este projeto, o código do usuário se perderia
+  const blocker = await uploadOverlapBlocker(ctx, project);
+  if (blocker) throw new Error(blocker);
   onLog(`Copiando ${from} → ${to} (excluindo ${[...UPLOAD_EXCLUDES].join(", ")})…\n`);
   await rm(to, { recursive: true, force: true });
   await cp(from, to, {

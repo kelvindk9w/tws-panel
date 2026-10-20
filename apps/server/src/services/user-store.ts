@@ -10,10 +10,9 @@
  * volta a ser a antiga depois do restart).
  */
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { OnboardingStepId, UserPreferences } from "@paas/core";
-import { writeFileAtomic } from "./json-file.js";
+import { loadJson, writeFileAtomic } from "./json-file.js";
 
 /**
  * Verificação em duas etapas (ver services/two-factor.ts). O segredo fica
@@ -86,14 +85,23 @@ export class UserStore {
    * leitura atrasada sobrescreveria depois o que ela tivesse alterado.
    */
   private ensureLoaded(): Promise<void> {
+    // Arquivo de contas ilegível NÃO vira "sem admin": o assistente de
+    // instalação reabriria. A carga falha, o arquivo fica como está, e a
+    // próxima chamada tenta de novo.
     this.loading ??= (async () => {
-      try {
-        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<UsersFile>;
-        this.users = Array.isArray(raw.users) ? raw.users : [];
-      } catch {
-        this.users = [];
-      }
-    })();
+      this.users = await loadJson<StoredUser[]>(this.file, {
+        empty: () => [],
+        parse: (raw) => {
+          const users = (raw as Partial<UsersFile> | null)?.users;
+          return Array.isArray(users) ? users : null;
+        },
+        strict: true,
+        recovery: "Para voltar a entrar, siga docs/recuperar-acesso.md (restaurar uma cópia do users.json ou recriar o administrador).",
+      });
+    })().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 

@@ -8,6 +8,7 @@
  */
 import { cp, lstat, realpath, rm } from "node:fs/promises";
 import path from "node:path";
+import { pathsOverlap } from "./ingest.js";
 
 function publishable(src: string, file: string): boolean {
   const rel = path.relative(src, file);
@@ -15,8 +16,31 @@ function publishable(src: string, file: string): boolean {
   return rel.split(path.sep).every((part) => !part.startsWith(".") || part === ".well-known");
 }
 
+/**
+ * A pasta de publicação é apagada e recriada a cada deploy. Se ela coincidir com
+ * o código do usuário, ou ficar dentro dele (ou o contiver), o deploy apagaria
+ * arquivos DELE. Recusa antes de tocar em qualquer coisa (achado A5).
+ */
+async function assertDestApartFromSource(src: string, dest: string): Promise<void> {
+  const real = async (p: string) => {
+    try {
+      return await realpath(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  if (pathsOverlap(await real(src), await real(dest))) {
+    throw new Error(
+      `A pasta de publicação (${dest}) coincide com a pasta do código (${src}), fica dentro dela ou a contém. ` +
+        "O painel não apaga nem copia nada para não perder os seus arquivos. Faça um novo deploy depois de migrar o projeto " +
+        "(o painel faz isso sozinho no deploy de projetos antigos) ou mova a pasta 'site' do código para outro lugar.",
+    );
+  }
+}
+
 /** Recria `dest` com o conteúdo publicável de `src` (arquivo apagado no código sai do ar). */
 export async function preparePublishDir(src: string, dest: string): Promise<void> {
+  await assertDestApartFromSource(src, dest);
   await rm(dest, { recursive: true, force: true });
   await cp(src, dest, { recursive: true, filter: (file) => publishable(src, file) });
 }
@@ -52,6 +76,7 @@ export async function publishBuildOutput(src: string, outputDir: string, dest: s
   if (!info.isDirectory()) {
     throw new Error(`A saída "${outputDir}" do build não é uma pasta.`);
   }
+  await assertDestApartFromSource(src, dest);
   await rm(dest, { recursive: true, force: true });
   await cp(real, dest, {
     recursive: true,

@@ -5,10 +5,9 @@
  * recorrente rodando a cada intervalo não geraria pilha de repetidos.
  */
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Alert, AlertSeverity, AlertSource, AlertStatus } from "@paas/core";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 const MAX_ALERTS = 500;
 
@@ -53,13 +52,18 @@ export class AlertsService {
    */
   private ensureLoaded(): Promise<void> {
     this.loadedPromise ??= (async () => {
-      try {
-        const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<AlertsFile>;
-        this.alerts = Array.isArray(raw.alerts) ? raw.alerts : [];
-      } catch {
-        this.alerts = [];
-      }
-    })();
+      this.alerts = await loadJson<Alert[]>(this.file, {
+        empty: () => [],
+        parse: (raw) => {
+          const alerts = (raw as Partial<AlertsFile> | null)?.alerts;
+          return Array.isArray(alerts) ? alerts : null;
+        },
+        log: this.log,
+      });
+    })().catch((err: unknown) => {
+      this.loadedPromise = null;
+      throw err;
+    });
     return this.loadedPromise;
   }
 

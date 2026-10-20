@@ -1,7 +1,6 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { SetupState, SetupStepInfo } from "@paas/core";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Passos do wizard na Fase 0 (fases futuras adicionam os demais). */
 export const SETUP_STEPS: SetupStepInfo[] = [
@@ -24,18 +23,26 @@ export class SetupStateStore {
     this.file = path.join(dataDir, "setup-state.json");
   }
 
-  async load(): Promise<SetupState> {
-    try {
-      const raw = await readFile(this.file, "utf8");
-      const parsed = JSON.parse(raw) as Partial<SetupState>;
-      return {
-        currentStep: Number(parsed.currentStep ?? 0),
-        completed: Boolean(parsed.completed ?? false),
-        updatedAt: String(parsed.updatedAt ?? DEFAULT_STATE.updatedAt),
-      };
-    } catch {
-      return { ...DEFAULT_STATE, updatedAt: new Date().toISOString() };
-    }
+  load(): Promise<SetupState> {
+    return this.read(loadJson);
+  }
+
+  private read(loader: typeof loadJson): Promise<SetupState> {
+    return loader<SetupState>(this.file, {
+      // Ilegível NÃO vira "setup não concluído": o assistente reabriria e
+      // permitiria criar outro administrador. Falha e deixa o arquivo como está.
+      strict: true,
+      empty: () => ({ ...DEFAULT_STATE, updatedAt: new Date().toISOString() }),
+      parse: (value) => {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+        const parsed = value as Partial<SetupState>;
+        return {
+          currentStep: Number(parsed.currentStep ?? 0),
+          completed: Boolean(parsed.completed ?? false),
+          updatedAt: String(parsed.updatedAt ?? DEFAULT_STATE.updatedAt),
+        };
+      },
+    });
   }
 
   /** Substitui o estado inteiro (na fila do arquivo, como as demais alterações). */
@@ -56,7 +63,7 @@ export class SetupStateStore {
    * voltava a "não concluído").
    */
   private change(fn: (state: SetupState) => SetupState): Promise<SetupState> {
-    return withFileLock(this.file, async () => this.write(fn(await this.load())));
+    return withFileLock(this.file, async () => this.write(fn(await this.read(loadJsonInLock))));
   }
 
   /** Volta ao passo 0, não concluído ("Recomeçar do zero"). */

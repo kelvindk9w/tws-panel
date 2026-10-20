@@ -26,7 +26,7 @@ import {
 import { resolveTerminalAccess, type ServerConfig } from "../config.js";
 import { BackgroundMirrorRunner, TerminalRelayRunner } from "./terminal-runner.js";
 import type { TerminalService } from "./terminal-service.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 
 /** Callback de auditoria para comandos executados no host real. */
 export type SecurityAuditHook = (action: string, detail: string) => void;
@@ -235,22 +235,33 @@ export class SecurityService {
    * GET /api/security/jobs/:id responder 404 enquanto o rollback agendado
    * NO ALVO continuava correndo de forma independente: o operador perdia
    * visibilidade exatamente no momento em que precisa confirmar acesso.
-   * Best-effort: falha ao ler o arquivo nunca impede o servidor de subir.
+   * Arquivo ausente = primeira execução; ilegível é guardado à parte; erro de
+   * leitura falha a carga (o painel não sobe com um estado que não conseguiu ler).
    */
   async restoreJobsFromDisk(): Promise<void> {
+    // Erro de leitura (permissão, E/S) lança: não se confunde com "sem jobs" nem
+    // se grava por cima. JSON quebrado vai para security-jobs.json.corrompido-<data>.
+    let parsed: Partial<JobsFile>;
     try {
-      const raw = await readFile(this.jobsFile, "utf8");
-      const parsed = JSON.parse(raw) as Partial<JobsFile>;
-      // Os runIds entram ANTES dos jobs: restoreJobs() decide reatachar ou não
-      // com base neles.
-      if (parsed.runs && typeof parsed.runs === "object") {
-        this.executor.restoreRunIds(parsed.runs as Record<string, string>);
-      }
-      if (Array.isArray(parsed.jobs) && parsed.jobs.length > 0) {
-        this.executor.restoreJobs(parsed.jobs);
-      }
-    } catch {
-      // primeira execução ou arquivo ausente/corrompido — nada a restaurar
+      parsed = await loadJson<Partial<JobsFile>>(this.jobsFile, {
+        empty: () => ({}),
+        parse: (raw) => (typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Partial<JobsFile>) : null),
+      });
+    } catch (err) {
+      throw new Error(
+        "Não consegui ler o security-jobs.json (jobs da tela Segurança), então a rota de segurança não subiu. " +
+          "Confira as permissões da pasta de dados do painel (/data no Docker) ou restaure o arquivo de um backup " +
+          "(scripts/restaurar-painel.sh). O arquivo não foi alterado.",
+        { cause: err },
+      );
+    }
+    // Os runIds entram ANTES dos jobs: restoreJobs() decide reatachar ou não
+    // com base neles.
+    if (parsed.runs && typeof parsed.runs === "object") {
+      this.executor.restoreRunIds(parsed.runs as Record<string, string>);
+    }
+    if (Array.isArray(parsed.jobs) && parsed.jobs.length > 0) {
+      this.executor.restoreJobs(parsed.jobs);
     }
   }
 
@@ -428,7 +439,15 @@ export class SecurityService {
       // ler → acrescentar → gravar na fila do arquivo (services/json-file.ts):
       // varredura e fase terminando juntas não apagam o registro uma da outra
       await withFileLock(this.historyFile, async () => {
-        const entries = await this.loadHistory();
+        // Aqui um erro de leitura NÃO pode virar "histórico vazio" (a gravação
+        // logo abaixo apagaria o registro todo): o erro sobe e o arquivo fica.
+        const entries = await loadJsonInLock<SecurityHistoryEntry[]>(this.historyFile, {
+          empty: () => [],
+          parse: (raw) => {
+            const list = (raw as Partial<HistoryFile> | null)?.entries;
+            return Array.isArray(list) ? list : null;
+          },
+        });
         entries.push(entry);
         const trimmed = trimHistoryPreservingBefore(entries);
         await writeFileAtomic(this.historyFile, JSON.stringify({ entries: trimmed }, null, 2) + "\n");

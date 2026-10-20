@@ -5,9 +5,12 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { isInsideProjectsDir } from "./projects-dir.js";
+import { isInsideProjectsDir, isPanelArea, sameFolder } from "./projects-dir.js";
+
+const PANEL_AREA_MESSAGE =
+  "Essa pasta é a própria pasta de projetos ou a área interna do painel (.paas). Escolha a pasta do código dentro da pasta de projetos.";
 import { httpError, type HttpError } from "./http-error.js";
 import { GithubIntegration } from "./github-integration.js";
 import { ProjectEnvStore, type EnvVar } from "./project-env.js";
@@ -53,8 +56,9 @@ import {
   detectProject,
   ingestCode,
   projectSrcDir,
-  projectWorkDir,
   runGuardrails,
+  migrateLegacyWorkDir,
+  removeProjectWorkDir,
   composeVariables,
   composeEnvFiles,
   composeTimezoneDefinitions,
@@ -78,7 +82,7 @@ import type { AuditService } from "./audit-service.js";
 import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
-import { withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 const MAX_JOBS = 100;
 
@@ -174,6 +178,7 @@ export class DeployService {
   private readonly engineCtx: EngineContext;
   private readonly projectsDir: string;
   private readonly projectsFile: string;
+  private readonly backupsDir: string;
   private readonly jobsFile: string;
   private readonly caddyHttpPort: number;
   private readonly caddyHttpsPort: number;
@@ -226,8 +231,10 @@ export class DeployService {
     this.currentPanelSite = config.panelDomain
       ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
       : null;
-    this.projectsDir = config.projectsDir;
+    // o mesmo padrão de config.ts (PAAS_PROJECTS_DIR ?? <dataDir>/projects)
+    this.projectsDir = config.projectsDir ?? path.join(config.dataDir, "projects");
     this.projectsFile = path.join(config.dataDir, "projects.json");
+    this.backupsDir = path.join(config.dataDir, "backups");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
     this.caddyHttpPort = config.caddyHttpPort;
     this.caddyHttpsPort = config.caddyHttpsPort;
@@ -634,30 +641,42 @@ export class DeployService {
    * chamada seguia com a lista vazia e a gravação dela apagava os projetos.
    */
   private ensureLoaded(): Promise<void> {
-    this.loadedPromise ??= this.load();
+    this.loadedPromise ??= this.load().catch((err: unknown) => {
+      // falha de leitura NÃO é "sem projetos": a próxima chamada tenta de novo
+      this.loadedPromise = null;
+      throw err;
+    });
     return this.loadedPromise;
   }
 
   private async load(): Promise<void> {
-    try {
-      const raw = JSON.parse(await readFile(this.projectsFile, "utf8")) as Partial<ProjectsFile>;
-      this.projects = Array.isArray(raw.projects) ? raw.projects : [];
-    } catch {
-      this.projects = [];
-    }
-    try {
-      const raw = JSON.parse(await readFile(this.jobsFile, "utf8")) as Partial<JobsFile>;
-      this.jobs = Array.isArray(raw.jobs) ? raw.jobs : [];
-      // jobs "running" de uma execução anterior do processo são marcados como falhos
-      for (const job of this.jobs) {
-        if (job.status === "running" || job.status === "queued") {
-          job.status = "failed";
-          job.error = "Servidor reiniciado durante o deploy.";
-          job.finishedAt = new Date().toISOString();
-        }
+    // A lista de projetos é o que o Caddyfile e o resto do painel usam: erro de
+    // leitura (ou arquivo ilegível) falha a carga e o arquivo não é tocado —
+    // nunca "sem projetos", que recalcularia o Caddyfile sem eles e seria
+    // gravado por cima na próxima alteração.
+    this.projects = await loadJson<Project[]>(this.projectsFile, {
+      empty: () => [],
+      parse: (raw) => {
+        const projects = (raw as Partial<ProjectsFile> | null)?.projects;
+        return Array.isArray(projects) ? projects : null;
+      },
+      strict: true,
+    });
+    // Histórico de deploys: ilegível vai para o lado e recomeça (não é a lista de projetos).
+    this.jobs = await loadJson<DeployJob[]>(this.jobsFile, {
+      empty: () => [],
+      parse: (raw) => {
+        const jobs = (raw as Partial<JobsFile> | null)?.jobs;
+        return Array.isArray(jobs) ? jobs : null;
+      },
+    });
+    // jobs "running" de uma execução anterior do processo são marcados como falhos
+    for (const job of this.jobs) {
+      if (job.status === "running" || job.status === "queued") {
+        job.status = "failed";
+        job.error = "Servidor reiniciado durante o deploy.";
+        job.finishedAt = new Date().toISOString();
       }
-    } catch {
-      this.jobs = [];
     }
   }
 
@@ -720,6 +739,9 @@ export class DeployService {
         `A pasta precisa estar dentro da pasta de projetos (${this.projectsDir}).`,
       );
     }
+    if ((req.ingestMode === "upload" || req.ingestMode === "existing") && (await isPanelArea(this.projectsDir, source))) {
+      throw httpError(400, "source_reserved", PANEL_AREA_MESSAGE);
+    }
     if ((req.ingestMode === "upload" || req.ingestMode === "existing") && !existsSync(path.resolve(source))) {
       throw httpError(400, "source_not_found", `Caminho não encontrado: ${source}`);
     }
@@ -728,7 +750,20 @@ export class DeployService {
     if (!domain) throw httpError(400, "invalid_domain", "Informe o domínio desejado.");
 
     let slug = slugify(name);
-    while (this.projects.some((p) => p.slug === slug)) slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
+    while (this.projects.some((p) => p.slug === slug) || (await this.slugHasBackups(slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
+    // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
+    // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
+    // do projeto (nome igual ao da pasta é o caso comum).
+    const slugFolder = path.join(this.projectsDir, slug);
+    if (existsSync(slugFolder) && !(req.ingestMode !== "git" && (await sameFolder(slugFolder, source)))) {
+      throw httpError(
+        409,
+        "slug_folder_exists",
+        `Já existe uma pasta "${slug}" na pasta de projetos (${this.projectsDir}). Escolha outro nome para o projeto.`,
+      );
+    }
     if (this.domainInUse(domain, null)) {
       throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso por outro projeto.`);
     }
@@ -752,6 +787,8 @@ export class DeployService {
       lastDeployStatus: null,
       deployedBranch: null,
       deployedSource: null,
+      // o que o painel gera mora em <projetos>/.paas/<id>, longe das pastas do usuário
+      storageLayout: "reserved",
     };
     this.projects.push(project);
     await this.saveProjects();
@@ -807,6 +844,9 @@ export class DeployService {
           `A pasta precisa estar dentro da pasta de projetos (${this.projectsDir}).`,
         );
       }
+      if (project.ingestMode !== "git" && (await isPanelArea(this.projectsDir, source))) {
+        throw httpError(400, "source_reserved", PANEL_AREA_MESSAGE);
+      }
       changes.source = source;
     }
     if (req.branch !== undefined) {
@@ -858,12 +898,19 @@ export class DeployService {
     if (await this.credentials.remove(project.id)) {
       onLog("Credencial de leitura do repositório removida do cofre.\n");
     }
-    if (deleteSource && project.ingestMode !== "existing") {
-      await rm(projectWorkDir({ projectsDir: this.projectsDir }, project), {
-        recursive: true,
-        force: true,
-      });
-      onLog("Código-fonte removido.\n");
+    // Só se apaga o que o PAINEL criou (A5): numa pasta antiga compartilhada com
+    // arquivos do usuário, ficam os dele e o log diz quais. Os arquivos com
+    // segredos (paas.*) saem sempre, mesmo sem apagar o código.
+    const removal = await removeProjectWorkDir({ projectsDir: this.projectsDir }, project, this.projects, {
+      deleteSource: deleteSource && project.ingestMode !== "existing",
+    });
+    if (removal.folderRemoved && deleteSource) onLog("Código-fonte removido.\n");
+    else if (removal.removed.length > 0) onLog(`Removido da pasta do projeto: ${removal.removed.join(", ")}.\n`);
+    if (removal.kept.length > 0 && deleteSource) {
+      onLog(`Os arquivos que ficaram na pasta (não foram criados pelo painel): ${removal.kept.join(", ")}.\n`);
+    }
+    for (const s of removal.skipped) {
+      onLog(`NÃO removido: ${s}. Confira a pasta e apague à mão, se for o caso.\n`);
     }
     await this.saveProjects();
   }
@@ -976,6 +1023,20 @@ export class DeployService {
   }
 
   private async startDeployReserved(project: Project, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
+    // Projeto "existing"/"upload" de antes da área reservada: o que o painel gera
+    // (paas.*, site) sai da pasta do usuário e vai para .paas/<id>. Só move,
+    // nunca apaga; roda uma vez (depois o projeto já é "reserved").
+    let migrationNote = "";
+    const movedEntries = await migrateLegacyWorkDir({ projectsDir: this.projectsDir }, project);
+    if (movedEntries) {
+      await this.saveProjects();
+      migrationNote =
+        `Projeto migrado para a área do painel (${path.join(this.projectsDir, ".paas", project.id)}). ` +
+        (movedEntries.length > 0
+          ? `Movidos da pasta antiga: ${movedEntries.join(", ")}. `
+          : "Não havia arquivos do painel na pasta antiga. ") +
+        "Nenhum arquivo seu foi apagado.\n";
+    }
 
     // Re-roda a detecção se necessário (código mudou desde a última).
     if (!project.detection) {
@@ -1087,7 +1148,7 @@ export class DeployService {
         { name: "Proxy reverso (Caddy)", status: "running" },
         { name: "Health check", status: "running" },
       ].map((s, i) => ({ name: s.name, status: i === 0 ? "running" : ("skipped" as const) })),
-      log: "",
+      log: migrationNote,
       error: null,
     };
     // steps começam "skipped" (pendentes) e avançam conforme o log
@@ -1133,8 +1194,15 @@ export class DeployService {
         for (const step of job.steps) {
           if (step.status === "running") step.status = job.status === "success" ? "done" : "failed";
         }
-        await this.saveProjects();
-        await this.saveJobs();
+        // Gravar o estado pode falhar (disco cheio): nunca vira rejeição sem
+        // tratamento (derrubaria o processo) e não impede o aviso de fim de deploy.
+        for (const gravar of [() => this.saveProjects(), () => this.saveJobs()]) {
+          try {
+            await gravar();
+          } catch (err) {
+            console.warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
+          }
+        }
         try {
           this.hooks.onDeployFinished?.({
             projectId: project.id,
@@ -1515,6 +1583,29 @@ export class DeployService {
   }
 
   /**
+   * O slug já aparece em backups (pasta local, conferências `<slug>/arquivo` ou
+   * histórico de um projeto de mesmo nome)? Então é de um projeto apagado.
+   */
+  private async slugHasBackups(slug: string): Promise<boolean> {
+    if (existsSync(path.join(this.backupsDir, slug))) return true;
+    const dataDir = path.dirname(this.backupsDir);
+    try {
+      const cfg = JSON.parse(await readFile(path.join(dataDir, "backups.json"), "utf8")) as { checks?: Record<string, unknown> };
+      if (Object.keys(cfg.checks ?? {}).some((k) => k.startsWith(`${slug}/`))) return true;
+    } catch {
+      /* sem configuração de backups */
+    }
+    try {
+      const hist = JSON.parse(await readFile(path.join(dataDir, "backups-history.json"), "utf8")) as {
+        entries?: Array<{ target?: string; targetName?: string }>;
+      };
+      return (hist.entries ?? []).some((e) => e.target?.startsWith("project:") && typeof e.targetName === "string" && slugify(e.targetName) === slug);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * "Reiniciar com o fuso novo": recria os containers com a configuração
    * atual, sem baixar código nem refazer o build (o TZ só entra num container
    * novo; `docker restart` mantém o ambiente antigo). Vira um job, como o
@@ -1541,6 +1632,9 @@ export class DeployService {
       target: project.slug,
       detail: `Containers de "${project.name}" recriados com a configuração atual (fuso: ${zone ?? "padrão da imagem"}).`,
     });
+    // Projeto "existing"/"upload" antigo: os arquivos do painel saem da pasta do usuário antes de recriar.
+    const movedEntries = await migrateLegacyWorkDir({ projectsDir: this.projectsDir }, project);
+    if (movedEntries) await this.saveProjects();
     const now = new Date().toISOString();
     const job: DeployJob = {
       id: randomBytes(8).toString("hex"),
@@ -1551,7 +1645,9 @@ export class DeployService {
       startedAt: now,
       finishedAt: null,
       steps: [{ name: "Recriar os containers com a configuração atual", status: "running" }],
-      log: "=== Reinício com a configuração atual (sem baixar código nem refazer o build) ===\n",
+      log:
+        "=== Reinício com a configuração atual (sem baixar código nem refazer o build) ===\n" +
+        (movedEntries ? `Projeto migrado para a área do painel (${path.join(this.projectsDir, ".paas", project.id)}). Nenhum arquivo seu foi apagado.\n` : ""),
       error: null,
     };
     this.jobs.push(job);

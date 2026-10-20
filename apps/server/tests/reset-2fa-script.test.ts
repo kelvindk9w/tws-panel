@@ -5,7 +5,7 @@
  * duas etapas de todas as contas e não toca em mais nada.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -40,6 +40,24 @@ describe("scripts/reset-2fa.mjs", () => {
     expect(saved.users[0]!.passwordHash).toBe("$argon2id$hash");
     expect(saved.users[0]!.username).toBe("admin");
     expect((await stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it("grava de forma atômica: não deixa arquivo temporário e, se não consegue gravar, o users.json fica como estava", async () => {
+    const file = path.join(dir, "users.json");
+    const conteudo = JSON.stringify({ users: [{ id: "u1", username: "admin", twoFactor: { iv: "a" } }] });
+    await writeFile(file, conteudo, { mode: 0o600 });
+    // pasta sem permissão de criar arquivos: a gravação por temporário+rename falha ANTES de tocar no original
+    await chmod(dir, 0o500);
+    try {
+      if (process.getuid?.() !== 0) {
+        expect(() => execFileSync("node", [SCRIPT, file], { encoding: "utf8", stdio: "pipe" })).toThrow();
+        expect(await readFile(file, "utf8")).toBe(conteudo);
+      }
+    } finally {
+      await chmod(dir, 0o700);
+    }
+    execFileSync("node", [SCRIPT, file], { encoding: "utf8" });
+    expect((await readdir(dir)).sort()).toEqual(["users.json"]);
   });
 
   it("sem nenhuma conta com a verificação ativa: diz isso e não regrava o arquivo", async () => {

@@ -19,10 +19,9 @@
  * `expiresAt` por conta própria (ver isSessionExpired).
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { SESSION_TTL_MS } from "@paas/core";
-import { writeFileAtomic } from "./json-file.js";
+import { loadJson, loadOrCreateKey, writeFileAtomic } from "./json-file.js";
 
 export interface Session {
   id: string;
@@ -44,6 +43,7 @@ export class SessionStore {
   private sessions: Session[] = [];
   private loading: Promise<void> | null = null;
   private secret: Buffer | null = null;
+  private secretLoading: Promise<Buffer> | null = null;
   private writing: Promise<void> = Promise.resolve();
   private readonly revokedListeners = new Set<(ids: readonly string[]) => void>();
 
@@ -52,21 +52,18 @@ export class SessionStore {
     this.secretFile = path.join(dataDir, "session-secret");
   }
 
-  /** Carrega (ou gera no primeiro boot) o segredo de sessão. */
+  /**
+   * Carrega (ou gera no primeiro boot) o segredo de sessão. Erro de leitura
+   * que não seja "não existe" é lançado (chave nova derrubaria todas as
+   * sessões e, pior, esconderia o problema); conteúdo que não é um segredo
+   * hexa de 32 bytes é guardado à parte e substituído (json-file.ts).
+   */
   async init(): Promise<void> {
-    try {
-      const raw = (await readFile(this.secretFile, "utf8")).trim();
-      if (raw.length >= 32) {
-        this.secret = Buffer.from(raw, "hex");
-        return;
-      }
-    } catch {
-      // arquivo inexistente ou ilegível — gera um novo abaixo
-    }
-    const generated = randomBytes(32);
-    // atômica: uma queda no meio nunca deixa a chave pela metade (todas as sessões cairiam)
-    await writeFileAtomic(this.secretFile, generated.toString("hex") + "\n");
-    this.secret = generated;
+    if (this.secret) return;
+    this.secret = await (this.secretLoading ??= loadOrCreateKey(this.secretFile, 32, { log: (m) => console.warn(m) }).catch((err: unknown) => {
+      this.secretLoading = null;
+      throw err;
+    }));
   }
 
   /**
@@ -83,18 +80,22 @@ export class SessionStore {
 
   /** Carga única e compartilhada (chamadas concorrentes esperam a mesma leitura). */
   private ensureLoaded(): Promise<void> {
-    this.loading ??= this.load();
+    this.loading ??= this.load().catch((err: unknown) => {
+      this.loading = null;
+      throw err;
+    });
     return this.loading;
   }
 
   private async load(): Promise<void> {
     if (!this.secret) await this.init();
-    try {
-      const raw = JSON.parse(await readFile(this.file, "utf8")) as Partial<SessionsFile>;
-      this.sessions = Array.isArray(raw.sessions) ? raw.sessions : [];
-    } catch {
-      this.sessions = [];
-    }
+    this.sessions = await loadJson<Session[]>(this.file, {
+      empty: () => [],
+      parse: (raw) => {
+        const sessions = (raw as Partial<SessionsFile> | null)?.sessions;
+        return Array.isArray(sessions) ? sessions : null;
+      },
+    });
     // descarta sessões expiradas no boot
     const now = Date.now();
     await this.persist(() => {

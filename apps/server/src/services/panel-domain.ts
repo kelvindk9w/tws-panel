@@ -23,7 +23,8 @@
  * público da VPS (registro A, checklist do e-mail, endereço automático dos
  * projetos).
  */
-import { readFile, rename, writeFile, mkdir } from "node:fs/promises";
+import { rename, writeFile, mkdir } from "node:fs/promises";
+import { loadJson } from "./json-file.js";
 import { isIP } from "node:net";
 import path from "node:path";
 import type { CertificateItem, PanelDomainDnsCheck, PanelDomainStatus, PanelOpenedVia } from "@paas/core";
@@ -286,16 +287,16 @@ export class PanelDomainService {
   }
 
   private async read(): Promise<StoredPanelDomain> {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(await readFile(this.file, "utf8"));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        this.deps.log?.(`Domínio do painel: ${this.file} ilegível (${err instanceof Error ? err.message : String(err)}); usando o endereço pelo IP.`);
-      }
-      return { ...EMPTY };
-    }
-    const r = (raw ?? {}) as Partial<StoredPanelDomain>;
+    // Erro de leitura é lançado (o domínio configurado não é regravado como
+    // "nenhum"); arquivo com JSON inválido vai para .corrompido-<data> e o
+    // painel segue pelo endereço do IP.
+    const raw = await loadJson<unknown>(this.file, {
+      empty: () => null,
+      parse: (value) => value,
+      log: this.deps.log,
+    });
+    if (raw === null) return { ...EMPTY };
+    const r = raw as Partial<StoredPanelDomain>;
     const domain = typeof r.domain === "string" && normalizePanelDomainInput(r.domain, this.deps.ipAddress).ok ? r.domain : null;
     const active = domain !== null && r.active === true;
     return {

@@ -105,7 +105,8 @@ printf '%s\n' "$SENHA_LIDA" | docker run --rm -i --entrypoint sh \
     if [ -n "$4" ]; then 7zz x -y -bso0 -bsp0 -o"$1" "/entrada/$2"; else 7zz x -y -bso0 -bsp0 -o"$1" "/entrada/$2" </dev/null; fi
     chmod -R go-rwx "$1"
     rm -rf "$1/backups" "$1/setup-token" "$1/projects"
-    printf "{\"requestedAt\":\"%s\",\"fileName\":\"%s\",\"actor\":\"ssh\"}\n" "$3" "$2" > "$5"
+    nome_json="$(printf "%s" "$2" | sed -e "s/\\\\/\\\\\\\\/g" -e "s/\"/\\\\\"/g")"
+    printf "{\"requestedAt\":\"%s\",\"fileName\":\"%s\",\"actor\":\"ssh\"}\n" "$3" "$nome_json" > "$5"
   ' restaurar "$STAGE" "$ARCHIVE_NAME" "$NOW" "${SENHA_LIDA:+cifrado}" "$MARKER" || STATUS=$?
 SENHA_LIDA=""
 
