@@ -91,7 +91,7 @@ salvar**.
 > [!WARNING]
 > **Não clique em Fazer backup agora no painel novo antes do passo 5**, e não mude as agendas. O
 > backup automático do painel vem ligado de fábrica. Depois que a senha é definida (passo 4), a VPS
-> nova pode enviar um backup de um painel **vazio** para a pasta `_painel/`, e a retenção (5 cópias)
+> nova pode enviar um backup de um painel **vazio** para a pasta `_painel/`, e a retenção (5 cópias, por padrão)
 > apaga a mais antiga. A data mais recente da lista pode então ser a do painel vazio, e não a da VPS
 > antiga.
 
@@ -167,14 +167,45 @@ IP novo. Depois disso, use **Tentar emitir agora** nessa mesma página.
 
 Projetos criados por upload ou a partir de uma pasta do servidor não são restaurados pelos passos
 acima. O painel publica o projeto **antes** de devolver o código, e nesses projetos o código-fonte
-era um caminho da VPS antiga, então a publicação falha. O caminho alternativo, por projeto:
+era uma pasta da VPS antiga, então a publicação falha. O caminho alternativo, por projeto, com os
+projetos já cadastrados (passo 5) e antes de clicar em **Restaurar** no passo 7:
 
-1. Baixe do armazenamento o `.7z` mais recente do projeto (`TWS Panel Backups/<projeto>/`) e abra-o
-   com o 7-Zip, usando a senha dos backups.
-2. Tire dele o `codigo/codigo.tar` e extraia na pasta do projeto na VPS nova
-   (`/opt/tws-projects/<projeto>/`), de modo que o código fique em `src/`.
-3. Clique em **Deploy** no projeto para publicá-lo.
-4. Só então restaure os dados: aba **Backups** do projeto → **Restaurar**.
+1. Baixe do armazenamento (`TWS Panel Backups/<projeto>/`) o `.7z` do **último backup feito na VPS
+   antiga** (o mesmo momento do backup do painel do passo 5) e abra-o com o 7-Zip, usando a senha
+   dos backups. Tire dele o `codigo/codigo.tar` e leve-o para a VPS nova.
+2. Descubra a **pasta de origem** do projeto (`<ORIGEM>` abaixo) na aba de configuração do projeto:
+   a tela diz "Este projeto usa uma pasta do servidor (…)". Ela precisa ficar dentro da pasta de
+   projetos da VPS nova (`PAAS_PROJECTS_DIR`, padrão `/opt/tws-projects`), a única pasta do host que
+   o painel enxerga.
+3. Ponha o código em `<ORIGEM>`, conforme o jeito que o projeto foi criado:
+   - **Criado por upload** (o tar traz uma pasta chamada `src/`): extraia numa pasta temporária e
+     copie o **conteúdo** de `src/` para a origem:
+
+     ```bash
+     sudo mkdir -p <ORIGEM> /tmp/x
+     sudo tar -xf codigo.tar -C /tmp/x
+     sudo cp -a /tmp/x/src/. <ORIGEM>/
+     ```
+
+   - **Criado a partir de uma pasta do servidor** (o tar traz uma pasta com o nome da própria
+     pasta, por exemplo `meusite/`): extraia na pasta pai da origem:
+
+     ```bash
+     sudo tar -xf codigo.tar -C "$(dirname <ORIGEM>)"
+     ```
+4. Nos dois casos, entregue a pasta ao usuário do painel (ele roda como usuário 10001):
+
+   ```bash
+   sudo chown -R 10001:10001 <ORIGEM>
+   ```
+5. Clique em **Deploy** no projeto para publicá-lo.
+6. Só então restaure os dados: aba **Backups** do projeto → **Restaurar**. A restauração devolve o
+   código por cima da pasta mais uma vez.
+
+> [!NOTE]
+> Este caminho foi escrito pela leitura do código e não foi executado numa VPS real. Em especial,
+> não confirmei se o painel recusa uma pasta de origem fora da pasta de projetos; ele apenas não a
+> enxerga.
 
 ### 8. Restaure o e-mail por último
 

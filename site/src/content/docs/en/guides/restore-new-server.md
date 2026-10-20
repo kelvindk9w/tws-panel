@@ -92,7 +92,7 @@ Click **Testar e salvar** (Test and save).
 > **Do not click Fazer backup agora on the new panel before step 5**, and do not change the
 > schedules. The automatic backup of the panel is on by default. Once the password is set (step 4),
 > the new VPS can send a backup of an **empty** panel to the `_painel/` folder, and the retention
-> (5 copies) deletes the oldest one. The most recent date in the list may then be the empty panel,
+> (5 copies by default) deletes the oldest one. The most recent date in the list may then be the empty panel,
 > not the one from the old VPS.
 
 ### 4. Enter the backup password
@@ -167,15 +167,46 @@ after that.
 #### Projects that do not come from GitHub
 
 Projects created by upload or from a folder on the server cannot be restored by the steps above.
-The panel publishes the project **before** it puts the code back, and for these projects the source
-was a path on the old VPS, so the publication fails. The workaround, per project:
+The panel publishes the project **before** it puts the code back, and for these projects the
+source was a folder on the old VPS, so the publication fails. The workaround, per project, with the
+projects registered (step 5) and before you click **Restaurar** in step 7:
 
-1. Download the project's latest `.7z` from the storage (`TWS Panel Backups/<project>/`) and open it
-   with 7-Zip, using the backup password.
-2. Take `codigo/codigo.tar` out of it and extract it into the project's folder on the new VPS
-   (`/opt/tws-projects/<project>/`), so that the code ends up in `src/`.
-3. Click **Deploy** in the project to publish it.
-4. Only then, restore the data: **Backups** tab of the project → **Restaurar**.
+1. Download, from the storage (`TWS Panel Backups/<project>/`), the `.7z` of the **last backup made
+   on the old VPS** (the same moment as the panel backup from step 5) and open it with 7-Zip, using
+   the backup password. Take out `codigo/codigo.tar` and copy it to the new VPS.
+2. Find the project's **source folder** (`<ORIGIN>` below) in the project's configuration tab: the
+   screen says "Este projeto usa uma pasta do servidor (…)" (This project uses a folder on the
+   server). It must be inside the projects folder of the new VPS (`PAAS_PROJECTS_DIR`, default
+   `/opt/tws-projects`), the only host folder the panel can see.
+3. Put the code in `<ORIGIN>`, according to how the project was created:
+   - **Created by upload** (the tar holds a folder called `src/`): extract to a temporary folder and
+     copy the **contents** of `src/` to the origin:
+
+     ```bash
+     sudo mkdir -p <ORIGIN> /tmp/x
+     sudo tar -xf codigo.tar -C /tmp/x
+     sudo cp -a /tmp/x/src/. <ORIGIN>/
+     ```
+
+   - **Created from a folder on the server** (the tar holds a folder with the folder's own name,
+     for example `meusite/`): extract it into the parent of the origin:
+
+     ```bash
+     sudo tar -xf codigo.tar -C "$(dirname <ORIGIN>)"
+     ```
+4. In both cases, give the folder to the panel user (it runs as user 10001):
+
+   ```bash
+   sudo chown -R 10001:10001 <ORIGIN>
+   ```
+5. Click **Deploy** in the project to publish it.
+6. Only then restore the data: **Backups** tab of the project → **Restaurar**. The restore puts the
+   code back over the folder once more.
+
+> [!NOTE]
+> This workaround was written by reading the code and has not been run on a real VPS. In particular,
+> I did not confirm that the panel refuses a source folder outside the projects folder; it just
+> cannot see it.
 
 ### 8. Restore the email last
 
