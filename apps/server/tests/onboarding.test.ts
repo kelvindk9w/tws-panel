@@ -85,7 +85,9 @@ describe("proteções da VPS (hardening)", () => {
     expect(s.status).toBe("in_progress");
     expect(s.detail).toMatch(/6 de 8 fases/);
     expect(s.detail).toMatch(/nota do Lynis 70/);
-    expect(s.detail).toMatch(/Firewall \(UFW\)/);
+    expect(s.detail).not.toMatch(/Firewall/);
+    expect(s.missing).toMatch(/Firewall \(UFW\)/);
+    expect(s.missing).toMatch(/Proteções da VPS/);
   });
 
   it("nada aprovado e nada aplicado → pendente; nota interna aparece como tal", () => {
@@ -94,6 +96,8 @@ describe("proteções da VPS (hardening)", () => {
     expect(s.status).toBe("pending");
     expect(s.detail).toMatch(/0 de 8 fases/);
     expect(s.detail).toMatch(/nota interna 40/);
+    // não começou: sem pendência
+    expect(s.missing).toBeUndefined();
   });
 
   it("fase aplicada com sucesso conta como resolvida mesmo com a checagem ainda reprovada (caso Contabo)", () => {
@@ -132,24 +136,27 @@ describe("domínio do painel", () => {
     expect(s.status).toBe("pending");
     expect(s.detail).toContain(`https://${IP}`);
     expect(s.detail).toMatch(/IP da VPS no nome/);
+    expect(s.missing).toBeUndefined();
   });
 
   it("domínio cadastrado sem DNS conferido → em andamento, dizendo que falta o DNS", () => {
     const s = panelDomainState({ ...base, domain: D });
     expect(s.status).toBe("in_progress");
-    expect(s.detail).toMatch(/DNS/);
+    expect(s.detail).toContain(D);
+    expect(s.missing).toMatch(/DNS/);
+    expect(s.missing).toMatch(/Verificar DNS/);
   });
 
   it("DNS certo, certificado ainda não válido → em andamento, falta o certificado", () => {
     const s = panelDomainState({ ...base, domain: D, active: true });
     expect(s.status).toBe("in_progress");
-    expect(s.detail).toMatch(/certificado/);
+    expect(s.missing).toMatch(/certificado/);
   });
 
   it("certificado válido, mas aberto pelo IP → em andamento: abrir pelo endereço novo", () => {
     const s = panelDomainState({ ...base, domain: D, active: true, certificateValid: true });
     expect(s.status).toBe("in_progress");
-    expect(s.detail).toContain(`https://${D}`);
+    expect(s.missing).toContain(`https://${D}`);
   });
 
   it("aberto pelo domínio novo com certificado, IP ainda ativo → feito, com o aviso do IP", () => {
@@ -190,13 +197,14 @@ describe("e-mail do servidor", () => {
   });
 
   it("ligado sem domínio, parado, ou DNS ainda não conferido → em andamento, dizendo o que falta", () => {
-    expect(emailState({ installed: true, running: true, domains: [] }).detail).toMatch(/falta adicionar um domínio/);
+    expect(emailState({ installed: true, running: true, domains: [] }).missing).toMatch(/adicionar um domínio/);
     const parado = emailState({ installed: true, running: false, domains: [{ name: "envio.exemplo.com.br", dnsOk: true }] });
     expect(parado.status).toBe("in_progress");
     expect(parado.detail).toMatch(/parado/);
+    expect(parado.missing).toMatch(/Ligue o servidor/);
     const semDns = emailState({ installed: true, running: true, domains: [{ name: "envio.exemplo.com.br", dnsOk: false }] });
     expect(semDns.status).toBe("in_progress");
-    expect(semDns.detail).toMatch(/falta conferir o DNS/);
+    expect(semDns.missing).toMatch(/conferir o DNS de envio\.exemplo\.com\.br/);
     expect(emailState({ installed: false, running: false, domains: [{ name: "envio.exemplo.com.br", dnsOk: null }] }).status).toBe(
       "in_progress",
     );
@@ -221,7 +229,7 @@ describe("notificações", () => {
     const s = notificationsState({ channels: [ch("telegram", true, false), ch("email", false, false)] });
     expect(s.status).toBe("in_progress");
     expect(s.detail).toMatch(/Telegram/);
-    expect(s.detail).toMatch(/Enviar teste/);
+    expect(s.missing).toMatch(/Enviar teste/);
   });
 
   it("pelo menos um canal conectado e testado: feito, citando os canais", () => {
@@ -246,8 +254,28 @@ describe("backups fora da VPS", () => {
   it("destino conectado sem backup externo conferido: em andamento", () => {
     const s = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null });
     expect(s.status).toBe("in_progress");
-    expect(s.detail).toMatch(/Fazer backup agora/);
-    expect(backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: "sem espaço" }).detail).toMatch(/sem espaço/);
+    expect(s.missing).toMatch(/Fazer backup agora/);
+    expect(s.missingCode).toBeUndefined();
+    expect(backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: "sem espaço" }).missing).toMatch(/sem espaço/);
+  });
+
+  it("destino com backups de OUTRO painel: não convida a fazer backup, manda restaurar primeiro", () => {
+    const s = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null, foreignBackupsHeld: true });
+    expect(s.status).toBe("in_progress");
+    expect(s.missingCode).toBe("backups-restore-first");
+    expect(s.missing).toMatch(/Restaure primeiro o painel antigo/);
+    expect(s.missing).not.toMatch(/Fazer backup agora/);
+    // não deu para conferir o armazenamento: também NÃO convida a fazer backup
+    const u = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null, foreignBackupsHeld: "unknown" });
+    expect(u.status).toBe("in_progress");
+    expect(u.missingCode).toBe("backups-storage-unknown");
+    expect(u.missing).toMatch(/Não foi possível conferir o armazenamento agora/);
+    expect(u.missing).toMatch(/restaure o painel antigo antes do primeiro backup/);
+    expect(u.missing).not.toMatch(/Fazer backup agora/);
+    // com backup externo já conferido, a regra não vale mais
+    expect(backupsState({ destinationConnected: true, verifiedRemote: 1, lastFailure: null, foreignBackupsHeld: true }).status).toBe("done");
+    // sem destino, a pausa é irrelevante
+    expect(backupsState({ destinationConnected: false, verifiedRemote: 0, lastFailure: null, foreignBackupsHeld: true }).missing).toBeUndefined();
   });
 
   it("com um backup externo conferido: feito", () => {
@@ -280,6 +308,42 @@ describe("buildOnboardingResponse", () => {
     expect(res.started).toBe(false);
     expect(res.complete).toBe(false);
     expect(res.projectsDir).toBe("/opt/tws-projects");
+  });
+
+  it("pendência: só em passo 'em andamento'; some em feito, pendente, 'Não vou usar' e quando a conferência falha", async () => {
+    const withMissing = (status: Awaited<ReturnType<OnboardingChecks["email"]>>["status"]) => async () => ({
+      status,
+      detail: status,
+      missing: `falta algo (${status})`,
+      missingCode: "backups-restore-first" as const,
+    });
+    const res = await buildOnboardingResponse(
+      {
+        ...checks,
+        hardening: withMissing("in_progress"),
+        "two-factor": withMissing("pending"),
+        email: withMissing("in_progress"),
+        notifications: withMissing("done"),
+        backups: async () => {
+          throw new Error("x");
+        },
+      },
+      { userId: "u1" },
+      { startedAt: "2026-10-01T10:00:00Z", skipped: ["email"] },
+      "/opt/tws-projects",
+    );
+    const get = (id: string) => res.steps.find((s) => s.id === id)!;
+    expect(get("hardening").missing).toBe("falta algo (in_progress)");
+    expect(get("hardening").missingCode).toBe("backups-restore-first");
+    expect(get("two-factor").missing).toBeNull();
+    expect(get("email").status).toBe("skipped");
+    expect(get("email").missing).toBeNull();
+    expect(get("notifications").missing).toBeNull();
+    expect(get("backups").status).toBe("unknown");
+    expect(get("backups").missing).toBeNull();
+    // passo sem pendência: o campo vai sempre, nulo
+    expect(get("panel-domain").missing).toBeNull();
+    expect(get("panel-domain").missingCode).toBeNull();
   });
 
   it("'Não vou usar' vale só para passo opcional que não está feito", async () => {
@@ -397,6 +461,19 @@ describe("createOnboardingChecks — fontes reais", () => {
       backupFacts: async () => ({ destinationConnected: true, verifiedRemote: 2, lastFailure: null }),
     });
     expect((await checks.backups({ userId: user.id })).status).toBe("done");
+  });
+
+  it("backups: backups de outro painel no armazenamento viram a pendência 'restaure primeiro'", async () => {
+    const user = await users.create("admin", "hash");
+    const checks = createOnboardingChecks({
+      config: { dataDir: dir, panelDomain: null },
+      userStore: users,
+      emailFacts: async () => ({ installed: false, running: false, domains: [] }),
+      backupFacts: async () => ({ destinationConnected: true, verifiedRemote: 0, lastFailure: null, foreignBackupsHeld: true }),
+    });
+    const s = await checks.backups({ userId: user.id });
+    expect(s.status).toBe("in_progress");
+    expect(s.missingCode).toBe("backups-restore-first");
   });
 
   it("notificações: usa a fonte do serviço de notificações", async () => {

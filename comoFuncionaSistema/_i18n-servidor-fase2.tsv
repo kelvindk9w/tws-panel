@@ -214,33 +214,43 @@ code	status	rota	dinamica	mensagem	locais
 (sem code)	-	(serviço notification-sources.ts: deployNotification) [body]	nao	O último deploy terminou bem depois de uma falha.	services/notification-sources.ts:72
 (sem code)	-	(serviço notification-sources.ts: panelStartedNotification) [title]	nao	O painel foi iniciado	services/notification-sources.ts:84
 (sem code)	-	(serviço notification-sources.ts: panelStartedNotification) [body]	sim	Ligou às ${when} (horário de Brasília), depois de uma atualização ou de a VPS reiniciar.	services/notification-sources.ts:85
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Ativa: entrar no painel pede também o código do celular.	services/onboarding.ts:105
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Desligada: o painel está na internet e protegido só pela senha.	services/onboarding.ts:106
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Acesso só por túnel SSH: o painel não tem endereço na internet. Para usar um domínio, veja Configurações → Domínio do painel.	services/onboarding.ts:126
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	O painel abre em https://${ip}.	services/onboarding.ts:130
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Hoje o painel abre em https://${ip} — o endereço atual tem o IP da VPS no nome.	services/onboarding.ts:134
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	${d} cadastrado; falta o DNS apontar para a VPS (registro A) e clicar em "Verificar DNS".	services/onboarding.ts:137
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	DNS de ${d} certo; falta o certificado HTTPS ficar válido (Configurações → Domínio do painel).	services/onboarding.ts:140
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	O painel abre em https://${d}; o acesso pelo IP está desativado.	services/onboarding.ts:143
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Certificado pronto: abra o painel por https://${d} e entre de novo.	services/onboarding.ts:146
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	O painel abre em https://${d} · acesso pelo IP ainda ativo (dá para desativar em Configurações → Domínio do painel).	services/onboarding.ts:150
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Servidor de e-mail não iniciado e nenhum domínio de e-mail cadastrado.	services/onboarding.ts:189
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Domínio ${names} cadastrado, mas o servidor de e-mail não foi iniciado.	services/onboarding.ts:192
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Não foi possível conferir se o servidor de e-mail está ligado.	services/onboarding.ts:195
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	O servidor de e-mail está parado.	services/onboarding.ts:198
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Servidor ligado; falta adicionar um domínio de e-mail.	services/onboarding.ts:201
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Servidor ligado; falta conferir o DNS de ${semDns.map((d) => d.name).join(", ")}.	services/onboarding.ts:207
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Servidor ligado · ${names}.	services/onboarding.ts:210
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Hoje os alertas aparecem só dentro do painel: com ele fechado, você não fica sabendo.	services/onboarding.ts:229
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	${connected.map((c) => label(c.id)).join(" e ")} conectado; falta clicar em "Enviar teste" e conferir se a mensagem chegou.	services/onboarding.ts:235
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Avisos chegando por ${names}${note}.	services/onboarding.ts:241
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Hoje os backups ficam só na VPS: se ela for perdida, eles vão junto.	services/onboarding.ts:266
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Armazenamento conectado; falta um backup externo conferido (clique em "Fazer backup agora").${why}	services/onboarding.ts:273
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Backups conferidos fora da VPS (${n} ${n === 1 ? "item" : "itens"}).	services/onboarding.ts:277
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	Não foi possível conferir agora. Tente de novo em instantes.	services/onboarding.ts:335
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	Todas as ${total} fases resolvidas · nota ${tipo} ${hardeningIndex}.	services/onboarding.ts:55-56,89
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	nao	O painel ainda não conferiu a VPS. A varredura mostra o que falta proteger.	services/onboarding.ts:75
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail do passo]	sim	${resolved} de ${total} fases resolvidas · falta: ${títulos}.	services/onboarding.ts:92-96
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Ativa: entrar no painel pede também o código do celular.	services/onboarding.ts:112
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Desligada: o painel está na internet e protegido só pela senha.	services/onboarding.ts:113
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Acesso só por túnel SSH: o painel não tem endereço na internet. Para usar um domínio, veja Configurações → Domínio do painel.	services/onboarding.ts:133
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	O painel abre em https://${ip}.	services/onboarding.ts:137
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Hoje o painel abre em https://${ip} — o endereço atual tem o IP da VPS no nome.	services/onboarding.ts:141
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	${d} cadastrado.	services/onboarding.ts:146
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Falta o DNS de ${d} apontar para a VPS (registro A). Crie o registro no provedor do domínio e clique em "Verificar DNS".	services/onboarding.ts:147
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	DNS de ${d} certo.	services/onboarding.ts:153
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Falta o certificado HTTPS ficar válido. Acompanhe em Configurações → Domínio do painel.	services/onboarding.ts:154
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	O painel abre em https://${d}; o acesso pelo IP está desativado.	services/onboarding.ts:158
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Certificado de ${d} pronto.	services/onboarding.ts:163
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Abra o painel por https://${d} e entre de novo.	services/onboarding.ts:164
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	O painel abre em https://${d} · acesso pelo IP ainda ativo (dá para desativar em Configurações → Domínio do painel).	services/onboarding.ts:169
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Servidor de e-mail não iniciado e nenhum domínio de e-mail cadastrado.	services/onboarding.ts:208
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Domínio ${names} cadastrado.	services/onboarding.ts:146
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	O servidor de e-mail não foi iniciado. Inicie-o na tela de E-mail.	services/onboarding.ts:214
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Não foi possível conferir se o servidor de e-mail está ligado.	services/onboarding.ts:218
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	O servidor de e-mail está parado.	services/onboarding.ts:223
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Ligue o servidor de e-mail na tela de E-mail.	services/onboarding.ts:224
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Servidor de e-mail ligado.	services/onboarding.ts:230
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Falta adicionar um domínio de e-mail na tela de E-mail.	services/onboarding.ts:231
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Falta conferir o DNS de ${semDns.map((d) => d.name).join(", ")}. Crie os registros no provedor do domínio e clique em "Verificar DNS".	services/onboarding.ts:239
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Servidor ligado · ${names}.	services/onboarding.ts:242
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Hoje os alertas aparecem só dentro do painel: com ele fechado, você não fica sabendo.	services/onboarding.ts:261
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	${connected.map((c) => label(c.id)).join(" e ")} conectado.	services/onboarding.ts:267
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Falta clicar em "Enviar teste" e conferir se a mensagem chegou.	services/onboarding.ts:268
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Avisos chegando por ${names}${note}.	services/onboarding.ts:274
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Hoje os backups ficam só na VPS: se ela for perdida, eles vão junto.	services/onboarding.ts:304
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Armazenamento conectado, ainda sem backup externo conferido.	services/onboarding.ts:308
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup, para não misturar com as cópias do painel anterior. [o web mostra o texto traduzido e o link do guia: missingCode backups-restore-first]	services/onboarding.ts:323
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo missing do passo; missingCode backups-storage-unknown, o web mostra o texto traduzido]	nao	Não foi possível conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do primeiro backup.	services/onboarding.ts:314
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Falta um backup externo conferido. Em Configurações → Backups, clique em "Fazer backup agora".${why}	services/onboarding.ts:331
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Backups conferidos fora da VPS (${n} ${n === 1 ? "item" : "itens"}).	services/onboarding.ts:335
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Não foi possível conferir agora. Tente de novo em instantes.	services/onboarding.ts:393
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	${resolved} de ${total} fases resolvidas · nota ${tipo} ${hardeningIndex}. [detail]	services/onboarding.ts:97
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	O painel ainda não conferiu a VPS. A varredura mostra o que falta proteger.	services/onboarding.ts:81
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Falta aplicar: ${títulos}. Abra Proteções da VPS e aplique as fases que faltam.	services/onboarding.ts:102
 (sem code)	200	PUT /api/settings/panel-domain (validação do domínio) [campo message]	nao	Informe o domínio do painel (ex.: painel.exemplo.com.br).	services/panel-domain.ts:106
 (sem code)	200	PUT /api/settings/panel-domain (validação do domínio) [campo message]	nao	Informe um nome de domínio, não um IP: o objetivo é justamente tirar o IP do endereço.	services/panel-domain.ts:108
 (sem code)	200	PUT /api/settings/panel-domain (validação do domínio) [campo message]	sim	"${raw.trim()}" é um domínio inválido. Use só letras, números, hífen e ponto.	services/panel-domain.ts:111, services/panel-domain.ts:123

@@ -13,6 +13,8 @@ import {
   isOnboardingStepResolved,
   isOnboardingWaitingOnSoon,
   nextOnboardingStep,
+  onboardingAttentionSteps,
+  onboardingStepNeedsAttention,
   soonOnboardingSteps,
   type OnboardingStep,
   type OnboardingStepStatus,
@@ -131,5 +133,28 @@ describe("roteiro de primeiros passos", () => {
     expect(isOnboardingFirstVisit({ started: false, steps: [step("hardening", "done"), step("two-factor", "done")] })).toBe(false);
     expect(isOnboardingFirstVisit({ started: false, steps: [step("two-factor", "pending"), step("email", "skipped")] })).toBe(false);
     expect(isOnboardingFirstVisit({ started: false, steps: [step("two-factor", "pending"), step("email", "in_progress")] })).toBe(false);
+  });
+
+  it("pendência: só passo 'em andamento' com o texto do que falta pede atenção", () => {
+    const withMissing = (id: OnboardingStep["id"], status: OnboardingStepStatus, missing: string | null | undefined) => ({
+      ...step(id, status),
+      missing,
+    });
+    expect(onboardingStepNeedsAttention(withMissing("backups", "in_progress", "Falta um backup."))).toBe(true);
+    expect(onboardingStepNeedsAttention(withMissing("backups", "in_progress", "  "))).toBe(false);
+    expect(onboardingStepNeedsAttention(withMissing("backups", "in_progress", null))).toBe(false);
+    // servidor antigo, sem o campo
+    expect(onboardingStepNeedsAttention(step("backups", "in_progress"))).toBe(false);
+    for (const status of ["pending", "done", "skipped", "soon", "unknown"] as const) {
+      expect(onboardingStepNeedsAttention(withMissing("email", status, "texto"))).toBe(false);
+    }
+    const all = [
+      withMissing("hardening", "in_progress", "a"),
+      withMissing("two-factor", "pending", "b"),
+      withMissing("email", "in_progress", "c"),
+      withMissing("backups", "done", "d"),
+    ];
+    expect(onboardingAttentionSteps(all).map((s) => s.id)).toEqual(["hardening", "email"]);
+    expect(onboardingAttentionSteps([])).toEqual([]);
   });
 });

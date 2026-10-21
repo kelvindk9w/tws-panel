@@ -30,6 +30,11 @@ export function helpPageUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/help/`;
 }
 
+/** Guia de restauração em outro servidor, no idioma da interface. */
+export function restoreGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/guides/restore-new-server/`;
+}
+
 /** Perguntas e ideias (GitHub Discussions). */
 export function discussionsUrl(): string {
   return `${REPO_URL}/discussions`;

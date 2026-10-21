@@ -344,6 +344,145 @@ describe("situação", () => {
     await backup();
     expect(await service.facts()).toMatchObject({ destinationConnected: true, verifiedRemote: 1 });
   });
+
+  describe("o roteiro vê backups de outro painel no armazenamento (só leitura)", () => {
+    const OTHER = `${BACKUP_ROOT_FOLDER}/_painel/2026-10-13_03-00.7z`;
+
+    it("painel novo, armazenamento conectado com backups do painel de outro servidor: foreignBackupsHeld", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+      expect(await service.facts()).toMatchObject({ destinationConnected: true, verifiedRemote: 0, foreignBackupsHeld: true });
+      // ler não muda nada: nenhuma pausa gravada, nenhum aviso
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason).toBeNull();
+    });
+
+    it("sem backup do painel no armazenamento, com projeto, sem destino ou com backup já conferido: sem o campo", async () => {
+      projects = [];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      await connect();
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      storage.objects.set(OTHER, Buffer.from("x"));
+      projects = [project({ id: "p1" })];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+    });
+
+    it("listagem falha: estado explícito 'unknown' (nunca some), sem gravar nada, e a próxima consulta tenta de novo", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("x"));
+      const list = storage.list.bind(storage);
+      let calls = 0;
+      storage.list = async (...args: Parameters<typeof list>) => {
+        calls++;
+        throw new Error("sem rede");
+      };
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      // nenhuma falha contada para o aviso do agendador, nenhuma pausa gravada
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason).toBeNull();
+      // 'unknown' não fica em cache: conferir de novo consulta o armazenamento outra vez
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      expect(calls).toBe(2);
+      storage.list = list;
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+    });
+
+    it("armazenamento que não responde: a consulta estoura o prazo curto e vira 'unknown' em vez de travar o roteiro", async () => {
+      projects = [];
+      service = build({ foreignCheckTimeoutMs: 30 });
+      await connect();
+      storage.list = () => new Promise(() => undefined);
+      const t0 = Date.now();
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      expect(Date.now() - t0).toBeLessThan(2000);
+    });
+
+    it("bucket vazio, depois as cópias do painel antigo entram no MESMO bucket: 'Conferir de novo' já vê (o 'livre' não fica em cache)", async () => {
+      projects = [];
+      await connect();
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      storage.objects.set(OTHER, Buffer.from("copiado à mão"));
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+    });
+
+    it("só o 'há cópias alheias' (lado seguro) fica em cache; o 'livre' consulta sempre", async () => {
+      projects = [];
+      await connect();
+      const list = storage.list.bind(storage);
+      let calls = 0;
+      storage.list = async (...args: Parameters<typeof list>) => {
+        calls++;
+        return list(...args);
+      };
+      await service.facts();
+      await service.facts();
+      expect(calls).toBe(2);
+      storage.objects.set(OTHER, Buffer.from("x"));
+      await service.facts();
+      await service.facts();
+      expect(calls).toBe(3);
+    });
+
+    it("consultas simultâneas dividem uma só ida ao armazenamento; com a consulta travada, não abre outra", async () => {
+      projects = [];
+      service = build({ foreignCheckTimeoutMs: 30 });
+      await connect();
+      let calls = 0;
+      let release!: () => void;
+      let hang = true;
+      storage.list = () => {
+        calls++;
+        if (!hang) return Promise.resolve([]);
+        return new Promise((resolve) => {
+          release = () => resolve([]);
+        });
+      };
+      const all = await Promise.all([service.facts(), service.facts(), service.facts()]);
+      expect(all.every((f) => f.foreignBackupsHeld === "unknown")).toBe(true);
+      expect(calls).toBe(1);
+      // ainda travada: as recargas seguintes não empilham pedidos
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      expect(calls).toBe(1);
+      hang = false;
+      release();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      expect(calls).toBe(2);
+    });
+
+    it("resultado em cache por ~60 s; muda o armazenamento, o projeto ou a hora: consulta de novo", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("x"));
+      const list = storage.list.bind(storage);
+      let calls = 0;
+      storage.list = async (...args: Parameters<typeof list>) => {
+        calls++;
+        return list(...args);
+      };
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      expect(calls).toBe(1);
+      // passou de 60 s
+      now += 61_000;
+      await service.facts();
+      expect(calls).toBe(2);
+      // projeto cadastrado: o resultado muda sem esperar o cache
+      projects = [project({ id: "p1" })];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      expect(calls).toBe(2); // com projeto, a regra nem consulta o armazenamento
+      projects = [];
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      const before = calls;
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      expect(calls).toBe(before); // de novo em cache
+      // armazenamento reconectado (outro connectedAt): invalida
+      now += 1000;
+      await connect();
+      await service.facts();
+      expect(calls).toBe(before + 1);
+    });
+  });
 });
 
 describe("destino externo", () => {
