@@ -12,7 +12,7 @@ export default {
   "nav.settings": "Settings",
   "nav.setup": "Setup",
   "nav.menu": "Menu",
-  "nav.more": "More",
+  "nav.settingsMenu": "Settings submenu",
   "nav.label": "Main",
   "footer.poweredBy": "Powered by",
   "footer.license": "open source (MIT)",

@@ -11,24 +11,24 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/i18n";
 import type { Key } from "@/i18n";
 
-type NavItem = { to: string; label: Key; end?: boolean; more?: boolean };
+type NavItem = { to: string; label: Key; end?: boolean; sub?: boolean; settings?: boolean };
 
 /**
- * Todas as rotas do menu, na ordem. No topo, os marcados com `more` ficam
- * atrás do item "Mais" (uso menos diário); na lateral e no menu móvel há
- * espaço, então todos aparecem em lista.
+ * Todas as rotas do menu, na ordem. No topo, os marcados com `sub` ficam
+ * no submenu de "Configurações" (o item `settings`, que vira link + seta);
+ * na lateral e no menu móvel há espaço, então todos aparecem em lista.
  */
 const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "shell.nav.dashboard", end: true },
   { to: "/projects/new", label: "shell.nav.newProject" },
   { to: "/mail", label: "shell.nav.mail" },
-  { to: "/mail/envios", label: "shell.nav.sending", more: true },
-  { to: "/certificates", label: "shell.nav.certificates", more: true },
+  { to: "/mail/envios", label: "shell.nav.sending", sub: true },
+  { to: "/certificates", label: "shell.nav.certificates", sub: true },
   { to: "/security", label: "shell.nav.security" },
   { to: "/alerts", label: "shell.nav.alerts" },
-  { to: "/audit", label: "shell.nav.audit", more: true },
-  { to: "/settings", label: "shell.nav.settings", more: true },
-  { to: "/setup", label: "shell.nav.setup", more: true },
+  { to: "/audit", label: "shell.nav.audit", sub: true },
+  { to: "/settings", label: "shell.nav.settings", settings: true },
+  { to: "/setup", label: "shell.nav.setup", sub: true },
 ];
 
 const linkClass = "whitespace-nowrap rounded-md px-3 py-1.5 transition-colors";
@@ -102,11 +102,12 @@ function Brand() {
 }
 
 /**
- * Item "Mais" do menu do topo: botão que abre uma lista com os itens menos
- * usados. Fecha com Esc (devolvendo o foco ao botão), clique fora, troca de
+ * Item "Configurações" do menu do topo: um link para /settings/profile e,
+ * ao lado, uma seta (botão separado) que abre o submenu com os itens menos
+ * usados. Fecha com Esc (devolvendo o foco à seta), clique fora, troca de
  * rota ou quando o foco sai do grupo; seta para baixo abre e percorre a lista.
  */
-function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean }) {
+function SettingsMenu({ item, items, enviosOpen }: { item: NavItem; items: NavItem[]; enviosOpen: boolean }) {
   const { t } = useI18n();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
@@ -115,7 +116,8 @@ function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean
   const containerRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const active = items.some((item) => isUnder(item.to, pathname));
+  const settingsOpen = isUnder(item.to, pathname);
+  const active = settingsOpen || items.some((sub) => isUnder(sub.to, pathname));
 
   useEffect(() => setOpen(false), [pathname]);
 
@@ -172,26 +174,34 @@ function MoreMenu({ items, enviosOpen }: { items: NavItem[]; enviosOpen: boolean
         if (to && containerRef.current && !containerRef.current.contains(to)) setOpen(false);
       }}
     >
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-expanded={open}
-        aria-controls="nav-more-panel"
-        data-active={active ? "true" : undefined}
-        onClick={() => setOpen((v) => !v)}
-        className={cn(linkClass, "flex items-center gap-1", active ? linkActive : linkIdle)}
-      >
-        {t("shell.nav.more")}
-        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden />
-      </button>
+      <div className="flex items-center">
+        <NavLink
+          to="/settings/profile"
+          className={cn(linkClass, "rounded-r-none pr-2", settingsOpen ? linkActive : linkIdle)}
+        >
+          {t(item.label)}
+        </NavLink>
+        <button
+          ref={buttonRef}
+          type="button"
+          aria-label={t("shell.nav.settingsMenu")}
+          aria-expanded={open}
+          aria-controls="nav-settings-panel"
+          data-active={active ? "true" : undefined}
+          onClick={() => setOpen((v) => !v)}
+          className={cn(linkClass, "rounded-l-none px-1.5", active ? linkActive : linkIdle)}
+        >
+          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden />
+        </button>
+      </div>
       {open && (
         <div
-          id="nav-more-panel"
+          id="nav-settings-panel"
           ref={panelRef}
           className="absolute left-0 top-full z-50 mt-1 flex w-56 flex-col gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-lg"
         >
-          {items.map((item) => (
-            <NavEntry key={item.to} item={item} enviosOpen={enviosOpen} onNavigate={() => setOpen(false)} />
+          {items.map((sub) => (
+            <NavEntry key={sub.to} item={sub} enviosOpen={enviosOpen} onNavigate={() => setOpen(false)} />
           ))}
         </div>
       )}
@@ -217,21 +227,22 @@ function NavEntry({ item, enviosOpen, onNavigate }: { item: NavItem; enviosOpen:
 }
 
 /**
- * Itens do menu. Em linha (topo): os de uso diário à vista e o resto em
- * "Mais". Empilhados (lateral e móvel): todos, sem agrupar.
+ * Itens do menu. Em linha (topo): os de uso diário à vista e o resto no
+ * submenu de "Configurações". Empilhados (lateral e móvel): todos, sem agrupar.
  */
 function NavItems({ vertical }: { vertical: boolean }) {
   const { t } = useI18n();
   // /mail/envios fica dentro de /mail: sem isto, "E-mail" ficaria marcado junto.
   const { pathname } = useLocation();
   const enviosOpen = isUnder("/mail/envios", pathname);
-  const shown = vertical ? NAV_ITEMS : NAV_ITEMS.filter((item) => !item.more);
+  const shown = vertical ? NAV_ITEMS : NAV_ITEMS.filter((item) => !item.sub && !item.settings);
+  const settings = NAV_ITEMS.find((item) => item.settings)!;
   return (
     <nav aria-label={t("shell.nav.label")} className={cn("flex gap-1 text-sm", vertical ? "flex-col" : "items-center")}>
       {shown.map((item) => (
         <NavEntry key={item.to} item={item} enviosOpen={enviosOpen} />
       ))}
-      {!vertical && <MoreMenu items={NAV_ITEMS.filter((item) => item.more)} enviosOpen={enviosOpen} />}
+      {!vertical && <SettingsMenu item={settings} items={NAV_ITEMS.filter((item) => item.sub)} enviosOpen={enviosOpen} />}
     </nav>
   );
 }

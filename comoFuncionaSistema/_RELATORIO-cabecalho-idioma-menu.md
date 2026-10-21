@@ -41,6 +41,23 @@
 - "Mais": seta para cima parte do último item (aberto ou fechado), Home/End, e clicar na rota já aberta fecha o painel.
 - Cobertura final (web): 981 testes, 91,98% instruções / 86,37% ramos; Layout.tsx entrou na cobertura (95,9% / 93,9%).
 
+## 2026-10-21: "Mais" vira "Configurações" com submenu
+- No topo, o item "Mais" saiu. Em seu lugar há "Configurações": o rótulo é um link para
+  /settings/profile e, colado a ele, uma seta (botão separado, nome acessível "Submenu de
+  Configurações" / "Settings submenu") abre e fecha o submenu com Envios, Certificados,
+  Auditoria e Setup. Configurações não se repete dentro do submenu.
+- O submenu mantém tudo que o "Mais" tinha: aria-expanded, Enter/Espaço, setas, Home/End, Esc
+  devolvendo o foco à seta, clique fora, troca de rota e saída do foco. A seta fica destacada
+  quando uma rota filha está aberta (Envios, Certificados, Auditoria, Setup e qualquer /settings/*);
+  o link também fica destacado em /settings/*. Só um menu aberto por vez (usuário, ajuda, idioma, submenu).
+- Lateral e menu móvel seguem listando os 10 itens, sem submenu.
+- Chave `nav.more` removida (pt-BR e en); nova `nav.settingsMenu`. Glossário atualizado.
+- Documentação do site (guia completo, pt-br e en) passou a citar "seta ao lado de Configurações".
+- Testes: header-language-menu, layout e help-menu atualizados e ampliados (vistos falhar antes);
+  asserções de comportamento mantidas.
+- Medição no Chromium (Vite + API simulada, nome longo e badge 99+): sem rolagem horizontal a
+  360/390/768/1023/1024/1440 px, em pt-BR e en; submenu aberto dentro da tela em 1024 e 1440.
+
 ## Não testado
 - Navegadores além do Chromium; leitor de tela real; telas entre 768 e 1023px só por regra de CSS.
 - Idiomas além de pt-BR/en.
