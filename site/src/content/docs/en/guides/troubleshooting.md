@@ -126,13 +126,25 @@ under the apps domain gets a new suffix on every creation.
    wizard, the project is created with a provisional address (`name-xxxxx.localhost`, unique, no IP and no public certificate) and only switches to the address under the base
    when you click **Create project**.
 
-### `.localhost` domain does not open
+### Project with a provisional address (`name-xxxxx.localhost`)
 
-**Symptoms:** `meuapp.localhost` does not resolve in the browser.
+**Symptoms:** the project shows an amber "Provisional address" notice and the `name-xxxxx.localhost` address does not open.
+
+**Cause:** the wizard creates the project with this provisional address and only replaces it when you click
+**Create project**. If you closed the wizard before that, the project kept it. `.localhost` always points to the
+computer of whoever is browsing, not to the VPS, so it does not work on a public panel.
+
+**Solution:** open the project, go to **Domains** (the notice has a shortcut) and choose the final address:
+the automatic one under the apps domain, or your own domain. Do not edit `/etc/hosts`: it will not make the
+VPS site appear.
+
+### `.localhost` domain does not open (panel on your machine)
+
+**Symptoms:** `meuapp.localhost` does not resolve in the browser, with the panel running on your own computer.
 
 **Solution:** `.localhost` depends on the operating system resolving to 127.0.0.1 — it works
 natively on modern Linux/macOS and in Chrome; if it fails, add this to `/etc/hosts`:
-`127.0.0.1 meuapp.localhost`. In dev, remember that `.localhost` is served over **plain HTTP**.
+`127.0.0.1 meuapp.localhost`. This applies only to a local panel. In dev, remember that `.localhost` is served over **plain HTTP**.
 
 ---
 

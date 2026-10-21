@@ -91,7 +91,10 @@ criado e depois abandonado no assistente não gasta certificado: o projeto nasce
 (`<projeto>-<sufixo>.localhost`, conferido como livre contra projetos, apelidos, painel e e-mail; o proxy o serve em HTTP
 puro, sem certificado público e sem IP). Só ganha o endereço sob a base ao clicar em "Criar projeto", se a pessoa
 escolher o automático; antes disso o servidor da sugestão é consultado de novo e, se a base mudou ou saiu, nada é
-gravado sob ela (aviso e novo endereço). Vale também para painel sem sslip.io (túnel SSH), sem exceção. Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
+gravado sob ela (aviso e novo endereço; a base guardada é comparada com a atual, então trocar `apps.example.com`
+por `example.com` também é pego). Um projeto que ficou com o provisório num painel público não abre no computador de
+quem acessa: a Visão geral e a lista de projetos mostram um aviso âmbar com atalho para Domínios e não linkam o
+endereço (helper `isProvisionalDomain`/`showsProvisionalNotice` em `packages/core`, com teste). Vale também para painel sem sslip.io (túnel SSH), sem exceção. Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
 visíveis; o sufixo evita colisão, não esconde o endereço.
 
 ## Documentação

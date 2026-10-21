@@ -94,6 +94,8 @@ export default {
   "overview.domains.title": "Domains · automatic HTTPS",
   "overview.domains.primary": "primary",
   "overview.domains.manage": "Manage domains",
+  "provisional.notice": "Provisional address: choose the address in Domains. This address only opens on your own computer, not on the server.",
+  "provisional.action": "Choose the address in Domains",
   "overview.email.title": "Project email",
   "overview.email.active": "Active",
   "overview.email.autoFill": "SMTP_* and MAIL_FROM are added automatically on deploy.",

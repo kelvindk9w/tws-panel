@@ -94,6 +94,8 @@ export default {
   "overview.domains.title": "Domínios · HTTPS automático",
   "overview.domains.primary": "principal",
   "overview.domains.manage": "Gerenciar domínios",
+  "provisional.notice": "Endereço provisório: escolha o endereço em Domínios. Este endereço só abre no seu computador, não no servidor.",
+  "provisional.action": "Escolher o endereço em Domínios",
   "overview.email.title": "E-mail do projeto",
   "overview.email.active": "Ativo",
   "overview.email.autoFill": "SMTP_* e MAIL_FROM entram sozinhos no deploy.",

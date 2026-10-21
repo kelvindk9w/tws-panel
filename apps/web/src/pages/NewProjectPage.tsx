@@ -164,7 +164,7 @@ export function NewProjectPage() {
         // (.localhost, sem certificado público nem IP): o proxy pede certificado na hora e o
         // limite do Let's Encrypt é por semana. O endereço sob a base só entra em finish(),
         // se a pessoa escolher o automático.
-        dom = sug?.kind === "apps" ? (sug.provisional ?? auto) : auto;
+        dom = sug?.kind === "apps" ? (sug.provisional ?? (defaultDomainFor(name) || "projeto.localhost")) : auto;
         setAutoDomain(auto);
         setPublicIp(sug?.publicIp ?? null);
         applySuggestion(sug);
@@ -257,7 +257,7 @@ export function NewProjectPage() {
         // gravar o endereço sob ela. Se mudou, mostra o novo endereço e espera a pessoa confirmar
         // (o projeto continua com o provisório; clicar de novo é seguro).
         const sug = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`);
-        if (sug.kind !== "apps" || !chosenDomain.endsWith(`.${sug.appsBase ?? ""}`)) {
+        if (sug.kind !== "apps" || sug.appsBase !== appsBase || !chosenDomain.endsWith(`.${sug.appsBase ?? ""}`)) {
           setAutoDomain(sug.auto);
           applySuggestion(sug);
           setNotice(t("projects.new.domain.baseChanged"));

@@ -123,13 +123,25 @@ sufixo novo a cada criação.
 4. Para não gastar o limite à toa, não apague e recrie projetos várias vezes. No assistente, o projeto é
    criado com um endereço provisório (`nome-xxxxx.localhost`, único, sem IP e sem certificado público) e só troca para o endereço sob a base ao clicar em **Criar projeto**.
 
-### Domínio `.localhost` não abre
+### Projeto com endereço provisório (`nome-xxxxx.localhost`)
 
-**Sintomas:** `meuapp.localhost` não resolve no navegador.
+**Sintomas:** o projeto mostra um aviso âmbar "Endereço provisório" e o endereço `nome-xxxxx.localhost` não abre.
+
+**Causa:** o assistente cria o projeto com esse endereço provisório e só o troca ao clicar em **Criar projeto**.
+Se você fechou o assistente antes, o projeto ficou com ele. `.localhost` sempre aponta para o computador de quem
+acessa, não para a VPS, então ele não funciona num painel público.
+
+**Solução:** abra o projeto, vá em **Domínios** (o aviso tem o atalho) e escolha o endereço definitivo:
+o automático sob o domínio de aplicações ou o seu próprio domínio. Não edite o `/etc/hosts`: isso não faz o
+site da VPS aparecer.
+
+### Domínio `.localhost` não abre (painel na sua máquina)
+
+**Sintomas:** `meuapp.localhost` não resolve no navegador, com o painel rodando no seu próprio computador.
 
 **Solução:** `.localhost` depende do sistema operacional resolver para 127.0.0.1 — funciona
 nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/hosts`:
-`127.0.0.1 meuapp.localhost`. Em dev, lembre-se de que `.localhost` é servido em **HTTP puro**.
+`127.0.0.1 meuapp.localhost`. Isso vale só para o painel local. Em dev, lembre-se de que `.localhost` é servido em **HTTP puro**.
 
 ---
 

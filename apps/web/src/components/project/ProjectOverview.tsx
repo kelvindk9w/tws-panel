@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Plug, Rocket } from "lucide-react";
 import { ComposeServicesCard } from "./ComposeServices";
 import { PortsModal } from "./PortsModal";
+import { isProvisionalHere, ProvisionalAddressNotice } from "./ProvisionalAddressNotice";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
 import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
 
@@ -175,23 +176,31 @@ export function ProjectOverview({
             {domains.map((d) => (
               <div key={d} data-testid={`https-${d}`} className="flex flex-col gap-0.5">
                 <div className="flex flex-wrap items-center gap-2">
-                  <a
-                    href={urlOf(d)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex min-w-0 items-center gap-1 break-all font-mono hover:underline"
-                  >
-                    {d} <ExternalLink className="h-3 w-3 shrink-0" />
-                  </a>
+                  {isProvisionalHere(d) ? (
+                    <span className="min-w-0 break-all font-mono">{d}</span>
+                  ) : (
+                    <a
+                      href={urlOf(d)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex min-w-0 items-center gap-1 break-all font-mono hover:underline"
+                    >
+                      {d} <ExternalLink className="h-3 w-3 shrink-0" />
+                    </a>
+                  )}
                   {d === project.domain && domains.length > 1 && (
                     <span className="whitespace-nowrap rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-400">
                       {t("projects.overview.domains.primary")}
                     </span>
                   )}
                 </div>
-                <span className="text-xs">
-                  <HttpsLine status={https?.find((h) => h.domain === d) ?? (https ? { domain: d, ok: false, issuer: null, validTo: null, error: null } : undefined)} />
-                </span>
+                {isProvisionalHere(d) ? (
+                  <ProvisionalAddressNotice projectId={project.id} />
+                ) : (
+                  <span className="text-xs">
+                    <HttpsLine status={https?.find((h) => h.domain === d) ?? (https ? { domain: d, ok: false, issuer: null, validTo: null, error: null } : undefined)} />
+                  </span>
+                )}
               </div>
             ))}
             <Link to={`/projects/${project.id}/domains`} className="text-xs text-sky-400 hover:underline">

@@ -90,3 +90,25 @@ export interface AutoDomainSuggestion {
   /** Endereço único e sem certificado público (.localhost) com que o projeto nasce; só com `kind: "apps"`. */
   provisional?: string;
 }
+
+/** Letras e números do sufixo do endereço provisório (o mesmo alfabeto que o servidor sorteia). */
+const PROVISIONAL_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*-[abcdefghjkmnpqrstuvwxyz23456789]{5,8}\.localhost$/;
+
+/** É o endereço provisório (`<projeto>-<sufixo>.localhost`) com que um projeto novo nasce? */
+export function isProvisionalDomain(domain: string): boolean {
+  return PROVISIONAL_RE.test(domain);
+}
+
+/** O painel está sendo aberto na própria máquina (localhost, 127.x, ::1)? */
+export function isLocalPanelHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === "localhost" || h.endsWith(".localhost") || h === "[::1]" || h === "::1" || h.startsWith("127.");
+}
+
+/**
+ * Avisar "endereço provisório"? Só num painel com endereço público: lá o
+ * `.localhost` aponta para o computador de quem abre, não para a VPS.
+ */
+export function showsProvisionalNotice(domain: string, panelHostname: string): boolean {
+  return isProvisionalDomain(domain) && !isLocalPanelHost(panelHostname);
+}

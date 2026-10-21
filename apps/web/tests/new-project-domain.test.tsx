@@ -164,10 +164,23 @@ describe("passo 3 — com domínio de aplicações verificado", () => {
     expect(createdDomain()).not.toContain("apps.example.com");
   });
 
-  it("criar sem sugestão de provisório (servidor antigo): cai no automático de sempre", async () => {
+  it("criar sem sugestão de provisório (servidor antigo): nunca nasce sob a base", async () => {
     suggestion = { ...WITH_APPS, provisional: undefined };
     await ateOPasso3();
-    expect(createdDomain()).toBe(APPS);
+    expect(createdDomain()).toBe("loja.localhost");
+    expect(createdDomain().endsWith("apps.example.com")).toBe(false);
+  });
+
+  it("base trocada em outra aba (apps.example.com para example.com): não grava o endereço antigo", async () => {
+    await ateOPasso3();
+    suggestion = { ...WITH_APPS, auto: "loja-zz9yy.example.com", appsBase: "example.com" };
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await screen.findByTestId("new-project-notice");
+    const patches = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects/p1" && (i as RequestInit | undefined)?.method === "PATCH");
+    expect(patches).toHaveLength(0);
+    await waitFor(() => expect(screen.getByTestId("auto-domain")).toHaveTextContent("https://loja-zz9yy.example.com"));
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(patchBody()).toMatchObject({ domain: "loja-zz9yy.example.com" }));
   });
 
   it("falha na troca de endereço ao criar: o projeto segue com o provisório e a nova tentativa é segura", async () => {
