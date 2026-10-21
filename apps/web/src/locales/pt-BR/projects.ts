@@ -96,6 +96,8 @@ export default {
   "overview.domains.manage": "Gerenciar domínios",
   "provisional.notice": "Endereço provisório: escolha o endereço em Domínios. Este endereço só abre no seu computador, não no servidor.",
   "provisional.action": "Escolher o endereço em Domínios",
+  "provisional.suggestError": "Não foi possível consultar o endereço automático agora. Verifique a conexão e tente de novo.",
+  "provisional.retry": "Tentar de novo",
   "provisional.noBase": "Este projeto ainda não tem um domínio de aplicações para trocar automaticamente. Configure o domínio de aplicações em Configurações, ou use \"Conectar novo domínio\" abaixo com um domínio seu.",
   "provisional.configureBase": "Configurar o domínio de aplicações",
   "provisional.useAuto": "Usar o endereço automático ({address})",

@@ -13,6 +13,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...real, apiFetch: apiFetchMock };
 });
 
+import { ApiRequestError } from "@/lib/api";
 import { setLocale } from "@/i18n/core";
 import { resetPanelPublicCache } from "@/components/project/ProvisionalAddressNotice";
 import { ProjectDomainsCard } from "@/components/ProjectDomainsCard";
@@ -99,6 +100,62 @@ describe("Domínios com endereço provisório", () => {
     fireEvent.click(screen.getByRole("button", { name: /Usar o endereço automático/ }));
     await waitFor(() => expect(calls("DELETE")).toHaveLength(1));
     expect(calls("POST").filter((p) => p === "/api/projects/p1/domains")).toHaveLength(1);
+  });
+
+  it("resposta perdida ao adicionar: o servidor já gravou, a nova tentativa recebe 409 e segue para principal e remover", async () => {
+    mount();
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/domains" && init?.method === "POST") throw new ApiRequestError(409, "domain_in_use", "já está em uso", null);
+      if (path === "/api/projects/p1") return { project: project(PROV, [AUTO]) };
+      return base(path, init);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /Usar o endereço automático/ }));
+    await waitFor(() => expect(calls("DELETE")).toEqual([`/api/projects/p1/domains/${PROV}`]));
+    expect(calls("POST")).toContain(`/api/projects/p1/domains/${AUTO}/primary`);
+  });
+
+  it("409 de um endereço que NÃO é deste projeto: não segue e mostra o erro", async () => {
+    mount();
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/domains" && init?.method === "POST") throw new ApiRequestError(409, "domain_in_use", "em uso", null);
+      if (path === "/api/projects/p1") return { project: project(PROV) };
+      return base(path, init);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /Usar o endereço automático/ }));
+    await screen.findByTestId("provisional-switch-error");
+    expect(calls("DELETE")).toHaveLength(0);
+  });
+
+  it("página recarregada com um endereço sob a base já adicionado: retoma a partir dele, sem adicionar um segundo", async () => {
+    const JA = "loja-old11.apps.example.com";
+    mount(project(PROV, [JA]));
+    expect(await screen.findByRole("button", { name: `Usar o endereço automático (${JA})` })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Usar o endereço automático/ }));
+    await waitFor(() => expect(calls("DELETE")).toEqual([`/api/projects/p1/domains/${PROV}`]));
+    expect(calls("POST")).toEqual([`/api/projects/p1/domains/${JA}/primary`]);
+  });
+
+  it("o botão quebra linha (não estoura a largura no celular)", async () => {
+    mount();
+    const b = await screen.findByRole("button", { name: /Usar o endereço automático/ });
+    expect(b.className).toMatch(/whitespace-normal/);
+    expect(b.className).toMatch(/max-w-full/);
+    expect(b.querySelector("span.break-all")).not.toBeNull();
+  });
+
+  it("consulta da sugestão falhou por rede: mostra erro com 'Tentar de novo', não 'sem domínio de aplicações'", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    let falhar = true;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.includes("suggest?name=loja") && falhar) throw new Error("rede");
+      return base(path, init);
+    });
+    resetPanelPublicCache();
+    mount();
+    expect(await screen.findByTestId("provisional-suggest-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("provisional-no-base")).not.toBeInTheDocument();
   });
 
   it("sem domínio de aplicações: explica o caminho real, com link para Configurações, e não oferece o botão", async () => {

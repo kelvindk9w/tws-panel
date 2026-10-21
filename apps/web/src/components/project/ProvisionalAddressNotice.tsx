@@ -16,7 +16,10 @@ export function resetPanelPublicCache() {
 function fetchPanelPublic(): Promise<boolean> {
   panelPublicCache ??= apiFetch<AutoDomainSuggestion>("/api/domains/suggest?name=x")
     .then((r) => r.panelPublic === true)
-    .catch(() => false);
+    .catch(() => {
+      panelPublicCache = null; // falha de rede não fica guardada: a próxima consulta tenta de novo
+      return false;
+    });
   return panelPublicCache;
 }
 

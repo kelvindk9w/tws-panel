@@ -106,3 +106,21 @@ describe("lista de projetos com endereço provisório", () => {
     expect(screen.queryByRole("link", { name: new RegExp(PROV) })).not.toBeInTheDocument();
   });
 });
+
+describe("falha ao perguntar ao servidor se o painel é público", () => {
+  it("não fica guardada como 'não': na próxima montagem consulta de novo", async () => {
+    let falhar = true;
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/domains/suggest") && falhar) throw new Error("rede");
+      return base(path, init);
+    });
+    const a = overview(PROV);
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/domains/suggest")));
+    expect(screen.queryByTestId("provisional-notice")).not.toBeInTheDocument();
+    a.unmount();
+    falhar = false;
+    overview(PROV);
+    expect(await screen.findByTestId("provisional-notice")).toBeInTheDocument();
+  });
+});

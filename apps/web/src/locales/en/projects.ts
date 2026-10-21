@@ -96,6 +96,8 @@ export default {
   "overview.domains.manage": "Manage domains",
   "provisional.notice": "Provisional address: choose the address in Domains. This address only opens on your own computer, not on the server.",
   "provisional.action": "Choose the address in Domains",
+  "provisional.suggestError": "Could not look up the automatic address right now. Check your connection and try again.",
+  "provisional.retry": "Try again",
   "provisional.noBase": "This project has no apps domain to switch to automatically. Set up the apps domain in Settings, or use \"Connect a new domain\" below with a domain of your own.",
   "provisional.configureBase": "Set up the apps domain",
   "provisional.useAuto": "Use the automatic address ({address})",

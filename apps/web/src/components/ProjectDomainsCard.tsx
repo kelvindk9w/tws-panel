@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AutoDomainSuggestion, DomainCheckResponse, Project, ProjectResponse } from "@paas/core";
 import { isProvisionalDomain } from "@paas/core";
 import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
-import { apiFetch } from "@/lib/api";
+import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -137,7 +137,8 @@ function DomainRow({
  */
 function ProvisionalSwitch({ project, onChanged }: { project: Project; onChanged: () => void }) {
   const { t } = useI18n();
-  const [sug, setSug] = useState<AutoDomainSuggestion | null | undefined>(undefined);
+  const [sug, setSug] = useState<AutoDomainSuggestion | "error" | undefined>(undefined);
+  const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [baseChanged, setBaseChanged] = useState(false);
@@ -149,14 +150,24 @@ function ProvisionalSwitch({ project, onChanged }: { project: Project; onChanged
     let cancelled = false;
     apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${name}`)
       .then((r) => !cancelled && setSug(r))
-      .catch(() => !cancelled && setSug(null));
+      .catch(() => !cancelled && setSug("error"));
     return () => {
       cancelled = true;
     };
-  }, [name]);
+  }, [name, attempt]);
 
   if (sug === undefined) return null;
-  if (sug?.kind !== "apps") {
+  if (sug === "error") {
+    return (
+      <div data-testid="provisional-suggest-error" role="alert" className="flex flex-col gap-2 rounded-md border p-3 text-sm">
+        <p className="text-destructive">{t("projects.provisional.suggestError")}</p>
+        <Button size="sm" variant="outline" className="self-start" onClick={() => { setSug(undefined); setAttempt((n) => n + 1); }}>
+          {t("projects.provisional.retry")}
+        </Button>
+      </div>
+    );
+  }
+  if (sug.kind !== "apps") {
     return (
       <div data-testid="provisional-no-base" className="rounded-md border p-3 text-sm">
         <p>{t("projects.provisional.noBase")}</p>
@@ -166,21 +177,32 @@ function ProvisionalSwitch({ project, onChanged }: { project: Project; onChanged
       </div>
     );
   }
-  const target = sug.auto;
+  // Já existe um endereço sob a base neste projeto (adição anterior que não terminou, ou página
+  // recarregada)? Retoma a partir dele em vez de gerar e adicionar um segundo.
+  const underBase = (project.aliases ?? []).concat(project.domain).find((d) => !isProvisionalDomain(d) && sug.appsBase && d.endsWith(`.${sug.appsBase}`));
+  const target = underBase ?? sug.auto;
+  const sugBase = sug.appsBase;
 
   async function switchNow() {
     setBusy(true);
     setError(null);
     try {
-      if (!done.current.added) {
+      if (!done.current.added && !underBase) {
         // a base pode ter mudado em outra aba: confere antes de gravar qualquer coisa
         const now = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${name}`);
-        if (now.kind !== "apps" || now.appsBase !== sug?.appsBase) {
+        if (now.kind !== "apps" || now.appsBase !== sugBase) {
           setSug(now);
           setBaseChanged(true);
           return;
         }
-        await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains`, { method: "POST", body: JSON.stringify({ domain: target }) });
+        try {
+          await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains`, { method: "POST", body: JSON.stringify({ domain: target }) });
+        } catch (err) {
+          // resposta perdida na tentativa anterior: se o servidor já gravou este endereço NESTE projeto, segue
+          if (!(err instanceof ApiRequestError && err.status === 409)) throw err;
+          const cur = await apiFetch<ProjectResponse>(`/api/projects/${project.id}`);
+          if (![cur.project.domain, ...(cur.project.aliases ?? [])].includes(target)) throw err;
+        }
         done.current.added = true;
       }
       if (!done.current.primary) {
@@ -204,9 +226,9 @@ function ProvisionalSwitch({ project, onChanged }: { project: Project; onChanged
           {t("projects.provisional.baseChanged")}
         </p>
       )}
-      <Button className="self-start" disabled={busy} onClick={() => void switchNow()}>
-        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-        {t("projects.provisional.useAuto", { address: target })}
+      <Button className="h-auto min-h-9 max-w-full self-start whitespace-normal py-2 text-left" disabled={busy} onClick={() => void switchNow()}>
+        {busy && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
+        <span className="min-w-0 break-all">{t("projects.provisional.useAuto", { address: target })}</span>
       </Button>
       {error && (
         <p data-testid="provisional-switch-error" role="alert" className="text-xs text-destructive">

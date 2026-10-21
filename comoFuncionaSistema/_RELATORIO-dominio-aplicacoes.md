@@ -119,11 +119,11 @@ contra o build), `docs:site-url` e `check-no-real-hosts`: tudo OK. Testes com co
 | Pacote | Arquivos / testes | Instruções | Ramos | Funções | Linhas |
 |---|---|---|---|---|---|
 | core | 14 / 131 | 99,64 | 98,76 | 100 | 100 |
-| web | 68 / 1088 | 92,04 | 86,40 | 90,35 | 93,36 |
+| web | 68 / 1094 | 92,04 | 86,40 | 90,35 | 93,36 |
 | deploy | 47 / 840 | 98,52 | 95,72 | 99,05 | 99,26 |
 | mailer | 17 / 362 | 99,90 | 98,45 | 100 | 100 |
 | security | 12 / 215 | 99,33 | 97,33 | 100 | 100 |
-| server | 132 / 2136 (2 ignorados) | 97,73 | 93,35 | 98,15 | 98,88 |
+| server | 132 / 2136 (2 ignorados) | 97,73 | 93,38 | 98,15 | 98,88 |
 
 Testes novos: servidor (validação adversarial, verificação com resolvedor falso: ok, curinga ausente, nome exato
 só, Cloudflare, IP errado/misto, IPv6, timeout/travamento, fallback, rótulo aleatório; sugestão: colisão, nomes
