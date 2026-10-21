@@ -177,7 +177,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       mailAuth: () => new MailService(config, { log: () => undefined }).checkAdminAuth(),
       repairMailAuth: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth(),
       // O serviço do domínio nasce depois; a função só roda numa restauração ou na conferência da tela, com tudo no ar.
-      panelDomainPointsHere: (domain) => app.panelDomainService.pointsHere(domain),
+      // DNS sem resposta ou sem IP público (túnel) lança: a conferência diz "não foi possível conferir".
+      panelDomainPointsHere: (domain) => app.panelDomainService.pointsHereOrThrow(domain),
     },
     log: (m) => app.log.warn(m),
   });

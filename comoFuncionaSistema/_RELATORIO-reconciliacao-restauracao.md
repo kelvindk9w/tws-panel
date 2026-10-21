@@ -68,3 +68,9 @@ Desvio de TDD: `DockerCli.probe` foi escrito antes do teste; vi o teste falhar r
 - O reparo usa uma instância nova de `MailService`; ele grava `tls` no mail.json e a instância das rotas pode ter uma cópia velha desse campo até a próxima sincronização horária (efeito pequeno).
 - Reparar reinicia o servidor de e-mail por alguns segundos (pede confirmação na tela; automático só ao fim da restauração do e-mail e na subida com pendência).
 - `webmail.json` com `enabled` forçado a `false` quando o container não existe: ativar de novo é o fluxo normal (a chave `desKey` é mantida).
+
+## 9. Correções depois da revisão
+
+1. **Conferência do domínio (antes dizia "ainda não aponta" mesmo sem conseguir conferir).** `PanelDomainService.pointsHereOrThrow` lança quando o DNS não responde ou o IP público é desconhecido (acesso por túnel); a reconciliação usa essa consulta, então produz "não foi possível conferir" em produção. O ajuste do acesso pelo IP (lote 8) continua com `pointsHere`, sem mudança. Testes com a consulta real e resolvedores que expiram, sem IP público e com IP de outro servidor.
+2. **401 do Stalwart em todas as telas.** Mensagem e conversão num módulo só (`services/mail-auth-error.ts`): 401/403 viram 409 `mail_auth_failed`. Aplicado em E-mail (`routes/mail.ts`), Envios (`stalwartError`, fila, tentar de novo, cancelar, `routes/mail-envios.ts`), Webmail (`routes/webmail.ts`) e no `registerErrorHandler` (rota sem try/catch própria nunca devolve 401 do Stalwart, que o navegador leria como sessão expirada). Reputação, relatórios e logs não chamam a API do Stalwart (DNS/listas/arquivos). Testes para cada rota.
+3. **Um reparo por vez.** `repairAdminAuth` agora coalesce chamadas simultâneas por pasta de dados no processo (instâncias diferentes: subida, botão e fim da restauração); o Stalwart reinicia uma vez. Teste de concorrência.

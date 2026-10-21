@@ -223,6 +223,9 @@ export interface RemoveDomainResult {
   mailboxDeleteFailures: string[];
 }
 
+/** Reparos da senha de administração em andamento, por pasta de dados. */
+const REPAIRS_IN_FLIGHT = new Map<string, Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running">>();
+
 export class MailService {
   private readonly mailDir: string;
   private readonly mailFile: string;
@@ -517,6 +520,17 @@ export class MailService {
    * próximo "Iniciar" já grava a configuração com a senha certa.
    */
   async repairAdminAuth(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running"> {
+    // Um reparo por vez no processo (a subida do painel, o botão e o fim da restauração usam instâncias diferentes):
+    // quem chega durante um reparo espera o mesmo resultado, e o Stalwart não reinicia duas vezes.
+    const key = this.mailDir;
+    const running = REPAIRS_IN_FLIGHT.get(key);
+    if (running) return running;
+    const run = this.doRepairAdminAuth().finally(() => REPAIRS_IN_FLIGHT.delete(key));
+    REPAIRS_IN_FLIGHT.set(key, run);
+    return run;
+  }
+
+  private async doRepairAdminAuth(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running"> {
     await this.ensureLoaded();
     // Logo depois de um start (restauração do e-mail) a API ainda está subindo: espera até responder (401 também vale).
     if (this.data.adminSecret && (await this.manager().status()).running) {

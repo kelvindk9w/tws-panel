@@ -178,7 +178,7 @@ domínio aponta para esta VPS). Nesse caso, entre pelo domínio do painel.
 > **Conferir o DNS** leva a **Configurações → Domínio do painel**) e um botão **Dispensar**. O aviso
 > some sozinho quando o serviço passa a rodar e continua depois de reiniciar o painel até isso
 > acontecer ou até você clicar em **Dispensar**. Se tudo que estava ligado já roda, nada é
-> perguntado. Se o painel não conseguiu conferir (o Docker ou o DNS não respondeu), o aviso diz isso
+> perguntado. Se o painel não conseguiu conferir (o Docker ou o DNS não respondeu, ou o painel não sabe o próprio IP público, como no acesso por túnel), o aviso diz isso
 > em vez de adivinhar. O mesmo aviso aparece no resultado da restauração e no alto de
 > **Configurações → Backups**. A restauração também registra as pendências como mensagens, como "O
 > painel antigo tinha o webmail ativo e ele não está rodando nesta VPS. Nada foi ativado…".

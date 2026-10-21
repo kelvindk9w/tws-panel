@@ -175,7 +175,7 @@ this VPS). In that case, sign in at the panel domain.
 > mail server; **Check the DNS** goes to **Settings → Panel domain**) and a **Dismiss** button. The
 > notice goes away by itself when the service starts running, and it stays after a panel restart
 > until then or until you click **Dismiss**. If everything that was on is already running, nothing is
-> asked. If the panel could not check (Docker or DNS did not answer), the notice says so instead of
+> asked. If the panel could not check (Docker or DNS did not answer, or the panel does not know its public IP, as in tunnel access), the notice says so instead of
 > guessing. The same notice appears in the restore result and at the top of **Settings → Backups**.
 > The restore also writes the pending items as messages (server messages, in Portuguese) such as "O
 > painel antigo tinha o webmail ativo e ele não está rodando nesta VPS. Nada foi ativado…".

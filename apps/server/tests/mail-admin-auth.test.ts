@@ -147,4 +147,25 @@ describe("repairAdminAuth", () => {
     restartIgnoresSecret = true;
     expect(await service().repairAdminAuth()).toBe("failed");
   });
+
+  it("reparos simultâneos (subida do painel x botão x fim da restauração) viram um só: o Stalwart reinicia uma vez", async () => {
+    await seed("segredo-do-painel-antigo");
+    const s = service();
+    // instâncias diferentes, como no app (subida, botão, fim da restauração)
+    const results = await Promise.all([s.repairAdminAuth(), service().repairAdminAuth(), service().repairAdminAuth()]);
+    expect(results).toEqual(["repaired", "repaired", "repaired"]);
+    expect(calls.filter((c) => c === "applyTls restart=true")).toHaveLength(1);
+    // depois que terminou, um novo pedido confere de novo (e não reinicia, já está certo)
+    expect(await s.repairAdminAuth()).toBe("ok");
+    expect(calls.filter((c) => c === "applyTls restart=true")).toHaveLength(1);
+  });
+
+  it("falha de um reparo não trava os seguintes", async () => {
+    await seed("segredo-do-painel-antigo");
+    restartIgnoresSecret = true;
+    const s = service();
+    expect(await s.repairAdminAuth()).toBe("failed");
+    restartIgnoresSecret = false;
+    expect(await s.repairAdminAuth()).toBe("repaired");
+  });
 });

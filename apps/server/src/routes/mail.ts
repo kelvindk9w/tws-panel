@@ -3,7 +3,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
-import { StalwartApiError } from "@paas/mailer";
+import { mailAuthError } from "../services/mail-auth-error.js";
 import type {
   ChangeMailboxPasswordRequest,
   CreateMailDomainRequest,
@@ -253,15 +253,8 @@ const testEmailStatusSchema = {
 } as const;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
-  // 401 do Stalwart: a senha de administração do painel (mail.json) não é a do servidor em execução
-  // (acontece depois de restaurar o painel ou o e-mail). O texto cru não diz o que fazer.
-  if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) {
-    return reply.code(409).send({
-      error: "mail_auth_failed",
-      message:
-        "O painel não conseguiu autenticar no servidor de e-mail (a senha de administração guardada não é a do servidor em execução, o que acontece depois de restaurar o painel ou o e-mail). Reaplique a configuração: pare e inicie o servidor de e-mail em E-mail → Servidor, ou use o aviso do Dashboard.",
-    });
-  }
+  // 401/403 do Stalwart (senha de administração divergente depois de restaurar): mensagem única, ver mail-auth-error.ts
+  err = mailAuthError(err) ?? err;
   const e = err as Partial<HttpError>;
   return reply.code(e.statusCode ?? 500).send({
     error: e.code ?? "internal_error",
