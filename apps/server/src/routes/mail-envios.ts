@@ -21,6 +21,7 @@ import { MAIL_DELIVERY_STATES, type MailDeliveryState, type PostmasterMarks } fr
 import { deliverabilityScore } from "@paas/mailer";
 import type { MailEnviosService } from "../services/mail-envios-service.js";
 import type { MailReputationService } from "../services/mail-reputation-service.js";
+import { mailAuthError } from "../services/mail-auth-error.js";
 import type { HttpError } from "../services/http-error.js";
 
 export interface MailEnviosRouteDeps {
@@ -89,6 +90,7 @@ const postmasterSchema = {
 } as const;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
+  err = mailAuthError(err) ?? err;
   const e = err as Partial<HttpError>;
   if (!e.statusCode) {
     return reply.code(500).send({ error: "internal_error", message: "Erro interno." });

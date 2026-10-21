@@ -23,12 +23,15 @@
     "Backup incompleto nunca conta como completo (lote 1): (1) código 1 do 7-Zip ao CRIAR (arquivo que sumiu ou sem permissão de leitura; o .7z sai sem ele e o teste do arquivo passa) é falha, com a lista legível do que faltou (ArchiveError 'incomplete', backup-archive.ts); a falha acontece antes de publicar, então não entra na VPS, não atualiza lastSuccessAt e a retenção não roda; no teste e na extração o código 1 continua aceito como antes. (2) O backup do painel compacta uma CÓPIA de /data feita na pasta temporária do backup (snapshotTree: arquivo por arquivo dentro da fila de gravação dele, sem .tmp/.partial em nenhum nível; o que some entre listar e copiar fica de fora; arquivo ilegível faz o backup falhar dizendo qual). (3) SAVE do Redis precisa responder OK; se falha ou responde outra coisa (NOAUTH…), o backup segue com aviso explícito, status 'warning', não atualiza lastSuccessAt e a cópia fica marcada incomplete (checks[...].local/remote.incomplete).",
     "Retenção (local e externa) = retentionVictims (backup-service.ts): apaga as cópias além das N mais novas, MENOS a última cópia completa quando nenhuma das N que ficam é completa. Cópias incompletas seguidas nunca levam embora a última completa; com uma completa nova, volta ao normal. Cópias sem informação (anteriores ao lote 1, ou de outro servidor) contam como completas.",
     "Painel novo não sobrescreve backups de outro servidor (lote 9, panelFreshOverForeign): a regra só considera conteúdo próprio um projeto cadastrado, o painel restaurado (config.panelRestoredAt) ou um backup COMPLETO do painel/e-mail enviado e conferido no armazenamento externo (target.lastRemoteSentAt). Cópia só na VPS (lastSuccessAt) NÃO conta: o painel novo faz backup às 03:00 mesmo sem armazenamento. Migração: na carga, lastRemoteSentAt ausente recebe lastRemoteVerifiedAt (ou null). Solta 7 dias depois de destination.connectedAt; backup à mão sempre sai.",
-    "Nomes dentro do .7z são únicos (lote 1, achado 13): 'a b', 'a/b', 'a_b' e 'A_B' (sem diferenciar maiúsculas, por causa do Windows) e pastas como /data/x e /data_x ganham sufixo (-2, -3…), inclusive contra o _papeis.sql do Postgres. O manifesto guarda o arquivo de cada item, então a restauração não muda."
+    "Nomes dentro do .7z são únicos (lote 1, achado 13): 'a b', 'a/b', 'a_b' e 'A_B' (sem diferenciar maiúsculas, por causa do Windows) e pastas como /data/x e /data_x ganham sufixo (-2, -3…), inclusive contra o _papeis.sql do Postgres. O manifesto guarda o arquivo de cada item, então a restauração não muda.",
+    "Reconciliação depois de restaurar (services/restore-reconciliation.ts, routes/restore-reconciliation.ts): ao preparar a restauração do painel (stagePanel) e ao restaurar o e-mail, compara o que o backup tinha ATIVO (mail/webmail.json enabled, mail/mail.json adminSecret, panel-domain.json active) com o Docker/DNS desta VPS (DockerCli.probe distingue 'não existe' de 'Docker não respondeu'). Nada é ativado. Pendências em data/restore-reconciliation.json (viajam com o estado restaurado; scripts/restaurar-painel.sh é coberto por afterApplied em restorePanelAtBoot quando actor='ssh'). GET /api/restore-reconciliation reconfere na hora e resolve sozinha; POST /api/restore-reconciliation/:id/dismiss dispensa. Webmail com container inexistente: a flag enabled do estado que entra no lugar vira false (a flag restaurada dizia 'ativo' sem container). Itens: webmail, mail-server, panel-domain, mail-auth. UI: components/restore/ReconciliationNotice.tsx (Dashboard, topo de Configurações → Backups e resultado da restauração).",
+    "Senha de administração do Stalwart (mail-auth): adminSecret mora em mail.json (painel) E no config.toml dentro do container (fallback-admin). Restaurar o e-mail devolve o etc/ do servidor antigo; restaurar o painel devolve o mail.json do painel antigo: divergem e toda chamada dá 401. MailService.checkAdminAuth/repairAdminAuth conferem com uma chamada autenticada e, se divergente, regravam a configuração e reiniciam o container (applyTls restart) sem apagar dados. Rodam ao fim da restauração do e-mail, 20 s depois da subida se houver pendência mail-auth, e por POST /api/mail/server/repair-auth. 401/403 do Stalwart vira 409 mail_auth_failed com orientação."
   ],
   "arquivosFonte": {
     "rotas": [
       "apps/server/src/routes/backups.ts",
-      "apps/server/src/routes/projects.ts (backup na criação; forgetProject ao apagar)"
+      "apps/server/src/routes/projects.ts (backup na criação; forgetProject ao apagar)",
+      "apps/server/src/routes/restore-reconciliation.ts"
     ],
     "servicos": [
       "apps/server/src/services/backup-service.ts",
@@ -43,7 +46,8 @@
       "apps/server/src/services/onboarding.ts (backupsState)",
       "apps/server/src/app.ts",
       "apps/server/src/index.ts",
-      "apps/server/src/services/json-file.ts"
+      "apps/server/src/services/json-file.ts",
+      "apps/server/src/services/restore-reconciliation.ts"
     ],
     "pacotes": [
       "packages/core/src/backups.ts",
@@ -55,7 +59,8 @@
       "apps/web/src/components/backups/backup-ui.tsx",
       "apps/web/src/components/project/ProjectBackupsCard.tsx",
       "apps/web/src/pages/NewProjectPage.tsx (Fazer backup: sim/não)",
-      "apps/web/src/components/onboarding/steps-content.ts (passo backups)"
+      "apps/web/src/components/onboarding/steps-content.ts (passo backups)",
+      "apps/web/src/components/restore/ReconciliationNotice.tsx"
     ],
     "scripts": [
       "scripts/restaurar-painel.sh"
@@ -74,7 +79,13 @@
       "apps/web/tests/backup-settings.test.tsx",
       "apps/web/tests/project-backups.test.tsx",
       "apps/web/tests/new-project-page.test.tsx",
-      "apps/server/tests/panel-restore-interrupcao.test.ts"
+      "apps/server/tests/panel-restore-interrupcao.test.ts",
+      "apps/server/tests/restore-reconciliation.test.ts",
+      "apps/server/tests/restore-reconciliation-docker.test.ts",
+      "apps/server/tests/routes-restore-reconciliation.test.ts",
+      "apps/server/tests/mail-admin-auth.test.ts",
+      "apps/server/tests/routes-mail-auth.test.ts",
+      "apps/web/tests/restore-reconciliation-notice.test.tsx"
     ]
   },
   "persistencia": [

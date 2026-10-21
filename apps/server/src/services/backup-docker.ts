@@ -273,6 +273,21 @@ export class DockerCli implements BackupDocker {
     }
   }
 
+  /**
+   * Como `state`, mas distingue "não existe" de "o Docker não respondeu": o
+   * segundo LANÇA. A reconciliação depois de restaurar não pode tratar um
+   * Docker fora do ar como "o webmail não existe".
+   */
+  async probe(container: string): Promise<"running" | "stopped" | "missing"> {
+    try {
+      const { stdout } = await this.run(["inspect", "-f", "{{.State.Running}}", container], { timeoutMs: 30_000 });
+      return stdout.trim() === "true" ? "running" : "stopped";
+    } catch (err) {
+      if (/no such (object|container)/i.test(err instanceof Error ? err.message : "")) return "missing";
+      throw err;
+    }
+  }
+
   async stop(container: string): Promise<void> {
     await this.run(["stop", "-t", "30", container], { timeoutMs: 120_000 });
   }

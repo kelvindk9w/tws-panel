@@ -342,6 +342,70 @@ describe("restorePanelAtBoot (index.ts)", () => {
     expect(await ativo()).toEqual({ ...ORIGINAL, "audit.json": expect.any(String) });
   });
 
+  describe("reconciliação do que o painel antigo tinha ativo (restaurar-painel.sh)", () => {
+    const comActor = (actor: string) => put("backups/.restaurar-painel.json", JSON.stringify({ ...MARKER, actor }));
+
+    it("restauração por SSH (script): chama a conferência com o estado já restaurado, sem bloquear a subida", async () => {
+      await cenario();
+      await comActor("ssh");
+      const chamadas: string[] = [];
+      const l = logs();
+      const ok = await restorePanelAtBoot(dir, l.log, {
+        afterApplied: async (dataDir) => void chamadas.push(`${dataDir}:${(await ler("users.json")) ?? ""}`),
+      });
+      expect(ok).toBe(true);
+      // chamada DEPOIS da troca: já enxerga o users.json do backup
+      expect(chamadas).toEqual([`${dir}:do-backup`]);
+    });
+
+    it("com arquivos reais: backup com webmail ativo e nenhum container aqui — a pendência fica gravada e a flag passa a dizer a verdade", async () => {
+      await cenario();
+      await comActor("ssh");
+      await put(`${STAGED}/mail/webmail.json`, JSON.stringify({ enabled: true, desKey: "k".repeat(24) }));
+      const { RestoreReconciliation } = await import("../src/services/restore-reconciliation.js");
+      await restorePanelAtBoot(dir, logs().log, {
+        afterApplied: async (dataDir) => {
+          await new RestoreReconciliation({
+            dataDir,
+            containers: { stalwart: "paas-stalwart", webmail: "paas-webmail" },
+            probes: { container: async () => "missing" },
+          }).planStaged(dataDir);
+        },
+      });
+      expect(JSON.parse((await ler("mail/webmail.json"))!)).toMatchObject({ enabled: false });
+      expect(JSON.parse((await ler("restore-reconciliation.json"))!).items).toMatchObject([{ id: "webmail", state: "open" }]);
+    });
+
+    it("restauração pela tela: o painel já conferiu antes do reinício, então não confere de novo", async () => {
+      await cenario();
+      const chamadas: string[] = [];
+      await restorePanelAtBoot(dir, logs().log, { afterApplied: async () => void chamadas.push("x") });
+      expect(chamadas).toEqual([]);
+    });
+
+    it("restauração desfeita: nada a conferir", async () => {
+      await cenario();
+      await comActor("ssh");
+      const chamadas: string[] = [];
+      await restorePanelAtBoot(dir, logs().log, {
+        onStep: (s) => {
+          if (s.startsWith("aplicando:")) throw new Error("falha simulada");
+        },
+        afterApplied: async () => void chamadas.push("x"),
+      });
+      expect(chamadas).toEqual([]);
+    });
+
+    it("a conferência quebrar não impede a subida (só vai para o log)", async () => {
+      await cenario();
+      await comActor("ssh");
+      const l = logs();
+      const ok = await restorePanelAtBoot(dir, l.log, { afterApplied: async () => Promise.reject(new Error("docker fora do ar")) });
+      expect(ok).toBe(true);
+      expect(l.linhas.join("\n")).toMatch(/warn .*conferir o que o painel antigo tinha ativo.*docker fora do ar/);
+    });
+  });
+
   it("nem trocar nem desfazer: devolve false (o painel não sobe) e diz o que fazer", async () => {
     await cenario();
     const l = logs();

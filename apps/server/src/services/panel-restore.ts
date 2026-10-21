@@ -91,6 +91,13 @@ export interface PanelRestoreOptions {
    * Existe para os testes simularem queda ou falha em cada ponto.
    */
   onStep?: (step: string) => void | Promise<void>;
+  /**
+   * Só em `restorePanelAtBoot`, depois de uma troca APLICADA pedida por SSH
+   * (scripts/restaurar-painel.sh). A restauração pela tela já conferiu o que
+   * o painel antigo tinha ativo antes do reinício; o script não passa por lá.
+   * Nunca impede a subida.
+   */
+  afterApplied?: (dataDir: string) => Promise<void>;
 }
 
 function reasonOf(err: unknown): string {
@@ -330,6 +337,13 @@ export async function restorePanelAtBoot(
     });
   }
   await audit.flush();
+  if (result.outcome === "applied" && marker.actor === "ssh" && opts.afterApplied) {
+    try {
+      await opts.afterApplied(dataDir);
+    } catch (err) {
+      log.warn(`Não foi possível conferir o que o painel antigo tinha ativo (${reasonOf(err)}). Confira o webmail e o servidor de e-mail em E-mail.`);
+    }
+  }
   return true;
 }
 

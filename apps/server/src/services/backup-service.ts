@@ -77,6 +77,7 @@ import {
   type Project,
   type ProjectBackupDetection,
   type ProjectBackupView,
+  type ReconciliationId,
 } from "@paas/core";
 import { ArchiveError } from "./backup-archive.js";
 import {
@@ -182,6 +183,19 @@ export interface BackupServiceOptions {
    * domínio já resolve aqui. Sem a função, conta como "não aponta".
    */
   panelDomainPointsHere?: (domain: string) => Promise<boolean>;
+  /**
+   * Depois de restaurar, compara o que o backup tinha ATIVO com o que roda
+   * nesta VPS e guarda as pendências (webmail, servidor de e-mail, domínio do
+   * painel). Só informa: nada é ativado. Ver restore-reconciliation.ts.
+   */
+  mailAuth?: {
+    /** Confere a senha de administração do Stalwart em execução e, se divergente, reaplica a configuração. */
+    repair(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running">;
+  };
+  reconciliation?: {
+    planStaged(staged: string): Promise<string[]>;
+    markPending(ids: ReconciliationId[], source: "panel" | "email"): Promise<void>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2616,6 +2630,8 @@ export class BackupService {
     if (!stalwart.exists) {
       r.warnings.push("O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e clique em Iniciar. Ele sobe com os dados restaurados.");
     }
+    const pending: ReconciliationId[] = [];
+    if (!stalwart.exists) pending.push("mail-server");
     const web = part("webmail");
     if (web) {
       this.step(r, "Restaurar o webmail");
@@ -2625,6 +2641,37 @@ export class BackupService {
         await docker.restoreVolume(mail.webmailVolume, path.join(content, web.file!));
       } finally {
         if (wm.running) await docker.start(mail.webmailContainer);
+      }
+      // O passo acima devolve os DADOS do volume; ele não liga o webmail. O check do passo não pode passar por "webmail ativo".
+      if (!wm.running) {
+        pending.push("webmail");
+        r.warnings.push(
+          "Os dados do webmail voltaram, mas o webmail não está rodando nesta VPS. Nada foi ativado: ative em E-mail → Webmail (o painel também pergunta no Dashboard).",
+        );
+      }
+    }
+    // O etc/ restaurado traz a senha de administração do servidor ANTIGO (config.toml); o painel usa a do mail.json desta VPS.
+    if (stalwart.exists && this.opts.mailAuth) {
+      let result: "ok" | "repaired" | "failed" | "unreachable" | "not_running" | "erro" = "erro";
+      try {
+        result = await this.opts.mailAuth.repair();
+      } catch (err) {
+        this.opts.log?.(`E-mail: não deu para conferir a senha de administração depois de restaurar (${reasonOf(err)}).`);
+      }
+      if (result === "repaired") {
+        r.warnings.push("A senha de administração do servidor de e-mail que veio no backup não era a deste painel: o painel reaplicou a configuração e reiniciou o servidor de e-mail. Nenhum dado foi apagado.");
+      } else if (result === "failed" || result === "unreachable" || result === "erro") {
+        pending.push("mail-auth");
+        r.warnings.push(
+          "Não foi possível confirmar que o painel autentica no servidor de e-mail depois da restauração. Se aparecer “não conseguiu autenticar”, pare e inicie o servidor em E-mail → Servidor (ou use o aviso do Dashboard).",
+        );
+      }
+    }
+    if (pending.length > 0 && this.opts.reconciliation) {
+      try {
+        await this.opts.reconciliation.markPending(pending, "email");
+      } catch (err) {
+        this.opts.log?.(`Reconciliação: não deu para guardar a pendência (${reasonOf(err)}).`);
       }
     }
   }
@@ -2642,6 +2689,7 @@ export class BackupService {
     await rename(content, target);
     for (const name of PANEL_PRESERVED) await rm(path.join(target, name), { recursive: true, force: true });
     await this.adaptRestoredPanel(r, target);
+    await this.reconcileStagedPanel(r, target);
     const marker: PanelRestoreMarker = { requestedAt: new Date(this.now()).toISOString(), fileName, actor };
     await this.writeJson(path.join(this.backupsDir, PANEL_RESTORE_MARKER), marker);
     r.warnings.push("O painel vai reiniciar para terminar a restauração. Depois, entre de novo com o usuário e a senha do backup.");
@@ -2666,6 +2714,22 @@ export class BackupService {
     } catch (err) {
       r.warnings.push(
         `Não foi possível conferir o acesso pelo IP (${reasonOf(err)}). Se o painel não abrir pelo domínio, use o endereço do IP; se também não abrir, rode scripts/reativar-acesso-ip.sh no servidor.`,
+      );
+    }
+  }
+
+  /**
+   * O que o painel antigo tinha ativo (webmail, servidor de e-mail, domínio)
+   * x o que roda nesta VPS. Só informa e guarda a pendência; nunca ativa nada
+   * e nunca derruba a restauração.
+   */
+  private async reconcileStagedPanel(r: BackupRecord, staged: string): Promise<void> {
+    if (!this.opts.reconciliation) return;
+    try {
+      r.warnings.push(...(await this.opts.reconciliation.planStaged(staged)));
+    } catch (err) {
+      r.warnings.push(
+        `Não foi possível conferir o que o painel antigo tinha ativo (${reasonOf(err)}). Depois do reinício, confira o webmail e o servidor de e-mail em E-mail e o domínio em Configurações → Domínio do painel.`,
       );
     }
   }

@@ -469,3 +469,19 @@ describe("casos de borda", () => {
     expect((await s.summary7d()).recipients).toBe(4);
   });
 });
+
+describe("senha de administração do Stalwart divergente (depois de restaurar)", () => {
+  const auth401 = () => Promise.reject(new StalwartApiError(401, "Stalwart: You have to authenticate first."));
+
+  it("fila: a mensagem amigável, sem o texto cru do Stalwart", async () => {
+    const res = await new MailEnviosService(deps({ listQueue: auth401 })).queue();
+    expect(res.available).toBe(false);
+    expect(res.message).toMatch(/não conseguiu autenticar no servidor de e-mail/);
+    expect(res.message).not.toMatch(/You have to authenticate/);
+  });
+
+  it("tentar de novo e cancelar: 409 mail_auth_failed (não 500)", async () => {
+    await expect(new MailEnviosService(deps({ retry: auth401 })).retry("333028896599011329")).rejects.toMatchObject({ statusCode: 409, code: "mail_auth_failed" });
+    await expect(new MailEnviosService(deps({ cancel: auth401 })).cancel("333028896599011329")).rejects.toMatchObject({ statusCode: 409, code: "mail_auth_failed" });
+  });
+});

@@ -312,6 +312,40 @@ describe("PanelDomainService", () => {
     expect(await new PanelDomainService(deps({ serverIp: null })).pointsHere(DOMAIN)).toBe(false);
   });
 
+  it("pointsHereOrThrow (conferência da reconciliação): DNS sem resposta ou sem IP público LANÇA, em vez de dizer 'não aponta'", async () => {
+    expect(await new PanelDomainService(deps()).pointsHereOrThrow(DOMAIN)).toBe(true);
+    expect(await new PanelDomainService(deps({ resolver: resolver({ a: ["198.51.100.7"] }) })).pointsHereOrThrow(DOMAIN)).toBe(false);
+    await expect(new PanelDomainService(deps({ resolver: resolver({ a: new Error("sem rede") }) })).pointsHereOrThrow(DOMAIN)).rejects.toThrow(/DNS não respondeu/);
+    await expect(new PanelDomainService(deps({ serverIp: null })).pointsHereOrThrow(DOMAIN)).rejects.toThrow(/IP público/);
+  });
+
+  it("reconciliação com a consulta real: DNS sem resposta ou túnel = 'não foi possível conferir' (nunca 'ainda não aponta')", async () => {
+    const { RestoreReconciliation } = await import("../src/services/restore-reconciliation.js");
+    const { mkdir } = await import("node:fs/promises");
+    const make = async (svc: PanelDomainService) => {
+      const staged = path.join(dataDir, "staged");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "panel-domain.json"), JSON.stringify({ domain: DOMAIN, active: true }));
+      const rec = new RestoreReconciliation({
+        dataDir: dataDir,
+        containers: { stalwart: "s", webmail: "w" },
+        probes: { container: async () => "running", panelDomainPointsHere: (d) => svc.pointsHereOrThrow(d) },
+      });
+      return { warnings: await rec.planStaged(staged), rec };
+    };
+    for (const d of [deps({ resolver: resolver({ a: new Error("timeout") }) }), deps({ serverIp: null })]) {
+      const { warnings, rec } = await make(new PanelDomainService(d));
+      expect(warnings.join(" ")).toMatch(/não foi possível conferir/);
+      expect(warnings.join(" ")).not.toMatch(/ainda não aponta/);
+      await writeFile(path.join(dataDir, "restore-reconciliation.json"), await readFile(path.join(dataDir, "staged", "restore-reconciliation.json")));
+      await writeFile(path.join(dataDir, "panel-domain.json"), JSON.stringify({ domain: DOMAIN, active: true }));
+      expect((await rec.list()).items).toMatchObject([{ id: "panel-domain", status: "unknown" }]);
+    }
+    // DNS responde e aponta para outro IP: aí sim "ainda não aponta"
+    const { warnings } = await make(new PanelDomainService(deps({ resolver: resolver({ a: ["198.51.100.7"] }) })));
+    expect(warnings.join(" ")).toMatch(/ainda não aponta/);
+  });
+
   it("verificar sem domínio cadastrado → 409", async () => {
     const svc = new PanelDomainService(deps());
     await svc.init();

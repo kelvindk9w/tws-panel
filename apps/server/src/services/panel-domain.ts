@@ -506,6 +506,26 @@ export class PanelDomainService {
     return check.ok;
   }
 
+  /**
+   * Como `pointsHere`, mas DNS sem resposta ou IP público desconhecido (acesso
+   * por túnel) LANÇAM em vez de virar "não aponta". É a consulta da
+   * reconciliação depois de restaurar: ali "não foi possível conferir" é um
+   * resultado diferente de "o DNS ainda não aponta para cá". O ajuste do
+   * acesso pelo IP (lote 8) continua usando `pointsHere`.
+   */
+  async pointsHereOrThrow(domain: string): Promise<boolean> {
+    const check = await checkPanelDomainDns({
+      domain,
+      expectedIp: this.deps.serverIp,
+      expectedIpv6: this.deps.serverIpv6,
+      primary: this.deps.resolver,
+      fallback: this.deps.fallbackResolver,
+      ...(this.deps.now ? { now: this.deps.now } : {}),
+    });
+    if (check.problem === "unavailable" || check.problem === "no_server_ip") throw new Error(check.message);
+    return check.ok;
+  }
+
   /** Remove o domínio; o acesso pelo IP volta (se estava desativado) antes de o domínio sair. */
   removeDomain(actor: string): Promise<PanelDomainStatus> {
     return this.serial(async () => {
