@@ -1,6 +1,8 @@
 import { IpInAddressHint } from "@/components/IpInAddress";
-import { useState } from "react";
-import type { DomainCheckResponse, Project, ProjectResponse } from "@paas/core";
+import { useEffect, useRef, useState } from "react";
+import type { AutoDomainSuggestion, DomainCheckResponse, Project, ProjectResponse } from "@paas/core";
+import { isProvisionalDomain } from "@paas/core";
+import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,7 @@ function DomainRow({
   const defaultPort = project.proxyPort ?? project.detection?.proxyPort ?? null;
   const currentPort = project.domainPorts?.[domain] ?? null;
   const [port, setPort] = useState(currentPort ? String(currentPort) : "");
+  const provisionalHere = useProvisionalHere(domain);
 
   async function call(path: string, method: "POST" | "DELETE" | "PUT", body?: unknown) {
     setBusy(true);
@@ -53,14 +56,18 @@ function DomainRow({
   return (
     <li data-testid={`domain-${domain}`} className="flex flex-col gap-2 border-b py-3 last:border-0">
       <div className="flex flex-wrap items-center gap-2">
-        <a
-          href={urlOf(domain)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 break-all font-mono text-sm hover:underline"
-        >
-          {domain} <ExternalLink className="h-3 w-3" />
-        </a>
+        {provisionalHere ? (
+          <span className="break-all font-mono text-sm">{domain}</span>
+        ) : (
+          <a
+            href={urlOf(domain)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 break-all font-mono text-sm hover:underline"
+          >
+            {domain} <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
         {primary && (
           <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-400">
             <Star className="h-3 w-3" /> {t("projects.domains.primary")}
@@ -93,6 +100,7 @@ function DomainRow({
           )}
         </div>
       </div>
+      {provisionalHere && <ProvisionalAddressNotice projectId={project.id} compact inDomains />}
       {hasPort && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <label htmlFor={`port-${domain}`}>{t("projects.domains.port")}</label>
@@ -122,6 +130,94 @@ function DomainRow({
 }
 
 /**
+ * Projeto que ficou com o endereço provisório: oferece o caminho real para sair dele.
+ * Com domínio de aplicações, um botão adiciona o endereço sob a base, o torna principal
+ * e remove o provisório (conferindo a base de novo antes, e retomando de onde parou se
+ * algo falhar). Sem ele, explica as duas saídas: configurar a base ou conectar um domínio.
+ */
+function ProvisionalSwitch({ project, onChanged }: { project: Project; onChanged: () => void }) {
+  const { t } = useI18n();
+  const [sug, setSug] = useState<AutoDomainSuggestion | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [baseChanged, setBaseChanged] = useState(false);
+  // passos já feitos para o endereço mostrado: a nova tentativa não repete nenhum
+  const done = useRef({ added: false, primary: false });
+  const name = encodeURIComponent(project.name);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${name}`)
+      .then((r) => !cancelled && setSug(r))
+      .catch(() => !cancelled && setSug(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  if (sug === undefined) return null;
+  if (sug?.kind !== "apps") {
+    return (
+      <div data-testid="provisional-no-base" className="rounded-md border p-3 text-sm">
+        <p>{t("projects.provisional.noBase")}</p>
+        <a href="/settings/apps-domain" className="text-sky-400 underline underline-offset-2 hover:no-underline">
+          {t("projects.provisional.configureBase")}
+        </a>
+      </div>
+    );
+  }
+  const target = sug.auto;
+
+  async function switchNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (!done.current.added) {
+        // a base pode ter mudado em outra aba: confere antes de gravar qualquer coisa
+        const now = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${name}`);
+        if (now.kind !== "apps" || now.appsBase !== sug?.appsBase) {
+          setSug(now);
+          setBaseChanged(true);
+          return;
+        }
+        await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains`, { method: "POST", body: JSON.stringify({ domain: target }) });
+        done.current.added = true;
+      }
+      if (!done.current.primary) {
+        await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains/${encodeURIComponent(target)}/primary`, { method: "POST" });
+        done.current.primary = true;
+      }
+      await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains/${encodeURIComponent(project.domain)}`, { method: "DELETE" });
+      setBaseChanged(false);
+      onChanged();
+    } catch {
+      setError(t("projects.provisional.switchError"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
+      {baseChanged && (
+        <p data-testid="provisional-base-changed" role="note" className="text-amber-400">
+          {t("projects.provisional.baseChanged")}
+        </p>
+      )}
+      <Button className="self-start" disabled={busy} onClick={() => void switchNow()}>
+        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+        {t("projects.provisional.useAuto", { address: target })}
+      </Button>
+      {error && (
+        <p data-testid="provisional-switch-error" role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * Seção Domínios do projeto: o principal (o do "Abrir site" e do health check)
  * e quantos adicionais o operador quiser, todos servidos ao mesmo tempo, cada
  * um com o seu certificado. Com o projeto no ar, cada mudança vale na hora.
@@ -143,6 +239,7 @@ export function ProjectDomainsCard({
   const [error, setError] = useState<string | null>(null);
 
   const all = [project.domain, ...(project.aliases ?? [])];
+  const provisionalHere = useProvisionalHere(project.domain) && isProvisionalDomain(project.domain);
 
   async function verify() {
     setBusy("check");
@@ -195,6 +292,8 @@ export function ProjectDomainsCard({
             <DomainRow key={d} project={project} domain={d} primary={d === project.domain} onChanged={onChanged} />
           ))}
         </ul>
+
+        {provisionalHere && <ProvisionalSwitch key={project.domain} project={project} onChanged={onChanged} />}
 
         <CertificateSummary query={`project=${encodeURIComponent(project.id)}`} />
 

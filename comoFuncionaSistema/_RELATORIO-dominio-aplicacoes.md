@@ -94,7 +94,11 @@ escolher o automático; antes disso o servidor da sugestão é consultado de nov
 gravado sob ela (aviso e novo endereço; a base guardada é comparada com a atual, então trocar `apps.example.com`
 por `example.com` também é pego). Um projeto que ficou com o provisório num painel público não abre no computador de
 quem acessa: a Visão geral e a lista de projetos mostram um aviso âmbar com atalho para Domínios e não linkam o
-endereço (helper `isProvisionalDomain`/`showsProvisionalNotice` em `packages/core`, com teste). Vale também para painel sem sslip.io (túnel SSH), sem exceção. Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
+endereço (helper `isProvisionalDomain`/`showsProvisionalNotice` em `packages/core`, com teste). Quem diz que o painel é
+público é o servidor (`panelPublic` em `/api/domains/suggest`), não o nome com que a página foi aberta; assim o aviso
+aparece também com o painel aberto por túnel SSH. Na tela Domínios o botão "Usar o endereço automático" adiciona o
+endereço sob a base, o torna principal e remove o provisório (conferindo a base e retomando se falhar); sem base, a
+tela explica configurar o domínio de aplicações ou conectar um domínio próprio. Vale também para painel sem sslip.io (túnel SSH), sem exceção. Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
 visíveis; o sufixo evita colisão, não esconde o endereço.
 
 ## Documentação
@@ -114,12 +118,12 @@ contra o build), `docs:site-url` e `check-no-real-hosts`: tudo OK. Testes com co
 
 | Pacote | Arquivos / testes | Instruções | Ramos | Funções | Linhas |
 |---|---|---|---|---|---|
-| core | 13 / 119 | 99,64 | 98,75 | 100 | 100 |
-| web | 66 / 1072 | 92,04 | 86,40 | 90,35 | 93,36 |
+| core | 14 / 131 | 99,64 | 98,76 | 100 | 100 |
+| web | 68 / 1088 | 92,04 | 86,40 | 90,35 | 93,36 |
 | deploy | 47 / 840 | 98,52 | 95,72 | 99,05 | 99,26 |
 | mailer | 17 / 362 | 99,90 | 98,45 | 100 | 100 |
 | security | 12 / 215 | 99,33 | 97,33 | 100 | 100 |
-| server | 132 / 2129 (2 ignorados) | 97,73 | 93,36 | 98,15 | 98,88 |
+| server | 132 / 2136 (2 ignorados) | 97,73 | 93,35 | 98,15 | 98,88 |
 
 Testes novos: servidor (validação adversarial, verificação com resolvedor falso: ok, curinga ausente, nome exato
 só, Cloudflare, IP errado/misto, IPv6, timeout/travamento, fallback, rótulo aleatório; sugestão: colisão, nomes

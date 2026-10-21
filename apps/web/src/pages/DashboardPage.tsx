@@ -10,7 +10,7 @@ import type {
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n, type Key } from "@/i18n";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
-import { isProvisionalHere, ProvisionalAddressNotice } from "@/components/project/ProvisionalAddressNotice";
+import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ export const TYPE_LABELS: Record<ProjectType, Key> = {
 function ProjectCard({ item }: { item: ProjectResponse }) {
   const { t } = useI18n();
   const { project, status, containers, url } = item;
-  const provisional = isProvisionalHere(project.domain);
+  const provisional = useProvisionalHere(project.domain);
   return (
     <Card className="hover:bg-accent/30">
       <CardHeader className="pb-3">

@@ -66,6 +66,13 @@ function publicIpOf(app: FastifyInstance): string | null {
   return process.env.PAAS_PUBLIC_IP?.trim() || publicIpFromPanelDomain(panelDomainOf(app));
 }
 
+/** O painel tem IP público ou um domínio que não é da própria máquina? */
+function panelIsPublic(app: FastifyInstance): boolean {
+  const panel = (panelDomainOf(app) ?? "").toLowerCase();
+  const local = panel === "" || panel === "localhost" || panel.endsWith(".localhost") || panel.startsWith("127.") || panel === "::1";
+  return publicIpOf(app) !== null || !local;
+}
+
 function machineIps(publicIp: string | null): string[] {
   const ips = new Set<string>();
   for (const infos of Object.values(os.networkInterfaces())) {
@@ -160,12 +167,12 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
       const apps = app.hasDecorator("appsDomainService") ? await app.appsDomainService.suggest(name) : null;
       if (apps) {
         const { base } = await app.appsDomainService.status();
-        const response: AutoDomainSuggestion = { auto: apps, publicIp, kind: "apps", appsBase: base, testAddress: sslip,
+        const response: AutoDomainSuggestion = { auto: apps, publicIp, panelPublic: panelIsPublic(app), kind: "apps", appsBase: base, testAddress: sslip,
           provisional: await app.appsDomainService.suggestProvisional(name),
         };
         return reply.send(response);
       }
-      return reply.send({ auto: sslip ?? `${slug}.localhost`, publicIp });
+      return reply.send({ auto: sslip ?? `${slug}.localhost`, publicIp, panelPublic: panelIsPublic(app) });
     },
   );
 };

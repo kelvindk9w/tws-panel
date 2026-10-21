@@ -1,18 +1,54 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { showsProvisionalNotice } from "@paas/core";
+import { isProvisionalDomain, showsProvisionalNotice, type AutoDomainSuggestion } from "@paas/core";
 import { AlertTriangle } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 import { useI18n } from "@/i18n";
 
-/** O endereço do projeto é o provisório e o painel é público? Então o link não abriria o site. */
-export function isProvisionalHere(domain: string): boolean {
-  return showsProvisionalNotice(domain, window.location.hostname);
+let panelPublicCache: Promise<boolean> | null = null;
+
+/** Só para testes: esquece a resposta guardada do servidor. */
+export function resetPanelPublicCache() {
+  panelPublicCache = null;
+}
+
+/** O servidor informa se o painel é público (uma consulta só, compartilhada por todos os cartões). */
+function fetchPanelPublic(): Promise<boolean> {
+  panelPublicCache ??= apiFetch<AutoDomainSuggestion>("/api/domains/suggest?name=x")
+    .then((r) => r.panelPublic === true)
+    .catch(() => false);
+  return panelPublicCache;
+}
+
+/** O servidor diz que o painel é público? `enabled` evita a consulta quando nenhum endereço é provisório. */
+export function usePanelPublic(enabled: boolean): boolean {
+  const [panelPublic, setPanelPublic] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void fetchPanelPublic().then((v) => !cancelled && setPanelPublic(v));
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  return panelPublic;
+}
+
+/**
+ * O endereço é o provisório (nome-xxxxx.localhost) E o servidor diz que o painel é público?
+ * Então o link não abriria o site. A decisão vem do servidor: pelo túnel SSH o navegador
+ * está em localhost, mas o painel (e o projeto) estão na VPS.
+ */
+export function useProvisionalHere(domain: string): boolean {
+  return showsProvisionalNotice(domain, usePanelPublic(isProvisionalDomain(domain)));
 }
 
 /**
  * Aviso âmbar (ícone + texto, não só cor): o projeto ainda tem o endereço provisório
- * (nome-xxxxx.localhost), que só abre no computador de quem acessa. Leva a Domínios.
+ * (nome-xxxxx.localhost), que só abre no computador de quem acessa. Fora da tela de
+ * Domínios leva até lá; dentro dela (`inDomains`) o botão logo abaixo faz a troca.
  */
-export function ProvisionalAddressNotice({ projectId, compact = false }: { projectId: string; compact?: boolean }) {
+export function ProvisionalAddressNotice({ projectId, compact = false, inDomains = false }: { projectId: string; compact?: boolean; inDomains?: boolean }) {
   const { t } = useI18n();
   return (
     <div
@@ -23,9 +59,11 @@ export function ProvisionalAddressNotice({ projectId, compact = false }: { proje
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
       <div className="flex min-w-0 flex-col gap-1">
         <p>{t("projects.provisional.notice")}</p>
-        <Link to={`/projects/${projectId}/domains`} className="underline underline-offset-2 hover:no-underline">
-          {t("projects.provisional.action")}
-        </Link>
+        {!inDomains && (
+          <Link to={`/projects/${projectId}/domains`} className="underline underline-offset-2 hover:no-underline">
+            {t("projects.provisional.action")}
+          </Link>
+        )}
       </div>
     </div>
   );

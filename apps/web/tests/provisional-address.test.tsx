@@ -14,6 +14,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import { setLocale } from "@/i18n/core";
+import { resetPanelPublicCache } from "@/components/project/ProvisionalAddressNotice";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { DashboardPage } from "@/pages/DashboardPage";
 
@@ -21,14 +22,19 @@ const PROV = "loja-p4r7m.localhost";
 const project = (domain: string) =>
   ({ id: "p1", name: "loja", slug: "loja", ingestMode: "git", source: "x", branch: "main", domain, websocket: false, detection: null, proxyService: null, proxyPort: null, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", lastDeployAt: null, lastDeployStatus: null }) as never;
 
+let panelPublic = true;
 function panelHost(hostname: string) {
-  vi.stubGlobal("location", { ...window.location, hostname, href: `https://${hostname}/` });
+  // quem decide é o servidor (panelPublic), não o nome com que a página foi aberta
+  panelPublic = hostname !== "localhost";
 }
 
 beforeEach(() => {
   setLocale("pt-BR");
+  resetPanelPublicCache();
+  panelPublic = true;
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(async (path: string) => {
+    if (path.startsWith("/api/domains/suggest")) return { auto: "x", publicIp: null, panelPublic };
     if (path === "/api/projects") return { projects: [{ project: project(PROV), status: "created", containers: [] }] };
     if (path.includes("/https")) return { domains: [] };
     if (path.includes("/email")) return { email: null };
@@ -64,7 +70,8 @@ describe("Visão geral com endereço provisório", () => {
   it("painel local: sem aviso e o link continua", async () => {
     panelHost("localhost");
     overview(PROV);
-    await waitFor(() => expect(screen.getByRole("link", { name: new RegExp(PROV) })).toBeInTheDocument());
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/domains/suggest")));
+    expect(screen.getByRole("link", { name: new RegExp(PROV) })).toBeInTheDocument();
     expect(screen.queryByTestId("provisional-notice")).not.toBeInTheDocument();
   });
 
@@ -73,6 +80,15 @@ describe("Visão geral com endereço provisório", () => {
     overview("loja-k3x9q.apps.example.com");
     expect(screen.getByRole("link", { name: /loja-k3x9q\.apps\.example\.com/ })).toBeInTheDocument();
     expect(screen.queryByTestId("provisional-notice")).not.toBeInTheDocument();
+  });
+});
+
+describe("painel aberto por túnel SSH (localhost no navegador) mas público no servidor", () => {
+  it("o aviso aparece mesmo com o navegador em localhost", async () => {
+    vi.stubGlobal("location", { ...window.location, hostname: "localhost" });
+    panelPublic = true;
+    overview(PROV);
+    expect(await screen.findByTestId("provisional-notice")).toBeInTheDocument();
   });
 });
 

@@ -82,6 +82,8 @@ export interface AppsDomainVerifyResponse {
 export interface AutoDomainSuggestion {
   auto: string;
   publicIp: string | null;
+  /** O painel tem IP ou domínio público (não é uma instalação local)? Vem do servidor. */
+  panelPublic?: boolean;
   /** "apps": `auto` está sob o domínio de aplicações. Ausente = endereço de sempre. */
   kind?: "apps";
   appsBase?: string | null;
@@ -99,16 +101,12 @@ export function isProvisionalDomain(domain: string): boolean {
   return PROVISIONAL_RE.test(domain);
 }
 
-/** O painel está sendo aberto na própria máquina (localhost, 127.x, ::1)? */
-export function isLocalPanelHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === "localhost" || h.endsWith(".localhost") || h === "[::1]" || h === "::1" || h.startsWith("127.");
-}
-
 /**
- * Avisar "endereço provisório"? Só num painel com endereço público: lá o
- * `.localhost` aponta para o computador de quem abre, não para a VPS.
+ * Avisar "endereço provisório"? Só quando o servidor informa que o painel é
+ * público (`panelPublic`): lá o `.localhost` aponta para o computador de quem
+ * abre, não para a VPS. A decisão vem do servidor, não do nome com que a página
+ * foi aberta (um túnel SSH abre o painel público em localhost).
  */
-export function showsProvisionalNotice(domain: string, panelHostname: string): boolean {
-  return isProvisionalDomain(domain) && !isLocalPanelHost(panelHostname);
+export function showsProvisionalNotice(domain: string, panelPublic: boolean): boolean {
+  return panelPublic && isProvisionalDomain(domain);
 }

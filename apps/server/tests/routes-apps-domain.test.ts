@@ -202,7 +202,25 @@ describe("GET /api/domains/suggest com domínio de aplicações", () => {
 
   it("sem base: continua o sslip de sempre, com o formato antigo da resposta", async () => {
     const res = await call("GET", "/api/domains/suggest?name=Dev%20Link");
-    expect(res.json()).toEqual({ auto: `dev-link.${IP_HOST}`, publicIp: "203.0.113.10" });
+    expect(res.json()).toEqual({ auto: `dev-link.${IP_HOST}`, publicIp: "203.0.113.10", panelPublic: true });
+  });
+
+  it("panelPublic vem do servidor: painel com domínio público é público; painel em localhost sem IP público não é", async () => {
+    (app.config as { panelDomain: string | null }).panelDomain = PANEL;
+    expect(((await call("GET", "/api/domains/suggest?name=x")).json() as { panelPublic: boolean }).panelPublic).toBe(true);
+    (app.config as { panelDomain: string | null }).panelDomain = "localhost";
+    const antes = process.env.PAAS_PUBLIC_IP;
+    delete process.env.PAAS_PUBLIC_IP;
+    try {
+      expect(((await call("GET", "/api/domains/suggest?name=x")).json() as { panelPublic: boolean }).panelPublic).toBe(false);
+    } finally {
+      if (antes !== undefined) process.env.PAAS_PUBLIC_IP = antes;
+    }
+  });
+
+  it("com base verificada a resposta também traz panelPublic", async () => {
+    await call("POST", "/api/settings/apps-domain/verify", { domain: BASE });
+    expect(((await call("GET", "/api/domains/suggest?name=x")).json() as { panelPublic: boolean }).panelPublic).toBe(true);
   });
 
   it("base salva mas a conferir (VPS com outro IP): volta ao sslip", async () => {

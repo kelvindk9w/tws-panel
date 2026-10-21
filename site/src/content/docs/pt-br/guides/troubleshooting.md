@@ -131,8 +131,14 @@ sufixo novo a cada criação.
 Se você fechou o assistente antes, o projeto ficou com ele. `.localhost` sempre aponta para o computador de quem
 acessa, não para a VPS, então ele não funciona num painel público.
 
-**Solução:** abra o projeto, vá em **Domínios** (o aviso tem o atalho) e escolha o endereço definitivo:
-o automático sob o domínio de aplicações ou o seu próprio domínio. Não edite o `/etc/hosts`: isso não faz o
+**Solução:** abra o projeto, vá em **Domínios** (o aviso tem o atalho) e troque o endereço:
+- com o domínio de aplicações configurado, clique em **Usar o endereço automático (…)**: o painel adiciona o
+  endereço sob a base, o torna principal e remove o provisório (se algo falhar, clique de novo e ele continua de
+  onde parou);
+- sem o domínio de aplicações, a tela explica as saídas: **Configurar o domínio de aplicações** (em Configurações)
+  ou **Conectar novo domínio** com um domínio seu.
+
+Não edite o `/etc/hosts`: isso não faz o
 site da VPS aparecer.
 
 ### Domínio `.localhost` não abre (painel na sua máquina)

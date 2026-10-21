@@ -134,8 +134,14 @@ under the apps domain gets a new suffix on every creation.
 **Create project**. If you closed the wizard before that, the project kept it. `.localhost` always points to the
 computer of whoever is browsing, not to the VPS, so it does not work on a public panel.
 
-**Solution:** open the project, go to **Domains** (the notice has a shortcut) and choose the final address:
-the automatic one under the apps domain, or your own domain. Do not edit `/etc/hosts`: it will not make the
+**Solution:** open the project, go to **Domains** (the notice has a shortcut) and change the address:
+- with the apps domain set up, click **Use the automatic address (…)**: the panel adds the address under the
+  base, makes it primary and removes the provisional one (if something fails, click again and it continues where
+  it stopped);
+- without the apps domain, the screen explains the ways out: **Set up the apps domain** (in Settings) or
+  **Connect a new domain** with a domain of your own.
+
+Do not edit `/etc/hosts`: it will not make the
 VPS site appear.
 
 ### `.localhost` domain does not open (panel on your machine)

@@ -9,6 +9,7 @@ import type {
   ProjectHttpsResponse,
   ProjectStatus,
 } from "@paas/core";
+import { isProvisionalDomain, showsProvisionalNotice } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { formatDate, Trans, useI18n, type Key } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Plug, Rocket } from "lucide-react";
 import { ComposeServicesCard } from "./ComposeServices";
 import { PortsModal } from "./PortsModal";
-import { isProvisionalHere, ProvisionalAddressNotice } from "./ProvisionalAddressNotice";
+import { ProvisionalAddressNotice, usePanelPublic } from "./ProvisionalAddressNotice";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
 import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
 
@@ -90,6 +91,7 @@ export function ProjectOverview({
   const [portsOpen, setPortsOpen] = useState(false);
   const domains = [project.domain, ...(project.aliases ?? [])];
   const domainsKey = domains.join(",");
+  const panelPublic = usePanelPublic(domains.some(isProvisionalDomain));
 
   useEffect(() => {
     let cancelled = false;
@@ -176,7 +178,7 @@ export function ProjectOverview({
             {domains.map((d) => (
               <div key={d} data-testid={`https-${d}`} className="flex flex-col gap-0.5">
                 <div className="flex flex-wrap items-center gap-2">
-                  {isProvisionalHere(d) ? (
+                  {showsProvisionalNotice(d, panelPublic) ? (
                     <span className="min-w-0 break-all font-mono">{d}</span>
                   ) : (
                     <a
@@ -194,7 +196,7 @@ export function ProjectOverview({
                     </span>
                   )}
                 </div>
-                {isProvisionalHere(d) ? (
+                {showsProvisionalNotice(d, panelPublic) ? (
                   <ProvisionalAddressNotice projectId={project.id} />
                 ) : (
                   <span className="text-xs">
