@@ -1,19 +1,18 @@
 ---
-title: "Step-by-step installation"
-description: "Install TWS Panel on a clean Ubuntu VPS: create a user, set up an SSH key, run the installer and open the setup wizard."
+title: "Step-by-step guide — Part 1: Install"
+description: "Part 1 of the step-by-step guide: install TWS Panel on a clean Ubuntu VPS, create a user, set up an SSH key, run the installer and open the setup wizard."
 sidebar:
-  label: "Installation (steps 1 to 8)"
+  label: "Part 1: Install"
 ---
 
-A complete guide to installing TWS Panel on a clean VPS, from scratch all the way to the setup
+Part 1 of the step-by-step guide: installing TWS Panel on a clean VPS, from scratch all the way to the setup
 wizard. The [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md) has the short version; this guide explains every
 step, what shows up on screen, and what to do when something goes wrong.
 
 > [!TIP]
-> **Which guide do I use?** This one covers **only the installation**, Steps 1 to 8, with every
-> command explained. If you want the whole journey, from the VPS to a configured panel and a
-> tested restore, follow the [complete guide](complete-guide.md): it points back here for the
-> installation details. Already moving to a new server? See [Restore on a new VPS](../guides/restore-new-server.md).
+> **Two guides, one path.** This is **Part 1 (Install)**, Steps 1 to 8, from the VPS to the open wizard.
+> [Part 2 (Configure)](complete-guide.md) picks up from there: security, domain, email, backups and your first project.
+> Already moving to a new server? See [Restore on a new VPS](../guides/restore-new-server.md).
 
 > [!NOTE]
 > **Interface language.** The panel is available in English and Portuguese ([how to choose](#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. The installer and the scripts print in Portuguese (each sample has a short English summary). Some messages that come from the server also still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, alerts and audit details, and many error messages.
@@ -33,12 +32,54 @@ these numbers.
 | [8](#passo-8) | Browser | Open the panel and follow the wizard |
 
 After Step 8, the wizard's Security step has its own guide:
-[Security wizard](security-wizard.md).
+[Security wizard](security-wizard.md). Then [Part 2](complete-guide.md) continues the setup.
 
 ## Before you start
 
+### What to get
+
+**A VPS** (virtual server) with:
+
+- **Ubuntu 22.04 or 24.04 LTS**, clean (no other software installed). When creating it, prefer
+  24.04.
+- Recommended minimum: **1 vCPU, 2 GB of RAM, and 25 GB of disk**.
+- Ports **80 and 443** open to the internet. The HTTPS certificate depends on them. If your
+  provider has a firewall in its hosting dashboard, open both.
+- For email: port **25** unblocked by the provider. Many providers block it, especially on new
+  accounts. You check this in [Step 4 of Part 2](complete-guide.md#etapa-4).
+
+You will need two things the provider gives you: **the VPS IP** and **the root password**.
+Before going on, look in the provider's dashboard for "Console", "VNC", "Rescue", or "Recovery
+mode" and confirm it exists: it is your way back in if you lose SSH access. See
+[I lost access](../guides/recover-access.md).
+
 > [!NOTE]
-> **The only prerequisite:** a clean VPS running Ubuntu 22.04 or 24.04 LTS. Docker, Node and everything else are installed automatically — just follow the steps below, in order.
+> You do **not** need to install Docker, Node, or the rest yourself: the installer takes care of it.
+> Just follow the steps below, in order.
+
+### Domain (optional, but recommended)
+
+Without a domain, everything works with automatic `*.sslip.io` addresses (for example,
+`https://203-0-113-10.sslip.io`). With a domain of your own, you get:
+
+- your own address for the panel (`panel.example.com`), instead of one with the IP in the name;
+- professional email, which **requires** a domain;
+- your own addresses for your projects.
+
+You will create records in the domain's DNS (at the provider where it is registered, or on
+Cloudflare). The examples in Part 2 use Cloudflare. You can leave the domain for later: nothing in Part 1 depends on it.
+
+### Accounts
+
+| Account | What for | Required? |
+|---|---|---|
+| **GitHub** | Publish projects from a repository. A private repository needs a read-only token (the screen teaches you how to generate one). | Only if your code is on GitHub |
+| **Cloudflare** | R2, the external storage for backups (the free plan covers 10 GB per month; it asks for a card). It also works as the domain's DNS. | Recommended |
+| **Telegram** | Receive the panel's notices on your phone. | Optional |
+
+None of them is used in Part 1; you only need them in Part 2.
+
+### Reinstalled the VPS?
 
 > [!WARNING]
 > **Reinstalled the VPS operating system, or reinstalled it to test again, and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is expected: the VPS now has a new identity. On your computer, run `ssh-keygen -R YOUR_IP` (with the VPS IP), connect again and answer `yes`. [Full message and details](#host-identification-changed) (collapsed block below).
@@ -156,7 +197,7 @@ After that, just follow from Step 1 onwards, as with a new VPS — because now i
 
 ## Step 1 — Get a VPS
 
-Get a VPS running Ubuntu 24.04 LTS (recommended minimum: 1 vCPU / 2 GB RAM / 25 GB disk).
+Get a VPS running Ubuntu 24.04 LTS (recommended minimum: 1 vCPU / 2 GB RAM / 25 GB disk), as described in [Before you start](#before-you-start).
 
 > [!NOTE]
 > **Never rented a VPS before?** This guide starts at the point where you already have **an IP and a
@@ -1162,8 +1203,13 @@ sudo docker exec tws-panel cat /data/setup-token   # shows only the token
 
 On first access, the Dashboard shows the **Get the panel ready** checklist, with what is still left to
 configure (protections, two-factor authentication, panel domain, email, notifications and
-backups). The steps are in the [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md#after-installing).
+backups). [Part 2](complete-guide.md) walks through each of them, in order.
 
 To publish a project: register the project, point the DNS, and the panel takes care of the build, the proxy and
 SSL. Production guide in [production.md](../guides/production.md). Everyday commands, the projects folder
 and changing the terminal's port or user are in [Operation](../guides/operations.md).
+
+> [!TIP]
+> **Next: [Part 2 — Configure](complete-guide.md).** With the wizard link in hand, go to Part 2, which starts
+> at the wizard and goes on to security (hardening), two-factor authentication, the domain, email,
+> notifications, backups and your first project.

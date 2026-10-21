@@ -8,8 +8,8 @@ import remarkGithubAlerts from './plugins/remark-github-alerts.mjs';
 const base = '/tws-panel';
 const repo = 'https://github.com/kelvindk9w/tws-panel';
 
-// The first group follows the reader's path: the complete guide (first installation), the
-// installation details, the security wizard and the restore on a new VPS. Each page appears once.
+// The first group is the step-by-step guide, in two chained parts (Part 1 Install, Part 2 Configure).
+// The second group has the security wizard and the restore on a new VPS. Each page appears once.
 // Sidebar entries use the same slugs in every language. A page that exists
 // only in English is served in English under /pt-br/ with a notice (Starlight
 // fallback), so adding a new language is a matter of adding a folder under
@@ -35,13 +35,17 @@ export default defineConfig({
       editLink: { baseUrl: `${repo}/edit/main/site/` },
       lastUpdated: true,
       customCss: ['./src/styles/custom.css'],
+      components: { Footer: './src/components/Footer.astro' },
       sidebar: [
+        {
+          label: 'Step-by-step guide',
+          translations: { 'pt-BR': 'Guia passo a passo' },
+          items: [{ slug: 'getting-started/installation' }, { slug: 'getting-started/complete-guide' }],
+        },
         {
           label: 'Getting started',
           translations: { 'pt-BR': 'Primeiros passos' },
           items: [
-            { slug: 'getting-started/complete-guide' },
-            { slug: 'getting-started/installation' },
             { slug: 'getting-started/security-wizard' },
             { slug: 'guides/restore-new-server' },
           ],
@@ -56,6 +60,7 @@ export default defineConfig({
             { slug: 'guides/troubleshooting' },
             { slug: 'guides/recover-access' },
             { slug: 'guides/network-migration' },
+            { slug: 'guides/help' },
           ],
         },
         {

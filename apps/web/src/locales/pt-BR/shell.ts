@@ -33,6 +33,16 @@ export default {
   "userMenu.signOut": "Sair",
   "userMenu.unexpectedError": "Erro inesperado ao falar com o servidor.",
   "userMenu.language": "Idioma",
+  // HelpMenu (Ajuda e feedback)
+  "help.button": "Ajuda e feedback",
+  "help.docs": "Guia e documentação",
+  "help.site": "Página de ajuda e feedback",
+  "help.discussions": "Fazer uma pergunta ou dar uma ideia",
+  "help.bug": "Relatar um problema",
+  "help.feature": "Sugerir uma funcionalidade",
+  "help.newTab": "(abre em nova aba)",
+  "help.logsWarning": "Não cole logs sem revisar: podem conter domínios, IPs e tokens.",
+  "help.version": "TWS Panel v{version}",
   // TwoFactorNudge
   "twoFactorNudge.text": "O painel está na internet e protegido só pela senha. Ative a <b>verificação em duas etapas</b>: entrar passa a exigir também um código do seu celular.",
   "twoFactorNudge.cta": "Ativar agora",

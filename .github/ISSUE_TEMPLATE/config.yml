@@ -9,3 +9,6 @@ contact_links:
   - name: Documentation
     url: https://kelvindk9w.github.io/tws-panel/
     about: Installation, operation and troubleshooting guides.
+  - name: Help and feedback
+    url: https://kelvindk9w.github.io/tws-panel/en/guides/help/
+    about: Where to ask, report, suggest, and what to include in a bug report.

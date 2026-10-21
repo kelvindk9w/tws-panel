@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import type { FastifyPluginAsync, FastifyInstance } from "fastify";
+import type { PanelVersionResponse } from "@paas/core";
 import { scanSystemHealth, type HostProbe } from "../services/system-info.js";
 import { TerminalUnavailableError } from "../services/terminal-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
@@ -48,6 +50,20 @@ const HEALTH_MIRROR_COMMANDS: readonly string[] = [
   "uptime",
 ];
 
+/**
+ * Versão do painel = a do package.json da raiz do monorepo (vai inteira na
+ * imagem). Se o arquivo sumir, "unknown" — o "Ajuda e feedback" do painel
+ * simplesmente não manda versão. Só a versão sai daqui.
+ */
+export function readPanelVersion(file: URL = new URL("../../../../package.json", import.meta.url)): string {
+  try {
+    const { version } = JSON.parse(readFileSync(file, "utf8")) as { version?: unknown };
+    return typeof version === "string" && version ? version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Tempo máximo de cada leitura no host (inclui abrir o terminal, se preciso). */
 export const HOST_PROBE_TIMEOUT_MS = 20_000;
 
@@ -74,6 +90,11 @@ const healthRoutes: FastifyPluginAsync = async (app) => {
   // Liveness público (sem auth) — usado pelo HEALTHCHECK do Docker e por
   // balanceadores/monitoramento externos.
   app.get("/api/healthz", async () => ({ status: "ok" }));
+
+  // Autenticada (cai no hook de auth): serve o "Ajuda e feedback" do cabeçalho.
+  // Devolve SÓ a versão — nada da máquina nem do ambiente.
+  const panelVersion = readPanelVersion();
+  app.get("/api/version", async (): Promise<PanelVersionResponse> => ({ version: panelVersion }));
 
   app.get("/api/health/scan", async (_request, reply) => {
     const runMirror = (cmd: string) => app.terminalService.runCommand(cmd, () => undefined, { timeoutMs: 15_000 });
