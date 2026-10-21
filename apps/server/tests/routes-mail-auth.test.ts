@@ -96,4 +96,12 @@ describe("POST /api/mail/server/repair-auth", () => {
     const res = await app.inject({ method: "POST", url: "/api/mail/server/repair-auth", headers: auth });
     expect(res.json()).toEqual({ ok: true, result: "ok" });
   });
+
+  it("o reparo parou no meio: 409 mail_auth_repair_incomplete (nunca 500 com texto cru do docker)", async () => {
+    const { mailAuthRepairIncompleteError } = await import("../src/services/mail-auth-error.js");
+    spy(MailService.prototype, "repairAdminAuth").mockRejectedValueOnce(mailAuthRepairIncompleteError(new Error("docker fora"), null));
+    const res = await app.inject({ method: "POST", url: "/api/mail/server/repair-auth", headers: auth });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "mail_auth_repair_incomplete" });
+  });
 });

@@ -22,6 +22,8 @@ let liveSecret = "";
 let applyTlsCalls = 0;
 /** false: o reinício não consegue aplicar a senha do painel (reparo que falha). */
 let repairWorks = true;
+/** Docker falso que ecoa a senha de administração no stderr ao reiniciar. */
+let dockerEchoesSecret = false;
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
@@ -29,6 +31,7 @@ vi.mock("@paas/mailer", async (importOriginal) => {
     constructor(private readonly opts: Record<string, unknown> = {}) {}
     async applyTls() {
       applyTlsCalls += 1;
+      if (dockerEchoesSecret) throw new Error(`falha ao reiniciar paas-stalwart: secret = "${this.opts.adminSecret as string}" ${"x".repeat(300)}`);
       await new Promise((r) => setTimeout(r, 20));
       if (repairWorks) liveSecret = this.opts.adminSecret as string;
       return "restarted";
@@ -131,6 +134,7 @@ beforeEach(async () => {
   liveSecret = ADMIN;
   applyTlsCalls = 0;
   repairWorks = true;
+  dockerEchoesSecret = false;
   fetchCalls = [];
   config = { dataDir: dir, mailPorts: MAIL_DEFAULT_PORTS, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null } as unknown as ServerConfig;
   await mkdir(path.join(dir, "mail"), { recursive: true });
@@ -383,6 +387,50 @@ describe("MailService.adoptFromStalwart", () => {
     expect(err.message).toMatch(/Próximo passo/);
     expect(err.message).not.toContain(ADMIN);
     expect(err.message).not.toMatch(/continua recusando/);
+  });
+
+  describe("docker que ecoa a senha no stderr: erro limpo, sem segredo na resposta nem no log (os três caminhos)", () => {
+    const expectClean = (err: Error & { code?: string; statusCode?: number }, logs: string[]) => {
+      expect(err).toMatchObject({ statusCode: 409, code: "mail_auth_repair_incomplete" });
+      expect(err.message).toMatch(/não terminou/);
+      expect(err.message).not.toContain(ADMIN);
+      expect(err.message.length).toBeLessThan(700);
+      expect(JSON.stringify(logs)).not.toContain(ADMIN);
+    };
+
+    it("Sincronizar", async () => {
+      liveSecret = "senha-antiga-do-servidor";
+      dockerEchoesSecret = true;
+      const logs: string[] = [];
+      const err = (await service({ log: (m: string) => logs.push(m) }).adoptFromStalwart().catch((e: unknown) => e)) as Error;
+      expectClean(err, logs);
+    });
+
+    it("botão Reparar agora (repairAdminAuth direto)", async () => {
+      liveSecret = "senha-antiga-do-servidor";
+      dockerEchoesSecret = true;
+      const logs: string[] = [];
+      const err = (await service({ log: (m: string) => logs.push(m) }).repairAdminAuth().catch((e: unknown) => e)) as Error;
+      expectClean(err, logs);
+    });
+
+    it("subida do painel (repairOpen): o log de aviso não traz a senha", async () => {
+      liveSecret = "senha-antiga-do-servidor";
+      dockerEchoesSecret = true;
+      const logs: string[] = [];
+      const { RestoreReconciliation } = await import("../src/services/restore-reconciliation.js");
+      const rec = new RestoreReconciliation({
+        dataDir: dir,
+        containers: { stalwart: "paas-stalwart", webmail: "paas-webmail" },
+        probes: { container: async () => "running", mailAuth: async () => "mismatch", repairMailAuth: () => service({ log: (m: string) => logs.push(m) }).repairAdminAuth() },
+        log: (m: string) => logs.push(m),
+      });
+      await rec.markPending(["mail-auth"], "panel");
+      expect(await rec.repairOpen()).toBeNull();
+      expect(logs.length).toBeGreaterThan(0);
+      expect(JSON.stringify(logs)).not.toContain(ADMIN);
+      expect(JSON.stringify(logs)).toMatch(/não terminou/);
+    });
   });
 
   it("servidor sem resposta durante o reparo: erro de servidor inacessível, não de senha", async () => {

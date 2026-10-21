@@ -552,12 +552,18 @@ export class MailService {
     }
     const before = await this.checkAdminAuth();
     if (before !== "mismatch") return before;
-    const certificates = await this.currentCertificates();
-    const manager = this.manager(certificates);
-    await manager.applyTls({ restart: true });
-    await manager.waitReady();
-    this.data.tls = this.tlsState(certificates);
-    await this.save();
+    // Sincronizar, o botão e a subida do painel usam este método: o erro cru do Docker (stderr, que pode
+    // ecoar a configuração com a senha) vira aqui, num lugar só, o erro limpo e mascarado.
+    try {
+      const certificates = await this.currentCertificates();
+      const manager = this.manager(certificates);
+      await manager.applyTls({ restart: true });
+      await manager.waitReady();
+      this.data.tls = this.tlsState(certificates);
+      await this.save();
+    } catch (err) {
+      throw mailAuthRepairIncompleteError(err, this.data.adminSecret ?? null);
+    }
     return (await this.checkAdminAuth()) === "ok" ? "repaired" : "failed";
   }
 
@@ -1208,9 +1214,10 @@ export class MailService {
     try {
       repair = await this.repairAdminAuth();
     } catch (err) {
-      // O reparo parou no meio: não é "reiniciou e continua recusando".
-      this.log(`Sincronizar: o reparo da senha de administração não terminou (${err instanceof Error ? err.message.split(this.data.adminSecret ?? "\0").join("***") : String(err)}).`);
-      throw mailAuthRepairIncompleteError(err, this.data.adminSecret ?? null);
+      // O reparo parou no meio (o erro já vem mascarado de doRepairAdminAuth; outro erro é mascarado aqui).
+      const incomplete = (err as { code?: string }).code === "mail_auth_repair_incomplete" ? (err as Error) : mailAuthRepairIncompleteError(err, this.data.adminSecret ?? null);
+      this.log(`Sincronizar: ${incomplete.message}`);
+      throw incomplete;
     }
     if (repair === "repaired" || repair === "ok") {
       try {
