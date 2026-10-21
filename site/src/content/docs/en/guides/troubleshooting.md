@@ -109,19 +109,22 @@ from the server, in Portuguese even with the interface in English.
 
 ### A project certificate is not issued (Let's Encrypt limit)
 
-**Symptoms:** the project opens over HTTP or with a certificate error, and the **Certificates** page
-shows the domain as "Failed".
+**Symptoms:** the browser shows a certificate error when opening the project (Caddy redirects HTTP to
+HTTPS), and the **Certificates** page shows the domain as "Failed".
 
 **Cause:** Let's Encrypt limits you to **50 new certificates per week per registered domain** (for
 `projeto-k3x9q.apps.example.com`, the registered domain is `example.com`) and to 5 identical
-certificates per week. Creating and deleting many projects within a few days, or repeating the
-creation of the same name, uses the limit up.
+certificates per week. Creating and deleting many projects within a few days uses up the limit of 50.
+The limit on identical certificates only affects an own domain (repeating the same name): each address
+under the apps domain gets a new suffix on every creation.
 
 **Solution:**
 1. Open **Certificates** and read the cause the panel shows (a server message, in Portuguese).
 2. If it is the limit, wait: it comes back little by little over the week. The panel cannot get around it.
 3. Then click **Try issuing now**. Meanwhile the panel keeps retrying on its own, with growing intervals.
-4. To avoid using up the limit for nothing, do not delete and recreate the same project several times.
+4. To avoid using up the limit for nothing, do not delete and recreate projects several times. In the
+   wizard, the project is created with the test address and only switches to the address under the base
+   when you click **Create project**.
 
 ### `.localhost` domain does not open
 

@@ -106,20 +106,22 @@ salvo" e uma mensagem do servidor, em português mesmo com a interface em inglê
 
 ### Certificado de um projeto não sai (limite do Let's Encrypt)
 
-**Sintomas:** o projeto abre em HTTP ou com erro de certificado, e a página **Certificados** mostra o
-domínio como "Falhou".
+**Sintomas:** o navegador mostra erro de certificado ao abrir o projeto (o Caddy redireciona o HTTP para
+HTTPS), e a página **Certificados** mostra o domínio como "Falhou".
 
 **Causa:** o Let's Encrypt limita a **50 certificados novos por semana por domínio registrado** (para
 `projeto-k3x9q.apps.example.com`, o domínio registrado é `example.com`), e a 5 certificados idênticos
-por semana. Criar e apagar muitos projetos em poucos dias, ou repetir a criação do mesmo nome, esgota
-o limite.
+por semana. Criar e apagar muitos projetos em poucos dias esgota o limite dos 50. O limite dos idênticos
+só atinge domínio próprio (repetir o mesmo nome): cada endereço sob o domínio de aplicações ganha um
+sufixo novo a cada criação.
 
 **Solução:**
 1. Abra **Certificados** e leia a causa que o painel mostra (mensagem do servidor, em português).
 2. Se for o limite, espere: ele volta aos poucos ao longo da semana. O painel não consegue contorná-lo.
 3. Depois, clique em **Tentar emitir agora**. Enquanto isso o painel segue com as tentativas
    automáticas, com intervalo crescente.
-4. Para não gastar o limite à toa, não apague e recrie o mesmo projeto várias vezes.
+4. Para não gastar o limite à toa, não apague e recrie projetos várias vezes. No assistente, o projeto é
+   criado com o endereço de teste e só troca para o endereço sob a base ao clicar em **Criar projeto**.
 
 ### Domínio `.localhost` não abre
 

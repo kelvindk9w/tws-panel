@@ -53,7 +53,7 @@
     "1. Digitar a base: a tela mostra o registro curinga (tipo, nome *.base, valor = IP da VPS) com botões de copiar.",
     "2. Criar o registro no DNS (nuvem cinza no Cloudflare).",
     "3. Verificar DNS e salvar: POST verify; sem sucesso, o motivo aparece em âmbar e nada é salvo.",
-    "4. Novo Projeto, passo 3: GET /api/domains/suggest devolve o endereço sob a base; o projeto é criado com ele (POST /api/projects) e ganha rota explícita no Caddy.",
+    "4. Novo Projeto, passo 3: GET /api/domains/suggest devolve o endereço sob a base e o de teste; o projeto é CRIADO com o de teste (POST /api/projects; o proxy pede certificado na hora) e só troca para o endereço sob a base em 'Criar projeto' (PATCH), se a pessoa escolher o automático.",
     "5. Se a base for configurada em outra aba com o assistente aberto, ao voltar para a aba (evento focus) o endereço automático passa a ser o novo."
   ],
   "proxy": "packages/deploy/src/caddy.ts não mudou: cada projeto tem o próprio bloco por host (HTTPS automático). Não existe bloco curinga, on_demand_tls nem diretiva global. Um nome aleatório sob a base, sem projeto, cai no bloco 'http://' (404 'domínio não configurado') e não recebe certificado. Teste: packages/deploy/tests/caddy-apps-domain.test.ts.",

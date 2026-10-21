@@ -67,7 +67,7 @@ Validação em `normalizeAppsDomainInput`, com teste adversarial por item (`apps
   erro nunca repete o texto digitado.
 - Curinga: `*.base` digitado vira só a base; qualquer outro `*` (`*apps`, `a*`, `**.`, `apps.*.`, `*`) é recusado.
 - Porta (`:8080`, `https://…:443/`), IP em qualquer forma (v4, v6, `[::1]`, numérico, hex, TLD numérico).
-- IDN/largura total: convertidos por `domainToASCII` (punycode) e reconferidos; `xn--` inválido recusado.
+- IDN/largura total: convertidos por `domainToASCII` (punycode) e reconferidos; `xn--` inválido que já vem em ASCII (ex.: `xn--abc.`) passa pela regra de hostname e é aceito (inofensivo: só não resolve); só o que termina em hífen é recusado.
 - Maiúsculas, ponto final, `https://`, barra final: normalizados. Rótulo > 63 e nome > 200: recusados.
 - Reservados: `.localhost`, `.local`, `.internal`, `.lan`, `.home(.arpa)`, `.localdomain`, `.intranet`, `.corp`,
   `.private`, `.test`, `.invalid`, `.onion`, `.arpa`, `.example`; sslip.io, nip.io, xip.io, traefik.me,
@@ -87,8 +87,8 @@ Documentado no guia (Parte 2) e em Solução de problemas: **50 certificados nov
 registrado** (o `example.com`, somando subdomínios) e 5 idênticos por semana (valores do que eu conhecia; vale
 reconferir na documentação atual do Let's Encrypt antes de publicar). Quando a emissão falha, a página
 Certificados já mostra a causa e o botão "Tentar emitir agora"; o painel não contorna o limite. Cada projeto
-criado e depois abandonado no assistente consome um nome (o assistente reaproveita o endereço em nova tentativa
-do mesmo projeto). Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
+criado e depois abandonado no assistente consome um nome (o projeto nasce no assistente com o endereço de teste e só ganha o endereço sob a base ao clicar em
+"Criar projeto", então escolher domínio próprio ou teste não gasta certificado sob a base). Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
 visíveis; o sufixo evita colisão, não esconde o endereço.
 
 ## Documentação
@@ -109,7 +109,7 @@ contra o build), `docs:site-url` e `check-no-real-hosts`: tudo OK. Testes com co
 | Pacote | Arquivos / testes | Instruções | Ramos | Funções | Linhas |
 |---|---|---|---|---|---|
 | core | 13 / 119 | 99,64 | 98,75 | 100 | 100 |
-| web | 66 / 1069 | 92,04 | 86,40 | 90,35 | 93,36 |
+| web | 66 / 1072 | 92,04 | 86,40 | 90,35 | 93,36 |
 | deploy | 47 / 840 | 98,52 | 95,72 | 99,05 | 99,26 |
 | mailer | 17 / 362 | 99,90 | 98,45 | 100 | 100 |
 | security | 12 / 215 | 99,33 | 97,33 | 100 | 100 |

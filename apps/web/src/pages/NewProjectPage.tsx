@@ -158,8 +158,12 @@ export function NewProjectPage() {
       if (!dom) {
         // endereço automático: funciona na hora, com HTTPS, sem configurar DNS
         const sug = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`).catch(() => null);
-        dom = sug?.auto ?? defaultDomainFor(name);
-        setAutoDomain(dom);
+        const auto = sug?.auto ?? defaultDomainFor(name);
+        // Com domínio de aplicações, o projeto NASCE com o endereço de teste (sslip.io): o
+        // proxy pede certificado na hora e o limite do Let's Encrypt é por semana. O endereço
+        // sob a base só entra em finish(), se a pessoa escolher o automático.
+        dom = sug?.kind === "apps" ? (sug.testAddress ?? auto) : auto;
+        setAutoDomain(auto);
         setPublicIp(sug?.publicIp ?? null);
         applySuggestion(sug);
       }
@@ -682,7 +686,7 @@ export function NewProjectPage() {
               </p>
             )}
 
-            {showIpWarning && <IpAddressWarning onUseOwn={() => setDomainMode("own")} />}
+            {showIpWarning && <IpAddressWarning onUseOwn={() => setDomainMode("own")} hasAppsDomain={appsBase !== null} />}
 
             {domainMode === "own" && (
               <div className="flex flex-col gap-3">

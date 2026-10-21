@@ -15,7 +15,7 @@ export function addressHasVpsIp(domain: string | null | undefined): boolean {
  * com atalho para "Meu domínio ou subdomínio" e para configurar o Domínio de
  * aplicações. O link abre em outra aba para não perder o assistente.
  */
-export function IpAddressWarning({ onUseOwn }: { onUseOwn: () => void }) {
+export function IpAddressWarning({ onUseOwn, hasAppsDomain = false }: { onUseOwn: () => void; hasAppsDomain?: boolean }) {
   const { t } = useI18n();
   return (
     <div
@@ -31,14 +31,16 @@ export function IpAddressWarning({ onUseOwn }: { onUseOwn: () => void }) {
           <button type="button" onClick={onUseOwn} className="text-left underline underline-offset-2 hover:no-underline">
             {t("projects.new.domain.ipWarningOwn")}
           </button>
-          <a
-            href="/settings/apps-domain"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:no-underline"
-          >
-            {t("projects.new.domain.ipWarningApps")}
-          </a>
+          {!hasAppsDomain && (
+            <a
+              href="/settings/apps-domain"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:no-underline"
+            >
+              {t("projects.new.domain.ipWarningApps")}
+            </a>
+          )}
         </div>
       </div>
     </div>

@@ -140,10 +140,40 @@ describe("passo 3 — com domínio de aplicações verificado", () => {
     project = { ...project, domain: APPS };
   });
 
-  it("o projeto nasce com o endereço sob a base, sem IP nem aviso; o sslip.io não é o padrão", async () => {
-    await ateOPasso3();
+  function createdDomain(): string {
     const create = apiFetchMock.mock.calls.find(([p, i]) => p === "/api/projects" && (i as RequestInit).method === "POST");
-    expect(JSON.parse(String((create![1] as RequestInit).body)).domain).toBe(APPS);
+    return JSON.parse(String((create![1] as RequestInit).body)).domain;
+  }
+
+  it("o projeto é CRIADO com o endereço de teste (sem gastar certificado sob a base); o automático sob a base só entra ao criar", async () => {
+    await ateOPasso3();
+    expect(createdDomain()).toBe(SSLIP);
+    const antes = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects/p1" && (i as RequestInit | undefined)?.method === "PATCH");
+    expect(antes).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(patchBody()).toMatchObject({ domain: APPS }));
+  });
+
+  it("escolhendo domínio próprio, o endereço sob a base nunca é enviado ao servidor", async () => {
+    await ateOPasso3();
+    fireEvent.click(screen.getByRole("radio", { name: /Meu domínio ou subdomínio/ }));
+    fireEvent.change(screen.getByLabelText(/Seu domínio/), { target: { value: "site.meusite.com.br" } });
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(patchBody()).toMatchObject({ domain: "site.meusite.com.br" }));
+    const bodies = apiFetchMock.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.body).map(([, i]) => String((i as RequestInit).body));
+    expect(bodies.some((b) => b.includes("apps.example.com"))).toBe(false);
+  });
+
+  it("no modo teste com base configurada, o aviso não oferece 'Configurar o domínio de aplicações'", async () => {
+    await ateOPasso3();
+    fireEvent.click(screen.getByRole("radio", { name: /Endereço de teste/ }));
+    const aviso = screen.getByTestId("ip-warning");
+    expect(within(aviso).queryByRole("link", { name: /Configurar o domínio de aplicações/ })).not.toBeInTheDocument();
+    expect(within(aviso).getByRole("button", { name: /Usar meu domínio ou subdomínio/ })).toBeInTheDocument();
+  });
+
+  it("o passo 3 mostra o endereço sob a base, sem IP nem aviso; o sslip.io não é o padrão", async () => {
+    await ateOPasso3();
     expect(screen.getByRole("radio", { name: /Endereço automático/ })).toBeChecked();
     expect(screen.getByTestId("auto-domain")).toHaveTextContent(`https://${APPS}`);
     expect(screen.getByTestId("auto-domain").textContent).not.toContain("sslip");
