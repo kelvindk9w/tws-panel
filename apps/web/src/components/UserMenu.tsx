@@ -82,7 +82,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
         }
       }}
       onBlur={(event) => {
-        // o foco foi para fora do menu (ex.: abriu o "Mais"): fecha, sem sobrepor
+        // o foco foi para fora do menu (ex.: abriu o submenu de Configurações): fecha, sem sobrepor
         const to = event.relatedTarget as Node | null;
         if (to && containerRef.current && !containerRef.current.contains(to)) close();
       }}
@@ -99,7 +99,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
       >
         <UserRound className="h-4 w-4" />
         {/* no topo, em tela de celular, só o ícone: o nome empurrava a página para o lado */}
-        <span className={cn("truncate", placement === "top" ? "hidden max-w-24 sm:inline xl:max-w-32" : "flex-1 text-left")}>
+        <span className={cn("truncate", placement === "top" ? "hidden max-w-24 sm:inline lg:max-w-16 xl:max-w-32" : "flex-1 text-left")}>
           {user.displayName || user.username}
         </span>
         <ChevronDown className="h-3.5 w-3.5" />

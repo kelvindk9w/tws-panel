@@ -359,13 +359,49 @@ describe("menu do topo com submenu de \"Configurações\"", () => {
     expect(within(nav).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("data-active", "true");
   });
 
-  it("abrir o submenu fecha a ajuda e o menu do usuário", async () => {
+  it("abrir o submenu fecha o menu do usuário e a ajuda", async () => {
     const user = userEvent.setup();
     renderLayout("top");
     await user.click(screen.getByRole("button", { name: /Conta:/ }));
     expect(screen.getByRole("button", { name: "Sair" })).toBeInTheDocument();
     await user.click(within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" }));
     expect(screen.queryByRole("button", { name: "Sair" })).not.toBeInTheDocument();
+    await user.click(within(top()).getByRole("button", { name: "Ajuda e feedback" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("aria-expanded", "false");
+    await user.click(within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["/settings/profile", "/settings/security", "/settings"])("em %s o link Configurações tem aria-current=page", (path) => {
+    renderLayout("top", path);
+    expect(within(desktopNav()).getByRole("link", { name: "Configurações" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("fora de /settings o link Configurações não tem aria-current", () => {
+    renderLayout("top", "/alerts");
+    expect(within(desktopNav()).getByRole("link", { name: "Configurações" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("clicar no link Configurações com o submenu aberto, na mesma rota, fecha o painel", async () => {
+    const user = userEvent.setup();
+    renderLayout("top", "/settings/profile");
+    const nav = desktopNav();
+    const btn = within(nav).getByRole("button", { name: "Submenu de Configurações" });
+    await user.click(btn);
+    expect(btn).toHaveAttribute("aria-expanded", "true");
+    await user.click(within(nav).getByRole("link", { name: "Configurações" }));
+    expect(btn).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("link e seta têm a mesma altura (sem degrau) e a seta mantém área de toque", () => {
+    renderLayout("top", "/settings/security");
+    const nav = desktopNav();
+    const link = within(nav).getByRole("link", { name: "Configurações" });
+    const btn = within(nav).getByRole("button", { name: "Submenu de Configurações" });
+    expect(link.className).toContain("h-8");
+    expect(btn.className).toContain("h-8");
+    expect(btn.className).toContain("w-7");
   });
 
   it("menu móvel lista todos os itens, sem agrupar", async () => {
@@ -395,10 +431,24 @@ describe("cabeçalho estreito: sem estouro lateral (estrutura)", () => {
     expect(label.className).toContain("sm:not-sr-only");
   });
 
+  it("faixa lg (1024-1279): itens do topo com folga lateral menor e nome do usuário limitado, para caber com Configurações", () => {
+    renderLayout("top");
+    const nav = within(top()).getByRole("navigation", { name: "Principal" });
+    for (const name of ["Dashboard", "Alertas"]) {
+      const cls = within(nav).getByRole("link", { name }).className;
+      expect(cls).toContain("lg:px-2");
+      expect(cls).toContain("xl:px-3");
+    }
+    expect(nav.className).toContain("lg:gap-0.5");
+    const nome = within(top()).getByRole("button", { name: /Conta:/ }).querySelector("span") as HTMLElement;
+    expect(nome.className).toContain("lg:max-w-16");
+    expect(nome.className).toContain("xl:max-w-32");
+  });
+
   it("espaços do cabeçalho: menores abaixo de sm e na faixa lg, normais em sm e xl", () => {
     renderLayout("top");
     const row = top().firstElementChild as HTMLElement;
-    for (const c of ["gap-2", "sm:gap-4", "lg:gap-3", "xl:gap-6"]) expect(row.className).toContain(c);
+    for (const c of ["gap-2", "sm:gap-4", "lg:gap-2", "xl:gap-6"]) expect(row.className).toContain(c);
     const group = within(top()).getByRole("combobox", { name: "Idioma" }).closest("div")!.parentElement as HTMLElement;
     for (const c of ["gap-1", "sm:gap-2", "lg:gap-1", "xl:gap-2"]) expect(group.className).toContain(c);
   });

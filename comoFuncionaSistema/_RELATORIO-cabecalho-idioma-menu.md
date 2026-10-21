@@ -55,8 +55,17 @@
 - Documentação do site (guia completo, pt-br e en) passou a citar "seta ao lado de Configurações".
 - Testes: header-language-menu, layout e help-menu atualizados e ampliados (vistos falhar antes);
   asserções de comportamento mantidas.
-- Medição no Chromium (Vite + API simulada, nome longo e badge 99+): sem rolagem horizontal a
-  360/390/768/1023/1024/1440 px, em pt-BR e en; submenu aberto dentro da tela em 1024 e 1440.
+- Correção da revisão (estouro em pt-BR): a primeira medição desta seção estava errada (usou a chave de
+  idioma errada e mediu só em inglês). Medido de novo com `paas.locale=pt-BR`, nome de 48 letras e badge 99+:
+  o cabeçalho chegava a 1087 px de largura (23 a 73 px além da tela) de 1024 a ~1099 px, em /mail/envios e
+  /settings/security. Causa: "Configurações" (link de ~120 px) no lugar de "Mais" (~50 px). Ajuste só na
+  faixa lg (1024-1279): folga lateral dos itens px-2 (xl volta a px-3), vão do menu 2 px, vão da linha gap-2 e nome
+  do usuário até 64 px (xl: 128 px). Depois: sem rolagem horizontal em 1024, 1040, 1060, 1080, 1099, 1100,
+  1280, 1440, 1023, 768, 390 e 360 px, pt-BR e en, nas duas rotas, com barra vertical (altura 500/700) e sem
+  (altura 1400/2500); sobra mínima de ~5 px dentro do respiro do cabeçalho a 1024 px com barra de rolagem
+  (botão do usuário termina em 993 px de 998 px úteis).
+- Link "Configurações" tem aria-current="page" em /settings e em qualquer subrota; clicar nele com o submenu
+  aberto fecha o painel; link e seta têm a mesma altura (h-8) e a seta tem 28x32 px.
 
 ## Não testado
 - Navegadores além do Chromium; leitor de tela real; telas entre 768 e 1023px só por regra de CSS.
