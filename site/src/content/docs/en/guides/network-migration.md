@@ -20,6 +20,8 @@ receive the version with separated networks. A new installation does not need th
 | `paas-mail-admin` | Only the panel and Stalwart (`paas-stalwart`): the email administration. |
 | `paas-mail` | Stalwart, webmail and the services of projects with email enabled (SMTP/IMAP). |
 
+> A compose service with `network_mode: service:X` (sharing another service's network) gets no network of its own: the panel attaches the owner service (`X`) to `paas-mail`, and the services sharing its network reach the mail server through it.
+
 What happens on its own (nothing is recreated, only `docker network connect/disconnect`):
 
 1. Panel up and served by domain: at boot (and on every deploy or proxy update) Caddy joins

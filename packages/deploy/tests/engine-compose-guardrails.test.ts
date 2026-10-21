@@ -4,6 +4,7 @@
  * qualquer `up` (achado A1). Sem Docker: `run` e `runStream` são dublês; a
  * saída do `config` é o modelo canônico que cada teste escolhe.
  */
+import { parse as parseYaml } from "yaml";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -326,5 +327,60 @@ describe("DeployEngine.recreate — o app pode ter mexido no compose desde o úl
     configResult = { code: 0, stdout: LIMPO, stderr: "" };
     await engine().recreate(project(), () => undefined);
     expect(sobe()).toBe(true);
+  });
+});
+
+describe("DeployEngine.deployCompose — e-mail em compose com network_mode (cassino)", () => {
+  const CASSINO = [
+    "services:",
+    "  db:",
+    "    image: postgres:16",
+    "  wallet:",
+    "    image: wallet:1",
+    "    networks: [backend]",
+    "  web:",
+    "    image: web:1",
+    "    network_mode: service:wallet",
+    "  caddy:",
+    "    image: caddy:2",
+    "    network_mode: service:wallet",
+    "networks:",
+    "  backend: {}",
+    "",
+  ].join("\n");
+
+  it("liga só o dono do namespace à rede de e-mail e explica nos logs", async () => {
+    await writeFile(path.join(src, "compose.yml"), CASSINO);
+    const proj = project();
+    proj.detection!.proxyService = "wallet";
+    configResult = {
+      code: 0,
+      stdout: JSON.stringify({
+        name: "paas-loja",
+        services: { db: { image: "postgres:16" }, wallet: { image: "wallet:1", networks: { backend: null, "paas-mail": null, "paas-net": null } }, web: { image: "web:1", network_mode: "service:wallet" }, caddy: { image: "caddy:2", network_mode: "service:wallet" } },
+        networks: { backend: {}, "paas-mail": { name: "paas-mail", external: true }, "paas-net": { name: "paas-net", external: true } },
+      }),
+      stderr: "",
+    };
+    const logs: string[] = [];
+    await privado().deployCompose(proj, src, (c) => logs.push(c), {}, { SMTP_HOST: "mail.loja.com" }, null, false);
+    expect(sobe()).toBe(true);
+    const override = parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as { services: Record<string, { networks?: Record<string, unknown> }> };
+    expect(override.services.web?.networks).toBeUndefined();
+    expect(override.services.caddy?.networks).toBeUndefined();
+    expect(override.services.wallet!.networks).toHaveProperty("paas-mail");
+    expect(override.services.db!.networks).toHaveProperty("paas-mail");
+    const text = logs.join("");
+    expect(text).toMatch(/Env vars injetadas nos serviços: db, wallet, web, caddy/);
+    expect(text).toMatch(/Rede de e-mail paas-mail ligada em: db, wallet\./);
+    expect(text).toMatch(/web, caddy compartilham a rede de wallet \(network_mode\) e usam a dela/);
+  });
+
+  it("serviço sem como entrar na rede (network_mode host) é avisado no log", async () => {
+    await writeFile(path.join(src, "compose.yml"), "services:\n  web:\n    image: x\n  agent:\n    image: y\n    network_mode: host\n");
+    configResult = { code: 0, stdout: LIMPO, stderr: "" };
+    const logs: string[] = [];
+    await privado().deployCompose(project(), src, (c) => logs.push(c), {}, { SMTP_HOST: "mail.loja.com" }, null, false);
+    expect(logs.join("")).toMatch(/agent: network_mode sem rede própria .* não alcança o servidor de e-mail/);
   });
 });

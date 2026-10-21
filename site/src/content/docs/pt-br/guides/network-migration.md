@@ -20,6 +20,8 @@ receber a versão com as redes separadas. Instalação nova não precisa disto: 
 | `paas-mail-admin` | Só o painel e o Stalwart (`paas-stalwart`): a administração do e-mail. |
 | `paas-mail` | Stalwart, webmail e os serviços dos projetos com e-mail habilitado (SMTP/IMAP). |
 
+> Serviço do compose com `network_mode: service:X` (que compartilha a rede de outro) não recebe rede própria: o painel liga o serviço dono (`X`) à `paas-mail` e os que compartilham a rede dele alcançam o servidor de e-mail por ele.
+
 Quando acontece sozinho (nada é recriado, só `docker network connect/disconnect`):
 
 1. Painel no ar e servido por domínio: no boot (e em todo deploy ou atualização do proxy) o Caddy entra na
