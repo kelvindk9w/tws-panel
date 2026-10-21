@@ -123,6 +123,8 @@ novo: o login pede o código. No Dashboard, o passo **Verificação em duas etap
 
 Troca o endereço `https://203-0-113-10.sslip.io` por um seu, como `painel.example.com`. O
 endereço automático entrega o IP da VPS no nome; um domínio seu é mais discreto e fácil de lembrar.
+Para os endereços dos projetos, veja também o [Domínio de aplicações](#dominio-de-aplicacoes), no
+fim desta etapa.
 
 > [!NOTE]
 > Instalou com acesso por túnel SSH? Então o painel não tem endereço na internet, este passo já
@@ -180,6 +182,62 @@ domínio novo** e o certificado válido.
   Espere a mensagem "pronto", abra `https://203-0-113-10.sslip.io` (com o seu IP) e entre de
   novo. Detalhes em
   [O domínio do painel parou de abrir](../guides/recover-access.md#o-domínio-do-painel-parou-de-abrir).
+
+<a id="dominio-de-aplicacoes"></a>
+
+### Domínio de aplicações (opcional)
+
+Cada projeto novo ganha, por padrão, um endereço automático **de teste** com o IP da VPS no nome
+(`minha-app.203-0-113-10.sslip.io`). Esse endereço aparece em prints e em links compartilhados,
+deixa de abrir se o IP da VPS mudar e depende de um serviço de terceiros (o sslip.io). Não é uma
+falha de segurança grave: quem hospeda sites sempre pode ter o IP descoberto pelo DNS. O problema é
+de privacidade, aparência e estabilidade.
+
+Com o **domínio de aplicações**, o painel gera os endereços sob um subdomínio seu, sem o IP no nome:
+`minha-app-k3x9q.apps.example.com`.
+
+**O que fazer:**
+
+1. **Escolha um subdomínio só para as aplicações**, como `apps.example.com`. Não use o domínio
+   principal, o domínio do painel nem um domínio de projeto ou de e-mail.
+2. Abra **Configurações → Domínio de aplicações** e digite `apps.example.com`. A tela mostra o
+   registro a criar, com botão de copiar em cada campo.
+3. **Crie um único registro curinga no DNS.** No Cloudflare: DNS → Registros → Adicionar registro.
+   - Tipo: **A**.
+   - Nome: `*.apps` (para `*.apps.example.com`). Se o seu provedor pede o nome completo, digite
+     `*.apps.example.com`.
+   - Endereço IPv4: o IP da VPS.
+   - Proxy: **nuvem cinza ("Somente DNS")**. Com a nuvem laranja, o certificado de cada projeto não sai.
+   - A tela só mostra um registro **AAAA** se o painel souber o IPv6 público da VPS
+     (`PAAS_PUBLIC_IPV6`). Fora isso, não crie AAAA.
+4. Clique em **Verificar DNS e salvar**. O painel consulta um nome aleatório sob a base
+   (`paas-check-…`) e **só salva** se ele chegar a esta VPS. Um registro só para `apps.example.com`
+   não passa: o curinga é que vale. O resultado é uma mensagem do servidor, sempre em português.
+   Se disser que não aponta, espere alguns minutos e tente de novo.
+
+**O que conferir:** a tela mostra o domínio com o selo **Verificado** e um exemplo de endereço.
+
+**Como usar:** em **Novo Projeto**, no passo 3, o **Endereço automático** passa a ser
+`<projeto>-<sufixo>.apps.example.com` (sufixo aleatório de 5 caracteres), com HTTPS e sem aviso. O
+sslip.io continua disponível como **Endereço de teste**, com o aviso de que contém o IP da VPS.
+Projetos que já existem com sslip.io não mudam.
+
+**Bom saber:**
+
+- Cada projeto tem a sua rota e o seu certificado. O painel **não** emite certificado curinga nem
+  libera emissão sob demanda: um nome qualquer sob `apps.example.com` sem projeto responde só a
+  página de "domínio não configurado", em HTTP, e não tem certificado.
+- O **Let's Encrypt limita a 50 certificados novos por semana por domínio registrado** (aqui,
+  `example.com`, somando todos os subdomínios). Para uso pessoal sobra; criar e apagar muitos
+  projetos em poucos dias pode esgotar o limite. Quando a emissão falha, a página **Certificados**
+  mostra a causa e tem o botão **Tentar emitir agora**
+  (veja [Limite do Let's Encrypt](../guides/troubleshooting.md#limite-do-lets-encrypt)).
+- Todo certificado fica numa lista pública (Certificate Transparency): o endereço de cada projeto
+  (nome do projeto e sufixo) fica visível ali. O sufixo evita colisão; não esconde o endereço.
+- **Trocar** a base não muda os projetos que já usam a antiga. **Remover** também não: eles
+  continuam abrindo, e os projetos novos voltam ao endereço de teste.
+- Se a verificação falhar, veja
+  [A verificação do domínio de aplicações falha](../guides/troubleshooting.md#verificacao-do-dominio-de-aplicacoes).
 
 <a id="etapa-3"></a>
 
@@ -513,7 +571,13 @@ No menu, clique em **Novo Projeto**. São três passos:
    ou `docker-compose`. Num compose, ele é adotado como está, sem ser reescrito, e a tela mostra em
    qual serviço e porta o HTTP chega.
 3. **Domínio e criação.**
-   - **Endereço automático:** funciona na hora, com HTTPS (ex.: `minha-app.203-0-113-10.sslip.io`).
+   - **Endereço automático:** funciona na hora, com HTTPS. Sem domínio de aplicações, é o
+     `minha-app.203-0-113-10.sslip.io`, e a tela mostra um aviso âmbar: "Este endereço contém o IP da
+     VPS. Use para testar; para publicar, use o seu domínio ou subdomínio." (não é um erro). Com o
+     [domínio de aplicações](#dominio-de-aplicacoes), é `minha-app-k3x9q.apps.example.com`, sem o IP e
+     sem aviso.
+   - **Endereço de teste:** só aparece com o domínio de aplicações configurado. É o endereço do
+     sslip.io, com o aviso. Serve para testar.
    - **Meu domínio ou subdomínio:** digite o domínio e crie, no seu DNS, o registro que a tela
      mostrar (tipo A para o IP da VPS, nuvem cinza no Cloudflare). Dá para criar o projeto antes de
      o DNS propagar.
@@ -692,6 +756,7 @@ Os comandos de emergência estão em
 - [ ] As 8 fases de segurança aplicadas e confirmadas, e a VPS reiniciada depois
 - [ ] Verificação em duas etapas ativa e códigos de recuperação guardados
 - [ ] Domínio do painel com certificado válido (e, se quiser, o acesso pelo IP desativado, com o comando de volta anotado)
+- [ ] (Opcional) Domínio de aplicações verificado, para os projetos não mostrarem o IP da VPS no endereço
 - [ ] Fuso horário da VPS conferido (backups às 03:00 no seu horário)
 - [ ] E-mail: porta 25 liberada, checklist DNS 6/6 OK, PTR verde ou azul e certificado válido
 - [ ] Caixa criada, e-mail de teste entregue e webmail abrindo

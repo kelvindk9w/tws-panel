@@ -81,6 +81,46 @@ instala e renova o certificado sozinho.
    Depois que o certificado sair, use **Tentar emitir agora** na página **Certificados** se ele ainda estiver pendente;
 5. Verifique se o UFW/liberação do provedor permite 80 e 443.
 
+<a id="verificacao-do-dominio-de-aplicacoes"></a>
+
+### A verificação do domínio de aplicações falha
+
+**Sintomas:** em **Configurações → Domínio de aplicações**, **Verificar DNS e salvar** mostra "Não foi
+salvo" e uma mensagem do servidor, em português mesmo com a interface em inglês.
+
+**Causas e soluções:**
+
+- **Só existe o registro do nome exato** (`apps.example.com`). A verificação consulta um nome
+  aleatório (`paas-check-…apps.example.com`), então só um registro **curinga** (`*.apps`) passa. Crie
+  o registro com o nome `*.apps` (ou `*.apps.example.com`, conforme o provedor).
+- **Nuvem laranja da Cloudflare:** a mensagem fala em "proxy da Cloudflare". Mude o registro curinga
+  para a nuvem cinza ("Somente DNS"). Atrás do proxy, o certificado de cada projeto não sai.
+- **IP errado, ou mais de um registro A:** deixe só o IP da VPS.
+- **Registro AAAA para outro lugar:** apague o AAAA curinga (ou aponte para o IPv6 da VPS, se o painel
+  o conhece).
+- **"O DNS não respondeu agora":** nada foi salvo e nada mudou; tente de novo em instantes.
+- **Acabou de criar o registro:** espere a propagação (minutos a horas) e verifique de novo.
+- Confira de fora: `dig +short qualquer-coisa.apps.example.com` deve devolver o IP da VPS.
+
+<a id="limite-do-lets-encrypt"></a>
+
+### Certificado de um projeto não sai (limite do Let's Encrypt)
+
+**Sintomas:** o projeto abre em HTTP ou com erro de certificado, e a página **Certificados** mostra o
+domínio como "Falhou".
+
+**Causa:** o Let's Encrypt limita a **50 certificados novos por semana por domínio registrado** (para
+`projeto-k3x9q.apps.example.com`, o domínio registrado é `example.com`), e a 5 certificados idênticos
+por semana. Criar e apagar muitos projetos em poucos dias, ou repetir a criação do mesmo nome, esgota
+o limite.
+
+**Solução:**
+1. Abra **Certificados** e leia a causa que o painel mostra (mensagem do servidor, em português).
+2. Se for o limite, espere: ele volta aos poucos ao longo da semana. O painel não consegue contorná-lo.
+3. Depois, clique em **Tentar emitir agora**. Enquanto isso o painel segue com as tentativas
+   automáticas, com intervalo crescente.
+4. Para não gastar o limite à toa, não apague e recrie o mesmo projeto várias vezes.
+
 ### Domínio `.localhost` não abre
 
 **Sintomas:** `meuapp.localhost` não resolve no navegador.

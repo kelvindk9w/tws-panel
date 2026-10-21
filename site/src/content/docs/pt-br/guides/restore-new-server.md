@@ -195,6 +195,17 @@ Faça isto enquanto restaura os projetos, porque o DNS leva tempo para se espalh
 domínio, edite o registro **A** para o IP da VPS nova (no Cloudflare, nuvem cinza, "Somente DNS").
 Isso vale para o domínio do painel e para o de cada projeto. Se puder, diminua o TTL antes.
 
+<a id="dominio-de-aplicacoes"></a>
+
+> [!NOTE]
+> **Domínio de aplicações.** Se você usava um [domínio de aplicações](../getting-started/complete-guide.md#dominio-de-aplicacoes)
+> (por exemplo, `apps.example.com`), a configuração volta com o backup do painel, mas o painel guarda
+> para qual IP o DNS foi conferido. Em uma VPS com **outro IP**, a base volta marcada como **A
+> conferir** e deixa de ser oferecida: os projetos novos voltam ao endereço de teste (sslip.io) até
+> você atualizar o registro curinga `*.apps` para o IP novo e, em **Configurações → Domínio de
+> aplicações**, clicar em **Verificar DNS de novo**. Os projetos restaurados que usam endereços sob
+> a base só abrem depois que o DNS aponta para a VPS nova.
+
 ### 7. Restaure os projetos
 
 No bloco **Projetos** do cartão, clique em **Restaurar** ao lado de cada projeto.

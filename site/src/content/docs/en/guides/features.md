@@ -15,6 +15,7 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
 - [Container ports](#portas)
 - [HTTPS and certificates](#certificados)
 - [Panel domain](#dominio-do-painel)
+- [Apps domain](#dominio-de-aplicacoes)
 - [Email](#email)
 - [Notifications](#notificacoes)
 - [Backups](#backups)
@@ -45,7 +46,7 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
 
 **Domain.**
 
-- Automatic address with instant HTTPS (`projeto.203-0-113-10.sslip.io`) or your own domain, with the
+- Automatic address with instant HTTPS or your own domain, with the
   exact DNS record to create.
 - **Multiple domains** on the same project: connect, make primary and remove, effective immediately.
 - Before the first deploy, the domain answers "site em configuração" (site being set up). A stopped project shows a
@@ -119,6 +120,29 @@ Optional, once on the new address: **Turn off IP access**. It is only enabled wh
 through the new domain, the certificate is valid and you type the domain to confirm. To go back over
 SSH: `cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh` (see
 [Recover access](recover-access.md)).
+
+<a id="dominio-de-aplicacoes"></a>
+
+## Apps domain
+
+In **Settings → Apps domain** you set a subdomain of your own (`apps.example.com`) for the automatic
+project addresses, with no VPS IP in the name:
+
+1. the screen shows **one wildcard record** to create (`*.apps.example.com`, type A pointing to the
+   VPS IP, with the gray cloud on Cloudflare; AAAA only if the panel knows the VPS IPv6);
+2. **Verify DNS and save** queries a random name under the base (`paas-check-…`) on public DNS and
+   **only saves** if it reaches this VPS (the Cloudflare proxy turned on counts as "does not point here");
+3. with the base verified, step 3 of **New Project** generates `<project>-<suffix>.apps.example.com`,
+   and sslip.io becomes the **Test address**, with a notice.
+
+Each project has its own route and its own certificate: there is no wildcard certificate and no
+on-demand issuance, and a random name under the base without a project has no certificate. The base
+cannot be the panel domain, a project or email domain, an IP, an internal network name (`.local`,
+`.internal`…), or a service such as sslip.io. There is only one apps domain per panel. Changing or
+removing the base does not change projects that already use an address under it. The file comes back
+with the panel backup, but on a VPS with a different IP the base comes back as **To recheck** until
+the record is updated (see [Restore on another server](restore-new-server.md#dominio-de-aplicacoes)).
+Step by step and Let's Encrypt limits: [Guide, Part 2](../getting-started/complete-guide.md#dominio-de-aplicacoes).
 
 <a id="email"></a>
 
