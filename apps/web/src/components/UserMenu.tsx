@@ -82,7 +82,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
         }
       }}
       onBlur={(event) => {
-        // o foco foi para fora do menu (ex.: abriu o "Mais"): fecha, sem sobrepor
+        // o foco foi para fora do menu (ex.: abriu o submenu de Configurações): fecha, sem sobrepor
         const to = event.relatedTarget as Node | null;
         if (to && containerRef.current && !containerRef.current.contains(to)) close();
       }}
@@ -91,6 +91,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
         ref={buttonRef}
         type="button"
         aria-label={t("shell.userMenu.account", { name: user.displayName || user.username })}
+        title={user.displayName || user.username}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "flex items-center gap-1 rounded-md px-2 py-1.5 sm:gap-2 sm:px-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
@@ -99,7 +100,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
       >
         <UserRound className="h-4 w-4" />
         {/* no topo, em tela de celular, só o ícone: o nome empurrava a página para o lado */}
-        <span className={cn("truncate", placement === "top" ? "hidden max-w-24 sm:inline xl:max-w-32" : "flex-1 text-left")}>
+        <span className={cn("truncate", placement === "top" ? "hidden max-w-24 sm:inline lg:max-w-16 xl:max-w-32" : "flex-1 text-left")}>
           {user.displayName || user.username}
         </span>
         <ChevronDown className="h-3.5 w-3.5" />

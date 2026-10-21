@@ -31,7 +31,7 @@ termo novo entra aqui antes de entrar nos dicionários.
 | código de recuperação | recovery code | |
 | sessão | session | |
 | configurações | settings | |
-| mais (item de menu que agrupa os demais) | more | |
+| submenu de Configurações (seta ao lado do link) | Settings submenu | |
 | ajuda e feedback (menu do cabeçalho) | help and feedback | |
 | relatar um problema | report a problem | formulário de bug (issue) |
 | sugerir uma funcionalidade | suggest a feature | formulário de sugestão |
