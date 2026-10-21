@@ -87,4 +87,6 @@ export interface AutoDomainSuggestion {
   appsBase?: string | null;
   /** Endereço sslip.io (com o IP no nome) para testar; null sem endereço público. */
   testAddress?: string | null;
+  /** Endereço único e sem certificado público (.localhost) com que o projeto nasce; só com `kind: "apps"`. */
+  provisional?: string;
 }

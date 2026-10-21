@@ -88,6 +88,7 @@ export function NewProjectPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // passo 1 — fonte
@@ -159,10 +160,11 @@ export function NewProjectPage() {
         // endereço automático: funciona na hora, com HTTPS, sem configurar DNS
         const sug = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`).catch(() => null);
         const auto = sug?.auto ?? defaultDomainFor(name);
-        // Com domínio de aplicações, o projeto NASCE com o endereço de teste (sslip.io): o
-        // proxy pede certificado na hora e o limite do Let's Encrypt é por semana. O endereço
-        // sob a base só entra em finish(), se a pessoa escolher o automático.
-        dom = sug?.kind === "apps" ? (sug.testAddress ?? auto) : auto;
+        // Com domínio de aplicações, o projeto NASCE com um endereço provisório único
+        // (.localhost, sem certificado público nem IP): o proxy pede certificado na hora e o
+        // limite do Let's Encrypt é por semana. O endereço sob a base só entra em finish(),
+        // se a pessoa escolher o automático.
+        dom = sug?.kind === "apps" ? (sug.provisional ?? auto) : auto;
         setAutoDomain(auto);
         setPublicIp(sug?.publicIp ?? null);
         applySuggestion(sug);
@@ -249,10 +251,25 @@ export function NewProjectPage() {
     setBusy(true);
     setError(null);
     try {
+      let finalDomain = chosenDomain;
+      if (domainMode === "auto" && appsBase !== null) {
+        // A base pode ter sido removida ou trocada em outra aba: confere no servidor antes de
+        // gravar o endereço sob ela. Se mudou, mostra o novo endereço e espera a pessoa confirmar
+        // (o projeto continua com o provisório; clicar de novo é seguro).
+        const sug = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`);
+        if (sug.kind !== "apps" || !chosenDomain.endsWith(`.${sug.appsBase ?? ""}`)) {
+          setAutoDomain(sug.auto);
+          applySuggestion(sug);
+          setNotice(t("projects.new.domain.baseChanged"));
+          return;
+        }
+        finalDomain = chosenDomain;
+      }
+      setNotice(null);
       await apiFetch<ProjectResponse>(`/api/projects/${projectId}`, {
         method: "PATCH",
         body: JSON.stringify({
-          domain: chosenDomain,
+          domain: finalDomain,
           websocket,
           proxyService: proxyService || null,
           proxyPort: proxyPort ? Number(proxyPort) : null,
@@ -333,6 +350,12 @@ export function NewProjectPage() {
           </li>
         ))}
       </ol>
+
+      {notice && (
+        <p role="status" data-testid="new-project-notice" className="text-sm text-amber-800 dark:text-amber-300">
+          {notice}
+        </p>
+      )}
 
       {error && (
         <p data-testid="new-project-error" className="whitespace-pre-line text-sm text-destructive">

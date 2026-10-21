@@ -490,6 +490,30 @@ describe("AppsDomainService", () => {
       expect(asked.at(-1)).toBe(out);
     });
 
+    it("provisório: <projeto>-<sufixo>.localhost, único e sem pedir certificado público", async () => {
+      const svc = await ready();
+      const asked: string[] = [];
+      inUse = { has: (d: string) => (asked.push(d), asked.length <= 2) } as unknown as Set<string>;
+      const out = await svc.suggestProvisional("Dev Link");
+      expect(out).toMatch(/^dev-link-[a-z0-9]{5}\.localhost$/);
+      expect(asked).toHaveLength(3);
+      expect(out).not.toMatch(/sslip|\d+\.\d+/);
+    });
+
+    it("provisório não depende de base configurada e repetir o mesmo nome dá endereços diferentes", async () => {
+      const svc = make({ randomChars: undefined });
+      const a = await svc.suggestProvisional("loja");
+      const b = await svc.suggestProvisional("loja");
+      expect(a).toMatch(/^loja-[a-hj-km-np-z2-9]{5}\.localhost$/);
+      expect(a).not.toBe(b);
+    });
+
+    it("provisório: tudo ocupado vira erro claro", async () => {
+      const svc = make();
+      inUse = { has: () => true } as unknown as Set<string>;
+      await expect(svc.suggestProvisional("loja")).rejects.toMatchObject({ statusCode: 409, code: "domain_in_use" });
+    });
+
     it("tudo ocupado (improvável): erro claro em vez de repetir um nome em uso", async () => {
       const svc = await ready();
       inUse = { has: () => true } as unknown as Set<string>;

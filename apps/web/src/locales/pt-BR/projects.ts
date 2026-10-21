@@ -275,6 +275,7 @@ export default {
   "new.domain.autoHint": "Funciona na hora, com HTTPS, sem configurar nada. Bom para testar e para começar.",
   "new.domain.autoHintApps": "Gerado sob o seu domínio de aplicações ({base}), com HTTPS e sem o IP da VPS no endereço.",
   "new.domain.testTitle": "Endereço de teste",
+  "new.domain.baseChanged": "O domínio de aplicações mudou desde que você abriu o assistente. O endereço foi atualizado: confira e clique em Criar projeto de novo.",
   "new.domain.testHint": "Usa sslip.io e contém o IP da VPS. Bom só para testar.",
   "new.domain.ipWarningTitle": "O IP da VPS aparece neste endereço",
   "new.domain.ipWarning": "Este endereço contém o IP da VPS. Use para testar; para publicar, use o seu domínio ou subdomínio.",

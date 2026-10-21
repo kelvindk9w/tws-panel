@@ -121,7 +121,7 @@ sufixo novo a cada criação.
 3. Depois, clique em **Tentar emitir agora**. Enquanto isso o painel segue com as tentativas
    automáticas, com intervalo crescente.
 4. Para não gastar o limite à toa, não apague e recrie projetos várias vezes. No assistente, o projeto é
-   criado com o endereço de teste e só troca para o endereço sob a base ao clicar em **Criar projeto**.
+   criado com um endereço provisório (`nome-xxxxx.localhost`, único, sem IP e sem certificado público) e só troca para o endereço sob a base ao clicar em **Criar projeto**.
 
 ### Domínio `.localhost` não abre
 

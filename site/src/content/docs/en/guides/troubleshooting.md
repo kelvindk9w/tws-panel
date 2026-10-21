@@ -123,7 +123,7 @@ under the apps domain gets a new suffix on every creation.
 2. If it is the limit, wait: it comes back little by little over the week. The panel cannot get around it.
 3. Then click **Try issuing now**. Meanwhile the panel keeps retrying on its own, with growing intervals.
 4. To avoid using up the limit for nothing, do not delete and recreate projects several times. In the
-   wizard, the project is created with the test address and only switches to the address under the base
+   wizard, the project is created with a provisional address (`name-xxxxx.localhost`, unique, no IP and no public certificate) and only switches to the address under the base
    when you click **Create project**.
 
 ### `.localhost` domain does not open

@@ -87,8 +87,11 @@ Documentado no guia (Parte 2) e em Solução de problemas: **50 certificados nov
 registrado** (o `example.com`, somando subdomínios) e 5 idênticos por semana (valores do que eu conhecia; vale
 reconferir na documentação atual do Let's Encrypt antes de publicar). Quando a emissão falha, a página
 Certificados já mostra a causa e o botão "Tentar emitir agora"; o painel não contorna o limite. Cada projeto
-criado e depois abandonado no assistente consome um nome (o projeto nasce no assistente com o endereço de teste e só ganha o endereço sob a base ao clicar em
-"Criar projeto", então escolher domínio próprio ou teste não gasta certificado sob a base). Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
+criado e depois abandonado no assistente não gasta certificado: o projeto nasce com um endereço provisório único
+(`<projeto>-<sufixo>.localhost`, conferido como livre contra projetos, apelidos, painel e e-mail; o proxy o serve em HTTP
+puro, sem certificado público e sem IP). Só ganha o endereço sob a base ao clicar em "Criar projeto", se a pessoa
+escolher o automático; antes disso o servidor da sugestão é consultado de novo e, se a base mudou ou saiu, nada é
+gravado sob ela (aviso e novo endereço). Vale também para painel sem sslip.io (túnel SSH), sem exceção. Todo certificado é público (Certificate Transparency): o nome do projeto e o sufixo ficam
 visíveis; o sufixo evita colisão, não esconde o endereço.
 
 ## Documentação

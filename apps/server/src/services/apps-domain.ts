@@ -428,6 +428,21 @@ export class AppsDomainService {
   async suggest(projectName: string): Promise<string | null> {
     const base = this.state.base;
     if (!base || !this.isVerified()) return null;
+    return this.uniqueUnder(projectName, base);
+  }
+
+  /**
+   * Endereço PROVISÓRIO de um projeto novo: <projeto>-<sufixo>.localhost. Único
+   * (conferido contra projetos, apelidos, painel e e-mail, como o da base), não
+   * revela o IP da VPS e NÃO pede certificado público (o proxy serve .localhost
+   * em HTTP puro). O projeto nasce com ele e só troca para o endereço definitivo
+   * ao fim do assistente; um rascunho abandonado nunca gasta certificado.
+   */
+  async suggestProvisional(projectName: string): Promise<string> {
+    return this.uniqueUnder(projectName, "localhost");
+  }
+
+  private async uniqueUnder(projectName: string, base: string): Promise<string> {
     const label = projectLabel(projectName);
     const rand = this.deps.randomChars ?? randomChars;
     for (const length of [SUFFIX_SHORT, SUFFIX_LONG]) {

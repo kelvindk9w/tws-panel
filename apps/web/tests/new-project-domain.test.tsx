@@ -24,6 +24,7 @@ import { NewProjectPage } from "@/pages/NewProjectPage";
 
 const SSLIP = "loja.203-0-113-10.sslip.io";
 const APPS = "loja-k3x9q.apps.example.com";
+const PROV = "loja-p4r7m.localhost";
 const WARNING = "Este endereço contém o IP da VPS. Use para testar; para publicar, use o seu domínio ou subdomínio.";
 
 type Suggestion = Record<string, unknown>;
@@ -31,7 +32,8 @@ let suggestion: Suggestion;
 let project: { id: string; domain: string; name: string };
 
 const SSLIP_ONLY: Suggestion = { auto: SSLIP, publicIp: "203.0.113.10" };
-const WITH_APPS: Suggestion = { auto: APPS, publicIp: "203.0.113.10", kind: "apps", appsBase: "apps.example.com", testAddress: SSLIP };
+const WITH_APPS: Suggestion = { auto: APPS, publicIp: "203.0.113.10", kind: "apps", appsBase: "apps.example.com", testAddress: SSLIP, provisional: PROV };
+const APPS_SEM_TESTE: Suggestion = { auto: APPS, publicIp: null, kind: "apps", appsBase: "apps.example.com", testAddress: null, provisional: PROV };
 
 beforeEach(() => {
   suggestion = SSLIP_ONLY;
@@ -145,13 +147,60 @@ describe("passo 3 — com domínio de aplicações verificado", () => {
     return JSON.parse(String((create![1] as RequestInit).body)).domain;
   }
 
-  it("o projeto é CRIADO com o endereço de teste (sem gastar certificado sob a base); o automático sob a base só entra ao criar", async () => {
+  it("o projeto é CRIADO com o endereço provisório único (sem IP, sem certificado público); o automático sob a base só entra ao criar", async () => {
     await ateOPasso3();
-    expect(createdDomain()).toBe(SSLIP);
+    expect(createdDomain()).toBe(PROV);
+    expect(createdDomain()).not.toContain("sslip");
     const antes = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects/p1" && (i as RequestInit | undefined)?.method === "PATCH");
     expect(antes).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
     await waitFor(() => expect(patchBody()).toMatchObject({ domain: APPS }));
+  });
+
+  it("painel sem sslip (testAddress nulo): o projeto nasce com o provisório, nunca sob a base", async () => {
+    suggestion = APPS_SEM_TESTE;
+    await ateOPasso3();
+    expect(createdDomain()).toBe(PROV);
+    expect(createdDomain()).not.toContain("apps.example.com");
+  });
+
+  it("criar sem sugestão de provisório (servidor antigo): cai no automático de sempre", async () => {
+    suggestion = { ...WITH_APPS, provisional: undefined };
+    await ateOPasso3();
+    expect(createdDomain()).toBe(APPS);
+  });
+
+  it("falha na troca de endereço ao criar: o projeto segue com o provisório e a nova tentativa é segura", async () => {
+    await ateOPasso3();
+    const base = apiFetchMock.getMockImplementation()!;
+    let falhar = true;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1" && init?.method === "PATCH" && falhar) {
+        falhar = false;
+        throw new Error("falha de rede");
+      }
+      return base(path, init);
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await screen.findByTestId("new-project-error");
+    expect(project.domain).toBe(PROV);
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(patchBody()).toMatchObject({ domain: APPS }));
+    const posts = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects" && (i as RequestInit).method === "POST");
+    expect(posts).toHaveLength(1);
+  });
+
+  it("base removida em outra aba antes de criar: não grava o endereço sob ela, avisa e mostra o novo endereço", async () => {
+    await ateOPasso3();
+    suggestion = SSLIP_ONLY;
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await screen.findByTestId("new-project-notice");
+    const patches = apiFetchMock.mock.calls.filter(([p, i]) => p === "/api/projects/p1" && (i as RequestInit | undefined)?.method === "PATCH");
+    expect(patches).toHaveLength(0);
+    expect(project.domain).toBe(PROV);
+    await waitFor(() => expect(screen.getByTestId("auto-domain")).toHaveTextContent(`https://${SSLIP}`));
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(patchBody()).toMatchObject({ domain: SSLIP }));
   });
 
   it("escolhendo domínio próprio, o endereço sob a base nunca é enviado ao servidor", async () => {

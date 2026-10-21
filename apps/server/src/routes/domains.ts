@@ -160,7 +160,9 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
       const apps = app.hasDecorator("appsDomainService") ? await app.appsDomainService.suggest(name) : null;
       if (apps) {
         const { base } = await app.appsDomainService.status();
-        const response: AutoDomainSuggestion = { auto: apps, publicIp, kind: "apps", appsBase: base, testAddress: sslip };
+        const response: AutoDomainSuggestion = { auto: apps, publicIp, kind: "apps", appsBase: base, testAddress: sslip,
+          provisional: await app.appsDomainService.suggestProvisional(name),
+        };
         return reply.send(response);
       }
       return reply.send({ auto: sslip ?? `${slug}.localhost`, publicIp });

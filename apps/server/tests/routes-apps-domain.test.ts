@@ -180,6 +180,24 @@ describe("GET /api/domains/suggest com domínio de aplicações", () => {
     expect(body.appsBase).toBe(BASE);
     expect(body.testAddress).toBe(`dev-link.${IP_HOST}`);
     expect(body.auto).not.toContain("sslip");
+    expect((body as unknown as { provisional: string }).provisional).toMatch(/^dev-link-[a-z0-9]{5}\.localhost$/);
+  });
+
+  it("nome repetido: cada sugestão traz um provisório novo, diferente do endereço de teste fixo", async () => {
+    await call("POST", "/api/settings/apps-domain/verify", { domain: BASE });
+    const a = (await call("GET", "/api/domains/suggest?name=loja")).json() as { provisional: string; testAddress: string };
+    const b = (await call("GET", "/api/domains/suggest?name=loja")).json() as { provisional: string };
+    expect(a.provisional).not.toBe(b.provisional);
+    expect(a.provisional).not.toBe(a.testAddress);
+  });
+
+  it("base verificada e painel sem sslip: sem endereço de teste, mas com provisório", async () => {
+    await call("POST", "/api/settings/apps-domain/verify", { domain: BASE });
+    (app.config as { panelDomain: string | null }).panelDomain = "painel.example.com";
+    const body = (await call("GET", "/api/domains/suggest?name=loja")).json() as { kind: string; testAddress: string | null; provisional: string };
+    expect(body.kind).toBe("apps");
+    expect(body.testAddress).toBeNull();
+    expect(body.provisional).toMatch(/^loja-[a-z0-9]{5}\.localhost$/);
   });
 
   it("sem base: continua o sslip de sempre, com o formato antigo da resposta", async () => {
