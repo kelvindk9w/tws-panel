@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
   isOnboardingFirstVisit,
+  onboardingAttentionSteps,
+  onboardingStepNeedsAttention,
   isOnboardingWaitingOnSoon,
   nextOnboardingStep,
   type OnboardingResponse,
@@ -11,11 +13,13 @@ import {
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, Trans, useI18n, type Key, type TFunction } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { restoreGuideUrl } from "@/lib/links";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
+  AlertTriangle,
   ArrowRight,
   Check,
   ChevronDown,
@@ -34,6 +38,7 @@ import {
   Minus,
   RefreshCw,
   Sparkles,
+  BookOpen,
 } from "lucide-react";
 import { ONBOARDING_CONTENT } from "./steps-content";
 
@@ -78,6 +83,52 @@ function canSkip(step: OnboardingStep): boolean {
   return step.optional && (step.status === "pending" || step.status === "in_progress" || step.status === "unknown");
 }
 
+/**
+ * "O que falta": aviso âmbar (pendência, não erro) de um passo em andamento.
+ * Fica fora do "Como fazer", sempre visível. Ícone + título (não depende só da
+ * cor) e role="note": informação estática, não uma interrupção.
+ */
+function MissingNote({ step, onGo }: { step: OnboardingStep; onGo: () => void }) {
+  const { t, locale } = useI18n();
+  const action = ONBOARDING_CONTENT[step.id].action;
+  const restoreFirst = step.missingCode === "backups-restore-first";
+  const titleId = `onboarding-missing-title-${step.id}`;
+  return (
+    <div
+      role="note"
+      aria-labelledby={titleId}
+      data-testid={`onboarding-missing-${step.id}`}
+      className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
+    >
+      <p className="flex items-center gap-1.5 font-semibold text-amber-300">
+        <span role="img" aria-label={t("onboarding.missing.icon")} className="flex">
+          <AlertTriangle aria-hidden className="h-4 w-4 shrink-0" />
+        </span>
+        <span id={titleId}>{t("onboarding.missing.title")}</span>
+      </p>
+      <p className="break-words">{restoreFirst ? t("onboarding.missing.backupsRestoreFirst") : step.missing}</p>
+      {(restoreFirst || action) && (
+        <div className="flex flex-wrap gap-2">
+          {restoreFirst && (
+            <Button size="sm" variant="outline" asChild>
+              <a href={restoreGuideUrl(locale)} target="_blank" rel="noopener noreferrer">
+                <BookOpen className="h-4 w-4" /> {t("onboarding.missing.restoreGuide")}
+              </a>
+            </Button>
+          )}
+          {action && (
+            <Button size="sm" variant="outline" asChild>
+              <Link to={action.to} onClick={onGo}>
+                {t(action.label)} <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepItem({
   step,
   number,
@@ -100,7 +151,7 @@ function StepItem({
   const Icon = content.icon;
   const muted = step.status === "soon" || step.status === "skipped";
   return (
-    <li data-testid={`onboarding-step-${step.id}`} className="flex gap-3 py-3 first:pt-0 last:pb-0">
+    <li id={`onboarding-step-${step.id}`} data-testid={`onboarding-step-${step.id}`} className="flex scroll-mt-4 gap-3 py-3 first:pt-0 last:pb-0">
       <StatusIcon status={step.status} />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -114,6 +165,7 @@ function StepItem({
           )}
         </div>
         <p className="break-words text-sm text-muted-foreground">{step.detail}</p>
+        {onboardingStepNeedsAttention(step) && <MissingNote step={step} onGo={onGo} />}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="ghost"
@@ -286,6 +338,40 @@ function Stepper({
         );
       })}
     </ol>
+  );
+}
+
+/** Uma linha âmbar no topo: quantos passos precisam de atenção, com um link para cada um. */
+function AttentionSummary({ steps, onJump }: { steps: OnboardingStep[]; onJump: (id: OnboardingStep["id"]) => void }) {
+  const { t } = useI18n();
+  const pending = onboardingAttentionSteps(steps);
+  if (pending.length === 0) return null;
+  return (
+    <p
+      role="status"
+      data-testid="onboarding-attention"
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+    >
+      <span role="img" aria-label={t("onboarding.missing.icon")} className="flex">
+        <AlertTriangle aria-hidden className="h-4 w-4 shrink-0 text-amber-300" />
+      </span>
+      <span className="font-medium">{t(pending.length === 1 ? "onboarding.attention.one" : "onboarding.attention.many", { count: pending.length })}</span>
+      {pending.map((step, i) => (
+        <span key={step.id}>
+          <a
+            href={`#onboarding-step-${step.id}`}
+            className="font-medium text-amber-300 underline underline-offset-2 hover:text-amber-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            onClick={(e) => {
+              e.preventDefault();
+              onJump(step.id);
+            }}
+          >
+            {t(ONBOARDING_CONTENT[step.id].title)}
+          </a>
+          {i < pending.length - 1 ? "," : ""}
+        </span>
+      ))}
+    </p>
   );
 }
 
@@ -497,6 +583,21 @@ export function OnboardingChecklist({
           <p className="text-xs text-muted-foreground">{summary(data.steps, t)}</p>
         </div>
       )}
+
+      <AttentionSummary
+        steps={data.steps}
+        onJump={(id) => {
+          if (compact) {
+            setSelectedId(id);
+            setShowAll(false);
+          }
+          // o passo pode ainda não estar na tela (compacto): espera o próximo quadro
+          requestAnimationFrame(() => {
+            const el = document.getElementById(`onboarding-step-${id}`);
+            el?.scrollIntoView?.({ block: "nearest" });
+          });
+        }}
+      />
 
       {data.complete && (
         <p className="flex items-center gap-2 text-sm text-emerald-400">

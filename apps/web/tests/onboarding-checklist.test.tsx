@@ -24,6 +24,8 @@ vi.mock("@/lib/api", () => ({
   ApiRequestError: class extends Error {},
 }));
 
+import { setLocale } from "../src/i18n";
+import { SITE_URL } from "@/lib/links";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { OnboardingSettings } from "@/pages/settings/OnboardingSettings";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
@@ -107,6 +109,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setLocale("pt-BR");
 });
 
 describe("primeiro acesso", () => {
@@ -414,5 +417,152 @@ describe("falha ao carregar", () => {
     cleanup();
     renderChecklist("settings");
     expect(await screen.findByRole("alert")).toHaveTextContent(/Não foi possível carregar/);
+  });
+});
+
+describe("pendência: o que falta num passo em andamento", () => {
+  /** Dashboard compacto com backups em andamento e o texto do que falta vindo do servidor. */
+  function withBackups(over: Partial<OnboardingStep> = {}, extra: Partial<OnboardingResponse> = {}): OnboardingResponse {
+    const base = response({ started: true, ...extra }, { hardening: "done", "two-factor": "done", "panel-domain": "done", email: "done", notifications: "done" });
+    return {
+      ...base,
+      steps: [
+        ...base.steps,
+        {
+          id: "backups",
+          status: "in_progress",
+          optional: true,
+          detail: "Armazenamento conectado.",
+          missing: 'Falta um backup externo conferido. Clique em "Fazer backup agora".',
+          missingCode: null,
+          ...over,
+        },
+      ],
+    };
+  }
+
+  it("passo em andamento mostra a caixa 'O que falta' com o texto, o ícone e o botão do passo — sem abrir o Como fazer", async () => {
+    serve(withBackups());
+    renderChecklist();
+    const step = await screen.findByTestId("onboarding-step-backups");
+    const box = within(step).getByTestId("onboarding-missing-backups");
+    expect(box).toHaveAttribute("role", "note");
+    expect(box).toHaveAccessibleName("O que falta");
+    expect(within(box).getByText("O que falta")).toBeInTheDocument();
+    expect(within(box).getByText(/Falta um backup externo conferido/)).toBeInTheDocument();
+    // ícone com texto alternativo; a informação não depende só da cor
+    expect(within(box).getByRole("img", { name: "Atenção" })).toBeInTheDocument();
+    expect(box.className).toMatch(/amber/);
+    const open = within(box).getByRole("link", { name: /Abrir Backups/ });
+    expect(open).toHaveAttribute("href", "/settings/backups");
+  });
+
+  it("o botão da caixa leva à tela do passo e conta como começar o roteiro", async () => {
+    serve(withBackups());
+    renderChecklist();
+    const box = await screen.findByTestId("onboarding-missing-backups");
+    fireEvent.click(within(box).getByRole("link", { name: /Abrir Backups/ }));
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/settings/backups"));
+  });
+
+  it("passo feito, a fazer, 'Não vou usar', não confirmado ou em andamento sem texto: sem caixa", async () => {
+    for (const over of [
+      { status: "done" as const },
+      { status: "pending" as const },
+      { status: "skipped" as const },
+      { status: "unknown" as const },
+      { missing: null },
+      { missing: undefined },
+    ]) {
+      serve(withBackups(over));
+      renderChecklist("settings");
+      await screen.findByTestId("onboarding-step-backups");
+      expect(screen.queryByTestId("onboarding-missing-backups")).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("resumo no topo: conta os passos pendentes e leva a cada um (âncora)", async () => {
+    const res = withBackups();
+    res.steps = res.steps.map((s) =>
+      s.id === "email" ? { ...s, status: "in_progress" as const, missing: "O servidor de e-mail está parado: ligue-o." } : s,
+    );
+    serve(res);
+    renderChecklist("settings");
+    const summary = await screen.findByTestId("onboarding-attention");
+    expect(summary).toHaveAttribute("role", "status");
+    expect(summary).toHaveTextContent("2 passos precisam de atenção:");
+    const links = within(summary).getAllByRole("link");
+    expect(links.map((l) => l.textContent)).toEqual(["E-mail do servidor", "Backups fora da VPS"]);
+    expect(links[1]).toHaveAttribute("href", "#onboarding-step-backups");
+    // o alvo existe na lista
+    expect(document.getElementById("onboarding-step-backups")).toBeInTheDocument();
+  });
+
+  it("resumo no singular; no compacto, o link traz o passo à tela", async () => {
+    serve(withBackups());
+    renderChecklist();
+    const summary = await screen.findByTestId("onboarding-attention");
+    expect(summary).toHaveTextContent("1 passo precisa de atenção:");
+    // o compacto mostra só o passo atual (backups, o único que pede algo); escolhe outro e volta pelo link
+    const user = withBackups();
+    user.steps = user.steps.map((s) => (s.id === "two-factor" ? { ...s, status: "pending" as const } : s));
+    cleanup();
+    serve(user);
+    renderChecklist();
+    await screen.findByTestId("onboarding-step-two-factor");
+    expect(screen.queryByTestId("onboarding-step-backups")).not.toBeInTheDocument();
+    fireEvent.click(within(await screen.findByTestId("onboarding-attention")).getByRole("link", { name: "Backups fora da VPS" }));
+    expect(await screen.findByTestId("onboarding-step-backups")).toBeInTheDocument();
+    expect(screen.queryByTestId("onboarding-step-two-factor")).not.toBeInTheDocument();
+  });
+
+  it("sem pendência (tudo a fazer simples, ou tudo feito): sem resumo", async () => {
+    serve(response());
+    renderChecklist();
+    await screen.findByTestId("onboarding-card");
+    expect(screen.queryByTestId("onboarding-attention")).not.toBeInTheDocument();
+    cleanup();
+    const done = response({ started: true, complete: true }, { hardening: "done", "two-factor": "done", "panel-domain": "done", email: "done", notifications: "done" });
+    serve(done);
+    renderChecklist("settings");
+    await screen.findByText("Tudo pronto", { exact: false });
+    expect(screen.queryByTestId("onboarding-attention")).not.toBeInTheDocument();
+    expect(screen.queryByTestId(/onboarding-missing/)).not.toBeInTheDocument();
+  });
+
+  it("backups com cópias de outro painel: não convida a fazer backup; manda restaurar e abre o guia no idioma", async () => {
+    serve(
+      withBackups({
+        missing: "Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup.",
+        missingCode: "backups-restore-first",
+      }),
+    );
+    renderChecklist();
+    const box = await screen.findByTestId("onboarding-missing-backups");
+    expect(box).toHaveTextContent(/Restaure primeiro o painel antigo \(guia de restauração\) antes do primeiro backup/);
+    expect(box).toHaveTextContent(/não misturar com as cópias do painel anterior/);
+    expect(box).not.toHaveTextContent(/Fazer backup agora/);
+    const guide = within(box).getByRole("link", { name: /Abrir o guia de restauração/ });
+    expect(guide).toHaveAttribute("href", `${SITE_URL}/pt-br/guides/restore-new-server/`);
+    expect(guide).toHaveAttribute("target", "_blank");
+    expect(guide).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(within(box).getByRole("link", { name: /Abrir Backups/ })).toBeInTheDocument();
+  });
+
+  it("em inglês: título, ícone, resumo e guia no idioma", async () => {
+    setLocale("en");
+    serve(withBackups({ missing: "texto do servidor", missingCode: "backups-restore-first" }));
+    renderChecklist();
+    const box = await screen.findByTestId("onboarding-missing-backups");
+    expect(box).toHaveAccessibleName("What's missing");
+    expect(within(box).getByRole("img", { name: "Attention" })).toBeInTheDocument();
+    expect(box).toHaveTextContent(/Restore the old panel first/);
+    expect(box).not.toHaveTextContent("texto do servidor");
+    expect(within(box).getByRole("link", { name: /Open the restore guide/ })).toHaveAttribute(
+      "href",
+      `${SITE_URL}/en/guides/restore-new-server/`,
+    );
+    expect(await screen.findByTestId("onboarding-attention")).toHaveTextContent("1 step needs attention:");
   });
 });

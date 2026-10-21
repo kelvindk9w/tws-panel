@@ -344,6 +344,42 @@ describe("situação", () => {
     await backup();
     expect(await service.facts()).toMatchObject({ destinationConnected: true, verifiedRemote: 1 });
   });
+
+  describe("o roteiro vê backups de outro painel no armazenamento (só leitura)", () => {
+    const OTHER = `${BACKUP_ROOT_FOLDER}/_painel/2026-10-13_03-00.7z`;
+
+    it("painel novo, armazenamento conectado com backups do painel de outro servidor: foreignBackupsHeld", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+      expect(await service.facts()).toMatchObject({ destinationConnected: true, verifiedRemote: 0, foreignBackupsHeld: true });
+      // ler não muda nada: nenhuma pausa gravada, nenhum aviso
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason).toBeNull();
+    });
+
+    it("sem backup do painel no armazenamento, com projeto, sem destino ou com backup já conferido: sem o campo", async () => {
+      projects = [];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      await connect();
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      storage.objects.set(OTHER, Buffer.from("x"));
+      projects = [project({ id: "p1" })];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+    });
+
+    it("o armazenamento não responde: não afirma nada e não conta falha para o aviso do agendador", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("x"));
+      const list = storage.list.bind(storage);
+      storage.list = async () => {
+        throw new Error("sem rede");
+      };
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      storage.list = list;
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+    });
+  });
 });
 
 describe("destino externo", () => {

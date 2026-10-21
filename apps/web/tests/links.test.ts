@@ -9,6 +9,7 @@ import {
   docsUrl,
   featureRequestUrl,
   helpPageUrl,
+  restoreGuideUrl,
   REPO_URL,
   SITE_URL,
   siteLanguage,
@@ -35,6 +36,8 @@ describe("endereços por idioma", () => {
     expect(docsUrl("en")).toBe(`${SITE_URL}/en/`);
     expect(helpPageUrl("pt-BR")).toBe(`${SITE_URL}/pt-br/guides/help/`);
     expect(helpPageUrl("en")).toBe(`${SITE_URL}/en/guides/help/`);
+    expect(restoreGuideUrl("pt-BR")).toBe(`${SITE_URL}/pt-br/guides/restore-new-server/`);
+    expect(restoreGuideUrl("en")).toBe(`${SITE_URL}/en/guides/restore-new-server/`);
   });
 
   it("Discussions e formulário de funcionalidade apontam para o repositório", () => {

@@ -15,6 +15,7 @@ import {
   SECURITY_PHASES,
   isOnboardingComplete,
   isOnboardingHiddenUntilNews,
+  type OnboardingMissingCode,
   type OnboardingResponse,
   type OnboardingStep,
   type OnboardingStepId,
@@ -33,7 +34,12 @@ import type { StoredOnboarding, UserStore } from "./user-store.js";
 /** Resultado de uma conferência ("Não vou usar" é aplicado depois, pela conta). */
 export interface StepState {
   status: Exclude<OnboardingStepStatus, "skipped">;
+  /** A situação real, em uma frase. */
   detail: string;
+  /** Só com status "in_progress": o que falta e como resolver (distinto do `detail`). */
+  missing?: string;
+  /** Pendência que a interface mostra com texto e link próprios. */
+  missingCode?: OnboardingMissingCode;
 }
 
 export interface OnboardingContext {
@@ -88,12 +94,13 @@ export function hardeningState(report: SecurityScanReport | null, history: Secur
   if (pending.length === 0) {
     return { status: "done", detail: [`Todas as ${total} fases resolvidas`, nota].filter(Boolean).join(" · ") + "." };
   }
-  const parts = [
-    `${resolved} de ${total} fases resolvidas`,
-    nota,
-    `falta: ${pending.map((p) => p.title).join(", ")}`,
-  ];
-  return { status: resolved > 0 ? "in_progress" : "pending", detail: parts.filter(Boolean).join(" · ") + "." };
+  const detail = [`${resolved} de ${total} fases resolvidas`, nota].filter(Boolean).join(" · ") + ".";
+  if (resolved === 0) return { status: "pending", detail };
+  return {
+    status: "in_progress",
+    detail,
+    missing: `Falta aplicar: ${pending.map((p) => p.title).join(", ")}. Abra Proteções da VPS e aplique as fases que faltam.`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,16 +141,28 @@ export function panelDomainState(facts: PanelDomainFacts): StepState {
     return { status: "pending", detail: `Hoje o painel abre em https://${ip} — o endereço atual tem o IP da VPS no nome.` };
   }
   if (!facts.active) {
-    return { status: "in_progress", detail: `${d} cadastrado; falta o DNS apontar para a VPS (registro A) e clicar em "Verificar DNS".` };
+    return {
+      status: "in_progress",
+      detail: `${d} cadastrado.`,
+      missing: `Falta o DNS de ${d} apontar para a VPS (registro A). Crie o registro no provedor do domínio e clique em "Verificar DNS".`,
+    };
   }
   if (!facts.certificateValid) {
-    return { status: "in_progress", detail: `DNS de ${d} certo; falta o certificado HTTPS ficar válido (Configurações → Domínio do painel).` };
+    return {
+      status: "in_progress",
+      detail: `DNS de ${d} certo.`,
+      missing: "Falta o certificado HTTPS ficar válido. Acompanhe em Configurações → Domínio do painel.",
+    };
   }
   if (facts.ipAccessDisabled) {
     return { status: "done", detail: `O painel abre em https://${d}; o acesso pelo IP está desativado.` };
   }
   if (!facts.openedViaDomain) {
-    return { status: "in_progress", detail: `Certificado pronto: abra o painel por https://${d} e entre de novo.` };
+    return {
+      status: "in_progress",
+      detail: `Certificado de ${d} pronto.`,
+      missing: `Abra o painel por https://${d} e entre de novo.`,
+    };
   }
   return {
     status: "done",
@@ -189,22 +208,35 @@ export function emailState(facts: EmailFacts): StepState {
     return { status: "pending", detail: "Servidor de e-mail não iniciado e nenhum domínio de e-mail cadastrado." };
   }
   if (!facts.installed) {
-    return { status: "in_progress", detail: `Domínio ${names} cadastrado, mas o servidor de e-mail não foi iniciado.` };
+    return {
+      status: "in_progress",
+      detail: `Domínio ${names} cadastrado.`,
+      missing: "O servidor de e-mail não foi iniciado. Inicie-o na tela de E-mail.",
+    };
   }
   if (facts.running === null) {
     return { status: "unknown", detail: "Não foi possível conferir se o servidor de e-mail está ligado." };
   }
   if (!facts.running) {
-    return { status: "in_progress", detail: "O servidor de e-mail está parado." };
+    return {
+      status: "in_progress",
+      detail: "O servidor de e-mail está parado.",
+      missing: "Ligue o servidor de e-mail na tela de E-mail.",
+    };
   }
   if (facts.domains.length === 0) {
-    return { status: "in_progress", detail: "Servidor ligado; falta adicionar um domínio de e-mail." };
+    return {
+      status: "in_progress",
+      detail: "Servidor de e-mail ligado.",
+      missing: "Falta adicionar um domínio de e-mail na tela de E-mail.",
+    };
   }
   const semDns = facts.domains.filter((d) => d.dnsOk !== true);
   if (semDns.length === facts.domains.length) {
     return {
       status: "in_progress",
-      detail: `Servidor ligado; falta conferir o DNS de ${semDns.map((d) => d.name).join(", ")}.`,
+      detail: "Servidor de e-mail ligado.",
+      missing: `Falta conferir o DNS de ${semDns.map((d) => d.name).join(", ")}. Crie os registros no provedor do domínio e clique em "Verificar DNS".`,
     };
   }
   return { status: "done", detail: `Servidor ligado · ${names}.` };
@@ -232,7 +264,8 @@ export function notificationsState(facts: NotificationFacts): StepState {
   if (tested.length === 0) {
     return {
       status: "in_progress",
-      detail: `${connected.map((c) => label(c.id)).join(" e ")} conectado; falta clicar em "Enviar teste" e conferir se a mensagem chegou.`,
+      detail: `${connected.map((c) => label(c.id)).join(" e ")} conectado.`,
+      missing: 'Falta clicar em "Enviar teste" e conferir se a mensagem chegou.',
     };
   }
   const names = connected.map((c) => label(c.id)).join(" e ");
@@ -252,6 +285,11 @@ export interface BackupFacts {
   verifiedRemote: number;
   /** Motivo da última falha de backup externo, se houver. */
   lastFailure: string | null;
+  /**
+   * O armazenamento já guarda backups do painel de OUTRO servidor e este painel
+   * é novo (a mesma regra que pausa o backup automático do painel). Só leitura.
+   */
+  foreignBackupsHeld?: boolean;
 }
 
 /**
@@ -267,10 +305,21 @@ export function backupsState(facts: BackupFacts): StepState {
     };
   }
   if (facts.verifiedRemote === 0) {
+    const detail = "Armazenamento conectado, ainda sem backup externo conferido.";
+    if (facts.foreignBackupsHeld) {
+      return {
+        status: "in_progress",
+        detail,
+        missing:
+          "Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup, para não misturar com as cópias do painel anterior.",
+        missingCode: "backups-restore-first",
+      };
+    }
     const why = facts.lastFailure ? ` O último falhou: ${facts.lastFailure}` : "";
     return {
       status: "in_progress",
-      detail: `Armazenamento conectado; falta um backup externo conferido (clique em "Fazer backup agora").${why}`,
+      detail,
+      missing: `Falta um backup externo conferido. Em Configurações → Backups, clique em "Fazer backup agora".${why}`,
     };
   }
   const n = facts.verifiedRemote;
@@ -335,7 +384,8 @@ export async function buildOnboardingResponse(
         state = { status: "unknown", detail: "Não foi possível conferir agora. Tente de novo em instantes." };
       }
       const status: OnboardingStepStatus = optional && skipped.has(id) && state.status !== "done" ? "skipped" : state.status;
-      return { id, status, optional, detail: state.detail };
+      const pending = status === "in_progress" && state.missing ? state : null;
+      return { id, status, optional, detail: state.detail, missing: pending?.missing ?? null, missingCode: pending?.missingCode ?? null };
     }),
   );
   return {

@@ -19,6 +19,14 @@ export default {
   "step.soon": "Em breve no painel.",
   "stepper.aria": "{number}. {title}: {status}",
   "stepper.title": "{title} — {status}",
+
+  // OnboardingChecklist: pendência (passo em andamento)
+  "missing.title": "O que falta",
+  "missing.icon": "Atenção",
+  "missing.backupsRestoreFirst": "Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup, para não misturar com as cópias do painel anterior.",
+  "missing.restoreGuide": "Abrir o guia de restauração",
+  "attention.one": "{count} passo precisa de atenção:",
+  "attention.many": "{count} passos precisam de atenção:",
   "projectsDir": "Pasta dos projetos na VPS: <code>{dir}</code> — definida na instalação, nada a fazer.",
 
   // OnboardingChecklist: resumo

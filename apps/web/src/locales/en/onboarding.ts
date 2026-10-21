@@ -19,6 +19,14 @@ export default {
   "step.soon": "Coming soon to the panel.",
   "stepper.aria": "{number}. {title}: {status}",
   "stepper.title": "{title} — {status}",
+
+  // OnboardingChecklist: pendência (passo em andamento)
+  "missing.title": "What's missing",
+  "missing.icon": "Attention",
+  "missing.backupsRestoreFirst": "Restore the old panel first (follow the restore guide) before the first backup, so it does not get mixed with the previous panel's copies.",
+  "missing.restoreGuide": "Open the restore guide",
+  "attention.one": "{count} step needs attention:",
+  "attention.many": "{count} steps need attention:",
   "projectsDir": "Projects folder on the VPS: <code>{dir}</code> — set during installation, nothing to do.",
 
   // OnboardingChecklist: resumo

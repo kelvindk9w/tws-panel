@@ -986,14 +986,20 @@ export class BackupService {
   }
 
   /** Para o roteiro (passo 6). */
-  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null }> {
+  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; foreignBackupsHeld?: true }> {
     await this.ensureLoaded();
     const verified = Object.values(this.config.targets).filter((t) => t.lastRemoteVerifiedAt).length;
     const failed = [...this.history].reverse().find((r) => r.remote === "failed");
+    // Só leitura da regra que pausa o backup do painel (nada é gravado nem avisado); só custa uma listagem quando importa.
+    const foreign =
+      this.config.destination !== null && verified === 0
+        ? (await this.panelFreshOverForeign((await this.opts.projects.list()).length, true)) !== null
+        : false;
     return {
       destinationConnected: this.config.destination !== null,
       verifiedRemote: verified,
       lastFailure: failed?.remoteDetail ?? null,
+      ...(foreign ? { foreignBackupsHeld: true as const } : {}),
     };
   }
 
@@ -1393,7 +1399,7 @@ export class BackupService {
     return Boolean(t.lastRemoteSentAt);
   }
 
-  private async panelFreshOverForeign(projectCount: number): Promise<string | null> {
+  private async panelFreshOverForeign(projectCount: number, readOnly = false): Promise<string | null> {
     const t = this.target("panel");
     // O que é desta instalação: projeto cadastrado, painel restaurado, ou um backup (do painel ou do e-mail)
     // já ENVIADO ao armazenamento externo. Cópia só na VPS (`lastSuccessAt`) não conta: o painel novo
@@ -1407,10 +1413,11 @@ export class BackupService {
     const prefix = `${BACKUP_ROOT_FOLDER}/_painel/`;
     try {
       const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
-      delete t.heldFailures;
+      if (!readOnly) delete t.heldFailures;
       if (!found) return null;
       return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto, de você restaurar o painel ou de fazer um backup à mão com o armazenamento já conectado (cópia só na VPS não conta). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
     } catch (err) {
+      if (readOnly) return null; // consulta do roteiro: sem contar falha nem avisar
       t.heldFailures = (t.heldFailures ?? 0) + 1;
       if (t.heldFailures === 3) {
         this.opts.notify?.({
