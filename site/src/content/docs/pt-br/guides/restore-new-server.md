@@ -257,6 +257,8 @@ Se a restauração terminar com o aviso "Os dados do webmail voltaram, mas o web
    depois de iniciar o servidor de e-mail, use o aviso âmbar do **Dashboard** ou **E-mail → Webmail
    → Ativar webmail**.
 
+**Domínios e caixas voltam sozinhos para a lista.** O painel mostra a lista de domínios e caixas do cadastro dele, não a do servidor de e-mail. Por isso, no fim da restauração do e-mail o painel lê o que o servidor de e-mail trouxe e cadastra o que faltava (aviso do servidor, em português: "Cadastrei 2 domínios e 4 caixas no painel"). Nada é ativado e o que já estava cadastrado não muda. Duas consequências: as caixas cadastradas ficam **sem senha conhecida pelo painel** (o servidor nunca a entrega), então use **Trocar senha** na caixa antes de enviar por ela; e o DNS dos domínios aparece como **não verificado** até você clicar em **Verificar agora**. Se o servidor de e-mail ainda não existia na VPS, ou a restauração avisou que não conseguiu cadastrar, abra **E-mail** e clique em **Sincronizar com o servidor de e-mail** (pode repetir à vontade: não duplica nada).
+
 **O que conferir:** clique em **Verificar agora** até chegar a **6/6 OK**, envie um e-mail de teste
 (Etapa 4.7 da Parte 2 do guia passo a passo) e veja **Válido** no cartão do certificado do e-mail. Envie devagar no
 começo: o IP novo ainda não tem reputação.

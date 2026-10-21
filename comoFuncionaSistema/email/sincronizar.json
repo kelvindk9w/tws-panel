@@ -1,0 +1,69 @@
+{
+  "id": "sincronizar",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/sync",
+  "resumo": "Sincronizar com o servidor de e-mail: cadastra no painel os domínios e as caixas que o Stalwart já tem e o cadastro (data/mail/mail.json) não conhece. É o que acontece sozinho no fim da restauração do e-mail; o botão serve a quem já restaurou antes ou iniciou o servidor depois de restaurar. Nada é ativado e nenhuma senha é lida.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts (POST /api/mail/sync), apps/server/src/services/mail-service.ts (adoptFromStalwart), apps/server/src/services/mail-adopt.ts (planAdoption), packages/mailer/src/client.ts (listPrincipals)",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). Escrita: a verificação de origem cruzada (CSRF) do guard vale como nas demais rotas POST."
+  },
+  "rateLimit": "10 req/min por IP (config da rota); o limite global de 200 req/min também vale.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": { "ok": true, "domainCount": "número de domínios cadastrados agora", "mailboxCount": "número de caixas cadastradas agora", "domains": "string[] (nomes)", "mailboxes": "string[] (endereços completos)", "skipped": "string[] (nomes que o Stalwart tem e o painel não conseguiu cadastrar)" },
+      "exemplo": { "ok": true, "domainCount": 1, "mailboxCount": 3, "domains": ["cassp.example.com"], "mailboxes": ["contato@envio.example.com", "contato@cassp.example.com", "postmaster@cassp.example.com"], "skipped": [] },
+      "quando": "Nada a cadastrar também é 200, com contagens zeradas (a tela diz 'O painel já conhece tudo o que o servidor de e-mail tem', sem texto de erro). A resposta NUNCA traz senha, hash ou dados da conta."
+    }
+  ],
+  "erros": [
+    { "status": 409, "codigo": "mail_auth_failed", "quando": "401/403 do Stalwart: a senha de administração guardada não é a do servidor em execução. Mesma mensagem das demais telas (mail-auth-error.ts); o reparo é o do Dashboard / E-mail → Servidor." },
+    { "status": 409, "codigo": "mail_server_stopped", "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar." },
+    { "status": 409, "codigo": "mail_not_initialized", "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro." },
+    { "status": 502, "codigo": "mail_unreachable", "quando": "O Stalwart não respondeu (rede/timeout).", "mensagem": "O painel não conseguiu falar com o servidor de e-mail agora. Confira se ele está rodando em E-mail → Servidor e tente de novo. Nada foi alterado." },
+    { "status": 502, "codigo": "mail_sync_failed", "quando": "Outro erro HTTP do Stalwart.", "mensagem": "O servidor de e-mail respondeu com erro e nada foi alterado: <motivo>" }
+  ],
+  "fluxo": [
+    "1. Chamadas simultâneas viram uma só (MailService.adopting): quem chega durante a sincronização recebe o mesmo resultado; o Stalwart é consultado uma vez.",
+    "2. Lê do Stalwart os principals type=domain e type=individual (GET /api/principal?type=…&limit=500&page=N, autenticação Basic com o adminSecret do mail.json). StalwartClient.listPrincipals monta cada item campo a campo com SÓ nome e e-mails: o campo `secrets` (hash/senhas da caixa) e o resto da resposta são descartados no cliente, nunca guardados nem logados.",
+    "3. planAdoption (regra pura): o que já está no cadastro não entra (idempotente); caixa só entra se o nome é um endereço completo cujo domínio está cadastrado ou foi adotado agora; abuse@/dmarc@ são endereços da caixa postmaster@, não caixas (alias não duplica); postmaster@ vira kind 'system' (protegida); endereço cuja parte local é o slug de um projeto cadastrado vira kind 'project' com projectId daquele projeto; o resto é 'user'.",
+    "4. Cada domínio novo precisa da chave DKIM pública para o checklist de DNS: lê GET /api/dkim/rsa-<domínio>; se a assinatura não existe, cria como o cadastro do domínio faz (POST /api/dkim, idempotente) e lê de novo. Sem chave legível o domínio NÃO entra (nem as caixas dele) e vai para `skipped`; a próxima sincronização tenta de novo.",
+    "5. Domínio adotado: dkimSelector 'paas', dkimKeyBits 2048, dmarcStage 'none', lastVerify null (DNS 'não verificado': a pessoa roda Verificar agora). Sem dmarcAlias: a sincronização do TLS (ensureDmarcAliases) confere dmarc@ na postmaster@ e acrescenta se faltar.",
+    "6. Caixa adotada: password '' (SENHA DESCONHECIDA). O painel nunca lê a senha do Stalwart. A tela mostra 'O painel não sabe a senha desta caixa' e o botão Trocar senha (PUT /api/mail/mailboxes/:id/password) define uma nova no Stalwart e no cadastro. Mailbox.passwordUnknown=true na listagem.",
+    "7. Grava o mail.json só se adotou algo. A rota audita 'mail.sync' (contagens) e dispara a sincronização do TLS/Caddy em segundo plano (os hosts mail.<domínio> novos ganham bloco e certificado)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.adoptFromStalwart", "arquivo": "apps/server/src/services/mail-service.ts", "papel": "Orquestra a leitura, o plano e a gravação; um objeto só (o decorator app.mailService) para a tela e para a restauração, para não haver duas cópias do cadastro em memória." },
+    { "tipo": "funcao", "nome": "planAdoption", "arquivo": "apps/server/src/services/mail-adopt.ts", "papel": "Decide o que falta cadastrar, sem rede nem disco." },
+    { "tipo": "cliente", "nome": "StalwartClient.listPrincipals", "arquivo": "packages/mailer/src/client.ts", "papel": "Lista domínios e caixas devolvendo só nome e endereços." },
+    { "tipo": "servico", "nome": "mailAuthError / mailSyncError", "arquivo": "apps/server/src/services/mail-auth-error.ts", "papel": "401/403 viram mail_auth_failed; Stalwart fora do ar vira mail_unreachable." }
+  ],
+  "efeitosColaterais": [
+    "Grava data/mail/mail.json (domínios e caixas novos) quando há algo a cadastrar.",
+    "Pode criar a assinatura DKIM de um domínio que o Stalwart tem sem chave (mesma operação do cadastro do domínio).",
+    "Não cria, altera nem remove nada de caixa, senha ou domínio no Stalwart; não apaga nada do cadastro; não liga webmail, projetos nem DNS."
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/MailPage.tsx (botão 'Sincronizar com o servidor de e-mail', card do servidor, só com o servidor rodando)",
+    "apps/server/src/services/backup-service.ts (restoreEmail → adoptRestoredEmail, via opts.mailAdopt)"
+  ],
+  "testes": [
+    "apps/server/tests/mail-adopt.test.ts",
+    "apps/server/tests/mail-adopt-service.test.ts (integração: Stalwart falso por fetch, 2 domínios e 4 caixas, reexecução, caixa já cadastrada com senha, simultâneas, 401)",
+    "apps/server/tests/routes-mail-sync.test.ts",
+    "apps/server/tests/backup-service.test.ts (restauração do e-mail: cadastrar no painel…)",
+    "packages/mailer/tests/client-principals.test.ts",
+    "apps/web/tests/mail-page.test.tsx",
+    "apps/web/tests/mail-panels.test.tsx"
+  ],
+  "observacoes": [
+    "Motivo (validado pelo dono, 21/10/2026): o painel lista domínios e caixas do SEU cadastro (mail.json), não do Stalwart. Numa VPS nova o backup tinha 2 domínios (cassp, envio) e 4 caixas, mas o painel só mostrava envio e postmaster@envio, porque a restauração devolve dados e configuração ao Stalwart sem avisar o cadastro.",
+    "Senha desconhecida não quebra nada: Enviar teste e avisos do painel por e-mail a partir de uma caixa sem senha respondem 409 mailbox_no_password / 'não está pronto' com a instrução de usar Trocar senha; envForProject devolve {} (nunca SMTP_PASS vazio); a leitura do aviso de entrega é pulada. Ativar o e-mail de um projeto numa caixa adotada de projeto (kind 'project') pede a senha e a define.",
+    "Associação ao projeto: só pelo slug (<slug>@domínio, o endereço padrão do e-mail do projeto). O vínculo de ENVIO (data.projects, SMTP_*) NÃO é restaurado: a pessoa ativa o e-mail do projeto e escolhe a senha.",
+    "Falha ao ler a lista de projetos não impede o cadastro: as caixas entram sem dono."
+  ]
+}

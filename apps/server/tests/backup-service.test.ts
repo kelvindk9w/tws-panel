@@ -3078,3 +3078,118 @@ describe("restauração do e-mail: senha de administração do servidor de e-mai
     expect(repairs).toBe(0);
   });
 });
+
+describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mail trouxe", () => {
+  type Repair = "ok" | "repaired" | "failed" | "unreachable" | "not_running";
+  let adopts: number;
+  const withAdopt = (
+    adopt: () => Promise<{ domains: string[]; mailboxes: string[]; skipped: string[] }>,
+    repair: Repair = "ok",
+  ): BackupService =>
+    build({
+      mailAuth: { repair: async () => repair },
+      mailAdopt: {
+        adopt: async () => {
+          adopts++;
+          return adopt();
+        },
+      },
+    });
+  async function restoreEmail() {
+    const b = await backup("email");
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+  beforeEach(() => {
+    adopts = 0;
+  });
+
+  it("2 domínios e 3 caixas cadastrados: o registro diz quantos, em passo e em aviso", async () => {
+    service = withAdopt(async () => ({
+      domains: ["cassp.example.com", "envio.example.com"],
+      mailboxes: ["a@cassp.example.com", "b@cassp.example.com", "c@envio.example.com"],
+      skipped: [],
+    }));
+    const rec = await restoreEmail();
+    expect(adopts).toBe(1);
+    expect(rec.steps.map((s) => s.label).join("|")).toMatch(/Cadastrei 2 domínios e 3 caixas no painel/);
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 2 domínios e 3 caixas no painel/);
+    expect(rec.warnings.join(" ")).toMatch(/Trocar senha/);
+    expect(rec.warnings.join(" ")).toMatch(/Verificar agora/);
+    expect(rec.error).toBeNull();
+  });
+
+  it("singular: 1 domínio e 1 caixa", async () => {
+    service = withAdopt(async () => ({ domains: ["envio.example.com"], mailboxes: ["a@envio.example.com"], skipped: [] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 1 domínio e 1 caixa no painel/);
+  });
+
+  it("só caixas, sem domínio novo: a frase não cita domínio", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: ["a@envio.example.com", "b@envio.example.com"], skipped: [] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 2 caixas no painel/);
+    expect(rec.warnings.join(" ")).not.toMatch(/domínio/);
+  });
+
+  it("nada a cadastrar: sem aviso, sem texto de erro", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [] }));
+    const rec = await restoreEmail();
+    expect(adopts).toBe(1);
+    expect(rec.warnings).toEqual([]);
+    expect(rec.status).not.toBe("warning");
+    expect(rec.steps.map((s) => s.label).join("|")).not.toMatch(/Cadastrei/);
+  });
+
+  it("o que o painel não conseguiu cadastrar é avisado, só com nomes", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: ["joao", "x.example.com"] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/não consegui cadastrar.*joao, x\.example\.com/s);
+  });
+
+  it("falha do Stalwart: aviso com a ação, a restauração não falha", async () => {
+    service = withAdopt(async () => {
+      throw new Error("Sem conexão com o Stalwart");
+    });
+    const rec = await restoreEmail();
+    expect(rec.status).toBe("warning");
+    expect(rec.error).toBeNull();
+    expect(rec.warnings.join(" ")).toMatch(/Sincronizar com o servidor de e-mail/);
+  });
+
+  it("401: usa a mensagem de autenticação que já existe", async () => {
+    const { StalwartApiError } = await import("@paas/mailer");
+    service = withAdopt(async () => {
+      throw new StalwartApiError(401, "Stalwart: You have to authenticate first.");
+    });
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/não conseguiu autenticar no servidor de e-mail/);
+    expect(rec.warnings.join(" ")).not.toMatch(/You have to authenticate/);
+  });
+
+  it("senha de administração sem conserto ou servidor sem resposta: nem tenta cadastrar", async () => {
+    for (const repair of ["failed", "unreachable", "not_running"] as const) {
+      adopts = 0;
+      service = withAdopt(async () => ({ domains: ["x.example.com"], mailboxes: [], skipped: [] }), repair);
+      await restoreEmail();
+      expect(adopts).toBe(0);
+    }
+  });
+
+  it("servidor de e-mail ainda não existe aqui: não tenta, e o aviso manda sincronizar depois de iniciar", async () => {
+    service = withAdopt(async () => ({ domains: ["x.example.com"], mailboxes: [], skipped: [] }));
+    const b = await backup("email");
+    docker.states = {};
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    expect(adopts).toBe(0);
+    expect((await service.record(r.id)).warnings.join(" ")).toMatch(/Sincronizar com o servidor de e-mail/);
+  });
+
+  it("sem a verificação da senha de administração: cadastra assim mesmo", async () => {
+    service = build({ mailAdopt: { adopt: async () => ({ domains: ["a.example.com"], mailboxes: [], skipped: [] }) } });
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 1 domínio/);
+  });
+});

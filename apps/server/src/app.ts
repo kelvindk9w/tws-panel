@@ -189,6 +189,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     docker: backupDocker,
     reconciliation: restoreReconciliation,
     mailAuth: { repair: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth() },
+    // O serviço compartilhado do plugin de e-mail (o mesmo da tela): gravar o cadastro por outra instância deixaria o da tela desatualizado.
+    // A função só roda numa restauração, com o plugin já registrado.
+    mailAdopt: { adopt: () => app.mailService.adoptFromStalwart() },
     archiver: new SevenZip(),
     storage: (cfg) => new S3Storage(cfg),
     // O serviço do domínio nasce depois deste (linha abaixo); a função só roda numa restauração, com tudo no ar.

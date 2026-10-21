@@ -32,6 +32,12 @@ export class StalwartApiError extends Error {
   }
 }
 
+/** O que o painel guarda de um principal do Stalwart: nunca senhas. */
+export interface StalwartPrincipalSummary {
+  name: string;
+  emails: string[];
+}
+
 function assertIp(ip: string): void {
   if (!isIP(ip)) throw new StalwartApiError(400, `IP inválido: ${JSON.stringify(ip)}`);
 }
@@ -202,6 +208,33 @@ export class StalwartClient {
     return (data?.items ?? [])
       .map((item) => item.name ?? "")
       .filter((name) => name.endsWith(`@${domain}`));
+  }
+
+  /**
+   * Domínios ou caixas que o Stalwart tem (GET /api/principal?type=…), para o
+   * painel cadastrar o que veio de um backup. Devolve só nome e endereços: a
+   * resposta traz `secrets` (hash/senhas da caixa) e o resto, que NUNCA sai
+   * daqui — cada item é montado campo a campo.
+   */
+  async listPrincipals(type: "domain" | "individual"): Promise<StalwartPrincipalSummary[]> {
+    const limit = 500;
+    const out: StalwartPrincipalSummary[] = [];
+    for (let page = 1; page <= 40; page += 1) {
+      const data = (await this.request("GET", `/principal?type=${type}&limit=${limit}&page=${page}`)) as {
+        items?: unknown[];
+      } | null;
+      const items = Array.isArray(data?.items) ? data!.items : [];
+      for (const item of items) {
+        const raw = typeof item === "string" ? { name: item } : (item as { name?: unknown; emails?: unknown } | null);
+        const name = typeof raw?.name === "string" ? raw.name.trim().toLowerCase() : "";
+        if (!name) continue;
+        const emails = (raw as { emails?: unknown }).emails;
+        const list = typeof emails === "string" ? [emails] : Array.isArray(emails) ? emails : [];
+        out.push({ name, emails: list.filter((e): e is string => typeof e === "string").map((e) => e.toLowerCase()) });
+      }
+      if (items.length < limit) break;
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------

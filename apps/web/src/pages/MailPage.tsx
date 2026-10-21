@@ -6,6 +6,7 @@ import type {
   MailDomainSummary,
   MailServerActionResponse,
   MailServerStatus,
+  MailSyncResponse,
   MailTlsStatusResponse,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
@@ -28,6 +29,7 @@ import {
   MailPlus,
   Play,
   RefreshCw,
+  RefreshCcw,
   Server,
   Square,
   Trash2,
@@ -111,6 +113,34 @@ function DnsAggregateBadge({ domain }: { domain: MailDomainSummary }) {
   );
 }
 
+/** Resultado da sincronização: contagens e endereços (nunca senhas). */
+function SyncResult({ result }: { result: MailSyncResponse }) {
+  const { t } = useI18n();
+  const parts = [
+    ...(result.domainCount > 0 ? [t("mail.page.sync.domains", { count: result.domainCount })] : []),
+    ...(result.mailboxCount > 0 ? [t("mail.page.sync.mailboxes", { count: result.mailboxCount })] : []),
+  ];
+  const added = parts.length > 0;
+  return (
+    <div data-testid="mail-sync-result" role="status" className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm">
+      <p className={added ? "font-medium text-emerald-400" : "text-muted-foreground"}>
+        {added ? t("mail.page.sync.done", { what: parts.join(t("mail.page.sync.and")) }) : t("mail.page.sync.nothing")}
+      </p>
+      {result.domains.length > 0 && (
+        <p className="break-all text-xs text-muted-foreground">{t("mail.page.sync.domainsList", { list: result.domains.join(", ") })}</p>
+      )}
+      {result.mailboxes.length > 0 && (
+        <p className="break-all text-xs text-muted-foreground">{t("mail.page.sync.mailboxesList", { list: result.mailboxes.join(", ") })}</p>
+      )}
+      {result.mailboxCount > 0 && <p className="text-xs text-muted-foreground">{t("mail.page.sync.passwordNote")}</p>}
+      {result.domainCount > 0 && <p className="text-xs text-muted-foreground">{t("mail.page.sync.dnsNote")}</p>}
+      {result.skipped.length > 0 && (
+        <p className="break-all text-xs text-amber-400">{t("mail.page.sync.skipped", { list: result.skipped.join(", ") })}</p>
+      )}
+    </div>
+  );
+}
+
 const ONBOARDING_STEPS: Key[] = [
   "mail.page.onboarding.step1",
   "mail.page.onboarding.step2",
@@ -128,6 +158,7 @@ export function MailPage() {
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [tls, setTls] = useState<MailTlsStatusResponse | null>(null);
   const [tlsBusy, setTlsBusy] = useState(false);
+  const [syncResult, setSyncResult] = useState<MailSyncResponse | null>(null);
   const [existingMail, setExistingMail] = useState<{ domain: string; info: ExistingMailInfo } | null>(null);
 
   const loadTls = useCallback(async () => {
@@ -174,6 +205,21 @@ export function MailPage() {
       setStatus(res.status);
     } catch (err) {
       setError(apiErrorText(err, action === "start" ? "mail.page.startError" : "mail.page.stopError"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Cadastra no painel o que o servidor de e-mail já tem (depois de restaurar). O servidor junta chamadas simultâneas.
+  async function syncWithServer() {
+    setBusy("sync");
+    setError(null);
+    setSyncResult(null);
+    try {
+      setSyncResult(await apiFetch<MailSyncResponse>("/api/mail/sync", { method: "POST" }));
+      await refresh();
+    } catch (err) {
+      setError(apiErrorText(err, "mail.page.sync.error"));
     } finally {
       setBusy(null);
     }
@@ -276,7 +322,7 @@ export function MailPage() {
               <span>{t("mail.page.server.portImaps", { port: status.ports.imaps })}</span>
             </div>
           )}
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {status?.running ? (
               <Button
                 variant="outline"
@@ -293,7 +339,15 @@ export function MailPage() {
                 {t("mail.page.server.start")}
               </Button>
             )}
+            {status?.running && (
+              <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void syncWithServer()}>
+                {busy === "sync" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                {t("mail.page.sync.button")}
+              </Button>
+            )}
           </div>
+          {status?.running && <p className="text-xs text-muted-foreground">{t("mail.page.sync.hint")}</p>}
+          {syncResult && <SyncResult result={syncResult} />}
         </CardContent>
       </Card>
 

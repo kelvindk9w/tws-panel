@@ -53,6 +53,7 @@ termo novo entra aqui antes de entrar nos dicionários.
 | ativo / inativo | active / inactive | |
 | em execução / parado | running / stopped | |
 | dispensar (um aviso) | dismiss | aviso da restauração "O painel antigo tinha X ativo" |
+| sincronizar (com o servidor de e-mail) | sync (with the mail server) | cadastra no painel os domínios e caixas que o servidor de e-mail já tem; não ativa nada nem lê senhas |
 | reparar | repair | reaplica a configuração do servidor de e-mail |
 
 Termos técnicos ficam como estão nos dois idiomas: Docker, Docker Compose,

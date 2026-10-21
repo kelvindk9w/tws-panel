@@ -19,7 +19,7 @@
     {
       "status": 200,
       "quando": "Sempre — lê apenas o arquivo local, não consulta o Stalwart nem exige o servidor rodando.",
-      "corpo": { "mailboxes": "Mailbox[] (sem o campo password; projectId = projeto dono, quando tem; projectName = nome dele, ausente se o projeto não existe mais)" },
+      "corpo": { "mailboxes": "Mailbox[] (sem o campo password; projectId = projeto dono, quando tem; projectName = nome dele, ausente se o projeto não existe mais); passwordUnknown = true na caixa cadastrada pela sincronização com o Stalwart, cuja senha o painel não sabe (use Trocar senha)" },
       "exemplo": { "mailboxes": [
         { "id": "postmaster@exemplo.com.br", "localPart": "postmaster", "domain": "exemplo.com.br", "kind": "system", "createdAt": "2026-08-01T12:00:00.000Z" },
         { "id": "contato@exemplo.com.br", "localPart": "contato", "domain": "exemplo.com.br", "kind": "user", "createdAt": "2026-08-10T09:30:00.000Z" }

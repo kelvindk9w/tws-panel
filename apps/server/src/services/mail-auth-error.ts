@@ -19,3 +19,20 @@ export function mailAuthError(err: unknown): HttpError | null {
   }
   return null;
 }
+
+/**
+ * Falha do Stalwart ao sincronizar (E-mail → Sincronizar): fora do ar ou outra
+ * resposta de erro, em português. O 401/403 fica com `mailAuthError`. Null se
+ * o erro não é do Stalwart.
+ */
+export function mailSyncError(err: unknown): HttpError | null {
+  if (!(err instanceof StalwartApiError) || err.status === 401 || err.status === 403) return null;
+  if (err.status === 0) {
+    return httpError(
+      502,
+      "mail_unreachable",
+      "O painel não conseguiu falar com o servidor de e-mail agora. Confira se ele está rodando em E-mail → Servidor e tente de novo. Nada foi alterado.",
+    );
+  }
+  return httpError(502, "mail_sync_failed", `O servidor de e-mail respondeu com erro e nada foi alterado: ${err.message}`);
+}
