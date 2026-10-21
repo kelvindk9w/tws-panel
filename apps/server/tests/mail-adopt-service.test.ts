@@ -45,6 +45,8 @@ let fetchCalls: string[] = [];
 /** "missing": a assinatura DKIM não existe até o POST; "error": a leitura falha com 500. */
 let dkimMode: "ok" | "missing" | "error" = "ok";
 let dkimPosts = 0;
+/** true: o Stalwart falso pagina de verdade (limit/page). */
+let pageLimitFake = false;
 
 function box(name: string, emails: string[] = [name]) {
   return { id: 1, type: "individual", name, secrets: [HASH], emails, roles: ["user"], quota: 0 };
@@ -62,7 +64,12 @@ function fakeStalwart() {
       const u = new URL(url);
       if (u.pathname === "/api/principal") {
         const type = u.searchParams.get("type");
-        const items = principals.filter((p) => p.type === type);
+        let items = principals.filter((p) => p.type === type);
+        if (pageLimitFake) {
+          const limit = Number(u.searchParams.get("limit") ?? "500");
+          const page = Number(u.searchParams.get("page") ?? "1");
+          items = items.slice((page - 1) * limit, page * limit);
+        }
         return new Response(JSON.stringify({ data: { items, total: items.length } }), { status: 200 });
       }
       if (u.pathname.startsWith("/api/dkim/") && dkimMode === "error") return new Response(`{"detail":"boom"}`, { status: 500 });
@@ -106,6 +113,7 @@ beforeEach(async () => {
   dkimOk = true;
   dkimMode = "ok";
   dkimPosts = 0;
+  pageLimitFake = false;
   rejectAuth = false;
   fetchCalls = [];
   config = { dataDir: dir, mailPorts: MAIL_DEFAULT_PORTS, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null } as unknown as ServerConfig;
@@ -291,8 +299,18 @@ describe("MailService.adoptFromStalwart", () => {
     expect(result.skippedTotal).toBe(250);
   });
 
+  it("exatamente 20 000 caixas lidas e a página seguinte vazia: não avisa corte que não houve", async () => {
+    pageLimitFake = true;
+    const have = principals.filter((p) => p.type === "individual").length;
+    for (let i = 0; i < 20_000 - have; i += 1) principals.push(box(`u${i}@envio.example.com`));
+    expect(principals.filter((p) => p.type === "individual")).toHaveLength(20_000);
+    const result = await service().adoptFromStalwart();
+    expect(result.truncated).toBeUndefined();
+  });
+
   it("avisa quando o Stalwart tem mais de 20 000 caixas (a lista vem cortada)", async () => {
-    for (let i = 0; i < 20_000; i += 1) principals.push(box(`u${i}@envio.example.com`));
+    pageLimitFake = true;
+    for (let i = 0; i < 20_001; i += 1) principals.push(box(`u${i}@envio.example.com`));
     const result = await service().adoptFromStalwart();
     expect(result.truncated).toBe(true);
   });
@@ -348,6 +366,44 @@ describe("caixa adotada, sem senha conhecida", () => {
     expect(res.generatedPassword).toBeTruthy();
     expect(res.mailbox.passwordUnknown).toBeUndefined();
     expect((await readStored()).mailboxes["contato@cassp.example.com"]!.password).toBe(res.generatedPassword);
+  });
+
+  it("restaurou só o e-mail: ativar o e-mail do projeto na caixa <slug>@ adotada pede a senha e a define, sem apagar nada", async () => {
+    principals.push(box("loja@cassp.example.com"));
+    const project = { id: "p1", slug: "loja", name: "Loja" } as unknown as Project;
+    const svc = service({ projects: async () => [project] });
+    await svc.adoptFromStalwart();
+    // o painel novo não tem e-mail de projeto nenhum: a caixa entrou como comum
+    expect((await svc.listMailboxes("cassp.example.com")).find((b) => b.id === "loja@cassp.example.com")).toMatchObject({ kind: "user" });
+    fetchCalls = [];
+    await expect(svc.enableProjectEmail(project, "cassp.example.com")).rejects.toMatchObject({ code: "password_required" });
+    const res = await svc.enableProjectEmail(project, "cassp.example.com", { generatePassword: true });
+    expect(res.generatedPassword).toBeTruthy();
+    const env = await svc.envForProject(project);
+    expect(env.SMTP_PASS).toBe(res.generatedPassword);
+    expect(env.SMTP_USER).toBe("loja@cassp.example.com");
+    const box1 = (await svc.listMailboxes("cassp.example.com")).find((b) => b.id === "loja@cassp.example.com");
+    expect(box1).toMatchObject({ kind: "project", projectId: "p1" });
+    expect(box1!.passwordUnknown).toBeUndefined();
+    // a senha foi definida no Stalwart (PATCH), a caixa não foi criada de novo nem apagada
+    expect(fetchCalls.some((c) => c.startsWith("DELETE"))).toBe(false);
+    expect(fetchCalls.some((c) => c.startsWith("POST") && c.endsWith("/api/principal"))).toBe(false);
+    expect(fetchCalls.some((c) => c.startsWith("PATCH") && c.includes("loja%40cassp.example.com"))).toBe(true);
+  });
+
+  it("caixa adotada de outro endereço, com senha conhecida ou de outro projeto continua recusando (409)", async () => {
+    principals.push(box("loja@cassp.example.com"), box("outra@cassp.example.com"));
+    const project = { id: "p1", slug: "loja", name: "Loja" } as unknown as Project;
+    const svc = service({ projects: async () => [project] });
+    await svc.adoptFromStalwart();
+    // endereço que não é o do projeto
+    await expect(svc.enableProjectEmail(project, "cassp.example.com", { fromLocalPart: "outra", generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
+    // caixa com senha conhecida (postmaster@envio é do sistema; contato@ do painel antigo com senha)
+    await svc.changeMailboxPassword("loja@cassp.example.com", undefined, { generate: true });
+    await expect(svc.enableProjectEmail(project, "cassp.example.com", { generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
+    // outro projeto já usa a caixa
+    const other = { id: "p2", slug: "loja2", name: "Loja 2" } as unknown as Project;
+    await expect(svc.enableProjectEmail(other, "envio.example.com", { fromLocalPart: "postmaster", generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
   });
 
   it("projeto ligado a uma caixa sem senha conhecida não recebe SMTP_PASS vazio", async () => {

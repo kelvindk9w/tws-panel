@@ -104,3 +104,21 @@ describe("StalwartClient.findDkimPublicKey", () => {
     await expect(client.findDkimPublicKey("rsa-x.example.com")).rejects.toBeInstanceOf(StalwartApiError);
   });
 });
+
+describe("StalwartClient.listPrincipalsChecked", () => {
+  const page = (n: number) => JSON.stringify({ data: { items: Array.from({ length: n }, (_, i) => ({ name: `u${i}@x.example.com` })) } });
+  it("exatamente no teto, com a página seguinte vazia: não está cortada", async () => {
+    const pages = [...Array.from({ length: 40 }, () => page(500)), page(0)];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(pages.shift()!, { status: 200 })));
+    const r = await client.listPrincipalsChecked("individual");
+    expect(r.items).toHaveLength(20_000);
+    expect(r.truncated).toBe(false);
+  });
+  it("página seguinte ao teto ainda com itens: cortada", async () => {
+    const pages = [...Array.from({ length: 40 }, () => page(500)), page(1)];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(pages.shift()!, { status: 200 })));
+    const r = await client.listPrincipalsChecked("individual");
+    expect(r.items).toHaveLength(20_000);
+    expect(r.truncated).toBe(true);
+  });
+});

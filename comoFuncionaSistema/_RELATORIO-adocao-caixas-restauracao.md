@@ -16,7 +16,8 @@ O painel lista domínios e caixas do cadastro dele (`data/mail/mail.json`), não
 
 ## Decisões a conferir
 
-- Associação ao projeto é só pelo slug (o endereço padrão do e-mail do projeto); o vínculo de envio (`SMTP_*`) não é restaurado, a pessoa ativa o e-mail do projeto e escolhe a senha.
+- Associação ao projeto na adoção só vale quando o projeto já tem e-mail cadastrado naquele domínio. Restaurando só o e-mail numa VPS nova isso não existe, então `<slug>@` entra como caixa comum e sem senha conhecida. Ativar o e-mail do projeto nessa caixa funciona: sem senha pede a senha (`password_required`); com senha, define no Stalwart, a caixa vira a do projeto, nada é apagado e as mensagens ficam. Caixa com outro endereço, senha conhecida ou outro dono continua recusando (409). O vínculo de envio (`SMTP_*`) não é restaurado.
+- Corte de 20 000: avisa só quando a página seguinte ao teto ainda traz itens (exatamente 20 000 não avisa).
 - Se o Stalwart diz que NÃO tem a assinatura DKIM `rsa-<domínio>` (404 ou sem chave), a adoção a cria; qualquer outra falha de leitura deixa o domínio de fora.
 - Revisão (a1cacc0): domínio adotado com `dmarcAlias` coerente; alias de outra caixa e abuse@/dmarc@ próprios vão para os ignorados; dono pelo slug só no domínio do e-mail do projeto; falha do reparo do 401 sugere Sincronizar; ignorados cortados em 200 (com total) e aviso acima de 20 000; a tela avisa que domínio novo pode reiniciar o servidor de e-mail.
 

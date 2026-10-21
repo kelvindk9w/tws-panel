@@ -247,13 +247,19 @@ export class StalwartClient {
    * daqui — cada item é montado campo a campo.
    */
   async listPrincipals(type: "domain" | "individual"): Promise<StalwartPrincipalSummary[]> {
+    return (await this.listPrincipalsChecked(type)).items;
+  }
+
+  /** Como listPrincipals, e diz se havia MAIS que PRINCIPAL_LIST_MAX (a página seguinte ao teto não veio vazia). */
+  async listPrincipalsChecked(type: "domain" | "individual"): Promise<{ items: StalwartPrincipalSummary[]; truncated: boolean }> {
     const limit = 500;
     const out: StalwartPrincipalSummary[] = [];
-    for (let page = 1; page <= PRINCIPAL_LIST_PAGES; page += 1) {
+    for (let page = 1; page <= PRINCIPAL_LIST_PAGES + 1; page += 1) {
       const data = (await this.request("GET", `/principal?type=${type}&limit=${limit}&page=${page}`)) as {
         items?: unknown[];
       } | null;
       const items = Array.isArray(data?.items) ? data!.items : [];
+      if (page > PRINCIPAL_LIST_PAGES) return { items: out, truncated: items.length > 0 };
       for (const item of items) {
         const raw = typeof item === "string" ? { name: item } : (item as { name?: unknown; emails?: unknown } | null);
         const name = typeof raw?.name === "string" ? raw.name.trim().toLowerCase() : "";
@@ -264,7 +270,7 @@ export class StalwartClient {
       }
       if (items.length < limit) break;
     }
-    return out;
+    return { items: out, truncated: false };
   }
 
   // -------------------------------------------------------------------------

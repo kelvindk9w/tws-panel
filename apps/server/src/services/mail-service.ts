@@ -52,7 +52,6 @@ import {
   readCaddyCertificate,
   sendSmtpMail,
   SmtpSendError,
-  PRINCIPAL_LIST_MAX,
   StalwartApiError,
   StalwartClient,
   StalwartManager,
@@ -1194,9 +1193,11 @@ export class MailService {
     await this.ensureLoaded();
     const client = this.client();
     await this.requireRunning();
-    const domainPrincipals = await client.listPrincipals("domain");
-    const mailboxPrincipals = await client.listPrincipals("individual");
-    const truncated = domainPrincipals.length >= PRINCIPAL_LIST_MAX || mailboxPrincipals.length >= PRINCIPAL_LIST_MAX;
+    const domainList = await client.listPrincipalsChecked("domain");
+    const mailboxList = await client.listPrincipalsChecked("individual");
+    const domainPrincipals = domainList.items;
+    const mailboxPrincipals = mailboxList.items;
+    const truncated = domainList.truncated || mailboxList.truncated;
     let projects: Array<Pick<Project, "id" | "slug">> = [];
     try {
       projects = (await this.projectsOf?.()) ?? [];
@@ -1528,7 +1529,7 @@ export class MailService {
     const domain = this.requireDomain(domainName);
     const local = opts.fromLocalPart ? normalizeLocalPart(opts.fromLocalPart) : project.slug;
     const address = `${local}@${domain.name}`;
-    this.requireFreeAddress(address, project.id);
+    this.requireFreeAddress(address, project);
 
     const previous = this.data.projects[project.id];
     const existing = this.data.mailboxes[address];
@@ -1562,6 +1563,11 @@ export class MailService {
     } else if (newPassword !== undefined) {
       await client.setMailboxPassword(address, newPassword);
       existing.password = newPassword;
+      // caixa adotada do Stalwart: passa a ser a do projeto
+      if (existing.kind === "user") {
+        existing.kind = "project";
+        existing.projectId = project.id;
+      }
     }
 
     this.data.projects[project.id] = {
@@ -1584,13 +1590,17 @@ export class MailService {
    * ninguém usa mais, ou a do próprio projeto), nem de outro projeto, nem o
    * postmaster@/abuse@/dmarc@ que o painel cria com o domínio.
    */
-  private requireFreeAddress(address: string, projectId: string): void {
+  private requireFreeAddress(address: string, project: Pick<Project, "id" | "slug">): void {
+    const projectId = project.id;
     const [local] = address.split("@");
     const takenByOther = Object.entries(this.data.projects).some(
       ([id, p]) => id !== projectId && (p.fromAddress === address || p.mailbox === address),
     );
     const mailbox = this.data.mailboxes[address];
-    if (takenByOther || (mailbox && mailbox.kind !== "project") || SYSTEM_LOCAL_PARTS.has(local ?? "")) {
+    // Caixa adotada do Stalwart (restauração) SEM senha conhecida e no endereço padrão do projeto (slug@domínio):
+    // a ativação a assume como caixa do projeto (pede a senha e a define no Stalwart; nada é apagado).
+    const adoptedForProject = mailbox?.kind === "user" && mailbox.password === "" && address.startsWith(`${project.slug}@`);
+    if (takenByOther || (mailbox && mailbox.kind !== "project" && !adoptedForProject) || SYSTEM_LOCAL_PARTS.has(local ?? "")) {
       throw httpError(409, "address_in_use", `O endereço ${address} já é de outra caixa ou de outro projeto.`);
     }
   }
