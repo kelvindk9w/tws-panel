@@ -289,7 +289,7 @@ export interface BackupFacts {
    * O armazenamento já guarda backups do painel de OUTRO servidor e este painel
    * é novo (a mesma regra que pausa o backup automático do painel). Só leitura.
    */
-  foreignBackupsHeld?: boolean;
+  foreignBackupsHeld?: boolean | "unknown";
 }
 
 /**
@@ -306,6 +306,15 @@ export function backupsState(facts: BackupFacts): StepState {
   }
   if (facts.verifiedRemote === 0) {
     const detail = "Armazenamento conectado, ainda sem backup externo conferido.";
+    if (facts.foreignBackupsHeld === "unknown") {
+      return {
+        status: "in_progress",
+        detail,
+        missing:
+          "Não foi possível conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do primeiro backup.",
+        missingCode: "backups-storage-unknown",
+      };
+    }
     if (facts.foreignBackupsHeld) {
       return {
         status: "in_progress",

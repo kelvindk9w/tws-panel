@@ -228,7 +228,7 @@ code	status	rota	dinamica	mensagem	locais
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Abra o painel por https://${d} e entre de novo.	services/onboarding.ts:164
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	O painel abre em https://${d} · acesso pelo IP ainda ativo (dá para desativar em Configurações → Domínio do painel).	services/onboarding.ts:169
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Servidor de e-mail não iniciado e nenhum domínio de e-mail cadastrado.	services/onboarding.ts:208
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Domínio ${names} cadastrado.	services/onboarding.ts:213
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Domínio ${names} cadastrado.	services/onboarding.ts:146
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	O servidor de e-mail não foi iniciado. Inicie-o na tela de E-mail.	services/onboarding.ts:214
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Não foi possível conferir se o servidor de e-mail está ligado.	services/onboarding.ts:218
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	O servidor de e-mail está parado.	services/onboarding.ts:223
@@ -243,10 +243,11 @@ code	status	rota	dinamica	mensagem	locais
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Avisos chegando por ${names}${note}.	services/onboarding.ts:274
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Hoje os backups ficam só na VPS: se ela for perdida, eles vão junto.	services/onboarding.ts:304
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Armazenamento conectado, ainda sem backup externo conferido.	services/onboarding.ts:308
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup, para não misturar com as cópias do painel anterior. [o web mostra o texto traduzido e o link do guia: missingCode backups-restore-first]	services/onboarding.ts:314
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Falta um backup externo conferido. Em Configurações → Backups, clique em "Fazer backup agora".${why}	services/onboarding.ts:322
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Backups conferidos fora da VPS (${n} ${n === 1 ? "item" : "itens"}).	services/onboarding.ts:326
-(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Não foi possível conferir agora. Tente de novo em instantes.	services/onboarding.ts:384
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup, para não misturar com as cópias do painel anterior. [o web mostra o texto traduzido e o link do guia: missingCode backups-restore-first]	services/onboarding.ts:323
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo missing do passo; missingCode backups-storage-unknown, o web mostra o texto traduzido]	nao	Não foi possível conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do primeiro backup.	services/onboarding.ts:314
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Falta um backup externo conferido. Em Configurações → Backups, clique em "Fazer backup agora".${why}	services/onboarding.ts:331
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Backups conferidos fora da VPS (${n} ${n === 1 ? "item" : "itens"}).	services/onboarding.ts:335
+(sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	Não foi possível conferir agora. Tente de novo em instantes.	services/onboarding.ts:393
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	${resolved} de ${total} fases resolvidas · nota ${tipo} ${hardeningIndex}. [detail]	services/onboarding.ts:97
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	nao	O painel ainda não conferiu a VPS. A varredura mostra o que falta proteger.	services/onboarding.ts:81
 (sem code)	200	GET /api/onboarding | PUT /api/onboarding/* [campo detail ou missing do passo]	sim	Falta aplicar: ${títulos}. Abra Proteções da VPS e aplique as fases que faltam.	services/onboarding.ts:102

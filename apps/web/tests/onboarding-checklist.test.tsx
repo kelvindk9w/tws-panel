@@ -565,4 +565,57 @@ describe("pendência: o que falta num passo em andamento", () => {
     );
     expect(await screen.findByTestId("onboarding-attention")).toHaveTextContent("1 step needs attention:");
   });
+
+  it("primeiro acesso com só as Proteções em andamento e nada mais começado: sem o resumo", async () => {
+    const res = response({ started: false }, { hardening: "in_progress" });
+    res.steps = res.steps.map((s) => (s.id === "hardening" ? { ...s, missing: "Falta aplicar: Firewall (UFW)." } : s));
+    serve(res);
+    renderChecklist();
+    await screen.findByTestId("onboarding-card");
+    expect(screen.queryByTestId("onboarding-attention")).not.toBeInTheDocument();
+    // a caixa do próprio passo continua
+    expect(screen.getByTestId("onboarding-missing-hardening")).toBeInTheDocument();
+    // depois de começar o roteiro, o resumo volta
+    cleanup();
+    serve({ ...res, started: true });
+    renderChecklist();
+    expect(await screen.findByTestId("onboarding-attention")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["pt-BR", "Fazer backup agora"],
+    ["en", "Back up now"],
+  ] as const)("(%s) o cartão inteiro só convida ao backup na instalação do zero, nunca com cópias de outro painel ou armazenamento sem resposta", async (loc, phrase) => {
+    setLocale(loc);
+    const text = async (over: Partial<OnboardingStep>) => {
+      serve(withBackups(over));
+      renderChecklist();
+      await screen.findByTestId("onboarding-missing-backups");
+      const t = screen.getByTestId("onboarding-card").textContent ?? "";
+      cleanup();
+      return t;
+    };
+    // instalação do zero: o passo a passo continua mandando fazer o backup
+    expect(await text({})).toContain(phrase);
+    expect(await text({ missingCode: "backups-restore-first" })).not.toContain(phrase);
+    expect(await text({ missingCode: "backups-storage-unknown" })).not.toContain(phrase);
+  });
+
+  it("armazenamento sem resposta: texto âmbar traduzido e 'Conferir de novo' consulta o servidor outra vez", async () => {
+    serve(withBackups({ missing: "texto do servidor", missingCode: "backups-storage-unknown" }));
+    renderChecklist();
+    const box = await screen.findByTestId("onboarding-missing-backups");
+    expect(box).toHaveTextContent("Não foi possível conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do primeiro backup.");
+    expect(box).not.toHaveTextContent("texto do servidor");
+    const before = apiFetchMock.mock.calls.length;
+    fireEvent.click(within(box).getByRole("button", { name: "Conferir de novo" }));
+    await waitFor(() => expect(apiFetchMock.mock.calls.length).toBe(before + 1));
+    cleanup();
+    setLocale("en");
+    serve(withBackups({ missingCode: "backups-storage-unknown" }));
+    renderChecklist();
+    const en = await screen.findByTestId("onboarding-missing-backups");
+    expect(en).toHaveTextContent("Could not check the storage right now. If this panel is being restored, restore the old panel before the first backup.");
+    expect(within(en).getByRole("button", { name: "Check again" })).toBeInTheDocument();
+  });
 });

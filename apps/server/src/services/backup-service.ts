@@ -168,6 +168,8 @@ export interface BackupServiceOptions {
   /** Reinicia o painel (depois de restaurar o painel). */
   restartPanel?: () => void;
   backupHour?: number;
+  /** Prazo da consulta do roteiro ao armazenamento (backups de outro painel); padrão 5 s. Só ela: as operações de backup não mudam. */
+  foreignCheckTimeoutMs?: number;
   /** Espera entre as tentativas de falar com o banco que acabou de subir. */
   readyDelayMs?: number;
   /** Espera antes de reiniciar o painel depois de preparar a restauração (padrão 3 s). */
@@ -985,22 +987,43 @@ export class BackupService {
     };
   }
 
-  /** Para o roteiro (passo 6). */
-  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; foreignBackupsHeld?: true }> {
+  /**
+   * Para o roteiro (passo 6). `foreignBackupsHeld`: true = o armazenamento guarda backups de outro painel e este é novo;
+   * "unknown" = não deu para conferir (falha ou prazo estourado), e o roteiro NÃO convida a fazer backup; ausente = livre.
+   */
+  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; foreignBackupsHeld?: true | "unknown" }> {
     await this.ensureLoaded();
     const verified = Object.values(this.config.targets).filter((t) => t.lastRemoteVerifiedAt).length;
     const failed = [...this.history].reverse().find((r) => r.remote === "failed");
     // Só leitura da regra que pausa o backup do painel (nada é gravado nem avisado); só custa uma listagem quando importa.
-    const foreign =
-      this.config.destination !== null && verified === 0
-        ? (await this.panelFreshOverForeign((await this.opts.projects.list()).length, true)) !== null
-        : false;
+    const foreign = this.config.destination !== null && verified === 0 ? await this.foreignBackupsState() : false;
     return {
       destinationConnected: this.config.destination !== null,
       verifiedRemote: verified,
       lastFailure: failed?.remoteDetail ?? null,
-      ...(foreign ? { foreignBackupsHeld: true as const } : {}),
+      ...(foreign ? { foreignBackupsHeld: foreign } : {}),
     };
+  }
+
+  private foreignCache: { key: string; at: number; held: boolean } | null = null;
+
+  /**
+   * Consulta do roteiro (só leitura): prazo curto, resultado em cache por 60 s (a chave muda com o armazenamento, os projetos ou o que
+   * já foi enviado) e, se não deu para conferir, "unknown" (não cacheado, para "Conferir de novo" tentar outra vez).
+   */
+  private async foreignBackupsState(): Promise<true | "unknown" | false> {
+    const projectCount = (await this.opts.projects.list()).length;
+    const d = this.config.destination!;
+    const key = JSON.stringify([d.connectedAt, d.testedAt, d.endpoint, d.bucket, projectCount, this.config.panelRestoredAt, this.target("panel").lastRemoteSentAt, this.target("email").lastRemoteSentAt]);
+    const c = this.foreignCache;
+    if (c && c.key === key && this.now() - c.at < 60_000) return c.held;
+    try {
+      const held = (await this.panelFreshOverForeign(projectCount, true)) !== null;
+      this.foreignCache = { key, at: this.now(), held };
+      return held;
+    } catch {
+      return "unknown";
+    }
   }
 
   async projectView(projectId: string): Promise<ProjectBackupView> {
@@ -1399,6 +1422,15 @@ export class BackupService {
     return Boolean(t.lastRemoteSentAt);
   }
 
+  private withForeignDeadline<T>(p: Promise<T>): Promise<T> {
+    p.catch(() => undefined); // se estourar o prazo, a resposta tardia não vira erro solto
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("o armazenamento não respondeu a tempo")), this.opts.foreignCheckTimeoutMs ?? 5000);
+    });
+    return Promise.race([p, deadline]).finally(() => clearTimeout(timer));
+  }
+
   private async panelFreshOverForeign(projectCount: number, readOnly = false): Promise<string | null> {
     const t = this.target("panel");
     // O que é desta instalação: projeto cadastrado, painel restaurado, ou um backup (do painel ou do e-mail)
@@ -1412,12 +1444,13 @@ export class BackupService {
     if (this.now() - Date.parse(d.connectedAt) > RESTORE_HOLD_MS) return null;
     const prefix = `${BACKUP_ROOT_FOLDER}/_painel/`;
     try {
-      const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
+      const listing = storage.list(prefix);
+      const found = (await (readOnly ? this.withForeignDeadline(listing) : listing)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
       if (!readOnly) delete t.heldFailures;
       if (!found) return null;
       return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto, de você restaurar o painel ou de fazer um backup à mão com o armazenamento já conectado (cópia só na VPS não conta). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
     } catch (err) {
-      if (readOnly) return null; // consulta do roteiro: sem contar falha nem avisar
+      if (readOnly) throw err; // consulta do roteiro: sem contar falha nem avisar; quem chama trata como "não deu para conferir"
       t.heldFailures = (t.heldFailures ?? 0) + 1;
       if (t.heldFailures === 3) {
         this.opts.notify?.({

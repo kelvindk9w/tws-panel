@@ -28,6 +28,28 @@ avisa. O estado `pausedReason` existente só é gravado no horário do agendador
 orientar logo depois de conectar o armazenamento. A regra não mudou. A listagem só roda com
 armazenamento conectado e nenhum backup externo conferido.
 
+## Revisão (21/10/2026)
+- **Consulta ao armazenamento limitada**: a listagem do roteiro tem prazo de 5 s (só ela; as operações
+  de backup mantêm o timeout normal) e o resultado fica em cache por 60 s. A chave do cache muda quando
+  o armazenamento é reconectado ou testado de novo, quando um projeto é cadastrado ou quando o painel
+  é restaurado ou envia um backup externo.
+- **Falha nunca vira convite ao backup**: se a listagem falha ou estoura o prazo, `foreignBackupsHeld`
+  vira `"unknown"` (código `backups-storage-unknown`). A interface mostra, em âmbar, "Não foi possível
+  conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do
+  primeiro backup", com o guia de restauração e o botão "Conferir de novo". "unknown" não entra em cache,
+  então conferir de novo consulta outra vez. O modo continua só leitura: nada é gravado, nenhuma falha é
+  contada e nenhum aviso sai.
+- **Passo 8 do "Como fazer" de Backups**: com `backups-restore-first` ou `backups-storage-unknown`, o
+  "Clique em Fazer backup agora" é trocado por "Restaure primeiro o painel antigo e só então faça o
+  primeiro backup". Na instalação do zero o texto original continua.
+- **Resumo no primeiro acesso**: a linha-resumo âmbar fica oculta enquanto vale `isOnboardingFirstVisit`
+  (roteiro não começado e nenhum passo além das Proteções andou). Com só as Proteções em andamento e
+  nada mais começado, o resumo não aparece; a caixa do próprio passo aparece. Assim que a pessoa
+  começa o roteiro (Recolher, botão de um passo ou "Não vou usar") ou outro passo anda, o resumo volta.
+- **Prazo de 7 dias**: a regra do painel novo (`panelFreshOverForeign`) deixa de valer 7 dias depois da
+  conexão do armazenamento. Passado esse prazo o roteiro volta a convidar ao "Fazer backup agora", mesmo
+  com cópias de outro painel no armazenamento (o cache de 60 s não muda isso).
+
 ## Limites conhecidos
 - Os textos de `missing` vêm do servidor em português (padrão de `detail`), então em inglês aparecem em
   português, exceto o caso do backup, traduzido pelo código. Linhas em `_i18n-servidor-fase2.tsv`.

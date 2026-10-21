@@ -265,6 +265,13 @@ describe("backups fora da VPS", () => {
     expect(s.missingCode).toBe("backups-restore-first");
     expect(s.missing).toMatch(/Restaure primeiro o painel antigo/);
     expect(s.missing).not.toMatch(/Fazer backup agora/);
+    // não deu para conferir o armazenamento: também NÃO convida a fazer backup
+    const u = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null, foreignBackupsHeld: "unknown" });
+    expect(u.status).toBe("in_progress");
+    expect(u.missingCode).toBe("backups-storage-unknown");
+    expect(u.missing).toMatch(/Não foi possível conferir o armazenamento agora/);
+    expect(u.missing).toMatch(/restaure o painel antigo antes do primeiro backup/);
+    expect(u.missing).not.toMatch(/Fazer backup agora/);
     // com backup externo já conferido, a regra não vale mais
     expect(backupsState({ destinationConnected: true, verifiedRemote: 1, lastFailure: null, foreignBackupsHeld: true }).status).toBe("done");
     // sem destino, a pausa é irrelevante

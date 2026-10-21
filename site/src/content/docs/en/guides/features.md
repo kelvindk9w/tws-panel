@@ -298,6 +298,6 @@ and never reads, logs or stores what you type; it only audits connection and dis
 
 On the Dashboard, a card lists what is still left to configure after installation, with the status of
 each step computed from the panel's real state. Each step has a "How to" and a button
-that takes you to the right screen. A step that has started but still lacks something is "in progress" and shows, outside the "How to", an orange **What's missing** box with what to do and the button for the right screen; at the top of the card, one line sums up how many steps need attention, with a link to each. Optional steps accept "I won't use this". The whole checklist is also
+that takes you to the right screen. A step that has started but still lacks something is "in progress" and shows, outside the "How to", an amber **What's missing** box with what to do and the button for the right screen; at the top of the card, one line sums up how many steps need attention, with a link to each. Optional steps accept "I won't use this". The whole checklist is also
 available in **Settings → Getting started**. The list of steps is in the
 [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md#after-installing).

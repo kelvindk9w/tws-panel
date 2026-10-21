@@ -24,6 +24,7 @@ export default {
   "missing.title": "What's missing",
   "missing.icon": "Attention",
   "missing.backupsRestoreFirst": "Restore the old panel first (follow the restore guide) before the first backup, so it does not get mixed with the previous panel's copies.",
+  "missing.storageUnknown": "Could not check the storage right now. If this panel is being restored, restore the old panel before the first backup.",
   "missing.restoreGuide": "Open the restore guide",
   "attention.one": "{count} step needs attention:",
   "attention.many": "{count} steps need attention:",
@@ -125,6 +126,7 @@ export default {
   "steps.backups.howTo.6": "In Settings → Backups, paste the details into the External storage card (region auto) and click Test and save.",
   "steps.backups.howTo.7": "In the Encryption card, create the password (or click Suggest a strong phrase), download the recovery kit and check “I saved the password somewhere safe”.",
   "steps.backups.howTo.8": "Click Back up now on the Dashboard: the step is done once the first external copy is uploaded and verified.",
+  "steps.backups.howTo.8Restore": "Restore the old panel first (restore guide) and only then make the first backup.",
   "steps.backups.note": "Counts as done with the storage connected and at least one verified external backup. If you already have another off-VPS backup routine, choose “I won't use this”.",
   "steps.backups.action": "Open Backups",
 } as const;

@@ -88,10 +88,12 @@ function canSkip(step: OnboardingStep): boolean {
  * Fica fora do "Como fazer", sempre visível. Ícone + título (não depende só da
  * cor) e role="note": informação estática, não uma interrupção.
  */
-function MissingNote({ step, onGo }: { step: OnboardingStep; onGo: () => void }) {
+function MissingNote({ step, onGo, onRecheck }: { step: OnboardingStep; onGo: () => void; onRecheck: () => void }) {
   const { t, locale } = useI18n();
   const action = ONBOARDING_CONTENT[step.id].action;
-  const restoreFirst = step.missingCode === "backups-restore-first";
+  const unknown = step.missingCode === "backups-storage-unknown";
+  // nos dois casos o guia de restauração vale: na dúvida, restaurar vem antes do primeiro backup
+  const restoreFirst = step.missingCode === "backups-restore-first" || unknown;
   const titleId = `onboarding-missing-title-${step.id}`;
   return (
     <div
@@ -106,7 +108,9 @@ function MissingNote({ step, onGo }: { step: OnboardingStep; onGo: () => void })
         </span>
         <span id={titleId}>{t("onboarding.missing.title")}</span>
       </p>
-      <p className="break-words">{restoreFirst ? t("onboarding.missing.backupsRestoreFirst") : step.missing}</p>
+      <p className="break-words">
+        {unknown ? t("onboarding.missing.storageUnknown") : restoreFirst ? t("onboarding.missing.backupsRestoreFirst") : step.missing}
+      </p>
       {(restoreFirst || action) && (
         <div className="flex flex-wrap gap-2">
           {restoreFirst && (
@@ -114,6 +118,11 @@ function MissingNote({ step, onGo }: { step: OnboardingStep; onGo: () => void })
               <a href={restoreGuideUrl(locale)} target="_blank" rel="noopener noreferrer">
                 <BookOpen className="h-4 w-4" /> {t("onboarding.missing.restoreGuide")}
               </a>
+            </Button>
+          )}
+          {unknown && (
+            <Button size="sm" variant="outline" onClick={onRecheck}>
+              <RefreshCw className="h-4 w-4" /> {t("onboarding.recheck")}
             </Button>
           )}
           {action && (
@@ -135,6 +144,7 @@ function StepItem({
   busy,
   onSkip,
   onGo,
+  onRecheck,
   defaultOpen = false,
 }: {
   step: OnboardingStep;
@@ -142,6 +152,7 @@ function StepItem({
   busy: boolean;
   onSkip: (skipped: boolean) => void;
   onGo: () => void;
+  onRecheck: () => void;
   /** No compacto, a orientação do passo mostrado já vem aberta. */
   defaultOpen?: boolean;
 }) {
@@ -149,6 +160,8 @@ function StepItem({
   const [open, setOpen] = useState(defaultOpen);
   const content = ONBOARDING_CONTENT[step.id];
   const Icon = content.icon;
+  // com cópias de outro painel (ou sem saber), o último passo de backups não pode mandar fazer o backup
+  const restoreFirst = step.missingCode === "backups-restore-first" || step.missingCode === "backups-storage-unknown";
   const muted = step.status === "soon" || step.status === "skipped";
   return (
     <li id={`onboarding-step-${step.id}`} data-testid={`onboarding-step-${step.id}`} className="flex scroll-mt-4 gap-3 py-3 first:pt-0 last:pb-0">
@@ -165,7 +178,7 @@ function StepItem({
           )}
         </div>
         <p className="break-words text-sm text-muted-foreground">{step.detail}</p>
-        {onboardingStepNeedsAttention(step) && <MissingNote step={step} onGo={onGo} />}
+        {onboardingStepNeedsAttention(step) && <MissingNote step={step} onGo={onGo} onRecheck={onRecheck} />}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="ghost"
@@ -202,7 +215,7 @@ function StepItem({
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.steps")}</p>
               <ol className="ml-5 list-decimal space-y-1">
                 {content.howTo.map((line) => (
-                  <li key={line}>{t(line)}</li>
+                  <li key={line}>{t(line === "onboarding.steps.backups.howTo.8" && restoreFirst ? "onboarding.steps.backups.howTo.8Restore" : line)}</li>
                 ))}
               </ol>
             </div>
@@ -233,6 +246,7 @@ function StepList({
   busyId,
   onSkip,
   onGo,
+  onRecheck,
   defaultOpen,
 }: {
   steps: OnboardingStep[];
@@ -240,6 +254,7 @@ function StepList({
   busyId: string | null;
   onSkip: (step: OnboardingStep, skipped: boolean) => void;
   onGo: () => void;
+  onRecheck: () => void;
   defaultOpen?: boolean;
 }) {
   return (
@@ -253,6 +268,7 @@ function StepList({
           busy={busyId === step.id}
           onSkip={(skipped) => onSkip(step, skipped)}
           onGo={onGo}
+          onRecheck={onRecheck}
         />
       ))}
     </ul>
@@ -531,7 +547,7 @@ export function OnboardingChecklist({
   const waiting = isOnboardingWaitingOnSoon(data.steps);
   const waitingOnly = compact && waiting && !showAll && !shown;
   const listAll = !waitingOnly && (!compact || showAll || !shown);
-  const listProps = { all: data.steps, busyId, onSkip: (s: OnboardingStep, v: boolean) => void skip(s, v), onGo: () => void start() };
+  const listProps = { all: data.steps, busyId, onSkip: (s: OnboardingStep, v: boolean) => void skip(s, v), onGo: () => void start(), onRecheck: () => void load() };
 
   return (
     <Card data-testid="onboarding-card" className="flex flex-col gap-4 border-sky-500/30 p-4 sm:p-6">
@@ -584,8 +600,9 @@ export function OnboardingChecklist({
         </div>
       )}
 
+      {/* No primeiro acesso (nada começado além das Proteções) não há o que resumir: o roteiro inteiro já está aberto. */}
       <AttentionSummary
-        steps={data.steps}
+        steps={isOnboardingFirstVisit(data) ? [] : data.steps}
         onJump={(id) => {
           if (compact) {
             setSelectedId(id);

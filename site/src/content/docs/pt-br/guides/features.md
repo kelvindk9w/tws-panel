@@ -297,6 +297,6 @@ nunca lê, registra ou guarda o que você digita; só audita conexão e desconex
 
 No Dashboard, um cartão lista o que ainda falta configurar depois da instalação, com o estado de
 cada passo calculado a partir do estado real do painel. Cada passo tem um "Como fazer" e o botão
-que leva à tela certa. Um passo que já começou mas ainda falta algo fica "em andamento" e mostra, fora do "Como fazer", uma caixa laranja **O que falta** com o que fazer e o botão da tela certa; no topo do cartão, uma linha resume quantos passos precisam de atenção, com um link para cada um. Os passos opcionais aceitam "Não vou usar". O roteiro inteiro fica também
+que leva à tela certa. Um passo que já começou mas ainda falta algo fica "em andamento" e mostra, fora do "Como fazer", uma caixa âmbar **O que falta** com o que fazer e o botão da tela certa; no topo do cartão, uma linha resume quantos passos precisam de atenção, com um link para cada um. Os passos opcionais aceitam "Não vou usar". O roteiro inteiro fica também
 em **Configurações → Primeiros passos**. A lista dos passos está no
 [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.pt-BR.md#depois-de-instalar).

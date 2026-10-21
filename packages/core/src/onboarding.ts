@@ -32,8 +32,10 @@ export type OnboardingStepStatus = "done" | "in_progress" | "pending" | "skipped
  * em vez do texto em português do servidor.
  * - backups-restore-first: o armazenamento já guarda backups do painel de
  *   OUTRO servidor; restaurar vem antes do primeiro backup deste painel.
+ * - backups-storage-unknown: não deu para conferir o armazenamento (falha ou prazo);
+ *   na dúvida, a interface também não convida a fazer o primeiro backup.
  */
-export type OnboardingMissingCode = "backups-restore-first";
+export type OnboardingMissingCode = "backups-restore-first" | "backups-storage-unknown";
 
 export interface OnboardingStep {
   id: OnboardingStepId;
