@@ -179,6 +179,15 @@ staging environment), check **I understand the risks and want to deploy anyway (
 
 ---
 
+### "You have to authenticate first" in the mail server after a restore
+
+The panel's saved mail server admin password and the one in the running mail server's
+configuration differ (it happens after restoring the panel or the email). The panel checks this
+after a restore and tries to fix it; if you still see "O painel não conseguiu autenticar no
+servidor de e-mail" (a server message), click **Repair now** in the amber notice on the Dashboard,
+or stop the mail server and start it again in **Email**. No data is deleted. Details in
+[Restore on a new server](restore-new-server.md#if-something-fails).
+
 ## Docker
 
 ### "Cannot connect to the Docker daemon"

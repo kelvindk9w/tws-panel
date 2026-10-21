@@ -164,6 +164,22 @@ this VPS). In that case, sign in at the panel domain.
 > off. After the DNS points here, turn it off again in **Settings → Panel domain** (**Turn off
 > IP access**). Changing the domain's A record before this step is optional.
 
+> [!NOTE]
+> **The amber notice "The old panel had … enabled".** Right after the restore, and on the
+> **Dashboard** while something is still pending, the panel compares what the backup said was on
+> (webmail, mail server, panel domain) with what actually runs on this VPS (it asks Docker; it does
+> not trust the saved setting). It does not start anything by itself, because enabling webmail or
+> email touches ports, DNS and certificates. For each thing that was on and is not running, it asks
+> "The old panel had webmail enabled. Enable it now?" with a button to the right screen
+> (**Enable now** goes to **Email**, where you click **Enable webmail**; **Start now** goes to the
+> mail server; **Check the DNS** goes to **Settings → Panel domain**) and a **Dismiss** button. The
+> notice goes away by itself when the service starts running, and it stays after a panel restart
+> until then or until you click **Dismiss**. If everything that was on is already running, nothing is
+> asked. If the panel could not check (Docker or DNS did not answer), the notice says so instead of
+> guessing. The same notice appears in the restore result and at the top of **Settings → Backups**.
+> The restore also writes the pending items as messages (server messages, in Portuguese) such as "O
+> painel antigo tinha o webmail ativo e ele não está rodando nesta VPS. Nada foi ativado…".
+
 If the panel does not open at all, restore it from a file instead:
 `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` (see
 [Operations](operations.md)). That path skips the adjustments above, so the next two warnings apply
@@ -237,6 +253,11 @@ after that.
 3. Ask the provider to set the **PTR** of the new IP to `mail.send.example.com`.
 4. Check that outbound port 25 is open ([Step-by-step guide, Part 2, Step 4.1](../getting-started/complete-guide.md#etapa-4)).
 
+If the restore ends with the notice "Os dados do webmail voltaram, mas o webmail não está rodando
+   nesta VPS" (a server message: the webmail data came back, but webmail is not running here), the
+   webmail was on in the old panel: after the mail server starts, use the amber notice on the
+   **Dashboard** or **Email → Webmail → Enable webmail**.
+
 **What to check:** click **Verify now** until you reach **6/6 OK**, send a test email
 (Step 4.7 of Part 2 of the step-by-step guide), and see **Valid** in the email certificate card. Send slowly at
 first: the new IP has no reputation yet.
@@ -285,6 +306,7 @@ first: the new IP has no reputation yet.
   sobrescrito" (a server message: the code folder already exists with files and was left as it is):**
   the deploy uses what is already there. If you want the code from the backup, rename or empty the
   source folder **before** clicking **Restore**, never afterwards (see step 7).
+- **"Stalwart: You have to authenticate first" or "O painel não conseguiu autenticar no servidor de e-mail" when changing a mailbox password (or any mail action):** the mail server's admin password lives in two places, the panel's settings and the running mail server's own configuration. Restoring the email brings back the old server's configuration; restoring the panel brings back the old panel's password. If they differ, every panel call to the mail server is refused. After a restore the panel checks this by itself and, if it can, rewrites the configuration with the panel's password and restarts the mail server (no data is deleted). If you still see the error, the amber notice on the **Dashboard** has **Repair now** (restarts the mail server for a few seconds). Manual way out: **Email**, stop the mail server and start it again with **Start server**; that rewrites the configuration with the panel's password. Do this after both restores, and before creating or changing mailboxes.
 - **A restore fails halfway:** the panel keeps the previous state in
   `/data/backups/_painel/antes-da-restauracao/` and undoes a failed panel swap by itself. Read the
   error in **Latest backups** and run the step again.

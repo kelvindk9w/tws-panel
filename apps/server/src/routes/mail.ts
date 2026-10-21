@@ -3,6 +3,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
+import { StalwartApiError } from "@paas/mailer";
 import type {
   ChangeMailboxPasswordRequest,
   CreateMailDomainRequest,
@@ -252,6 +253,15 @@ const testEmailStatusSchema = {
 } as const;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
+  // 401 do Stalwart: a senha de administração do painel (mail.json) não é a do servidor em execução
+  // (acontece depois de restaurar o painel ou o e-mail). O texto cru não diz o que fazer.
+  if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) {
+    return reply.code(409).send({
+      error: "mail_auth_failed",
+      message:
+        "O painel não conseguiu autenticar no servidor de e-mail (a senha de administração guardada não é a do servidor em execução, o que acontece depois de restaurar o painel ou o e-mail). Reaplique a configuração: pare e inicie o servidor de e-mail em E-mail → Servidor, ou use o aviso do Dashboard.",
+    });
+  }
   const e = err as Partial<HttpError>;
   return reply.code(e.statusCode ?? 500).send({
     error: e.code ?? "internal_error",
@@ -457,6 +467,30 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       refreshInBackground({ force: true });
       const response: MailServerActionResponse = { ok: true, status };
       return reply.send(response);
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  // Depois de restaurar: reescreve a configuração do Stalwart com a senha de administração do painel e reinicia (sem apagar dados).
+  app.post("/api/mail/server/repair-auth", async (_request, reply) => {
+    try {
+      const result = await service.repairAdminAuth();
+      if (result === "failed") {
+        return reply.code(409).send({
+          error: "mail_auth_repair_failed",
+          message: "Não foi possível reaplicar a configuração do servidor de e-mail. Pare e inicie o servidor em E-mail → Servidor e tente de novo.",
+        });
+      }
+      await app.auditService.record({
+        action: "mail.server.repair_auth",
+        target: "mail-server",
+        detail:
+          result === "repaired"
+            ? "Servidor de e-mail reiniciado com a configuração do painel: a senha de administração guardada não era a do servidor em execução."
+            : "Senha de administração do servidor de e-mail conferida (resultado: " + result + ").",
+      });
+      return reply.send({ ok: true, result });
     } catch (err) {
       return sendError(reply, err);
     }

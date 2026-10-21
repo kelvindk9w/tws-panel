@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { cn } from "@/lib/utils";
+import { ReconciliationNotice } from "@/components/restore/ReconciliationNotice";
 import { AlertTriangle, CheckCircle2, Download, Loader2, RotateCcw, ShieldCheck, Sparkles } from "lucide-react";
 
 export function errorText(err: unknown): string {
@@ -994,6 +995,8 @@ export function RestoreDialog({
                 })}
               </p>
             )}
+            {/* resultado: o que o painel antigo tinha ativo e não roda aqui (some sozinho / dispensável) */}
+            {done && record.status !== "failed" && watch?.phase !== "relogin" && <ReconciliationNotice variant="result" />}
             {lost && <p className="text-sm text-amber-400">{t("backups.restore.lost")}</p>}
             {!done && !watch && !lost && <p className="text-xs text-muted-foreground">{t("backups.restore.canClose")}</p>}
             <div className="flex justify-end gap-2">

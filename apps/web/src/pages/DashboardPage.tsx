@@ -11,6 +11,7 @@ import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n, type Key } from "@/i18n";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
+import { ReconciliationNotice } from "@/components/restore/ReconciliationNotice";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -151,6 +152,8 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      {/* independente do roteiro: "o painel antigo tinha X ativo" depois de restaurar um backup */}
+      <ReconciliationNotice />
       <OnboardingChecklist variant="dashboard" onVisibleChange={setChecklistShown} />
       {/* com o roteiro na tela, o passo 2 dele já fala do 2FA */}
       {checklistShown === false && <TwoFactorNudge />}

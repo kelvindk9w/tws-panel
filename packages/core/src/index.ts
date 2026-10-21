@@ -169,3 +169,4 @@ export * from "./backups";
 export * from "./timezone";
 export * from "./images";
 export * from "./container-identity";
+export * from "./restore-reconciliation";

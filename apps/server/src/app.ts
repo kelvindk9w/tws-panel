@@ -55,6 +55,9 @@ import {
 } from "./services/notification-sources.js";
 import { createTelegramClient } from "./services/telegram-client.js";
 import backupsRoutes from "./routes/backups.js";
+import restoreReconciliationRoutes from "./routes/restore-reconciliation.js";
+import { MailService } from "./services/mail-service.js";
+import { RestoreReconciliation } from "./services/restore-reconciliation.js";
 import { BackupService } from "./services/backup-service.js";
 import { DockerCli } from "./services/backup-docker.js";
 import { SevenZip } from "./services/backup-archive.js";
@@ -163,10 +166,28 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   );
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
+  const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
+  // "O painel antigo tinha X ativo": compara o backup restaurado com o que roda de fato (Docker) e guarda as pendências.
+  const restoreReconciliation = new RestoreReconciliation({
+    dataDir: config.dataDir,
+    containers: { stalwart: PAAS_STALWART_CONTAINER, webmail: PAAS_WEBMAIL_CONTAINER },
+    probes: {
+      container: (name) => backupDocker.probe(name),
+      // Uma instância nova a cada consulta (lê o mail.json do disco na hora), como o roteiro faz em onboarding-sources.ts.
+      mailAuth: () => new MailService(config, { log: () => undefined }).checkAdminAuth(),
+      repairMailAuth: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth(),
+      // O serviço do domínio nasce depois; a função só roda numa restauração ou na conferência da tela, com tudo no ar.
+      panelDomainPointsHere: (domain) => app.panelDomainService.pointsHere(domain),
+    },
+    log: (m) => app.log.warn(m),
+  });
+  app.decorate("restoreReconciliation", restoreReconciliation);
   backupService = new BackupService({
     dataDir: config.dataDir,
     projectsDir: config.projectsDir,
-    docker: new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage }),
+    docker: backupDocker,
+    reconciliation: restoreReconciliation,
+    mailAuth: { repair: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth() },
     archiver: new SevenZip(),
     storage: (cfg) => new S3Storage(cfg),
     // O serviço do domínio nasce depois deste (linha abaixo); a função só roda numa restauração, com tudo no ar.
@@ -384,6 +405,14 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(panelDomainRoutes);
   await app.register(notificationsRoutes);
   await app.register(backupsRoutes);
+  await app.register(restoreReconciliationRoutes);
+  // Painel recém-restaurado: o mail.json pode ter a senha de administração de outro servidor; 20 s depois da subida
+  // (com o Docker e o Stalwart no ar) o painel reaplica a configuração, se preciso. Nunca derruba a subida.
+  const authRepair = setTimeout(() => {
+    void restoreReconciliation.repairOpen().catch(() => undefined);
+  }, 20_000);
+  authRepair.unref();
+  app.addHook("onClose", async () => clearTimeout(authRepair));
   await app.register(timezoneRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);

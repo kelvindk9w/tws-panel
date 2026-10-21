@@ -176,6 +176,15 @@ Auditoria (`guardrail.override`).
 
 ---
 
+### "You have to authenticate first" no servidor de e-mail depois de restaurar
+
+A senha de administração do servidor de e-mail guardada no painel e a que está na configuração do
+servidor em execução são diferentes (acontece depois de restaurar o painel ou o e-mail). O painel
+confere isso depois da restauração e tenta corrigir; se ainda aparecer "O painel não conseguiu
+autenticar no servidor de e-mail", clique em **Reparar agora** no aviso âmbar do Dashboard, ou pare o
+servidor de e-mail e inicie de novo em **E-mail**. Nenhum dado é apagado. Detalhes em
+[Restaurar em outro servidor](restore-new-server.md#se-algo-falhar).
+
 ## Docker
 
 ### "Cannot connect to the Docker daemon"

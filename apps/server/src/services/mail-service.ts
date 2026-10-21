@@ -50,6 +50,7 @@ import {
   readCaddyCertificate,
   sendSmtpMail,
   SmtpSendError,
+  StalwartApiError,
   StalwartClient,
   StalwartManager,
   stalwartConfigFingerprint,
@@ -481,6 +482,55 @@ export class MailService {
       await this.save();
     }
     return manager.status();
+  }
+
+  // -------------------------------------------------------------------------
+  // Senha de administração: mail.json x config.toml do container
+  // -------------------------------------------------------------------------
+
+  /**
+   * A senha de administração (`adminSecret`) mora em dois lugares: aqui, no
+   * mail.json (o que o painel envia), e no config.toml DENTRO do container
+   * (`fallback-admin`, o que o Stalwart aceita). Restaurar o e-mail devolve o
+   * etc/ do servidor antigo; restaurar o painel devolve o mail.json do painel
+   * antigo. Em qualquer ordem os dois lados podem divergir e toda chamada dá
+   * 401 ("You have to authenticate first"). Esta conferência faz uma chamada
+   * autenticada de leitura. A senha nunca vai para o log.
+   */
+  async checkAdminAuth(): Promise<"ok" | "mismatch" | "unreachable" | "not_running"> {
+    await this.ensureLoaded();
+    if (!this.data.adminSecret) return "not_running";
+    if (!(await this.manager().status()).running) return "not_running";
+    try {
+      await this.client().listQueue(1);
+      return "ok";
+    } catch (err) {
+      if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) return "mismatch";
+      return "unreachable";
+    }
+  }
+
+  /**
+   * Se a senha do painel não autentica no servidor em execução, regrava a
+   * configuração com a senha do painel e reinicia o container (os dados ficam
+   * no volume; nada é apagado). Servidor parado: não faz nada, porque o
+   * próximo "Iniciar" já grava a configuração com a senha certa.
+   */
+  async repairAdminAuth(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running"> {
+    await this.ensureLoaded();
+    // Logo depois de um start (restauração do e-mail) a API ainda está subindo: espera até responder (401 também vale).
+    if (this.data.adminSecret && (await this.manager().status()).running) {
+      await this.manager().waitReady(30_000).catch(() => undefined);
+    }
+    const before = await this.checkAdminAuth();
+    if (before !== "mismatch") return before;
+    const certificates = await this.currentCertificates();
+    const manager = this.manager(certificates);
+    await manager.applyTls({ restart: true });
+    await manager.waitReady();
+    this.data.tls = this.tlsState(certificates);
+    await this.save();
+    return (await this.checkAdminAuth()) === "ok" ? "repaired" : "failed";
   }
 
   // -------------------------------------------------------------------------

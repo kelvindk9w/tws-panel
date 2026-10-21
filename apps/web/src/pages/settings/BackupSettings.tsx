@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { CopyButton } from "@/components/CopyButton";
+import { ReconciliationNotice } from "@/components/restore/ReconciliationNotice";
 import {
   BackupTimezoneNote,
   Feedback,
@@ -996,6 +997,7 @@ export function BackupSettings() {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground">{t("backups.page.intro")}</p>
+      <ReconciliationNotice variant="result" />
       {loadError && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-destructive">{loadError}</span>
