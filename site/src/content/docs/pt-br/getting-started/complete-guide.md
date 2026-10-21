@@ -388,7 +388,7 @@ webmail. Esqueceu a senha da caixa? Aba **Caixas** → **Trocar senha**.
 
 ### 4.9 Página Envios
 
-No menu (**Mais → Envios**), **Envios** mostra o que o servidor de e-mail está fazendo:
+No menu (seta ao lado de **Configurações** → **Envios**), **Envios** mostra o que o servidor de e-mail está fazendo:
 
 - **Fila agora:** o que ainda está em tentativa, com o motivo da última falha.
 - **Histórico:** entregues, recusadas, adiadas e canceladas dos últimos 30 dias.
@@ -645,7 +645,7 @@ exposta), a tela diz qual regra; veja
 ### 7.7 Certificado
 
 Na aba **Domínios**, cada domínio do projeto mostra o estado do certificado HTTPS. A página
-**Certificados** (menu **Mais → Certificados**) lista todos (painel, projetos e e-mail).
+**Certificados** (seta ao lado de **Configurações** → **Certificados**) lista todos (painel, projetos e e-mail).
 
 **O que conferir:** o domínio do projeto está **Válido**. Se falhou, a página **Certificados**
 explica a causa provável (DNS que não aponta para a VPS, nuvem laranja, portas 80/443 fechadas) e
@@ -734,10 +734,10 @@ O painel sai do ar por alguns segundos e volta sozinho. O porquê está no
 
 - **Alertas** (menu): a central de alertas, com o que o monitoramento achou. Filtre por status
   (aberto, reconhecido).
-- **Auditoria** (menu **Mais**): as ações sensíveis, com quando, ação, alvo e detalhe.
+- **Auditoria** (menu **Configurações**, seta ao lado): as ações sensíveis, com quando, ação, alvo e detalhe.
 - **Segurança** (menu): proteções da VPS, retrato de referência, monitoramento e reputação do
   e-mail.
-- **Certificados** e **Envios** (menu **Mais**): certificados e e-mail.
+- **Certificados** e **Envios** (menu **Configurações**, seta ao lado): certificados e e-mail.
 - O Telegram ou o e-mail da [Etapa 5](#etapa-5), quando o painel está fechado.
 
 ### Se perder o acesso

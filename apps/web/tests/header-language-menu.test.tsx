@@ -1,7 +1,7 @@
 /**
  * header-language-menu.test.tsx — o seletor de idioma sempre à vista no
  * cabeçalho do painel (topo, laterais e barra móvel) e o menu do topo
- * enxuto: itens do dia a dia visíveis e o resto atrás de "Mais".
+ * enxuto: itens do dia a dia visíveis e o resto no submenu de "Configurações".
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -51,7 +51,7 @@ describe("seletor de idioma no cabeçalho", () => {
     fireEvent.change(select, { target: { value: "en" } });
     expect(within(top()).getByRole("combobox", { name: "Language" })).toHaveValue("en");
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe("en");
-    expect(within(top()).getByRole("button", { name: "More" })).toBeInTheDocument();
+    expect(within(top()).getByRole("button", { name: "Settings submenu" })).toBeInTheDocument();
   });
 
   it("mostra o código curto do idioma (PT/EN) e mantém o nome completo acessível nas opções", () => {
@@ -92,14 +92,14 @@ describe("seletor de idioma no cabeçalho", () => {
   });
 });
 
-describe("menu do usuário e \"Mais\" não ficam abertos juntos", () => {
+describe("menu do usuário e o submenu não ficam abertos juntos", () => {
   const sair = () => screen.queryByRole("button", { name: "Sair" });
 
-  it("abrir \"Mais\" pelo teclado fecha o menu do usuário, e o inverso", async () => {
+  it("abrir o submenu pelo teclado fecha o menu do usuário, e o inverso", async () => {
     const user = userEvent.setup();
     renderLayout("top");
     const conta = screen.getByRole("button", { name: /Conta:/ });
-    const more = within(top()).getByRole("button", { name: "Mais" });
+    const more = within(top()).getByRole("button", { name: "Submenu de Configurações" });
     conta.focus();
     await user.keyboard("{Enter}");
     expect(sair()).toBeInTheDocument();
@@ -137,27 +137,27 @@ describe("menu do usuário e \"Mais\" não ficam abertos juntos", () => {
   });
 });
 
-describe("menu do topo com \"Mais\"", () => {
-  const visible = ["Dashboard", "Novo Projeto", "E-mail", "Segurança", "Alertas"];
-  const grouped = ["Envios", "Certificados", "Auditoria", "Configurações", "Setup"];
+describe("menu do topo com submenu de \"Configurações\"", () => {
+  const visible = ["Dashboard", "Novo Projeto", "E-mail", "Segurança", "Alertas", "Configurações"];
+  const grouped = ["Envios", "Certificados", "Auditoria", "Setup"];
 
   function desktopNav() {
     return within(top()).getByRole("navigation", { name: "Principal" });
   }
 
-  it("só os itens do dia a dia ficam à vista; o resto some até abrir \"Mais\"", () => {
+  it("só os itens do dia a dia ficam à vista; o resto some até abrir o submenu", () => {
     renderLayout("top");
     const nav = desktopNav();
     for (const name of visible) expect(within(nav).getByRole("link", { name })).toBeInTheDocument();
     for (const name of grouped) expect(within(nav).queryByRole("link", { name })).not.toBeInTheDocument();
-    expect(within(nav).getByRole("button", { name: "Mais" })).toHaveAttribute("aria-expanded", "false");
+    expect(within(nav).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("abre e fecha por clique, mantendo aria-expanded", async () => {
     const user = userEvent.setup();
     renderLayout("top");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     await user.click(more);
     expect(more).toHaveAttribute("aria-expanded", "true");
     for (const name of grouped) expect(within(nav).getByRole("link", { name })).toBeInTheDocument();
@@ -171,7 +171,7 @@ describe("menu do topo com \"Mais\"", () => {
     const user = userEvent.setup();
     renderLayout("top");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     more.focus();
     await user.keyboard("{Enter}");
     expect(more).toHaveAttribute("aria-expanded", "true");
@@ -190,13 +190,13 @@ describe("menu do topo com \"Mais\"", () => {
     const user = userEvent.setup();
     renderLayout("top");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     await user.click(more);
     expect(more).toHaveFocus();
     await user.keyboard("{ArrowUp}");
     expect(within(nav).getByRole("link", { name: "Setup" })).toHaveFocus();
     await user.keyboard("{ArrowUp}");
-    expect(within(nav).getByRole("link", { name: "Configurações" })).toHaveFocus();
+    expect(within(nav).getByRole("link", { name: "Auditoria" })).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(more).toHaveFocus();
     await user.keyboard("{ArrowUp}");
@@ -208,7 +208,7 @@ describe("menu do topo com \"Mais\"", () => {
     const user = userEvent.setup();
     renderLayout("top");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     await user.click(more);
     await user.keyboard("{ArrowDown}");
     expect(within(nav).getByRole("link", { name: "Envios" })).toHaveFocus();
@@ -229,7 +229,7 @@ describe("menu do topo com \"Mais\"", () => {
   it("Home e End com o painel fechado não abrem nada", async () => {
     const user = userEvent.setup();
     renderLayout("top");
-    const more = within(desktopNav()).getByRole("button", { name: "Mais" });
+    const more = within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" });
     more.focus();
     await user.keyboard("{End}{Home}");
     expect(more).toHaveAttribute("aria-expanded", "false");
@@ -239,7 +239,7 @@ describe("menu do topo com \"Mais\"", () => {
     const user = userEvent.setup();
     renderLayout("top", "/certificates");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     await user.click(more);
     await user.click(within(nav).getByRole("link", { name: "Certificados" }));
     expect(more).toHaveAttribute("aria-expanded", "false");
@@ -248,7 +248,7 @@ describe("menu do topo com \"Mais\"", () => {
   it("clique fora fecha", async () => {
     const user = userEvent.setup();
     renderLayout("top");
-    const more = within(desktopNav()).getByRole("button", { name: "Mais" });
+    const more = within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" });
     await user.click(more);
     await user.click(screen.getByText("conteúdo"));
     expect(more).toHaveAttribute("aria-expanded", "false");
@@ -258,7 +258,7 @@ describe("menu do topo com \"Mais\"", () => {
     const user = userEvent.setup();
     renderLayout("top");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     await user.click(more);
     within(nav).getByRole("link", { name: "Setup" }).focus();
     await user.tab();
@@ -269,17 +269,17 @@ describe("menu do topo com \"Mais\"", () => {
     const user = userEvent.setup();
     renderLayout("top");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     await user.click(more);
     await user.click(within(nav).getByRole("link", { name: "Auditoria" }));
     expect(more).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("rota filha aberta destaca \"Mais\" e o item dentro dele", async () => {
+  it("rota filha aberta destaca o botão do submenu e o item dentro dele", async () => {
     const user = userEvent.setup();
     renderLayout("top", "/certificates");
     const nav = desktopNav();
-    const more = within(nav).getByRole("button", { name: "Mais" });
+    const more = within(nav).getByRole("button", { name: "Submenu de Configurações" });
     expect(more.className).toContain("bg-secondary");
     expect(more).toHaveAttribute("data-active", "true");
     await user.click(more);
@@ -288,20 +288,20 @@ describe("menu do topo com \"Mais\"", () => {
     expect(within(nav).getByRole("link", { name: "Auditoria" }).className).not.toContain("bg-secondary");
   });
 
-  it("em /mail/envios \"Mais\" fica ativo e E-mail não; em /settings/security (subrota) também", () => {
+  it("em /mail/envios o submenu fica ativo e E-mail não; em /settings/security (subrota) o botão fica ativo", () => {
     renderLayout("top", "/mail/envios");
     let nav = desktopNav();
-    expect(within(nav).getByRole("button", { name: "Mais" })).toHaveAttribute("data-active", "true");
+    expect(within(nav).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("data-active", "true");
     expect(within(nav).getByRole("link", { name: "E-mail" }).className).not.toContain("bg-secondary");
     cleanup();
     renderLayout("top", "/settings/security");
     nav = desktopNav();
-    expect(within(nav).getByRole("button", { name: "Mais" })).toHaveAttribute("data-active", "true");
+    expect(within(nav).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("data-active", "true");
   });
 
-  it("rota de item visível não ativa \"Mais\"", () => {
+  it("rota de item visível não ativa o submenu", () => {
     renderLayout("top", "/alerts");
-    const more = within(desktopNav()).getByRole("button", { name: "Mais" });
+    const more = within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" });
     expect(more).not.toHaveAttribute("data-active");
     expect(more.className).not.toContain("bg-secondary");
   });
@@ -313,13 +313,95 @@ describe("menu do topo com \"Mais\"", () => {
     await waitFor(() => expect(alerts).toHaveTextContent("99+"));
   });
 
-  it("em inglês, rótulos do grupo e dos itens", async () => {
+  it("em inglês, rótulos do submenu e dos itens", async () => {
     const user = userEvent.setup();
     renderLayout("top");
     fireEvent.change(within(top()).getByRole("combobox"), { target: { value: "en" } });
     const nav = within(top()).getByRole("navigation", { name: "Main" });
-    await user.click(within(nav).getByRole("button", { name: "More" }));
+    await user.click(within(nav).getByRole("button", { name: "Settings submenu" }));
     expect(within(nav).getByRole("link", { name: "Audit log" })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings/profile");
+  });
+
+  it("\"Configurações\" no topo é um link para /settings/profile, separado do botão do submenu", () => {
+    renderLayout("top");
+    const nav = desktopNav();
+    const link = within(nav).getByRole("link", { name: "Configurações" });
+    expect(link).toHaveAttribute("href", "/settings/profile");
+    const btn = within(nav).getByRole("button", { name: "Submenu de Configurações" });
+    expect(btn).not.toBe(link);
+    expect(btn).toHaveAttribute("aria-expanded", "false");
+    expect(within(nav).queryByRole("button", { name: "Mais" })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+  });
+
+  it("o submenu não repete Configurações", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    const nav = desktopNav();
+    await user.click(within(nav).getByRole("button", { name: "Submenu de Configurações" }));
+    expect(within(nav).getAllByRole("link", { name: "Configurações" })).toHaveLength(1);
+  });
+
+  it("clicar no rótulo navega para /settings/profile e não abre o submenu", async () => {
+    const user = userEvent.setup();
+    renderLayout("top", "/alerts");
+    const nav = desktopNav();
+    await user.click(within(nav).getByRole("link", { name: "Configurações" }));
+    expect(within(nav).getByRole("link", { name: "Configurações" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("em /settings/* o link e o botão ficam destacados", () => {
+    renderLayout("top", "/settings/security");
+    const nav = desktopNav();
+    expect(within(nav).getByRole("link", { name: "Configurações" }).className).toContain("bg-secondary");
+    expect(within(nav).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("data-active", "true");
+  });
+
+  it("abrir o submenu fecha o menu do usuário e a ajuda", async () => {
+    const user = userEvent.setup();
+    renderLayout("top");
+    await user.click(screen.getByRole("button", { name: /Conta:/ }));
+    expect(screen.getByRole("button", { name: "Sair" })).toBeInTheDocument();
+    await user.click(within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" }));
+    expect(screen.queryByRole("button", { name: "Sair" })).not.toBeInTheDocument();
+    await user.click(within(top()).getByRole("button", { name: "Ajuda e feedback" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" })).toHaveAttribute("aria-expanded", "false");
+    await user.click(within(desktopNav()).getByRole("button", { name: "Submenu de Configurações" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["/settings/profile", "/settings/security", "/settings"])("em %s o link Configurações tem aria-current=page", (path) => {
+    renderLayout("top", path);
+    expect(within(desktopNav()).getByRole("link", { name: "Configurações" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("fora de /settings o link Configurações não tem aria-current", () => {
+    renderLayout("top", "/alerts");
+    expect(within(desktopNav()).getByRole("link", { name: "Configurações" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("clicar no link Configurações com o submenu aberto, na mesma rota, fecha o painel", async () => {
+    const user = userEvent.setup();
+    renderLayout("top", "/settings/profile");
+    const nav = desktopNav();
+    const btn = within(nav).getByRole("button", { name: "Submenu de Configurações" });
+    await user.click(btn);
+    expect(btn).toHaveAttribute("aria-expanded", "true");
+    await user.click(within(nav).getByRole("link", { name: "Configurações" }));
+    expect(btn).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("link e seta têm a mesma altura (sem degrau) e a seta mantém área de toque", () => {
+    renderLayout("top", "/settings/security");
+    const nav = desktopNav();
+    const link = within(nav).getByRole("link", { name: "Configurações" });
+    const btn = within(nav).getByRole("button", { name: "Submenu de Configurações" });
+    expect(link.className).toContain("h-8");
+    expect(btn.className).toContain("h-8");
+    expect(btn.className).toContain("w-7");
   });
 
   it("menu móvel lista todos os itens, sem agrupar", async () => {
@@ -328,7 +410,7 @@ describe("menu do topo com \"Mais\"", () => {
     await user.click(screen.getByRole("button", { name: /^Menu/ }));
     const mobile = screen.getByTestId("nav-mobile");
     for (const name of [...visible, ...grouped]) expect(within(mobile).getByRole("link", { name })).toBeInTheDocument();
-    expect(within(mobile).queryByRole("button", { name: "Mais" })).not.toBeInTheDocument();
+    expect(within(mobile).queryByRole("button", { name: "Submenu de Configurações" })).not.toBeInTheDocument();
   });
 
   it("lateral lista todos os itens, sem agrupar, na ordem de sempre", () => {
@@ -336,7 +418,7 @@ describe("menu do topo com \"Mais\"", () => {
     const lateral = screen.getByTestId("nav-sidebar");
     const links = within(lateral).getAllByRole("link").map((a) => a.textContent);
     expect(links.slice(1)).toEqual(["Dashboard", "Novo Projeto", "E-mail", "Envios", "Certificados", "Segurança", "Alertas", "Auditoria", "Configurações", "Setup"]);
-    expect(within(lateral).queryByRole("button", { name: "Mais" })).not.toBeInTheDocument();
+    expect(within(lateral).queryByRole("button", { name: "Submenu de Configurações" })).not.toBeInTheDocument();
   });
 });
 
@@ -349,10 +431,33 @@ describe("cabeçalho estreito: sem estouro lateral (estrutura)", () => {
     expect(label.className).toContain("sm:not-sr-only");
   });
 
+  it("faixa lg (1024-1279): itens do topo com folga lateral menor e nome do usuário limitado, para caber com Configurações", () => {
+    renderLayout("top");
+    const nav = within(top()).getByRole("navigation", { name: "Principal" });
+    for (const name of ["Dashboard", "Alertas"]) {
+      const cls = within(nav).getByRole("link", { name }).className;
+      expect(cls).toContain("lg:px-2");
+      expect(cls).toContain("xl:px-3");
+    }
+    expect(nav.className).toContain("lg:gap-0.5");
+    const nome = within(top()).getByRole("button", { name: /Conta:/ }).querySelector("span") as HTMLElement;
+    expect(nome.className).toContain("lg:max-w-16");
+    expect(nome.className).toContain("xl:max-w-32");
+  });
+
+  it("botão do usuário traz o nome completo em title, sem mudar o aria-label", () => {
+    renderLayout("top");
+    const conta = within(top()).getByRole("button", { name: /Conta:/ });
+    const nome = conta.querySelector("span") as HTMLElement;
+    expect(conta).toHaveAttribute("title", nome.textContent);
+    expect(conta.getAttribute("title")).toBeTruthy();
+    expect(conta.getAttribute("aria-label")).toMatch(/^Conta:/);
+  });
+
   it("espaços do cabeçalho: menores abaixo de sm e na faixa lg, normais em sm e xl", () => {
     renderLayout("top");
     const row = top().firstElementChild as HTMLElement;
-    for (const c of ["gap-2", "sm:gap-4", "lg:gap-3", "xl:gap-6"]) expect(row.className).toContain(c);
+    for (const c of ["gap-2", "sm:gap-4", "lg:gap-2", "xl:gap-6"]) expect(row.className).toContain(c);
     const group = within(top()).getByRole("combobox", { name: "Idioma" }).closest("div")!.parentElement as HTMLElement;
     for (const c of ["gap-1", "sm:gap-2", "lg:gap-1", "xl:gap-2"]) expect(group.className).toContain(c);
   });

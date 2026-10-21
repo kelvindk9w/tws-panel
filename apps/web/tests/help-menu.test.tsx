@@ -1,7 +1,7 @@
 /**
  * help-menu.test.tsx — "Ajuda e feedback" no cabeçalho: links por idioma,
  * privacidade do link de bug, acessibilidade/teclado e convivência com os
- * outros menus do cabeçalho ("Mais" e menu do usuário).
+ * outros menus do cabeçalho (o submenu e menu do usuário).
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -262,9 +262,9 @@ describe("convivência com os outros menus", () => {
     expect(screen.getByRole("button", { name: "Sair" })).toBeInTheDocument();
   });
 
-  it("abrir a ajuda fecha o 'Mais', e vice-versa", async () => {
+  it("abrir a ajuda fecha o submenu de Configurações, e vice-versa", async () => {
     renderLayout("top");
-    const more = within(top()).getByRole("button", { name: "Mais" });
+    const more = within(top()).getByRole("button", { name: "Submenu de Configurações" });
     await userEvent.click(more);
     expect(more).toHaveAttribute("aria-expanded", "true");
     await userEvent.click(helpButton());

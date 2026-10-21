@@ -17,10 +17,26 @@ import { MAIL_DEFAULT_PORTS, type Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 
 let running = true;
+/** Senha que o config.toml DENTRO do container aceita (o reparo a troca pela do painel). */
+let liveSecret = "";
+let applyTlsCalls = 0;
+/** false: o reinício não consegue aplicar a senha do painel (reparo que falha). */
+let repairWorks = true;
+/** Docker falso que ecoa a senha de administração no stderr ao reiniciar. */
+let dockerEchoesSecret = false;
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
   class FakeStalwartManager {
+    constructor(private readonly opts: Record<string, unknown> = {}) {}
+    async applyTls() {
+      applyTlsCalls += 1;
+      if (dockerEchoesSecret) throw new Error(`falha ao reiniciar paas-stalwart: secret = "${this.opts.adminSecret as string}" ${"x".repeat(300)}`);
+      await new Promise((r) => setTimeout(r, 20));
+      if (repairWorks) liveSecret = this.opts.adminSecret as string;
+      return "restarted";
+    }
+    async waitReady() {}
     async joinMailNetworks() {}
     async leaveProjectNetwork() {}
     async connectContainer() {}
@@ -58,7 +74,7 @@ function fakeStalwart() {
     vi.fn(async (url: string, init?: RequestInit) => {
       fetchCalls.push(`${init?.method ?? "GET"} ${url}`);
       const auth = (init?.headers as Record<string, string>).authorization;
-      if (rejectAuth || auth !== `Basic ${Buffer.from(`admin:${ADMIN}`).toString("base64")}`) {
+      if (rejectAuth || auth !== `Basic ${Buffer.from(`admin:${liveSecret}`).toString("base64")}`) {
         return new Response(`{"error":"other","details":"You have to authenticate first"}`, { status: 401 });
       }
       const u = new URL(url);
@@ -115,6 +131,10 @@ beforeEach(async () => {
   dkimPosts = 0;
   pageLimitFake = false;
   rejectAuth = false;
+  liveSecret = ADMIN;
+  applyTlsCalls = 0;
+  repairWorks = true;
+  dockerEchoesSecret = false;
   fetchCalls = [];
   config = { dataDir: dir, mailPorts: MAIL_DEFAULT_PORTS, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null } as unknown as ServerConfig;
   await mkdir(path.join(dir, "mail"), { recursive: true });
@@ -150,6 +170,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -315,11 +336,119 @@ describe("MailService.adoptFromStalwart", () => {
     expect(result.truncated).toBe(true);
   });
 
-  it("401 do Stalwart: erro com o status 401 e o cadastro intacto", async () => {
+  it("senha certa: não reinicia o Stalwart nem repara nada", async () => {
+    await service().adoptFromStalwart();
+    expect(applyTlsCalls).toBe(0);
+  });
+
+  it("401 (senha do painel diferente da do servidor): repara UMA vez, repete a leitura e cadastra", async () => {
+    liveSecret = "senha-antiga-do-servidor";
+    const logs: string[] = [];
+    const result = await service({ log: (m: string) => logs.push(m) }).adoptFromStalwart();
+    expect(result.domains).toEqual(["cassp.example.com"]);
+    expect(applyTlsCalls).toBe(1);
+    const raw = await readFile(path.join(dir, "mail", "mail.json"), "utf8");
+    expect(JSON.parse(raw).adminSecret).toBe(ADMIN);
+    expect(JSON.stringify(logs)).not.toContain(ADMIN);
+    expect(JSON.stringify(logs)).not.toContain("senha-antiga");
+  });
+
+  it("reparo coalescido: duas sincronizações de instâncias diferentes reiniciam o Stalwart uma só vez", async () => {
+    liveSecret = "senha-antiga-do-servidor";
+    const [a, b] = await Promise.all([service().adoptFromStalwart(), service().adoptFromStalwart()]);
+    expect(a.domains.length + b.domains.length).toBeGreaterThan(0);
+    expect(applyTlsCalls).toBe(1);
+  });
+
+  it("o reparo também falha: erro claro (o que tentou e o próximo passo), sem laço, sem segredo e sem tocar no cadastro", async () => {
+    liveSecret = "senha-antiga-do-servidor";
+    repairWorks = false;
+    const before = await readStored();
+    const err = (await service().adoptFromStalwart().catch((e: unknown) => e)) as Error;
+    expect(err).toMatchObject({ statusCode: 409, code: "mail_auth_repair_failed" });
+    expect(err.message).toMatch(/tentou regravar a configuração e reiniciar/);
+    expect(err.message).not.toContain(ADMIN);
+    expect(err.message).not.toContain("senha-antiga");
+    expect(applyTlsCalls).toBe(1);
+    const after = await readStored();
+    expect(after.domains).toEqual(before.domains);
+    expect(after.mailboxes).toEqual(before.mailboxes);
+    const principalCalls = fetchCalls.filter((c) => c.includes("/api/principal")).length;
+    expect(principalCalls).toBeLessThanOrEqual(3);
+  });
+
+  it("o reparo erra antes de terminar (ex.: falha ao reiniciar): mensagem diz que não terminou, com motivo sem segredo", async () => {
+    liveSecret = "senha-antiga-do-servidor";
+    vi.spyOn(MailService.prototype, "repairAdminAuth").mockRejectedValue(new Error(`falha ao reiniciar paas-stalwart: docker recusou ${ADMIN} agora`));
+    const err = (await service().adoptFromStalwart().catch((e: unknown) => e)) as Error & { code: string; statusCode: number };
+    expect(err).toMatchObject({ statusCode: 409, code: "mail_auth_repair_incomplete" });
+    expect(err.message).toMatch(/não terminou/);
+    expect(err.message).toMatch(/falha ao reiniciar paas-stalwart/);
+    expect(err.message).toMatch(/Próximo passo/);
+    expect(err.message).not.toContain(ADMIN);
+    expect(err.message).not.toMatch(/continua recusando/);
+  });
+
+  describe("docker que ecoa a senha no stderr: erro limpo, sem segredo na resposta nem no log (os três caminhos)", () => {
+    const expectClean = (err: Error & { code?: string; statusCode?: number }, logs: string[]) => {
+      expect(err).toMatchObject({ statusCode: 409, code: "mail_auth_repair_incomplete" });
+      expect(err.message).toMatch(/não terminou/);
+      expect(err.message).not.toContain(ADMIN);
+      expect(err.message.length).toBeLessThan(700);
+      expect(JSON.stringify(logs)).not.toContain(ADMIN);
+    };
+
+    it("Sincronizar", async () => {
+      liveSecret = "senha-antiga-do-servidor";
+      dockerEchoesSecret = true;
+      const logs: string[] = [];
+      const err = (await service({ log: (m: string) => logs.push(m) }).adoptFromStalwart().catch((e: unknown) => e)) as Error;
+      expectClean(err, logs);
+    });
+
+    it("botão Reparar agora (repairAdminAuth direto)", async () => {
+      liveSecret = "senha-antiga-do-servidor";
+      dockerEchoesSecret = true;
+      const logs: string[] = [];
+      const err = (await service({ log: (m: string) => logs.push(m) }).repairAdminAuth().catch((e: unknown) => e)) as Error;
+      expectClean(err, logs);
+    });
+
+    it("subida do painel (repairOpen): o log de aviso não traz a senha", async () => {
+      liveSecret = "senha-antiga-do-servidor";
+      dockerEchoesSecret = true;
+      const logs: string[] = [];
+      const { RestoreReconciliation } = await import("../src/services/restore-reconciliation.js");
+      const rec = new RestoreReconciliation({
+        dataDir: dir,
+        containers: { stalwart: "paas-stalwart", webmail: "paas-webmail" },
+        probes: { container: async () => "running", mailAuth: async () => "mismatch", repairMailAuth: () => service({ log: (m: string) => logs.push(m) }).repairAdminAuth() },
+        log: (m: string) => logs.push(m),
+      });
+      await rec.markPending(["mail-auth"], "panel");
+      expect(await rec.repairOpen()).toBeNull();
+      expect(logs.length).toBeGreaterThan(0);
+      expect(JSON.stringify(logs)).not.toContain(ADMIN);
+      expect(JSON.stringify(logs)).toMatch(/não terminou/);
+    });
+  });
+
+  it("servidor sem resposta durante o reparo: erro de servidor inacessível, não de senha", async () => {
+    liveSecret = "senha-antiga-do-servidor";
+    vi.spyOn(MailService.prototype, "repairAdminAuth").mockResolvedValue("unreachable");
+    await expect(service().adoptFromStalwart()).rejects.toMatchObject({ statusCode: 502, code: "mail_unreachable" });
+  });
+
+  it("reparo diz que a senha confere, mas a leitura continua recusada: erro próprio, sem reiniciar de novo", async () => {
     rejectAuth = true;
-    const before = await readFile(path.join(dir, "mail", "mail.json"), "utf8");
-    await expect(service().adoptFromStalwart()).rejects.toMatchObject({ status: 401 });
-    expect(await readFile(path.join(dir, "mail", "mail.json"), "utf8")).toBe(before);
+    vi.spyOn(MailService.prototype, "repairAdminAuth").mockResolvedValue("ok");
+    await expect(service().adoptFromStalwart()).rejects.toMatchObject({ statusCode: 409, code: "mail_auth_still_refused" });
+  });
+
+  it("servidor parado no meio do reparo: 409 mail_server_stopped", async () => {
+    rejectAuth = true;
+    vi.spyOn(MailService.prototype, "repairAdminAuth").mockResolvedValue("not_running");
+    await expect(service().adoptFromStalwart()).rejects.toMatchObject({ statusCode: 409, code: "mail_server_stopped" });
   });
 
   it("servidor parado ou nunca iniciado: 409, sem consultar nada", async () => {

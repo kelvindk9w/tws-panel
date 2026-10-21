@@ -79,4 +79,29 @@ describe("POST /api/mail/server/repair-auth", () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: "mail_auth_repair_failed" });
   });
+
+  it("servidor sem resposta ou parado: não finge sucesso (o botão precisa mostrar o erro)", async () => {
+    spy(MailService.prototype, "repairAdminAuth").mockResolvedValueOnce("unreachable");
+    const a = await app.inject({ method: "POST", url: "/api/mail/server/repair-auth", headers: auth });
+    expect(a.statusCode).toBe(502);
+    expect(a.json()).toMatchObject({ error: "mail_unreachable" });
+    spy(MailService.prototype, "repairAdminAuth").mockResolvedValueOnce("not_running");
+    const b = await app.inject({ method: "POST", url: "/api/mail/server/repair-auth", headers: auth });
+    expect(b.statusCode).toBe(409);
+    expect(b.json()).toMatchObject({ error: "mail_server_stopped" });
+  });
+
+  it("senha já certa: 200 sem reiniciar", async () => {
+    spy(MailService.prototype, "repairAdminAuth").mockResolvedValueOnce("ok");
+    const res = await app.inject({ method: "POST", url: "/api/mail/server/repair-auth", headers: auth });
+    expect(res.json()).toEqual({ ok: true, result: "ok" });
+  });
+
+  it("o reparo parou no meio: 409 mail_auth_repair_incomplete (nunca 500 com texto cru do docker)", async () => {
+    const { mailAuthRepairIncompleteError } = await import("../src/services/mail-auth-error.js");
+    spy(MailService.prototype, "repairAdminAuth").mockRejectedValueOnce(mailAuthRepairIncompleteError(new Error("docker fora"), null));
+    const res = await app.inject({ method: "POST", url: "/api/mail/server/repair-auth", headers: auth });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "mail_auth_repair_incomplete" });
+  });
 });
