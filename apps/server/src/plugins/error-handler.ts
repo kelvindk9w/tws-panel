@@ -16,6 +16,7 @@ import type {
 } from "fastify";
 
 import { scrubUrl } from "../log-config.js";
+import { mailAuthError } from "../services/mail-auth-error.js";
 
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
@@ -32,6 +33,9 @@ export function registerErrorHandler(app: FastifyInstance): void {
         message: invalidFieldMessage(error),
       });
     }
+    // Rota sem try/catch própria: um 401 do Stalwart nunca pode sair como 401 (o navegador leria "sessão acabou").
+    const mailAuth = mailAuthError(error);
+    if (mailAuth) return reply.code(mailAuth.statusCode).send({ error: mailAuth.code, message: mailAuth.message });
     return reply.send(error);
   });
 }

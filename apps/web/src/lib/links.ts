@@ -30,6 +30,16 @@ export function helpPageUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/help/`;
 }
 
+/** Guia de restauração em outro servidor, no idioma da interface. */
+export function restoreGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/guides/restore-new-server/`;
+}
+
+/** Domínio de aplicações no guia passo a passo (Parte 2), no idioma da interface. */
+export function appsDomainGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/getting-started/complete-guide/#dominio-de-aplicacoes`;
+}
+
 /** Perguntas e ideias (GitHub Discussions). */
 export function discussionsUrl(): string {
   return `${REPO_URL}/discussions`;

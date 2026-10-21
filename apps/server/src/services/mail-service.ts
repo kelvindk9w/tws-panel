@@ -14,12 +14,14 @@ import {
   PROJECT_EMAIL_VALUE_KEYS,
   envLinkNameProblem,
   PAAS_STALWART_CONTAINER,
+  MAIL_ADOPT_SKIPPED_MAX,
   STALWART_IMAGE_REF,
   type MailTlsHostStatus,
   type MailTlsStatusResponse,
   type BlacklistCheckResponse,
   type DnsChecklistResponse,
   type DnsVerifyResponse,
+  type MailAdoptResult,
   type MailDomain,
   type MailDomainSummary,
   type MailTestStatus,
@@ -50,6 +52,7 @@ import {
   readCaddyCertificate,
   sendSmtpMail,
   SmtpSendError,
+  StalwartApiError,
   StalwartClient,
   StalwartManager,
   stalwartConfigFingerprint,
@@ -63,6 +66,8 @@ import type { ServerConfig } from "../config.js";
 import { isCloudflareIp, publicIpFromPanelDomain } from "../routes/domains.js";
 import { httpError } from "./deploy-service.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
+import { planAdoption } from "./mail-adopt.js";
+import type { HttpError } from "./http-error.js";
 
 /** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
 const PANEL_CONTAINER = "tws-panel";
@@ -192,6 +197,12 @@ export interface MailServiceOptions {
   findReport?: typeof findDeliveryReport;
   /** Relógio (ms) — limite de frequência e espera do e-mail de teste. */
   now?: () => number;
+  /**
+   * Projetos cadastrados, para dar dono à caixa que o painel adota do
+   * Stalwart (endereço <slug>@ = caixa do projeto). Ausente ou com erro: as
+   * caixas entram sem dono.
+   */
+  projects?: () => Promise<Array<Pick<Project, "id" | "slug">>>;
 }
 
 /** E-mail de teste em acompanhamento (só em memória: some ao reiniciar o painel). */
@@ -222,6 +233,9 @@ export interface RemoveDomainResult {
   mailboxDeleteFailures: string[];
 }
 
+/** Reparos da senha de administração em andamento, por pasta de dados. */
+const REPAIRS_IN_FLIGHT = new Map<string, Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running">>();
+
 export class MailService {
   private readonly mailDir: string;
   private readonly mailFile: string;
@@ -236,6 +250,8 @@ export class MailService {
   private readonly sendMail: typeof sendSmtpMail;
   private readonly findReport: typeof findDeliveryReport;
   private readonly now: () => number;
+  private readonly projectsOf: (() => Promise<Array<Pick<Project, "id" | "slug">>>) | undefined;
+  private adopting: Promise<MailAdoptResult> | null = null;
   private readonly tests = new Map<string, TestEmailRecord>();
   /** Horário (ms) de cada tentativa de envio de teste na última hora. */
   private testAttempts: number[] = [];
@@ -261,6 +277,7 @@ export class MailService {
     this.sendMail = opts.sendMail ?? sendSmtpMail;
     this.findReport = opts.findReport ?? findDeliveryReport;
     this.now = opts.now ?? Date.now;
+    this.projectsOf = opts.projects;
   }
 
   /**
@@ -481,6 +498,66 @@ export class MailService {
       await this.save();
     }
     return manager.status();
+  }
+
+  // -------------------------------------------------------------------------
+  // Senha de administração: mail.json x config.toml do container
+  // -------------------------------------------------------------------------
+
+  /**
+   * A senha de administração (`adminSecret`) mora em dois lugares: aqui, no
+   * mail.json (o que o painel envia), e no config.toml DENTRO do container
+   * (`fallback-admin`, o que o Stalwart aceita). Restaurar o e-mail devolve o
+   * etc/ do servidor antigo; restaurar o painel devolve o mail.json do painel
+   * antigo. Em qualquer ordem os dois lados podem divergir e toda chamada dá
+   * 401 ("You have to authenticate first"). Esta conferência faz uma chamada
+   * autenticada de leitura. A senha nunca vai para o log.
+   */
+  async checkAdminAuth(): Promise<"ok" | "mismatch" | "unreachable" | "not_running"> {
+    await this.ensureLoaded();
+    if (!this.data.adminSecret) return "not_running";
+    if (!(await this.manager().status()).running) return "not_running";
+    try {
+      await this.client().listQueue(1);
+      return "ok";
+    } catch (err) {
+      if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) return "mismatch";
+      return "unreachable";
+    }
+  }
+
+  /**
+   * Se a senha do painel não autentica no servidor em execução, regrava a
+   * configuração com a senha do painel e reinicia o container (os dados ficam
+   * no volume; nada é apagado). Servidor parado: não faz nada, porque o
+   * próximo "Iniciar" já grava a configuração com a senha certa.
+   */
+  async repairAdminAuth(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running"> {
+    // Um reparo por vez no processo (a subida do painel, o botão e o fim da restauração usam instâncias diferentes):
+    // quem chega durante um reparo espera o mesmo resultado, e o Stalwart não reinicia duas vezes.
+    const key = this.mailDir;
+    const running = REPAIRS_IN_FLIGHT.get(key);
+    if (running) return running;
+    const run = this.doRepairAdminAuth().finally(() => REPAIRS_IN_FLIGHT.delete(key));
+    REPAIRS_IN_FLIGHT.set(key, run);
+    return run;
+  }
+
+  private async doRepairAdminAuth(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running"> {
+    await this.ensureLoaded();
+    // Logo depois de um start (restauração do e-mail) a API ainda está subindo: espera até responder (401 também vale).
+    if (this.data.adminSecret && (await this.manager().status()).running) {
+      await this.manager().waitReady(30_000).catch(() => undefined);
+    }
+    const before = await this.checkAdminAuth();
+    if (before !== "mismatch") return before;
+    const certificates = await this.currentCertificates();
+    const manager = this.manager(certificates);
+    await manager.applyTls({ restart: true });
+    await manager.waitReady();
+    this.data.tls = this.tlsState(certificates);
+    await this.save();
+    return (await this.checkAdminAuth()) === "ok" ? "repaired" : "failed";
   }
 
   // -------------------------------------------------------------------------
@@ -966,9 +1043,10 @@ export class MailService {
     const senderOf = new Map(Object.entries(this.data.projects).map(([id, p]) => [p.mailbox, id]));
     return Object.values(this.data.mailboxes)
       .filter((m) => m.domain === domain)
-      .map(({ password: _password, ...mailbox }): Mailbox => {
+      .map(({ password, ...mailbox }): Mailbox => {
         const owner = mailbox.projectId ?? senderOf.get(mailbox.id);
-        return owner ? { ...mailbox, projectId: owner } : mailbox;
+        const out: Mailbox = owner ? { ...mailbox, projectId: owner } : mailbox;
+        return password === "" ? { ...out, passwordUnknown: true } : out;
       })
       .filter((m) => opts.projectId === undefined || m.projectId === opts.projectId);
   }
@@ -1089,6 +1167,125 @@ export class MailService {
   }
 
   // -------------------------------------------------------------------------
+  // Adoção: cadastrar no painel o que o Stalwart já tem (depois de restaurar)
+  // -------------------------------------------------------------------------
+
+  /**
+   * O painel lista domínios e caixas do SEU cadastro (mail.json), não do
+   * Stalwart. Depois de restaurar o backup do e-mail, o Stalwart volta com o
+   * que havia e o cadastro não sabe. Lê o Stalwart (domínios e caixas) e
+   * cadastra o que falta. Regras:
+   *  - nada é ativado; o que já está cadastrado não muda;
+   *  - nenhuma senha é lida, guardada ou mostrada (o `secrets` da resposta é
+   *    descartado no cliente); a caixa adotada fica sem senha conhecida;
+   *  - o domínio entra com o DNS "não verificado";
+   *  - chamadas simultâneas viram uma só; repetir não duplica.
+   * Falha do Stalwart (401, fora do ar) sobe como está e não apaga nada.
+   */
+  adoptFromStalwart(): Promise<MailAdoptResult> {
+    this.adopting ??= this.doAdopt().finally(() => {
+      this.adopting = null;
+    });
+    return this.adopting;
+  }
+
+  private async doAdopt(): Promise<MailAdoptResult> {
+    await this.ensureLoaded();
+    const client = this.client();
+    await this.requireRunning();
+    const domainList = await client.listPrincipalsChecked("domain");
+    const mailboxList = await client.listPrincipalsChecked("individual");
+    const domainPrincipals = domainList.items;
+    const mailboxPrincipals = mailboxList.items;
+    const truncated = domainList.truncated || mailboxList.truncated;
+    let projects: Array<Pick<Project, "id" | "slug">> = [];
+    try {
+      projects = (await this.projectsOf?.()) ?? [];
+    } catch {
+      // sem a lista de projetos as caixas entram sem dono
+    }
+    const plan = planAdoption({
+      domains: domainPrincipals.map((p) => p.name),
+      mailboxes: mailboxPrincipals,
+      knownDomains: new Set(Object.keys(this.data.domains)),
+      knownMailboxes: new Set(Object.keys(this.data.mailboxes)),
+      projects,
+      projectDomains: new Map(Object.entries(this.data.projects).map(([id, p]) => [id, p.domain])),
+    });
+
+    // O domínio precisa da chave DKIM pública para o checklist de DNS. Sem ela, não entra (nem as caixas dele).
+    const dkim = new Map<string, string>();
+    const skipped = [...plan.skipped];
+    for (const name of plan.domains) {
+      try {
+        dkim.set(name, await this.readOrCreateDkim(client, name));
+      } catch (err) {
+        if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) throw err;
+        skipped.push(name);
+      }
+    }
+    // O DMARC do checklist manda relatórios para dmarc@: o domínio adotado só fica sem a marca (a rotina horária
+    // acrescenta o alias) quando a postmaster@ existe no Stalwart e dmarc@ ainda não recebe; sem postmaster@
+    // não há onde pôr o alias, e a rotina falharia no log a cada hora.
+    const dmarcReceives = (domain: string): boolean => {
+      const dmarc = `dmarc@${domain}`;
+      const postmaster = `postmaster@${domain}`;
+      const hasPostmaster = mailboxPrincipals.some((p) => p.name === postmaster);
+      const dmarcDelivers = mailboxPrincipals.some((p) => p.name === dmarc || p.emails.includes(dmarc));
+      return dmarcDelivers || !hasPostmaster;
+    };
+    const now = new Date().toISOString();
+    const result: MailAdoptResult = { domains: [], mailboxes: [], skipped };
+    for (const [name, dkimPublicKey] of dkim) {
+      if (this.data.domains[name]) continue;
+      this.data.domains[name] = {
+        name,
+        dkimSelector: DKIM_SELECTOR,
+        dkimPublicKey,
+        dkimKeyBits: 2048,
+        dmarcStage: "none",
+        createdAt: now,
+        lastVerify: null,
+        ...(dmarcReceives(name) ? { dmarcAlias: true } : {}),
+      };
+      result.domains.push(name);
+    }
+    for (const box of plan.mailboxes) {
+      if (!this.data.domains[box.domain]) {
+        skipped.push(box.id);
+        continue;
+      }
+      if (this.data.mailboxes[box.id]) continue;
+      this.data.mailboxes[box.id] = {
+        id: box.id,
+        localPart: box.localPart,
+        domain: box.domain,
+        kind: box.kind,
+        createdAt: now,
+        ...(box.projectId ? { projectId: box.projectId } : {}),
+        // sem senha conhecida: o Stalwart nunca a entrega, e o painel não a pede
+        password: "",
+      };
+      result.mailboxes.push(box.id);
+    }
+    if (result.domains.length > 0 || result.mailboxes.length > 0) await this.save();
+    if (skipped.length > MAIL_ADOPT_SKIPPED_MAX) {
+      result.skippedTotal = skipped.length;
+      result.skipped = skipped.slice(0, MAIL_ADOPT_SKIPPED_MAX);
+    }
+    if (truncated) result.truncated = true;
+    return result;
+  }
+
+  /** Chave pública DKIM do domínio no Stalwart; se a assinatura não existe, cria como no cadastro do domínio. */
+  private async readOrCreateDkim(client: StalwartClient, domain: string): Promise<string> {
+    // só cria quando o Stalwart diz que NÃO existe; qualquer outra falha de leitura sobe (e o domínio fica de fora)
+    const existing = await client.findDkimPublicKey(`rsa-${domain}`);
+    if (existing !== null) return existing;
+    return client.getDkimPublicKey(await client.createDkimSignature(domain, DKIM_SELECTOR));
+  }
+
+  // -------------------------------------------------------------------------
   // E-mail de teste (página do domínio)
   // -------------------------------------------------------------------------
 
@@ -1127,6 +1324,7 @@ export class MailService {
         `A caixa ${from} não está registrada no painel, e é dela que o teste sai. Remova e cadastre o domínio de novo para recriá-la.`,
       );
     }
+    if (mailbox.password === "") throw noPasswordError(from);
     await this.requireRunning();
     this.takeTestSlot();
 
@@ -1247,7 +1445,7 @@ export class MailService {
   private async readDeliveryReport(record: TestEmailRecord): Promise<Awaited<ReturnType<typeof findDeliveryReport>>> {
     const { status } = record;
     const mailbox = this.data.mailboxes[status.from];
-    if (!mailbox) return null;
+    if (!mailbox || mailbox.password === "") return null;
     try {
       return await this.findReport({
         baseUrl: this.apiBaseUrl(),
@@ -1331,7 +1529,7 @@ export class MailService {
     const domain = this.requireDomain(domainName);
     const local = opts.fromLocalPart ? normalizeLocalPart(opts.fromLocalPart) : project.slug;
     const address = `${local}@${domain.name}`;
-    this.requireFreeAddress(address, project.id);
+    this.requireFreeAddress(address, project);
 
     const previous = this.data.projects[project.id];
     const existing = this.data.mailboxes[address];
@@ -1365,6 +1563,11 @@ export class MailService {
     } else if (newPassword !== undefined) {
       await client.setMailboxPassword(address, newPassword);
       existing.password = newPassword;
+      // caixa adotada do Stalwart: passa a ser a do projeto
+      if (existing.kind === "user") {
+        existing.kind = "project";
+        existing.projectId = project.id;
+      }
     }
 
     this.data.projects[project.id] = {
@@ -1387,13 +1590,17 @@ export class MailService {
    * ninguém usa mais, ou a do próprio projeto), nem de outro projeto, nem o
    * postmaster@/abuse@/dmarc@ que o painel cria com o domínio.
    */
-  private requireFreeAddress(address: string, projectId: string): void {
+  private requireFreeAddress(address: string, project: Pick<Project, "id" | "slug">): void {
+    const projectId = project.id;
     const [local] = address.split("@");
     const takenByOther = Object.entries(this.data.projects).some(
       ([id, p]) => id !== projectId && (p.fromAddress === address || p.mailbox === address),
     );
     const mailbox = this.data.mailboxes[address];
-    if (takenByOther || (mailbox && mailbox.kind !== "project") || SYSTEM_LOCAL_PARTS.has(local ?? "")) {
+    // Caixa adotada do Stalwart (restauração) SEM senha conhecida e no endereço padrão do projeto (slug@domínio):
+    // a ativação a assume como caixa do projeto (pede a senha e a define no Stalwart; nada é apagado).
+    const adoptedForProject = mailbox?.kind === "user" && mailbox.password === "" && address.startsWith(`${project.slug}@`);
+    if (takenByOther || (mailbox && mailbox.kind !== "project" && !adoptedForProject) || SYSTEM_LOCAL_PARTS.has(local ?? "")) {
       throw httpError(409, "address_in_use", `O endereço ${address} já é de outra caixa ou de outro projeto.`);
     }
   }
@@ -1495,7 +1702,8 @@ export class MailService {
     await this.ensureLoaded();
     const stored = this.data.projects[project.id];
     const mailbox = stored ? this.data.mailboxes[stored.mailbox] : undefined;
-    if (!stored || !mailbox) return {};
+    // caixa sem senha conhecida: SMTP_PASS vazio quebraria o login do app; melhor não entregar nada
+    if (!stored || !mailbox || mailbox.password === "") return {};
     return this.smtpEnvOf(stored, mailbox, project.name);
   };
 
@@ -1580,7 +1788,13 @@ export class MailService {
       if (!v) return false;
       return typeof v.recordsOk === "boolean" ? v.recordsOk : v.total > 0 && v.ok === v.total;
     };
-    const chosen = domains.find((d) => dnsOk(d) && this.data.mailboxes[`postmaster@${d.name}`]);
+    const withDns = domains.filter((d) => dnsOk(d) && this.data.mailboxes[`postmaster@${d.name}`]);
+    const chosen = withDns.find((d) => this.data.mailboxes[`postmaster@${d.name}`]!.password !== "");
+    if (!chosen && withDns.length > 0) {
+      return notReady(
+        `A caixa postmaster@${withDns[0]!.name} veio de um backup e o painel não sabe a senha dela. Em E-mail → ${withDns[0]!.name} → Caixas, use Trocar senha na postmaster@.`,
+      );
+    }
     if (!chosen) {
       return notReady("Nenhum domínio de e-mail está com o DNS conferido. Abra o domínio na página E-mail e clique em Verificar DNS.");
     }
@@ -1755,6 +1969,14 @@ export function normalizeMailDomain(name: string): string {
     throw httpError(400, "invalid_domain", `Domínio inválido: ${name}`);
   }
   return domain;
+}
+
+function noPasswordError(address: string): HttpError {
+  return httpError(
+    409,
+    "mailbox_no_password",
+    `O painel não sabe a senha da caixa ${address} (ela veio de um backup). Use Trocar senha nesta caixa e tente de novo.`,
+  );
 }
 
 function normalizeLocalPart(localPart: string): string {

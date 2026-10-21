@@ -7,6 +7,7 @@ export default {
   "section.profile": "Perfil",
   "section.security": "Segurança",
   "section.panelDomain": "Domínio do painel",
+  "section.appsDomain": "Domínio de aplicações",
   "section.appearance": "Aparência",
   "section.notifications": "Notificações",
   "section.backups": "Backups",

@@ -57,5 +57,9 @@ export default {
   "code.username_taken": "That username already exists.",
   "code.webhook_active": "This bot is tied to a webhook (another system receives its messages). Use a bot just for the panel.",
   "code.webmail_no_domain": "Add an email domain before turning on webmail.",
+  "code.mail_auth_failed": "The panel could not sign in to the mail server (the admin password it stores is not the one the running server has, which happens after restoring the panel or the email). Reapply the configuration: stop and start the mail server in Email → Server, or use the notice on the Dashboard.",
+  "code.mail_unreachable": "The panel could not reach the mail server right now. Check that it is running in Email → Server and try again. Nothing was changed.",
+  "code.mail_auth_repair_failed": "Could not reapply the mail server configuration. Stop and start the server in Email → Server and try again.",
+  "code.reconciliation_not_found": "That notice no longer exists.",
   "code.wrong_password": "The password does not open this backup.",
 } as const;

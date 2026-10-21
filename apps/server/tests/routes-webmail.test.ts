@@ -129,3 +129,14 @@ describe("leitura das senhas erradas, a cada minuto", () => {
     expect(refreshProxy).not.toHaveBeenCalled();
   });
 });
+
+describe("senha de administração do Stalwart divergente", () => {
+  it("ativar o webmail: 409 mail_auth_failed com a mensagem amigável", async () => {
+    const { StalwartApiError } = await import("@paas/mailer");
+    webmail.enable!.mockRejectedValue(new StalwartApiError(401, "Stalwart: You have to authenticate first."));
+    const res = await app.inject({ method: "POST", url: "/api/mail/webmail/enable", headers: { "x-setup-token": "token-de-teste" } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "mail_auth_failed" });
+    expect(res.body).not.toMatch(/You have to authenticate/);
+  });
+});

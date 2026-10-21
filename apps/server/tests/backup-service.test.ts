@@ -23,6 +23,7 @@ import type { BackupDocker, ProjectContainer } from "../src/services/backup-dock
 import { StorageError, type BackupStorage, type StoredObject } from "../src/services/backup-s3.js";
 import { BackupService, orderBackups, projectTargetId, retentionVictims, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
 import type { NotificationEvent } from "../src/services/notification-service.js";
+import { RestoreReconciliation } from "../src/services/restore-reconciliation.js";
 
 // ---------------------------------------------------------------------------
 // Dublês
@@ -343,6 +344,145 @@ describe("situação", () => {
     await connect();
     await backup();
     expect(await service.facts()).toMatchObject({ destinationConnected: true, verifiedRemote: 1 });
+  });
+
+  describe("o roteiro vê backups de outro painel no armazenamento (só leitura)", () => {
+    const OTHER = `${BACKUP_ROOT_FOLDER}/_painel/2026-10-13_03-00.7z`;
+
+    it("painel novo, armazenamento conectado com backups do painel de outro servidor: foreignBackupsHeld", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("backup bom do servidor antigo"));
+      expect(await service.facts()).toMatchObject({ destinationConnected: true, verifiedRemote: 0, foreignBackupsHeld: true });
+      // ler não muda nada: nenhuma pausa gravada, nenhum aviso
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason).toBeNull();
+    });
+
+    it("sem backup do painel no armazenamento, com projeto, sem destino ou com backup já conferido: sem o campo", async () => {
+      projects = [];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      await connect();
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      storage.objects.set(OTHER, Buffer.from("x"));
+      projects = [project({ id: "p1" })];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+    });
+
+    it("listagem falha: estado explícito 'unknown' (nunca some), sem gravar nada, e a próxima consulta tenta de novo", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("x"));
+      const list = storage.list.bind(storage);
+      let calls = 0;
+      storage.list = async (...args: Parameters<typeof list>) => {
+        calls++;
+        throw new Error("sem rede");
+      };
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      // nenhuma falha contada para o aviso do agendador, nenhuma pausa gravada
+      expect((await service.status()).targets.find((t) => t.id === "panel")!.pausedReason).toBeNull();
+      // 'unknown' não fica em cache: conferir de novo consulta o armazenamento outra vez
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      expect(calls).toBe(2);
+      storage.list = list;
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+    });
+
+    it("armazenamento que não responde: a consulta estoura o prazo curto e vira 'unknown' em vez de travar o roteiro", async () => {
+      projects = [];
+      service = build({ foreignCheckTimeoutMs: 30 });
+      await connect();
+      storage.list = () => new Promise(() => undefined);
+      const t0 = Date.now();
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      expect(Date.now() - t0).toBeLessThan(2000);
+    });
+
+    it("bucket vazio, depois as cópias do painel antigo entram no MESMO bucket: 'Conferir de novo' já vê (o 'livre' não fica em cache)", async () => {
+      projects = [];
+      await connect();
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      storage.objects.set(OTHER, Buffer.from("copiado à mão"));
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+    });
+
+    it("só o 'há cópias alheias' (lado seguro) fica em cache; o 'livre' consulta sempre", async () => {
+      projects = [];
+      await connect();
+      const list = storage.list.bind(storage);
+      let calls = 0;
+      storage.list = async (...args: Parameters<typeof list>) => {
+        calls++;
+        return list(...args);
+      };
+      await service.facts();
+      await service.facts();
+      expect(calls).toBe(2);
+      storage.objects.set(OTHER, Buffer.from("x"));
+      await service.facts();
+      await service.facts();
+      expect(calls).toBe(3);
+    });
+
+    it("consultas simultâneas dividem uma só ida ao armazenamento; com a consulta travada, não abre outra", async () => {
+      projects = [];
+      service = build({ foreignCheckTimeoutMs: 30 });
+      await connect();
+      let calls = 0;
+      let release!: () => void;
+      let hang = true;
+      storage.list = () => {
+        calls++;
+        if (!hang) return Promise.resolve([]);
+        return new Promise((resolve) => {
+          release = () => resolve([]);
+        });
+      };
+      const all = await Promise.all([service.facts(), service.facts(), service.facts()]);
+      expect(all.every((f) => f.foreignBackupsHeld === "unknown")).toBe(true);
+      expect(calls).toBe(1);
+      // ainda travada: as recargas seguintes não empilham pedidos
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      expect(calls).toBe(1);
+      hang = false;
+      release();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      expect(calls).toBe(2);
+    });
+
+    it("resultado em cache por ~60 s; muda o armazenamento, o projeto ou a hora: consulta de novo", async () => {
+      projects = [];
+      await connect();
+      storage.objects.set(OTHER, Buffer.from("x"));
+      const list = storage.list.bind(storage);
+      let calls = 0;
+      storage.list = async (...args: Parameters<typeof list>) => {
+        calls++;
+        return list(...args);
+      };
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      expect(calls).toBe(1);
+      // passou de 60 s
+      now += 61_000;
+      await service.facts();
+      expect(calls).toBe(2);
+      // projeto cadastrado: o resultado muda sem esperar o cache
+      projects = [project({ id: "p1" })];
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      expect(calls).toBe(2); // com projeto, a regra nem consulta o armazenamento
+      projects = [];
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      const before = calls;
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+      expect(calls).toBe(before); // de novo em cache
+      // armazenamento reconectado (outro connectedAt): invalida
+      now += 1000;
+      await connect();
+      await service.facts();
+      expect(calls).toBe(before + 1);
+    });
   });
 });
 
@@ -2761,5 +2901,317 @@ describe("retenção nunca apaga o backup recém-criado (M5)", () => {
       "2026-10-14_10-00-2.7z",
       "2026-10-14_10-00-3.7z",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reconciliação depois de restaurar: o que o backup tinha ativo x o que roda aqui
+// ---------------------------------------------------------------------------
+
+describe("restauração: reconciliação do que o painel antigo tinha ativo", () => {
+  const stagedFile = (f: string) => path.join(dir, "backups", ".restaurar-painel", f);
+  const live = () => new RestoreReconciliation({ dataDir: dir, containers: { stalwart: "paas-stalwart", webmail: "paas-webmail" }, probes: probes() });
+  const probes = () => ({
+    container: async (n: string) => {
+      const s = docker.states[n];
+      return !s || !s.exists ? ("missing" as const) : s.running ? ("running" as const) : ("stopped" as const);
+    },
+  });
+  const webmailOn = JSON.stringify({ enabled: true, enabledAt: "2026-10-01T00:00:00Z", desKey: "k".repeat(24), exemptIp: null });
+
+  function withReconciliation(): BackupService {
+    return build({ reconciliation: live() });
+  }
+
+  async function restoreEmailBackup() {
+    const b = await backup("email");
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+
+  async function restorePanelBackup() {
+    const b = await backup("panel");
+    const r = await service.restore("panel", { fileName: b.fileName!, source: "local", confirm: "painel" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+
+  it("painel: backup com webmail ativo e VPS sem webmail rodando — avisa no resultado, deixa a pendência no estado que entra no lugar e não liga nada", async () => {
+    service = withReconciliation();
+    await mkdir(path.join(dir, "mail"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "webmail.json"), webmailOn);
+    docker.states = {};
+    docker.calls = [];
+    const rec = await restorePanelBackup();
+    expect(rec.status).toBe("warning");
+    expect(rec.warnings.join(" ")).toMatch(/webmail ativo.*Nada foi ativado/s);
+    expect(JSON.parse(await readFile(stagedFile("mail/webmail.json"), "utf8")).enabled).toBe(false);
+    expect(JSON.parse(await readFile(stagedFile("restore-reconciliation.json"), "utf8")).items).toMatchObject([{ id: "webmail", state: "open" }]);
+    expect(docker.calls.filter((c) => /^(start|run|create)/.test(c))).toEqual([]);
+  });
+
+  it("painel: tudo já ativo aqui — nenhum aviso, nenhuma pendência", async () => {
+    service = withReconciliation();
+    await mkdir(path.join(dir, "mail"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "webmail.json"), webmailOn);
+    const rec = await restorePanelBackup(); // FakeDocker: webmail e Stalwart existem e rodam
+    expect(rec.warnings.join(" ")).not.toMatch(/webmail/);
+    expect(existsSync(stagedFile("restore-reconciliation.json"))).toBe(false);
+    expect(JSON.parse(await readFile(stagedFile("mail/webmail.json"), "utf8")).enabled).toBe(true);
+  });
+
+  it("painel: o serviço de reconciliação quebrar não impede a restauração (só vira aviso)", async () => {
+    service = build({ reconciliation: { planStaged: async () => Promise.reject(new Error("disco cheio")), markPending: async () => undefined } });
+    const rec = await restorePanelBackup();
+    expect(rec.status).toBe("warning");
+    expect(rec.warnings.join(" ")).toMatch(/não foi possível conferir.*disco cheio/i);
+    expect(restarted).toBe(1);
+  });
+
+  it("painel: sem o serviço de reconciliação (backups antigos, testes) tudo segue como antes", async () => {
+    const rec = await restorePanelBackup();
+    expect(rec.status).toBe("warning");
+  });
+
+  it("e-mail: o backup trazia o webmail e ele não roda aqui — o passo continua 'feito' (são os dados), mas o resultado avisa e fica a pendência", async () => {
+    service = withReconciliation();
+    const b = await backup("email");
+    docker.states = { "paas-stalwart": { exists: true, running: true } };
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    const rec = await service.record(r.id);
+    expect(rec.status).toBe("warning");
+    expect(rec.warnings.join(" ")).toMatch(/dados do webmail voltaram.*não está rodando.*Nada foi ativado/s);
+    expect((await live().list()).items).toMatchObject([{ id: "webmail", source: "email", status: "pending" }]);
+  });
+
+  it("e-mail: servidor de e-mail ainda não existe aqui — pendência do servidor também", async () => {
+    service = withReconciliation();
+    const b = await backup("email");
+    docker.states = {};
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).warnings.join(" ")).toMatch(/clique em Iniciar/);
+    expect((await live().list()).items.map((i) => i.id).sort()).toEqual(["mail-server", "webmail"]);
+  });
+
+  it("e-mail: webmail e servidor rodando — nenhuma pendência, nenhuma pergunta", async () => {
+    service = withReconciliation();
+    const rec = await restoreEmailBackup();
+    expect(rec.warnings.join(" ")).not.toMatch(/webmail/);
+    expect((await live().list()).items).toEqual([]);
+  });
+
+  it("e-mail: backup sem a parte do webmail — nada a perguntar sobre ele", async () => {
+    service = withReconciliation();
+    docker.states = { "paas-stalwart": { exists: true, running: true } };
+    const b = await backup("email");
+    docker.states = {};
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    expect((await live().list()).items.map((i) => i.id)).toEqual(["mail-server"]);
+    expect((await service.record(r.id)).warnings.join(" ")).not.toMatch(/dados do webmail/);
+  });
+});
+
+describe("restauração do e-mail: senha de administração do servidor de e-mail", () => {
+  type Repair = "ok" | "repaired" | "failed" | "unreachable" | "not_running";
+  let repairs: number;
+  let pending: Array<[string[], string]>;
+  const withAuth = (result: Repair | "erro"): BackupService =>
+    build({
+      mailAuth: {
+        repair: async () => {
+          repairs++;
+          if (result === "erro") throw new Error("docker fora do ar");
+          return result;
+        },
+      },
+      reconciliation: { planStaged: async () => [], markPending: async (ids, source) => void pending.push([ids, source]) },
+    });
+  async function restoreEmail() {
+    const b = await backup("email");
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+  beforeEach(() => {
+    repairs = 0;
+    pending = [];
+  });
+
+  it("o etc/ do servidor antigo voltou com outra senha e foi reaplicada: avisa o que aconteceu, sem pendência", async () => {
+    service = withAuth("repaired");
+    const rec = await restoreEmail();
+    expect(repairs).toBe(1);
+    expect(rec.warnings.join(" ")).toMatch(/senha de administração.*reaplicou/s);
+    expect(rec.warnings.join(" ")).not.toMatch(/segredo|secret/i);
+    expect(pending).toEqual([]);
+  });
+
+  it("senha já consistente: nada a dizer", async () => {
+    service = withAuth("ok");
+    const rec = await restoreEmail();
+    expect(repairs).toBe(1);
+    expect(rec.warnings.join(" ")).not.toMatch(/senha de administração/);
+    expect(pending).toEqual([]);
+  });
+
+  it("não deu para reaplicar (ou conferir): aviso com a ação e pendência 'mail-auth' — a restauração não falha", async () => {
+    for (const result of ["failed", "unreachable", "erro"] as const) {
+      pending = [];
+      service = withAuth(result);
+      const rec = await restoreEmail();
+      expect(rec.status).toBe("warning");
+      expect(rec.warnings.join(" ")).toMatch(/E-mail → Servidor/);
+      expect(pending).toEqual([[["mail-auth"], "email"]]);
+    }
+  });
+
+  it("servidor de e-mail ainda não existe aqui: não há o que conferir (o Iniciar grava a senha certa)", async () => {
+    service = withAuth("repaired");
+    const b = await backup("email");
+    docker.states = {};
+    await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    expect(repairs).toBe(0);
+  });
+});
+
+describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mail trouxe", () => {
+  type Repair = "ok" | "repaired" | "failed" | "unreachable" | "not_running";
+  let adopts: number;
+  const withAdopt = (
+    adopt: () => Promise<{ domains: string[]; mailboxes: string[]; skipped: string[] }>,
+    repair: Repair = "ok",
+  ): BackupService =>
+    build({
+      mailAuth: { repair: async () => repair },
+      mailAdopt: {
+        adopt: async () => {
+          adopts++;
+          return adopt();
+        },
+      },
+    });
+  async function restoreEmail() {
+    const b = await backup("email");
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+  beforeEach(() => {
+    adopts = 0;
+  });
+
+  it("2 domínios e 3 caixas cadastrados: o registro diz quantos, em passo e em aviso", async () => {
+    service = withAdopt(async () => ({
+      domains: ["cassp.example.com", "envio.example.com"],
+      mailboxes: ["a@cassp.example.com", "b@cassp.example.com", "c@envio.example.com"],
+      skipped: [],
+    }));
+    const rec = await restoreEmail();
+    expect(adopts).toBe(1);
+    expect(rec.steps.map((s) => s.label).join("|")).toMatch(/Cadastrei 2 domínios e 3 caixas no painel/);
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 2 domínios e 3 caixas no painel/);
+    expect(rec.warnings.join(" ")).toMatch(/Trocar senha/);
+    expect(rec.warnings.join(" ")).toMatch(/Verificar agora/);
+    expect(rec.error).toBeNull();
+  });
+
+  it("singular: 1 domínio e 1 caixa", async () => {
+    service = withAdopt(async () => ({ domains: ["envio.example.com"], mailboxes: ["a@envio.example.com"], skipped: [] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 1 domínio e 1 caixa no painel/);
+  });
+
+  it("só caixas, sem domínio novo: a frase não cita domínio", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: ["a@envio.example.com", "b@envio.example.com"], skipped: [] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 2 caixas no painel/);
+    expect(rec.warnings.join(" ")).not.toMatch(/domínio/);
+  });
+
+  it("nada a cadastrar: sem aviso, sem texto de erro", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [] }));
+    const rec = await restoreEmail();
+    expect(adopts).toBe(1);
+    expect(rec.warnings).toEqual([]);
+    expect(rec.status).not.toBe("warning");
+    expect(rec.steps.map((s) => s.label).join("|")).not.toMatch(/Cadastrei/);
+  });
+
+  it("o que o painel não conseguiu cadastrar é avisado, só com nomes", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: ["joao", "x.example.com"] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/não consegui cadastrar.*joao, x\.example\.com/s);
+  });
+
+  it("falha do Stalwart: aviso com a ação, a restauração não falha", async () => {
+    service = withAdopt(async () => {
+      throw new Error("Sem conexão com o Stalwart");
+    });
+    const rec = await restoreEmail();
+    expect(rec.status).toBe("warning");
+    expect(rec.error).toBeNull();
+    expect(rec.warnings.join(" ")).toMatch(/Sincronizar com o servidor de e-mail/);
+  });
+
+  it("401: usa a mensagem de autenticação que já existe", async () => {
+    const { StalwartApiError } = await import("@paas/mailer");
+    service = withAdopt(async () => {
+      throw new StalwartApiError(401, "Stalwart: You have to authenticate first.");
+    });
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/não conseguiu autenticar no servidor de e-mail/);
+    expect(rec.warnings.join(" ")).not.toMatch(/You have to authenticate/);
+  });
+
+  it("senha de administração sem conserto ou servidor sem resposta: nem tenta cadastrar", async () => {
+    for (const repair of ["failed", "unreachable", "not_running"] as const) {
+      adopts = 0;
+      service = withAdopt(async () => ({ domains: ["x.example.com"], mailboxes: [], skipped: [] }), repair);
+      const rec = await restoreEmail();
+      expect(adopts).toBe(0);
+      // quando o reparo da senha falha, o aviso também diz como cadastrar depois
+      if (repair !== "not_running") expect(rec.warnings.join(" ")).toMatch(/Sincronizar com o servidor de e-mail/);
+    }
+  });
+
+  it("lista cortada em 20 000: avisa que o resto não foi conferido; ignorados contam o total", async () => {
+    service = withAdopt(async () => ({
+      domains: [],
+      mailboxes: [],
+      skipped: Array.from({ length: 200 }, (_, i) => `n${i}`),
+      skippedTotal: 250,
+      truncated: true,
+    }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/e mais 240/);
+    expect(rec.warnings.join(" ")).toMatch(/mais de 20 000/);
+  });
+
+  it("o adotador pode ser entregue depois da criação (setMailAdopt), como faz o plugin de e-mail", async () => {
+    service = build({ mailAuth: { repair: async () => "ok" } });
+    service.setMailAdopt({ adopt: async () => ({ domains: ["t.example.com"], mailboxes: [], skipped: [] }) });
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 1 domínio/);
+  });
+
+  it("servidor de e-mail ainda não existe aqui: não tenta, e o aviso manda sincronizar depois de iniciar", async () => {
+    service = withAdopt(async () => ({ domains: ["x.example.com"], mailboxes: [], skipped: [] }));
+    const b = await backup("email");
+    docker.states = {};
+    const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "E-MAIL" }, "admin");
+    await service.idle();
+    expect(adopts).toBe(0);
+    expect((await service.record(r.id)).warnings.join(" ")).toMatch(/Sincronizar com o servidor de e-mail/);
+  });
+
+  it("sem a verificação da senha de administração: cadastra assim mesmo", async () => {
+    service = build({ mailAdopt: { adopt: async () => ({ domains: ["a.example.com"], mailboxes: [], skipped: [] }) } });
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 1 domínio/);
   });
 });

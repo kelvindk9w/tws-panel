@@ -81,13 +81,73 @@ instala e renova o certificado sozinho.
    Depois que o certificado sair, use **Tentar emitir agora** na página **Certificados** se ele ainda estiver pendente;
 5. Verifique se o UFW/liberação do provedor permite 80 e 443.
 
-### Domínio `.localhost` não abre
+<a id="verificacao-do-dominio-de-aplicacoes"></a>
 
-**Sintomas:** `meuapp.localhost` não resolve no navegador.
+### A verificação do domínio de aplicações falha
+
+**Sintomas:** em **Configurações → Domínio de aplicações**, **Verificar DNS e salvar** mostra "Não foi
+salvo" e uma mensagem do servidor, em português mesmo com a interface em inglês.
+
+**Causas e soluções:**
+
+- **Só existe o registro do nome exato** (`apps.example.com`). A verificação consulta um nome
+  aleatório (`paas-check-…apps.example.com`), então só um registro **curinga** (`*.apps`) passa. Crie
+  o registro com o nome `*.apps` (ou `*.apps.example.com`, conforme o provedor).
+- **Nuvem laranja da Cloudflare:** a mensagem fala em "proxy da Cloudflare". Mude o registro curinga
+  para a nuvem cinza ("Somente DNS"). Atrás do proxy, o certificado de cada projeto não sai.
+- **IP errado, ou mais de um registro A:** deixe só o IP da VPS.
+- **Registro AAAA para outro lugar:** apague o AAAA curinga (ou aponte para o IPv6 da VPS, se o painel
+  o conhece).
+- **"O DNS não respondeu agora":** nada foi salvo e nada mudou; tente de novo em instantes.
+- **Acabou de criar o registro:** espere a propagação (minutos a horas) e verifique de novo.
+- Confira de fora: `dig +short qualquer-coisa.apps.example.com` deve devolver o IP da VPS.
+
+<a id="limite-do-lets-encrypt"></a>
+
+### Certificado de um projeto não sai (limite do Let's Encrypt)
+
+**Sintomas:** o navegador mostra erro de certificado ao abrir o projeto (o Caddy redireciona o HTTP para
+HTTPS), e a página **Certificados** mostra o domínio como "Falhou".
+
+**Causa:** o Let's Encrypt limita a **50 certificados novos por semana por domínio registrado** (para
+`projeto-k3x9q.apps.example.com`, o domínio registrado é `example.com`), e a 5 certificados idênticos
+por semana. Criar e apagar muitos projetos em poucos dias esgota o limite dos 50. O limite dos idênticos
+só atinge domínio próprio (repetir o mesmo nome): cada endereço sob o domínio de aplicações ganha um
+sufixo novo a cada criação.
+
+**Solução:**
+1. Abra **Certificados** e leia a causa que o painel mostra (mensagem do servidor, em português).
+2. Se for o limite, espere: ele volta aos poucos ao longo da semana. O painel não consegue contorná-lo.
+3. Depois, clique em **Tentar emitir agora**. Enquanto isso o painel segue com as tentativas
+   automáticas, com intervalo crescente.
+4. Para não gastar o limite à toa, não apague e recrie projetos várias vezes. No assistente, o projeto é
+   criado com um endereço provisório (`nome-xxxxx.localhost`, único, sem IP e sem certificado público) e só troca para o endereço sob a base ao clicar em **Criar projeto**.
+
+### Projeto com endereço provisório (`nome-xxxxx.localhost`)
+
+**Sintomas:** o projeto mostra um aviso âmbar "Endereço provisório" e o endereço `nome-xxxxx.localhost` não abre.
+
+**Causa:** o assistente cria o projeto com esse endereço provisório e só o troca ao clicar em **Criar projeto**.
+Se você fechou o assistente antes, o projeto ficou com ele. `.localhost` sempre aponta para o computador de quem
+acessa, não para a VPS, então ele não funciona num painel público.
+
+**Solução:** abra o projeto, vá em **Domínios** (o aviso tem o atalho) e troque o endereço:
+- com o domínio de aplicações configurado, clique em **Usar o endereço automático (…)**: o painel adiciona o
+  endereço sob a base, o torna principal e remove o provisório (se algo falhar, clique de novo e ele continua de
+  onde parou);
+- sem o domínio de aplicações, a tela explica as saídas: **Configurar o domínio de aplicações** (em Configurações)
+  ou **Conectar novo domínio** com um domínio seu.
+
+Não edite o `/etc/hosts`: isso não faz o
+site da VPS aparecer.
+
+### Domínio `.localhost` não abre (painel na sua máquina)
+
+**Sintomas:** `meuapp.localhost` não resolve no navegador, com o painel rodando no seu próprio computador.
 
 **Solução:** `.localhost` depende do sistema operacional resolver para 127.0.0.1 — funciona
 nativamente no Linux/macOS modernos e no Chrome; se falhar, adicione ao `/etc/hosts`:
-`127.0.0.1 meuapp.localhost`. Em dev, lembre-se de que `.localhost` é servido em **HTTP puro**.
+`127.0.0.1 meuapp.localhost`. Isso vale só para o painel local. Em dev, lembre-se de que `.localhost` é servido em **HTTP puro**.
 
 ---
 
@@ -175,6 +235,15 @@ de homologação), marque **Entendo os riscos e quero fazer o deploy mesmo assim
 Auditoria (`guardrail.override`).
 
 ---
+
+### "You have to authenticate first" no servidor de e-mail depois de restaurar
+
+A senha de administração do servidor de e-mail guardada no painel e a que está na configuração do
+servidor em execução são diferentes (acontece depois de restaurar o painel ou o e-mail). O painel
+confere isso depois da restauração e tenta corrigir; se ainda aparecer "O painel não conseguiu
+autenticar no servidor de e-mail", clique em **Reparar agora** no aviso âmbar do Dashboard, ou pare o
+servidor de e-mail e inicie de novo em **E-mail**. Nenhum dado é apagado. Detalhes em
+[Restaurar em outro servidor](restore-new-server.md#se-algo-falhar).
 
 ## Docker
 

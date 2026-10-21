@@ -77,6 +77,7 @@ import {
   type Project,
   type ProjectBackupDetection,
   type ProjectBackupView,
+  type ReconciliationId,
 } from "@paas/core";
 import { ArchiveError } from "./backup-archive.js";
 import {
@@ -98,6 +99,7 @@ import { isInsideProjectsDir, isPanelArea } from "./projects-dir.js";
 import { loadJson, loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
+import { mailAuthError } from "./mail-auth-error.js";
 
 // ---------------------------------------------------------------------------
 // Dependências
@@ -168,6 +170,8 @@ export interface BackupServiceOptions {
   /** Reinicia o painel (depois de restaurar o painel). */
   restartPanel?: () => void;
   backupHour?: number;
+  /** Prazo da consulta do roteiro ao armazenamento (backups de outro painel); padrão 5 s. Só ela: as operações de backup não mudam. */
+  foreignCheckTimeoutMs?: number;
   /** Espera entre as tentativas de falar com o banco que acabou de subir. */
   readyDelayMs?: number;
   /** Espera antes de reiniciar o painel depois de preparar a restauração (padrão 3 s). */
@@ -180,6 +184,27 @@ export interface BackupServiceOptions {
    * domínio já resolve aqui. Sem a função, conta como "não aponta".
    */
   panelDomainPointsHere?: (domain: string) => Promise<boolean>;
+  /**
+   * Depois de restaurar, compara o que o backup tinha ATIVO com o que roda
+   * nesta VPS e guarda as pendências (webmail, servidor de e-mail, domínio do
+   * painel). Só informa: nada é ativado. Ver restore-reconciliation.ts.
+   */
+  mailAuth?: {
+    /** Confere a senha de administração do Stalwart em execução e, se divergente, reaplica a configuração. */
+    repair(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running">;
+  };
+  /**
+   * Depois de restaurar o e-mail, cadastra no painel os domínios e caixas que o
+   * Stalwart trouxe (o painel lista do seu cadastro, não do Stalwart). Só
+   * nomes; nunca senhas. Ver MailService.adoptFromStalwart.
+   */
+  mailAdopt?: {
+    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; skippedTotal?: number; truncated?: boolean }>;
+  };
+  reconciliation?: {
+    planStaged(staged: string): Promise<string[]>;
+    markPending(ids: ReconciliationId[], source: "panel" | "email"): Promise<void>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -568,8 +593,10 @@ export class BackupService {
   private timer: NodeJS.Timeout | null = null;
   private archiverOk: boolean | null = null;
   private emailAvailable: boolean | null = null;
+  private mailAdopt: BackupServiceOptions["mailAdopt"];
 
   constructor(private readonly opts: BackupServiceOptions) {
+    this.mailAdopt = opts.mailAdopt;
     this.file = path.join(opts.dataDir, "backups.json");
     this.historyFile = path.join(opts.dataDir, "backups-history.json");
     this.keyFile = path.join(opts.dataDir, "backups-key");
@@ -985,16 +1012,58 @@ export class BackupService {
     };
   }
 
-  /** Para o roteiro (passo 6). */
-  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null }> {
+  /**
+   * Para o roteiro (passo 6). `foreignBackupsHeld`: true = o armazenamento guarda backups de outro painel e este é novo;
+   * "unknown" = não deu para conferir (falha ou prazo estourado), e o roteiro NÃO convida a fazer backup; ausente = livre.
+   */
+  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; foreignBackupsHeld?: true | "unknown" }> {
     await this.ensureLoaded();
     const verified = Object.values(this.config.targets).filter((t) => t.lastRemoteVerifiedAt).length;
     const failed = [...this.history].reverse().find((r) => r.remote === "failed");
+    // Só leitura da regra que pausa o backup do painel (nada é gravado nem avisado); só custa uma listagem quando importa.
+    const foreign = this.config.destination !== null && verified === 0 ? await this.foreignBackupsState() : false;
     return {
       destinationConnected: this.config.destination !== null,
       verifiedRemote: verified,
       lastFailure: failed?.remoteDetail ?? null,
+      ...(foreign ? { foreignBackupsHeld: foreign } : {}),
     };
+  }
+
+  private foreignCache: { key: string; at: number; held: boolean } | null = null;
+  private foreignInflight: Promise<true | "unknown" | false> | null = null;
+
+  /**
+   * Consulta do roteiro (só leitura): prazo curto, resultado "há cópias alheias" em cache por 60 s (a chave muda com o armazenamento, os projetos ou o que
+   * já foi enviado; "livre" nunca é cacheado) e, se não deu para conferir, "unknown" (não cacheado, para "Conferir de novo" tentar outra vez).
+   */
+  private async foreignBackupsState(): Promise<true | "unknown" | false> {
+    const projectCount = (await this.opts.projects.list()).length;
+    const d = this.config.destination!;
+    const key = JSON.stringify([d.connectedAt, d.testedAt, d.endpoint, d.bucket, projectCount, this.config.panelRestoredAt, this.target("panel").lastRemoteSentAt, this.target("email").lastRemoteSentAt]);
+    const c = this.foreignCache;
+    if (c && c.key === key && this.now() - c.at < 60_000) return c.held;
+    // Uma ida ao armazenamento por vez: consultas simultâneas dividem o resultado e, com uma travada (o pedido segue aberto
+    // até o timeout do S3Storage), as recargas não empilham outras; elas recebem o "unknown" já decidido.
+    if (this.foreignInflight) return this.foreignInflight;
+    const work = this.panelFreshOverForeign(projectCount, true).then((why) => why !== null);
+    const result = this.withForeignDeadline(work).then(
+      (held): true | false => {
+        // Só o "há cópias alheias" (lado seguro) fica em cache: "livre" consulta sempre, porque o conteúdo do bucket muda por fora.
+        if (held) this.foreignCache = { key, at: this.now(), held };
+        else this.foreignCache = null;
+        return held;
+      },
+      (): "unknown" => "unknown",
+    );
+    this.foreignInflight = result;
+    void work.then(
+      () => undefined,
+      () => undefined,
+    ).then(() => {
+      if (this.foreignInflight === result) this.foreignInflight = null;
+    });
+    return result;
   }
 
   async projectView(projectId: string): Promise<ProjectBackupView> {
@@ -1393,7 +1462,16 @@ export class BackupService {
     return Boolean(t.lastRemoteSentAt);
   }
 
-  private async panelFreshOverForeign(projectCount: number): Promise<string | null> {
+  private withForeignDeadline<T>(p: Promise<T>): Promise<T> {
+    p.catch(() => undefined); // se estourar o prazo, a resposta tardia não vira erro solto
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("o armazenamento não respondeu a tempo")), this.opts.foreignCheckTimeoutMs ?? 5000);
+    });
+    return Promise.race([p, deadline]).finally(() => clearTimeout(timer));
+  }
+
+  private async panelFreshOverForeign(projectCount: number, readOnly = false): Promise<string | null> {
     const t = this.target("panel");
     // O que é desta instalação: projeto cadastrado, painel restaurado, ou um backup (do painel ou do e-mail)
     // já ENVIADO ao armazenamento externo. Cópia só na VPS (`lastSuccessAt`) não conta: o painel novo
@@ -1407,10 +1485,11 @@ export class BackupService {
     const prefix = `${BACKUP_ROOT_FOLDER}/_painel/`;
     try {
       const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
-      delete t.heldFailures;
+      if (!readOnly) delete t.heldFailures;
       if (!found) return null;
       return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto, de você restaurar o painel ou de fazer um backup à mão com o armazenamento já conectado (cópia só na VPS não conta). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
     } catch (err) {
+      if (readOnly) throw err; // consulta do roteiro: sem contar falha nem avisar; quem chama trata como "não deu para conferir"
       t.heldFailures = (t.heldFailures ?? 0) + 1;
       if (t.heldFailures === 3) {
         this.opts.notify?.({
@@ -2560,8 +2639,12 @@ export class BackupService {
       if (stalwart.exists) await docker.start(mail.container);
     }
     if (!stalwart.exists) {
-      r.warnings.push("O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e clique em Iniciar. Ele sobe com os dados restaurados.");
+      r.warnings.push(
+        "O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e clique em Iniciar. Ele sobe com os dados restaurados. Depois de iniciar, use Sincronizar com o servidor de e-mail para o painel cadastrar os domínios e caixas que vieram no backup.",
+      );
     }
+    const pending: ReconciliationId[] = [];
+    if (!stalwart.exists) pending.push("mail-server");
     const web = part("webmail");
     if (web) {
       this.step(r, "Restaurar o webmail");
@@ -2572,7 +2655,96 @@ export class BackupService {
       } finally {
         if (wm.running) await docker.start(mail.webmailContainer);
       }
+      // O passo acima devolve os DADOS do volume; ele não liga o webmail. O check do passo não pode passar por "webmail ativo".
+      if (!wm.running) {
+        pending.push("webmail");
+        r.warnings.push(
+          "Os dados do webmail voltaram, mas o webmail não está rodando nesta VPS. Nada foi ativado: ative em E-mail → Webmail (o painel também pergunta no Dashboard).",
+        );
+      }
     }
+    // O etc/ restaurado traz a senha de administração do servidor ANTIGO (config.toml); o painel usa a do mail.json desta VPS.
+    let canAdopt = stalwart.exists && this.mailAdopt !== undefined;
+    if (stalwart.exists && this.opts.mailAuth) {
+      let result: "ok" | "repaired" | "failed" | "unreachable" | "not_running" | "erro" = "erro";
+      try {
+        result = await this.opts.mailAuth.repair();
+      } catch (err) {
+        this.opts.log?.(`E-mail: não deu para conferir a senha de administração depois de restaurar (${reasonOf(err)}).`);
+      }
+      // sem autenticar no Stalwart não há o que ler: a pessoa sincroniza depois de resolver
+      if (result !== "ok" && result !== "repaired") canAdopt = false;
+      if (result === "repaired") {
+        r.warnings.push("A senha de administração do servidor de e-mail que veio no backup não era a deste painel: o painel reaplicou a configuração e reiniciou o servidor de e-mail. Nenhum dado foi apagado.");
+      } else if (result === "failed" || result === "unreachable" || result === "erro") {
+        pending.push("mail-auth");
+        r.warnings.push(
+          "Não foi possível confirmar que o painel autentica no servidor de e-mail depois da restauração. Se aparecer “não conseguiu autenticar”, pare e inicie o servidor em E-mail → Servidor (ou use o aviso do Dashboard)." +
+            (this.mailAdopt !== undefined
+              ? " Os domínios e caixas do e-mail ainda não foram cadastrados no painel: depois disso, abra E-mail e use Sincronizar com o servidor de e-mail."
+              : ""),
+        );
+      }
+    }
+    if (canAdopt) await this.adoptRestoredEmail(r);
+    if (pending.length > 0 && this.opts.reconciliation) {
+      try {
+        await this.opts.reconciliation.markPending(pending, "email");
+      } catch (err) {
+        this.opts.log?.(`Reconciliação: não deu para guardar a pendência (${reasonOf(err)}).`);
+      }
+    }
+  }
+
+  /**
+   * O Stalwart voltou com os domínios e caixas do backup, mas o painel lista
+   * do seu próprio cadastro. Cadastra o que falta (só nomes; nada é ativado,
+   * nenhuma senha é lida) e conta o resultado no registro. Falha não derruba a
+   * restauração: os dados já voltaram, e o botão Sincronizar repete o passo.
+   */
+  private async adoptRestoredEmail(r: BackupRecord): Promise<void> {
+    this.step(r, "Conferir os domínios e caixas do e-mail no painel");
+    try {
+      const { domains, mailboxes, skipped, skippedTotal, truncated } = await this.mailAdopt!.adopt();
+      if (domains.length > 0 || mailboxes.length > 0) {
+        const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+        const what = [
+          ...(domains.length > 0 ? [count(domains.length, "domínio", "domínios")] : []),
+          ...(mailboxes.length > 0 ? [count(mailboxes.length, "caixa", "caixas")] : []),
+        ].join(" e ");
+        r.steps[r.steps.length - 1]!.label = `Cadastrei ${what} no painel`;
+        r.warnings.push(
+          `Cadastrei ${what} no painel (o que o servidor de e-mail trouxe do backup). Nada foi ativado.` +
+            (mailboxes.length > 0 ? " As caixas cadastradas ficam sem senha conhecida pelo painel: para enviar por elas, use Trocar senha." : "") +
+            (domains.length > 0 ? " O DNS dos domínios aparece como não verificado: use Verificar agora em cada um." : ""),
+        );
+      }
+      if (skipped.length > 0) {
+        const total = Math.max(skippedTotal ?? 0, skipped.length);
+        const shown = skipped.slice(0, 10).join(", ") + (total > 10 ? ` e mais ${total - 10}` : "");
+        r.warnings.push(
+          `Do servidor de e-mail, não consegui cadastrar no painel estes nomes (nome sem endereço completo, domínio inválido ou sem chave de assinatura): ${shown}. Eles continuam no servidor, sem alteração.`,
+        );
+      }
+      if (truncated) {
+        r.warnings.push(
+          "O servidor de e-mail tem mais de 20 000 domínios ou caixas: o painel leu só os primeiros, e o resto não foi conferido nem cadastrado.",
+        );
+      }
+    } catch (err) {
+      const reason = mailAuthError(err)?.message ?? reasonOf(err);
+      r.warnings.push(
+        `Não foi possível cadastrar no painel os domínios e caixas do e-mail (${reason}). Nada foi apagado. Quando o servidor de e-mail responder, abra E-mail e use Sincronizar com o servidor de e-mail.`,
+      );
+    }
+  }
+
+  /**
+   * O serviço de e-mail só existe dentro do plugin de rotas do e-mail (o
+   * Fastify isola o escopo); o plugin entrega aqui o mesmo serviço da tela.
+   */
+  setMailAdopt(adopt: BackupServiceOptions["mailAdopt"]): void {
+    this.mailAdopt = adopt;
   }
 
   /** Painel: deixa pronto para a troca na próxima subida e pede o reinício. */
@@ -2588,6 +2760,7 @@ export class BackupService {
     await rename(content, target);
     for (const name of PANEL_PRESERVED) await rm(path.join(target, name), { recursive: true, force: true });
     await this.adaptRestoredPanel(r, target);
+    await this.reconcileStagedPanel(r, target);
     const marker: PanelRestoreMarker = { requestedAt: new Date(this.now()).toISOString(), fileName, actor };
     await this.writeJson(path.join(this.backupsDir, PANEL_RESTORE_MARKER), marker);
     r.warnings.push("O painel vai reiniciar para terminar a restauração. Depois, entre de novo com o usuário e a senha do backup.");
@@ -2612,6 +2785,22 @@ export class BackupService {
     } catch (err) {
       r.warnings.push(
         `Não foi possível conferir o acesso pelo IP (${reasonOf(err)}). Se o painel não abrir pelo domínio, use o endereço do IP; se também não abrir, rode scripts/reativar-acesso-ip.sh no servidor.`,
+      );
+    }
+  }
+
+  /**
+   * O que o painel antigo tinha ativo (webmail, servidor de e-mail, domínio)
+   * x o que roda nesta VPS. Só informa e guarda a pendência; nunca ativa nada
+   * e nunca derruba a restauração.
+   */
+  private async reconcileStagedPanel(r: BackupRecord, staged: string): Promise<void> {
+    if (!this.opts.reconciliation) return;
+    try {
+      r.warnings.push(...(await this.opts.reconciliation.planStaged(staged)));
+    } catch (err) {
+      r.warnings.push(
+        `Não foi possível conferir o que o painel antigo tinha ativo (${reasonOf(err)}). Depois do reinício, confira o webmail e o servidor de e-mail em E-mail e o domínio em Configurações → Domínio do painel.`,
       );
     }
   }

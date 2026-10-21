@@ -42,6 +42,7 @@ import {
   StalwartApiError,
   type QueueMessageRaw,
 } from "@paas/mailer";
+import { mailAuthError } from "./mail-auth-error.js";
 import { httpError } from "./http-error.js";
 import { loadJson, loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 
@@ -114,6 +115,8 @@ function rate(num: number, den: number, limit: number): MailRate {
 }
 
 function stalwartError(err: unknown): never {
+  const auth = mailAuthError(err);
+  if (auth) throw auth;
   if (err instanceof StalwartApiError) {
     if (err.status === 404) {
       throw httpError(404, "queue_message_not_found", "Essa mensagem já saiu da fila (foi entregue, recusada ou cancelada).");
@@ -212,7 +215,7 @@ export class MailEnviosService {
     } catch (err) {
       return {
         available: false,
-        message: `Não deu para ler a fila do servidor de e-mail: ${err instanceof Error ? err.message : String(err)}`,
+        message: mailAuthError(err)?.message ?? `Não deu para ler a fila do servidor de e-mail: ${err instanceof Error ? err.message : String(err)}`,
         items: [],
         total: 0,
         checkedAt,

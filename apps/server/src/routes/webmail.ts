@@ -4,6 +4,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { WebmailActionResponse, WebmailStatus } from "@paas/core";
+import { mailAuthError } from "../services/mail-auth-error.js";
 import type { HttpError } from "../services/http-error.js";
 import type { WebmailService } from "../services/webmail-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
@@ -12,6 +13,7 @@ import { registerErrorHandler } from "../plugins/error-handler.js";
 const FAILED_LOGIN_POLL_MS = 60_000;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
+  err = mailAuthError(err) ?? err;
   const e = err as Partial<HttpError>;
   return reply.code(e.statusCode ?? 500).send({
     error: e.code ?? "internal_error",

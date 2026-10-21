@@ -5,7 +5,7 @@
 import dns from "node:dns/promises";
 import os from "node:os";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import type { DomainCheckResponse } from "@paas/core";
+import type { AutoDomainSuggestion, DomainCheckResponse } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { slugify } from "../services/deploy-service.js";
 
@@ -64,6 +64,13 @@ function panelDomainOf(app: FastifyInstance): string | null {
 
 function publicIpOf(app: FastifyInstance): string | null {
   return process.env.PAAS_PUBLIC_IP?.trim() || publicIpFromPanelDomain(panelDomainOf(app));
+}
+
+/** O painel tem IP público ou um domínio que não é da própria máquina? */
+function panelIsPublic(app: FastifyInstance): boolean {
+  const panel = (panelDomainOf(app) ?? "").toLowerCase();
+  const local = panel === "" || panel === "localhost" || panel.endsWith(".localhost") || panel.startsWith("127.") || panel === "::1";
+  return publicIpOf(app) !== null || !local;
 }
 
 function machineIps(publicIp: string | null): string[] {
@@ -149,11 +156,23 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (request, reply) => {
-      const slug = slugify(request.query.name ?? "projeto");
+      const name = request.query.name ?? "projeto";
+      const slug = slugify(name);
       const panelDomain = panelDomainOf(app);
       const publicIp = publicIpOf(app);
-      const auto = panelDomain && publicIpFromPanelDomain(panelDomain) ? `${slug}.${panelDomain}` : `${slug}.localhost`;
-      return reply.send({ auto, publicIp });
+      const sslip = panelDomain && publicIpFromPanelDomain(panelDomain) ? `${slug}.${panelDomain}` : null;
+      // Domínio de aplicações verificado: o endereço automático é <projeto>-<sufixo>.<base>
+      // (sem o IP da VPS) e o sslip.io fica como alternativa "para testar".
+      // Sem ele, a resposta é a de sempre (só auto e publicIp).
+      const apps = app.hasDecorator("appsDomainService") ? await app.appsDomainService.suggest(name) : null;
+      if (apps) {
+        const { base } = await app.appsDomainService.status();
+        const response: AutoDomainSuggestion = { auto: apps, publicIp, panelPublic: panelIsPublic(app), kind: "apps", appsBase: base, testAddress: sslip,
+          provisional: await app.appsDomainService.suggestProvisional(name),
+        };
+        return reply.send(response);
+      }
+      return reply.send({ auto: sslip ?? `${slug}.localhost`, publicIp, panelPublic: panelIsPublic(app) });
     },
   );
 };

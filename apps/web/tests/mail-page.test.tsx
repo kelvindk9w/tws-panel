@@ -247,6 +247,7 @@ describe("MailPage — domínio que já recebe e-mail em outro servidor", () => 
   });
 
   it("consulta do MX falhou: aviso próprio, também com confirmação", async () => {
+
     mockApi({
       extra: (url, init) =>
         url.endsWith("/api/mail/domains") && init?.method === "POST"
@@ -269,3 +270,86 @@ describe("MailPage — domínio que já recebe e-mail em outro servidor", () => 
     expect(screen.getByRole("checkbox")).toBeInTheDocument();
   });
 });
+
+describe("MailPage — Sincronizar com o servidor de e-mail", () => {
+  const sync = (body: unknown, status = 200): Handler => (url, init) =>
+    url.endsWith("/api/mail/sync") && init?.method === "POST" ? { status, body } : undefined;
+  const syncCalls = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.filter(([u, i]) => String(u).endsWith("/api/mail/sync") && (i as RequestInit | undefined)?.method === "POST");
+
+  it("cadastrou: diz quantos domínios e caixas, com os endereços, e atualiza a lista", async () => {
+    const fetchMock = mockApi({
+      extra: sync({
+        ok: true,
+        domainCount: 1,
+        mailboxCount: 3,
+        domains: ["cassp.example.com"],
+        mailboxes: ["contato@cassp.example.com", "postmaster@cassp.example.com", "contato@envio.example.com"],
+        skipped: [],
+      }),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    const note = await screen.findByTestId("mail-sync-result");
+    expect(note).toHaveTextContent("Cadastrei 1 domínio e 3 caixas no painel.");
+    expect(note).toHaveTextContent("cassp.example.com");
+    expect(note).toHaveTextContent("postmaster@cassp.example.com");
+    expect(note).toHaveTextContent(/Trocar senha/);
+    expect(note).toHaveTextContent(/pode reiniciar o servidor de e-mail/);
+    expect(syncCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it("lista cortada: mostra quantos nomes a mais e avisa que passou de 20 000", async () => {
+    mockApi({
+      extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: ["joao"], skippedTotal: 250, truncated: true }),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    const note = await screen.findByTestId("mail-sync-result");
+    expect(note).toHaveTextContent("e mais 249");
+    expect(note).toHaveTextContent(/mais de 20 000/);
+  });
+
+  it("nada a cadastrar: mensagem neutra, sem texto de erro", async () => {
+    mockApi({ extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: [] }) });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    expect(await screen.findByTestId("mail-sync-result")).toHaveTextContent("O painel já conhece tudo o que o servidor de e-mail tem.");
+    expect(screen.queryByText(/falh|erro/i)).not.toBeInTheDocument();
+  });
+
+  it("nomes que não deu para cadastrar aparecem", async () => {
+    mockApi({ extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: ["joao"] }) });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    expect(await screen.findByTestId("mail-sync-result")).toHaveTextContent(/joao/);
+  });
+
+  it("falha de autenticação: mostra a mensagem do servidor e nenhum resultado", async () => {
+    mockApi({ extra: sync({ error: "mail_auth_failed", message: "O painel não conseguiu autenticar no servidor de e-mail." }, 409) });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    expect(await screen.findByText("O painel não conseguiu autenticar no servidor de e-mail.")).toBeInTheDocument();
+    expect(screen.queryByTestId("mail-sync-result")).not.toBeInTheDocument();
+  });
+
+  it("servidor parado: o botão não aparece", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith("/api/mail/status") ? { ...STATUS, running: false } : { domains: [] };
+        return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    renderPage();
+    await screen.findByText("Iniciar servidor");
+    expect(screen.queryByRole("button", { name: /sincronizar com o servidor de e-mail/i })).not.toBeInTheDocument();
+  });
+});
+

@@ -32,7 +32,7 @@ export {
   type ExistingMailAssessment,
   type ExistingMailStatus,
 } from "./mx-guard.js";
-export { StalwartClient, StalwartApiError } from "./client.js";
+export { StalwartClient, StalwartApiError, PRINCIPAL_LIST_MAX, type StalwartPrincipalSummary } from "./client.js";
 export {
   buildDnsChecklist,
   verifyDnsRecords,

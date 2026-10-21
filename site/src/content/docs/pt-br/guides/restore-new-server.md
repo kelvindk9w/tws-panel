@@ -167,6 +167,22 @@ domínio aponta para esta VPS). Nesse caso, entre pelo domínio do painel.
 > painel** (**Desativar o acesso pelo IP**). Trocar o registro A do domínio antes deste passo é
 > opcional.
 
+> [!NOTE]
+> **O aviso âmbar "O painel antigo tinha … ativo".** Logo depois da restauração, e no **Dashboard**
+> enquanto houver pendência, o painel compara o que o backup dizia estar ligado (webmail, servidor
+> de e-mail, domínio do painel) com o que de fato roda nesta VPS (ele pergunta ao Docker; não confia
+> na configuração salva). Ele não liga nada sozinho, porque ativar webmail ou e-mail mexe em portas,
+> DNS e certificados. Para cada coisa que estava ligada e não está rodando, pergunta "O painel antigo
+> tinha o webmail ativo. Ativar agora?" com um botão para a tela certa (**Ativar agora** leva a
+> **E-mail**, onde você clica em **Ativar webmail**; **Iniciar agora** leva ao servidor de e-mail;
+> **Conferir o DNS** leva a **Configurações → Domínio do painel**) e um botão **Dispensar**. O aviso
+> some sozinho quando o serviço passa a rodar e continua depois de reiniciar o painel até isso
+> acontecer ou até você clicar em **Dispensar**. Se tudo que estava ligado já roda, nada é
+> perguntado. Se o painel não conseguiu conferir (o Docker ou o DNS não respondeu, ou o painel não sabe o próprio IP público, como no acesso por túnel), o aviso diz isso
+> em vez de adivinhar. O mesmo aviso aparece no resultado da restauração e no alto de
+> **Configurações → Backups**. A restauração também registra as pendências como mensagens, como "O
+> painel antigo tinha o webmail ativo e ele não está rodando nesta VPS. Nada foi ativado…".
+
 Se o painel não abre de jeito nenhum, restaure-o a partir de um arquivo:
 `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` (veja
 [Operação](operations.md)). Esse caminho não faz os ajustes acima, então os dois avisos a seguir
@@ -194,6 +210,17 @@ valem **só para ele**. Ele também não põe a agenda em pausa (veja as confer�
 Faça isto enquanto restaura os projetos, porque o DNS leva tempo para se espalhar. Para cada
 domínio, edite o registro **A** para o IP da VPS nova (no Cloudflare, nuvem cinza, "Somente DNS").
 Isso vale para o domínio do painel e para o de cada projeto. Se puder, diminua o TTL antes.
+
+<a id="dominio-de-aplicacoes"></a>
+
+> [!NOTE]
+> **Domínio de aplicações.** Se você usava um [domínio de aplicações](../getting-started/complete-guide.md#dominio-de-aplicacoes)
+> (por exemplo, `apps.example.com`), a configuração volta com o backup do painel, mas o painel guarda
+> para qual IP o DNS foi conferido. Em uma VPS com **outro IP**, a base volta marcada como **A
+> conferir** e deixa de ser oferecida: os projetos novos voltam ao endereço de teste (sslip.io) até
+> você atualizar o registro curinga `*.apps` para o IP novo e, em **Configurações → Domínio de
+> aplicações**, clicar em **Verificar DNS de novo**. Os projetos restaurados que usam endereços sob
+> a base só abrem depois que o DNS aponta para a VPS nova.
 
 ### 7. Restaure os projetos
 
@@ -235,6 +262,13 @@ IP novo. Depois disso, use **Tentar emitir agora** nessa mesma página.
    - MX, DKIM e DMARC não mudam, porque os nomes e as chaves voltaram.
 3. Peça ao provedor para definir o **PTR** do IP novo como `mail.envio.example.com`.
 4. Confira que a porta 25 de saída está liberada ([Guia passo a passo, Parte 2, Etapa 4.1](../getting-started/complete-guide.md#etapa-4)).
+
+Se a restauração terminar com o aviso "Os dados do webmail voltaram, mas o webmail não está
+   rodando nesta VPS" (aviso do servidor, em português), o webmail estava ligado no painel antigo:
+   depois de iniciar o servidor de e-mail, use o aviso âmbar do **Dashboard** ou **E-mail → Webmail
+   → Ativar webmail**.
+
+**Domínios e caixas voltam sozinhos para a lista.** O painel mostra a lista de domínios e caixas do cadastro dele, não a do servidor de e-mail. Por isso, no fim da restauração do e-mail o painel lê o que o servidor de e-mail trouxe e cadastra o que faltava (aviso do servidor, em português: "Cadastrei 2 domínios e 4 caixas no painel"). Nada é ativado e o que já estava cadastrado não muda. Duas consequências: as caixas cadastradas ficam **sem senha conhecida pelo painel** (o servidor nunca a entrega), então use **Trocar senha** na caixa antes de enviar por ela; e o DNS dos domínios aparece como **não verificado** até você clicar em **Verificar agora**. Se o servidor de e-mail ainda não existia na VPS, ou a restauração avisou que não conseguiu cadastrar, abra **E-mail** e clique em **Sincronizar com o servidor de e-mail** (pode repetir à vontade: não duplica nada).
 
 **O que conferir:** clique em **Verificar agora** até chegar a **6/6 OK**, envie um e-mail de teste
 (Etapa 4.7 da Parte 2 do guia passo a passo) e veja **Válido** no cartão do certificado do e-mail. Envie devagar no
@@ -283,6 +317,7 @@ começo: o IP novo ainda não tem reputação.
   sobrescrito" (mensagem do servidor):** a publicação usa o que já está lá. Se você quer o código
   do backup, renomeie ou esvazie a pasta de origem **antes** de clicar em **Restaurar**, nunca
   depois (veja o passo 7).
+- **"Stalwart: You have to authenticate first" ou "O painel não conseguiu autenticar no servidor de e-mail" ao trocar a senha de uma caixa (ou em qualquer ação do e-mail):** a senha de administração do servidor de e-mail mora em dois lugares, nas configurações do painel e na configuração do próprio servidor em execução. Restaurar o e-mail traz de volta a configuração do servidor antigo; restaurar o painel traz de volta a senha do painel antigo. Se as duas diferem, toda chamada do painel ao servidor de e-mail é recusada. Depois de uma restauração o painel confere isso sozinho e, se conseguir, regrava a configuração com a senha do painel e reinicia o servidor de e-mail (nenhum dado é apagado). Se o erro continuar, o aviso âmbar do **Dashboard** tem o botão **Reparar agora** (reinicia o servidor de e-mail por alguns segundos). Saída manual: em **E-mail**, pare o servidor de e-mail e inicie de novo com **Iniciar servidor**; isso regrava a configuração com a senha do painel. Faça depois das duas restaurações e antes de criar ou trocar caixas.
 - **A restauração falha no meio:** o painel guarda o estado anterior em
   `/data/backups/_painel/antes-da-restauracao/` e desfaz sozinho uma troca do painel que falhou.
   Leia o erro em **Últimos backups** e repita o passo.

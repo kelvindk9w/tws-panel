@@ -10,6 +10,7 @@
  * conclusão (ou a falha, quando dá para ler o histórico depois da volta).
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackupRecord } from "@paas/core";
 
@@ -227,5 +228,34 @@ describe("RestoreDialog — outras restaurações", () => {
     polls = [DOWN, record({ target: "project:p1", status: "success", finishedAt: "2026-10-14T12:01:00Z" })];
     const dialog = start(PROJECT);
     await waitFor(() => expect(within(dialog).getByText("Concluído")).toBeInTheDocument());
+  });
+});
+
+describe("RestoreDialog — resultado lista o que o painel antigo tinha ativo", () => {
+  const EMAIL: RestoreTarget = { id: "email", kind: "email", name: "E-mail" };
+
+  it("restauração do e-mail concluída com pendência: o aviso âmbar aparece no resultado", async () => {
+    const final = record({
+      target: "email",
+      status: "warning",
+      finishedAt: "2026-10-14T12:01:00Z",
+      steps: [{ label: "Restaurar o webmail", status: "done" }],
+      warnings: ["Os dados do webmail voltaram, mas o webmail não está rodando nesta VPS."],
+    });
+    polls = [final];
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/restore-reconciliation") return { items: [{ id: "webmail", status: "pending", source: "email", since: "2026-10-14T12:01:00Z" }] };
+      return base(path, init);
+    });
+    render(
+      <MemoryRouter>
+        <RestoreDialog target={EMAIL} onClose={() => undefined} points={POINTS} pollMs={5} />
+      </MemoryRouter>,
+    );
+    const dialog = screen.getByTestId("restore-dialog");
+    fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), { target: { value: "E-mail" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restaurar" }));
+    expect(await within(dialog).findByText(/O painel antigo tinha o webmail ativo\. Ativar agora\?/)).toBeInTheDocument();
   });
 });

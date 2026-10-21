@@ -263,3 +263,25 @@ describe("nota de entregabilidade", () => {
     }
   });
 });
+
+describe("senha de administração do Stalwart divergente", () => {
+  it("tentar de novo e cancelar devolvem 409 mail_auth_failed com a mensagem amigável (não 500)", async () => {
+    const err = Object.assign(new Error("Erro"), { statusCode: 409, code: "mail_auth_failed" });
+    d.envios.retry!.mockRejectedValue(err);
+    d.envios.cancel!.mockRejectedValue(err);
+    for (const action of ["retry", "cancel"]) {
+      const res = await app.inject({ method: "POST", url: `/api/mail/envios/queue/${ID}/${action}`, headers: auth });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: "mail_auth_failed" });
+    }
+  });
+
+  it("um StalwartApiError 401 que escape de qualquer rota vira a mesma mensagem", async () => {
+    const { StalwartApiError } = await import("@paas/mailer");
+    d.envios.history!.mockRejectedValue(new StalwartApiError(401, "Stalwart: You have to authenticate first."));
+    const res = await app.inject({ method: "GET", url: "/api/mail/envios/history", headers: auth });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toMatch(/não conseguiu autenticar no servidor de e-mail/);
+    expect(res.body).not.toMatch(/You have to authenticate/);
+  });
+});

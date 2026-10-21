@@ -126,6 +126,20 @@ describe("MailboxesPanel", () => {
     expect(screen.getByText("Caixas de e-mail")).toBeInTheDocument();
   });
 
+  it("caixa que veio de um backup avisa que a senha é desconhecida e continua com Trocar senha", async () => {
+    mockApi({ mailboxes: [{ ...USER_BOX, passwordUnknown: true }, PROJECT_BOX] });
+    render(
+      <MemoryRouter>
+        <MailboxesPanel domain="exemplo.com.br" />
+      </MemoryRouter>,
+    );
+    const row = (await screen.findByText("vendas@exemplo.com.br")).closest("[data-mailbox]") as HTMLElement;
+    expect(within(row).getByText(/não sabe a senha desta caixa.*Trocar senha/)).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: /Trocar senha/ })).toBeEnabled();
+    const other = screen.getByText("loja@exemplo.com.br").closest("[data-mailbox]") as HTMLElement;
+    expect(within(other).queryByText(/não sabe a senha/)).not.toBeInTheDocument();
+  });
+
   it("destaca a caixa do projeto quando recebe o endereço dela", async () => {
     mockApi({ mailboxes: [USER_BOX, PROJECT_BOX] });
     render(

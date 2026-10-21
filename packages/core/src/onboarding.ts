@@ -27,6 +27,16 @@ export const OPTIONAL_ONBOARDING_STEPS: readonly OnboardingStepId[] = ["email", 
  */
 export type OnboardingStepStatus = "done" | "in_progress" | "pending" | "skipped" | "soon" | "unknown";
 
+/**
+ * Pendências que a interface mostra com texto próprio (traduzido e com link),
+ * em vez do texto em português do servidor.
+ * - backups-restore-first: o armazenamento já guarda backups do painel de
+ *   OUTRO servidor; restaurar vem antes do primeiro backup deste painel.
+ * - backups-storage-unknown: não deu para conferir o armazenamento (falha ou prazo);
+ *   na dúvida, a interface também não convida a fazer o primeiro backup.
+ */
+export type OnboardingMissingCode = "backups-restore-first" | "backups-storage-unknown";
+
 export interface OnboardingStep {
   id: OnboardingStepId;
   status: OnboardingStepStatus;
@@ -34,6 +44,15 @@ export interface OnboardingStep {
   optional: boolean;
   /** A situação real em uma frase (ex.: "6 de 8 fases resolvidas · nota do Lynis 76"). */
   detail: string;
+  /**
+   * O que falta para o passo ficar pronto e como resolver, em uma ou duas
+   * frases. Só vem preenchido com o passo "em andamento" (começou, falta algo);
+   * nos demais é null. Distinto de `detail`, que descreve a situação.
+   * Ausente em servidor antigo.
+   */
+  missing?: string | null;
+  /** Ver OnboardingMissingCode. */
+  missingCode?: OnboardingMissingCode | null;
 }
 
 /** GET /api/onboarding (e resposta das ações do roteiro). */
@@ -71,6 +90,16 @@ export interface OnboardingHideRequest {
 /** Status que não pedem nada da pessoa agora. */
 export function isOnboardingStepResolved(status: OnboardingStepStatus): boolean {
   return status === "done" || status === "skipped" || status === "soon";
+}
+
+/** O passo está começado e falta algo: a interface mostra o aviso "O que falta". */
+export function onboardingStepNeedsAttention(step: OnboardingStep): boolean {
+  return step.status === "in_progress" && typeof step.missing === "string" && step.missing.trim() !== "";
+}
+
+/** Os passos com pendência, na ordem do roteiro. */
+export function onboardingAttentionSteps(steps: readonly OnboardingStep[]): OnboardingStep[] {
+  return steps.filter(onboardingStepNeedsAttention);
 }
 
 /** O primeiro passo, na ordem, que ainda pede algo — ou null. */
