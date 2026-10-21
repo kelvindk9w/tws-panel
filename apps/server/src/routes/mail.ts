@@ -3,7 +3,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
-import { mailAuthError } from "../services/mail-auth-error.js";
+import { mailAuthError, mailSyncError } from "../services/mail-auth-error.js";
 import type {
   ChangeMailboxPasswordRequest,
   CreateMailDomainRequest,
@@ -17,6 +17,7 @@ import type {
   MailboxCredentialsResponse,
   MailboxListResponse,
   MailboxResponse,
+  MailSyncResponse,
   MailServerActionResponse,
   MailServerStatus,
   MailTestResponse,
@@ -273,6 +274,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // domínio e criar caixa.
   const service = new MailService(app.config, {
     audit: app.auditService,
+    // dono das caixas que o painel adota do Stalwart (endereço <slug>@ = caixa do projeto)
+    projects: () => app.deployService.listProjects(),
     // Certificado manual de mail.<domínio> (página Certificados) vence o do Caddy.
     ...(app.hasDecorator("certificateStore")
       ? { manualCertificate: (host: string) => app.certificateStore.forHost(host) }
@@ -286,6 +289,11 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       readiness: () => service.systemMailReadiness(),
       send: (msg) => service.sendSystemMail(msg),
     });
+  }
+  // Restaurar o e-mail cadastra no painel o que o Stalwart trouxe: o backup
+  // usa ESTE serviço (o da tela); uma segunda instância deixaria a da tela desatualizada.
+  if (app.hasDecorator("backupService")) {
+    app.backupService.setMailAdopt({ adopt: () => service.adoptFromStalwart() });
   }
   // Webmail (Roundcube em https://mail.<domínio>/): acompanha o servidor de
   // e-mail e conta ao proxy se os blocos mail.<domínio> abrem o webmail.
@@ -488,6 +496,34 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       return sendError(reply, err);
     }
   });
+
+  // Cadastra no painel os domínios e caixas que o Stalwart já tem (depois de restaurar o e-mail). Nada é ativado; senhas nunca são lidas.
+  app.post(
+    "/api/mail/sync",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (_request, reply) => {
+      try {
+        const result = await service.adoptFromStalwart();
+        if (result.domains.length > 0 || result.mailboxes.length > 0) {
+          refreshInBackground({ force: true });
+          await app.auditService.record({
+            action: "mail.sync",
+            target: "mail-server",
+            detail: `Cadastrados a partir do servidor de e-mail: ${result.domains.length} domínio(s) e ${result.mailboxes.length} caixa(s).`,
+          });
+        }
+        const response: MailSyncResponse = {
+          ok: true,
+          domainCount: result.domains.length,
+          mailboxCount: result.mailboxes.length,
+          ...result,
+        };
+        return reply.send(response);
+      } catch (err) {
+        return sendError(reply, mailSyncError(err) ?? err);
+      }
+    },
+  );
 
   app.post("/api/mail/server/stop", async (_request, reply) => {
     try {

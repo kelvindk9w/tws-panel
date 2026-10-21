@@ -477,6 +477,9 @@ export function MailboxesPanel({
                           ? t("mail.boxes.kindProject")
                           : t("mail.boxes.createdAt", { date: formatDateTime(mailbox.createdAt) })}
                     </p>
+                    {mailbox.passwordUnknown && (
+                      <p className="text-xs text-amber-400">{t("mail.boxes.passwordUnknown")}</p>
+                    )}
                   </div>
                   <Button
                     variant="outline"

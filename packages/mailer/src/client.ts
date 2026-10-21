@@ -32,6 +32,12 @@ export class StalwartApiError extends Error {
   }
 }
 
+/** O que o painel guarda de um principal do Stalwart: nunca senhas. */
+export interface StalwartPrincipalSummary {
+  name: string;
+  emails: string[];
+}
+
 function assertIp(ip: string): void {
   if (!isIP(ip)) throw new StalwartApiError(400, `IP inválido: ${JSON.stringify(ip)}`);
 }
@@ -42,6 +48,10 @@ interface ApiEnvelope {
   title?: string;
   detail?: string;
 }
+
+/** Páginas lidas por listPrincipals (500 por página): acima de PRINCIPAL_LIST_MAX a lista vem cortada. */
+const PRINCIPAL_LIST_PAGES = 40;
+export const PRINCIPAL_LIST_MAX = PRINCIPAL_LIST_PAGES * 500;
 
 export class StalwartClient {
   private readonly authHeader: string;
@@ -135,6 +145,32 @@ export class StalwartClient {
     return data;
   }
 
+  /**
+   * Como getDkimPublicKey, mas devolve null quando o Stalwart diz que a
+   * assinatura NÃO existe (404, ou resposta sem chave). Qualquer outra falha
+   * (401, rede, 5xx) sobe: quem lê não deve criar uma chave por causa dela.
+   */
+  async findDkimPublicKey(signatureId: string): Promise<string | null> {
+    let text: string;
+    try {
+      text = await this.call("GET", `/dkim/${encodeURIComponent(signatureId)}`);
+    } catch (err) {
+      if (err instanceof StalwartApiError && err.status === 404) return null;
+      throw err;
+    }
+    let data: unknown;
+    try {
+      data = (JSON.parse(text) as ApiEnvelope | null)?.data;
+    } catch {
+      data = undefined;
+    }
+    if (data === undefined || data === null) return null;
+    if (typeof data !== "string" || data.length < 100) {
+      throw new StalwartApiError(500, "Stalwart retornou uma chave DKIM inválida.");
+    }
+    return data;
+  }
+
   // -------------------------------------------------------------------------
   // Caixas (principals "individual")
   // -------------------------------------------------------------------------
@@ -202,6 +238,39 @@ export class StalwartClient {
     return (data?.items ?? [])
       .map((item) => item.name ?? "")
       .filter((name) => name.endsWith(`@${domain}`));
+  }
+
+  /**
+   * Domínios ou caixas que o Stalwart tem (GET /api/principal?type=…), para o
+   * painel cadastrar o que veio de um backup. Devolve só nome e endereços: a
+   * resposta traz `secrets` (hash/senhas da caixa) e o resto, que NUNCA sai
+   * daqui — cada item é montado campo a campo.
+   */
+  async listPrincipals(type: "domain" | "individual"): Promise<StalwartPrincipalSummary[]> {
+    return (await this.listPrincipalsChecked(type)).items;
+  }
+
+  /** Como listPrincipals, e diz se havia MAIS que PRINCIPAL_LIST_MAX (a página seguinte ao teto não veio vazia). */
+  async listPrincipalsChecked(type: "domain" | "individual"): Promise<{ items: StalwartPrincipalSummary[]; truncated: boolean }> {
+    const limit = 500;
+    const out: StalwartPrincipalSummary[] = [];
+    for (let page = 1; page <= PRINCIPAL_LIST_PAGES + 1; page += 1) {
+      const data = (await this.request("GET", `/principal?type=${type}&limit=${limit}&page=${page}`)) as {
+        items?: unknown[];
+      } | null;
+      const items = Array.isArray(data?.items) ? data!.items : [];
+      if (page > PRINCIPAL_LIST_PAGES) return { items: out, truncated: items.length > 0 };
+      for (const item of items) {
+        const raw = typeof item === "string" ? { name: item } : (item as { name?: unknown; emails?: unknown } | null);
+        const name = typeof raw?.name === "string" ? raw.name.trim().toLowerCase() : "";
+        if (!name) continue;
+        const emails = (raw as { emails?: unknown }).emails;
+        const list = typeof emails === "string" ? [emails] : Array.isArray(emails) ? emails : [];
+        out.push({ name, emails: list.filter((e): e is string => typeof e === "string").map((e) => e.toLowerCase()) });
+      }
+      if (items.length < limit) break;
+    }
+    return { items: out, truncated: false };
   }
 
   // -------------------------------------------------------------------------

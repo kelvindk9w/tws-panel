@@ -219,6 +219,39 @@ export interface Mailbox {
   projectId?: string;
   /** Só nas listagens: nome do projeto dono (ausente se o projeto não existe mais). */
   projectName?: string;
+  /**
+   * O painel não sabe a senha desta caixa (ela veio de um backup e foi
+   * cadastrada pela sincronização). A caixa funciona; para enviar pelo painel,
+   * use "Trocar senha". Ausente = senha conhecida.
+   */
+  passwordUnknown?: boolean;
+}
+
+/**
+ * Resultado de cadastrar no painel o que o servidor de e-mail já tem
+ * (POST /api/mail/sync e o fim da restauração do e-mail). Só nomes: nunca
+ * senhas nem dados da conta.
+ */
+export interface MailAdoptResult {
+  /** Domínios cadastrados agora. */
+  domains: string[];
+  /** Caixas cadastradas agora (endereço completo; alias não conta como caixa). */
+  mailboxes: string[];
+  /** Nomes que o servidor tem e o painel não conseguiu cadastrar (no máximo MAIL_ADOPT_SKIPPED_MAX). */
+  skipped: string[];
+  /** Quantos nomes não foram cadastrados no total (maior que `skipped.length` quando a lista foi cortada). */
+  skippedTotal?: number;
+  /** O servidor tem mais de 20 000 domínios ou caixas: só os primeiros foram lidos; o resto não foi conferido. */
+  truncated?: boolean;
+}
+
+/** Teto de nomes devolvidos em `skipped` (a resposta não cresce com o tamanho do servidor). */
+export const MAIL_ADOPT_SKIPPED_MAX = 200;
+
+export interface MailSyncResponse extends MailAdoptResult {
+  ok: true;
+  domainCount: number;
+  mailboxCount: number;
 }
 
 export interface MailboxListResponse {

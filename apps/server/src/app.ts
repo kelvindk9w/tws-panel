@@ -189,6 +189,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     docker: backupDocker,
     reconciliation: restoreReconciliation,
     mailAuth: { repair: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth() },
+    // mailAdopt: o plugin de rotas do e-mail entrega o serviço da tela (backupService.setMailAdopt); ele não existe neste escopo.
     archiver: new SevenZip(),
     storage: (cfg) => new S3Storage(cfg),
     // O serviço do domínio nasce depois deste (linha abaixo); a função só roda numa restauração, com tudo no ar.

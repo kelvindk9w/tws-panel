@@ -58,6 +58,7 @@ export default {
   "code.webhook_active": "Este robô está ligado a um webhook (outro sistema recebe as mensagens dele). Use um robô só para o painel.",
   "code.webmail_no_domain": "Cadastre um domínio de e-mail antes de ativar o webmail.",
   "code.mail_auth_failed": "O painel não conseguiu autenticar no servidor de e-mail (a senha de administração guardada não é a do servidor em execução, o que acontece depois de restaurar o painel ou o e-mail). Reaplique a configuração: pare e inicie o servidor de e-mail em E-mail → Servidor, ou use o aviso do Dashboard.",
+  "code.mail_unreachable": "O painel não conseguiu falar com o servidor de e-mail agora. Confira se ele está rodando em E-mail → Servidor e tente de novo. Nada foi alterado.",
   "code.mail_auth_repair_failed": "Não foi possível reaplicar a configuração do servidor de e-mail. Pare e inicie o servidor em E-mail → Servidor e tente de novo.",
   "code.reconciliation_not_found": "Esse aviso não existe mais.",
   "code.wrong_password": "A senha não abre este backup.",

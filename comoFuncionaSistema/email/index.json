@@ -24,6 +24,7 @@
     "Proteção do e-mail existente (01/10/2026): POST /api/mail/domains consulta o MX do domínio (resolvers públicos) antes de provisionar. Se ele aponta para outro servidor ('elsewhere') ou a consulta falha ('unknown'), responde 409 domain_receives_mail com existingMail {status, servers, suggestedDomain: envio.<domínio>} e só segue com confirmExistingMail:true. Sem MX, MX nulo (RFC 7505) ou MX já apontando para mail.<domínio>/hostname: segue direto. Motivo: o dono do produto ia cadastrar o domínio principal da empresa, que recebe e-mail em outro provedor.",
     "Webmail (04/10/2026, ver webmail.json): botão 'Ativar webmail' na página E-mail sobe o container paas-webmail (Roundcube 1.7.4, imagem fixada por tag e digest) na paas-net, sem porta publicada, falando só com o paas-stalwart (IMAP 993 e SMTP 465, mesmo login). O bloco de cada mail.<domínio> no Caddy passa de página estática a reverse_proxy para ele (o certificado continua sendo emitido pelo mesmo bloco). O painel isenta o IP do webmail no bloqueio automático do Stalwart e bloqueia no Caddy o IP real de quem erra a senha demais.",
     "Blacklist (GET /api/mail/blacklist e página Envios → Reputação): consulta DNSBLs (Spamhaus ZEN, SpamCop, Barracuda para o IP; Spamhaus DBL para cada domínio) pelo resolvedor do sistema. Desde 04/10/2026 cada zona é testada com o ponto de teste oficial (127.0.0.2 / dbltest.com): sem resposta ao teste o resultado é 'não deu para verificar', nunca 'limpo'; a Spamhaus aceita a chave DQS gratuita. Roda uma vez por dia e no botão, agendada pelo próprio plugin de e-mail (antes era um gancho do Monitoramento que nunca rodou). Detalhes em envios.json.",
+    "Cadastro x Stalwart (21/10/2026): o painel lista domínios e caixas do SEU cadastro (data/mail/mail.json), não do Stalwart. Depois de restaurar o backup do e-mail o Stalwart volta com os domínios e caixas de antes e o cadastro não os conhecia (VPS nova: o backup tinha 2 domínios e 4 caixas e o painel mostrava só o que tinha sido criado nela). Agora, no fim da restauração do e-mail (com o Stalwart respondendo e autenticando) e no botão 'Sincronizar com o servidor de e-mail' (POST /api/mail/sync, ver sincronizar.json), MailService.adoptFromStalwart lê o Stalwart (/api/principal, tipos domain e individual) e ADOTA no cadastro o que falta: nada é ativado, o que já está cadastrado não muda, é idempotente, a senha da caixa NUNCA é lida (o campo secrets é descartado no cliente), a caixa adotada fica sem senha conhecida (Trocar senha), o domínio entra com o DNS 'não verificado', abuse@/dmarc@ não viram caixas (são endereços da postmaster@) e o endereço <slug>@ de um projeto cadastrado vira caixa dele. Chamadas simultâneas viram uma só. 401/403 do Stalwart = mail_auth_failed (mesma mensagem e mesmo reparo das demais telas); Stalwart fora do ar = 502 mail_unreachable. Nada é apagado em falha.",
     "Página Envios (04/10/2026, /mail/envios): fila do Stalwart com Tentar agora/Cancelar, histórico lido do registro do container (docker logs a cada 5 min, só metadados, 30 dias em data/mail/envios), volume de 14 dias, reputação e nota de entregabilidade. Ver envios.json."
   ],
   "arquivosFonte": {
@@ -33,6 +34,8 @@
     ],
     "servicos": [
       "apps/server/src/services/mail-service.ts",
+      "apps/server/src/services/mail-adopt.ts",
+      "apps/server/src/services/mail-auth-error.ts",
       "apps/server/src/services/mail-envios-service.ts",
       "apps/server/src/services/mail-reputation-service.ts",
       "apps/server/src/services/stalwart-logs.ts"
@@ -106,6 +109,10 @@
       "apps/server/tests/routes-mail-envios.test.ts",
       "apps/server/tests/mail-envios-wiring.test.ts",
       "apps/server/tests/stalwart-logs.test.ts",
+      "apps/server/tests/mail-adopt.test.ts",
+      "apps/server/tests/mail-adopt-service.test.ts",
+      "apps/server/tests/routes-mail-sync.test.ts",
+      "packages/mailer/tests/client-principals.test.ts",
       "apps/web/tests/mail-envios-page.test.tsx"
     ]
   },
@@ -113,7 +120,7 @@
     {
       "arquivo": "data/mail/mail.json",
       "formato": "json (chmod 0600)",
-      "conteudo": "{ adminSecret: string|null, hostname: string|null, domains: Record<domínio, {name, dkimSelector, dkimPublicKey, dkimKeyBits, dmarcStage, createdAt, lastVerify, dmarcAlias?}>, mailboxes: Record<email, {id, localPart, domain, kind:'user'|'project'|'system', createdAt, password}>, projects: Record<projectId, {domain, mailbox, enabledAt}>, tls: {hostname, aliases, certificates: Record<host, sha256>, config?: sha256 do config.toml sem o segredo} | null (o que foi instalado no Stalwart na última sincronização — sem chave privada) }. IMPORTANTE: mailboxes[].password fica em TEXTO PLANO (necessário para reexibir credenciais e para a injeção SMTP)."
+      "conteudo": "{ adminSecret: string|null, hostname: string|null, domains: Record<domínio, {name, dkimSelector, dkimPublicKey, dkimKeyBits, dmarcStage, createdAt, lastVerify, dmarcAlias?}>, mailboxes: Record<email, {id, localPart, domain, kind:'user'|'project'|'system', createdAt, password}>, projects: Record<projectId, {domain, mailbox, enabledAt}>, tls: {hostname, aliases, certificates: Record<host, sha256>, config?: sha256 do config.toml sem o segredo} | null (o que foi instalado no Stalwart na última sincronização — sem chave privada) }. IMPORTANTE: mailboxes[].password fica em TEXTO PLANO (necessário para reexibir credenciais e para a injeção SMTP). Exceção: caixa cadastrada pela sincronização com o Stalwart (restauração do e-mail) tem password vazio = SENHA DESCONHECIDA (o painel nunca lê a senha do Stalwart); a listagem marca passwordUnknown e Trocar senha define uma."
     },
     {
       "arquivo": "data/mail/stalwart/config.toml",
@@ -147,6 +154,7 @@
     { "id": "webmail", "metodo": "GET", "url": "/api/mail/webmail", "resumo": "Estado do webmail (Roundcube em https://mail.<domínio>/), um link por domínio.", "arquivo": "webmail.json" },
     { "id": "webmail-ativar", "metodo": "POST", "url": "/api/mail/webmail/enable", "resumo": "Ativa o webmail: sobe o paas-webmail e mail.<domínio> passa a abri-lo.", "arquivo": "webmail.json" },
     { "id": "webmail-desativar", "metodo": "POST", "url": "/api/mail/webmail/disable", "resumo": "Desativa o webmail: mail.<domínio> volta à página do servidor de e-mail.", "arquivo": "webmail.json" },
+    { "id": "sincronizar", "metodo": "POST", "url": "/api/mail/sync", "resumo": "Sincronizar com o servidor de e-mail: cadastra no painel os domínios e caixas que o Stalwart já tem (depois de restaurar o e-mail). Nada é ativado, nenhuma senha é lida.", "arquivo": "sincronizar.json" },
     { "id": "blacklist", "metodo": "GET", "url": "/api/mail/blacklist", "resumo": "Checa o IP público e os domínios contra DNSBLs.", "arquivo": "blacklist.json" },
     { "id": "dns-checklist", "metodo": "GET", "url": "/api/mail/domains/:domain/dns", "resumo": "Lista os registros DNS esperados para o domínio.", "arquivo": "dns-checklist.json" },
     { "id": "verificar-dns", "metodo": "POST", "url": "/api/mail/domains/:domain/verify", "resumo": "Verifica os registros DNS contra o DNS real + PTR (verde, azul ou amarelo).", "arquivo": "verificar-dns.json" },

@@ -99,6 +99,7 @@ import { isInsideProjectsDir, isPanelArea } from "./projects-dir.js";
 import { loadJson, loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
 import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
+import { mailAuthError } from "./mail-auth-error.js";
 
 // ---------------------------------------------------------------------------
 // Dependências
@@ -191,6 +192,14 @@ export interface BackupServiceOptions {
   mailAuth?: {
     /** Confere a senha de administração do Stalwart em execução e, se divergente, reaplica a configuração. */
     repair(): Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running">;
+  };
+  /**
+   * Depois de restaurar o e-mail, cadastra no painel os domínios e caixas que o
+   * Stalwart trouxe (o painel lista do seu cadastro, não do Stalwart). Só
+   * nomes; nunca senhas. Ver MailService.adoptFromStalwart.
+   */
+  mailAdopt?: {
+    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; skippedTotal?: number; truncated?: boolean }>;
   };
   reconciliation?: {
     planStaged(staged: string): Promise<string[]>;
@@ -584,8 +593,10 @@ export class BackupService {
   private timer: NodeJS.Timeout | null = null;
   private archiverOk: boolean | null = null;
   private emailAvailable: boolean | null = null;
+  private mailAdopt: BackupServiceOptions["mailAdopt"];
 
   constructor(private readonly opts: BackupServiceOptions) {
+    this.mailAdopt = opts.mailAdopt;
     this.file = path.join(opts.dataDir, "backups.json");
     this.historyFile = path.join(opts.dataDir, "backups-history.json");
     this.keyFile = path.join(opts.dataDir, "backups-key");
@@ -2628,7 +2639,9 @@ export class BackupService {
       if (stalwart.exists) await docker.start(mail.container);
     }
     if (!stalwart.exists) {
-      r.warnings.push("O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e clique em Iniciar. Ele sobe com os dados restaurados.");
+      r.warnings.push(
+        "O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e clique em Iniciar. Ele sobe com os dados restaurados. Depois de iniciar, use Sincronizar com o servidor de e-mail para o painel cadastrar os domínios e caixas que vieram no backup.",
+      );
     }
     const pending: ReconciliationId[] = [];
     if (!stalwart.exists) pending.push("mail-server");
@@ -2651,6 +2664,7 @@ export class BackupService {
       }
     }
     // O etc/ restaurado traz a senha de administração do servidor ANTIGO (config.toml); o painel usa a do mail.json desta VPS.
+    let canAdopt = stalwart.exists && this.mailAdopt !== undefined;
     if (stalwart.exists && this.opts.mailAuth) {
       let result: "ok" | "repaired" | "failed" | "unreachable" | "not_running" | "erro" = "erro";
       try {
@@ -2658,15 +2672,21 @@ export class BackupService {
       } catch (err) {
         this.opts.log?.(`E-mail: não deu para conferir a senha de administração depois de restaurar (${reasonOf(err)}).`);
       }
+      // sem autenticar no Stalwart não há o que ler: a pessoa sincroniza depois de resolver
+      if (result !== "ok" && result !== "repaired") canAdopt = false;
       if (result === "repaired") {
         r.warnings.push("A senha de administração do servidor de e-mail que veio no backup não era a deste painel: o painel reaplicou a configuração e reiniciou o servidor de e-mail. Nenhum dado foi apagado.");
       } else if (result === "failed" || result === "unreachable" || result === "erro") {
         pending.push("mail-auth");
         r.warnings.push(
-          "Não foi possível confirmar que o painel autentica no servidor de e-mail depois da restauração. Se aparecer “não conseguiu autenticar”, pare e inicie o servidor em E-mail → Servidor (ou use o aviso do Dashboard).",
+          "Não foi possível confirmar que o painel autentica no servidor de e-mail depois da restauração. Se aparecer “não conseguiu autenticar”, pare e inicie o servidor em E-mail → Servidor (ou use o aviso do Dashboard)." +
+            (this.mailAdopt !== undefined
+              ? " Os domínios e caixas do e-mail ainda não foram cadastrados no painel: depois disso, abra E-mail e use Sincronizar com o servidor de e-mail."
+              : ""),
         );
       }
     }
+    if (canAdopt) await this.adoptRestoredEmail(r);
     if (pending.length > 0 && this.opts.reconciliation) {
       try {
         await this.opts.reconciliation.markPending(pending, "email");
@@ -2674,6 +2694,57 @@ export class BackupService {
         this.opts.log?.(`Reconciliação: não deu para guardar a pendência (${reasonOf(err)}).`);
       }
     }
+  }
+
+  /**
+   * O Stalwart voltou com os domínios e caixas do backup, mas o painel lista
+   * do seu próprio cadastro. Cadastra o que falta (só nomes; nada é ativado,
+   * nenhuma senha é lida) e conta o resultado no registro. Falha não derruba a
+   * restauração: os dados já voltaram, e o botão Sincronizar repete o passo.
+   */
+  private async adoptRestoredEmail(r: BackupRecord): Promise<void> {
+    this.step(r, "Conferir os domínios e caixas do e-mail no painel");
+    try {
+      const { domains, mailboxes, skipped, skippedTotal, truncated } = await this.mailAdopt!.adopt();
+      if (domains.length > 0 || mailboxes.length > 0) {
+        const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+        const what = [
+          ...(domains.length > 0 ? [count(domains.length, "domínio", "domínios")] : []),
+          ...(mailboxes.length > 0 ? [count(mailboxes.length, "caixa", "caixas")] : []),
+        ].join(" e ");
+        r.steps[r.steps.length - 1]!.label = `Cadastrei ${what} no painel`;
+        r.warnings.push(
+          `Cadastrei ${what} no painel (o que o servidor de e-mail trouxe do backup). Nada foi ativado.` +
+            (mailboxes.length > 0 ? " As caixas cadastradas ficam sem senha conhecida pelo painel: para enviar por elas, use Trocar senha." : "") +
+            (domains.length > 0 ? " O DNS dos domínios aparece como não verificado: use Verificar agora em cada um." : ""),
+        );
+      }
+      if (skipped.length > 0) {
+        const total = Math.max(skippedTotal ?? 0, skipped.length);
+        const shown = skipped.slice(0, 10).join(", ") + (total > 10 ? ` e mais ${total - 10}` : "");
+        r.warnings.push(
+          `Do servidor de e-mail, não consegui cadastrar no painel estes nomes (nome sem endereço completo, domínio inválido ou sem chave de assinatura): ${shown}. Eles continuam no servidor, sem alteração.`,
+        );
+      }
+      if (truncated) {
+        r.warnings.push(
+          "O servidor de e-mail tem mais de 20 000 domínios ou caixas: o painel leu só os primeiros, e o resto não foi conferido nem cadastrado.",
+        );
+      }
+    } catch (err) {
+      const reason = mailAuthError(err)?.message ?? reasonOf(err);
+      r.warnings.push(
+        `Não foi possível cadastrar no painel os domínios e caixas do e-mail (${reason}). Nada foi apagado. Quando o servidor de e-mail responder, abra E-mail e use Sincronizar com o servidor de e-mail.`,
+      );
+    }
+  }
+
+  /**
+   * O serviço de e-mail só existe dentro do plugin de rotas do e-mail (o
+   * Fastify isola o escopo); o plugin entrega aqui o mesmo serviço da tela.
+   */
+  setMailAdopt(adopt: BackupServiceOptions["mailAdopt"]): void {
+    this.mailAdopt = adopt;
   }
 
   /** Painel: deixa pronto para a troca na próxima subida e pede o reinício. */

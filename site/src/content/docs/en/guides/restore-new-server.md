@@ -258,6 +258,8 @@ If the restore ends with the notice "Os dados do webmail voltaram, mas o webmail
    webmail was on in the old panel: after the mail server starts, use the amber notice on the
    **Dashboard** or **Email → Webmail → Enable webmail**.
 
+**Domains and mailboxes come back to the list by themselves.** The panel shows the domains and mailboxes in its own records, not the mail server's list. So at the end of the email restore the panel reads what the mail server brought back and registers what was missing (a server notice, in Portuguese: "Cadastrei 2 domínios e 4 caixas no painel", meaning it registered 2 domains and 4 mailboxes). Nothing is turned on and what was already registered does not change. Two consequences: the registered mailboxes have **no password known to the panel** (the server never hands it over), so use **Change password** on a mailbox before sending from it; and the domains' DNS shows as **not verified** until you click **Verify now**. If the mail server did not exist on the VPS yet, or the restore warned it could not register them, open **Email** and click **Sync with the mail server** (safe to repeat: it never duplicates anything).
+
 **What to check:** click **Verify now** until you reach **6/6 OK**, send a test email
 (Step 4.7 of Part 2 of the step-by-step guide), and see **Valid** in the email certificate card. Send slowly at
 first: the new IP has no reputation yet.
