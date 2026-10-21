@@ -154,6 +154,12 @@ const ONBOARDING_STEPS: Key[] = [
   "mail.page.onboarding.step4",
 ];
 
+const AUTH_ERROR_CODES = ["mail_auth_failed", "mail_auth_repair_failed"];
+
+function isAuthError(err: unknown): boolean {
+  return err instanceof ApiRequestError && AUTH_ERROR_CODES.includes(err.code);
+}
+
 export function MailPage() {
   const { t } = useI18n();
   const [status, setStatus] = useState<MailServerStatus | null>(null);
@@ -165,6 +171,9 @@ export function MailPage() {
   const [tls, setTls] = useState<MailTlsStatusResponse | null>(null);
   const [tlsBusy, setTlsBusy] = useState(false);
   const [syncResult, setSyncResult] = useState<MailSyncResponse | null>(null);
+  // Erro de senha de administração: o botão Reparar agora aparece junto da mensagem.
+  const [authError, setAuthError] = useState(false);
+  const [confirmRepair, setConfirmRepair] = useState(false);
   const [existingMail, setExistingMail] = useState<{ domain: string; info: ExistingMailInfo } | null>(null);
 
   const loadTls = useCallback(async () => {
@@ -220,15 +229,37 @@ export function MailPage() {
   async function syncWithServer() {
     setBusy("sync");
     setError(null);
+    setAuthError(false);
+    setConfirmRepair(false);
     setSyncResult(null);
     try {
       setSyncResult(await apiFetch<MailSyncResponse>("/api/mail/sync", { method: "POST" }));
       await refresh();
     } catch (err) {
       setError(apiErrorText(err, "mail.page.sync.error"));
+      setAuthError(isAuthError(err));
     } finally {
       setBusy(null);
     }
+  }
+
+  // Mesmo reparo do aviso do Dashboard (regrava a configuração e reinicia, sem apagar dados); dando certo, sincroniza de novo.
+  async function repairAuth() {
+    setBusy("repair");
+    setError(null);
+    try {
+      await apiFetch("/api/mail/server/repair-auth", { method: "POST" });
+      setConfirmRepair(false);
+      setAuthError(false);
+    } catch (err) {
+      setError(apiErrorText(err, "mail.page.repair.error"));
+      setAuthError(isAuthError(err));
+      setConfirmRepair(false);
+      setBusy(null);
+      return;
+    }
+    setBusy(null);
+    await syncWithServer();
   }
 
   async function addDomain(name = newDomain.trim(), confirmExistingMail = false) {
@@ -291,6 +322,26 @@ export function MailPage() {
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && authError && (
+        <div data-testid="mail-auth-repair" className="flex flex-wrap items-center gap-2 text-sm">
+          {confirmRepair ? (
+            <>
+              <span>{t("mail.page.repair.confirmText")}</span>
+              <Button size="sm" disabled={busy !== null} onClick={() => void repairAuth()}>
+                {busy === "repair" && <Loader2 className="h-4 w-4 animate-spin" />}
+                {busy === "repair" ? t("mail.page.repair.working") : t("mail.page.repair.confirm")}
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => setConfirmRepair(false)}>
+                {t("mail.page.repair.cancel")}
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" disabled={busy !== null} onClick={() => setConfirmRepair(true)}>
+              {t("mail.page.repair.cta")}
+            </Button>
+          )}
+        </div>
+      )}
 
       <Card>
         <CardHeader className="pb-2">

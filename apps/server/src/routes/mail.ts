@@ -3,7 +3,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
-import { mailAuthError, mailSyncError } from "../services/mail-auth-error.js";
+import { mailAuthError, mailAuthRepairFailedError, mailSyncError } from "../services/mail-auth-error.js";
 import type {
   ChangeMailboxPasswordRequest,
   CreateMailDomainRequest,
@@ -477,11 +477,9 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/mail/server/repair-auth", async (_request, reply) => {
     try {
       const result = await service.repairAdminAuth();
-      if (result === "failed") {
-        return reply.code(409).send({
-          error: "mail_auth_repair_failed",
-          message: "Não foi possível reaplicar a configuração do servidor de e-mail. Pare e inicie o servidor em E-mail → Servidor e tente de novo.",
-        });
+      // Não finge sucesso: o botão só some quando a senha passou a autenticar.
+      if (result === "failed" || result === "unreachable" || result === "not_running") {
+        return sendError(reply, mailAuthRepairFailedError(result));
       }
       await app.auditService.record({
         action: "mail.server.repair_auth",
@@ -520,6 +518,13 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         };
         return reply.send(response);
       } catch (err) {
+        // Senha de administração que o reparo automático não resolveu: o Dashboard passa a oferecer Reparar agora.
+        const code = (err as Partial<HttpError>).code;
+        if (code === "mail_auth_repair_failed" || code === "mail_auth_still_refused" || mailAuthError(err)) {
+          await app.restoreReconciliation?.markPending(["mail-auth"], "email").catch((e: unknown) => {
+            app.log.warn(`Reconciliação: não deu para guardar a pendência de autenticação (${e instanceof Error ? e.message : String(e)}).`);
+          });
+        }
         return sendError(reply, mailSyncError(err) ?? err);
       }
     },

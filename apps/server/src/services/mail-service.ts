@@ -68,6 +68,7 @@ import { httpError } from "./deploy-service.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { planAdoption } from "./mail-adopt.js";
 import type { HttpError } from "./http-error.js";
+import { mailAuthRepairFailedError } from "./mail-auth-error.js";
 
 /** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
 const PANEL_CONTAINER = "tws-panel";
@@ -1183,10 +1184,42 @@ export class MailService {
    * Falha do Stalwart (401, fora do ar) sobe como está e não apaga nada.
    */
   adoptFromStalwart(): Promise<MailAdoptResult> {
-    this.adopting ??= this.doAdopt().finally(() => {
+    this.adopting ??= this.doAdoptRepairing().finally(() => {
       this.adopting = null;
     });
     return this.adopting;
+  }
+
+  /**
+   * 401/403 do Stalwart na leitura: a senha do mail.json não é a do servidor
+   * em execução (acontece depois de restaurar). Tenta UMA vez o reparo da
+   * senha de administração (o mesmo do botão Reparar agora: regrava a
+   * configuração e reinicia, sem apagar dados; coalescido entre instâncias) e
+   * repete a leitura. Se continuar falhando, devolve o erro dizendo o que foi
+   * tentado. Senha certa: nada é reiniciado.
+   */
+  private async doAdoptRepairing(): Promise<MailAdoptResult> {
+    try {
+      return await this.doAdopt();
+    } catch (err) {
+      if (!(err instanceof StalwartApiError) || (err.status !== 401 && err.status !== 403)) throw err;
+    }
+    let repair: Awaited<ReturnType<MailService["repairAdminAuth"]>>;
+    try {
+      repair = await this.repairAdminAuth();
+    } catch (err) {
+      this.log(`Sincronizar: o reparo da senha de administração falhou (${err instanceof Error ? err.message : String(err)}).`);
+      repair = "failed";
+    }
+    if (repair === "repaired" || repair === "ok") {
+      try {
+        return await this.doAdopt();
+      } catch (err) {
+        if (!(err instanceof StalwartApiError) || (err.status !== 401 && err.status !== 403)) throw err;
+        throw mailAuthRepairFailedError(repair === "ok" ? "ok" : "failed");
+      }
+    }
+    throw mailAuthRepairFailedError(repair);
   }
 
   private async doAdopt(): Promise<MailAdoptResult> {

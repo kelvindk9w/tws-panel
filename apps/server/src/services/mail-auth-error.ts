@@ -10,7 +10,30 @@ import { StalwartApiError } from "@paas/mailer";
 import { httpError, type HttpError } from "./http-error.js";
 
 export const MAIL_AUTH_FAILED_MESSAGE =
-  "O painel não conseguiu autenticar no servidor de e-mail (a senha de administração guardada não é a do servidor em execução, o que acontece depois de restaurar o painel ou o e-mail). Reaplique a configuração: pare e inicie o servidor de e-mail em E-mail → Servidor, ou use o aviso do Dashboard.";
+  "O painel não conseguiu autenticar no servidor de e-mail (a senha de administração guardada não é a do servidor em execução, o que acontece depois de restaurar o painel ou o e-mail). Use Reparar agora, na tela E-mail ou no aviso do Dashboard (regrava a configuração com a senha do painel e reinicia o servidor de e-mail, sem apagar dados) ou, em E-mail → Servidor, pare e inicie o servidor.";
+
+export const MAIL_AUTH_REPAIR_FAILED_MESSAGE =
+  "O painel tentou regravar a configuração e reiniciar o servidor de e-mail para acertar a senha de administração, mas o servidor continua recusando a senha guardada. Nada foi apagado. Próximo passo: em E-mail → Servidor, pare e inicie o servidor; se o erro continuar, confira no servidor (VPS) se o config.toml do contêiner paas-stalwart tem a mesma senha de administração do painel, comparando só a impressão digital delas (o guia de restauração traz o comando) e olhe o log com docker logs paas-stalwart.";
+
+export const MAIL_AUTH_STILL_REFUSED_MESSAGE =
+  "O painel conferiu a senha de administração e o servidor de e-mail a aceita, mas a leitura foi recusada de novo. Nada foi reiniciado nem apagado. Próximo passo: tente Sincronizar mais uma vez; se repetir, olhe o log com docker logs paas-stalwart.";
+
+/**
+ * Depois de UMA tentativa de reparo que não resolveu: o erro diz o que o painel
+ * tentou e o que fazer agora (nunca pede para reaplicar o que já foi feito).
+ */
+export function mailAuthRepairFailedError(result: "ok" | "failed" | "unreachable" | "not_running"): HttpError {
+  if (result === "failed") return httpError(409, "mail_auth_repair_failed", MAIL_AUTH_REPAIR_FAILED_MESSAGE);
+  if (result === "ok") return httpError(409, "mail_auth_still_refused", MAIL_AUTH_STILL_REFUSED_MESSAGE);
+  if (result === "not_running") {
+    return httpError(409, "mail_server_stopped", "O servidor de e-mail está parado. Inicie-o antes de continuar.");
+  }
+  return httpError(
+    502,
+    "mail_unreachable",
+    "O painel tentou reparar a senha de administração, mas não conseguiu falar com o servidor de e-mail agora. Confira se ele está rodando em E-mail → Servidor e tente de novo. Nada foi alterado.",
+  );
+}
 
 /** 409 `mail_auth_failed` se o erro é um 401/403 do Stalwart; senão null (o erro segue como estava). */
 export function mailAuthError(err: unknown): HttpError | null {

@@ -240,9 +240,11 @@ Auditoria (`guardrail.override`).
 
 A senha de administração do servidor de e-mail guardada no painel e a que está na configuração do
 servidor em execução são diferentes (acontece depois de restaurar o painel ou o e-mail). O painel
-confere isso depois da restauração e tenta corrigir; se ainda aparecer "O painel não conseguiu
-autenticar no servidor de e-mail", clique em **Reparar agora** no aviso âmbar do Dashboard, ou pare o
-servidor de e-mail e inicie de novo em **E-mail**. Nenhum dado é apagado. Detalhes em
+confere isso depois da restauração e tenta corrigir, e **Sincronizar com o servidor de e-mail**
+também tenta o reparo uma vez antes de mostrar erro. Se ainda aparecer "O painel não conseguiu
+autenticar no servidor de e-mail", clique em **Reparar agora** (na própria tela de **E-mail**, junto
+da mensagem, ou no aviso âmbar do Dashboard), ou pare o servidor de e-mail e inicie de novo em
+**E-mail**. Nenhum dado é apagado. Detalhes em
 [Restaurar em outro servidor](restore-new-server.md#se-algo-falhar).
 
 ## Docker
