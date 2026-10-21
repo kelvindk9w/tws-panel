@@ -3172,9 +3172,31 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
     for (const repair of ["failed", "unreachable", "not_running"] as const) {
       adopts = 0;
       service = withAdopt(async () => ({ domains: ["x.example.com"], mailboxes: [], skipped: [] }), repair);
-      await restoreEmail();
+      const rec = await restoreEmail();
       expect(adopts).toBe(0);
+      // quando o reparo da senha falha, o aviso também diz como cadastrar depois
+      if (repair !== "not_running") expect(rec.warnings.join(" ")).toMatch(/Sincronizar com o servidor de e-mail/);
     }
+  });
+
+  it("lista cortada em 20 000: avisa que o resto não foi conferido; ignorados contam o total", async () => {
+    service = withAdopt(async () => ({
+      domains: [],
+      mailboxes: [],
+      skipped: Array.from({ length: 200 }, (_, i) => `n${i}`),
+      skippedTotal: 250,
+      truncated: true,
+    }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/e mais 240/);
+    expect(rec.warnings.join(" ")).toMatch(/mais de 20 000/);
+  });
+
+  it("o adotador pode ser entregue depois da criação (setMailAdopt), como faz o plugin de e-mail", async () => {
+    service = build({ mailAuth: { repair: async () => "ok" } });
+    service.setMailAdopt({ adopt: async () => ({ domains: ["t.example.com"], mailboxes: [], skipped: [] }) });
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Cadastrei 1 domínio/);
   });
 
   it("servidor de e-mail ainda não existe aqui: não tenta, e o aviso manda sincronizar depois de iniciar", async () => {

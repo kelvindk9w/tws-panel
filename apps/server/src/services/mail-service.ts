@@ -14,6 +14,7 @@ import {
   PROJECT_EMAIL_VALUE_KEYS,
   envLinkNameProblem,
   PAAS_STALWART_CONTAINER,
+  MAIL_ADOPT_SKIPPED_MAX,
   STALWART_IMAGE_REF,
   type MailTlsHostStatus,
   type MailTlsStatusResponse,
@@ -51,6 +52,7 @@ import {
   readCaddyCertificate,
   sendSmtpMail,
   SmtpSendError,
+  PRINCIPAL_LIST_MAX,
   StalwartApiError,
   StalwartClient,
   StalwartManager,
@@ -1194,6 +1196,7 @@ export class MailService {
     await this.requireRunning();
     const domainPrincipals = await client.listPrincipals("domain");
     const mailboxPrincipals = await client.listPrincipals("individual");
+    const truncated = domainPrincipals.length >= PRINCIPAL_LIST_MAX || mailboxPrincipals.length >= PRINCIPAL_LIST_MAX;
     let projects: Array<Pick<Project, "id" | "slug">> = [];
     try {
       projects = (await this.projectsOf?.()) ?? [];
@@ -1206,6 +1209,7 @@ export class MailService {
       knownDomains: new Set(Object.keys(this.data.domains)),
       knownMailboxes: new Set(Object.keys(this.data.mailboxes)),
       projects,
+      projectDomains: new Map(Object.entries(this.data.projects).map(([id, p]) => [id, p.domain])),
     });
 
     // O domínio precisa da chave DKIM pública para o checklist de DNS. Sem ela, não entra (nem as caixas dele).
@@ -1219,6 +1223,16 @@ export class MailService {
         skipped.push(name);
       }
     }
+    // O DMARC do checklist manda relatórios para dmarc@: o domínio adotado só fica sem a marca (a rotina horária
+    // acrescenta o alias) quando a postmaster@ existe no Stalwart e dmarc@ ainda não recebe; sem postmaster@
+    // não há onde pôr o alias, e a rotina falharia no log a cada hora.
+    const dmarcReceives = (domain: string): boolean => {
+      const dmarc = `dmarc@${domain}`;
+      const postmaster = `postmaster@${domain}`;
+      const hasPostmaster = mailboxPrincipals.some((p) => p.name === postmaster);
+      const dmarcDelivers = mailboxPrincipals.some((p) => p.name === dmarc || p.emails.includes(dmarc));
+      return dmarcDelivers || !hasPostmaster;
+    };
     const now = new Date().toISOString();
     const result: MailAdoptResult = { domains: [], mailboxes: [], skipped };
     for (const [name, dkimPublicKey] of dkim) {
@@ -1231,6 +1245,7 @@ export class MailService {
         dmarcStage: "none",
         createdAt: now,
         lastVerify: null,
+        ...(dmarcReceives(name) ? { dmarcAlias: true } : {}),
       };
       result.domains.push(name);
     }
@@ -1253,16 +1268,19 @@ export class MailService {
       result.mailboxes.push(box.id);
     }
     if (result.domains.length > 0 || result.mailboxes.length > 0) await this.save();
+    if (skipped.length > MAIL_ADOPT_SKIPPED_MAX) {
+      result.skippedTotal = skipped.length;
+      result.skipped = skipped.slice(0, MAIL_ADOPT_SKIPPED_MAX);
+    }
+    if (truncated) result.truncated = true;
     return result;
   }
 
   /** Chave pública DKIM do domínio no Stalwart; se a assinatura não existe, cria como no cadastro do domínio. */
   private async readOrCreateDkim(client: StalwartClient, domain: string): Promise<string> {
-    try {
-      return await client.getDkimPublicKey(`rsa-${domain}`);
-    } catch (err) {
-      if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) throw err;
-    }
+    // só cria quando o Stalwart diz que NÃO existe; qualquer outra falha de leitura sobe (e o domínio fica de fora)
+    const existing = await client.findDkimPublicKey(`rsa-${domain}`);
+    if (existing !== null) return existing;
     return client.getDkimPublicKey(await client.createDkimSignature(domain, DKIM_SELECTOR));
   }
 

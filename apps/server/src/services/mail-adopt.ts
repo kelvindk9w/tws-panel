@@ -36,6 +36,8 @@ export function planAdoption(input: {
   knownDomains: ReadonlySet<string>;
   knownMailboxes: ReadonlySet<string>;
   projects: ReadonlyArray<{ id: string; slug: string }>;
+  /** Projeto → domínio do e-mail dele no painel (só esses podem ser dono de uma caixa <slug>@). */
+  projectDomains?: ReadonlyMap<string, string>;
 }): AdoptionPlan {
   const skipped: string[] = [];
   const domains: string[] = [];
@@ -61,16 +63,22 @@ export function planAdoption(input: {
   for (const principal of input.mailboxes) {
     const id = principal.name.trim().toLowerCase();
     if (input.knownMailboxes.has(id) || seen.has(id)) continue;
-    if (aliasOwner.has(id)) continue;
     const parts = id.split("@");
     const local = parts[0] ?? "";
     const domain = parts[1] ?? "";
+    // endereço que é alias de outra caixa, ou abuse@/dmarc@ (reservados do painel): não vira caixa comum
+    if (aliasOwner.has(id) || local === "abuse" || local === "dmarc") {
+      skipped.push(id);
+      continue;
+    }
     if (parts.length !== 2 || !LOCAL_RE.test(local) || local.includes("..") || !available.has(domain)) {
       skipped.push(id);
       continue;
     }
     seen.add(id);
-    const projectId = projectBySlug.get(local);
+    // dono só quando o domínio é o do e-mail do projeto: contato@ de outro domínio não é caixa do projeto "contato"
+    const candidate = projectBySlug.get(local);
+    const projectId = candidate !== undefined && input.projectDomains?.get(candidate) === domain ? candidate : undefined;
     if (local === "postmaster") mailboxes.push({ id, localPart: local, domain, kind: "system" });
     else if (projectId !== undefined) mailboxes.push({ id, localPart: local, domain, kind: "project", projectId });
     else mailboxes.push({ id, localPart: local, domain, kind: "user" });

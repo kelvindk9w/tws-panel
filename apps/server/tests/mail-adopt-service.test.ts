@@ -42,6 +42,9 @@ let principals: Array<Record<string, unknown>> = [];
 let dkimOk = true;
 let rejectAuth = false;
 let fetchCalls: string[] = [];
+/** "missing": a assinatura DKIM não existe até o POST; "error": a leitura falha com 500. */
+let dkimMode: "ok" | "missing" | "error" = "ok";
+let dkimPosts = 0;
 
 function box(name: string, emails: string[] = [name]) {
   return { id: 1, type: "individual", name, secrets: [HASH], emails, roles: ["user"], quota: 0 };
@@ -62,6 +65,9 @@ function fakeStalwart() {
         const items = principals.filter((p) => p.type === type);
         return new Response(JSON.stringify({ data: { items, total: items.length } }), { status: 200 });
       }
+      if (u.pathname.startsWith("/api/dkim/") && dkimMode === "error") return new Response(`{"detail":"boom"}`, { status: 500 });
+      if (u.pathname.startsWith("/api/dkim/") && dkimMode === "missing" && dkimPosts === 0) return new Response(`{"detail":"not found"}`, { status: 404 });
+      if (u.pathname === "/api/dkim" && init?.method === "POST") dkimPosts += 1;
       if (u.pathname.startsWith("/api/dkim/")) {
         if (!dkimOk) return new Response(`{"detail":"not found"}`, { status: 404 });
         return new Response(JSON.stringify({ data: DKIM_KEY }), { status: 200 });
@@ -98,6 +104,8 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-mail-adopt-"));
   running = true;
   dkimOk = true;
+  dkimMode = "ok";
+  dkimPosts = 0;
   rejectAuth = false;
   fetchCalls = [];
   config = { dataDir: dir, mailPorts: MAIL_DEFAULT_PORTS, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null } as unknown as ServerConfig;
@@ -211,10 +219,21 @@ describe("MailService.adoptFromStalwart", () => {
 
   it("associa o projeto dono quando o endereço é o do projeto", async () => {
     principals.push(box("loja@cassp.example.com"));
+    const stored = await readStored();
+    stored.projects["p1"] = { domain: "cassp.example.com", mailbox: "loja@cassp.example.com", enabledAt: "2026-10-20T00:00:00.000Z" };
+    await writeFile(path.join(dir, "mail", "mail.json"), JSON.stringify({ ...stored, adminSecret: ADMIN }));
     const svc = service({ projects: async () => [{ id: "p1", slug: "loja", name: "Loja" } as unknown as Project] });
     await svc.adoptFromStalwart();
     const boxes = await svc.listMailboxes("cassp.example.com", { projectId: "p1" });
     expect(boxes.map((b) => [b.id, b.kind, b.projectId])).toEqual([["loja@cassp.example.com", "project", "p1"]]);
+  });
+
+  it("caixa <slug>@ de um domínio que não é o do e-mail do projeto fica como caixa comum", async () => {
+    principals.push(box("loja@cassp.example.com"));
+    const svc = service({ projects: async () => [{ id: "p1", slug: "loja", name: "Loja" } as unknown as Project] });
+    await svc.adoptFromStalwart();
+    const boxes = await svc.listMailboxes("cassp.example.com");
+    expect(boxes.find((b) => b.id === "loja@cassp.example.com")).toMatchObject({ kind: "user" });
   });
 
   it("lista de projetos que falha não impede o cadastro", async () => {
@@ -234,6 +253,48 @@ describe("MailService.adoptFromStalwart", () => {
     expect(result.mailboxes).toEqual(["contato@envio.example.com"]);
     expect(result.skipped).toEqual(["cassp.example.com", "contato@cassp.example.com", "postmaster@cassp.example.com"]);
     expect(Object.keys((await readStored()).domains)).toEqual(["envio.example.com"]);
+  });
+
+  it("cria a assinatura DKIM só quando o Stalwart diz que ela não existe", async () => {
+    dkimMode = "missing";
+    const result = await service().adoptFromStalwart();
+    expect(result.domains).toEqual(["cassp.example.com"]);
+    expect(dkimPosts).toBe(1);
+  });
+
+  it("falha ao ler a chave DKIM (500) não cria assinatura: o domínio fica de fora", async () => {
+    dkimMode = "error";
+    const result = await service().adoptFromStalwart();
+    expect(result.domains).toEqual([]);
+    expect(dkimPosts).toBe(0);
+    expect(result.skipped).toContain("cassp.example.com");
+  });
+
+  it("domínio adotado: dmarcAlias coerente com a postmaster@ do Stalwart", async () => {
+    principals.push({ id: 20, type: "domain", name: "semcaixa.example.com" });
+    principals.push({ id: 21, type: "domain", name: "semalias.example.com" });
+    principals.push(box("postmaster@semalias.example.com", ["postmaster@semalias.example.com"]));
+    await service().adoptFromStalwart();
+    const { domains } = await readStored();
+    // dmarc@ já recebe (alias da postmaster@): marcado
+    expect(domains["cassp.example.com"]!.dmarcAlias).toBe(true);
+    // sem postmaster@ no Stalwart não há onde pôr o alias: marcado, para a rotina horária não falhar no log
+    expect(domains["semcaixa.example.com"]!.dmarcAlias).toBe(true);
+    // tem postmaster@ sem dmarc@: a rotina acrescenta o alias
+    expect(domains["semalias.example.com"]!.dmarcAlias).toBeUndefined();
+  });
+
+  it("corta a lista de ignorados em 200 nomes e conta o total", async () => {
+    for (let i = 0; i < 250; i += 1) principals.push(box(`Nome Ruim ${i}@envio.example.com`));
+    const result = await service().adoptFromStalwart();
+    expect(result.skipped).toHaveLength(200);
+    expect(result.skippedTotal).toBe(250);
+  });
+
+  it("avisa quando o Stalwart tem mais de 20 000 caixas (a lista vem cortada)", async () => {
+    for (let i = 0; i < 20_000; i += 1) principals.push(box(`u${i}@envio.example.com`));
+    const result = await service().adoptFromStalwart();
+    expect(result.truncated).toBe(true);
   });
 
   it("401 do Stalwart: erro com o status 401 e o cadastro intacto", async () => {
@@ -287,18 +348,6 @@ describe("caixa adotada, sem senha conhecida", () => {
     expect(res.generatedPassword).toBeTruthy();
     expect(res.mailbox.passwordUnknown).toBeUndefined();
     expect((await readStored()).mailboxes["contato@cassp.example.com"]!.password).toBe(res.generatedPassword);
-  });
-
-  it("ativar o e-mail de um projeto numa caixa adotada pede a senha e a define", async () => {
-    principals.push(box("loja@cassp.example.com"));
-    const project = { id: "p1", slug: "loja", name: "Loja" } as unknown as Project;
-    const svc = service({ projects: async () => [project] });
-    await svc.adoptFromStalwart();
-    await expect(svc.enableProjectEmail(project, "cassp.example.com")).rejects.toMatchObject({ code: "password_required" });
-    const res = await svc.enableProjectEmail(project, "cassp.example.com", { generatePassword: true });
-    const env = await svc.envForProject(project);
-    expect(env.SMTP_PASS).toBe(res.generatedPassword);
-    expect(env.SMTP_USER).toBe("loja@cassp.example.com");
   });
 
   it("projeto ligado a uma caixa sem senha conhecida não recebe SMTP_PASS vazio", async () => {

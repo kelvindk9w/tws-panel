@@ -12,12 +12,17 @@ O painel lista domínios e caixas do cadastro dele (`data/mail/mail.json`), não
 - Caixa sem senha conhecida não quebra nada: e-mail de teste e aviso do painel por e-mail explicam que falta a senha; o deploy não injeta `SMTP_PASS` vazio.
 - Domínio cuja chave DKIM não dá para ler não entra (nem as caixas dele); aparece em "não consegui cadastrar".
 - Falha do Stalwart: 401/403 usa `mail_auth_failed` (mesma mensagem e reparo); fora do ar vira `mail_unreachable` (502); outro erro `mail_sync_failed`. Na restauração a falha vira aviso e a restauração não falha. Nada é apagado.
-- O serviço usado pela restauração é o mesmo objeto da tela (`app.mailService`): uma segunda instância gravando o `mail.json` deixaria a da tela desatualizada.
+- O serviço usado pela restauração é o mesmo objeto da tela, entregue pelo plugin de rotas do e-mail com `backupService.setMailAdopt`. A primeira versão chamava `app.mailService` no escopo raiz, onde ele não existe (o Fastify isola o plugin): a adoção automática nunca rodava em produção e só o botão Sincronizar funcionava. Os testes não viam porque usavam um adotador falso. Agora `tests/mail-adopt-wiring.test.ts` sobe o `buildApp()` real e prova que a adoção chega ao serviço que a tela lista (falhava antes da correção).
 
 ## Decisões a conferir
 
 - Associação ao projeto é só pelo slug (o endereço padrão do e-mail do projeto); o vínculo de envio (`SMTP_*`) não é restaurado, a pessoa ativa o e-mail do projeto e escolhe a senha.
-- Se o Stalwart não tem a assinatura DKIM `rsa-<domínio>`, a adoção a cria (mesma operação do cadastro do domínio).
+- Se o Stalwart diz que NÃO tem a assinatura DKIM `rsa-<domínio>` (404 ou sem chave), a adoção a cria; qualquer outra falha de leitura deixa o domínio de fora.
+- Revisão (a1cacc0): domínio adotado com `dmarcAlias` coerente; alias de outra caixa e abuse@/dmarc@ próprios vão para os ignorados; dono pelo slug só no domínio do e-mail do projeto; falha do reparo do 401 sugere Sincronizar; ignorados cortados em 200 (com total) e aviso acima de 20 000; a tela avisa que domínio novo pode reiniciar o servidor de e-mail.
+
+## Pendência anterior a este commit (não resolvida aqui)
+
+A gravação do `mail.json` pela adoção (e por outras operações do `MailService`) escreve o arquivo inteiro a partir do que está em memória, sem reler. Se outra instância gravar entre a leitura e a escrita (por exemplo o reparo do 401 da restauração, que usa uma instância própria e pode gravar o TLS), a adoção pode desfazer essa gravação. O problema já existia no `MailService` e não foi mudado; fica registrado para tratar à parte (reler antes de gravar, ou um único dono do arquivo).
 - A base foi a `dev` (traz o `mail-auth-error.ts`); a branch do worktree foi apontada para ela.
 
 ## Arquivos

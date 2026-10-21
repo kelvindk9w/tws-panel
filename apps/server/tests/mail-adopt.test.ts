@@ -64,10 +64,40 @@ describe("planAdoption", () => {
       knownDomains: new Set(),
       knownMailboxes: new Set(),
       projects: [{ id: "p1", slug: "loja" }],
+      projectDomains: new Map([["p1", "envio.example.com"]]),
     });
     expect(plan.mailboxes[0]).toMatchObject({ id: "loja@envio.example.com", kind: "project", projectId: "p1" });
     expect(plan.mailboxes[1]).toMatchObject({ kind: "user" });
     expect(plan.mailboxes[1]).not.toHaveProperty("projectId");
+  });
+
+  it("o slug só vale no domínio do e-mail do projeto (contato@ de outro domínio não é do projeto contato)", () => {
+    const plan = planAdoption({
+      domains: ["envio.example.com", "cassp.example.com"],
+      mailboxes: [person("contato@cassp.example.com"), person("contato@envio.example.com")],
+      knownDomains: new Set(),
+      knownMailboxes: new Set(),
+      projects: [{ id: "p1", slug: "contato" }],
+      projectDomains: new Map([["p1", "envio.example.com"]]),
+    });
+    expect(plan.mailboxes.find((m) => m.domain === "envio.example.com")).toMatchObject({ kind: "project", projectId: "p1" });
+    expect(plan.mailboxes.find((m) => m.domain === "cassp.example.com")).toMatchObject({ kind: "user" });
+  });
+
+  it("alias de outra caixa e abuse@/dmarc@ próprios vão para os ignorados, não viram caixa comum", () => {
+    const plan = planAdoption({
+      domains: ["envio.example.com"],
+      mailboxes: [
+        person("postmaster@envio.example.com", ["postmaster@envio.example.com", "abuse@envio.example.com"]),
+        person("abuse@envio.example.com"),
+        person("dmarc@envio.example.com"),
+      ],
+      knownDomains: new Set(),
+      knownMailboxes: new Set(),
+      projects: [],
+    });
+    expect(plan.mailboxes.map((m) => m.id)).toEqual(["postmaster@envio.example.com"]);
+    expect(plan.skipped).toEqual(["abuse@envio.example.com", "dmarc@envio.example.com"]);
   });
 
   it("ignora e lista o que não dá para cadastrar: nome sem @, domínio que o Stalwart não tem, parte local inválida, duplicado", () => {

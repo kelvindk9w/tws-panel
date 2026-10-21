@@ -49,6 +49,10 @@ interface ApiEnvelope {
   detail?: string;
 }
 
+/** Páginas lidas por listPrincipals (500 por página): acima de PRINCIPAL_LIST_MAX a lista vem cortada. */
+const PRINCIPAL_LIST_PAGES = 40;
+export const PRINCIPAL_LIST_MAX = PRINCIPAL_LIST_PAGES * 500;
+
 export class StalwartClient {
   private readonly authHeader: string;
 
@@ -141,6 +145,32 @@ export class StalwartClient {
     return data;
   }
 
+  /**
+   * Como getDkimPublicKey, mas devolve null quando o Stalwart diz que a
+   * assinatura NÃO existe (404, ou resposta sem chave). Qualquer outra falha
+   * (401, rede, 5xx) sobe: quem lê não deve criar uma chave por causa dela.
+   */
+  async findDkimPublicKey(signatureId: string): Promise<string | null> {
+    let text: string;
+    try {
+      text = await this.call("GET", `/dkim/${encodeURIComponent(signatureId)}`);
+    } catch (err) {
+      if (err instanceof StalwartApiError && err.status === 404) return null;
+      throw err;
+    }
+    let data: unknown;
+    try {
+      data = (JSON.parse(text) as ApiEnvelope | null)?.data;
+    } catch {
+      data = undefined;
+    }
+    if (data === undefined || data === null) return null;
+    if (typeof data !== "string" || data.length < 100) {
+      throw new StalwartApiError(500, "Stalwart retornou uma chave DKIM inválida.");
+    }
+    return data;
+  }
+
   // -------------------------------------------------------------------------
   // Caixas (principals "individual")
   // -------------------------------------------------------------------------
@@ -219,7 +249,7 @@ export class StalwartClient {
   async listPrincipals(type: "domain" | "individual"): Promise<StalwartPrincipalSummary[]> {
     const limit = 500;
     const out: StalwartPrincipalSummary[] = [];
-    for (let page = 1; page <= 40; page += 1) {
+    for (let page = 1; page <= PRINCIPAL_LIST_PAGES; page += 1) {
       const data = (await this.request("GET", `/principal?type=${type}&limit=${limit}&page=${page}`)) as {
         items?: unknown[];
       } | null;

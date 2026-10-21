@@ -37,14 +37,14 @@
     "7. Grava o mail.json só se adotou algo. A rota audita 'mail.sync' (contagens) e dispara a sincronização do TLS/Caddy em segundo plano (os hosts mail.<domínio> novos ganham bloco e certificado)."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "MailService.adoptFromStalwart", "arquivo": "apps/server/src/services/mail-service.ts", "papel": "Orquestra a leitura, o plano e a gravação; um objeto só (o decorator app.mailService) para a tela e para a restauração, para não haver duas cópias do cadastro em memória." },
+    { "tipo": "servico", "nome": "MailService.adoptFromStalwart", "arquivo": "apps/server/src/services/mail-service.ts", "papel": "Orquestra a leitura, o plano e a gravação; um objeto só para a tela e para a restauração, para não haver duas cópias do cadastro em memória. Esse objeto nasce DENTRO do plugin de rotas do e-mail (routes/mail.ts), que o Fastify isola: o decorator app.mailService NÃO existe no escopo raiz (app.ts). Por isso o plugin entrega o serviço ao backup com app.backupService.setMailAdopt (como faz com notificationService.setEmailSender). Teste: tests/mail-adopt-wiring.test.ts, com o buildApp() real." },
     { "tipo": "funcao", "nome": "planAdoption", "arquivo": "apps/server/src/services/mail-adopt.ts", "papel": "Decide o que falta cadastrar, sem rede nem disco." },
     { "tipo": "cliente", "nome": "StalwartClient.listPrincipals", "arquivo": "packages/mailer/src/client.ts", "papel": "Lista domínios e caixas devolvendo só nome e endereços." },
     { "tipo": "servico", "nome": "mailAuthError / mailSyncError", "arquivo": "apps/server/src/services/mail-auth-error.ts", "papel": "401/403 viram mail_auth_failed; Stalwart fora do ar vira mail_unreachable." }
   ],
   "efeitosColaterais": [
     "Grava data/mail/mail.json (domínios e caixas novos) quando há algo a cadastrar.",
-    "Pode criar a assinatura DKIM de um domínio que o Stalwart tem sem chave (mesma operação do cadastro do domínio).",
+    "Pode criar a assinatura DKIM de um domínio que o Stalwart tem sem chave (mesma operação do cadastro do domínio), mas só quando a leitura (StalwartClient.findDkimPublicKey) diz que ela NÃO existe (404 ou sem chave); 401, 500, rede ou chave inválida deixam o domínio de fora, sem criar nada. Domínio adotado recebe dmarcAlias coerente (marcado quando dmarc@ já recebe ou quando não há postmaster@ no Stalwart; sem marca quando há postmaster@ sem dmarc@, e a rotina horária acrescenta o alias). Alias de outra caixa e abuse@/dmarc@ próprios vão para os ignorados. A lista de ignorados da resposta é cortada em 200 nomes (skippedTotal traz o total) e passa truncated=true quando o Stalwart tem 20 000 ou mais domínios/caixas (só os primeiros foram lidos). Cadastrar domínio novo dispara a sincronização do TLS, que pode reiniciar o servidor de e-mail por alguns segundos (a tela avisa).",
     "Não cria, altera nem remove nada de caixa, senha ou domínio no Stalwart; não apaga nada do cadastro; não liga webmail, projetos nem DNS."
   ],
   "chamadoPor": [
@@ -63,7 +63,7 @@
   "observacoes": [
     "Motivo (validado pelo dono, 21/10/2026): o painel lista domínios e caixas do SEU cadastro (mail.json), não do Stalwart. Numa VPS nova o backup tinha 2 domínios (cassp, envio) e 4 caixas, mas o painel só mostrava envio e postmaster@envio, porque a restauração devolve dados e configuração ao Stalwart sem avisar o cadastro.",
     "Senha desconhecida não quebra nada: Enviar teste e avisos do painel por e-mail a partir de uma caixa sem senha respondem 409 mailbox_no_password / 'não está pronto' com a instrução de usar Trocar senha; envForProject devolve {} (nunca SMTP_PASS vazio); a leitura do aviso de entrega é pulada. Ativar o e-mail de um projeto numa caixa adotada de projeto (kind 'project') pede a senha e a define.",
-    "Associação ao projeto: só pelo slug (<slug>@domínio, o endereço padrão do e-mail do projeto). O vínculo de ENVIO (data.projects, SMTP_*) NÃO é restaurado: a pessoa ativa o e-mail do projeto e escolhe a senha.",
+    "Associação ao projeto: só pelo slug (<slug>@domínio) E só no domínio do e-mail do projeto (data.projects[id].domain); contato@ de outro domínio não é caixa do projeto de slug contato. O vínculo de ENVIO (data.projects, SMTP_*) NÃO é restaurado: a pessoa ativa o e-mail do projeto e escolhe a senha.",
     "Falha ao ler a lista de projetos não impede o cadastro: as caixas entram sem dono."
   ]
 }

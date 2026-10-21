@@ -290,6 +290,11 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       send: (msg) => service.sendSystemMail(msg),
     });
   }
+  // Restaurar o e-mail cadastra no painel o que o Stalwart trouxe: o backup
+  // usa ESTE serviço (o da tela); uma segunda instância deixaria a da tela desatualizada.
+  if (app.hasDecorator("backupService")) {
+    app.backupService.setMailAdopt({ adopt: () => service.adoptFromStalwart() });
+  }
   // Webmail (Roundcube em https://mail.<domínio>/): acompanha o servidor de
   // e-mail e conta ao proxy se os blocos mail.<domínio> abrem o webmail.
   const webmail = new WebmailService(app.config, service, {

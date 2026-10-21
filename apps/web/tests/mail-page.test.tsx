@@ -296,7 +296,20 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
     expect(note).toHaveTextContent("cassp.example.com");
     expect(note).toHaveTextContent("postmaster@cassp.example.com");
     expect(note).toHaveTextContent(/Trocar senha/);
+    expect(note).toHaveTextContent(/pode reiniciar o servidor de e-mail/);
     expect(syncCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it("lista cortada: mostra quantos nomes a mais e avisa que passou de 20 000", async () => {
+    mockApi({
+      extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: ["joao"], skippedTotal: 250, truncated: true }),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    const note = await screen.findByTestId("mail-sync-result");
+    expect(note).toHaveTextContent("e mais 249");
+    expect(note).toHaveTextContent(/mais de 20 000/);
   });
 
   it("nada a cadastrar: mensagem neutra, sem texto de erro", async () => {

@@ -134,9 +134,15 @@ function SyncResult({ result }: { result: MailSyncResponse }) {
       )}
       {result.mailboxCount > 0 && <p className="text-xs text-muted-foreground">{t("mail.page.sync.passwordNote")}</p>}
       {result.domainCount > 0 && <p className="text-xs text-muted-foreground">{t("mail.page.sync.dnsNote")}</p>}
+      {result.domainCount > 0 && <p className="text-xs text-muted-foreground">{t("mail.page.sync.restartNote")}</p>}
       {result.skipped.length > 0 && (
-        <p className="break-all text-xs text-amber-400">{t("mail.page.sync.skipped", { list: result.skipped.join(", ") })}</p>
+        <p className="break-all text-xs text-amber-400">
+          {t("mail.page.sync.skipped", { list: result.skipped.join(", ") })}
+          {(result.skippedTotal ?? 0) > result.skipped.length &&
+            ` ${t("mail.page.sync.skippedMore", { count: (result.skippedTotal ?? 0) - result.skipped.length })}`}
+        </p>
       )}
+      {result.truncated && <p className="text-xs text-amber-400">{t("mail.page.sync.truncated")}</p>}
     </div>
   );
 }

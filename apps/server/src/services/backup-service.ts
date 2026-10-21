@@ -199,7 +199,7 @@ export interface BackupServiceOptions {
    * nomes; nunca senhas. Ver MailService.adoptFromStalwart.
    */
   mailAdopt?: {
-    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[] }>;
+    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; skippedTotal?: number; truncated?: boolean }>;
   };
   reconciliation?: {
     planStaged(staged: string): Promise<string[]>;
@@ -593,8 +593,10 @@ export class BackupService {
   private timer: NodeJS.Timeout | null = null;
   private archiverOk: boolean | null = null;
   private emailAvailable: boolean | null = null;
+  private mailAdopt: BackupServiceOptions["mailAdopt"];
 
   constructor(private readonly opts: BackupServiceOptions) {
+    this.mailAdopt = opts.mailAdopt;
     this.file = path.join(opts.dataDir, "backups.json");
     this.historyFile = path.join(opts.dataDir, "backups-history.json");
     this.keyFile = path.join(opts.dataDir, "backups-key");
@@ -2662,7 +2664,7 @@ export class BackupService {
       }
     }
     // O etc/ restaurado traz a senha de administração do servidor ANTIGO (config.toml); o painel usa a do mail.json desta VPS.
-    let canAdopt = stalwart.exists && this.opts.mailAdopt !== undefined;
+    let canAdopt = stalwart.exists && this.mailAdopt !== undefined;
     if (stalwart.exists && this.opts.mailAuth) {
       let result: "ok" | "repaired" | "failed" | "unreachable" | "not_running" | "erro" = "erro";
       try {
@@ -2677,7 +2679,10 @@ export class BackupService {
       } else if (result === "failed" || result === "unreachable" || result === "erro") {
         pending.push("mail-auth");
         r.warnings.push(
-          "Não foi possível confirmar que o painel autentica no servidor de e-mail depois da restauração. Se aparecer “não conseguiu autenticar”, pare e inicie o servidor em E-mail → Servidor (ou use o aviso do Dashboard).",
+          "Não foi possível confirmar que o painel autentica no servidor de e-mail depois da restauração. Se aparecer “não conseguiu autenticar”, pare e inicie o servidor em E-mail → Servidor (ou use o aviso do Dashboard)." +
+            (this.mailAdopt !== undefined
+              ? " Os domínios e caixas do e-mail ainda não foram cadastrados no painel: depois disso, abra E-mail e use Sincronizar com o servidor de e-mail."
+              : ""),
         );
       }
     }
@@ -2700,7 +2705,7 @@ export class BackupService {
   private async adoptRestoredEmail(r: BackupRecord): Promise<void> {
     this.step(r, "Conferir os domínios e caixas do e-mail no painel");
     try {
-      const { domains, mailboxes, skipped } = await this.opts.mailAdopt!.adopt();
+      const { domains, mailboxes, skipped, skippedTotal, truncated } = await this.mailAdopt!.adopt();
       if (domains.length > 0 || mailboxes.length > 0) {
         const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
         const what = [
@@ -2715,9 +2720,15 @@ export class BackupService {
         );
       }
       if (skipped.length > 0) {
-        const shown = skipped.slice(0, 10).join(", ") + (skipped.length > 10 ? ` e mais ${skipped.length - 10}` : "");
+        const total = Math.max(skippedTotal ?? 0, skipped.length);
+        const shown = skipped.slice(0, 10).join(", ") + (total > 10 ? ` e mais ${total - 10}` : "");
         r.warnings.push(
           `Do servidor de e-mail, não consegui cadastrar no painel estes nomes (nome sem endereço completo, domínio inválido ou sem chave de assinatura): ${shown}. Eles continuam no servidor, sem alteração.`,
+        );
+      }
+      if (truncated) {
+        r.warnings.push(
+          "O servidor de e-mail tem mais de 20 000 domínios ou caixas: o painel leu só os primeiros, e o resto não foi conferido nem cadastrado.",
         );
       }
     } catch (err) {
@@ -2726,6 +2737,14 @@ export class BackupService {
         `Não foi possível cadastrar no painel os domínios e caixas do e-mail (${reason}). Nada foi apagado. Quando o servidor de e-mail responder, abra E-mail e use Sincronizar com o servidor de e-mail.`,
       );
     }
+  }
+
+  /**
+   * O serviço de e-mail só existe dentro do plugin de rotas do e-mail (o
+   * Fastify isola o escopo); o plugin entrega aqui o mesmo serviço da tela.
+   */
+  setMailAdopt(adopt: BackupServiceOptions["mailAdopt"]): void {
+    this.mailAdopt = adopt;
   }
 
   /** Painel: deixa pronto para a troca na próxima subida e pede o reinício. */

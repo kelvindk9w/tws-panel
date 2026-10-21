@@ -74,3 +74,33 @@ describe("StalwartClient.listPrincipals", () => {
     await expect(client.listPrincipals("individual")).rejects.toBeInstanceOf(StalwartApiError);
   });
 });
+
+describe("StalwartClient.findDkimPublicKey", () => {
+  const KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA".padEnd(300, "A");
+  const respond = (status: number, body: string) => vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status })));
+
+  it("devolve a chave quando existe", async () => {
+    respond(200, JSON.stringify({ data: KEY }));
+    expect(await client.findDkimPublicKey("rsa-x.example.com")).toBe(KEY);
+  });
+
+  it("404 e resposta sem chave dizem que não existe (null)", async () => {
+    respond(404, `{"detail":"not found"}`);
+    expect(await client.findDkimPublicKey("rsa-x.example.com")).toBeNull();
+    respond(200, `{"error":"notFound"}`);
+    expect(await client.findDkimPublicKey("rsa-x.example.com")).toBeNull();
+    respond(200, "");
+    expect(await client.findDkimPublicKey("rsa-x.example.com")).toBeNull();
+  });
+
+  it("401, 500, rede e chave curta sobem como erro (não significam que não existe)", async () => {
+    respond(401, `{"detail":"x"}`);
+    await expect(client.findDkimPublicKey("rsa-x.example.com")).rejects.toMatchObject({ status: 401 });
+    respond(500, `{"detail":"x"}`);
+    await expect(client.findDkimPublicKey("rsa-x.example.com")).rejects.toMatchObject({ status: 500 });
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
+    await expect(client.findDkimPublicKey("rsa-x.example.com")).rejects.toBeInstanceOf(StalwartApiError);
+    respond(200, JSON.stringify({ data: "curta" }));
+    await expect(client.findDkimPublicKey("rsa-x.example.com")).rejects.toBeInstanceOf(StalwartApiError);
+  });
+});
