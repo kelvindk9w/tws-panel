@@ -1,3 +1,4 @@
+import { IpInAddressHint } from "@/components/IpInAddress";
 import { useState } from "react";
 import type { DomainCheckResponse, Project, ProjectResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
@@ -68,6 +69,7 @@ function DomainRow({
         {domain.endsWith(".sslip.io") && (
           <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{t("projects.domains.automatic")}</span>
         )}
+        <IpInAddressHint domain={domain} />
         <div className="ml-auto flex gap-2">
           {!primary && !confirming && (
             <>

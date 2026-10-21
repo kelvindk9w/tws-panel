@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import type {
+  AutoDomainSuggestion,
   DetectResponse,
   DetectResult,
   DomainCheckResponse,
@@ -18,6 +19,7 @@ import { TokenGuide } from "@/components/TokenGuide";
 import { ServerFolderBrowser } from "@/components/ServerFolderBrowser";
 import { GithubRepoPicker } from "@/components/GithubRepoPicker";
 import { DnsGuide } from "@/components/DnsGuide";
+import { addressHasVpsIp, IpAddressWarning } from "@/components/IpInAddress";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -116,10 +118,13 @@ export function NewProjectPage() {
   const [proxyService, setProxyService] = useState("");
   const [proxyPort, setProxyPort] = useState("");
   const [dnsCheck, setDnsCheck] = useState<DomainCheckResponse | null>(null);
-  // Endereço automático (<projeto>.<ip>.sslip.io) ou domínio próprio
+  // Endereço automático (sob o domínio de aplicações, se houver; senão
+  // <projeto>.<ip>.sslip.io), endereço de teste (sslip.io) ou domínio próprio
   const [autoDomain, setAutoDomain] = useState<string | null>(null);
   const [publicIp, setPublicIp] = useState<string | null>(null);
-  const [domainMode, setDomainMode] = useState<"auto" | "own">("auto");
+  const [appsBase, setAppsBase] = useState<string | null>(null);
+  const [testAddress, setTestAddress] = useState<string | null>(null);
+  const [domainMode, setDomainMode] = useState<"auto" | "test" | "own">("auto");
   const [ownDomain, setOwnDomain] = useState("");
 
   function defaultDomainFor(projectName: string): string {
@@ -130,6 +135,13 @@ export function NewProjectPage() {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
     return slug ? `${slug}.localhost` : "";
+  }
+
+  /** Domínio de aplicações: guarda a base e o endereço de teste (sslip.io) que a resposta traz. */
+  function applySuggestion(sug: AutoDomainSuggestion | null) {
+    const apps = sug?.kind === "apps";
+    setAppsBase(apps ? (sug.appsBase ?? null) : null);
+    setTestAddress(apps ? (sug.testAddress ?? null) : null);
   }
 
   /**
@@ -145,12 +157,11 @@ export function NewProjectPage() {
       let dom = domain;
       if (!dom) {
         // endereço automático: funciona na hora, com HTTPS, sem configurar DNS
-        const sug = await apiFetch<{ auto: string; publicIp: string | null }>(
-          `/api/domains/suggest?name=${encodeURIComponent(name)}`,
-        ).catch(() => null);
+        const sug = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`).catch(() => null);
         dom = sug?.auto ?? defaultDomainFor(name);
         setAutoDomain(dom);
         setPublicIp(sug?.publicIp ?? null);
+        applySuggestion(sug);
       }
       const source = sourceText;
       if (id === null) {
@@ -255,7 +266,37 @@ export function NewProjectPage() {
   }
 
   const hasSource = sourceText.trim() !== "";
-  const chosenDomain = domainMode === "auto" ? (autoDomain ?? domain) : ownDomain.trim().toLowerCase();
+  const autoAddress = autoDomain ?? domain;
+  const chosenDomain =
+    domainMode === "auto" ? autoAddress : domainMode === "test" ? (testAddress ?? "") : ownDomain.trim().toLowerCase();
+  // O endereço mostrado agora (automático ou de teste) com o IP da VPS no nome
+  const shownAddress = domainMode === "test" ? (testAddress ?? "") : autoAddress;
+  const showIpWarning = domainMode !== "own" && addressHasVpsIp(shownAddress);
+
+  // O Domínio de aplicações pode ter sido configurado em outra aba enquanto o
+  // assistente está aberto: ao voltar para esta aba, o endereço automático
+  // passa a ser o novo (a escolha da pessoa — teste ou domínio próprio — não muda).
+  const onSslipAuto = step === 2 && projectId !== null && appsBase === null && addressHasVpsIp(autoAddress);
+  useEffect(() => {
+    if (!onSslipAuto) return;
+    let cancelled = false;
+    const refresh = () => {
+      void apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`)
+        .then((sug) => {
+          if (cancelled || sug.kind !== "apps") return;
+          setAutoDomain(sug.auto);
+          applySuggestion(sug);
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener("focus", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refresh);
+    };
+    // applySuggestion só usa setters estáveis
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onSslipAuto, name]);
   const canNextStep0 =
     name.trim() !== "" && hasSource && (!privateRepo || ingestMode !== "git" || token.trim() !== "" || projectId !== null);
 
@@ -579,7 +620,11 @@ export function NewProjectPage() {
             <CardDescription>{t("projects.new.domain.description")}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div role="radiogroup" aria-label={t("projects.new.domain.groupAria")} className="grid gap-2 sm:grid-cols-2">
+            <div
+              role="radiogroup"
+              aria-label={t("projects.new.domain.groupAria")}
+              className={cn("grid gap-2", testAddress ? "sm:grid-cols-3" : "sm:grid-cols-2")}
+            >
               <button
                 type="button"
                 role="radio"
@@ -593,9 +638,25 @@ export function NewProjectPage() {
               >
                 <span className="font-medium">{t("projects.new.domain.autoTitle")}</span>
                 <span className="text-xs text-muted-foreground">
-                  {t("projects.new.domain.autoHint")}
+                  {appsBase ? t("projects.new.domain.autoHintApps", { base: appsBase }) : t("projects.new.domain.autoHint")}
                 </span>
               </button>
+              {testAddress && (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={domainMode === "test"}
+                  aria-label={t("projects.new.domain.testTitle")}
+                  onClick={() => setDomainMode("test")}
+                  className={cn(
+                    "flex flex-col gap-1 rounded-lg border p-3 text-left text-sm",
+                    domainMode === "test" ? "border-primary bg-primary/10" : "hover:border-foreground/30",
+                  )}
+                >
+                  <span className="font-medium">{t("projects.new.domain.testTitle")}</span>
+                  <span className="text-xs text-muted-foreground">{t("projects.new.domain.testHint")}</span>
+                </button>
+              )}
               <button
                 type="button"
                 role="radio"
@@ -614,12 +675,14 @@ export function NewProjectPage() {
               </button>
             </div>
 
-            {domainMode === "auto" && (
+            {domainMode !== "own" && (
               <p data-testid="auto-domain" className="rounded-md border bg-secondary/30 px-3 py-2 font-mono text-sm">
-                {(autoDomain ?? domain).endsWith(".localhost") ? "http://" : "https://"}
-                {autoDomain ?? domain}
+                {shownAddress.endsWith(".localhost") ? "http://" : "https://"}
+                {shownAddress}
               </p>
             )}
+
+            {showIpWarning && <IpAddressWarning onUseOwn={() => setDomainMode("own")} />}
 
             {domainMode === "own" && (
               <div className="flex flex-col gap-3">

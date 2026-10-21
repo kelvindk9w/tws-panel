@@ -76,6 +76,12 @@ describe("ProjectDetailPage — acesso ao site", () => {
     expect(botao).toHaveAttribute("target", "_blank");
   });
 
+  it("endereço sslip.io no cabeçalho leva o indicador discreto \"contém o IP da VPS\"", async () => {
+    abrir();
+    await screen.findByRole("link", { name: /Abrir site/ });
+    expect(screen.getAllByTestId("ip-in-address")[0]).toHaveTextContent("contém o IP da VPS");
+  });
+
   it("o card diz HTTPS automático (não \"HTTP padrão\")", async () => {
     abrir();
     expect(await screen.findByText(/HTTPS automático/)).toBeInTheDocument();

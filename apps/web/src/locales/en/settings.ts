@@ -7,6 +7,7 @@ export default {
   "section.profile": "Profile",
   "section.security": "Security",
   "section.panelDomain": "Panel domain",
+  "section.appsDomain": "Apps domain",
   "section.appearance": "Appearance",
   "section.notifications": "Notifications",
   "section.backups": "Backups",
