@@ -154,7 +154,7 @@ const ONBOARDING_STEPS: Key[] = [
   "mail.page.onboarding.step4",
 ];
 
-const AUTH_ERROR_CODES = ["mail_auth_failed", "mail_auth_repair_failed"];
+const AUTH_ERROR_CODES = ["mail_auth_failed", "mail_auth_repair_failed", "mail_auth_repair_incomplete"];
 
 function isAuthError(err: unknown): boolean {
   return err instanceof ApiRequestError && AUTH_ERROR_CODES.includes(err.code);

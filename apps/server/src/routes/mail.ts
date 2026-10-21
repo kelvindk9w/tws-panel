@@ -520,7 +520,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       } catch (err) {
         // Senha de administração que o reparo automático não resolveu: o Dashboard passa a oferecer Reparar agora.
         const code = (err as Partial<HttpError>).code;
-        if (code === "mail_auth_repair_failed" || code === "mail_auth_still_refused" || mailAuthError(err)) {
+        if (code === "mail_auth_repair_failed" || code === "mail_auth_repair_incomplete" || code === "mail_auth_still_refused" || mailAuthError(err)) {
           await app.restoreReconciliation?.markPending(["mail-auth"], "email").catch((e: unknown) => {
             app.log.warn(`Reconciliação: não deu para guardar a pendência de autenticação (${e instanceof Error ? e.message : String(e)}).`);
           });

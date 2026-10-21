@@ -373,6 +373,18 @@ describe("MailService.adoptFromStalwart", () => {
     expect(principalCalls).toBeLessThanOrEqual(3);
   });
 
+  it("o reparo erra antes de terminar (ex.: falha ao reiniciar): mensagem diz que não terminou, com motivo sem segredo", async () => {
+    liveSecret = "senha-antiga-do-servidor";
+    vi.spyOn(MailService.prototype, "repairAdminAuth").mockRejectedValue(new Error(`falha ao reiniciar paas-stalwart: docker recusou ${ADMIN} agora`));
+    const err = (await service().adoptFromStalwart().catch((e: unknown) => e)) as Error & { code: string; statusCode: number };
+    expect(err).toMatchObject({ statusCode: 409, code: "mail_auth_repair_incomplete" });
+    expect(err.message).toMatch(/não terminou/);
+    expect(err.message).toMatch(/falha ao reiniciar paas-stalwart/);
+    expect(err.message).toMatch(/Próximo passo/);
+    expect(err.message).not.toContain(ADMIN);
+    expect(err.message).not.toMatch(/continua recusando/);
+  });
+
   it("servidor sem resposta durante o reparo: erro de servidor inacessível, não de senha", async () => {
     liveSecret = "senha-antiga-do-servidor";
     vi.spyOn(MailService.prototype, "repairAdminAuth").mockResolvedValue("unreachable");

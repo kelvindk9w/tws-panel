@@ -6,7 +6,7 @@
  */
 import { StalwartApiError } from "@paas/mailer";
 import { describe, expect, it } from "vitest";
-import { MAIL_AUTH_FAILED_MESSAGE, mailAuthError, mailAuthRepairFailedError } from "../src/services/mail-auth-error.js";
+import { MAIL_AUTH_FAILED_MESSAGE, mailAuthError, mailAuthRepairFailedError, mailAuthRepairIncompleteError } from "../src/services/mail-auth-error.js";
 
 describe("mailAuthError", () => {
   it("401 e 403 do Stalwart viram 409 mail_auth_failed com a mensagem única", () => {
@@ -40,5 +40,19 @@ describe("mailAuthRepairFailedError", () => {
   it("servidor sem resposta e servidor parado", () => {
     expect(mailAuthRepairFailedError("unreachable")).toMatchObject({ statusCode: 502, code: "mail_unreachable" });
     expect(mailAuthRepairFailedError("not_running")).toMatchObject({ statusCode: 409, code: "mail_server_stopped" });
+  });
+});
+
+describe("mailAuthRepairIncompleteError", () => {
+  it("tira o segredo, corta o motivo e mantém o próximo passo", () => {
+    const e = mailAuthRepairIncompleteError(new Error("x ".repeat(200) + "SEGREDO"), "SEGREDO");
+    expect(e).toMatchObject({ statusCode: 409, code: "mail_auth_repair_incomplete" });
+    expect(e.message).not.toContain("SEGREDO");
+    expect(e.message.length).toBeLessThan(900);
+    expect(e.message).toMatch(/Próximo passo/);
+  });
+  it("erro que não é Error, ou sem segredo guardado", () => {
+    expect(mailAuthRepairIncompleteError("texto", null).message).toMatch(/\(texto\)/);
+    expect(mailAuthRepairIncompleteError(undefined, "").message).toMatch(/não terminou/);
   });
 });

@@ -68,7 +68,7 @@ import { httpError } from "./deploy-service.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { planAdoption } from "./mail-adopt.js";
 import type { HttpError } from "./http-error.js";
-import { mailAuthRepairFailedError } from "./mail-auth-error.js";
+import { mailAuthRepairFailedError, mailAuthRepairIncompleteError } from "./mail-auth-error.js";
 
 /** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
 const PANEL_CONTAINER = "tws-panel";
@@ -1208,8 +1208,9 @@ export class MailService {
     try {
       repair = await this.repairAdminAuth();
     } catch (err) {
-      this.log(`Sincronizar: o reparo da senha de administração falhou (${err instanceof Error ? err.message : String(err)}).`);
-      repair = "failed";
+      // O reparo parou no meio: não é "reiniciou e continua recusando".
+      this.log(`Sincronizar: o reparo da senha de administração não terminou (${err instanceof Error ? err.message.split(this.data.adminSecret ?? "\0").join("***") : String(err)}).`);
+      throw mailAuthRepairIncompleteError(err, this.data.adminSecret ?? null);
     }
     if (repair === "repaired" || repair === "ok") {
       try {

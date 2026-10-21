@@ -88,6 +88,16 @@ describe("POST /api/mail/sync", () => {
     expect(markPending).toHaveBeenCalledWith(["mail-auth"], "email");
   });
 
+  it("reparo que não terminou também abre a pendência", async () => {
+    const { mailAuthRepairIncompleteError } = await import("../src/services/mail-auth-error.js");
+    spies.push(vi.spyOn(MailService.prototype, "adoptFromStalwart").mockRejectedValue(mailAuthRepairIncompleteError(new Error("docker fora"), null)) as unknown as MockInstance);
+    const markPending = vi.fn(async () => undefined);
+    (app as unknown as Record<string, unknown>).restoreReconciliation = { markPending };
+    const res = await sync();
+    expect(res.json()).toMatchObject({ error: "mail_auth_repair_incomplete" });
+    expect(markPending).toHaveBeenCalledWith(["mail-auth"], "email");
+  });
+
   it("401 que sobrou também abre a pendência; falha ao gravá-la não muda a resposta", async () => {
     spies.push(vi.spyOn(MailService.prototype, "adoptFromStalwart").mockRejectedValue(new StalwartApiError(403, "x")) as unknown as MockInstance);
     const markPending = vi.fn(async () => {
