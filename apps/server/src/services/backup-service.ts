@@ -1006,10 +1006,11 @@ export class BackupService {
   }
 
   private foreignCache: { key: string; at: number; held: boolean } | null = null;
+  private foreignInflight: Promise<true | "unknown" | false> | null = null;
 
   /**
-   * Consulta do roteiro (só leitura): prazo curto, resultado em cache por 60 s (a chave muda com o armazenamento, os projetos ou o que
-   * já foi enviado) e, se não deu para conferir, "unknown" (não cacheado, para "Conferir de novo" tentar outra vez).
+   * Consulta do roteiro (só leitura): prazo curto, resultado "há cópias alheias" em cache por 60 s (a chave muda com o armazenamento, os projetos ou o que
+   * já foi enviado; "livre" nunca é cacheado) e, se não deu para conferir, "unknown" (não cacheado, para "Conferir de novo" tentar outra vez).
    */
   private async foreignBackupsState(): Promise<true | "unknown" | false> {
     const projectCount = (await this.opts.projects.list()).length;
@@ -1017,13 +1018,27 @@ export class BackupService {
     const key = JSON.stringify([d.connectedAt, d.testedAt, d.endpoint, d.bucket, projectCount, this.config.panelRestoredAt, this.target("panel").lastRemoteSentAt, this.target("email").lastRemoteSentAt]);
     const c = this.foreignCache;
     if (c && c.key === key && this.now() - c.at < 60_000) return c.held;
-    try {
-      const held = (await this.panelFreshOverForeign(projectCount, true)) !== null;
-      this.foreignCache = { key, at: this.now(), held };
-      return held;
-    } catch {
-      return "unknown";
-    }
+    // Uma ida ao armazenamento por vez: consultas simultâneas dividem o resultado e, com uma travada (o pedido segue aberto
+    // até o timeout do S3Storage), as recargas não empilham outras; elas recebem o "unknown" já decidido.
+    if (this.foreignInflight) return this.foreignInflight;
+    const work = this.panelFreshOverForeign(projectCount, true).then((why) => why !== null);
+    const result = this.withForeignDeadline(work).then(
+      (held): true | false => {
+        // Só o "há cópias alheias" (lado seguro) fica em cache: "livre" consulta sempre, porque o conteúdo do bucket muda por fora.
+        if (held) this.foreignCache = { key, at: this.now(), held };
+        else this.foreignCache = null;
+        return held;
+      },
+      (): "unknown" => "unknown",
+    );
+    this.foreignInflight = result;
+    void work.then(
+      () => undefined,
+      () => undefined,
+    ).then(() => {
+      if (this.foreignInflight === result) this.foreignInflight = null;
+    });
+    return result;
   }
 
   async projectView(projectId: string): Promise<ProjectBackupView> {
@@ -1444,8 +1459,7 @@ export class BackupService {
     if (this.now() - Date.parse(d.connectedAt) > RESTORE_HOLD_MS) return null;
     const prefix = `${BACKUP_ROOT_FOLDER}/_painel/`;
     try {
-      const listing = storage.list(prefix);
-      const found = (await (readOnly ? this.withForeignDeadline(listing) : listing)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
+      const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
       if (!readOnly) delete t.heldFailures;
       if (!found) return null;
       return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto, de você restaurar o painel ou de fazer um backup à mão com o armazenamento já conectado (cópia só na VPS não conta). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";

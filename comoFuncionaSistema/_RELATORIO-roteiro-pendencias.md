@@ -30,9 +30,15 @@ armazenamento conectado e nenhum backup externo conferido.
 
 ## Revisão (21/10/2026)
 - **Consulta ao armazenamento limitada**: a listagem do roteiro tem prazo de 5 s (só ela; as operações
-  de backup mantêm o timeout normal) e o resultado fica em cache por 60 s. A chave do cache muda quando
-  o armazenamento é reconectado ou testado de novo, quando um projeto é cadastrado ou quando o painel
-  é restaurado ou envia um backup externo.
+  de backup mantêm o timeout normal). Só o resultado "há cópias de outro painel" (lado seguro) fica em
+  cache por 60 s; o "livre" consulta sempre, porque o conteúdo do bucket muda por fora (cenário: bucket
+  vazio conectado e, depois, cópias do painel antigo copiadas à mão para o mesmo bucket: "Conferir de novo"
+  já enxerga). A chave do cache muda quando o armazenamento é reconectado ou testado de novo, quando entra
+  projeto ou quando o painel é restaurado ou envia backup externo.
+- **Uma consulta em voo por vez**: consultas simultâneas dividem o mesmo pedido. Se ele trava, o pedido
+  segue aberto até o timeout do `S3Storage` (30 min), mas as recargas não abrem outros: recebem "não deu
+  para conferir" na hora até o pedido terminar. Não cancelei o pedido (o `S3Storage` não aceita
+  cancelamento por chamada; mudar isso mexeria nas operações reais de backup).
 - **Falha nunca vira convite ao backup**: se a listagem falha ou estoura o prazo, `foreignBackupsHeld`
   vira `"unknown"` (código `backups-storage-unknown`). A interface mostra, em âmbar, "Não foi possível
   conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do

@@ -397,6 +397,59 @@ describe("situação", () => {
       expect(Date.now() - t0).toBeLessThan(2000);
     });
 
+    it("bucket vazio, depois as cópias do painel antigo entram no MESMO bucket: 'Conferir de novo' já vê (o 'livre' não fica em cache)", async () => {
+      projects = [];
+      await connect();
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      storage.objects.set(OTHER, Buffer.from("copiado à mão"));
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: true });
+    });
+
+    it("só o 'há cópias alheias' (lado seguro) fica em cache; o 'livre' consulta sempre", async () => {
+      projects = [];
+      await connect();
+      const list = storage.list.bind(storage);
+      let calls = 0;
+      storage.list = async (...args: Parameters<typeof list>) => {
+        calls++;
+        return list(...args);
+      };
+      await service.facts();
+      await service.facts();
+      expect(calls).toBe(2);
+      storage.objects.set(OTHER, Buffer.from("x"));
+      await service.facts();
+      await service.facts();
+      expect(calls).toBe(3);
+    });
+
+    it("consultas simultâneas dividem uma só ida ao armazenamento; com a consulta travada, não abre outra", async () => {
+      projects = [];
+      service = build({ foreignCheckTimeoutMs: 30 });
+      await connect();
+      let calls = 0;
+      let release!: () => void;
+      let hang = true;
+      storage.list = () => {
+        calls++;
+        if (!hang) return Promise.resolve([]);
+        return new Promise((resolve) => {
+          release = () => resolve([]);
+        });
+      };
+      const all = await Promise.all([service.facts(), service.facts(), service.facts()]);
+      expect(all.every((f) => f.foreignBackupsHeld === "unknown")).toBe(true);
+      expect(calls).toBe(1);
+      // ainda travada: as recargas seguintes não empilham pedidos
+      expect(await service.facts()).toMatchObject({ foreignBackupsHeld: "unknown" });
+      expect(calls).toBe(1);
+      hang = false;
+      release();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await service.facts()).not.toHaveProperty("foreignBackupsHeld");
+      expect(calls).toBe(2);
+    });
+
     it("resultado em cache por ~60 s; muda o armazenamento, o projeto ou a hora: consulta de novo", async () => {
       projects = [];
       await connect();
