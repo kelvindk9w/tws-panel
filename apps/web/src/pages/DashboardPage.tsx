@@ -10,6 +10,7 @@ import type {
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n, type Key } from "@/i18n";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
+import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { ReconciliationNotice } from "@/components/restore/ReconciliationNotice";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +53,7 @@ export const TYPE_LABELS: Record<ProjectType, Key> = {
 function ProjectCard({ item }: { item: ProjectResponse }) {
   const { t } = useI18n();
   const { project, status, containers, url } = item;
+  const provisional = useProvisionalHere(project.domain);
   return (
     <Card className="hover:bg-accent/30">
       <CardHeader className="pb-3">
@@ -65,16 +67,21 @@ function ProjectCard({ item }: { item: ProjectResponse }) {
         </div>
         <CardDescription className="flex items-center gap-2">
           <Globe className="h-3.5 w-3.5" />
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 hover:underline"
-          >
-            {project.domain}
-            <ExternalLink className="h-3 w-3" />
-          </a>
+          {provisional ? (
+            <span>{project.domain}</span>
+          ) : (
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 hover:underline"
+            >
+              {project.domain}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
         </CardDescription>
+        {provisional && <ProvisionalAddressNotice projectId={project.id} compact />}
       </CardHeader>
       <CardContent className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <Badge variant="outline">

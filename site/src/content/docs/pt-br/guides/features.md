@@ -15,6 +15,7 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
 - [Portas dos containers](#portas)
 - [HTTPS e certificados](#certificados)
 - [Domínio do painel](#dominio-do-painel)
+- [Domínio de aplicações](#dominio-de-aplicacoes)
 - [E-mail](#email)
 - [Notificações](#notificacoes)
 - [Backups](#backups)
@@ -45,8 +46,12 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
 
 **Domínio.**
 
-- Endereço automático com HTTPS na hora (`projeto.203-0-113-10.sslip.io`) ou o seu domínio, com o
-  registro de DNS exato a criar.
+- Endereço automático com HTTPS na hora ou o seu domínio, com o registro de DNS exato a criar. Sem
+  domínio de aplicações, o endereço automático é `projeto.203-0-113-10.sslip.io`, que tem o IP da VPS
+  no nome: a tela avisa em âmbar que serve para testar. Com o
+  [domínio de aplicações](#dominio-de-aplicacoes), é `projeto-k3x9q.apps.example.com`.
+- Endereços de sslip.io já criados levam o indicador discreto "contém o IP da VPS" (página do
+  projeto e lista de domínios).
 - **Vários domínios** no mesmo projeto: conectar, tornar principal e remover, valendo na hora.
 - Antes do primeiro deploy, o domínio responde "site em configuração". Projeto parado mostra uma
   página neutra de "temporariamente indisponível", em vez do erro cru do servidor. Essas duas
@@ -119,6 +124,29 @@ Opcional, já no endereço novo: **Desativar o acesso pelo IP**. Só é liberado
 pelo domínio novo, o certificado válido e o domínio digitado para confirmar. Para voltar atrás por
 SSH: `cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh` (veja
 [Recuperar o acesso](recover-access.md)).
+
+<a id="dominio-de-aplicacoes"></a>
+
+## Domínio de aplicações
+
+Em **Configurações → Domínio de aplicações** você define um subdomínio seu (`apps.example.com`) para
+os endereços automáticos dos projetos, sem o IP da VPS no nome:
+
+1. a tela mostra **um registro curinga** a criar (`*.apps.example.com`, tipo A para o IP da VPS, com
+   nuvem cinza no Cloudflare; AAAA só se o painel souber o IPv6 da VPS);
+2. **Verificar DNS e salvar** consulta um nome aleatório sob a base (`paas-check-…`) no DNS público e
+   **só salva** se ele chegar a esta VPS (proxy da Cloudflare ligado conta como "não aponta");
+3. com a base verificada, o passo 3 do **Novo Projeto** gera `<projeto>-<sufixo>.apps.example.com`,
+   e o sslip.io vira o **Endereço de teste**, com aviso.
+
+Cada projeto tem a sua rota e o seu certificado: não há certificado curinga nem emissão sob demanda,
+e um nome aleatório sob a base, sem projeto, não tem certificado. A base não pode ser o domínio do
+painel, um domínio de projeto ou de e-mail, um IP, um nome de rede interna (`.local`, `.internal`…)
+nem um serviço como sslip.io. Só existe um domínio de aplicações por painel. Trocar ou remover a base
+não muda os projetos que já usam um endereço sob ela. O arquivo volta com o backup do painel, mas,
+em uma VPS com outro IP, a base volta como **A conferir** até o registro ser atualizado (veja
+[Restaurar em outro servidor](restore-new-server.md#dominio-de-aplicacoes)). Passo a passo e limites
+do Let's Encrypt: [Guia, Parte 2](../getting-started/complete-guide.md#dominio-de-aplicacoes).
 
 <a id="email"></a>
 

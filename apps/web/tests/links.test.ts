@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  appsDomainGuideUrl,
   bugReportUrl,
   discussionsUrl,
   docsUrl,
@@ -38,6 +39,11 @@ describe("endereços por idioma", () => {
     expect(helpPageUrl("en")).toBe(`${SITE_URL}/en/guides/help/`);
     expect(restoreGuideUrl("pt-BR")).toBe(`${SITE_URL}/pt-br/guides/restore-new-server/`);
     expect(restoreGuideUrl("en")).toBe(`${SITE_URL}/en/guides/restore-new-server/`);
+  });
+
+  it("guia do domínio de aplicações segue o idioma e aponta para a âncora da Parte 2", () => {
+    expect(appsDomainGuideUrl("pt-BR")).toBe(`${SITE_URL}/pt-br/getting-started/complete-guide/#dominio-de-aplicacoes`);
+    expect(appsDomainGuideUrl("en")).toBe(`${SITE_URL}/en/getting-started/complete-guide/#dominio-de-aplicacoes`);
   });
 
   it("Discussions e formulário de funcionalidade apontam para o repositório", () => {

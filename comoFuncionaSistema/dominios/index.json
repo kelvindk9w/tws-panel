@@ -9,6 +9,7 @@
     "Se o domínio é 'localhost' ou termina em '.localhost', responde imediatamente devLocal:true, ok:true, resolvedIps fixo ['127.0.0.1','::1'] — sem nenhuma consulta de DNS (modo de desenvolvimento).",
     "Caso contrário, resolve o domínio via dns.resolve4 (somente registros A/IPv4); qualquer erro de resolução (ex.: NXDOMAIN) é tratado como lista vazia, nunca propaga como erro HTTP.",
     "ok = true quando algum IP resolvido está entre os IPs desta máquina; a mensagem varia entre 'pronto para emissão de certificado', 'não resolveu nenhum registro A' (lista vazia) e 'não aponta para esta máquina' (resolveu, mas para outro IP).",
+    "O endereço automático do projeto vem de GET /api/domains/suggest. Sem domínio de aplicações verificado, é <projeto>.<ip-com-hífens>.sslip.io (ou .localhost em desenvolvimento), com o IP da VPS no nome: o passo 3 mostra um aviso âmbar. Com o domínio de aplicações (Configurações → Domínio de aplicações, configuracoes/dominio-de-aplicacoes.json), a resposta traz também kind 'apps', appsBase e testAddress, e o endereço é <projeto>-<sufixo>.<base>.",
     "O resultado é só informativo: o assistente de projeto (NewProjectPage.tsx) mostra a mensagem, mas permite salvar o domínio mesmo com ok:false. A emissão de certificado de fato acontece depois, de forma assíncrona, quando o CaddyManager (packages/deploy/src/caddy.ts) aplica o Caddyfile do projeto — esse endpoint não dispara nem consulta esse processo."
   ],
   "arquivosFonte": {

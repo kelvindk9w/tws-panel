@@ -164,6 +164,7 @@ export * from "./certificates";
 export * from "./webmail";
 export * from "./mail-envios";
 export * from "./panel-domain";
+export * from "./apps-domain";
 export * from "./notifications";
 export * from "./backups";
 export * from "./timezone";

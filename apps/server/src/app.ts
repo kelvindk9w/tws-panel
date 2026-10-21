@@ -44,6 +44,7 @@ import { ManualCertificateStore } from "./services/certificate-store.js";
 import monitoringRoutes from "./routes/monitoring.js";
 import terminalRoutes from "./routes/terminal.js";
 import panelDomainRoutes, { buildPanelDomainService } from "./routes/panel-domain.js";
+import appsDomainRoutes, { buildAppsDomainService } from "./routes/apps-domain.js";
 import notificationsRoutes from "./routes/notifications.js";
 import { NotificationService, type NotificationEvent } from "./services/notification-service.js";
 import {
@@ -290,6 +291,11 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   const panelDomainService = buildPanelDomainService(app);
   await panelDomainService.init();
   app.decorate("panelDomainService", panelDomainService);
+  // Domínio de aplicações (Configurações → Domínio de aplicações): base própria
+  // para os endereços automáticos dos projetos, em data/apps-domain.json.
+  const appsDomainService = buildAppsDomainService(app);
+  await appsDomainService.init();
+  app.decorate("appsDomainService", appsDomainService);
   // Acesso por HTTPS (PAAS_PANEL_DOMAIN): o Caddy central sobe JUNTO com o
   // painel, já com o site dele — senão só subiria no primeiro deploy.
   app.deployService.startPanelRoute({
@@ -405,6 +411,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     }),
   });
   await app.register(panelDomainRoutes);
+  await app.register(appsDomainRoutes);
   await app.register(notificationsRoutes);
   await app.register(backupsRoutes);
   await app.register(restoreReconciliationRoutes);

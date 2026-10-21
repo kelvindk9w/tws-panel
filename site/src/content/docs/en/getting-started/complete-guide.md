@@ -126,6 +126,7 @@ On the Dashboard, the **Two-factor authentication** step shows as done.
 Replaces the address `https://203-0-113-10.sslip.io` with one of your own, such as
 `panel.example.com`. The automatic address gives away the VPS IP in the name; a domain of your own
 is more discreet and easier to remember.
+For project addresses, see also the [Apps domain](#dominio-de-aplicacoes), at the end of this step.
 
 > [!NOTE]
 > Installed with SSH tunnel access? Then the panel has no address on the internet, this step
@@ -185,6 +186,62 @@ the new domain** and the certificate valid.
   Wait for the script's final message ("pronto", Portuguese for "done"), open `https://203-0-113-10.sslip.io` (with your IP), and
   sign in again. Details in
   [The panel domain stopped opening](../guides/recover-access.md#o-domínio-do-painel-parou-de-abrir).
+
+<a id="dominio-de-aplicacoes"></a>
+
+### Apps domain (optional)
+
+By default, each new project gets an automatic **test** address with the VPS IP in the name
+(`minha-app.203-0-113-10.sslip.io`). That address shows up in screenshots and shared links, stops
+opening if the VPS IP changes, and depends on a third-party service (sslip.io). It is not a serious
+security flaw: anyone who hosts sites can always have the IP found through DNS. The problem is
+privacy, appearance, and stability.
+
+With the **apps domain**, the panel generates addresses under a subdomain of your own, with no IP in
+the name: `minha-app-k3x9q.apps.example.com`.
+
+**What to do:**
+
+1. **Pick a subdomain just for apps**, such as `apps.example.com`. Do not use the main domain, the
+   panel domain, or a project or email domain.
+2. Open **Settings → Apps domain** and type `apps.example.com`. The screen shows the record to
+   create, with a copy button on each field.
+3. **Create a single wildcard DNS record.** On Cloudflare: DNS → Records → Add record.
+   - Type: **A**.
+   - Name: `*.apps` (for `*.apps.example.com`). If your provider asks for the full name, type
+     `*.apps.example.com`.
+   - IPv4 address: the VPS IP.
+   - Proxy: **gray cloud ("DNS only")**. With the orange cloud, each project's certificate is not issued.
+   - The screen only shows an **AAAA** record if the panel knows the VPS public IPv6
+     (`PAAS_PUBLIC_IPV6`). Otherwise, do not create an AAAA.
+4. Click **Verify DNS and save**. The panel queries a random name under the base (`paas-check-…`)
+   and **only saves** if it reaches this VPS. A record only for `apps.example.com` does not pass:
+   the wildcard is what counts. The result is a server message, still in Portuguese. If it says the
+   name does not point there ("não aponta"), wait a few minutes and try again.
+
+**What to check:** the screen shows the domain with the **Verified** badge and an example address.
+
+**How to use it:** in **New Project**, step 3, the **Automatic address** becomes
+`<project>-<suffix>.apps.example.com` (a random 5-character suffix), with HTTPS and no warning.
+sslip.io stays available as the **Test address**, with the notice that it contains the VPS IP.
+Projects that already exist with sslip.io do not change.
+
+**Good to know:**
+
+- Each project has its own route and its own certificate. The panel does **not** issue a wildcard
+  certificate or allow on-demand issuance: any name under `apps.example.com` without a project
+  answers only the "domain not configured" page, over HTTP, and has no certificate.
+- **Let's Encrypt limits you to 50 new certificates per week per registered domain** (here,
+  `example.com`, adding up all subdomains). That is plenty for personal use; creating and deleting
+  many projects within a few days can use it up. When issuing fails, the **Certificates** page shows
+  the cause and has the **Try issuing now** button
+  (see [Let's Encrypt limit](../guides/troubleshooting.md#limite-do-lets-encrypt)).
+- Every certificate goes into a public list (Certificate Transparency): each project's address
+  (project name and suffix) is visible there. The suffix avoids collisions; it does not hide the address.
+- **Changing** the base does not change projects that already use the old one. **Removing** it does
+  not either: they keep opening, and new projects go back to the test address.
+- If the check fails, see
+  [The apps domain check fails](../guides/troubleshooting.md#verificacao-do-dominio-de-aplicacoes).
 
 <a id="etapa-3"></a>
 
@@ -527,8 +584,13 @@ In the menu, click **New project**. There are three steps:
    with a build, `Dockerfile`, or `docker-compose`. A compose file is adopted as is, without being
    rewritten, and the screen shows which service and port HTTP arrives on.
 3. **Domain and creation**.
-   - **Automatic address**: works right away, with HTTPS (e.g.,
-     `minha-app.203-0-113-10.sslip.io`).
+   - **Automatic address**: works right away, with HTTPS. Without an apps domain, it is
+     `minha-app.203-0-113-10.sslip.io`, and the screen shows an amber notice: "This address contains
+     the VPS IP. Use it to test; to publish, use your own domain or subdomain." (it is not an error).
+     With the [apps domain](#dominio-de-aplicacoes), it is `minha-app-k3x9q.apps.example.com`, with no
+     IP and no notice.
+   - **Test address**: only appears once the apps domain is set up. It is the sslip.io address, with
+     the notice. Use it to test.
    - **My domain or subdomain**: type the domain and create, in your
      DNS, the record the screen shows (type A pointing to the VPS IP, gray cloud on Cloudflare). You
      can create the project before the DNS propagates.
@@ -705,6 +767,7 @@ The emergency commands are in
 - [ ] All 8 security phases applied and confirmed, and the VPS rebooted afterward
 - [ ] Two-factor authentication on and recovery codes stored
 - [ ] Panel domain with a valid certificate (and, if you want, access by IP turned off, with the way-back command written down)
+- [ ] (Optional) Apps domain verified, so projects do not show the VPS IP in their address
 - [ ] VPS time zone checked (backups at 03:00 your time)
 - [ ] Email: port 25 unblocked, DNS checklist 6/6 OK, PTR green or blue, and certificate valid
 - [ ] Mailbox created, test email delivered, and webmail opening

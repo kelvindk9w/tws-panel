@@ -83,13 +83,74 @@ installs and renews the certificate on its own.
    After the certificate is issued, use **Try issuing now** on the **Certificates** page if it is still pending;
 5. Check that UFW/the provider's firewall allows 80 and 443.
 
-### `.localhost` domain does not open
+<a id="verificacao-do-dominio-de-aplicacoes"></a>
 
-**Symptoms:** `meuapp.localhost` does not resolve in the browser.
+### The apps domain check fails
+
+**Symptoms:** in **Settings → Apps domain**, **Verify DNS and save** shows "Not saved" and a message
+from the server, in Portuguese even with the interface in English.
+
+**Causes and solutions:**
+
+- **Only the exact-name record exists** (`apps.example.com`). The check queries a random name
+  (`paas-check-…apps.example.com`), so only a **wildcard** record (`*.apps`) passes. Create the
+  record named `*.apps` (or `*.apps.example.com`, depending on the provider).
+- **Cloudflare orange cloud:** the message mentions the "proxy da Cloudflare" (Cloudflare proxy).
+  Switch the wildcard record to the gray cloud ("DNS only"). Behind the proxy, each project's certificate cannot be issued.
+- **Wrong IP, or more than one A record:** leave only the VPS IP.
+- **AAAA record pointing elsewhere:** delete the wildcard AAAA (or point it at the VPS IPv6, if the
+  panel knows it).
+- **"O DNS não respondeu agora" (the DNS did not answer now):** nothing was saved and nothing changed;
+  try again in a moment.
+- **You just created the record:** wait for propagation (minutes to hours) and verify again.
+- Check from outside: `dig +short anything.apps.example.com` should return the VPS IP.
+
+<a id="limite-do-lets-encrypt"></a>
+
+### A project certificate is not issued (Let's Encrypt limit)
+
+**Symptoms:** the browser shows a certificate error when opening the project (Caddy redirects HTTP to
+HTTPS), and the **Certificates** page shows the domain as "Failed".
+
+**Cause:** Let's Encrypt limits you to **50 new certificates per week per registered domain** (for
+`projeto-k3x9q.apps.example.com`, the registered domain is `example.com`) and to 5 identical
+certificates per week. Creating and deleting many projects within a few days uses up the limit of 50.
+The limit on identical certificates only affects an own domain (repeating the same name): each address
+under the apps domain gets a new suffix on every creation.
+
+**Solution:**
+1. Open **Certificates** and read the cause the panel shows (a server message, in Portuguese).
+2. If it is the limit, wait: it comes back little by little over the week. The panel cannot get around it.
+3. Then click **Try issuing now**. Meanwhile the panel keeps retrying on its own, with growing intervals.
+4. To avoid using up the limit for nothing, do not delete and recreate projects several times. In the
+   wizard, the project is created with a provisional address (`name-xxxxx.localhost`, unique, no IP and no public certificate) and only switches to the address under the base
+   when you click **Create project**.
+
+### Project with a provisional address (`name-xxxxx.localhost`)
+
+**Symptoms:** the project shows an amber "Provisional address" notice and the `name-xxxxx.localhost` address does not open.
+
+**Cause:** the wizard creates the project with this provisional address and only replaces it when you click
+**Create project**. If you closed the wizard before that, the project kept it. `.localhost` always points to the
+computer of whoever is browsing, not to the VPS, so it does not work on a public panel.
+
+**Solution:** open the project, go to **Domains** (the notice has a shortcut) and change the address:
+- with the apps domain set up, click **Use the automatic address (…)**: the panel adds the address under the
+  base, makes it primary and removes the provisional one (if something fails, click again and it continues where
+  it stopped);
+- without the apps domain, the screen explains the ways out: **Set up the apps domain** (in Settings) or
+  **Connect a new domain** with a domain of your own.
+
+Do not edit `/etc/hosts`: it will not make the
+VPS site appear.
+
+### `.localhost` domain does not open (panel on your machine)
+
+**Symptoms:** `meuapp.localhost` does not resolve in the browser, with the panel running on your own computer.
 
 **Solution:** `.localhost` depends on the operating system resolving to 127.0.0.1 — it works
 natively on modern Linux/macOS and in Chrome; if it fails, add this to `/etc/hosts`:
-`127.0.0.1 meuapp.localhost`. In dev, remember that `.localhost` is served over **plain HTTP**.
+`127.0.0.1 meuapp.localhost`. This applies only to a local panel. In dev, remember that `.localhost` is served over **plain HTTP**.
 
 ---
 

@@ -208,6 +208,17 @@ Do this while the projects are restored, because DNS takes time to spread. For e
 **A** record to the new VPS IP (on Cloudflare, gray cloud, "DNS only"). That includes the panel
 domain and every project domain. Lower the TTL beforehand if you can.
 
+<a id="dominio-de-aplicacoes"></a>
+
+> [!NOTE]
+> **Apps domain.** If you used an [apps domain](../getting-started/complete-guide.md#dominio-de-aplicacoes)
+> (for example, `apps.example.com`), the setting comes back with the panel backup, but the panel keeps
+> the IP the DNS was verified for. On a VPS with a **different IP**, the base comes back marked **To
+> recheck** and stops being offered: new projects go back to the test address (sslip.io) until you
+> update the `*.apps` wildcard record to the new IP and, in **Settings → Apps domain**, click
+> **Verify DNS again**. Restored projects that use addresses under the base only open after the DNS
+> points to the new VPS.
+
 ### 7. Restore the projects
 
 In the **Projects** block of the card, click **Restore** next to each project.

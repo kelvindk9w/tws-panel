@@ -48,13 +48,13 @@ describe("endereço automático do projeto", () => {
     await montar("203-0-113-10.sslip.io");
     const res = await app.inject({ method: "GET", url: "/api/domains/suggest?name=Dev%20Links", headers: auth });
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toEqual({ auto: "dev-links.203-0-113-10.sslip.io", publicIp: "203.0.113.10" });
+    expect(res.json()).toEqual({ auto: "dev-links.203-0-113-10.sslip.io", publicIp: "203.0.113.10", panelPublic: true });
   });
 
   it("sem endereço público (desenvolvimento local): sugere .localhost e não inventa IP", async () => {
     await montar(null);
     const res = await app.inject({ method: "GET", url: "/api/domains/suggest?name=site", headers: auth });
-    expect(res.json()).toEqual({ auto: "site.localhost", publicIp: null });
+    expect(res.json()).toEqual({ auto: "site.localhost", publicIp: null, panelPublic: false });
   });
 });
 

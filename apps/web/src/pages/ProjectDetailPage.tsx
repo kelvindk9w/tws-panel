@@ -1,3 +1,4 @@
+import { IpInAddressHint } from "@/components/IpInAddress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router";
 import type {
@@ -365,14 +366,17 @@ export function ProjectDetailPage() {
             <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight">
               {project.name} <StatusBadge status={status} />
             </h1>
-            <a
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex max-w-full items-center gap-1 break-all text-sm text-muted-foreground hover:underline"
-            >
-              <Globe className="h-3.5 w-3.5 shrink-0" /> {project.domain} <ExternalLink className="h-3 w-3 shrink-0" />
-            </a>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex max-w-full items-center gap-1 break-all text-sm text-muted-foreground hover:underline"
+              >
+                <Globe className="h-3.5 w-3.5 shrink-0" /> {project.domain} <ExternalLink className="h-3 w-3 shrink-0" />
+              </a>
+              <IpInAddressHint domain={project.domain} />
+            </div>
           </div>
         </div>
         {/* celular: duas colunas embaixo do nome; tela larga: em linha, à direita */}

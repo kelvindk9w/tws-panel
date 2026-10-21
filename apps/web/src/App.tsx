@@ -24,6 +24,7 @@ import { NotificationSettings } from "@/pages/settings/NotificationSettings";
 import { IntegrationSettings } from "@/pages/settings/IntegrationSettings";
 import { OnboardingSettings } from "@/pages/settings/OnboardingSettings";
 import { PanelDomainSettings } from "@/pages/settings/PanelDomainSettings";
+import { AppsDomainSettings } from "@/pages/settings/AppsDomainSettings";
 import { BackupSettings } from "@/pages/settings/BackupSettings";
 import { TimezoneSettings } from "@/pages/settings/TimezoneSettings";
 import { SetupPage } from "@/pages/SetupPage";
@@ -62,6 +63,7 @@ const router = createBrowserRouter([
           { path: "profile", element: <ProfileSettings /> },
           { path: "security", element: <SecuritySettings /> },
           { path: "panel-domain", element: <PanelDomainSettings /> },
+          { path: "apps-domain", element: <AppsDomainSettings /> },
           { path: "appearance", element: <AppearanceSettings /> },
           { path: "notifications", element: <NotificationSettings /> },
           { path: "backups", element: <BackupSettings /> },
