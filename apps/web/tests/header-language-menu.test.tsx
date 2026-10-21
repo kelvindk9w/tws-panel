@@ -445,6 +445,15 @@ describe("cabeçalho estreito: sem estouro lateral (estrutura)", () => {
     expect(nome.className).toContain("xl:max-w-32");
   });
 
+  it("botão do usuário traz o nome completo em title, sem mudar o aria-label", () => {
+    renderLayout("top");
+    const conta = within(top()).getByRole("button", { name: /Conta:/ });
+    const nome = conta.querySelector("span") as HTMLElement;
+    expect(conta).toHaveAttribute("title", nome.textContent);
+    expect(conta.getAttribute("title")).toBeTruthy();
+    expect(conta.getAttribute("aria-label")).toMatch(/^Conta:/);
+  });
+
   it("espaços do cabeçalho: menores abaixo de sm e na faixa lg, normais em sm e xl", () => {
     renderLayout("top");
     const row = top().firstElementChild as HTMLElement;

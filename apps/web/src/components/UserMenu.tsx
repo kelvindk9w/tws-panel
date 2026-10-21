@@ -91,6 +91,7 @@ export function UserMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
         ref={buttonRef}
         type="button"
         aria-label={t("shell.userMenu.account", { name: user.displayName || user.username })}
+        title={user.displayName || user.username}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "flex items-center gap-1 rounded-md px-2 py-1.5 sm:gap-2 sm:px-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
