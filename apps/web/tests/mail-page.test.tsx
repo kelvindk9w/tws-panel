@@ -338,6 +338,75 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
     expect(screen.queryByTestId("mail-sync-result")).not.toBeInTheDocument();
   });
 
+  it("erro de autenticação: oferece Reparar agora ali mesmo, pede confirmação, repara e sincroniza de novo", async () => {
+    let repaired = false;
+    const fetchMock = mockApi({
+      extra: (url, init) => {
+        if (url.endsWith("/api/mail/server/repair-auth") && init?.method === "POST") {
+          repaired = true;
+          return { status: 200, body: { ok: true, result: "repaired" } };
+        }
+        if (url.endsWith("/api/mail/sync") && init?.method === "POST") {
+          return repaired
+            ? { status: 200, body: { ok: true, domainCount: 1, mailboxCount: 0, domains: ["a.example.com"], mailboxes: [], skipped: [] } }
+            : { status: 409, body: { error: "mail_auth_failed", message: "O painel não conseguiu autenticar no servidor de e-mail." } };
+        }
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    await user.click(await screen.findByRole("button", { name: "Reparar agora" }));
+    expect(screen.getByText(/o reinicia por alguns segundos, sem apagar dados/i)).toBeInTheDocument();
+    expect(repaired).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Confirmar reparo" }));
+    expect(await screen.findByTestId("mail-sync-result")).toHaveTextContent(/a\.example\.com/);
+    expect(screen.queryByRole("button", { name: "Reparar agora" })).not.toBeInTheDocument();
+    expect(syncCalls(fetchMock)).toHaveLength(2);
+  });
+
+  it("o reparo automático já falhou (mail_auth_repair_failed): a mensagem aparece e o botão continua disponível; Cancelar fecha a confirmação", async () => {
+    mockApi({ extra: sync({ error: "mail_auth_repair_failed", message: "O painel tentou regravar a configuração." }, 409) });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    expect(await screen.findByText("O painel tentou regravar a configuração.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reparar agora" }));
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.getByRole("button", { name: "Reparar agora" })).toBeInTheDocument();
+  });
+
+  it("o reparo do botão falha: mostra o erro do servidor e mantém o botão", async () => {
+    mockApi({
+      extra: (url, init) => {
+        if (url.endsWith("/api/mail/server/repair-auth") && init?.method === "POST") {
+          return { status: 409, body: { error: "mail_auth_repair_failed", message: "Continua recusando." } };
+        }
+        if (url.endsWith("/api/mail/sync") && init?.method === "POST") {
+          return { status: 409, body: { error: "mail_auth_failed", message: "Não autenticou." } };
+        }
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    await user.click(await screen.findByRole("button", { name: "Reparar agora" }));
+    await user.click(screen.getByRole("button", { name: "Confirmar reparo" }));
+    expect(await screen.findByText("Continua recusando.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reparar agora" })).toBeInTheDocument();
+  });
+
+  it("outro erro (servidor inacessível): sem botão de reparo", async () => {
+    mockApi({ extra: sync({ error: "mail_unreachable", message: "Sem resposta." }, 502) });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    expect(await screen.findByText("Sem resposta.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reparar agora" })).not.toBeInTheDocument();
+  });
+
   it("servidor parado: o botão não aparece", async () => {
     vi.stubGlobal(
       "fetch",
