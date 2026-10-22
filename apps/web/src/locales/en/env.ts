@@ -90,7 +90,8 @@ export default {
   "density.list": "List",
   "density.compact": "Compact",
   "filterNote":
-    "Showing {shown} of {total}. “Show values”, “Delete all” and “Save variables” apply to all of them, not just the ones shown; searching never changes whether values are shown or hidden.",
+    "While searching ({shown} of {total} shown): “Show values”, “Delete all” and “Save variables” apply to all of them, not just the ones shown; searching never changes whether values are shown or hidden.",
+  "revealing": "Fetching the value of {name}…",
   // ProjectEnvCard: lista
   "empty": "No variables yet.",
   "noMatch": "No variables match the search.",

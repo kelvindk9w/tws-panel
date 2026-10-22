@@ -210,7 +210,7 @@ describe("Variáveis — botões do rodapé com a pesquisa ativa", () => {
     renderCard();
     await screen.findByDisplayValue("abc");
     fireEvent.change(search(), { target: { value: "api" } });
-    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/Mostrando 1 de 2\. “Mostrar valores”.*valem para todas/);
+    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/^Com a pesquisa ativa \(1 de 2 à mostra\): “Mostrar valores”.*valem para todas/);
     fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
     fireEvent.change(search(), { target: { value: "" } });
     expect((screen.getByDisplayValue("abc") as HTMLInputElement).type).toBe("text");

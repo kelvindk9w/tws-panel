@@ -4,7 +4,7 @@
  * individual sobrepõe só a própria linha; o botão global descarta os olhos e
  * aplica o novo estado a todas, inclusive às que a pesquisa esconde.
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 import { MemoryRouter } from "react-router";
@@ -161,9 +161,10 @@ describe("Mostrar valores como padrão de todas as linhas", () => {
   it("rótulos acessíveis refletem o estado real", async () => {
     serve();
     await ready();
-    expect(globalBtn(/Mostrar valores/)).toHaveAttribute("aria-pressed", "false");
+    // rótulo que muda com o estado, sem aria-pressed junto (seria sinal duplicado)
+    expect(globalBtn(/Mostrar valores/)).not.toHaveAttribute("aria-pressed");
     fireEvent.click(globalBtn(/Mostrar valores/));
-    expect(globalBtn(/Ocultar valores/)).toHaveAttribute("aria-pressed", "true");
+    expect(globalBtn(/Ocultar valores/)).not.toHaveAttribute("aria-pressed");
     expect(within(screen.getByTestId("env-row-API_KEY")).getByRole("button", { name: "Ocultar valor" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -206,7 +207,7 @@ describe("Mostrar valores como padrão de todas as linhas", () => {
     await ready();
     fireEvent.change(search(), { target: { value: "api" } });
     const note = screen.getByTestId("env-filter-note");
-    expect(note).toHaveTextContent(/“Mostrar valores”.*valem para todas/);
+    expect(note).toHaveTextContent(/^Com a pesquisa ativa \(1 de 4 à mostra\): “Mostrar valores”.*valem para todas/);
     expect(note).not.toHaveTextContent(/vale só/);
   });
 });
@@ -266,9 +267,130 @@ describe("Mostrar valores — en", () => {
     renderCard();
     await screen.findByDisplayValue("abc");
     fireEvent.click(screen.getByRole("button", { name: /Show values/ }));
-    expect(screen.getByRole("button", { name: /Hide values/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Hide values/ })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "api" } });
-    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/apply to all of them/);
+    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/^While searching \(1 of 4 shown\): “Show values”.*apply to all of them/);
     expect((screen.getByDisplayValue("abc") as HTMLInputElement).type).toBe("text");
+  });
+});
+
+describe("Mostrar valores — corridas, contagem e salvar", () => {
+  type Deferred = { resolve: (v: unknown) => void; reject: (e: unknown) => void };
+  let pending: Deferred[] = [];
+  function serveDeferred() {
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") return JSON.parse(String(init.body));
+      if (/\/env\/provided\//.test(path)) return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+      return DATA;
+    });
+  }
+  beforeEach(() => {
+    pending = [];
+  });
+  const panel = () =>
+    within(screen.getByTestId("env-panel-SMTP_PASS")).getByLabelText("Valor de SMTP_PASS") as HTMLInputElement;
+  const panelEye = (name: RegExp) => within(screen.getByTestId("env-panel-SMTP_PASS")).getByRole("button", { name });
+  const ok = async (i: number) => act(async () => pending[i]!.resolve({ name: "SMTP_PASS", value: SENHA }));
+
+  it("olho carregando, depois global mostrar e ocultar: a resposta tardia não revela", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(panelEye(/Mostrar valor/));
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    fireEvent.click(globalBtn(/Ocultar valores/));
+    await ok(0);
+    expect(globalBtn(/Mostrar valores/)).toBeInTheDocument();
+    expect(panel().type).toBe("password");
+  });
+
+  it("global mostrar com busca falha, olho carregando e global ocultar: a resposta tardia não revela", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    await act(async () => pending[0]!.reject(new Error("rede")));
+    expect(panel().type).toBe("password");
+    fireEvent.click(panelEye(/Mostrar valor/));
+    expect(pending).toHaveLength(2);
+    fireEvent.click(globalBtn(/Ocultar valores/));
+    await ok(1);
+    expect(panel().type).toBe("password");
+  });
+
+  it("ocultar pelo próprio olho durante a carga também cancela", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(panelEye(/Mostrar valor/));
+    fireEvent.click(panelEye(/Ocultar valor|Mostrar valor/));
+    await ok(0);
+    expect(panel().type).toBe("password");
+  });
+
+  it("global mostrar, ocultar e mostrar rápido: uma só chamada e termina visível, sem spinner", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    fireEvent.click(globalBtn(/Ocultar valores/));
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    expect(revealCalls()).toHaveLength(1);
+    expect(globalBtn(/Ocultar valores/).querySelector(".animate-spin")).not.toBeNull();
+    await ok(0);
+    expect(panel().type).toBe("text");
+    expect(globalBtn(/Ocultar valores/).querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("mostrar, ocultar rápido e resposta tardia: fica oculta, e depois mostrar não busca de novo", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    fireEvent.click(globalBtn(/Ocultar valores/));
+    await ok(0);
+    expect(panel().type).toBe("password");
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    expect(panel().type).toBe("text");
+    expect(revealCalls()).toHaveLength(1);
+  });
+
+  it("a linha do e-mail mostra um indicador de carregamento enquanto a senha vem", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(panelEye(/Mostrar valor/));
+    expect(within(screen.getByTestId("env-panel-SMTP_PASS")).getByRole("status")).toBeInTheDocument();
+    await ok(0);
+    expect(within(screen.getByTestId("env-panel-SMTP_PASS")).queryByRole("status")).toBeNull();
+    expect(panel().type).toBe("text");
+  });
+
+  it("a falha diz qual variável ficou oculta e some quando a nova tentativa dá certo", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    await act(async () => pending[0]!.reject(new Error("rede")));
+    expect(screen.getByRole("alert")).toHaveTextContent("SMTP_PASS");
+    fireEvent.click(panelEye(/Mostrar valor/));
+    await ok(1);
+    expect(panel().type).toBe("text");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("salvar não revela o que a pessoa ocultou pelo olho (variável e linha do e-mail)", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    await ok(0);
+    fireEvent.click(within(screen.getByTestId("env-row-DB_URL")).getByRole("button", { name: "Ocultar valor" }));
+    fireEvent.click(panelEye(/Ocultar valor/));
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByText(/Salvas\./);
+    expect(typeOf("postgres://x")).toBe("password");
+    expect(panel().type).toBe("password");
+    expect(typeOf("abc")).toBe("text");
+  });
+
+  it("a dica e o topo contam a mesma coisa (linhas do e-mail incluídas)", async () => {
+    serve();
+    await ready();
+    fireEvent.change(search(), { target: { value: "smtp" } });
+    expect(screen.getByTestId("env-count")).toHaveTextContent("1 de 4 variáveis");
+    expect(screen.getByTestId("env-filter-note")).toHaveTextContent("(1 de 4 à mostra)");
   });
 });
