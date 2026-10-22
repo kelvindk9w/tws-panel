@@ -49,7 +49,7 @@ configurar Outlook ou Gmail.
 
 ### Por baixo
 
-- **Container `paas-webmail`** (Roundcube 1.7.4):
+- **Container `paas-webmail`** (Roundcube 1.7.5):
   - fica na `paas-net` **sem porta publicada**, então só o Caddy o alcança;
   - os dados ficam no volume `paas_webmail_data` (SQLite com preferências, contatos e
     sessões; as mensagens continuam no Stalwart);
@@ -65,7 +65,7 @@ configurar Outlook ou Gmail.
 
 ## Decisões
 
-### 1. Qual webmail: Roundcube 1.7.4
+### 1. Qual webmail: Roundcube (escolhido na 1.7.4; hoje 1.7.5)
 
 | Critério | Roundcube | SnappyMail |
 |---|---|---|
@@ -87,7 +87,7 @@ defesa principal é manter a imagem atualizada. Por isso ela está fixada e a tr
 versão é um passo explícito.
 
 **Imagem fixada (tag E digest):**
-`roundcube/roundcubemail:1.7.4-apache-nonroot@sha256:533b48d35f8fef99f24ae6997a032a727888d6992bd55a1a0a24d1ea208dbf3f`
+`roundcube/roundcubemail:1.7.5-apache-nonroot@sha256:269c2855d07c5aec609848164e3fde2c2192458ea82c2927afb8b7f58799f6d3`
 
 - O digest foi conferido com `docker pull` (RepoDigests).
 - Variante **nonroot**: o Apache roda como `www-data` (uid 33), na porta 8000.
@@ -402,7 +402,7 @@ já entre no webmail com o nome de exibição configurado no e-mail do projeto (
 
 ### Como funciona
 
-- **Forma suportada pelo Roundcube 1.7.4**, conferida no código da imagem fixada:
+- **Forma suportada pelo Roundcube 1.7.4 (mantida na 1.7.5)**, conferida no código da imagem fixada:
   - `rcube_user::create` chama o hook **`user_create`** com `user_name` vazio e usa o
     valor que voltar como nome da identidade criada;
   - `index.php` chama o hook **`login_after`** depois de cada login com sucesso;

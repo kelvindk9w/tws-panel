@@ -386,6 +386,10 @@ respondeu (normalmente SPF, DKIM, DMARC ou o nome reverso). Veja
 português por padrão (o webmail é o Roundcube, que tem a própria configuração de idioma e não segue a do painel). Envie um e-mail para você e responda de lá: a resposta aparece na Caixa de entrada do
 webmail. Esqueceu a senha da caixa? Aba **Caixas** → **Trocar senha**.
 
+**Atualizações de segurança:** depois de atualizar o painel, o webmail é recriado automaticamente
+com a versão corrigida do Roundcube (reinício breve; preferências, contatos e nomes de exibição
+ficam). Não precisa desativar e ativar de novo.
+
 ### 4.9 Página Envios
 
 No menu (seta ao lado de **Configurações** → **Envios**), **Envios** mostra o que o servidor de e-mail está fazendo:
