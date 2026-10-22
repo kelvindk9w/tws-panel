@@ -15,6 +15,8 @@ import type { ServerConfig } from "../src/config.js";
 const calls: string[] = [];
 const passwordCalls: { email: string; password: string }[] = [];
 const createdCalls: string[] = [];
+/** Nomes de exibição gravados no Stalwart falso (campo description). */
+const nameCalls: { email: string; name: string }[] = [];
 /** O que o Stalwart falso responde a "a senha confere?" (por caixa). */
 let matchImpl: (email: string, password: string) => Promise<boolean | null> = async () => true;
 let setPasswordImpl: (email: string, password: string) => Promise<void> = async () => undefined;
@@ -50,8 +52,12 @@ vi.mock("@paas/mailer", async (importOriginal) => {
       passwordCalls.push({ email, password });
       serverSecrets[email] = [password, ...(serverSecrets[email] ?? []).filter((x) => x.startsWith("$app$") || x.startsWith("otpauth://"))];
     }
-    async createMailbox(email: string) {
+    async createMailbox(email: string, _password?: string, _extra?: string[], displayName?: string) {
       createdCalls.push(email);
+      if (displayName) nameCalls.push({ email, name: displayName });
+    }
+    async setMailboxDisplayName(email: string, name: string) {
+      nameCalls.push({ email, name });
     }
     async removeMailboxAlias(email: string, alias: string) {
       await aliasImpl(email, alias);
@@ -112,6 +118,7 @@ beforeEach(async () => {
   calls.length = 0;
   passwordCalls.length = 0;
   createdCalls.length = 0;
+  nameCalls.length = 0;
   for (const k of Object.keys(serverSecrets)) delete serverSecrets[k];
   matchImpl = async () => true;
   setPasswordImpl = async () => undefined;

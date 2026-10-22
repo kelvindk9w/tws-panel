@@ -138,7 +138,7 @@
     {
       "id": "email",
       "titulo": "E-mail",
-      "resumo": "Servidor de e-mail próprio (Stalwart Mail Server em container Docker) com domínios DKIM, checklist/verificação de DNS, caixas IMAP/SMTP e injeção automática de credenciais SMTP nos projetos deployados.",
+      "resumo": "Servidor de e-mail próprio (Stalwart Mail Server em container Docker) com domínios DKIM, checklist/verificação de DNS, caixas IMAP/SMTP, injeção automática de credenciais SMTP nos projetos deployados e registro dos e-mails que os apps enviam (assunto/corpo ocultos por padrão).",
       "pontoDeEntrada": {
         "api": "GET /api/mail/status",
         "web": "/mail"

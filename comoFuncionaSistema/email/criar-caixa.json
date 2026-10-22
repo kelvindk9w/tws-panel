@@ -50,6 +50,13 @@
         "obrigatorio": false,
         "regras": "1 a 64 caracteres. A rota confere que o projeto existe (DeployService.getProject); não existe → 404 project_not_found, sem criar nada.",
         "descricao": "Criada pela aba Caixas do e-mail do projeto: a caixa fica sendo daquele projeto (projectId gravado na caixa) e aparece só na aba Caixas dele (03/10/2026)."
+      },
+      {
+        "nome": "displayName",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "0 a 80 caracteres (conta caracteres, não bytes); pattern MAILBOX_DISPLAY_NAME_PATTERN (@paas/core): sem caracteres de controle (CR, LF, TAB, NUL), U+2028/2029, marcas de direção, < >, aspas e barra invertida. O service normaliza (apara, junta espaços) e revalida com normalizeDisplayName: 400 invalid_display_name.",
+        "descricao": "Nome de exibição da caixa (opcional). Vazio/ausente = sem nome (o From sai só com o endereço). Gravado no Stalwart no campo description do principal e em mail.json (displayName). Até 22/10/2026 só a ativação do e-mail do projeto pedia nome."
       }
     ],
     "headers": []
@@ -127,8 +134,8 @@
     "2. Monta o e-mail completo; 409 mailbox_exists se já existir — e também para postmaster@, abuse@ e dmarc@, endereços que o painel põe na caixa postmaster@ ao cadastrar o domínio (04/10/2026).",
     "3. requireRunning().",
     "4. requireStrongPassword(password): mínimo 12 caracteres.",
-    "5. client().createMailbox(email, senha): POST /api/principal {type:'individual', name:email, secrets:[senha], emails:[email], quota:0, roles:['user']}.",
-    "6. Persiste StoredMailbox (kind:'user', password e, se veio, projectId) e save() — o painel guarda a senha porque o e-mail de teste (postmaster@) e a injeção SMTP dos projetos precisam dela.",
+    "5. client().createMailbox(email, senha, [], displayName): POST /api/principal {type:'individual', name:email, secrets:[senha], emails:[email], quota:0, roles:['user'], description: <nome, só se informado>} (JSON; o nome nunca vai em URL nem comando).",
+    "6. Persiste StoredMailbox (kind:'user', password e, se vieram, projectId e displayName) e save() — o painel guarda a senha porque o e-mail de teste (postmaster@) e a injeção SMTP dos projetos precisam dela.",
     "7. Rota grava auditoria mail.mailbox.create e responde 201 com { mailbox } — SEM senha."
   ],
   "dependencias": [
@@ -163,11 +170,15 @@
     "scripts/test-mail.mts (passo 4)",
     "apps/server/tests/mail-service.test.ts (caixas do projeto)",
     "apps/server/tests/routes-mail-schema.test.ts (caixas do projeto)",
-    "apps/web/tests/mail-panels.test.tsx"
+    "apps/web/tests/mail-panels.test.tsx",
+    "apps/server/tests/mail-display-name.test.ts",
+    "apps/server/tests/routes-mail-display-name.test.ts",
+    "apps/web/tests/mailbox-display-name.test.tsx"
   ],
   "observacoes": [
     "Pedido do dono do produto (02/10/2026): a senha de uma caixa nunca fica visível. Antes o painel gerava uma senha e a mostrava na criação e em 'Ver credenciais'; agora a pessoa define a senha e, se esquecer, troca (trocar-senha-caixa.json).",
     "A senha continua guardada em data/mail/mail.json, porque o painel precisa dela para o e-mail de teste e para entregar SMTP_PASS às caixas técnicas dos projetos; risco caso o arquivo ou um backup vaze.",
-    "03/10/2026 (pedido do dono do produto): na aba Caixas (componente compartilhado components/mail/MailboxesPanel.tsx, usado na página do domínio e no e-mail do projeto) a pessoa escolhe 'Digitar uma senha' ou 'Gerar uma senha forte para mim' (components/mail/MailboxPasswordChoice.tsx). A gerada aparece uma vez, com copiar e 'Já guardei'. O mesmo vale para 'Trocar senha' (PUT /api/mail/mailboxes/:id/password com generate: true)."
+    "03/10/2026 (pedido do dono do produto): na aba Caixas (componente compartilhado components/mail/MailboxesPanel.tsx, usado na página do domínio e no e-mail do projeto) a pessoa escolhe 'Digitar uma senha' ou 'Gerar uma senha forte para mim' (components/mail/MailboxPasswordChoice.tsx). A gerada aparece uma vez, com copiar e 'Já guardei'. O mesmo vale para 'Trocar senha' (PUT /api/mail/mailboxes/:id/password com generate: true).",
+    "22/10/2026 (pedido do dono): o nome de exibição passou a existir em TODA criação de caixa (página do domínio e aba Caixas do projeto) e pode ser alterado depois (alterar-nome-exibicao-caixa.json). Antes, só a ativação do e-mail do projeto pedia nome, e ele ficava só no mail.json (nunca no Stalwart). Caixa criada sem nome não recebe nome padrão: o From sai só com o endereço."
   ]
 }

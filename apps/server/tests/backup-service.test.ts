@@ -822,6 +822,20 @@ describe("backup do e-mail e do painel", () => {
     expect(files).toEqual(expect.arrayContaining(["users.json", "mail/domains.json", "backups-key", "manifesto.json"]));
     expect(files.some((f) => f.startsWith("backups/") || f.endsWith(".tmp"))).toBe(false);
   });
+
+  it("painel: assunto e corpo dos envios por SMTP ficam FORA do backup; os metadados entram", async () => {
+    await mkdir(path.join(dir, "envios-conteudo"), { recursive: true });
+    await writeFile(path.join(dir, "envios-conteudo", "1.json"), '{"subject":"segredo"}');
+    await mkdir(path.join(dir, "mail", "envios", "saidas"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl"), '{"id":"1"}\n');
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    const raw = await readFile(path.join(dir, "backups", "_painel", r.fileName!), "utf8");
+    const files = Object.keys((JSON.parse(raw) as { files: Record<string, string> }).files);
+    expect(files.some((f) => f.startsWith("envios-conteudo"))).toBe(false);
+    expect(files).toContain("mail/envios/saidas/2026-10-22.jsonl");
+    expect(raw).not.toContain("segredo");
+  });
 });
 
 describe("restaurar", () => {

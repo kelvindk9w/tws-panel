@@ -11,6 +11,8 @@ export {
   type StalwartCertificate,
   type StalwartManagerOptions,
   type RenderConfigOptions,
+  type SendHookConfig,
+  SEND_HOOK_TIMEOUT,
 } from "./server.js";
 export {
   CADDY_CERTIFICATES_DIR,
@@ -142,3 +144,13 @@ export {
   STALWART_INTERNAL_SMTP_PORT,
   type SmtpEnvInput,
 } from "./smtp-inject.js";
+export {
+  decodeHeaderWords,
+  extractBody,
+  parseSendHook,
+  queueIdFromHex,
+  type ParseSendHookOptions,
+  type ParseSendHookResult,
+  type SendHookMessage,
+} from "./send-hook.js";
+export { explainSendFailure, failureState } from "./send-errors.js";
