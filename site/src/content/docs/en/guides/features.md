@@ -188,6 +188,12 @@ your projects can send messages and for mailboxes such as `contato@`.
   names. Instead of creating a new mailbox, you can **use a mailbox that already exists** on the
   domain (nothing is deleted). And deleting the project does not delete the mailbox or its
   messages: the address is free to be used again.
+- **Display name:** every mailbox can have a name (optional, up to 80 characters) that recipients see in
+  the From field. Set it when creating (domain page or the project's **Mailboxes** tab) and change it
+  later with **Change display name**: only the name changes, the password, 2FA, app passwords,
+  aliases and messages stay as they are. On a project's sending mailbox the name is `MAIL_FROM_NAME`
+  and a change applies on the next deploy (the panel does not deploy by itself); empty, the project
+  name is used.
   On the **Variables** tab, if the compose file requires e-mail variables (`SMTP_HOST`,
   `SMTP_PASSWORD`, `SMTP_FROM`…), a notice says which ones project e-mail fills in, leads to the
   card to turn it on, and offers **Link `SMTP_PASSWORD` to the `SMTP_PASS` value** (only the link
