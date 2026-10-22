@@ -115,13 +115,44 @@ describe("ActionAttempt", () => {
     livre!.release();
   });
 
-  it("fail devolve o maior tempo entre as duas contagens", () => {
+  it("fail devolve o MAIOR tempo entre as duas contagens (IP já reincidente x sessão nova)", () => {
+    vi.useFakeTimers();
+    try {
+      const l = new LoginLimiter();
+      const reply = fakeReply();
+      const ip = "192.0.2.3";
+      // 1º bloqueio do IP: 60 s (a sessão s1 também)
+      let first = { allowed: true, retryAfterSec: 0 };
+      for (let i = 0; i < 5; i += 1) first = beginAction(l, { ip, sessionId: "s1" }, reply as never)!.fail();
+      expect(first).toEqual({ allowed: false, retryAfterSec: 60 });
+      vi.advanceTimersByTime(61_000);
+      // 2º bloqueio do IP: 120 s; a sessão s2 é nova e bloqueia só por 60 s
+      let second = { allowed: true, retryAfterSec: 0 };
+      for (let i = 0; i < 5; i += 1) second = beginAction(l, { ip, sessionId: "s2" }, reply as never)!.fail();
+      expect(second.allowed).toBe(false);
+      expect(second.retryAfterSec).toBe(120);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fail sem estourar nenhuma contagem devolve allowed=true e tempo 0", () => {
+    const l = new LoginLimiter();
+    const r = beginAction(l, { ip: "192.0.2.4", sessionId: "s5" }, fakeReply() as never)!.fail();
+    expect(r).toEqual({ allowed: true, retryAfterSec: 0 });
+  });
+
+  it("recusa por sessão bloqueada não deixa reserva presa no IP (10 recusas, depois 5 reservas simultâneas)", () => {
     const l = new LoginLimiter();
     const reply = fakeReply();
-    let last = { allowed: true, retryAfterSec: 0 };
-    for (let i = 0; i < 5; i += 1) last = beginAction(l, { ip: "192.0.2.3", sessionId: "s4" }, reply as never)!.fail();
-    expect(last.allowed).toBe(false);
-    expect(last.retryAfterSec).toBeGreaterThan(0);
+    // trava a sessão "presa" a partir de IPs diferentes
+    for (let i = 0; i < 5; i += 1) beginAction(l, { ip: `192.0.2.${100 + i}`, sessionId: "presa" }, reply as never)!.fail();
+    const ip = "192.0.2.50";
+    for (let i = 0; i < 10; i += 1) expect(beginAction(l, { ip, sessionId: "presa" }, reply as never)).toBeNull();
+    // se alguma recusa tivesse deixado a reserva do IP, não caberiam 5 tentativas em andamento
+    const abertas = Array.from({ length: 5 }, (_, i) => beginAction(l, { ip, sessionId: `livre${i}` }, reply as never));
+    expect(abertas.every((a) => a !== null)).toBe(true);
+    expect(beginAction(l, { ip, sessionId: "livre9" }, reply as never)).toBeNull(); // 6ª: limite normal do IP
   });
 });
 

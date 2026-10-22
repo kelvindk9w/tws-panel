@@ -148,6 +148,22 @@ describe("scripts/reset-2fa.sh", () => {
     expect((await saved()).twoFactor).not.toHaveProperty("lockedUntil");
   });
 
+  it("falha do .mjs vira erro do script (código ≠ 0, mensagem) e o painel sobe de volta, sem mexer no users.json", async () => {
+    const boom = path.join(dir, "boom.mjs");
+    await writeFile(boom, "process.stderr.write('falhou'); process.exit(3);\n");
+    const antes = await readFile(users, "utf8");
+    const r = run(["--so-bloqueio"], "liberar\n", { FAKE_MJS: boom });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/não foi possível alterar o users\.json \(código 3\)/);
+    expect(r.stderr).toMatch(/painel voltou como estava/);
+    expect(await readFile(users, "utf8")).toBe(antes);
+    const c = await calls();
+    const idx = (verb: string) => c.findIndex((l) => l.startsWith(verb + " "));
+    expect(idx("stop")).toBeGreaterThanOrEqual(0);
+    expect(idx("run")).toBeGreaterThan(idx("stop"));
+    expect(idx("start")).toBeGreaterThan(idx("run")); // o painel sobe mesmo com a falha
+  });
+
   it("imagem ausente: erro antes de parar o painel", async () => {
     const r = run([], "desligar\n", { FAKE_IMAGE_EXIT: "1" });
     expect(r.status).not.toBe(0);
