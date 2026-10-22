@@ -73,8 +73,28 @@ export async function sanitizeGitConfig(gitDir: string, run: Executar, env: Node
  * $PAAS_GIT_PASSWORD do ambiente. Nenhum arquivo é criado e o argv traz só o
  * nome das variáveis, nunca o token (ver ingest.ts e git-access.ts).
  */
-export const CREDENTIAL_HELPER =
-  '!f() { test "$1" = get && printf \'username=%s\\npassword=%s\\n\' "$PAAS_GIT_USERNAME" "$PAAS_GIT_PASSWORD"; }; f';
+export function credentialHelper(mark?: string): string {
+  // Responde SÓ quando o `host=` que o git pede for o do endereço cadastrado ($PAAS_GIT_HOST):
+  // um redirecionamento para outro host não recebe o token (o git falha por falta de credencial).
+  const marker = mark ? `echo ${mark} >&2; ` : "";
+  return (
+    '!f() { test "$1" = get || return 0; h=; while IFS= read -r l; do case "$l" in host=*) h="${l#host=}";; esac; done; ' +
+    'h=$(printf %s "$h" | tr A-Z a-z); test -n "$PAAS_GIT_HOST" && test "$h" = "$PAAS_GIT_HOST" || return 0; ' +
+    marker +
+    "printf 'username=%s\\npassword=%s\\n' \"$PAAS_GIT_USERNAME\" \"$PAAS_GIT_PASSWORD\"; }; f"
+  );
+}
+
+export const CREDENTIAL_HELPER = credentialHelper();
+
+/** `host[:porta]` (minúsculo, porta padrão omitida) do endereço cadastrado, como o git o pede ao helper; "" se não for URL. */
+export function credentialHost(source: string): string {
+  try {
+    return new URL(source).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Só COM credencial: um 301/302 não pode levar o cabeçalho de autenticação a outro

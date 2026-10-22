@@ -290,11 +290,17 @@ describe("checkGitAccess — o token nunca vaza", () => {
     expect(texto).not.toContain("errado-123456");
   }, 60_000);
 
-  it("não cria arquivo nenhum no diretório temporário do sistema", async () => {
-    const antes = new Set(await readdir(tmpdir()));
-    await checkGitAccess({ source: `${base}/privado.git`, branch: null, credential: cred });
-    const novos = (await readdir(tmpdir())).filter((n) => !antes.has(n) && !n.startsWith("paas-git-access-"));
-    expect(novos).toEqual([]);
+  it("não cria arquivo nenhum no diretório temporário (TMPDIR próprio, sem depender do /tmp compartilhado)", async () => {
+    const proprio = await mkdtemp(path.join(tmp, "tmpdir-"));
+    const antes = process.env.TMPDIR;
+    process.env.TMPDIR = proprio;
+    try {
+      await checkGitAccess({ source: `${base}/privado.git`, branch: null, credential: cred });
+    } finally {
+      if (antes === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = antes;
+    }
+    expect(await readdir(proprio)).toEqual([]);
   }, 30_000);
 
   it("o servidor recebe o token (a credencial funciona) mas só por cabeçalho Basic", async () => {

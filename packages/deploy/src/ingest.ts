@@ -9,7 +9,7 @@ import { cp, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
-import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, NO_REDIRECT_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
+import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, credentialHost, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
 import { uploadOverlapBlocker } from "./workdir-safety.js";
 
@@ -72,7 +72,7 @@ interface AmbienteGit {
   temCredencial: boolean;
 }
 
-function prepararAmbienteGit(cred: GitReadCredential | null): AmbienteGit {
+function prepararAmbienteGit(cred: GitReadCredential | null, source: string): AmbienteGit {
   const base: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
@@ -86,10 +86,10 @@ function prepararAmbienteGit(cred: GitReadCredential | null): AmbienteGit {
 
   const token = cred.token;
   return {
-    env: { ...base, PAAS_GIT_USERNAME: cred.username, PAAS_GIT_PASSWORD: token },
+    env: { ...base, PAAS_GIT_USERNAME: cred.username, PAAS_GIT_PASSWORD: token, PAAS_GIT_HOST: credentialHost(source) },
     // o primeiro "credential.helper=" zera helpers herdados (ex.: um store no
     // ~/.gitconfig), para o token nunca ser gravado por outro helper
-    configArgs: ["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`, ...NO_REDIRECT_CONFIG],
+    configArgs: ["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`],
     ocultar: (texto) => (token ? texto.split(token).join(CREDENCIAL_OCULTA) : texto),
     temCredencial: true,
   };
@@ -115,12 +115,13 @@ function falhaGit(
     ? `${rotulo} falhou: ${detalhe}`
     : `${rotulo} falhou com código ${r.code} e sem nenhuma saída de erro — ` +
       `confirme que o git está instalado na imagem do painel e que o repositório é acessível.`;
-  // Com credencial o redirecionamento é recusado (o token não vai a outro endereço): diz o que fazer.
-  if (ambiente?.temCredencial && /returned error: 30[1278]|redirecting to|unable to update url base from redirection/i.test(bruto)) {
+  // O helper só entrega o token ao host cadastrado: se o repositório redirecionou para OUTRO host, o git
+  // pede credencial lá, não recebe e para. Diz o que fazer em vez de culpar o token.
+  if (ambiente?.temCredencial && /could not read (username|password)|terminal prompts disabled/i.test(bruto)) {
     return new Error(
-      `${base}\n\nO endereço do repositório redireciona para outro lugar (o GitLab, por exemplo, redireciona quando falta o ".git" no fim, e o GitHub quando o repositório foi renomeado ou movido). ` +
-        `Com um token cadastrado o painel não segue redirecionamentos, para não enviar a credencial a outro endereço. ` +
-        `Use o endereço final do repositório nas configurações do projeto (por exemplo, com ".git" no fim).`,
+      `${base}\n\nO token cadastrado só é enviado ao host do endereço do projeto. Se o repositório redirecionou para outro host ` +
+        `(repositório movido, por exemplo), o git pediu credencial lá e o painel não a enviou, de propósito. ` +
+        `Use o endereço final do repositório nas configurações do projeto (por exemplo, o do novo host).`,
     );
   }
   // Só orienta sobre credencial quando o sinal é REALMENTE de autenticação.
@@ -247,7 +248,7 @@ async function ingestGit(
   }
 
   const cred = (await ctx.credentialFor?.(project)) ?? null;
-  const ambiente = prepararAmbienteGit(cred);
+  const ambiente = prepararAmbienteGit(cred, project.source);
   // Todo git do painel aponta para o repositório DELE (fora de `src`), com
   // hooks e fsmonitor desligados: nada que esteja em `src` é executado nem
   // lido como configuração (git-safe.ts, achado A2).

@@ -44,7 +44,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import type { GitAccessCheckResponse, GitAccessFailureReason, GitReadCredential } from "@paas/core";
-import { GIT_SAFE_CONFIG, NO_REDIRECT_CONFIG, gitSafeEnv } from "./git-safe.js";
+import { GIT_SAFE_CONFIG, NO_REDIRECT_CONFIG, credentialHelper, credentialHost, gitSafeEnv } from "./git-safe.js";
 
 export const GIT_ACCESS_TIMEOUT_MS = 15_000;
 const MAX_BRANCHES = 10;
@@ -169,10 +169,8 @@ export function parseHeads(stdout: string): { branches: string[]; defaultBranch:
 const MAX_OUTPUT = 1024 * 1024;
 /** Marcador que o helper de credencial escreve no stderr quando o git de fato pede a credencial. */
 const CREDENTIAL_USED_MARK = "paas-credential-used";
-/** Como o helper do clone, mas avisa quando foi chamado (o git só pede token se o servidor exigir). */
-const CHECK_CREDENTIAL_HELPER =
-  `!f() { test "$1" = get && echo ${CREDENTIAL_USED_MARK} >&2 && ` +
-  `printf 'username=%s\\npassword=%s\\n' "$PAAS_GIT_USERNAME" "$PAAS_GIT_PASSWORD"; }; f`;
+/** Como o helper do clone (só responde ao host do endereço), mas avisa quando foi chamado. */
+const CHECK_CREDENTIAL_HELPER = credentialHelper(CREDENTIAL_USED_MARK);
 
 interface GroupedResult {
   code: number | null;
@@ -309,7 +307,7 @@ export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCh
     if (/^(https?_proxy|all_proxy)$/i.test(name)) delete baseEnv[name];
   }
   const env: NodeJS.ProcessEnv = credential
-    ? { ...baseEnv, PAAS_GIT_USERNAME: credential.username, PAAS_GIT_PASSWORD: credential.token }
+    ? { ...baseEnv, PAAS_GIT_USERNAME: credential.username, PAAS_GIT_PASSWORD: credential.token, PAAS_GIT_HOST: credentialHost(source) }
     : baseEnv;
   // sem tty o ssh já não pergunta nada; BatchMode deixa isso explícito e a falha, imediata
   // (a fase do banner não é coberta por ConnectTimeout: o ServerAlive derruba o ssh mudo)

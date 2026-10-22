@@ -584,7 +584,7 @@ In the menu, click **New project**. There are three steps:
      read it: **Access confirmed** (with the default branch and the first branches), invalid or expired
      token, token without read permission, repository not found, branch that does not exist,
      unreachable server, or timeout. The same button appears when you pick a private repository of the
-     connected GitHub account from the list (it tests with the account's token). The test never follows redirects (so the credential is not sent to another address and internal destinations are not queried), and the deploy does not follow them either when there is a token; cloning a public repository without a token does. If the test or the deploy says the address redirects, use the final address, for example with `.git` at the end (GitLab redirects when it is missing). The test does not query addresses of the machine itself (`localhost`, `127.x`, `169.254.x`). Changed the URL, the
+     connected GitHub account from the list (it tests with the account's token). The test never follows redirects (so the credential is not sent to another address and internal destinations are not queried), while the deploy does follow redirects, but the saved token is only sent to the host of the project address (a repository moved to another host needs the final address). If the test says the address redirects, use the final address, for example with `.git` at the end (GitLab redirects when it is missing). The test does not query addresses of the machine itself (`localhost`, `127.x`, `169.254.x`). Changed the URL, the
      branch, or the token? The old result disappears and you need to test again.
    - Click **Create and detect**.
 2. **Automatic detection**. The panel works out the type: plain HTML, project

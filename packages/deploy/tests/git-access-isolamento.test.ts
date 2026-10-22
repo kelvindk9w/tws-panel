@@ -310,3 +310,14 @@ describe("resolveTarget — destinos que o teste não consulta", () => {
     expect(chamadas.at(-1)?.args.join(" ")).toContain("http.curloptResolve=exemplo.invalid:80:127.0.0.1");
   }, 30_000);
 });
+
+describe("credentialHost — a quem o helper entrega o token", () => {
+  it("host[:porta] em minúsculas, porta padrão omitida; vazio se não for URL (o helper então não responde a ninguém)", async () => {
+    const { credentialHost } = await import("../src/git-safe.js");
+    expect(credentialHost("https://GitLab.Example.com/dono/repo")).toBe("gitlab.example.com");
+    expect(credentialHost("https://git.example.com:8443/r.git")).toBe("git.example.com:8443");
+    expect(credentialHost("https://git.example.com:443/r.git")).toBe("git.example.com");
+    expect(credentialHost("git@git.example.com:dono/r.git")).toBe("");
+    expect(credentialHost("lixo")).toBe("");
+  });
+});

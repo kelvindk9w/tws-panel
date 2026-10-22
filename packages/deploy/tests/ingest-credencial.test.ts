@@ -55,6 +55,10 @@ let repoPublico: string;
 let autenticadas = 0;
 /** Requisições que chegaram ao endereço FINAL de um redirecionamento. */
 let destinoDoRedirect = 0;
+let outro: http.Server;
+let urlOutro: string;
+/** Pedidos que chegaram ao OUTRO host, com o cabeçalho Authorization. */
+let pedidosOutro: { url: string; auth: string }[] = [];
 
 async function git(args: string[]): Promise<void> {
   const { run } = await vi.importActual<typeof import("../src/exec.js")>("../src/exec.js");
@@ -106,6 +110,7 @@ beforeEach(async () => {
   chamadas.length = 0;
   autenticadas = 0;
   destinoDoRedirect = 0;
+  pedidosOutro = [];
   tmp = await mkdtemp(path.join(tmpdir(), "paas-cred-test-"));
   projectsDir = path.join(tmp, "projects");
   repoPublico = path.join(tmp, "publico");
@@ -117,8 +122,26 @@ beforeEach(async () => {
   await git(["clone", "-q", "--bare", work, bare]);
   await git(["-C", bare, "update-server-info"]);
 
+  outro = http.createServer((req, res) => {
+    pedidosOutro.push({ url: req.url ?? "", auth: req.headers.authorization ?? "" });
+    res.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
+    res.end("x");
+  });
+  await new Promise<void>((resolve) => outro.listen(0, "127.0.0.1", resolve));
+  urlOutro = `http://127.0.0.1:${(outro.address() as { port: number }).port}`;
+
   server = http.createServer((req, res) => {
     const caminho = new URL(req.url ?? "/", "http://x").pathname;
+    // privado movido no MESMO host (GitLab sem .git): redireciona e continua exigindo o token
+    if (caminho.startsWith("/movido-privado.git/")) {
+      res.writeHead(301, { Location: `http://${req.headers.host}${req.url?.replace("/movido-privado.git/", "/privado.git/")}` });
+      return res.end();
+    }
+    // saindo para OUTRO host: o token não pode chegar lá
+    if (caminho.startsWith("/saindo.git/")) {
+      res.writeHead(302, { Location: `${urlOutro}${req.url?.replace("/saindo.git/", "/privado.git/")}` });
+      return res.end();
+    }
     // repositório "movido": 301 para o endereço final (como o GitLab sem o .git), que é público
     if (caminho.startsWith("/movido.git/")) {
       res.writeHead(301, { Location: `http://${req.headers.host}${req.url?.replace("/movido.git/", "/final.git/")}` });
@@ -169,6 +192,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  outro.closeAllConnections();
+  await new Promise<void>((resolve) => outro.close(() => resolve()));
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await rm(tmp, { recursive: true, force: true });
 });
@@ -203,22 +228,33 @@ describe("ingestCode — repositório privado com credencial de leitura", () => 
     expect(destinoDoRedirect).toBeGreaterThan(0);
   }, 30_000);
 
-  it("COM token o redirecionamento é recusado (o token não vai a outro endereço) e a mensagem diz o que fazer", async () => {
-    const pedacos: string[] = [];
+  it("COM token, redirecionamento no MESMO host funciona (GitLab privado cadastrado sem .git)", async () => {
+    const src = await ingestCode(
+      comCredencial({ username: "x-access-token", token: TOKEN }),
+      projeto({ source: urlPrivada.replace("/privado.git", "/movido-privado.git") }),
+      () => {},
+    );
+    await expect(stat(path.join(src, "arquivo.txt"))).resolves.toBeTruthy();
+    expect(autenticadas).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("COM token, redirecionamento para OUTRO host: o token não é enviado e a mensagem diz o que fazer", async () => {
     const erro = await ingestCode(
       comCredencial({ username: "x-access-token", token: TOKEN }),
-      projeto({ source: urlPrivada.replace("/privado.git", "/movido.git") }),
-      (c) => pedacos.push(c),
+      projeto({ source: urlPrivada.replace("/privado.git", "/saindo.git") }),
+      () => {},
     ).then(
       () => null,
       (e: Error) => e,
     );
     expect(erro).not.toBeNull();
-    expect(erro?.message).toMatch(/redireciona/i);
     expect(erro?.message).toMatch(/endereço final/i);
-    expect(erro?.message).toMatch(/\.git/);
+    expect(erro?.message).toMatch(/outro (host|endereço)/i);
     expect(erro?.message).not.toContain(TOKEN);
-    expect(destinoDoRedirect).toBe(0);
+    // o outro host foi procurado, mas nenhum pedido levou credencial
+    expect(pedidosOutro.length).toBeGreaterThan(0);
+    expect(pedidosOutro.every((p) => p.auth === "")).toBe(true);
+    expect(JSON.stringify(pedidosOutro)).not.toContain(Buffer.from(`x-access-token:${TOKEN}`).toString("base64"));
   }, 30_000);
 
   it("o token não é gravado no .git/config do clone (remote.origin.url limpa)", async () => {

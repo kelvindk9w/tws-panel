@@ -571,7 +571,7 @@ No menu, clique em **Novo Projeto**. São três passos:
      confirmado** (com a branch padrão e as primeiras branches), token inválido ou expirado, token sem
      permissão de leitura, repositório não encontrado, branch que não existe, servidor inacessível ou
      tempo esgotado. O mesmo botão aparece quando você escolhe da lista um repositório privado da
-     conta do GitHub conectada (ele testa com o token da conta). O teste nunca segue redirecionamentos (para não enviar a credencial a outro endereço nem consultar destinos internos), e o deploy também não segue quando há token; o clone de repositório público sem token segue. Se o teste ou o deploy disserem que o endereço redireciona, use o endereço final, por exemplo com `.git` no fim (o GitLab redireciona quando ele falta). O teste não consulta endereços da própria máquina (`localhost`, `127.x`, `169.254.x`). Mudou a URL, a branch ou o token? O
+     conta do GitHub conectada (ele testa com o token da conta). O teste nunca segue redirecionamentos (para não enviar a credencial a outro endereço nem consultar destinos internos), já o deploy segue redirecionamentos, mas o token cadastrado só é enviado ao host do endereço do projeto (um repositório movido para outro host exige o endereço final). Se o teste disser que o endereço redireciona, use o endereço final, por exemplo com `.git` no fim (o GitLab redireciona quando ele falta). O teste não consulta endereços da própria máquina (`localhost`, `127.x`, `169.254.x`). Mudou a URL, a branch ou o token? O
      resultado antigo some e é preciso testar de novo.
    - Clique em **Criar e detectar**.
 2. **Detecção automática.** O painel descobre o tipo: HTML puro, projeto com build, `Dockerfile`
