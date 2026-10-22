@@ -388,7 +388,11 @@ describe("ProjectEnvCard — o que o painel fornece e variável alternativa", ()
         variables: [{ name: "MAIL_FROM", required: true, defaultValue: null, alternatives: ["EMAIL_DE"] }],
       },
     }));
-    render(<ProjectEnvCard project={PROJECT} />);
+    render(
+      <MemoryRouter>
+        <ProjectEnvCard project={PROJECT} />
+      </MemoryRouter>,
+    );
     await screen.findByDisplayValue("MAIL_FROM");
     expect(screen.getByTestId("env-row-MAIL_FROM")).toHaveTextContent(/obrigatória se EMAIL_DE estiver vazia/);
   });

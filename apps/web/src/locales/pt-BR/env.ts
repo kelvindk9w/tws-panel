@@ -10,7 +10,9 @@ export default {
   "describe.ignored.label":
     "ignorada no deploy: {name} está ligada ao E-mail do projeto (← {linkedTo}) e a ligação vence. Apague esta linha ou desfaça a ligação no E-mail.",
   "describe.ignored.placeholder": "ignorada: vem do E-mail do projeto",
-  "describe.provided.label": "fornecida pelo E-mail do projeto — preencher aqui substitui",
+  "describe.provided.label": "fornecida pelo E-mail do projeto — o container recebe o valor do e-mail",
+  "describe.provided.labelDockerfile": "fornecida pelo E-mail do projeto — preencher aqui substitui",
+  "describe.provided.labelNeutral": "fornecida pelo E-mail do projeto",
   "describe.provided.placeholder": "fornecida pelo painel",
   "describe.example.label": "do {file} (o app pode ler por env_file)",
   "describe.example.placeholder": "do {file}",
@@ -39,6 +41,7 @@ export default {
   // ProjectEnvCard: falhas e avisos
   "loadFailed": "Não foi possível carregar as variáveis.",
   "revealFailed": "Não foi possível mostrar o valor de {name}.",
+  "revealFailedWhy": "Não foi possível mostrar o valor de {name}: {reason}",
   "saved": "Salvas. Valem a partir do próximo deploy.",
   "saveFailed": "Não foi possível salvar.",
   "cleared": "Variáveis apagadas. Importe o .env de novo ou preencha a lista.",
@@ -71,7 +74,51 @@ export default {
   "provided.delivers": "O e-mail do projeto entrega estas variáveis no deploy: <mono>{names}</mono>.",
   "provided.linked": "Ligadas a ele: <mono>{names}</mono>.",
   "provided.help":
-    "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Uma variável salva aqui com o nome padrão (ex.: SMTP_HOST) substitui o valor do e-mail; as ligadas vêm sempre do e-mail.",
+    "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Num projeto compose, o container recebe sempre o valor do e-mail: uma variável salva aqui com o nome padrão (ex.: SMTP_HOST) só vale na interpolação do compose (${VAR} no .env). As ligadas também vêm sempre do e-mail.",
+  // ProjectEnvCard: aviso "o e-mail do projeto preenche estas variáveis"
+  "email.collision.directNeutral":
+    "{name} está preenchida aqui e também vem do e-mail do projeto. Apague a linha daqui para não confundir.",
+  "provided.helpNeutral":
+    "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas).",
+  "email.title.manual": "Variáveis de e-mail que o painel não preenche: preencha à mão",
+  "email.collision.directDockerfile":
+    "{name} está preenchida aqui e substitui o valor do e-mail do projeto no deploy (o container recebe o valor salvo). Apague a linha para usar o valor do e-mail.",
+  "provided.helpDockerfile":
+    "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Num projeto com Dockerfile, uma variável salva aqui com o nome padrão (ex.: SMTP_HOST) substitui o valor do e-mail; as ligadas vêm sempre do e-mail.",
+  "email.title": "O e-mail do projeto preenche estas variáveis obrigatórias por você",
+  "email.off.intro":
+    "O projeto exige {names}. O E-mail do projeto cria a caixa e entrega SMTP_HOST, SMTP_PORT (587, STARTTLS), SMTP_USER e a senha no deploy: você não precisa digitar essas variáveis à mão.",
+  "email.off.button": "Ligar o e-mail do projeto",
+  "email.on.intro": "O e-mail do projeto está ligado. Estado de cada variável obrigatória:",
+  "email.on.help":
+    "Ligar um nome só guarda a ligação (nada é copiado para as Variáveis) e vale a partir do próximo deploy. Para ver ou desfazer, use <link>E-mail → Ligar às variáveis do projeto</link>.",
+  "email.unreachable":
+    "Não consegui consultar o e-mail do projeto agora. Veja o estado em <link>E-mail do projeto</link>.",
+  "email.state.provided": "fornecida pelo e-mail do projeto",
+  "email.state.linked": "fornecida pelo e-mail do projeto (ligada a {source})",
+  "email.state.suggest": "falta — pode ser ligada a {source}",
+  "email.state.off": "falta — o e-mail do projeto pode fornecer",
+  "email.state.manual": "falta — preencha à mão",
+  "email.state.set": "preenchida aqui",
+  "email.state.unavailable": "falta — o e-mail do projeto não fornece este valor agora",
+  "email.state.unknown": "não deu para saber — a consulta ao e-mail do projeto falhou",
+  "email.collision.direct":
+    "{name} está preenchida aqui, mas o container recebe o valor do e-mail do projeto (entregue por cima de tudo); o valor salvo aqui só vale na interpolação do compose (${VAR} no .env). Apague a linha para não confundir.",
+  "email.collision.linked":
+    "{name} está ligada a {source}: o valor salvo aqui é ignorado no deploy (a ligação vence). Apague a linha para não confundir.",
+  "email.link.preview": "Será ligado: {pairs}. O painel guarda só a ligação; nada é copiado para as Variáveis.",
+  "email.link.one": "Ligar {name} ao valor {source}",
+  "email.link.all": "Ligar todas as sugeridas ({count})",
+  "email.link.limit": "Não dá para sugerir as ligações: o limite é de {max} variáveis ligadas por projeto.",
+  "email.link.failed": "Não consegui ligar {names}.",
+  "email.link.retry": "Tente de novo.",
+  "email.linked": "Ligado: {names}. Vale a partir do próximo deploy.",
+  "email.manual.hint":
+    "<mono>{name}</mono> o e-mail do projeto não fornece: preencha à mão. O painel entrega a porta 587 com STARTTLS, então o valor típico é <mono>{value}</mono> (a porta 465, TLS implícito, seria true). Confira o que o seu app espera.",
+  "email.manual.generic":
+    "<mono>{name}</mono> o e-mail do projeto não fornece: preencha à mão conforme o seu app (o painel entrega a porta 587 com STARTTLS).",
+  "email.manual.add": "Adicionar {name}={value}",
+  "email.manual.added": "{name} adicionada à lista. Clique em Salvar variáveis para valer.",
   "example.count_one": "1 variável do .env.example está sem valor.",
   "example.count_other": "{count} variáveis do .env.example estão sem valor.",
   "example.help":
@@ -90,7 +137,8 @@ export default {
   "density.list": "Lista",
   "density.compact": "Compacta",
   "filterNote":
-    "Com a pesquisa ativa, “Mostrar valores” vale só para as mostradas ({shown} de {total}); “Apagar todas” e “Salvar variáveis” valem para todas.",
+    "Com a pesquisa ativa ({shown} de {total} à mostra): “Mostrar valores”, “Apagar todas” e “Salvar variáveis” valem para todas, não só para as mostradas; pesquisar não muda se os valores estão mostrados ou ocultos.",
+  "revealing": "Buscando o valor de {name}…",
   // ProjectEnvCard: lista
   "empty": "Nenhuma variável ainda.",
   "noMatch": "Nenhuma variável corresponde à pesquisa.",

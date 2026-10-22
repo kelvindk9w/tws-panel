@@ -4,7 +4,7 @@
   "tipo": "tela",
   "rota": "/projects/:id/email",
   "resumo": "Seção E-mail da página do projeto. Desativado: formulário de ativação (domínio, endereço, nome, senha) e cadastro do domínio do projeto. Ativado: três abas — Remetente, Caixas e DNS — para conferir e configurar o e-mail do projeto sem sair dele.",
-  "atualizadoEm": "2026-10-03",
+  "atualizadoEm": "2026-10-22",
   "arquivosFonte": [
     "apps/web/src/components/project/ProjectEmailCard.tsx",
     "apps/web/src/components/mail/MailboxesPanel.tsx",
@@ -35,27 +35,43 @@
       }
     ],
     "enderecoDasAbas": "Trocar de aba troca o ?email= da URL sem criar entrada nova no histórico (replace); outros parâmetros da URL são mantidos. Remetente não tem parâmetro. Um valor desconhecido abre em Remetente.",
-    "celular": "As três abas cabem lado a lado a 390 px; o link 'Abrir na página E-mail' desce para a linha de baixo. Nos painéis, cada registro DNS vira um bloco empilhado e, nas caixas, o endereço ocupa a linha e os botões descem. Conferido no navegador sem rolagem lateral."
+    "celular": "As três abas cabem lado a lado a 390 px; o link 'Abrir na página E-mail' desce para a linha de baixo. Nos painéis, cada registro DNS vira um bloco empilhado e, nas caixas, o endereço ocupa a linha e os botões descem. Conferido no navegador sem rolagem lateral.",
+    "caixaExistente": [
+      "No formulário (ativar ou Alterar remetente) há 'Caixa do projeto': 'Criar uma caixa nova' (fluxo de sempre) ou 'Usar uma caixa que já existe'.",
+      "Existente: lista (GET /api/projects/:id/email/mailboxes?domain=) as caixas do domínio escolhido que o projeto pode usar; vazia → explica (role=status); falha → role=alert.",
+      "Ao escolher a caixa: 'Informar a senha atual da caixa' (campo com olho, 12+ caracteres; o painel confere sem tentar login), 'Manter a senha que o painel já guarda' (só se ele a conhece; já vem marcada) e 'Trocar a senha desta caixa por uma gerada pelo painel' (aviso: apps e webmail com a senha antiga precisam ser atualizados; a gerada aparece uma vez).",
+      "Sempre explica que a caixa passa a ser gerenciada pelo painel (Sincronizar/restauração a mantêm com a senha guardada) e que a senha não deve ser trocada direto no webmail.",
+      "Senha aceita sem o servidor conseguir conferir (só caixa que o painel criou): aviso âmbar (role=status) dizendo a consequência (o Sincronizar a gravaria na caixa). Em caixa de usuário, o servidor responde 409 password_unverifiable e nada é guardado.",
+      "Erros do servidor (caixa de outro projeto, senha errada, caixa sumida) aparecem em role=alert no topo do cartão; o foco e a rolagem vão para o erro (FocusedAlert).",
+      "O texto fixo explica que Desativar e-mail solta a caixa (mantém as mensagens, volta a ser comum)."
+    ]
   },
   "paineisReutilizaveis": [
     {
       "componente": "MailboxesPanel",
       "arquivo": "apps/web/src/components/mail/MailboxesPanel.tsx",
       "props": "domain (obrigatório); projectId (só as caixas daquele projeto, e a caixa criada fica sendo dele — seção E-mail do projeto); highlight (endereço a destacar, a caixa do projeto); onMailboxesChange (avisa a cada carga — a página do domínio usa para 'Caixas (n)'). Sem projectId (página do domínio): todas as caixas, cada uma com 'do projeto X' (ou 'de um projeto removido') quando tem dono.",
-      "usadoPor": ["apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"]
+      "usadoPor": [
+        "apps/web/src/pages/MailDomainPage.tsx",
+        "apps/web/src/components/project/ProjectEmailCard.tsx"
+      ]
     },
     {
       "componente": "DnsChecklistPanel",
       "arquivo": "apps/web/src/components/mail/DnsChecklistPanel.tsx",
       "props": "domain (obrigatório); onVerified (avisa a cada verificação); showCertificateNotice (padrão true; a página do domínio passa false e mostra o aviso no topo, acima das abas, com CertificateRetryNotice).",
-      "usadoPor": ["apps/web/src/pages/MailDomainPage.tsx", "apps/web/src/components/project/ProjectEmailCard.tsx"]
+      "usadoPor": [
+        "apps/web/src/pages/MailDomainPage.tsx",
+        "apps/web/src/components/project/ProjectEmailCard.tsx"
+      ]
     }
   ],
   "paginaDoDominio": "Em /mail/:domain a página carrega o checklist só para o cabeçalho (servidor e IP) e mantém os dois painéis montados, escondendo o inativo: ao abrir, o DNS é conferido e a aba Caixas já mostra a contagem, qualquer que seja a aba. As abas Caixas/Checklist DNS e o ?aba=dns continuam como antes.",
   "testes": [
     "apps/web/tests/project-email-card.test.tsx",
     "apps/web/tests/mail-panels.test.tsx",
-    "apps/web/tests/mail-domain-page.test.tsx"
+    "apps/web/tests/mail-domain-page.test.tsx",
+    "apps/web/tests/project-email-card.test.tsx (usar uma caixa que já existe)"
   ],
   "observacoes": [
     "03/10/2026 (validação real do dono do produto): ele precisava das partes Caixas e DNS do domínio dentro da seção E-mail do projeto, para conferir e configurar depois sem sair do projeto e criar novas caixas (ex.: suporte@ do mesmo domínio).",

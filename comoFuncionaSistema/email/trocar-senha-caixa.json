@@ -77,9 +77,9 @@
     }
   ],
   "fluxo": [
-    "1. Acha a caixa (404) e recusa caixa de projeto (409 mailbox_managed).",
+    "1. Acha a caixa (404 mailbox_not_found). Vale para qualquer caixa, inclusive a de um projeto (não há recusa).",
     "2. requireStrongPassword; requireRunning.",
-    "3. StalwartClient.setMailboxPassword: PATCH /api/principal/{email} com [{action:'set', field:'secrets', value:[senha]}].",
+    "3. StalwartClient.setMailboxMainPassword: lê a caixa e troca só a senha principal no campo secrets, preservando senhas de aplicativo ($app$...) e o segundo fator (otpauth://...); se não conseguir ler a caixa, falha sem alterar nada.",
     "4. Atualiza a senha guardada em data/mail/mail.json (o e-mail de teste de postmaster@ passa a usar a nova) e save().",
     "5. Auditoria mail.mailbox.password (só o endereço, nunca a senha); resposta { mailbox } sem senha."
   ],
@@ -92,9 +92,9 @@
     },
     {
       "tipo": "pacote",
-      "nome": "StalwartClient.setMailboxPassword",
+      "nome": "StalwartClient.setMailboxMainPassword",
       "arquivo": "packages/mailer/src/client.ts",
-      "papel": "PATCH /api/principal."
+      "papel": "Lê o principal e faz PATCH /api/principal só com a senha principal trocada."
     }
   ],
   "efeitosColaterais": [
@@ -109,7 +109,7 @@
     "apps/server/tests/mail-service.test.ts",
     "apps/server/tests/routes-mail-schema.test.ts",
     "apps/web/tests/mail-domain-page.test.tsx",
-    "packages/mailer/tests/delivery-status.test.ts (setMailboxPassword)"
+    "packages/mailer/tests/client-principals.test.ts (setMailboxMainPassword)"
   ],
   "observacoes": [
     "Pedido do dono do produto (02/10/2026): a senha nunca fica visível; quem esqueceu troca.",
