@@ -11,6 +11,7 @@ export default {
   "code.current_password_required": "To change the sign-in username, confirm with your current password.",
   "code.deploy_in_progress": "A deploy is already running for this project.",
   "code.dir_not_found": "Folder not found.",
+  "code.health_check_too_soon": "The check just ran. Wait a few seconds before checking again.",
   "code.email_no_recipients": "Save at least one address before sending the test.",
   "code.email_not_enabled": "Turn on the project's email before linking the variables.",
   "code.github_not_connected": "Connect your GitHub account in Settings → Integrations.",

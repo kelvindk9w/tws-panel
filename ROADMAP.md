@@ -39,7 +39,8 @@ Ideas we intend to work on, in no particular order:
 | Public API and OpenAPI | A documented, versioned API (with an OpenAPI description) for automating the panel. |
 | MCP for AI assistants | Let AI assistants operate the panel through the Model Context Protocol, with the same authentication and audit as any other client. |
 | Guided IP warm-up | Limit the sending volume of a new IP and raise it gradually. Today the deliverability score only counts how long you have been sending. |
-| MTA-STS / TLS-RPT | A policy that requires TLS for incoming email (MTA-STS), and reports of TLS delivery failures (TLS-RPT). |
+| MTA-STS / TLS-RPT | The panel already suggests the records and checks them (as an optional bonus). Still to come: serving the MTA-STS policy file itself. |
+| Automatic Cloudflare DNS | Create the email records through a minimal-scope API token (DNS edit on one zone), with a diff and confirmation. Plan only, see the deliverability report. |
 | BIMI | Show your verified logo in inboxes (requires an enforced DMARC policy). |
 
 ## Later (future phase)

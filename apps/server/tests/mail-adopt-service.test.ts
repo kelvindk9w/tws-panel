@@ -295,6 +295,31 @@ describe("MailService.adoptFromStalwart", () => {
     const result = await service().adoptFromStalwart();
     expect(result.domains).toEqual(["cassp.example.com"]);
     expect(dkimPosts).toBe(1);
+    // a chave criada agora só vale depois de reiniciar o Stalwart: um reinício, e nada pendente
+    expect(applyTlsCalls).toBe(1);
+    expect(result.dkimRestartPending).toBeUndefined();
+    expect((await readStored()).domains["cassp.example.com"]!.dkimRestartPending).toBeUndefined();
+  });
+
+  it("chave DKIM criada e reinício que falha: o domínio fica 'reinício pendente' (não 'ok') e a resposta avisa", async () => {
+    dkimMode = "missing";
+    dockerEchoesSecret = true;
+    const logs: string[] = [];
+    const svc = service({ log: (m: string) => logs.push(m), readCertificate: async () => null });
+    const result = await svc.adoptFromStalwart();
+    expect(result.domains).toEqual(["cassp.example.com"]);
+    expect(result.dkimRestartPending).toEqual(["cassp.example.com"]);
+    expect((await readStored()).domains["cassp.example.com"]!.dkimRestartPending).toBe(true);
+    expect((await svc.listDomains()).find((d) => d.name === "cassp.example.com")?.dkimRestartPending).toBe(true);
+    expect((await svc.healthPlanInput("cassp.example.com")).dkimRestartPending).toBe(true);
+    expect(logs.join("\n")).toContain("ativar o DKIM");
+    expect(logs.join("\n")).not.toContain(ADMIN);
+  });
+
+  it("chave DKIM que já existia não reinicia o servidor", async () => {
+    await service({ readCertificate: async () => null }).adoptFromStalwart();
+    expect(dkimPosts).toBe(0);
+    expect(applyTlsCalls).toBe(0);
   });
 
   it("falha ao ler a chave DKIM (500) não cria assinatura: o domínio fica de fora", async () => {

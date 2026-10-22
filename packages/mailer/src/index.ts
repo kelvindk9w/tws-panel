@@ -130,6 +130,26 @@ export {
   type QueueMessageRaw,
 } from "./queue-view.js";
 export {
+  analyzeSpf,
+  buildDnsPlan,
+  classifyDelay,
+  evaluateHealth,
+  type DelayCause,
+  fetchMtaStsPolicy,
+  isPrivateAddress,
+  mtaStsId,
+  mtaStsPolicy,
+  probePort25,
+  PORT25_PROBE_HOSTS,
+  publicAddressesOf,
+  type HealthInput,
+  type PlanInput,
+  type Port25Result,
+  type ResolverEntry,
+  type SpfAnalysis,
+  type TlsHostState,
+} from "./deliverability-health.js";
+export {
   deliverabilityScore,
   formatPercent,
   GOOGLE_POSTMASTER_URL,

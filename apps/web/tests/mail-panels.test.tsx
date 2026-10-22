@@ -266,6 +266,7 @@ describe("DnsChecklistPanel", () => {
     expect(await screen.findByText("3/3 OK")).toBeInTheDocument();
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       "GET /api/mail/domains/exemplo.com.br/dns",
+      "GET /api/mail/domains/exemplo.com.br/health",
       "POST /api/mail/domains/exemplo.com.br/verify",
     ]);
     expect(screen.getByRole("table")).toBeInTheDocument();

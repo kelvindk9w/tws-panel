@@ -155,3 +155,24 @@ describe("DNS público sem resposta", () => {
     expect(result.ptr.diagnostic).toMatch(/reverso de 203\.0\.113\.10 — DNS público/);
   });
 });
+
+describe("healthPlanInput — dados do domínio para o plano de entregabilidade", () => {
+  it("devolve o domínio, o nome do servidor, o IP e a chave DKIM pública", async () => {
+    const service = new MailService(config, { inContainer: false });
+    await expect(service.healthPlanInput("envio.exemplo.com.br")).resolves.toEqual({
+      domain: "envio.exemplo.com.br",
+      mailHostname: "mail.envio.exemplo.com.br",
+      serverHostname: "mail.envio.exemplo.com.br",
+      serverIp: "203.0.113.10",
+      serverIpv6: null,
+      dkimSelector: "paas",
+      dkimPublicKey: DKIM,
+      dmarcStage: "none",
+    });
+  });
+
+  it("domínio não cadastrado: 404", async () => {
+    const service = new MailService(config, { inContainer: false });
+    await expect(service.healthPlanInput("outro.exemplo.com")).rejects.toMatchObject({ statusCode: 404 });
+  });
+});

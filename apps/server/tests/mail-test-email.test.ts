@@ -348,6 +348,24 @@ describe("sendTestEmail — envio", () => {
     await expect(s.sendTestEmail(DOMAIN, TO)).resolves.toBeTruthy();
   });
 
+  it("teto diário: 60 testes em 24 h, mesmo respeitando o limite por hora", async () => {
+    const s = service();
+    for (let hour = 0; hour < 3; hour += 1) {
+      for (let i = 0; i < 20; i += 1) {
+        clock += 30_000;
+        await s.sendTestEmail(DOMAIN, TO);
+      }
+      clock += 61 * 60_000;
+    }
+    expect(sent).toHaveLength(60);
+    const err = await s.sendTestEmail(DOMAIN, TO).catch((e: unknown) => e);
+    expect(err).toMatchObject({ statusCode: 429, code: "test_rate_limited" });
+    expect((err as Error).message).toMatch(/60 testes por dia/);
+    // passadas 24 h do primeiro, libera de novo
+    clock += 24 * 60 * 60_000;
+    await expect(s.sendTestEmail(DOMAIN, TO)).resolves.toBeTruthy();
+  });
+
   it("falha no envio também conta no limite (o botão não vira martelo)", async () => {
     sendImpl = async () => {
       throw new Error("fora do ar");
