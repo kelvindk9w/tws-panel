@@ -20,6 +20,8 @@ import { DeployDetailModal } from "@/components/project/DeployDetailModal";
 import { DeployHistory } from "@/components/project/DeployHistory";
 import { MissingEnvModal } from "@/components/project/MissingEnvModal";
 import { ProjectEmailCard } from "@/components/project/ProjectEmailCard";
+import { UpdateNotice } from "@/components/project/UpdateNotice";
+import { useProjectUpdateStatus } from "@/lib/update-status";
 import { ProjectTimezoneCard } from "@/components/project/ProjectTimezoneCard";
 import { ProjectBackupsCard } from "@/components/project/ProjectBackupsCard";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
@@ -241,6 +243,10 @@ export function ProjectDetailPage() {
   const [openJobId, setOpenJobId] = useState<string | null>(null);
   const [missingEnv, setMissingEnv] = useState<string[] | null>(null);
 
+  // Alerta de nova atualização (só aviso). Refeito quando o projeto muda: fim de um deploy, outra branch.
+  const updateKey = `${data?.project.lastDeployAt ?? ""}|${data?.project.deployedCommit ?? ""}|${data?.project.branch ?? ""}|${data?.project.source ?? ""}`;
+  const update = useProjectUpdateStatus(id, updateKey, data?.project.ingestMode === "git");
+
   const refresh = useCallback(async (): Promise<{ job: DeployJob | null; rateLimited: boolean }> => {
     if (!id) return { job: null, rateLimited: false };
     const startedAt = Date.now();
@@ -385,6 +391,13 @@ export function ProjectDetailPage() {
     void deployWithGuardrails();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, searchParams]);
+
+  /** Clique no aviso de atualização: o MESMO fluxo do botão Deploy (guardrails, variáveis); nunca publica sozinho. */
+  function deployFromNotice() {
+    void deployWithGuardrails();
+    // fora da Visão geral e dos Deploys o andamento não aparece: leva para onde o deploy é acompanhado
+    if (id && section !== "overview" && section !== "deploys") navigate(`/projects/${id}/deploys`);
+  }
 
   /**
    * Confere o estado REAL do projeto na API (não confia só no "ok" do POST).
@@ -646,6 +659,8 @@ export function ProjectDetailPage() {
             size="sm"
             disabled={busy !== null || running}
             onClick={() => void deployWithGuardrails()}
+            title={t("projects.detail.deployTooltip")}
+            aria-describedby="deploy-help"
           >
             {busy === "deploy" || running ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -654,6 +669,9 @@ export function ProjectDetailPage() {
             )}
             {t("projects.detail.deploy")}
           </Button>
+          <span id="deploy-help" className="sr-only">
+            {t("projects.detail.deployTooltip")}
+          </span>
         </div>
       </div>
 
@@ -676,6 +694,15 @@ export function ProjectDetailPage() {
           </ActionNotice>
         )}
       </NoticeRegion>
+      {/* aviso de nova atualização: sem parar/sem projeto em deploy, e na aba Git quem mostra é o cartão completo */}
+      {section !== "git" && (status === "running" || status === "error") && (
+        <UpdateNotice
+          variant="banner"
+          status={update.status}
+          onDeploy={deployFromNotice}
+          deployDisabled={busy !== null || running}
+        />
+      )}
       {error && (
         <ActionNotice
           tone="error"
@@ -793,6 +820,19 @@ export function ProjectDetailPage() {
 
       {section === "domains" && (
         <ProjectDomainsCard project={project} publicIp={publicIp} onChanged={() => void refresh()} />
+      )}
+
+      {section === "git" && project.ingestMode === "git" && (
+        <UpdateNotice
+          variant="full"
+          status={update.status}
+          failed={update.failed}
+          onDeploy={deployFromNotice}
+          deployDisabled={busy !== null || running}
+          onCheck={() => void update.checkNow()}
+          checking={update.checking}
+          limited={update.limited}
+        />
       )}
 
       {section === "git" && (

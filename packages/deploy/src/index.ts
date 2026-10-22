@@ -18,7 +18,7 @@ export { analyzeCompose, guessProxyTarget } from "./guardrails.js";
 export { runGuardrails, GUARDRAIL_RULES, type GuardrailRuleInfo, type IsolationContext } from "./rules.js";
 export { HARD_RULES, checkComposeModel } from "./compose-model.js";
 export { composeEnv, loadCanonicalCompose } from "./compose-config.js";
-export { ingestCode, pathsOverlap, projectSrcDir, projectWorkDir, reservedRoot, RESERVED_DIRNAME, type IngestContext } from "./ingest.js";
+export { ingestCode, readDeployedCommit, pathsOverlap, projectSrcDir, projectWorkDir, reservedRoot, RESERVED_DIRNAME, type IngestContext } from "./ingest.js";
 export { migrateLegacyWorkDir, removeProjectWorkDir, uploadOverlapBlocker, workDirRemovalBlocker } from "./workdir-safety.js";
 export {
   CaddyManager,
@@ -49,4 +49,4 @@ export { run, runStream, type ExecResult } from "./exec.js";
 export { composeVariables, GENERATED_HEADER, missingFromComposeOutput, writeProjectDotenv, type ComposeVariable } from "./project-dotenv.js";
 export { ENV_EXAMPLE_FILES, envExampleNames, readEnvExamples, type EnvExampleVariable } from "./env-example.js";
 export { certificateStatus, type CertificateStatus } from "./tls-status.js";
-export { checkGitAccess, classifyGitFailure, resolveTarget, isBlockedAddress, GIT_ACCESS_MESSAGES, type DnsLookup, type GitAccessInput, type TargetCheck } from "./git-access.js";
+export { checkGitAccess, remoteBranchCommit, type RemoteBranchCommit, classifyGitFailure, resolveTarget, isBlockedAddress, GIT_ACCESS_MESSAGES, type DnsLookup, type GitAccessInput, type TargetCheck } from "./git-access.js";

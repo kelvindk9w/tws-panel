@@ -75,6 +75,19 @@ Email, Backups and Settings.
   A `.env` that belongs to the repository is never overwritten: the panel's variables go to
   a separate file, and the deploy log explains the conflict.
 - **Git:** editable repository and branch; the screen shows which branch is actually live.
+- **New-update notice.** The panel queries the repository (read-only, without downloading the code)
+  and compares the tip of the project's **configured branch** with the commit the last deploy
+  published. If there is a newer commit, "A new update is available" appears on the Git tab, at the
+  top of the project page and on the Dashboard (a marker on the project card and a list of the
+  projects with an update). Projects that use the same repository on different branches (production
+  on `main`, sandbox on another) are each checked against their own branch. **The panel never updates
+  by itself:** to update the code, click **Deploy** (it fetches the new code from the branch and
+  rebuilds the project). The check repeats every few minutes and the Git tab has a **Check now**
+  button. If the repository cannot be queried (network, rejected token, a branch that does not
+  exist), the screen says "could not check" and why, which does not mean the code is up to date.
+  Projects published before this notice stay at "no commit recorded" until their next deploy;
+  uploads and server folders have no notice, and stopped projects only show it on the Git tab (not
+  at the top of the page or on the Dashboard).
 - **Multiple environments:** the same repository can run more than once, on different branches and domains
   (production on `main`, sandbox on another branch), side by side on the same VPS. Each
   instance has its own clone, image, containers and network; only the domain needs to be unique.
