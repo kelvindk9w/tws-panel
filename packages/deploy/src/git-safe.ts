@@ -68,6 +68,14 @@ export async function sanitizeGitConfig(gitDir: string, run: Executar, env: Node
   return removed;
 }
 
+/**
+ * Credential helper EM LINHA: só responde ao "get" e só lê $PAAS_GIT_USERNAME /
+ * $PAAS_GIT_PASSWORD do ambiente. Nenhum arquivo é criado e o argv traz só o
+ * nome das variáveis, nunca o token (ver ingest.ts e git-access.ts).
+ */
+export const CREDENTIAL_HELPER =
+  '!f() { test "$1" = get && printf \'username=%s\\npassword=%s\\n\' "$PAAS_GIT_USERNAME" "$PAAS_GIT_PASSWORD"; }; f';
+
 /** Variáveis do git que mudariam de onde ele lê repositório e configuração. */
 const GIT_ENV_REMOVIDAS = [
   "GIT_DIR",

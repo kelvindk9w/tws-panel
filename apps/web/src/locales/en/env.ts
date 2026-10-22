@@ -25,6 +25,17 @@ export default {
   "describe.default.placeholder": "default: {value}",
   "describe.optional.label": "optional in compose",
   "describe.optional.placeholder": "optional",
+  // ProjectEnvCard: warning for host variables (SITE_HOST=http://…)
+  "host.warn": "{name} has {problems} in its value. Host variables usually expect just the domain name; as it is, the project may open blank. This is only a warning: it does not block saving.",
+  "host.suggest": " Suggested value: {value}.",
+  "host.problem.scheme": "a scheme (http:// or https://)",
+  "host.problem.path": "a slash or path",
+  "host.problem.port": "a port",
+  "host.problem.space": "a space",
+  "host.fix": "Fix",
+  "host.fixLabel": "Fix {name}",
+  "import.hosts_one": "{n} host variable with an odd value (see the yellow warning).",
+  "import.hosts_other": "{n} host variables with odd values (see the yellow warnings).",
   // ProjectEnvCard: falhas e avisos
   "loadFailed": "Couldn't load the variables.",
   "revealFailed": "Couldn't show the value of {name}.",

@@ -579,6 +579,13 @@ In the menu, click **New project**. There are three steps:
    - Check the **Branch**.
    - Private repository without the account connected? Check **Private repository** and paste a **Read token** (the screen teaches you how to
      generate it, with the `Contents: Read` permission for that repository only).
+   - Before creating, click **Test access**, next to the token field. The panel only queries the
+     repository (it does not create the project or store the token) and tells you, in plain words, whether it can
+     read it: **Access confirmed** (with the default branch and the first branches), invalid or expired
+     token, token without read permission, repository not found, branch that does not exist,
+     unreachable server, or timeout. The same button appears when you pick a private repository of the
+     connected GitHub account from the list (it tests with the account's token). Changed the URL, the
+     branch, or the token? The old result disappears and you need to test again.
    - Click **Create and detect**.
 2. **Automatic detection**. The panel works out the type: plain HTML, project
    with a build, `Dockerfile`, or `docker-compose`. A compose file is adopted as is, without being
@@ -609,6 +616,13 @@ the names from the repository's `.env.example`, still without values.
    saved yet: review it.
 2. Fill in what is missing (or use **Add variable**).
 3. Click **Save variables**.
+
+> [!TIP]
+> A variable whose name ends in `_HOST`, `_HOSTNAME`, or `_DOMAIN` (such as `SITE_HOST`) usually
+> expects just the domain name, without `http://`, a trailing slash, a path, a port, or a space. If the
+> value has any of them, the row gets an amber warning with the suggested value and a **Fix** button.
+> It is only a warning: it does not block saving, and the deploy log repeats the note (without showing
+> the value of a variable that looks like a secret). `_URL` variables are not affected.
 
 > [!NOTE]
 > If the repository already has its own `.env`, the panel does not overwrite it. The variables you

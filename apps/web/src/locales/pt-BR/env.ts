@@ -25,6 +25,17 @@ export default {
   "describe.default.placeholder": "padrão: {value}",
   "describe.optional.label": "opcional no compose",
   "describe.optional.placeholder": "opcional",
+  // ProjectEnvCard: aviso de variável de host (SITE_HOST=http://…)
+  "host.warn": "{name} tem {problems} no valor. Variáveis de host costumam esperar só o nome do domínio; do jeito que está, o projeto pode abrir em branco. É só um aviso: não bloqueia o salvar.",
+  "host.suggest": " Valor sugerido: {value}.",
+  "host.problem.scheme": "esquema (http:// ou https://)",
+  "host.problem.path": "barra ou caminho",
+  "host.problem.port": "porta",
+  "host.problem.space": "espaço",
+  "host.fix": "Corrigir",
+  "host.fixLabel": "Corrigir {name}",
+  "import.hosts_one": "{n} variável de host com valor estranho (veja o aviso amarelo).",
+  "import.hosts_other": "{n} variáveis de host com valor estranho (veja os avisos amarelos).",
   // ProjectEnvCard: falhas e avisos
   "loadFailed": "Não foi possível carregar as variáveis.",
   "revealFailed": "Não foi possível mostrar o valor de {name}.",

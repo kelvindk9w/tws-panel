@@ -23,6 +23,9 @@ import {
   type DetectResult,
   type DockerContainerInfo,
   type DomainHttpsStatus,
+  type GitAccessCheckRequest,
+  type GitAccessCheckResponse,
+  type GitAccessFailureReason,
   type GitReadCredential,
   type GuardrailReport,
   type EnvExampleVariable,
@@ -52,6 +55,8 @@ import {
 } from "@paas/core";
 import {
   DeployEngine,
+  GIT_ACCESS_MESSAGES,
+  checkGitAccess,
   composeProjectName,
   detectProject,
   ingestCode,
@@ -1476,6 +1481,40 @@ export class DeployService {
     const own = await this.credentials.get(project.id);
     if (own) return own;
     return project.ingestMode === "git" ? this.github.credentialForUrl(project.source) : null;
+  }
+
+  /**
+   * "Testar acesso" do assistente Novo projeto: consulta SOMENTE LEITURA
+   * (`git ls-remote`) com as mesmas validações da criação do projeto. O token
+   * vem do corpo ou da conta do GitHub conectada (só github.com), vive só na
+   * memória desta chamada e no ambiente do processo git; nada é gravado.
+   */
+  async checkGitAccess(req: GitAccessCheckRequest): Promise<GitAccessCheckResponse> {
+    const falha = (reason: GitAccessFailureReason): GitAccessCheckResponse => ({
+      ok: false,
+      reason,
+      message: GIT_ACCESS_MESSAGES[reason],
+    });
+    let source: string;
+    let branch: string | null;
+    try {
+      source = validateGitSource(req.source);
+    } catch {
+      return falha("invalid_source");
+    }
+    try {
+      branch = validateBranch(req.branch);
+    } catch {
+      return falha("invalid_branch");
+    }
+    let credential: GitReadCredential | null = null;
+    if (req.useAccount) {
+      credential = await this.github.credentialForUrl(source);
+      if (!credential) return falha((await this.github.token()) ? "account_not_applicable" : "account_not_connected");
+    } else if (req.token?.trim()) {
+      credential = { username: DEFAULT_GIT_CREDENTIAL_USERNAME, token: req.token.trim() };
+    }
+    return checkGitAccess({ source, branch, credential });
   }
 
   // -------------------------------------------------------------------------

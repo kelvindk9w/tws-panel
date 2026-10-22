@@ -9,7 +9,7 @@ import { cp, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
-import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
+import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
 import { uploadOverlapBlocker } from "./workdir-safety.js";
 
@@ -71,10 +71,6 @@ interface AmbienteGit {
   ocultar: (texto: string) => string;
   temCredencial: boolean;
 }
-
-/** Helper que só responde ao "get" e só lê o que está no ambiente. */
-const CREDENTIAL_HELPER =
-  '!f() { test "$1" = get && printf \'username=%s\\npassword=%s\\n\' "$PAAS_GIT_USERNAME" "$PAAS_GIT_PASSWORD"; }; f';
 
 function prepararAmbienteGit(cred: GitReadCredential | null): AmbienteGit {
   const base: NodeJS.ProcessEnv = {

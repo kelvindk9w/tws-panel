@@ -7,6 +7,7 @@ import type {
   DetectResponse,
   GuardrailReportResponse,
   Project,
+  GitAccessCheckRequest,
   ProjectCredentialResponse,
   ProjectListResponse,
   ProjectResponse,
@@ -133,6 +134,22 @@ const setCredentialSchema = {
     properties: {
       token: { type: "string", minLength: 1, maxLength: 500 },
       username: { type: "string", minLength: 1, maxLength: 100 },
+    },
+  },
+} as const;
+
+// "Testar acesso" do assistente Novo projeto. O token vem no corpo e NUNCA volta,
+// nem vai para a auditoria ou o log; nada é gravado (consulta somente leitura).
+const checkGitAccessSchema = {
+  body: {
+    type: "object",
+    required: ["source"],
+    additionalProperties: false,
+    properties: {
+      source: { type: "string", minLength: 1, maxLength: 500 },
+      branch: { type: "string", maxLength: 200 },
+      token: { type: "string", minLength: 1, maxLength: 500 },
+      useAccount: { type: "boolean" },
     },
   },
 } as const;
@@ -362,6 +379,25 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         return reply.send({ vars: await service.setEnv(request.params.id, request.body.vars) });
       } catch (err) {
         return sendError(reply, err);
+      }
+    },
+  );
+
+  // "Testar acesso": git ls-remote com o token digitado (ou o da conta do GitHub).
+  // Responde 200 também quando o teste falha (ok:false + motivo): o pedido foi
+  // válido, o resultado é que não foi bom. Nada é gravado nem auditado.
+  app.post<{ Body: GitAccessCheckRequest }>(
+    "/api/projects/check-git-access",
+    { schema: checkGitAccessSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      try {
+        return reply.send(await service.checkGitAccess(request.body));
+      } catch (err) {
+        // Sem a mensagem do erro: ela poderia ecoar o que o git recebeu (o token).
+        const e = err as Partial<HttpError>;
+        if (e.statusCode) return sendError(reply, err);
+        request.log.error("falha inesperada ao testar o acesso ao repositório");
+        return reply.code(500).send({ error: "git_access_failed", message: "Não foi possível testar o acesso agora." });
       }
     },
   );
