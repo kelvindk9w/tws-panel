@@ -174,6 +174,13 @@ describe("ingestCode — repositório privado com credencial de leitura", () => 
     }
   }, 30_000);
 
+  it("clone e fetch não seguem redirecionamento (o token não vai a outro host)", async () => {
+    await ingestCode(comCredencial({ username: "x-access-token", token: TOKEN }), projeto(), () => {});
+    const rede = chamadas.filter((c) => c.args.includes("fetch"));
+    expect(rede.length).toBeGreaterThan(0);
+    for (const c of rede) expect(c.args.join(" ")).toContain("http.followRedirects=false");
+  }, 30_000);
+
   it("o token não é gravado no .git/config do clone (remote.origin.url limpa)", async () => {
     const src = await ingestCode(
       comCredencial({ username: "x-access-token", token: TOKEN }),

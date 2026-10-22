@@ -33,9 +33,18 @@ O token era guardado e o erro só aparecia no clone, depois de criar o projeto.
 
 ### Segurança do token
 - Chega ao git só por variável de ambiente, lida por um credential helper em linha (o mesmo do clone, agora compartilhado em `git-safe.ts`). Não há arquivo temporário para apagar, o argv não tem o valor e a URL não leva `usuario:senha`.
-- Mesmas validações da criação (`validateGitSource`, `validateBranch`); `ext::` barrado; o endereço vai depois de `--`; `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS` vazio, hooks/fsmonitor desligados, `cwd` fora de qualquer repositório, prazo de 15 s.
+- Mesmas validações da criação (`validateGitSource`, `validateBranch`); `ext::` barrado; o endereço vai depois de `--`; `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS` vazio, hooks/fsmonitor desligados, `cwd` fora de qualquer repositório.
 - A resposta só tem motivo, mensagem fixa e listas de branches. Só o motivo "desconhecido" leva a última linha do git, antes limpa do token e do `usuario:senha` da URL. Erro inesperado da rota devolve mensagem fixa (a do erro poderia ecoar o token).
 - Teste de `ps` real: enquanto o git roda contra um servidor que não responde, nenhuma linha de comando do sistema contém o token.
+- **O token fica no ambiente do processo git enquanto ele roda** (no máximo 15 s), então é legível em `/proc/<pid>/environ` por quem roda como o mesmo usuário do sistema. Não está no argv, em arquivo, em log nem em resposta.
+
+## Revisão (correções do 566eacd)
+- **Prazo real e processos órfãos.** A consulta agora roda em grupo de processos próprio e o grupo inteiro leva SIGKILL aos 15 s TOTAIS (inclusive com servidor que goteja bytes) e ao fim normal. Antes, só o `git` de cima morria (execFile) e os `remote-http`/`ssh` ficavam vivos com o token no ambiente. O ssh ganhou `ServerAliveInterval`/`ServerAliveCountMax`. Testes: servidor que goteja e ssh mudo respondem em ~2 s (prazo de teste) e nenhum processo sobra.
+- **Redirecionamento.** `http.followRedirects=false` entrou no `GIT_SAFE_CONFIG`, que vale para o teste E para o clone/fetch real. Um 302 não leva o `Authorization` a outro host (o segundo servidor do teste não recebe nada). Efeito colateral aceito: repositório renomeado/movido (o GitHub redireciona) deixa de funcionar com o endereço antigo; o teste diz isso (`redirected`) e o clone falha com a mensagem do git.
+- **Alcance de rede.** O teste recusa loopback, 0.0.0.0, link-local (metadados 169.254.0.0/16), `localhost` e nomes que resolvem para isso (basta um endereço), com mensagem em português. Para https, o nome é resolvido uma vez e os endereços conferidos são fixados no curl (`http.curloptResolve`), contra rebinding; em ssh só o nome resolvido é conferido (limitação). Redes privadas (10/8, 172.16/12, 192.168/16) seguem permitidas por causa de Git interno legítimo: nelas a rota ainda é um oráculo (a resposta diferencia inacessível, tempo esgotado, não encontrado, e lista branches), contido por sessão obrigatória, 10 consultas/min e mensagens fixas.
+- **Pendência registrada:** a mesma recusa NÃO foi aplicada ao clone/fetch real. Instalações de desenvolvimento podem apontar para um Git em localhost; aplicar lá é decisão do dono.
+- **Token não verificado.** Com token em repositório público o git nunca o pede. O helper do teste marca no stderr quando é chamado; a resposta traz `tokenUsed` e a tela avisa "o token não foi verificado".
+- **Interface.** O botão usa `aria-disabled` durante a consulta (o foco não se perde), a dica fica empilhada abaixo do botão (sem coluna estreita em 360 px). Anotado: o estouro de 13 a 22 px a 360 px vem do indicador de passos do assistente, que já existia antes e não foi alterado.
 
 ## Decisão registrada
 GitHub responde 404 tanto para repositório inexistente quanto para privado que o token não enxerga. O painel não consegue distinguir; com token informado, o motivo é `not_found_or_no_access` e a mensagem diz as duas possibilidades.

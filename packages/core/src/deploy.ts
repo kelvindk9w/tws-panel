@@ -274,6 +274,8 @@ export type GitAccessFailureReason =
   | "unsupported_host"
   | "unreachable"
   | "timeout"
+  | "redirected"
+  | "blocked_host"
   | "token_not_applicable"
   | "account_not_connected"
   | "account_not_applicable"
@@ -289,6 +291,8 @@ export type GitAccessCheckResponse =
       totalBranches: number;
       /** A branch pedida existe? null = nenhuma foi pedida. */
       branchFound: boolean | null;
+      /** Token informado: o git de fato o enviou? false = repositório público, o token NÃO foi verificado. null = sem token. */
+      tokenUsed: boolean | null;
       message: string;
     }
   | {

@@ -57,6 +57,8 @@ import {
   DeployEngine,
   GIT_ACCESS_MESSAGES,
   checkGitAccess,
+  resolveTarget,
+  type DnsLookup,
   composeProjectName,
   detectProject,
   ingestCode,
@@ -1489,6 +1491,9 @@ export class DeployService {
    * vem do corpo ou da conta do GitHub conectada (só github.com), vive só na
    * memória desta chamada e no ambiente do processo git; nada é gravado.
    */
+  /** Resolução de nomes do "Testar acesso" (os testes trocam por um dublê); undefined = DNS do sistema. */
+  targetLookup: DnsLookup | undefined = undefined;
+
   async checkGitAccess(req: GitAccessCheckRequest): Promise<GitAccessCheckResponse> {
     const falha = (reason: GitAccessFailureReason): GitAccessCheckResponse => ({
       ok: false,
@@ -1514,7 +1519,11 @@ export class DeployService {
     } else if (req.token?.trim()) {
       credential = { username: DEFAULT_GIT_CREDENTIAL_USERNAME, token: req.token.trim() };
     }
-    return checkGitAccess({ source, branch, credential });
+    // Loopback, link-local e metadados da nuvem não são consultados (a rota não vira sonda da rede
+    // interna); redes privadas seguem permitidas. Os endereços conferidos são fixados no curl.
+    const target = await resolveTarget(source, this.targetLookup);
+    if (!target.ok) return falha(target.reason);
+    return checkGitAccess({ source, branch, credential, pin: target.pin });
   }
 
   // -------------------------------------------------------------------------

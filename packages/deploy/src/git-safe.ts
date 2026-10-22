@@ -30,6 +30,9 @@ export const GIT_SAFE_CONFIG: readonly string[] = [
   "core.untrackedCache=false",
   "-c",
   "protocol.ext.allow=never",
+  // um 302 nunca leva o cabeçalho de autenticação a outro host
+  "-c",
+  "http.followRedirects=false",
   "-c",
   "protocol.file.allow=user",
   "-c",

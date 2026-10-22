@@ -15,24 +15,28 @@ import { execFileSync } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitReadCredential } from "@paas/core";
 
 const chamadas: { file: string; args: string[]; env?: NodeJS.ProcessEnv; cwd?: string }[] = [];
-vi.mock("../src/exec.js", async () => {
-  const real = await vi.importActual<typeof import("../src/exec.js")>("../src/exec.js");
+// o teste observa o que o painel executa (spawn); o git roda de verdade
+vi.mock("node:child_process", async () => {
+  const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...real,
-    run: (file: string, args: string[], opts?: { env?: NodeJS.ProcessEnv; cwd?: string }) => {
+    spawn: (file: string, args: string[], opts?: { env?: NodeJS.ProcessEnv; cwd?: string }) => {
       chamadas.push({ file, args, ...(opts?.env ? { env: opts.env } : {}), ...(opts?.cwd ? { cwd: opts.cwd } : {}) });
-      return real.run(file, args, opts as never);
+      return (real.spawn as (...a: unknown[]) => unknown)(file, args, opts);
     },
   };
 });
 
-const { checkGitAccess, classifyGitFailure, GIT_ACCESS_MESSAGES, parseHeads, sanitizeDetail } = await import("../src/git-access.js");
+const { checkGitAccess, classifyGitFailure, GIT_ACCESS_MESSAGES, parseHeads, sanitizeDetail, resolveTarget } = await import(
+  "../src/git-access.js"
+);
 
 const TOKEN = "ghp_TOKENDETESTEsupersecreto0002";
 const cred: GitReadCredential = { username: "x-access-token", token: TOKEN };
@@ -42,6 +46,10 @@ let bare: string;
 let server: http.Server;
 let base: string;
 let pedidos: { url: string; auth: string }[];
+// segundo servidor: destino de um redirecionamento (não pode receber o token)
+let outro: string;
+let outroServer: http.Server;
+let outroPedidos: { url: string; auth: string }[];
 
 async function git(args: string[]): Promise<void> {
   const { run } = await vi.importActual<typeof import("../src/exec.js")>("../src/exec.js");
@@ -90,6 +98,17 @@ beforeEach(async () => {
     const senha = auth.startsWith("Basic ") ? Buffer.from(auth.slice(6), "base64").toString("utf8").split(":")[1] : null;
 
     if (url.startsWith("/lento.git/")) return; // nunca responde
+    if (url.startsWith("/gotejo.git/")) {
+      // goteja ~4 KB/s para sempre: fica acima do limite de velocidade mínima do curl
+      res.writeHead(200);
+      const t = setInterval(() => res.write("0".repeat(400)), 100);
+      res.on("close", () => clearInterval(t));
+      return;
+    }
+    if (url.startsWith("/vai.git/")) {
+      res.writeHead(302, { Location: `${outro}${url.replace("/vai.git", "/privado.git")}` });
+      return res.end();
+    }
     if (url.startsWith("/quebrado.git/")) {
       res.writeHead(200, { "Content-Type": "text/plain" });
       return res.end("isto não é um repositório git\n");
@@ -113,12 +132,23 @@ beforeEach(async () => {
     res.writeHead(404);
     res.end("repository not found");
   });
+  outroPedidos = [];
+  outroServer = http.createServer((req, res) => {
+    outroPedidos.push({ url: req.url ?? "", auth: req.headers.authorization ?? "" });
+    res.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
+    res.end("x");
+  });
+  await new Promise<void>((resolve) => outroServer.listen(0, "127.0.0.1", resolve));
+  const oa = outroServer.address();
+  outro = `http://127.0.0.1:${typeof oa === "object" && oa ? oa.port : 0}`;
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const addr = server.address();
   base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
 });
 
 afterEach(async () => {
+  outroServer.closeAllConnections();
+  await new Promise<void>((resolve) => outroServer.close(() => resolve()));
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await rm(tmp, { recursive: true, force: true });

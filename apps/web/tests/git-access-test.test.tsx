@@ -28,6 +28,7 @@ const OK = {
   branches: ["main", "develop", "feature/x"],
   totalBranches: 3,
   branchFound: null,
+  tokenUsed: true,
   message: "x",
 };
 
@@ -98,7 +99,7 @@ describe("Testar acesso — token digitado", () => {
     fireEvent.click(botao());
     expect(await screen.findByText(/Testando o acesso/)).toBeInTheDocument();
     expect(resultado()).toHaveAttribute("role", "status");
-    expect(botao()).toBeDisabled();
+    expect(botao()).toHaveAttribute("aria-disabled", "true");
     expect(chamadasTeste).toEqual([{ path: "/api/projects/check-git-access", body: { source: URL_REPO, branch: "main", token: TOKEN } }]);
 
     pendente?.(OK);
@@ -107,6 +108,40 @@ describe("Testar acesso — token digitado", () => {
     expect(resultado()).toHaveTextContent("develop");
     expect(resultado()).toHaveTextContent("feature/x");
     expect(botao()).toBeEnabled();
+  });
+
+  it("o foco continua no botão durante e depois da consulta (aria-disabled, não disabled)", async () => {
+    resposta = "segurar";
+    abrirPrivado();
+    fireEvent.change(screen.getByLabelText(/Token de leitura/), { target: { value: TOKEN } });
+    botao().focus();
+    fireEvent.click(botao());
+    await screen.findByText(/Testando o acesso/);
+    expect(botao()).not.toBeDisabled();
+    expect(document.activeElement).toBe(botao());
+    // outro clique durante a consulta não dispara um segundo pedido
+    fireEvent.click(botao());
+    expect(chamadasTeste).toHaveLength(1);
+    pendente?.(OK);
+    await waitFor(() => expect(resultado()).toHaveTextContent(/Acesso confirmado/));
+    expect(document.activeElement).toBe(botao());
+  });
+
+  it("token informado em repositório público: avisa que o token não foi verificado", async () => {
+    resposta = { ...OK, tokenUsed: false };
+    abrirPrivado();
+    fireEvent.change(screen.getByLabelText(/Token de leitura/), { target: { value: TOKEN } });
+    fireEvent.click(botao());
+    await waitFor(() => expect(resultado()).toHaveTextContent(/Acesso confirmado/));
+    expect(resultado()).toHaveTextContent(/token não foi verificado/i);
+  });
+
+  it("token que o servidor usou: não traz o aviso de token não verificado", async () => {
+    abrirPrivado();
+    fireEvent.change(screen.getByLabelText(/Token de leitura/), { target: { value: TOKEN } });
+    fireEvent.click(botao());
+    await waitFor(() => expect(resultado()).toHaveTextContent(/Acesso confirmado/));
+    expect(resultado()).not.toHaveTextContent(/não foi verificado/i);
   });
 
   it("o token nunca aparece na tela, nem no resultado", async () => {
@@ -146,6 +181,8 @@ describe("Testar acesso — token digitado", () => {
     ["token_not_applicable", /https/i],
     ["invalid_source", /Endereço.*inválido/i],
     ["unknown", /não reconheceu/i],
+    ["redirected", /redireciona/i],
+    ["blocked_host", /própria máquina/i],
   ])("motivo %s é explicado em português", async (reason, texto) => {
     resposta = { ok: false, reason, message: "mensagem do servidor" };
     abrirPrivado();
@@ -195,7 +232,7 @@ describe("Testar acesso — token digitado", () => {
     fireEvent.click(botao());
     await waitFor(() => expect(resultado()).toHaveTextContent(/Acesso confirmado/));
     expect(resultado().className).toMatch(/overflow-wrap:anywhere/);
-    expect(botao().closest("div")?.className).toMatch(/flex-wrap/);
+    expect(botao().parentElement?.className).toMatch(/flex-col/);
   });
 
   it("testar não cria o projeto: nenhuma chamada além da consulta", async () => {

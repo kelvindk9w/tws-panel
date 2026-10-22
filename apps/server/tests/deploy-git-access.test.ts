@@ -47,6 +47,8 @@ beforeEach(async () => {
     panelDomain: null,
     port: 9000,
   } as unknown as ServerConfig);
+  // sem DNS de verdade nos testes
+  svc.targetLookup = async () => [{ address: "203.0.113.7", family: 4 }];
 });
 
 afterEach(async () => {
@@ -103,6 +105,30 @@ describe("DeployService.checkGitAccess", () => {
       ok: false,
       reason: "account_not_applicable",
     });
+    expect(consultas).toHaveLength(0);
+  });
+
+  it("recusa loopback, link-local e metadados, e nomes que resolvem para eles, sem consultar", async () => {
+    for (const source of ["https://127.0.0.1/r.git", "https://169.254.169.254/r.git", "https://localhost/r.git", "ssh://git@0.0.0.0/r.git"]) {
+      expect(await svc.checkGitAccess({ source, token: TOKEN_DIGITADO })).toMatchObject({ ok: false, reason: "blocked_host" });
+    }
+    svc.targetLookup = async () => [{ address: "127.0.0.1", family: 4 }];
+    expect(await svc.checkGitAccess({ source: "https://rebind.example.com/r.git" })).toMatchObject({ ok: false, reason: "blocked_host" });
+    expect(consultas).toHaveLength(0);
+  });
+
+  it("rede privada é permitida; nome público entra fixado no endereço resolvido", async () => {
+    await svc.checkGitAccess({ source: "https://192.168.1.10/r.git" });
+    expect(consultas.at(-1)?.pin).toBeNull();
+    await svc.checkGitAccess({ source: "https://git.example.com/r.git" });
+    expect(consultas.at(-1)?.pin).toBe("git.example.com:443:203.0.113.7");
+  });
+
+  it("nome que não resolve: inacessível, sem consultar", async () => {
+    svc.targetLookup = async () => {
+      throw new Error("ENOTFOUND");
+    };
+    expect(await svc.checkGitAccess({ source: "https://nao-existe.example.com/r.git" })).toMatchObject({ ok: false, reason: "unreachable" });
     expect(consultas).toHaveLength(0);
   });
 

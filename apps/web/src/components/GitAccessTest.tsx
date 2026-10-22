@@ -21,6 +21,8 @@ const REASON_KEY: Record<GitAccessFailureReason, Key> = {
   not_found_or_no_access: "projects.new.access.reason.not_found_or_no_access",
   branch_not_found: "projects.new.access.branchMissing",
   unsupported_host: "projects.new.access.reason.unsupported_host",
+  redirected: "projects.new.access.reason.redirected",
+  blocked_host: "projects.new.access.reason.blocked_host",
   unreachable: "projects.new.access.reason.unreachable",
   timeout: "projects.new.access.reason.timeout",
   token_not_applicable: "projects.new.access.reason.token_not_applicable",
@@ -60,6 +62,7 @@ export function GitAccessTest({
   const ready = source.trim() !== "" && (useAccount || (token ?? "").trim() !== "");
 
   async function run() {
+    if (state.kind === "loading") return;
     const mine = ++generation.current;
     setState({ kind: "loading" });
     const body: GitAccessCheckRequest = {
@@ -102,7 +105,8 @@ export function GitAccessTest({
         t("projects.new.access.ok") +
         (r.defaultBranch ? t("projects.new.access.ok.default", { branch: r.defaultBranch }) : t("projects.new.access.ok.empty")) +
         (r.branchFound && state.branch ? t("projects.new.access.ok.branchExists", { branch: state.branch }) : "") +
-        (r.branches.length > 0 ? t("projects.new.access.ok.branches", { list, more }) : "");
+        (r.branches.length > 0 ? t("projects.new.access.ok.branches", { list, more }) : "") +
+        (r.tokenUsed === false ? t("projects.new.access.tokenUnchecked") : "");
     } else {
       tone = "bad";
       if (r.reason === "branch_not_found") {
@@ -120,18 +124,20 @@ export function GitAccessTest({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {/* empilhado: em 360 px a dica não pode virar uma coluna estreita ao lado do botão */}
+      <div className="flex flex-col items-start gap-1">
         <Button
           type="button"
           variant="outline"
           size="sm"
-          disabled={!ready || state.kind === "loading"}
+          disabled={!ready}
+          aria-disabled={state.kind === "loading"}
           onClick={() => void run()}
         >
           {state.kind === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
           {t("projects.new.access.button")}
         </Button>
-        <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+        <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
           {t("projects.new.access.hint")}
         </span>
       </div>
