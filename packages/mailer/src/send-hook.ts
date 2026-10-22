@@ -147,18 +147,64 @@ function decodeTransfer(raw: string, encoding: string, charset: string): string 
   return raw;
 }
 
+function trimLineEnd(line: string): string {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+  return end === line.length ? line : line.slice(0, end);
+}
+
+/** Tags que fecham uma linha no texto. */
+const BLOCK_TAGS = new Set(["p", "div", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "li"]);
+
+/**
+ * HTML → texto, em UMA passada (sem expressões regulares que voltam atrás):
+ * o tempo é proporcional ao tamanho, mesmo com milhares de "<" sem ">".
+ */
 function htmlToText(html: string): string {
-  return html
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<br\s*\/?>|<\/(p|div|tr|h[1-6]|li)>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
+  const lower = html.toLowerCase();
+  let out = "";
+  let i = 0;
+  const n = html.length;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      out += html.slice(i);
+      break;
+    }
+    out += html.slice(i, lt);
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) {
+      // nenhum ">" até o fim: o resto não é tag
+      out += html.slice(lt);
+      break;
+    }
+    let j = lt + 1;
+    const closing = html[j] === "/";
+    if (closing) j++;
+    let k = j;
+    while (k < gt && /[a-z0-9]/.test(lower[k]!)) k++;
+    const name = lower.slice(j, k);
+    if (!closing && (name === "script" || name === "style")) {
+      const end = lower.indexOf(`</${name}`, gt + 1);
+      if (end === -1) break;
+      const endGt = html.indexOf(">", end);
+      out += " ";
+      i = endGt === -1 ? n : endGt + 1;
+      continue;
+    }
+    if (name === "br" || (closing && BLOCK_TAGS.has(name))) out += "\n";
+    i = gt + 1;
+  }
+  return out
     .replace(/&nbsp;/gi, " ")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
     .replace(/&amp;/gi, "&")
-    .replace(/[ \t]+\n/g, "\n")
+    .split("\n")
+    .map(trimLineEnd)
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -219,7 +265,9 @@ function walk(headers: Headers, body: string, depth: number, out: Collected, tex
   }
   const charset = ct.params.get("charset") ?? "utf-8";
   // Só decodifica o começo: o resto seria descartado pelo teto de qualquer jeito.
-  const slice = body.length > textBudget * 4 ? body.slice(0, textBudget * 4) : body;
+  // HTML tem teto menor: a extração de texto só precisa do começo.
+  const factor = ct.main === "text/html" ? 2 : 4;
+  const slice = body.length > textBudget * factor ? body.slice(0, textBudget * factor) : body;
   // Parte vazia não conta: não impede o texto da próxima.
   const text = ct.main === "text/plain" ? out.plain : out.html;
   if (text !== null) return;

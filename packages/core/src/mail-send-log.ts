@@ -134,6 +134,8 @@ export interface MailSendItem {
   hasContent: boolean;
   /** O conteúdo existia e já foi apagado pela retenção. */
   contentExpired: boolean;
+  /** Apagado na hora porque a gravação de assunto e corpo foi desligada. */
+  contentRemoved: boolean;
   /** Corpo guardado cortado no limite de tamanho. */
   contentTruncated: boolean;
   /** O painel viu o envio chegar (captura ativa) ou só reconstruiu pelo registro de entrega. */

@@ -52,11 +52,17 @@ export interface MailSendLogDeps {
   projectNames(): Promise<Map<string, string>>;
   serverCreated(): Promise<boolean>;
   listQueue(): Promise<{ items: QueueMessageRaw[]; total: number }>;
+  /**
+   * Domínios de e-mail que este servidor recebe. Registro reconstruído só pelo
+   * log nunca vale para destinatário local: e-mail vindo de fora com remetente
+   * forjado também é "entregue" localmente e seria atribuído ao projeto.
+   */
+  localDomains?(): Promise<string[]>;
   /** A captura (aviso do Stalwart) está configurada? */
   captureConfigured(): Promise<boolean>;
   log?: (message: string) => void;
   now?: () => number;
-  /** Quantos avisos esperam na fila em memória (padrão 500). */
+  /** Quantos avisos esperam na fila em memória (padrão 16: cada um pode ter vários MiB). */
   queueLimit?: number;
 }
 
@@ -111,14 +117,13 @@ export class MailSendLogService {
   private settingsCache: { at: number; value: MailSendSettings } | null = null;
   private timers: Array<ReturnType<typeof setTimeout>> = [];
   private contentWrites = 0;
-  private lastReceivedAt: string | null = null;
   /** Contadores de diagnóstico (nenhum conteúdo). */
   readonly counters = { received: 0, stored: 0, invalid: 0, dropped: 0, failed: 0 };
 
   constructor(private readonly deps: MailSendLogDeps) {
     this.now = deps.now ?? Date.now;
     this.store = new MailSendStore(deps.dataDir, this.now);
-    this.queueLimit = deps.queueLimit ?? 500;
+    this.queueLimit = deps.queueLimit ?? 16;
   }
 
   private log(message: string): void {
@@ -198,13 +203,34 @@ export class MailSendLogService {
     return value;
   }
 
+  /**
+   * Apaga o conteúdo que a pessoa mandou parar de guardar. Só marca como
+   * apagado quando o arquivo realmente saiu; se falhar, o próximo expurgo repete.
+   */
   private async dropContent(pick: (rec: StoredSend) => boolean): Promise<void> {
     await this.load();
     for (const rec of this.store.all()) {
       if (rec.content !== "stored" || !pick(rec)) continue;
-      await this.store.deleteContent(rec.id).catch(() => undefined);
-      await this.store.put({ ...rec, content: "expired" });
+      if (!(await this.removeContent(rec.id))) continue;
+      await this.store.put({ ...rec, content: "removed" });
     }
+  }
+
+  /** true = o arquivo não existe mais. */
+  private async removeContent(id: string): Promise<boolean> {
+    try {
+      await this.store.deleteContent(id);
+      return true;
+    } catch (err) {
+      this.counters.failed++;
+      this.log(`Registro de envios: não consegui apagar o conteúdo de um envio (${err instanceof Error ? err.message : String(err)}). Tento de novo no próximo expurgo.`);
+      return false;
+    }
+  }
+
+  private async isLocal(address: string): Promise<boolean> {
+    const domains = (await this.deps.localDomains?.().catch(() => [])) ?? [];
+    return domains.map((d) => d.toLowerCase()).includes(domainOf(address));
   }
 
   // -------------------------------------------------------------------------
@@ -245,7 +271,6 @@ export class MailSendLogService {
       this.counters.dropped++;
       return "dropped";
     }
-    this.lastReceivedAt = new Date(this.now()).toISOString();
     this.pending.push(payload);
     this.drain();
     return "queued";
@@ -287,7 +312,9 @@ export class MailSendLogService {
     const peek = raw as { context: { sasl: { login: string } }; envelope?: { from?: { address?: string } } };
     const login = peek.context.sasl.login.toLowerCase();
     const attr = await this.attribution(login, String(peek.envelope?.from?.address ?? ""));
-    const withContent = settings.storeContent && !(attr.projectId && settings.projectsWithoutContent.includes(attr.projectId));
+    // Assunto e corpo só de caixa de PROJETO (o que o app envia). Webmail e clientes
+    // IMAP de caixas pessoais ficam só com os dados da mensagem.
+    const withContent = settings.storeContent && attr.origin === "project" && !(attr.projectId && settings.projectsWithoutContent.includes(attr.projectId));
     const parsed = parseSendHook(raw, { maxBodyBytes: settings.maxBodyKiB * 1024, withContent });
     if (!parsed.ok) {
       this.counters.invalid++;
@@ -349,6 +376,8 @@ export class MailSendLogService {
         // Sem aviso, não dá para saber se é envio ou e-mail recebido de fora que o
         // servidor entregou localmente: só entram remetentes que o painel conhece.
         if (attr.origin === "other") continue;
+        // O remetente do log é forjável por quem escreve na porta 25: destino local não prova envio.
+        if (await this.isLocal(e.to)) continue;
         rec = {
           id: e.queueId,
           at: e.at,
@@ -410,6 +439,7 @@ export class MailSendLogService {
       return { created: 0, unconfirmed: 0 };
     }
     const inQueue = new Set(queue.map((m) => m.id));
+    const local = new Set((await this.deps.localDomains?.().catch(() => [])) ?? []);
     let created = 0;
     let unconfirmed = 0;
     for (const m of queue) {
@@ -418,6 +448,8 @@ export class MailSendLogService {
       if (!view.from) continue; // aviso do próprio servidor
       const attr = await this.attribution(null, view.from);
       if (attr.origin === "other") continue;
+      const remote = view.recipients.filter((r) => !local.has(domainOf(r.address)));
+      if (remote.length === 0) continue;
       const at = view.createdAt ?? new Date(this.now()).toISOString();
       await this.store.put({
         id: m.id,
@@ -430,7 +462,7 @@ export class MailSendLogService {
         projectName: attr.projectName,
         size: view.size,
         attachments: [],
-        recipients: view.recipients.map((r) => newRecipient(r.address, null, r.state === "waiting" ? "queued" : r.state === "bounced" ? "failed" : r.state)),
+        recipients: remote.map((r) => newRecipient(r.address, null, r.state === "waiting" ? "queued" : r.state === "bounced" ? "failed" : r.state)),
         content: "none",
         truncated: false,
         captured: false,
@@ -470,12 +502,12 @@ export class MailSendLogService {
       const content = await this.store.readContent(rec.id);
       const stale = !content || Date.parse(content.storedAt) < cutoff;
       if (!stale) continue;
-      await this.store.deleteContent(rec.id).catch(() => undefined);
+      if (!(await this.removeContent(rec.id))) continue;
       await this.store.put({ ...rec, content: "expired" });
       expiredContents++;
     }
     for (const f of await this.store.contentFiles()) {
-      if (!this.store.get(f.id)) await this.store.deleteContent(f.id).catch(() => undefined);
+      if (!this.store.get(f.id)) await this.removeContent(f.id);
     }
     expiredContents += await this.enforceCap();
     return { removedRecords, expiredContents };
@@ -490,7 +522,7 @@ export class MailSendLogService {
     let removed = 0;
     for (const f of files) {
       if (total <= cap) break;
-      await this.store.deleteContent(f.id).catch(() => undefined);
+      if (!(await this.removeContent(f.id))) continue;
       total -= f.size;
       const rec = this.store.get(f.id);
       if (rec && rec.content === "stored") await this.store.put({ ...rec, content: "expired" });
@@ -534,10 +566,20 @@ export class MailSendLogService {
       limit,
       offset,
       projects: [...projects].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
-      capture: { configured, lastReceivedAt: this.lastReceivedAt, serverCreated: created },
+      capture: { configured, lastReceivedAt: this.lastCaptured(scoped), serverCreated: created },
       retention: { metadataDays: settings.metadataDays, bodyDays: settings.bodyDays },
       storesContent: settings.storeContent && !(scoped && settings.projectsWithoutContent.includes(scoped)),
     };
+  }
+
+  /** Último envio registrado pelo aviso do Stalwart (do projeto, quando a lista é de um projeto). */
+  private lastCaptured(projectId: string | null): string | null {
+    let last: string | null = null;
+    for (const r of this.store.all()) {
+      if (!r.captured || (projectId && r.projectId !== projectId)) continue;
+      if (last === null || r.at > last) last = r.at;
+    }
+    return last;
   }
 
   private view(r: StoredSend, names: Map<string, string>): MailSendItem {
@@ -565,6 +607,7 @@ export class MailSendLogService {
       attachments: r.attachments,
       hasContent: r.content === "stored",
       contentExpired: r.content === "expired",
+      contentRemoved: r.content === "removed",
       contentTruncated: r.truncated,
       captured: r.captured,
     };
@@ -582,6 +625,9 @@ export class MailSendLogService {
     }
     if (rec.content === "none") {
       throw httpError(404, "content_not_stored", "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).");
+    }
+    if (rec.content === "removed") {
+      throw httpError(410, "content_removed", "O assunto e o corpo desta mensagem foram apagados quando a gravação foi desligada.");
     }
     const content = rec.content === "stored" ? await this.store.readContent(id) : null;
     if (!content) {

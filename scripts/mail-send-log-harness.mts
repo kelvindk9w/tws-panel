@@ -14,6 +14,7 @@
 import http from "node:http";
 import nodemailer from "nodemailer";
 import { StalwartClient } from "../packages/mailer/src/client.js";
+import { lookup } from "node:dns/promises";
 import { buildMailHookServer } from "../apps/server/src/services/mail-send-hook-server.js";
 import { MailSendLogService } from "../apps/server/src/services/mail-send-log-service.js";
 import { MailEnviosService } from "../apps/server/src/services/mail-envios-service.js";
@@ -33,6 +34,7 @@ const sends = new MailSendLogService({
   senders,
   projectNames,
   serverCreated: async () => true,
+  localDomains: async () => ["example.com"],
   listQueue: async () => ({ items: [], total: 0 }),
   captureConfigured: async () => true,
   log: (m) => console.log("[painel]", m),
@@ -53,6 +55,8 @@ const envios = new MailEnviosService({
 
 const hook = buildMailHookServer({
   verify: async (s) => s === secret,
+  // como no painel: só o container do Stalwart (endereço resolvido pelo nome na rede)
+  allowFrom: async () => (await lookup("paas-stalwart", { all: true })).map((a) => a.address),
   submit: (payload) => sends.submit(payload),
 });
 await hook.listen({ port: 9100, host: "0.0.0.0" });
@@ -104,9 +108,9 @@ http
           });
           out = { response: info.response, ms: Date.now() - t0 };
         } else if (url.pathname === "/inbound") {
-          // Mensagem recebida de fora (porta 25, sem login): não pode virar registro.
+          // Mensagem recebida de fora (porta 25, sem login) com o remetente FORJADO da caixa do projeto: não pode virar registro.
           const transport = nodemailer.createTransport({ host: "paas-stalwart", port: 25, secure: false, ignoreTLS: true });
-          const info = await transport.sendMail({ from: "alguem@fora.example.net", to: "postmaster@example.com", subject: "entrada", text: "oi" });
+          const info = await transport.sendMail({ from: "loja@example.com", to: "postmaster@example.com", subject: "entrada", text: "oi" });
           out = { response: info.response };
         } else {
           out = { ok: true };

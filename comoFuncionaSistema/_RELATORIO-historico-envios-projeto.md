@@ -42,11 +42,28 @@ Estado e motivo continuam vindo do registro do container (a cada 5 min); o id da
 - Recebidos de fora e entregas locais não viram "envio": registros só do log existem apenas para
   remetentes conhecidos.
 
+## Correções da 1ª revisão (22/10/2026)
+
+1. Remetente forjado na porta 25 não vira "envio do projeto": registro só pelo log vale apenas para destinatário de fora do servidor.
+2. HTML para texto agora é uma passada linear, com teto de entrada menor (2x o corpo); teste de tempo com HTML hostil.
+3. O ouvido sobe com o painel (em container) mesmo sem servidor de e-mail criado; instalação nova não precisa reiniciar.
+4. `envios-conteudo` entra em `PANEL_PRESERVED`: a restauração do painel não o copia para "antes da restauração".
+5. Assunto e corpo só de caixas de PROJETO; webmail e caixas pessoais guardam só os dados da mensagem (texto na aba Privacidade, site e CHANGELOG).
+6. Só o container do Stalwart é aceito (origem conferida) e as tentativas ruins contam por origem.
+7. `PAAS_MAIL_HOOK_PORT` repassada pelo docker-compose e documentada em `global/configuracao.json`.
+8. O destinatário de um evento do log tem de estar entre os da mensagem (texto remoto não cria destinatário falso).
+9. Corpo máximo 8 MiB, 2 pedidos ao mesmo tempo, fila de 16 avisos.
+10. Conteúdo só é marcado como apagado depois que o arquivo realmente saiu.
+11. Mensagem própria ao desligar a gravação e confirmação no checkbox do projeto.
+12. "Último envio registrado" é do projeto.
+13. Registro só pelo log: hora da entrega, tamanho 0, sem caixa (documentado).
+14. Tela: a lista velha sai quando a recarga falha; rótulo do Exibir resumido; datas no mesmo formato.
+
 ## Limites e riscos
 
 1. O receptor escuta em `0.0.0.0` dentro do container; outra rede Docker em que o painel esteja
    ligado o alcança. Proteção = segredo + limite de taxa. Não publique a porta.
-2. Mensagem > 16 MiB é enviada, mas sem assunto/corpo (só metadados pelo log).
+2. Mensagem > 8 MiB é enviada, mas sem assunto/corpo (só metadados pelo log).
 3. Recusa antes da fila (senha errada) não aparece.
 4. Entregue/falhou pode demorar até 5 min (intervalo da leitura do log).
 5. Atualizar o painel muda o `config.toml`: a primeira sincronização reinicia o Stalwart uma vez.

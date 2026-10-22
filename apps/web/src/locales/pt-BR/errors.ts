@@ -78,4 +78,5 @@ export default {
   "code.send_not_found": "Mensagem não encontrada.",
   "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",
   "code.content_expired": "O assunto e o corpo desta mensagem já foram apagados pela retenção.",
+  "code.content_removed": "O assunto e o corpo desta mensagem foram apagados quando a gravação foi desligada.",
 } as const;

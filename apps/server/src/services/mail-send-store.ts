@@ -40,8 +40,8 @@ export interface StoredRecipient {
   error: MailSendFailure | null;
 }
 
-/** "none" = sem conteúdo guardado; "stored" = guardado; "expired" = apagado pela retenção. */
-export type StoredContentState = "none" | "stored" | "expired";
+/** "none" = sem conteúdo guardado; "stored" = guardado; "expired" = apagado pela retenção; "removed" = apagado porque a gravação foi desligada. */
+export type StoredContentState = "none" | "stored" | "expired" | "removed";
 
 export interface StoredSend {
   id: string;

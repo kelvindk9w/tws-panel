@@ -89,13 +89,57 @@ describe("ouvido do aviso de envio", () => {
     expect((await post()).statusCode).toBe(200);
   });
 
-  it("muitas tentativas com segredo errado bloqueiam até o certo por um minuto", async () => {
+  it("muitas tentativas com segredo errado bloqueiam SÓ aquela origem; o Stalwart (outra origem) segue", async () => {
     const { submit } = build({ maxBadAuthPerMinute: 3 });
-    for (let i = 0; i < 3; i++) expect((await post({ authorization: "Bearer x" })).statusCode).toBe(401);
-    expect((await post()).statusCode).toBe(429);
-    expect(submit).not.toHaveBeenCalled();
+    const from = (remoteAddress: string, headers: Record<string, string>) =>
+      app!.inject({ method: "POST", url: MAIL_HOOK_PATH, remoteAddress, headers: { "content-type": "application/json", ...headers }, payload: "{}" });
+    for (let i = 0; i < 3; i++) expect((await from("10.0.0.9", { authorization: "Bearer x" })).statusCode).toBe(401);
+    // o vizinho barulhento é barrado, até com o segredo certo (não confere mais nada para ele)...
+    expect((await from("10.0.0.9", { authorization: `Bearer ${SECRET}` })).statusCode).toBe(429);
+    // ...mas o envio de verdade, de outra origem, passa
+    expect((await from("10.0.0.5", { authorization: `Bearer ${SECRET}` })).statusCode).toBe(200);
+    expect(submit).toHaveBeenCalledTimes(1);
     now += 61_000;
+    expect((await from("10.0.0.9", { authorization: `Bearer ${SECRET}` })).statusCode).toBe(200);
+  });
+
+  it("tentativas erradas de terceiros não gastam a cota de pedidos do Stalwart", async () => {
+    build({ maxPerMinute: 2, maxBadAuthPerMinute: 1000 });
+    for (let i = 0; i < 10; i++) expect((await post({ authorization: "Bearer x" })).statusCode).toBe(401);
     expect((await post()).statusCode).toBe(200);
+    expect((await post()).statusCode).toBe(200);
+  });
+
+  it("origem IPv4 mapeada em IPv6 é reconhecida", async () => {
+    build({ allowFrom: async () => ["172.18.0.2"] });
+    const res = await app!.inject({ method: "POST", url: MAIL_HOOK_PATH, remoteAddress: "::ffff:172.18.0.2", headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" }, payload: "{}" });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("só o container do Stalwart pode chamar: outra origem leva 403 antes de qualquer conferência", async () => {
+    const { submit, verify } = build({ allowFrom: async () => ["127.0.0.1"] });
+    expect((await post()).statusCode).toBe(200);
+    const other = await app!.inject({ method: "POST", url: MAIL_HOOK_PATH, remoteAddress: "10.9.9.9", headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" }, payload: "{}" });
+    expect(other.statusCode).toBe(403);
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("não resolveu o endereço do Stalwart: recusa tudo (403)", async () => {
+    build({
+      allowFrom: async () => {
+        throw new Error("sem DNS");
+      },
+    });
+    expect((await post()).statusCode).toBe(403);
+  });
+
+  it("pedidos simultâneos são limitados (memória): a vaga é devolvida ao fim de cada pedido", async () => {
+    build({ maxConcurrent: 1 });
+    for (let i = 0; i < 4; i++) expect((await post()).statusCode).toBe(200);
+    await app!.close();
+    build({ maxConcurrent: 0 });
+    expect((await post()).statusCode).toBe(429);
   });
 
   it("não há cookie nem CSRF: pedido com Origin de outro site também passa (é o Stalwart, não um navegador)", async () => {

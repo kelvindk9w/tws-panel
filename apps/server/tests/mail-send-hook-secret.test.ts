@@ -56,6 +56,23 @@ describe("aviso de envio — MailService", () => {
     expect(await make(true).sendHookConfigured()).toBe(false);
   });
 
+  it("instalação nova: o ouvido pode subir antes do servidor existir, e o segredo vale assim que ele é criado (sem reinício)", async () => {
+    await seed(null);
+    expect(make(true).sendHookListenable()).toBe(true);
+    expect(make(false).sendHookListenable()).toBe(false);
+    config = { ...config, mailHookPort: 0 };
+    expect(make(true).sendHookListenable()).toBe(false);
+    config = { ...config, mailHookPort: undefined };
+    const s = make(true);
+    expect(await s.verifySendHookSecret("qualquer")).toBe(false);
+    // startServer cria o segredo de administração com o painel no ar
+    (s as unknown as { data: { adminSecret: string | null } }).data.adminSecret = "novo-segredo";
+    (s as unknown as { manager(): unknown }).manager();
+    const hook = managers.at(-1)!.sendHook as { secret: string };
+    expect(await s.verifySendHookSecret(hook.secret)).toBe(true);
+    expect(await s.verifySendHookSecret("qualquer")).toBe(false);
+  });
+
   it("em container: configurada, e o segredo é verificado (só o certo passa)", async () => {
     await seed("segredo-admin");
     const s = make(true);

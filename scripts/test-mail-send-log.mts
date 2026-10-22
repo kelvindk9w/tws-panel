@@ -9,7 +9,7 @@
  *  1. envio autenticado pela caixa de um projeto aparece, com projeto, de, para,
  *     assunto e corpo (só pela rota de revelar), anexo (nome e tamanho);
  *  2. entrega local = "entregue"; domínio inexistente = falha com motivo (sem MX);
- *  3. mensagem recebida de fora (porta 25, sem login) NÃO é registrada;
+ *  3. mensagem recebida de fora (porta 25, sem login), até com o remetente forjado da caixa do projeto, NÃO é registrada;
  *  4. painel parado: o envio é aceito sem demora e, depois, o painel reconstrói o
  *     registro (só metadados) pelo registro de entrega do Stalwart;
  *  5. listagem nunca traz assunto nem corpo.
@@ -116,7 +116,7 @@ try {
   assert.match(sent2.response, /queued/i);
   ok(`aceitos pelo Stalwart (${sent1.ms} ms e ${sent2.ms} ms, com o aviso ao painel no meio)`);
 
-  console.log("▶ 3. mensagem de fora (porta 25, sem login) não é registrada");
+  console.log("▶ 3. mensagem de fora (porta 25, sem login) com remetente forjado do projeto não é registrada");
   await control("/inbound");
 
   await sleep(4000);

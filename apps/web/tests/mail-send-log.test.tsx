@@ -30,6 +30,7 @@ function item(id: string, over: Partial<MailSendItem> = {}): MailSendItem {
     attachments: [],
     hasContent: true,
     contentExpired: false,
+    contentRemoved: false,
     contentTruncated: false,
     captured: true,
     ...over,
@@ -205,6 +206,51 @@ describe("erros em linguagem clara", () => {
   });
 });
 
+describe("revisão", () => {
+  it("conteúdo apagado ao desligar a gravação tem mensagem própria (não 'pela retenção')", async () => {
+    mockApi(() => ({ status: 200, body: list([item("8", { hasContent: false, contentRemoved: true })]) }));
+    render(<SendLogSection projectId="p1" />);
+    expect(await screen.findByText("Assunto e corpo foram apagados quando a gravação foi desligada.")).toBeInTheDocument();
+    expect(screen.queryByText(/pela retenção/)).not.toBeInTheDocument();
+  });
+
+  it("o botão Exibir cita só o primeiro destinatário e quantos mais", async () => {
+    const many = item("9", {
+      recipients: ["a@x.org", "b@x.org", "c@x.org"].map((address) => ({ address, domain: "x.org", state: "delivered" as const, deferrals: 0, updatedAt: null, nextRetryAt: null, remoteHost: null, error: null })),
+    });
+    mockApi(() => ({ status: 200, body: list([many]) }));
+    render(<SendLogSection projectId="p1" />);
+    expect(await screen.findByRole("button", { name: "Exibir assunto e corpo da mensagem para a@x.org e mais 2" })).toBeInTheDocument();
+  });
+
+  it("se a recarga falha, a lista velha sai (não fica 'Mostrando 1 a 24' ao lado do erro)", async () => {
+    let fail = false;
+    mockApi(() => (fail ? { status: 500, body: { error: "x", message: "Caiu" } } : { status: 200, body: list([item("1")]) }));
+    render(<SendLogSection projectId="p1" />);
+    await screen.findByTestId("send-1");
+    fail = true;
+    await userEvent.click(screen.getByRole("button", { name: "Atualizar" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Caiu");
+    expect(screen.queryByTestId("send-1")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Mostrando/)).not.toBeInTheDocument();
+  });
+
+  it("as datas usam o mesmo formato (ano com 4 dígitos) na lista e no 'último envio'", async () => {
+    mockApi(() => ({ status: 200, body: list([item("1")]) }));
+    render(<SendLogSection projectId="p1" />);
+    const row = await screen.findByTestId("send-1");
+    expect(within(row).getByText(/22\/10\/2026/)).toBeInTheDocument();
+    expect(screen.getByText(/Último envio registrado em .*22\/10\/2026/)).toBeInTheDocument();
+  });
+
+  it("a aba Privacidade explica que só caixas de projeto guardam assunto e corpo", async () => {
+    mockApi(() => ({ status: 200, body: { metadataDays: 90, bodyDays: 14, storeContent: true, maxBodyKiB: 64, maxTotalMiB: 100, projectsWithoutContent: [] } }));
+    render(<SendPrivacyCard />);
+    expect(await screen.findByText(/SÓ das caixas de projeto/)).toBeInTheDocument();
+    expect(screen.getByText(/nunca guardam assunto e corpo/)).toBeInTheDocument();
+  });
+});
+
 describe("Exibir", () => {
   it("revela UMA mensagem por clique (POST), com botão acessível, e oculta de novo", async () => {
     const fn = mockApi((url, init) => {
@@ -329,6 +375,10 @@ describe("opção por projeto", () => {
     const box = await screen.findByLabelText("Guardar assunto e corpo das mensagens deste projeto");
     expect(box).toBeChecked();
     await userEvent.click(box);
+    // desligar apaga o que já está guardado: pede confirmação antes de chamar a API
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Desligar apaga agora o assunto e o corpo");
+    expect(fn.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === "PUT")).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Desligar e apagar" }));
     expect(await screen.findByText("Opção salva.")).toBeInTheDocument();
     expect(fn.mock.calls.some((c) => String(c[0]) === "/api/projects/p1/email/saidas/settings" && (c[1] as RequestInit).method === "PUT")).toBe(true);
     await waitFor(() => expect(screen.getByLabelText("Guardar assunto e corpo das mensagens deste projeto")).not.toBeChecked());
@@ -338,7 +388,27 @@ describe("opção por projeto", () => {
     mockApi((url, init) => (init?.method === "PUT" ? { status: 400, body: { error: "x", message: "Recusado" } } : { status: 200, body: list([item("1")]) }));
     render(<SendLogSection projectId="p1" />);
     await userEvent.click(await screen.findByLabelText(/Guardar assunto e corpo/));
+    await userEvent.click(screen.getByRole("button", { name: "Desligar e apagar" }));
     expect(await screen.findByText("Recusado")).toBeInTheDocument();
+  });
+
+  it("cancelar a confirmação não muda nada; ligar de novo não pede confirmação", async () => {
+    const fn = mockApi((url, init) => (init?.method === "PUT" ? { status: 200, body: {} } : { status: 200, body: list([item("1")], { storesContent: false }) }));
+    render(<SendLogSection projectId="p1" />);
+    const box = await screen.findByLabelText(/Guardar assunto e corpo/);
+    expect(box).not.toBeChecked();
+    await userEvent.click(box);
+    expect(fn.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === "PUT")).toBe(true);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("cancelar o aviso de apagar fecha o aviso e não chama a API", async () => {
+    const fn = mockApi(() => ({ status: 200, body: list([item("1")]) }));
+    render(<SendLogSection projectId="p1" />);
+    await userEvent.click(await screen.findByLabelText(/Guardar assunto e corpo/));
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(fn.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === "PUT")).toBe(false);
   });
 });
 

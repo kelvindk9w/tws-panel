@@ -19,13 +19,49 @@ import Fastify, { type FastifyInstance } from "fastify";
 export interface MailHookServerDeps {
   verify(secret: string): Promise<boolean>;
   submit(payload: unknown): "queued" | "invalid" | "dropped";
-  /** Teto do corpo do pedido em bytes (padrão 16 MiB). */
+  /** Pedidos sendo lidos ao mesmo tempo (padrão 2): cada aviso pode ter vários MiB em memória. */
+  maxConcurrent?: number;
+  /** Teto do corpo do pedido em bytes (padrão 8 MiB). */
   bodyLimit?: number;
   /** Pedidos aceitos por minuto (padrão 1200). */
   maxPerMinute?: number;
   /** Tentativas com segredo errado por minuto antes de recusar tudo (padrão 30). */
   maxBadAuthPerMinute?: number;
+  /**
+   * Endereços de onde o aviso pode vir (o IP do container do Stalwart). Fora da
+   * lista: 403 antes de qualquer conferência. Sem a função, qualquer origem.
+   */
+  allowFrom?: () => Promise<readonly string[]>;
   now?: () => number;
+}
+
+/** "::ffff:172.18.0.2" → "172.18.0.2". */
+function plainIp(ip: string): string {
+  return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+}
+
+/** Tentativas ruins por origem: uma origem barulhenta não bloqueia as outras. */
+class PerIp {
+  private readonly windows = new Map<string, Window>();
+  constructor(
+    private readonly max: number,
+    private readonly now: () => number,
+  ) {}
+  private get(ip: string): Window {
+    let w = this.windows.get(ip);
+    if (!w) {
+      if (this.windows.size >= 1000) this.windows.delete(this.windows.keys().next().value as string);
+      w = new Window(this.max, this.now);
+      this.windows.set(ip, w);
+    }
+    return w;
+  }
+  full(ip: string): boolean {
+    return this.get(ip).full();
+  }
+  record(ip: string): void {
+    this.get(ip).record();
+  }
 }
 
 export const MAIL_HOOK_PATH = "/mail-hook/send";
@@ -57,7 +93,7 @@ export function buildMailHookServer(deps: MailHookServerDeps): FastifyInstance {
   const now = deps.now ?? Date.now;
   const app = Fastify({
     logger: false,
-    bodyLimit: deps.bodyLimit ?? 16 * 1024 * 1024,
+    bodyLimit: deps.bodyLimit ?? 8 * 1024 * 1024,
     connectionTimeout: 15_000,
     requestTimeout: 15_000,
     keepAliveTimeout: 5_000,
@@ -66,19 +102,36 @@ export function buildMailHookServer(deps: MailHookServerDeps): FastifyInstance {
   // Só JSON (o Stalwart manda application/json).
   app.removeContentTypeParser("text/plain");
   const all = new Window(deps.maxPerMinute ?? 1200, now);
-  const bad = new Window(deps.maxBadAuthPerMinute ?? 30, now);
+  let inflight = 0;
+  const bad = new PerIp(deps.maxBadAuthPerMinute ?? 30, now);
 
   app.addHook("onRequest", async (request, reply) => {
     if (request.method !== "POST" || request.url !== MAIL_HOOK_PATH) {
       return reply.code(404).send({ error: "not_found" });
     }
-    if (bad.full() || !all.hit()) return reply.code(429).send({ error: "rate_limited" });
+    const ip = plainIp(request.ip);
+    if (deps.allowFrom) {
+      const allowed = await deps.allowFrom().catch(() => [] as string[]);
+      if (!allowed.includes(ip)) return reply.code(403).send({ error: "forbidden" });
+    }
+    // Só a origem que errou o segredo é barrada; o segredo certo nunca é bloqueado por terceiros.
+    if (bad.full(ip)) return reply.code(429).send({ error: "rate_limited" });
     const header = request.headers.authorization;
     const provided = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";
     if (!provided || provided.length > 256 || !(await deps.verify(provided))) {
-      bad.record();
+      bad.record(ip);
       return reply.code(401).send({ error: "unauthorized" });
     }
+    if (!all.hit() || inflight >= (deps.maxConcurrent ?? 2)) return reply.code(429).send({ error: "rate_limited" });
+    inflight++;
+    let released = false;
+    const release = () => {
+      if (!released) {
+        released = true;
+        inflight--;
+      }
+    };
+    reply.raw.once("close", release);
   });
 
   app.post(MAIL_HOOK_PATH, async (request, reply) => {

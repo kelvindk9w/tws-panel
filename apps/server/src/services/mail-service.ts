@@ -433,6 +433,15 @@ export class MailService {
     };
   }
 
+  /**
+   * O ouvido do aviso pode subir? Só depende de o painel estar em container e
+   * da porta: o segredo nasce quando o servidor de e-mail é criado (com o painel
+   * já no ar), e até lá o ouvido responde 401 a tudo.
+   */
+  sendHookListenable(): boolean {
+    return this.inContainer && (this.config.mailHookPort ?? 9100) > 0;
+  }
+
   /** A captura de envios SMTP está configurada? (servidor criado, painel em container) */
   async sendHookConfigured(): Promise<boolean> {
     await this.ensureLoaded();

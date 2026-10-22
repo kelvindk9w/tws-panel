@@ -5,7 +5,7 @@
  * revelação do conteúdo. Sem Docker nem Stalwart: o aviso usado é o formato
  * real capturado de um Stalwart v0.11.8.
  */
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -71,8 +71,11 @@ beforeEach(async () => {
     senders: async () => [
       { address: "app@example.com", mailbox: "app@example.com", projectId: "p1", system: false },
       { address: "postmaster@example.com", mailbox: "postmaster@example.com", projectId: null, system: true },
+      { address: "outro@example.com", mailbox: "outro@example.com", projectId: "p2", system: false },
+      { address: "maria@example.com", mailbox: "maria@example.com", projectId: null, system: false },
     ],
-    projectNames: async () => new Map([["p1", "Loja"]]),
+    localDomains: async () => ["example.com"],
+    projectNames: async () => new Map([["p1", "Loja"], ["p2", "Blog"]]),
     serverCreated: async () => serverCreated,
     listQueue: async () => {
       if (queueFails) throw new Error("fila fora do ar");
@@ -210,12 +213,13 @@ describe("privacidade e conteúdo", () => {
 
   it("desligar por projeto: só aquele projeto; e apaga o que já estava guardado", async () => {
     await receive(hook());
-    await receive(hook({ login: "postmaster@example.com", hex: "2", from: "postmaster@example.com" }));
+    await receive(hook({ login: "outro@example.com", hex: "2", from: "outro@example.com" }));
     await svc.updateSettings({ project: { id: "p1", storeContent: false } });
     expect(await readdir(path.join(dir, "envios-conteudo"))).toEqual(["2.json"]);
     const byId = Object.fromEntries((await svc.list({})).items.map((i) => [i.id, i]));
-    expect(byId[QID]).toMatchObject({ hasContent: false, contentExpired: true });
+    expect(byId[QID]).toMatchObject({ hasContent: false, contentExpired: false, contentRemoved: true });
     expect(byId["2"]!.hasContent).toBe(true);
+    await expect(svc.reveal(QID)).rejects.toMatchObject({ statusCode: 410, code: "content_removed" });
     expect((await svc.list({ projectId: "p1" })).storesContent).toBe(false);
     expect((await svc.list({ projectId: "none" })).storesContent).toBe(true);
     await receive(hook({ hex: "3" }));
@@ -260,6 +264,91 @@ describe("privacidade e conteúdo", () => {
     await svc.purge();
     await expect(svc.reveal(QID)).rejects.toMatchObject({ statusCode: 410, code: "content_expired" });
     expect((await svc.list({})).items[0]).toMatchObject({ hasContent: false, contentExpired: true });
+  });
+});
+
+/** Troca o arquivo por uma pasta com algo dentro: o `rm` simples falha, como num erro de permissão. */
+async function blockRemoval(file: string): Promise<void> {
+  await rm(file, { force: true });
+  await mkdir(file);
+  await writeFile(path.join(file, "x"), "x");
+}
+
+describe("revisão: privacidade e atribuição", () => {
+  it("assunto e corpo só de caixa de PROJETO; webmail e caixa pessoal ficam só com os dados da mensagem", async () => {
+    await receive(hook({ login: "maria@example.com", from: "maria@example.com", hex: "a" }));
+    await receive(hook({ login: "postmaster@example.com", from: "postmaster@example.com", hex: "b" }));
+    await receive(hook({ hex: "c" }));
+    const byId = Object.fromEntries((await svc.list({})).items.map((i) => [i.id, i]));
+    expect(byId["10"]).toMatchObject({ origin: "panel", hasContent: false });
+    expect(byId["11"]).toMatchObject({ hasContent: false });
+    expect(byId["12"]).toMatchObject({ origin: "project", hasContent: true });
+    expect(await readdir(path.join(dir, "envios-conteudo"))).toEqual(["12.json"]);
+    await expect(svc.reveal("10")).rejects.toMatchObject({ code: "content_not_stored" });
+  });
+
+  it("remetente forjado de caixa existente, entregue localmente, NÃO vira envio do projeto", async () => {
+    // e-mail vindo de fora (porta 25, sem login) com MAIL FROM = caixa do projeto, para uma caixa local
+    await svc.applyEvents([event({ queueId: "300", from: "app@example.com", to: "postmaster@example.com", toDomain: "example.com" })]);
+    queue = [raw("301", "app@example.com", "postmaster@example.com")];
+    expect(await svc.reconcile()).toEqual({ created: 0, unconfirmed: 0 });
+    expect((await svc.list({})).total).toBe(0);
+    expect((await svc.list({ projectId: "p1" })).total).toBe(0);
+  });
+
+  it("entrega para fora do servidor (só existe com login) continua reconstruída pelo log", async () => {
+    await svc.applyEvents([event({ queueId: "302", from: "app@example.com", to: "cliente@exemplo.net" })]);
+    queue = [raw("303", "app@example.com", "x@exemplo.net")];
+    expect((await svc.reconcile()).created).toBe(1);
+    expect((await svc.list({ projectId: "p1" })).total).toBe(2);
+  });
+
+  it("fila mista (local + fora): só os destinatários de fora entram", async () => {
+    const base = raw("304", "app@example.com", "postmaster@example.com");
+    const extra = raw("304", "app@example.com", "fora@exemplo.net").domains[0]!;
+    queue = [{ ...base, domains: [...base.domains, extra] } as QueueMessageRaw];
+    expect((await svc.reconcile()).created).toBe(1);
+    expect((await svc.list({})).items[0]!.recipients.map((r) => r.address)).toEqual(["fora@exemplo.net"]);
+  });
+
+  it("apagar conteúdo que falha ao remover NÃO marca como apagado e repete no próximo expurgo", async () => {
+    await receive(hook());
+    const file = path.join(dir, "envios-conteudo", `${QID}.json`);
+    await blockRemoval(file);
+    await svc.updateSettings({ storeContent: false });
+    expect((await svc.list({})).items[0]).toMatchObject({ hasContent: true, contentRemoved: false });
+    expect(logs.some((l) => l.includes("Tento de novo"))).toBe(true);
+    expect(logs.join("\n")).not.toContain(SECRET_BODY);
+    // o problema passou: o expurgo seguinte (gravação já desligada) conclui
+    await rm(file, { recursive: true, force: true });
+    await svc.updateSettings({ storeContent: false });
+    expect((await svc.list({})).items[0]).toMatchObject({ hasContent: false, contentRemoved: true });
+    expect(await readdir(path.join(dir, "envios-conteudo"))).toEqual([]);
+  });
+
+  it("expurgo por retenção que falha em remover mantém o registro 'guardado'", async () => {
+    await receive(hook());
+    now += 20 * 86_400_000;
+    const file = path.join(dir, "envios-conteudo", `${QID}.json`);
+    await blockRemoval(file);
+    const first = await svc.purge();
+    expect(first.expiredContents).toBe(0);
+    expect((await svc.list({})).items[0]!.hasContent).toBe(true);
+    await rm(file, { recursive: true, force: true });
+    await writeFile(file, JSON.stringify({ id: QID, subject: "s", body: "b", bodyTruncated: false, attachments: [], storedAt: "2026-10-22T12:00:00.000Z" }));
+    expect((await svc.purge()).expiredContents).toBe(1);
+  });
+
+  it("'último envio registrado' é do projeto, não do painel todo", async () => {
+    await receive(hook({ login: "outro@example.com", from: "outro@example.com", hex: "a" }));
+    now += 3_600_000;
+    await receive(hook({ hex: "b" }));
+    const p2 = (await svc.list({ projectId: "p2" })).capture.lastReceivedAt;
+    const p1 = (await svc.list({ projectId: "p1" })).capture.lastReceivedAt;
+    expect(p2).toBe("2026-10-22T12:00:00.000Z");
+    expect(p1).toBe("2026-10-22T13:00:00.000Z");
+    expect((await svc.list({})).capture.lastReceivedAt).toBe("2026-10-22T13:00:00.000Z");
+    expect((await svc.list({ projectId: "sem-envio" })).capture.lastReceivedAt).toBeNull();
   });
 });
 

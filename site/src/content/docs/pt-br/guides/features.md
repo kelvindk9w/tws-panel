@@ -213,7 +213,8 @@ minutos sem uso, e 10 logins errados vindos do mesmo IP em 10 minutos bloqueiam 
   motivo do erro em linguagem clara, com os detalhes técnicos recolhidos). Cada projeto tem a sua
   seção **Envios**. O assunto e o corpo ficam **ocultos**: clique em **Exibir** (cada exibição fica
   no registro de auditoria, sem o conteúdo). Ficam guardados 14 dias (os dados da mensagem, 90),
-  sem anexos, e **não entram nos backups do painel**. Dá para não guardar assunto e corpo, por
+  sem anexos, e **não entram nos backups do painel**. Só as caixas **de projeto** (o que o app
+  envia) guardam assunto e corpo; webmail e caixas pessoais ficam só com de, para, hora e estado. Dá para não guardar assunto e corpo, por
   projeto ou para todos, na aba **Privacidade**.
 - **Reputação:** consulta diária às listas de bloqueio (Spamhaus ZEN e DBL, SpamCop, Barracuda),
   com o ponto de teste de cada lista para nunca dizer "limpo" sem ter conferido. Aceita a chave

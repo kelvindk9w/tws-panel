@@ -142,7 +142,7 @@ describe("Exibir", () => {
     expect((await post("/api/mail/envios/saidas/999/reveal")).statusCode).toBe(404);
     expect((await post("/api/mail/envios/saidas/abc/reveal")).statusCode).toBe(400);
     await sends.updateSettings({ storeContent: false });
-    expect((await post("/api/mail/envios/saidas/10/reveal")).json().error).toBe("content_expired");
+    expect((await post("/api/mail/envios/saidas/10/reveal")).json().error).toBe("content_removed");
     expect((await post("/api/mail/envios/saidas/10/reveal")).statusCode).toBe(410);
   });
 });

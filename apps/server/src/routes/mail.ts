@@ -1,6 +1,7 @@
 /**
  * mail.ts — rotas do módulo de e-mail (Fase 3, plano §5.3).
  */
+import { lookup } from "node:dns/promises";
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
 import { mailAuthError, mailAuthRepairFailedError, mailSyncError } from "../services/mail-auth-error.js";
@@ -447,6 +448,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
     serverCreated: () => service.enviosServerCreated(),
     listQueue: () => service.enviosQueue(),
+    localDomains: async () => (await service.listDomains()).map((d) => d.name),
     captureConfigured: () => service.sendHookConfigured(),
     log: (message) => app.log.warn(message),
   });
@@ -489,11 +491,22 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // Sobe quando o painel fica pronto e só se a captura está configurada (painel
   // em container); porta ocupada ou erro nunca derrubam o painel.
   let hookServer: ReturnType<typeof buildMailHookServer> | null = null;
+  // Só o container do Stalwart pode chamar o ouvido (endereços resolvidos pelo nome na rede do Docker).
+  let stalwartIps: { at: number; ips: string[] } = { at: 0, ips: [] };
+  const stalwartAddresses = async (): Promise<string[]> => {
+    if (Date.now() - stalwartIps.at < 30_000 && stalwartIps.ips.length > 0) return stalwartIps.ips;
+    const found = await lookup("paas-stalwart", { all: true }).catch(() => []);
+    stalwartIps = { at: Date.now(), ips: found.map((a) => a.address) };
+    return stalwartIps.ips;
+  };
   app.addHook("onReady", async () => {
-    if (!(await service.sendHookConfigured())) return;
+    // Sobe mesmo sem servidor de e-mail criado: o segredo nasce quando ele for
+    // criado, e até lá o ouvido responde 401 (sem precisar reiniciar o painel).
+    if (!service.sendHookListenable()) return;
     hookServer = buildMailHookServer({
       verify: (secret) => service.verifySendHookSecret(secret),
       submit: (payload) => sends.submit(payload),
+      allowFrom: stalwartAddresses,
     });
     try {
       await hookServer.listen({ port: app.config.mailHookPort ?? 9100, host: "0.0.0.0" });

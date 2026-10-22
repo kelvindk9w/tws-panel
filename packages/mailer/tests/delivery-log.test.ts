@@ -324,4 +324,13 @@ describe("DeliveryLogReader", () => {
       reader.push(`2026-10-04T03:00:00Z INFO OK (delivery.dsn-success) queueId = 1, from = "a@b.test", to = ["x@y.test"], to = "x@y.test", code = 250, details = "OK"`),
     ).toHaveLength(1);
   });
+  it("texto devolvido pelo servidor remoto não cria destinatário falso (', to = ...' dentro dos detalhes)", () => {
+    const reader = new DeliveryLogReader();
+    const events = [
+      `2026-10-22T03:00:00Z INFO S (delivery.attempt-start) queueId = 9, from = "app@b.test", to = ["real@remoto.test"], size = 1, total = 1`,
+      `2026-10-22T03:00:01Z INFO D (delivery.dsn-perm-fail) queueId = 9, from = "app@b.test", to = ["real@remoto.test"], size = 1, total = 1, to = "real@remoto.test", hostname = "mx.remoto.test", code = 550, details = "nao existe, to = "evil@outro.example", code = 250", total = 0`,
+    ].flatMap((l) => reader.push(l));
+    expect(events.map((e) => e.to)).toEqual(["real@remoto.test"]);
+    expect(events[0]!.state).toBe("bounced");
+  });
 });

@@ -12,7 +12,7 @@ import {
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { useAutoRefresh, type RefreshPhase } from "@/lib/auto-refresh";
-import { apiErrorText, formatDateTime as formatDateTimeI18n, useI18n } from "@/i18n";
+import { apiErrorText, useI18n } from "@/i18n";
 import { formatBytes, formatDateTime, SEND_ORIGIN_KEYS, SEND_STATE_KEYS, sendErrorText, sendStateVariant } from "@/lib/envios";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,6 +72,7 @@ export function SendLogSection({ projectId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<Record<string, Revealed>>({});
   const [projectBusy, setProjectBusy] = useState(false);
+  const [confirmOff, setConfirmOff] = useState(false);
   const [projectNote, setProjectNote] = useState<{ ok: boolean; text: string } | null>(null);
   const seq = useRef(0);
 
@@ -98,7 +99,11 @@ export function SendLogSection({ projectId }: Props) {
         const res = await apiFetch<MailSendListResponse>(`${scope}?${qs.toString()}`);
         if (mine === seq.current) setData(res);
       } catch (err) {
-        if (mine === seq.current && !quiet) setError(apiErrorText(err, "envios.sends.error.load"));
+        if (mine === seq.current && !quiet) {
+          // Sem lista velha ao lado do erro (ela diria "Mostrando 1 a 24" de uma consulta que falhou).
+          setData(null);
+          setError(apiErrorText(err, "envios.sends.error.load"));
+        }
       } finally {
         if (mine === seq.current && !quiet) setLoading(false);
       }
@@ -141,6 +146,7 @@ export function SendLogSection({ projectId }: Props) {
 
   async function toggleProjectStore(next: boolean) {
     if (!projectId) return;
+    setConfirmOff(false);
     setProjectBusy(true);
     setProjectNote(null);
     try {
@@ -178,7 +184,7 @@ export function SendLogSection({ projectId }: Props) {
           <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">{t("envios.sends.capture.waiting")}</p>
         )}
         {capture?.lastReceivedAt && (
-          <p className="text-xs text-muted-foreground">{t("envios.sends.capture.last", { date: formatDateTimeI18n(new Date(capture.lastReceivedAt), { dateStyle: "short", timeStyle: "short" }) })}</p>
+          <p className="text-xs text-muted-foreground">{t("envios.sends.capture.last", { date: formatDateTime(capture.lastReceivedAt) })}</p>
         )}
 
         {projectId && data && (
@@ -189,11 +195,24 @@ export function SendLogSection({ projectId }: Props) {
                 className="mt-0.5 h-4 w-4"
                 checked={data.storesContent}
                 disabled={projectBusy}
-                onChange={(e) => void toggleProjectStore(e.target.checked)}
+                onChange={(e) => (e.target.checked ? void toggleProjectStore(true) : setConfirmOff(true))}
               />
               <span>{t("envios.sends.project.storeContent")}</span>
             </label>
             <p className="text-xs text-muted-foreground">{t("envios.sends.project.storeContent.help")}</p>
+            {confirmOff && (
+              <div role="alertdialog" aria-label={t("envios.sends.project.confirm.question")} className="flex flex-col gap-2 rounded-md border border-destructive/40 p-2">
+                <p className="text-xs">{t("envios.sends.project.confirm.question")}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="danger" disabled={projectBusy} onClick={() => void toggleProjectStore(false)}>
+                    {t("envios.sends.project.confirm.yes")}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setConfirmOff(false)}>
+                    {t("envios.sends.project.confirm.cancel")}
+                  </Button>
+                </div>
+              </div>
+            )}
             {projectNote && (
               <p role="status" className={projectNote.ok ? "text-xs text-emerald-400" : "text-xs text-destructive"}>
                 {projectNote.text}
@@ -313,6 +332,8 @@ function SendRow({ item, state, onShow, onHide }: { item: MailSendItem; state: R
   const to = item.recipients.map((r) => r.address).join(", ");
   const shown = state?.content ?? null;
   const contentId = `send-content-${item.id}`;
+  // O rótulo do botão cita o primeiro destinatário e quantos mais (não a lista inteira).
+  const ariaTo = item.recipients.length > 1 ? t("envios.sends.aria.more", { to: item.recipients[0]!.address, n: item.recipients.length - 1 }) : (item.recipients[0]?.address ?? "");
   const origin = item.projectName ?? t(SEND_ORIGIN_KEYS[item.origin]);
   return (
     <li data-testid={`send-${item.id}`} className="flex flex-col gap-2 rounded-lg border p-3 text-sm">
@@ -354,7 +375,13 @@ function SendRow({ item, state, onShow, onHide }: { item: MailSendItem; state: R
             <span className="text-muted-foreground">{t("envios.sends.hidden")}</span>
           ) : (
             <span className="text-xs text-muted-foreground">
-              {!item.captured ? t("envios.sends.row.notCaptured") : item.contentExpired ? t("envios.sends.row.expired") : t("envios.sends.row.noContent")}
+              {!item.captured
+                ? t("envios.sends.row.notCaptured")
+                : item.contentRemoved
+                  ? t("envios.sends.row.removed")
+                  : item.contentExpired
+                    ? t("envios.sends.row.expired")
+                    : t("envios.sends.row.noContent")}
             </span>
           )}
         </div>
@@ -364,7 +391,7 @@ function SendRow({ item, state, onShow, onHide }: { item: MailSendItem; state: R
             variant="outline"
             aria-expanded={Boolean(shown)}
             aria-controls={contentId}
-            aria-label={shown ? t("envios.sends.hide.aria", { to }) : t("envios.sends.show.aria", { to })}
+            aria-label={shown ? t("envios.sends.hide.aria", { to: ariaTo }) : t("envios.sends.show.aria", { to: ariaTo })}
             disabled={state?.loading}
             onClick={shown ? onHide : onShow}
           >

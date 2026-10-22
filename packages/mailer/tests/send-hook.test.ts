@@ -217,3 +217,47 @@ describe("queueIdFromHex / decodeHeaderWords", () => {
     expect(decodeHeaderWords("=?UTF-8?Q?a=ZZb?=")).toBe("a=ZZb");
   });
 });
+
+describe("HTML hostil (CPU em tempo linear)", () => {
+  const big = { maxBodyBytes: 512 * 1024, withContent: true };
+  const html = (contents: string) => parseSendHook(payload({ headers: [["Content-Type", "text/html; charset=utf-8"]], contents }), big);
+  const N = 256 * 1024;
+  const cases: Array<[string, string]> = [
+    ["só '<' (sem '>')", "<".repeat(N)],
+    ["'<' com um '>' no fim", "<".repeat(N) + ">"],
+    ["'<script' sem fechar", "<script ".repeat(N / 8)],
+    ["script sem fechamento", "<script>" + "x".repeat(N)],
+    ["tags abertas sem fim", "<a ".repeat(N / 3)],
+    ["espaços e depois texto", " ".repeat(N) + "x"],
+    ["espaços antes de quebra de linha", (" ".repeat(1000) + "\n").repeat(N / 1001)],
+    ["quebras de linha", "\n".repeat(N)],
+    ["entidades", "&amp;&lt;".repeat(N / 9)],
+    ["'<' e '</' alternados", "</<".repeat(N / 3)],
+  ];
+
+  it.each(cases)("%s: termina rápido e devolve texto", (_name, body) => {
+    const t0 = performance.now();
+    const r = html(body);
+    const ms = performance.now() - t0;
+    expect(r.ok).toBe(true);
+    // antes da correção: 21 s com 256 KiB de '<'
+    expect(ms).toBeLessThan(500);
+  });
+
+  it("HTML enorme: só o começo é processado (teto menor que o do texto simples)", () => {
+    const t0 = performance.now();
+    const r = html("<p>início</p>" + "<b>x</b>".repeat(5_000_000));
+    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(r.ok && r.value.body?.startsWith("início")).toBe(true);
+  });
+
+  it("extrai o texto: quebras de bloco, entidades e sem script/style", () => {
+    const r = html("<style>p{x:y}</style><h1>Título</h1><p>um &amp; dois</p><div>três<br/>quatro</div><SCRIPT>evil()</SCRIPT><ul><li>a</li><li>b</li></ul>fim <b>negrito</b> &lt;ok&gt; 5 < 6");
+    expect(r.ok && r.value.body).toBe("Título\num & dois\ntrês\nquatro\n a\nb\nfim negrito <ok> 5 < 6");
+  });
+
+  it("'<' solto sem '>' continua sendo texto", () => {
+    const r = html("a < b e c <d");
+    expect(r.ok && r.value.body).toBe("a < b e c <d");
+  });
+});

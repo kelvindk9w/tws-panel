@@ -78,4 +78,5 @@ export default {
   "code.send_not_found": "Message not found.",
   "code.content_not_stored": "The subject and body of this message were not stored (storage was off or the send was not captured).",
   "code.content_expired": "The subject and body of this message were already deleted by retention.",
+  "code.content_removed": "The subject and body of this message were deleted when storing was turned off.",
 } as const;
