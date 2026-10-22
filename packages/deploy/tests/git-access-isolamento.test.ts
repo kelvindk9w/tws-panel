@@ -203,10 +203,11 @@ describe("redirecionamento não leva o token a outro host", () => {
     expect(JSON.stringify(r)).not.toContain(TOKEN);
   }, 30_000);
 
-  it("SEM token o redirecionamento é seguido como antes (repositório público que mudou de endereço)", async () => {
-    await checkGitAccess({ source: `${base}/vai.git`, branch: null, credential: null });
-    expect(otherRequests.length).toBeGreaterThan(0);
-    expect(chamadas.at(-1)?.args.join(" ")).not.toContain("followRedirects");
+  it("SEM token o teste também NÃO segue redirecionamento (nada de SSRF por redirect para destino interno)", async () => {
+    const r = await checkGitAccess({ source: `${base}/vai.git`, branch: null, credential: null });
+    expect(r).toMatchObject({ ok: false, reason: "redirected" });
+    expect(otherRequests).toEqual([]);
+    expect(chamadas.at(-1)?.args.join(" ")).toContain("http.followRedirects=false");
   }, 30_000);
 
   it("a mensagem do redirecionamento cita o endereço final e a falta do .git", () => {

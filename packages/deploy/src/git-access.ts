@@ -18,8 +18,10 @@
  * vivo. Enquanto o git roda, o token está no AMBIENTE dele (legível em
  * /proc/<pid>/environ pelo mesmo usuário do sistema), nunca no argv.
  *
- * REDIRECIONAMENTO: com token, `http.followRedirects=false`: um 301/302 não leva o
- * cabeçalho Authorization a outro host. Sem token o redirecionamento segue.
+ * REDIRECIONAMENTO: o TESTE nunca segue (`http.followRedirects=false`, com ou sem
+ * token): com token, o Authorization não vai a outro host; sem token, um host
+ * público não redireciona a consulta a loopback/metadados/rede interna e contorna
+ * resolveTarget. (O clone real sem token segue redirecionamentos.)
  * PROXY: variáveis de proxy herdadas são removidas e `http.proxy` fica vazio, para
  * a consulta ir direto ao endereço conferido (um proxy contornaria a fixação do DNS).
  *
@@ -319,7 +321,8 @@ export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCh
     ...GIT_SAFE_CONFIG,
     "-c",
     "http.proxy=",
-    ...(credential ? ["-c", "credential.helper=", "-c", `credential.helper=${CHECK_CREDENTIAL_HELPER}`, ...NO_REDIRECT_CONFIG] : []),
+    ...NO_REDIRECT_CONFIG,
+    ...(credential ? ["-c", "credential.helper=", "-c", `credential.helper=${CHECK_CREDENTIAL_HELPER}`] : []),
     ...(input.pin ? ["-c", `http.curloptResolve=${input.pin}`] : []),
     // servidor que para de responder derruba a conexão em vez de pendurar o teste
     "-c",
