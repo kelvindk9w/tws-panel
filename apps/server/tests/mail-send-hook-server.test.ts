@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { buildMailHookServer, MAIL_HOOK_PATH } from "../src/services/mail-send-hook-server.js";
+import { buildMailHookServer, MAIL_HOOK_PATH, stalwartAddressResolver } from "../src/services/mail-send-hook-server.js";
 
 const SECRET = "ab".repeat(32);
 let app: FastifyInstance | null = null;
@@ -145,5 +145,51 @@ describe("ouvido do aviso de envio", () => {
   it("não há cookie nem CSRF: pedido com Origin de outro site também passa (é o Stalwart, não um navegador)", async () => {
     build();
     expect((await post({ authorization: `Bearer ${SECRET}`, origin: "https://evil.example.com" })).statusCode).toBe(200);
+  });
+});
+
+describe("endereços do Stalwart (cache com nova consulta ao IP desconhecido)", () => {
+  it("guarda por 30 s; IP desconhecido refaz a consulta, no máximo a cada 5 s", async () => {
+    let t = 0;
+    let ips = ["10.0.0.2"];
+    const lookup = vi.fn(async () => ips);
+    const resolve = stalwartAddressResolver({ lookup, now: () => t });
+    expect(await resolve("10.0.0.2")).toEqual(["10.0.0.2"]);
+    expect(await resolve("10.0.0.2")).toEqual(["10.0.0.2"]);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    // o container foi recriado com outro IP: o primeiro pedido novo já acha o endereço certo
+    ips = ["10.0.0.7"];
+    t = 6_000;
+    expect(await resolve("10.0.0.7")).toEqual(["10.0.0.7"]);
+    expect(lookup).toHaveBeenCalledTimes(2);
+    // um desconhecido não força consulta a cada pedido
+    t = 7_000;
+    expect(await resolve("10.9.9.9")).toEqual(["10.0.0.7"]);
+    expect(lookup).toHaveBeenCalledTimes(2);
+    t = 12_000;
+    await resolve("10.9.9.9");
+    expect(lookup).toHaveBeenCalledTimes(3);
+    // IP conhecido só renova depois de 30 s
+    t = 20_000;
+    await resolve("10.0.0.7");
+    expect(lookup).toHaveBeenCalledTimes(3);
+    t = 43_000;
+    await resolve("10.0.0.7");
+    expect(lookup).toHaveBeenCalledTimes(4);
+  });
+
+  it("consulta que falha vira lista vazia e tenta de novo em 5 s; pedidos juntos dividem a mesma consulta", async () => {
+    let t = 0;
+    let fail = true;
+    const lookup = vi.fn(async () => {
+      if (fail) throw new Error("sem DNS");
+      return ["10.0.0.2"];
+    });
+    const resolve = stalwartAddressResolver({ lookup, now: () => t });
+    expect(await Promise.all([resolve("10.0.0.2"), resolve("10.0.0.2")])).toEqual([[], []]);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    fail = false;
+    t = 5_000;
+    expect(await resolve("10.0.0.2")).toEqual(["10.0.0.2"]);
   });
 });

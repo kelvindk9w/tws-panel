@@ -328,7 +328,7 @@ describe("DeliveryLogReader", () => {
     const reader = new DeliveryLogReader();
     const events = [
       `2026-10-22T03:00:00Z INFO S (delivery.attempt-start) queueId = 9, from = "app@b.test", to = ["real@remoto.test"], size = 1, total = 1`,
-      `2026-10-22T03:00:01Z INFO D (delivery.dsn-perm-fail) queueId = 9, from = "app@b.test", to = ["real@remoto.test"], size = 1, total = 1, to = "real@remoto.test", hostname = "mx.remoto.test", code = 550, details = "nao existe, to = "evil@outro.example", code = 250", total = 0`,
+      `2026-10-22T03:00:01Z INFO D (delivery.dsn-perm-fail) queueId = 9, from = "app@b.test", to = ["real@remoto.test"], size = 1, total = 1, to = "real@remoto.test", hostname = "mx.remoto.test", code = 550, details = "x", to = "evil@outro.example", queueId = "1", from = "blog@example.com", elapsed = 0ms", total = 0`,
     ].flatMap((l) => reader.push(l));
     expect(events.map((e) => e.to)).toEqual(["real@remoto.test"]);
     expect(events[0]!.state).toBe("bounced");

@@ -40,7 +40,7 @@ import { migrateMailNetworks } from "../services/mail-network-migration.js";
 import { mailEnviosRoutes } from "./mail-envios.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
-import { buildMailHookServer } from "../services/mail-send-hook-server.js";
+import { buildMailHookServer, stalwartAddressResolver } from "../services/mail-send-hook-server.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
@@ -504,13 +504,9 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // em container); porta ocupada ou erro nunca derrubam o painel.
   let hookServer: ReturnType<typeof buildMailHookServer> | null = null;
   // Só o container do Stalwart pode chamar o ouvido (endereços resolvidos pelo nome na rede do Docker).
-  let stalwartIps: { at: number; ips: string[] } = { at: 0, ips: [] };
-  const stalwartAddresses = async (): Promise<string[]> => {
-    if (Date.now() - stalwartIps.at < 30_000 && stalwartIps.ips.length > 0) return stalwartIps.ips;
-    const found = await lookup("paas-stalwart", { all: true }).catch(() => []);
-    stalwartIps = { at: Date.now(), ips: found.map((a) => a.address) };
-    return stalwartIps.ips;
-  };
+  const stalwartAddresses = stalwartAddressResolver({
+    lookup: async () => (await lookup("paas-stalwart", { all: true })).map((a) => a.address),
+  });
   app.addHook("onReady", async () => {
     // Sobe mesmo sem servidor de e-mail criado: o segredo nasce quando ele for
     // criado, e até lá o ouvido responde 401 (sem precisar reiniciar o painel).

@@ -345,6 +345,28 @@ describe("filtros, páginas e atualização", () => {
     expect(await screen.findByTestId("send-1")).toBeInTheDocument();
   });
 
+  it("o campo de busca só leva à página 1 quando o texto muda: 'Próxima' logo ao abrir não se perde", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fn = mockApi((url) => {
+      const offset = Number(new URL(url, "http://x").searchParams.get("offset"));
+      return { status: 200, body: list([item(String(offset + 1))], { total: 30, offset }) };
+    });
+    render(<SendLogSection projectId="p1" />);
+    await screen.findByTestId("send-1");
+    await userEvent.click(screen.getByRole("button", { name: "Próxima" }));
+    expect(await screen.findByTestId("send-26")).toBeInTheDocument();
+    // passa o prazo da busca (300 ms) sem ninguém digitar: continua na página 2
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(screen.getByTestId("send-26")).toBeInTheDocument();
+    expect(String(fn.mock.calls.at(-1)![0])).toContain("offset=25");
+    // digitar de verdade volta à página 1
+    await userEvent.type(screen.getByLabelText("Destinatário"), "ana");
+    await waitFor(() => expect(String(fn.mock.calls.at(-1)![0])).toContain("recipient=ana"));
+    expect(String(fn.mock.calls.at(-1)![0])).toContain("offset=0");
+  });
+
   it("Atualizar recarrega; enquanto há mensagem na fila, atualiza sozinho", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fn = mockApi(() => ({ status: 200, body: list([item("1", { state: "queued" })]) }));

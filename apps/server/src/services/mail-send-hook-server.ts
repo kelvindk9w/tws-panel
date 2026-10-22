@@ -31,8 +31,44 @@ export interface MailHookServerDeps {
    * Endereços de onde o aviso pode vir (o IP do container do Stalwart). Fora da
    * lista: 403 antes de qualquer conferência. Sem a função, qualquer origem.
    */
-  allowFrom?: () => Promise<readonly string[]>;
+  allowFrom?: (ip: string) => Promise<readonly string[]>;
   now?: () => number;
+}
+
+/**
+ * Endereços do container do Stalwart, por nome na rede do Docker. Guardados por
+ * 30 s; um pedido de IP desconhecido (o container foi recriado e mudou de
+ * endereço) refaz a consulta, no máximo uma vez a cada 5 s, para não perder
+ * capturas por até 30 s nem deixar quem não é o Stalwart forçar consultas.
+ */
+export function stalwartAddressResolver(opts: {
+  lookup: () => Promise<string[]>;
+  now?: () => number;
+  ttlMs?: number;
+  retryMs?: number;
+}): (ip: string) => Promise<string[]> {
+  const now = opts.now ?? Date.now;
+  const ttl = opts.ttlMs ?? 30_000;
+  const retry = opts.retryMs ?? 5_000;
+  let cache: { at: number; ips: string[] } | null = null;
+  let inflight: Promise<string[]> | null = null;
+  return async (ip) => {
+    if (cache) {
+      const age = now() - cache.at;
+      if (cache.ips.includes(ip) ? age < ttl : age < retry) return cache.ips;
+    }
+    inflight ??= opts
+      .lookup()
+      .catch(() => [] as string[])
+      .then((ips) => {
+        cache = { at: now(), ips };
+        return ips;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+    return inflight;
+  };
 }
 
 /** "::ffff:172.18.0.2" → "172.18.0.2". */
@@ -111,7 +147,7 @@ export function buildMailHookServer(deps: MailHookServerDeps): FastifyInstance {
     }
     const ip = plainIp(request.ip);
     if (deps.allowFrom) {
-      const allowed = await deps.allowFrom().catch(() => [] as string[]);
+      const allowed = await deps.allowFrom(ip).catch(() => [] as string[]);
       if (!allowed.includes(ip)) return reply.code(403).send({ error: "forbidden" });
     }
     // Só a origem que errou o segredo é barrada; o segredo certo nunca é bloqueado por terceiros.

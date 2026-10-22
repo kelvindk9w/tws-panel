@@ -52,7 +52,7 @@ Estado e motivo continuam vindo do registro do container (a cada 5 min); o id da
 6. Só o container do Stalwart é aceito (origem conferida) e as tentativas ruins contam por origem.
 7. `PAAS_MAIL_HOOK_PORT` repassada pelo docker-compose e documentada em `global/configuracao.json`.
 8. O destinatário de um evento do log tem de estar entre os da mensagem (texto remoto não cria destinatário falso).
-9. Corpo máximo 8 MiB, 2 pedidos ao mesmo tempo, fila de 16 avisos.
+9. JSON do aviso até 8 MiB (~6 MiB de mensagem), 2 pedidos ao mesmo tempo, fila de 16 avisos.
 10. Conteúdo só é marcado como apagado depois que o arquivo realmente saiu.
 11. Mensagem própria ao desligar a gravação e confirmação no checkbox do projeto.
 12. "Último envio registrado" é do projeto.
@@ -63,7 +63,7 @@ Estado e motivo continuam vindo do registro do container (a cada 5 min); o id da
 
 1. O receptor escuta em `0.0.0.0` dentro do container; outra rede Docker em que o painel esteja
    ligado o alcança. Proteção = segredo + limite de taxa. Não publique a porta.
-2. Mensagem > 8 MiB é enviada, mas sem assunto/corpo (só metadados pelo log).
+2. Aviso acima de 8 MiB de JSON (mensagem de ~6 MiB) ou além de 2 avisos simultâneos (429) é enviado normalmente, mas perde a captura: sem assunto/corpo, só pelo log, e só se algum destinatário for externo.
 3. Recusa antes da fila (senha errada) não aparece.
 4. Entregue/falhou pode demorar até 5 min (intervalo da leitura do log).
 5. Atualizar o painel muda o `config.toml`: a primeira sincronização reinicia o Stalwart uma vez.
@@ -72,7 +72,7 @@ Estado e motivo continuam vindo do registro do container (a cada 5 min); o id da
 
 ## Verificação feita
 
-- Mailer 451 testes, ramos 98,16%. Servidor 2513 testes (cobertura 97,58/93,5/98,07/98,77).
+- Mailer 472 testes, ramos 98,12%. Servidor 2608 testes (cobertura 97,58/93,43/98,07/98,77).
   Web 1382 testes. `pnpm -r typecheck` e `check-no-real-hosts` ok.
 - Integração real: `node_modules/.bin/tsx scripts/test-mail-send-log.mts` — 7 verificações:
   envio autenticado pela caixa do projeto aparece (projeto, anexo nome/tamanho); domínio

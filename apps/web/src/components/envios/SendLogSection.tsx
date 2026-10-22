@@ -75,11 +75,16 @@ export function SendLogSection({ projectId }: Props) {
   const [confirmOff, setConfirmOff] = useState(false);
   const [projectNote, setProjectNote] = useState<{ ok: boolean; text: string } | null>(null);
   const seq = useRef(0);
+  const appliedSearch = useRef("");
 
   // Busca digitada: espera a pessoa parar de digitar.
   useEffect(() => {
     const timer = setTimeout(() => {
-      setFilters((f) => (f.recipient === search ? f : { ...f, recipient: search }));
+      // Só volta à página 1 quando o texto buscado mudou de fato (um clique em
+      // "Próxima" logo depois de abrir a tela não pode se perder).
+      if (appliedSearch.current === search) return;
+      appliedSearch.current = search;
+      setFilters((f) => ({ ...f, recipient: search }));
       setPage(0);
     }, 300);
     return () => clearTimeout(timer);
