@@ -106,6 +106,8 @@ interface StoredDomain extends MailDomain {
    * em domínios cadastrados antes de 04/10/2026: a sincronização acrescenta.
    */
   dmarcAlias?: boolean;
+  /** Chave DKIM criada e ainda não carregada pelo Stalwart (precisa reiniciar). Some quando um reinício dá certo. */
+  dkimRestartPending?: true;
 }
 
 /**
@@ -258,6 +260,13 @@ export interface RemoveDomainResult {
 
 /** Reparos da senha de administração em andamento, por pasta de dados. */
 const REPAIRS_IN_FLIGHT = new Map<string, Promise<"ok" | "repaired" | "failed" | "unreachable" | "not_running">>();
+
+/**
+ * Reinícios do Stalwart por pasta de dados: um de cada vez, e quem pede enquanto
+ * outro ainda ESPERA para começar entra no mesmo (cadastros simultâneos, a
+ * sincronização do TLS e o reparo da senha não reiniciam o servidor em cima um do outro).
+ */
+const RESTARTS = new Map<string, { tail: Promise<void>; waiting: Promise<void> | null }>();
 
 export class MailService {
   private readonly mailDir: string;
@@ -655,12 +664,7 @@ export class MailService {
     // Sincronizar, o botão e a subida do painel usam este método: o erro cru do Docker (stderr, que pode
     // ecoar a configuração com a senha) vira aqui, num lugar só, o erro limpo e mascarado.
     try {
-      const certificates = await this.currentCertificates();
-      const manager = this.manager(certificates);
-      await manager.applyTls({ restart: true });
-      await manager.waitReady();
-      this.data.tls = this.tlsState(certificates);
-      await this.save();
+      await this.requestRestart();
     } catch (err) {
       throw mailAuthRepairIncompleteError(err, this.data.adminSecret ?? null);
     }
@@ -734,9 +738,15 @@ export class MailService {
       sameNames &&
       Object.entries(wanted.certificates).every(([h, fp]) => applied.certificates[h] === fp) &&
       applied.aliases.join(",") === wanted.aliases.join(",");
-    if (sameContent) return { result: "none", certificates };
+    const dkimPending = this.dkimPendingDomains().length > 0;
+    if (sameContent && !dkimPending) return { result: "none", certificates };
 
-    const result = await this.manager(certificates).applyTls({ restart: !sameNames });
+    // Nome novo, outra configuração ou chave DKIM ainda não carregada: só reiniciando (fila única de reinícios).
+    if (!sameNames || dkimPending) {
+      await this.requestRestart(certificates);
+      return { result: "restarted", certificates };
+    }
+    const result = await this.manager(certificates).applyTls({ restart: false });
     this.data.tls = wanted;
     await this.save();
     return { result, certificates };
@@ -1030,6 +1040,7 @@ export class MailService {
       createdAt: now,
       lastVerify: null,
       dmarcAlias: true,
+      dkimRestartPending: true,
     };
     this.data.domains[domain] = stored;
 
@@ -1048,7 +1059,7 @@ export class MailService {
     };
 
     await this.save();
-    await this.restartToActivateDkim(domain);
+    await this.restartToActivateDkim([domain]);
     return this.summaryOf(stored);
   }
 
@@ -1056,25 +1067,53 @@ export class MailService {
    * O Stalwart v0.11.8 só passa a assinar com uma chave DKIM nova depois de
    * reiniciar: GET /api/reload não a carrega (conferido em Docker real,
    * packages/mailer/tests/stalwart-deliverability.integration.test.ts: sem o
-   * reinício a mensagem sai SEM DKIM-Signature). Um domínio cadastrado com o
-   * servidor já no ar enviaria sem assinatura até o próximo reinício. Por
-   * isso o cadastro reinicia o servidor uma vez (alguns segundos; a fila fica
-   * no volume). Falha não desfaz o cadastro: vai para o log e o reinício
-   * volta a acontecer quando o certificado do domínio for instalado.
+   * reinício a mensagem sai SEM DKIM-Signature). Por isso cadastrar um domínio
+   * ou adotar um que já tem chave criada agora reinicia o servidor (alguns
+   * segundos; a fila fica no volume), numa fila única de reinícios. Falha não
+   * desfaz o cadastro: o domínio fica marcado como "reinício pendente" (o
+   * painel de saúde mostra atenção, não "ok"), vai para o log e a próxima
+   * sincronização do servidor tenta de novo. Devolve os domínios ainda pendentes.
    */
-  private async restartToActivateDkim(domain: string): Promise<void> {
+  private async restartToActivateDkim(domains: string[]): Promise<string[]> {
     try {
-      const certificates = await this.currentCertificates();
-      const manager = this.manager(certificates);
-      await manager.applyTls({ restart: true });
-      await manager.waitReady();
-      this.data.tls = this.tlsState(certificates);
-      await this.save();
+      await this.requestRestart();
     } catch (err) {
-      this.log(`E-mail: não deu para reiniciar o servidor para ativar o DKIM de ${domain}`, {
+      this.log(`E-mail: não deu para reiniciar o servidor para ativar o DKIM de ${domains.join(", ")}`, {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    return domains.filter((d) => this.data.domains[d]?.dkimRestartPending);
+  }
+
+  private dkimPendingDomains(): string[] {
+    return Object.values(this.data.domains).filter((d) => d.dkimRestartPending).map((d) => d.name);
+  }
+
+  /** Pede um reinício: um de cada vez, e quem chega enquanto outro ainda espera para começar entra nele. */
+  private requestRestart(known?: MailCertificate[]): Promise<void> {
+    const slot = RESTARTS.get(this.mailDir) ?? { tail: Promise.resolve(), waiting: null };
+    RESTARTS.set(this.mailDir, slot);
+    if (slot.waiting) return slot.waiting;
+    const waiting = slot.tail
+      .catch(() => undefined)
+      .then(async () => {
+        slot.waiting = null; // a partir daqui, quem pedir precisa de OUTRO reinício
+        await this.restartNow(known);
+      });
+    slot.waiting = waiting;
+    slot.tail = waiting;
+    return waiting;
+  }
+
+  private async restartNow(known?: MailCertificate[]): Promise<void> {
+    const covered = this.dkimPendingDomains();
+    const certificates = known ?? (await this.currentCertificates());
+    const manager = this.manager(certificates);
+    await manager.applyTls({ restart: true });
+    await manager.waitReady();
+    this.data.tls = this.tlsState(certificates);
+    for (const name of covered) delete this.data.domains[name]?.dkimRestartPending;
+    await this.save();
   }
 
   async removeDomain(name: string): Promise<RemoveDomainResult> {
@@ -1151,6 +1190,7 @@ export class MailService {
       dkimSelector: domain.dkimSelector,
       dkimPublicKey: domain.dkimPublicKey,
       dmarcStage: domain.dmarcStage,
+      ...(domain.dkimRestartPending ? { dkimRestartPending: true } : {}),
     };
   }
 
@@ -1471,10 +1511,13 @@ export class MailService {
 
     // O domínio precisa da chave DKIM pública para o checklist de DNS. Sem ela, não entra (nem as caixas dele).
     const dkim = new Map<string, string>();
+    const createdKeys = new Set<string>();
     const skipped = [...plan.skipped];
     for (const name of plan.domains) {
       try {
-        dkim.set(name, await this.readOrCreateDkim(client, name));
+        const read = await this.readOrCreateDkim(client, name);
+        dkim.set(name, read.key);
+        if (read.created) createdKeys.add(name);
       } catch (err) {
         if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) throw err;
         skipped.push(name);
@@ -1509,6 +1552,8 @@ export class MailService {
         createdAt: now,
         lastVerify: null,
         ...(dmarcReceives(name) ? { dmarcAlias: true } : {}),
+        // chave criada agora: o Stalwart só assina com ela depois de reiniciar
+        ...(createdKeys.has(name) ? { dkimRestartPending: true as const } : {}),
       };
       result.domains.push(name);
     }
@@ -1534,6 +1579,10 @@ export class MailService {
     if (result.domains.length > 0 || result.mailboxes.length > 0) await this.save();
     await this.realignKnownPasswords(client, new Set(mailboxPrincipals.map((p) => p.name.trim().toLowerCase())), result);
     await this.pushProjectNames(client, mailboxPrincipals);
+    if (result.domains.some((d) => createdKeys.has(d))) {
+      const stillPending = await this.restartToActivateDkim(result.domains.filter((d) => createdKeys.has(d)));
+      if (stillPending.length > 0) result.dkimRestartPending = stillPending;
+    }
     if (skipped.length > MAIL_ADOPT_SKIPPED_MAX) {
       result.skippedTotal = skipped.length;
       result.skipped = skipped.slice(0, MAIL_ADOPT_SKIPPED_MAX);
@@ -1611,11 +1660,11 @@ export class MailService {
   }
 
   /** Chave pública DKIM do domínio no Stalwart; se a assinatura não existe, cria como no cadastro do domínio. */
-  private async readOrCreateDkim(client: StalwartClient, domain: string): Promise<string> {
+  private async readOrCreateDkim(client: StalwartClient, domain: string): Promise<{ key: string; created: boolean }> {
     // só cria quando o Stalwart diz que NÃO existe; qualquer outra falha de leitura sobe (e o domínio fica de fora)
     const existing = await client.findDkimPublicKey(`rsa-${domain}`);
-    if (existing !== null) return existing;
-    return client.getDkimPublicKey(await client.createDkimSignature(domain, DKIM_SELECTOR));
+    if (existing !== null) return { key: existing, created: false };
+    return { key: await client.getDkimPublicKey(await client.createDkimSignature(domain, DKIM_SELECTOR)), created: true };
   }
 
   // -------------------------------------------------------------------------

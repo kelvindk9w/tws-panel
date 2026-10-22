@@ -19,6 +19,16 @@ server keeps the message and retries; the first retry is about 2 minutes later. 
 regular sending, at a low and growing volume, without complaints. The panel shows the cause under
 **Email sending health**, in the "Sending queue" item.
 
+Note: if the reason is `4.7.26`, `4.7.27`, `4.7.30` or `4.7.32`, **it is not a rate limit**. It is an
+authentication failure (SPF, DKIM or sender domain alignment) and waiting does not fix it: check SPF and
+DKIM below and the domain used as the sender.
+
+> [!NOTE]
+> **Registering a domain restarts the mail server** for a few seconds, because Stalwart only signs with the
+> new DKIM key after a restart. Open connections drop and come back; the sending queue is kept. If the
+> restart fails, the panel shows DKIM as **attention (restart pending)**, and messages go out unsigned
+> until the next sync.
+
 ## 1. Set up DNS in order
 
 Open the domain on the Email page. The **Email sending health** card has the **DNS step by step**, with

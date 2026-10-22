@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "POST",
   "url": "/api/mail/domains",
-  "resumo": "Provisiona um domínio de e-mail: cria o domínio no Stalwart, gera o par DKIM RSA 2048 e cria a caixa postmaster@ (com os endereços extras abuse@ e dmarc@).",
+  "resumo": "Provisiona um domínio de e-mail: cria o domínio no Stalwart, gera o par DKIM RSA 2048 e cria a caixa postmaster@ (com os endereços extras abuse@ e dmarc@) e REINICIA o Stalwart uma vez para ele passar a assinar com a chave DKIM nova.",
   "arquivoFonte": "apps/server/src/routes/mail.ts:87",
   "autenticacao": {
     "exigida": true,
@@ -140,6 +140,8 @@
   "efeitosColaterais": [
     "Cria domínio + par DKIM + caixa postmaster@/abuse@ dentro do Stalwart (volume paas_stalwart_data).",
     "Grava data/mail/mail.json (novo domínio + nova caixa 'system').",
+    "REINICIA o container do Stalwart (MailService.restartToActivateDkim): o v0.11.8 só assina com uma chave DKIM criada pela API depois de reiniciar; /api/reload não basta (provado em Docker real, packages/mailer/tests/stalwart-deliverability.integration.test.ts: sem reinício a mensagem sai sem DKIM-Signature). Consequências: por alguns segundos SMTP/IMAP caem (conexões abertas são cortadas; clientes reconectam) e a fila de envio fica no volume e continua depois. Os reinícios passam por uma fila única (cadastros simultâneos, sincronização do TLS e reparo da senha não reiniciam em cima um do outro; quem espera entra no mesmo reinício).",
+    "Se o reinício falha, o cadastro NÃO é desfeito: o domínio fica marcado com dkimRestartPending (resposta, mail.json e painel de saúde mostram atenção 'reinício pendente', nunca DKIM 'ok'), o erro vai para o log e a próxima sincronização do TLS tenta de novo.",
     "Auditoria: mail.domain.add."
   ],
   "chamadoPor": [

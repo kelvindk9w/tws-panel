@@ -40,7 +40,14 @@ const PROXY = `tws-it-proxy-${ID}`;
 const ALIAS = "stalwart-it";
 const SINK_ALIAS = "sink-it";
 const SINK = `tws-it-sink-${ID}`;
+const DEFER = `tws-it-defer-${ID}`;
+const DEFER_ALIAS = "defer-it";
+const DEFER_TEXT = "451 4.7.26 This mail is unauthenticated, which poses a security risk to the recipient";
 const DOMAIN = "example.test";
+/** Domínio cuja chave DKIM é criada SEM reiniciar o servidor (o controle do achado). */
+const NORESTART = "semreinicio.test";
+/** Destino cujo servidor recusa o destinatário com 4xx (falha de autenticação do Gmail): a mensagem fica adiada de verdade. */
+const DOWN_DOMAIN = "adiado.test";
 const HOST = `mail.${DOMAIN}`;
 const SECRET = `it-${randomBytes(8).toString("hex")}`;
 const PASSWORD = `Senha-${randomBytes(6).toString("hex")}`;
@@ -119,9 +126,15 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
     const [first, ...rest] = base.split("\n");
     const config = [
       first,
-      `queue.outbound.next-hop = [{if = "rcpt_domain == '${DOMAIN}'", then = "'local'"}, {else = "'sink'"}]`,
+      `queue.outbound.next-hop = [{if = "rcpt_domain == '${DOMAIN}'", then = "'local'"}, {if = "rcpt_domain == '${DOWN_DOMAIN}'", then = "'down'"}, {else = "'sink'"}]`,
       'queue.outbound.tls.starttls = "optional"',
       ...rest,
+      "",
+      "[remote.down]",
+      `address = "${DEFER_ALIAS}"`,
+      "port = 25",
+      'protocol = "smtp"',
+      "tls.implicit = false",
       "",
       "[remote.sink]",
       `address = "${SINK_ALIAS}"`,
@@ -148,6 +161,14 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
       "});c.on('error',()=>{});}).listen(25,'0.0.0.0');",
     ].join("");
     docker("run", "-d", "--name", SINK, "--network", INTERNAL, "--network-alias", SINK_ALIAS, "node:22-alpine", "node", "-e", sinkScript);
+    const deferScript = [
+      "const net=require('net');",
+      "net.createServer(c=>{c.write('220 defer ESMTP\\r\\n');let b='';c.on('data',x=>{b+=x.toString('latin1');let i;",
+      "while((i=b.indexOf('\\r\\n'))>=0){const l=b.slice(0,i);b=b.slice(i+2);",
+      `if(/^RCPT/i.test(l))c.write('${DEFER_TEXT}\\r\\n');`,
+      "else if(/^QUIT/i.test(l)){c.write('221 bye\\r\\n');c.end();}else if(/^EHLO/i.test(l))c.write('250 defer\\r\\n');else c.write('250 ok\\r\\n');}});c.on('error',()=>{});}).listen(25,'0.0.0.0');",
+    ].join("");
+    docker("run", "-d", "--name", DEFER, "--network", INTERNAL, "--network-alias", DEFER_ALIAS, "node:22-alpine", "node", "-e", deferScript);
     docker("create", "--name", STALWART, "--network", INTERNAL, "--network-alias", ALIAS, STALWART_IMAGE);
     docker("cp", path.join(work, "etc"), `${STALWART}:/opt/stalwart-mail/`);
     docker("start", STALWART);
@@ -184,12 +205,18 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
     await until("API depois do reinício", async () => client.listQueue().then(() => true).catch(() => false));
     await client.createMailbox(`alice@${DOMAIN}`, PASSWORD);
     await client.createMailbox(`bob@${DOMAIN}`, PASSWORD);
+
+    // Controle: segundo domínio com chave criada DEPOIS do último reinício e sem reiniciar de novo.
+    await client.createDomain(NORESTART);
+    await client.createDkimSignature(NORESTART);
+    await client.createMailbox(`carol@${NORESTART}`, PASSWORD);
   }, 180_000);
 
   afterAll(() => {
     for (const args of [
       ["rm", "-f", "-v", PROXY],
       ["rm", "-f", "-v", SINK],
+      ["rm", "-f", "-v", DEFER],
       ["rm", "-f", "-v", STALWART],
       ["network", "rm", INTERNAL],
       ["network", "rm", EXTERNAL],
@@ -203,21 +230,33 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
     if (work) rmSync(work, { recursive: true, force: true });
   }, 60_000);
 
-  async function send(to: string, subject: string): Promise<void> {
+  async function send(to: string, subject: string, user = `alice@${DOMAIN}`): Promise<void> {
     await sendSmtpMail({
       host: "127.0.0.1",
       port: smtpPort,
       servername: HOST,
-      username: `alice@${DOMAIN}`,
+      username: user,
       password: PASSWORD,
-      from: `alice@${DOMAIN}`,
+      from: user,
       to,
       subject,
       text: "Mensagem de teste de entregabilidade.",
       envId: `it-${randomBytes(4).toString("hex")}`,
       // sem Message-ID do cliente de propósito: o servidor deve acrescentar o dele? (o buildTestMessage já traz um)
-      messageId: `<it-${randomBytes(4).toString("hex")}@${DOMAIN}>`,
+      messageId: `<it-${randomBytes(4).toString("hex")}@${user.split("@")[1]}>`,
     });
+  }
+
+  /** Mensagem que chegou ao receptor falso com este assunto (como o Stalwart a entregou). */
+  async function sinkMessage(subject: string): Promise<string> {
+    return until(`mensagem "${subject}" no receptor falso`, async () => {
+      for (const line of docker("logs", SINK).split("\n")) {
+        if (!line.startsWith("MSG:")) continue;
+        const raw = Buffer.from(line.slice(4), "base64").toString("latin1");
+        if (raw.includes(`Subject: ${subject}`)) return raw;
+      }
+      return null;
+    }, 60_000);
   }
 
   it("a chave DKIM criada pelo painel tem 2048 bits e o verificador de saúde a lê", async () => {
@@ -319,4 +358,55 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
     expect(views.every((v) => v.recipients.every((r) => r.state !== "bounced"))).toBe(true);
     expect(classifyDelay("421-4.7.28 unusual rate of unsolicited mail")).toBe("rate_limited");
   });
+
+  it("CONTROLE: chave DKIM criada sem reiniciar o servidor NÃO assina; depois do reinício, assina", async () => {
+    await send("alguem@destino-externo.test", "Controle sem reinicio", `carol@${NORESTART}`);
+    const before = await sinkMessage("Controle sem reinicio");
+    expect(before).not.toMatch(/^DKIM-Signature:/im);
+    // o que o painel passou a fazer ao cadastrar/adotar um domínio
+    docker("restart", STALWART);
+    await until("API depois do reinício", async () => client.listQueue().then(() => true).catch(() => false));
+    await send("alguem@destino-externo.test", "Controle com reinicio", `carol@${NORESTART}`);
+    const after = await sinkMessage("Controle com reinicio");
+    expect(after).toMatch(/^DKIM-Signature: .*\bd=semreinicio\.test\b/ims);
+  }, 240_000);
+
+  it("adiamento REAL do Stalwart: a fila lida da API vira o item 'Fila de envio' com a causa em português", async () => {
+    await send(`alguem@${DOWN_DOMAIN}`, "Para destino fora do ar");
+    const views = await until("mensagem adiada na fila do Stalwart", async () => {
+      const { items } = await client.listQueue();
+      const deferred = items.map(queueItemFromMessage).filter((v) => v.recipients.some((r) => r.state === "deferred") && v.lastError);
+      return deferred.length > 0 ? deferred : null;
+    }, 90_000).catch(async (err: Error) => {
+      const { items } = await client.listQueue();
+      throw new Error(`${err.message}; fila: ${JSON.stringify(items)}`);
+    });
+    const reason = views[0]!.lastError!;
+    // não é texto fixo do teste: é o que o Stalwart escreveu ao adiar (a recusa 4.7.26 do destino)
+    expect(reason.length).toBeGreaterThan(5);
+    expect(reason).toContain("4.7.26");
+    expect(classifyDelay(reason)).toBe("auth");
+    const report = await evaluateHealth({
+      domain: DOMAIN,
+      mailHostname: HOST,
+      serverHostname: HOST,
+      serverIp: "203.0.113.10",
+      dkimSelector: "paas",
+      dkimPublicKey,
+      dmarcStage: "none",
+      resolvers: [{ label: "falso", resolver: { resolve4: async () => [], resolve6: async () => [], resolveMx: async () => [], resolveTxt: async () => [], reverse: async () => [] } }],
+      ptr: { ip: "203.0.113.10", expected: HOST, status: "found", found: [HOST], ticketText: null },
+      port25: { status: "open" },
+      queue: views,
+      serverRunning: true,
+      tlsHosts: [],
+      blacklist: null,
+      fetchPolicy: async () => null,
+      isProxyIp: () => false,
+      now: Date.now(),
+    });
+    const queue = report.checks.find((c) => c.id === "queue")!;
+    expect(queue).toMatchObject({ code: "deferred_auth", level: "critical" });
+    expect(queue.params.count).toBeGreaterThanOrEqual(1);
+  }, 180_000);
 });

@@ -76,6 +76,12 @@ export interface MailDomain {
 
 export interface MailDomainSummary extends MailDomain {
   mailboxCount: number;
+  /**
+   * A chave DKIM existe no servidor mas ele ainda não a carregou: o Stalwart só assina com uma chave nova depois
+   * de reiniciar e o reinício falhou. Enquanto estiver presente, as mensagens saem SEM assinatura DKIM. Ausente
+   * quando não há pendência; a hora em que o painel sincroniza o servidor tenta de novo.
+   */
+  dkimRestartPending?: boolean;
   /** Resumo da última verificação DNS persistida (null = nunca verificado). */
   lastVerify: {
     at: string;
@@ -241,6 +247,11 @@ export interface Mailbox {
 export interface MailAdoptResult {
   /** Domínios cadastrados agora. */
   domains: string[];
+  /**
+   * Domínios cuja chave DKIM foi criada agora e o servidor não conseguiu reiniciar para carregá-la: enquanto isso
+   * saem sem assinatura DKIM. Ausente quando não há pendência.
+   */
+  dkimRestartPending?: string[];
   /** Caixas cadastradas agora (endereço completo; alias não conta como caixa). */
   mailboxes: string[];
   /** Nomes que o servidor tem e o painel não conseguiu cadastrar (no máximo MAIL_ADOPT_SKIPPED_MAX). */

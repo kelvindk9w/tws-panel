@@ -10,7 +10,7 @@
     "tipo": "sessao",
     "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
   },
-  "rateLimit": "Global: 200 req/min por IP. Específico (MailService.takeTestSlot, mail-service.ts:931): no máximo 1 teste a cada 30 s e 20 por hora, por instância do painel (em memória). A tentativa conta mesmo se o envio falhar.",
+  "rateLimit": "Global: 200 req/min por IP. Específico (MailService.takeTestSlot, mail-service.ts:931): três travas, por instância do painel (em memória): no máximo 1 teste a cada 30 s, 20 por hora e 60 por dia (TEST_MAX_PER_DAY; as tentativas ficam guardadas por 24 h). A tentativa conta mesmo se o envio falhar.",
   "parametros": {
     "path": [
       {
@@ -98,8 +98,8 @@
     {
       "status": 429,
       "codigo": "test_rate_limited",
-      "quando": "Menos de 30 s desde o último teste, ou 20 testes na última hora.",
-      "mensagem": "Aguarde N s para enviar outro e-mail de teste. | Limite de 20 testes por hora atingido. Tente de novo em N min."
+      "quando": "Menos de 30 s desde o último teste, 20 testes na última hora ou 60 nas últimas 24 h.",
+      "mensagem": "Aguarde N s para enviar outro e-mail de teste. | Limite de 20 testes por hora atingido. Tente de novo em N min. | Limite de 60 testes por dia atingido. Tente de novo em N h."
     },
     {
       "status": 502,
@@ -116,7 +116,7 @@
   ],
   "fluxo": [
     "1. requireDomain; valida e normaliza 'to'; pega a caixa postmaster@<domínio> (senha guardada em mail.json desde o cadastro do domínio).",
-    "2. requireRunning; takeTestSlot (limite de frequência).",
+    "2. requireRunning; takeTestSlot (limite de frequência: teto diário de 60, depois intervalo de 30 s e 20 por hora). O destino é sempre digitado por quem está autenticado: o teto diário impede que a rota vire disparador de mensagens para terceiros.",
     "3. id = 8 bytes aleatórios em hex; ENVID = tws-teste-<id>; Message-ID = <tws-teste-<id>@<domínio>>.",
     "4. sendSmtpMail (packages/mailer/src/smtp-send.ts:194): TLS implícito na 465 — em container, host paas-stalwart pela paas-net; fora (desenvolvimento), 127.0.0.1 na porta publicada (mailPorts.submissions). SNI = mail.<domínio>. A verificação da cadeia fica DESLIGADA nesta conexão interna: o certificado ainda pode ser autoassinado e o teste não pode falhar por isso; o estado do certificado continua em GET /api/mail/tls.",
     "5. Conversa SMTP: EHLO → AUTH PLAIN (postmaster@) → EHLO de novo (o Stalwart só anuncia DSN para sessão autenticada; o reset da sessão não mexe na autenticação) → MAIL FROM com RET=HDRS ENVID=<xtext> → RCPT TO com NOTIFY=SUCCESS,FAILURE,DELAY ORCPT=rfc822;<to> → DATA (cabeçalhos ASCII, assunto UTF-8 codificado, corpo text/plain em base64) → QUIT.",

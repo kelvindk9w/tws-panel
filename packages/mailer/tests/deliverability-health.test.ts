@@ -27,6 +27,7 @@ import {
   probePort25,
   publicAddressesOf,
   readSmtpBanner,
+  withDeadline,
   type HealthInput,
   type ResolverEntry,
 } from "../src/deliverability-health.js";
@@ -202,8 +203,23 @@ describe("destinos de rede", () => {
     "169.254.169.254",
     "100.64.0.1",
     "0.0.0.0",
-    "224.0.0.1",
+    [224, 0, 0, 1].join("."),
     "::1",
+    "0:0:0:0:0:0:0:1",
+    "::127.0.0.1",
+    "::10.0.0.1",
+    "64:ff9b::7f00:1",
+    "64:ff9b::a00:1",
+    "fec0::1",
+    "fe80::1%eth0",
+    "2001:db8::1",
+    "2001::1",
+    "2002:7f00:1::",
+    "2002:a9fe:a9fe::",
+    "100::1",
+    "fc00::1",
+    "febf::1",
+    "ffff::1",
     "::",
     "fd00::1",
     "fe80::1",
@@ -215,7 +231,7 @@ describe("destinos de rede", () => {
     expect(isPrivateAddress(address)).toBe(true);
   });
 
-  it.each(["203.0.113.10", "8.8.8.8", "2606:4700::1111", "::ffff:8.8.8.8"])("%s é público", (address) => {
+  it.each(["203.0.113.10", "8.8.8.8", "2606:4700::1111", "::ffff:8.8.8.8", "2002:808:808::", "2a00:1450::1"])("%s é público", (address) => {
     expect(isPrivateAddress(address)).toBe(false);
   });
 
@@ -380,6 +396,18 @@ describe("busca da política MTA-STS", () => {
     expect(called).toBe(false);
   });
 
+  it("busca que não termina no prazo (get pendurado) devolve null no relógio", async () => {
+    const started = Date.now();
+    const text = await fetchMtaStsPolicy(DOMAIN, { lookup: async () => ["8.8.8.8"], get: () => new Promise(() => undefined), timeoutMs: 100 });
+    expect(text).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
+  it("withDeadline devolve o resultado antes do prazo e o fallback depois", async () => {
+    await expect(withDeadline(Promise.resolve("a"), 1_000, "b")).resolves.toBe("a");
+    await expect(withDeadline(new Promise<string>(() => undefined), 50, "b")).resolves.toBe("b");
+  });
+
   it("falha na busca ou DNS vira null", async () => {
     expect(await fetchMtaStsPolicy(DOMAIN, { lookup: async () => ["8.8.8.8"], get: async () => { throw new Error("x"); } })).toBeNull();
     expect(await fetchMtaStsPolicy(DOMAIN, { lookup: async () => { throw new Error("x"); } })).toBeNull();
@@ -439,6 +467,18 @@ describe("busca da política MTA-STS", () => {
       s.close();
     });
 
+    it("prazo é do relógio: servidor que manda 1 byte a cada 200 ms não segura a busca", async () => {
+      const s = await serve((_req, res) => {
+        res.statusCode = 200;
+        const timer = setInterval(() => res.write("x"), 200);
+        res.on("close", () => clearInterval(timer));
+      });
+      const started = Date.now();
+      await expect(getHttpsPolicy("127.0.0.1", "mta-sts.example.com", 600, { port: s.port, ca: cert })).resolves.toBeNull();
+      expect(Date.now() - started).toBeLessThan(1_500);
+      s.close();
+    });
+
     it("servidor que não responde no prazo vira null", async () => {
       const s = await serve(() => undefined);
       await expect(getHttpsPolicy("127.0.0.1", "mta-sts.example.com", 100, { port: s.port, ca: cert })).resolves.toBeNull();
@@ -476,7 +516,7 @@ describe("SPF", () => {
     const make = (mech: string) => resolverOf({ txt: { [DOMAIN]: [`v=spf1 ${mech} -all`] } });
     expect((await analyzeSpf(DOMAIN, IP, make("ip4:203.0.113.0/24"))).authorizes).toBe(true);
     expect((await analyzeSpf(DOMAIN, IP, make(`ip4:${IP}`))).authorizes).toBe(true);
-    expect((await analyzeSpf(DOMAIN, IP, make("ip4:203.0.114.0/24"))).authorizes).toBe(false);
+    expect((await analyzeSpf(DOMAIN, IP, make("ip4:198.51.100.0/24"))).authorizes).toBe(false);
     expect((await analyzeSpf(DOMAIN, IP, make("ip4:203.0.113.0/99"))).authorizes).toBe(false);
     expect((await analyzeSpf(DOMAIN, IP, make("ip4:abc"))).authorizes).toBe(false);
     expect((await analyzeSpf("x.invalid", "abc", make("ip4:1.1.1.1"))).authorizes).toBe(false);
@@ -582,6 +622,81 @@ describe("verificação ao vivo", () => {
     it("DNS sem resposta: indisponível", async () => {
       expect((await checkOf("spf", { ...GOOD_ZONE, broken: [DOMAIN] })).code).toBe("unavailable");
     });
+
+    it("avalia como um receptor: o qualificador manda e o primeiro termo que casa decide", async () => {
+      const analyze = (record: string, extra: Record<string, string[]> = {}, a: Record<string, string[]> = {}) =>
+        analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: [record], ...extra }, a }));
+      // "-ip4:" NÃO autoriza, mesmo com "+" depois
+      expect(await analyze(`v=spf1 -ip4:${IP} ip4:${IP} -all`)).toMatchObject({ authorizes: false, outcome: "fail" });
+      expect(await analyze(`v=spf1 ~ip4:${IP} -all`)).toMatchObject({ authorizes: false, outcome: "softfail" });
+      expect(await analyze(`v=spf1 ?ip4:${IP} -all`)).toMatchObject({ authorizes: false, outcome: "neutral" });
+      expect(await analyze(`v=spf1 +ip4:${IP} -all`)).toMatchObject({ authorizes: true, outcome: "pass" });
+      expect(await analyze(`v=spf1 -a:a.example.com ip4:${IP} -all`, {}, { "a.example.com": [IP] })).toMatchObject({ authorizes: false });
+      expect((await checkOf("spf", withTxt(DOMAIN, [`v=spf1 -ip4:${IP} -all`]))).code).toBe("ip_missing");
+    });
+
+    it("include: passa só se o destino passa; destino com -ip4 ou sem o IP não autoriza", async () => {
+      const analyze = (inner: string[] | undefined) =>
+        analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: ["v=spf1 include:inc.example.com -all"], ...(inner ? { "inc.example.com": inner } : {}) } }));
+      expect((await analyze([`v=spf1 ip4:${IP} -all`])).authorizes).toBe(true);
+      expect((await analyze([`v=spf1 -ip4:${IP} ip4:${IP} ~all`])).authorizes).toBe(false);
+      expect((await analyze(["v=spf1 ip4:198.51.100.1 -all"])).authorizes).toBe(false);
+      // o "-all" do include não é o "all" do domínio
+      expect((await analyze([`v=spf1 ip4:${IP} ~all`])).all).toBe("-all");
+    });
+
+    it("include (ou redirect) para domínio sem SPF, ou com dois, é erro permanente", async () => {
+      const noSpf = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: ["v=spf1 include:semspf.example.com -all"] } }));
+      expect(noSpf).toMatchObject({ outcome: "permerror", authorizes: false });
+      const twice = await analyzeSpf(
+        DOMAIN,
+        IP,
+        resolverOf({ txt: { [DOMAIN]: ["v=spf1 include:dois.example.com -all"], "dois.example.com": ["v=spf1 -all", "v=spf1 +all"] } }),
+      );
+      expect(twice.outcome).toBe("permerror");
+      const redirectToNothing = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: ["v=spf1 redirect=nada.example.com"] } }));
+      expect(redirectToNothing.outcome).toBe("permerror");
+      expect((await checkOf("spf", withTxt(DOMAIN, ["v=spf1 include:semspf.example.com -all"]))).code).toBe("permerror");
+      // erro depois de um termo que já casou não conta: o receptor nem chega nele
+      const afterMatch = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: [`v=spf1 ip4:${IP} include:semspf.example.com -all`] } }));
+      expect(afterMatch).toMatchObject({ outcome: "pass", authorizes: true });
+    });
+
+    it("redirect= herda o all do destino e só vale sem all no registro", async () => {
+      const zone = (target: string) => ({ txt: { [DOMAIN]: ["v=spf1 redirect=spf.example.com"], "spf.example.com": [target] } });
+      const hard = await analyzeSpf(DOMAIN, IP, resolverOf(zone(`v=spf1 ip4:${IP} -all`)));
+      expect(hard).toMatchObject({ authorizes: true, all: "-all", outcome: "pass" });
+      const checked = await checkOf("spf", { txt: { [DOMAIN]: ["v=spf1 redirect=spf.example.com"], "spf.example.com": [`v=spf1 ip4:${IP} -all`] } });
+      expect(checked).toMatchObject({ level: "ok", code: "ok_hard" });
+      // o destino sem all continua fraco, e isso é dito
+      const weak = await checkOf("spf", { txt: { [DOMAIN]: ["v=spf1 redirect=spf.example.com"], "spf.example.com": [`v=spf1 ip4:${IP}`] } });
+      expect(weak.code).toBe("weak_all");
+      // com all no registro, o redirect é ignorado
+      const ignored = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: ["v=spf1 -all redirect=spf.example.com"], "spf.example.com": [`v=spf1 ip4:${IP} -all`] } }));
+      expect(ignored).toMatchObject({ authorizes: false, outcome: "fail", all: "-all" });
+    });
+
+    it("termos depois de all são ignorados (nem contam consultas)", async () => {
+      const after = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: [`v=spf1 -all ip4:${IP} include:x.example.com mx`] } }));
+      expect(after).toMatchObject({ authorizes: false, outcome: "fail", lookups: 0 });
+      const ok = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: [`v=spf1 ip4:${IP} ~all include:x.example.com`] } }));
+      expect(ok).toMatchObject({ authorizes: true, lookups: 0, all: "~all" });
+    });
+
+    it("macros não são expandidas: o termo não casa e a mensagem não afirma 'IP ausente'", async () => {
+      const macro = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: ["v=spf1 include:%{d}._spf.example.com a:%{h}.example.com mx:%{d}.example.com redirect=%{d}.example.com"] } }));
+      expect(macro).toMatchObject({ macros: true, authorizes: false, lookups: 4 });
+      const checked = await checkOf("spf", withTxt(DOMAIN, ["v=spf1 include:%{d}._spf.example.com -all"]));
+      expect(checked).toMatchObject({ level: "warn", code: "has_macros" });
+      // IP autorizado por outro termo continua passando, mesmo com macro no registro
+      const pass = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: [`v=spf1 ip4:${IP} exists:%{i}.x.example.com -all`] } }));
+      expect(pass).toMatchObject({ authorizes: true, macros: true });
+    });
+
+    it("modificadores desconhecidos (exp=) não são mecanismos", async () => {
+      const spf = await analyzeSpf(DOMAIN, IP, resolverOf({ txt: { [DOMAIN]: [`v=spf1 exp=explica.example.com ip4:${IP} -all`] } }));
+      expect(spf).toMatchObject({ authorizes: true, lookups: 0 });
+    });
   });
 
   describe("DKIM", () => {
@@ -686,6 +801,23 @@ describe("verificação ao vivo", () => {
       expect(reversed.params.host).toBe("a.example.com");
     });
 
+    it("TLS sem validade conhecida não vira 'ok, 90 dias': fica informativo e fora do estado geral", async () => {
+      const unknown = await checkOf("tls", GOOD_ZONE, { tlsHosts: [{ host: HOST, ok: true, validTo: null, error: null }] });
+      expect(unknown).toMatchObject({ level: "info", code: "expiry_unknown", inbox: false, params: { host: HOST } });
+      const garbled = await checkOf("tls", GOOD_ZONE, { tlsHosts: [{ host: HOST, ok: true, validTo: "não é data", error: null }] });
+      expect(garbled.code).toBe("expiry_unknown");
+    });
+
+    it("lista não consultável (sem chave DQS) não impede o estado geral 'ok'", async () => {
+      const unknownOnly: BlacklistCheckResponse = {
+        ...CLEAN,
+        domains: [{ target: DOMAIN, results: [{ dnsbl: "d", label: "Spamhaus DBL", status: "unknown", detail: null, removalUrl: null }] }],
+      };
+      const report = await evaluateHealth(input(GOOD_ZONE, { blacklist: unknownOnly }));
+      expect(report.checks.find((c) => c.id === "dnsbl")?.level).toBe("info");
+      expect(report.counts.warn).toBe(0);
+    });
+
     it("listas de bloqueio: sem dados, listado, não verificado, limpo", async () => {
       expect((await checkOf("dnsbl", GOOD_ZONE, { blacklist: null })).code).toBe("not_checked");
       const bad = (status: "listed" | "unknown"): BlacklistCheckResponse => ({
@@ -693,7 +825,7 @@ describe("verificação ao vivo", () => {
         domains: [{ target: DOMAIN, results: [{ dnsbl: "d", label: "Spamhaus DBL", status, detail: null, removalUrl: null }] }],
       });
       expect(await checkOf("dnsbl", GOOD_ZONE, { blacklist: bad("listed") })).toMatchObject({ level: "critical", params: { lists: "Spamhaus DBL" } });
-      expect(await checkOf("dnsbl", GOOD_ZONE, { blacklist: bad("unknown") })).toMatchObject({ level: "warn", inbox: false });
+      expect(await checkOf("dnsbl", GOOD_ZONE, { blacklist: bad("unknown") })).toMatchObject({ level: "info", code: "unknown", inbox: false });
       expect((await checkOf("dnsbl")).code).toBe("ok");
       expect((await checkOf("dnsbl", GOOD_ZONE, { blacklist: { ...CLEAN, ip: null } })).code).toBe("ok");
     });
@@ -723,6 +855,15 @@ describe("verificação ao vivo", () => {
   });
 
   describe("MTA-STS e TLS-RPT (bônus)", () => {
+    it("busca pendurada não trava a verificação inteira: prazo total e item 'inalcançável'", async () => {
+      const started = Date.now();
+      const report = await evaluateHealth(
+        input(withTxt(`_mta-sts.${DOMAIN}`, ["v=STSv1; id=1"]), { fetchPolicy: () => new Promise(() => undefined), mtaStsDeadlineMs: 80 }),
+      );
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(report.checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "warn", code: "unreachable", inbox: false });
+    });
+
     const sts = (policy: string | null) =>
       checkOf("mta_sts", withTxt(`_mta-sts.${DOMAIN}`, ["v=STSv1; id=abc"]), { fetchPolicy: async () => policy });
 
@@ -814,6 +955,12 @@ describe("atraso na fila", () => {
     ["421-4.7.28 [203.0.113.10] Our system has detected an unusual rate of unsolicited mail", "rate_limited"],
     ["421 4.7.0 [TSS04] Messages from 203.0.113.10 temporarily deferred due to user complaints", "rate_limited"],
     ["450-4.2.1 The user you are trying to contact is receiving mail at a rate that prevents additional messages", "rate_limited"],
+    ["421-4.7.26 This mail is unauthenticated, which poses a security risk to the recipient", "auth"],
+    ["550-5.7.26 This message does not pass authentication checks (SPF and DKIM both do not pass)", "auth"],
+    ["421-4.7.27 SPF check failed for the sending domain", "auth"],
+    ["421-4.7.30 Your message is not aligned with DMARC policy", "auth"],
+    ["421-4.7.32 Your email has been rate limited because the From: header is not aligned with either the authenticated SPF or DKIM domain", "auth"],
+    ["550 5.7.509 Access denied, sending domain does not pass DMARC verification", "auth"],
     ["550 5.7.1 Service unavailable; Client host blocked using Spamhaus", "blocked_ip"],
     ["550 5.7.1 Unfortunately, messages from [203.0.113.10] weren't sent. S3150", "blocked_ip"],
     ["452 4.2.2 mailbox full", "mailbox"],
@@ -824,6 +971,15 @@ describe("atraso na fila", () => {
     ["algo desconhecido", "other"],
   ] as const)("%s -> %s", (text, cause) => {
     expect(classifyDelay(text)).toBe(cause);
+  });
+
+  it("falha de autenticação no texto não é limite de taxa, e limite de taxa continua sendo", () => {
+    expect(classifyDelay("421-4.7.28 unusual rate of unsolicited mail; see SPF and DKIM docs")).toBe("rate_limited");
+  });
+
+  it("fila: autenticação é crítica já na 1ª tentativa e aponta para SPF/DKIM", async () => {
+    const check = await queueCheck([queued({ attempts: 1, lastError: "421-4.7.26 This mail is unauthenticated" })]);
+    expect(check).toMatchObject({ code: "deferred_auth", level: "critical", inbox: true });
   });
 
   it("sem texto: other", () => {

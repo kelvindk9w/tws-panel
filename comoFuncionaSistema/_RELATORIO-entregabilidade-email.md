@@ -31,7 +31,7 @@ Configuração do Stalwart v0.11.8 (`packages/mailer/src/server.ts`), conferida:
 HELO = `server.hostname` (certo, o PTR deve casar); DKIM RSA 2048 com seletor `paas` e assinatura
 automática `rsa-<domínio>`; `Message-ID` e `Date` completados na submissão; saída só por IPv4 (o SPF
 só tem `ip4:`); STARTTLS exigido na saída (padrão `require`); fila com retentativas em 2, 5, 10, 15, 30
-min, 1 h e 2 h e expiração em 5 dias. **Nenhuma dessas chaves precisou mudar**: nenhuma mudança de
+min, 1 h e 2 h e expiração em 5 dias (é a agenda PADRÃO do Stalwart, não uma configuração do painel; o painel não a altera). **Nenhuma dessas chaves precisou mudar**: nenhuma mudança de
 configuração provou ganho.
 
 ## 2. Causas prováveis do atraso de alguns minutos no Gmail
@@ -43,12 +43,14 @@ Em ordem de probabilidade:
    **primeira nova tentativa é em 2 minutos**, o que bate com "alguns minutos". É reputação em formação:
    some em semanas, com volume baixo e crescente e quase nenhuma reclamação.
 2. **Greylisting** em destinos que não são o Gmail (451 4.7.1): primeira tentativa recusada de propósito.
-3. **Autenticação incompleta**: DKIM ausente (ver achado abaixo), SPF sem o IP, DMARC ausente, PTR
-   genérico. Aumenta o risco de limite e de spam.
+3. **Falha de autenticação** (SPF, DKIM, alinhamento): o Gmail adia com `4.7.26`, `4.7.27`, `4.7.30` ou
+   `4.7.32`. **Isto NÃO é limite de taxa** e esperar não resolve; o painel classifica como autenticação,
+   marca crítico já na 1ª tentativa e manda conferir SPF/DKIM e o domínio do remetente. Também entram aqui
+   DKIM ausente (ver achado abaixo), SPF sem o IP, DMARC ausente e PTR genérico.
 4. **Porta 25 de saída bloqueada**: aí nada sai, nem com atraso.
 5. TLS e DNS do destino: raros.
 
-O painel agora **diagnostica sozinho** os itens 1 a 4: o item "Fila de envio" da saúde lê a fila do
+O painel agora **diagnostica sozinho** os itens 1 a 5: o item "Fila de envio" da saúde lê a fila do
 Stalwart e mostra, em português, a causa mais comum, o número de tentativas e em quantos minutos é a
 próxima.
 
@@ -57,8 +59,20 @@ próxima.
 O teste de integração mostrou que o Stalwart **não assina com a chave DKIM criada pela API, nem depois de
 `GET /api/reload`; só depois de reiniciar**. Sem isso a mensagem sai sem `DKIM-Signature`. Em produção, o
 reinício só acontecia quando o certificado do domínio novo era instalado (depois de o registro A existir).
-Correção: cadastrar o domínio **reinicia o Stalwart uma vez**. Domínios cadastrados antes já passaram por
-reinício (cada atualização do painel e cada certificado novo reiniciam) e não são afetados.
+Correção: cadastrar o domínio **e adotá-lo pela Sincronização** (quando a chave DKIM é criada naquele momento)
+**reinicia o Stalwart**, numa fila única de reinícios (cadastros simultâneos, sincronização do TLS e reparo
+da senha não reiniciam em cima um do outro; quem espera entra no mesmo reinício).
+
+**Correção de uma afirmação anterior deste relatório:** a versão anterior dizia que domínios cadastrados antes
+"já passaram por reinício e não são afetados". Isso não se sustenta: um domínio cadastrado antes pode ter
+a chave criada DEPOIS do último reinício do servidor (o reinício só acontecia quando o certificado do domínio
+era instalado, e só se o registro A já existisse). Para esses não há como o painel saber, só pela API, se o
+servidor carregou a chave. A mensagem de teste (cabeçalho DKIM-Signature em "Mostrar original") e o item DKIM
+da saúde são a conferência; reiniciar o servidor de e-mail resolve.
+
+Se o reinício falha, o domínio fica marcado com **reinício pendente** (resposta da API, `mail.json`, aviso da
+tela de Sincronizar e item DKIM da saúde em **atenção**, nunca "ok"); a sincronização do TLS (de hora em
+hora e ao abrir a página E-mail) tenta de novo.
 
 ## 3. O que mudou, pelo comportamento
 
@@ -73,7 +87,7 @@ reinício (cada atualização do painel e cada certificado novo reiniciam) e nã
 - **Teste de entrega**: depois de "entregue", um passo a passo do Gmail ("Mostrar original", SPF, DKIM e
   DMARC = PASS). O painel não lê a caixa. Teto de 60 testes por dia (além de 1 a cada 30 s e 20 por hora);
   o destino é sempre digitado por quem está autenticado.
-- **Cadastrar domínio** reinicia o Stalwart uma vez (ver o achado acima).
+- **Cadastrar domínio** (e adotar, na Sincronização, um domínio cuja chave DKIM é criada na hora) reinicia o Stalwart; por alguns segundos SMTP e IMAP caem e a fila fica guardada. Se o reinício falha, o painel diz "reinício pendente" em vez de DKIM ok.
 
 ## 4. Segurança
 
@@ -106,7 +120,7 @@ reinício (cada atualização do painel e cada certificado novo reiniciam) e nã
 
 ## 6. Como testei
 
-- `packages/mailer/tests/deliverability-health.test.ts`: plano, SPF (contagem de consultas, CIDR, ciclos),
+- `packages/mailer/tests/deliverability-health.test.ts`: plano, SPF (contagem de consultas, CIDR, ciclos, qualificadores, redirect, termos depois de all, include sem SPF, macros),
   DKIM (chave fraca, curta, revogada, de outro tipo), DMARC (herança), MX/A, PTR, porta 25, TLS, listas,
   propagação, MTA-STS contra um servidor HTTPS local, banner SMTP contra um servidor local, destinos
   privados e a classificação do atraso. Resolvedores falsos, sem rede.
@@ -118,8 +132,10 @@ reinício (cada atualização do painel e cada certificado novo reiniciam) e nã
 - **Integração real**: `packages/mailer/tests/stalwart-deliverability.integration.test.ts`, só com
   `STALWART_INTEGRATION=1`. Stalwart v0.11.8 em rede Docker `--internal`, com um proxy de TCP e um receptor
   SMTP falso. Cobre: chave DKIM de 2048 bits lida pelo verificador, `Message-ID` e `Date` completados, a
-  mensagem de saída **assinada** (`d=`, `s=paas`, `rsa-sha256`, cabeçalhos assinados) e a leitura da fila
-  real. Os contêineres, redes e volumes criados são removidos no fim; as imagens já existiam.
+  mensagem de saída **assinada** (`d=`, `s=paas`, `rsa-sha256`, cabeçalhos assinados), o **controle** (domínio
+  com chave criada sem reiniciar sai SEM assinatura; depois do reinício, assinado) e um **adiamento real**: um
+  destino falso responde `451 4.7.26` ao destinatário, o Stalwart guarda a mensagem adiada e o painel lê o
+  texto que o próprio Stalwart gravou na fila e classifica como autenticação. Os contêineres, redes e volumes criados são removidos no fim; as imagens já existiam.
 
 ## 7. Só dá para validar na VPS
 

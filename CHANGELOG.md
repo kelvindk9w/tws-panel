@@ -105,7 +105,11 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   IP bloqueado e outras).
 - E-mail de teste: passo a passo do "Mostrar original" no Gmail e teto de 60 testes por dia.
 - Corrigido: o Stalwart só assinava com a chave DKIM nova depois de reiniciar; cadastrar um domínio
-  agora reinicia o servidor de e-mail uma vez.
+  (ou adotá-lo na Sincronização, quando a chave é criada na hora) agora reinicia o servidor de e-mail,
+  numa fila única de reinícios. Se o reinício falha, o painel mostra DKIM em atenção ("reinício
+  pendente") e avisa na resposta, em vez de DKIM ok.
+- Diagnóstico do atraso: falhas de autenticação do Gmail (4.7.26, 4.7.27, 4.7.30, 4.7.32) deixam de
+  ser tratadas como limite de taxa. SPF avaliado como receptor (qualificadores, redirect, macros).
 
 **Notificações**
 

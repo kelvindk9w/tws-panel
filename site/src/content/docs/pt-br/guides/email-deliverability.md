@@ -19,6 +19,16 @@ O servidor guarda a mensagem e tenta de novo; a primeira nova tentativa é em ce
 diminui com semanas de envio regular, em volume baixo e crescente, e sem reclamações. O painel mostra a
 causa em **Saúde do envio de e-mail**, no item "Fila de envio".
 
+Atenção: se o motivo for `4.7.26`, `4.7.27`, `4.7.30` ou `4.7.32`, **não é limite de taxa**. É falha de
+autenticação (SPF, DKIM ou alinhamento do domínio do remetente) e esperar não resolve: confira SPF e DKIM
+abaixo e o domínio usado como remetente.
+
+> [!NOTE]
+> **Cadastrar um domínio reinicia o servidor de e-mail** por alguns segundos, porque o Stalwart só assina com
+> a chave DKIM nova depois de reiniciar. As conexões abertas caem e voltam; a fila de envio fica guardada.
+> Se o reinício falhar, o painel mostra DKIM em **atenção (reinício pendente)**, e as mensagens saem sem
+> assinatura até a próxima sincronização.
+
 ## 1. Configure o DNS na ordem
 
 Abra o domínio na página de E-mail. O card **Saúde do envio de e-mail** tem o **Passo a passo do DNS**, com

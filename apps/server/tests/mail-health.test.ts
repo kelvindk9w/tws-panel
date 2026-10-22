@@ -309,6 +309,13 @@ describe("rotas /health", () => {
     expect(res.json().error).toBe("internal_error");
   });
 
+  it("erro sem mensagem nem código: 500 genérico, sem vazar nada", async () => {
+    health.state.mockRejectedValueOnce({});
+    const res = await app.inject({ method: "GET", url: `/api/mail/domains/${DOMAIN}/health`, headers: auth });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: "internal_error", message: "Erro interno." });
+  });
+
   it("domínio com formato inválido: 400 sem chamar o serviço", async () => {
     for (const bad of ["a b", "x;rm", "-a.com", "127.0.0.1:25@x", "semponto"]) {
       const res = await app.inject({ method: "GET", url: `/api/mail/domains/${encodeURIComponent(bad)}/health`, headers: auth });

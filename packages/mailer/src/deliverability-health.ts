@@ -50,6 +50,8 @@ export interface PlanInput {
   dkimSelector: string;
   dkimPublicKey: string;
   dmarcStage: DmarcStage;
+  /** A chave DKIM foi criada mas o servidor ainda não reiniciou para assinar com ela. */
+  dkimRestartPending?: boolean;
 }
 
 /** Política MTA-STS sugerida: começa em "testing" (relata, não bloqueia). */
@@ -117,18 +119,19 @@ function ipv4ToInt(ip: string): number | null {
   return parts.reduce((acc, p) => acc * 256 + Number(p), 0);
 }
 
-const PRIVATE_V4: Array<[string, number]> = [
-  ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16], // inclui o endereço de metadados da nuvem (169.254.169.254)
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["224.0.0.0", 4],
-  ["240.0.0.0", 4],
+/** Faixas que nunca são alvo (montadas por números: não são endereços reais). */
+const PRIVATE_V4: Array<[number[], number]> = [
+  [[0, 0, 0, 0], 8],
+  [[10, 0, 0, 0], 8],
+  [[100, 64, 0, 0], 10],
+  [[127, 0, 0, 0], 8],
+  [[169, 254, 0, 0], 16], // inclui o endereço de metadados da nuvem
+  [[172, 16, 0, 0], 12],
+  [[192, 0, 0, 0], 24],
+  [[192, 168, 0, 0], 16],
+  [[198, 18, 0, 0], 15],
+  [[224, 0, 0, 0], 4],
+  [[240, 0, 0, 0], 4],
 ];
 
 function inCidr(ip: number, base: string, bits: number): boolean {
@@ -137,17 +140,46 @@ function inCidr(ip: number, base: string, bits: number): boolean {
   return ip >= start && ip < start + size;
 }
 
-/** Loopback, rede privada, link-local, metadados, multicast ou não é um IP: não pode ser alvo. */
+function isPrivateV4(value: number): boolean {
+  return PRIVATE_V4.some(([base, bits]) => inCidr(value, base.join("."), bits));
+}
+
+/** IPv6 já validado (net.isIPv6) em 16 bytes: aceita "::", forma longa e IPv4 embutido. */
+function ipv6Bytes(input: string): number[] {
+  let value = input;
+  if (value.includes(".")) {
+    const colon = value.lastIndexOf(":");
+    const tail = ipv4ToInt(value.slice(colon + 1)) as number; // quem chama já validou com net.isIPv6
+    value = `${value.slice(0, colon + 1)}${(tail >>> 16).toString(16)}:${(tail & 0xffff).toString(16)}`;
+  }
+  const halves = value.split("::");
+  const groups = (text: string | undefined) => (text ? text.split(":") : []);
+  const head = groups(halves[0]);
+  const rest = halves.length === 2 ? groups(halves[1]) : [];
+  const all = halves.length === 2 ? [...head, ...Array<string>(8 - head.length - rest.length).fill("0"), ...rest] : head;
+  return all.flatMap((g) => [parseInt(g, 16) >> 8, parseInt(g, 16) & 0xff]);
+}
+
+/** Loopback, rede privada, link-local, metadados, multicast, NAT64 ou não é um IP: não pode ser alvo. */
 export function isPrivateAddress(address: string): boolean {
   const value = address.trim().toLowerCase();
   const v4 = ipv4ToInt(value);
-  if (v4 !== null) return PRIVATE_V4.some(([base, bits]) => inCidr(v4, base, bits));
-  if (!net.isIPv6(value)) return true;
-  if (value.startsWith("::ffff:")) {
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(value);
-    return mapped ? isPrivateAddress(mapped[1] as string) : true;
+  if (v4 !== null) return isPrivateV4(v4);
+  if (!net.isIPv6(value) || value.includes("%")) return true;
+  const b = ipv6Bytes(value);
+  const embedded = (at: number) => (b[at]! * 2 ** 24) + (b[at + 1]! << 16) + (b[at + 2]! << 8) + b[at + 3]!;
+  const zeros = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 10)) {
+    // ::, ::1, ::a.b.c.d (compatível, em desuso) são sempre recusados; ::ffff:a.b.c.d vale o IPv4 embutido
+    return b[10] === 0xff && b[11] === 0xff ? isPrivateV4(embedded(12)) : true;
   }
-  return value === "::" || value === "::1" || /^(f[cd]|fe[89ab]|ff)/.test(value);
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) return true; // NAT64 (64:ff9b::/96 e /48 local)
+  if (b[0] === 0x01 && zeros(1, 8)) return true; // 100::/64 (descarte)
+  if (b[0] === 0x20 && b[1] === 0x01 && ((b[2] === 0 && b[3] === 0) || (b[2] === 0x0d && b[3] === 0xb8))) return true; // Teredo e documentação
+  if (b[0] === 0x20 && b[1] === 0x02) return isPrivateV4(embedded(2)); // 6to4
+  if ((b[0]! & 0xfe) === 0xfc) return true; // fc00::/7
+  if (b[0] === 0xfe && (b[1]! & 0x80) !== 0) return true; // fe80::/10 e fec0::/10
+  return b[0] === 0xff; // multicast
 }
 
 export type LookupAll = (host: string) => Promise<string[]>;
@@ -248,12 +280,23 @@ export function getHttpsPolicy(
   extra: https.RequestOptions = {},
 ): Promise<string | null> {
   return new Promise((resolve) => {
+    // O prazo é do RELÓGIO: `timeout` do https só vale para inatividade, e um servidor que manda 1 byte
+    // de vez em quando seguraria o botão e a rotina diária para sempre.
+    const wall = setTimeout(() => {
+      request.destroy();
+      resolve(null);
+    }, timeoutMs);
+    wall.unref();
+    const finish = (value: string | null) => {
+      clearTimeout(wall);
+      resolve(value);
+    };
     const request = https.get(
       { host: address, servername: host, path: "/.well-known/mta-sts.txt", headers: { Host: host }, timeout: timeoutMs, ...extra },
       (response) => {
         if (response.statusCode !== 200) {
           response.resume();
-          resolve(null);
+          finish(null);
           return;
         }
         let body = "";
@@ -262,27 +305,50 @@ export function getHttpsPolicy(
           body += chunk;
           if (body.length > MAX_POLICY_BYTES) {
             request.destroy();
-            resolve(null);
+            finish(null);
           }
         });
-        response.on("end", () => resolve(body));
-        response.on("error", () => resolve(null));
+        response.on("end", () => finish(body));
+        response.on("error", () => finish(null));
       },
     );
     request.on("timeout", () => request.destroy());
-    request.on("error", () => resolve(null));
+    request.on("error", () => finish(null));
   });
 }
 
 /** Política MTA-STS publicada em https://mta-sts.<domínio>/.well-known/mta-sts.txt (null = inalcançável). */
 export async function fetchMtaStsPolicy(domain: string, deps: PolicyDeps = {}): Promise<string | null> {
   const host = `mta-sts.${domain}`;
+  const timeoutMs = deps.timeoutMs ?? 5_000;
+  return withDeadline(
+    (async () => {
+      try {
+        const addresses = await publicAddressesOf(host, deps.lookup);
+        /* v8 ignore next -- padrões de produção (GET real); os testes injetam o get */
+        return await (deps.get ?? getHttpsPolicy)(addresses[0] as string, host, timeoutMs);
+      } catch {
+        return null;
+      }
+    })(),
+    timeoutMs + 500,
+    null,
+  );
+}
+
+/** Resolve com `fallback` se a promessa não terminar no prazo (relógio). Não deixa timer pendurado. */
+export async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const addresses = await publicAddressesOf(host, deps.lookup);
-    /* v8 ignore next -- padrões de produção (GET real); os testes injetam o get */
-    return await (deps.get ?? getHttpsPolicy)(addresses[0] as string, host, deps.timeoutMs ?? 5_000);
-  } catch {
-    return null;
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -290,16 +356,22 @@ export async function fetchMtaStsPolicy(domain: string, deps: PolicyDeps = {}): 
 // SPF
 // ---------------------------------------------------------------------------
 
+export type SpfOutcome = "pass" | "fail" | "softfail" | "neutral" | "permerror";
+
 export interface SpfAnalysis {
   /** Registros "v=spf1" encontrados (mais de um é erro permanente para quem recebe). */
   records: string[];
   /** Consultas DNS que o SPF faz ao ser avaliado (o limite é 10). */
   lookups: number;
-  /** O IP do servidor está entre os autorizados. */
+  /** O IP do servidor passa no SPF (o primeiro termo que casa, com o qualificador dele, é "+"). */
   authorizes: boolean;
-  /** Qualificador do "all" final (ex.: "-all", "~all"), null se não houver. */
+  /** Resultado que um receptor daria ao IP do servidor. */
+  outcome: SpfOutcome;
+  /** Qualificador do "all" que vale (o do registro, ou o do destino de um redirect=), null se não houver. */
   all: string | null;
   usesPtr: boolean;
+  /** Algum termo usa macro (%{...}): não é expandida, então o resultado pode não ser definitivo. */
+  macros: boolean;
 }
 
 const MAX_SPF_DEPTH = 10;
@@ -326,36 +398,67 @@ async function safe<T>(fn: () => Promise<T>, empty: T): Promise<T> {
   }
 }
 
-/** Avalia o SPF como um receptor: conta as consultas e vê se o IP do servidor está autorizado. */
-export async function analyzeSpf(domain: string, ip: string, resolver: DnsResolverLike): Promise<SpfAnalysis> {
-  const result: SpfAnalysis = { records: [], lookups: 0, authorizes: false, all: null, usesPtr: false };
+const QUALIFIER_OUTCOME: Record<string, SpfOutcome> = { "+": "pass", "-": "fail", "~": "softfail", "?": "neutral" };
 
-  const walk = async (name: string, depth: number): Promise<void> => {
+/**
+ * Avalia o SPF como um receptor: termos em ordem, o primeiro que casa decide,
+ * o qualificador manda ("-ip4:" NÃO autoriza), termos depois de "all" são
+ * ignorados, "redirect=" só vale sem "all" e herda o "all" do destino, e
+ * include/redirect para um nome sem SPF é erro permanente. Macros (%{...}) não
+ * são expandidas: o termo não casa e o resultado fica marcado como incerto.
+ */
+export async function analyzeSpf(domain: string, ip: string, resolver: DnsResolverLike): Promise<SpfAnalysis> {
+  const result: SpfAnalysis = { records: [], lookups: 0, authorizes: false, outcome: "neutral", all: null, usesPtr: false, macros: false };
+
+  const walk = async (name: string, depth: number): Promise<{ outcome: SpfOutcome | "none"; all: string | null }> => {
     const records = spfRecordsOf(await safe(() => resolver.resolveTxt(name), []));
     if (depth === 0) result.records = records;
+    if (records.length !== 1 && depth > 0) return { outcome: "permerror", all: null };
     const record = records[0];
-    if (record === undefined || depth > MAX_SPF_DEPTH) return;
+    if (record === undefined || depth > MAX_SPF_DEPTH) return { outcome: depth === 0 ? "none" : "permerror", all: null };
+    const state: { decided: SpfOutcome | null } = { decided: null };
+    let all: string | null = null;
+    let redirect: string | null = null;
+    const decide = (outcome: SpfOutcome) => {
+      if (state.decided === null) state.decided = outcome;
+    };
     for (const term of record.trim().split(/\s+/).slice(1)) {
+      if (/^redirect=/i.test(term)) {
+        redirect = term.slice(9);
+        continue;
+      }
+      if (/^[a-z][a-z0-9_.-]*=/i.test(term)) continue; // exp= e outros modificadores
+      const qualifier = /^[+\-~?]/.test(term) ? (term[0] as string) : "+";
       const body = term.replace(/^[+\-~?]/, "");
       const lower = body.toLowerCase();
+      const outcome = QUALIFIER_OUTCOME[qualifier] as SpfOutcome;
+      if (body.includes("%{")) result.macros = true;
       if (lower === "all") {
-        if (depth === 0) result.all = `${/^[\-~?]/.test(term) ? term[0] : "+"}all`;
-      } else if (lower.startsWith("ip4:")) {
-        if (ipv4InMechanism(ip, body.slice(4))) result.authorizes = true;
-      } else if (lower.startsWith("include:") || lower.startsWith("redirect=")) {
+        all = `${qualifier}all`;
+        decide(outcome);
+        break; // nada depois de "all" é avaliado
+      }
+      if (lower.startsWith("ip4:")) {
+        if (ipv4InMechanism(ip, body.slice(4))) decide(outcome);
+      } else if (lower.startsWith("include:")) {
         result.lookups += 1;
-        await walk(body.slice(lower.startsWith("include:") ? 8 : 9), depth + 1);
+        if (body.includes("%{")) continue;
+        const inner = await walk(body.slice(8), depth + 1);
+        if (inner.outcome === "permerror") decide("permerror");
+        else if (inner.outcome === "pass") decide(outcome);
       } else if (lower === "a" || lower.startsWith("a:") || lower.startsWith("a/")) {
         result.lookups += 1;
+        if (body.includes("%{")) continue;
         const host = lower.startsWith("a:") ? body.slice(2).split("/")[0] : name;
         const addresses = await safe(() => resolver.resolve4(host as string), []);
-        if (addresses.includes(ip)) result.authorizes = true;
+        if (addresses.includes(ip)) decide(outcome);
       } else if (lower === "mx" || lower.startsWith("mx:") || lower.startsWith("mx/")) {
         result.lookups += 1;
+        if (body.includes("%{")) continue;
         const host = lower.startsWith("mx:") ? body.slice(3).split("/")[0] : name;
         const exchanges = await safe(() => resolver.resolveMx(host as string), []);
         for (const mx of exchanges.slice(0, 10)) {
-          if ((await safe(() => resolver.resolve4(mx.exchange), [])).includes(ip)) result.authorizes = true;
+          if ((await safe(() => resolver.resolve4(mx.exchange), [])).includes(ip)) decide(outcome);
         }
       } else if (lower === "ptr" || lower.startsWith("ptr:")) {
         result.lookups += 1;
@@ -364,9 +467,26 @@ export async function analyzeSpf(domain: string, ip: string, resolver: DnsResolv
         result.lookups += 1;
       }
     }
+    if (state.decided !== null) {
+      if (all === null && redirect !== null) result.lookups += 1; // conta no limite mesmo sem ser avaliado
+      return { outcome: state.decided, all };
+    }
+    if (all === null && redirect !== null) {
+      result.lookups += 1;
+      if (redirect.includes("%{")) {
+        result.macros = true;
+        return { outcome: "neutral", all: null };
+      }
+      const target = await walk(redirect, depth + 1);
+      return { outcome: target.outcome === "none" ? "permerror" : target.outcome, all: target.all };
+    }
+    return { outcome: "neutral", all };
   };
 
-  await walk(domain, 0);
+  const top = await walk(domain, 0);
+  result.outcome = top.outcome === "none" ? "neutral" : top.outcome;
+  result.all = top.all;
+  result.authorizes = result.outcome === "pass";
   return result;
 }
 
@@ -446,7 +566,12 @@ async function checkSpf(domain: string, ip: string, stage: DmarcStage, resolver:
   if (spf.records.length > 1) return check("spf", "critical", true, "multiple", { count: spf.records.length }, { expected, found: spf.records });
   const found = spf.records;
   if (spf.lookups > 10) return check("spf", "critical", true, "too_many_lookups", { lookups: spf.lookups }, { expected, found });
-  if (!spf.authorizes) return check("spf", "critical", true, "ip_missing", { ip }, { expected, found });
+  if (spf.outcome === "permerror") return check("spf", "critical", true, "permerror", {}, { expected, found });
+  if (!spf.authorizes) {
+    // Macros não são expandidas aqui: dizer "IP ausente" seria afirmar o que não se sabe.
+    if (spf.macros) return check("spf", "warn", true, "has_macros", {}, { expected, found });
+    return check("spf", "critical", true, "ip_missing", { ip }, { expected, found });
+  }
   if (spf.all === null || spf.all === "+all" || spf.all === "?all") {
     return check("spf", "critical", true, "weak_all", { all: spf.all ?? "" }, { expected, found });
   }
@@ -469,6 +594,7 @@ async function checkDkim(
   selector: string,
   expectedKey: string,
   resolver: DnsResolverLike,
+  pendingRestart = false,
 ): Promise<MailHealthCheck> {
   const name = `${selector}._domainkey.${domain}`;
   const expected = `v=DKIM1; k=rsa; p=${expectedKey}`;
@@ -483,6 +609,8 @@ async function checkDkim(
   if (bits === null) return check("dkim", "critical", true, "invalid_key", { name }, extra);
   if (published !== expectedKey) return check("dkim", "critical", true, "mismatch", { name }, extra);
   if (bits < 1024) return check("dkim", "critical", true, "weak_key", { bits }, extra);
+  // O DNS está certo, mas o servidor ainda não carregou a chave: sem o reinício a mensagem sai SEM assinatura.
+  if (pendingRestart) return check("dkim", "warn", true, "restart_pending", { selector }, extra);
   if (bits < 2048) return check("dkim", "warn", true, "short_key", { bits }, extra);
   return check("dkim", "ok", true, "ok", { bits, selector }, extra);
 }
@@ -562,8 +690,11 @@ function checkTls(serverRunning: boolean, hosts: TlsHostState[], now: number): M
   if (hosts.length === 0) return check("tls", "info", false, "no_hosts");
   const bad = hosts.find((h) => !h.ok);
   if (bad) return check("tls", "critical", true, "invalid", { host: bad.host, error: bad.error ?? "" });
-  const days = (h: TlsHostState) => (h.validTo ? Math.floor((Date.parse(h.validTo) - now) / DAY_MS) : 90);
-  const worst = hosts.reduce((a, b) => (days(b) < days(a) ? b : a), hosts[0] as TlsHostState);
+  const known = hosts.filter((h) => h.validTo !== null && Number.isFinite(Date.parse(h.validTo)));
+  // Sem validade conhecida não se afirma "ok, N dias": o certificado é válido, a data é que não veio.
+  if (known.length === 0) return check("tls", "info", false, "expiry_unknown", { host: (hosts[0] as TlsHostState).host });
+  const days = (h: TlsHostState) => Math.floor((Date.parse(h.validTo as string) - now) / DAY_MS);
+  const worst = known.reduce((a, b) => (days(b) < days(a) ? b : a), known[0] as TlsHostState);
   const left = days(worst);
   const params = { host: worst.host, days: left };
   if (left < 7) return check("tls", "critical", true, "expiring", params);
@@ -577,7 +708,7 @@ function checkDnsbl(list: BlacklistCheckResponse | null): MailHealthCheck {
   const listed = results.filter((r) => r.status === "listed");
   if (listed.length > 0) return check("dnsbl", "critical", true, "listed", { lists: listed.map((r) => r.label).join(", ") });
   if (results.some((r) => r.status === "unknown")) {
-    return check("dnsbl", "warn", false, "unknown", { lists: results.filter((r) => r.status === "unknown").map((r) => r.label).join(", ") });
+    return check("dnsbl", "info", false, "unknown", { lists: results.filter((r) => r.status === "unknown").map((r) => r.label).join(", ") });
   }
   return check("dnsbl", "ok", true, "ok", { count: results.length });
 }
@@ -647,6 +778,7 @@ async function checkTlsRpt(domain: string, resolver: DnsResolverLike): Promise<M
 
 export type DelayCause =
   | "greylisted"
+  | "auth"
   | "blocked_ip"
   | "rate_limited"
   | "mailbox"
@@ -663,6 +795,8 @@ export type DelayCause =
 export function classifyDelay(text: string | null): DelayCause {
   const reason = (text ?? "").toLowerCase();
   if (/greylist|graylist|4\.2\.0|451 4\.7\.1\b/.test(reason)) return "greylisted";
+  // 4.7.26/27/30/32: o Gmail adia por falha de autenticação (SPF/DKIM/alinhamento), NÃO por taxa
+  if (!/4\.7\.28/.test(reason) && /\b[45]\.7\.(26|27|30|32)\b|unauthenticated|not authenticated|authentication (?:is )?required|\b(spf|dkim|dmarc)\b/.test(reason)) return "auth";
   if (/s3150|s775|s3140|blacklist|blocklist|spamhaus|poor reputation|5\.7\.1\b|ip.*blocked|blocked.*ip/.test(reason)) return "blocked_ip";
   if (/rate|4\.7\.28|4\.7\.0\b|tss0|4\.2\.1\b|too many|unusual|try again later|temporarily/.test(reason)) return "rate_limited";
   if (/mailbox full|over quota|quota exceeded|4\.2\.2\b/.test(reason)) return "mailbox";
@@ -689,7 +823,7 @@ function checkQueue(queue: QueueItemView[] | null, domain: string, now: number):
   const next = deferred.map((m) => m.nextRetryAt).filter((v): v is string => v !== null).sort()[0];
   const minutes = next ? Math.max(0, Math.ceil((Date.parse(next) - now) / 60_000)) : 0;
   // Muitas tentativas sem sucesso (a agenda do Stalwart passa de 1 h na 6ª): deixou de ser só atraso.
-  const level = attempts >= 6 || cause === "blocked_ip" ? "critical" : "warn";
+  const level = attempts >= 6 || cause === "blocked_ip" || cause === "auth" ? "critical" : "warn";
   return check("queue", level, true, `deferred_${cause}`, {
     count: deferred.length,
     attempts,
@@ -710,6 +844,8 @@ export interface HealthInput extends PlanInput {
   fetchPolicy: (domain: string) => Promise<string | null>;
   isProxyIp: (ip: string) => boolean;
   now: number;
+  /** Prazo total (relógio) da checagem de MTA-STS. Padrão: 10 s. */
+  mtaStsDeadlineMs?: number;
 }
 
 /** Roda todas as verificações e resume o estado do domínio. */
@@ -723,7 +859,7 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
       : checkAddress("helo", serverHostname, serverIp, main, input.isProxyIp),
     checkMx(domain, mailHostname, serverIp, main),
     checkSpf(domain, serverIp, input.dmarcStage, main),
-    checkDkim(domain, input.dkimSelector, input.dkimPublicKey, main),
+    checkDkim(domain, input.dkimSelector, input.dkimPublicKey, main, input.dkimRestartPending === true),
     checkDmarc(domain, input.dmarcStage, main),
     Promise.resolve(checkPtr(input.ptr)),
     Promise.resolve(checkPort25(input.port25)),
@@ -731,7 +867,12 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     Promise.resolve(checkTls(input.serverRunning, input.tlsHosts, input.now)),
     Promise.resolve(checkDnsbl(input.blacklist)),
     checkPropagation(domain, input.dkimSelector, input.resolvers),
-    checkMtaSts(domain, mailHostname, main, input.fetchPolicy),
+    // Prazo total do relógio: um servidor de política lento não pode segurar a verificação inteira.
+    withDeadline(
+      checkMtaSts(domain, mailHostname, main, input.fetchPolicy),
+      input.mtaStsDeadlineMs ?? 10_000,
+      check("mta_sts", "warn", false, "unreachable", { host: `mta-sts.${domain}` }),
+    ),
     checkTlsRpt(domain, main),
   ]).then((all) => all.filter((c): c is MailHealthCheck => c !== null));
 

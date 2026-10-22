@@ -116,10 +116,70 @@ describe("DeliveryHealthCard", () => {
     expect(screen.getByTestId("delivery-health")).toHaveAttribute("data-level", "ok");
   });
 
-  it("nunca promete caixa de entrada (em nenhum idioma)", () => {
+  // Frases que prometem o que nenhum servidor pode prometer. A negação ("não existe garantia") é tirada antes.
+  const PROMESSAS: RegExp[] = [
+    /garant(e|em|ido|ida|idos|idas|imos|iu|ir|irá|iria)\b/,
+    /garantia de (entrega|caixa|inbox)/,
+    /(vai|vão|irá|irão|deve|devem) (cair|chegar|entrar|ir|parar|ficar) (na|à|em|para a) (sua )?(caixa de entrada|inbox)/,
+    /(cairá|chegará|entrará|ficará) (na|à|em) (sua )?(caixa de entrada|inbox)/,
+    /(cai|chega|entra|fica) (sempre )?(na|à) (sua )?(caixa de entrada|inbox)/,
+    /(nunca|jamais|não) (vai|irá|vão|cai|cairá) (cair |ir |parar )?(no|para o|na pasta de) ?(spam|lixo)/,
+    /(evita|evitará|livra|elimina) (o )?(spam|lixo eletrônico)/,
+    /(sem|zero) risco de (spam|rejeição)/,
+    /sempre (chega|chegam|entrega|entregam|cai|caem)/,
+    /100 ?%/,
+    /guarantee[sd]?\b/,
+    /(will|would|should) (land|arrive|reach|go|end up|be delivered) (in|to|into) (your |the )?(inbox|primary)/,
+    /(lands?|arrives?|reaches|ends up) (in|to|into) (your |the )?inbox/,
+    /(never|won't|will not|no longer) (land|go|end up|be sent) (in|to|into)? ?(the )?(spam|junk)/,
+    /(avoids?|prevents?|eliminates?) (the )?(spam|junk)/,
+    /(no|zero) risk of (spam|rejection)/,
+    /always (reach|reaches|arrive|arrives|land|lands|deliver|delivers)/,
+    /(inbox|delivery|placement)( placement)? (is |are )?(assured|ensured|guaranteed|certain)/,
+    /(ensures?|assures?) (inbox|delivery)/,
+  ];
+  const NEGACOES =
+    /(não existe|nenhuma|sem|não há|nem) garantia|no guarantee|not a guarantee|não é (uma )?garantia|no one can guarantee|cannot guarantee|can't guarantee|does not guarantee|doesn't guarantee|not guaranteed|não garante|não pode garantir|ninguém garante|nenhum servidor (garante|pode garantir)/g;
+  const prometeAlgo = (text: string) => {
+    const limpo = text.toLowerCase().replace(NEGACOES, " ");
+    return PROMESSAS.filter((re) => re.test(limpo));
+  };
+
+  it("o detector de promessas pega frases típicas (teste negativo)", () => {
+    for (const frase of [
+      "Seu e-mail vai cair na caixa de entrada.",
+      "A mensagem chegará à caixa de entrada do Gmail.",
+      "Entrega garantida em todos os provedores.",
+      "Evita o spam por completo",
+      "Nunca vai cair no spam",
+      "Your message lands in the inbox",
+      "It will land in your inbox",
+      "This setup guarantees delivery",
+      "Inbox placement is assured",
+      "Avoids spam entirely",
+      "100% de entrega",
+    ]) {
+      expect(prometeAlgo(frase), frase).not.toEqual([]);
+    }
+    for (const frase of [
+      "Não existe garantia de caixa de entrada.",
+      "There is no guarantee of inbox placement.",
+      "Aumenta as chances de a mensagem chegar, sem garantia.",
+      "Nenhum item que afete diretamente a caixa de entrada.",
+    ]) {
+      expect(prometeAlgo(frase), frase).toEqual([]);
+    }
+  });
+
+  it("nunca promete caixa de entrada: varre todo texto de e-mail em pt-BR e en", () => {
+    const namespaces = ["mailHealth", "mail", "envios"];
     for (const locale of Object.keys(catalog)) {
-      const texts = Object.values(catalog[locale]!.mailHealth!).join("\n").toLowerCase();
-      expect(texts).not.toMatch(/garantid|garante |guarantee[sd]? (inbox|delivery)|100%/);
+      for (const ns of namespaces) {
+        const dict = (catalog[locale] as unknown as Record<string, Record<string, string> | undefined>)[ns] ?? {};
+        for (const [key, text] of Object.entries(dict)) {
+          expect(prometeAlgo(String(text)), `${locale}.${ns}.${key}: ${String(text).slice(0, 80)}`).toEqual([]);
+        }
+      }
     }
     expect(catalog["pt-BR"]!.mailHealth!.description).toMatch(/não existe garantia/);
     expect(catalog.en!.mailHealth!.description).toMatch(/no guarantee/);
@@ -187,13 +247,13 @@ describe("mensagens do servidor x dicionário", () => {
   const CODES: Record<string, string[]> = {
     a: ["ok", "missing", "mismatch", "proxied", "unavailable"],
     mx: ["ok", "missing", "other", "target_wrong_ip", "unavailable"],
-    spf: ["ok_hard", "ok_soft", "missing", "multiple", "too_many_lookups", "ip_missing", "weak_all", "near_limit", "uses_ptr", "unavailable"],
-    dkim: ["ok", "missing", "revoked", "invalid_key", "mismatch", "weak_key", "short_key", "unavailable"],
+    spf: ["ok_hard", "ok_soft", "missing", "multiple", "too_many_lookups", "ip_missing", "weak_all", "near_limit", "uses_ptr", "permerror", "has_macros", "unavailable"],
+    dkim: ["ok", "missing", "revoked", "invalid_key", "mismatch", "weak_key", "short_key", "restart_pending", "unavailable"],
     dmarc: ["none", "quarantine", "reject", "missing", "multiple", "invalid", "inherited", "no_rua", "unavailable"],
     ptr: ["ok", "generic", "mismatch", "missing", "unavailable"],
     port25: ["ok", "blocked", "unavailable"],
-    queue: ["empty", "unavailable", "deferred_greylisted", "deferred_rate_limited", "deferred_blocked_ip", "deferred_mailbox", "deferred_tls", "deferred_dns", "deferred_connection", "deferred_other"],
-    tls: ["ok", "expiring", "expiring_soon", "invalid", "server_stopped", "no_hosts"],
+    queue: ["empty", "unavailable", "deferred_greylisted", "deferred_auth", "deferred_rate_limited", "deferred_blocked_ip", "deferred_mailbox", "deferred_tls", "deferred_dns", "deferred_connection", "deferred_other"],
+    tls: ["ok", "expiring", "expiring_soon", "invalid", "server_stopped", "no_hosts", "expiry_unknown"],
     dnsbl: ["ok", "listed", "unknown", "not_checked"],
     propagation: ["ok", "partial", "none"],
     mta_sts: ["absent", "unreachable", "invalid", "mx_mismatch", "testing", "enforce"],

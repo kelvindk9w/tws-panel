@@ -296,7 +296,7 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
     expect(note).toHaveTextContent("cassp.example.com");
     expect(note).toHaveTextContent("postmaster@cassp.example.com");
     expect(note).toHaveTextContent(/Trocar senha/);
-    expect(note).toHaveTextContent(/pode reiniciar o servidor de e-mail/);
+    expect(note).toHaveTextContent(/reinicia o servidor de e-mail por alguns segundos/);
     expect(syncCalls(fetchMock)).toHaveLength(1);
   });
 
@@ -320,6 +320,19 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
     expect(note).toHaveTextContent("Realinhei a senha de 2 caixas com a que o painel guarda.");
     expect(note).toHaveTextContent(/Não consegui realinhar a senha de: loja@cassp\.example\.com/);
     expect(note).toHaveTextContent(/Trocar senha/);
+  });
+
+  it("chave DKIM sem reinício: avisa quais domínios saem sem assinatura e o que fazer", async () => {
+    mockApi({
+      extra: sync({ ok: true, domainCount: 1, mailboxCount: 0, domains: ["cassp.example.com"], mailboxes: [], skipped: [], dkimRestartPending: ["cassp.example.com"] }),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    const note = await screen.findByTestId("mail-sync-result");
+    expect(note).toHaveTextContent(/Reinício pendente/);
+    expect(note).toHaveTextContent(/cassp\.example\.com/);
+    expect(note).toHaveTextContent(/sem assinatura DKIM/);
   });
 
   it("não deu para conferir antes: diz que reaplicou, sem afirmar que a senha estava diferente", async () => {
