@@ -161,6 +161,52 @@ describe("LoginPage — tentativas restantes no código errado", () => {
     expect(code).toBeInTheDocument();
   });
 
+  it("limite do IP: texto neutro, sem citar o código do app (pt-BR e en)", async () => {
+    stubWrong({ attemptsLeft: 2, nextLockSec: 60, limit: "ip" });
+    await loginUntilCode();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Código incorreto. Restam 2 tentativas antes de um bloqueio temporário de 1 min.");
+    expect(alert.textContent).not.toMatch(/código do app/);
+    cleanup();
+    setLocale("en");
+    stubWrong({ attemptsLeft: 1, nextLockSec: 120, limit: "ip" });
+    await loginUntilCode();
+    const en = await screen.findByRole("alert");
+    expect(en).toHaveTextContent("Wrong code. 1 attempt left before a temporary lock of 2 min.");
+    expect(en.textContent).not.toMatch(/app code/);
+  });
+
+  it("attemptsLeft 0, nextLockSec 0 ou valores que não são número: só a mensagem do servidor", async () => {
+    for (const data of [
+      { attemptsLeft: 0, nextLockSec: 300 },
+      { attemptsLeft: 3, nextLockSec: 0 },
+      { attemptsLeft: "3", nextLockSec: 300 },
+      { attemptsLeft: 3, nextLockSec: "300" },
+    ]) {
+      stubWrong(data);
+      await loginUntilCode();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Código incorreto.");
+      expect(alert.textContent).not.toMatch(/Restam|Resta |antes de/);
+      cleanup();
+    }
+  });
+
+  it("a contagem só vale para invalid_two_factor_code: outro erro com os mesmos campos mantém a mensagem dele", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { code?: string };
+        if (!body.code) return jsonResponse({ error: "two_factor_required", message: "Digite o código." }, 401);
+        return jsonResponse({ error: "two_factor_locked", message: LOCKED_PT, attemptsLeft: 3, nextLockSec: 300 }, 429);
+      }),
+    );
+    await loginUntilCode();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/código de recuperação/i);
+    expect(alert.textContent).not.toMatch(/Restam|antes de bloquear/);
+  });
+
   it("sem os números (servidor antigo ou resposta sem contagem): só a mensagem do servidor, sem 'undefined'", async () => {
     stubWrong({});
     await loginUntilCode();

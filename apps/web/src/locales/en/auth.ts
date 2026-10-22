@@ -9,6 +9,8 @@ export default {
   "login.failed": "Could not sign in. Please try again.",
   "login.codeWrong_one": "Wrong code. {count} attempt left before the app code is locked for {time}.",
   "login.codeWrong_other": "Wrong code. {count} attempts left before the app code is locked for {time}.",
+  "login.codeWrongIp_one": "Wrong code. {count} attempt left before a temporary lock of {time}.",
+  "login.codeWrongIp_other": "Wrong code. {count} attempts left before a temporary lock of {time}.",
   "login.retryIn": "Try again in {time}.",
   "login.submit": "Sign in",
   "login.submitting": "Signing in…",

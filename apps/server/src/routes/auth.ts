@@ -32,6 +32,7 @@ import {
   type TwoFactorStatusResponse,
 } from "@paas/core";
 import { hashPassword, verifyPasswordTimingSafe } from "../services/password.js";
+import { attemptsText, durationText } from "../services/login-messages.js";
 import { LoginLimiter } from "../services/login-limiter.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { publicUser } from "../services/public-user.js";
@@ -83,20 +84,6 @@ function isStorageWriteFailure(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === "storage_write_failed";
 }
 
-function attemptsText(n: number): string {
-  return n === 1 ? "Resta 1 tentativa" : `Restam ${n} tentativas`;
-}
-
-function durationText(sec: number): string {
-  if (sec < 60) return sec === 1 ? "1 segundo" : `${sec} segundos`;
-  if (sec < 3600) {
-    const m = Math.ceil(sec / 60);
-    return m === 1 ? "1 minuto" : `${m} minutos`;
-  }
-  const h = Math.ceil(sec / 3600);
-  return h === 1 ? "1 hora" : `${h} horas`;
-}
-
 const authRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const limiter = new LoginLimiter();
@@ -111,8 +98,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
   /**
    * 401 do código errado, com o aviso do bloqueio. Só é chamado depois de a senha
-   * estar certa. Mostra o MENOR entre o que resta na conta e no IP, sem dizer qual
-   * dos dois é (empate: o de bloqueio mais longo) e só a duração do PRÓXIMO bloqueio, nunca o nível.
+   * estar certa. Mostra o MENOR entre o que resta na conta e no IP (empate: o de
+   * bloqueio mais longo) e a duração do PRÓXIMO bloqueio. Quem já provou a senha
+   * pode deduzir pela duração qual limite é (IP: 60·2^k s; conta: 300·2^k s) e o
+   * nível; por isso o corpo diz `limit` com franqueza. Quando o menor é o do IP,
+   * o texto é neutro: o bloqueio do IP trava o login inteiro, não só o código do app.
    */
   function invalidTwoFactorCode(
     reply: FastifyReply,
@@ -120,17 +110,21 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     account: { attemptsLeft: number; nextLockSec: number } | undefined,
   ): FastifyReply {
     const byIp = limiter.remaining(ip);
-    const worst =
-      account &&
+    const useAccount =
+      account !== undefined &&
       (account.attemptsLeft < byIp.attemptsLeft ||
-        (account.attemptsLeft === byIp.attemptsLeft && account.nextLockSec > byIp.nextLockSec))
-        ? account
-        : byIp;
+        (account.attemptsLeft === byIp.attemptsLeft && account.nextLockSec > byIp.nextLockSec));
+    const worst = useAccount ? account : byIp;
+    const limit = useAccount ? "account" : "ip";
+    const tail = useAccount
+      ? `antes de bloquear o código do app por ${durationText(worst.nextLockSec)}`
+      : `antes de um bloqueio temporário de ${durationText(worst.nextLockSec)}`;
     return reply.code(401).send({
       error: "invalid_two_factor_code",
-      message: `Código incorreto. ${attemptsText(worst.attemptsLeft)} antes de bloquear o código do app por ${durationText(worst.nextLockSec)}.`,
+      message: `Código incorreto. ${attemptsText(worst.attemptsLeft)} ${tail}.`,
       attemptsLeft: worst.attemptsLeft,
       nextLockSec: worst.nextLockSec,
+      limit,
     });
   }
 
@@ -200,11 +194,12 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       if (user.twoFactor) {
         const code = request.body.code;
         if (code === undefined) {
-          // Primeiro passo (a tela pede o código): conta como tentativa do IP
-          // e abre uma pendência — se o login não for concluído, vira aviso.
-          const failure = settle(() => limiter.onFailure(ip));
+          // Primeiro passo (a tela pede o código): abre uma pendência — se o
+          // login não for concluído, vira aviso.
+          // Senha certa à espera do código: NÃO conta falha no IP (a reserva é
+          // devolvida no finally). Quem tem a senha não ganha nada repetindo este
+          // passo, e contá-lo gastava as tentativas do dono antes do primeiro erro.
           app.loginWatch.passwordAccepted(ip, watched);
-          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
           return reply.code(401).send({
             error: "two_factor_required",
             message: "Digite o código de 6 dígitos do seu app autenticador.",
@@ -229,7 +224,13 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           if (outcome.lockedNow) {
             await app.loginWatch.accountLocked(ip, watched, outcome.lockedNow);
           }
-          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+          if (!failure.allowed) {
+            // os dois bloqueios de uma vez: diz o MAIOR tempo (é o que vale para o código do app)
+            if (outcome.lockedNow) {
+              return twoFactorLocked(reply, Math.max(outcome.lockedNow.retryAfterSec, failure.retryAfterSec));
+            }
+            return sendTooManyAttempts(reply, failure.retryAfterSec);
+          }
           if (outcome.lockedNow) return twoFactorLocked(reply, outcome.lockedNow.retryAfterSec);
           return invalidTwoFactorCode(reply, ip, outcome.account);
         }

@@ -5,7 +5,7 @@
  */
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SETUP_TOKEN_HEADER,
   TWO_FACTOR_LOCK_BASE_MS,
@@ -112,18 +112,92 @@ describe("tentativas restantes no código errado", () => {
     expect(fifth.json().attemptsLeft).toBeUndefined();
   });
 
-  it("IP: mostra o menor dos dois (aqui o do IP, com o bloqueio do IP) sem dizer qual é", async () => {
+  it("caminho do dono em um IP só (código do app): a sequência é verdadeira até o bloqueio, que diz o maior tempo", async () => {
     await enable2fa();
     const ip = "203.0.113.77";
-    // 1º passo (pede o código) já conta 1 no IP; depois cada código errado conta mais 1
     expect((await loginFrom(ip)).json().error).toBe("two_factor_required");
-    const a = (await loginFrom(ip, { code: WRONG })).json() as Body;
-    expect(a.attemptsLeft).toBe(3);
-    expect(a.nextLockSec).toBe(60);
-    expect(a.message).toBe("Código incorreto. Restam 3 tentativas antes de bloquear o código do app por 1 minuto.");
-    const b = (await loginFrom(ip, { code: WRONG })).json() as Body;
-    expect(b.attemptsLeft).toBe(2);
-    expect(Object.keys(b).sort()).toEqual(["attemptsLeft", "error", "message", "nextLockSec"]);
+    const textos: string[] = [];
+    for (const left of [4, 3, 2, 1]) {
+      const r = (await loginFrom(ip, { code: WRONG })).json() as Body;
+      expect(r.attemptsLeft).toBe(left);
+      expect(r.limit).toBe("account");
+      expect(r.nextLockSec).toBe(300);
+      textos.push(String(r.message));
+    }
+    expect(textos[3]).toBe("Código incorreto. Resta 1 tentativa antes de bloquear o código do app por 5 minutos.");
+    // o aviso "resta 1" precede o bloqueio real; os dois bloqueios chegam juntos e vale o maior tempo
+    const quinta = await loginFrom(ip, { code: WRONG });
+    expect(quinta.statusCode).toBe(429);
+    expect(quinta.json().error).toBe("two_factor_locked");
+    expect(quinta.json().retryAfterSec).toBe(300);
+    expect(Number(quinta.headers["retry-after"])).toBe(300);
+  });
+
+  it("60 pedidos do mesmo IP: a conta fica 5 min e a resposta de bloqueio diz 5 min, não 60 s", async () => {
+    await enable2fa();
+    const respostas = await Promise.all(Array.from({ length: 60 }, () => loginFrom("203.0.113.78", { code: WRONG })));
+    const locked = respostas.filter((r) => r.json().error === "two_factor_locked");
+    for (const r of locked) expect(r.json().retryAfterSec).toBeGreaterThanOrEqual(60);
+    const tf = (await ctx.userStore.findByUsername("admin"))!.twoFactor!;
+    expect(tf.lockedUntil! - nowMs).toBe(TWO_FACTOR_LOCK_BASE_MS);
+  });
+
+  it("caminho do dono com o código de recuperação errado: texto neutro, só o IP, e passado 1 min o dono entra", async () => {
+    const { recoveryCodes } = await enable2fa();
+    const ip = "203.0.113.79";
+    const realNow = Date.now;
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      const textos: string[] = [];
+      for (const left of [4, 3, 2, 1]) {
+        const r = (await loginFrom(ip, { code: "aaaaa-bbbbb" })).json() as Body;
+        expect(r.attemptsLeft).toBe(left);
+        expect(r.limit).toBe("ip");
+        expect(r.nextLockSec).toBe(60);
+        textos.push(String(r.message));
+      }
+      expect(textos[0]).toBe("Código incorreto. Restam 4 tentativas antes de um bloqueio temporário de 1 minuto.");
+      expect(textos[3]).toBe("Código incorreto. Resta 1 tentativa antes de um bloqueio temporário de 1 minuto.");
+      expect(textos.join(" ")).not.toMatch(/código do app/);
+      const quinta = await loginFrom(ip, { code: "aaaaa-bbbbb" });
+      expect(quinta.statusCode).toBe(429);
+      expect(quinta.json().error).toBe("too_many_attempts");
+      const tf = (await ctx.userStore.findByUsername("admin"))!.twoFactor!;
+      expect(tf.failedCodes ?? 0).toBe(0);
+      skew = 61_000;
+      const ok = await loginFrom(ip, { code: recoveryCodes[0]! });
+      expect(ok.statusCode, ok.body).toBe(200);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("código com menos de 6 dígitos também só usa o limite do IP (texto neutro)", async () => {
+    await enable2fa();
+    const r = (await loginFrom("203.0.113.80", { code: "123" })).json() as Body;
+    expect(r.limit).toBe("ip");
+    expect(r.message).toBe("Código incorreto. Restam 4 tentativas antes de um bloqueio temporário de 1 minuto.");
+    const tf = (await ctx.userStore.findByUsername("admin"))!.twoFactor!;
+    expect(tf.failedCodes ?? 0).toBe(0);
+  });
+
+  it("depois de 1 min o IP volta a 5, mas a conta guarda os erros: o aviso passa a ser o da conta", async () => {
+    await enable2fa();
+    const ip = "203.0.113.81";
+    const realNow = Date.now;
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      await loginFrom(ip, { code: WRONG });
+      await loginFrom(ip, { code: WRONG });
+      skew = 61_000;
+      const r = (await loginFrom(ip, { code: WRONG })).json() as Body;
+      expect(r.attemptsLeft).toBe(2);
+      expect(r.limit).toBe("account");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("não revela o nível de reincidência: após um bloqueio vencido o corpo tem os mesmos campos e nunca 'nível'", async () => {
@@ -131,7 +205,7 @@ describe("tentativas restantes no código errado", () => {
     await lockAccount();
     nowMs += TWO_FACTOR_LOCK_BASE_MS + 1000;
     const r = (await loginFrom(freshIp(), { code: WRONG })).json() as Body;
-    expect(Object.keys(r).sort()).toEqual(["attemptsLeft", "error", "message", "nextLockSec"]);
+    expect(Object.keys(r).sort()).toEqual(["attemptsLeft", "error", "limit", "message", "nextLockSec"]);
     expect(JSON.stringify(r)).not.toMatch(/level|nivel|nível|reincid/i);
     // só o PRÓXIMO bloqueio: 10 min, sem dizer que é o 2º
     expect(r.nextLockSec).toBe((TWO_FACTOR_LOCK_BASE_MS * 2) / 1000);
@@ -143,6 +217,7 @@ describe("tentativas restantes no código errado", () => {
     const r = (await loginFrom("203.0.113.90", { code: "aaaaa-bbbbb" })).json() as Body;
     expect(r.error).toBe("invalid_two_factor_code");
     expect(r.attemptsLeft).toBe(4);
+    expect(r.limit).toBe("ip");
     const tf = (await ctx.userStore.findByUsername("admin"))!.twoFactor!;
     expect(tf.failedCodes ?? 0).toBe(0);
   });

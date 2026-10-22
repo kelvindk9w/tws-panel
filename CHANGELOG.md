@@ -45,8 +45,9 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
 - Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas
   tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
-  limite da conta e o do IP, sem dizer qual). Só aparece a quem já acertou a senha e não revela o
-  nível de reincidência da conta.
+  limite da conta e o do IP; quando o menor é o do IP, o texto é neutro). Só aparece a quem já
+  acertou a senha, que pela duração mostrada pode deduzir qual limite é e o nível de reincidência
+  (já era visível no 429). O passo "senha certa, falta o código" deixou de gastar tentativas do IP.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**

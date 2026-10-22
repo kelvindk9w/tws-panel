@@ -142,7 +142,7 @@ export class LoginLimiter {
     const recent = state ? state.failures.filter((t) => now - t < LOGIN_WINDOW_MS).length : 0;
     const level = state?.lockLevel ?? 0;
     return {
-      attemptsLeft: Math.max(1, LOGIN_MAX_ATTEMPTS - recent),
+      attemptsLeft: LOGIN_MAX_ATTEMPTS - recent,
       nextLockSec: Math.ceil(Math.min(BASE_LOCKOUT_MS * 2 ** level, MAX_LOCKOUT_MS) / 1000),
     };
   }

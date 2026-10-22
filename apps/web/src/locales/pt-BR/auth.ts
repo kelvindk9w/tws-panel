@@ -9,6 +9,8 @@ export default {
   "login.failed": "Não foi possível entrar. Tente novamente.",
   "login.codeWrong_one": "Código incorreto. Resta {count} tentativa antes de bloquear o código do app por {time}.",
   "login.codeWrong_other": "Código incorreto. Restam {count} tentativas antes de bloquear o código do app por {time}.",
+  "login.codeWrongIp_one": "Código incorreto. Resta {count} tentativa antes de um bloqueio temporário de {time}.",
+  "login.codeWrongIp_other": "Código incorreto. Restam {count} tentativas antes de um bloqueio temporário de {time}.",
   "login.retryIn": "Tente de novo em {time}.",
   "login.submit": "Entrar",
   "login.submitting": "Entrando…",

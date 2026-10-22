@@ -22,8 +22,8 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
    acertou a senha; senha errada ou usuário inexistente seguem 401 `invalid_credentials` mesmo com a conta
    bloqueada, para não enumerar usuários. Custo: o 429 confirma a senha, que os `two_factor_required` e
    `invalid_two_factor_code` anteriores já confirmavam (o "oráculo" que a análise aceitou).
-4. **Senha certa sem código conta para o IP.** O primeiro passo agora é uma tentativa do IP (a 5ª em 1 min
-   bloqueia). Login concluído zera o IP, então o fluxo legítimo não paga nada.
+4. **Senha certa sem código NÃO conta para o IP** (revisado após o aviso de tentativas restantes). O primeiro
+   passo devolve a reserva: contá-lo gastava as tentativas do dono antes do primeiro erro de código.
 5. **Auditoria e aviso.** Todo login legítimo com 2FA passa pelo primeiro passo (senha certa, sem código),
    então avisar nele seria ruído. O primeiro passo abre uma "pendência" por IP/64 + conta (`LoginWatch`);
    concluir o login em 5 min a apaga; ao expirar vira `auth.2fa_abandoned` (ou `auth.2fa_wrong_code` se

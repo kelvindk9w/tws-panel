@@ -87,8 +87,10 @@ fora do celular. O Dashboard lembra você enquanto ela estiver desligada.
   disco: reiniciar o painel não o remove. Se não houver código de recuperação, o
   `sudo ./scripts/reset-2fa.sh --so-bloqueio` na VPS limpa só o bloqueio. Ao errar o código do app, a
   tela diz **quantas tentativas restam antes do bloqueio** e por quanto tempo o próximo bloqueio
-  duraria (por exemplo, "Restam 3 tentativas antes de bloquear o código do app por 5 minutos"); o
-  número é o menor entre o limite da conta e o do seu IP. Esse aviso só aparece depois de a senha estar
+  duraria (por exemplo, "Restam 3 tentativas antes de bloquear o código do app por 5 min"); o
+  número é o menor entre o limite da conta e o do seu IP. Quando o menor é o do IP, o aviso fala de
+  "um bloqueio temporário", porque esse bloqueio trava o login inteiro. Quem já acertou a senha pode
+  deduzir, pela duração mostrada, qual limite é e o nível de reincidência. Esse aviso só aparece depois de a senha estar
   certa: usuário inexistente e senha errada recebem sempre a mesma resposta de antes.
 - **Aviso quando a senha certa chega sem o código certo.** Se alguém digita a sua senha e não conclui a
   verificação (ou erra o código), isso vai para a **Auditoria** e vira um **Alerta** (origem "acesso"),

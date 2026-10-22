@@ -68,7 +68,9 @@ export function LoginPage() {
           typeof lockSec === "number" &&
           lockSec > 0
         ) {
-          text = t("auth.login.codeWrong", { count: left, time: formatWait(lockSec) });
+          // limite do IP: texto neutro (esse bloqueio trava o login inteiro, não só o código do app)
+          const key = err.data?.limit === "ip" ? "auth.login.codeWrongIp" : "auth.login.codeWrong";
+          text = t(key, { count: left, time: formatWait(lockSec) });
         }
         setError(text);
       } else {

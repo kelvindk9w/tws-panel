@@ -69,15 +69,14 @@ describe("login concorrente (rota real, argon2 real)", () => {
     for (let i = 0; i < 4; i++) expect((await tentar("SenhaErrada123")).statusCode).toBe(401);
   });
 
-  it("senha certa, mas sem código de 2FA, conta como tentativa do IP (4 pedem o código, a 5ª bloqueia)", async () => {
+  it("senha certa, mas sem código de 2FA, NÃO gasta tentativa do IP (pede o código quantas vezes for preciso)", async () => {
     const user = (await ctx.userStore.findByUsername("admin"))!;
     const enable = vi.spyOn(ctx.userStore, "findByUsername").mockResolvedValue({ ...user, twoFactor: { enabled: true } } as never);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 10; i++) {
       const res = await tentar(PASSWORD);
       expect(res.statusCode).toBe(401);
       expect(res.json().error).toBe("two_factor_required");
     }
-    expect((await tentar(PASSWORD)).statusCode).toBe(429);
     enable.mockRestore();
   });
 });
