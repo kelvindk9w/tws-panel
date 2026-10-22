@@ -150,11 +150,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Segurança
 
-- Webmail (Roundcube) atualizado para a 1.7.5, que roda sobre o PHP 8.4.27: traz a correção de uma
-  falha crítica do PHP, divulgada em 21/10/2026, e outras correções do Roundcube. **Após atualizar o
-  painel, o webmail é recriado automaticamente com a imagem corrigida** (ao subir o painel e ao
-  sincronizar o e-mail), com um reinício breve; preferências, contatos, sessões e nomes de exibição
-  ficam no volume e são mantidos. Se a troca falhar, o container anterior volta e o erro é mostrado.
+- Webmail (Roundcube) atualizado para a 1.7.5, que roda sobre o PHP 8.4.27: traz a correção das duas
+  falhas críticas do PHP divulgadas em 21/10/2026 (CVE-2026-109618 e CVE-2026-109619) e outras
+  correções do Roundcube. **Após atualizar o painel, o webmail é recriado automaticamente com a
+  imagem corrigida** (ao subir o painel e ao sincronizar o e-mail), com um reinício breve;
+  preferências, contatos, sessões e nomes de exibição ficam no volume e são mantidos. O painel confere
+  que o webmail novo segue de pé alguns segundos antes de apagar o anterior; se a troca falhar ou o
+  novo cair, o container anterior volta e o erro é mostrado. Sobras de uma troca interrompida são
+  limpas na próxima sincronização.
   Para atualizar: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`.
 - Imagem base do Node do painel e dos builds de sites estáticos atualizada para a 22.23.4 (correções de
   segurança do Node de 21/10/2026), pnpm para a 10.34.7 e vitest para a 4.1.12 (só desenvolvimento).
