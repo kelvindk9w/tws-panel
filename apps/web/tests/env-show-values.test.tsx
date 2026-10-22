@@ -319,10 +319,53 @@ describe("Mostrar valores — corridas, contagem e salvar", () => {
   it("ocultar pelo próprio olho durante a carga também cancela", async () => {
     serveDeferred();
     await ready();
-    fireEvent.click(panelEye(/Mostrar valor/));
-    fireEvent.click(panelEye(/Ocultar valor|Mostrar valor/));
+    fireEvent.click(panelEye(/^Mostrar valor$/));
+    // durante a carga o olho já mostra a intenção: o rótulo é o de ocultar
+    fireEvent.click(panelEye(/^Ocultar valor$/));
     await ok(0);
     expect(panel().type).toBe("password");
+    expect(panelEye(/^Mostrar valor$/)).toBeInTheDocument();
+  });
+
+  it("durante a carga o olho reflete a intenção; se a busca falha, volta ao rótulo de mostrar", async () => {
+    serveDeferred();
+    await ready();
+    fireEvent.click(panelEye(/^Mostrar valor$/));
+    expect(panelEye(/^Ocultar valor$/)).toBeInTheDocument();
+    expect(panel()).toHaveValue("");
+    await act(async () => pending[0]!.reject(new Error("rede")));
+    expect(panelEye(/^Mostrar valor$/)).toBeInTheDocument();
+    expect(panel().type).toBe("password");
+  });
+
+  it("erro do servidor: a frase diz a variável e acrescenta o motivo, uma por linha que falhou", async () => {
+    const { ApiRequestError } = await import("../src/lib/api");
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") return JSON.parse(String(init.body));
+      const m = /\/env\/provided\/([A-Za-z0-9_]+)$/.exec(path);
+      if (m && m[1] === "SMTP_PASS") throw new ApiRequestError(500, "internal", "Falha simulada");
+      if (m) throw new ApiRequestError(429, "reveal_rate_limited", "Muitos valores exibidos em pouco tempo.");
+      return { ...DATA, provided: ["SMTP_PASS", "SMTP_SENHA"], links: { SMTP_SENHA: "SMTP_PASS" } };
+    });
+    await ready();
+    fireEvent.click(globalBtn(/Mostrar valores/));
+    const alerts = await screen.findAllByRole("alert");
+    const texts = alerts.map((a) => a.textContent);
+    expect(texts).toContain("Não foi possível mostrar o valor de SMTP_PASS: Falha simulada");
+    expect(texts).toContain("Não foi possível mostrar o valor de SMTP_SENHA: Muitos valores exibidos em pouco tempo.");
+  });
+
+  it("erro do servidor em inglês também leva o nome", async () => {
+    setLocale("en", { persist: false });
+    const { ApiRequestError } = await import("../src/lib/api");
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (/\/env\/provided\//.test(path)) throw new ApiRequestError(500, "internal", "Simulated failure");
+      return DATA;
+    });
+    renderCard();
+    await screen.findByDisplayValue("abc");
+    fireEvent.click(screen.getByRole("button", { name: /Show values/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't show the value of SMTP_PASS: Simulated failure");
   });
 
   it("global mostrar, ocultar e mostrar rápido: uma só chamada e termina visível, sem spinner", async () => {

@@ -39,6 +39,7 @@ export default {
   // ProjectEnvCard: falhas e avisos
   "loadFailed": "Couldn't load the variables.",
   "revealFailed": "Couldn't show the value of {name}.",
+  "revealFailedWhy": "Couldn't show the value of {name}: {reason}",
   "saved": "Saved. They take effect from the next deploy.",
   "saveFailed": "Couldn't save.",
   "cleared": "Variables deleted. Import the .env again or fill in the list.",

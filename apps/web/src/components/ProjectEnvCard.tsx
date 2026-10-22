@@ -87,6 +87,13 @@ function envErrorText(err: unknown, key: Key, params?: Record<string, string | n
   return err instanceof ApiRequestError ? apiErrorText(err, key, params) : t(key, params);
 }
 
+/** Falha ao revelar: sempre diz QUAL variável; com erro da API, acrescenta o motivo do servidor. */
+function revealErrorText(err: unknown, name: string): string {
+  const reason = envErrorText(err, "env.revealFailed", { name });
+  const plain = t("env.revealFailed", { name });
+  return reason === plain ? plain : t("env.revealFailedWhy", { name, reason });
+}
+
 /**
  * Texto com número e plural ("1 variável" / "3 variáveis"). O plural escolhido é
  * só singular (1) ou plural (qualquer outro número, inclusive 0), como sempre
@@ -329,7 +336,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             return r.value;
           })
           .catch((err: unknown) => {
-            setRevealErrors((prev) => ({ ...prev, [name]: envErrorText(err, "env.revealFailed", { name }) }));
+            setRevealErrors((prev) => ({ ...prev, [name]: revealErrorText(err, name) }));
             throw err;
           })
           .finally(() => {
@@ -376,12 +383,15 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   async function togglePanel(line: { name: string; onDemand?: boolean }, show: boolean) {
     const mine = (eyeSeq.current[line.name] = (eyeSeq.current[line.name] ?? 0) + 1);
     const at = epoch.current;
-    if (show && inFlight.current.has(line.name)) show = false;
-    if (show && line.onDemand && revealed[line.name] === undefined) {
-      if ((await reveal([line.name])).length === 0) return;
-      if (eyeSeq.current[line.name] !== mine || epoch.current !== at) return;
-    }
     setPanelVisible(line.name, show);
+    if (show && line.onDemand && revealed[line.name] === undefined) {
+      // a intenção (olho já como "ocultar") vale durante a carga; o valor só aparece quando chega
+      const ok = (await reveal([line.name])).length > 0;
+      if (!ok && eyeSeq.current[line.name] === mine && epoch.current === at) {
+        // falhou e ninguém mudou de ideia: volta ao padrão e ao rótulo de mostrar
+        setPanelOverride(({ [line.name]: _gone, ...rest }) => rest);
+      }
+    }
   }
 
   /** `key`: "row:<id>" ou "panel:<nome>" — onde mostrar o "copiado". */
@@ -818,7 +828,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                                   value={line.value}
                                   readOnly
                                   revealLabel={t("env.row.valueNoun")}
-                                  visible={isPanelVisible(line)}
+                                  visible={(panelOverride[line.name] ?? showAll) && (!line.onDemand || revealed[line.name] !== undefined || loadingNames.has(line.name))}
                                   onVisibleChange={(show) => void togglePanel(line, show)}
                                   {...(line.onDemand && !line.value ? { placeholder: "••••••••" } : {})}
                                   className={cn("cursor-default font-mono", compact && "h-8 text-xs")}
