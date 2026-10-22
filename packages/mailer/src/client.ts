@@ -36,6 +36,8 @@ export class StalwartApiError extends Error {
 export interface StalwartPrincipalSummary {
   name: string;
   emails: string[];
+  /** Nome de exibição (campo `description` do principal); ausente = sem nome. */
+  description?: string;
 }
 
 function assertIp(ip: string): void {
@@ -194,12 +196,19 @@ export class StalwartClient {
   // Caixas (principals "individual")
   // -------------------------------------------------------------------------
 
-  async createMailbox(email: string, password: string, extraEmails: string[] = []): Promise<void> {
+  async createMailbox(
+    email: string,
+    password: string,
+    extraEmails: string[] = [],
+    displayName?: string,
+  ): Promise<void> {
     await this.request("POST", "/principal", {
       type: "individual",
       name: email,
       secrets: [password],
       emails: [email, ...extraEmails],
+      // nome de exibição: campo `description` do principal (sempre dentro do JSON)
+      ...(displayName ? { description: displayName } : {}),
       quota: 0,
       // Sem o papel "user" o Stalwart autentica mas nega SMTP/IMAP
       // ("Your account is not authorized to use this service").
@@ -211,6 +220,16 @@ export class StalwartClient {
   async setMailboxPassword(email: string, password: string): Promise<void> {
     await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
       { action: "set", field: "secrets", value: [password] },
+    ]);
+  }
+
+  /**
+   * Nome de exibição da caixa (PATCH set description). Só esse campo: senha,
+   * 2FA, senhas de app, aliases e mensagens não são tocados. Vazio remove o nome.
+   */
+  async setMailboxDisplayName(email: string, displayName: string): Promise<void> {
+    await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
+      { action: "set", field: "description", value: displayName },
     ]);
   }
 
@@ -316,12 +335,17 @@ export class StalwartClient {
       const items = Array.isArray(data?.items) ? data!.items : [];
       if (page > PRINCIPAL_LIST_PAGES) return { items: out, truncated: items.length > 0 };
       for (const item of items) {
-        const raw = typeof item === "string" ? { name: item } : (item as { name?: unknown; emails?: unknown } | null);
+        const raw = typeof item === "string" ? { name: item } : (item as { name?: unknown; emails?: unknown; description?: unknown } | null);
         const name = typeof raw?.name === "string" ? raw.name.trim().toLowerCase() : "";
         if (!name) continue;
         const emails = (raw as { emails?: unknown }).emails;
         const list = typeof emails === "string" ? [emails] : Array.isArray(emails) ? emails : [];
-        out.push({ name, emails: list.filter((e): e is string => typeof e === "string").map((e) => e.toLowerCase()) });
+        const description = (raw as { description?: unknown }).description;
+        out.push({
+          name,
+          emails: list.filter((e): e is string => typeof e === "string").map((e) => e.toLowerCase()),
+          ...(typeof description === "string" && description.trim() ? { description: description.trim() } : {}),
+        });
       }
       if (items.length < limit) break;
     }

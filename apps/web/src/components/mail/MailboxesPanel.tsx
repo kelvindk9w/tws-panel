@@ -14,7 +14,7 @@
  * dele. Sem `projectId` (página do domínio), mostra todas, com o projeto
  * dono de cada uma.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MAILBOX_PASSWORD_MIN, webmailUrl } from "@paas/core";
 import type {
   Mailbox,
@@ -22,6 +22,7 @@ import type {
   MailboxCredentialsResponse,
   MailboxListResponse,
   MailboxResponse,
+  SetMailboxDisplayNameResponse,
   WebmailStatus,
 } from "@paas/core";
 import { apiErrorText, formatDateTime, useI18n } from "@/i18n";
@@ -31,6 +32,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DisplayNameField, displayNameProblem } from "@/components/mail/DisplayNameField";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { TestEmailModal } from "@/components/mail/TestEmailCard";
 import {
@@ -40,7 +42,7 @@ import {
   passwordChoiceProblem,
   type PasswordChoiceState,
 } from "@/components/mail/MailboxPasswordChoice";
-import { ExternalLink, Inbox, KeyRound, Loader2, MailPlus, Send, Settings2, Trash2, X } from "lucide-react";
+import { ExternalLink, Inbox, KeyRound, Loader2, MailPlus, Pencil, Send, Settings2, Trash2, X } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Modais (credenciais e troca de senha)
@@ -58,11 +60,51 @@ function CredentialRow({ label, value, mono = true }: { label: string; value: st
   );
 }
 
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   const { t } = useI18n();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // Lido na renderização, antes de qualquer autoFocus do conteúdo: é o botão que abriu o modal.
+  const openerRef = useRef<Element | null>(typeof document === "undefined" ? null : document.activeElement);
+  // Esc fecha; Tab fica dentro do modal; ao fechar, o foco volta ao botão que o abriu.
+  useEffect(() => {
+    const opener = openerRef.current instanceof HTMLElement ? openerRef.current : null;
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab" || !dialog) return;
+      const items = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === dialog)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -145,6 +187,73 @@ function ChangePasswordModal({
             </div>
           </>
         )}
+      </div>
+    </ModalShell>
+  );
+}
+
+/** "Alterar nome de exibição": só o nome muda (senha, 2FA, senhas de app, apelidos e mensagens ficam). */
+function DisplayNameModal({
+  mailbox,
+  projectId,
+  onClose,
+  onDone,
+}: {
+  mailbox: Mailbox;
+  /** Aba do projeto: o servidor só aceita caixa daquele projeto. */
+  projectId?: string;
+  onClose: () => void;
+  onDone: (result: SetMailboxDisplayNameResponse) => void;
+}) {
+  const { t } = useI18n();
+  const [value, setValue] = useState(mailbox.displayName ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const invalid = displayNameProblem(value) !== null;
+  const unchanged = value.trim() === (mailbox.displayName ?? "");
+
+  async function save() {
+    if (invalid || unchanged || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await apiFetch<SetMailboxDisplayNameResponse>(
+        `/api/mail/mailboxes/${encodeURIComponent(mailbox.id)}/display-name`,
+        { method: "PUT", body: JSON.stringify({ displayName: value.trim(), ...(projectId ? { projectId } : {}) }) },
+      );
+      onDone(res);
+    } catch (err) {
+      setError(apiErrorText(err, "mail.boxes.editName.error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalShell title={t("mail.boxes.editName.title", { email: mailbox.id })} onClose={onClose}>
+      <div className="flex flex-col gap-3 text-sm">
+        <p className="text-muted-foreground">
+          {t("mail.boxes.editName.intro")}
+          {mailbox.kind === "project" && ` ${t("mail.boxes.editName.projectNote")}`}
+        </p>
+        <DisplayNameField
+          value={value}
+          onChange={setValue}
+          disabled={saving}
+          onEnter={() => void save()}
+          autoFocus
+          hintKey={mailbox.kind === "project" ? "mail.displayName.hintProject" : "mail.displayName.hint"}
+        />
+        {error && <p role="alert" className="text-destructive">{error}</p>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            {t("mail.common.cancel")}
+          </Button>
+          <Button variant="success" disabled={saving || invalid || unchanged} onClick={() => void save()}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
+            {t("mail.boxes.editName.save")}
+          </Button>
+        </div>
       </div>
     </ModalShell>
   );
@@ -238,6 +347,9 @@ export function MailboxesPanel({
   const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [newMailbox, setNewMailbox] = useState("");
+  const [newDisplayName, setNewDisplayName] = useState("");
+  /** Caixa cujo nome de exibição está sendo alterado (modal). */
+  const [editingName, setEditingName] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [newChoice, setNewChoice] = useState<PasswordChoiceState>(EMPTY_PASSWORD_CHOICE);
   /** Senha gerada na criação: mostrada uma única vez, até "Já guardei". */
@@ -289,7 +401,7 @@ export function MailboxesPanel({
 
   async function addMailbox() {
     const local = newMailbox.trim();
-    if (!local || passwordChoiceProblem(newChoice) !== null) return;
+    if (!local || passwordChoiceProblem(newChoice) !== null || displayNameProblem(newDisplayName) !== null) return;
     setBusy("add");
     setError(null);
     try {
@@ -301,10 +413,12 @@ export function MailboxesPanel({
             localPart: local,
             ...(newChoice.mode === "generate" ? { generatePassword: true } : { password: newChoice.password }),
             ...(projectId ? { projectId } : {}),
+            ...(newDisplayName.trim() ? { displayName: newDisplayName.trim() } : {}),
           }),
         },
       );
       setNewMailbox("");
+      setNewDisplayName("");
       setNewChoice(EMPTY_PASSWORD_CHOICE);
       setChangedMailbox(null);
       if (res.generatedPassword) {
@@ -389,6 +503,9 @@ export function MailboxesPanel({
               </span>
             </div>
             <div className="max-w-md">
+              <DisplayNameField value={newDisplayName} onChange={setNewDisplayName} disabled={busy !== null} />
+            </div>
+            <div className="max-w-md">
               <PasswordChoice value={newChoice} onChange={setNewChoice} />
             </div>
             {newChoice.mode === "type" && (
@@ -399,7 +516,12 @@ export function MailboxesPanel({
             <div>
               <Button
                 size="sm"
-                disabled={busy !== null || !newMailbox.trim() || passwordChoiceProblem(newChoice) !== null}
+                disabled={
+                  busy !== null ||
+                  !newMailbox.trim() ||
+                  passwordChoiceProblem(newChoice) !== null ||
+                  displayNameProblem(newDisplayName) !== null
+                }
                 onClick={() => void addMailbox()}
               >
                 {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailPlus className="h-4 w-4" />}
@@ -459,6 +581,14 @@ export function MailboxesPanel({
                       ocupa a linha e os botões descem */}
                   <div className="min-w-0 flex-1 basis-[calc(100%-1.75rem)] sm:min-w-[16rem] sm:basis-0">
                     <p className="break-all font-medium">{mailbox.id}</p>
+                    <p
+                      data-testid={`display-name-${mailbox.id}`}
+                      className={cn("break-words text-sm", mailbox.displayName ? "" : "text-xs text-muted-foreground")}
+                    >
+                      {mailbox.displayName
+                        ? t("mail.boxes.displayNameLine", { name: mailbox.displayName })
+                        : t("mail.boxes.noDisplayName")}
+                    </p>
                     {mailbox.id === highlight && (
                       <Badge variant="outline" className="mt-0.5 border-sky-500/40 text-sky-300">
                         {t("mail.boxes.thisProject")}
@@ -501,6 +631,15 @@ export function MailboxesPanel({
                     onClick={() => setTestingFrom(mailbox.id)}
                   >
                     <Send className="h-4 w-4" /> {t("mail.boxes.testSend")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy !== null}
+                    aria-label={t("mail.boxes.editName.aria", { email: mailbox.id })}
+                    onClick={() => setEditingName(mailbox.id)}
+                  >
+                    <Pencil className="h-4 w-4" /> {t("mail.boxes.editName.button")}
                   </Button>
                   <Button
                     variant="outline"
@@ -564,6 +703,23 @@ export function MailboxesPanel({
             setChangingPassword(null);
             setChangedMailbox(email);
             setNotice(t("mail.boxes.passwordChanged", { email }));
+          }}
+        />
+      )}
+      {editingName && mailboxes.find((m) => m.id === editingName) && (
+        <DisplayNameModal
+          mailbox={mailboxes.find((m) => m.id === editingName)!}
+          {...(projectId ? { projectId } : {})}
+          onClose={() => setEditingName(null)}
+          onDone={(res) => {
+            setEditingName(null);
+            setChangedMailbox(null);
+            setGenerated(null);
+            setNotice(
+              t(res.mailbox.displayName ? "mail.boxes.editName.done" : "mail.boxes.editName.removed", { email: res.mailbox.id }) +
+                (res.projectEmail ? t("mail.boxes.editName.deployNote") : ""),
+            );
+            void refresh();
           }}
         />
       )}

@@ -52,9 +52,10 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { TestEmailModal } from "@/components/mail/TestEmailCard";
 import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
+import { DisplayNameField, displayNameProblem } from "@/components/mail/DisplayNameField";
 import { DnsChecklistPanel } from "@/components/mail/DnsChecklistPanel";
 import { cn } from "@/lib/utils";
-import { MAILBOX_PASSWORD_MIN } from "@paas/core";
+import { MAILBOX_PASSWORD_MIN, sanitizeDisplayName } from "@paas/core";
 import {
   AlertTriangle,
   Check,
@@ -377,7 +378,9 @@ export function ProjectEmailCard({
         fromLocalPart: box.localPart,
         useExistingMailbox: existingMode,
       };
-      if (fromName.trim()) body.fromName = fromName.trim();
+      // Só o que a pessoa DIGITOU de novo: o nome já guardado (que o formulário traz preenchido) não conta, para
+      // que o nome que a caixa escolhida já tem prevaleça (sem nenhum, vale o nome do projeto).
+      if (fromName.trim() && fromName.trim() !== (email?.fromName ?? "")) body.fromName = fromName.trim();
       if (existingMode === "current_password") body.password = currentPassword;
       const res = await apiFetch<ProjectEmailResponse>(`/api/projects/${projectId}/email`, {
         method: "POST",
@@ -474,7 +477,9 @@ export function ProjectEmailCard({
 
   const domain = domains.find((d) => d.name === selectedDomain);
   const previewAddress = `${fromLocal.trim().toLowerCase() || projectSlug}@${selectedDomain}`;
-  const previewName = fromName.trim() || projectName;
+  // a mesma limpeza do servidor: é isto que será gravado e entregue
+  const defaultName = sanitizeDisplayName(projectName);
+  const previewName = sanitizeDisplayName(fromName) || defaultName;
   // e-mail ativado: abas Remetente, Caixas e DNS do domínio do projeto
   const tabbed = email.enabled && Boolean(email.domain);
   const activeTab: EmailTab = tabbed ? tab : "remetente";
@@ -725,16 +730,13 @@ export function ProjectEmailCard({
                 </div>
               </label>
               )}
-              <label className="flex flex-col gap-1 text-sm">
-                <span>{t("mail.project.nameLabel")}</span>
-                <Input
-                  aria-label={t("mail.project.nameLabel")}
-                  placeholder={projectName}
-                  maxLength={80}
-                  value={fromName}
-                  onChange={(e) => setFromName(e.target.value)}
-                />
-              </label>
+              <DisplayNameField
+                label={t("mail.project.nameLabel")}
+                placeholder={defaultName}
+                hintKey="mail.displayName.hintProject"
+                value={fromName}
+                onChange={setFromName}
+              />
             </div>
             {source === "existing" && usableError && <FocusedAlert>{usableError}</FocusedAlert>}
             {source === "existing" && (
@@ -783,7 +785,7 @@ export function ProjectEmailCard({
                 <Button
                   variant="success"
                   size="sm"
-                  disabled={busy || !selectedDomain || !existingReady}
+                  disabled={busy || !selectedDomain || !existingReady || displayNameProblem(fromName) !== null}
                   onClick={() => void saveExisting()}
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
@@ -793,7 +795,7 @@ export function ProjectEmailCard({
               <Button
                 variant="success"
                 size="sm"
-                disabled={busy || !selectedDomain || passwordProblem !== null}
+                disabled={busy || !selectedDomain || passwordProblem !== null || displayNameProblem(fromName) !== null}
                 onClick={() => void save()}
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
@@ -820,9 +822,12 @@ export function ProjectEmailCard({
           <>
             <div className="flex flex-col gap-1 text-sm">
               <p className="text-muted-foreground">{t("mail.project.tab.sender")}</p>
-              <p className="font-medium [overflow-wrap:anywhere]">{`${email.fromName ?? projectName} <${email.mailFrom}>`}</p>
+              <p className="font-medium [overflow-wrap:anywhere]">{(email.fromName ?? sanitizeDisplayName(projectName)) ? `${email.fromName ?? sanitizeDisplayName(projectName)} <${email.mailFrom}>` : (email.mailFrom ?? "")}</p>
               <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {t("mail.project.mailboxLine", { mailbox: email.mailbox ?? "" })}
+              </p>
+              <p data-testid="from-source" className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                {t("mail.project.fromSource", { address: email.mailFrom ?? "" })}
               </p>
             </div>
             {email.legacyAlias && (

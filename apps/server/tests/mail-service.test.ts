@@ -80,6 +80,7 @@ vi.mock("@paas/mailer", async (importOriginal) => {
       createdMailboxCalls.push({ email, password });
       order.push(`create ${email}`);
     }
+    async setMailboxDisplayName() {}
     async addMailboxAlias(email: string, alias: string) {
       aliasCalls.push(`+ ${email} ${alias}`);
     }
