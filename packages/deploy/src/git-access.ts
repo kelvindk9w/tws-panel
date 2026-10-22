@@ -18,8 +18,10 @@
  * vivo. Enquanto o git roda, o token está no AMBIENTE dele (legível em
  * /proc/<pid>/environ pelo mesmo usuário do sistema), nunca no argv.
  *
- * REDIRECIONAMENTO: `http.followRedirects=false` (GIT_SAFE_CONFIG): um 302 não
- * leva o cabeçalho Authorization a outro host.
+ * REDIRECIONAMENTO: com token, `http.followRedirects=false`: um 301/302 não leva o
+ * cabeçalho Authorization a outro host. Sem token o redirecionamento segue.
+ * PROXY: variáveis de proxy herdadas são removidas e `http.proxy` fica vazio, para
+ * a consulta ir direto ao endereço conferido (um proxy contornaria a fixação do DNS).
  *
  * DESTINOS: resolveTarget recusa loopback, 0.0.0.0, link-local (inclui os
  * metadados da nuvem, 169.254.0.0/16) e nomes que resolvam para eles; os
@@ -40,7 +42,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import type { GitAccessCheckResponse, GitAccessFailureReason, GitReadCredential } from "@paas/core";
-import { GIT_SAFE_CONFIG, gitSafeEnv } from "./git-safe.js";
+import { GIT_SAFE_CONFIG, NO_REDIRECT_CONFIG, gitSafeEnv } from "./git-safe.js";
 
 export const GIT_ACCESS_TIMEOUT_MS = 15_000;
 const MAX_BRANCHES = 10;
@@ -66,7 +68,7 @@ export const GIT_ACCESS_MESSAGES: Record<GitAccessFailureReason, string> = {
     "Não foi possível falar com o servidor do repositório (endereço, rede ou certificado). Confira o endereço e se o servidor está no ar.",
   timeout: "O servidor do repositório demorou demais para responder (tempo esgotado). Tente de novo em instantes.",
   redirected:
-    "O endereço redireciona para outro lugar (repositório renomeado ou movido). Por segurança o painel não segue redirecionamentos com token: use o endereço final.",
+    "O endereço redireciona para outro lugar (falta o \".git\" no fim, como no GitLab, ou o repositório foi renomeado ou movido). Por segurança o painel não segue redirecionamentos com token: use o endereço final, por exemplo com \".git\".",
   blocked_host:
     "Este endereço aponta para a própria máquina ou para a rede de metadados (loopback ou link-local). O teste de acesso não consulta esses destinos.",
   token_not_applicable: "O token só vale para endereços https://. Para ssh, o painel usa a chave SSH, não um token.",
@@ -301,6 +303,9 @@ export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCh
   if (credential && !isHttp) return falha("token_not_applicable");
 
   const baseEnv = gitSafeEnv(process.env);
+  for (const name of Object.keys(baseEnv)) {
+    if (/^(https?_proxy|all_proxy)$/i.test(name)) delete baseEnv[name];
+  }
   const env: NodeJS.ProcessEnv = credential
     ? { ...baseEnv, PAAS_GIT_USERNAME: credential.username, PAAS_GIT_PASSWORD: credential.token }
     : baseEnv;
@@ -312,7 +317,9 @@ export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCh
 
   const args = [
     ...GIT_SAFE_CONFIG,
-    ...(credential ? ["-c", "credential.helper=", "-c", `credential.helper=${CHECK_CREDENTIAL_HELPER}`] : []),
+    "-c",
+    "http.proxy=",
+    ...(credential ? ["-c", "credential.helper=", "-c", `credential.helper=${CHECK_CREDENTIAL_HELPER}`, ...NO_REDIRECT_CONFIG] : []),
     ...(input.pin ? ["-c", `http.curloptResolve=${input.pin}`] : []),
     // servidor que para de responder derruba a conexão em vez de pendurar o teste
     "-c",

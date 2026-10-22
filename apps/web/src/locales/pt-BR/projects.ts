@@ -286,7 +286,7 @@ export default {
   "new.access.reason.unreachable": "Não foi possível falar com o servidor do repositório (endereço, rede ou certificado). Confira o endereço e se o servidor está no ar.",
   "new.access.reason.timeout": "O servidor do repositório demorou demais para responder (tempo esgotado). Tente de novo em instantes.",
   "new.access.tokenUnchecked": " Atenção: o servidor não pediu autenticação (repositório público), então o token não foi verificado.",
-  "new.access.reason.redirected": "O endereço redireciona para outro lugar (repositório renomeado ou movido). Por segurança o painel não segue redirecionamentos com token: use o endereço final.",
+  "new.access.reason.redirected": "O endereço redireciona para outro lugar (falta o \".git\" no fim, como no GitLab, ou o repositório foi renomeado ou movido). Por segurança o painel não segue redirecionamentos com token: use o endereço final, por exemplo com \".git\".",
   "new.access.reason.blocked_host": "Este endereço aponta para a própria máquina ou para a rede de metadados (loopback ou link-local). O teste de acesso não consulta esses destinos.",
   "new.access.reason.token_not_applicable": "O token só vale para endereços https://. Para ssh, o painel usa a chave SSH, não um token.",
   "new.access.reason.account_not_connected": "Nenhuma conta do GitHub está conectada. Conecte em Configurações → Integrações.",

@@ -53,6 +53,8 @@ let urlPrivada: string;
 let repoPublico: string;
 /** Requisições que chegaram ao servidor com credencial válida. */
 let autenticadas = 0;
+/** Requisições que chegaram ao endereço FINAL de um redirecionamento. */
+let destinoDoRedirect = 0;
 
 async function git(args: string[]): Promise<void> {
   const { run } = await vi.importActual<typeof import("../src/exec.js")>("../src/exec.js");
@@ -103,6 +105,7 @@ function comCredencial(cred: GitReadCredential | null) {
 beforeEach(async () => {
   chamadas.length = 0;
   autenticadas = 0;
+  destinoDoRedirect = 0;
   tmp = await mkdtemp(path.join(tmpdir(), "paas-cred-test-"));
   projectsDir = path.join(tmp, "projects");
   repoPublico = path.join(tmp, "publico");
@@ -115,6 +118,26 @@ beforeEach(async () => {
   await git(["-C", bare, "update-server-info"]);
 
   server = http.createServer((req, res) => {
+    const caminho = new URL(req.url ?? "/", "http://x").pathname;
+    // repositório "movido": 301 para o endereço final (como o GitLab sem o .git), que é público
+    if (caminho.startsWith("/movido.git/")) {
+      res.writeHead(301, { Location: `http://${req.headers.host}${req.url?.replace("/movido.git/", "/final.git/")}` });
+      return res.end();
+    }
+    if (caminho.startsWith("/final.git/")) {
+      destinoDoRedirect += 1;
+      const alvo = path.join(bare, caminho.replace("/final.git/", ""));
+      void stat(alvo)
+        .then(() => {
+          res.writeHead(200);
+          createReadStream(alvo).pipe(res);
+        })
+        .catch(() => {
+          res.writeHead(404);
+          res.end("nao encontrado");
+        });
+      return;
+    }
     const auth = req.headers.authorization ?? "";
     if (!auth.startsWith("Basic ")) {
       res.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
@@ -174,11 +197,28 @@ describe("ingestCode — repositório privado com credencial de leitura", () => 
     }
   }, 30_000);
 
-  it("clone e fetch não seguem redirecionamento (o token não vai a outro host)", async () => {
-    await ingestCode(comCredencial({ username: "x-access-token", token: TOKEN }), projeto(), () => {});
-    const rede = chamadas.filter((c) => c.args.includes("fetch"));
-    expect(rede.length).toBeGreaterThan(0);
-    for (const c of rede) expect(c.args.join(" ")).toContain("http.followRedirects=false");
+  it("repositório público que redireciona (301) continua clonando SEM token, como antes", async () => {
+    const src = await ingestCode(comCredencial(null), projeto({ source: urlPrivada.replace("/privado.git", "/movido.git") }), () => {});
+    await expect(stat(path.join(src, "arquivo.txt"))).resolves.toBeTruthy();
+    expect(destinoDoRedirect).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("COM token o redirecionamento é recusado (o token não vai a outro endereço) e a mensagem diz o que fazer", async () => {
+    const pedacos: string[] = [];
+    const erro = await ingestCode(
+      comCredencial({ username: "x-access-token", token: TOKEN }),
+      projeto({ source: urlPrivada.replace("/privado.git", "/movido.git") }),
+      (c) => pedacos.push(c),
+    ).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro?.message).toMatch(/redireciona/i);
+    expect(erro?.message).toMatch(/endereço final/i);
+    expect(erro?.message).toMatch(/\.git/);
+    expect(erro?.message).not.toContain(TOKEN);
+    expect(destinoDoRedirect).toBe(0);
   }, 30_000);
 
   it("o token não é gravado no .git/config do clone (remote.origin.url limpa)", async () => {

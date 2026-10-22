@@ -30,9 +30,6 @@ export const GIT_SAFE_CONFIG: readonly string[] = [
   "core.untrackedCache=false",
   "-c",
   "protocol.ext.allow=never",
-  // um 302 nunca leva o cabeçalho de autenticação a outro host
-  "-c",
-  "http.followRedirects=false",
   "-c",
   "protocol.file.allow=user",
   "-c",
@@ -78,6 +75,13 @@ export async function sanitizeGitConfig(gitDir: string, run: Executar, env: Node
  */
 export const CREDENTIAL_HELPER =
   '!f() { test "$1" = get && printf \'username=%s\\npassword=%s\\n\' "$PAAS_GIT_USERNAME" "$PAAS_GIT_PASSWORD"; }; f';
+
+/**
+ * Só COM credencial: um 301/302 não pode levar o cabeçalho de autenticação a outro
+ * endereço. Sem credencial o redirecionamento segue como sempre (GitLab sem `.git`,
+ * repositório renomeado): não há segredo a proteger.
+ */
+export const NO_REDIRECT_CONFIG: readonly string[] = ["-c", "http.followRedirects=false"];
 
 /** Variáveis do git que mudariam de onde ele lê repositório e configuração. */
 const GIT_ENV_REMOVIDAS = [

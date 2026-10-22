@@ -29,7 +29,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-const { checkGitAccess, resolveTarget, classifyGitFailure } = await import("../src/git-access.js");
+const { checkGitAccess, resolveTarget, classifyGitFailure, GIT_ACCESS_MESSAGES } = await import("../src/git-access.js");
 
 const TOKEN = "ghp_TOKENISOLAMENTOsupersecreto0009";
 const cred: GitReadCredential = { username: "x-access-token", token: TOKEN };
@@ -174,9 +174,23 @@ describe("prazo real e processos órfãos", () => {
     }
   });
 
-  it("saída gigante não estoura a memória: o excesso é descartado", async () => {
-    const r = await checkGitAccess({ source: `${base}/publico.git`, branch: null, credential: null });
-    expect(r.ok).toBe(true);
+  it("proxy herdado do ambiente é ignorado: a consulta vai direto ao endereço conferido", async () => {
+    const antes = { http: process.env.http_proxy, HTTP: process.env.HTTP_PROXY, all: process.env.ALL_PROXY };
+    process.env.http_proxy = "http://127.0.0.1:1";
+    process.env.HTTP_PROXY = "http://127.0.0.1:1";
+    process.env.ALL_PROXY = "http://127.0.0.1:1";
+    try {
+      const r = await checkGitAccess({ source: `${base}/publico.git`, branch: null, credential: null, timeoutMs: 10_000 });
+      expect(r.ok).toBe(true);
+      expect(chamadas.at(-1)?.env?.http_proxy).toBeUndefined();
+      expect(chamadas.at(-1)?.env?.HTTP_PROXY).toBeUndefined();
+      expect(chamadas.at(-1)?.env?.ALL_PROXY).toBeUndefined();
+    } finally {
+      for (const [k, v] of [["http_proxy", antes.http], ["HTTP_PROXY", antes.HTTP], ["ALL_PROXY", antes.all]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   }, 30_000);
 });
 
@@ -188,6 +202,17 @@ describe("redirecionamento não leva o token a outro host", () => {
     expect(chamadas.at(-1)?.args.join(" ")).toContain("http.followRedirects=false");
     expect(JSON.stringify(r)).not.toContain(TOKEN);
   }, 30_000);
+
+  it("SEM token o redirecionamento é seguido como antes (repositório público que mudou de endereço)", async () => {
+    await checkGitAccess({ source: `${base}/vai.git`, branch: null, credential: null });
+    expect(otherRequests.length).toBeGreaterThan(0);
+    expect(chamadas.at(-1)?.args.join(" ")).not.toContain("followRedirects");
+  }, 30_000);
+
+  it("a mensagem do redirecionamento cita o endereço final e a falta do .git", () => {
+    expect(GIT_ACCESS_MESSAGES.redirected).toMatch(/\.git/);
+    expect(GIT_ACCESS_MESSAGES.redirected).toMatch(/endereço final/);
+  });
 
   it("classifyGitFailure reconhece a recusa do redirecionamento", () => {
     expect(classifyGitFailure("warning: redirecting to https://x/y.git/\nfatal: unable to update url base from redirection", true)).toBe("redirected");

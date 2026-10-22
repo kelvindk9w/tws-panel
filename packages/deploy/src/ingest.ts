@@ -9,7 +9,7 @@ import { cp, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
-import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
+import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, NO_REDIRECT_CONFIG, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
 import { uploadOverlapBlocker } from "./workdir-safety.js";
 
@@ -89,7 +89,7 @@ function prepararAmbienteGit(cred: GitReadCredential | null): AmbienteGit {
     env: { ...base, PAAS_GIT_USERNAME: cred.username, PAAS_GIT_PASSWORD: token },
     // o primeiro "credential.helper=" zera helpers herdados (ex.: um store no
     // ~/.gitconfig), para o token nunca ser gravado por outro helper
-    configArgs: ["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`],
+    configArgs: ["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`, ...NO_REDIRECT_CONFIG],
     ocultar: (texto) => (token ? texto.split(token).join(CREDENCIAL_OCULTA) : texto),
     temCredencial: true,
   };
@@ -115,6 +115,14 @@ function falhaGit(
     ? `${rotulo} falhou: ${detalhe}`
     : `${rotulo} falhou com código ${r.code} e sem nenhuma saída de erro — ` +
       `confirme que o git está instalado na imagem do painel e que o repositório é acessível.`;
+  // Com credencial o redirecionamento é recusado (o token não vai a outro endereço): diz o que fazer.
+  if (ambiente?.temCredencial && /returned error: 30[1278]|redirecting to|unable to update url base from redirection/i.test(bruto)) {
+    return new Error(
+      `${base}\n\nO endereço do repositório redireciona para outro lugar (o GitLab, por exemplo, redireciona quando falta o ".git" no fim, e o GitHub quando o repositório foi renomeado ou movido). ` +
+        `Com um token cadastrado o painel não segue redirecionamentos, para não enviar a credencial a outro endereço. ` +
+        `Use o endereço final do repositório nas configurações do projeto (por exemplo, com ".git" no fim).`,
+    );
+  }
   // Só orienta sobre credencial quando o sinal é REALMENTE de autenticação.
   if (!pareceFalhaDeAutenticacao(bruto)) return new Error(base);
   const orientacao = ambiente?.temCredencial

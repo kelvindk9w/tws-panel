@@ -286,7 +286,7 @@ export default {
   "new.access.reason.unreachable": "Could not reach the repository server (address, network or certificate). Check the address and that the server is up.",
   "new.access.reason.timeout": "The repository server took too long to answer (timed out). Try again in a moment.",
   "new.access.tokenUnchecked": " Note: the server did not ask for authentication (public repository), so the token was not verified.",
-  "new.access.reason.redirected": "The address redirects somewhere else (repository renamed or moved). For safety the panel does not follow redirects with a token: use the final address.",
+  "new.access.reason.redirected": "The address redirects somewhere else (the \".git\" at the end is missing, as on GitLab, or the repository was renamed or moved). For safety the panel does not follow redirects with a token: use the final address, for example with \".git\".",
   "new.access.reason.blocked_host": "This address points to the machine itself or to the metadata network (loopback or link-local). The access test does not query those destinations.",
   "new.access.reason.token_not_applicable": "The token only works with https:// addresses. For ssh, the panel uses the SSH key, not a token.",
   "new.access.reason.account_not_connected": "No GitHub account is connected. Connect one in Settings → Integrations.",
