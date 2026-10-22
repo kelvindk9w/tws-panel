@@ -55,6 +55,8 @@ export function LoginPage() {
         // bloqueio do código por conta: diz quanto falta (o servidor manda retryAfterSec)
         const wait = err.data?.retryAfterSec;
         if (err.code === "two_factor_locked" && typeof wait === "number" && wait > 0) {
+          // conta e IP bloqueados juntos: a recuperação não é saída por este IP
+          if (err.data?.limit === "ip") text = t("auth.login.lockedBoth");
           text = `${text} ${t("auth.login.retryIn", { time: formatWait(wait) })}`;
         }
         // código errado: quantas tentativas restam antes do bloqueio (o servidor só manda
@@ -71,6 +73,12 @@ export function LoginPage() {
           // limite do IP: texto neutro (esse bloqueio trava o login inteiro, não só o código do app)
           const key = err.data?.limit === "ip" ? "auth.login.codeWrongIp" : "auth.login.codeWrong";
           text = t(key, { count: left, time: formatWait(lockSec) });
+          // IP menor, mas a conta já está perto do bloqueio: avisa das duas
+          const accLeft = err.data?.accountLeft;
+          const accSec = err.data?.accountLockSec;
+          if (typeof accLeft === "number" && accLeft > 0 && typeof accSec === "number" && accSec > 0) {
+            text = `${text} ${t("auth.login.accountNear", { count: accLeft, time: formatWait(accSec) })}`;
+          }
         }
         setError(text);
       } else {

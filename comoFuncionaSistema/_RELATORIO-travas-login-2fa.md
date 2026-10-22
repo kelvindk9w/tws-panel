@@ -21,7 +21,7 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
    recuperação"), com `retryAfterSec`; a tela de login mostra o tempo restante. O 429 só aparece a quem já
    acertou a senha; senha errada ou usuário inexistente seguem 401 `invalid_credentials` mesmo com a conta
    bloqueada, para não enumerar usuários. Custo: o 429 confirma a senha, que os `two_factor_required` e
-   `invalid_two_factor_code` anteriores já confirmavam (o "oráculo" que a análise aceitou).
+   `invalid_two_factor_code` anteriores já confirmavam (o "oráculo" que a análise aceitou). Com os dois bloqueios juntos (conta e IP), a resposta diz o maior tempo e não promete o código de recuperação, que por esse IP também recebe 429.
 4. **Senha certa sem código NÃO conta para o IP** (revisado após o aviso de tentativas restantes). O primeiro
    passo devolve a reserva: contá-lo gastava as tentativas do dono antes do primeiro erro de código.
 5. **Auditoria e aviso.** Todo login legítimo com 2FA passa pelo primeiro passo (senha certa, sem código),
@@ -64,8 +64,10 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
 - O estado das pendências e o agrupamento ficam em memória: um reinício perde o que ainda não virou evento.
 - Os cabeçalhos da Cloudflare podem ser forjados; o pior efeito é o aviso na tela Segurança.
 - Com o proxy da Cloudflare ligado a proteção por IP não funciona; a recomendação segue sendo nuvem cinza.
-- Primeiro passo contando como tentativa: o dono com 4 erros de código seguidos é bloqueado por IP 1 min
-  (antes eram 5 erros).
+- O primeiro passo (senha certa, falta o código) NÃO conta como tentativa do IP; só os erros contam. Num
+  mesmo IP, uma senha errada antes e depois erros de código podem acionar o bloqueio do IP (1 min) antes do
+  da conta; o aviso da tela cita a conta quando ela está a 2 erros ou menos, e erros recusados pelo
+  bloqueio do IP também contam na conta.
 - Não foi verificado em VPS real: IPv6 de ponta a ponta atrás do Caddy e o `reset-2fa.sh --so-bloqueio`
   com Docker de verdade (o `.sh` é testado com um `docker` falso que roda o `.mjs`: confirmação, ordem
   parar → gravar → subir, 0600, cancelamento, painel parado e `--help`).

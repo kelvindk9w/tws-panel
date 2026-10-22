@@ -264,3 +264,110 @@ describe("tentativas restantes no código errado", () => {
     expect(r.json().attemptsLeft).toBeUndefined();
   });
 });
+
+describe("paralelismo, bloqueio duplo e aviso da conta", () => {
+  it("60 pedidos paralelos do mesmo IP (recuperação errada): os números mostrados nunca sobem nem repetem", async () => {
+    await enable2fa();
+    for (let rodada = 0; rodada < 5; rodada += 1) {
+      const ip = `203.0.113.${100 + rodada}`;
+      const respostas = await Promise.all(Array.from({ length: 60 }, () => loginFrom(ip, { code: "aaaaa-bbbbb" })));
+      const avisos = respostas.filter((r) => r.json().error === "invalid_two_factor_code").map((r) => r.json() as Body);
+      const lefts = avisos.map((a) => a.attemptsLeft as number);
+      expect(Math.max(...lefts, 0)).toBeLessThanOrEqual(4);
+      expect(new Set(lefts).size).toBe(lefts.length);
+      for (const a of avisos) expect(a.nextLockSec).toBe(60);
+    }
+  });
+
+  it("bloqueio duplo com o IP em nível alto: two_factor_locked com o tempo do IP (maior) e sem prometer a recuperação", async () => {
+    await enable2fa();
+    const ip = "203.0.113.120";
+    const realNow = Date.now;
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      for (const lock of [60, 120, 240]) {
+        for (let i = 0; i < 5; i += 1) await loginFrom(ip, { code: "aaaaa-bbbbb" });
+        skew += (lock + 1) * 1000;
+      }
+      let ultima;
+      for (let i = 0; i < 5; i += 1) ultima = await loginFrom(ip, { code: WRONG });
+      expect(ultima!.statusCode).toBe(429);
+      const b = ultima!.json() as Body;
+      expect(b.error).toBe("two_factor_locked");
+      expect(b.retryAfterSec).toBe(480);
+      expect(b.limit).toBe("ip");
+      expect(b.message).toBe(
+        "Verificação em duas etapas e login deste endereço temporariamente bloqueados por excesso de tentativas. Aguarde ou tente de outro lugar.",
+      );
+      expect(String(b.message)).not.toMatch(/recuperação/);
+      expect(Number(ultima!.headers["retry-after"])).toBe(480);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("bloqueio só da conta (IPs diferentes) continua oferecendo o código de recuperação, sem campo limit", async () => {
+    await enable2fa();
+    let ultima;
+    for (let i = 0; i < 5; i += 1) ultima = await loginFrom(freshIp(), { code: WRONG });
+    const b = ultima!.json() as Body;
+    expect(b.message).toMatch(/código de recuperação/);
+    expect(b.limit).toBeUndefined();
+  });
+
+  it("IP menor com a conta perto do bloqueio: o aviso cita a conta; passado o minuto, o 5º erro bloqueia (caso reproduzido)", async () => {
+    await enable2fa();
+    const ip = "203.0.113.130";
+    const realNow = Date.now;
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      await loginFrom(ip, { password: "SenhaErrada123", code: WRONG });
+      const um = (await loginFrom(ip, { code: WRONG })).json() as Body;
+      const dois = (await loginFrom(ip, { code: WRONG })).json() as Body;
+      const tres = (await loginFrom(ip, { code: WRONG })).json() as Body;
+      expect(um.accountLeft).toBeUndefined();
+      expect(dois.accountLeft).toBeUndefined();
+      expect([um.attemptsLeft, dois.attemptsLeft, tres.attemptsLeft]).toEqual([3, 2, 1]);
+      expect(tres.limit).toBe("ip");
+      expect(tres.accountLeft).toBe(2);
+      expect(tres.accountLockSec).toBe(300);
+      expect(tres.message).toBe(
+        "Código incorreto. Resta 1 tentativa antes de um bloqueio temporário de 1 minuto. O código do app também está perto de bloquear: restam 2 tentativas antes de bloquear por 5 minutos (erros recusados pelo bloqueio do IP também contam).",
+      );
+      const quarta = await loginFrom(ip, { code: WRONG });
+      expect(quarta.json().error).toBe("too_many_attempts");
+      const tf = (await ctx.userStore.findByUsername("admin"))!.twoFactor!;
+      expect(tf.failedCodes).toBe(4);
+      skew = 61_000;
+      const quinta = await loginFrom(ip, { code: WRONG });
+      expect(quinta.json().error).toBe("two_factor_locked");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("empate em 1 com o IP em nível alto: mostra o IP e avisa a conta no singular", async () => {
+    await enable2fa();
+    const ip = "203.0.113.131";
+    const realNow = Date.now;
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      for (const lock of [60, 120, 240]) {
+        for (let i = 0; i < 5; i += 1) await loginFrom(ip, { code: "aaaaa-bbbbb" });
+        skew += (lock + 1) * 1000;
+      }
+      let r: Body = {};
+      for (let i = 0; i < 4; i += 1) r = (await loginFrom(ip, { code: WRONG })).json() as Body;
+      expect(r.limit).toBe("ip");
+      expect(r.attemptsLeft).toBe(1);
+      expect(r.nextLockSec).toBe(480);
+      expect(r.accountLeft).toBe(1);
+      expect(String(r.message)).toContain("resta 1 tentativa antes de bloquear por 5 minutos");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});

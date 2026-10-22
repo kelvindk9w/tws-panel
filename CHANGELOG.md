@@ -47,7 +47,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
   limite da conta e o do IP; quando o menor é o do IP, o texto é neutro). Só aparece a quem já
   acertou a senha, que pela duração mostrada pode deduzir qual limite é e o nível de reincidência
-  (já era visível no 429). O passo "senha certa, falta o código" deixou de gastar tentativas do IP.
+  (já era visível no 429); se o IP é o menor e a conta está perto do bloqueio, o aviso cita as duas. Com os dois bloqueios juntos a tela diz "aguarde ou tente de outro lugar". O passo "senha certa, falta o código" deixou de gastar tentativas do IP.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**

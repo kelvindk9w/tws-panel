@@ -90,7 +90,7 @@ off your phone. The Dashboard reminds you while it is off.
   code is locked for 5 min"); the number is the lower of the account limit and your IP limit. When the
   IP limit is the lower one the text speaks of "a temporary lock", because that lock stops the whole
   sign-in. Someone who already knows the password can tell from the shown duration which limit it is
-  and how many times the account has been locked. This notice
+  and how many times the account has been locked. If the IP limit hits together with the account limit, the notice says "wait or try from another place": from that IP even the recovery code is refused until the IP lock expires. This notice
   only appears once the password is right: an unknown user or a wrong password always gets the same
   response as before.
 - **Warning when the right password arrives without the right code.** If someone types your password and

@@ -176,6 +176,70 @@ describe("LoginPage — tentativas restantes no código errado", () => {
     expect(en.textContent).not.toMatch(/app code/);
   });
 
+  it("texto do IP: singular em pt-BR e plural em en", async () => {
+    stubWrong({ attemptsLeft: 1, nextLockSec: 60, limit: "ip" });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Código incorreto. Resta 1 tentativa antes de um bloqueio temporário de 1 min.",
+    );
+    cleanup();
+    setLocale("en");
+    stubWrong({ attemptsLeft: 3, nextLockSec: 240, limit: "ip" });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Wrong code. 3 attempts left before a temporary lock of 4 min.",
+    );
+  });
+
+  it("IP menor com a conta perto do bloqueio: acrescenta o aviso da conta (pt-BR e en)", async () => {
+    stubWrong({ attemptsLeft: 1, nextLockSec: 60, limit: "ip", accountLeft: 2, accountLockSec: 300 });
+    await loginUntilCode();
+    const pt = await screen.findByRole("alert");
+    expect(pt).toHaveTextContent("O código do app também está perto de bloquear: restam 2 tentativas antes de bloquear por 5 min");
+    expect(pt).toHaveTextContent("erros recusados pelo bloqueio do IP também contam");
+    cleanup();
+    setLocale("en");
+    stubWrong({ attemptsLeft: 1, nextLockSec: 60, limit: "ip", accountLeft: 1, accountLockSec: 300 });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The app code is also close to locking: 1 attempt left before it locks for 5 min",
+    );
+  });
+
+  it("sem accountLeft válido não aparece aviso da conta", async () => {
+    for (const extra of [{}, { accountLeft: 0, accountLockSec: 300 }, { accountLeft: 2, accountLockSec: 0 }, { accountLeft: "2", accountLockSec: 300 }, { accountLeft: 2, accountLockSec: "300" }]) {
+      stubWrong({ attemptsLeft: 2, nextLockSec: 60, limit: "ip", ...extra });
+      await loginUntilCode();
+      expect((await screen.findByRole("alert")).textContent).not.toMatch(/perto de bloquear/);
+      cleanup();
+    }
+  });
+
+  it("bloqueio duplo (conta e IP): não promete o código de recuperação e mostra o tempo (pt-BR e en)", async () => {
+    const stub = () =>
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { code?: string };
+          if (!body.code) return jsonResponse({ error: "two_factor_required", message: "Digite o código." }, 401);
+          return jsonResponse({ error: "two_factor_locked", message: "x", retryAfterSec: 480, limit: "ip" }, 429);
+        }),
+      );
+    stub();
+    await loginUntilCode();
+    const pt = await screen.findByRole("alert");
+    expect(pt).toHaveTextContent("Aguarde ou tente de outro lugar.");
+    expect(pt).toHaveTextContent("Tente de novo em 8 min.");
+    expect(pt.textContent).not.toMatch(/código de recuperação/);
+    cleanup();
+    setLocale("en");
+    stub();
+    await loginUntilCode();
+    const en = await screen.findByRole("alert");
+    expect(en).toHaveTextContent("Wait or try from another place.");
+    expect(en.textContent).not.toMatch(/recovery code/);
+  });
+
   it("attemptsLeft 0, nextLockSec 0 ou valores que não são número: só a mensagem do servidor", async () => {
     for (const data of [
       { attemptsLeft: 0, nextLockSec: 300 },
