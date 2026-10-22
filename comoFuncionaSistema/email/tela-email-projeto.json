@@ -41,8 +41,9 @@
       "Existente: lista (GET /api/projects/:id/email/mailboxes?domain=) as caixas do domínio escolhido que o projeto pode usar; vazia → explica (role=status); falha → role=alert.",
       "Ao escolher a caixa: 'Informar a senha atual da caixa' (campo com olho, 12+ caracteres; o painel confere sem tentar login), 'Manter a senha que o painel já guarda' (só se ele a conhece; já vem marcada) e 'Trocar a senha desta caixa por uma gerada pelo painel' (aviso: apps e webmail com a senha antiga precisam ser atualizados; a gerada aparece uma vez).",
       "Sempre explica que a caixa passa a ser gerenciada pelo painel (Sincronizar/restauração a mantêm com a senha guardada) e que a senha não deve ser trocada direto no webmail.",
-      "Senha aceita sem o servidor conseguir conferir: aviso âmbar (role=status) 'foi aceita, mas o servidor de e-mail não deixou conferi-la'.",
-      "Erros do servidor (caixa de outro projeto, senha errada, caixa sumida) aparecem em role=alert."
+      "Senha aceita sem o servidor conseguir conferir (só caixa que o painel criou): aviso âmbar (role=status) dizendo a consequência (o Sincronizar a gravaria na caixa). Em caixa de usuário, o servidor responde 409 password_unverifiable e nada é guardado.",
+      "Erros do servidor (caixa de outro projeto, senha errada, caixa sumida) aparecem em role=alert no topo do cartão; o foco e a rolagem vão para o erro (FocusedAlert).",
+      "O texto fixo explica que Desativar e-mail solta a caixa (mantém as mensagens, volta a ser comum)."
     ]
   },
   "paineisReutilizaveis": [

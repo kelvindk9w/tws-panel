@@ -75,7 +75,7 @@
   "fluxo": [
     "1. getProject(id); 404 se ausente.",
     "2. purgeOrphanProjects(): solta registros de e-mail de projetos que não existem mais.",
-    "3. Filtra as caixas do domínio: só kind 'user' ou 'project'; fora postmaster/abuse/dmarc, as de sistema, a caixa atual do projeto e as que outro projeto QUE EXISTE usa (registro de e-mail dele ou dono gravado na caixa).",
+    "3. Filtra as caixas do domínio: só kind 'user' ou 'project'; fora postmaster/abuse/dmarc, as de sistema, a caixa atual do projeto e as que o e-mail de outro projeto QUE EXISTE usa (registro em data.projects; Desativar o e-mail dele a libera). O dono gravado pela aba Caixas não bloqueia.",
     "4. Devolve ordenado por endereço, com passwordKnown (o painel sabe a senha dela?). A senha nunca sai."
   ],
   "dependencias": [

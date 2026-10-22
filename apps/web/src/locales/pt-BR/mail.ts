@@ -342,9 +342,9 @@ export default {
   "project.existing.currentLabel": "Senha atual da caixa",
   "project.existing.currentHint": "O painel confere a senha sem tentar entrar na caixa. Se o servidor de e-mail não deixar conferir, ela é aceita sem verificação e o painel avisa.",
   "project.existing.keepHint": "O painel usa a senha que já guarda para esta caixa e confere se ela ainda é a certa.",
-  "project.existing.replaceWarning": "Atenção: a senha atual deixa de valer. Apps, celulares e o webmail que usam a senha antiga precisam ser atualizados. A caixa e as mensagens continuam.",
-  "project.existing.managedNote": "Depois de ligada, a caixa passa a ser gerenciada pelo painel: o Sincronizar e a restauração do e-mail a mantêm com a senha guardada. Não troque a senha dela direto no webmail; use Trocar senha aqui.",
+  "project.existing.replaceWarning": "Atenção: a senha atual deixa de valer. Apps, celulares e o webmail que usam a senha antiga precisam ser atualizados. A caixa e as mensagens continuam; as senhas de app e a verificação em duas etapas da caixa são mantidas.",
+  "project.existing.managedNote": "Depois de ligada, a caixa passa a ser gerenciada pelo painel: o Sincronizar e a restauração do e-mail a mantêm com a senha guardada. Não troque a senha dela direto no webmail; use Trocar senha aqui. Desativar o e-mail do projeto solta a caixa: ela continua com as mensagens e volta a ser uma caixa comum, e o painel deixa de regravar a senha dela.",
   "project.existing.submit": "Usar esta caixa",
   "project.existing.saveError": "Falha ao ligar a caixa ao projeto.",
-  "project.existing.unverified": "A senha foi aceita, mas o servidor de e-mail não deixou conferi-la. Se estiver errada, o app do projeto não consegue enviar: confira com um e-mail de teste.",
+  "project.existing.unverified": "A senha foi aceita, mas o servidor de e-mail não deixou conferi-la. Se estiver errada, o app do projeto não consegue enviar e o Sincronizar vai gravá-la na caixa, trocando a senha real: confira agora com um e-mail de teste e, se falhar, use Trocar senha.",
 } as const;

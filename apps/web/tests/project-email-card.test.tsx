@@ -728,6 +728,7 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     // o painel não sabe a senha dela: sem "manter"
     expect(screen.queryByLabelText("Manter a senha que o painel já guarda")).not.toBeInTheDocument();
     expect(screen.getByText(/Não troque a senha dela direto no webmail/)).toBeInTheDocument();
+    expect(screen.getByText(/Desativar o e-mail do projeto solta a caixa/)).toBeInTheDocument();
     expect(screen.getByLabelText("Senha atual da caixa")).toHaveAttribute("type", "password");
   });
 
@@ -768,7 +769,7 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     await user.selectOptions(screen.getByLabelText("Caixa existente"), CONTATO.address);
     await user.type(screen.getByLabelText("Senha atual da caixa"), ATUAL);
     await user.click(screen.getByRole("button", { name: "Usar esta caixa" }));
-    expect(await screen.findByTestId("password-unverified")).toHaveTextContent(/não deixou conferi-la/);
+    expect(await screen.findByTestId("password-unverified")).toHaveTextContent(/não deixou conferi-la.*Sincronizar vai gravá-la/);
   });
 
   it("trocar a senha: avisa que apps e webmail precisam ser atualizados, não pede senha e mostra a gerada uma vez", async () => {
@@ -779,7 +780,7 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     await waitFor(() => expect(screen.getByLabelText("Caixa existente")).not.toBeDisabled());
     await user.selectOptions(screen.getByLabelText("Caixa existente"), CONTATO.address);
     await user.click(screen.getByLabelText("Trocar a senha desta caixa por uma gerada pelo painel"));
-    expect(screen.getByTestId("replace-warning")).toHaveTextContent(/precisam ser atualizados/);
+    expect(screen.getByTestId("replace-warning")).toHaveTextContent(/precisam ser atualizados.*senhas de app e a verificação em duas etapas/);
     expect(screen.queryByLabelText("Senha atual da caixa")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Usar esta caixa" }));
     await waitFor(() =>
@@ -840,7 +841,10 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     await user.selectOptions(screen.getByLabelText("Caixa existente"), CONTATO.address);
     await user.type(screen.getByLabelText("Senha atual da caixa"), ATUAL);
     await user.click(screen.getByRole("button", { name: "Usar esta caixa" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("já é usada pelo projeto Outra");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("já é usada pelo projeto Outra");
+    // o foco vai para o erro (o botão fica longe do topo do cartão)
+    expect(alert).toHaveFocus();
     expect(screen.getByRole("button", { name: "Usar esta caixa" })).toBeInTheDocument();
   });
 

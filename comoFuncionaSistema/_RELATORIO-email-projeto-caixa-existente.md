@@ -38,9 +38,17 @@ O dono apagou o projeto do site da TWS (o painel não apagou o e-mail, como deve
 - Os testes foram escritos antes do código, mas não rodei cada um falhando de forma isolada antes de implementar (os de rota foram vistos falhando; os de serviço, web e deploy passaram na primeira execução depois do código).
 - Cobertura: server 2405 testes ok (instr. 97,59%, ramos 93,53%); web 1263 ok; core 149 ok (ramos 98,53%); mailer não foi tocado.
 
+## Correções da revisão (22/10/2026)
+- A conferência de senha ignora as entradas `$app$…` (senha de app) e `otpauth://…` (2FA) do campo `secrets`: antes, uma senha ERRADA virava "não deu para conferir". Se há senha principal em texto e ela difere: "não confere".
+- Não conseguir conferir em caixa de USUÁRIO agora recusa (409 `password_unverifiable`): guardar a senha errada faria o Sincronizar gravá-la na caixa. Em caixa criada pelo painel segue aceitando com o aviso (que agora diz a consequência).
+- "Trocar por gerada" troca só o item principal e preserva senhas de app e 2FA (`setMailboxMainPassword`); o realinhamento do Sincronizar também usa essa troca quando a leitura funcionou. Se não dá para ler a caixa, falha sem trocar nada.
+- Desativar o e-mail solta a caixa adotada (volta a ser de usuário) e o bloqueio por "dono" só vale para o e-mail de projeto registrado; a mensagem "Desative o e-mail dele" passa a ser verdadeira.
+- Lista de projetos vazia com vínculos registrados vale como "não sei" (projects.json ausente é lido como lista vazia).
+- Web: o erro recebe foco e rolagem; ícone da legenda com `shrink-0`; texto sobre Desativar e-mail.
+- Testes: mutação do filtro de órfãos (projetos vivos preservados), caixa de sistema com parte local comum, Desativar libera, lista vazia, e os de mailer (`$app$`/`otpauth`, `setMailboxMainPassword`).
+
 ## Limites e o que não foi verificado
 - Não rodado contra um Stalwart real: a conferência da senha depende do `GET /principal/<caixa>` devolver a senha em texto (v0.11.8, como o realinhamento já assume); com hash, o caminho cai em "aceita sem verificação".
 - Layout a 360/1024 px e acessibilidade foram feitos com as mesmas classes e padrões do cartão (colunas que empilham, `min-w-0`, `overflow-wrap`), mas não conferi no navegador.
-- Uma caixa de usuário com senha aceita sem verificação e errada será regravada com essa senha errada pelo Sincronizar (o painel é a fonte da verdade para caixas "de projeto"). O aviso na tela manda conferir com um e-mail de teste.
-- Desativar o e-mail (botão) continua sem soltar a caixa de `external` (a caixa fica `kind: "project"` com o dono, como sempre); ela só volta a usuário quando o projeto é removido ou deixa a caixa por troca de endereço.
+- Em caixa criada pelo painel, senha aceita sem verificação e errada será regravada pelo Sincronizar; o aviso na tela diz isso.
 - Não tratei o diálogo de apagar projeto com a opção de apagar o e-mail/backup (outro lote).

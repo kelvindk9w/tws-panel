@@ -19,7 +19,7 @@
  * configurar e criar caixas (ex.: suporte@) sem sair do projeto. Cada aba
  * tem endereço próprio: ?email=caixas e ?email=dns.
  */
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import type {
   ExistingMailboxMode,
@@ -97,6 +97,22 @@ function dnsLabel(domain: MailDomainSummary): string {
     : tGlobal("mail.project.dns.pending");
 }
 
+/** Erro da API: ao aparecer, recebe o foco e entra na tela (o cartão é longo e o botão fica longe do topo). */
+function FocusedAlert({ children }: { children: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    el.scrollIntoView?.({ block: "center" });
+  }, [children]);
+  return (
+    <p ref={ref} role="alert" tabIndex={-1} className="text-sm text-destructive outline-none [overflow-wrap:anywhere]">
+      {children}
+    </p>
+  );
+}
+
 /** Como o projeto passa a ter a senha da caixa que já existia: informa a atual, mantém a guardada ou troca. */
 function ExistingMailboxPasswordSection({
   help,
@@ -129,7 +145,7 @@ function ExistingMailboxPasswordSection({
       {box && (
         <fieldset className="flex min-w-0 flex-col gap-2">
           <legend className="mb-1 flex items-center gap-2 text-sm">
-            <KeyRound className="h-4 w-4" /> {t("mail.project.existing.passwordLegend", { address: box.address })}
+            <KeyRound className="h-4 w-4 shrink-0" /> {t("mail.project.existing.passwordLegend", { address: box.address })}
           </legend>
           <label className="flex items-center gap-2 text-sm">
             <input type="radio" name={group} checked={mode === "current_password"} onChange={() => onMode("current_password")} />
@@ -485,11 +501,7 @@ export function ProjectEmailCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        {error && <FocusedAlert>{error}</FocusedAlert>}
 
         {generated && <GeneratedPasswordNotice password={generated} onDone={() => setGenerated(null)} />}
 
@@ -724,11 +736,7 @@ export function ProjectEmailCard({
                 />
               </label>
             </div>
-            {source === "existing" && usableError && (
-              <p role="alert" className="text-sm text-destructive">
-                {usableError}
-              </p>
-            )}
+            {source === "existing" && usableError && <FocusedAlert>{usableError}</FocusedAlert>}
             {source === "existing" && (
               <ExistingMailboxPasswordSection
                 help={t("mail.project.existing.help")}

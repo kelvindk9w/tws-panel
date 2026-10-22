@@ -62,7 +62,7 @@
         "nome": "useExistingMailbox",
         "tipo": "string",
         "obrigatorio": false,
-        "regras": "enum: current_password | keep_password | replace_password. Exige fromLocalPart (a caixa escolhida; 400 invalid_request sem ele). current_password usa `password` (a senha ATUAL da caixa, mínimo 12); keep_password usa a senha que o painel guarda; replace_password gera uma forte e a aplica na caixa (generatePassword é ignorado neste caminho).",
+        "regras": "enum: current_password | keep_password | replace_password. Exige fromLocalPart (a caixa escolhida; 400 invalid_request sem ele). current_password usa `password` (a senha ATUAL da caixa, mínimo 12); keep_password usa a senha que o painel guarda; replace_password gera uma forte e a aplica só no item principal do campo de senhas (StalwartClient.setMailboxMainPassword), preservando senhas de app ($app$…) e 2FA (otpauth://…); generatePassword é ignorado neste caminho.",
         "descricao": "Usa a caixa <fromLocalPart>@<domain> que JÁ existe, em vez de criar uma. Nada é apagado. A lista de caixas possíveis vem de GET /api/projects/:id/email/mailboxes."
       }
     ],
@@ -75,7 +75,7 @@
       "corpo": {
         "email": "ProjectEmailConfig",
         "generatedPassword": "string (só com generatePassword:true, ou useExistingMailbox:replace_password; cabeçalho cache-control: no-store)",
-        "passwordVerified": "boolean (só com useExistingMailbox current_password/keep_password: true = o painel conferiu que a senha é a da caixa; false = o servidor de e-mail não deixou conferir e a senha foi aceita sem verificação)"
+        "passwordVerified": "boolean (só com useExistingMailbox current_password/keep_password: true = o painel conferiu que a senha é a da caixa; false = o servidor de e-mail não deixou conferir e a senha foi aceita sem verificação — só acontece em caixa que o painel criou; em caixa de usuário vira 409 password_unverifiable)"
       },
       "exemplo": {
         "email": {
@@ -157,7 +157,7 @@
     {
       "status": 409,
       "codigo": "mailbox_taken_by_project",
-      "quando": "useExistingMailbox com caixa que outro projeto QUE EXISTE usa (registro de e-mail dele ou dono gravado na caixa).",
+      "quando": "useExistingMailbox com caixa que o e-mail de outro projeto QUE EXISTE usa (registro em data.projects). Desativar o e-mail dele a libera. O dono gravado pela aba Caixas não bloqueia: a caixa não está em uso pelo e-mail dele.",
       "mensagem": "A caixa {endereço} já é usada pelo projeto {nome}. Desative o e-mail dele antes."
     },
     {
@@ -186,6 +186,12 @@
     },
     {
       "status": 409,
+      "codigo": "password_unverifiable",
+      "quando": "current_password/keep_password em caixa de usuário (o painel não a criou) quando o servidor de e-mail não deixa conferir a senha (só hash, ou a leitura falhou). A senha NÃO é aceita: guardá-la errada faria o Sincronizar gravá-la na caixa e trancar o dono para fora.",
+      "mensagem": "O servidor de e-mail não deixou o painel conferir a senha de {endereço}. Para não guardar uma senha possivelmente errada (o Sincronizar a gravaria na caixa), o painel não a aceita: troque por uma senha gerada pelo painel."
+    },
+    {
+      "status": 409,
       "codigo": "mailbox_gone",
       "quando": "A caixa sumiu do servidor de e-mail durante a operação (404 do Stalwart na conferência ou na troca de senha). Nada é alterado.",
       "mensagem": "A caixa {endereço} não existe mais no servidor de e-mail. Rode Sincronizar na página E-mail e escolha de novo."
@@ -200,7 +206,7 @@
     "6. data.projects[id] = { domain, mailbox: endereço, enabledAt, fromName, envLinks (mantido) } — sem fromAddress. save().",
     "7. Endereço trocado: dropUnusedProjectMailbox(caixa antiga) — remove no Stalwart e do registro se nenhum projeto a usa; falha no Stalwart vai para o log e a caixa fica na lista do domínio.",
     "8. Retorna { email: projectEmailConfig(id), generatedPassword? }.",
-    "8b. Caminho useExistingMailbox (MailService.connectExistingMailbox): purga órfãos; recusa SYSTEM_LOCAL_PARTS/sistema e caixa de outro projeto que existe; valida a senha ANTES de falar com o servidor (weak_password); requireRunning(); dentro de withMailboxLock(caixa), revalida; current_password/keep_password: mailboxPasswordMatches (GET do cadastro, sem login; false → recusa; null/erro → aceita com passwordVerified:false; 404 → mailbox_gone); grava o cadastro ANTES de trocar a senha (replace_password: setMailboxPassword) e, se algo falhar, restaura caixa e registro do projeto e regrava (nada fica meio assumido). A caixa de usuário vira kind:'project' com external:true e projectId; ao ser deixada (troca de endereço, projeto removido) volta a kind:'user' e NUNCA é apagada.",
+    "8b. Caminho useExistingMailbox (MailService.connectExistingMailbox): purga órfãos; recusa SYSTEM_LOCAL_PARTS/sistema e caixa de outro projeto que existe; valida a senha ANTES de falar com o servidor (weak_password); requireRunning(); dentro de withMailboxLock(caixa), revalida; current_password/keep_password: mailboxPasswordMatches (GET do cadastro, sem login; senhas de app $app$ e 2FA otpauth:// no mesmo campo são ignoradas; false → recusa; null/erro → 409 password_unverifiable se a caixa é de usuário, ou aceita com passwordVerified:false se foi o painel que a criou; 404 → mailbox_gone); grava o cadastro ANTES de trocar a senha (replace_password: setMailboxPassword) e, se algo falhar, restaura caixa e registro do projeto e regrava (nada fica meio assumido). A caixa de usuário vira kind:'project' com external:true e projectId; ao ser deixada (troca de endereço, projeto removido) volta a kind:'user' e NUNCA é apagada.",
     "9. (Efeito indireto): todo deploy chama envForProject (SMTP_* + MAIL_FROM/MAIL_FROM_NAME, em todos os serviços do compose e no .env) e linkedEnvForProject (variáveis ligadas, só no .env)."
   ],
   "dependencias": [
@@ -240,7 +246,7 @@
     "Trocar o endereço remove a caixa antiga do projeto (com as mensagens) se nenhum outro projeto a usa.",
     "Registro antigo: remove o alias da caixa técnica e, ao trocar para outro endereço, remove a caixa técnica.",
     "Só vale no projeto a partir do próximo deploy.",
-    "useExistingMailbox: não cria nem apaga caixa; pode trocar a senha dela no servidor (replace_password). A caixa passa a ser realinhada pelo Sincronizar/restauração (realignKnownPasswords, só kind project/system). Auditoria mail.project.mailbox.connect (caixa e caminho; nunca a senha)."
+    "useExistingMailbox: não cria nem apaga caixa; pode trocar a senha dela no servidor (replace_password). A caixa passa a ser realinhada pelo Sincronizar/restauração (realignKnownPasswords, só kind project/system). Auditoria mail.project.mailbox.connect (caixa e caminho; nunca a senha). Desativar o e-mail do projeto solta a caixa adotada (volta a ser de usuário, sem dono; o Sincronizar deixa de regravá-la)."
   ],
   "chamadoPor": [
     "apps/web/src/components/project/ProjectEmailCard.tsx (Ativar e-mail / Alterar remetente → Salvar)"
@@ -259,7 +265,7 @@
     "Trocar o domínio de um projeto já ativado segue a mesma regra de troca de endereço: cria a caixa no domínio novo e remove a antiga sem uso.",
     "Desativar não apaga a caixa (as mensagens ficam); ela pode ser removida na página do domínio. Reativar no mesmo endereço reaproveita a caixa, pedindo senha.",
     "Tela: o campo 'Seu domínio' de 'Usar um domínio meu' já vem preenchido com o domínio do projeto (editável).",
-    "Projeto apagado solta o e-mail (DeployService.deleteProject → MailService.releaseProjectEmail): tira o registro e as ligações; a caixa e as mensagens ficam. Registro órfão de projeto apagado antes disso é solto sozinho ao ativar, listar caixas, listar caixas usáveis e Sincronizar (purgeOrphanProjects, com a lista de projetos que existem). Antes, o órfão bloqueava o endereço com 409 address_in_use.",
+    "Projeto apagado solta o e-mail (DeployService.deleteProject → MailService.releaseProjectEmail): tira o registro e as ligações; a caixa e as mensagens ficam. Lista de projetos vazia com vínculos registrados vale como \"não sei\" (um projects.json ausente é lido como lista vazia): nada é solto. Registro órfão de projeto apagado antes disso é solto sozinho ao ativar, listar caixas, listar caixas usáveis e Sincronizar (purgeOrphanProjects, com a lista de projetos que existem). Antes, o órfão bloqueava o endereço com 409 address_in_use.",
     "Trocar o endereço NÃO apaga mais uma caixa que já existia antes de virar a do projeto (external): só a solta."
   ]
 }

@@ -1392,7 +1392,9 @@ export class MailService {
             // leitura falhou: reaplica sem ter conferido
           }
           if (matches === true) return "same";
-          await client.setMailboxPassword(email, box.password);
+          // a leitura funcionou (matches === false): troca só a senha principal e preserva senhas de app e 2FA
+          if (matches === false) await client.setMailboxMainPassword(email, box.password);
+          else await client.setMailboxPassword(email, box.password);
           return matches === false ? "realigned" : "reapplied";
         });
         if (outcome === "realigned") realigned += 1;
@@ -1783,6 +1785,10 @@ export class MailService {
       await this.client().removeMailboxAlias(stored.mailbox, stored.fromAddress);
     }
     delete this.data.projects[projectId];
+    // caixa que já existia antes de virar a do projeto: volta a ser de usuário (outro projeto pode usá-la e o
+    // Sincronizar deixa de regravar a senha dela); a criada para o projeto segue como estava
+    const box = stored ? this.data.mailboxes[stored.mailbox] : undefined;
+    if (box?.external && !Object.values(this.data.projects).some((p) => p.mailbox === box.id)) this.freeMailbox(box);
     await this.save();
     return this.projectEmailConfig(projectId);
   }
@@ -1795,7 +1801,14 @@ export class MailService {
   private async liveProjects(): Promise<Map<string, { slug: string; name?: string }> | null> {
     if (!this.projectsOf) return null;
     try {
-      return new Map((await this.projectsOf()).map((p) => [p.id, { slug: p.slug, ...(p.name ? { name: p.name } : {}) }]));
+      const list = await this.projectsOf();
+      // Lista vazia com e-mails de projeto registrados = "não sei" (um projects.json ausente é lido como
+      // lista vazia): soltar os vínculos de projetos vivos seria irreversível. Órfão só é solto quando
+      // existe ao menos um projeto para provar que a lista é de verdade.
+      if (list.length === 0 && (Object.keys(this.data.projects).length > 0 || Object.values(this.data.mailboxes).some((m) => m.kind === "project" && m.projectId))) {
+        return null;
+      }
+      return new Map(list.map((p) => [p.id, { slug: p.slug, ...(p.name ? { name: p.name } : {}) }]));
     } catch {
       return null;
     }
@@ -1880,27 +1893,19 @@ export class MailService {
   }
 
   /** Projeto (que existe) que já usa esta caixa, ou null. */
-  private otherOwnerOf(
-    address: string,
-    mailbox: StoredMailbox,
-    projectId: string,
-    live: Map<string, { slug: string; name?: string }> | null,
-  ): string | null {
+  private otherOwnerOf(address: string, projectId: string): string | null {
     for (const [id, p] of Object.entries(this.data.projects)) {
       if (id !== projectId && (p.mailbox === address || p.fromAddress === address)) return id;
     }
-    const owner = mailbox.projectId;
-    if (owner && owner !== projectId && (live === null || live.has(owner))) return owner;
     return null;
   }
 
   private requireNotUsedByOtherProject(
     address: string,
-    mailbox: StoredMailbox,
     projectId: string,
     live: Map<string, { slug: string; name?: string }> | null,
   ): void {
-    const other = this.otherOwnerOf(address, mailbox, projectId, live);
+    const other = this.otherOwnerOf(address, projectId);
     if (other === null) return;
     const info = live?.get(other);
     throw httpError(409, "mailbox_taken_by_project", `A caixa ${address} já é usada pelo projeto ${info?.name ?? info?.slug ?? other}. Desative o e-mail dele antes.`);
@@ -1923,7 +1928,7 @@ export class MailService {
           (m.kind === "user" || m.kind === "project") &&
           !SYSTEM_LOCAL_PARTS.has(m.localPart) &&
           m.id !== current &&
-          this.otherOwnerOf(m.id, m, project.id, live) === null,
+          this.otherOwnerOf(m.id, project.id) === null,
       )
       .map((m) => ({ address: m.id, localPart: m.localPart, kind: m.kind as "user" | "project", passwordKnown: m.password !== "" }))
       .sort((a, b) => a.address.localeCompare(b.address));
@@ -1934,10 +1939,12 @@ export class MailService {
    * ficam). O app precisa da senha da caixa (SMTP_USER/SMTP_PASS no deploy), então a pessoa escolhe:
    *  - `current_password`: informa a senha atual. O painel confere comparando com o que o servidor de e-mail
    *    guarda (GET do cadastro, sem tentar login: login errado leva ~5 s e o Stalwart bloqueia o IP com 100 por
-   *    dia). Se o servidor não deixa comparar (só guarda hash), aceita e devolve `passwordVerified: false`;
+   *    dia). Senha de app e 2FA dividem o campo da senha e são ignorados na comparação. Se o servidor não
+   *    deixa comparar (só guarda hash): em caixa de usuário recusa (409 password_unverifiable); em caixa que o
+   *    painel criou aceita e devolve `passwordVerified: false`;
    *  - `keep_password`: usa a senha que o painel já guarda (conferida do mesmo jeito);
-   *  - `replace_password`: o painel gera uma senha forte e a aplica na caixa (apps e webmail que usavam a antiga
-   *    precisam ser atualizados).
+   *  - `replace_password`: o painel gera uma senha forte e a aplica na caixa, preservando senhas de app e 2FA
+   *    (apps e webmail que usavam a antiga precisam ser atualizados).
    * A caixa passa a ser "do projeto" (o Sincronizar a realinha) e volta a ser de usuário quando ele a deixar.
    * Falha no meio reverte o cadastro: a caixa não fica meio assumida.
    */
@@ -1962,7 +1969,7 @@ export class MailService {
     if (found.kind === "system") {
       throw httpError(409, "address_in_use", `A caixa ${address} é do próprio painel e não pode ser a de um projeto.`);
     }
-    this.requireNotUsedByOtherProject(address, found, project.id, live);
+    this.requireNotUsedByOtherProject(address, project.id, live);
 
     let candidate: string;
     if (opts.mode === "replace_password") candidate = generateStrongPassword();
@@ -1983,7 +1990,7 @@ export class MailService {
       // a vez dela chegou: confere de novo (outra operação pode ter mexido na caixa enquanto esperava)
       const box = this.data.mailboxes[address];
       if (!box) throw gone();
-      this.requireNotUsedByOtherProject(address, box, project.id, live);
+      this.requireNotUsedByOtherProject(address, project.id, live);
 
       if (opts.mode !== "replace_password") {
         let matches: boolean | null = null;
@@ -1991,13 +1998,23 @@ export class MailService {
           matches = await client.mailboxPasswordMatches(address, candidate);
         } catch (err) {
           if (err instanceof StalwartApiError && err.status === 404) throw gone();
-          // sem conseguir conferir: aceita e avisa (nada de tentar de novo)
+          // sem conseguir conferir: só uma caixa que o painel criou é aceita assim (abaixo); nada de tentar de novo
           this.log(`não deu para conferir a senha da caixa ${address} (${err instanceof StalwartApiError ? `HTTP ${err.status}` : "falha de conexão"}).`);
         }
         if (matches === false) {
           throw opts.mode === "keep_password"
             ? httpError(409, "stored_password_stale", `A senha que o painel guarda para ${address} não é mais a da caixa. Informe a senha atual ou troque por uma gerada pelo painel.`)
             : httpError(400, "mailbox_password_mismatch", `A senha informada não é a da caixa ${address}.`);
+        }
+        // Não deu para conferir e a caixa é de usuário (o painel não a criou): NÃO aceita. Uma senha errada
+        // guardada seria regravada na caixa pelo Sincronizar, trancando o dono para fora (senha de app e 2FA
+        // dividem o campo da senha, e o servidor pode só guardar o hash).
+        if (matches === null && box.kind === "user") {
+          throw httpError(
+            409,
+            "password_unverifiable",
+            `O servidor de e-mail não deixou o painel conferir a senha de ${address}. Para não guardar uma senha possivelmente errada (o Sincronizar a gravaria na caixa), o painel não a aceita: troque por uma senha gerada pelo painel.`,
+          );
         }
         passwordVerified = matches === true;
       }
@@ -2035,7 +2052,7 @@ export class MailService {
       try {
         // grava antes de trocar a senha no servidor: se o processo cair no meio, o painel não perde a senha nova
         await this.save();
-        if (opts.mode === "replace_password") await client.setMailboxPassword(address, candidate);
+        if (opts.mode === "replace_password") await client.setMailboxMainPassword(address, candidate);
       } catch (err) {
         await revert();
         if (err instanceof StalwartApiError && err.status === 404) throw gone();

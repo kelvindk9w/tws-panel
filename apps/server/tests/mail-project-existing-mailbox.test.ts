@@ -39,6 +39,10 @@ vi.mock("@paas/mailer", async (importOriginal) => {
       await setPasswordImpl(email, password);
       passwordCalls.push({ email, password });
     }
+    async setMailboxMainPassword(email: string, password: string) {
+      await setPasswordImpl(email, password);
+      passwordCalls.push({ email, password });
+    }
     async createMailbox(email: string) {
       createdCalls.push(email);
     }
@@ -249,7 +253,8 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
       { id: "p2", slug: "outra", name: "Outra" },
     ];
     const list = await service().listUsableMailboxes(loja, "exemplo.com");
-    expect(list.map((m) => m.address).sort()).toEqual(["adotada@exemplo.com", "contato@exemplo.com", "morto@exemplo.com", "solta@exemplo.com"]);
+    // "dono@" tem dono gravado (criada na aba Caixas do p2) mas nenhum e-mail de projeto a usa: pode
+    expect(list.map((m) => m.address).sort()).toEqual(["adotada@exemplo.com", "contato@exemplo.com", "dono@exemplo.com", "morto@exemplo.com", "solta@exemplo.com"]);
     expect(list.find((m) => m.address === "adotada@exemplo.com")).toMatchObject({ passwordKnown: false });
     expect(list.find((m) => m.address === "contato@exemplo.com")).toMatchObject({ passwordKnown: true, kind: "user" });
     expect(JSON.stringify(list)).not.toContain("senha-guardada-1");
@@ -288,17 +293,29 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
     expect(file.mailboxes["contato@exemplo.com"]).toMatchObject({ kind: "user", password: "senha-guardada-1" });
   });
 
-  it("servidor não deixa conferir (só hash) ou falha: aceita e diz que não foi verificada", async () => {
-    await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
+  it("não dá para conferir e a caixa é de usuário: NÃO aceita (o Sincronizar gravaria a senha errada); nada muda", async () => {
+    for (const impl of [
+      async () => null,
+      async () => {
+        throw new StalwartApiError(500, "boom");
+      },
+    ]) {
+      await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
+      matchImpl = impl;
+      for (const mode of ["current_password", "keep_password"]) {
+        await expect(connect(service(), "contato", { mode, password: SENHA })).rejects.toMatchObject({ statusCode: 409, code: "password_unverifiable" });
+      }
+      const file = await stored();
+      expect(file.projects).toEqual({});
+      expect(file.mailboxes["contato@exemplo.com"]).toMatchObject({ kind: "user", password: "senha-guardada-1" });
+    }
+  });
+
+  it("não dá para conferir mas a caixa foi criada pelo painel (de projeto): aceita e diz que não foi verificada", async () => {
+    await seed({ "solta@exemplo.com": box("solta@exemplo.com", "project") });
     matchImpl = async () => null;
-    const res = await connect(service(), "contato", { mode: "current_password", password: SENHA });
+    const res = await connect(service(), "solta", { mode: "keep_password" });
     expect(res.passwordVerified).toBe(false);
-    matchImpl = async () => {
-      throw new StalwartApiError(500, "boom");
-    };
-    await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
-    const res2 = await connect(service(), "contato", { mode: "current_password", password: SENHA });
-    expect(res2.passwordVerified).toBe(false);
   });
 
   it("a conferência é UMA só (nunca em laço)", async () => {
@@ -344,7 +361,7 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
     expect(calls).toEqual([]);
   });
 
-  it("caixa de outro projeto que existe: 409 dizendo qual; nunca com senha", async () => {
+  it("caixa que o e-mail de outro projeto que existe usa: 409 dizendo qual; nunca com senha", async () => {
     await seed(
       { "dela@exemplo.com": box("dela@exemplo.com", "project"), "dono@exemplo.com": box("dono@exemplo.com", "user", { projectId: "p2" }) },
       { p2: { domain: "exemplo.com", mailbox: "dela@exemplo.com", enabledAt: NOW } },
@@ -353,7 +370,7 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
       { id: "p1", slug: "loja", name: "Loja" },
       { id: "p2", slug: "outra", name: "Projeto Outra" },
     ];
-    for (const local of ["dela", "dono"]) {
+    for (const local of ["dela"]) {
       const err = await connect(service(), local, { mode: "current_password", password: SENHA }).catch((e: unknown) => e);
       expect(err).toMatchObject({ statusCode: 409, code: "mailbox_taken_by_project" });
       expect((err as Error).message).toContain("Projeto Outra");
@@ -446,7 +463,94 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
     matchImpl = async () => {
       throw new Error(`falhou com ${SENHA}`);
     };
-    await connect(service(logs), "contato", { mode: "current_password", password: SENHA });
+    await connect(service(logs), "contato", { mode: "current_password", password: SENHA }).catch(() => undefined);
     expect(logs.join(" ")).not.toContain(SENHA);
+  });
+});
+
+describe("revisão: soltar a caixa, lista de projetos duvidosa e órfãos", () => {
+  const connect = (svc: InstanceType<typeof MailService>, project: Project, opts: Record<string, unknown>) =>
+    svc.connectExistingMailbox(project, "exemplo.com", "contato", opts as never);
+  const blog = { id: "p2", slug: "blog", name: "Blog" } as unknown as Project;
+
+  it("Desativar o e-mail do outro projeto libera a caixa de verdade (como a mensagem manda)", async () => {
+    existing = [
+      { id: "p1", slug: "loja", name: "Loja Royal" },
+      { id: "p2", slug: "blog", name: "Blog" },
+    ];
+    await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
+    const svc = service();
+    await connect(svc, blog, { mode: "keep_password" });
+    await expect(connect(svc, loja, { mode: "keep_password" })).rejects.toMatchObject({ code: "mailbox_taken_by_project" });
+    await svc.disableProjectEmail("p2");
+    expect((await svc.listUsableMailboxes(loja, "exemplo.com")).map((m) => m.address)).toContain("contato@exemplo.com");
+    await expect(connect(svc, loja, { mode: "keep_password" })).resolves.toBeTruthy();
+  });
+
+  it("Desativar solta a caixa adotada: volta a ser de usuário, sem dono, e deixa de ser candidata ao realinhamento", async () => {
+    await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
+    const svc = service();
+    await connect(svc, loja, { mode: "keep_password" });
+    await svc.disableProjectEmail("p1");
+    const m = (await stored()).mailboxes["contato@exemplo.com"]!;
+    expect({ kind: m.kind, projectId: m.projectId ?? null, external: m.external ?? null }).toEqual({ kind: "user", projectId: null, external: null });
+  });
+
+  it("Desativar a caixa que o painel criou para o projeto: não apaga, e outro projeto pode usá-la", async () => {
+    existing = [
+      { id: "p1", slug: "loja", name: "Loja Royal" },
+      { id: "p2", slug: "blog", name: "Blog" },
+    ];
+    await seed({});
+    const svc = service();
+    await svc.enableProjectEmail(loja, "exemplo.com", { fromLocalPart: "contato", password: "senha-nova-forte-1" });
+    await svc.disableProjectEmail("p1");
+    expect(calls.filter((c) => c.startsWith("delete"))).toEqual([]);
+    await expect(connect(svc, blog, { mode: "keep_password" })).resolves.toBeTruthy();
+  });
+
+  it("lista de projetos vazia com vínculos registrados vale como 'não sei': nada é solto", async () => {
+    await seed(
+      { "loja@exemplo.com": box("loja@exemplo.com", "project", { projectId: "p1" }) },
+      { p1: { domain: "exemplo.com", mailbox: "loja@exemplo.com", enabledAt: NOW, envLinks: { SMTP_SENHA: "SMTP_PASS" } } },
+    );
+    existing = [];
+    const svc = service();
+    await svc.listMailboxes("exemplo.com");
+    await expect(svc.enableProjectEmail(loja, "exemplo.com", { password: SENHA })).resolves.toBeTruthy();
+    const file = await stored();
+    expect(file.projects.p1).toMatchObject({ envLinks: { SMTP_SENHA: "SMTP_PASS" } });
+  });
+
+  it("lista com projetos vivos: o filtro de órfãos solta só os mortos e preserva vínculo, envLinks e dono dos vivos", async () => {
+    existing = [
+      { id: "p1", slug: "loja", name: "Loja Royal" },
+      { id: "p2", slug: "blog", name: "Blog" },
+    ];
+    await seed(
+      {
+        "loja@exemplo.com": box("loja@exemplo.com", "project", { projectId: "p1" }),
+        "blog@exemplo.com": box("blog@exemplo.com", "project", { projectId: "p2" }),
+        "morto@exemplo.com": box("morto@exemplo.com", "project", { projectId: "pMorto" }),
+      },
+      {
+        p1: { domain: "exemplo.com", mailbox: "loja@exemplo.com", enabledAt: NOW, envLinks: { A: "SMTP_HOST" } },
+        pMorto: { domain: "exemplo.com", mailbox: "morto@exemplo.com", enabledAt: NOW },
+      },
+    );
+    await service().listMailboxes("exemplo.com");
+    const file = await stored();
+    expect(Object.keys(file.projects)).toEqual(["p1"]);
+    expect(file.projects.p1).toMatchObject({ envLinks: { A: "SMTP_HOST" } });
+    expect(file.mailboxes["loja@exemplo.com"]!.projectId).toBe("p1");
+    expect(file.mailboxes["blog@exemplo.com"]!.projectId).toBe("p2");
+    expect(file.mailboxes["morto@exemplo.com"]!.projectId).toBeUndefined();
+  });
+
+  it("caixa de sistema com parte local comum também é recusada (409 address_in_use)", async () => {
+    await seed({ "painel@exemplo.com": box("painel@exemplo.com", "system") });
+    await expect(
+      loja && service().connectExistingMailbox(loja, "exemplo.com", "painel", { mode: "keep_password" }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "address_in_use" });
   });
 });

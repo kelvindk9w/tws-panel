@@ -496,6 +496,7 @@ not_found	404	(serviço backup-service.ts: resolveTarget) ; POST /api/backups/pr
 onboarding_has_action	409	PUT /api/onboarding/hidden	nao	Ainda há passo a fazer agora no roteiro: o cartão só pode ser ocultado quando falta apenas o que chega em breve.	routes/onboarding.ts:127
 outside_projects_dir	400	GET /api/fs/dirs	sim	Só dá para navegar dentro da pasta de projetos (${root}).	services/server-folders.ts:35
 password_required	400	(serviço mail-service.ts: forgetOldTests)	sim	Defina a senha da caixa ${address} (mínimo ${MAILBOX_PASSWORD_MIN} caracteres) ou peça uma senha forte gerada pelo painel.	services/mail-service.ts:1342
+password_unverifiable	409	POST /api/projects/:id/email (useExistingMailbox)	sim	O servidor de e-mail não deixou o painel conferir a senha de ${address}. Para não guardar uma senha possivelmente errada (o Sincronizar a gravaria na caixa), o painel não a aceita: troque por uma senha gerada pelo painel.	services/mail-service.ts (connectExistingMailbox)
 password_required	400	POST /api/projects/:id/email (useExistingMailbox)	sim	O painel não sabe a senha de ${address}. Informe a senha atual ou troque por uma gerada pelo painel.	services/mail-service.ts (connectExistingMailbox)
 port_in_use	409	(serviço port-map.ts: checkPortChange)	sim	A porta ${hostPort} do servidor é reservada ao painel. Escolha outra.	services/port-map.ts:488
 port_in_use	409	(serviço port-map.ts: checkPortChange)	sim	A porta ${hostPort} do servidor já é usada por ${conflict}. Escolha outra.	services/port-map.ts:499

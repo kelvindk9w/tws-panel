@@ -342,9 +342,9 @@ export default {
   "project.existing.currentLabel": "Mailbox's current password",
   "project.existing.currentHint": "The panel checks the password without trying to sign in to the mailbox. If the mail server does not allow checking, it is accepted unverified and the panel says so.",
   "project.existing.keepHint": "The panel uses the password it already stores for this mailbox and checks that it is still the right one.",
-  "project.existing.replaceWarning": "Warning: the current password stops working. Apps, phones and webmail that use the old password must be updated. The mailbox and its messages stay.",
-  "project.existing.managedNote": "Once connected, the mailbox is managed by the panel: Sync and the email restore keep it on the stored password. Do not change its password directly in webmail; use Change password here.",
+  "project.existing.replaceWarning": "Warning: the current password stops working. Apps, phones and webmail that use the old password must be updated. The mailbox and its messages stay; the mailbox's app passwords and two-step verification are kept.",
+  "project.existing.managedNote": "Once connected, the mailbox is managed by the panel: Sync and the email restore keep it on the stored password. Do not change its password directly in webmail; use Change password here. Turning off the project's email releases the mailbox: it keeps its messages and goes back to being a regular mailbox, and the panel stops rewriting its password.",
   "project.existing.submit": "Use this mailbox",
   "project.existing.saveError": "Could not connect the mailbox to the project.",
-  "project.existing.unverified": "The password was accepted, but the mail server did not let the panel check it. If it is wrong, the project's app cannot send: confirm with a test email.",
+  "project.existing.unverified": "The password was accepted, but the mail server did not let the panel check it. If it is wrong, the project's app cannot send and Sync will write it onto the mailbox, replacing the real password: check now with a test email and, if it fails, use Change password.",
 } as const;

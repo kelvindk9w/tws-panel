@@ -35,6 +35,7 @@ export default {
   "code.mailbox_taken_by_project": "Esta caixa já é usada por outro projeto. Desative o e-mail dele antes.",
   "code.mailbox_password_mismatch": "A senha informada não é a desta caixa.",
   "code.stored_password_stale": "A senha que o painel guarda para esta caixa não é mais a certa. Informe a senha atual ou troque por uma gerada pelo painel.",
+  "code.password_unverifiable": "O servidor de e-mail não deixou o painel conferir a senha desta caixa, então ela não foi aceita (uma senha errada seria gravada na caixa pelo Sincronizar). Troque por uma senha gerada pelo painel.",
   "code.mailbox_gone": "A caixa não existe mais no servidor de e-mail. Rode Sincronizar na página E-mail e escolha de novo.",
   "code.address_in_use": "Este endereço já é de outra caixa, de outro projeto ou é reservado do painel.",
   "code.password_required": "Informe a senha da caixa (ou peça uma senha forte gerada pelo painel).",
