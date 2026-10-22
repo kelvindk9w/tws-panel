@@ -18,12 +18,18 @@ import { Button } from "@/components/ui/button";
 import type { EmailAdvice, EmailAdviceItem } from "@/lib/email-env-advice";
 import { Link2, Loader2, Mail, Plus } from "lucide-react";
 
+const COLLISION = {
+  compose: "env.email.collision.direct",
+  dockerfile: "env.email.collision.directDockerfile",
+  other: "env.email.collision.directNeutral",
+} as const;
+
 const mono = <span className="font-mono" />;
 
 export function EnvEmailAdvice({
   projectId,
   advice,
-  compose,
+  mode,
   links,
   onLinked,
   onAddRow,
@@ -31,7 +37,7 @@ export function EnvEmailAdvice({
   projectId: string;
   advice: EmailAdvice;
   /** Projeto compose (o e-mail vem por cima no container) ou Dockerfile (o valor salvo vence). */
-  compose: boolean;
+  mode: "compose" | "dockerfile" | "other";
   /** Ligações GUARDADAS (sem filtro): o PUT troca o mapa inteiro, então parte delas para nada se perder. */
   links: Record<string, ProjectEmailValueKey>;
   onLinked: (links: Record<string, ProjectEmailValueKey>, names: string[]) => void;
@@ -186,7 +192,7 @@ export function EnvEmailAdvice({
           >
             {i.state === "linked"
               ? t("env.email.collision.linked", { name: i.name, source: i.source ?? "" })
-              : t(compose ? "env.email.collision.direct" : "env.email.collision.directDockerfile", { name: i.name })}
+              : t(COLLISION[mode], { name: i.name })}
           </p>
         ))}
 

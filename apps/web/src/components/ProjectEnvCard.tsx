@@ -105,6 +105,19 @@ function namesIn(text: string): string[] {
   return [...text.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!);
 }
 
+/** Quem vence quando há valor salvo com nome do e-mail: depende do tipo (só compose e Dockerfile são conhecidos). */
+type ProvidedMode = "compose" | "dockerfile" | "other";
+const PROVIDED_LABEL: Record<ProvidedMode, Key> = {
+  compose: "env.describe.provided.label",
+  dockerfile: "env.describe.provided.labelDockerfile",
+  other: "env.describe.provided.labelNeutral",
+};
+const PROVIDED_HELP: Record<ProvidedMode, Key> = {
+  compose: "env.provided.help",
+  dockerfile: "env.provided.helpDockerfile",
+  other: "env.provided.helpNeutral",
+};
+
 /**
  * O que a linha significa (rótulo e placeholder). `linkedTo` = valor do e-mail
  * ligado a ela; `exampleFile` = o .env.example que a cita (quando o compose não cita).
@@ -115,7 +128,7 @@ function describe(
   provided: boolean,
   linkedTo?: string,
   exampleFile?: string,
-  compose = true,
+  mode: ProvidedMode = "compose",
 ): { label: string; placeholder: string } | null {
   if (linkedTo) {
     // a ligação vence o valor salvo aqui (deploy-service.ts, envForProject)
@@ -126,7 +139,7 @@ function describe(
   }
   if (provided) {
     return {
-      label: t(compose ? "env.describe.provided.label" : "env.describe.provided.labelDockerfile"),
+      label: t(PROVIDED_LABEL[mode]),
       placeholder: t("env.describe.provided.placeholder"),
     };
   }
@@ -456,7 +469,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   }
 
   // compose: o override do e-mail vem por cima; Dockerfile: o valor salvo aqui vence o do e-mail
-  const isCompose = project.detection?.type === "compose";
+  const mode: ProvidedMode =
+    project.detection?.type === "compose" ? "compose" : project.detection?.type === "dockerfile" ? "dockerfile" : "other";
   const staticSite = project.detection?.type === "static" || project.detection?.type === "static-node";
   const providedSet = new Set(provided);
   const composeByName = new Map((composeVars ?? []).map((v) => [v.name, v]));
@@ -610,7 +624,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           <EnvEmailAdvice
             projectId={project.id}
             advice={advice}
-            compose={isCompose}
+            mode={mode}
             links={emailConfig?.envLinks ?? {}}
             onLinked={onEmailLinked}
             onAddRow={addManualRow}
@@ -641,7 +655,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             )}
             <p className="mt-2 text-muted-foreground">
               <Trans
-                k={isCompose ? "env.provided.help" : "env.provided.helpDockerfile"}
+                k={PROVIDED_HELP[mode]}
                 components={{
                   link: (c) => (
                     <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
@@ -858,7 +872,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   }
                   const { row: v, index: i } = line;
                   const name = v.key.trim();
-                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name), isCompose);
+                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name), mode);
                   const shown = visible.has(v.id);
                   const urgent = isMissing(v);
                   const fromExample = isExampleMissing(v);

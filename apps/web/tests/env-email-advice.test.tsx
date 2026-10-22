@@ -103,6 +103,9 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     const aviso = await screen.findByTestId("env-email-advice");
     expect(aviso).toHaveAttribute("role", "status");
     expect(aviso).toHaveTextContent("SMTP_HOST");
+    // há o que o e-mail preenche: o título comum, não o das variáveis manuais
+    expect(aviso).toHaveTextContent(/preenche estas variáveis obrigatórias por você/);
+    expect(aviso).not.toHaveTextContent(/o painel não preenche/);
     expect(aviso).toHaveTextContent(/não precisa digitar/i);
     const link = within(aviso).getByRole("link", { name: /Ligar o e-mail do projeto/ });
     expect(link).toHaveAttribute("href", "/projects/p1/email");
@@ -314,29 +317,35 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     expect(await screen.findByTestId("env-email-item-SMTP_HOST")).toHaveTextContent(/não deu para saber/);
   });
 
-  it("compose x Dockerfile: o rótulo, a ajuda e a colisão dizem quem vence em cada tipo", async () => {
-    const collide = {
+  it.each([
+    ["compose", /o container recebe o valor do e-mail/, /Num projeto compose/, /só vale na interpolação do compose/],
+    ["dockerfile", /preencher aqui substitui/, /Num projeto com Dockerfile/, /o container recebe o valor salvo/],
+    ["static", null, null, /também vem do e-mail do projeto/],
+    ["static-node", null, null, /também vem do e-mail do projeto/],
+    ["unknown", null, null, /também vem do e-mail do projeto/],
+  ])("tipo %s: rótulo, ajuda e colisão dizem só o que vale para o tipo", async (type, label, help, collision) => {
+    serve({
       email: emailOn({ SMTP_PASSWORD: "SMTP_PASS", SMTP_FROM: "MAIL_FROM" }),
       vars: [
         { key: "SMTP_HOST", value: "smtp.outro.example.com" },
         { key: "SMTP_SECURE", value: "false" },
       ],
-    };
-    serve(collide);
-    renderCard();
-    expect(await screen.findByTestId("env-row-SMTP_HOST")).toHaveTextContent(/o container recebe o valor do e-mail/);
-    expect(screen.getByTestId("env-provided")).toHaveTextContent(/Num projeto compose/);
-    expect(screen.getByTestId("env-email-collision-SMTP_HOST")).toHaveTextContent(/só vale na interpolação do compose/);
-    cleanup();
-
-    serve(collide);
-    const dockerfile = { ...PROJECT, detection: { type: "dockerfile" } } as unknown as Project;
-    renderCard(dockerfile);
+    });
+    renderCard({ ...PROJECT, detection: { type } } as unknown as Project);
     const row = await screen.findByTestId("env-row-SMTP_HOST");
-    expect(row).toHaveTextContent(/preencher aqui substitui/);
-    expect(row).not.toHaveTextContent(/o container recebe o valor do e-mail/);
-    expect(screen.getByTestId("env-provided")).toHaveTextContent(/Num projeto com Dockerfile/);
-    expect(screen.getByTestId("env-email-collision-SMTP_HOST")).toHaveTextContent(/o container recebe o valor salvo/);
+    const box = screen.getByTestId("env-provided");
+    if (label && help) {
+      expect(row).toHaveTextContent(label);
+      expect(box).toHaveTextContent(help);
+    } else {
+      // tipo sem regra conhecida: texto neutro, sem afirmar quem vence
+      expect(row).toHaveTextContent(/fornecida pelo E-mail do projeto/);
+      expect(row).not.toHaveTextContent(/substitui|container recebe/);
+      expect(box).not.toHaveTextContent(/Num projeto|substitui o valor do e-mail/);
+    }
+    expect(screen.getByTestId("env-email-collision-SMTP_HOST")).toHaveTextContent(collision);
+    if (type === "dockerfile") expect(row).not.toHaveTextContent(/o container recebe o valor do e-mail/);
+    if (type === "compose") expect(row).not.toHaveTextContent(/preencher aqui substitui/);
   });
 
   it("ligar duas vezes seguidas: o segundo PUT inclui a primeira ligação", async () => {
@@ -358,7 +367,7 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     renderCard();
     const aviso = await screen.findByTestId("env-email-advice");
     expect(aviso).not.toHaveTextContent(/preenche estas variáveis obrigatórias por você/);
-    expect(aviso).toHaveTextContent(/o painel não preenche/);
+    expect(aviso).toHaveTextContent(/preencha à mão/);
   });
 
   it("em inglês: textos, botões e dica traduzidos", async () => {
