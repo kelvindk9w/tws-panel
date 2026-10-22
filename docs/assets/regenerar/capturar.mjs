@@ -100,7 +100,7 @@ const MAILBOXES = {
   ],
 };
 const WEBMAIL = {
-  enabled: true, installed: true, running: true, image: "roundcube/roundcubemail:1.7.4-apache", containerName: "paas-webmail",
+  enabled: true, installed: true, running: true, image: "roundcube/roundcubemail:1.7.5-apache-nonroot", containerName: "paas-webmail",
   mailServerRunning: true, tlsVerified: true,
   links: [{ domain: MAIL_DOMAIN, host: MAILHOST, url: `https://${MAILHOST}/` }], blockedIps: 0, message: null,
 };

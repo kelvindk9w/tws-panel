@@ -92,5 +92,14 @@ de segurança, e não há linhas de versões antigas mantidas. Rode sempre a ver
   e-mail, domínio do painel, notificações, backups e monitoramento).
 - **Guardrails de deploy** que bloqueiam configurações perigosas (como uma porta de banco de dados
   exposta, credenciais fracas ou um container privilegiado) e só podem ser contornados com um override explícito e auditado. As regras que protegem o isolamento do próprio painel não podem ser contornadas de forma alguma.
+- **Imagens de container fixadas e mantidas em dia.** Toda imagem que o painel roda (Node, Caddy,
+  Stalwart, webmail Roundcube, nginx) é fixada por tag e digest, então as correções só chegam quando
+  o repositório troca o digest. Quando a imagem fixada do webmail muda, o painel recria o container
+  do webmail sozinho depois de uma atualização (dados e configuração ficam no volume).
+- **Risco aceito e conhecido: `braces` (alerta do Dependabot, GHSA-vfj7-8cjw-p6xm).** Não existe
+  versão corrigida no projeto original. É só dependência de desenvolvimento (via `tailwindcss`,
+  `chokidar` e `micromatch`, usadas no build da interface), o `pnpm audit --prod` não acusa nada e o
+  servidor nunca a carrega, então nenhuma entrada externa chega a ela. Revisamos quando sair uma
+  versão corrigida.
 - **Hardening com rollback automático** nas três fases que mexem no acesso (usuário, SSH e
   firewall): se ninguém confirmar em cerca de 5 minutos, o servidor desfaz sozinho o que aplicou.

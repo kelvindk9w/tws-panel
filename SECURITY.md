@@ -90,5 +90,13 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   changes, panel domain, notifications, backups and monitoring).
 - **Deploy guardrails** that block dangerous configurations (such as an exposed database port, weak
   credentials or a privileged container) and can be bypassed only with an explicit, audited override. The rules that protect the panel's own isolation cannot be bypassed at all.
+- **Pinned container images, kept current.** Every image the panel runs (Node, Caddy, Stalwart,
+  Roundcube webmail, nginx) is pinned by tag and digest, so fixes only arrive when the repository
+  changes the digest. When the pinned webmail image changes, the panel recreates the webmail
+  container on its own after an update (data and settings stay in the volume).
+- **Known accepted risk: `braces` (Dependabot alert, GHSA-vfj7-8cjw-p6xm).** It has no fixed version
+  upstream. It is only a development dependency (through `tailwindcss`, `chokidar` and `micromatch`,
+  used while building the web UI), `pnpm audit --prod` reports nothing, and the server never loads
+  it, so no external input reaches it. We review it when a fixed version appears.
 - **Hardening with automatic rollback** on the three phases that touch access (user, SSH and
   firewall): if nobody confirms within about 5 minutes, the server undoes what it applied by itself.
