@@ -76,3 +76,26 @@ a senha sozinha passa a ser a única barreira. No menu do seu usuário (canto su
 um app autenticador gratuito (Google Authenticator, Microsoft Authenticator ou outro). Você lê um
 QR code, confirma com um código e recebe **10 códigos de recuperação** de uso único — guarde-os
 fora do celular. O Dashboard lembra você enquanto ela estiver desligada.
+
+**Travas do login com a verificação ligada:**
+
+- **Bloqueio por conta no código de 6 dígitos.** Depois de **5 códigos errados seguidos**, vindos de
+  qualquer IP, o código do app fica bloqueado por **5 minutos**; cada reincidência dobra o tempo, até
+  **24 horas**. Durante o bloqueio nem o código certo do app entra, mas o **código de recuperação
+  continua valendo** (é a saída do dono) e um login bem-sucedido zera tudo. O bloqueio fica gravado em
+  disco: reiniciar o painel não o remove. Se não houver código de recuperação, o
+  `sudo ./scripts/reset-2fa.sh --so-bloqueio` na VPS limpa só o bloqueio.
+- **Aviso quando a senha certa chega sem o código certo.** Se alguém digita a sua senha e não conclui a
+  verificação (ou erra o código), isso vai para a **Auditoria** e vira um **Alerta** (origem "acesso"),
+  com notificação do tipo "segurança" se você ligou Telegram ou e-mail. Os avisos são agrupados (no
+  máximo um por tipo a cada 15 minutos) e o bloqueio da conta avisa na hora. O aviso nunca traz senha
+  nem código, e o IP aparece só mascarado (/24 no IPv4, /64 no IPv6). **Se não foi você, troque a senha.**
+- **Limite também com a sessão aberta.** Trocar a senha, ativar ou desativar a verificação e recomeçar
+  o assistente têm o mesmo bloqueio progressivo para senha ou código errados, contado por conta.
+- **IPv6 por bloco /64.** O limite de tentativas por IP agrupa os endereços IPv6 do mesmo bloco /64;
+  IPv4 continua por endereço.
+
+**Atenção: não ligue o proxy da Cloudflare no domínio do painel.** Com o proxy ligado (nuvem laranja), o
+painel enxerga o IP da Cloudflare e não o de quem tenta entrar: o limite por IP deixa de separar o
+atacante do dono. Deixe o registro DNS do painel como **só DNS (nuvem cinza)**. Se o painel perceber os
+cabeçalhos da Cloudflare, a tela **Segurança** mostra um aviso.

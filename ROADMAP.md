@@ -17,6 +17,7 @@ Delivered, and listed in the [CHANGELOG](CHANGELOG.md) (in Portuguese):
 - Mail server (Stalwart) with a DNS checklist, mailboxes, project email, webmail and delivery history.
 - Deploy guardrails, continuous monitoring, an alert center and an audit log.
 - Two-step verification (TOTP) and recovery codes.
+- Sign-in locks: per-account progressive lock on the 6-digit code, warnings to the owner, limits on routes that ask for the password with the session open.
 - Notifications by Telegram and email.
 - Backups of the panel, the mail server and the projects, on the VPS and on Cloudflare R2 (or other
   S3-compatible storage), with optional encryption and restore on a new server.
@@ -32,6 +33,9 @@ Ideas we intend to work on, in no particular order:
 | Spanish (es) translation | The documentation and the panel interface exist in English and Portuguese (Brazil); Spanish is still to come, documentation first. The docs structure and the interface dictionaries already accept more languages. Messages written by the server are still in Portuguese in every language. |
 | Google Drive in backups | Another destination for the off-site copy, besides Cloudflare R2 and other S3-compatible storage. |
 | One-click templates | Ready-made starting points for common apps, going through the same guardrails as any other deploy. |
+| Mandatory two-step verification | Require the second factor at the end of setup in HTTPS mode, with a grace period for existing installs. |
+| Passkeys (WebAuthn) | Hardware or phone passkeys as a second factor and later as the main sign-in, keeping TOTP and recovery codes as a fallback. Needs a stable domain. |
+| Single sign-in form | Optionally show the code field up front with one generic error, so the first step no longer confirms the password. |
 | Public API and OpenAPI | A documented, versioned API (with an OpenAPI description) for automating the panel. |
 | MCP for AI assistants | Let AI assistants operate the panel through the Model Context Protocol, with the same authentication and audit as any other client. |
 | Guided IP warm-up | Limit the sending volume of a new IP and raise it gradually. Today the deliverability score only counts how long you have been sending. |

@@ -8,7 +8,10 @@ import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { AJV_OPTIONS } from "../src/ajv-options.js";
 import authPlugin from "../src/plugins/auth.js";
+import { AlertsService } from "../src/services/alerts-service.js";
 import { AuditService } from "../src/services/audit-service.js";
+import { LoginLimiter } from "../src/services/login-limiter.js";
+import { LoginWatch } from "../src/services/login-watch.js";
 import { SessionStore } from "../src/services/session-store.js";
 import { SetupStateStore } from "../src/services/setup-state.js";
 import { TwoFactorService } from "../src/services/two-factor.js";
@@ -22,11 +25,14 @@ export interface AuthTestContext {
   sessionStore: SessionStore;
   auditService: AuditService;
   twoFactor: TwoFactorService;
+  alertsService: AlertsService;
+  loginWatch: LoginWatch;
+  actionLimiter: LoginLimiter;
 }
 
 export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
-  opts: { now?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object } = {},
+  opts: { now?: () => number; watchNow?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object } = {},
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
   // Mesmas opções de validação da produção (app.ts), para que os testes de
@@ -44,8 +50,18 @@ export async function buildAuthTestApp(
   app.decorate("twoFactor", twoFactor);
   app.decorate("sessionStore", sessionStore);
   app.decorate("auditService", auditService);
+  const alertsService = new AlertsService(dir, { log: () => undefined });
+  const loginWatch = new LoginWatch({
+    alerts: alertsService,
+    audit: auditService,
+    log: () => undefined,
+    ...(opts.watchNow ? { now: opts.watchNow } : {}),
+  });
+  app.decorate("loginWatch", loginWatch);
+  const actionLimiter = new LoginLimiter();
+  app.decorate("actionLimiter", actionLimiter);
   await app.register(authPlugin);
-  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor };
+  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor, alertsService, loginWatch, actionLimiter };
 }
 
 export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {

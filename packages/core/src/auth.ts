@@ -31,6 +31,17 @@ export const LOGIN_MAX_ATTEMPTS = 5;
 /** Janela de contagem das tentativas de login (1 minuto). */
 export const LOGIN_WINDOW_MS = 60 * 1000;
 
+/**
+ * Bloqueio POR CONTA do código de 6 dígitos da verificação em duas etapas
+ * (vale para qualquer IP): 5 erros seguidos bloqueiam o código do app por
+ * 5 min; cada nova reincidência dobra o tempo, até 24 h. O código de
+ * recuperação continua aceito durante o bloqueio, e um login bem-sucedido
+ * zera tudo.
+ */
+export const TWO_FACTOR_LOCK_MAX_FAILURES = 5;
+export const TWO_FACTOR_LOCK_BASE_MS = 5 * 60 * 1000;
+export const TWO_FACTOR_LOCK_MAX_MS = 24 * 60 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Tipos da API
 // ---------------------------------------------------------------------------
@@ -129,6 +140,12 @@ export interface TwoFactorStatusResponse {
   enabled: boolean;
   /** Códigos de recuperação ainda não usados. */
   recoveryCodesLeft: number;
+}
+
+/** GET /api/security/edge — o painel está atrás do proxy da Cloudflare (nuvem laranja)? */
+export interface EdgeStatusResponse {
+  cloudflareProxy: boolean;
+  lastSeenAt: string | null;
 }
 
 /** POST /api/auth/2fa/setup — segredo mostrado UMA vez, para o QR code. */

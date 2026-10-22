@@ -29,6 +29,16 @@ export interface StoredTwoFactor {
   /** Hashes dos códigos de recuperação ainda não usados. */
   recoveryHashes: string[];
   enabledAt: string;
+  /**
+   * Bloqueio por conta do código de 6 dígitos (ver two-factor.ts). Todos
+   * opcionais: ausente vale zero, então um users.json antigo continua valendo.
+   */
+  /** Códigos de 6 dígitos errados desde o último acerto/bloqueio. */
+  failedCodes?: number;
+  /** Quantos bloqueios seguidos já houve (o tempo dobra a cada um). */
+  lockLevel?: number;
+  /** Até quando (epoch ms) o código do app está bloqueado. */
+  lockedUntil?: number;
 }
 
 /**

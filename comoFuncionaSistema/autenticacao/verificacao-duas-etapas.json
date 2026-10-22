@@ -12,20 +12,29 @@
     "Ativar: POST /api/auth/2fa/setup gera o segredo e a URI otpauth:// (QR code no navegador, biblioteca qrcode) e o guarda SÓ em memória por 10 min; nada muda no login até POST /api/auth/2fa/enable com a senha atual + um código válido. Aí o segredo é gravado cifrado e 10 códigos de recuperação são devolvidos UMA vez.",
     "Em repouso: segredo cifrado com AES-256-GCM, chave em data/two-factor-key (0600, gerada no primeiro uso, arquivo próprio); códigos de recuperação só como hash SHA-256 (StoredUser.twoFactor em data/users.json).",
     "Login: a senha é conferida primeiro. Senha certa sem código → 401 two_factor_required (a tela mostra o campo do código, sem apagar o que foi digitado). Código errado conta no limite de tentativas por IP e é auditado (auth.2fa_failed). Código de recuperação é consumido; a auditoria do login diz quantos restam.",
+    "Bloqueio POR CONTA do código de 6 dígitos (TwoFactorService.verifyDetailed): 5 erros seguidos, de qualquer IP, bloqueiam o código do app por 5 min; cada reincidência dobra (5, 10, 20... até 24 h; o nível esfria se o último bloqueio venceu há mais de 24 h). Constantes em packages/core/src/auth.ts (TWO_FACTOR_LOCK_*). O estado fica em campos OPCIONAIS do registro twoFactor no users.json (failedCodes, lockLevel, lockedUntil; 0600, gravação atômica): sobrevive a reinício, ausente vale zero, sem migração. A decisão acontece DENTRO de UserStore.updateTwoFactor (fila de gravação), então pedidos simultâneos de IPs diferentes nunca conferem mais que o limite. Bloqueada, a conta recusa até o código CERTO do app. O código de recuperação (qualquer entrada que não seja 6 dígitos) nunca é bloqueado, não conta falha e, como todo acerto, zera o bloqueio.",
+    "Aviso ao dono: LoginWatch (services/login-watch.ts) -> Auditoria + Alerta origem 'login' (vira notificação do tipo security). Eventos: no_code e wrong_code (agrupados: no máximo 1 alerta por tipo a cada 15 min, com a contagem) e locked (imediato). IP só mascarado (/24, /64) no alerta. Nunca contém senha ou código.",
+    "Rotas com sessão aberta (change-password, 2fa/enable, 2fa/disable, settings/restart-setup): limite POR CONTA (app.actionLimiter, services/action-guard.ts), mesma regra do login (5 erros/min, bloqueio de 1 min dobrando até 30 min); só a ação concluída zera. Código errado em disable/restart-setup também soma no bloqueio da conta do 2FA.",
     "Desativar: POST /api/auth/2fa/disable exige senha atual + código (sessão roubada com senha vazada não basta). Gerar códigos novos = desativar e ativar de novo.",
-    "Emergência (perdeu celular e códigos): scripts/reset-2fa.sh na VPS, com confirmação — para o container (o painel regravaria o users.json com o estado da memória), roda scripts/reset-2fa.mjs com a imagem do painel sobre o volume paas_data e sobe o painel de novo. Não toca em mais nada.",
+    "Emergência (perdeu celular e códigos): scripts/reset-2fa.sh na VPS, com confirmação — para o container (o painel regravaria o users.json com o estado da memória), roda scripts/reset-2fa.mjs com a imagem do painel sobre o volume paas_data e sobe o painel de novo. Não toca em mais nada. Desligar o 2FA também apaga o bloqueio (mora no registro do 2FA). Com --so-bloqueio (confirmação 'liberar') o 2FA continua ligado e só os campos do bloqueio são removidos.",
     "Interface: Configurações → Segurança (TwoFactorPanel; o menu do usuário leva até lá); aviso no Dashboard enquanto estiver desligada (TwoFactorNudge); o 'Concluir' após a ativação só libera depois de marcar que guardou os códigos."
   ],
   "auditoria": [
     "auth.2fa_enabled",
     "auth.2fa_disabled",
     "auth.2fa_failed",
+    "auth.2fa_locked (bloqueio da conta)",
+    "auth.2fa_abandoned (senha certa, código nunca chegou)",
+    "auth.2fa_wrong_code (senha certa, código recusado, login não concluído)",
     "auth.login (detalhe diz se foi com código de recuperação e quantos restam)"
   ],
   "testes": [
     "apps/server/tests/totp.test.ts",
     "apps/server/tests/auth-2fa.test.ts",
     "apps/server/tests/reset-2fa-script.test.ts",
+    "apps/server/tests/login-2fa-travas.test.ts",
+    "apps/server/tests/login-travas-unit.test.ts",
+    "apps/web/tests/login-travas.test.tsx",
     "apps/web/tests/login-page.test.tsx",
     "apps/web/tests/two-factor-modal.test.tsx",
     "apps/web/tests/two-factor-nudge.test.tsx"

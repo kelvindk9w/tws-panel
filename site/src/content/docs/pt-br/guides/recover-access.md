@@ -57,6 +57,11 @@ No login, digite um dos seus **códigos de recuperação** no campo do código (
 vez). Já dentro do painel, desative e ative de novo a verificação para cadastrar o celular novo e
 receber códigos novos.
 
+**Bloqueado por erros no código?** Depois de 5 códigos errados seguidos o código do app fica
+bloqueado (5 minutos, dobrando a cada reincidência até 24 horas), mas o **código de recuperação
+continua entrando**. Sem código de recuperação, e com o celular em mãos, limpe só o bloqueio na VPS
+(`sudo ./scripts/reset-2fa.sh --so-bloqueio`, confirmação: `liberar`; a verificação continua ligada).
+
 Perdeu também os códigos? Com acesso SSH à VPS:
 
 ```bash
@@ -65,7 +70,7 @@ sudo ./scripts/reset-2fa.sh
 ```
 
 Ele pede confirmação (digite `desligar`), para o painel por alguns segundos, desliga a
-verificação em duas etapas e sobe o painel de novo. Entre só com usuário e senha e ative a
+verificação em duas etapas (e limpa qualquer bloqueio por códigos errados) e sobe o painel de novo. Entre só com usuário e senha e ative a
 verificação outra vez. **Nada mais é tocado.**
 
 ## Perdi a senha do usuário Linux
