@@ -155,6 +155,14 @@ describe("StalwartClient.mailboxPasswordMatches", () => {
     expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBeNull();
   });
 
+  it("caixa inexistente no v0.11.8 real (HTTP 200 com error notFound): sobe como 404, nunca como 'não deu para comparar'", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "notFound", item: "a@x.example.com" }), { status: 200 })));
+    const err = await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StalwartApiError);
+    expect((err as StalwartApiError).status).toBe(404);
+    expect((err as Error).message).not.toContain("senha-do-painel");
+  });
+
   it("erro HTTP sobe como StalwartApiError (quem chama decide); a senha não vai à mensagem", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(`{"detail":"nada"}`, { status: 404 })));
     const err = await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel").catch((e: unknown) => e);

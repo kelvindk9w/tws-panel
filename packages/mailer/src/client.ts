@@ -56,6 +56,16 @@ export const PRINCIPAL_LIST_MAX = PRINCIPAL_LIST_PAGES * 500;
 /** Cara de hash (crypt "$6$", "$argon2id$", "$app$"; "{SHA}"): não dá para comparar com a senha em texto. */
 const HASHED_SECRET_RE = /^(\$[0-9a-z]+\$|\{[A-Za-z0-9-]+\})/;
 
+type PrincipalEnvelope = { data?: { secrets?: string | string[] } | null; error?: string };
+
+function parseEnvelope(text: string): PrincipalEnvelope | null {
+  try {
+    return JSON.parse(text) as PrincipalEnvelope | null;
+  } catch {
+    return null; // resposta sem corpo JSON: não dá para comparar
+  }
+}
+
 export class StalwartClient {
   private readonly authHeader: string;
 
@@ -191,7 +201,7 @@ export class StalwartClient {
     });
   }
 
-  /** Troca a senha da caixa (o Stalwart guarda só o hash). */
+  /** Troca a senha da caixa (PATCH set secrets). */
   async setMailboxPassword(email: string, password: string): Promise<void> {
     await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
       { action: "set", field: "secrets", value: [password] },
@@ -225,13 +235,14 @@ export class StalwartClient {
   /**
    * A senha guardada pelo painel é a que a caixa tem no Stalwart? A comparação é feita aqui, em memória: a senha
    * que o servidor devolve nunca sai deste método. `true`/`false` quando o servidor devolve a senha em texto
-   * (v0.11.8); `null` quando não dá para comparar (sem o campo, lista vazia ou só hash). Erro HTTP sobe.
+   * (v0.11.8); `null` quando não dá para comparar (sem o campo, lista vazia ou só hash). Erro HTTP sobe, e caixa inexistente (HTTP 200 com `error: "notFound"`, formato do v0.11.8) sobe como StalwartApiError 404.
    */
   async mailboxPasswordMatches(email: string, password: string): Promise<boolean | null> {
-    const data = (await this.request("GET", `/principal/${encodeURIComponent(email)}`)) as {
-      secrets?: string | string[];
-    } | null;
-    const raw = data?.secrets;
+    const text = await this.call("GET", `/principal/${encodeURIComponent(email)}`);
+    const envelope = parseEnvelope(text);
+    // v0.11.8: caixa inexistente responde HTTP 200 com {"error":"notFound","item":"..."}
+    if (envelope?.error === "notFound") throw new StalwartApiError(404, "Stalwart: caixa não encontrada.");
+    const raw = envelope?.data?.secrets;
     const secrets = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
     if (secrets.includes(password)) return true;
     if (secrets.length === 0 || secrets.some((s) => HASHED_SECRET_RE.test(s))) return null;

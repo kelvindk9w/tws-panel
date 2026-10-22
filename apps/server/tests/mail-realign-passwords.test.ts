@@ -48,8 +48,8 @@ let patchLog: Array<{ email: string; value: string }> = [];
 let failPatchFor = new Set<string>();
 /** Atraso do PRIMEIRO PATCH de cada caixa (ms). */
 let patchDelay: Record<string, number> = {};
-/** Como o Stalwart falso responde a GET /principal/<caixa>: a senha em texto, um hash, sem senha, 500 ou 404. */
-let getMode: "plain" | "hash" | "none" | "error" | "missing" = "plain";
+/** Como o Stalwart falso responde a GET /principal/<caixa>: a senha em texto, um hash, sem senha, 500, caixa inexistente (como o v0.11.8 real: HTTP 200 com {"error":"notFound"}) ou 404 HTTP. */
+let getMode: "plain" | "hash" | "none" | "error" | "missing" | "missing404" = "plain";
 let principals: Array<Record<string, unknown>> = [];
 const logs: string[] = [];
 
@@ -70,7 +70,8 @@ function fakeStalwart() {
       if (u.pathname.startsWith("/api/principal/") && (init?.method ?? "GET") === "GET") {
         const email = decodeURIComponent(u.pathname.slice("/api/principal/".length));
         if (getMode === "error") return new Response(`{"detail":"boom"}`, { status: 500 });
-        if (getMode === "missing") return new Response(`{"detail":"not found"}`, { status: 404 });
+        if (getMode === "missing") return new Response(JSON.stringify({ error: "notFound", item: email }), { status: 200 });
+        if (getMode === "missing404") return new Response(`{"detail":"not found"}`, { status: 404 });
         const secrets = getMode === "plain" ? [serverPassword[email]] : getMode === "hash" ? ["$6$salt$HASH-NAO-PODE-VAZAR"] : undefined;
         return new Response(JSON.stringify({ data: { type: "individual", name: email, ...(secrets ? { secrets } : {}) } }), { status: 200 });
       }
@@ -223,8 +224,8 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
     expect(result.passwordsFailed).toBeUndefined();
   });
 
-  it("caixa apagada no servidor durante a sincronização (404): fica de fora, sem contar nem aparecer como falha", async () => {
-    getMode = "missing";
+  it.each(["missing", "missing404"] as const)("caixa apagada no servidor durante a sincronização (%s): fica de fora, sem contar nem aparecer como falha", async (mode) => {
+    getMode = mode;
     const result = await service().adoptFromStalwart();
     expect(patchLog).toEqual([]);
     expect(result.passwordsFailed).toBeUndefined();
@@ -244,7 +245,9 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
   });
 
   it("caixa removida do cadastro depois de entrar na fila (esperando uma troca em andamento): nada é regravado", async () => {
-    patchDelay[LOJA] = 100;
+    patchDelay[LOJA] = 300;
+    // só hash: sem a checagem de remoção, o realinhamento reaplicaria a senha da caixa apagada
+    getMode = "hash";
     const svc = service();
     const change = svc.changeMailboxPassword(LOJA, "senha-trocada-antes-de-apagar");
     await vi.waitFor(() => expect(patchLog.some((p) => p.email === LOJA)).toBe(true));
@@ -255,6 +258,7 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
     const [, result] = await Promise.all([change, sync]);
     expect(result.passwordsFailed).toBeUndefined();
     expect(patchLog.filter((p) => p.email === LOJA)).toHaveLength(1);
+    expect(result.passwordsReapplied).toBe(1); // só a postmaster@
   });
 
   it("caixa de sistema cujo domínio não está cadastrado no painel não é tocada", async () => {

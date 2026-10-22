@@ -80,6 +80,17 @@ describe("POST /api/mail/sync", () => {
     );
   });
 
+  it("só caixas reaplicadas sem conferir: a auditoria registra as contagens", async () => {
+    spies.push(
+      vi.spyOn(MailService.prototype, "adoptFromStalwart").mockResolvedValue({ domains: [], mailboxes: [], skipped: [], passwordsReapplied: 2 }) as unknown as MockInstance,
+    );
+    const res = await sync();
+    expect(res.json()).toMatchObject({ ok: true, passwordsReapplied: 2 });
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "mail.sync", detail: expect.stringMatching(/0 caixa\(s\) realinhada.*2 caixa\(s\) reaplicada.*0 falha/s) }),
+    );
+  });
+
   it("nada a cadastrar: resposta com zeros e sem auditoria", async () => {
     spies.push(vi.spyOn(MailService.prototype, "adoptFromStalwart").mockResolvedValue({ domains: [], mailboxes: [], skipped: [] }) as unknown as MockInstance);
     const res = await sync();
