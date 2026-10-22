@@ -22,3 +22,9 @@
 - Sucesso só após duas leituras seguidas; aviso trocado por um verdadeiro se o estado mudar depois; leituras antigas do polling não desfazem a confirmação.
 - Após erro de rede/5xx o estado real é relido; Parar/Iniciar desabilitados com status erro sem containers; explicação visível (aria-describedby); aviso de projeto nunca publicado fala em manutenção; rótulo de andamento sem opacidade reduzida.
 - 31 testes no arquivo de feedback (alert, foco, clique duplo síncrono, texto do estado parado).
+
+## 2ª revisão (testes de corrida)
+- Novos testes: troca de projeto durante a 1ª e a 2ª leitura de conferência, durante a espera entre leituras, em leitura que falha e na releitura após erro de rede; leitura periódica antiga não desfaz a confirmação (confirmedAt). Cada conferência removida (mutação) derruba pelo menos um teste.
+- Decisão: sair para a lista no meio da remoção continua sem aviso (exigiria estado fora da página; a remoção termina no servidor e o projeto some da lista). Ficou como melhoria futura.
+- Limitação conhecida: as linhas de sobra da remoção (NÃO removido / Aviso / compose down:) vêm do log do servidor, em português, mesmo na tela em inglês.
+- Este relatório fica no repositório, como os demais _RELATORIO-*.md.

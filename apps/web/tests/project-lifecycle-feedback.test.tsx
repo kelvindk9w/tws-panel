@@ -47,6 +47,18 @@ const world = { p1: "running" as Status, p2: "running" as Status };
 const flags = { unpublished: false };
 /** gancho chamado a cada GET do projeto (depois de montar a resposta) */
 let onProjectGet: ((id: string) => void) | null = null;
+/** se devolver uma promessa, o GET do projeto espera por ela (a resposta já foi montada) */
+let holdProjectGet: ((id: string) => Promise<void> | null) | null = null;
+
+function gate() {
+  let ok!: () => void;
+  let ko!: () => void;
+  const p = new Promise<void>((res, rej) => {
+    ok = res;
+    ko = () => rej(new Error("rede caiu"));
+  });
+  return { p, ok, ko };
+}
 
 function view(id: "p1" | "p2") {
   return {
@@ -68,6 +80,7 @@ beforeEach(() => {
   world.p2 = "running";
   flags.unpublished = false;
   onProjectGet = null;
+  holdProjectGet = null;
   post = async (path) => {
     const [, , , id, kind] = path.split("/");
     world[id as "p1"] = kind === "stop" ? "stopped" : "running";
@@ -80,6 +93,8 @@ beforeEach(() => {
     if (m && !init?.method) {
       const v = view(m[1] as "p1");
       onProjectGet?.(m[1]);
+      const h = holdProjectGet?.(m[1]);
+      if (h) await h;
       return v;
     }
     if (path === "/api/projects") return { projects: [] };
@@ -528,5 +543,147 @@ describe("Revisão — remoção atrasada, região de anúncio, estabilização 
     const aviso = await screen.findByTestId("action-notice");
     expect(aviso).toHaveTextContent(/em manutenção/);
     expect(aviso).not.toHaveTextContent(/indisponível/);
+  });
+});
+
+describe("Parar projeto — troca de projeto durante a conferência e leitura antiga", () => {
+  const leituras = (id: string) =>
+    apiFetchMock.mock.calls.filter(([p, i]) => p === `/api/projects/${id}` && !(i as RequestInit | undefined)?.method).length;
+
+  /** Alfa pede para parar; a n-ésima leitura de Alfa depois do POST fica presa em `g`. */
+  async function pararAlfaPrendendoLeitura(n: number, g: ReturnType<typeof gate>) {
+    let depoisDoPost = false;
+    let vistas = 0;
+    const orig = post;
+    post = async (path) => {
+      const r = await orig(path);
+      depoisDoPost = true;
+      return r;
+    };
+    holdProjectGet = (id) => {
+      if (id !== "p1" || !depoisDoPost) return null;
+      vistas += 1;
+      return vistas === n ? g.p : null;
+    };
+    abrir();
+    fireEvent.click(await screen.findByRole("button", { name: "Parar" }));
+    await waitFor(() => expect(vistas).toBe(n));
+  }
+
+  async function irParaBeta() {
+    fireEvent.click(screen.getByText("ir-para-beta"));
+    await screen.findByRole("heading", { name: /Beta/ });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Parar" })).toBeEnabled());
+  }
+
+  function betaLimpo() {
+    expect(screen.getByRole("heading", { name: /Beta/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Alfa/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Projeto parado.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("action-notice")).not.toBeInTheDocument();
+  }
+
+  it("troca de projeto durante a PRIMEIRA leitura de conferência: Beta não mostra dados nem aviso de Alfa", async () => {
+    const g = gate();
+    await pararAlfaPrendendoLeitura(1, g);
+    await irParaBeta();
+    await act(async () => g.ok());
+    await new Promise((r) => setTimeout(r, 50));
+    betaLimpo();
+  });
+
+  it("troca de projeto durante a SEGUNDA leitura de conferência: Beta não mostra dados nem aviso de Alfa", async () => {
+    const g = gate();
+    await pararAlfaPrendendoLeitura(2, g);
+    await irParaBeta();
+    await act(async () => g.ok());
+    await new Promise((r) => setTimeout(r, 50));
+    betaLimpo();
+  });
+
+  it("leitura de conferência que FALHA depois da troca de projeto: a conferência para (não agenda nova espera)", async () => {
+    const g = gate();
+    await pararAlfaPrendendoLeitura(1, g);
+    await irParaBeta();
+    const espera = vi.spyOn(globalThis, "setTimeout");
+    await act(async () => g.ko());
+    await new Promise((r) => setTimeout(r, 50));
+    // a espera entre leituras é de 1,5 s (1 s quando já estabilizando); a de Beta é de 5 s
+    expect(espera.mock.calls.filter(([, ms]) => ms === 1_500 || ms === 1_000)).toHaveLength(0);
+    espera.mockRestore();
+    betaLimpo();
+  });
+
+  it("troca de projeto durante a ESPERA entre as leituras: nenhuma leitura nova de Alfa é feita", async () => {
+    let depoisDoPost = false;
+    const orig = post;
+    post = async (path) => {
+      const r = await orig(path);
+      depoisDoPost = true;
+      return r;
+    };
+    abrir();
+    fireEvent.click(await screen.findByRole("button", { name: "Parar" }));
+    await waitFor(() => expect(depoisDoPost).toBe(true));
+    // a primeira leitura vê "parado" (sequência 1) e a conferência dorme 1 s
+    await irParaBeta();
+    const antes = leituras("p1");
+    await new Promise((r) => setTimeout(r, 1_400));
+    expect(leituras("p1")).toBe(antes);
+    betaLimpo();
+  });
+
+  it("troca de projeto durante a releitura depois de um erro de rede: Beta não mostra dados nem aviso de Alfa", async () => {
+    const g = gate();
+    let depoisDoPost = false;
+    post = async () => {
+      depoisDoPost = true;
+      world.p1 = "stopped";
+      throw new ApiRequestError(0, "network", "sem conexão");
+    };
+    holdProjectGet = (id) => (id === "p1" && depoisDoPost ? g.p : null);
+    abrir();
+    fireEvent.click(await screen.findByRole("button", { name: "Parar" }));
+    await waitFor(() => expect(depoisDoPost).toBe(true));
+    await irParaBeta();
+    await act(async () => g.ok());
+    await new Promise((r) => setTimeout(r, 50));
+    betaLimpo();
+  });
+
+  it("leitura periódica iniciada ANTES da confirmação e que responde depois dela não desfaz o \"parado\"", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const velha = gate();
+    const postGate = gate();
+    let armado = false;
+    let presa = false;
+    post = async () => {
+      await postGate.p;
+      world.p1 = "stopped";
+      return { ok: true };
+    };
+    holdProjectGet = (id) => {
+      if (id !== "p1" || !armado || presa) return null;
+      presa = true; // só a primeira leitura periódica (resposta ainda "em execução")
+      return velha.p;
+    };
+    abrir();
+    fireEvent.click(await screen.findByRole("button", { name: "Parar" }));
+    armado = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_500); // a consulta periódica começa e fica esperando
+    });
+    expect(presa).toBe(true);
+    await act(async () => postGate.ok());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500); // duas leituras de conferência
+    });
+    expect(await screen.findByText("Projeto parado.")).toBeInTheDocument();
+    await act(async () => velha.ok()); // chega a resposta antiga: "em execução"
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByText("Projeto parado.")).toBeInTheDocument();
+    expect(screen.getByTestId("action-notice")).not.toHaveTextContent(/mudou/);
   });
 });
