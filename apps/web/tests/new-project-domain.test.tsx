@@ -311,3 +311,130 @@ describe("passo 3 — domínio de aplicações configurado enquanto o assistente
     expect(screen.getByTestId("auto-domain")).toHaveTextContent(`https://${SSLIP}`);
   });
 });
+
+describe("domínio próprio no passo 3 — o endereço temporário não some", () => {
+  let dnsOk: boolean;
+  let temporaryPost: "ok" | "falha";
+
+  beforeEach(() => {
+    dnsOk = false;
+    temporaryPost = "ok";
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/domains/check")) return { domain: "x", ok: dnsOk, devLocal: false, resolvedIps: [], machineIps: [], message: "m" };
+      if (path === "/api/projects/p1/domains" && init?.method === "POST") {
+        if (temporaryPost === "falha") throw new Error("falhou");
+        return { project };
+      }
+      return base(path, init);
+    });
+  });
+
+  function addPosts() {
+    return apiFetchMock.mock.calls
+      .filter(([p, i]) => p === "/api/projects/p1/domains" && (i as RequestInit | undefined)?.method === "POST")
+      .map(([, i]) => JSON.parse(String((i as RequestInit).body)));
+  }
+
+  async function criarComProprio() {
+    await ateOPasso3();
+    fireEvent.click(screen.getByRole("radio", { name: /Meu domínio ou subdomínio/ }));
+    fireEvent.change(screen.getByLabelText(/Seu domínio/), { target: { value: "Site.Meusite.com.br" } });
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(patchBody()).toMatchObject({ domain: "site.meusite.com.br" }));
+  }
+
+  it("o DNS do domínio próprio ainda não aponta: ele vira principal e o endereço automático continua como adicional", async () => {
+    suggestion = { ...SSLIP_ONLY, panelPublic: true };
+    await criarComProprio();
+    await waitFor(() => expect(addPosts()).toEqual([{ domain: SSLIP }]));
+  });
+
+  it("com domínio de aplicações verificado, o temporário é o endereço sob a base", async () => {
+    suggestion = { ...WITH_APPS, panelPublic: true };
+    await criarComProprio();
+    await waitFor(() => expect(addPosts()).toEqual([{ domain: APPS }]));
+  });
+
+  it("o DNS já aponta para a VPS: nenhum endereço temporário é acrescentado", async () => {
+    suggestion = { ...SSLIP_ONLY, panelPublic: true };
+    dnsOk = true;
+    await criarComProprio();
+    await waitFor(() => expect(apiFetchMock.mock.calls.some(([p]) => String(p).startsWith("/api/domains/check"))).toBe(true));
+    expect(addPosts()).toEqual([]);
+  });
+
+  /** Espera o assistente terminar de decidir sobre o temporário (a etapa roda depois do PATCH). */
+  async function assentar() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+  }
+  const suggestCalls = () => apiFetchMock.mock.calls.filter(([p]) => String(p).startsWith("/api/domains/suggest")).length;
+
+  it("painel local (panelPublic false): nenhum endereço temporário, nem consulta ao DNS", async () => {
+    suggestion = { auto: "loja.localhost", publicIp: null, panelPublic: false };
+    await criarComProprio();
+    await assentar();
+    expect(addPosts()).toEqual([]);
+  });
+
+  it("panelPublic false mesmo com endereço sslip.io sugerido: nada é acrescentado", async () => {
+    suggestion = { ...SSLIP_ONLY, panelPublic: false };
+    await criarComProprio();
+    await assentar();
+    expect(addPosts()).toEqual([]);
+    expect(apiFetchMock.mock.calls.some(([p]) => String(p).startsWith("/api/domains/check"))).toBe(false);
+  });
+
+  it("painel público mas a sugestão é .localhost: nada é acrescentado", async () => {
+    suggestion = { auto: "loja.localhost", publicIp: null, panelPublic: true };
+    await criarComProprio();
+    await assentar();
+    expect(addPosts()).toEqual([]);
+  });
+
+  it("nova tentativa depois de uma falha posterior não duplica o temporário (sufixo sorteado de novo)", async () => {
+    let n = 0;
+    const base = apiFetchMock.getMockImplementation()!;
+    let putFails = true;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/domains/suggest")) return { ...WITH_APPS, panelPublic: true, auto: `loja-r${++n}xxx.apps.example.com` };
+      if (path.startsWith("/api/backups/targets/") && init?.method === "PUT" && putFails) {
+        putFails = false;
+        throw new Error("falhou");
+      }
+      if (path.startsWith("/api/backups/targets/")) return {};
+      return base(path, init);
+    });
+    await ateOPasso3();
+    fireEvent.click(screen.getByRole("radio", { name: "Não" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Meu domínio ou subdomínio/ }));
+    fireEvent.change(screen.getByLabelText(/Seu domínio/), { target: { value: "site.meusite.com.br" } });
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(putFails).toBe(false));
+    await assentar();
+    const antes = suggestCalls();
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(apiFetchMock.mock.calls.filter(([p, i]) => String(p).startsWith("/api/backups/targets/") && (i as RequestInit).method === "PUT")).toHaveLength(2));
+    await assentar();
+    expect(addPosts()).toHaveLength(1);
+    expect(suggestCalls()).toBe(antes);
+  });
+
+  it("falha ao acrescentar o temporário não impede criar o projeto", async () => {
+    suggestion = { ...SSLIP_ONLY, panelPublic: true };
+    temporaryPost = "falha";
+    await criarComProprio();
+    await waitFor(() => expect(addPosts()).toHaveLength(1));
+    expect(screen.queryByText("Falha ao salvar o projeto.")).not.toBeInTheDocument();
+  });
+
+  it("endereço automático escolhido: nada é acrescentado", async () => {
+    suggestion = { ...SSLIP_ONLY, panelPublic: true };
+    await ateOPasso3();
+    fireEvent.click(screen.getByRole("button", { name: /Criar projeto/ }));
+    await waitFor(() => expect(patchBody()).toMatchObject({ domain: SSLIP }));
+    expect(addPosts()).toEqual([]);
+  });
+});

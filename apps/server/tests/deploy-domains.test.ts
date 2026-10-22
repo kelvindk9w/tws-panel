@@ -67,6 +67,25 @@ describe("domínios do projeto", () => {
     expect(up.aliases).toEqual(["devlink.203-0-113-10.sslip.io"]);
   });
 
+  /**
+   * Investigação (endereço temporário que "some"): conectar o domínio oficial NUNCA tira o
+   * endereço automático (POST /domains só acrescenta; "Tornar principal" rebaixa o antigo a
+   * adicional). Quem o descarta é o assistente de novo projeto ao escolher "Meu domínio", que
+   * troca o principal por PATCH — o antigo sai da lista e nada o recoloca.
+   */
+  it("conectar e tornar principal o domínio oficial preservam o endereço automático; só o PATCH do principal o substitui", async () => {
+    const auto = "devlink.203-0-113-10.sslip.io";
+    const p = await projeto(auto);
+    const comAlias = await svc.addDomain(p.id, "loja.example.com");
+    expect([comAlias.domain, ...(comAlias.aliases ?? [])]).toEqual([auto, "loja.example.com"]);
+    const prim = await svc.setPrimaryDomain(p.id, "loja.example.com");
+    expect([prim.domain, ...(prim.aliases ?? [])]).toEqual(["loja.example.com", auto]);
+
+    const q = await svc.createProject({ name: "outro", ingestMode: "git", source: "https://github.com/k/x", branch: "main", domain: "outro.203-0-113-10.sslip.io" });
+    const trocado = await svc.updateProject(q.id, { domain: "site.example.com" });
+    expect([trocado.domain, ...(trocado.aliases ?? [])]).toEqual(["site.example.com"]);
+  });
+
   it("remover um adicional; o principal só sai se outro virar principal antes", async () => {
     const p = await projeto();
     await svc.addDomain(p.id, "loja.example.com");
