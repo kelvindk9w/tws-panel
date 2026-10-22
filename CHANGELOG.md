@@ -74,6 +74,17 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   entregabilidade.
 - Entregabilidade: `Message-ID` e `Date` completados, relatórios DMARC entregues na `postmaster@`
   e saída só por IPv4.
+- Saúde do envio de e-mail por domínio (ok, atenção, crítico): A, MX, SPF (limite de 10 consultas),
+  DKIM (tamanho da chave), DMARC, PTR, porta 25, fila, TLS, listas de bloqueio e propagação, mais
+  MTA-STS e TLS-RPT opcionais; botão "Verificar a saúde agora" e verificação diária. Nunca promete
+  caixa de entrada.
+- Passo a passo do DNS com registros em ordem, valores copiáveis, nuvem cinza do Cloudflare e aviso
+  de PTR; guia "DNS e entregabilidade do e-mail" no site.
+- Diagnóstico do atraso na fila do Stalwart com a causa em português (limite de taxa, greylisting,
+  IP bloqueado e outras).
+- E-mail de teste: passo a passo do "Mostrar original" no Gmail e teto de 60 testes por dia.
+- Corrigido: o Stalwart só assinava com a chave DKIM nova depois de reiniciar; cadastrar um domínio
+  agora reinicia o servidor de e-mail uma vez.
 
 **Notificações**
 

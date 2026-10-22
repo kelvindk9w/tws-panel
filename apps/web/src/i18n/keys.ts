@@ -16,6 +16,7 @@ import type compose from "@/locales/pt-BR/compose";
 import type ports from "@/locales/pt-BR/ports";
 import type mail from "@/locales/pt-BR/mail";
 import type envios from "@/locales/pt-BR/envios";
+import type mailHealth from "@/locales/pt-BR/mailHealth";
 import type backups from "@/locales/pt-BR/backups";
 import type settings from "@/locales/pt-BR/settings";
 import type notifications from "@/locales/pt-BR/notifications";
@@ -41,6 +42,7 @@ interface Catalog {
   ports: typeof ports;
   mail: typeof mail;
   envios: typeof envios;
+  mailHealth: typeof mailHealth;
   backups: typeof backups;
   settings: typeof settings;
   notifications: typeof notifications;
@@ -58,4 +60,4 @@ export type Key = {
   [N in keyof Catalog]: `${N & string}.${Base<keyof Catalog[N] & string>}`;
 }[keyof Catalog];
 
-export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","backups","settings","notifications","panelDomain","onboarding","timezone"] as const;
+export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","mailHealth","backups","settings","notifications","panelDomain","onboarding","timezone"] as const;

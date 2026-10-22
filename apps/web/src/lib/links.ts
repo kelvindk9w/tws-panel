@@ -35,6 +35,11 @@ export function restoreGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/restore-new-server/`;
 }
 
+/** Guia de DNS e entregabilidade do e-mail, no idioma da interface. */
+export function emailDeliverabilityGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/guides/email-deliverability/`;
+}
+
 /** Domínio de aplicações no guia passo a passo (Parte 2), no idioma da interface. */
 export function appsDomainGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/getting-started/complete-guide/#dominio-de-aplicacoes`;

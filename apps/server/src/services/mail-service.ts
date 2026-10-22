@@ -62,6 +62,7 @@ import {
   verifyDnsRecords,
   type DnsResolverLike,
   type MailCertificate,
+  type PlanInput,
   type QueuedMessage,
   type QueueMessageRaw,
 } from "@paas/mailer";
@@ -232,6 +233,8 @@ interface TestEmailRecord {
 /** No máximo 1 e-mail de teste a cada 30 s e 20 por hora (por instância do painel). */
 const TEST_MIN_INTERVAL_MS = 30_000;
 const TEST_MAX_PER_HOUR = 20;
+/** Teto por dia: o teste só vai a endereços digitados por quem está logado, e não vira canal de envio em massa. */
+const TEST_MAX_PER_DAY = 60;
 /**
  * Espera pelo aviso de entrega depois que a mensagem sai da fila. O Stalwart
  * enfileira o aviso ANTES de remover a mensagem e a entrega local é imediata;
@@ -965,7 +968,33 @@ export class MailService {
     };
 
     await this.save();
+    await this.restartToActivateDkim(domain);
     return this.summaryOf(stored);
+  }
+
+  /**
+   * O Stalwart v0.11.8 só passa a assinar com uma chave DKIM nova depois de
+   * reiniciar: GET /api/reload não a carrega (conferido em Docker real,
+   * packages/mailer/tests/stalwart-deliverability.integration.test.ts: sem o
+   * reinício a mensagem sai SEM DKIM-Signature). Um domínio cadastrado com o
+   * servidor já no ar enviaria sem assinatura até o próximo reinício. Por
+   * isso o cadastro reinicia o servidor uma vez (alguns segundos; a fila fica
+   * no volume). Falha não desfaz o cadastro: vai para o log e o reinício
+   * volta a acontecer quando o certificado do domínio for instalado.
+   */
+  private async restartToActivateDkim(domain: string): Promise<void> {
+    try {
+      const certificates = await this.currentCertificates();
+      const manager = this.manager(certificates);
+      await manager.applyTls({ restart: true });
+      await manager.waitReady();
+      this.data.tls = this.tlsState(certificates);
+      await this.save();
+    } catch (err) {
+      this.log(`E-mail: não deu para reiniciar o servidor para ativar o DKIM de ${domain}`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   async removeDomain(name: string): Promise<RemoveDomainResult> {
@@ -1024,6 +1053,25 @@ export class MailService {
       dkimPublicKey: domain.dkimPublicKey,
       dmarcStage: domain.dmarcStage,
     });
+  }
+
+  /**
+   * Dados do domínio para o plano de registros e a saúde de entregabilidade
+   * (mail-health-service.ts). Só leitura do cadastro: a chave DKIM é a pública.
+   */
+  async healthPlanInput(name: string): Promise<PlanInput> {
+    await this.ensureLoaded();
+    const domain = this.requireDomain(name);
+    return {
+      domain: domain.name,
+      mailHostname: mailHostFor(domain.name),
+      serverHostname: this.hostname(),
+      serverIp: this.serverIp(),
+      serverIpv6: this.config.publicIpv6,
+      dkimSelector: domain.dkimSelector,
+      dkimPublicKey: domain.dkimPublicKey,
+      dmarcStage: domain.dmarcStage,
+    };
   }
 
   async verifyDomain(name: string): Promise<DnsVerifyResponse> {
@@ -1612,14 +1660,23 @@ export class MailService {
   private takeTestSlot(): void {
     const now = this.now();
     const hour = 60 * 60 * 1000;
-    this.testAttempts = this.testAttempts.filter((t) => now - t < hour);
+    this.testAttempts = this.testAttempts.filter((t) => now - t < 24 * hour);
+    if (this.testAttempts.length >= TEST_MAX_PER_DAY) {
+      const wait = Math.ceil((this.testAttempts[0]! + 24 * hour - now) / hour);
+      throw httpError(
+        429,
+        "test_rate_limited",
+        `Limite de ${TEST_MAX_PER_DAY} testes por dia atingido. Tente de novo em ${wait} h.`,
+      );
+    }
+    const lastHour = this.testAttempts.filter((t) => now - t < hour);
     const last = this.testAttempts.at(-1);
     if (last !== undefined && now - last < TEST_MIN_INTERVAL_MS) {
       const wait = Math.ceil((TEST_MIN_INTERVAL_MS - (now - last)) / 1000);
       throw httpError(429, "test_rate_limited", `Aguarde ${wait} s para enviar outro e-mail de teste.`);
     }
-    if (this.testAttempts.length >= TEST_MAX_PER_HOUR) {
-      const wait = Math.ceil((this.testAttempts[0]! + hour - now) / 60_000);
+    if (lastHour.length >= TEST_MAX_PER_HOUR) {
+      const wait = Math.ceil((lastHour[0]! + hour - now) / 60_000);
       throw httpError(
         429,
         "test_rate_limited",

@@ -491,6 +491,7 @@ describe("addDomain — o domínio já recebe e-mail em outro servidor", () => {
     await seed({});
     const service = new MailService(config, {
       inContainer: false,
+      readCertificate: async () => null,
       resolver: resolverOf({}, { "empresa.com.br": [{ exchange: "aspmx.l.google.com", priority: 1 }] }),
     });
     await service.addDomain("empresa.com.br", { confirmExistingMail: true });
@@ -515,12 +516,13 @@ describe("addDomain — o domínio já recebe e-mail em outro servidor", () => {
 
   it("sem MX (ou já apontando para cá): segue direto", async () => {
     await seed({});
-    const service = new MailService(config, { inContainer: false, resolver: resolverOf({}) });
+    const service = new MailService(config, { inContainer: false, readCertificate: async () => null, resolver: resolverOf({}) });
     await service.addDomain("envio.empresa.com.br");
     expect(clientCalls).toContain("domain envio.empresa.com.br");
 
     const here = new MailService(config, {
       inContainer: false,
+      readCertificate: async () => null,
       resolver: resolverOf({}, { "outro.com.br": [{ exchange: "mail.outro.com.br", priority: 10 }] }),
     });
     await here.addDomain("outro.com.br");

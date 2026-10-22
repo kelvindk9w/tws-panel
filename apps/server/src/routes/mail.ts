@@ -35,6 +35,10 @@ import { MailReputationService } from "../services/mail-reputation-service.js";
 import { readStalwartLogs } from "../services/stalwart-logs.js";
 import { migrateMailNetworks } from "../services/mail-network-migration.js";
 import { mailEnviosRoutes } from "./mail-envios.js";
+import { mailHealthRoutes } from "./mail-health.js";
+import { isCloudflareIp } from "./domains.js";
+import { queueItemFromMessage } from "@paas/mailer";
+import { MailHealthService } from "../services/mail-health-service.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
@@ -471,6 +475,31 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     envios.stop();
     reputation.stop();
   });
+
+  // Saúde de entregabilidade por domínio (plano de DNS + verificação ao vivo).
+  // Reaproveita as listas de bloqueio que a reputação já confere uma vez por dia.
+  const health = new MailHealthService({
+    planInput: (domain) => service.healthPlanInput(domain),
+    verify: (domain) => service.verifyDomain(domain),
+    tls: () => service.tlsStatus(),
+    blacklist: async () => (await reputation.state()).lastCheck,
+    queue: async () => (await service.enviosQueue()).items.map(queueItemFromMessage),
+    isProxyIp: isCloudflareIp,
+    log: (message) => app.log.warn(message),
+  });
+  mailHealthRoutes(app, health);
+  // Verificação diária de todos os domínios: a página mostra o estado sem ninguém precisar pedir.
+  const dailyHealth = setInterval(() => {
+    void (async () => {
+      for (const { name } of await service.listDomains()) {
+        await health.check(name, { manual: false }).catch((err: unknown) => {
+          app.log.warn(`Saúde do e-mail de ${name}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    })().catch(() => undefined);
+  }, 24 * 60 * 60 * 1000);
+  dailyHealth.unref();
+  app.addHook("onClose", async () => clearInterval(dailyHealth));
 
   // -------------------------------------------------------------------------
   // Servidor Stalwart

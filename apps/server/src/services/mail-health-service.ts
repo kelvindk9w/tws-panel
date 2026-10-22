@@ -1,0 +1,148 @@
+/**
+ * mail-health-service.ts — saúde de entregabilidade por domínio de e-mail
+ * (plano de registros DNS + verificação ao vivo). A regra de cada verificação
+ * está em packages/mailer/src/deliverability-health.ts; aqui ficam a coleta
+ * dos fatos que dependem do painel (PTR, certificado, listas de bloqueio), o
+ * limite de uso e a última verificação de cada domínio.
+ *
+ * Segurança: nenhum destino vem de quem chama a API. Os alvos são o domínio
+ * cadastrado, os resolvedores públicos fixos e os MX de teste da porta 25.
+ * "Verificar agora" tem intervalo mínimo por domínio e a sonda da porta 25
+ * fica em cache (não vira ferramenta de varredura contra Google/Microsoft).
+ */
+import dns from "node:dns/promises";
+import {
+  buildDnsPlan,
+  evaluateHealth,
+  fetchMtaStsPolicy,
+  probePort25,
+  type PlanInput,
+  type Port25Result,
+  type QueueItemView,
+  type ResolverEntry,
+} from "@paas/mailer";
+import type {
+  BlacklistCheckResponse,
+  DeliveryHealthResponse,
+  DeliveryHealthStateResponse,
+  DnsPlanResponse,
+  DnsVerifyResponse,
+  MailTlsStatusResponse,
+} from "@paas/core";
+import { httpError } from "./http-error.js";
+
+export interface MailHealthDeps {
+  planInput(domain: string): Promise<PlanInput>;
+  /** Verificação de DNS do checklist (traz o PTR); também atualiza o resumo do domínio. */
+  verify(domain: string): Promise<DnsVerifyResponse>;
+  tls(): Promise<MailTlsStatusResponse>;
+  /** Última conferência de listas de bloqueio (a diária); null = nunca rodou. */
+  blacklist(): Promise<BlacklistCheckResponse | null>;
+  /** Fila do servidor de e-mail agora (mensagens adiadas incluídas). */
+  queue(): Promise<QueueItemView[]>;
+  /** Resolvedores públicos diferentes (padrão: Cloudflare, Google, Quad9). */
+  resolvers?: () => ResolverEntry[];
+  probePort25?: () => Promise<Port25Result>;
+  fetchPolicy?: (domain: string) => Promise<string | null>;
+  isProxyIp: (ip: string) => boolean;
+  log?: (message: string) => void;
+  now?: () => number;
+}
+
+/** Intervalo mínimo entre duas verificações do mesmo domínio ("Verificar agora"). */
+export const HEALTH_MIN_INTERVAL_MS = 15_000;
+/** A sonda da porta 25 não repete antes disto (ela conecta em servidores de terceiros). */
+export const PORT25_CACHE_MS = 10 * 60_000;
+const PUBLIC_RESOLVERS = [
+  ["Cloudflare (1.1.1.1)", "1.1.1.1"],
+  ["Google (8.8.8.8)", "8.8.8.8"],
+  ["Quad9 (9.9.9.9)", "9.9.9.9"],
+] as const;
+
+function publicResolvers(): ResolverEntry[] {
+  return PUBLIC_RESOLVERS.map(([label, server]) => {
+    const resolver = new dns.Resolver({ timeout: 2_000, tries: 2 });
+    resolver.setServers([server]);
+    return { label, resolver };
+  });
+}
+
+export class MailHealthService {
+  private readonly reports = new Map<string, DeliveryHealthResponse>();
+  private readonly lastRun = new Map<string, number>();
+  private readonly running = new Map<string, Promise<DeliveryHealthResponse>>();
+  private port25: { at: number; result: Port25Result } | null = null;
+
+  constructor(private readonly deps: MailHealthDeps) {}
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  async plan(domain: string): Promise<DnsPlanResponse> {
+    return buildDnsPlan(await this.deps.planInput(domain));
+  }
+
+  async state(domain: string): Promise<DeliveryHealthStateResponse> {
+    const plan = await this.plan(domain);
+    return { plan, report: this.reports.get(plan.domain) ?? null };
+  }
+
+  /** Última verificação de cada domínio (só memória; vazio depois de reiniciar o painel). */
+  summary(): Array<{ domain: string; level: DeliveryHealthResponse["level"]; checkedAt: string }> {
+    return [...this.reports.values()].map((r) => ({ domain: r.domain, level: r.level, checkedAt: r.checkedAt }));
+  }
+
+  /** Verifica agora. `manual` = botão (intervalo mínimo por domínio); a rotina diária não tem. */
+  check(domain: string, opts: { manual: boolean }): Promise<DeliveryHealthResponse> {
+    const running = this.running.get(domain);
+    if (running) return running;
+    const last = this.lastRun.get(domain);
+    if (opts.manual && last !== undefined && this.now() - last < HEALTH_MIN_INTERVAL_MS) {
+      const wait = Math.ceil((HEALTH_MIN_INTERVAL_MS - (this.now() - last)) / 1000);
+      return Promise.reject(httpError(429, "health_check_too_soon", `A verificação acabou de rodar. Espere ${wait} s para verificar de novo.`));
+    }
+    this.lastRun.set(domain, this.now());
+    const promise = this.doCheck(domain).finally(() => this.running.delete(domain));
+    this.running.set(domain, promise);
+    return promise;
+  }
+
+  private async cachedPort25(): Promise<Port25Result> {
+    if (this.port25 && this.now() - this.port25.at < PORT25_CACHE_MS) return this.port25.result;
+    const result = await (this.deps.probePort25 ?? probePort25)();
+    // "Não deu para testar" não fica em cache: a próxima verificação tenta de novo.
+    this.port25 = result.status === "error" ? null : { at: this.now(), result };
+    return result;
+  }
+
+  private async doCheck(domain: string): Promise<DeliveryHealthResponse> {
+    const plan = await this.deps.planInput(domain);
+    const [verify, tls, blacklist, port25, queue] = await Promise.all([
+      this.deps.verify(domain),
+      this.deps.tls().catch((err: unknown) => {
+        this.deps.log?.(`Saúde do e-mail: certificado não conferido (${err instanceof Error ? err.message : String(err)}).`);
+        return null;
+      }),
+      this.deps.blacklist().catch(() => null),
+      this.cachedPort25(),
+      this.deps.queue().catch(() => null),
+    ]);
+    const report = await evaluateHealth({
+      ...plan,
+      resolvers: (this.deps.resolvers ?? publicResolvers)(),
+      ptr: verify.ptr,
+      port25,
+      queue,
+      // certificado não conferido: não acusa servidor parado, só deixa de avaliar
+      serverRunning: tls?.serverRunning ?? true,
+      tlsHosts: (tls?.hosts ?? []).map((h) => ({ host: h.host, ok: h.ok, validTo: h.validTo, error: h.error })),
+      blacklist,
+      fetchPolicy: this.deps.fetchPolicy ?? ((d) => fetchMtaStsPolicy(d)),
+      isProxyIp: this.deps.isProxyIp,
+      now: this.now(),
+    });
+    this.reports.set(report.domain, report);
+    return report;
+  }
+}

@@ -90,6 +90,9 @@ describe("TestEmailCard", () => {
     expect(ok.closest("[data-state]")).toHaveAttribute("data-state", "delivered");
     expect(screen.getByText(/gmail-smtp-in\.l\.google\.com/)).toBeInTheDocument();
     expect(screen.getByText(/pasta Spam/)).toBeInTheDocument();
+    // como conferir SPF, DKIM e DMARC no Gmail ("Mostrar original")
+    expect(screen.getByText("Como conferir no Gmail se passou")).toBeInTheDocument();
+    expect(screen.getByText(/Mostrar original/)).toBeInTheDocument();
     const gets = calls.filter((c) => c.method === "GET");
     expect(gets[0]!.url).toBe(`/api/mail/domains/${DOMAIN}/test-email/0123456789abcdef`);
     // terminou: para de consultar
