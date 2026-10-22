@@ -184,6 +184,8 @@ describe("MailService.adoptFromStalwart", () => {
       domains: ["cassp.example.com"],
       mailboxes: ["contato@envio.example.com", "contato@cassp.example.com", "postmaster@cassp.example.com"],
       skipped: [],
+      // a postmaster@ já cadastrada tem senha conhecida e este Stalwart falso não devolve a senha: reaplicada sem conferir (ver mail-realign-passwords.test.ts)
+      passwordsReapplied: 1,
     });
     const domains = await svc.listDomains();
     expect(domains.map((d) => [d.name, d.mailboxCount])).toEqual([
@@ -229,10 +231,10 @@ describe("MailService.adoptFromStalwart", () => {
     const svc = service();
     await svc.adoptFromStalwart();
     const before = await readFile(path.join(dir, "mail", "mail.json"), "utf8");
-    expect(await svc.adoptFromStalwart()).toEqual({ domains: [], mailboxes: [], skipped: [] });
+    expect(await svc.adoptFromStalwart()).toEqual({ domains: [], mailboxes: [], skipped: [], passwordsReapplied: 1 });
     expect(await readFile(path.join(dir, "mail", "mail.json"), "utf8")).toBe(before);
     // outra instância (painel reiniciado) também não duplica
-    expect(await service().adoptFromStalwart()).toEqual({ domains: [], mailboxes: [], skipped: [] });
+    expect(await service().adoptFromStalwart()).toEqual({ domains: [], mailboxes: [], skipped: [], passwordsReapplied: 1 });
   });
 
   it("chamadas simultâneas viram uma só consulta ao Stalwart", async () => {

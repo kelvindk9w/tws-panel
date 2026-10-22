@@ -62,6 +62,35 @@ describe("POST /api/mail/sync", () => {
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: "mail.sync", detail: expect.stringContaining("1 domínio") }));
   });
 
+  it("senhas realinhadas: a resposta traz a contagem e a auditoria registra, sem senha", async () => {
+    spies.push(
+      vi.spyOn(MailService.prototype, "adoptFromStalwart").mockResolvedValue({
+        domains: [],
+        mailboxes: [],
+        skipped: [],
+        passwordsRealigned: 3,
+        passwordsReapplied: 2,
+        passwordsFailed: ["loja@cassp.example.com"],
+      }) as unknown as MockInstance,
+    );
+    const res = await sync();
+    expect(res.json()).toMatchObject({ ok: true, passwordsRealigned: 3, passwordsFailed: ["loja@cassp.example.com"] });
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "mail.sync", detail: expect.stringMatching(/3 caixa.*realinhada.*2 caixa.*reaplicada.*1 falha/s) }),
+    );
+  });
+
+  it("só caixas reaplicadas sem conferir: a auditoria registra as contagens", async () => {
+    spies.push(
+      vi.spyOn(MailService.prototype, "adoptFromStalwart").mockResolvedValue({ domains: [], mailboxes: [], skipped: [], passwordsReapplied: 2 }) as unknown as MockInstance,
+    );
+    const res = await sync();
+    expect(res.json()).toMatchObject({ ok: true, passwordsReapplied: 2 });
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "mail.sync", detail: expect.stringMatching(/0 caixa\(s\) realinhada.*2 caixa\(s\) reaplicada.*0 falha/s) }),
+    );
+  });
+
   it("nada a cadastrar: resposta com zeros e sem auditoria", async () => {
     spies.push(vi.spyOn(MailService.prototype, "adoptFromStalwart").mockResolvedValue({ domains: [], mailboxes: [], skipped: [] }) as unknown as MockInstance);
     const res = await sync();

@@ -68,7 +68,7 @@ import { httpError } from "./deploy-service.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { planAdoption } from "./mail-adopt.js";
 import type { HttpError } from "./http-error.js";
-import { mailAuthRepairFailedError, mailAuthRepairIncompleteError } from "./mail-auth-error.js";
+import { MAIL_SMTP_AUTH_REJECTED_MESSAGE, mailSmtpAuthRejectedMessage, mailAuthRepairFailedError, mailAuthRepairIncompleteError } from "./mail-auth-error.js";
 
 /** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
 const PANEL_CONTAINER = "tws-panel";
@@ -253,6 +253,8 @@ export class MailService {
   private readonly now: () => number;
   private readonly projectsOf: (() => Promise<Array<Pick<Project, "id" | "slug">>>) | undefined;
   private adopting: Promise<MailAdoptResult> | null = null;
+  /** Fila por caixa: trocar a senha e realinhá-la no servidor nunca se cruzam. */
+  private readonly mailboxLocks = new Map<string, Promise<unknown>>();
   private readonly tests = new Map<string, TestEmailRecord>();
   /** Horário (ms) de cada tentativa de envio de teste na última hora. */
   private testAttempts: number[] = [];
@@ -1125,8 +1127,10 @@ export class MailService {
     const generated = opts.generate ? generateStrongPassword() : undefined;
     const finalPassword = generated ?? requireStrongPassword(password);
     await this.requireRunning();
-    await this.client().setMailboxPassword(email, finalPassword);
-    stored.password = finalPassword;
+    await this.withMailboxLock(email, async () => {
+      await this.client().setMailboxPassword(email, finalPassword);
+      stored.password = finalPassword;
+    });
     await this.save();
     const { password: _p, ...mailbox } = stored;
     return generated ? { mailbox, generatedPassword: generated } : { mailbox };
@@ -1310,12 +1314,80 @@ export class MailService {
       result.mailboxes.push(box.id);
     }
     if (result.domains.length > 0 || result.mailboxes.length > 0) await this.save();
+    await this.realignKnownPasswords(client, new Set(mailboxPrincipals.map((p) => p.name.trim().toLowerCase())), result);
     if (skipped.length > MAIL_ADOPT_SKIPPED_MAX) {
       result.skippedTotal = skipped.length;
       result.skipped = skipped.slice(0, MAIL_ADOPT_SKIPPED_MAX);
     }
     if (truncated) result.truncated = true;
     return result;
+  }
+
+  /** Executa `fn` depois de tudo o que já está na fila da caixa (uma por vez, mesmo se uma etapa falhar). */
+  private withMailboxLock<T>(email: string, fn: () => Promise<T>): Promise<T> {
+    const run = (this.mailboxLocks.get(email) ?? Promise.resolve()).catch(() => undefined).then(fn);
+    const tail = run.catch(() => undefined);
+    this.mailboxLocks.set(email, tail);
+    void tail.then(() => {
+      if (this.mailboxLocks.get(email) === tail) this.mailboxLocks.delete(email);
+    });
+    return run;
+  }
+
+  /**
+   * Depois de restaurar o e-mail o Stalwart volta com a senha ANTIGA do backup nas caixas, e o painel segue
+   * usando a que guardou: o envio de avisos falha com "535 5.7.8". Para as caixas que o painel gerencia
+   * (sistema: postmaster@; projeto) e cuja senha ele conhece, o painel é a fonte da verdade.
+   *
+   * No Stalwart v0.11.8, GET /principal/<caixa> devolve a senha como foi enviada (texto puro). O painel COMPARA
+   * em memória (StalwartClient.mailboxPasswordMatches; a senha do servidor nunca é guardada, logada nem
+   * devolvida) e só regrava quando difere: não faz login errado (cada login errado leva ~5 s e ~100 por dia do
+   * mesmo IP acionam o bloqueio automático do Stalwart, `server.auto-ban.auth.rate = 100/1d`, que corta até a API
+   * de administração), a contagem é verdadeira e só se avisa quando de fato houve diferença. Se a leitura falha
+   * ou não traz a senha (só hash), reaplica mesmo assim e conta à parte ("reaplicada, não verificada").
+   *
+   * Fica de fora: caixa de usuário (a pessoa pode ter trocado a senha no webmail), caixa sem senha conhecida,
+   * caixa de domínio não cadastrado, caixa que o servidor não tem (404) e a removida do cadastro durante a
+   * sincronização. Falha numa caixa não impede as outras. Nada reinicia; nenhuma senha vai a log, resposta ou
+   * auditoria (só o endereço da caixa).
+   */
+  private async realignKnownPasswords(client: StalwartClient, present: ReadonlySet<string>, result: MailAdoptResult): Promise<void> {
+    let realigned = 0;
+    let reapplied = 0;
+    const failed: string[] = [];
+    for (const email of Object.keys(this.data.mailboxes)) {
+      const box = this.data.mailboxes[email];
+      // `box` some se a caixa foi removida do cadastro durante a sincronização
+      if (!box || (box.kind !== "system" && box.kind !== "project") || !box.password || !present.has(email) || !this.data.domains[box.domain]) continue;
+      try {
+        // Dentro da fila da caixa, uma etapa de cada vez: `box` é o próprio registro, então a senha é lida só
+        // quando chega a vez dela, e uma troca que já estava em andamento vale (nunca é desfeita).
+        const outcome = await this.withMailboxLock(email, async (): Promise<"same" | "realigned" | "reapplied"> => {
+          // removida do cadastro enquanto esperava a vez: nada a fazer
+          if (this.data.mailboxes[email] !== box) return "same";
+          let matches: boolean | null = null;
+          try {
+            matches = await client.mailboxPasswordMatches(email, box.password);
+          } catch (err) {
+            if (err instanceof StalwartApiError && err.status === 404) throw err;
+            // leitura falhou: reaplica sem ter conferido
+          }
+          if (matches === true) return "same";
+          await client.setMailboxPassword(email, box.password);
+          return matches === false ? "realigned" : "reapplied";
+        });
+        if (outcome === "realigned") realigned += 1;
+        else if (outcome === "reapplied") reapplied += 1;
+      } catch (err) {
+        // caixa apagada no servidor durante a sincronização: fica de fora, não é falha
+        if (err instanceof StalwartApiError && err.status === 404) continue;
+        failed.push(email);
+        this.log(`Sincronizar: não deu para realinhar a senha da caixa ${email} (${err instanceof StalwartApiError ? `HTTP ${err.status}` : "falha de conexão"}).`);
+      }
+    }
+    if (realigned > 0) result.passwordsRealigned = realigned;
+    if (reapplied > 0) result.passwordsReapplied = reapplied;
+    if (failed.length > 0) result.passwordsFailed = failed.slice(0, MAIL_ADOPT_SKIPPED_MAX);
   }
 
   /** Chave pública DKIM do domínio no Stalwart; se a assinatura não existe, cria como no cadastro do domínio. */
@@ -1398,6 +1470,9 @@ export class MailService {
         date: sentAt,
       });
     } catch (err) {
+      if (err instanceof SmtpSendError && err.command === "AUTH" && err.code >= 500 && err.code < 600) {
+        throw httpError(409, "email_auth_rejected", mailSmtpAuthRejectedMessage(from));
+      }
       throw httpError(
         502,
         "test_send_failed",
@@ -1602,8 +1677,10 @@ export class MailService {
         password: newPassword!,
       };
     } else if (newPassword !== undefined) {
-      await client.setMailboxPassword(address, newPassword);
-      existing.password = newPassword;
+      await this.withMailboxLock(address, async () => {
+        await client.setMailboxPassword(address, newPassword);
+        existing.password = newPassword;
+      });
       // caixa adotada do Stalwart: passa a ser a do projeto
       if (existing.kind === "user") {
         existing.kind = "project";
@@ -1883,6 +1960,9 @@ export class MailService {
       });
     } catch (err) {
       const code = err instanceof SmtpSendError ? err.code : 0;
+      if (err instanceof SmtpSendError && err.command === "AUTH" && code >= 500 && code < 600) {
+        throw Object.assign(new Error(MAIL_SMTP_AUTH_REJECTED_MESSAGE), { permanent: true, code: "email_auth_rejected" });
+      }
       throw Object.assign(new Error(err instanceof Error ? err.message : String(err)), {
         permanent: code >= 500 && code < 600,
       });

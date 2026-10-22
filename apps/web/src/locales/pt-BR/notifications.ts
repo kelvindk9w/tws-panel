@@ -35,6 +35,7 @@ export default {
   "email.description": "Os avisos chegam por e-mail, enviados pelo servidor de e-mail do próprio painel.",
   "email.unavailablePrefix": "Os e-mails de aviso não vão sair enquanto isto não for resolvido: ",
   "email.openMail": "Abrir E-mail",
+  "email.openMailToSync": "Abrir E-mail para sincronizar",
   "email.telegramOnly": "Enquanto isso, dá para usar só o Telegram.",
   "email.sentFrom": "Os avisos saem de <b>{from}</b>.",
   "email.recipientsLabel": "Endereços que recebem (até 5, um por linha ou separados por vírgula)",

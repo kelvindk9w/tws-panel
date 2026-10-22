@@ -122,3 +122,52 @@ describe("StalwartClient.listPrincipalsChecked", () => {
     expect(r.truncated).toBe(true);
   });
 });
+
+describe("StalwartClient.mailboxPasswordMatches", () => {
+  const reply = (data: unknown) => vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data }), { status: 200 })));
+
+  it("a senha guardada está entre as do servidor: true", async () => {
+    reply({ name: "a@x.example.com", secrets: ["outra", "senha-do-painel"] });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBe(true);
+  });
+
+  it("uma senha só, em texto: aceita string no lugar de lista", async () => {
+    reply({ secrets: "senha-do-painel" });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBe(true);
+  });
+
+  it("senha em texto diferente: false", async () => {
+    reply({ secrets: ["senha-antiga-do-backup"] });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBe(false);
+  });
+
+  it.each([["$6$salt$hash"], ["$argon2id$v=19$m=1,t=1,p=1$x$y"], ["{SHA}abc="], ["$app$nome$hash"]])("só hash (%s): não dá para comparar, null", async (secret) => {
+    reply({ secrets: [secret] });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBeNull();
+  });
+
+  it("sem o campo de senhas, lista vazia ou corpo vazio: null", async () => {
+    reply({ name: "a@x.example.com" });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBeNull();
+    reply({ secrets: [] });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBeNull();
+    reply(null);
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBeNull();
+  });
+
+  it("caixa inexistente no v0.11.8 real (HTTP 200 com error notFound): sobe como 404, nunca como 'não deu para comparar'", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "notFound", item: "a@x.example.com" }), { status: 200 })));
+    const err = await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StalwartApiError);
+    expect((err as StalwartApiError).status).toBe(404);
+    expect((err as Error).message).not.toContain("senha-do-painel");
+  });
+
+  it("erro HTTP sobe como StalwartApiError (quem chama decide); a senha não vai à mensagem", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(`{"detail":"nada"}`, { status: 404 })));
+    const err = await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StalwartApiError);
+    expect((err as StalwartApiError).status).toBe(404);
+    expect((err as Error).message).not.toContain("senha-do-painel");
+  });
+});

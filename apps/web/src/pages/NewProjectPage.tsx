@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { GitAccessTest } from "@/components/GitAccessTest";
 import { TokenGuide } from "@/components/TokenGuide";
 import { ServerFolderBrowser } from "@/components/ServerFolderBrowser";
 import { GithubRepoPicker } from "@/components/GithubRepoPicker";
@@ -435,6 +436,9 @@ export function NewProjectPage() {
                     {t("projects.new.source.accountToken")}
                   </p>
                 )}
+                {fromAccount?.private && (
+                  <GitAccessTest source={sourceText} branch={branch} useAccount />
+                )}
               </div>
             )}
 
@@ -510,6 +514,7 @@ export function NewProjectPage() {
                     <span className="text-xs text-muted-foreground">
                       {t("projects.new.source.tokenHint")}
                     </span>
+                    <GitAccessTest source={sourceText} branch={branch} token={token} />
                   </div>
                 )}
               </div>

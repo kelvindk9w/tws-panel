@@ -335,6 +335,21 @@ describe("E-mail", () => {
     expect((await httpErrorOf(s.testEmail("admin"))).code).toBe("email_unavailable");
   });
 
+  it("teste com login recusado (senha do painel diferente da do servidor): 409 email_auth_rejected com o caminho, e o histórico guarda o motivo", async () => {
+    const s = service();
+    const email = makeEmail();
+    s.setEmailSender(email);
+    await s.setEmailRecipients(["a@exemplo.org"], "admin");
+    email.failNext.push(Object.assign(new Error("A senha guardada pelo painel não é a do servidor de e-mail. Use Sincronizar."), { code: "email_auth_rejected", permanent: true }));
+    const err = await httpErrorOf(s.testEmail("admin"));
+    expect(err.statusCode).toBe(409);
+    expect(err.code).toBe("email_auth_rejected");
+    expect(err.message).toContain("Sincronizar");
+    const st = await s.status();
+    expect(st.email.testedAt).toBeNull();
+    expect(st.history.find((h) => h.channel === "email" && h.kind === "test")?.detail).toContain("Sincronizar");
+  });
+
   it("remover o e-mail: sem endereços", async () => {
     const s = service();
     s.setEmailSender(makeEmail());

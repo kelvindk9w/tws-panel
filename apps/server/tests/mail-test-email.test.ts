@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
-import type { FindDeliveryReportOptions, QueuedMessage, SmtpSendOptions } from "@paas/mailer";
+import { SmtpSendError, type FindDeliveryReportOptions, type QueuedMessage, type SmtpSendOptions } from "@paas/mailer";
 import type { ServerConfig } from "../src/config.js";
 
 let queue: QueuedMessage[] = [];
@@ -260,6 +260,38 @@ describe("sendTestEmail — envio", () => {
       code: "test_send_failed",
       message: expect.stringContaining("535"),
     });
+  });
+
+  it("login recusado no AUTH (senha do painel diferente da do servidor): 409 email_auth_rejected dizendo o que fazer", async () => {
+    sendImpl = async () => {
+      throw new SmtpSendError(535, "O servidor de e-mail recusou (AUTH): 535 5.7.8 Authentication credentials invalid", "AUTH");
+    };
+    const err = (await service().sendTestEmail(DOMAIN, TO).catch((e: unknown) => e)) as Error & { statusCode?: number; code?: string };
+    expect(err.statusCode).toBe(409);
+    expect(err.code).toBe("email_auth_rejected");
+    expect(err.message).toMatch(/Sincronizar/);
+    expect(err.message).toMatch(/Trocar senha/);
+  });
+
+  it.each([450, 499, 600])("fronteira: AUTH com código %i não é recusa 5xx: continua test_send_failed (502)", async (code) => {
+    sendImpl = async () => {
+      throw new SmtpSendError(code, `O servidor de e-mail recusou (AUTH): ${code} x`, "AUTH");
+    };
+    await expect(service().sendTestEmail(DOMAIN, TO)).rejects.toMatchObject({ statusCode: 502, code: "test_send_failed" });
+  });
+
+  it("login recusado em caixa de projeto: a mensagem cita a caixa que enviou, não a postmaster@", async () => {
+    const loja = `loja@${DOMAIN}`;
+    await seed({
+      [`postmaster@${DOMAIN}`]: postmaster(),
+      [loja]: { id: loja, localPart: "loja", domain: DOMAIN, kind: "project", createdAt: new Date(0).toISOString(), projectId: "p1", password: "senha-da-loja" },
+    });
+    sendImpl = async () => {
+      throw new SmtpSendError(535, "O servidor de e-mail recusou (AUTH): 535 x", "AUTH");
+    };
+    const err = (await service().sendTestEmail(DOMAIN, TO, loja).catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain(`Trocar senha na caixa ${loja}`);
+    expect(err.message).not.toContain("postmaster@");
   });
 
   it("limite de frequência: 1 teste a cada 30 s e 20 por hora", async () => {
