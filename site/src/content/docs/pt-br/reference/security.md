@@ -92,7 +92,7 @@ fora do celular. O Dashboard lembra você enquanto ela estiver desligada.
   máximo um por tipo a cada 15 minutos) e o bloqueio da conta avisa na hora. O aviso nunca traz senha
   nem código, e o IP aparece só mascarado (/24 no IPv4, /64 no IPv6). **Se não foi você, troque a senha.**
 - **Limite também com a sessão aberta.** Trocar a senha, ativar ou desativar a verificação e recomeçar
-  o assistente têm o mesmo bloqueio progressivo para senha ou código errados, contado por conta.
+  o assistente têm o mesmo bloqueio progressivo para senha ou código errados, contado por IP e por sessão (a sessão ou o IP de um atacante não bloqueia a sua).
 - **IPv6 por bloco /64.** O limite de tentativas por IP agrupa os endereços IPv6 do mesmo bloco /64;
   IPv4 continua por endereço.
 

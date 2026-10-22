@@ -10,6 +10,13 @@ import { LanguageSelect } from "@/components/LanguageSelect";
 import { apiErrorText, useI18n } from "@/i18n";
 import { Loader2, ShieldCheck } from "lucide-react";
 
+/** "45 s", "5 min", "2 h" (arredonda para cima; igual nos dois idiomas). */
+function formatWait(seconds: number): string {
+  if (seconds < 60) return `${Math.max(1, Math.ceil(seconds))} s`;
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+  return `${Math.ceil(seconds / 3600)} h`;
+}
+
 export function LoginPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
@@ -43,7 +50,17 @@ export function LoginPage() {
         setNeedsCode(true); // próximo passo, não erro
         return;
       }
-      setError(err instanceof ApiRequestError ? apiErrorText(err, "auth.login.failed") : t("auth.login.failed"));
+      if (err instanceof ApiRequestError) {
+        let text = apiErrorText(err, "auth.login.failed");
+        // bloqueio do código por conta: diz quanto falta (o servidor manda retryAfterSec)
+        const wait = err.data?.retryAfterSec;
+        if (err.code === "two_factor_locked" && typeof wait === "number" && wait > 0) {
+          text = `${text} ${t("auth.login.retryIn", { time: formatWait(wait) })}`;
+        }
+        setError(text);
+      } else {
+        setError(t("auth.login.failed"));
+      }
     } finally {
       setLoading(false);
     }

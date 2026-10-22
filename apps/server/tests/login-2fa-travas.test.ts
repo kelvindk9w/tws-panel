@@ -114,18 +114,24 @@ describe("bloqueio por conta no código de 6 dígitos", () => {
     expect(certo.headers["set-cookie"]).toBeUndefined();
   });
 
-  it("a resposta do bloqueio é a mesma com senha certa ou errada (não confirma a senha)", async () => {
+  it("com a conta bloqueada, usuário real e inexistente com senha errada recebem a MESMA resposta (sem enumerar)", async () => {
     await enable2fa();
     await lockAccount();
+    const real = await loginFrom(freshIp(), { code: "123456", password: "SenhaErrada999" });
+    const fantasma = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "x-forwarded-for": freshIp() },
+      payload: { username: "ninguem", password: "SenhaErrada999", code: "123456" },
+    });
+    expect(real.statusCode).toBe(401);
+    expect(fantasma.statusCode).toBe(401);
+    expect(real.json()).toEqual(fantasma.json());
+    expect(real.json().error).toBe("invalid_credentials");
+    // o bloqueio só aparece a quem já acertou a senha
     const certa = await loginFrom(freshIp(), { code: "123456" });
-    const errada = await loginFrom(freshIp(), { code: "123456", password: "SenhaErrada999" });
     expect(certa.statusCode).toBe(429);
-    expect(errada.statusCode).toBe(429);
-    expect(errada.json().error).toBe(certa.json().error);
-    expect(errada.json().message).toBe(certa.json().message);
-    // sem código de 6 dígitos a resposta continua a de sempre
-    const semCodigo = await loginFrom(freshIp(), { password: "SenhaErrada999" });
-    expect(semCodigo.json().error).toBe("invalid_credentials");
+    expect(certa.json().error).toBe("two_factor_locked");
   });
 
   it("durante o bloqueio o código de recuperação entra, e o login bem-sucedido zera o bloqueio", async () => {
@@ -292,7 +298,7 @@ describe("Auditoria e aviso ao dono", () => {
     expect(audit).toHaveLength(3);
 
     // nova rajada dentro da janela de 15 min: acumula e sai UM resumo depois
-    for (const ip of ["198.18.0.1", "198.18.0.2"]) await loginFrom(ip);
+    for (const ip of ["198.51.100.201", "198.51.100.202"]) await loginFrom(ip);
     watchMs += 6 * 60_000;
     await ctx.loginWatch.sweep();
     expect((await ctx.alertsService.list({ source: "login" })).alerts[0]!.detail).toMatch(/1 ocorrência/); // ainda não resumiu
@@ -359,25 +365,83 @@ describe("limite por IP: passo da senha e IPv6", () => {
   });
 });
 
+describe("cabeçalhos da Cloudflare não mudam o IP contado", () => {
+  it("cf-connecting-ip e cf-ray variando não escapam do limite do IP real", async () => {
+    const codigos: number[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const r = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        headers: {
+          "x-forwarded-for": "203.0.113.200",
+          "cf-connecting-ip": `198.51.100.${i + 1}`,
+          "cf-ray": `ray-${i}`,
+        },
+        payload: { username: "admin", password: "SenhaErrada999" },
+      });
+      codigos.push(r.statusCode);
+    }
+    expect(codigos.slice(0, 4)).toEqual([401, 401, 401, 401]);
+    expect(codigos.slice(4).every((c) => c === 429)).toBe(true);
+  });
+
+  it("o IP contado vem do X-Forwarded-For confiável, não do cf-connecting-ip", async () => {
+    // outro IP real, mesmos cabeçalhos da Cloudflare: não herda o bloqueio
+    for (let i = 0; i < 6; i += 1) {
+      await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        headers: { "x-forwarded-for": "203.0.113.201", "cf-connecting-ip": "198.51.100.9" },
+        payload: { username: "admin", password: "SenhaErrada999" },
+      });
+    }
+    const outro = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "x-forwarded-for": "203.0.113.202", "cf-connecting-ip": "198.51.100.9" },
+      payload: { username: "admin", password: "SenhaErrada999" },
+    });
+    expect(outro.statusCode).toBe(401);
+  });
+});
+
 describe("rotas com a sessão aberta", () => {
-  it("trocar senha: 5 senhas atuais erradas bloqueiam (429), mesmo com outra sessão", async () => {
-    const login = await loginFrom(freshIp());
-    const cookie = sessionCookieOf(login);
-    const cookie2 = sessionCookieOf(await loginFrom(freshIp()));
-    const tentar = (c: string, currentPassword: string) =>
+  it("trocar senha: 5 senhas erradas bloqueiam a sessão e o IP do atacante, mas NÃO a sessão do dono em outro IP", async () => {
+    const dono = sessionCookieOf(await loginFrom("203.0.113.10"));
+    const atacante = sessionCookieOf(await loginFrom("203.0.113.66"));
+    const tentar = (c: string, ip: string, currentPassword: string, newPassword = "NovaSenha456xyz") =>
       app.inject({
         method: "POST",
         url: "/api/auth/change-password",
-        headers: { cookie: c },
-        payload: { currentPassword, newPassword: "NovaSenha456xyz" },
+        headers: { cookie: c, "x-forwarded-for": ip },
+        payload: { currentPassword, newPassword },
       });
-    for (let i = 0; i < 4; i += 1) expect((await tentar(cookie, "Errada123456")).statusCode).toBe(401);
-    const quinta = await tentar(cookie, "Errada123456");
+    for (let i = 0; i < 4; i += 1) expect((await tentar(atacante, "203.0.113.66", "Errada123456")).statusCode).toBe(401);
+    const quinta = await tentar(atacante, "203.0.113.66", "Errada123456");
     expect(quinta.statusCode).toBe(429);
     expect(quinta.json().error).toBe("too_many_attempts");
     expect(quinta.headers["retry-after"]).toBeDefined();
-    // a conta está travada, não a sessão: a outra sessão e a senha certa também esperam
-    expect((await tentar(cookie2, PASSWORD)).statusCode).toBe(429);
+    // o atacante segue bloqueado, mesmo trocando de IP (a sessão dele está travada)...
+    expect((await tentar(atacante, "203.0.113.67", PASSWORD, "fraca")).statusCode).toBe(429);
+    // ...e mesmo abrindo outra sessão do mesmo IP (o IP está travado)
+    const atacante2 = sessionCookieOf(await loginFrom("203.0.113.68"));
+    expect((await tentar(atacante2, "203.0.113.66", PASSWORD, "fraca")).statusCode).toBe(429);
+    // o dono, com a senha certa, na própria sessão e IP, segue livre
+    expect((await tentar(dono, "203.0.113.10", PASSWORD)).statusCode).toBe(200);
+  });
+
+  it("trocar senha: o IP do atacante trava as sessões dele; outra sessão do dono no mesmo IP não é afetada por erros de OUTRA sessão em outro IP", async () => {
+    const a = sessionCookieOf(await loginFrom("203.0.113.70"));
+    const b = sessionCookieOf(await loginFrom("203.0.113.71"));
+    const tentar = (c: string, ip: string, currentPassword: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/auth/change-password",
+        headers: { cookie: c, "x-forwarded-for": ip },
+        payload: { currentPassword, newPassword: "fraca" },
+      });
+    for (let i = 0; i < 5; i += 1) await tentar(a, "203.0.113.70", "Errada123456");
+    expect((await tentar(b, "203.0.113.71", PASSWORD)).statusCode).toBe(400); // chegou na validação da senha nova
   });
 
   it("trocar senha: senha fraca não conta como erro; sucesso zera a contagem", async () => {

@@ -53,9 +53,9 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
     if (request.body.confirm.trim().toLowerCase() !== RESTART_CONFIRMATION) {
       return reply.code(400).send({ error: "confirmation_mismatch", message: `Digite "${RESTART_CONFIRMATION}" para confirmar.` });
     }
-    // Limite por CONTA (senha atual e código): sessão aberta + senha vazada não
+    // Limite por IP e por sessão (senha atual e código): sessão aberta + senha vazada não
     // bastam para adivinhar o código. O mesmo bloqueio progressivo do login.
-    const attempt = beginAction(app.actionLimiter, user.id, reply);
+    const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
     if (!attempt) return reply;
     try {
       if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {

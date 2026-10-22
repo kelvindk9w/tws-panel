@@ -35,7 +35,7 @@ import { hashPassword, verifyPasswordTimingSafe } from "../services/password.js"
 import { LoginLimiter } from "../services/login-limiter.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { publicUser } from "../services/public-user.js";
-import { TwoFactorError, looksLikeTotp } from "../services/two-factor.js";
+import { TwoFactorError } from "../services/two-factor.js";
 import { beginAction, sendTooManyAttempts } from "../services/action-guard.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo
@@ -145,13 +145,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         if (!failure.allowed) {
           return sendTooManyAttempts(reply, failure.retryAfterSec);
         }
-        // Conta com o código de 6 dígitos bloqueado: a resposta é a MESMA com a
-        // senha certa ou errada (ver mais abaixo), para o bloqueio não confirmar a senha.
-        const lockedLeft =
-          user && typeof request.body.code === "string" && looksLikeTotp(request.body.code)
-            ? app.twoFactor.lockRemainingSec(user)
-            : 0;
-        if (lockedLeft > 0) return twoFactorLocked(reply, lockedLeft);
+        // Senha errada (ou usuário inexistente) é SEMPRE 401 invalid_credentials,
+        // mesmo com o código de 6 dígitos da conta bloqueado: o bloqueio só
+        // aparece a quem já acertou a senha, então não revela que o usuário existe.
         return reply.code(401).send({
           error: "invalid_credentials",
           message: "Credenciais inválidas.",
@@ -316,8 +312,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
     }
 
-    // Limite por CONTA: sessão aberta + senha vazada não bastam para adivinhar a senha atual.
-    const attempt = beginAction(app.actionLimiter, user.id, reply);
+    // Limite por IP e por sessão: sessão aberta + senha vazada não bastam para adivinhar a senha atual.
+    const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
     if (!attempt) return reply;
     try {
       const currentOk = await verifyPasswordTimingSafe(user.passwordHash, currentPassword);
@@ -436,7 +432,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const user = await sessionUser(request, reply);
       if (!user) return reply;
-      const attempt = beginAction(app.actionLimiter, user.id, reply);
+      const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
       if (!attempt) return reply;
       try {
         if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
@@ -482,7 +478,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const user = await sessionUser(request, reply);
       if (!user) return reply;
-      const attempt = beginAction(app.actionLimiter, user.id, reply);
+      const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
       if (!attempt) return reply;
       try {
         if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {

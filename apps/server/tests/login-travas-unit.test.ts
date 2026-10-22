@@ -10,10 +10,11 @@ import path from "node:path";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ipGroupKey, maskIp } from "../src/services/ip-group.js";
+import { verifyPasswordTimingSafe, warmUpDummyHash } from "../src/services/password.js";
 import { LoginLimiter } from "../src/services/login-limiter.js";
 import { LoginWatch } from "../src/services/login-watch.js";
 import { EdgeWatch } from "../src/services/edge-watch.js";
-import { ActionAttempt, accountKey, beginAction } from "../src/services/action-guard.js";
+import { ActionAttempt, beginAction } from "../src/services/action-guard.js";
 
 // O plugin de segurança instancia o SecurityService por dentro; aqui só a rota do proxy importa.
 vi.mock("../src/services/security-service.js", () => ({
@@ -35,7 +36,16 @@ describe("ipGroupKey / maskIp", () => {
     expect(ipGroupKey("2001:db8:1:3::1")).not.toBe(a);
     expect(ipGroupKey("::1")).toBe("0:0:0:0::/64");
     expect(ipGroupKey("fe80::1%eth0")).toBe("fe80:0:0:0::/64");
-    expect(ipGroupKey("2001:db8:1:2:3:4:1.2.3.4")).toBe(a);
+    expect(ipGroupKey("2001:db8:1:2:3:4:192.0.2.4")).toBe(a);
+  });
+
+  it("IPv4 mapeado em IPv6, em qualquer grafia, vira o IPv4 (e não cai no grupo de ::1)", () => {
+    for (const form of ["::ffff:192.0.2.4", "::ffff:c000:204", "0:0:0:0:0:ffff:192.0.2.4", "::ffff:192.0.2.4%eth0", "0:0:0:0:0:FFFF:C000:0204"]) {
+      expect(ipGroupKey(form), form).toBe("192.0.2.4");
+      expect(maskIp(form), form).toBe("192.0.2.0/24");
+    }
+    expect(ipGroupKey("::1")).not.toBe("192.0.2.4");
+    expect(ipGroupKey("::ffff:c000:204")).not.toBe(ipGroupKey("::1"));
   });
 
   it("texto que não é IP volta como veio (chaves de conta)", () => {
@@ -74,26 +84,44 @@ describe("LoginLimiter com IPv6", () => {
 });
 
 describe("ActionAttempt", () => {
+  const fakeReply = () => ({ header: vi.fn(), code: vi.fn().mockReturnThis(), send: vi.fn() });
+
   it("success zera; release depois de fail não devolve em dobro", () => {
     const l = new LoginLimiter();
-    const reply = { header: vi.fn(), code: vi.fn().mockReturnThis(), send: vi.fn() };
-    const a = beginAction(l, "u1", reply as never)!;
+    const reply = fakeReply();
+    const who = { ip: "192.0.2.1", sessionId: "s1" };
+    const a = beginAction(l, who, reply as never)!;
     a.fail();
     a.release(); // já liquidada: não faz nada
-    const b = beginAction(l, "u1", reply as never)!;
+    const b = beginAction(l, who, reply as never)!;
     b.success();
     b.release();
-    const c = new ActionAttempt(l, accountKey("u1"));
+    const c = new ActionAttempt(l, ["x"]);
+    c.release();
     c.release();
     expect(reply.code).not.toHaveBeenCalled();
   });
 
-  it("conta bloqueada: responde 429 e devolve null", () => {
+  it("IP bloqueado ou sessão bloqueada: 429 e devolve null, sem prender reserva", () => {
     const l = new LoginLimiter();
-    const reply = { header: vi.fn(), code: vi.fn().mockReturnThis(), send: vi.fn() };
-    for (let i = 0; i < 5; i += 1) beginAction(l, "u2", reply as never)?.fail();
-    expect(beginAction(l, "u2", reply as never)).toBeNull();
+    const reply = fakeReply();
+    for (let i = 0; i < 5; i += 1) beginAction(l, { ip: "192.0.2.2", sessionId: "s2" }, reply as never)?.fail();
+    expect(beginAction(l, { ip: "192.0.2.2", sessionId: "outra" }, reply as never)).toBeNull(); // IP travado
+    expect(beginAction(l, { ip: "192.0.2.99", sessionId: "s2" }, reply as never)).toBeNull(); // sessão travada
     expect(reply.code).toHaveBeenCalledWith(429);
+    // sessão nova em IP novo passa, e a reserva da checagem anterior não ficou presa
+    const livre = beginAction(l, { ip: "192.0.2.99", sessionId: "s3" }, reply as never);
+    expect(livre).not.toBeNull();
+    livre!.release();
+  });
+
+  it("fail devolve o maior tempo entre as duas contagens", () => {
+    const l = new LoginLimiter();
+    const reply = fakeReply();
+    let last = { allowed: true, retryAfterSec: 0 };
+    for (let i = 0; i < 5; i += 1) last = beginAction(l, { ip: "192.0.2.3", sessionId: "s4" }, reply as never)!.fail();
+    expect(last.allowed).toBe(false);
+    expect(last.retryAfterSec).toBeGreaterThan(0);
   });
 });
 
@@ -262,5 +290,13 @@ describe("scripts/reset-2fa.mjs --so-bloqueio", () => {
   it("opção desconhecida → uso e código 2", async () => {
     const file = await prepare();
     expect(() => execFileSync("node", [SCRIPT, file, "--outra"], { encoding: "utf8", stdio: "pipe" })).toThrow();
+  });
+});
+
+describe("hash fictício na inicialização", () => {
+  it("warmUpDummyHash prepara o hash e a verificação de usuário inexistente continua falsa", async () => {
+    await warmUpDummyHash();
+    await warmUpDummyHash();
+    expect(await verifyPasswordTimingSafe(null, "qualquer")).toBe(false);
   });
 });

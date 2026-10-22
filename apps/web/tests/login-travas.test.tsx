@@ -59,13 +59,13 @@ async function loginUntilCode() {
   return code;
 }
 
-function stubLogin() {
+function stubLogin(retryAfterSec: number | null = 300) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { code?: string };
       if (!body.code) return jsonResponse({ error: "two_factor_required", message: "Digite o código." }, 401);
-      return jsonResponse({ error: "two_factor_locked", message: LOCKED_PT, retryAfterSec: 300 }, 429);
+      return jsonResponse({ error: "two_factor_locked", message: LOCKED_PT, ...(retryAfterSec === null ? {} : { retryAfterSec }) }, 429);
     }),
   );
 }
@@ -77,6 +77,7 @@ describe("LoginPage — bloqueio do código por conta", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/código de recuperação/i);
     expect(alert.textContent).not.toMatch(/^errors\.|two_factor_locked/);
+    expect(alert).toHaveTextContent("Tente de novo em 5 min.");
     expect(code).toBeInTheDocument();
   });
 
@@ -88,6 +89,26 @@ describe("LoginPage — bloqueio do código por conta", () => {
     expect(alert).toHaveTextContent(/recovery code/i);
     expect(alert.textContent).not.toMatch(/errors\.|code\.two_factor_locked/);
     expect(alert.textContent).not.toMatch(/bloqueada/);
+    expect(alert).toHaveTextContent("Try again in 5 min.");
+  });
+});
+
+describe("LoginPage — tempo restante do bloqueio", () => {
+  it.each([
+    [30, "Tente de novo em 30 s."],
+    [90, "Tente de novo em 2 min."],
+    [7200, "Tente de novo em 2 h."],
+  ])("retryAfterSec=%i → %s", async (seconds, text) => {
+    stubLogin(seconds);
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+  });
+
+  it("sem retryAfterSec: só a mensagem do servidor", async () => {
+    stubLogin(null);
+    await loginUntilCode();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toMatch(/Tente de novo em/);
   });
 });
 

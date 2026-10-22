@@ -92,11 +92,6 @@ export class TwoFactorService {
     this.accountSuffix = opts.accountSuffix ?? null;
   }
 
-  /** Segundos de bloqueio que restam ao código de 6 dígitos da conta (0 = livre), no relógio do serviço. */
-  lockRemainingSec(user: StoredUser): number {
-    return twoFactorLockRemainingSec(user.twoFactor, this.now());
-  }
-
   status(user: StoredUser): TwoFactorStatus {
     const tf = user.twoFactor;
     return { enabled: Boolean(tf), recoveryCodesLeft: tf?.recoveryHashes.length ?? 0 };

@@ -18,8 +18,10 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
    bloqueio vai junto) e ganhou `--so-bloqueio` (confirmação `liberar`), que mantém o 2FA e limpa só o
    bloqueio.
 3. **Mensagem.** `429 two_factor_locked` com `Retry-After` ("tente mais tarde ou use um código de
-   recuperação"). Com a conta bloqueada e um código de 6 dígitos no pedido, a resposta é a mesma com a senha
-   certa ou errada, então o bloqueio não confirma a senha.
+   recuperação"), com `retryAfterSec`; a tela de login mostra o tempo restante. O 429 só aparece a quem já
+   acertou a senha; senha errada ou usuário inexistente seguem 401 `invalid_credentials` mesmo com a conta
+   bloqueada, para não enumerar usuários. Custo: o 429 confirma a senha, que os `two_factor_required` e
+   `invalid_two_factor_code` anteriores já confirmavam (o "oráculo" que a análise aceitou).
 4. **Senha certa sem código conta para o IP.** O primeiro passo agora é uma tentativa do IP (a 5ª em 1 min
    bloqueia). Login concluído zera o IP, então o fluxo legítimo não paga nada.
 5. **Auditoria e aviso.** Todo login legítimo com 2FA passa pelo primeiro passo (senha certa, sem código),
@@ -34,7 +36,10 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
    conta (não por sessão nem IP), mesma regra do login (5 erros/min, bloqueio de 1 min dobrando até 30 min),
    429 `too_many_attempts`. Só a ação concluída zera; senha fraca e conflitos não contam. Código errado em
    desativar e recomeçar também soma no bloqueio da conta do 2FA.
-7. **IPv6 por /64** no limitador por IP (IPv4 por endereço).
+7. **IPv6 por /64** no limitador por IP (IPv4 por endereço). IPv4 mapeado em IPv6 (`::ffff:1.2.3.4`,
+   `::ffff:102:304`, `0:0:0:0:0:ffff:1.2.3.4`, com ou sem zona) é normalizado para o IPv4. O hash fictício da
+   senha agora é gerado na inicialização do painel. `cf-connecting-ip` e `cf-ray` não mudam o IP contado
+   (testado).
 8. **Cloudflare.** Documentado nos guias de segurança (pt-br e en). `EdgeWatch` percebe `cf-ray` ou
    `cf-connecting-ip` e `GET /api/security/edge` alimenta um aviso na tela Segurança (pt-BR e en).
 
@@ -46,7 +51,7 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
   último bloqueio venceu há mais de 24 h.
 - Aviso pela pendência com atraso de até 5 min (mais o ciclo de 30 s do vigia), em troca de não alarmar a
   cada login do dono. O bloqueio da conta não tem atraso.
-- Chave do limitador de ações é a conta (`conta:<id>`), reaproveitando o `LoginLimiter`.
+- Chaves do limitador de ações: o IP (/64) e `sessao:<id>`, reaproveitando o `LoginLimiter`. Um limite por conta deixaria um atacante trancar o dono fora das rotas sensíveis (apontado na revisão).
 
 ## Limites e riscos
 
@@ -62,7 +67,8 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
 - Primeiro passo contando como tentativa: o dono com 4 erros de código seguidos é bloqueado por IP 1 min
   (antes eram 5 erros).
 - Não foi verificado em VPS real: IPv6 de ponta a ponta atrás do Caddy e o `reset-2fa.sh --so-bloqueio`
-  dentro do container (o `.mjs` está testado; o `.sh` só teve checagem de sintaxe).
+  com Docker de verdade (o `.sh` é testado com um `docker` falso que roda o `.mjs`: confirmação, ordem
+  parar → gravar → subir, 0600, cancelamento, painel parado e `--help`).
 
 ## Próximos passos (fora desta rodada)
 

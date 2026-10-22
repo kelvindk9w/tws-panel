@@ -8,12 +8,6 @@
  */
 import { isIPv4, isIPv6 } from "node:net";
 
-/** IPv4 dentro de IPv6 ("::ffff:1.2.3.4") vira o IPv4 puro. */
-function unmap(ip: string): string {
-  const m = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
-  return m ? m[1]! : ip;
-}
-
 /** Os 8 grupos de 16 bits de um IPv6 válido (aceita "::" e IPv4 no final). */
 function ipv6Groups(ip: string): number[] | null {
   let text = ip.split("%")[0]!; // zona (fe80::1%eth0)
@@ -38,21 +32,32 @@ function ipv6Groups(ip: string): number[] | null {
   return groups.length === 8 && groups.every((g) => !Number.isNaN(g)) ? groups : null;
 }
 
+/** Forma canônica: IPv4 puro (inclusive o mapeado em IPv6, em qualquer grafia) ou os 8 grupos do IPv6. */
+function canonical(raw: string): { v4: string } | { groups: number[] } | null {
+  const ip = raw.trim().split("%")[0]!; // zona (fe80::1%eth0, ::ffff:1.2.3.4%eth0)
+  if (isIPv4(ip)) return { v4: ip };
+  if (!isIPv6(ip)) return null;
+  const g = ipv6Groups(ip);
+  if (!g) return null;
+  // IPv4-mapeado (::ffff:a.b.c.d, ::ffff:102:304, 0:0:0:0:0:ffff:...) é o IPv4 de verdade
+  if (g.slice(0, 5).every((n) => n === 0) && g[5] === 0xffff) {
+    return { v4: `${g[6]! >> 8}.${g[6]! & 255}.${g[7]! >> 8}.${g[7]! & 255}` };
+  }
+  return { groups: g };
+}
+
 /** Chave de contagem: IPv4 por endereço, IPv6 pelo bloco /64. Texto que não é IP volta como veio. */
 export function ipGroupKey(ip: string): string {
-  const plain = unmap(ip.trim());
-  if (isIPv4(plain)) return plain;
-  if (isIPv6(plain)) {
-    const g = ipv6Groups(plain);
-    if (g) return `${g.slice(0, 4).map((n) => n.toString(16)).join(":")}::/64`;
-  }
-  return plain;
+  const c = canonical(ip);
+  if (!c) return ip.trim();
+  if ("v4" in c) return c.v4;
+  return `${c.groups.slice(0, 4).map((n) => n.toString(16)).join(":")}::/64`;
 }
 
 /** IP para mostrar em Alertas: IPv4 vira /24, IPv6 vira /64 (nunca o endereço inteiro). */
 export function maskIp(ip: string): string {
-  const plain = unmap(ip.trim());
-  if (isIPv4(plain)) return `${plain.split(".").slice(0, 3).join(".")}.0/24`;
-  if (isIPv6(plain)) return ipGroupKey(plain);
-  return "origem desconhecida";
+  const c = canonical(ip);
+  if (!c) return "origem desconhecida";
+  if ("v4" in c) return `${c.v4.split(".").slice(0, 3).join(".")}.0/24`;
+  return ipGroupKey(ip);
 }

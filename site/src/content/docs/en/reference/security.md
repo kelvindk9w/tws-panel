@@ -93,7 +93,7 @@ off your phone. The Dashboard reminds you while it is off.
   contains a password or code, and the IP is shown masked only (/24 for IPv4, /64 for IPv6). **If it
   was not you, change your password.**
 - **Limits with the session open too.** Changing the password, turning verification on or off and
-  restarting the wizard have the same progressive lock for wrong passwords or codes, counted per account.
+  restarting the wizard have the same progressive lock for wrong passwords or codes, counted per IP and per session (an attacker's session or IP does not lock yours).
 - **IPv6 by /64 block.** The per-IP attempt limit groups IPv6 addresses of the same /64 block; IPv4 stays
   per address.
 

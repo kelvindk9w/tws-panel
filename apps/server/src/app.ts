@@ -63,7 +63,7 @@ import { BackupService } from "./services/backup-service.js";
 import { DockerCli } from "./services/backup-docker.js";
 import { SevenZip } from "./services/backup-archive.js";
 import { S3Storage } from "./services/backup-s3.js";
-import { verifyPasswordTimingSafe } from "./services/password.js";
+import { verifyPasswordTimingSafe, warmUpDummyHash } from "./services/password.js";
 import timezoneRoutes from "./routes/timezone.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
@@ -463,6 +463,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // o painel assentar (o proxy e o e-mail sobem em segundo plano).
   notificationService.start();
   loginWatch.start();
+  void warmUpDummyHash();
   const disk = new DiskWatcher({ path: config.dataDir, statfs, notify: async (e) => notify(e) });
   const certificates = new CertificateWatcher({
     list: async () => (await app.certificateService.list()).items,
