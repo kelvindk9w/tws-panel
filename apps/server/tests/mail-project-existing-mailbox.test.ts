@@ -631,7 +631,11 @@ describe("senhas de app e 2FA sobrevivem, e a caixa de outro projeto não é lev
   it("caixa com dono sem poder saber se ele existe (lista indisponível): recusa", async () => {
     await seed({ "suporte@exemplo.com": box("suporte@exemplo.com", "user", { projectId: "p2" }) });
     const semLista = new MailService(config);
-    await expect(semLista.connectExistingMailbox(loja, "exemplo.com", "suporte", { mode: "keep_password" })).rejects.toMatchObject({ code: "mailbox_taken_by_project" });
+    const err = await semLista.connectExistingMailbox(loja, "exemplo.com", "suporte", { mode: "keep_password" }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "mailbox_taken_by_project" });
+    // sem nome conhecido, nunca o id interno
+    expect((err as Error).message).toContain("a outro projeto");
+    expect((err as Error).message).not.toContain("p2");
   });
 
   it("lista de projetos vazia: caixas com dono (e sem registro de e-mail) também valem como 'não sei'", async () => {

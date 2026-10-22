@@ -1918,13 +1918,14 @@ export class MailService {
     const other = this.otherOwnerOf(address, projectId, live);
     if (other === null) return;
     const info = live?.get(other.id);
-    const name = info?.name ?? info?.slug ?? other.id;
+    // sem a lista de projetos não há nome: nunca mostra o id interno
+    const name = info?.name ?? info?.slug;
     throw httpError(
       409,
       "mailbox_taken_by_project",
       other.viaRegistry
-        ? `A caixa ${address} já é usada pelo projeto ${name}. Desative o e-mail dele antes.`
-        : `A caixa ${address} pertence ao projeto ${name} (foi criada para ele, no e-mail ou na aba Caixas dele) e só pode ser usada por ele.`,
+        ? `A caixa ${address} já é usada ${name ? `pelo projeto ${name}` : "por outro projeto"}. Desative o e-mail dele antes.`
+        : `A caixa ${address} pertence ${name ? `ao projeto ${name}` : "a outro projeto"} (foi criada para ele, no e-mail ou na aba Caixas dele) e só pode ser usada por ele.`,
     );
   }
 
