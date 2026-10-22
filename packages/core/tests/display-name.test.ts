@@ -2,7 +2,7 @@
  * Nome de exibição das caixas de e-mail: a regra única do painel (servidor e tela).
  */
 import { describe, expect, it } from "vitest";
-import { MAILBOX_DISPLAY_NAME_MAX, MAILBOX_DISPLAY_NAME_PATTERN, normalizeDisplayName } from "../src/mail";
+import { MAILBOX_DISPLAY_NAME_MAX, MAILBOX_DISPLAY_NAME_PATTERN, normalizeDisplayName, sanitizeDisplayName } from "../src/mail";
 
 describe("normalizeDisplayName", () => {
   it("vazio, ausente e só espaços valem 'sem nome'", () => {
@@ -45,5 +45,32 @@ describe("normalizeDisplayName", () => {
     expect(re.test("")).toBe(true);
     expect(re.test("a\r\nb")).toBe(false);
     expect(re.test("a<b")).toBe(false);
+  });
+});
+
+describe("sanitizeDisplayName", () => {
+  it("tira o que o nome não aceita (vira espaço), junta espaços e corta no limite", () => {
+    expect(sanitizeDisplayName("Loja\r\nBcc: x")).toBe("Loja Bcc: x");
+    expect(sanitizeDisplayName("Loja <b>")).toBe("Loja b");
+    expect(sanitizeDisplayName("  a\u200bb\ud800c ")).toBe("a b c");
+    expect(sanitizeDisplayName("x".repeat(200))).toHaveLength(MAILBOX_DISPLAY_NAME_MAX);
+    expect(sanitizeDisplayName("😀".repeat(200))).toBe("😀".repeat(MAILBOX_DISPLAY_NAME_MAX));
+  });
+
+  it("só caracteres inválidos, vazio, nulo: sem nome (vazio), nunca o texto cru", () => {
+    expect(sanitizeDisplayName("<<>>")).toBe("");
+    expect(sanitizeDisplayName(null)).toBe("");
+    expect(sanitizeDisplayName(undefined)).toBe("");
+  });
+
+  it("o resultado sempre passa em normalizeDisplayName", () => {
+    for (const raw of ["a\r\nb", "<<x>>", "\u202eabc", "ok", "é".repeat(120)]) {
+      expect(normalizeDisplayName(sanitizeDisplayName(raw)).ok).toBe(true);
+    }
+  });
+
+  it("'@' e emoji sem junção são aceitos (o endereço real continua visível)", () => {
+    expect(normalizeDisplayName("ceo@example.com").ok).toBe(true);
+    expect(normalizeDisplayName("Loja 😀").ok).toBe(true);
   });
 });

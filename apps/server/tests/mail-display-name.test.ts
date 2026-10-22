@@ -392,3 +392,100 @@ describe("webmail", () => {
     expect((await service().webmailBackend()).identities).toEqual({ "a@exemplo.com": "Caixa A", "loja@exemplo.com": "Loja Royal" });
   });
 });
+
+describe("nome do projeto cru nunca chega ao deploy, ao webmail nem ao e-mail de teste", () => {
+  it("registro antigo SEM fromName e projeto com CRLF no nome: MAIL_FROM_NAME sai limpo (sem quebra de linha)", async () => {
+    await seed(
+      { "loja@exemplo.com": box("loja@exemplo.com", "project", { projectId: "p1" }) },
+      { p1: { domain: "exemplo.com", mailbox: "loja@exemplo.com", enabledAt: NOW } },
+    );
+    const env = await service().envForProject({ ...loja, name: "Loja\r\nBcc: vitima@example.com" } as Project);
+    expect(env.MAIL_FROM_NAME).toBe("Loja Bcc: vitima@example.com");
+    expect(env.MAIL_FROM_NAME).not.toMatch(/[\r\n]/);
+  });
+
+  it("registro antigo COM fromName 'Loja <b>' ou U+2028: deploy, webmail e e-mail de teste saem limpos", async () => {
+    await seed(
+      { "loja@exemplo.com": box("loja@exemplo.com", "project", { projectId: "p1", displayName: "Loja <b> X\u2028Y" }) },
+      { p1: { domain: "exemplo.com", mailbox: "loja@exemplo.com", enabledAt: NOW, fromName: "Loja <b> X\u2028Y" } },
+    );
+    const svc = service();
+    expect((await svc.envForProject(loja)).MAIL_FROM_NAME).toBe("Loja b X Y");
+    expect((await svc.webmailBackend()).identities).toEqual({ "loja@exemplo.com": "Loja b X Y" });
+    expect((await svc.projectEmailConfig("p1")).fromName).toBe("Loja b X Y");
+  });
+
+  it("projeto chamado '<<>>': a limpeza dá vazio, não há nome e o deploy NÃO manda o texto cru (From só com o endereço)", async () => {
+    await seed({});
+    const svc = service();
+    const p = { ...loja, name: "<<>>" } as Project;
+    await svc.enableProjectEmail(p, "exemplo.com", { password: SENHA });
+    expect((await stored()).projects["p1"]!.fromName).toBeUndefined();
+    expect(created[0]!.name).toBeUndefined();
+    const env = await svc.envForProject(p);
+    expect(env).not.toHaveProperty("MAIL_FROM_NAME");
+    expect(env.MAIL_FROM).toBe("loja@exemplo.com");
+  });
+
+  it("zero-width, LRM/RLM, ALM e surrogate solto no nome do projeto são tirados", async () => {
+    await seed(
+      { "loja@exemplo.com": box("loja@exemplo.com", "project", { projectId: "p1" }) },
+      { p1: { domain: "exemplo.com", mailbox: "loja@exemplo.com", enabledAt: NOW } },
+    );
+    const env = await service().envForProject({ ...loja, name: "Lo\u200bja\u200e\u061c\ufeff\ud800 X" } as Project);
+    expect(env.MAIL_FROM_NAME).toBe("Lo ja X");
+  });
+});
+
+describe("projeto ativado ANTES do nome por caixa", () => {
+  it("a lista e o modal mostram o nome efetivo da caixa de envio (copiado do projeto), sem sobrescrever nome existente", async () => {
+    await seed(
+      {
+        "loja@exemplo.com": box("loja@exemplo.com", "project", { projectId: "p1" }),
+        "outra@exemplo.com": box("outra@exemplo.com", "project", { projectId: "p2", displayName: "Já tinha" }),
+      },
+      {
+        p1: { domain: "exemplo.com", mailbox: "loja@exemplo.com", enabledAt: NOW, fromName: "Loja Royal" },
+        p2: { domain: "exemplo.com", mailbox: "outra@exemplo.com", enabledAt: NOW, fromName: "Outro nome" },
+      },
+    );
+    const svc = service();
+    const listed = await svc.listMailboxes("exemplo.com");
+    expect(listed.find((m) => m.id === "loja@exemplo.com")!.displayName).toBe("Loja Royal");
+    expect(listed.find((m) => m.id === "outra@exemplo.com")!.displayName).toBe("Já tinha");
+    expect((await svc.envForProject(loja)).MAIL_FROM_NAME).toBe("Loja Royal");
+  });
+});
+
+describe("concorrência na mesma caixa", () => {
+  it("alterar o nome e trocar a senha ao mesmo tempo: o Stalwart nunca recebe as duas chamadas juntas", async () => {
+    await seed({ "c@exemplo.com": box("c@exemplo.com", "user") });
+    const svc = service();
+    let active = 0;
+    let overlap = 0;
+    const busy = async () => {
+      active += 1;
+      if (active > 1) overlap += 1;
+      await new Promise((r) => setTimeout(r, 5));
+      active -= 1;
+    };
+    setNameImpl = busy;
+    const anySvc = svc as unknown as { client(): { setMailboxMainPassword: (e: string, p: string) => Promise<void> } };
+    const orig = anySvc.client.bind(svc);
+    anySvc.client = () => {
+      const c = orig();
+      c.setMailboxMainPassword = busy;
+      return c;
+    };
+    await Promise.all([
+      svc.setMailboxDisplayName("c@exemplo.com", "A"),
+      svc.changeMailboxPassword("c@exemplo.com", "outra-senha-forte-123"),
+      svc.setMailboxDisplayName("c@exemplo.com", "B"),
+      svc.changeMailboxPassword("c@exemplo.com", "outra-senha-forte-456"),
+    ]);
+    expect(overlap).toBe(0);
+    const s = (await stored()).mailboxes["c@exemplo.com"]!;
+    expect(s.displayName).toBe("B");
+    expect(s.password).toBe("outra-senha-forte-456");
+  });
+});

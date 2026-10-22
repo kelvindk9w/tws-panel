@@ -10,8 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   MAILBOX_PASSWORD_MIN,
-  MAILBOX_DISPLAY_NAME_MAX,
   normalizeDisplayName,
+  sanitizeDisplayName,
   DKIM_SELECTOR,
   MAX_PROJECT_EMAIL_LINKS,
   PROJECT_EMAIL_VALUE_KEYS,
@@ -367,11 +367,44 @@ export class MailService {
             : null,
         strict: true,
       });
+      this.backfillProjectNames();
     })().catch((err: unknown) => {
       this.loadedPromise = null;
       throw err;
     });
     return this.loadedPromise;
+  }
+
+  /**
+   * Projeto ativado ANTES do nome de exibição por caixa: o nome vivia só em projects[].fromName. Copia-o para a
+   * caixa de envio que ainda não tem nome (a lista e o modal mostram o nome efetivo). Em memória e idempotente;
+   * nunca sobrescreve um nome já existente. O Stalwart recebe o nome no próximo Sincronizar (pushProjectNames).
+   */
+  private backfillProjectNames(): void {
+    for (const project of Object.values(this.data.projects)) {
+      const box = this.data.mailboxes[project.mailbox];
+      const name = sanitizeDisplayName(project.fromName);
+      if (box && !box.displayName && name) box.displayName = name;
+    }
+  }
+
+  /**
+   * Grava no Stalwart o nome da caixa de envio dos projetos antigos (ver backfillProjectNames) quando o servidor
+   * ainda não tem nome nenhum nela. Nunca sobrescreve um nome que o Stalwart já tenha; falha só vai para o log.
+   */
+  private async pushProjectNames(client: StalwartClient, principals: readonly { name: string; description?: string }[]): Promise<void> {
+    const described = new Map(principals.map((p) => [p.name.trim().toLowerCase(), p.description]));
+    for (const project of Object.values(this.data.projects)) {
+      const box = this.data.mailboxes[project.mailbox];
+      if (!box?.displayName || !described.has(box.id) || described.get(box.id)) continue;
+      try {
+        await this.withMailboxLock(box.id, () => client.setMailboxDisplayName(box.id, box.displayName!));
+      } catch (err) {
+        this.log(`não deu para gravar o nome de exibição de ${box.id} no servidor de e-mail`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /**
@@ -1408,6 +1441,7 @@ export class MailService {
     }
     if (result.domains.length > 0 || result.mailboxes.length > 0) await this.save();
     await this.realignKnownPasswords(client, new Set(mailboxPrincipals.map((p) => p.name.trim().toLowerCase())), result);
+    await this.pushProjectNames(client, mailboxPrincipals);
     if (skipped.length > MAIL_ADOPT_SKIPPED_MAX) {
       result.skippedTotal = skipped.length;
       result.skipped = skipped.slice(0, MAIL_ADOPT_SKIPPED_MAX);
@@ -1538,7 +1572,7 @@ export class MailService {
     // Da caixa de um projeto, o teste sai com o nome de exibição dele
     // (validação real: no Gmail aparecia só "cassino"); das demais, com o nome da própria caixa, se tiver.
     const owner = Object.values(this.data.projects).find((p) => p.mailbox === from);
-    const fromName = owner?.fromName ?? mailbox.displayName ?? undefined;
+    const fromName = sanitizeDisplayName(owner?.fromName ?? mailbox.displayName) || undefined;
 
     const id = randomBytes(8).toString("hex");
     // O ENVID é segredo do painel (só no envelope SMTP e na memória): quem recebe
@@ -2227,7 +2261,7 @@ export class MailService {
       domain: stored.domain,
       mailbox: stored.mailbox,
       mailFrom: env.MAIL_FROM!,
-      fromName: stored.fromName ?? null,
+      fromName: sanitizeDisplayName(stored.fromName) || null,
       env: maskEnv(env),
       envLinks: { ...(stored.envLinks ?? {}) },
       legacyAlias: Boolean(stored.fromAddress),
@@ -2275,7 +2309,8 @@ export class MailService {
   };
 
   private smtpEnvOf(stored: StoredProjectEmail, mailbox: StoredMailbox, projectName?: string): Record<string, string> {
-    const name = stored.fromName ?? projectName;
+    // O nome pode vir de registro antigo ou do nome do projeto (texto livre): sempre limpo; vazio = sem MAIL_FROM_NAME.
+    const name = sanitizeDisplayName(stored.fromName ?? projectName);
     return buildSmtpEnv({
       host: mailHostFor(stored.domain),
       mailbox: mailbox.id,
@@ -2435,11 +2470,13 @@ export class MailService {
     const out: Record<string, string> = {};
     // as demais caixas (global e extras do projeto) com nome de exibição
     for (const m of Object.values(this.data.mailboxes)) {
-      if (m.displayName) out[m.id.toLowerCase()] = m.displayName;
+      const name = sanitizeDisplayName(m.displayName);
+      if (name) out[m.id.toLowerCase()] = name;
     }
     // a caixa de envio do projeto vale o nome do MAIL_FROM_NAME
     for (const p of Object.values(this.data.projects)) {
-      if (p.fromName) out[p.mailbox.toLowerCase()] = p.fromName;
+      const name = sanitizeDisplayName(p.fromName);
+      if (name) out[p.mailbox.toLowerCase()] = name;
     }
     return out;
   }
@@ -2540,15 +2577,6 @@ function requireDisplayName(raw: string | undefined): string {
   const checked = normalizeDisplayName(raw);
   if (!checked.ok) throw httpError(400, "invalid_display_name", checked.reason);
   return checked.value;
-}
-
-/**
- * Nome padrão tirado de um texto livre (o nome do projeto): tira o que o nome
- * de exibição não aceita (controle, < > aspas, barra invertida) e corta no limite.
- */
-function sanitizeDisplayName(raw: string): string {
-  const cleaned = raw.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069<>"\\]/gu, " ");
-  return [...cleaned.trim().replace(/ {2,}/g, " ")].slice(0, MAILBOX_DISPLAY_NAME_MAX).join("").trim();
 }
 
 /** Senha definida pela pessoa para uma caixa: mínimo MAILBOX_PASSWORD_MIN caracteres. */

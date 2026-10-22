@@ -325,6 +325,52 @@ describe("Alterar nome de exibição", () => {
   });
 });
 
+describe("modal — teclado e textos", () => {
+  it("Esc fecha o modal e o foco volta ao botão que o abriu", async () => {
+    mockApi({ mailboxes: [USER_BOX] });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByText("vendas@exemplo.com.br");
+    const opener = screen.getByRole("button", { name: /Alterar nome de exibição de vendas@/ });
+    await user.click(opener);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
+  it("Tab não sai do modal (volta ao primeiro item) e Shift+Tab do primeiro vai ao último", async () => {
+    mockApi({ mailboxes: [USER_BOX] });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByText("vendas@exemplo.com.br");
+    await user.click(screen.getByRole("button", { name: /Alterar nome de exibição de vendas@/ }));
+    const dialog = screen.getByRole("dialog");
+    const buttons = within(dialog).getAllByRole("button");
+    const first = within(dialog).getByRole("button", { name: "Fechar" });
+    const last = buttons[buttons.length - 1]!;
+    last.focus();
+    await user.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    first.focus();
+    await user.tab({ shift: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("caixa de projeto: a dica diz 'volta o nome do projeto' (sem contradizer o aviso); caixa comum: 'só com o endereço'", async () => {
+    mockApi({ mailboxes: [PROJECT_BOX, USER_BOX] });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByText("vendas@exemplo.com.br");
+    await user.click(screen.getByRole("button", { name: /Alterar nome de exibição de loja@/ }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(/Em branco, o painel usa o nome do projeto/);
+    expect(screen.getByRole("dialog")).not.toHaveTextContent(/só com o endereço/);
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: /Alterar nome de exibição de vendas@/ }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(/só com o endereço/);
+  });
+});
+
 describe("i18n", () => {
   it("em inglês não sobra chave crua nem texto em português no campo, na lista e no modal", async () => {
     setLocale("en", { persist: false });

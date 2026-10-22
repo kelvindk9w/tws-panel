@@ -38,6 +38,15 @@ describe("StalwartClient.createMailbox com nome de exibição", () => {
     });
   });
 
+  it("nome de 80 caracteres vai inteiro (sem corte)", async () => {
+    const fn = mockOk();
+    const name = "ã".repeat(79) + "😀";
+    await client.createMailbox("a@example.com", "senha-forte-de-teste", [], name);
+    await client.setMailboxDisplayName("a@example.com", name);
+    expect((sent(fn, 0).body as { description: string }).description).toBe(name);
+    expect(sent(fn, 1).body).toEqual([{ action: "set", field: "description", value: name }]);
+  });
+
   it("sem nome (ou vazio) não manda description", async () => {
     const fn = mockOk();
     await client.createMailbox("a@example.com", "senha-forte-de-teste");

@@ -45,6 +45,17 @@ Onde o nome era usado:
 - **Cartão do e-mail do projeto:** diz de onde vem o `From` do app: `MAIL_FROM_NAME` + `MAIL_FROM`, o nome vem da caixa do projeto e vale no próximo deploy.
 - **E-mail de teste** de qualquer caixa com nome sai com o nome dela. **Webmail** passa a receber o nome de todas as caixas que têm nome (a de envio do projeto vale o `MAIL_FROM_NAME`). **Sincronizar** (adoção depois de restaurar) lê o `description` do Stalwart e, se for um nome válido, adota.
 
+## Correções da revisão (1ª rodada)
+
+- **Projetos ativados antes do lote:** o nome vivia só em `projects[].fromName`. Ao carregar o cadastro, o painel copia esse nome para a caixa de envio que não tem nome (em memória, idempotente, nunca sobrescreve), então a lista e o modal mostram o nome efetivo. O Stalwart recebe o nome no próximo **Sincronizar**, e só se a caixa estiver sem `description` lá (não sobrescreve nome existente; falha vai para o log).
+- **Nome cru do projeto:** `MAIL_FROM_NAME` do deploy, identidades do webmail, e-mail de teste e a configuração devolvida à tela passam por `sanitizeDisplayName` (em `@paas/core`). Se a limpeza dá vazio (projeto chamado `<<>>`), não há nome: sem `MAIL_FROM_NAME` e `From` só com o endereço, nunca o texto cru.
+- **Regra mais estrita:** também recusa zero-width (U+200B–200D, U+2060, U+FEFF — isso inclui o ZWJ de emoji compostos), LRM/RLM/ALM (U+200E, U+200F, U+061C) e surrogate solitário (o Stalwart recusa com "JSON deserialization failed"). "Sem marcas de direção" agora é verdade.
+- **"@" no nome é aceito** (ex.: `ceo@example.com`): o endereço real da caixa continua visível ao lado. Não há normalização NFC nem proteção contra homógrafos.
+- **Sincronizar** só traz o nome do Stalwart para caixas **novas** (adoção); não sobrescreve nome já conhecido nem desfaz um nome alterado depois no painel.
+- **Trocar para "usar caixa existente" num projeto já ativado:** o nome que o formulário traz preenchido (o do projeto) deixou de contar como digitado; só o que a pessoa digita de novo é enviado. Assim o nome que a caixa escolhida já tem prevalece; sem nenhum, vale o nome do projeto. Efeito: o nome antigo do projeto não acompanha a troca para outra caixa, a menos que seja digitado de novo.
+- **Modal:** Esc fecha, Tab fica dentro dele e o foco volta ao botão que o abriu (vale para os três modais da aba Caixas). A dica do modal da caixa de envio concorda com o aviso ("em branco, o nome do projeto"). A prévia e o exemplo da ativação usam a mesma limpeza do servidor; o rótulo voltou a dizer "(opcional)". O botão visível é "Alterar nome" (o nome acessível continua completo) para a linha de botões caber melhor em 1024 px.
+- **Origem provável da confusão do dono:** existem outros dois rótulos "Nome de exibição" no painel — Configurações → Perfil (nome do usuário do painel) e a configuração do projeto —, que não têm relação com o nome da caixa.
+
 ## Decisões e limites
 
 - Rate limit: o global do painel (200/min por IP), igual às demais rotas de escrita do e-mail; CSRF e sessão vêm do guard global. Não criei limite próprio.

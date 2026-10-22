@@ -55,7 +55,7 @@ import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
 import { DisplayNameField, displayNameProblem } from "@/components/mail/DisplayNameField";
 import { DnsChecklistPanel } from "@/components/mail/DnsChecklistPanel";
 import { cn } from "@/lib/utils";
-import { MAILBOX_PASSWORD_MIN } from "@paas/core";
+import { MAILBOX_PASSWORD_MIN, sanitizeDisplayName } from "@paas/core";
 import {
   AlertTriangle,
   Check,
@@ -378,7 +378,9 @@ export function ProjectEmailCard({
         fromLocalPart: box.localPart,
         useExistingMailbox: existingMode,
       };
-      if (fromName.trim()) body.fromName = fromName.trim();
+      // Só o que a pessoa DIGITOU de novo: o nome já guardado (que o formulário traz preenchido) não conta, para
+      // que o nome que a caixa escolhida já tem prevaleça (sem nenhum, vale o nome do projeto).
+      if (fromName.trim() && fromName.trim() !== (email?.fromName ?? "")) body.fromName = fromName.trim();
       if (existingMode === "current_password") body.password = currentPassword;
       const res = await apiFetch<ProjectEmailResponse>(`/api/projects/${projectId}/email`, {
         method: "POST",
@@ -475,7 +477,9 @@ export function ProjectEmailCard({
 
   const domain = domains.find((d) => d.name === selectedDomain);
   const previewAddress = `${fromLocal.trim().toLowerCase() || projectSlug}@${selectedDomain}`;
-  const previewName = fromName.trim() || projectName;
+  // a mesma limpeza do servidor: é isto que será gravado e entregue
+  const defaultName = sanitizeDisplayName(projectName);
+  const previewName = sanitizeDisplayName(fromName) || defaultName;
   // e-mail ativado: abas Remetente, Caixas e DNS do domínio do projeto
   const tabbed = email.enabled && Boolean(email.domain);
   const activeTab: EmailTab = tabbed ? tab : "remetente";
@@ -728,7 +732,7 @@ export function ProjectEmailCard({
               )}
               <DisplayNameField
                 label={t("mail.project.nameLabel")}
-                placeholder={projectName}
+                placeholder={defaultName}
                 hintKey="mail.displayName.hintProject"
                 value={fromName}
                 onChange={setFromName}
@@ -818,7 +822,7 @@ export function ProjectEmailCard({
           <>
             <div className="flex flex-col gap-1 text-sm">
               <p className="text-muted-foreground">{t("mail.project.tab.sender")}</p>
-              <p className="font-medium [overflow-wrap:anywhere]">{`${email.fromName ?? projectName} <${email.mailFrom}>`}</p>
+              <p className="font-medium [overflow-wrap:anywhere]">{(email.fromName ?? sanitizeDisplayName(projectName)) ? `${email.fromName ?? sanitizeDisplayName(projectName)} <${email.mailFrom}>` : (email.mailFrom ?? "")}</p>
               <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {t("mail.project.mailboxLine", { mailbox: email.mailbox ?? "" })}
               </p>

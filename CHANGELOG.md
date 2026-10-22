@@ -71,7 +71,10 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Nome de exibição (opcional) em toda caixa: ao criar na página do domínio, na aba Caixas do projeto
   e ao ativar o e-mail do projeto, e **Alterar nome de exibição** depois, sem mexer em senha, 2FA,
   senhas de app, apelidos nem mensagens. O nome aparece nas listas e vale no `From` do e-mail de
-  teste e no webmail; na caixa de envio do projeto é o `MAIL_FROM_NAME` (vale no próximo deploy).
+  teste e no webmail (identidade que já tem nome no webmail não é sobrescrita); na caixa de envio do
+  projeto é o `MAIL_FROM_NAME` (vale no próximo deploy). O Sincronizar só traz o nome do servidor de
+  e-mail para caixas novas: não sobrescreve um nome já conhecido nem desfaz um nome alterado depois.
+  Nome de projeto com caracteres inválidos é limpo antes de ir para `MAIL_FROM_NAME`.
 - Checklist de DNS com valores copiáveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de

@@ -315,14 +315,34 @@ export interface SetMailboxDisplayNameResponse {
 export const MAILBOX_DISPLAY_NAME_MAX = 80;
 
 /**
- * Padrão (regex, usado no schema das rotas) do nome de exibição: sem caracteres
- * de controle (inclui CR, LF, TAB e NUL), sem separadores de linha/parágrafo,
- * sem marcas de direção do Unicode e sem < > " nem barra invertida — o nome
- * vai para o cabeçalho From e para o MAIL_FROM_NAME, onde apps montam
- * "Nome <endereço>".
+ * Caracteres que o nome de exibição não aceita (conteúdo de uma classe de regex):
+ * controle (CR, LF, TAB, NUL, C1), separadores de linha/parágrafo (U+2028/2029),
+ * invisíveis de largura zero (U+200B–200D, U+2060, U+FEFF), marcas de direção
+ * (LRM/RLM U+200E/200F, ALM U+061C, embeddings/overrides U+202A–202E, isolates
+ * U+2066–2069), < > " e barra invertida, e surrogates soltos (UTF-16 malformado:
+ * o Stalwart recusa com "JSON deserialization failed").
  */
-export const MAILBOX_DISPLAY_NAME_PATTERN =
-  '^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069<>"\\\\]*$';
+const DISPLAY_NAME_FORBIDDEN =
+  '\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060\\u2066-\\u2069\\ufeff\\ud800-\\udfff<>"\\\\';
+
+/**
+ * Padrão (regex com a flag u, usado no schema das rotas) do nome de exibição:
+ * nada de DISPLAY_NAME_FORBIDDEN — o nome vai para o cabeçalho From, para o
+ * MAIL_FROM_NAME (onde apps montam "Nome <endereço>") e para o Stalwart.
+ * Não há normalização NFC nem proteção contra homógrafos; "@" é aceito (o
+ * endereço real da caixa continua visível ao lado).
+ */
+export const MAILBOX_DISPLAY_NAME_PATTERN = `^[^${DISPLAY_NAME_FORBIDDEN}]*$`;
+
+/**
+ * Tira de um texto livre (ex.: o nome do projeto) o que o nome de exibição não
+ * aceita (cada ocorrência vira um espaço), junta espaços, apara e corta no
+ * limite. Pode devolver vazio: então não há nome (o From sai só com o endereço).
+ */
+export function sanitizeDisplayName(raw: string | null | undefined): string {
+  const cleaned = String(raw ?? "").replace(new RegExp(`[${DISPLAY_NAME_FORBIDDEN}]`, "gu"), " ");
+  return [...cleaned.trim().replace(/ {2,}/g, " ")].slice(0, MAILBOX_DISPLAY_NAME_MAX).join("").trim();
+}
 
 export type DisplayNameResult =
   | { ok: true; value: string }

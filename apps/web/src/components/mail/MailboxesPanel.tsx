@@ -14,7 +14,7 @@
  * dele. Sem `projectId` (página do domínio), mostra todas, com o projeto
  * dono de cada uma.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MAILBOX_PASSWORD_MIN, webmailUrl } from "@paas/core";
 import type {
   Mailbox,
@@ -60,11 +60,51 @@ function CredentialRow({ label, value, mono = true }: { label: string; value: st
   );
 }
 
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   const { t } = useI18n();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // Lido na renderização, antes de qualquer autoFocus do conteúdo: é o botão que abriu o modal.
+  const openerRef = useRef<Element | null>(typeof document === "undefined" ? null : document.activeElement);
+  // Esc fecha; Tab fica dentro do modal; ao fechar, o foco volta ao botão que o abriu.
+  useEffect(() => {
+    const opener = openerRef.current instanceof HTMLElement ? openerRef.current : null;
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab" || !dialog) return;
+      const items = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === dialog)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -196,7 +236,14 @@ function DisplayNameModal({
           {t("mail.boxes.editName.intro")}
           {mailbox.kind === "project" && ` ${t("mail.boxes.editName.projectNote")}`}
         </p>
-        <DisplayNameField value={value} onChange={setValue} disabled={saving} onEnter={() => void save()} autoFocus />
+        <DisplayNameField
+          value={value}
+          onChange={setValue}
+          disabled={saving}
+          onEnter={() => void save()}
+          autoFocus
+          hintKey={mailbox.kind === "project" ? "mail.displayName.hintProject" : "mail.displayName.hint"}
+        />
         {error && <p role="alert" className="text-destructive">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
