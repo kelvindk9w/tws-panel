@@ -6,7 +6,7 @@
   "author": "Kelvin — CEO & Founder @ TWS",
   "license": "MIT",
   "type": "module",
-  "packageManager": "pnpm@10.31.0",
+  "packageManager": "pnpm@10.34.7",
   "engines": {
     "node": ">=22"
   },
@@ -31,12 +31,12 @@
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "imapflow": "^1.0.164",
     "nodemailer": "^10.0.9",
     "tsx": "^4.19.2",
     "vite": "^6.4.4",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "pnpm": {
     "overrides": {

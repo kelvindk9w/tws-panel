@@ -22,7 +22,7 @@ export const STALWART_IMAGE_REF =
   "stalwartlabs/mail-server:v0.11.8@sha256:a5ce0615640b29a01c0a55b9fff6dd2c9dfa261ec87862c22e4db7e0254cdb1f";
 /** Build de sites estáticos (Node). */
 export const NODE_BUILD_IMAGE =
-  "node:22@sha256:0e5f906573693feaa1e21057ebdcfdb5bd5021f050b2dc7c9deceb629c7da2a8";
+  "node:22@sha256:63538dfe497cc29dfafdda25ada09b46db68a3f4cc205abf1f5d6bf0913f3384";
 /** Servidor dos sites estáticos. */
 export const STATIC_SERVER_IMAGE =
   "nginx:alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d";

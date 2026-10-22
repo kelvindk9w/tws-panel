@@ -56,7 +56,9 @@ const BASE = {
   trustedHosts: ["mail.exemplo.com", "mail.outro.com.br"],
 };
 
+let imageInUse = "";
 beforeEach(() => {
+  imageInUse = ROUNDCUBE_IMAGE;
   calls.length = 0;
   copies.length = 0;
   copyResult = ok();
@@ -65,7 +67,7 @@ beforeEach(() => {
 
 describe("imagem", () => {
   it("versão fixa por tag e digest (nada de latest)", () => {
-    expect(ROUNDCUBE_IMAGE).toMatch(/^roundcube\/roundcubemail:1\.7\.4-apache-nonroot@sha256:[0-9a-f]{64}$/);
+    expect(ROUNDCUBE_IMAGE).toMatch(/^roundcube\/roundcubemail:1\.7\.5-apache-nonroot@sha256:[0-9a-f]{64}$/);
   });
 });
 
@@ -288,6 +290,7 @@ describe("WebmailManager", () => {
       if (args[0] === "inspect" && (args[2] ?? "").includes("Networks")) {
         return state ? ok(JSON.stringify({ "paas-panel": {}, "paas-mail": {} })) : fail("No such object");
       }
+      if (args[0] === "inspect" && args[2] === "{{.Config.Image}}") return state ? ok(`${imageInUse}\n`) : fail("No such object");
       if (args[0] === "inspect") return state ? ok(`${state.running}\n`) : fail("No such object");
       return ok();
     };
@@ -362,19 +365,96 @@ describe("WebmailManager", () => {
   it("existente e parado: regrava a config e inicia; rodando: só regrava", async () => {
     responder = daemon({ running: false });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start"]);
     calls.length = 0;
     responder = daemon({ running: true });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "<cp>", "<cp>", "<cp>", "inspect"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect"]);
   });
 
   it("não inicia o existente: remove e recria", async () => {
     let starts = 0;
     responder = daemon({ running: false }, (a) => (a[0] === "start" && starts++ === 0 ? fail("quebrado") : undefined));
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "<cp>", "start"]);
     expect(calls.find((c) => c[0] === "rm")).toEqual(["rm", "-f", "paas-webmail"]);
+  });
+
+  describe("imagem diferente da esperada (atualização do painel)", () => {
+    const OLD = "roundcube/roundcubemail:1.7.4-apache-nonroot@sha256:" + "a".repeat(64);
+
+    it("recria: baixa a nova com o antigo no ar, para e guarda o antigo, cria o novo no mesmo volume e só então remove o antigo", async () => {
+      imageInUse = OLD;
+      responder = daemon({ running: true }, (a) => (a[0] === "image" ? fail("No such image") : undefined));
+      await manager().start();
+      expect(calls).toContainEqual(["pull", ROUNDCUBE_IMAGE]);
+      const order = calls.map((c) => c[0]);
+      expect(order.indexOf("pull")).toBeLessThan(order.indexOf("stop"));
+      expect(order.indexOf("stop")).toBeLessThan(order.indexOf("rename"));
+      expect(order.indexOf("rename")).toBeLessThan(order.indexOf("create"));
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+      const create = calls.find((c) => c[0] === "create")!;
+      expect(create.join(" ")).toContain("-v paas_webmail_data:/var/roundcube");
+      expect(create.at(-1)).toBe(ROUNDCUBE_IMAGE);
+      expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
+      expect(calls.at(-2)![0]).toBe("start");
+    });
+
+    it("imagem nova já local: não baixa de novo", async () => {
+      imageInUse = OLD;
+      responder = daemon({ running: true });
+      await manager().start();
+      expect(calls.some((c) => c[0] === "pull")).toBe(false);
+      expect(calls.some((c) => c[0] === "create")).toBe(true);
+    });
+
+    it("não conseguiu baixar: erro claro e o antigo nem é tocado", async () => {
+      imageInUse = OLD;
+      responder = daemon({ running: true }, (a) => (a[0] === "image" ? fail("No such image") : a[0] === "pull" ? fail("sem rede\n") : undefined));
+      await expect(manager().start()).rejects.toThrow(/falha ao baixar a imagem nova do webmail \(sem rede\); o webmail segue na versão anterior/);
+      expect(calls.some((c) => ["stop", "rename", "rm", "create"].includes(c[0]))).toBe(false);
+    });
+
+    it("não consegue parar o antigo: erro e nada renomeado", async () => {
+      imageInUse = OLD;
+      responder = daemon({ running: true }, (a) => (a[0] === "stop" ? fail("busy") : undefined));
+      await expect(manager().start()).rejects.toThrow(/falha ao parar paas-webmail para atualizá-lo: busy/);
+      expect(calls.some((c) => c[0] === "rename")).toBe(false);
+    });
+
+    it("não consegue renomear: religa o antigo e avisa", async () => {
+      imageInUse = OLD;
+      responder = daemon({ running: true }, (a) => (a[0] === "rename" ? fail("conflito") : undefined));
+      await expect(manager().start()).rejects.toThrow(/falha ao preparar a troca do webmail: conflito/);
+      expect(calls.at(-1)).toEqual(["start", "paas-webmail"]);
+    });
+
+    it("o novo não sobe: remove o novo, devolve o nome ao antigo e o religa (rollback)", async () => {
+      imageInUse = OLD;
+      let creates = 0;
+      responder = daemon({ running: true }, (a) => (a[0] === "create" && creates++ === 0 ? fail("sem memória") : undefined));
+      await expect(manager().start()).rejects.toThrow(/falha ao atualizar o webmail para a imagem nova \(falha ao criar paas-webmail: sem memória\); o container anterior foi restaurado/);
+      const tail = calls.slice(-3);
+      expect(tail).toEqual([
+        ["rm", "-f", "paas-webmail"],
+        ["rename", "paas-webmail-prev", "paas-webmail"],
+        ["start", "paas-webmail"],
+      ]);
+    });
+
+    it("rollback que também falha: o erro diz para ativar de novo", async () => {
+      imageInUse = OLD;
+      responder = daemon({ running: true }, (a) =>
+        a[0] === "create" ? fail("x") : a[0] === "rename" && a[1] === "paas-webmail-prev" ? fail("sumiu") : undefined,
+      );
+      await expect(manager().start()).rejects.toThrow(/não deu para restaurar o anterior \(sumiu\); ative o webmail de novo/);
+    });
+
+    it("não consegue ler a imagem do existente: mantém o container (não recria à toa)", async () => {
+      responder = daemon({ running: true }, (a) => (a[0] === "inspect" && a[2] === "{{.Config.Image}}" ? fail("erro") : undefined));
+      await manager().start();
+      expect(calls.some((c) => c[0] === "create" || c[0] === "rename")).toBe(false);
+    });
   });
 
   it("propaga falhas de create, cp e start", async () => {

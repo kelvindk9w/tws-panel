@@ -16,7 +16,7 @@ const OFF: WebmailStatus = {
   enabled: false,
   installed: false,
   running: false,
-  image: "roundcube/roundcubemail:1.7.4-apache-nonroot",
+  image: "roundcube/roundcubemail:1.7.5-apache-nonroot",
   containerName: "paas-webmail",
   mailServerRunning: true,
   tlsVerified: true,
