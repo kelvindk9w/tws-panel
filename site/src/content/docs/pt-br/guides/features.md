@@ -190,6 +190,11 @@ seus projetos enviarem mensagens e para caixas como `contato@`.
   com nome de exibição, e os valores `SMTP_*` e `MAIL_*` são injetados no deploy. Se o app usa
   outros nomes de variável, **Ligar às variáveis do projeto** entrega os mesmos valores com esses
   nomes.
+  Na aba **Variáveis**, se o compose exige variáveis de e-mail (`SMTP_HOST`, `SMTP_PASSWORD`,
+  `SMTP_FROM`…), um aviso diz quais o e-mail do projeto preenche, leva ao cartão para ligá-lo e
+  oferece **Ligar `SMTP_PASSWORD` ao valor `SMTP_PASS`** (só a ligação é guardada, nada é copiado).
+  O que o e-mail não fornece, como `SMTP_SECURE`, continua manual: o aviso sugere `false` para a
+  porta 587 (STARTTLS) e o atalho só adiciona a linha, sem salvar.
 
 **Webmail.** Com um clique, `https://mail.<domínio>/` passa a abrir um webmail (**Roundcube**) em
 português para ler, responder e enviar como a própria caixa. A sessão termina depois de 10

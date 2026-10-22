@@ -8,6 +8,8 @@ import {
   type ComposeVariable,
   type EnvExampleVariable,
   type Project,
+  type ProjectEmailConfig,
+  type ProjectEmailResponse,
   type ProjectEmailValueKey,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
@@ -19,6 +21,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { EnvEmailAdvice } from "@/components/project/EnvEmailAdvice";
+import { emailAdvice } from "@/lib/email-env-advice";
 import {
   Check,
   CheckCircle2,
@@ -211,6 +215,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [provided, setProvided] = useState<string[]>([]);
   // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA → SMTP_PASS)
   const [links, setLinks] = useState<Record<string, ProjectEmailValueKey>>({});
+  // Configuração do e-mail do projeto (undefined = carregando; null = não deu para consultar)
+  const [emailConfig, setEmailConfig] = useState<ProjectEmailConfig | null | undefined>(undefined);
   // Valores do que o painel fornece (sem a senha da caixa; null = servidor antigo)
   const [providedValues, setProvidedValues] = useState<Record<string, string> | null>(null);
   // Senha da caixa (e o que vale o mesmo) buscada a pedido, pelo olho
@@ -258,6 +264,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setVars([]);
         setError(envErrorText(err, "env.loadFailed"));
       });
+  }, [project.id]);
+
+  useEffect(() => {
+    apiFetch<ProjectEmailResponse>(`/api/projects/${project.id}/email`)
+      .then((r) => setEmailConfig(r.email ?? null))
+      .catch(() => setEmailConfig(null));
   }, [project.id]);
 
   function changed() {
@@ -326,6 +338,25 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       if ((await reveal([line.name])).length === 0) return;
     }
     setPanelVisible(line.name, show);
+  }
+
+  /** As ligações foram salvas: o e-mail passa a fornecer esses nomes (o valor vem do painel, nunca copiado). */
+  function onEmailLinked(next: Record<string, ProjectEmailValueKey>, names: string[]) {
+    setLinks(next);
+    setEmailConfig((c) => (c ? { ...c, envLinks: next } : c));
+    setProvided((prev) => [...new Set([...prev, ...Object.keys(next)])].sort());
+    // a linha vazia sugerida pelo compose some: o painel fornece o valor
+    setVars((prev) => (prev ?? []).filter((v) => !(v.suggested && v.value === "" && next[v.key.trim()] !== undefined)));
+    setNotice(t("env.email.linked", { names: names.join(", ") }));
+  }
+
+  /** Atalho de variável manual (SMTP_SECURE=false): só põe a linha na tabela; salvar é com a pessoa. */
+  function addManualRow(name: string, value: string) {
+    changed();
+    const existing = (vars ?? []).find((v) => v.key.trim() === name);
+    if (existing) update(existing.id, { value });
+    else setVars((prev) => [...(prev ?? []), row({ key: name, value }, true)]);
+    setNotice(t("env.email.manual.added", { name }));
   }
 
   /** `key`: "row:<id>" ou "panel:<nome>" — onde mostrar o "copiado". */
@@ -428,6 +459,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     ...(vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()),
     ...provided,
   ]);
+  const advice = emailAdvice(
+    composeVars,
+    new Set((vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim())),
+    providedSet,
+    emailConfig ?? null,
+    links,
+  );
   const missing = missingComposeVariables(composeVars ?? [], defined);
   const missingSet = new Set(missing);
   // O que o e-mail entrega com o nome padrão, na ordem da tela do e-mail…
@@ -561,6 +599,15 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               ` ${t("env.compose.allSet")}`
             )}
           </p>
+        )}
+        {emailConfig !== undefined && vars !== null && advice.show && (
+          <EnvEmailAdvice
+            projectId={project.id}
+            advice={advice}
+            links={links}
+            onLinked={onEmailLinked}
+            onAddRow={addManualRow}
+          />
         )}
         {provided.length > 0 && (
           <div data-testid="env-provided" className="mt-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs">

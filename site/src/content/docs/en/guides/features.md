@@ -186,6 +186,12 @@ your projects can send messages and for mailboxes such as `contato@`.
   with a display name, and the `SMTP_*` and `MAIL_*` values are injected at deploy time. If the app uses
   other variable names, **Link to project variables** delivers the same values under those
   names.
+  On the **Variables** tab, if the compose file requires e-mail variables (`SMTP_HOST`,
+  `SMTP_PASSWORD`, `SMTP_FROM`…), a notice says which ones project e-mail fills in, leads to the
+  card to turn it on, and offers **Link `SMTP_PASSWORD` to the `SMTP_PASS` value** (only the link
+  is stored, nothing is copied). What e-mail does not provide, such as `SMTP_SECURE`, stays
+  manual: the notice suggests `false` for port 587 (STARTTLS) and the shortcut only adds the row,
+  without saving.
 
 **Webmail.** With one click, `https://mail.<domain>/` starts opening a webmail (**Roundcube**) in
 Portuguese to read, reply and send as the mailbox itself. The session ends after 10

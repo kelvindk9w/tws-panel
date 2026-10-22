@@ -72,6 +72,39 @@ export default {
   "provided.linked": "Linked to it: <mono>{names}</mono>.",
   "provided.help":
     "If your app uses other names (e.g. SMTP_PASSWORD), link them in <link>Email → Link to project variables</link>. They appear in the list already filled in: the eye shows the value, which you change in the project's Email. The mailbox password is never shown (forgot it? change it in Email → Mailboxes). A variable saved here with the default name (e.g. SMTP_HOST) overrides the email value; linked ones always come from the email.",
+  // ProjectEnvCard: "project e-mail fills these variables" notice
+  "email.title": "Project e-mail fills these required variables for you",
+  "email.off.intro":
+    "The project requires {names}. Project e-mail creates the mailbox and delivers SMTP_HOST, SMTP_PORT (587, STARTTLS), SMTP_USER and the password on deploy: you do not need to type these variables by hand.",
+  "email.off.button": "Turn on project e-mail",
+  "email.on.intro": "Project e-mail is on. State of each required variable:",
+  "email.on.help":
+    "Linking a name only stores the link (nothing is copied into Variables) and applies from the next deploy. To review or undo, use <link>E-mail → Link to project variables</link>.",
+  "email.unreachable": "I could not check project e-mail right now. See its state in <link>Project e-mail</link>.",
+  "email.state.provided": "provided by project e-mail",
+  "email.state.linked": "provided by project e-mail (linked to {source})",
+  "email.state.suggest": "missing — can be linked to {source}",
+  "email.state.off": "missing — project e-mail can provide it",
+  "email.state.manual": "missing — fill it in by hand",
+  "email.state.set": "filled in here",
+  "email.state.unavailable": "missing — project e-mail does not provide this value right now",
+  "email.collision.direct":
+    "{name} is filled in here and replaces the project e-mail value on deploy. Delete the row to use the e-mail value.",
+  "email.collision.linked":
+    "{name} is linked to {source}: the value saved here is ignored on deploy (the link wins). Delete the row to avoid confusion.",
+  "email.link.preview": "Will be linked: {pairs}. The panel stores only the link; nothing is copied into Variables.",
+  "email.link.one": "Link {name} to the {source} value",
+  "email.link.all": "Link all suggested ({count})",
+  "email.link.limit": "Cannot suggest links: the limit is {max} linked variables per project.",
+  "email.link.failed": "I could not link {names}.",
+  "email.link.retry": "Try again.",
+  "email.linked": "Linked: {names}. Applies from the next deploy.",
+  "email.manual.hint":
+    "<mono>{name}</mono> is not provided by project e-mail: fill it in by hand. The panel delivers port 587 with STARTTLS, so the typical value is <mono>{value}</mono> (port 465, implicit TLS, would be true). Check what your app expects.",
+  "email.manual.generic":
+    "<mono>{name}</mono> is not provided by project e-mail: fill it in by hand as your app expects (the panel delivers port 587 with STARTTLS).",
+  "email.manual.add": "Add {name}={value}",
+  "email.manual.added": "{name} added to the list. Click Save variables to apply it.",
   "example.count_one": "1 variable from .env.example has no value.",
   "example.count_other": "{count} variables from .env.example have no value.",
   "example.help":

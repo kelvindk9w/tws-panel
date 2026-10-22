@@ -344,6 +344,9 @@ export const PROJECT_EMAIL_VALUE_KEYS = [
 ] as const;
 export type ProjectEmailValueKey = (typeof PROJECT_EMAIL_VALUE_KEYS)[number];
 
+/** Quantas variáveis do app podem ser ligadas aos valores do e-mail do projeto. */
+export const MAX_PROJECT_EMAIL_LINKS = 30;
+
 /** Mesmo padrão das Variáveis do projeto (apps/server/src/services/project-env.ts). */
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 /** Nomes que mudam o compose, o Docker ou o próprio sistema do container. */
