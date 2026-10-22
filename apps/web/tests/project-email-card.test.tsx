@@ -729,7 +729,7 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     // o painel não sabe a senha dela: sem "manter"
     expect(screen.queryByLabelText("Manter a senha que o painel já guarda")).not.toBeInTheDocument();
     expect(screen.getByText(/Não troque a senha dela direto no webmail/)).toBeInTheDocument();
-    expect(screen.getByText(/Desativar o e-mail do projeto solta a caixa/)).toBeInTheDocument();
+    expect(screen.getByText(/Desativar o e-mail do projeto solta uma caixa que já existia/)).toBeInTheDocument();
     expect(screen.getByLabelText("Senha atual da caixa")).toHaveAttribute("type", "password");
   });
 

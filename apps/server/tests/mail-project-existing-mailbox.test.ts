@@ -640,5 +640,34 @@ describe("senhas de app e 2FA sobrevivem, e a caixa de outro projeto não é lev
     await service().listMailboxes("exemplo.com");
     expect((await stored()).mailboxes["loja@exemplo.com"]!.projectId).toBe("p1");
   });
-});
 
+  it("'Criar uma caixa nova' no endereço da caixa criada para A (e desativada) também é recusado, sem trocar a senha de A", async () => {
+    existing = [
+      { id: "p1", slug: "loja", name: "Loja Royal" },
+      { id: "p2", slug: "blog", name: "Blog" },
+    ];
+    await seed({});
+    const svc = service();
+    await svc.enableProjectEmail(loja, "exemplo.com", { fromLocalPart: "loja-a", password: "senha-da-loja-forte-1" });
+    await svc.disableProjectEmail("p1");
+    passwordCalls.length = 0;
+    const err = await svc.enableProjectEmail(blog, "exemplo.com", { fromLocalPart: "loja-a", password: "senha-do-blog-forte-1" }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ statusCode: 409, code: "mailbox_taken_by_project" });
+    expect((err as Error).message).toContain("Loja Royal");
+    expect((err as Error).message).toContain("foi criada para ele, no e-mail ou na aba Caixas dele");
+    expect(passwordCalls).toEqual([]);
+    expect((await stored()).mailboxes["loja-a@exemplo.com"]).toMatchObject({ projectId: "p1", password: "senha-da-loja-forte-1" });
+    // o próprio A reativa normalmente
+    await expect(svc.enableProjectEmail(loja, "exemplo.com", { fromLocalPart: "loja-a", password: "outra-senha-forte-1" })).resolves.toBeTruthy();
+  });
+
+  it("campos internos (external, ownerBefore, senha) não saem por nenhuma resposta do serviço", async () => {
+    existing = [{ id: "p1", slug: "loja", name: "Loja Royal" }];
+    await seed({ "suporte@exemplo.com": box("suporte@exemplo.com", "user", { projectId: "p1" }) });
+    const svc = service();
+    const res = await connect(svc, loja, "suporte", { mode: "keep_password" });
+    expect((await stored()).mailboxes["suporte@exemplo.com"]).toMatchObject({ external: true, ownerBefore: "p1" });
+    const out = JSON.stringify([res, await svc.listMailboxes("exemplo.com"), await svc.listUsableMailboxes(loja, "exemplo.com"), await svc.changeMailboxPassword("suporte@exemplo.com", "senha-nova-forte-1")]);
+    for (const leak of ["external", "ownerBefore", "senha-guardada-1", "senha-nova-forte-1"]) expect(out).not.toContain(leak);
+  });
+});

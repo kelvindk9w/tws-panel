@@ -157,7 +157,7 @@
     {
       "status": 409,
       "codigo": "mailbox_taken_by_project",
-      "quando": "useExistingMailbox com caixa que o e-mail de outro projeto QUE EXISTE usa (registro em data.projects; Desativar o e-mail dele a libera) ou que foi criada na aba Caixas de outro projeto que existe (projectId dele; só ele pode usá-la; sem a lista de projetos, vale como \"existe\"). A mensagem muda conforme o caso.",
+      "quando": "useExistingMailbox com caixa que o e-mail de outro projeto QUE EXISTE usa (registro em data.projects; Desativar o e-mail dele a libera) ou que foi criada para outro projeto que existe (aba Caixas dele ou como o e-mail dele, mesmo desativado: projectId dele; só ele pode usá-la; vale também em 'Criar uma caixa nova' no mesmo endereço; sem a lista de projetos, vale como \"existe\"). A mensagem muda conforme o caso.",
       "mensagem": "A caixa {endereço} já é usada pelo projeto {nome}. Desative o e-mail dele antes."
     },
     {

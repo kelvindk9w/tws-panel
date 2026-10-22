@@ -1664,11 +1664,13 @@ export class MailService {
     opts: { fromLocalPart?: string; fromName?: string; password?: string; generatePassword?: boolean } = {},
   ): Promise<{ email: ProjectEmailConfig; generatedPassword?: string }> {
     await this.ensureLoaded();
-    await this.purgeOrphanProjects();
+    const live = await this.purgeOrphanProjects();
     const domain = this.requireDomain(domainName);
     const local = opts.fromLocalPart ? normalizeLocalPart(opts.fromLocalPart) : project.slug;
     const address = `${local}@${domain.name}`;
     this.requireFreeAddress(address, project);
+    // caixa criada para outro projeto que existe (mesmo desativada): não passa para este, nem criando "nova"
+    if (this.data.mailboxes[address]) this.requireNotUsedByOtherProject(address, project.id, live);
 
     const previous = this.data.projects[project.id];
     const existing = this.data.mailboxes[address];
@@ -1922,7 +1924,7 @@ export class MailService {
       "mailbox_taken_by_project",
       other.viaRegistry
         ? `A caixa ${address} já é usada pelo projeto ${name}. Desative o e-mail dele antes.`
-        : `A caixa ${address} pertence ao projeto ${name} (foi criada na aba Caixas dele) e só pode ser usada por ele.`,
+        : `A caixa ${address} pertence ao projeto ${name} (foi criada para ele, no e-mail ou na aba Caixas dele) e só pode ser usada por ele.`,
     );
   }
 
