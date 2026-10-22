@@ -158,9 +158,9 @@ describe("tradução do 'recomeçar' (en)", () => {
     const botao = await screen.findByRole("button", { name: /Apagar e recomeçar/ });
     fireEvent.change(screen.getByLabelText(/Sua senha atual/), { target: { value: "x" } });
     fireEvent.change(screen.getByLabelText(/Código da verificação em duas etapas/), { target: { value: "1" } });
-    fireEvent.change(screen.getByLabelText(/Digite recomeçar/), { target: { value: "restart" } });
+    fireEvent.change(screen.getByLabelText(/Digite a palavra recomeçar/), { target: { value: "restart" } });
     expect(botao).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/Digite recomeçar/), { target: { value: "recomeçar" } });
+    fireEvent.change(screen.getByLabelText(/Digite a palavra recomeçar/), { target: { value: "recomeçar" } });
     expect(botao).toBeEnabled();
   });
 });

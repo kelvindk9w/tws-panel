@@ -52,6 +52,7 @@ termo novo entra aqui antes de entrar nos dicionários.
 | verificar | check / verify | "verify" para DNS/domínio/propriedade; "check" para estado geral |
 | ativo / inativo | active / inactive | |
 | em execução / parado | running / stopped | |
+| palavra de confirmação (digitar para confirmar) | confirmation word | em fonte de código, com dica de que é literal e botão de copiar (ConfirmWordInput) |
 | dispensar (um aviso) | dismiss | aviso da restauração "O painel antigo tinha X ativo" |
 | sincronizar (com o servidor de e-mail) | sync (with the mail server) | cadastra no painel os domínios e caixas que o servidor de e-mail já tem; não ativa nada nem lê senhas |
 | reparar | repair | reaplica a configuração do servidor de e-mail com a senha do painel e o reinicia, sem apagar dados; também é tentado uma vez, sozinho, ao sincronizar |

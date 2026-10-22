@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ConfirmWordInput } from "@/components/ConfirmWordInput";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { CertificateCard } from "@/pages/CertificatesPage";
 import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
@@ -473,15 +474,14 @@ export function PanelDomainSettings() {
                   />
                 </p>
                 <Command text={status.reactivateCommand} testId="reactivate-command" />
-                <label htmlFor="disable-confirm" className="font-medium">
-                  {t("panelDomain.ip.typeToConfirm", { domain: domain ?? "" })}
-                </label>
-                <Input
+                <ConfirmWordInput
                   id="disable-confirm"
+                  word={domain ?? ""}
                   value={typed}
-                  onChange={(e) => setTyped(e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
+                  onChange={setTyped}
+                  labelKey="panelDomain.ip.typeToConfirm"
+                  hintKey="panelDomain.ip.typeToConfirmHint"
+                  params={{ domain: domain ?? "" }}
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button variant="outline" onClick={() => setConfirmDisable(false)} disabled={busy !== null}>

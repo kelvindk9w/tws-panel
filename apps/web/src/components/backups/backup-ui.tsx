@@ -23,6 +23,7 @@ import {
   type BackupVerifySummary,
 } from "@paas/core";
 import { Link } from "react-router";
+import { ConfirmWordInput } from "@/components/ConfirmWordInput";
 import { apiErrorText, formatDateTime, formatNumber, lowerCase, t, Trans, useI18n, type Key } from "@/i18n";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -614,6 +615,12 @@ function confirmWord(target: RestoreTarget): string {
   return target.kind === "panel" ? t("backups.restore.confirmWord.panel") : target.kind === "email" ? t("backups.restore.confirmWord.email") : target.name;
 }
 
+const RESTORE_CONFIRM_HINT: Record<RestoreTarget["kind"], Key> = {
+  project: "backups.restore.confirmHint.project",
+  email: "backups.restore.confirmHint.email",
+  panel: "backups.restore.confirmHint.panel",
+};
+
 const RESTORE_WARNING: Record<RestoreTarget["kind"], Key> = {
   project: "backups.restore.warning.project",
   email: "backups.restore.warning.email",
@@ -920,12 +927,14 @@ export function RestoreDialog({
                 )}
               </div>
             )}
-            <div className="flex flex-col gap-1.5 text-sm">
-              <label htmlFor="restore-confirm" className="font-medium">
-                <Trans k="backups.restore.confirmLabel" params={{ word }} components={{ b: <strong /> }} />
-              </label>
-              <Input id="restore-confirm" autoComplete="off" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-            </div>
+            <ConfirmWordInput
+              id="restore-confirm"
+              word={word}
+              value={confirm}
+              onChange={setConfirm}
+              labelKey={target.kind === "project" ? "backups.restore.confirmLabel.name" : "backups.restore.confirmLabel.word"}
+              hintKey={RESTORE_CONFIRM_HINT[target.kind]}
+            />
             <Feedback error={error} notice={null} />
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={onClose}>

@@ -4,6 +4,7 @@ import type { AdminUser, TwoFactorStatusResponse } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmWordInput } from "@/components/ConfirmWordInput";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
@@ -125,16 +126,14 @@ function RestartZone() {
                   className="font-mono tracking-widest"
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="rs-confirm" className="font-medium">
-                  <Trans
-                    k="setup.done.restart.confirm"
-                    params={{ word: t("setup.done.restart.confirmWord") }}
-                    components={{ code: <code className="rounded bg-muted px-1 font-mono text-foreground" /> }}
-                  />
-                </label>
-                <Input id="rs-confirm" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" />
-              </div>
+              <ConfirmWordInput
+                id="rs-confirm"
+                word={t("setup.done.restart.confirmWord")}
+                value={confirm}
+                onChange={setConfirm}
+                labelKey="setup.done.restart.confirm"
+                hintKey="setup.done.restart.confirmHint"
+              />
               {error && (
                 <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
                   {error}

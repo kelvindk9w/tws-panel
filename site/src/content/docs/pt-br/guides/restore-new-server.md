@@ -138,7 +138,7 @@ não abre os backups, confira o kit de novo.
 1. No passo 3, clique em **Ver o que existe no armazenamento**.
 2. No bloco **Painel**, clique em **Restaurar o painel**.
 3. Escolha a data do **último backup da VPS antiga**, a que você anotou no passo 2. Não presuma que
-   a primeira data da lista é a certa. Confirme digitando a palavra que a tela mostra: `painel` com a interface em português, `panel` com a interface em inglês.
+   a primeira data da lista é a certa. Confirme digitando a palavra que a tela mostra (em fonte de código, com botão de copiar): `painel` com a interface em português, `panel` com a interface em inglês. É a palavra literal, não o domínio nem o nome do painel.
 4. Espere. O painel reinicia sozinho.
 
 **O que conferir:** abra de novo o endereço da VPS nova (`https://203-0-113-10.sslip.io`, com o IP
@@ -252,7 +252,7 @@ IP novo. Depois disso, use **Tentar emitir agora** nessa mesma página.
 
 ### 8. Restaure o e-mail por último
 
-1. No cartão, clique em **Restaurar o e-mail**, escolha a data do backup do e-mail que você anotou no passo 2 e confirme digitando a palavra que a tela mostra: `e-mail` com a interface em português, `email` com a interface em inglês. Se a restauração
+1. No cartão, clique em **Restaurar o e-mail**, escolha a data do backup do e-mail que você anotou no passo 2 e confirme digitando a palavra que a tela mostra: `e-mail` com a interface em português, `email` com a interface em inglês. É a palavra literal, não o seu endereço de e-mail. Se a restauração
    terminar com o aviso "O servidor de e-mail ainda não existe nesta VPS: abra a página E-mail e
    clique em Iniciar" (aviso do servidor, sempre em português), abra **E-mail** e clique em **Iniciar servidor**. Ele sobe com os dados
    restaurados.

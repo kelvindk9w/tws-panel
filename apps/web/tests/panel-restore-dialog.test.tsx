@@ -13,6 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackupRecord } from "@paas/core";
+import { setLocale } from "../src/i18n";
 
 const apiFetchMock = vi.fn();
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -257,5 +258,73 @@ describe("RestoreDialog — resultado lista o que o painel antigo tinha ativo", 
     fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), { target: { value: "E-mail" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Restaurar" }));
     expect(await within(dialog).findByText(/O painel antigo tinha o webmail ativo\. Ativar agora\?/)).toBeInTheDocument();
+  });
+});
+
+describe("RestoreDialog — palavra de confirmação inequívoca", () => {
+  const EMAIL_TARGET: RestoreTarget = { id: "email", kind: "email", name: "E-mail" };
+  const show = (target: RestoreTarget) => {
+    render(
+      <MemoryRouter>
+        <RestoreDialog target={target} onClose={() => undefined} points={POINTS} pollMs={5} />
+      </MemoryRouter>,
+    );
+    return screen.getByTestId("restore-dialog");
+  };
+
+  it.each([
+    ["pt-BR", "e-mail", /Para confirmar, digite a palavra/, "Digite exatamente a palavra e-mail (não é o seu endereço de e-mail)."],
+    ["en", "email", /To confirm, type the word/, "Type exactly the word email (it is not your email address)."],
+  ] as const)("(%s) alvo e-mail: palavra literal em código, dica de que não é o endereço, placeholder e confirmação tolerante", (loc, word, label, hint) => {
+    setLocale(loc);
+    const dialog = show(EMAIL_TARGET);
+    const input = within(dialog).getByLabelText(label);
+    expect(within(dialog).getByText(word, { selector: "code" })).toBeInTheDocument();
+    expect(within(dialog).getByText(hint)).toBeInTheDocument();
+    expect(input).toHaveAttribute("placeholder", word);
+    const go = within(dialog).getByRole("button", { name: loc === "en" ? "Restore" : "Restaurar" });
+    // o endereço de e-mail da pessoa NÃO confirma
+    fireEvent.change(input, { target: { value: "ana@example.com" } });
+    expect(go).toBeDisabled();
+    // conter a palavra não basta: tem de ser exatamente ela
+    fireEvent.change(input, { target: { value: `${word}@ana.com` } });
+    expect(go).toBeDisabled();
+    // a palavra, em qualquer caixa e com espaços, confirma (a palavra em português também)
+    fireEvent.change(input, { target: { value: `  ${word.toUpperCase()} ` } });
+    expect(go).toBeEnabled();
+    fireEvent.change(input, { target: { value: "e-mail" } });
+    expect(go).toBeEnabled();
+  });
+
+  it.each([
+    ["pt-BR", "painel", /Para confirmar, digite a palavra/, "Digite exatamente a palavra painel (não é o domínio nem o nome do painel)."],
+    ["en", "panel", /To confirm, type the word/, "Type exactly the word panel (it is not the panel's domain or name)."],
+  ] as const)("(%s) alvo painel: mesma forma e a confirmação não enfraquece", (loc, word, label, hint) => {
+    setLocale(loc);
+    const dialog = show(PANEL);
+    const input = within(dialog).getByLabelText(label);
+    expect(within(dialog).getByText(word, { selector: "code" })).toBeInTheDocument();
+    expect(within(dialog).getByText(hint)).toBeInTheDocument();
+    const go = within(dialog).getByRole("button", { name: loc === "en" ? "Restore" : "Restaurar" });
+    fireEvent.change(input, { target: { value: "pain" } });
+    expect(go).toBeDisabled();
+    fireEvent.change(input, { target: { value: word } });
+    expect(go).toBeEnabled();
+  });
+
+  it.each([
+    ["pt-BR", /Para confirmar, digite o nome do projeto/],
+    ["en", /To confirm, type the project name/],
+  ] as const)("(%s) alvo projeto: pede o nome, em código, com o nome como placeholder", (loc, label) => {
+    setLocale(loc);
+    const dialog = show(PROJECT);
+    const input = within(dialog).getByLabelText(label);
+    expect(within(dialog).getByText("Loja", { selector: "code" })).toBeInTheDocument();
+    expect(input).toHaveAttribute("placeholder", "Loja");
+    const go = within(dialog).getByRole("button", { name: loc === "en" ? "Restore" : "Restaurar" });
+    fireEvent.change(input, { target: { value: "painel" } });
+    expect(go).toBeDisabled();
+    fireEvent.change(input, { target: { value: "loja" } });
+    expect(go).toBeEnabled();
   });
 });

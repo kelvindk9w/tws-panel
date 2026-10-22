@@ -8,6 +8,7 @@ export default {
   // Ações genéricas
   "copy": "Copy",
   "copied": "Copied",
+  "confirmWord.copy": "Copy {word}",
   "combobox.close": "Close the list",
   "combobox.open": "Open the list",
   "combobox.empty": "Nothing found.",

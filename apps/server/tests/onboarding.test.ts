@@ -259,12 +259,23 @@ describe("backups fora da VPS", () => {
     expect(backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: "sem espaço" }).missing).toMatch(/sem espaço/);
   });
 
-  it("destino com backups de OUTRO painel: não convida a fazer backup, manda restaurar primeiro", () => {
+  it("destino com backups de OUTRO painel: dois caminhos (restaurar o antigo OU o primeiro backup à mão) e o aviso da retenção", () => {
     const s = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null, foreignBackupsHeld: true });
     expect(s.status).toBe("in_progress");
     expect(s.missingCode).toBe("backups-restore-first");
-    expect(s.missing).toMatch(/Restaure primeiro o painel antigo/);
-    expect(s.missing).not.toMatch(/Fazer backup agora/);
+    expect(s.missing).toMatch(/já guarda backups de outro painel/);
+    expect(s.missing).toMatch(/continuar o painel antigo, restaure-o primeiro/);
+    expect(s.missing).toMatch(/painel novo/);
+    expect(s.missing).toMatch(/Configurações → Backups \(Fazer backup agora\)/);
+    expect(s.missing).toMatch(/não é bloqueado/);
+    expect(s.missing).toMatch(/a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta/);
+    expect(s.missing).toMatch(/inclusive as do painel antigo/);
+    expect(s.missing).toMatch(/baixe-as ANTES de fazer o primeiro backup ou use outro bucket\/pasta/);
+    // bucket vazio (usuário realmente novo): só o convite ao backup, sem falar em painel antigo
+    const empty = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null });
+    expect(empty.missingCode).toBeUndefined();
+    expect(empty.missing).toMatch(/Fazer backup agora/);
+    expect(empty.missing).not.toMatch(/painel antigo|retenção/);
     // não deu para conferir o armazenamento: também NÃO convida a fazer backup
     const u = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null, foreignBackupsHeld: "unknown" });
     expect(u.status).toBe("in_progress");
