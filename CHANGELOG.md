@@ -85,6 +85,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
+- Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
+  aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
+  filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar
+  em **Exibir** (cada exibição é auditada), com retenção configurável (90 dias para os dados da
+  mensagem, 14 dias para assunto e corpo), limites de tamanho, opção de não guardar assunto e corpo
+  por projeto ou para todos, e conteúdo fora dos backups do painel. Assunto e corpo são guardados
+  só das caixas de projeto (o que o app envia); webmail e caixas pessoais ficam apenas com de,
+  para, hora, estado e erro.
 - Entregabilidade: `Message-ID` e `Date` completados, relatórios DMARC entregues na `postmaster@`
   e saída só por IPv4.
 

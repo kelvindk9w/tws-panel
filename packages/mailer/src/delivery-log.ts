@@ -299,7 +299,11 @@ export class DeliveryLogReader {
     const from = text(line.all("from")[0]);
     if (!queueId || !from || from === "<>") return [];
     const pending = line.all("to").find(Array.isArray)?.filter((v): v is string => typeof v === "string") ?? [];
-    const rcpt = text(line.all("to").filter((v) => typeof v === "string").at(-1));
+    // O texto devolvido pelo servidor remoto pode trazer ", to = ..." e virar campo: o destinatário
+    // só vale se estiver entre os da mensagem (a lista do trecho de abertura da linha).
+    const known = new Set(pending.map((a) => a.toLowerCase()));
+    const stringTos = line.all("to").filter((v): v is string => typeof v === "string");
+    const rcpt = text((known.size > 0 ? stringTos.filter((a) => known.has(a.toLowerCase())) : stringTos).at(-1));
     const t = this.track(queueId);
 
     const event = (to: string, state: MailDeliveryEvent["state"], r: Response, nextRetryAt: string | null = null): MailDeliveryEvent => ({

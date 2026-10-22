@@ -22,6 +22,7 @@ import { MissingEnvModal } from "@/components/project/MissingEnvModal";
 import { ProjectEmailCard } from "@/components/project/ProjectEmailCard";
 import { UpdateNotice } from "@/components/project/UpdateNotice";
 import { useProjectUpdateStatus } from "@/lib/update-status";
+import { SendLogSection } from "@/components/envios/SendLogSection";
 import { ProjectTimezoneCard } from "@/components/project/ProjectTimezoneCard";
 import { ProjectBackupsCard } from "@/components/project/ProjectBackupsCard";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
@@ -40,6 +41,7 @@ import {
   Mail,
   Play,
   Rocket,
+  Send,
   Settings,
   ShieldAlert,
   Square,
@@ -189,6 +191,7 @@ const PROJECT_SECTIONS = [
   { key: "git", label: "projects.detail.nav.git", icon: GitBranch },
   { key: "env", label: "projects.detail.nav.env", icon: Variable },
   { key: "email", label: "projects.detail.nav.email", icon: Mail },
+  { key: "sends", label: "projects.detail.nav.sends", icon: Send },
   { key: "backups", label: "projects.detail.nav.backups", icon: DatabaseBackup },
   { key: "settings", label: "projects.detail.nav.settings", icon: Settings },
 ] as const satisfies ReadonlyArray<{ key: string; label: Key; icon: unknown }>;
@@ -865,6 +868,8 @@ export function ProjectDetailPage() {
           projectDomain={project.domain ?? undefined}
         />
       )}
+
+      {section === "sends" && <SendLogSection projectId={project.id} />}
 
       {section === "deploys" && <DeployHistory jobs={jobs} onOpen={setOpenJobId} />}
 

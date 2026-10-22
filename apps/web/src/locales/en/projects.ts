@@ -387,4 +387,5 @@ export default {
   "update.deployButton": "Deploy now",
   "update.hint": "To update the code, click Deploy at the top of the page. The panel fetches the new code from the configured branch and rebuilds the project. Nothing is published on its own.",
   "detail.deployTooltip": "Fetches the new code from the configured branch, rebuilds and publishes the project.",
+  "detail.nav.sends": "Sends",
 } as const;

@@ -225,6 +225,13 @@ minutes of inactivity, and 10 failed sign-ins from the same IP within 10 minutes
 - **History**: delivered, rejected, deferred and canceled messages from the last 30 days (metadata only,
   never subject or body).
 - **Volume:** chart of the last 14 days, rejection rate and totals per project.
+- **Outgoing:** the emails each project's app sent over SMTP (from, to, time, state and the error
+  reason in plain language, with technical details collapsed). Each project has its own **Sends**
+  section. Subject and body are **hidden**: click **Show** (each reveal is written to the audit log,
+  without the content). They are kept for 14 days (message data for 90), with no attachments, and
+  are **not included in panel backups**. Only **project** mailboxes (what the app sends) keep
+  subject and body; webmail and personal mailboxes keep only from, to, time and state. You can stop storing subject and body, per project or for
+  everything, on the **Privacy** tab.
 - **Reputation**: daily lookup against blocklists (Spamhaus ZEN and DBL, SpamCop, Barracuda),
   with each list's test point so it never says "clean" without having checked. It accepts Spamhaus's
   free DQS key.

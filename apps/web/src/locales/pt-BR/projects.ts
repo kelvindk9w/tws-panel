@@ -387,4 +387,5 @@ export default {
   "update.deployButton": "Fazer o deploy",
   "update.hint": "Para atualizar o código, clique em Deploy, no topo da página. O painel busca o código novo da branch configurada e reconstrói o projeto. Nada é publicado sozinho.",
   "detail.deployTooltip": "Busca o código novo da branch configurada, reconstrói e publica o projeto.",
+  "detail.nav.sends": "Envios",
 } as const;

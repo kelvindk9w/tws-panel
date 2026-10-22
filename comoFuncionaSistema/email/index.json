@@ -25,12 +25,14 @@
     "Webmail (04/10/2026, ver webmail.json): botão 'Ativar webmail' na página E-mail sobe o container paas-webmail (Roundcube 1.7.4, imagem fixada por tag e digest) na paas-net, sem porta publicada, falando só com o paas-stalwart (IMAP 993 e SMTP 465, mesmo login). O bloco de cada mail.<domínio> no Caddy passa de página estática a reverse_proxy para ele (o certificado continua sendo emitido pelo mesmo bloco). O painel isenta o IP do webmail no bloqueio automático do Stalwart e bloqueia no Caddy o IP real de quem erra a senha demais.",
     "Blacklist (GET /api/mail/blacklist e página Envios → Reputação): consulta DNSBLs (Spamhaus ZEN, SpamCop, Barracuda para o IP; Spamhaus DBL para cada domínio) pelo resolvedor do sistema. Desde 04/10/2026 cada zona é testada com o ponto de teste oficial (127.0.0.2 / dbltest.com): sem resposta ao teste o resultado é 'não deu para verificar', nunca 'limpo'; a Spamhaus aceita a chave DQS gratuita. Roda uma vez por dia e no botão, agendada pelo próprio plugin de e-mail (antes era um gancho do Monitoramento que nunca rodou). Detalhes em envios.json.",
     "Cadastro x Stalwart (21/10/2026): o painel lista domínios e caixas do SEU cadastro (data/mail/mail.json), não do Stalwart. Depois de restaurar o backup do e-mail o Stalwart volta com os domínios e caixas de antes e o cadastro não os conhecia (VPS nova: o backup tinha 2 domínios e 4 caixas e o painel mostrava só o que tinha sido criado nela). Agora, no fim da restauração do e-mail (com o Stalwart respondendo e autenticando) e no botão 'Sincronizar com o servidor de e-mail' (POST /api/mail/sync, ver sincronizar.json), MailService.adoptFromStalwart lê o Stalwart (/api/principal, tipos domain e individual) e ADOTA no cadastro o que falta: nada é ativado, o que já está cadastrado não muda, é idempotente, a senha da caixa NUNCA é lida (o campo secrets é descartado no cliente), a caixa adotada fica sem senha conhecida (Trocar senha), o domínio entra com o DNS 'não verificado', abuse@/dmarc@ não viram caixas (são endereços da postmaster@) e o endereço <slug>@ de um projeto cadastrado vira caixa dele. Chamadas simultâneas viram uma só. 401/403 do Stalwart = mail_auth_failed (mesma mensagem e mesmo reparo das demais telas); Stalwart fora do ar = 502 mail_unreachable. Nada é apagado em falha.",
+    "Envios dos apps por SMTP (22/10/2026, ver saidas.json): o Stalwart avisa o painel (MTA hook, rede interna, segredo derivado do adminSecret) de cada mensagem enviada com login; o painel guarda metadados (90 dias) e assunto/corpo (14 dias, só sob 'Exibir', auditado, fora do backup). Falha do registro nunca atrasa nem bloqueia o envio.",
     "Página Envios (04/10/2026, /mail/envios): fila do Stalwart com Tentar agora/Cancelar, histórico lido do registro do container (docker logs a cada 5 min, só metadados, 30 dias em data/mail/envios), volume de 14 dias, reputação e nota de entregabilidade. Ver envios.json."
   ],
   "arquivosFonte": {
     "rotas": [
       "apps/server/src/routes/mail.ts",
-      "apps/server/src/routes/mail-envios.ts"
+      "apps/server/src/routes/mail-envios.ts",
+      "apps/server/src/routes/mail-send-routes.ts"
     ],
     "servicos": [
       "apps/server/src/services/mail-service.ts",
@@ -38,7 +40,10 @@
       "apps/server/src/services/mail-auth-error.ts",
       "apps/server/src/services/mail-envios-service.ts",
       "apps/server/src/services/mail-reputation-service.ts",
-      "apps/server/src/services/stalwart-logs.ts"
+      "apps/server/src/services/stalwart-logs.ts",
+      "apps/server/src/services/mail-send-log-service.ts",
+      "apps/server/src/services/mail-send-store.ts",
+      "apps/server/src/services/mail-send-hook-server.ts"
     ],
     "pacotes": [
       "packages/mailer/src/server.ts",
@@ -60,7 +65,10 @@
       "packages/mailer/src/delivery-log.ts",
       "packages/mailer/src/queue-view.ts",
       "packages/mailer/src/deliverability-score.ts",
-      "packages/core/src/mail-envios.ts"
+      "packages/core/src/mail-envios.ts",
+      "packages/core/src/mail-send-log.ts",
+      "packages/mailer/src/send-hook.ts",
+      "packages/mailer/src/send-errors.ts"
     ],
     "web": [
       "apps/web/src/pages/MailPage.tsx",
@@ -113,7 +121,17 @@
       "apps/server/tests/mail-adopt-service.test.ts",
       "apps/server/tests/routes-mail-sync.test.ts",
       "packages/mailer/tests/client-principals.test.ts",
-      "apps/web/tests/mail-envios-page.test.tsx"
+      "apps/web/tests/mail-envios-page.test.tsx",
+      "apps/web/tests/mail-send-log.test.tsx",
+      "packages/mailer/tests/send-hook.test.ts",
+      "packages/mailer/tests/send-errors.test.ts",
+      "packages/mailer/tests/send-hook-config.test.ts",
+      "apps/server/tests/mail-send-store.test.ts",
+      "apps/server/tests/mail-send-log-service.test.ts",
+      "apps/server/tests/mail-send-hook-secret.test.ts",
+      "apps/server/tests/mail-send-hook-server.test.ts",
+      "apps/server/tests/routes-mail-send.test.ts",
+      "scripts/test-mail-send-log.mts"
     ]
   },
   "persistencia": [
@@ -136,6 +154,11 @@
       "arquivo": "data/mail/envios/AAAA-MM-DD.jsonl e estado.json",
       "formato": "jsonl/json 0600",
       "conteudo": "Histórico de entregas (só metadados do envelope e a resposta do destino), 30 dias; cursor da leitura do registro. Ver envios.json."
+    },
+    {
+      "arquivo": "data/mail/envios/saidas/AAAA-MM-DD.jsonl, data/mail/envios/saidas-config.json e data/envios-conteudo/",
+      "formato": "jsonl/json 0600 (pastas 0700)",
+      "conteudo": "Registro dos e-mails enviados pelos apps (metadados 90 dias, no backup) e assunto/corpo (14 dias, FORA do backup). Ver saidas.json."
     },
     {
       "arquivo": "data/mail/reputacao.json",
@@ -171,6 +194,10 @@
     { "id": "listar-caixas-usaveis-email-projeto", "metodo": "GET", "url": "/api/projects/:id/email/mailboxes", "resumo": "Caixas do domínio que o e-mail do projeto pode usar (usuário e projeto sem uso), sem senha.", "arquivo": "listar-caixas-usaveis-email-projeto.json" },
     { "id": "desabilitar-email-projeto", "metodo": "DELETE", "url": "/api/projects/:id/email", "resumo": "Desativa a injeção SMTP no próximo deploy do projeto.", "arquivo": "desabilitar-email-projeto.json" },
     { "id": "ligar-variaveis-email-projeto", "metodo": "PUT", "url": "/api/projects/:id/email/links", "resumo": "Liga variáveis do app a valores do e-mail do projeto (guarda só o mapeamento; o deploy entrega o valor atual).", "arquivo": "ligar-variaveis-email-projeto.json" },
+    {"id": "saidas-lista", "metodo": "GET", "url": "/api/mail/envios/saidas", "resumo": "E-mails enviados pelos apps por SMTP (sem assunto/corpo), com filtros e páginas.", "arquivo": "saidas.json"},
+    {"id": "saidas-revelar", "metodo": "POST", "url": "/api/mail/envios/saidas/:msg/reveal", "resumo": "Exibe assunto e corpo de UMA mensagem (auditado).", "arquivo": "saidas.json"},
+    {"id": "saidas-config", "metodo": "PUT", "url": "/api/mail/envios/saidas/settings", "resumo": "Retenção, limites e gravação de assunto/corpo.", "arquivo": "saidas.json"},
+    {"id": "saidas-projeto", "metodo": "GET", "url": "/api/projects/:id/email/saidas", "resumo": "Envios só daquele projeto (e /reveal, /settings).", "arquivo": "saidas.json"},
     {"id": "envios-fila", "metodo": "GET", "url": "/api/mail/envios/queue", "resumo": "Fila do servidor de e-mail agora.", "arquivo": "envios.json"},
     {"id": "envios-tentar", "metodo": "POST", "url": "/api/mail/envios/queue/:id/retry", "resumo": "Tentar agora (no Stalwart 0.11.8, a última tentativa).", "arquivo": "envios.json"},
     {"id": "envios-cancelar", "metodo": "POST", "url": "/api/mail/envios/queue/:id/cancel", "resumo": "Tira a mensagem da fila.", "arquivo": "envios.json"},
@@ -188,6 +215,12 @@
       "rota": "/projects/:id/email",
       "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente, Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).",
       "arquivo": "tela-email-projeto.json"
+    },
+    {
+      "id": "saidas",
+      "rota": "/projects/:id/sends e /mail/envios?aba=saidas|privacidade",
+      "resumo": "Envios por SMTP dos apps: lista com filtros, erros explicados, assunto/corpo ocultos até 'Exibir', retenção configurável.",
+      "arquivo": "saidas.json"
     },
     {
       "id": "envios",
