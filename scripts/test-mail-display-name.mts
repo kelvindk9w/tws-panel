@@ -18,20 +18,22 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
-import { STALWART_IMAGE_REF } from "@paas/core";
-import { StalwartClient, renderConfigToml } from "@paas/mailer";
+import { STALWART_IMAGE_REF } from "../packages/core/src/index.js";
+import { StalwartClient, renderConfigToml } from "../packages/mailer/src/index.js";
 
 const run = promisify(execFile);
 const docker = (...args: string[]) => run("docker", args, { maxBuffer: 8 * 1024 * 1024 });
 
+// Modo "dentro": roda dentro de um container na rede interna (o host não alcança o IP de uma rede --internal).
+const INSIDE = process.env.TWS_DN_INSIDE_BASE ?? null;
 const suffix = randomBytes(4).toString("hex");
 const NAME = `tws-dn-test-${suffix}`;
 const NETWORK = `${NAME}-net`;
 const VOLUME = `${NAME}-data`;
-const ADMIN_SECRET = randomBytes(18).toString("base64url");
+const ADMIN_SECRET = process.env.TWS_DN_ADMIN_SECRET ?? randomBytes(18).toString("base64url");
 const DOMAIN = "example.com";
 const BOX = `contato@${DOMAIN}`;
-const PASSWORD = `Aa1-${randomBytes(12).toString("base64url")}`;
+const PASSWORD = process.env.TWS_DN_BOX_SECRET ?? `Aa1-${randomBytes(12).toString("base64url")}`;
 let passed = 0;
 
 function ok(msg: string): void {
@@ -53,7 +55,8 @@ async function cleanup(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  await docker("network", "create", "--internal", NETWORK);
+  // sub-rede explícita: com muitas redes no host o Docker pode ficar sem faixas livres (TWS_DN_SUBNET troca a faixa)
+  await docker("network", "create", "--internal", "--subnet", process.env.TWS_DN_SUBNET ?? "10.250.37.0/24", NETWORK);
   await docker("volume", "create", VOLUME);
   await docker(
     "create", "--name", NAME, "--network", NETWORK,
@@ -61,19 +64,30 @@ async function main(): Promise<void> {
     STALWART_IMAGE_REF,
   );
   // config.toml entregue por docker cp (como o painel faz)
-  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const path = await import("node:path");
   const dir = mkdtempSync(path.join(tmpdir(), "tws-dn-"));
   try {
-    writeFileSync(path.join(dir, "config.toml"), renderConfigToml(`mail.${DOMAIN}`, ADMIN_SECRET, [], { reportDomain: null }), { mode: 0o600 });
-    await docker("cp", path.join(dir, "config.toml"), `${NAME}:/opt/stalwart-mail/etc/config.toml`);
+    mkdirSync(path.join(dir, "etc"));
+    writeFileSync(path.join(dir, "etc", "config.toml"), renderConfigToml(`mail.${DOMAIN}`, ADMIN_SECRET, [], { reportDomain: null }), { mode: 0o600 });
+    await docker("cp", `${dir}/.`, `${NAME}:/opt/stalwart-mail`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
   await docker("start", NAME);
   const ip = (await docker("inspect", "-f", `{{(index .NetworkSettings.Networks "${NETWORK}").IPAddress}}`, NAME)).stdout.trim();
-  const base = `http://${ip}:8080`;
+  // O host não alcança uma rede --internal: os testes rodam num container Node na mesma rede, com o repositório
+  // montado só para leitura.
+  const out = await docker(
+    "run", "--rm", "--network", NETWORK, "--label", "tws.test=display-name", "-v", `${process.cwd()}:/work:ro`, "-w", "/work",
+    "-e", `TWS_DN_INSIDE_BASE=http://${ip}:8080`, "-e", `TWS_DN_ADMIN_SECRET=${ADMIN_SECRET}`, "-e", `TWS_DN_BOX_SECRET=${PASSWORD}`,
+    "node:22-alpine", "node_modules/.bin/tsx", "scripts/test-mail-display-name.mts",
+  );
+  console.log(out.stdout);
+}
+
+async function checks(base: string): Promise<void> {
   const client = new StalwartClient(base, "admin", ADMIN_SECRET);
 
   for (let i = 0; ; i += 1) {
@@ -92,7 +106,17 @@ async function main(): Promise<void> {
   ok("criar a caixa grava o nome em description");
 
   assert.equal(await client.mailboxPasswordMatches(BOX, PASSWORD), true);
+  // 2FA (otpauth://) e senha de app ($app$) dividem o campo secrets com a senha
+  await fetch(`${base}/api/principal/${encodeURIComponent(BOX)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", authorization: `Basic ${Buffer.from(`admin:${ADMIN_SECRET}`).toString("base64")}` },
+    body: JSON.stringify([
+      { action: "addItem", field: "secrets", value: "otpauth://totp/Example?secret=JBSWY3DPEHPK3PXP" },
+      { action: "addItem", field: "secrets", value: "$app$celular$not-a-real-hash" },
+    ]),
+  });
   const secretsBefore = (await rawPrincipal(base, BOX)).secrets;
+  assert.ok(Array.isArray(secretsBefore) && secretsBefore.length === 3);
   await client.addMailboxAlias(BOX, `alias@${DOMAIN}`);
 
   await client.setMailboxDisplayName(BOX, "Atendimento Ação 日本 😀 O'Neil");
@@ -129,9 +153,8 @@ async function main(): Promise<void> {
   console.log(`\n${passed} verificações passaram.`);
 }
 
-main()
+(INSIDE ? checks(INSIDE) : main().finally(cleanup))
   .catch((err) => {
     console.error(err);
     process.exitCode = 1;
-  })
-  .finally(cleanup);
+  });

@@ -324,7 +324,9 @@ export const MAILBOX_DISPLAY_NAME_MAX = 80;
 export const MAILBOX_DISPLAY_NAME_PATTERN =
   '^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069<>"\\\\]*$';
 
-export type DisplayNameResult = { ok: true; value: string } | { ok: false; reason: string };
+export type DisplayNameResult =
+  | { ok: true; value: string }
+  | { ok: false; reason: string; code: "not_text" | "invalid_chars" | "too_long" };
 
 /**
  * Valida e normaliza o nome de exibição: tira espaços das pontas e junta
@@ -333,17 +335,18 @@ export type DisplayNameResult = { ok: true; value: string } | { ok: false; reaso
  */
 export function normalizeDisplayName(raw: unknown): DisplayNameResult {
   if (raw === undefined || raw === null) return { ok: true, value: "" };
-  if (typeof raw !== "string") return { ok: false, reason: "O nome de exibição deve ser um texto." };
+  if (typeof raw !== "string") return { ok: false, code: "not_text", reason: "O nome de exibição deve ser um texto." };
   // Antes de aparar: o trim() levaria embora \t, \r e \n das pontas e o nome "passaria".
   if (!new RegExp(MAILBOX_DISPLAY_NAME_PATTERN, "u").test(raw)) {
     return {
       ok: false,
+      code: "invalid_chars",
       reason: "O nome de exibição não pode ter quebra de linha, caracteres de controle, < > aspas nem barra invertida.",
     };
   }
   const value = raw.trim().replace(/ {2,}/g, " ");
   if ([...value].length > MAILBOX_DISPLAY_NAME_MAX) {
-    return { ok: false, reason: `O nome de exibição pode ter no máximo ${MAILBOX_DISPLAY_NAME_MAX} caracteres.` };
+    return { ok: false, code: "too_long", reason: `O nome de exibição pode ter no máximo ${MAILBOX_DISPLAY_NAME_MAX} caracteres.` };
   }
   return { ok: true, value };
 }

@@ -881,3 +881,37 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The password entered is not this mailbox's password.");
   });
 });
+
+describe("ProjectEmailCard — nome de exibição (campo único das caixas)", () => {
+  it("nome com < > ou aspas: mostra o erro, marca o campo e não deixa ativar", async () => {
+    serve(OFF);
+    const user = userEvent.setup();
+    renderCard();
+    const field = await screen.findByLabelText("Nome de exibição");
+    await user.type(await screen.findByLabelText("Senha da caixa"), SENHA);
+    await user.type(screen.getByLabelText("Repita a senha"), SENHA);
+    await user.type(field, "Loja <x@exemplo.com>");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/Sem quebra de linha, caracteres de controle/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ativar e-mail/ })).toBeDisabled();
+    await user.clear(field);
+    expect(field).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByRole("button", { name: /Ativar e-mail/ })).toBeEnabled();
+  });
+
+  it("a dica diz que, em branco, vale o nome do projeto", async () => {
+    serve(OFF);
+    renderCard();
+    await screen.findByLabelText("Nome de exibição");
+    expect(screen.getAllByText(/Em branco, o painel usa o nome do projeto/).length).toBeGreaterThan(0);
+  });
+
+  it("ativado: diz de onde vem o From que o app usa (MAIL_FROM_NAME + MAIL_FROM) e que a mudança vale no próximo deploy", async () => {
+    serve(ON);
+    renderCard();
+    const note = await screen.findByTestId("from-source");
+    expect(note).toHaveTextContent(/MAIL_FROM_NAME e MAIL_FROM/);
+    expect(note).toHaveTextContent(/próximo deploy/);
+    expect(note).toHaveTextContent("contato@envio.exemplo.com.br");
+  });
+});

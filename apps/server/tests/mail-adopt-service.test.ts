@@ -546,3 +546,18 @@ describe("caixa adotada, sem senha conhecida", () => {
     expect(await service().envForProject(project)).toEqual({});
   });
 });
+
+describe("MailService.adoptFromStalwart — nome de exibição", () => {
+  it("o description válido do Stalwart vira o nome da caixa adotada; o inválido ou ausente é ignorado", async () => {
+    principals = principals.map((p) => {
+      if (p.name === "contato@envio.example.com") return { ...p, description: "  Contato   da Loja " };
+      if (p.name === "contato@cassp.example.com") return { ...p, description: "Oi <x@example.com>" };
+      return p;
+    });
+    await service().adoptFromStalwart();
+    const stored = await readStored();
+    expect(stored.mailboxes["contato@envio.example.com"]!.displayName).toBe("Contato da Loja");
+    expect(stored.mailboxes["contato@cassp.example.com"]!.displayName).toBeUndefined();
+    expect(stored.mailboxes["postmaster@cassp.example.com"]!.displayName).toBeUndefined();
+  });
+});

@@ -52,6 +52,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { TestEmailModal } from "@/components/mail/TestEmailCard";
 import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
+import { DisplayNameField, displayNameProblem } from "@/components/mail/DisplayNameField";
 import { DnsChecklistPanel } from "@/components/mail/DnsChecklistPanel";
 import { cn } from "@/lib/utils";
 import { MAILBOX_PASSWORD_MIN } from "@paas/core";
@@ -725,16 +726,13 @@ export function ProjectEmailCard({
                 </div>
               </label>
               )}
-              <label className="flex flex-col gap-1 text-sm">
-                <span>{t("mail.project.nameLabel")}</span>
-                <Input
-                  aria-label={t("mail.project.nameLabel")}
-                  placeholder={projectName}
-                  maxLength={80}
-                  value={fromName}
-                  onChange={(e) => setFromName(e.target.value)}
-                />
-              </label>
+              <DisplayNameField
+                label={t("mail.project.nameLabel")}
+                placeholder={projectName}
+                hintKey="mail.displayName.hintProject"
+                value={fromName}
+                onChange={setFromName}
+              />
             </div>
             {source === "existing" && usableError && <FocusedAlert>{usableError}</FocusedAlert>}
             {source === "existing" && (
@@ -783,7 +781,7 @@ export function ProjectEmailCard({
                 <Button
                   variant="success"
                   size="sm"
-                  disabled={busy || !selectedDomain || !existingReady}
+                  disabled={busy || !selectedDomain || !existingReady || displayNameProblem(fromName) !== null}
                   onClick={() => void saveExisting()}
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
@@ -793,7 +791,7 @@ export function ProjectEmailCard({
               <Button
                 variant="success"
                 size="sm"
-                disabled={busy || !selectedDomain || passwordProblem !== null}
+                disabled={busy || !selectedDomain || passwordProblem !== null || displayNameProblem(fromName) !== null}
                 onClick={() => void save()}
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
@@ -823,6 +821,9 @@ export function ProjectEmailCard({
               <p className="font-medium [overflow-wrap:anywhere]">{`${email.fromName ?? projectName} <${email.mailFrom}>`}</p>
               <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {t("mail.project.mailboxLine", { mailbox: email.mailbox ?? "" })}
+              </p>
+              <p data-testid="from-source" className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                {t("mail.project.fromSource", { address: email.mailFrom ?? "" })}
               </p>
             </div>
             {email.legacyAlias && (

@@ -2064,6 +2064,8 @@ export class MailService {
     if (SYSTEM_LOCAL_PARTS.has(local)) {
       throw httpError(409, "address_in_use", `O endereço ${address} é reservado do painel e não pode ser a caixa de um projeto.`);
     }
+    // nome digitado; sem ele, o que a caixa já tem; sem nenhum, o nome do projeto
+    const requestedName = requireDisplayName(opts.fromName);
     const found = this.data.mailboxes[address];
     if (!found || found.domain !== domain.name) {
       throw httpError(404, "mailbox_not_found", `A caixa ${address} não existe. Rode Sincronizar na página E-mail se ela foi criada fora do painel.`);
@@ -2138,7 +2140,10 @@ export class MailService {
         }
       };
 
+      const fromName = requestedName || box.displayName || sanitizeDisplayName(project.name);
       box.password = candidate;
+      if (fromName) box.displayName = fromName;
+      else delete box.displayName;
       if (box.kind === "user") {
         box.kind = "project";
         box.external = true;
@@ -2149,13 +2154,15 @@ export class MailService {
         domain: domain.name,
         mailbox: address,
         enabledAt: previous?.enabledAt ?? new Date().toISOString(),
-        fromName: opts.fromName?.trim() || project.name,
+        ...(fromName ? { fromName } : {}),
         ...(previous?.envLinks ? { envLinks: previous.envLinks } : {}),
       };
       try {
         // grava antes de trocar a senha no servidor: se o processo cair no meio, o painel não perde a senha nova
         await this.save();
         if (opts.mode === "replace_password") await client.setMailboxMainPassword(address, candidate);
+        // o Stalwart passa a ter o mesmo nome do From (só o campo description)
+        if (boxBefore.displayName !== (fromName || undefined)) await client.setMailboxDisplayName(address, fromName);
       } catch (err) {
         await revert();
         if (err instanceof StalwartApiError && err.status === 404) throw gone();
