@@ -38,7 +38,7 @@
     { "tipo": "pacote", "nome": "DeployEngine.start", "arquivo": "packages/deploy/src/engine.ts:404", "papel": "Resolve containers e roda docker start." }
   ],
   "efeitosColaterais": ["docker start nos containers do projeto"],
-  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('start'), botão 'Iniciar' — desabilitado quando status já é 'running', 'deploying' ou 'created'). Mesmo feedback do Parar: 'Iniciando…', conferência do estado real e 'Projeto iniciado.' só com status 'running'."],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('start'), botão 'Iniciar' — desabilitado quando status já é 'running', 'deploying' ou 'created'). Mesmo feedback do Parar: 'Iniciando…', conferência do estado real e 'Projeto iniciado.' só com status 'running' em duas leituras seguidas (se o projeto cair em seguida, aviso 'Não confirmei'; se o estado mudar depois, o aviso é trocado). A explicação de Parar/Iniciar é texto visível (aria-describedby), não só title."],
   "testes": ["apps/server/tests/routes-projects.test.ts", "packages/deploy/tests/engine-lifecycle.test.ts"],
   "observacoes": [
     "CORRIGIDO nesta rodada: a falta de containers agora lança um erro de domínio (engineError, packages/deploy/src/engine.ts) com statusCode=409/code='no_containers', em vez de um Error comum mapeado para 500 internal_error — a mensagem 'faça um deploy primeiro' agora chega de fato ao cliente. O botão 'Iniciar' já fica desabilitado quando status==='created' no frontend, então esse caminho só é alcançável via chamada direta à API ou corrida de estado (status desatualizado no polling).",

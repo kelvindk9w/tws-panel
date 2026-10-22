@@ -16,7 +16,7 @@ const TONES: Record<NoticeTone, { box: string; icon: string; Icon: typeof Info }
  * Aviso do resultado de uma ação (sucesso, atenção ou erro). Fica na tela até
  * ser fechado ou substituído — nunca some sozinho. O erro tem role="alert"; os
  * demais devem ser renderizados dentro de uma região role="status" que já
- * exista na página (ver `NoticeRegion`), para o leitor de tela anunciar.
+ * exista na página (ver `NoticeRegion`; vazia ela fica só `sr-only`, nunca display:none, para continuar na árvore de acessibilidade), para o leitor de tela anunciar.
  */
 export function ActionNotice({
   tone,
@@ -73,7 +73,7 @@ export function ActionNotice({
 /** Região anunciada por leitor de tela; precisa existir antes do aviso entrar. */
 export function NoticeRegion({ children }: { children?: ReactNode }) {
   return (
-    <div role="status" aria-live="polite" className="empty:hidden">
+    <div role="status" aria-live="polite" className="empty:sr-only">
       {children}
     </div>
   );

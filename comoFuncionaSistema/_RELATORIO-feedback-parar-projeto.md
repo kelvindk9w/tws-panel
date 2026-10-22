@@ -15,3 +15,10 @@
 
 ## Testes
 `apps/web/tests/project-lifecycle-feedback.test.tsx` (pt-BR e en).
+
+## Correções da revisão
+- Remoção que termina depois de ir para outro projeto só anuncia, sem navegar; remoção com sobras mostra o que ficou; "Tentar de novo" também na remoção.
+- Região de anúncio sempre no DOM (sr-only quando vazia).
+- Sucesso só após duas leituras seguidas; aviso trocado por um verdadeiro se o estado mudar depois; leituras antigas do polling não desfazem a confirmação.
+- Após erro de rede/5xx o estado real é relido; Parar/Iniciar desabilitados com status erro sem containers; explicação visível (aria-describedby); aviso de projeto nunca publicado fala em manutenção; rótulo de andamento sem opacidade reduzida.
+- 31 testes no arquivo de feedback (alert, foco, clique duplo síncrono, texto do estado parado).

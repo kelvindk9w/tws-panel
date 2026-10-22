@@ -109,11 +109,13 @@ export function DashboardPage() {
   // vindo da remoção de um projeto: confirma o que aconteceu (uma vez só)
   const location = useLocation();
   const navigate = useNavigate();
-  const [removedName, setRemovedName] = useState<string | null>(null);
+  const [removed, setRemoved] = useState<{ name: string; leftovers: string[] } | null>(null);
   useEffect(() => {
-    const name = (location.state as { removedProject?: unknown } | null)?.removedProject;
+    const st = location.state as { removedProject?: unknown; removalLeftovers?: unknown } | null;
+    const name = st?.removedProject;
     if (typeof name === "string") {
-      setRemovedName(name);
+      const left = Array.isArray(st?.removalLeftovers) ? (st.removalLeftovers as unknown[]).map(String) : [];
+      setRemoved({ name, leftovers: left });
       navigate(location.pathname, { replace: true, state: null });
     }
   }, [location, navigate]);
@@ -174,14 +176,16 @@ export function DashboardPage() {
       {/* independente do roteiro: "o painel antigo tinha X ativo" depois de restaurar um backup */}
       <ReconciliationNotice />
       <NoticeRegion>
-        {removedName !== null && (
+        {removed !== null && (
           <ActionNotice
-            tone="success"
+            tone={removed.leftovers.length > 0 ? "warning" : "success"}
             testId="removed-notice"
-            title={t("dashboard.removed.title", { name: removedName })}
-            onDismiss={() => setRemovedName(null)}
+            title={t(removed.leftovers.length > 0 ? "dashboard.removed.titleLeftovers" : "dashboard.removed.title", {
+              name: removed.name,
+            })}
+            onDismiss={() => setRemoved(null)}
           >
-            {t("dashboard.removed.body")}
+            {removed.leftovers.length > 0 ? removed.leftovers.join("\n") : t("dashboard.removed.body")}
           </ActionNotice>
         )}
       </NoticeRegion>
