@@ -21,13 +21,14 @@ import {
   type QueueItemView,
   type ResolverEntry,
 } from "@paas/mailer";
-import type {
-  BlacklistCheckResponse,
-  DeliveryHealthResponse,
-  DeliveryHealthStateResponse,
-  DnsPlanResponse,
-  DnsVerifyResponse,
-  MailTlsStatusResponse,
+import {
+  MAIL_HEALTH_MIN_INTERVAL_MS,
+  type BlacklistCheckResponse,
+  type DeliveryHealthResponse,
+  type DeliveryHealthStateResponse,
+  type DnsPlanResponse,
+  type DnsVerifyResponse,
+  type MailTlsStatusResponse,
 } from "@paas/core";
 import { httpError } from "./http-error.js";
 
@@ -50,7 +51,7 @@ export interface MailHealthDeps {
 }
 
 /** Intervalo mínimo entre duas verificações do mesmo domínio ("Verificar agora"). */
-export const HEALTH_MIN_INTERVAL_MS = 15_000;
+export const HEALTH_MIN_INTERVAL_MS = MAIL_HEALTH_MIN_INTERVAL_MS;
 /** A sonda da porta 25 não repete antes disto (ela conecta em servidores de terceiros). */
 export const PORT25_CACHE_MS = 10 * 60_000;
 const PUBLIC_RESOLVERS = [

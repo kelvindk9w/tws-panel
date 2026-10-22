@@ -7,9 +7,18 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DeliveryHealthResponse, DeliveryHealthStateResponse, DnsPlanResponse } from "@paas/core";
+import {
+  mailHealthScope,
+  type DeliveryHealthResponse,
+  type DeliveryHealthStateResponse,
+  type DnsPlanResponse,
+  type MailHealthCheck,
+  type MailHealthScope,
+  type MailHealthScopeSummary,
+} from "@paas/core";
 import { DeliveryHealthCard } from "../src/components/mail/DeliveryHealthCard";
-import { catalog } from "../src/i18n/core";
+import { catalog, setLocale } from "../src/i18n/core";
+import { readFileSync } from "node:fs";
 
 const DOMAIN = "envio.exemplo.com.br";
 
@@ -25,7 +34,21 @@ const PLAN: DnsPlanResponse = {
   ],
 };
 
+function scopesOf(checks: MailHealthCheck[]): Record<MailHealthScope, MailHealthScopeSummary> {
+  const one = (scope: MailHealthScope): MailHealthScopeSummary => {
+    const counts = { ok: 0, warn: 0, critical: 0 };
+    for (const c of checks) if (mailHealthScope(c.id) === scope && c.level !== "info") counts[c.level] += 1;
+    return { level: counts.critical ? "critical" : counts.warn ? "warn" : "ok", counts };
+  };
+  return { server: one("server"), domain: one("domain") };
+}
+
 function report(over: Partial<DeliveryHealthResponse> = {}): DeliveryHealthResponse {
+  const merged = reportBase(over);
+  return { ...merged, scopes: over.scopes ?? scopesOf(merged.checks) };
+}
+
+function reportBase(over: Partial<DeliveryHealthResponse>): Omit<DeliveryHealthResponse, "scopes"> {
   return {
     domain: DOMAIN,
     checkedAt: "2026-10-22T12:00:00.000Z",
@@ -97,7 +120,7 @@ describe("DeliveryHealthCard", () => {
     // esperado × encontrado
     expect(within(spf).getByText("v=spf1 ip4:203.0.113.10 ~all")).toBeInTheDocument();
     expect(within(spf).getByText("(nada)")).toBeInTheDocument();
-    expect(screen.getByText(/porta 25/i, { selector: "p.text-muted-foreground" })).toBeInTheDocument();
+    expect(within(document.querySelector('[data-check="port25"]') as HTMLElement).getByText(/porta 25/i, { selector: "p.text-muted-foreground" })).toBeInTheDocument();
     // atenção e bônus
     expect(within(document.querySelector('[data-check="ptr"]') as HTMLElement).getByText("Atenção")).toBeInTheDocument();
     expect(within(document.querySelector('[data-check="mta_sts"]') as HTMLElement).getByText("Bônus")).toBeInTheDocument();

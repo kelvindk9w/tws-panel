@@ -45,6 +45,34 @@ export interface MailHealthCheck {
   found?: string[];
 }
 
+/**
+ * Onde a verificação vale:
+ *  - server: é do servidor/IP e vale para TODOS os projetos e domínios
+ *    (nome reverso do IP, porta 25 de saída, certificado, listas de bloqueio, fila);
+ *  - domain: é do domínio (A do servidor de e-mail, MX, SPF, DKIM, DMARC,
+ *    propagação, MTA-STS, TLS-RPT).
+ */
+export type MailHealthScope = "server" | "domain";
+
+const SERVER_SCOPE_IDS: ReadonlySet<MailHealthCheckId> = new Set<MailHealthCheckId>([
+  "helo",
+  "ptr",
+  "port25",
+  "queue",
+  "tls",
+  "dnsbl",
+]);
+
+export function mailHealthScope(id: MailHealthCheckId): MailHealthScope {
+  return SERVER_SCOPE_IDS.has(id) ? "server" : "domain";
+}
+
+/** Resumo de um dos dois níveis (servidor ou domínio). */
+export interface MailHealthScopeSummary {
+  level: Exclude<MailHealthLevel, "info">;
+  counts: { ok: number; warn: number; critical: number };
+}
+
 export interface DeliveryHealthResponse {
   domain: string;
   checkedAt: string;
@@ -52,6 +80,8 @@ export interface DeliveryHealthResponse {
   level: Exclude<MailHealthLevel, "info">;
   counts: { ok: number; warn: number; critical: number };
   checks: MailHealthCheck[];
+  /** Mesmo resumo, separado por nível: o que é do servidor e o que é deste domínio. */
+  scopes: Record<MailHealthScope, MailHealthScopeSummary>;
   /** Verificações que afetam a caixa de entrada e não estão ok. */
   inboxIssues: MailHealthCheckId[];
 }
@@ -89,3 +119,6 @@ export interface DeliveryHealthStateResponse {
   /** Última verificação (null = ainda não rodou desde que o painel subiu). */
   report: DeliveryHealthResponse | null;
 }
+
+/** Intervalo mínimo entre duas verificações do mesmo domínio (botão "Verificar agora"); a interface espera o mesmo tempo. */
+export const MAIL_HEALTH_MIN_INTERVAL_MS = 15_000;

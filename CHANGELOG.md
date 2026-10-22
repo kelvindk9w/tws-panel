@@ -92,6 +92,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
+- Saúde do e-mail em dois níveis: o card separa o que é do servidor (IP, DNS reverso, porta 25,
+  certificado, listas de bloqueio, fila: valem para todos os projetos) do que é do domínio (SPF, DKIM,
+  DMARC, MX, MTA-STS), e a aba Remetente de cada projeto com e-mail mostra o resumo do domínio, os
+  itens numa expansão e o estado do PTR e da porta 25. Cada item que não está em ordem, e cada bônus,
+  tem um "O que fazer" expansível com passos curtos e valores copiáveis; o PTR traz o texto pronto
+  para o suporte da hospedagem (com o IP e o nome da própria VPS). O próximo passo do DMARC
+  (quarentena, depois rejeitar) aparece como sugestão opcional, com o risco. O botão de verificar
+  espera 15 s entre verificações.
 - Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
   aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
   filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar
@@ -141,6 +149,11 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Modelos de issue em formulário (bug, sugestão, pergunta ou documentação) e modelo de pull request.
 
 ### Alterado
+
+- DNS reverso (PTR) ausente ou incompatível passou de crítico (vermelho) para atenção importante
+  (laranja): com SPF, DKIM e DMARC passando o Gmail aceitou sem ele, mas Microsoft, Yahoo e
+  servidores corporativos podem atrasar ou recusar. O vermelho fica para porta 25 bloqueada e falha
+  de autenticação.
 
 - O painel escuta só em `127.0.0.1`; quem atende de fora é o proxy, nas portas 80 e 443.
 - O usuário do terminal não é mais colocado no grupo `docker`.

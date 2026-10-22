@@ -125,6 +125,43 @@ describe("MailHealthService", () => {
     expect(deps.verify).toHaveBeenCalledWith(DOMAIN);
   });
 
+  it("dados por projeto: cada domínio tem o seu relatório e o seu resumo; o servidor (porta 25) é um só", async () => {
+    const OTHER = "loja.example.org";
+    const { service, deps } = make({
+      planInput: vi.fn(async (domain: string) => {
+        if (domain === DOMAIN) return PLAN;
+        if (domain === OTHER) return { ...PLAN, domain: OTHER, mailHostname: `mail.${OTHER}` };
+        throw httpError(404, "domain_not_found", "Domínio não cadastrado.");
+      }),
+    });
+    const a = await service.check(DOMAIN, { manual: true });
+    const b = await service.check(OTHER, { manual: true });
+    expect(a.domain).toBe(DOMAIN);
+    expect(b.domain).toBe(OTHER);
+    // a sonda da porta 25 é do servidor: uma só para os dois projetos
+    expect(deps.probePort25).toHaveBeenCalledTimes(1);
+    for (const r of [a, b]) {
+      expect(r.scopes.server.level).toBe("critical"); // porta 25 e listas de bloqueio
+      expect(r.scopes.domain.level).toBe("critical"); // SPF/DKIM/DMARC ausentes no DNS falso
+      expect(r.checks.filter((c) => ["ptr", "port25", "tls", "dnsbl", "queue"].includes(c.id)).length).toBe(5);
+    }
+    // o relatório de um domínio não aparece no estado do outro
+    expect((await service.state(DOMAIN)).report?.domain).toBe(DOMAIN);
+    expect((await service.state(OTHER)).report?.domain).toBe(OTHER);
+    expect(service.summary().map((s) => s.domain).sort()).toEqual([OTHER, DOMAIN].sort());
+  });
+
+  it("PTR ausente com a porta 25 livre: o servidor fica em atenção, não crítico", async () => {
+    const { service } = make({
+      verify: vi.fn(async () => ({ ptr: { ip: IP, expected: HOST, status: "action_required", found: [], ticketText: null } }) as unknown as DnsVerifyResponse),
+      probePort25: vi.fn(async (): Promise<Port25Result> => ({ status: "open", host: "gmail-smtp-in.l.google.com" })),
+      blacklist: vi.fn(async () => null),
+    });
+    const report = await service.check(DOMAIN, { manual: true });
+    expect(report.checks.find((c) => c.id === "ptr")).toMatchObject({ level: "warn", code: "missing" });
+    expect(report.scopes.server.level).toBe("warn");
+  });
+
   it("não vaza nada além do que o relatório define (sem chave privada, sem segredo)", async () => {
     const { service } = make();
     const text = JSON.stringify(await service.check(DOMAIN, { manual: true }));
@@ -256,7 +293,7 @@ describe("rotas /health", () => {
   let health: { state: ReturnType<typeof vi.fn>; check: ReturnType<typeof vi.fn> };
 
   const STATE = { plan: { domain: DOMAIN }, report: null };
-  const REPORT = { domain: DOMAIN, level: "ok", checkedAt: "x", counts: { ok: 1, warn: 0, critical: 0 }, checks: [], inboxIssues: [] };
+  const REPORT = { domain: DOMAIN, level: "ok", checkedAt: "x", counts: { ok: 1, warn: 0, critical: 0 }, checks: [], inboxIssues: [], scopes: { server: { level: "ok", counts: { ok: 0, warn: 0, critical: 0 } }, domain: { level: "ok", counts: { ok: 1, warn: 0, critical: 0 } } } };
 
   beforeEach(async () => {
     ctx = await buildAuthTestApp(TOKEN);

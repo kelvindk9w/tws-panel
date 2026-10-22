@@ -22,16 +22,18 @@ import { createHash, createPublicKey } from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
 import https from "node:https";
-import type {
-  BlacklistCheckResponse,
-  DeliveryHealthResponse,
-  DmarcStage,
-  DnsPlanRecord,
-  DnsPlanResponse,
-  MailHealthCheck,
-  MailHealthCheckId,
-  MailHealthLevel,
-  PtrCheck,
+import {
+  mailHealthScope,
+  type BlacklistCheckResponse,
+  type DeliveryHealthResponse,
+  type DmarcStage,
+  type DnsPlanRecord,
+  type DnsPlanResponse,
+  type MailHealthCheck,
+  type MailHealthCheckId,
+  type MailHealthLevel,
+  type MailHealthScopeSummary,
+  type PtrCheck,
 } from "@paas/core";
 import { dmarcValue, spfValue, type DnsResolverLike } from "./dns-checklist.js";
 import type { QueueItemView } from "./queue-view.js";
@@ -661,10 +663,14 @@ function checkPtr(ptr: PtrCheck): MailHealthCheck {
       return check("ptr", "ok", true, "ok", params, extra);
     case "generic":
       return check("ptr", "warn", true, "generic", params, extra);
+    // Atenção forte, não crítico: SPF, DKIM e DMARC passando, o Gmail aceita sem o
+    // PTR (confirmado na VPS real); Microsoft, Yahoo e servidores corporativos
+    // podem atrasar ou recusar. Vermelho fica para porta 25 bloqueada e falha de
+    // autenticação, que impedem o envio de fato.
     case "mismatch":
-      return check("ptr", "critical", true, "mismatch", params, extra);
+      return check("ptr", "warn", true, "mismatch", params, extra);
     case "action_required":
-      return check("ptr", "critical", true, "missing", params, extra);
+      return check("ptr", "warn", true, "missing", params, extra);
     default:
       return check("ptr", "warn", false, "unavailable", params, extra);
   }
@@ -887,15 +893,22 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     checkTlsRpt(domain, main),
   ]).then((all) => all.filter((c): c is MailHealthCheck => c !== null));
 
-  const counts = { ok: 0, warn: 0, critical: 0 };
-  for (const c of checks) if (c.level !== "info") counts[c.level] += 1;
-  const level = counts.critical > 0 ? "critical" : counts.warn > 0 ? "warn" : "ok";
+  const summarize = (list: MailHealthCheck[]): MailHealthScopeSummary => {
+    const counts = { ok: 0, warn: 0, critical: 0 };
+    for (const c of list) if (c.level !== "info") counts[c.level] += 1;
+    return { level: counts.critical > 0 ? "critical" : counts.warn > 0 ? "warn" : "ok", counts };
+  };
+  const { level, counts } = summarize(checks);
   return {
     domain,
     checkedAt: new Date(input.now).toISOString(),
     level,
     counts,
     checks,
+    scopes: {
+      server: summarize(checks.filter((c) => mailHealthScope(c.id) === "server")),
+      domain: summarize(checks.filter((c) => mailHealthScope(c.id) === "domain")),
+    },
     inboxIssues: checks.filter((c) => c.inbox && (c.level === "warn" || c.level === "critical")).map((c) => c.id),
   };
 }
