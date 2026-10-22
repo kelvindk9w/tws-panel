@@ -32,7 +32,7 @@ export default {
   "code.mail_not_initialized": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro.",
   "code.mailbox_in_use": "Esta caixa está em uso por um projeto. Desative o e-mail do projeto antes.",
   "code.mailbox_protected": "A caixa postmaster@ é exigida pelas boas práticas de e-mail e não pode ser removida.",
-  "code.mailbox_taken_by_project": "Esta caixa já é usada por outro projeto. Desative o e-mail dele antes.",
+  "code.mailbox_taken_by_project": "Esta caixa é de outro projeto: ou o e-mail dele a usa (desative-o antes) ou ela foi criada na aba Caixas dele e só ele pode usá-la.",
   "code.mailbox_password_mismatch": "A senha informada não é a desta caixa.",
   "code.stored_password_stale": "A senha que o painel guarda para esta caixa não é mais a certa. Informe a senha atual ou troque por uma gerada pelo painel.",
   "code.password_unverifiable": "O servidor de e-mail não deixou o painel conferir a senha desta caixa, então ela não foi aceita (uma senha errada seria gravada na caixa pelo Sincronizar). Troque por uma senha gerada pelo painel.",

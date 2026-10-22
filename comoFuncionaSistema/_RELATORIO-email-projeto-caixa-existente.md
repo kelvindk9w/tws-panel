@@ -47,6 +47,11 @@ O dono apagou o projeto do site da TWS (o painel não apagou o e-mail, como deve
 - Web: o erro recebe foco e rolagem; ícone da legenda com `shrink-0`; texto sobre Desativar e-mail.
 - Testes: mutação do filtro de órfãos (projetos vivos preservados), caixa de sistema com parte local comum, Desativar libera, lista vazia, e os de mailer (`$app$`/`otpauth`, `setMailboxMainPassword`).
 
+## Correções da 2ª revisão
+- "Trocar senha", o assumir da caixa adotada `<slug>@` e o Sincronizar (também quando a leitura falha: então não troca e lista a falha) usam `setMailboxMainPassword`, que preserva `$app$` e `otpauth://`. Não sobra uso de `setMailboxPassword` sobre caixa existente.
+- Caixa criada na aba Caixas de outro projeto que existe fica fora da lista e é recusada (409 `mailbox_taken_by_project`, mensagem própria). Ao adotar, o dono original é guardado (`ownerBefore`) e volta ao soltar (Desativar, remoção do projeto, troca de endereço). Desativar continua liberando a caixa adotada.
+- O dublê de teste agora distingue as duas trocas (`setMailboxPassword` apaga app/2FA, como o Stalwart real) e há testes para os pontos acima. Mutações que caem: trocar por gerada, Trocar senha, assumir `<slug>@`, realinhamento, guarda da lista vazia (caixas com dono e sem registro), dono de outro projeto, restaurar o dono e a rolagem até o erro.
+
 ## Limites e o que não foi verificado
 - Não rodado contra um Stalwart real: a conferência da senha depende do `GET /principal/<caixa>` devolver a senha em texto (v0.11.8, como o realinhamento já assume); com hash, o caminho cai em "aceita sem verificação".
 - Layout a 360/1024 px e acessibilidade foram feitos com as mesmas classes e padrões do cartão (colunas que empilham, `min-w-0`, `overflow-wrap`), mas não conferi no navegador.

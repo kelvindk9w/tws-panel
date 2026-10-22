@@ -20,6 +20,9 @@ let matchImpl: (email: string, password: string) => Promise<boolean | null> = as
 let setPasswordImpl: (email: string, password: string) => Promise<void> = async () => undefined;
 let aliasImpl: (email: string, alias: string) => Promise<void> = async () => undefined;
 let running = true;
+/** Campo de senhas de cada caixa no Stalwart falso: senha principal + senhas de app/2FA, como o real. */
+const serverSecrets: Record<string, string[]> = {};
+const EXTRAS = ["$app$leitor$hash", "otpauth://totp/x?secret=ABC"];
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
@@ -35,13 +38,17 @@ vi.mock("@paas/mailer", async (importOriginal) => {
     async deleteMailbox(email: string) {
       calls.push(`delete ${email}`);
     }
+    /** Como o Stalwart real: PATCH set secrets=[senha] APAGA senhas de app e 2FA. */
     async setMailboxPassword(email: string, password: string) {
       await setPasswordImpl(email, password);
       passwordCalls.push({ email, password });
+      serverSecrets[email] = [password];
     }
+    /** Troca só o item principal e preserva as demais entradas. */
     async setMailboxMainPassword(email: string, password: string) {
       await setPasswordImpl(email, password);
       passwordCalls.push({ email, password });
+      serverSecrets[email] = [password, ...(serverSecrets[email] ?? []).filter((x) => x.startsWith("$app$") || x.startsWith("otpauth://"))];
     }
     async createMailbox(email: string) {
       createdCalls.push(email);
@@ -105,6 +112,7 @@ beforeEach(async () => {
   calls.length = 0;
   passwordCalls.length = 0;
   createdCalls.length = 0;
+  for (const k of Object.keys(serverSecrets)) delete serverSecrets[k];
   matchImpl = async () => true;
   setPasswordImpl = async () => undefined;
   aliasImpl = async () => undefined;
@@ -253,8 +261,8 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
       { id: "p2", slug: "outra", name: "Outra" },
     ];
     const list = await service().listUsableMailboxes(loja, "exemplo.com");
-    // "dono@" tem dono gravado (criada na aba Caixas do p2) mas nenhum e-mail de projeto a usa: pode
-    expect(list.map((m) => m.address).sort()).toEqual(["adotada@exemplo.com", "contato@exemplo.com", "dono@exemplo.com", "morto@exemplo.com", "solta@exemplo.com"]);
+    // "dono@" foi criada na aba Caixas do p2 (que existe): é dele; "morto@" tinha dono que não existe mais
+    expect(list.map((m) => m.address).sort()).toEqual(["adotada@exemplo.com", "contato@exemplo.com", "morto@exemplo.com", "solta@exemplo.com"]);
     expect(list.find((m) => m.address === "adotada@exemplo.com")).toMatchObject({ passwordKnown: false });
     expect(list.find((m) => m.address === "contato@exemplo.com")).toMatchObject({ passwordKnown: true, kind: "user" });
     expect(JSON.stringify(list)).not.toContain("senha-guardada-1");
@@ -361,7 +369,7 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
     expect(calls).toEqual([]);
   });
 
-  it("caixa que o e-mail de outro projeto que existe usa: 409 dizendo qual; nunca com senha", async () => {
+  it("caixa de OUTRO projeto (registro de e-mail ou criada na aba Caixas dele): 409 dizendo qual; nunca com senha", async () => {
     await seed(
       { "dela@exemplo.com": box("dela@exemplo.com", "project"), "dono@exemplo.com": box("dono@exemplo.com", "user", { projectId: "p2" }) },
       { p2: { domain: "exemplo.com", mailbox: "dela@exemplo.com", enabledAt: NOW } },
@@ -370,7 +378,7 @@ describe("conectar o e-mail do projeto a uma caixa que já existe", () => {
       { id: "p1", slug: "loja", name: "Loja" },
       { id: "p2", slug: "outra", name: "Projeto Outra" },
     ];
-    for (const local of ["dela"]) {
+    for (const local of ["dela", "dono"]) {
       const err = await connect(service(), local, { mode: "current_password", password: SENHA }).catch((e: unknown) => e);
       expect(err).toMatchObject({ statusCode: 409, code: "mailbox_taken_by_project" });
       expect((err as Error).message).toContain("Projeto Outra");
@@ -496,7 +504,7 @@ describe("revisão: soltar a caixa, lista de projetos duvidosa e órfãos", () =
     expect({ kind: m.kind, projectId: m.projectId ?? null, external: m.external ?? null }).toEqual({ kind: "user", projectId: null, external: null });
   });
 
-  it("Desativar a caixa que o painel criou para o projeto: não apaga, e outro projeto pode usá-la", async () => {
+  it("Desativar a caixa que o painel criou para o projeto: não apaga e segue sendo dele (outro projeto não a leva)", async () => {
     existing = [
       { id: "p1", slug: "loja", name: "Loja Royal" },
       { id: "p2", slug: "blog", name: "Blog" },
@@ -506,7 +514,8 @@ describe("revisão: soltar a caixa, lista de projetos duvidosa e órfãos", () =
     await svc.enableProjectEmail(loja, "exemplo.com", { fromLocalPart: "contato", password: "senha-nova-forte-1" });
     await svc.disableProjectEmail("p1");
     expect(calls.filter((c) => c.startsWith("delete"))).toEqual([]);
-    await expect(connect(svc, blog, { mode: "keep_password" })).resolves.toBeTruthy();
+    await expect(connect(svc, blog, { mode: "keep_password" })).rejects.toMatchObject({ code: "mailbox_taken_by_project" });
+    await expect(connect(svc, loja, { mode: "keep_password" })).resolves.toBeTruthy();
   });
 
   it("lista de projetos vazia com vínculos registrados vale como 'não sei': nada é solto", async () => {
@@ -554,3 +563,82 @@ describe("revisão: soltar a caixa, lista de projetos duvidosa e órfãos", () =
     ).rejects.toMatchObject({ statusCode: 409, code: "address_in_use" });
   });
 });
+
+describe("senhas de app e 2FA sobrevivem, e a caixa de outro projeto não é levada", () => {
+  const connect = (svc: InstanceType<typeof MailService>, project: Project, local: string, opts: Record<string, unknown>) =>
+    svc.connectExistingMailbox(project, "exemplo.com", local, opts as never);
+  const blog = { id: "p2", slug: "blog", name: "Blog" } as unknown as Project;
+
+  it("trocar por gerada preserva $app$ e otpauth", async () => {
+    await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
+    serverSecrets["contato@exemplo.com"] = ["velha", ...EXTRAS];
+    const res = await connect(service(), loja, "contato", { mode: "replace_password" });
+    expect(serverSecrets["contato@exemplo.com"]).toEqual([res.generatedPassword, ...EXTRAS]);
+  });
+
+  it("Trocar senha (changeMailboxPassword) preserva $app$ e otpauth", async () => {
+    await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
+    serverSecrets["contato@exemplo.com"] = ["velha", ...EXTRAS];
+    await service().changeMailboxPassword("contato@exemplo.com", "senha-nova-forte-1");
+    expect(serverSecrets["contato@exemplo.com"]).toEqual(["senha-nova-forte-1", ...EXTRAS]);
+  });
+
+  it("assumir a caixa adotada <slug>@ (ativar com senha) preserva $app$ e otpauth", async () => {
+    await seed({ "loja@exemplo.com": box("loja@exemplo.com", "user", { password: "" }) });
+    serverSecrets["loja@exemplo.com"] = ["velha", ...EXTRAS];
+    await service().enableProjectEmail(loja, "exemplo.com", { password: "senha-nova-forte-1" });
+    expect(serverSecrets["loja@exemplo.com"]).toEqual(["senha-nova-forte-1", ...EXTRAS]);
+  });
+
+  it("A cria uma caixa na aba Caixas: B não a vê nem a assume (409); A a assume e, ao desativar, ela volta a ser da aba Caixas de A", async () => {
+    existing = [
+      { id: "p1", slug: "loja", name: "Loja Royal" },
+      { id: "p2", slug: "blog", name: "Blog" },
+    ];
+    await seed({});
+    const svc = service();
+    await svc.createMailbox("exemplo.com", "suporte", "senha-suporte-forte-1", { projectId: "p1" });
+    expect((await svc.listUsableMailboxes(blog, "exemplo.com")).map((m) => m.address)).not.toContain("suporte@exemplo.com");
+    const err = await connect(svc, blog, "suporte", { mode: "keep_password" }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ statusCode: 409, code: "mailbox_taken_by_project" });
+    expect((err as Error).message).toContain("Loja Royal");
+    // nada mudou para A
+    expect((await stored()).mailboxes["suporte@exemplo.com"]).toMatchObject({ kind: "user", projectId: "p1", password: "senha-suporte-forte-1" });
+    expect((await svc.listMailboxes("exemplo.com", { projectId: "p1" })).map((m) => m.id)).toEqual(["suporte@exemplo.com"]);
+    // A usa a própria caixa e depois desativa: volta à aba Caixas de A, como usuário
+    await connect(svc, loja, "suporte", { mode: "keep_password" });
+    await svc.disableProjectEmail("p1");
+    const m = (await stored()).mailboxes["suporte@exemplo.com"]!;
+    expect({ kind: m.kind, projectId: m.projectId }).toEqual({ kind: "user", projectId: "p1" });
+    expect(m.ownerBefore).toBeUndefined();
+    expect((await svc.listMailboxes("exemplo.com", { projectId: "p1" })).map((x) => x.id)).toEqual(["suporte@exemplo.com"]);
+    expect(JSON.stringify(await svc.listMailboxes("exemplo.com"))).not.toContain("ownerBefore");
+  });
+
+  it("caixa sem dono adotada por B e depois solta (Desativar): continua sem dono", async () => {
+    existing = [
+      { id: "p1", slug: "loja", name: "Loja Royal" },
+      { id: "p2", slug: "blog", name: "Blog" },
+    ];
+    await seed({ "contato@exemplo.com": box("contato@exemplo.com", "user") });
+    const svc = service();
+    await connect(svc, blog, "contato", { mode: "keep_password" });
+    await svc.disableProjectEmail("p2");
+    expect((await stored()).mailboxes["contato@exemplo.com"]!.projectId).toBeUndefined();
+    await expect(connect(svc, loja, "contato", { mode: "keep_password" })).resolves.toBeTruthy();
+  });
+
+  it("caixa com dono sem poder saber se ele existe (lista indisponível): recusa", async () => {
+    await seed({ "suporte@exemplo.com": box("suporte@exemplo.com", "user", { projectId: "p2" }) });
+    const semLista = new MailService(config);
+    await expect(semLista.connectExistingMailbox(loja, "exemplo.com", "suporte", { mode: "keep_password" })).rejects.toMatchObject({ code: "mailbox_taken_by_project" });
+  });
+
+  it("lista de projetos vazia: caixas com dono (e sem registro de e-mail) também valem como 'não sei'", async () => {
+    await seed({ "loja@exemplo.com": box("loja@exemplo.com", "project", { projectId: "p1" }) });
+    existing = [];
+    await service().listMailboxes("exemplo.com");
+    expect((await stored()).mailboxes["loja@exemplo.com"]!.projectId).toBe("p1");
+  });
+});
+

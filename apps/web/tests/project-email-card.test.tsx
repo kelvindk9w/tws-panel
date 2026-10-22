@@ -191,6 +191,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   setLocale("pt-BR", { persist: false });
 });
 
@@ -830,6 +831,8 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
   });
 
   it("senha errada ou caixa em uso por outro projeto: a mensagem do servidor aparece (role=alert) e nada muda", async () => {
+    const scrollMock = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", { value: scrollMock, configurable: true, writable: true });
     serve(OFF, {
       usable: [CONTATO],
       connectError: new ApiRequestError(409, "mailbox_taken_by_project", "A caixa contato@envio.exemplo.com.br já é usada pelo projeto Outra."),
@@ -843,6 +846,9 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     await user.click(screen.getByRole("button", { name: "Usar esta caixa" }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("já é usada pelo projeto Outra");
+    // e entra na tela (o botão fica longe do topo do cartão)
+    expect(scrollMock).toHaveBeenCalledWith({ block: "center" });
+    expect(scrollMock.mock.contexts.at(-1)).toBe(alert);
     // o foco vai para o erro (o botão fica longe do topo do cartão)
     expect(alert).toHaveFocus();
     expect(screen.getByRole("button", { name: "Usar esta caixa" })).toBeInTheDocument();

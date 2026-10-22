@@ -116,11 +116,13 @@ interface StoredMailbox extends Mailbox {
    * a deixa (troca de endereço, projeto removido): volta a ser caixa de usuário. Não sai pela API.
    */
   external?: boolean;
+  /** Dono (aba Caixas de um projeto) que a caixa tinha antes de ser adotada; volta a ser dele ao ser solta. Não sai pela API. */
+  ownerBefore?: string;
 }
 
 /** A caixa como a API a mostra: sem a senha e sem campos internos. */
 function publicMailbox(stored: StoredMailbox): Mailbox {
-  const { password: _p, external: _e, ...mailbox } = stored;
+  const { password: _p, external: _e, ownerBefore: _o, ...mailbox } = stored;
   return mailbox;
 }
 
@@ -1146,7 +1148,7 @@ export class MailService {
     const finalPassword = generated ?? requireStrongPassword(password);
     await this.requireRunning();
     await this.withMailboxLock(email, async () => {
-      await this.client().setMailboxPassword(email, finalPassword);
+      await this.client().setMailboxMainPassword(email, finalPassword);
       stored.password = finalPassword;
     });
     await this.save();
@@ -1392,9 +1394,8 @@ export class MailService {
             // leitura falhou: reaplica sem ter conferido
           }
           if (matches === true) return "same";
-          // a leitura funcionou (matches === false): troca só a senha principal e preserva senhas de app e 2FA
-          if (matches === false) await client.setMailboxMainPassword(email, box.password);
-          else await client.setMailboxPassword(email, box.password);
+          // troca só a senha principal e preserva senhas de app e 2FA (se a caixa não pode ser lida, falha sem trocar)
+          await client.setMailboxMainPassword(email, box.password);
           return matches === false ? "realigned" : "reapplied";
         });
         if (outcome === "realigned") realigned += 1;
@@ -1700,13 +1701,14 @@ export class MailService {
       };
     } else if (newPassword !== undefined) {
       await this.withMailboxLock(address, async () => {
-        await client.setMailboxPassword(address, newPassword);
+        await client.setMailboxMainPassword(address, newPassword);
         existing.password = newPassword;
       });
       // caixa adotada do Stalwart: passa a ser a do projeto (e volta a ser de usuário quando ele a deixar)
       if (existing.kind === "user") {
         existing.kind = "project";
         existing.external = true;
+        if (existing.projectId) existing.ownerBefore = existing.projectId;
       }
       existing.projectId = project.id;
     }
@@ -1824,6 +1826,9 @@ export class MailService {
     if (mailbox.external) {
       mailbox.kind = "user";
       delete mailbox.external;
+      // caixa criada na aba Caixas de um projeto: volta a ser dele
+      if (mailbox.ownerBefore) mailbox.projectId = mailbox.ownerBefore;
+      delete mailbox.ownerBefore;
     }
   }
 
@@ -1893,10 +1898,13 @@ export class MailService {
   }
 
   /** Projeto (que existe) que já usa esta caixa, ou null. */
-  private otherOwnerOf(address: string, projectId: string): string | null {
+  private otherOwnerOf(address: string, projectId: string, live: Map<string, { slug: string; name?: string }> | null): { id: string; viaRegistry: boolean } | null {
     for (const [id, p] of Object.entries(this.data.projects)) {
-      if (id !== projectId && (p.mailbox === address || p.fromAddress === address)) return id;
+      if (id !== projectId && (p.mailbox === address || p.fromAddress === address)) return { id, viaRegistry: true };
     }
+    // caixa criada na aba Caixas de OUTRO projeto (que existe, ou que não dá para saber): é dele
+    const owner = this.data.mailboxes[address]?.projectId;
+    if (owner && owner !== projectId && (live === null || live.has(owner))) return { id: owner, viaRegistry: false };
     return null;
   }
 
@@ -1905,10 +1913,17 @@ export class MailService {
     projectId: string,
     live: Map<string, { slug: string; name?: string }> | null,
   ): void {
-    const other = this.otherOwnerOf(address, projectId);
+    const other = this.otherOwnerOf(address, projectId, live);
     if (other === null) return;
-    const info = live?.get(other);
-    throw httpError(409, "mailbox_taken_by_project", `A caixa ${address} já é usada pelo projeto ${info?.name ?? info?.slug ?? other}. Desative o e-mail dele antes.`);
+    const info = live?.get(other.id);
+    const name = info?.name ?? info?.slug ?? other.id;
+    throw httpError(
+      409,
+      "mailbox_taken_by_project",
+      other.viaRegistry
+        ? `A caixa ${address} já é usada pelo projeto ${name}. Desative o e-mail dele antes.`
+        : `A caixa ${address} pertence ao projeto ${name} (foi criada na aba Caixas dele) e só pode ser usada por ele.`,
+    );
   }
 
   /**
@@ -1928,7 +1943,7 @@ export class MailService {
           (m.kind === "user" || m.kind === "project") &&
           !SYSTEM_LOCAL_PARTS.has(m.localPart) &&
           m.id !== current &&
-          this.otherOwnerOf(m.id, project.id) === null,
+          this.otherOwnerOf(m.id, project.id, live) === null,
       )
       .map((m) => ({ address: m.id, localPart: m.localPart, kind: m.kind as "user" | "project", passwordKnown: m.password !== "" }))
       .sort((a, b) => a.address.localeCompare(b.address));
@@ -2040,6 +2055,7 @@ export class MailService {
       if (box.kind === "user") {
         box.kind = "project";
         box.external = true;
+        if (box.projectId) box.ownerBefore = box.projectId;
       }
       box.projectId = project.id;
       this.data.projects[project.id] = {

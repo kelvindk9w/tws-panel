@@ -652,7 +652,7 @@ Precisa da [Etapa 4](#etapa-4) pronta.
 
 Nada é apagado: a caixa e as mensagens continuam. Depois de ligada, a caixa passa a ser gerenciada pelo
 painel (o **Sincronizar** e a restauração do e-mail a mantêm com a senha guardada): não troque a senha dela
-direto no webmail, use **Trocar senha** no cartão. **Desativar e-mail** solta a caixa: ela continua com as mensagens e volta a ser uma caixa comum. Ficam de fora da lista as caixas de outros projetos e as do
+direto no webmail, use **Trocar senha** no cartão. **Desativar e-mail** solta a caixa: ela continua com as mensagens e volta a ser uma caixa comum. Ficam de fora da lista as caixas de outros projetos (inclusive as criadas na aba Caixas deles) e as do
 painel (`postmaster@`, `abuse@`, `dmarc@`).
 
 **Apagar o projeto** solta o e-mail dele, mas não apaga a caixa nem as mensagens. Ao recriar o projeto, o mesmo

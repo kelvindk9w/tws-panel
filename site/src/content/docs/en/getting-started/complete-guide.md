@@ -666,7 +666,7 @@ values go into the deploy automatically. The values only reach the app on the ne
 
 Nothing is deleted: the mailbox and its messages stay. Once connected, the mailbox is managed by the panel
 (**Sync** and the email restore keep it on the stored password): do not change its password directly in
-webmail, use **Change password** on the card. **Disable email** releases the mailbox: it keeps its messages and goes back to being a regular mailbox. Other projects' mailboxes and the panel's own (`postmaster@`,
+webmail, use **Change password** on the card. **Disable email** releases the mailbox: it keeps its messages and goes back to being a regular mailbox. Other projects' mailboxes (including those created in their Mailboxes tab) and the panel's own (`postmaster@`,
 `abuse@`, `dmarc@`) are left out of the list.
 
 **Deleting the project** releases its email, but does not delete the mailbox or its messages. When you recreate the

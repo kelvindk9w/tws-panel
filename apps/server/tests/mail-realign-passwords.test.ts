@@ -44,7 +44,9 @@ const FORA = `fora@${DOMAIN}`;
 
 /** Senha que o Stalwart falso aceita para cada caixa (a do backup restaurado). */
 let serverPassword: Record<string, string> = {};
-let patchLog: Array<{ email: string; value: string }> = [];
+let patchLog: Array<{ email: string; value: string; all: string[] }> = [];
+/** Senhas de app e 2FA que o Stalwart falso guarda no mesmo campo, por caixa (um PATCH set secrets as apaga, como o real). */
+let extraSecrets: Record<string, string[]> = {};
 let failPatchFor = new Set<string>();
 /** Atraso do PRIMEIRO PATCH de cada caixa (ms). */
 let patchDelay: Record<string, number> = {};
@@ -72,7 +74,7 @@ function fakeStalwart() {
         if (getMode === "error") return new Response(`{"detail":"boom"}`, { status: 500 });
         if (getMode === "missing") return new Response(JSON.stringify({ error: "notFound", item: email }), { status: 200 });
         if (getMode === "missing404") return new Response(`{"detail":"not found"}`, { status: 404 });
-        const secrets = getMode === "plain" ? [serverPassword[email]] : getMode === "hash" ? ["$6$salt$HASH-NAO-PODE-VAZAR"] : undefined;
+        const secrets = getMode === "plain" ? [serverPassword[email], ...(extraSecrets[email] ?? [])] : getMode === "hash" ? ["$6$salt$HASH-NAO-PODE-VAZAR"] : undefined;
         return new Response(JSON.stringify({ data: { type: "individual", name: email, ...(secrets ? { secrets } : {}) } }), { status: 200 });
       }
       if (u.pathname.startsWith("/api/principal/") && init?.method === "PATCH") {
@@ -80,10 +82,11 @@ function fakeStalwart() {
         const ops = JSON.parse(String(init.body)) as Array<{ field: string; value: string[] }>;
         const value = ops[0]!.value[0]!;
         const first = !patchLog.some((x) => x.email === email);
-        patchLog.push({ email, value });
+        patchLog.push({ email, value, all: ops[0]!.value });
         if (first && (patchDelay[email] ?? 0) > 0) await new Promise((r) => setTimeout(r, patchDelay[email]));
         if (failPatchFor.has(email)) return new Response(`{"detail":"boom"}`, { status: 500 });
         serverPassword[email] = value;
+        extraSecrets[email] = ops[0]!.value.slice(1);
         return new Response(`{"data":null}`, { status: 200 });
       }
       if (u.pathname.startsWith("/api/dkim/")) return new Response(JSON.stringify({ data: DKIM_KEY }), { status: 200 });
@@ -108,6 +111,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-mail-realign-"));
   logs.length = 0;
   patchLog = [];
+  extraSecrets = {};
   failPatchFor = new Set();
   patchDelay = {};
   getMode = "plain";
@@ -214,7 +218,24 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
     expect(result).toEqual({ domains: [], mailboxes: [], skipped: [] });
   });
 
-  it.each(["hash", "none", "error"] as const)("não deu para conferir (%s): reaplica e conta como reaplicada, nunca como realinhada", async (mode) => {
+  it("realinhar preserva senhas de app e 2FA que a caixa tem (só a principal é trocada)", async () => {
+    extraSecrets[PM] = ["$app$leitor$hash", "otpauth://totp/x?secret=ABC"];
+    extraSecrets[LOJA] = ["$app$outro$hash"];
+    await service().adoptFromStalwart();
+    expect(patchLog.find((p) => p.email === PM)!.all).toEqual(["senha-nova-do-painel-pm", "$app$leitor$hash", "otpauth://totp/x?secret=ABC"]);
+    expect(patchLog.find((p) => p.email === LOJA)!.all).toEqual(["senha-nova-do-painel-loja", "$app$outro$hash"]);
+    expect(extraSecrets[PM]).toEqual(["$app$leitor$hash", "otpauth://totp/x?secret=ABC"]);
+  });
+
+  it("leitura com erro: não dá para preservar o que a caixa tem, então NÃO troca no escuro; a falha é listada", async () => {
+    getMode = "error";
+    const result = await service().adoptFromStalwart();
+    expect(patchLog).toEqual([]);
+    expect(result.passwordsFailed?.sort()).toEqual([LOJA, PM].sort());
+    expect(result.passwordsReapplied).toBeUndefined();
+  });
+
+  it.each(["hash", "none"] as const)("não deu para conferir (%s): reaplica e conta como reaplicada, nunca como realinhada", async (mode) => {
     getMode = mode;
     const result = await service().adoptFromStalwart();
     expect(patchLog.map((p) => p.email).sort()).toEqual([LOJA, PM].sort());
