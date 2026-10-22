@@ -63,12 +63,15 @@ import { BackupService } from "./services/backup-service.js";
 import { DockerCli } from "./services/backup-docker.js";
 import { SevenZip } from "./services/backup-archive.js";
 import { S3Storage } from "./services/backup-s3.js";
-import { verifyPasswordTimingSafe } from "./services/password.js";
+import { verifyPasswordTimingSafe, warmUpDummyHash } from "./services/password.js";
 import timezoneRoutes from "./routes/timezone.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
 import { loggerOptions } from "./log-config.js";
 import { TrustedProxies } from "./services/trusted-proxies.js";
+import { LoginLimiter } from "./services/login-limiter.js";
+import { LoginWatch } from "./services/login-watch.js";
+import { EdgeWatch } from "./services/edge-watch.js";
 import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
 import { PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
@@ -78,6 +81,12 @@ declare module "fastify" {
     deployService: DeployService;
     auditService: AuditService;
     alertsService: AlertsService;
+    /** Aviso ao dono quando a senha certa chega sem o código certo (login-watch.ts). */
+    loginWatch: LoginWatch;
+    /** Limite por CONTA nas rotas que pedem senha/código com a sessão aberta (action-guard.ts). */
+    actionLimiter: LoginLimiter;
+    /** Percebe o proxy da Cloudflare na frente do painel (edge-watch.ts). */
+    edgeWatch: EdgeWatch;
   }
 }
 
@@ -118,6 +127,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
   app.decorate("alertsService", new AlertsService(config.dataDir));
+  const loginWatch = new LoginWatch({
+    alerts: app.alertsService,
+    audit: app.auditService,
+    log: (m) => app.log.warn(m),
+  });
+  app.decorate("loginWatch", loginWatch);
+  app.decorate("actionLimiter", new LoginLimiter());
+  const edgeWatch = new EdgeWatch();
+  app.decorate("edgeWatch", edgeWatch);
+  app.addHook("onRequest", async (request) => edgeWatch.observe(request.headers));
   // Notificações (Telegram/e-mail) no escopo RAIZ: alertas, deploy, vigias e
   // o plugin de e-mail (que registra o envio por e-mail) precisam do MESMO
   // objeto — decorado dentro de um plugin, os outros não o enxergariam (foi
@@ -443,6 +462,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // e certificados a cada 6 h (só leitura). O primeiro giro dos vigias espera
   // o painel assentar (o proxy e o e-mail sobem em segundo plano).
   notificationService.start();
+  loginWatch.start();
+  void warmUpDummyHash();
   const disk = new DiskWatcher({ path: config.dataDir, statfs, notify: async (e) => notify(e) });
   const certificates = new CertificateWatcher({
     list: async () => (await app.certificateService.list()).items,
@@ -462,6 +483,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
 
   app.addHook("onClose", async () => {
     notificationService.stop();
+    loginWatch.stop();
     backupService.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.flush();

@@ -2,6 +2,8 @@
  * login-limiter.ts — rate limit do login por IP: 5 tentativas/minuto; ao
  * estourar, lockout progressivo (1min, 2min, 4min… até 30min). Em memória —
  * suficiente para um painel single-node (o contador reinicia com o processo).
+ * A chave é o IPv4 exato ou o bloco /64 do IPv6 (ver ip-group.ts); chaves que
+ * não são IP (ex.: "conta:<id>", usadas nas rotas com sessão) valem como estão.
  *
  * A tentativa é RESERVADA antes de a senha ser verificada (`check`): falhas
  * recentes + tentativas em andamento nunca passam do limite. Sem isso, 60
@@ -10,6 +12,7 @@
  * precisa terminar com `onFailure`, `onSuccess` ou `release`.
  */
 import { LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS } from "@paas/core";
+import { ipGroupKey } from "./ip-group.js";
 
 const BASE_LOCKOUT_MS = 60 * 1000;
 const MAX_LOCKOUT_MS = 30 * 60 * 1000;
@@ -87,7 +90,8 @@ export class LoginLimiter {
   }
 
   /** Pergunta se o IP pode tentar agora e, se puder, RESERVA a tentativa. */
-  check(ip: string): LoginAttemptResult {
+  check(rawIp: string): LoginAttemptResult {
+    const ip = ipGroupKey(rawIp);
     const now = Date.now();
     this.prune(now);
     const state = this.stateFor(ip);
@@ -103,13 +107,14 @@ export class LoginLimiter {
   }
 
   /** Devolve a reserva sem contar falha (senha certa à espera do 2FA, erro interno). */
-  release(ip: string): void {
-    const state = this.ips.get(ip);
+  release(rawIp: string): void {
+    const state = this.ips.get(ipGroupKey(rawIp));
     if (state && state.inflight > 0) state.inflight -= 1;
   }
 
   /** Converte a reserva em falha; ao atingir o limite na janela, aplica lockout progressivo. */
-  onFailure(ip: string): LoginAttemptResult {
+  onFailure(rawIp: string): LoginAttemptResult {
+    const ip = ipGroupKey(rawIp);
     this.release(ip);
     const state = this.stateFor(ip);
     const now = Date.now();
@@ -128,7 +133,7 @@ export class LoginLimiter {
   }
 
   /** Login bem-sucedido: zera falhas e lockout do IP. */
-  onSuccess(ip: string): void {
-    this.ips.delete(ip);
+  onSuccess(rawIp: string): void {
+    this.ips.delete(ipGroupKey(rawIp));
   }
 }

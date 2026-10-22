@@ -66,7 +66,7 @@ pendente e por quê — informação que não está no código nem no git log.
 ## Atualização de 04/10/2026 — branch `feat/webmail` (subagente, worktree isolado)
 - Pedido do dono: webmail para ler, responder e enviar e-mail das caixas pelo navegador.
 - O que entrou:
-  - **Roundcube 1.7.4**, com a imagem fixada por tag e digest, no container `paas-webmail`: fica na `paas-net`, sem porta publicada, e fala só com o `paas-stalwart` (IMAP 993 e SMTP 465, conferindo o certificado pelo nome).
+  - **Roundcube 1.7.5** (PHP 8.4.27, desde 22/10/2026; o painel recria o container sozinho quando a imagem fixada muda), com a imagem fixada por tag e digest, no container `paas-webmail`: fica na `paas-net`, sem porta publicada, e fala só com o `paas-stalwart` (IMAP 993 e SMTP 465, conferindo o certificado pelo nome).
   - **Card "Webmail"** na página E-mail (ativar/desativar) e botão **"Abrir webmail"** em cada caixa, com o usuário preenchido.
   - **`https://mail.<domínio>/`** abre o webmail quando ele está ativado; o certificado continua sendo emitido pelo mesmo bloco do Caddy.
   - **Defesa contra senha errada:**

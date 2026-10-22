@@ -1,6 +1,6 @@
 /**
  * auth.ts — rotas de autenticação do painel:
- *  POST /api/auth/login            (público, rate limited por IP)
+ *  POST /api/auth/login            (público; limite por IP e, no código de 6 dígitos, por conta)
  *  POST /api/auth/logout           (sessão)
  *  GET  /api/auth/me               (sessão)
  *  POST /api/auth/change-password  (sessão; invalida as demais sessões)
@@ -36,6 +36,7 @@ import { LoginLimiter } from "../services/login-limiter.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { publicUser } from "../services/public-user.js";
 import { TwoFactorError } from "../services/two-factor.js";
+import { beginAction, sendTooManyAttempts } from "../services/action-guard.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo
 // desconhecido no corpo. `maxLength` em toda string é defesa contra payload
@@ -85,6 +86,14 @@ function isStorageWriteFailure(err: unknown): boolean {
 const authRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const limiter = new LoginLimiter();
+  const lockedMessage =
+    "Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. " +
+    "Tente mais tarde ou use um código de recuperação.";
+
+  function twoFactorLocked(reply: FastifyReply, retryAfterSec: number): FastifyReply {
+    reply.header("retry-after", String(retryAfterSec));
+    return reply.code(429).send({ error: "two_factor_locked", message: lockedMessage, retryAfterSec });
+  }
 
   // respostas de auth nunca devem ser cacheadas
   app.addHook("onSend", async (_request, reply) => {
@@ -134,13 +143,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           detail: `Login falho de ${ip}.`,
         });
         if (!failure.allowed) {
-          reply.header("retry-after", String(failure.retryAfterSec));
-          return reply.code(429).send({
-            error: "too_many_attempts",
-            message: `Muitas tentativas. Aguarde ${failure.retryAfterSec}s e tente novamente.`,
-            retryAfterSec: failure.retryAfterSec,
-          });
+          return sendTooManyAttempts(reply, failure.retryAfterSec);
         }
+        // Senha errada (ou usuário inexistente) é SEMPRE 401 invalid_credentials,
+        // mesmo com o código de 6 dígitos da conta bloqueado: o bloqueio só
+        // aparece a quem já acertou a senha, então não revela que o usuário existe.
         return reply.code(401).send({
           error: "invalid_credentials",
           message: "Credenciais inválidas.",
@@ -150,39 +157,50 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       // Verificação em duas etapas: a senha certa não basta. O código só é
       // conferido DEPOIS da senha — quem não sabe a senha não chega até aqui.
       let twoFactorNote = "";
+      const watched = { id: user.id, username: user.username };
       if (user.twoFactor) {
         const code = request.body.code;
         if (code === undefined) {
+          // Primeiro passo (a tela pede o código): conta como tentativa do IP
+          // e abre uma pendência — se o login não for concluído, vira aviso.
+          const failure = settle(() => limiter.onFailure(ip));
+          app.loginWatch.passwordAccepted(ip, watched);
+          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
           return reply.code(401).send({
             error: "two_factor_required",
             message: "Digite o código de 6 dígitos do seu app autenticador.",
           });
         }
-        const check = await app.twoFactor.verify(user, code);
-        if (!check) {
+        const outcome = await app.twoFactor.verifyDetailed(user, code);
+        if (outcome.status !== "ok") {
           const failure = settle(() => limiter.onFailure(ip));
+          app.loginWatch.codeRejected(ip, watched);
+          if (outcome.status === "locked") {
+            // Nada foi conferido (nem o código certo passa): sem auditoria por
+            // tentativa, só o contador do IP. O bloqueio em si já foi auditado.
+            if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+            return twoFactorLocked(reply, outcome.retryAfterSec);
+          }
           await app.auditService.record({
             actor: "anon",
             action: "auth.2fa_failed",
             target: user.username,
             detail: `Código de verificação em duas etapas incorreto, de ${ip}.`,
           });
-          if (!failure.allowed) {
-            reply.header("retry-after", String(failure.retryAfterSec));
-            return reply.code(429).send({
-              error: "too_many_attempts",
-              message: `Muitas tentativas. Aguarde ${failure.retryAfterSec}s e tente novamente.`,
-              retryAfterSec: failure.retryAfterSec,
-            });
+          if (outcome.lockedNow) {
+            await app.loginWatch.accountLocked(ip, watched, outcome.lockedNow);
           }
+          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+          if (outcome.lockedNow) return twoFactorLocked(reply, outcome.lockedNow.retryAfterSec);
           return reply.code(401).send({
             error: "invalid_two_factor_code",
             message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
           });
         }
+        app.loginWatch.completed(ip, watched);
         twoFactorNote =
-          check.method === "recovery"
-            ? ` Com código de recuperação (restam ${check.recoveryCodesLeft}).`
+          outcome.method === "recovery"
+            ? ` Com código de recuperação (restam ${outcome.recoveryCodesLeft}).`
             : " Com verificação em duas etapas.";
       }
 
@@ -294,69 +312,79 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
     }
 
-    const currentOk = await verifyPasswordTimingSafe(user.passwordHash, currentPassword);
-    if (!currentOk) {
-      return reply.code(401).send({
-        error: "invalid_current_password",
-        message: "A senha atual está incorreta.",
-      });
-    }
-
-    const errors = passwordStrengthErrors(newPassword);
-    if (errors.length > 0) {
-      return reply.code(400).send({
-        error: "weak_password",
-        message: `Senha fraca: ${errors.join(", ")}.`,
-      });
-    }
-
+    // Limite por IP e por sessão: sessão aberta + senha vazada não bastam para adivinhar a senha atual.
+    const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
+    if (!attempt) return reply;
     try {
-      await app.userStore.updatePassword(user.id, await hashPassword(newPassword));
-    } catch (err) {
-      if (!isStorageWriteFailure(err)) throw err;
-      request.log.error({ err }, "falha ao gravar a nova senha");
-      return reply.code(500).send({
-        error: "storage_write_failed",
-        message:
-          "Não foi possível salvar a nova senha no servidor. Nada foi alterado: a senha atual " +
-          "continua valendo e nenhuma sessão foi encerrada.",
-      });
-    }
+      const currentOk = await verifyPasswordTimingSafe(user.passwordHash, currentPassword);
+      if (!currentOk) {
+        const failure = attempt.fail();
+        if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+        return reply.code(401).send({
+          error: "invalid_current_password",
+          message: "A senha atual está incorreta.",
+        });
+      }
 
-    // invalida as OUTRAS sessões — a atual continua válida.
-    //
-    // Se ESTA gravação falhar, a senha nova já está no disco e fica: desfazê-la
-    // seria outra gravação sujeita à mesma falha, e quem troca a senha por
-    // suspeita de vazamento não deve voltar à senha antiga. A resposta não é
-    // sucesso e diz exatamente o que ficou pendente: as outras sessões podem
-    // continuar válidas (em memória e no disco, de forma consistente).
-    let revoked: number;
-    try {
-      revoked = await app.sessionStore.destroyOthersForUser(user.id, session.id);
-    } catch (err) {
-      if (!isStorageWriteFailure(err)) throw err;
-      request.log.error({ err }, "senha trocada, mas falha ao gravar a revogação das outras sessões");
+      const errors = passwordStrengthErrors(newPassword);
+      if (errors.length > 0) {
+        return reply.code(400).send({
+          error: "weak_password",
+          message: `Senha fraca: ${errors.join(", ")}.`,
+        });
+      }
+
+      try {
+        await app.userStore.updatePassword(user.id, await hashPassword(newPassword));
+      } catch (err) {
+        if (!isStorageWriteFailure(err)) throw err;
+        request.log.error({ err }, "falha ao gravar a nova senha");
+        return reply.code(500).send({
+          error: "storage_write_failed",
+          message:
+            "Não foi possível salvar a nova senha no servidor. Nada foi alterado: a senha atual " +
+            "continua valendo e nenhuma sessão foi encerrada.",
+        });
+      }
+
+      // invalida as OUTRAS sessões — a atual continua válida.
+      //
+      // Se ESTA gravação falhar, a senha nova já está no disco e fica: desfazê-la
+      // seria outra gravação sujeita à mesma falha, e quem troca a senha por
+      // suspeita de vazamento não deve voltar à senha antiga. A resposta não é
+      // sucesso e diz exatamente o que ficou pendente: as outras sessões podem
+      // continuar válidas (em memória e no disco, de forma consistente).
+      let revoked: number;
+      try {
+        revoked = await app.sessionStore.destroyOthersForUser(user.id, session.id);
+      } catch (err) {
+        if (!isStorageWriteFailure(err)) throw err;
+        request.log.error({ err }, "senha trocada, mas falha ao gravar a revogação das outras sessões");
+        await app.auditService.record({
+          actor: user.username,
+          action: "auth.password_changed",
+          detail:
+            "Senha alterada, mas não foi possível invalidar as sessões anteriores (falha de gravação) — " +
+            "elas podem continuar válidas.",
+        });
+        return reply.code(500).send({
+          error: "sessions_not_revoked",
+          message:
+            "A senha foi alterada, mas não foi possível encerrar as outras sessões no servidor: elas " +
+            "podem continuar válidas. Troque a senha novamente (usando a nova como atual) para " +
+            "tentar encerrá-las.",
+        });
+      }
       await app.auditService.record({
         actor: user.username,
         action: "auth.password_changed",
-        detail:
-          "Senha alterada, mas não foi possível invalidar as sessões anteriores (falha de gravação) — " +
-          "elas podem continuar válidas.",
+        detail: `Senha alterada; ${revoked} sessão(ões) anterior(es) invalidada(s).`,
       });
-      return reply.code(500).send({
-        error: "sessions_not_revoked",
-        message:
-          "A senha foi alterada, mas não foi possível encerrar as outras sessões no servidor: elas " +
-          "podem continuar válidas. Troque a senha novamente (usando a nova como atual) para " +
-          "tentar encerrá-las.",
-      });
+      attempt.success();
+      return reply.send({ ok: true });
+    } finally {
+      attempt.release();
     }
-    await app.auditService.record({
-      actor: user.username,
-      action: "auth.password_changed",
-      detail: `Senha alterada; ${revoked} sessão(ões) anterior(es) invalidada(s).`,
-    });
-    return reply.send({ ok: true });
     },
   );
 
@@ -404,29 +432,43 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const user = await sessionUser(request, reply);
       if (!user) return reply;
-      if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
-        return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
-      }
-      let recoveryCodes: string[];
+      const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
+      if (!attempt) return reply;
       try {
-        recoveryCodes = await app.twoFactor.enable(user, request.body.code);
-      } catch (err) {
-        if (isStorageWriteFailure(err)) {
-          request.log.error({ err }, "falha ao gravar a verificação em duas etapas");
-          return reply.code(500).send({
-            error: "storage_write_failed",
-            message: "Não foi possível salvar no servidor. Nada foi alterado: o login continua só com a senha.",
-          });
+        if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
+          const failure = attempt.fail();
+          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+          return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
         }
-        return twoFactorFailure(reply, err);
+        let recoveryCodes: string[];
+        try {
+          recoveryCodes = await app.twoFactor.enable(user, request.body.code);
+        } catch (err) {
+          if (isStorageWriteFailure(err)) {
+            request.log.error({ err }, "falha ao gravar a verificação em duas etapas");
+            return reply.code(500).send({
+              error: "storage_write_failed",
+              message: "Não foi possível salvar no servidor. Nada foi alterado: o login continua só com a senha.",
+            });
+          }
+          // código errado do app conta como falha; conflito (já ativa, setup expirado) não
+          if (err instanceof TwoFactorError && err.code === "invalid_two_factor_code") {
+            const failure = attempt.fail();
+            if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+          }
+          return twoFactorFailure(reply, err);
+        }
+        attempt.success();
+        await app.auditService.record({
+          actor: user.username,
+          action: "auth.2fa_enabled",
+          detail: "Verificação em duas etapas ativada (10 códigos de recuperação gerados).",
+        });
+        const response: TwoFactorEnableResponse = { recoveryCodes };
+        return reply.send(response);
+      } finally {
+        attempt.release();
       }
-      await app.auditService.record({
-        actor: user.username,
-        action: "auth.2fa_enabled",
-        detail: "Verificação em duas etapas ativada (10 códigos de recuperação gerados).",
-      });
-      const response: TwoFactorEnableResponse = { recoveryCodes };
-      return reply.send(response);
     },
   );
 
@@ -436,28 +478,45 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const user = await sessionUser(request, reply);
       if (!user) return reply;
-      if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
-        return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
-      }
-      if (!user.twoFactor) {
-        return reply.code(409).send({ error: "not_enabled", message: "A verificação em duas etapas não está ativa." });
-      }
-      // Sessão roubada + senha vazada não bastam: desligar exige o código.
-      const check = await app.twoFactor.verify(user, request.body.code);
-      if (!check) {
-        return reply.code(400).send({
-          error: "invalid_two_factor_code",
-          message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+      const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
+      if (!attempt) return reply;
+      try {
+        if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
+          const failure = attempt.fail();
+          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+          return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
+        }
+        if (!user.twoFactor) {
+          return reply.code(409).send({ error: "not_enabled", message: "A verificação em duas etapas não está ativa." });
+        }
+        // Sessão roubada + senha vazada não bastam: desligar exige o código
+        // (com o mesmo bloqueio por conta do login).
+        const outcome = await app.twoFactor.verifyDetailed(user, request.body.code);
+        if (outcome.status !== "ok") {
+          const failure = attempt.fail();
+          if (outcome.status === "invalid" && outcome.lockedNow) {
+            await app.loginWatch.accountLocked(request.ip, { id: user.id, username: user.username }, outcome.lockedNow);
+          }
+          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+          if (outcome.status === "locked") return twoFactorLocked(reply, outcome.retryAfterSec);
+          if (outcome.lockedNow) return twoFactorLocked(reply, outcome.lockedNow.retryAfterSec);
+          return reply.code(400).send({
+            error: "invalid_two_factor_code",
+            message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+          });
+        }
+        const fresh = (await app.userStore.findById(user.id)) ?? user;
+        await app.twoFactor.disable(fresh);
+        attempt.success();
+        await app.auditService.record({
+          actor: user.username,
+          action: "auth.2fa_disabled",
+          detail: "Verificação em duas etapas desativada.",
         });
+        return reply.send({ ok: true });
+      } finally {
+        attempt.release();
       }
-      const fresh = (await app.userStore.findById(user.id)) ?? user;
-      await app.twoFactor.disable(fresh);
-      await app.auditService.record({
-        actor: user.username,
-        action: "auth.2fa_disabled",
-        detail: "Verificação em duas etapas desativada.",
-      });
-      return reply.send({ ok: true });
     },
   );
 };

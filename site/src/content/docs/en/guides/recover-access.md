@@ -60,6 +60,11 @@ At sign-in, type one of your **recovery codes** in the code field (each one work
 inside the panel, turn the verification off and on again to register the new phone and get new
 codes.
 
+**Locked out by wrong codes?** After 5 wrong codes in a row the app code is locked (5 minutes, doubling
+on each repeat up to 24 hours), but a **recovery code still signs you in**. With no recovery code, and
+your phone at hand, clear only the lock on the VPS (`sudo ./scripts/reset-2fa.sh --so-bloqueio`,
+confirmation word: `liberar`; two-factor stays on).
+
 Lost the codes too? With SSH access to the VPS:
 
 ```bash
@@ -68,7 +73,7 @@ sudo ./scripts/reset-2fa.sh
 ```
 
 It asks for confirmation (type `desligar`, Portuguese for "turn off"), stops the panel for a few
-seconds, turns two-factor authentication off, and brings the panel back up. Sign in with just your
+seconds, turns two-factor authentication off (clearing any wrong-code lock), and brings the panel back up. Sign in with just your
 username and password and enable the verification again. **Nothing else is touched.**
 
 ## I lost the Linux user password

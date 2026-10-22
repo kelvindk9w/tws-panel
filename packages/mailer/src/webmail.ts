@@ -9,7 +9,7 @@
  * implícito (IMAP 993, SMTP 465), com o mesmo login nos dois.
  *
  * Por que Roundcube (e não SnappyMail): imagem oficial mantida pelo próprio
- * projeto, com versão de segurança mês a mês em 2026 (1.7.4 em 06/09/2026);
+ * projeto, com versão de segurança mês a mês em 2026 (1.7.5 em 19/10/2026);
  * SQLite embutido (sem banco externo); sem painel administrativo (o
  * instalador vem desligado); usuário preenchido por URL (`?_user=`). O
  * SnappyMail não publica versão desde 2.38.2 (out/2024) e tem um painel de
@@ -40,12 +40,12 @@ import { copyFilesToContainer } from "./container-files.js";
 import { run } from "./exec.js";
 
 /**
- * Roundcube 1.7.4 (versão de segurança de 06/09/2026), variante Apache que
+ * Roundcube 1.7.5 (PHP 8.4.27, correção de segurança de 21/10/2026), variante Apache que
  * roda sem root (usuário www-data, porta 8000). Tag E digest: a imagem não
  * muda por baixo do painel. Trocar de versão = trocar as duas e conferir.
  */
 export const ROUNDCUBE_IMAGE =
-  "roundcube/roundcubemail:1.7.4-apache-nonroot@sha256:533b48d35f8fef99f24ae6997a032a727888d6992bd55a1a0a24d1ea208dbf3f";
+  "roundcube/roundcubemail:1.7.5-apache-nonroot@sha256:269c2855d07c5aec609848164e3fde2c2192458ea82c2927afb8b7f58799f6d3";
 
 /** Raiz dos dados do Roundcube na imagem (pastas config/ e db/; dono www-data). */
 export const WEBMAIL_DATA_DIR = "/var/roundcube";
@@ -189,7 +189,7 @@ export function renderWebmailIdentities(identities: Record<string, string>): str
  *  - user_create (primeiro login): o nome da identidade criada vem do arquivo;
  *  - login_after (quem já entrou antes): preenche a identidade padrão só se
  *    o nome estiver VAZIO — nunca sobrescreve o que a pessoa escolheu.
- * Conferido no código do Roundcube 1.7.4: rcube_user::create passa
+ * Conferido no código do Roundcube 1.7.4 (a 1.7.5 é correção de segurança sobre a mesma base): rcube_user::create passa
  * 'user_name' ao hook e usa-o como nome da identidade; index.php chama
  * login_after depois do login com sucesso; update_identity grava com
  * parâmetro (sem montar SQL com o nome).
@@ -321,6 +321,8 @@ export interface WebmailManagerOptions {
   /** Rede em que o webmail alcança o Stalwart (padrão paas-mail). */
   mailNetwork?: string;
   dataVolume?: string;
+  /** Quanto o container novo precisa ficar de pé, numa troca de imagem, antes de o antigo ser removido (padrão 5 s). */
+  settleMs?: number;
 }
 
 export class WebmailManager {
@@ -414,13 +416,43 @@ export class WebmailManager {
   }
 
   /**
+   * Imagem com que o container existente foi criado (a referência exata,
+   * tag e digest). Null = não deu para ler: tratado como "está certo", para
+   * não recriar à toa.
+   */
+  private async currentImage(): Promise<string | null> {
+    const inspect = await run("docker", ["inspect", "-f", "{{.Config.Image}}", this.containerName]);
+    const image = inspect.code === 0 ? inspect.stdout.trim() : "";
+    return image || null;
+  }
+
+  private async state(): Promise<string> {
+    return (await run("docker", ["inspect", "-f", "{{.State.Status}}", this.containerName])).stdout.trim();
+  }
+
+  /**
    * Sobe (ou garante) o container. A config vai ANTES do primeiro start: o
-   * entrypoint só inclui os arquivos que existem quando ele roda.
+   * entrypoint só inclui os arquivos que existem quando ele roda. Container
+   * existente criado com outra imagem (atualização do painel que trocou a
+   * versão do Roundcube) é recriado; os dados ficam no volume.
    */
   async start(): Promise<void> {
     await this.ensureNetwork();
+    // sobra de uma troca interrompida: imagem antiga (vulnerável), parada, com o volume montado
+    await run("docker", ["rm", "-f", `${this.containerName}-prev`]);
     const current = await this.status();
     if (current.installed) {
+      // criado e nunca iniciado (painel interrompido): não dá para copiar para dentro dele; recria
+      if (!current.running && (await this.state()) === "created") {
+        await run("docker", ["rm", "-f", this.containerName]);
+        await this.createAndStart();
+        return;
+      }
+      const image = await this.currentImage();
+      if (image !== null && image !== this.image) {
+        await this.replaceContainer();
+        return;
+      }
       await this.pushConfig();
       await this.ensureNetworks();
       if (current.running) return;
@@ -428,6 +460,50 @@ export class WebmailManager {
       // não sobe (imagem trocada, estado quebrado): recria — os dados ficam no volume
       await run("docker", ["rm", "-f", this.containerName]);
     }
+    await this.createAndStart();
+  }
+
+  /**
+   * Troca o container por um da imagem esperada. A imagem nova é baixada com
+   * o webmail ainda no ar; só então o antigo para e vira `<nome>-prev`. Se a
+   * criação ou o start do novo falhar, o novo sai e o antigo volta com o
+   * nome original (o webmail fica como estava, com erro claro).
+   */
+  private async replaceContainer(): Promise<void> {
+    const previous = `${this.containerName}-prev`;
+    if ((await run("docker", ["image", "inspect", this.image])).code !== 0) {
+      const pull = await run("docker", ["pull", this.image], { timeoutMs: 600_000 });
+      if (pull.code !== 0) {
+        throw new Error(`falha ao baixar a imagem nova do webmail (${pull.stderr.trim()}); o webmail segue na versão anterior`);
+      }
+    }
+    const stop = await run("docker", ["stop", this.containerName], { timeoutMs: 60_000 });
+    if (stop.code !== 0) throw new Error(`falha ao parar ${this.containerName} para atualizá-lo: ${stop.stderr.trim()}`);
+    const rename = await run("docker", ["rename", this.containerName, previous]);
+    if (rename.code !== 0) {
+      await run("docker", ["start", this.containerName]);
+      throw new Error(`falha ao preparar a troca do webmail: ${rename.stderr.trim()}`);
+    }
+    try {
+      await this.createAndStart();
+      // o novo tem de continuar de pé (um Apache que cai ao ler a configuração morre em instantes)
+      await new Promise((resolve) => setTimeout(resolve, this.opts.settleMs ?? 5000));
+      if (!(await this.status()).running) {
+        const logs = await run("docker", ["logs", "--tail", "5", this.containerName]);
+        throw new Error(`o container novo parou logo após iniciar: ${`${logs.stdout}${logs.stderr}`.trim().slice(-200)}`);
+      }
+    } catch (err) {
+      const reason = (err as Error).message;
+      await run("docker", ["rm", "-f", this.containerName]);
+      const back = await run("docker", ["rename", previous, this.containerName]);
+      const restart = back.code === 0 ? await run("docker", ["start", this.containerName]) : back;
+      const outcome = restart.code === 0 ? "o container anterior foi restaurado" : `não deu para restaurar o anterior (${restart.stderr.trim()}); ative o webmail de novo`;
+      throw new Error(`falha ao atualizar o webmail para a imagem nova (${reason}); ${outcome}`);
+    }
+    await run("docker", ["rm", "-f", previous]);
+  }
+
+  private async createAndStart(): Promise<void> {
     const create = await run("docker", [
       "create",
       "--name",

@@ -2,14 +2,18 @@
 // painel, direto no users.json. Chamado por scripts/reset-2fa.sh (com o painel
 // PARADO, para ele não regravar o arquivo com o estado antigo da memória).
 // Não toca em usuário, senha, sessões nem em mais nada.
+// Desligar o 2FA também apaga o bloqueio por excesso de códigos errados (ele
+// mora dentro do registro do 2FA). Com --so-bloqueio o 2FA CONTINUA ligado e
+// só o bloqueio é limpo (para quem tem o celular, mas foi trancado por erros).
 //
-// Uso: node reset-2fa.mjs /data/users.json
+// Uso: node reset-2fa.mjs /data/users.json [--so-bloqueio]
 import { closeSync, fchownSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import path from "node:path";
 
 const file = process.argv[2];
-if (!file) {
-  console.error("uso: node reset-2fa.mjs <caminho do users.json>");
+const onlyLock = process.argv[3] === "--so-bloqueio";
+if (!file || (process.argv[3] !== undefined && !onlyLock)) {
+  console.error("uso: node reset-2fa.mjs <caminho do users.json> [--so-bloqueio]");
   process.exit(2);
 }
 
@@ -21,7 +25,15 @@ if (affected.length === 0) {
   process.exit(0);
 }
 const now = new Date().toISOString();
-data.users = users.map((u) => (u && u.twoFactor ? { ...u, twoFactor: null, updatedAt: now } : u));
+const clearLock = (tf) => {
+  const { failedCodes, lockLevel, lockedUntil, ...rest } = tf;
+  return rest;
+};
+data.users = users.map((u) =>
+  u && u.twoFactor
+    ? { ...u, twoFactor: onlyLock ? clearLock(u.twoFactor) : null, updatedAt: now }
+    : u,
+);
 // Gravação atômica: arquivo temporário na mesma pasta + rename. Uma queda no
 // meio nunca deixa o users.json pela metade (ninguém mais entraria no painel).
 const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
@@ -40,5 +52,9 @@ try {
   throw err;
 }
 for (const u of affected) {
-  console.log(`Verificação em duas etapas desligada para: ${u.username}`);
+  console.log(
+    onlyLock
+      ? `Bloqueio do código de verificação limpo para: ${u.username} (a verificação continua ligada)`
+      : `Verificação em duas etapas desligada para: ${u.username} (bloqueio por códigos errados também limpo)`,
+  );
 }

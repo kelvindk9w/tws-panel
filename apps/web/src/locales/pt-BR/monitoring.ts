@@ -8,6 +8,7 @@ export default {
   "alerts.source.scan": "monitoramento",
   "alerts.source.blacklist": "blacklist",
   "alerts.source.certificate": "certificado",
+  "alerts.source.login": "acesso",
   "alerts.status.open": "aberto",
   "alerts.status.acknowledged": "reconhecido",
   "alerts.status.resolved": "resolvido",

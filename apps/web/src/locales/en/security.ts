@@ -1,6 +1,9 @@
 // Namespace "security" (en). Flat keys; plurals use _one/_other suffixes.
 export default {
   // SecurityPage
+  // Cloudflare proxy notice (EdgeNotice)
+  "edge.title": "Cloudflare proxy detected on the panel",
+  "edge.body": "The panel is receiving traffic through Cloudflare with the proxy turned on (orange cloud). The sign-in attempt limit then sees Cloudflare's IP instead of the visitor's and stops protecting you. Keep the panel's DNS record as DNS only (grey cloud).",
   "page.title": "Security",
   "page.subtitle": "VPS protections, baseline snapshot, monitoring and email reputation.",
 
