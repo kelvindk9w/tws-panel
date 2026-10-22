@@ -337,6 +337,7 @@ export function remoteBadge(record: BackupRecord): { label: string; variant: Bad
 
 function operationText(record: BackupRecord): string {
   if (record.operation === "restore") return t("backups.operation.restore");
+  if (record.operation === "restore_check") return t("backups.operation.restoreCheck");
   if (record.operation === "verify") return record.fileName ? t("backups.operation.verify") : t("backups.operation.verifyAll");
   return record.trigger === "schedule" ? t("backups.operation.scheduled") : t("backups.operation.manual");
 }

@@ -42,6 +42,8 @@ const service = {
   updateDefaults: vi.fn(async () => undefined),
   applyDefaults: vi.fn(async () => ({ applied: [{ id: "p1", name: "Loja" }], missing: [] })),
   useDefaults: vi.fn(async () => undefined),
+  updateRestoreCheck: vi.fn(async () => ({ settings: null })),
+  runRestoreCheck: vi.fn(async () => ({ id: "r9", operation: "restore_check" })),
 };
 
 beforeEach(async () => {
@@ -97,6 +99,8 @@ describe("rotas de backups", () => {
       ["POST", "/api/backups/verify", {}],
       ["GET", "/api/backups/projects/p1"],
       ["GET", "/api/backups/catalog"],
+      ["PUT", "/api/backups/projects/p1/restore-check", { enabled: false }],
+      ["POST", "/api/backups/projects/p1/restore-check/run", { confirm: "x" }],
     ];
     for (const [method, url, payload] of routes) {
       const res = await fresh.app.inject({ method, url, headers: token, ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}) });
@@ -179,6 +183,26 @@ describe("rotas de backups", () => {
     await call("POST", "/api/backups/projects/p1/detect");
     expect(service.detectProject).toHaveBeenCalledWith("p1");
     expect((await call("GET", "/api/backups/catalog")).json()).toEqual({ panel: [], email: [], projects: [] });
+  });
+
+  it("teste de restauração: ligar/desligar e Testar agora, corpo validado, sem cache", async () => {
+    const body = { enabled: true, destinationId: "p2", frequency: "daily", confirm: "Fazenda Sandbox" };
+    const put = await call("PUT", "/api/backups/projects/p1/restore-check", body);
+    expect(put.statusCode).toBe(200);
+    expect(put.headers["cache-control"]).toBe("no-store");
+    expect(service.updateRestoreCheck).toHaveBeenCalledWith("p1", body, "admin");
+    await call("PUT", "/api/backups/projects/p1/restore-check", { enabled: false });
+    expect(service.updateRestoreCheck).toHaveBeenLastCalledWith("p1", { enabled: false }, "admin");
+    for (const bad of [{}, { enabled: true, frequency: "hourly" }, { enabled: true, destinationId: "../x" }, { enabled: true, extra: 1 }]) {
+      expect((await call("PUT", "/api/backups/projects/p1/restore-check", bad)).statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    const run = await call("POST", "/api/backups/projects/p1/restore-check/run", { confirm: "Fazenda Sandbox" });
+    expect(run.json()).toEqual({ id: "r9", operation: "restore_check" });
+    expect(run.headers["cache-control"]).toBe("no-store");
+    expect(service.runRestoreCheck).toHaveBeenCalledWith("p1", { confirm: "Fazenda Sandbox" }, "admin");
+    expect((await call("POST", "/api/backups/projects/p1/restore-check/run", {})).statusCode).toBe(400);
+    service.runRestoreCheck.mockRejectedValueOnce(httpError(400, "confirm_mismatch", "Para confirmar, digite exatamente: Fazenda Sandbox"));
+    expect((await call("POST", "/api/backups/projects/p1/restore-check/run", { confirm: "x" })).json().error).toBe("confirm_mismatch");
   });
 
   it("Conferir um, todos do item e todos: corpo validado, sem cache", async () => {

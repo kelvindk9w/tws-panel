@@ -377,6 +377,23 @@ export function restoreScript(engine: BackupDatabaseEngine): string {
   }
 }
 
+/**
+ * Teste de restauração: conta as tabelas do banco restaurado (só o número;
+ * nenhuma linha é lida). Postgres: $1 = banco. MongoDB: sem contagem (null);
+ * o teste vale pelo código de saída do mongorestore.
+ */
+export function tableCountScript(engine: BackupDatabaseEngine): string | null {
+  switch (engine) {
+    case "postgres":
+      return `${PG_ENV}\npsql -U "$U" -d "$1" -AtX -c "select count(*) from information_schema.tables where table_schema not in ('pg_catalog','information_schema')"`;
+    case "mysql":
+    case "mariadb":
+      return `${MY_ENV}\n$CLI -u"$U" -N -B -e "select count(*) from information_schema.tables where table_schema not in ('information_schema','performance_schema','mysql','sys')"`;
+    default:
+      return null;
+  }
+}
+
 /** Papéis do Postgres (o "já existe" de um papel é esperado e ignorado). */
 export const PG_GLOBALS_RESTORE = `${PG_ENV}\npsql -U "$U" -d template1 -X -q`;
 

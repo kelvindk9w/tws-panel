@@ -54,6 +54,13 @@ describe("M4 — erro nos arquivos do dump e da restauração", () => {
     await expect(cli.execFromFile("c1", "psql", [], path.join(dir, "nao-existe.sql"))).rejects.toThrow(/ler|ENOENT/i);
   });
 
+  it("restauração com prazo próprio (teste de restauração): passou do prazo, o comando é interrompido", async () => {
+    const cli = await dockerDeMentira("cat > /dev/null; exec sleep 30");
+    const entrada = path.join(dir, "entrada.sql");
+    await writeFile(entrada, "select 1;");
+    await expect(cli.execFromFile("c1", "psql", [], entrada, { timeoutMs: 200 })).rejects.toThrow(/passou do prazo/);
+  });
+
   it("dump que termina bem continua funcionando", async () => {
     const cli = await dockerDeMentira("echo SELECT 1");
     const saida = path.join(dir, "dump.sql");

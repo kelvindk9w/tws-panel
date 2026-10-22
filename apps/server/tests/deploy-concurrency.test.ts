@@ -61,6 +61,22 @@ function codes(results: PromiseSettledResult<unknown>[]): (string | null)[] {
   return results.map((r) => (r.status === "fulfilled" ? null : (r.reason as { code?: string }).code ?? "erro"));
 }
 
+describe("reserva do projeto (teste de restauração de backup)", () => {
+  it("enquanto o projeto está reservado, o deploy dele é recusado; ao soltar, volta a valer", async () => {
+    const p = await project();
+    const release = await svc.holdProject(p.id);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ code: "deploy_in_progress" });
+    await expect(svc.holdProject(p.id)).rejects.toMatchObject({ code: "deploy_in_progress" });
+    release();
+    const job = await svc.startDeploy(p.id);
+    expect(job.status).toBeDefined();
+  });
+
+  it("projeto que não existe: 404", async () => {
+    await expect(svc.holdProject("nao-existe")).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
 describe("um deploy por projeto", () => {
   it("dois deploys pedidos juntos: um roda, o outro é recusado com 409", async () => {
     const p = await project();

@@ -261,6 +261,35 @@ In **Settings → Backups** and in each project's **Backups** tab.
 **When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS time zone, with
 the number of copies kept on the VPS and externally. **Back up now** at any time.
 
+**Validate the database backup by restoring it into another project (optional).** On the
+project's **Backups** tab, off by default: the backup keeps working as always. When on, after each
+backup the panel restores the database into the database of **another project** (for example, the
+farm in sandbox, with the same repository on another branch and its own database) and checks that it
+ended up with tables. It is the proof that the database backup really restores; the test
+environment is always a bit behind.
+
+- **Careful.** The restore deletes and recreates, in the destination project's database, the tables
+  that are in the backup. It also copies real production data into the test environment, which may
+  be personal data (LGPD/GDPR): do not turn it on if the test environment is shared with third
+  parties. To turn it on, pick the destination project and type its name.
+- **Database only.** Files, volumes, variables and the source project's configuration are never
+  restored, nor are the PostgreSQL users (roles).
+- **Who can be the destination.** Another project, with a database of the same type (PostgreSQL,
+  MySQL, MariaDB or MongoDB) already detected and with no restore test of its own. For MySQL,
+  MariaDB and MongoDB the databases must have the same name; for PostgreSQL, the backup's database
+  goes into the destination's database.
+- **When.** After every backup (default) or at most once a day or a week. **Test now** runs the
+  test with the latest backup, with the same typed confirmation. If the external copy fails, the
+  panel still tests the VPS copy.
+- **Safety.** The destination's database must be running (the panel does not start or restart
+  anything), the destination must not be deploying, and the test waits its turn in the backup queue.
+  If the destination is deleted or renamed, the option turns itself off and warns you.
+- **Result.** The tab shows "Last restore test: passed on …, in project …", or failed, or not run,
+  with a short reason; **Settings → Backups** shows a seal per project. If the test fails, you get a
+  failed-backup notification. If the restore fails halfway, the test database may be left
+  incomplete. If the test project runs newer code and the schema does not match, the test fails with
+  the reason, without bringing anything down.
+
 **Restore.**
 
 - Per item (project, panel or email), choosing the date and the copy (VPS or external).

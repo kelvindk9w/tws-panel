@@ -58,6 +58,7 @@ function baseView(): ProjectBackupView {
     extraFolders: [],
     history: [],
     destinationConnected: false,
+    restoreCheck: { settings: null, last: null, unavailableReason: null, unavailableCode: null, engine: "postgres", candidates: [{ id: "p2", name: "Loja Teste", engine: "postgres" }], notice: null },
   };
 }
 
@@ -98,6 +99,8 @@ beforeEach(() => {
         return undefined;
       case "POST /api/backups/projects/p1/detect":
         return view;
+      case "PUT /api/backups/projects/p1/restore-check":
+        return view.restoreCheck;
       case "POST /api/backups/targets/email/run":
         return {};
       case "POST /api/backups/targets/project:p1/run":
@@ -181,6 +184,29 @@ describe("aba Backups do projeto", () => {
     const dialog = await screen.findByTestId("restore-dialog");
     expect(await within(dialog).findByText("Ainda não há backups para restaurar.")).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/Publicar do GitHub antes de restaurar/)).not.toBeChecked();
+  });
+
+  it("a validação do backup em outro projeto fica na aba, desligada, entre o que entra no backup e a frequência", async () => {
+    renderCard();
+    const root = await screen.findByTestId("project-backups");
+    const card = within(root).getByTestId("restore-check-card");
+    expect(card).toHaveTextContent("Validar o backup do banco restaurando em outro projeto");
+    expect(within(card).getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
+    // ligar pela aba: o mesmo PUT e a aba recarrega
+    fireEvent.change(within(card).getByLabelText("Projeto de destino"), { target: { value: "p2" } });
+    fireEvent.change(within(card).getByPlaceholderText("Loja Teste"), { target: { value: "Loja Teste" } });
+    view = { ...view, restoreCheck: { ...view.restoreCheck, settings: { enabled: true, destinationId: "p2", destinationName: "Loja Teste", frequency: "each" } } };
+    fireEvent.click(within(card).getByRole("button", { name: "Ligar a validação" }));
+    await waitFor(() => expect(within(root).getByTestId("restore-check-badge")).toHaveTextContent("Ligado"));
+    expect(calls.some((c) => c.key === "PUT /api/backups/projects/p1/restore-check")).toBe(true);
+  });
+
+  it("sem o campo restoreCheck (servidor antigo): a aba abre sem o cartão", async () => {
+    const { restoreCheck: _drop, ...old } = view;
+    view = old as ProjectBackupView;
+    renderCard();
+    await screen.findByTestId("project-backups");
+    expect(screen.queryByTestId("restore-check-card")).not.toBeInTheDocument();
   });
 
   it("Conferir um backup e Conferir todos do projeto; o fuso da agenda com o link para trocar", async () => {

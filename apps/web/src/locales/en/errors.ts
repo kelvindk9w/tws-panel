@@ -66,4 +66,11 @@ export default {
   "code.mail_auth_still_refused": "The panel checked the admin password and the mail server accepts it, but the read was refused again. Nothing was restarted or deleted. Next step: try Sync once more; if it repeats, read the log with docker logs paas-stalwart.",
   "code.reconciliation_not_found": "That notice no longer exists.",
   "code.wrong_password": "The password does not open this backup.",
+
+  // Backup restore test
+  "code.restore_check_unavailable": "This project has no database that the backup copies, or the database is not selected for the backup.",
+  "code.restore_check_chain": "This project is the destination of another project's restore test, so it cannot have its own test.",
+  "code.restore_check_off": "Turn on the database backup validation first.",
+  "code.invalid_destination": "This project cannot be the destination: it must be another project, with the same database type and no restore test of its own.",
+  "code.no_backup": "There is no backup of this project to test yet.",
 } as const;

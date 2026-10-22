@@ -265,6 +265,33 @@ Em **Configurações → Backups** e na aba **Backups** de cada projeto.
 **Quando.** Uma vez por dia, a cada 12 ou a cada 6 horas, a partir das 03:00 no fuso da VPS, com
 o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer momento.
 
+**Validar o backup do banco restaurando em outro projeto (opcional).** Na aba **Backups** do
+projeto, desligada por padrão: o backup continua como sempre. Ligada, depois de cada backup o painel
+restaura o banco no banco de **outro projeto** (por exemplo, a fazenda em sandbox, com o mesmo
+repositório em outra branch e o próprio banco) e confere que ele ficou com tabelas. É a prova de
+que o backup do banco realmente restaura; o ambiente de teste fica sempre um pouco defasado.
+
+- **Atenção.** A restauração apaga e recria, no banco do projeto de destino, as tabelas que estão no
+  backup. Ela também copia dados reais de produção para o ambiente de teste, que podem ser dados
+  pessoais (LGPD): não ligue se o teste for compartilhado com terceiros. Para ligar, escolha o
+  projeto de destino e digite o nome dele.
+- **Só o banco.** Arquivos, volumes, variáveis e a configuração do projeto de origem nunca são
+  restaurados, nem os usuários (papéis) do PostgreSQL.
+- **Quem pode ser destino.** Outro projeto, com banco do mesmo tipo (PostgreSQL, MySQL, MariaDB ou
+  MongoDB) já detectado e que não faça um teste próprio. No MySQL, MariaDB e MongoDB, os bancos
+  precisam ter o mesmo nome; no PostgreSQL, o banco do backup entra no banco do destino.
+- **Quando.** Após cada backup (padrão) ou, no máximo, uma vez por dia ou por semana. **Testar
+  agora** roda o teste com o último backup, com a mesma confirmação digitada. Se a cópia externa
+  falhar, o painel testa a cópia da VPS mesmo assim.
+- **Segurança.** O banco do destino precisa estar em execução (o painel não liga nem reinicia nada),
+  o destino não pode estar em deploy, e o teste espera a vez na fila dos backups. Se o destino for
+  apagado ou renomeado, a opção se desliga e avisa.
+- **Resultado.** A aba mostra "Último teste de restauração: ok em …, no projeto …", ou falhou, ou
+  não executado, com o motivo curto; **Configurações → Backups** mostra um selo por projeto. Se o
+  teste falhar, chega uma notificação de backup que falhou. Se a restauração falhar no meio, o banco
+  de teste pode ficar incompleto. Se o projeto de teste tem um código mais novo e o esquema não
+  combina, o teste falha com o motivo, sem derrubar nada.
+
 **Restaurar.**
 
 - Por item (projeto, painel ou e-mail), escolhendo a data e a cópia (VPS ou externa).

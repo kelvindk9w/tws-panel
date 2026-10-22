@@ -123,6 +123,19 @@ describe("SevenZip (7zz de mentira)", () => {
     expect(await readFile(path.join(out, "extraido.txt"), "utf8")).toBe("ok");
   });
 
+  it("extrair só alguns caminhos (teste de restauração): passa os nomes depois do arquivo; sem a lista, nada muda", async () => {
+    const z = new SevenZip({ bin: fakeBin });
+    const archive = path.join(dir, "b.7z");
+    await z.create(archive, [dir], {});
+    await z.extract(archive, path.join(dir, "s1"), null, ["manifesto.json", "bancos"]);
+    await z.extract(archive, path.join(dir, "s2"), null);
+    const all = await calls();
+    const only = all[1]!.args;
+    expect(only.slice(only.indexOf(archive))).toEqual([archive, "manifesto.json", "bancos"]);
+    const full = all[2]!.args;
+    expect(full[full.length - 1]).toBe(archive);
+  });
+
   it("sem senha num arquivo comum: passa -p vazio para nunca ficar esperando a senha", async () => {
     const z = new SevenZip({ bin: fakeBin });
     const archive = path.join(dir, "b.7z");

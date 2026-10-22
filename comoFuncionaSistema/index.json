@@ -260,7 +260,7 @@
     {
       "id": "backups",
       "titulo": "Backups",
-      "resumo": "Backups automáticos (.7z) do painel, do e-mail e dos bancos e pastas de cada projeto: cópia na VPS e cópia externa S3/R2 cifrada e conferida, com restauração por item e numa VPS nova.",
+      "resumo": "Backups automáticos (.7z) do painel, do e-mail e dos bancos e pastas de cada projeto: cópia na VPS e cópia externa S3/R2 cifrada e conferida, com restauração por item e numa VPS nova. Opcional por projeto: validar o backup do banco restaurando-o em outro projeto (teste).",
       "pontoDeEntrada": {
         "api": "GET /api/backups",
         "web": "/settings/backups"

@@ -1732,6 +1732,14 @@ export class DeployService {
    * entra em `this.jobs`, ele mesmo segura o projeto; quem chama libera a
    * reserva no `finally`.
    */
+  /**
+   * Reserva o projeto como um deploy faz: enquanto a reserva existir, nenhum deploy dele começa (409). Lança se já há
+   * deploy em andamento. Devolve a função que solta. Usado pelo teste de restauração de backup no projeto de destino.
+   */
+  async holdProject(id: string): Promise<() => void> {
+    return this.reserveProject(await this.requireProject(id));
+  }
+
   private reserveProject(project: Project): () => void {
     const busy =
       this.starting.has(project.id) ||
