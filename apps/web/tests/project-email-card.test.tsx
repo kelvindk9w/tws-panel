@@ -16,6 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DnsChecklistResponse, Mailbox, MailDomainSummary, ProjectEmailConfig, ProjectEmailUsableMailbox } from "@paas/core";
 import { setLocale } from "@/i18n/core";
 
+// Cada teste monta o cartão inteiro e digita campos longos; no runner do CI
+// (mais lento) um deles passou de 5 s. Limite maior só neste arquivo.
+vi.setConfig({ testTimeout: 20_000 });
+
 const apiFetchMock = vi.fn();
 vi.mock("@/lib/api", () => ({
   apiFetch: (path: string, init?: RequestInit) => apiFetchMock(path, init),
@@ -204,15 +208,19 @@ describe("ProjectEmailCard — ativar", () => {
     expect(local).toHaveAttribute("placeholder", "loja");
     expect(screen.getByLabelText("Nome de exibição (opcional)")).toHaveAttribute("placeholder", "Loja Royal");
     await user.type(local, "contato");
-    await user.type(screen.getByLabelText("Nome de exibição (opcional)"), "Contato - Loja");
+    // campos longos entram por colagem (um evento só), não tecla a tecla
+    await user.click(screen.getByLabelText("Nome de exibição (opcional)"));
+    await user.paste("Contato - Loja");
     expect(screen.getByText(/Contato - Loja <contato@envio\.exemplo\.com\.br>/)).toBeInTheDocument();
     // a caixa é o próprio endereço: dá para abrir num app de e-mail
     expect(screen.getByTestId("mailbox-explain")).toHaveTextContent(/contato@envio\.exemplo\.com\.br/);
     const pass = screen.getByLabelText("Senha da caixa");
     expect(pass).toHaveAttribute("type", "password");
     expect(screen.getByLabelText("Repita a senha")).toHaveAttribute("type", "password");
-    await user.type(pass, SENHA);
-    await user.type(screen.getByLabelText("Repita a senha"), SENHA);
+    await user.click(pass);
+    await user.paste(SENHA);
+    await user.click(screen.getByLabelText("Repita a senha"));
+    await user.paste(SENHA);
     await user.click(screen.getByRole("button", { name: /Ativar e-mail/ }));
     await waitFor(() =>
       expect(bodyOf("/api/projects/p1/email", "POST")).toEqual({
