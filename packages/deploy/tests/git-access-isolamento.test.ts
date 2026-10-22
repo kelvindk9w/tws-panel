@@ -321,3 +321,47 @@ describe("credentialHost — a quem o helper entrega o token", () => {
     expect(credentialHost("lixo")).toBe("");
   });
 });
+
+describe("credentialHelper — só entrega o token no protocolo cadastrado", () => {
+  async function pedir(registrado: string, pedido: { protocol: string; host: string }): Promise<string> {
+    const { spawnSync } = await import("node:child_process");
+    const { credentialHelper, credentialHost, credentialProtocol } = await import("../src/git-safe.js");
+    const r = spawnSync("sh", ["-c", `${credentialHelper().slice(1)} get`], {
+      input: `protocol=${pedido.protocol}\nhost=${pedido.host}\n\n`,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        PAAS_GIT_USERNAME: "x-access-token",
+        PAAS_GIT_PASSWORD: "segredo-de-teste",
+        PAAS_GIT_HOST: credentialHost(registrado),
+        PAAS_GIT_PROTOCOL: credentialProtocol(registrado),
+      },
+    });
+    return r.stdout;
+  }
+
+  it("credentialProtocol: https/http em minúsculas; vazio se não for URL", async () => {
+    const { credentialProtocol } = await import("../src/git-safe.js");
+    expect(credentialProtocol("HTTPS://git.example.com/r.git")).toBe("https");
+    expect(credentialProtocol("http://git.example.com/r.git")).toBe("http");
+    expect(credentialProtocol("lixo")).toBe("");
+  });
+
+  it("cadastro https: protocol=https entrega, protocol=http NÃO entrega", async () => {
+    const url = "https://git.example.com/r.git";
+    expect(await pedir(url, { protocol: "https", host: "git.example.com" })).toContain("password=segredo-de-teste");
+    expect(await pedir(url, { protocol: "http", host: "git.example.com" })).toBe("");
+  });
+
+  it("cadastro http: http entrega e https também (subir a proteção é permitido)", async () => {
+    const url = "http://git.example.com/r.git";
+    expect(await pedir(url, { protocol: "http", host: "git.example.com" })).toContain("password=");
+    expect(await pedir(url, { protocol: "https", host: "git.example.com" })).toContain("password=");
+  });
+
+  it("protocolo qualquer outro (ftp, vazio) nunca recebe", async () => {
+    const url = "https://git.example.com/r.git";
+    expect(await pedir(url, { protocol: "ftp", host: "git.example.com" })).toBe("");
+    expect(await pedir(url, { protocol: "", host: "git.example.com" })).toBe("");
+  });
+});

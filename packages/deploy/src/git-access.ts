@@ -44,7 +44,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import type { GitAccessCheckResponse, GitAccessFailureReason, GitReadCredential } from "@paas/core";
-import { GIT_SAFE_CONFIG, NO_REDIRECT_CONFIG, credentialHelper, credentialHost, gitSafeEnv } from "./git-safe.js";
+import { GIT_SAFE_CONFIG, NO_REDIRECT_CONFIG, credentialHelper, credentialHost, credentialProtocol, gitSafeEnv } from "./git-safe.js";
 
 export const GIT_ACCESS_TIMEOUT_MS = 15_000;
 const MAX_BRANCHES = 10;
@@ -307,7 +307,7 @@ export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCh
     if (/^(https?_proxy|all_proxy)$/i.test(name)) delete baseEnv[name];
   }
   const env: NodeJS.ProcessEnv = credential
-    ? { ...baseEnv, PAAS_GIT_USERNAME: credential.username, PAAS_GIT_PASSWORD: credential.token, PAAS_GIT_HOST: credentialHost(source) }
+    ? { ...baseEnv, PAAS_GIT_USERNAME: credential.username, PAAS_GIT_PASSWORD: credential.token, PAAS_GIT_HOST: credentialHost(source), PAAS_GIT_PROTOCOL: credentialProtocol(source) }
     : baseEnv;
   // sem tty o ssh já não pergunta nada; BatchMode deixa isso explícito e a falha, imediata
   // (a fase do banner não é coberta por ConnectTimeout: o ServerAlive derruba o ssh mudo)

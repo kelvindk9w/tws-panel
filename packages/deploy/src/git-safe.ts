@@ -76,10 +76,13 @@ export async function sanitizeGitConfig(gitDir: string, run: Executar, env: Node
 export function credentialHelper(mark?: string): string {
   // Responde SÓ quando o `host=` que o git pede for o do endereço cadastrado ($PAAS_GIT_HOST):
   // um redirecionamento para outro host não recebe o token (o git falha por falta de credencial).
+  // Também confere o `protocol=`: cadastro em https nunca entrega o token em http puro (um 302 https→http no
+  // mesmo host e porta). Cadastro em http aceita http e https (subir a proteção é permitido).
   const marker = mark ? `echo ${mark} >&2; ` : "";
   return (
-    '!f() { test "$1" = get || return 0; h=; while IFS= read -r l; do case "$l" in host=*) h="${l#host=}";; esac; done; ' +
+    '!f() { test "$1" = get || return 0; h=; p=; while IFS= read -r l; do case "$l" in host=*) h="${l#host=}";; protocol=*) p="${l#protocol=}";; esac; done; ' +
     'h=$(printf %s "$h" | tr A-Z a-z); test -n "$PAAS_GIT_HOST" && test "$h" = "$PAAS_GIT_HOST" || return 0; ' +
+    'p=$(printf %s "$p" | tr A-Z a-z); case "$PAAS_GIT_PROTOCOL/$p" in https/https|http/http|http/https) ;; *) return 0;; esac; ' +
     marker +
     "printf 'username=%s\\npassword=%s\\n' \"$PAAS_GIT_USERNAME\" \"$PAAS_GIT_PASSWORD\"; }; f"
   );
@@ -91,6 +94,16 @@ export const CREDENTIAL_HELPER = credentialHelper();
 export function credentialHost(source: string): string {
   try {
     return new URL(source).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/** `https`/`http` (minúsculo) do endereço cadastrado, como o git o pede ao helper; "" se não for http(s). */
+export function credentialProtocol(source: string): string {
+  try {
+    const p = new URL(source).protocol.replace(/:$/, "").toLowerCase();
+    return p === "https" || p === "http" ? p : "";
   } catch {
     return "";
   }

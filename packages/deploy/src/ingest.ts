@@ -9,7 +9,7 @@ import { cp, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { GitReadCredential, Project } from "@paas/core";
 import { run } from "./exec.js";
-import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, credentialHost, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
+import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, credentialHost, credentialProtocol, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
 import { uploadOverlapBlocker } from "./workdir-safety.js";
 
@@ -70,6 +70,8 @@ interface AmbienteGit {
   /** Apaga o segredo de qualquer texto antes de ele virar log ou erro. */
   ocultar: (texto: string) => string;
   temCredencial: boolean;
+  /** Endereço cadastrado (sem credencial), para explicar redirecionamentos recusados. */
+  origem?: string;
 }
 
 function prepararAmbienteGit(cred: GitReadCredential | null, source: string): AmbienteGit {
@@ -86,12 +88,13 @@ function prepararAmbienteGit(cred: GitReadCredential | null, source: string): Am
 
   const token = cred.token;
   return {
-    env: { ...base, PAAS_GIT_USERNAME: cred.username, PAAS_GIT_PASSWORD: token, PAAS_GIT_HOST: credentialHost(source) },
+    env: { ...base, PAAS_GIT_USERNAME: cred.username, PAAS_GIT_PASSWORD: token, PAAS_GIT_HOST: credentialHost(source), PAAS_GIT_PROTOCOL: credentialProtocol(source) },
     // o primeiro "credential.helper=" zera helpers herdados (ex.: um store no
     // ~/.gitconfig), para o token nunca ser gravado por outro helper
     configArgs: ["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`],
     ocultar: (texto) => (token ? texto.split(token).join(CREDENCIAL_OCULTA) : texto),
     temCredencial: true,
+    origem: source,
   };
 }
 
@@ -118,6 +121,14 @@ function falhaGit(
   // O helper só entrega o token ao host cadastrado: se o repositório redirecionou para OUTRO host, o git
   // pede credencial lá, não recebe e para. Diz o que fazer em vez de culpar o token.
   if (ambiente?.temCredencial && /could not read (username|password)|terminal prompts disabled/i.test(bruto)) {
+    // "could not read Username for 'http://host:porta'": o endereço que pediu a credencial (o do redirecionamento)
+    const destino = /could not read (?:username|password) for '([^']+)'/i.exec(bruto)?.[1] ?? "";
+    if (credentialProtocol(ambiente.origem ?? "") === "https" && /^http:\/\//i.test(destino)) {
+      return new Error(
+        `${base}\n\nO endereço redirecionou de https para http; o token não é enviado sem criptografia, de propósito. ` +
+          `Use o endereço final https do repositório nas configurações do projeto (ou corrija a URL externa do servidor Git).`,
+      );
+    }
     return new Error(
       `${base}\n\nO token cadastrado só é enviado ao host do endereço do projeto. Se o repositório redirecionou para outro host ` +
         `(repositório movido, por exemplo), o git pediu credencial lá e o painel não a enviou, de propósito. ` +

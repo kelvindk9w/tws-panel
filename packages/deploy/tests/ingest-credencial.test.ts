@@ -19,8 +19,10 @@
  * próxima do real sem depender de rede externa.
  */
 import { createReadStream } from "node:fs";
-import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
+import https from "node:https";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -350,5 +352,105 @@ describe("ingestCode — sem credencial", () => {
     expect(erro).toBeInstanceOf(Error);
     expect((erro as Error).message).toMatch(/credencial/i);
     expect((erro as Error).message).not.toContain("token-invalido-xyz");
+  }, 30_000);
+});
+
+describe("ingestCode — cadastro https que redireciona para http na mesma porta", () => {
+  let dirTls: string;
+  let mux: net.Server;
+  let cainfoAntes: string | undefined;
+  const sockets = new Set<net.Socket>();
+  let internos: net.Server[] = [];
+  /** Pedidos que chegaram ao lado http (sem criptografia). */
+  let pedidosHttp: { auth: string }[] = [];
+
+  beforeEach(async () => {
+    pedidosHttp = [];
+    dirTls = await mkdtemp(path.join(tmpdir(), "paas-tls-test-"));
+    const chave = path.join(dirTls, "k.pem");
+    const cert = path.join(dirTls, "c.pem");
+    const { run } = await vi.importActual<typeof import("../src/exec.js")>("../src/exec.js");
+    const r = await run("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", chave, "-out", cert,
+      "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
+    ]);
+    if (r.code !== 0) throw new Error(`openssl falhou: ${r.stderr}`);
+    cainfoAntes = process.env.GIT_SSL_CAINFO;
+    process.env.GIT_SSL_CAINFO = cert;
+
+    const lado = (req: http.IncomingMessage, res: http.ServerResponse, cifrado: boolean) => {
+      if (cifrado) {
+        // cadastro em https: manda o git para o MESMO host e porta, mas em http puro
+        res.writeHead(302, { Location: `http://${req.headers.host}${req.url}` });
+        return res.end();
+      }
+      pedidosHttp.push({ auth: req.headers.authorization ?? "" });
+      res.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
+      res.end("x");
+    };
+    const servidorHttp = http.createServer((q, s) => lado(q, s, false));
+    const servidorHttps = https.createServer(
+      { key: await readFile(chave), cert: await readFile(cert) },
+      (q, s) => lado(q, s, true),
+    );
+    // mesma porta para os dois: o primeiro byte decide (0x16 = handshake TLS) e a conexão é repassada
+    // a um servidor interno (o TLSSocket lê direto do handle, então não dá para devolver o byte lido)
+    await new Promise<void>((resolve) => servidorHttp.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => servidorHttps.listen(0, "127.0.0.1", resolve));
+    internos = [servidorHttp, servidorHttps];
+    mux = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.once("data", (buf) => {
+        const alvo = (buf[0] === 0x16 ? servidorHttps : servidorHttp).address() as net.AddressInfo;
+        const ponte = net.connect(alvo.port, "127.0.0.1", () => {
+          ponte.write(buf);
+          socket.pipe(ponte);
+          ponte.pipe(socket);
+        });
+        sockets.add(ponte);
+        const fim = () => {
+          socket.destroy();
+          ponte.destroy();
+        };
+        socket.on("error", fim);
+        ponte.on("error", fim);
+        socket.on("close", fim);
+        ponte.on("close", fim);
+      });
+    });
+    await new Promise<void>((resolve) => mux.listen(0, "127.0.0.1", resolve));
+  });
+
+  afterEach(async () => {
+    if (cainfoAntes === undefined) delete process.env.GIT_SSL_CAINFO;
+    else process.env.GIT_SSL_CAINFO = cainfoAntes;
+    for (const s of sockets) s.destroy();
+    sockets.clear();
+    await new Promise<void>((resolve) => mux.close(() => resolve()));
+    for (const s of internos) {
+      s.closeAllConnections();
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+    await rm(dirTls, { recursive: true, force: true });
+  });
+
+  it("o lado http não recebe Authorization nem o token, e a mensagem explica o https→http", async () => {
+    const porta = (mux.address() as { port: number }).port;
+    const erro = await ingestCode(
+      comCredencial({ username: "x-access-token", token: TOKEN }),
+      projeto({ source: `https://127.0.0.1:${porta}/privado.git` }),
+      () => {},
+    ).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(erro).not.toBeNull();
+    expect(pedidosHttp.length).toBeGreaterThan(0);
+    expect(pedidosHttp.every((p) => p.auth === "")).toBe(true);
+    expect(JSON.stringify(pedidosHttp)).not.toContain(Buffer.from(`x-access-token:${TOKEN}`).toString("base64"));
+    expect(erro?.message).toMatch(/https para http/i);
+    expect(erro?.message).toMatch(/sem criptografia/i);
+    expect(erro?.message).toMatch(/endereço final/i);
+    expect(erro?.message).not.toContain(TOKEN);
   }, 30_000);
 });
