@@ -75,6 +75,19 @@ Email, Backups and Settings.
   A `.env` that belongs to the repository is never overwritten: the panel's variables go to
   a separate file, and the deploy log explains the conflict.
 - **Git:** editable repository and branch; the screen shows which branch is actually live.
+- **New-update notice.** The panel queries the repository (read-only, without downloading the code)
+  and compares the tip of the project's **configured branch** with the commit the last deploy
+  published. If there is a newer commit, "A new update is available" appears on the Git tab, at the
+  top of the project page and on the Dashboard (a marker on the project card and a list of the
+  projects with an update). Projects that use the same repository on different branches (production
+  on `main`, sandbox on another) are each checked against their own branch. **The panel never updates
+  by itself:** to update the code, click **Deploy** (it fetches the new code from the branch and
+  rebuilds the project). The check repeats every few minutes and the Git tab has a **Check now**
+  button. If the repository cannot be queried (network, rejected token, a branch that does not
+  exist), the screen says "could not check" and why, which does not mean the code is up to date.
+  Projects published before this notice stay at "no commit recorded" until their next deploy;
+  uploads and server folders have no notice, and stopped projects only show it on the Git tab (not
+  at the top of the page or on the Dashboard).
 - **Multiple environments:** the same repository can run more than once, on different branches and domains
   (production on `main`, sandbox on another branch), side by side on the same VPS. Each
   instance has its own clone, image, containers and network; only the domain needs to be unique.
@@ -212,6 +225,13 @@ minutes of inactivity, and 10 failed sign-ins from the same IP within 10 minutes
 - **History**: delivered, rejected, deferred and canceled messages from the last 30 days (metadata only,
   never subject or body).
 - **Volume:** chart of the last 14 days, rejection rate and totals per project.
+- **Outgoing:** the emails each project's app sent over SMTP (from, to, time, state and the error
+  reason in plain language, with technical details collapsed). Each project has its own **Sends**
+  section. Subject and body are **hidden**: click **Show** (each reveal is written to the audit log,
+  without the content). They are kept for 14 days (message data for 90), with no attachments, and
+  are **not included in panel backups**. Only **project** mailboxes (what the app sends) keep
+  subject and body; webmail and personal mailboxes keep only from, to, time and state. You can stop storing subject and body, per project or for
+  everything, on the **Privacy** tab.
 - **Reputation**: daily lookup against blocklists (Spamhaus ZEN and DBL, SpamCop, Barracuda),
   with each list's test point so it never says "clean" without having checked. It accepts Spamhaus's
   free DQS key.

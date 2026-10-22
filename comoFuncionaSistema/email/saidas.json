@@ -1,0 +1,67 @@
+{
+  "id": "saidas",
+  "modulo": "email",
+  "tipo": "tela",
+  "rota": "/projects/:id/sends e /mail/envios?aba=saidas|privacidade",
+  "resumo": "Registro dos e-mails que o APP de um projeto envia por SMTP pela caixa do projeto: de, para, data/hora, estado (na fila, entregue, adiado com tentativas, falhou, rejeitado, cancelado, não confirmado), motivo do erro em linguagem clara (com 'Detalhes técnicos' recolhidos) e, só sob demanda, assunto e corpo. Seção 'Envios' dentro de cada projeto (só daquele projeto) e abas 'Saídas' e 'Privacidade' em E-mail → Envios (todos, com filtro de projeto e origem).",
+  "pedido": "Dono do produto, 22/10/2026: ver o que o app do projeto enviou, o que ficou na fila e por que falhou, sem expor assunto e corpo por padrão.",
+  "comoFunciona": [
+    "CAPTURA: o Stalwart v0.11.8 chama um 'MTA hook' do painel na fase DATA de toda mensagem enviada por usuário autenticado ([session.hook.\"paas-send-log\"], enable = !is_empty(authenticated_as)). O aviso traz o login (caixa), o id da fila, remetente/destinatários do envelope, cabeçalhos e a mensagem inteira. Mensagem recebida de fora (porta 25, sem login) NÃO dispara o aviso (conferido no Stalwart real). A resposta do painel é sempre 'accept'.",
+    "O ENVIO NUNCA DEPENDE DO REGISTRO: options.tempfail-on-error = false e timeout de 2 s. Painel parado → o envio é aceito na hora (16 ms no teste; < 1500 ms exigido no teste de integração). Painel travado → custo máximo de 2 s por mensagem. Falha ao gravar só incrementa um contador e escreve um aviso SEM conteúdo.",
+    "RECEPTOR: um segundo servidor Fastify, separado do principal, escutando em 0.0.0.0:<PAAS_MAIL_HOOK_PORT, padrão 9100> (0 desliga), rota única POST /mail-hook/send. Sobe junto com o painel quando ele roda em container, MESMO sem servidor de e-mail criado (o segredo nasce quando o servidor é criado, sem reinício; até lá responde 401/403). Só o container do Stalwart é aceito: a origem do pedido é conferida contra o endereço de paas-stalwart na rede do Docker (403 para qualquer outra, antes de conferir o segredo). NÃO é publicado no docker-compose (só a 9000 é) e NÃO passa pelo Caddy. O plugin de auth do painel só protege /api/*, por isso uma rota no servidor principal ficaria pública pelo Caddy: daí o segundo listener. Segurança: segredo compartilhado = HMAC-SHA256(adminSecret, 'paas-send-log-hook-v1') em hex (nada novo para guardar ou restaurar), comparado em tempo constante e conferido ANTES de ler o corpo; limite de 8 MiB para o JSON do aviso (o Stalwart manda a mensagem inteira em JSON, então cabem mensagens de até ~6 MiB); limite de taxa (1200/min depois de autenticado; 30 tentativas ruins/min POR ORIGEM, então um vizinho de rede não bloqueia o segredo certo do Stalwart); no máximo 2 pedidos sendo lidos ao mesmo tempo e fila de 16 avisos em memória (cada aviso pode ter vários MiB); sem cookie, sem CSRF; esquema validado; 404 em qualquer outra rota; sem logs. Mudar a configuração muda a impressão digital e a próxima sincronização reinicia o Stalwart uma vez.",
+    "ATRIBUIÇÃO AO PROJETO: pelo login autenticado (caixa) e, se faltar, pelo endereço do remetente, usando o cadastro de caixas/projetos. O remetente vindo SÓ do registro de entrega é forjável por quem escreve na porta 25, então registro reconstruído pelo log (sem o aviso) só existe para destinatário FORA deste servidor (relay exige login); entrega local sem aviso não vira envio de projeto. Origem: 'project' (caixa de projeto), 'panel' (caixa do painel sem projeto) ou 'other'.",
+    "ESTADO E MOTIVO: vêm do mecanismo que já existia em Envios (leitura do registro do Stalwart por docker logs, a cada 5 min, mais a fila pela API). O id da fila em hexadecimal do aviso é o mesmo número decimal do registro. Cada evento atualiza o destinatário; o estado da mensagem é o pior entre eles (rejeitado > falhou > adiado > na fila > não confirmado > cancelado > entregue). 'Rejeitado' = 5xx devolvido pelo destino; 'falhou' = DNS, conexão, TLS, tempo ou desistência.",
+    "TRADUÇÃO DE ERROS: packages/mailer/src/send-errors.ts classifica o código SMTP/enhanced e o texto em 18 tipos (no_such_user, mailbox_full, message_too_large, blocklisted, spam_content, sender_auth, policy_rejected, greylisted, rate_limited, no_mx, dns_failure, tls_failure, timeout, connection_failed, expired, temporary, rejected_other, unknown). O servidor devolve só 'kind' + o texto técnico original; a tela traduz título e sugestão (pt-BR e en) e mantém o original em 'Detalhes técnicos'.",
+    "LIMITE (registro só pelo log): mensagens que chegam só pelo registro de entrega (painel parado, aviso perdido) aparecem com a hora da entrega (não a do envio), tamanho 0, sem caixa autenticada e sem assunto/corpo; só para destinatários de fora do servidor. RECONCILIAÇÃO: a cada 5 min (primeira em 90 s) — itens da fila que o painel não conhece viram registro só de metadados (apenas para remetentes conhecidos; correio recebido entregue localmente também gera eventos e não pode virar 'envio'); registros pendentes há mais de 15 min que sumiram da fila viram 'não confirmado'. Um evento real posterior corrige 'não confirmado'. Mensagem enviada com o painel parado aparece depois, atribuída ao projeto, com `captured:false` e sem assunto/corpo.",
+    "PRIVACIDADE: a listagem NUNCA traz assunto nem corpo (tipo MailSendItem não tem esses campos). Eles saem só da rota de revelar (POST, 'cache-control: no-store'), uma mensagem por vez, exigindo sessão. Cada revelação é auditada como mail.send.reveal (quem, quando, id da mensagem; sem conteúdo). ASSUNTO E CORPO SÓ DE CAIXAS DE PROJETO (o que o app envia): o aviso do Stalwart cobre TODA submissão autenticada, inclusive webmail e clientes IMAP de caixas pessoais, mas dessas o painel guarda apenas de, para, hora, estado e erro. Conteúdo não vai para logs, notificações, auditoria, exportações nem backups do painel. Na tela: 'oculto' + botão 'Exibir' (aria-expanded/aria-controls) por mensagem e 'Exibir todos' (uma chamada e uma auditoria por mensagem). O que foi exibido é esquecido ao mudar filtro ou página.",
+    "RETENÇÃO (global, aba Privacidade): metadados 90 dias (7–365), assunto/corpo 14 dias (1–90, nunca maior que o dos metadados), corpo máximo 64 KiB por mensagem (1–512; o resto é cortado e marcado), total do conteúdo 100 MiB (10–2048; apaga o conteúdo mais antigo primeiro). Anexos NÃO são guardados: só nome e tamanho (até 20). Limpeza automática de hora em hora (primeira em 120 s) e também a cada 50 gravações de conteúdo. Desligar a gravação (global ou de um projeto) apaga na hora o conteúdo já guardado desse escopo (a tela pede confirmação para o projeto; a mensagem passa a dizer que foi apagada ao desligar, não pela retenção; só é marcada como apagada quando o arquivo realmente saiu, senão o próximo expurgo repete). Opção por projeto: caixa 'Guardar assunto e corpo' na seção Envios do projeto.",
+    "BACKUP (decisão): metadados ENTRAM nos backups do painel (são só endereços, horários e estados, 90 dias); a pasta de conteúdo FICA DE FORA (assunto/corpo é sensível, efêmero — 14 dias — e não vale levar para a nuvem nem restaurar numa VPS nova)."
+  ],
+  "endpoints": [
+    { "metodo": "GET", "url": "/api/mail/envios/saidas", "resposta": "MailSendListResponse { items, total, limit, offset, projects, capture, retention, storesContent }. Filtros: state, projectId, origin, from, to (AAAA-MM-DD), recipient, limit (≤100), offset. Sem assunto/corpo." },
+    { "metodo": "POST", "url": "/api/mail/envios/saidas/:msg/reveal", "resposta": "MailSendContent { id, subject, body, bodyTruncated, attachments, expiresAt }. 404 send_not_found, 404 content_not_stored, 410 content_expired. Auditoria mail.send.reveal. 120/min." },
+    { "metodo": "GET|PUT", "url": "/api/mail/envios/saidas/settings", "resposta": "MailSendSettings. PUT valida limites (400 se bodyDays > metadataDays); auditoria mail.send.settings." },
+    { "metodo": "GET", "url": "/api/projects/:id/email/saidas", "resposta": "Igual à lista global, restrita ao projeto." },
+    { "metodo": "POST", "url": "/api/projects/:id/email/saidas/:msg/reveal", "resposta": "Igual ao global, mas 404 se a mensagem não for do projeto." },
+    { "metodo": "PUT", "url": "/api/projects/:id/email/saidas/settings", "resposta": "{ storeContent: boolean } — liga/desliga a gravação de assunto e corpo só desse projeto." },
+    { "metodo": "POST", "url": "http://tws-panel:9100/mail-hook/send", "resposta": "Receptor interno do Stalwart (não é API do painel; Bearer = segredo derivado). 200 {action:'accept'}; 401, 400, 413, 429." }
+  ],
+  "persistencia": [
+    { "arquivo": "data/mail/envios/saidas/AAAA-MM-DD.jsonl", "formato": "jsonl, dir 0700, arquivos 0600", "conteudo": "Um retrato por linha (a última vale), dia = dia em que a mensagem foi aceita. SEM assunto/corpo. Entra no backup do painel." },
+    { "arquivo": "data/mail/envios/saidas-config.json", "formato": "json 0600", "conteudo": "Retenção, limites, gravação global e lista de projetos sem gravação." },
+    { "arquivo": "data/envios-conteudo/<idDaFila>.json", "formato": "json, dir 0700, arquivos 0600", "conteudo": "Assunto e corpo (cortado) e nomes/tamanhos de anexos. NÃO entra no backup do painel." }
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/mail-send-routes.ts", "apps/server/src/routes/mail.ts"],
+    "servicos": [
+      "apps/server/src/services/mail-send-log-service.ts",
+      "apps/server/src/services/mail-send-store.ts",
+      "apps/server/src/services/mail-send-hook-server.ts",
+      "apps/server/src/services/mail-service.ts",
+      "apps/server/src/services/backup-service.ts"
+    ],
+    "pacotes": ["packages/mailer/src/send-hook.ts", "packages/mailer/src/send-errors.ts", "packages/mailer/src/server.ts", "packages/core/src/mail-send-log.ts"],
+    "web": ["apps/web/src/components/envios/SendLogSection.tsx", "apps/web/src/components/envios/SendPrivacyCard.tsx", "apps/web/src/pages/MailEnviosPage.tsx", "apps/web/src/pages/ProjectDetailPage.tsx", "apps/web/src/lib/envios.ts"],
+    "scripts": ["scripts/test-mail-send-log.mts", "scripts/mail-send-log-harness.mts"]
+  },
+  "testes": [
+    "packages/mailer/tests/send-hook.test.ts",
+    "packages/mailer/tests/send-errors.test.ts",
+    "packages/mailer/tests/send-hook-config.test.ts",
+    "apps/server/tests/mail-send-store.test.ts",
+    "apps/server/tests/mail-send-log-service.test.ts",
+    "apps/server/tests/mail-send-hook-secret.test.ts",
+    "apps/server/tests/mail-send-hook-server.test.ts",
+    "apps/server/tests/routes-mail-send.test.ts",
+    "apps/web/tests/mail-send-log.test.tsx",
+    "scripts/test-mail-send-log.mts (integração REAL com Stalwart v0.11.8 em Docker)"
+  ],
+  "limites": [
+    "Só registra o que passou pelo MTA com login (submissão 587/465). Mensagem recusada antes da fila (senha errada, remetente não permitido) não aparece.",
+    "O receptor aceita no máximo 8 MiB de JSON por aviso (mensagens de até ~6 MiB) e 2 avisos sendo lidos ao mesmo tempo (memória: um aviso de 15 MiB custou ~100 MiB). Mensagem maior que isso, ou além dos 2 simultâneos (resposta 429), é ENVIADA normalmente, mas perde a captura: fica sem assunto/corpo e só aparece pelo registro de entrega, e isso só se algum destinatário for externo (para destinatário local não há registro nenhum).",
+    "O receptor escuta em 0.0.0.0:9100 dentro do container, mas só atende o endereço do container do Stalwart (conferido a cada 30 s; um IP desconhecido refaz a consulta, no máximo a cada 5 s, para não perder capturas quando o container do Stalwart é recriado) e exige o segredo. Não publique a porta. Encaminhamento (alias) de caixa local para fora poderia gerar entrega externa com remetente forjado: o painel não cria alias.",
+    "A conversão de HTML em texto é linear e só olha o começo (2x o limite do corpo): HTML hostil de 256 KiB de '<' custava 21 s e agora leva menos de 0,5 s.",
+    "Estado e motivo dependem da leitura do registro do container a cada 5 min: o 'entregue' pode demorar até esse intervalo.",
+    "Criar/atualizar o hook muda o config.toml: a primeira sincronização depois da atualização reinicia o Stalwart uma vez."
+  ]
+}

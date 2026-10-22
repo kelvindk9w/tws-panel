@@ -296,11 +296,21 @@ export async function resolveTarget(source: string, lookup: DnsLookup = defaultL
   return { ok: true, pin: `${host}:${port}:${addrs}` };
 }
 
-export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCheckResponse> {
-  const { source, branch, credential } = input;
-  if (source.startsWith("-")) return falha("invalid_source");
+type LsRemoteOutcome =
+  | { ok: true; stdout: string; tokenUsed: boolean | null }
+  | { ok: false; reason: GitAccessFailureReason; detail?: string };
+
+/**
+ * Uma consulta `ls-remote` somente leitura, com TODAS as proteções deste arquivo (helper de credencial
+ * que só vale para o host cadastrado, sem redirecionamento, sem proxy, endereço fixado, prazo com o
+ * grupo de processos morto). Usada pelo "Testar acesso" e pela verificação de atualização do projeto.
+ * Nunca devolve texto cru do git: só a saída de sucesso ou motivo (+ detalhe limpo do token em "unknown").
+ */
+async function lsRemote(input: GitAccessInput, patterns: readonly string[], symref: boolean): Promise<LsRemoteOutcome> {
+  const { source, credential } = input;
+  if (source.startsWith("-")) return { ok: false, reason: "invalid_source" };
   const isHttp = /^https?:\/\//i.test(source);
-  if (credential && !isHttp) return falha("token_not_applicable");
+  if (credential && !isHttp) return { ok: false, reason: "token_not_applicable" };
 
   const baseEnv = gitSafeEnv(process.env);
   for (const name of Object.keys(baseEnv)) {
@@ -328,25 +338,50 @@ export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCh
     "-c",
     "http.lowSpeedTime=10",
     "ls-remote",
-    "--symref",
+    ...(symref ? ["--symref"] : []),
     "--",
     source,
-    "HEAD",
-    "refs/heads/*",
+    ...patterns,
   ];
   const result = await runGrouped(args, env, input.timeoutMs ?? GIT_ACCESS_TIMEOUT_MS);
   const token = credential?.token ?? null;
   const tokenUsed = credential ? result.stderr.includes(CREDENTIAL_USED_MARK) : null;
   result.stderr = result.stderr.split(CREDENTIAL_USED_MARK).join("");
 
-  if (result.timedOut) return falha("timeout");
+  if (result.timedOut) return { ok: false, reason: "timeout" };
   if (result.code !== 0) {
     const output = `${result.stderr}\n${result.stdout}`;
     const reason = classifyGitFailure(output, credential !== null);
-    return falha(reason, reason === "unknown" ? { detail: sanitizeDetail(output, token) } : {});
+    return reason === "unknown" ? { ok: false, reason, detail: sanitizeDetail(output, token) } : { ok: false, reason };
   }
+  return { ok: true, stdout: result.stdout, tokenUsed };
+}
 
-  const { branches, defaultBranch } = parseHeads(result.stdout);
+export type RemoteBranchCommit =
+  | { ok: true; commit: string }
+  | { ok: false; reason: GitAccessFailureReason };
+
+/**
+ * Commit na ponta de `refs/heads/<branch>` do repositório remoto (`ls-remote`, sem clonar). Branch que
+ * não existe é falha "branch_not_found" (saída vazia com sucesso). O token nunca aparece no resultado.
+ */
+export async function remoteBranchCommit(input: GitAccessInput & { branch: string }): Promise<RemoteBranchCommit> {
+  const out = await lsRemote(input, [`refs/heads/${input.branch}`], false);
+  if (!out.ok) return { ok: false, reason: out.reason };
+  for (const line of out.stdout.split("\n")) {
+    const m = /^([0-9a-f]{40,64})\trefs\/heads\/(\S+)$/.exec(line);
+    if (m && m[2] === input.branch) return { ok: true, commit: m[1] as string };
+  }
+  return { ok: false, reason: "branch_not_found" };
+}
+
+export async function checkGitAccess(input: GitAccessInput): Promise<GitAccessCheckResponse> {
+  const { branch } = input;
+  const out = await lsRemote(input, ["HEAD", "refs/heads/*"], true);
+  if (!out.ok) return falha(out.reason, out.detail ? { detail: out.detail } : {});
+  const { tokenUsed } = out;
+
+  const { branches, defaultBranch } = parseHeads(out.stdout);
   const shown = branches.slice(0, input.maxBranches ?? MAX_BRANCHES);
   if (branch && !branches.includes(branch)) {
     return falha("branch_not_found", { defaultBranch, branches: shown, totalBranches: branches.length });

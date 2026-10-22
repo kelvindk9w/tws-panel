@@ -79,6 +79,12 @@ export interface ServerConfig {
   mailPorts: MailServerPorts;
   /** Hostname do servidor de e-mail (PAAS_MAIL_HOSTNAME ou derivado do 1º domínio). */
   mailHostname: string | null;
+  /**
+   * Porta (só na rede interna do Docker, nunca publicada nem no Caddy) em que o
+   * painel recebe o aviso de cada envio SMTP do Stalwart (PAAS_MAIL_HOOK_PORT;
+   * 0 desliga a captura). Ausente = 9100.
+   */
+  mailHookPort?: number;
   /** IPv4 público da máquina para o checklist DNS (PAAS_PUBLIC_IP). */
   publicIp: string | null;
   /** IPv6 público da máquina (opcional — PAAS_PUBLIC_IPV6). */
@@ -263,6 +269,7 @@ export function loadConfig(): ServerConfig {
       http: envInt("PAAS_STALWART_PORT_HTTP", MAIL_DEFAULT_PORTS.http),
     },
     mailHostname: process.env.PAAS_MAIL_HOSTNAME?.trim() || null,
+    mailHookPort: envInt("PAAS_MAIL_HOOK_PORT", 9100),
     publicIp: process.env.PAAS_PUBLIC_IP?.trim() || null,
     publicIpv6: process.env.PAAS_PUBLIC_IPV6?.trim() || null,
     monitorIntervalMs: envInt("PAAS_MONITOR_INTERVAL_MS", MONITOR_DEFAULT_INTERVAL_MS),

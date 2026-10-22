@@ -57,6 +57,7 @@ import {
   type BackupDefaultsRequest,
   type BackupCheckResult,
   type BackupCheckStatus,
+  MAIL_SEND_CONTENT_DIRNAME,
   type BackupCopyWhere,
   type BackupVerifyItem,
   type BackupVerifyRequest,
@@ -1938,7 +1939,7 @@ export class BackupService {
     const legacyProjects = path.resolve(path.join(this.opts.dataDir, "projects")) === path.resolve(this.opts.projectsDir);
     const names = await readdir(this.opts.dataDir);
     return names
-      .filter((n) => n !== "backups" && !(n === "projects" && legacyProjects) && !TEMP_FILE_RE.test(n))
+      .filter((n) => n !== "backups" && n !== MAIL_SEND_CONTENT_DIRNAME && !(n === "projects" && legacyProjects) && !TEMP_FILE_RE.test(n))
       .map((n) => path.join(this.opts.dataDir, n));
   };
 

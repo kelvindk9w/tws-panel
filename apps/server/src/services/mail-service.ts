@@ -4,7 +4,7 @@
  * Persistência JSON em data/mail/mail.json (modo 0600 — guarda segredos),
  * seguindo o padrão das fases 0–2.
  */
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +62,7 @@ import {
   StalwartClient,
   StalwartManager,
   stalwartConfigFingerprint,
+  type SendHookConfig,
   verifyDnsRecords,
   type DnsResolverLike,
   type MailCertificate,
@@ -448,7 +449,49 @@ export class MailService {
       hostname: this.hostname(),
       certificateHosts: certificates.map((c) => c.host),
       reportDomain: this.reportDomain(),
+      sendHook: this.sendHook(),
     });
+  }
+
+  /**
+   * Aviso de envio SMTP ao painel (MTA hook do Stalwart; ver SendHookConfig).
+   * Só com o painel em container: o Stalwart alcança `tws-panel` pela rede da
+   * administração (a mesma da API) e a porta do aviso não é publicada nem
+   * passa pelo Caddy. O segredo é derivado da senha de administração (HMAC),
+   * então não há outro segredo para guardar, restaurar ou perder.
+   */
+  private sendHook(): SendHookConfig | null {
+    const port = this.config.mailHookPort ?? 9100;
+    if (!this.inContainer || !this.data.adminSecret || port <= 0) return null;
+    return {
+      url: `http://${PANEL_CONTAINER}:${port}/mail-hook/send`,
+      secret: createHmac("sha256", this.data.adminSecret).update("paas-send-log-hook-v1").digest("hex"),
+    };
+  }
+
+  /**
+   * O ouvido do aviso pode subir? Só depende de o painel estar em container e
+   * da porta: o segredo nasce quando o servidor de e-mail é criado (com o painel
+   * já no ar), e até lá o ouvido responde 401 a tudo.
+   */
+  sendHookListenable(): boolean {
+    return this.inContainer && (this.config.mailHookPort ?? 9100) > 0;
+  }
+
+  /** A captura de envios SMTP está configurada? (servidor criado, painel em container) */
+  async sendHookConfigured(): Promise<boolean> {
+    await this.ensureLoaded();
+    return this.sendHook() !== null;
+  }
+
+  /** Confere (em tempo constante) o segredo que o Stalwart mandou no aviso de envio. */
+  async verifySendHookSecret(provided: string): Promise<boolean> {
+    await this.ensureLoaded();
+    const hook = this.sendHook();
+    if (!hook) return false;
+    const a = createHmac("sha256", "cmp").update(provided).digest();
+    const b = createHmac("sha256", "cmp").update(hook.secret).digest();
+    return timingSafeEqual(a, b);
   }
 
   /**
@@ -500,6 +543,7 @@ export class MailService {
       aliases: this.hostList(),
       certificates,
       reportDomain: this.reportDomain(),
+      sendHook: this.sendHook(),
       ...(this.inContainer ? { apiBaseUrl: this.apiBaseUrl() } : {}),
     });
   }

@@ -66,6 +66,23 @@ describe("restauração do painel na subida", () => {
     expect(history.entries.at(-1)).toMatchObject({ operation: "restore", status: "success" });
   });
 
+  it("assunto e corpo dos envios nunca vão para a cópia 'antes da restauração' (escapariam da retenção)", async () => {
+    await put("users.json", "atual");
+    await put("envios-conteudo/123.json", "segredo");
+    await put("backups/.restaurar-painel/users.json", "do-backup");
+    await put("backups/.restaurar-painel/envios-conteudo/999.json", "de-outro-backup");
+    await put(
+      "backups/.restaurar-painel.json",
+      JSON.stringify({ requestedAt: "2026-10-14T12:00:00Z", fileName: "2026-10-14_03-00.7z", actor: "admin" }),
+    );
+    const result = await applyPendingPanelRestore(dir, { now: () => new Date("2026-10-14T12:01:00Z") });
+    expect(result?.outcome).toBe("applied");
+    // continua onde a retenção e o "desligar apaga" o alcançam
+    expect(await readFile(path.join(dir, "envios-conteudo/123.json"), "utf8")).toBe("segredo");
+    expect(existsSync(path.join(dir, "envios-conteudo/999.json"))).toBe(false);
+    expect(existsSync(path.join(dir, "backups/_painel/antes-da-restauracao/envios-conteudo"))).toBe(false);
+  });
+
   it("marcador estragado ou sem a pasta extraída: só apaga o marcador", async () => {
     await put("users.json", "atual");
     await put("backups/.restaurar-painel.json", "{");

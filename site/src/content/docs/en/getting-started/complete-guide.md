@@ -396,6 +396,10 @@ the recipient replied (usually SPF, DKIM, DMARC, or the reverse name). See
 Portuguese by default (webmail is Roundcube, which has its own language setting; it does not follow the panel's). Send an email to yourself and reply from there: the reply shows up in the webmail
 Inbox. Forgot the mailbox password? **Mailboxes** tab → **Change password**.
 
+**Security updates:** after you update the panel, the webmail is recreated automatically with the
+fixed Roundcube version (a brief restart; preferences, contacts and display names are kept). You do
+not need to disable and enable it again.
+
 ### 4.9 The Sending page
 
 In the menu (arrow beside **Settings** → **Sending**), **Sending** shows what the email server is doing:
@@ -698,7 +702,8 @@ Most projects don't need this: the site opens through the domain, via the proxy.
 **What to check:** the deploy ends as **success** and the project's address opens the
 site. In the **Deploys** tab you will find the **Deploy history**. If a
 guardrail blocked the deploy (e.g., an exposed database port), the screen says which rule; see
-[Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
+[Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail)
+and [Writing a compose the panel accepts](../guides/compose-rules.md).
 
 ### 7.7 Certificate
 

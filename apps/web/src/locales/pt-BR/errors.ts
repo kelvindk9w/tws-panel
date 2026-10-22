@@ -18,6 +18,8 @@ export default {
   "code.github_unreachable": "Não foi possível falar com o GitHub agora. Tente de novo em instantes.",
   "code.invalid_branch": "Nome de branch inválido.",
   "code.invalid_credential": "Informe o token de LEITURA do repositório (no GitHub, um fine-grained PAT com \"Contents: Read\").",
+  "code.two_factor_locked": "Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. Tente mais tarde ou use um código de recuperação.",
+  "code.too_many_attempts": "Muitas tentativas. Aguarde um pouco e tente novamente.",
   "code.invalid_current_password": "A senha atual está incorreta.",
   "code.invalid_date": "Data inválida. Use a data em que você fez o cadastro (não pode ser no futuro).",
   "code.invalid_dqs_key": "A chave DQS tem só letras minúsculas e números (de 20 a 64). Confira e cole de novo.",
@@ -82,4 +84,8 @@ export default {
   "code.restore_check_off": "Ligue a validação do backup restaurando em outro projeto primeiro.",
   "code.invalid_destination": "Este projeto não pode ser o destino: precisa ser outro projeto, com banco do mesmo tipo e sem teste próprio.",
   "code.no_backup": "Ainda não há backup deste projeto para testar.",
+  "code.send_not_found": "Mensagem não encontrada.",
+  "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",
+  "code.content_expired": "O assunto e o corpo desta mensagem já foram apagados pela retenção.",
+  "code.content_removed": "O assunto e o corpo desta mensagem foram apagados quando a gravação foi desligada.",
 } as const;

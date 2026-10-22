@@ -14,6 +14,8 @@ import { TwoFactorNudge } from "@/components/TwoFactorNudge";
 import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { ReconciliationNotice } from "@/components/restore/ReconciliationNotice";
+import { UpdateBadge, UpdateSummary } from "@/components/project/UpdateNotice";
+import { useProjectUpdateStatuses } from "@/lib/update-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,7 +53,7 @@ export const TYPE_LABELS: Record<ProjectType, Key> = {
   unknown: "dashboard.type.unknown",
 };
 
-function ProjectCard({ item }: { item: ProjectResponse }) {
+function ProjectCard({ item, updateBranch }: { item: ProjectResponse; updateBranch?: string | null }) {
   const { t } = useI18n();
   const { project, status, containers, url } = item;
   const provisional = useProvisionalHere(project.domain);
@@ -93,6 +95,7 @@ function ProjectCard({ item }: { item: ProjectResponse }) {
           {containers.length > 0 &&
             t("dashboard.card.active", { n: containers.filter((c) => c.state === "running").length })}
         </span>
+        {updateBranch !== undefined && <UpdateBadge projectId={project.id} branch={updateBranch} />}
       </CardContent>
     </Card>
   );
@@ -171,6 +174,15 @@ export function DashboardPage() {
 
   const external = (containers?.containers ?? []).filter((c) => !c.managed);
 
+  // Alerta de nova atualização (só aviso): só de projeto no ar (ou com erro); parado/criado/deployando ficam de fora.
+  const updates = useProjectUpdateStatuses();
+  const withUpdate = new Map<string, string | null>();
+  for (const item of data?.projects ?? []) {
+    if (item.status !== "running" && item.status !== "error") continue;
+    const found = updates.statuses.find((s) => s.projectId === item.project.id);
+    if (found?.state === "update_available") withUpdate.set(item.project.id, found.branch);
+  }
+
   return (
     <div className="flex flex-col gap-8">
       {/* independente do roteiro: "o painel antigo tinha X ativo" depois de restaurar um backup */}
@@ -192,7 +204,7 @@ export function DashboardPage() {
       <OnboardingChecklist variant="dashboard" onVisibleChange={setChecklistShown} />
       {/* com o roteiro na tela, o passo 2 dele já fala do 2FA */}
       {checklistShown === false && <TwoFactorNudge />}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("dashboard.title")}</h1>
           <p className="text-sm text-muted-foreground">
@@ -212,6 +224,17 @@ export function DashboardPage() {
           </Button>
         </div>
       </div>
+
+      <UpdateSummary
+        items={(data?.projects ?? [])
+          .filter((i) => withUpdate.has(i.project.id))
+          .map((i) => ({ id: i.project.id, name: i.project.name, branch: withUpdate.get(i.project.id) ?? null }))}
+      />
+      {updates.failed && updates.loaded && (data?.projects.length ?? 0) > 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t("dashboard.update.unavailable")}
+        </p>
+      )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {loading && (
@@ -242,7 +265,9 @@ export function DashboardPage() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {data?.projects.map((item) => <ProjectCard key={item.project.id} item={item} />)}
+        {data?.projects.map((item) => (
+          <ProjectCard key={item.project.id} item={item} {...(withUpdate.has(item.project.id) ? { updateBranch: withUpdate.get(item.project.id) ?? null } : {})} />
+        ))}
       </div>
 
       <section className="flex flex-col gap-3">

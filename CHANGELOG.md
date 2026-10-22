@@ -36,6 +36,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Fase 07 do hardening (endurecimento adicional) e teste de acesso com "desfazer agora".
 - Fases de segurança acessíveis depois da instalação, em Segurança → Proteções.
 - Verificação em duas etapas (TOTP) no login, com 10 códigos de recuperação.
+- Travas do login com a verificação em duas etapas: bloqueio por conta no código de 6 dígitos
+  (5 erros seguidos bloqueiam por 5 min, dobrando até 24 h, gravado em disco; o código de
+  recuperação continua valendo), aviso na Auditoria, nos Alertas e nas notificações de segurança
+  quando a senha certa chega sem o código certo, e limite de tentativas ao trocar a senha, ativar
+  ou desativar a verificação e recomeçar o assistente. O limite por IP agrupa o IPv6 pelo bloco
+  /64, a tela Segurança avisa quando o proxy da Cloudflare é detectado e
+  `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**
@@ -52,6 +59,12 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Páginas "site em configuração", "em manutenção" e "temporariamente indisponível".
 - Botão Portas: portas do projeto e de todos os containers, trocar, publicar, remover e editar
   em lote.
+- Aviso de "nova atualização do projeto": o painel compara a ponta da branch configurada, no
+  repositório, com o commit que o último deploy publicou. O aviso aparece na aba Git, no topo da
+  página do projeto e no Dashboard (indicador por projeto e lista dos projetos com atualização),
+  sempre na branch de cada projeto. É só aviso: o deploy continua sendo um clique no botão Deploy,
+  que ganhou uma explicação (busca o código novo da branch). Quando não dá para consultar o
+  repositório, a tela diz "não deu para verificar" em vez de "atualizado".
 
 **HTTPS e domínio do painel**
 
@@ -79,6 +92,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
+- Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
+  aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
+  filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar
+  em **Exibir** (cada exibição é auditada), com retenção configurável (90 dias para os dados da
+  mensagem, 14 dias para assunto e corpo), limites de tamanho, opção de não guardar assunto e corpo
+  por projeto ou para todos, e conteúdo fora dos backups do painel. Assunto e corpo são guardados
+  só das caixas de projeto (o que o app envia); webmail e caixas pessoais ficam apenas com de,
+  para, hora, estado e erro.
 - Entregabilidade: `Message-ID` e `Date` completados, relatórios DMARC entregues na `postmaster@`
   e saída só por IPv4.
 
@@ -133,6 +154,20 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Repositório privado volta a clonar na VPS.
 - A checagem de listas de bloqueio do e-mail passa a rodar.
 - A restauração não confia nos caminhos gravados no manifesto do backup.
+
+### Segurança
+
+- Webmail (Roundcube) atualizado para a 1.7.5, que roda sobre o PHP 8.4.27: traz a correção das duas
+  falhas críticas do PHP divulgadas em 21/10/2026 (CVE-2026-109618 e CVE-2026-109619) e outras
+  correções do Roundcube. **Após atualizar o painel, o webmail é recriado automaticamente com a
+  imagem corrigida** (ao subir o painel e ao sincronizar o e-mail), com um reinício breve;
+  preferências, contatos, sessões e nomes de exibição ficam no volume e são mantidos. O painel confere
+  que o webmail novo segue de pé alguns segundos antes de apagar o anterior; se a troca falhar ou o
+  novo cair, o container anterior volta e o erro é mostrado. Sobras de uma troca interrompida são
+  limpas na próxima sincronização.
+  Para atualizar: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`.
+- Imagem base do Node do painel e dos builds de sites estáticos atualizada para a 22.23.4 (correções de
+  segurança do Node de 21/10/2026), pnpm para a 10.34.7 e vitest para a 4.1.12 (só desenvolvimento).
 
 ## [0.1.0] - 2026-08-20
 

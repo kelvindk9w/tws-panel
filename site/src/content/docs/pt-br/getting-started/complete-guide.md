@@ -386,6 +386,10 @@ respondeu (normalmente SPF, DKIM, DMARC ou o nome reverso). Veja
 português por padrão (o webmail é o Roundcube, que tem a própria configuração de idioma e não segue a do painel). Envie um e-mail para você e responda de lá: a resposta aparece na Caixa de entrada do
 webmail. Esqueceu a senha da caixa? Aba **Caixas** → **Trocar senha**.
 
+**Atualizações de segurança:** depois de atualizar o painel, o webmail é recriado automaticamente
+com a versão corrigida do Roundcube (reinício breve; preferências, contatos e nomes de exibição
+ficam). Não precisa desativar e ativar de novo.
+
 ### 4.9 Página Envios
 
 No menu (seta ao lado de **Configurações** → **Envios**), **Envios** mostra o que o servidor de e-mail está fazendo:
@@ -685,7 +689,8 @@ endereços (0.0.0.0)", a porta fica aberta para a internet.
 **O que conferir:** o deploy termina como **sucesso** e o endereço do projeto abre o site. Na aba
 **Deploys** fica o **Histórico de deploys**. Se um guardrail barrou o deploy (ex.: porta de banco
 exposta), a tela diz qual regra; veja
-[Deploy bloqueado por guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
+[Deploy bloqueado por guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail)
+e [Como escrever um compose que o painel aceita](../guides/compose-rules.md).
 
 ### 7.7 Certificado
 

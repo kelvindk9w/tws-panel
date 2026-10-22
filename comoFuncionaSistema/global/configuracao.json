@@ -39,6 +39,7 @@
     "PAAS_STATIC_IMAGE (apps/server/src/services/deploy-service.ts:92) — imagem Docker base para servir saída estática. Default: nginx:alpine.",
     "API_PROXY_TARGET (apps/web/vite.config.ts:16, só no dev server do Vite) — alvo do proxy de /api no dev server. Default: http://localhost:9000. docker-compose.dev.yml define http://server:9000 (nome do serviço na rede compose).",
     "NODE_ENV — setado explicitamente em Dockerfile (production) e nos composes; não é lido diretamente pelo código do painel além do uso implícito por libs de terceiros (ex.: comportamento padrão do Fastify/Node).",
+    "PAAS_MAIL_HOOK_PORT (docker-compose.yml, repassada ao container; padrão 9100) — porta INTERNA do ouvido do aviso de envio do Stalwart (registro de envios por SMTP). Não é publicada no host nem passa pelo Caddy; só o container do Stalwart é aceito (origem conferida) e o segredo é derivado da senha de administração. 0 desliga o registro de envios (o hook deixa de ser escrito no config.toml do Stalwart; a primeira sincronização reinicia o Stalwart uma vez). Ver email/saidas.json.",
     "PAAS_PORT (docker-compose.yml, produção) — porta do HOST mapeada para a porta 9000 do container. Default: 9000. Não confundir com PORT (porta interna do processo).",
     "DOCKER_GID (docker-compose.yml, produção) — GID do grupo dono de /var/run/docker.sock no host, adicionado ao container via group_add para permitir acesso ao socket sem rodar como root. Default: 999."
   ],

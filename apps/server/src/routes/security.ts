@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import {
   SECURITY_PHASES,
+  type EdgeStatusResponse,
   isValidSshPublicKey,
   isValidSshUsername,
   type SecurityApplyRequest,
@@ -144,6 +145,13 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
   );
 
   // Plano de correção a partir do último scan.
+  // Aviso "não ligue o proxy da Cloudflare no painel" (ver services/edge-watch.ts).
+  app.get("/api/security/edge", async (_request, reply) => {
+    const response: EdgeStatusResponse = app.edgeWatch.status();
+    reply.header("cache-control", "no-store");
+    return reply.send(response);
+  });
+
   app.post("/api/security/plan", async (_request, reply) => {
     const plan: SecurityPlan = await service.plan();
     return reply.send(plan);

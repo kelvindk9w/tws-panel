@@ -21,6 +21,7 @@ import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { sessionCookieName } from "@paas/core";
 import { verifyPasswordTimingSafe } from "../services/password.js";
+import { beginAction, sendTooManyAttempts } from "../services/action-guard.js";
 
 export const RESTART_CONFIRMATION = "recomeçar";
 
@@ -52,24 +53,52 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
     if (request.body.confirm.trim().toLowerCase() !== RESTART_CONFIRMATION) {
       return reply.code(400).send({ error: "confirmation_mismatch", message: `Digite "${RESTART_CONFIRMATION}" para confirmar.` });
     }
-    if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
-      return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
-    }
-    if (!user.twoFactor) {
-      return reply.code(409).send({
-        error: "two_factor_required",
-        message:
-          "Para recomeçar pelo painel, ative antes a verificação em duas etapas (Configurações → Segurança): é ela " +
-          "que confirma que é você. O envio de código por e-mail ainda não existe no painel. Sem ela, o caminho é " +
-          "pela VPS: sudo ./scripts/reset-setup.sh --full",
-      });
-    }
-    const check = request.body.code ? await app.twoFactor.verify(user, request.body.code) : null;
-    if (!check) {
-      return reply.code(400).send({
-        error: "invalid_two_factor_code",
-        message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
-      });
+    // Limite por IP e por sessão (senha atual e código): sessão aberta + senha vazada não
+    // bastam para adivinhar o código. O mesmo bloqueio progressivo do login.
+    const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: request.session!.id }, reply);
+    if (!attempt) return reply;
+    try {
+      if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
+        const failure = attempt.fail();
+        if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+        return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
+      }
+      if (!user.twoFactor) {
+        return reply.code(409).send({
+          error: "two_factor_required",
+          message:
+            "Para recomeçar pelo painel, ative antes a verificação em duas etapas (Configurações → Segurança): é ela " +
+            "que confirma que é você. O envio de código por e-mail ainda não existe no painel. Sem ela, o caminho é " +
+            "pela VPS: sudo ./scripts/reset-setup.sh --full",
+        });
+      }
+      const outcome = request.body.code ? await app.twoFactor.verifyDetailed(user, request.body.code) : null;
+      if (!outcome || outcome.status !== "ok") {
+        const failure = attempt.fail();
+        if (outcome?.status === "invalid" && outcome.lockedNow) {
+          await app.loginWatch.accountLocked(request.ip, { id: user.id, username: user.username }, outcome.lockedNow);
+        }
+        if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+        const retryAfterSec =
+          outcome?.status === "locked" ? outcome.retryAfterSec : outcome?.status === "invalid" ? outcome.lockedNow?.retryAfterSec : undefined;
+        if (retryAfterSec !== undefined) {
+          reply.header("retry-after", String(retryAfterSec));
+          return reply.code(429).send({
+            error: "two_factor_locked",
+            message:
+              "Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. " +
+              "Tente mais tarde ou use um código de recuperação.",
+            retryAfterSec,
+          });
+        }
+        return reply.code(400).send({
+          error: "invalid_two_factor_code",
+          message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+        });
+      }
+      attempt.success();
+    } finally {
+      attempt.release();
     }
 
     // Auditoria ANTES de apagar: ela fica num arquivo próprio, que continua.

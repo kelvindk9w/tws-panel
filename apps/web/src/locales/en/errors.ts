@@ -18,6 +18,8 @@ export default {
   "code.github_unreachable": "Could not reach GitHub right now. Try again in a moment.",
   "code.invalid_branch": "Invalid branch name.",
   "code.invalid_credential": "Enter the repository READ token (on GitHub, a fine-grained PAT with \"Contents: Read\").",
+  "code.two_factor_locked": "Two-step verification is temporarily locked after too many wrong codes. Try again later or use a recovery code.",
+  "code.too_many_attempts": "Too many attempts. Wait a moment and try again.",
   "code.invalid_current_password": "The current password is incorrect.",
   "code.invalid_date": "Invalid date. Use the date you signed up (it cannot be in the future).",
   "code.invalid_dqs_key": "The DQS key has only lowercase letters and numbers (20 to 64 characters). Check it and paste it again.",
@@ -82,4 +84,8 @@ export default {
   "code.restore_check_off": "Turn on the database backup validation first.",
   "code.invalid_destination": "This project cannot be the destination: it must be another project, with the same database type and no restore test of its own.",
   "code.no_backup": "There is no backup of this project to test yet.",
+  "code.send_not_found": "Message not found.",
+  "code.content_not_stored": "The subject and body of this message were not stored (storage was off or the send was not captured).",
+  "code.content_expired": "The subject and body of this message were already deleted by retention.",
+  "code.content_removed": "The subject and body of this message were deleted when storing was turned off.",
 } as const;

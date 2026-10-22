@@ -9,7 +9,26 @@ import { hash, verify } from "@node-rs/argon2";
  * o tempo de resposta do login não revele se a conta existe (timing attack).
  * Gerado com hash("dummy-password-para-timing") — o conteúdo não importa.
  */
-let dummyHash: string | null = null;
+let dummyHash: Promise<string> | null = null;
+
+function getDummyHash(): Promise<string> {
+  dummyHash ??= hashPassword("dummy-password-para-timing");
+  return dummyHash;
+}
+
+/**
+ * Gera o hash fictício já na inicialização: sem isso o PRIMEIRO pedido com
+ * usuário inexistente depois do boot custava um hash a mais (diferença
+ * mensurável). Chamado por app.ts; falha aqui é inofensiva (tenta de novo no
+ * primeiro uso).
+ */
+export async function warmUpDummyHash(): Promise<void> {
+  try {
+    await getDummyHash();
+  } catch {
+    dummyHash = null;
+  }
+}
 
 export async function hashPassword(password: string): Promise<string> {
   return hash(password);
@@ -33,8 +52,7 @@ export async function verifyPasswordTimingSafe(
   password: string,
 ): Promise<boolean> {
   if (passwordHash === null) {
-    dummyHash ??= await hashPassword("dummy-password-para-timing");
-    await verifyPassword(dummyHash, password);
+    await verifyPassword(await getDummyHash(), password);
     return false;
   }
   return verifyPassword(passwordHash, password);
