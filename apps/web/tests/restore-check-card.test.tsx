@@ -150,9 +150,10 @@ describe("desligado (o padrão)", () => {
 
   it.each([
     ["undetected", "ainda não foi detectado"],
-    ["no_database", "não tem banco PostgreSQL, MySQL, MariaDB ou MongoDB"],
+    ["no_database", "não tem banco PostgreSQL detectado"],
     ["not_selected", "não está marcado no backup"],
     ["is_destination", "destino do teste de restauração de outro projeto"],
+    ["engine_unsupported", "Ainda não disponível para este motor de banco"],
   ] as const)("opção indisponível (%s): explica e não mostra formulário nem aviso", (code, text) => {
     renderCard(view({ unavailableCode: code, unavailableReason: "texto do servidor", candidates: [] }));
     expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent(text);
@@ -329,7 +330,7 @@ describe("em inglês", () => {
 
   it("indisponível, aviso do painel e sem elegíveis", () => {
     renderCard(view({ unavailableCode: "no_database", unavailableReason: "pt", candidates: [] }));
-    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("no PostgreSQL, MySQL, MariaDB or MongoDB database");
+    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("no PostgreSQL database");
     cleanup();
     renderCard(view({ candidates: [], notice: { code: "destination_missing", text: "pt", at: "2026-10-14T12:00:00Z" } }));
     expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("PostgreSQL database already detected");

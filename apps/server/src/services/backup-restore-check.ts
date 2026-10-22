@@ -27,23 +27,28 @@ export const RESTORE_CHECK_REASONS: Readonly<Record<RestoreCheckReasonCode, stri
   no_backup: "Ainda não há backup deste projeto para testar.",
   backup_incomplete: "O backup ficou incompleto e não é usado no teste.",
   no_password: "O backup está cifrado e o painel não tem a senha dele.",
-  no_database_in_backup: "O backup não tem banco do mesmo tipo que o do destino.",
+  no_database_in_backup: "O backup não tem um banco PostgreSQL.",
   ambiguous_database: "Não foi possível saber qual banco do backup é o principal.",
   no_space: "Não há espaço em disco para abrir o backup.",
   timeout: "A restauração passou do prazo e foi interrompida. O banco temporário do teste foi apagado.",
-  panel_restarted: "O painel reiniciou durante o teste. Um banco temporário (tws_rc_) pode ter ficado no servidor do destino; o próximo teste o apaga.",
+  panel_restarted: "O painel reiniciou durante o teste. Um banco temporário (tws_rc_) pode ter ficado no servidor do destino; o painel o apaga ao iniciar e no próximo teste.",
   restart_before_start: "O painel reiniciou antes de o teste começar. Ele não rodou.",
   settings_changed: "O destino do teste foi trocado antes de ele começar. Este pedido não rodou.",
   restore_failed: "A restauração do backup num banco temporário do destino falhou: o backup pode estar com defeito, ou o servidor do destino não aceita algo do dump (extensão, permissão). O banco temporário foi apagado.",
   sanity_failed: "O backup não passou na conferência: está incompleto, ou o que foi restaurado não bate com o que o backup tem.",
-  cleanup_failed: "O teste terminou, mas não foi possível apagar o banco temporário (tws_rc_) do servidor do destino. Apague-o à mão; o próximo teste também tenta.",
+  engine_unsupported: "Ainda não disponível para este motor de banco. Por enquanto o teste só vale para PostgreSQL.",
+  destination_permission: "A credencial do banco do destino não tem permissão para criar bancos (precisa ser superusuário ou ter CREATEDB). É um problema de permissão no destino, não do backup.",
+  cleanup_failed: "O teste terminou, mas não foi possível apagar o banco temporário (tws_rc_) do servidor do destino. O painel guardou o nome e tenta apagar de novo ao iniciar, ao desligar a opção e no próximo teste.",
   backup_unreadable: "Não foi possível abrir o backup (arquivo ausente, corrompido ou alterado).",
   turned_off: "A opção foi desligada antes de o teste começar.",
 };
 
-/** Motores que o teste sabe restaurar (o Redis é cache: fica de fora). */
+/**
+ * Motores que o teste sabe validar. Neste lote, só o PostgreSQL: MySQL, MariaDB e MongoDB ainda não
+ * têm a mesma rigidez (ver o relatório) e ficam inelegíveis; o Redis é cache e nunca entra.
+ */
 export function isRestorable(engine: BackupDatabaseEngine): boolean {
-  return engine !== "redis";
+  return engine === "postgres";
 }
 
 /** Primeiro banco restaurável de uma lista detectada. */

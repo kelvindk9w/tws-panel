@@ -422,6 +422,8 @@ export type RestoreCheckReasonCode =
   | "restart_before_start"
   | "settings_changed"
   | "cleanup_failed"
+  | "engine_unsupported"
+  | "destination_permission"
   | "restore_failed"
   | "sanity_failed"
   | "backup_unreadable";
@@ -460,7 +462,7 @@ export interface RestoreCheckCandidate {
 }
 
 /** Por que a opção não está disponível no projeto de origem (a tela traduz; `unavailableReason` é o texto em português). */
-export type RestoreCheckUnavailableCode = "undetected" | "no_database" | "not_selected" | "is_destination";
+export type RestoreCheckUnavailableCode = "undetected" | "no_database" | "not_selected" | "is_destination" | "engine_unsupported";
 
 export interface RestoreCheckView {
   /** Configuração guardada (ligada ou não). */

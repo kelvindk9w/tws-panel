@@ -12,8 +12,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BackupDocker } from "../src/services/backup-docker.js";
 import {
   RestoreValidationError,
-  filterMysqlDump,
   filterPostgresDump,
+  dropTempDatabase,
+  isTempName,
   restoreCheckScripts,
   validateRestore,
   type ValidateInput,
@@ -99,68 +100,74 @@ describe("filterPostgresDump", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Filtro do dump do MySQL/MariaDB
+// Leitor do dump: textos, identificadores e corpos que atravessam linhas
 // ---------------------------------------------------------------------------
 
-describe("filterMysqlDump", () => {
-  const dump = [
-    "/*!40101 SET NAMES utf8mb4 */;",
-    "--",
-    "-- Current Database: `loja`",
-    "--",
-    "/*!40000 DROP DATABASE IF EXISTS `loja`*/;",
-    "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `loja` /*!40100 DEFAULT CHARACTER SET utf8mb4 */;",
-    "USE `loja`;",
-    "CREATE TABLE `pedidos` (",
-    "  `id` int",
-    ");",
-    "INSERT INTO `pedidos` VALUES (1),(2);",
-    "CREATE TABLE `vazia` (`i` int);",
-    "/*!50001 CREATE VIEW `v` AS SELECT 1 AS `id` */;",
-    "/*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER t BEFORE INSERT ON pedidos FOR EACH ROW SET NEW.id = 1 */;",
-    "--",
-    "-- Current Database: `extra`",
-    "--",
-    "/*!40000 DROP DATABASE IF EXISTS `extra`*/;",
-    "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `extra` /*!40100 DEFAULT CHARACTER SET utf8mb4 */;",
-    "USE `extra`;",
-    "CREATE TABLE `t` (`i` int);",
-    "INSERT INTO `t` VALUES (1);",
-    "--",
-    "-- Current Database: `loja`",
-    "--",
-    "USE `loja`;",
-    "/*!50013 DEFINER=`root`@`localhost` SQL SECURITY DEFINER */",
-    "-- Dump completed on 2026-10-22 10:00:00",
-    "",
-  ].join("\n");
+describe("filterPostgresDump: textos e corpos com $$ ou aspas não confundem o leitor", () => {
+  async function scanOf(lines: string[]) {
+    const out = path.join(dir, "o.sql");
+    const scan = await filterPostgresDump(await file("i.sql", lines.join("\n")), out);
+    return { scan, text: await readFile(out, "utf8") };
+  }
+  const END = "-- PostgreSQL database dump complete";
 
-  it("só o banco do projeto, com o nome trocado por um descartável, sem DROP DATABASE nem DEFINER", async () => {
-    const out = path.join(dir, "out.sql");
-    const scan = await filterMysqlDump(await file("in.sql", dump), out, "abcd1234", "loja");
-    const text = await readFile(out, "utf8");
-    expect(scan.dbs).toEqual([{ original: "loja", temp: "tws_rc_abcd1234_0", tables: ["pedidos", "vazia", "v"], withData: ["pedidos"] }]);
-    expect(text).toContain("CREATE DATABASE /*!32312 IF NOT EXISTS*/ `tws_rc_abcd1234_0`");
-    expect(text).toContain("USE `tws_rc_abcd1234_0`;");
-    expect(text).not.toMatch(/DROP DATABASE|DEFINER=|extra|`loja`/);
-    expect(scan.complete).toBe(true);
-  });
-
-  it("sem saber o banco do projeto: todos os do dump, cada um num descartável; o banco que volta (views) usa o mesmo", async () => {
-    const out = path.join(dir, "out.sql");
-    const scan = await filterMysqlDump(await file("in.sql", dump), out, "abcd1234", null);
-    expect(scan.dbs.map((d) => [d.original, d.temp])).toEqual([
-      ["loja", "tws_rc_abcd1234_0"],
-      ["extra", "tws_rc_abcd1234_1"],
+  it("COMMENT/DEFAULT com '$$' ou '$tag$' dentro de um texto entre aspas simples", async () => {
+    const { scan } = await scanOf([
+      "CREATE TABLE public.a (x text DEFAULT '$$');",
+      "COMMENT ON TABLE public.a IS 'custa $5 e $tag$ nao abre nada';",
+      "CREATE TABLE public.b (y int);",
+      "ALTER TABLE public.b OWNER TO dono;",
+      END,
     ]);
-    const text = await readFile(out, "utf8");
-    expect(text).not.toContain("`extra`");
-    expect(text.match(/USE `tws_rc_abcd1234_0`/g)).toHaveLength(2);
+    expect(scan.tables).toEqual(["public.a", "public.b"]);
   });
 
-  it("dump cortado (sem 'Dump completed'): complete é falso", async () => {
-    const scan = await filterMysqlDump(await file("in.sql", dump.replace("-- Dump completed on 2026-10-22 10:00:00\n", "")), path.join(dir, "o.sql"), "abcd1234", "loja");
-    expect(scan.complete).toBe(false);
+  it("texto E'...' com barra e aspa escapadas, e '' dentro de texto comum", async () => {
+    const { scan, text } = await scanOf([
+      "COMMENT ON TABLE public.a IS E'termina com \\' $$ ainda texto';",
+      "COMMENT ON COLUMN public.a.x IS 'it''s $$ ainda texto';",
+      "CREATE TABLE public.a (x int);",
+      "ALTER TABLE public.a OWNER TO dono;",
+      END,
+    ]);
+    expect(scan.tables).toEqual(["public.a"]);
+    expect(text).not.toContain("OWNER TO");
+  });
+
+  it("identificador entre aspas duplas com aspas simples ou $$ dentro", async () => {
+    const { scan } = await scanOf(['CREATE TABLE public."it\'s $$" (a int);', "CREATE TABLE public.b (a int);", END]);
+    expect(scan.tables).toEqual(['public."it\'s $$"', "public.b"]);
+  });
+
+  it("texto que atravessa várias linhas: o que parece GRANT/CREATE TABLE dentro dele não conta nem é cortado", async () => {
+    const { scan, text } = await scanOf([
+      "COMMENT ON TABLE public.a IS 'linha 1",
+      "GRANT ALL ON x TO y;",
+      "CREATE TABLE falso (a int);",
+      "fim';",
+      "CREATE TABLE public.a (x int);",
+      END,
+    ]);
+    expect(scan.tables).toEqual(["public.a"]);
+    expect(text).toContain("GRANT ALL ON x TO y;");
+  });
+
+  it("corpo $tag$ de função e comentários (-- e /* */) com aspas soltas", async () => {
+    const { scan } = await scanOf([
+      "-- aspas soltas ' aqui",
+      "/* e aqui ' $$ */",
+      "CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $fn$ select 'x'; $fn$;",
+      "CREATE FUNCTION g() RETURNS void LANGUAGE plpgsql AS $$",
+      "BEGIN",
+      "CREATE TABLE falsa (a int);",
+      "END;",
+      "$$;",
+      "/* bloco /* aninhado */ ainda comentário",
+      "CREATE TABLE falsa2 (a int); */",
+      "CREATE TABLE public.real (a int);",
+      END,
+    ]);
+    expect(scan.tables).toEqual(["public.real"]);
   });
 });
 
@@ -175,14 +182,12 @@ class FakeDb implements Partial<BackupDocker> {
   restoreText = "";
   verifySql = "";
   restoreError: Error | null = null;
-  restoreStderr = "";
   prepareError: Error | null = null;
   verifyError: Error | null = null;
   verifyOut: ((sql: string) => string) | null = null;
   cleanup: string | Error = "GONE\n";
   cleanupArgs: string[][] = [];
   prepareArgs: string[][] = [];
-  mongoVerify = "D|tws_rc_x_loja|2|3\n";
 
   async execCapture(_c: string, script: string, args: string[]): Promise<string> {
     const step = /# tws-rc:(\w+):(\w+)/.exec(script)!;
@@ -192,17 +197,9 @@ class FakeDb implements Partial<BackupDocker> {
       if (this.prepareError) throw this.prepareError;
       return "";
     }
-    if (step[2] === "cleanup") {
-      this.cleanupArgs.push(args);
-      if (this.cleanup instanceof Error) throw this.cleanup;
-      // o MongoDB varre os restos com o mesmo script (prefixo curto) antes de restaurar
-      return this.cleanup;
-    }
-    if (step[2] === "verify") {
-      if (this.verifyError) throw this.verifyError;
-      return this.mongoVerify;
-    }
-    return "";
+    this.cleanupArgs.push(args);
+    if (this.cleanup instanceof Error) throw this.cleanup;
+    return this.cleanup;
   }
 
   async execFromFile(_c: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }) {
@@ -212,54 +209,58 @@ class FakeDb implements Partial<BackupDocker> {
     if (step[2] === "verify") {
       this.verifySql = text;
       if (this.verifyError) throw this.verifyError;
-      return { stderr: "", stdout: this.verifyOut ? this.verifyOut(text) : defaultVerify(step[1]!, text) };
+      return { stderr: "", stdout: this.verifyOut ? this.verifyOut(text) : defaultVerify(text) };
     }
     this.restoreArgs.push(args);
     this.restoreTimeout = opts?.timeoutMs;
     this.restoreText = text;
     if (this.restoreError) throw this.restoreError;
-    return { stderr: this.restoreStderr, stdout: "" };
+    return { stderr: "", stdout: "" };
   }
 }
 
 /** A resposta de um banco em que tudo bate. */
-function defaultVerify(engine: string, sql: string): string {
-  if (engine === "postgres") {
-    return sql
-      .split("\n")
-      .map((l) => {
-        const e = /^select 'E', (\d+),/.exec(l);
-        if (e) return `E|${e[1]}|t`;
-        const r = /^select 'R', (\d+), count/.exec(l);
-        if (r) return `R|${r[1]}|2`;
-        if (l.startsWith("select 'T'")) return "T|9";
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
+function defaultVerify(sql: string): string {
   return sql
     .split("\n")
-    .map((l) => /^select '([ER])', (\d+),/.exec(l))
-    .filter((m): m is RegExpExecArray => m !== null)
-    .map((m) => `${m[1]}\t${m[2]}\t1`)
+    .map((l) => {
+      const e = /^select 'E', (\d+),/.exec(l);
+      if (e) return `E|${e[1]}|t`;
+      const r = /^select 'R', (\d+), count/.exec(l);
+      if (r) return `R|${r[1]}|2`;
+      if (l.startsWith("select 'T'")) return "T|9";
+      return "";
+    })
+    .filter(Boolean)
     .join("\n");
 }
 
 const PG_DUMP = ["CREATE TABLE public.a (id int);", "COPY public.a (id) FROM stdin;", "1", "2", "\\.", "-- PostgreSQL database dump complete", ""].join("\n");
-const MY_DUMP = [
-  "-- Current Database: `loja`",
-  "CREATE DATABASE `loja`;",
-  "USE `loja`;",
-  "CREATE TABLE `a` (`i` int);",
-  "INSERT INTO `a` VALUES (1);",
-  "CREATE TABLE `b` (`i` int);",
-  "-- Dump completed on 2026-10-22",
-  "",
-].join("\n");
+const ID = "0a1b2c3d4e5f6a7b";
+const NAME = `tws_rc_${ID}`;
 
-async function input(db: FakeDb, engine: ValidateInput["engine"], text: string, over: Partial<ValidateInput> = {}): Promise<ValidateInput> {
-  return { docker: db as unknown as BackupDocker, container: "c", engine, content: dir, workDir: dir, file: await file("dump", text), databaseName: "loja", id: "0a1b2c3d", timeoutMs: 5000, ...over };
+let registry: string[];
+let order: string[];
+
+async function input(db: FakeDb, text: string, over: Partial<ValidateInput> = {}): Promise<ValidateInput> {
+  return {
+    docker: db as unknown as BackupDocker,
+    container: "c",
+    engine: "postgres",
+    workDir: dir,
+    file: await file("dump", text),
+    id: ID,
+    timeoutMs: 5000,
+    register: async (n) => {
+      registry.push(n);
+      order.push(`register ${n}`);
+    },
+    forget: async (n) => {
+      registry = registry.filter((x) => x !== n);
+      order.push(`forget ${n}`);
+    },
+    ...over,
+  };
 }
 
 async function code(p: Promise<unknown>): Promise<string> {
@@ -273,28 +274,56 @@ async function code(p: Promise<unknown>): Promise<string> {
 }
 
 describe("validateRestore: Postgres", () => {
-  it("prepara, restaura com o prazo (em segundos no container e com folga no cliente), confere e limpa", async () => {
-    const db = new FakeDb();
-    expect(await validateRestore(await input(db, "postgres", PG_DUMP))).toEqual({ tables: 1, rows: 2 });
-    expect(db.calls).toEqual(["postgres:prepare", "postgres:restore", "postgres:verify", "postgres:cleanup"]);
-    expect(db.restoreArgs).toEqual([["tws_rc_0a1b2c3d", "5"]]);
-    expect(db.restoreTimeout).toBe(35_000);
-    expect(db.cleanupArgs).toEqual([["tws_rc_0a1b2c3d"]]);
+  beforeEach(() => {
+    registry = [];
+    order = [];
   });
 
-  it("restauração com erro, prazo, falha ao preparar, conferência que não roda: códigos; sempre limpa", async () => {
+  it("registra o nome ANTES de criar, prepara, restaura com o prazo (segundos no container, folga no cliente), confere, limpa e só então esquece", async () => {
+    const db = new FakeDb();
+    const real = db.execCapture.bind(db);
+    db.execCapture = async (c, script, args) => {
+      order.push(`docker ${/# tws-rc:\w+:(\w+)/.exec(script)![1]}`);
+      return real(c, script, args);
+    };
+    expect(await validateRestore(await input(db, PG_DUMP))).toEqual({ tables: 1, rows: 2 });
+    expect(db.calls).toEqual(["postgres:prepare", "postgres:restore", "postgres:verify", "postgres:cleanup"]);
+    expect(db.restoreArgs).toEqual([[NAME, "5"]]);
+    expect(db.restoreTimeout).toBe(35_000);
+    expect(db.cleanupArgs).toEqual([[NAME]]);
+    expect(order).toEqual([`register ${NAME}`, "docker prepare", "docker cleanup", `forget ${NAME}`]);
+    expect(registry).toEqual([]);
+  });
+
+  it("restauração com erro, prazo, falha ao preparar, conferência que não roda: códigos; sempre limpa e esquece", async () => {
     for (const [setup, expected] of [
       [(d: FakeDb) => (d.restoreError = new Error("psql: ERROR: valor DADO-SECRETO")), "restore_failed"],
       [(d: FakeDb) => (d.restoreError = new Error("o comando passou do prazo e foi interrompido")), "timeout"],
       [(d: FakeDb) => (d.restoreError = new Error("docker saiu com código 137")), "timeout"],
-      [(d: FakeDb) => (d.prepareError = new Error("sem permissão")), "restore_failed"],
+      [(d: FakeDb) => (d.prepareError = new Error("sem espaço")), "restore_failed"],
       [(d: FakeDb) => (d.verifyError = new Error("x")), "sanity_failed"],
     ] as const) {
+      registry = [];
       const db = new FakeDb();
       setup(db);
-      expect(await code(validateRestore(await input(db, "postgres", PG_DUMP)))).toBe(expected);
+      expect(await code(validateRestore(await input(db, PG_DUMP)))).toBe(expected);
       expect(db.cleanupArgs).toHaveLength(1);
+      expect(registry).toEqual([]);
     }
+  });
+
+  it("sem permissão para criar bancos: destination_permission; nome que já existe: falha; em nenhum dos dois se apaga nada", async () => {
+    const noPerm = new FakeDb();
+    noPerm.prepareError = new Error("tws-rc:no-permission");
+    expect(await code(validateRestore(await input(noPerm, PG_DUMP)))).toBe("destination_permission");
+    const exists = new FakeDb();
+    exists.prepareError = new Error("tws-rc:exists");
+    expect(await code(validateRestore(await input(exists, PG_DUMP)))).toBe("restore_failed");
+    for (const db of [noPerm, exists]) {
+      expect(db.cleanupArgs).toEqual([]);
+      expect(db.restoreArgs).toEqual([]);
+    }
+    expect(registry).toEqual([]);
   });
 
   it("conferência que não bate (tabela ausente, linhas a mais ou a menos, poucas tabelas, sem total): sanity_failed", async () => {
@@ -305,152 +334,89 @@ describe("validateRestore: Postgres", () => {
       (o: string) => o.replace("T|9", ""),
     ]) {
       const db = new FakeDb();
-      db.verifyOut = (sql) => edit(defaultVerify("postgres", sql));
-      expect(await code(validateRestore(await input(db, "postgres", PG_DUMP)))).toBe("sanity_failed");
+      db.verifyOut = (sql) => edit(defaultVerify(sql));
+      expect(await code(validateRestore(await input(db, PG_DUMP)))).toBe("sanity_failed");
     }
   });
 
-  it("dump lixo ou cortado: nem toca no servidor; arquivo ilegível: backup_unreadable", async () => {
+  it("dump lixo ou cortado: nem toca no servidor nem registra nada; arquivo ilegível: backup_unreadable", async () => {
     const db = new FakeDb();
-    expect(await code(validateRestore(await input(db, "postgres", "lixo")))).toBe("sanity_failed");
-    expect(await code(validateRestore(await input(db, "postgres", PG_DUMP.replace("-- PostgreSQL database dump complete\n", ""))))).toBe("sanity_failed");
-    expect(await code(validateRestore({ ...(await input(db, "postgres", PG_DUMP)), file: path.join(dir, "nao-existe") }))).toBe("backup_unreadable");
+    expect(await code(validateRestore(await input(db, "lixo")))).toBe("sanity_failed");
+    expect(await code(validateRestore(await input(db, PG_DUMP.replace("-- PostgreSQL database dump complete\n", ""))))).toBe("sanity_failed");
+    expect(await code(validateRestore({ ...(await input(db, PG_DUMP)), file: path.join(dir, "nao-existe") }))).toBe("backup_unreadable");
     expect(db.calls).toEqual([]);
+    expect(order).toEqual([]);
   });
 
-  it("não conseguir apagar o banco temporário vira cleanup_failed (mesmo se a restauração deu certo, ou falhou antes)", async () => {
+  it("não conseguir apagar o banco temporário vira cleanup_failed e o nome continua REGISTRADO (a varredura tenta de novo)", async () => {
     for (const answer of ["LEFT\n", new Error("x")]) {
+      registry = [];
       const db = new FakeDb();
       db.cleanup = answer;
-      expect(await code(validateRestore(await input(db, "postgres", PG_DUMP)))).toBe("cleanup_failed");
+      expect(await code(validateRestore(await input(db, PG_DUMP)))).toBe("cleanup_failed");
+      expect(registry).toEqual([NAME]);
+      registry = [];
       const db2 = new FakeDb();
       db2.cleanup = answer;
       db2.restoreError = new Error("x");
-      expect(await code(validateRestore(await input(db2, "postgres", PG_DUMP)))).toBe("cleanup_failed");
+      expect(await code(validateRestore(await input(db2, PG_DUMP)))).toBe("cleanup_failed");
     }
   });
 
-  it("identificador inválido, motor sem restauração (Redis): recusa sem tocar em nada", async () => {
+  it("não conseguir registrar o nome: nada é criado", async () => {
     const db = new FakeDb();
-    expect(await code(validateRestore({ ...(await input(db, "postgres", PG_DUMP)), id: "x'; drop" }))).toBe("restore_failed");
-    expect(await code(validateRestore(await input(db, "redis", PG_DUMP)))).toBe("restore_failed");
+    expect(await code(validateRestore(await input(db, PG_DUMP, { register: async () => Promise.reject(new Error("disco cheio")) })))).toBe("restore_failed");
     expect(db.calls).toEqual([]);
-    expect(restoreCheckScripts("redis")).toBeNull();
-  });
-});
-
-describe("validateRestore: MySQL e MariaDB", () => {
-  it("restaura só o banco do projeto, confere cada tabela e as que têm dados, e limpa pelo id do teste", async () => {
-    for (const engine of ["mysql", "mariadb"] as const) {
-      const db = new FakeDb();
-      expect(await validateRestore(await input(db, engine, MY_DUMP))).toEqual({ tables: 2, rows: 1 });
-      expect(db.calls).toEqual(["mysql:prepare", "mysql:restore", "mysql:verify", "mysql:cleanup"]);
-      expect(db.restoreArgs).toEqual([["0a1b2c3d", "5"]]);
-      expect(db.restoreText).toContain("USE `tws_rc_0a1b2c3d_0`;");
-      expect(db.restoreText).not.toContain("`loja`");
-      expect(db.verifySql).toContain("table_schema = 'tws_rc_0a1b2c3d_0' and table_name = 'a'");
-      expect(db.verifySql).toContain("exists(select 1 from `tws_rc_0a1b2c3d_0`.`a`)");
-      expect(db.cleanupArgs).toEqual([["0a1b2c3d"]]);
-    }
   });
 
-  it("erro, prazo, preparo, conferência: códigos; tabela ou dados ausentes: sanity_failed", async () => {
-    for (const [setup, expected] of [
-      [(d: FakeDb) => (d.restoreError = new Error("ERROR 1064")), "restore_failed"],
-      [(d: FakeDb) => (d.restoreError = new Error("o comando passou do prazo e foi interrompido")), "timeout"],
-      [(d: FakeDb) => (d.prepareError = new Error("x")), "restore_failed"],
-      [(d: FakeDb) => (d.verifyError = new Error("x")), "sanity_failed"],
-      [(d: FakeDb) => (d.verifyOut = (sql) => defaultVerify("mysql", sql).replace("E\t0\t1", "E\t0\t0")), "sanity_failed"],
-      [(d: FakeDb) => (d.verifyOut = (sql) => defaultVerify("mysql", sql).replace("R\t2\t1", "R\t2\t0")), "sanity_failed"],
-    ] as const) {
-      const db = new FakeDb();
-      setup(db);
-      expect(await code(validateRestore(await input(db, "mariadb", MY_DUMP)))).toBe(expected);
-      expect(db.cleanupArgs).toHaveLength(1);
-    }
-  });
-
-  it("dump cortado, sem tabelas, ou sem o banco do projeto: nem toca no servidor", async () => {
+  it("identificador inválido, motor que não é Postgres: recusa sem tocar em nada", async () => {
     const db = new FakeDb();
-    expect(await code(validateRestore(await input(db, "mysql", MY_DUMP.replace("-- Dump completed on 2026-10-22\n", ""))))).toBe("sanity_failed");
-    expect(await code(validateRestore(await input(db, "mysql", MY_DUMP, { databaseName: "outro" })))).toBe("sanity_failed");
-    expect(await code(validateRestore({ ...(await input(db, "mysql", MY_DUMP)), file: path.join(dir, "nao-existe") }))).toBe("backup_unreadable");
+    expect(await code(validateRestore({ ...(await input(db, PG_DUMP)), id: "x'; drop" }))).toBe("restore_failed");
+    expect(await code(validateRestore({ ...(await input(db, PG_DUMP)), id: "0a1b2c3d" }))).toBe("restore_failed");
+    for (const engine of ["redis", "mysql", "mariadb", "mongo"] as const) {
+      expect(await code(validateRestore({ ...(await input(db, PG_DUMP)), engine }))).toBe("restore_failed");
+      expect(restoreCheckScripts(engine)).toBeNull();
+    }
     expect(db.calls).toEqual([]);
   });
 });
 
-describe("validateRestore: MongoDB", () => {
-  const stderr = "2024 done\n3 document(s) restored successfully. 0 document(s) failed to restore.\n";
-
-  it("varre restos, restaura (prazo, banco do projeto opcional), confere coleções e documentos e limpa", async () => {
+describe("dropTempDatabase e isTempName: só o que tem a forma exata de um nome do painel", () => {
+  it("recusa nomes parecidos sem tocar no servidor", async () => {
     const db = new FakeDb();
-    db.restoreStderr = stderr;
-    expect(await validateRestore(await input(db, "mongo", "archive", { databaseName: null }))).toEqual({ tables: 2, rows: 3 });
-    expect(db.calls).toEqual(["mongo:cleanup", "mongo:restore", "mongo:verify", "mongo:cleanup"]);
-    expect(db.cleanupArgs).toEqual([["tws_rc_"], ["tws_rc_0a1b2c3d_"]]);
-    expect(db.restoreArgs).toEqual([["0a1b2c3d", "5", ""]]);
-    const withName = new FakeDb();
-    withName.restoreStderr = stderr;
-    await validateRestore(await input(withName, "mongo", "archive"));
-    expect(withName.restoreArgs).toEqual([["0a1b2c3d", "5", "loja"]]);
-  });
-
-  it("o script de restauração exclui admin/config/local, renomeia para o descartável e nunca usa --drop nem a senha na linha de comando", () => {
-    const script = (restoreCheckScripts("mongo") as { restore: string }).restore;
-    expect(script).toContain("--nsExclude 'admin.*' --nsExclude 'config.*' --nsExclude 'local.*'");
-    expect(script).toContain("--nsFrom '$db$.$coll$'");
-    expect(script).toContain('"tws_rc_${RC_ID}_\\$db\\$.\\$coll\\$"');
-    expect(script).toContain('--nsInclude "$RC_DB.*"');
-    expect(script).not.toContain("--drop");
-    expect(script).not.toMatch(/--password "\$MP"[^\n]*mongorestore/);
-  });
-
-  it("erro, prazo, preparo: códigos; conferência que não bate, sem coleções ou sem o resumo do mongorestore: sanity_failed", async () => {
-    for (const [setup, expected] of [
-      [(d: FakeDb) => (d.restoreError = new Error("falhou")), "restore_failed"],
-      [(d: FakeDb) => (d.restoreError = new Error("o comando passou do prazo e foi interrompido")), "timeout"],
-      [(d: FakeDb) => (d.verifyError = new Error("x")), "sanity_failed"],
-      [(d: FakeDb) => (d.mongoVerify = "D|tws_rc_x_loja|2|4\n"), "sanity_failed"],
-      [(d: FakeDb) => (d.mongoVerify = ""), "sanity_failed"],
-      [(d: FakeDb) => (d.restoreStderr = "sem resumo"), "sanity_failed"],
-    ] as const) {
-      const db = new FakeDb();
-      db.restoreStderr = stderr;
-      setup(db);
-      expect(await code(validateRestore(await input(db, "mongo", "archive")))).toBe(expected);
-      expect(db.cleanupArgs.at(-1)).toEqual(["tws_rc_0a1b2c3d_"]);
+    for (const n of ["tws_rc_cafe", "tws_rc_cafe_0", "tws_rc_meu_app", "tws_rc_0A1B2C3D4E5F6A7B", `${NAME}x`, `x${NAME}`, "postgres", `${NAME};drop`]) {
+      expect(isTempName(n)).toBe(false);
+      expect(await dropTempDatabase(db as unknown as BackupDocker, "c", n)).toBe(false);
     }
-  });
-
-  it("não conseguir varrer os restos antes: falha sem restaurar (e, sem poder limpar, avisa para apagar à mão)", async () => {
-    const db = new FakeDb();
+    expect(db.calls).toEqual([]);
+    expect(isTempName(NAME)).toBe(true);
+    expect(await dropTempDatabase(db as unknown as BackupDocker, "c", NAME)).toBe(true);
+    db.cleanup = "LEFT\n";
+    expect(await dropTempDatabase(db as unknown as BackupDocker, "c", NAME)).toBe(false);
     db.cleanup = new Error("x");
-    expect(await code(validateRestore(await input(db, "mongo", "archive")))).toBe("cleanup_failed");
-    expect(db.calls.filter((c) => c === "mongo:restore")).toEqual([]);
+    expect(await dropTempDatabase(db as unknown as BackupDocker, "c", NAME)).toBe(false);
   });
 });
 
 describe("scripts que rodam no container", () => {
-  it("cada passo se identifica e termina com GONE/LEFT na limpeza", () => {
-    for (const engine of ["postgres", "mysql", "mongo"] as const) {
-      const scripts = restoreCheckScripts(engine) as Record<string, string>;
-      for (const [step, text] of Object.entries(scripts)) expect(text.startsWith(`# tws-rc:${engine}:${step}`)).toBe(true);
-      expect(scripts.cleanup).toMatch(/GONE/);
-      expect(scripts.cleanup).toMatch(/LEFT/);
-    }
+  it("cada passo se identifica; a limpeza termina com GONE/LEFT e só apaga o nome recebido (nunca varre por padrão)", () => {
+    const scripts = restoreCheckScripts("postgres") as Record<string, string>;
+    for (const [step, text] of Object.entries(scripts)) expect(text.startsWith(`# tws-rc:postgres:${step}`)).toBe(true);
+    expect(scripts.cleanup).toMatch(/GONE/);
+    expect(scripts.cleanup).toMatch(/LEFT/);
+    for (const text of Object.values(scripts)) expect(text).not.toMatch(/like 'tws|datname like/);
   });
 
-  it("o prazo vale dentro do container: timeout -s KILL, e o Postgres identifica a sessão e a derruba antes de apagar o banco", () => {
+  it("o prazo vale dentro do container, a sessão é identificada e derrubada antes de apagar, e o preparo recusa sem permissão ou nome existente", () => {
     const pg = restoreCheckScripts("postgres") as Record<string, string>;
-    expect(pg.restore).toContain('timeout -s KILL $RC_SECS');
+    expect(pg.restore).toContain("timeout -s KILL $RC_SECS");
     expect(pg.restore).toContain("PGAPPNAME=tws-restore-check");
     expect(pg.restore).toContain("ON_ERROR_STOP=1");
     expect(pg.cleanup).toContain("pg_terminate_backend");
     expect(pg.cleanup).toContain("drop database if exists");
-    const my = restoreCheckScripts("mariadb") as Record<string, string>;
-    expect(my.restore).toContain("timeout -s KILL");
-    expect(my.cleanup).toContain("kill $pid");
-    // sem senha na linha de comando
-    for (const s of [...Object.values(pg), ...Object.values(my)]) expect(s).not.toMatch(/-p"?\$|--password/);
+    expect(pg.prepare).toContain("rolsuper or rolcreatedb");
+    expect(pg.prepare).toContain("tws-rc:no-permission");
+    expect(pg.prepare).toContain("tws-rc:exists");
+    for (const s of Object.values(pg)) expect(s).not.toMatch(/-p"?\$|--password/);
   });
 });

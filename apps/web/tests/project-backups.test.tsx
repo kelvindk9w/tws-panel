@@ -190,7 +190,7 @@ describe("aba Backups do projeto", () => {
     renderCard();
     const root = await screen.findByTestId("project-backups");
     const card = within(root).getByTestId("restore-check-card");
-    expect(card).toHaveTextContent("Validar o backup do banco restaurando em outro projeto");
+    expect(card).toHaveTextContent("Validar o backup do banco restaurando num banco temporário");
     expect(within(card).getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
     // ligar pela aba: o mesmo PUT e a aba recarrega
     fireEvent.change(within(card).getByLabelText("Projeto de destino"), { target: { value: "p2" } });

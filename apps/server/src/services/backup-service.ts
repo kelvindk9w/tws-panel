@@ -94,7 +94,7 @@ import {
   firstRestorable,
   frequencyWindowMs,
 } from "./backup-restore-check.js";
-import { RestoreValidationError, validateRestore } from "./backup-restore-validate.js";
+import { RestoreValidationError, dropTempDatabase, isTempName, validateRestore } from "./backup-restore-validate.js";
 import { ArchiveError } from "./backup-archive.js";
 import {
   PG_GLOBALS_RESTORE,
@@ -359,6 +359,11 @@ interface StoredConfig {
   panelRestoredAt?: string | null;
   /** "<pasta>/<arquivo>" → hash, tamanho e a última conferência de cada cópia. */
   checks: Record<string, StoredFileChecks>;
+  /**
+   * Bancos temporários do teste de restauração que o PAINEL criou (registrados antes do CREATE) e ainda não
+   * confirmou como apagados. É a única lista do que a varredura pode apagar: nunca se apaga por padrão de nome.
+   */
+  restoreCheckTemp?: Array<{ name: string; destinationId: string }>;
 }
 
 /** O que vai em manifesto.json dentro do .7z (lido de volta na restauração). */
@@ -699,6 +704,9 @@ export class BackupService {
             checks: raw.checks ?? {},
             restoreHold: parseRestoreHold(raw.restoreHold),
             panelRestoredAt: typeof raw.panelRestoredAt === "string" ? raw.panelRestoredAt : null,
+            restoreCheckTemp: Array.isArray(raw.restoreCheckTemp)
+              ? raw.restoreCheckTemp.filter((e) => typeof e?.name === "string" && isTempName(e.name) && typeof e.destinationId === "string")
+              : [],
           };
         },
         log: this.log,
@@ -773,6 +781,12 @@ export class BackupService {
       if (restoreInterrupted) await this.persistQuiet({ config: true });
       if (interrupted) await this.persistQuiet({ history: true });
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
+      // Banco temporário que o painel criou e não chegou a apagar (caiu no meio): apaga só os registrados.
+      if ((this.config.restoreCheckTemp ?? []).length > 0) {
+        void Promise.resolve()
+          .then(() => this.sweepRestoreCheckTemp())
+          .catch(() => undefined);
+      }
     })().catch((err: unknown) => {
       this.loading = null;
       throw err;
@@ -996,6 +1010,8 @@ export class BackupService {
     await this.ensureLoaded();
     delete this.config.targets[projectTargetId(projectId)];
     delete this.config.detections[projectId];
+    // O container do destino foi embora com o projeto: não há mais banco temporário a apagar nele.
+    this.config.restoreCheckTemp = (this.config.restoreCheckTemp ?? []).filter((e) => e.destinationId !== projectId);
     // Projetos que usavam este como destino do teste de restauração: a opção se desliga, com aviso.
     for (const [id, t] of Object.entries(this.config.targets)) {
       if (t?.restoreCheck?.settings?.enabled && t.restoreCheck.settings.destinationId === projectId) {
@@ -3070,7 +3086,10 @@ export class BackupService {
     const det = this.config.detections[projectId];
     if (!det || det.error) return { db: null, code: "undetected", reason: "O banco deste projeto ainda não foi detectado. Faça o deploy e use Detectar de novo." };
     const dbs = det.databases.filter((d) => firstRestorable([d]));
-    if (dbs.length === 0) return { db: null, code: "no_database", reason: "Este projeto não tem banco PostgreSQL, MySQL, MariaDB ou MongoDB detectado." };
+    if (dbs.length === 0) {
+      if (det.databases.some((d) => d.engine !== "redis")) return { db: null, code: "engine_unsupported", reason: RESTORE_CHECK_REASONS.engine_unsupported };
+      return { db: null, code: "no_database", reason: "Este projeto não tem banco PostgreSQL detectado." };
+    }
     const choices = this.config.targets[projectTargetId(projectId)]?.choices ?? {};
     const chosen = dbs.find((d) => choices[d.id] ?? d.defaultSelected);
     if (!chosen) return { db: null, code: "not_selected", reason: "O banco deste projeto não está marcado no backup. Marque-o em O que entra no backup." };
@@ -3159,6 +3178,39 @@ export class BackupService {
       path: `/projects/${targetId.slice(8)}/backups`,
     });
     void this.persistQuiet({ config: true });
+    void this.sweepRestoreCheckTemp().catch(() => undefined);
+  }
+
+  // Bancos temporários registrados -------------------------------------------------
+
+  private async registerTemp(name: string, destinationId: string): Promise<void> {
+    (this.config.restoreCheckTemp ??= []).push({ name, destinationId });
+    await this.persistQuiet({ config: true });
+  }
+
+  private async forgetTemp(name: string): Promise<void> {
+    this.config.restoreCheckTemp = (this.config.restoreCheckTemp ?? []).filter((e) => e.name !== name);
+    await this.persistQuiet({ config: true });
+  }
+
+  /**
+   * Apaga os bancos temporários que o painel criou e não confirmou como apagados (só os registrados, nunca por
+   * padrão de nome). Não mexe enquanto um teste roda (o banco dele está registrado): `own` = quem chama é o próprio teste.
+   */
+  private async sweepRestoreCheckTemp(own = false): Promise<void> {
+    if (!own && this.running?.record.operation === "restore_check") return;
+    const docker = this.opts.docker;
+    for (const entry of [...(this.config.restoreCheckTemp ?? [])]) {
+      const project = await this.opts.projects.get(entry.destinationId).catch(() => null);
+      if (!project) {
+        await this.forgetTemp(entry.name);
+        continue;
+      }
+      const service = this.config.detections[project.id]?.databases.find((d) => d.engine === "postgres")?.service;
+      const c = (await docker.projectContainers(project.slug).catch(() => [])).find((x) => x.service === service && x.running);
+      if (!c) continue;
+      if (await dropTempDatabase(docker, c.id, entry.name)) await this.forgetTemp(entry.name);
+    }
   }
 
   /** Liga, troca o destino ou a frequência, ou desliga. Ligar e trocar o destino exigem digitar o nome do destino. */
@@ -3175,6 +3227,8 @@ export class BackupService {
         cur.enabled = false;
         await this.persist({ config: true });
         this.audit("backups.restore_check", `${project!.name}: teste de restauração desligado.`, actor, project!.name);
+        // sobra de um teste que caiu no meio (só os bancos registrados pelo painel)
+        await this.sweepRestoreCheckTemp().catch(() => undefined);
       }
       return this.restoreCheckView(project!, all);
     }
@@ -3363,7 +3417,8 @@ export class BackupService {
       throw new RestoreCheckStop("destination_renamed");
     }
     if (this.rcOf(projectTargetId(dest.id))?.settings?.enabled) throw new RestoreCheckStop("destination_chain");
-    const { db: sourceDb } = this.sourceDatabase(projectId);
+    const { db: sourceDb, code: sourceCode } = this.sourceDatabase(projectId);
+    if (sourceCode === "engine_unsupported") throw new RestoreCheckStop("engine_unsupported");
     if (!sourceDb) throw new RestoreCheckStop("source_no_database");
     if (file.incomplete) throw new RestoreCheckStop("backup_incomplete");
 
@@ -3405,6 +3460,9 @@ export class BackupService {
       throw new RestoreCheckStop("no_space");
     }
 
+    // Restos de um teste anterior que caiu no meio (só os registrados pelo painel).
+    await this.sweepRestoreCheckTemp(true).catch(() => undefined);
+
     const staging = await this.tempDir("teste-restauracao");
     try {
       let opened: { content: string; manifest: Manifest };
@@ -3439,13 +3497,12 @@ export class BackupService {
           docker,
           container: container.id,
           engine: item.engine!,
-          content,
           workDir: staging,
           file: dumpFile,
-          // MySQL/MariaDB restauram só o banco do projeto; o MongoDB, todos menos os de sistema (o banco "inicial" costuma não ser o do app)
-          databaseName: item.engine === "mongo" ? null : sourceDb.databaseName,
-          id: randomBytes(4).toString("hex"),
+          id: randomBytes(8).toString("hex"),
           timeoutMs: this.opts.restoreCheckTimeoutMs ?? 30 * 60_000,
+          register: (name) => this.registerTemp(name, dest.id),
+          forget: (name) => this.forgetTemp(name),
         });
       } catch (err) {
         throw new RestoreCheckStop(err instanceof RestoreValidationError ? err.code : "restore_failed", "failed");

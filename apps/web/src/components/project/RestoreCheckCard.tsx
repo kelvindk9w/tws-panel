@@ -20,6 +20,7 @@ const UNAVAILABLE_KEYS = {
   no_database: "backups.restoreCheck.unavailable.no_database",
   not_selected: "backups.restoreCheck.unavailable.not_selected",
   is_destination: "backups.restoreCheck.unavailable.is_destination",
+  engine_unsupported: "backups.restoreCheck.unavailable.engine_unsupported",
 } as const satisfies Record<NonNullable<RestoreCheckView["unavailableCode"]>, Key>;
 
 const REASON_KEYS = {
@@ -31,6 +32,8 @@ const REASON_KEYS = {
   destination_not_running: "backups.restoreCheck.reason.destination_not_running",
   destination_busy: "backups.restoreCheck.reason.destination_busy",
   engine_mismatch: "backups.restoreCheck.reason.engine_mismatch",
+  engine_unsupported: "backups.restoreCheck.reason.engine_unsupported",
+  destination_permission: "backups.restoreCheck.reason.destination_permission",
   no_backup: "backups.restoreCheck.reason.no_backup",
   backup_incomplete: "backups.restoreCheck.reason.backup_incomplete",
   no_password: "backups.restoreCheck.reason.no_password",

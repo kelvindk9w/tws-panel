@@ -1,11 +1,22 @@
 /**
  * backup-restore-validate.ts — a parte que PROVA que um dump de banco restaura:
  * o dump é restaurado num banco DESCARTÁVEL criado no servidor de banco do
- * projeto de destino (nome `tws_rc_<id>`), com parada no primeiro erro, e depois
- * o painel confere que cada tabela do dump existe e que o número de linhas bate
- * com o do dump. O banco descartável é sempre apagado no fim (também em falha
- * e em prazo estourado), e nada do banco real do destino é tocado: nem tabelas,
- * nem usuários, nem papéis.
+ * projeto de destino (nome `tws_rc_<id aleatório>`), com parada no primeiro erro,
+ * e depois o painel confere que cada tabela do dump existe e que o número de
+ * linhas bate com o do dump. O banco descartável é apagado no fim (também em
+ * falha e em prazo estourado), e nada do banco real do destino é tocado: nem
+ * tabelas, nem usuários, nem papéis.
+ *
+ * Neste lote só o PostgreSQL é suportado. MySQL, MariaDB e MongoDB ficam fora
+ * (inelegíveis na interface e no servidor) até terem a mesma rigidez: o dump
+ * deles leva todos os bancos do servidor e corpos de gatilhos/rotinas com o nome
+ * do banco original, e o mongorestore tem de conferir também as falhas de
+ * documento. Ver o relatório (proposta para um lote seguinte).
+ *
+ * Só o painel apaga o que o painel criou: o nome de cada banco descartável é
+ * registrado de forma persistente ANTES do CREATE (o serviço guarda em
+ * backups.json) e só os nomes registrados são apagados. Nunca se apaga por
+ * padrão de nome: bancos reais chamados `tws_rc_...` do destino não são tocados.
  *
  * O que sai daqui para o resto do painel são códigos e números (tabelas e
  * linhas conferidas); texto devolvido pelo banco nunca é repassado, porque
@@ -22,10 +33,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BackupDatabaseEngine } from "@paas/core";
 import type { BackupDocker } from "./backup-docker.js";
-import { MY_ENV, PG_ENV, mongoEnv } from "./backup-detect.js";
+import { PG_ENV } from "./backup-detect.js";
 
 /** Códigos de falha que a validação devolve (o serviço os traduz em resultado). */
-export type ValidationCode = "restore_failed" | "timeout" | "sanity_failed" | "cleanup_failed" | "backup_unreadable";
+export type ValidationCode = "restore_failed" | "timeout" | "sanity_failed" | "cleanup_failed" | "backup_unreadable" | "destination_permission";
 
 export class RestoreValidationError extends Error {
   constructor(readonly code: ValidationCode) {
@@ -35,19 +46,24 @@ export class RestoreValidationError extends Error {
 
 export interface ValidationResult {
   tables: number;
-  /** Linhas conferidas (Postgres e MongoDB: todas; MySQL/MariaDB: tabelas com dados não vazias). */
+  /** Linhas conferidas: a soma das linhas dos blocos COPY do dump, iguais às do banco temporário. */
   rows: number;
 }
 
 /** Folga entre o prazo dentro do container (que mata a restauração) e o do cliente docker. */
 const CLIENT_SLACK_MS = 30_000;
 
+/** Prefixo do nome dos bancos descartáveis. */
+export const TEMP_PREFIX = "tws_rc_";
+
+/** Nome que o painel cria: prefixo + 16 hexadecimais aleatórios. Qualquer outro nome nunca é apagado. */
+export function isTempName(name: string): boolean {
+  return /^tws_rc_[0-9a-f]{16}$/.test(name);
+}
+
 // ---------------------------------------------------------------------------
 // Scripts (rodam no container do banco, com `sh -c`)
 // ---------------------------------------------------------------------------
-
-/** Prefixo do nome dos bancos descartáveis. */
-export const TEMP_PREFIX = "tws_rc_";
 
 /** `timeout` do container, quando existe: mata a restauração no prazo, mesmo que o cliente docker já tenha ido embora. */
 const TMO = ['TMO=""', 'if command -v timeout >/dev/null 2>&1; then TMO="timeout -s KILL $RC_SECS"; fi'].join("\n");
@@ -61,12 +77,12 @@ const PG_DROP = [
 
 function pgScripts() {
   return {
+    // $1 = nome do banco temporário (já registrado). Recusa se o usuário não pode criar bancos ou se o nome já existe.
     prepare: [
       "# tws-rc:postgres:prepare",
       PG_ENV,
-      PG_DROP,
-      // restos de testes anteriores (nome inteiramente nosso)
-      `for d in $(psql -U "$U" -d template1 -AtX -c "select datname from pg_database where datname like 'tws\\_rc\\_%'" | grep -E '^tws_rc_[0-9a-f]+$'); do rc_drop "$d"; done`,
+      `[ "$(psql -U "$U" -d template1 -AtX -c "select rolsuper or rolcreatedb from pg_roles where rolname = current_user")" = "t" ] || { echo "tws-rc:no-permission" >&2; exit 8; }`,
+      `[ "$(psql -U "$U" -d template1 -AtX -c "select count(*) from pg_database where datname = '$1'")" = "0" ] || { echo "tws-rc:exists" >&2; exit 9; }`,
       'psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 -c "create database \\"$1\\""',
     ].join("\n"),
     restore: [
@@ -92,79 +108,17 @@ function pgScripts() {
   };
 }
 
-function mysqlScripts() {
-  const list = (like: string) => `$CLI -u"$U" -N -B -e "select schema_name from information_schema.schemata where schema_name like '${like}'"`;
-  return {
-    prepare: [
-      "# tws-rc:mysql:prepare",
-      MY_ENV,
-      `for d in $(${list("tws\\\\_rc\\\\_%")} | grep -E '^tws_rc_[0-9a-f]+_[0-9]+$'); do $CLI -u"$U" -e "drop database if exists $d"; done`,
-      '$CLI -u"$U" -e "select 1" >/dev/null',
-    ].join("\n"),
-    restore: ["# tws-rc:mysql:restore", MY_ENV, 'RC_SECS="$2"', TMO, 'exec $TMO $CLI -u"$U"'].join("\n"),
-    verify: ["# tws-rc:mysql:verify", MY_ENV, '$CLI -u"$U" -N -B'].join("\n"),
-    cleanup: [
-      "# tws-rc:mysql:cleanup",
-      MY_ENV,
-      "for k in 1 2 3; do",
-      `  for pid in $($CLI -u"$U" -N -B -e "select id from information_schema.processlist where db like 'tws\\\\_rc\\\\_$1\\\\_%' and id <> connection_id()"); do $CLI -u"$U" -e "kill $pid" >/dev/null 2>&1; done`,
-      `  for d in $(${list("tws\\\\_rc\\\\_$1\\\\_%")} | grep -E '^tws_rc_[0-9a-f]+_[0-9]+$'); do $CLI -u"$U" -e "drop database if exists $d" >/dev/null 2>&1; done`,
-      `  [ "$($CLI -u"$U" -N -B -e "select count(*) from information_schema.schemata where schema_name like 'tws\\\\_rc\\\\_$1\\\\_%'")" = "0" ] && { echo GONE; exit 0; }`,
-      "  sleep 1",
-      "done",
-      "echo LEFT; exit 1",
-    ].join("\n"),
-  };
-}
-
-/** Cliente de shell do MongoDB e credenciais (a senha vai por variável de ambiente, nunca na linha de comando). */
-const MONGO_SHELL = [
-  'MU="${MONGO_INITDB_ROOT_USERNAME:-}"',
-  'MP="${MONGO_INITDB_ROOT_PASSWORD:-}"',
-  'if [ -z "$MP" ] && [ -n "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ] && [ -r "$MONGO_INITDB_ROOT_PASSWORD_FILE" ]; then MP="$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE")"; fi',
-  "export MU MP",
-  "MSH=mongosh; command -v mongosh >/dev/null 2>&1 || MSH=mongo",
-].join("\n");
-
-const MONGO_JS_CONNECT = [
-  'const cred = process.env.MU ? encodeURIComponent(process.env.MU) + ":" + encodeURIComponent(process.env.MP || "") + "@" : "";',
-  'const conn = new Mongo("mongodb://" + cred + "127.0.0.1:27017/?authSource=admin");',
-  'const names = () => conn.getDB("admin").adminCommand({ listDatabases: 1, nameOnly: true }).databases.map((d) => d.name).filter((n) => n.startsWith(process.env.RC_PREFIX));',
-].join(" ");
-
-function mongoScripts() {
-  const shell = (js: string) => `${MONGO_SHELL}\nRC_PREFIX="$1"; export RC_PREFIX\n$MSH --nodb --quiet --eval '${js}'`;
-  return {
-    // $1 = prefixo (tws_rc_ para varrer restos de testes anteriores)
-    cleanup: [
-      "# tws-rc:mongo:cleanup",
-      shell(`${MONGO_JS_CONNECT} names().forEach((n) => conn.getDB(n).dropDatabase()); const left = names().length; print(left === 0 ? "GONE" : "LEFT"); quit(left === 0 ? 0 : 1);`),
-    ].join("\n"),
-    // $1 = id, $2 = segundos, $3 = banco do projeto (opcional)
-    restore: [
-      "# tws-rc:mongo:restore",
-      'RC_ID="$1"; RC_SECS="$2"; RC_DB="${3:-}"',
-      mongoEnv("mongorestore"),
-      TMO,
-      "set -- \"$@\" --nsExclude 'admin.*' --nsExclude 'config.*' --nsExclude 'local.*'",
-      'if [ -n "$RC_DB" ]; then set -- "$@" --nsInclude "$RC_DB.*"; fi',
-      `$TMO mongorestore --archive --nsFrom '$db$.$coll$' --nsTo "${TEMP_PREFIX}\${RC_ID}_\\$db\\$.\\$coll\\$" "$@"`,
-    ].join("\n"),
-    // $1 = prefixo do teste; imprime D|banco|colecoes|documentos
-    verify: [
-      "# tws-rc:mongo:verify",
-      shell(
-        `${MONGO_JS_CONNECT} names().forEach((n) => { const d = conn.getDB(n); const cs = d.getCollectionInfos({ type: "collection" }).map((c) => c.name); let docs = 0; cs.forEach((c) => { docs += d.getCollection(c).countDocuments({}); }); print("D|" + n + "|" + cs.length + "|" + docs); });`,
-      ),
-    ].join("\n"),
-  };
-}
-
 export function restoreCheckScripts(engine: BackupDatabaseEngine) {
-  if (engine === "postgres") return pgScripts();
-  if (engine === "mysql" || engine === "mariadb") return mysqlScripts();
-  if (engine === "mongo") return mongoScripts();
-  return null;
+  return engine === "postgres" ? pgScripts() : null;
+}
+
+/**
+ * Apaga UM banco temporário que o painel registrou (derruba as sessões e confirma
+ * que sumiu). Recusa nomes que não tenham a forma que o painel cria.
+ */
+export async function dropTempDatabase(docker: BackupDocker, container: string, name: string): Promise<boolean> {
+  if (!isTempName(name)) return false;
+  return docker.execCapture(container, pgScripts().cleanup, [name]).then((o) => o.includes("GONE"), () => false);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +141,79 @@ const PG_COPY = new RegExp(`^COPY (${QUALIFIED}) (?:\\(.*\\) )?FROM stdin;$`);
 /** O que não faz sentido num banco descartável: donos e permissões de papéis que podem nem existir neste servidor. */
 const PG_DROPPED = [/^ALTER .* OWNER TO .+;$/, /^(GRANT|REVOKE) .*;$/, /^ALTER DEFAULT PRIVILEGES .*;$/];
 
+/** Onde o leitor está no SQL: fora de tudo, ou dentro de um texto, identificador, corpo $tag$ ou comentário (que atravessam linhas). */
+interface Lex {
+  mode: "normal" | "single" | "escape" | "double" | "dollar" | "block";
+  tag: string;
+  depth: number;
+}
+
+const isWord = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_\u0080-￿]/.test(c);
+
+/** Avança o leitor por uma linha. Textos entre aspas simples (com '' e E'\\'), identificadores entre aspas duplas, $tag$...$tag$ e comentários não confundem. */
+function lexLine(line: string, st: Lex): void {
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    const next = line[i + 1];
+    switch (st.mode) {
+      case "normal":
+        if (c === "-" && next === "-") return;
+        if (c === "/" && next === "*") {
+          st.mode = "block";
+          st.depth = 1;
+          i++;
+        } else if (c === "'") {
+          const prev = line[i - 1];
+          st.mode = (prev === "E" || prev === "e") && !isWord(line[i - 2]) ? "escape" : "single";
+        } else if (c === '"') st.mode = "double";
+        else if (c === "$" && !isWord(line[i - 1])) {
+          const m = /^\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/.exec(line.slice(i));
+          if (m) {
+            st.mode = "dollar";
+            st.tag = m[0];
+            i += m[0].length - 1;
+          }
+        }
+        break;
+      case "single":
+        if (c === "'") {
+          if (next === "'") i++;
+          else st.mode = "normal";
+        }
+        break;
+      case "escape":
+        if (c === "\\") i++;
+        else if (c === "'") {
+          if (next === "'") i++;
+          else st.mode = "normal";
+        }
+        break;
+      case "double":
+        if (c === '"') {
+          if (next === '"') i++;
+          else st.mode = "normal";
+        }
+        break;
+      case "dollar":
+        if (c === "$" && line.startsWith(st.tag, i)) {
+          st.mode = "normal";
+          i += st.tag.length - 1;
+        }
+        break;
+      case "block":
+        if (c === "/" && next === "*") {
+          st.depth++;
+          i++;
+        } else if (c === "*" && next === "/") {
+          st.depth--;
+          i++;
+          if (st.depth === 0) st.mode = "normal";
+        }
+        break;
+    }
+  }
+}
+
 export interface PostgresScan {
   /** Tabelas que o dump cria (identificador como está no dump). */
   tables: string[];
@@ -199,14 +226,14 @@ export interface PostgresScan {
 /**
  * Copia o dump do Postgres para `outFile` sem os donos e as permissões (e só
  * isso) e devolve o que o dump promete: tabelas e linhas. Linhas de dados
- * (bloco COPY) e corpos de função ($$...$$) passam intactos.
+ * (bloco COPY), textos, identificadores e corpos de função passam intactos.
  */
 export async function filterPostgresDump(inFile: string, outFile: string): Promise<PostgresScan> {
   const scan: PostgresScan = { tables: [], copyRows: new Map(), complete: false };
   const out = createWriteStream(outFile, { mode: 0o600 });
   const rl = createInterface({ input: createReadStream(inFile), crlfDelay: Infinity });
+  const lex: Lex = { mode: "normal", tag: "", depth: 0 };
   let copy: string | null = null;
-  let dollar: string | null = null;
   try {
     for await (const line of rl) {
       if (copy !== null) {
@@ -215,9 +242,12 @@ export async function filterPostgresDump(inFile: string, outFile: string): Promi
         await writeLine(out, line);
         continue;
       }
-      if (dollar === null) {
+      if (lex.mode === "normal") {
         if (line.startsWith("-- PostgreSQL database dump complete")) scan.complete = true;
-        if (PG_DROPPED.some((re) => re.test(line))) continue;
+        if (PG_DROPPED.some((re) => re.test(line))) {
+          lexLine(line, lex);
+          continue;
+        }
         const c = PG_COPY.exec(line);
         if (c) {
           copy = c[1]!;
@@ -227,77 +257,7 @@ export async function filterPostgresDump(inFile: string, outFile: string): Promi
           if (t && !scan.tables.includes(t[1]!)) scan.tables.push(t[1]!);
         }
       }
-      for (const m of line.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)?\$/g)) {
-        if (dollar === null) dollar = m[0];
-        else if (m[0] === dollar) dollar = null;
-      }
-      await writeLine(out, line);
-    }
-  } finally {
-    rl.close();
-    await closeStream(out);
-  }
-  return scan;
-}
-
-export interface MysqlDb {
-  original: string;
-  temp: string;
-  tables: string[];
-  /** Tabelas para as quais o dump traz INSERT (precisam ter linhas depois). */
-  withData: string[];
-}
-
-export interface MysqlScan {
-  dbs: MysqlDb[];
-  complete: boolean;
-}
-
-const MY_MARKER = /^-- Current Database: `([^`]+)`/;
-const MY_CREATE_TABLE = /^CREATE TABLE (?:IF NOT EXISTS )?`([^`]+)`/;
-const MY_VIEW = /^\/\*!50001 CREATE (?:ALGORITHM=\S+ )?VIEW `([^`]+)`/;
-const MY_INSERT = /^INSERT INTO `([^`]+)`/;
-const MY_DEFINER = /DEFINER\s*=\s*`[^`]*`@`[^`]*`/g;
-
-/**
- * Copia para `outFile` só o banco do projeto (`only`; sem ele, todos os do
- * dump), com o nome trocado para um banco descartável e sem DEFINER (o usuário
- * dono pode não existir no destino). O restante do servidor do destino (outros
- * bancos, mysql.user, tabelas de sistema) nem aparece no arquivo.
- */
-export async function filterMysqlDump(inFile: string, outFile: string, id: string, only: string | null): Promise<MysqlScan> {
-  const scan: MysqlScan = { dbs: [], complete: false };
-  const out = createWriteStream(outFile, { mode: 0o600 });
-  const rl = createInterface({ input: createReadStream(inFile), crlfDelay: Infinity });
-  let current: MysqlDb | null = null;
-  let skipping = false;
-  try {
-    for await (const raw of rl) {
-      if (raw.startsWith("-- Dump completed")) scan.complete = true;
-      const marker = MY_MARKER.exec(raw);
-      if (marker) {
-        const name = marker[1]!;
-        skipping = only !== null && name !== only;
-        // o mesmo banco aparece de novo mais adiante (para as views): continua no mesmo descartável
-        current = skipping ? null : (scan.dbs.find((d) => d.original === name) ?? { original: name, temp: `${TEMP_PREFIX}${id}_${scan.dbs.length}`, tables: [], withData: [] });
-        if (current && !scan.dbs.includes(current)) scan.dbs.push(current);
-        if (skipping) continue;
-        await writeLine(out, `-- Current Database: \`${current!.temp}\``);
-        continue;
-      }
-      if (skipping) continue;
-      const line = raw.replace(MY_DEFINER, "");
-      if (current) {
-        if (/^\/\*!?\d* ?DROP DATABASE IF EXISTS/.test(line) || /^\/\*!40000 DROP DATABASE IF EXISTS/.test(line)) continue;
-        if (/^CREATE DATABASE /.test(line) || /^USE `/.test(line)) {
-          await writeLine(out, line.replace(`\`${current.original}\``, `\`${current.temp}\``));
-          continue;
-        }
-        const t = MY_CREATE_TABLE.exec(line) ?? MY_VIEW.exec(line);
-        if (t && !current.tables.includes(t[1]!)) current.tables.push(t[1]!);
-        const ins = MY_INSERT.exec(line);
-        if (ins && !current.withData.includes(ins[1]!)) current.withData.push(ins[1]!);
-      }
+      lexLine(line, lex);
       await writeLine(out, line);
     }
   } finally {
@@ -312,7 +272,7 @@ export async function filterMysqlDump(inFile: string, outFile: string, id: strin
 // ---------------------------------------------------------------------------
 
 function sqlLiteral(s: string): string {
-  return `'${s.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+  return `'${s.replace(/'/g, "''")}'`;
 }
 
 function messageOf(err: unknown): string {
@@ -328,17 +288,17 @@ export interface ValidateInput {
   docker: BackupDocker;
   container: string;
   engine: BackupDatabaseEngine;
-  /** Pasta com os dumps extraídos. */
-  content: string;
   /** Pasta própria do teste (arquivos filtrados e conferência). */
   workDir: string;
-  /** Postgres: arquivo do dump do banco principal. MySQL/MariaDB/MongoDB: o arquivo do item. */
+  /** Arquivo do dump do banco principal. */
   file: string;
-  /** Nome do banco do projeto, quando se sabe (MySQL/MariaDB e MongoDB restauram só ele). */
-  databaseName: string | null;
-  /** Identificador do teste (hexadecimal, 8 caracteres). */
+  /** Identificador aleatório do teste (16 hexadecimais). */
   id: string;
   timeoutMs: number;
+  /** Chamado ANTES do CREATE com o nome do banco temporário: o serviço o guarda de forma persistente. */
+  register: (name: string) => Promise<void>;
+  /** Chamado quando o banco temporário foi confirmado como apagado (ou nunca foi criado). */
+  forget: (name: string) => Promise<void>;
 }
 
 /**
@@ -347,122 +307,76 @@ export interface ValidateInput {
  * RestoreValidationError com um código (nunca texto do banco).
  */
 export async function validateRestore(i: ValidateInput): Promise<ValidationResult> {
-  if (!/^[0-9a-f]{8}$/.test(i.id)) throw new RestoreValidationError("restore_failed");
   const scripts = restoreCheckScripts(i.engine);
-  if (!scripts) throw new RestoreValidationError("restore_failed");
+  if (!scripts || !/^[0-9a-f]{16}$/.test(i.id)) throw new RestoreValidationError("restore_failed");
   const secs = String(Math.max(1, Math.floor(i.timeoutMs / 1000)));
   const exec = { timeoutMs: i.timeoutMs + CLIENT_SLACK_MS };
   const d = i.docker;
+  const name = `${TEMP_PREFIX}${i.id}`;
+
+  const filtered = path.join(i.workDir, "dump-filtrado.sql");
+  const scan = await filterPostgresDump(i.file, filtered).catch(() => {
+    throw new RestoreValidationError("backup_unreadable");
+  });
+  if (!scan.complete || scan.tables.length === 0) throw new RestoreValidationError("sanity_failed");
+
+  await i.register(name).catch(() => {
+    throw new RestoreValidationError("restore_failed");
+  });
   let result: ValidationResult | null = null;
   let failure: RestoreValidationError | null = null;
-  const prefix = `${TEMP_PREFIX}${i.id}`;
-  /** Nome dos bancos a apagar no fim: pelo prefixo do teste, o que cobre também o que foi criado pela metade. */
-  const cleanupArgs = i.engine === "postgres" ? [prefix] : i.engine === "mongo" ? [`${prefix}_`] : [i.id];
-  let started = false;
+  /** Nome que já existia antes (nunca deveria): nada foi criado, então nada é apagado. */
+  let untouched = false;
   try {
-    if (i.engine === "postgres") {
-      const filtered = path.join(i.workDir, "dump-filtrado.sql");
-      const scan = await filterPostgresDump(i.file, filtered).catch(() => {
-        throw new RestoreValidationError("backup_unreadable");
-      });
-      if (!scan.complete || scan.tables.length === 0) throw new RestoreValidationError("sanity_failed");
-      started = true;
-      await d.execCapture(i.container, (scripts as ReturnType<typeof pgScripts>).prepare, [prefix]).catch(() => {
+    try {
+      await d.execCapture(i.container, scripts.prepare, [name]);
+    } catch (err) {
+      const text = messageOf(err);
+      if (/tws-rc:no-permission/.test(text)) {
+        untouched = true;
+        throw new RestoreValidationError("destination_permission");
+      }
+      if (/tws-rc:exists/.test(text)) {
+        untouched = true;
         throw new RestoreValidationError("restore_failed");
-      });
-      try {
-        await d.execFromFile(i.container, (scripts as ReturnType<typeof pgScripts>).restore, [prefix, secs], filtered, exec);
-      } catch (err) {
-        throw new RestoreValidationError(isTimeout(err) ? "timeout" : "restore_failed");
       }
-      const sql = [
-        `select 'T', count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind in ('r','p') and n.nspname !~ '^pg_' and n.nspname <> 'information_schema';`,
-        ...scan.tables.map((t, n) => `select 'E', ${n}, to_regclass(${sqlLiteral(t)}) is not null;`),
-        ...[...scan.copyRows.keys()].map((t, n) => `select 'R', ${n}, count(*) from only ${t};`),
-      ].join("\n");
-      const sqlFile = path.join(i.workDir, "conferir.sql");
-      await writeFile(sqlFile, sql, { mode: 0o600 });
-      const out = await d.execFromFile(i.container, (scripts as ReturnType<typeof pgScripts>).verify, [prefix], sqlFile, exec).catch(() => {
-        throw new RestoreValidationError("sanity_failed");
-      });
-      const lines = (out.stdout ?? "").split("\n").map((l) => l.trim().split("|"));
-      const exists = new Set(lines.filter((l) => l[0] === "E" && l[2] === "t").map((l) => Number(l[1])));
-      const counts = new Map(lines.filter((l) => l[0] === "R").map((l) => [Number(l[1]), Number(l[2])]));
-      const total = lines.find((l) => l[0] === "T");
-      if (!total || !(Number(total[1]) >= scan.tables.length)) throw new RestoreValidationError("sanity_failed");
-      if (scan.tables.some((_, n) => !exists.has(n))) throw new RestoreValidationError("sanity_failed");
-      let rows = 0;
-      for (const [n, expected] of [...scan.copyRows.values()].entries()) {
-        if (counts.get(n) !== expected) throw new RestoreValidationError("sanity_failed");
-        rows += expected;
-      }
-      result = { tables: scan.tables.length, rows };
-    } else if (i.engine === "mysql" || i.engine === "mariadb") {
-      const s = scripts as ReturnType<typeof mysqlScripts>;
-      const filtered = path.join(i.workDir, "dump-filtrado.sql");
-      const scan = await filterMysqlDump(i.file, filtered, i.id, i.databaseName).catch(() => {
-        throw new RestoreValidationError("backup_unreadable");
-      });
-      const tables = scan.dbs.reduce((n, db) => n + db.tables.length, 0);
-      if (!scan.complete || tables === 0) throw new RestoreValidationError("sanity_failed");
-      started = true;
-      await d.execCapture(i.container, s.prepare, []).catch(() => {
-        throw new RestoreValidationError("restore_failed");
-      });
-      try {
-        await d.execFromFile(i.container, s.restore, [i.id, secs], filtered, exec);
-      } catch (err) {
-        throw new RestoreValidationError(isTimeout(err) ? "timeout" : "restore_failed");
-      }
-      const queries: string[] = [];
-      const index: Array<{ kind: "E" | "R" }> = [];
-      for (const db of scan.dbs) {
-        for (const t of db.tables) {
-          queries.push(`select 'E', ${index.length}, count(*) from information_schema.tables where table_schema = ${sqlLiteral(db.temp)} and table_name = ${sqlLiteral(t)};`);
-          index.push({ kind: "E" });
-        }
-        for (const t of db.withData) {
-          queries.push(`select 'R', ${index.length}, exists(select 1 from \`${db.temp}\`.\`${t.replace(/`/g, "``")}\`);`);
-          index.push({ kind: "R" });
-        }
-      }
-      const sqlFile = path.join(i.workDir, "conferir.sql");
-      await writeFile(sqlFile, queries.join("\n"), { mode: 0o600 });
-      const out = await d.execFromFile(i.container, s.verify, [], sqlFile, exec).catch(() => {
-        throw new RestoreValidationError("sanity_failed");
-      });
-      const got = new Map((out.stdout ?? "").split("\n").map((l) => l.trim().split("\t")).filter((l) => l.length === 3).map((l) => [Number(l[1]), l[2]!]));
-      if (index.some((_, n) => got.get(n) !== "1")) throw new RestoreValidationError("sanity_failed");
-      result = { tables, rows: scan.dbs.reduce((n, db) => n + db.withData.length, 0) };
-    } else {
-      const s = scripts as ReturnType<typeof mongoScripts>;
-      started = true;
-      await d.execCapture(i.container, s.cleanup, [TEMP_PREFIX]).catch(() => {
-        throw new RestoreValidationError("restore_failed");
-      });
-      let restored: { stderr: string };
-      try {
-        restored = await d.execFromFile(i.container, s.restore, [i.id, secs, i.databaseName ?? ""], i.file, exec);
-      } catch (err) {
-        throw new RestoreValidationError(isTimeout(err) ? "timeout" : "restore_failed");
-      }
-      const out = await d.execCapture(i.container, s.verify, [`${prefix}_`]).catch(() => {
-        throw new RestoreValidationError("sanity_failed");
-      });
-      const dbs = out.split("\n").map((l) => l.trim().split("|")).filter((l) => l[0] === "D" && l.length === 4);
-      const collections = dbs.reduce((n, l) => n + Number(l[2]), 0);
-      const docs = dbs.reduce((n, l) => n + Number(l[3]), 0);
-      const said = /(\d+) document\(s\) restored successfully/.exec(restored.stderr);
-      if (collections === 0 || !said || Number(said[1]) !== docs) throw new RestoreValidationError("sanity_failed");
-      result = { tables: collections, rows: docs };
+      throw new RestoreValidationError("restore_failed");
     }
+    try {
+      await d.execFromFile(i.container, scripts.restore, [name, secs], filtered, exec);
+    } catch (err) {
+      throw new RestoreValidationError(isTimeout(err) ? "timeout" : "restore_failed");
+    }
+    const sql = [
+      `select 'T', count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind in ('r','p') and n.nspname !~ '^pg_' and n.nspname <> 'information_schema';`,
+      ...scan.tables.map((t, n) => `select 'E', ${n}, to_regclass(${sqlLiteral(t)}) is not null;`),
+      ...[...scan.copyRows.keys()].map((t, n) => `select 'R', ${n}, count(*) from only ${t};`),
+    ].join("\n");
+    const sqlFile = path.join(i.workDir, "conferir.sql");
+    await writeFile(sqlFile, sql, { mode: 0o600 });
+    const out = await d.execFromFile(i.container, scripts.verify, [name], sqlFile, exec).catch(() => {
+      throw new RestoreValidationError("sanity_failed");
+    });
+    const lines = (out.stdout ?? "").split("\n").map((l) => l.trim().split("|"));
+    const exists = new Set(lines.filter((l) => l[0] === "E" && l[2] === "t").map((l) => Number(l[1])));
+    const counts = new Map(lines.filter((l) => l[0] === "R").map((l) => [Number(l[1]), Number(l[2])]));
+    const total = lines.find((l) => l[0] === "T");
+    if (!total || !(Number(total[1]) >= scan.tables.length)) throw new RestoreValidationError("sanity_failed");
+    if (scan.tables.some((_, n) => !exists.has(n))) throw new RestoreValidationError("sanity_failed");
+    let rows = 0;
+    for (const [n, expected] of [...scan.copyRows.values()].entries()) {
+      if (counts.get(n) !== expected) throw new RestoreValidationError("sanity_failed");
+      rows += expected;
+    }
+    result = { tables: scan.tables.length, rows };
   } catch (err) {
     failure = err instanceof RestoreValidationError ? err : new RestoreValidationError("restore_failed");
-  } finally {
-    if (started) {
-      const gone = await d.execCapture(i.container, scripts.cleanup, cleanupArgs).then((o) => o.includes("GONE"), () => false);
-      if (!gone) failure = new RestoreValidationError("cleanup_failed");
-    }
+  }
+  if (untouched) await i.forget(name).catch(() => undefined);
+  else {
+    const gone = await dropTempDatabase(d, i.container, name);
+    if (gone) await i.forget(name).catch(() => undefined);
+    else failure = new RestoreValidationError("cleanup_failed");
   }
   if (failure) throw failure;
   return result!;

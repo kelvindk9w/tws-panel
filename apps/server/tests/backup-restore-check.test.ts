@@ -479,11 +479,12 @@ describe("configuração", () => {
   });
 
   it("o nome do banco do destino não importa: a prova é feita num banco temporário, e nada do destino é tocado", async () => {
-    docker.fleet.dbs["s-db"] = { image: "mysql:8", dbName: "fazenda" };
-    docker.fleet.dbs["d-db"] = { image: "mysql:8", dbName: "fazenda_sbx" };
+    docker.fleet.dbs["s-db"] = { image: "postgres:16", dbName: "fazenda" };
+    docker.fleet.dbs["d-db"] = { image: "postgres:16", dbName: "outro_nome_qualquer" };
     await service.detectProject(SRC);
     await service.detectProject(DST);
-    expect((await view()).candidates.map((c) => c.id)).toEqual([DST, "p3"]);
+    // o outro projeto (MySQL) não aparece: motor diferente do da origem
+    expect((await view()).candidates.map((c) => c.id)).toEqual([DST]);
   });
 
   it("encadeamento proibido: um destino não pode ser origem de outro teste (nunca restaurar em cima da produção)", async () => {
@@ -544,7 +545,7 @@ describe("depois do backup", () => {
     const r = docker.restores[0]!;
     expect(r.container).toBe("d-db");
     // o banco do destino (fazenda_sbx) nem é citado: o dump entra em tws_rc_<id>, com o prazo em segundos dentro do container
-    expect(r.args[0]).toMatch(/^tws_rc_[0-9a-f]{8}$/);
+    expect(r.args[0]).toMatch(/^tws_rc_[0-9a-f]{16}$/);
     expect(r.args[1]).toBe("1");
     expect(JSON.stringify(docker.calls)).not.toContain("fazenda_sbx");
     // dono e permissão de papéis que podem não existir no destino ficam de fora; os dados passam intactos (inclusive uma linha que parece um GRANT)
@@ -733,7 +734,7 @@ describe("salvaguardas: 'não executado', sem tocar em nada", () => {
     docker.fleet.dbs["d-db"] = { image: "mysql:8", dbName: "fazenda_sbx" };
     await service.detectProject(DST);
     await backup();
-    await expectNotRun("engine_mismatch");
+    await expectNotRun("destination_no_database");
   });
 
   it("o destino virou origem de outro teste: não roda (nunca em cima da produção)", async () => {
@@ -762,14 +763,14 @@ describe("salvaguardas: 'não executado', sem tocar em nada", () => {
     await enable();
     await backup();
     docker.restores.length = 0;
-    // origem e destino viraram MySQL depois do backup; o backup guardado é de Postgres
+    // origem e destino viraram MySQL depois do backup: o teste ainda só existe para Postgres
     docker.fleet.dbs["s-db"] = { image: "mysql:8", dbName: "fazenda" };
     docker.fleet.dbs["d-db"] = { image: "mysql:8", dbName: "fazenda" };
     await service.detectProject(SRC);
     await service.detectProject(DST);
     await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
     await service.idle();
-    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "no_database_in_backup" });
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "engine_unsupported" });
     expect(docker.restores).toEqual([]);
   });
 
@@ -1228,5 +1229,127 @@ describe("reinício do painel no meio do teste", () => {
     expect(raw).toContain("restoreCheck");
     expect(raw).not.toContain(ROW_DATA);
     expect(raw).not.toContain(DB_SECRET);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bancos temporários: só os que o painel registrou, nunca por nome parecido
+// ---------------------------------------------------------------------------
+
+const LEFTOVER = "tws_rc_00000000000000aa";
+
+type TempEntry = { name: string; destinationId: string };
+
+function seedRegistry(entries: TempEntry[]) {
+  (service as unknown as { config: { restoreCheckTemp?: TempEntry[] } }).config.restoreCheckTemp = entries;
+}
+function registry(svc: BackupService = service): TempEntry[] {
+  return (svc as unknown as { config: { restoreCheckTemp?: TempEntry[] } }).config.restoreCheckTemp ?? [];
+}
+
+describe("bancos temporários registrados", () => {
+  it("o nome vai para o registro (em disco) ANTES de o banco ser criado e sai dele depois de apagado", async () => {
+    await enable();
+    let atPrepare = "";
+    const real = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, s, a = []) => {
+      if (s.includes(":prepare")) atPrepare = `${JSON.stringify(registry())} ${await readFile(path.join(dir, "backups.json"), "utf8")}`;
+      return real(c, s, a);
+    };
+    await backup();
+    const name = docker.prepares[0]!.args[0]!;
+    // aparece na memória e no arquivo no instante em que o banco vai ser criado
+    expect(atPrepare.split(name).length).toBeGreaterThan(2);
+    expect(registry()).toEqual([]);
+  });
+
+  it("ao desligar a opção, apaga só o registrado (nada por padrão de nome) e esquece", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    expect(docker.cleanups).toEqual([{ container: "d-db", args: [LEFTOVER] }]);
+    expect(registry()).toEqual([]);
+  });
+
+  it("antes de cada teste apaga o que sobrou de outro, e só o registrado", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    await backup();
+    expect(docker.cleanups.map((c) => c.args[0])).toEqual([LEFTOVER, docker.prepares[0]!.args[0]]);
+    expect(registry()).toEqual([]);
+  });
+
+  it("na partida do painel apaga o registrado que sobrou", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    await (service as unknown as { persistQuiet(o: { config: boolean }): Promise<void> }).persistQuiet({ config: true });
+    await service.flush();
+    service = build();
+    await view();
+    await until(async () => docker.cleanups.length === 1);
+    expect(docker.cleanups[0]).toEqual({ container: "d-db", args: [LEFTOVER] });
+    await until(async () => registry().length === 0);
+  });
+
+  it("não conseguir apagar mantém o nome registrado para tentar de novo", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    docker.cleanupAnswer = "LEFT";
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    expect(registry()).toEqual([{ name: LEFTOVER, destinationId: DST }]);
+  });
+
+  it("destino que não existe mais: esquece o nome sem tentar apagar nada", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: "sumiu" }]);
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    expect(docker.cleanups).toEqual([]);
+    expect(registry()).toEqual([]);
+  });
+
+  it("apagar o projeto de destino tira os nomes dele do registro", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    projects = projects.filter((p) => p.id !== DST);
+    await service.forgetProject(DST);
+    expect(registry()).toEqual([]);
+  });
+});
+
+describe("somente PostgreSQL nesta etapa", () => {
+  it("origem MySQL/MariaDB/Mongo: indisponível com motivo próprio, e o servidor recusa ligar", async () => {
+    docker.fleet.dbs["s-db"] = { image: "mysql:8", dbName: "fazenda" };
+    await service.detectProject(SRC);
+    const v = await view();
+    expect(v.unavailableCode).toBe("engine_unsupported");
+    expect(v.candidates).toEqual([]);
+    await expect(service.updateRestoreCheck(SRC, { enabled: true, destinationId: DST, confirm: "Fazenda Sandbox" }, "admin")).rejects.toMatchObject({ statusCode: 409, code: "restore_check_unavailable" });
+  });
+
+  it("destino sem permissão para criar bancos: 'falhou' dizendo que é permissão, sem apagar nada", async () => {
+    docker.prepareError = new Error("tws-rc:no-permission");
+    await enable();
+    await backup();
+    const v = await view();
+    expect(v.last).toMatchObject({ status: "failed", reasonCode: "destination_permission" });
+    expect(docker.cleanups).toEqual([]);
+    expect(docker.restores).toEqual([]);
+  });
+
+  it("a opção desligada durante o backup: o teste não roda", async () => {
+    await enable();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = docker.execToFile.bind(docker);
+    docker.execToFile = async (...a: Parameters<FakeDocker["execToFile"]>) => {
+      await gate;
+      return original(...a);
+    };
+    const r = await service.runNow(SRC_ID, "admin");
+    await until(async () => (await service.status()).running?.id === r.id);
+    (service as unknown as { target(id: string): { restoreCheck?: { settings: { enabled: boolean } } } }).target(SRC_ID).restoreCheck!.settings.enabled = false;
+    release();
+    await service.idle();
+    expect(docker.restores).toEqual([]);
   });
 });

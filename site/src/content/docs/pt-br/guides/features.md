@@ -265,13 +265,14 @@ Em **Configurações → Backups** e na aba **Backups** de cada projeto.
 **Quando.** Uma vez por dia, a cada 12 ou a cada 6 horas, a partir das 03:00 no fuso da VPS, com
 o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer momento.
 
-**Validar o backup do banco restaurando em outro projeto (opcional).** Na aba **Backups** do
-projeto, desligada por padrão: o backup continua como sempre. Ligada, depois de cada backup o painel
+**Validar o backup do banco restaurando num banco temporário (no servidor de outro projeto).** Na
+aba **Backups** do projeto, desligada por padrão: o backup continua como sempre. Por enquanto vale
+só para **PostgreSQL**. Ligada, depois de cada backup o painel
 restaura o banco num **banco temporário** que ele cria no servidor de banco de **outro projeto**
 (por exemplo, a fazenda em sandbox), confere que cada tabela do backup existe e que o número de
 linhas bate com o do backup, e apaga o banco temporário. É a prova de que o backup do banco
-realmente restaura. O banco do projeto de destino **não é alterado**: o teste não deixa os dados
-de produção no ambiente de teste.
+realmente restaura. O ambiente de teste **não recebe os dados**: o banco do projeto de destino não
+é alterado e o teste não deixa os dados de produção lá.
 
 - **Atenção.** O teste copia dados reais de produção, que podem ser dados pessoais (LGPD), para o
   disco do servidor de banco do destino enquanto dura (o banco temporário é apagado no fim, também
@@ -279,10 +280,14 @@ de produção no ambiente de teste.
   Para ligar, escolha o projeto de destino e digite o nome dele.
 - **Só o banco.** Arquivos, volumes, variáveis e a configuração do projeto de origem nunca são
   restaurados. Também não são tocados os bancos, os usuários, os papéis nem as tabelas de sistema
-  do servidor de destino: o MySQL e o MariaDB restauram só o banco do projeto, e o MongoDB deixa de
-  fora `admin`, `config` e `local`.
-- **Quem pode ser destino.** Outro projeto, com banco do mesmo tipo (PostgreSQL, MySQL, MariaDB ou
-  MongoDB) já detectado e que não faça um teste próprio. O nome do banco do destino não importa.
+  do servidor de destino. O painel só apaga o banco temporário que ele mesmo criou e registrou
+  (nome `tws_rc_` mais 16 letras e números sorteados); um banco seu com nome parecido nunca é apagado.
+- **Quem pode ser destino.** Outro projeto, com banco PostgreSQL já detectado, em execução, e que
+  não faça um teste próprio. O destino precisa de uma credencial de administrador (superusuário ou
+  com permissão de criar bancos) e de espaço em disco para o backup; sem a permissão, o resultado
+  diz que é problema de permissão. O nome do banco do destino não importa.
+- **MySQL, MariaDB e MongoDB.** Ainda não disponíveis: a opção aparece com o motivo "ainda não
+  disponível para este motor de banco". Ficam para uma próxima etapa.
 - **Quando.** Após cada backup (padrão) ou, no máximo, uma vez por dia ou por semana. **Testar
   agora** roda o teste com o último backup, com a mesma confirmação digitada. Se a cópia externa
   falhar, o painel testa a cópia da VPS mesmo assim.
@@ -296,8 +301,8 @@ de produção no ambiente de teste.
 - **Resultado.** A aba mostra "Último teste de restauração: ok em …, no projeto …", ou falhou, ou
   não executado, com o motivo curto e o que foi conferido; **Configurações → Backups** mostra um
   selo por projeto. Se o teste falhar, chega uma notificação de backup que falhou. Se o painel
-  reiniciar no meio, um banco temporário pode sobrar no destino: o aviso diz isso e o próximo teste
-  o apaga.
+  reiniciar no meio, um banco temporário pode sobrar no destino: o aviso diz isso e o painel o apaga
+  ao iniciar e no próximo teste.
 
 **Restaurar.**
 
