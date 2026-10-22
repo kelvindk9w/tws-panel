@@ -3,20 +3,35 @@
  * o dump é restaurado num banco DESCARTÁVEL criado no servidor de banco do
  * projeto de destino (nome `tws_rc_<id aleatório>`), com parada no primeiro erro,
  * e depois o painel confere que cada tabela do dump existe e que o número de
- * linhas bate com o do dump. O banco descartável é apagado no fim (também em
- * falha e em prazo estourado), e nada do banco real do destino é tocado: nem
- * tabelas, nem usuários, nem papéis.
+ * linhas bate com o do dump.
+ *
+ * O dump vem de outro projeto e é tratado como NÃO CONFIÁVEL (funções dele rodam
+ * durante a restauração, por exemplo em CHECK, índice ou valor padrão). Por isso:
+ *  - só o painel, com a credencial de administrador do destino, cria o banco e o
+ *    papel descartáveis e executa o DROP; o SQL do dump NUNCA roda com essa credencial;
+ *  - o dump é restaurado (e conferido) por um papel DESCARTÁVEL sem privilégios
+ *    (NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS), com o mesmo
+ *    nome sorteado do banco, dono do banco temporário e com CONNECT revogado de
+ *    PUBLIC nele; a senha dele é derivada dentro do container (não passa pelo
+ *    painel nem pela linha de comando do `docker exec`);
+ *  - dump com comandos do cliente psql (barra invertida: \!, \copy, \o ...) é
+ *    recusado, porque eles rodariam um shell dentro do container do destino;
+ *  - o banco e o papel descartáveis são apagados no fim (também em falha e em
+ *    prazo estourado) e confirmados como apagados.
+ * O que isso NÃO garante: o papel descartável é um papel comum e herda o que o
+ * servidor concede a PUBLIC (por exemplo, CONNECT em outros bancos do destino),
+ * e os dados do backup passam pelo disco e pelo WAL do servidor do destino
+ * durante o teste. Extensões e recursos que exigem superusuário falham
+ * (resultado "extension_unavailable"); é o preço de não dar privilégio ao dump.
  *
  * Neste lote só o PostgreSQL é suportado. MySQL, MariaDB e MongoDB ficam fora
- * (inelegíveis na interface e no servidor) até terem a mesma rigidez: o dump
- * deles leva todos os bancos do servidor e corpos de gatilhos/rotinas com o nome
- * do banco original, e o mongorestore tem de conferir também as falhas de
- * documento. Ver o relatório (proposta para um lote seguinte).
+ * (inelegíveis na interface e no servidor) até terem a mesma rigidez. Ver o
+ * relatório (proposta para um lote seguinte).
  *
- * Só o painel apaga o que o painel criou: o nome de cada banco descartável é
- * registrado de forma persistente ANTES do CREATE (o serviço guarda em
- * backups.json) e só os nomes registrados são apagados. Nunca se apaga por
- * padrão de nome: bancos reais chamados `tws_rc_...` do destino não são tocados.
+ * Só o painel apaga o que o painel criou: o nome de cada banco/papel descartável
+ * é registrado de forma persistente ANTES do CREATE (o serviço guarda em
+ * backups.json; se não gravar, nada é criado) e só os nomes registrados são
+ * apagados. Nunca se apaga por padrão de nome.
  *
  * O que sai daqui para o resto do painel são códigos e números (tabelas e
  * linhas conferidas); texto devolvido pelo banco nunca é repassado, porque
@@ -36,7 +51,7 @@ import type { BackupDocker } from "./backup-docker.js";
 import { PG_ENV } from "./backup-detect.js";
 
 /** Códigos de falha que a validação devolve (o serviço os traduz em resultado). */
-export type ValidationCode = "restore_failed" | "timeout" | "sanity_failed" | "cleanup_failed" | "backup_unreadable" | "destination_permission";
+export type ValidationCode = "restore_failed" | "timeout" | "sanity_failed" | "cleanup_failed" | "backup_unreadable" | "destination_permission" | "extension_unavailable" | "unsafe_dump";
 
 export class RestoreValidationError extends Error {
   constructor(readonly code: ValidationCode) {
@@ -68,39 +83,62 @@ export function isTempName(name: string): boolean {
 /** `timeout` do container, quando existe: mata a restauração no prazo, mesmo que o cliente docker já tenha ido embora. */
 const TMO = ['TMO=""', 'if command -v timeout >/dev/null 2>&1; then TMO="timeout -s KILL $RC_SECS"; fi'].join("\n");
 
+/** Senha do papel descartável: derivada aqui dentro (nome + senha do administrador), nunca trafega pelo painel nem pelo `docker exec`. */
+const RC_PW = 'RCPW="$(printf %s "tws-rc:$1:${PGPASSWORD:-}" | sha256sum | cut -d" " -f1)"';
+
+/** Conecta como o papel descartável (nunca como o administrador) pelo TCP local. */
+const AS_ROLE = [RC_PW, 'PGPASSWORD="$RCPW"; export PGPASSWORD'].join("\n");
+
 const PG_DROP = [
+  "rc_exists() {",
+  `  psql -U "$U" -d template1 -AtX -c "select (select count(*) from pg_database where datname = '$1') + (select count(*) from pg_roles where rolname = '$1')"`,
+  "}",
   "rc_drop() {",
-  `  psql -U "$U" -d template1 -AtX -c "select pg_terminate_backend(pid) from pg_stat_activity where datname = '$1' and pid <> pg_backend_pid()" >/dev/null 2>&1`,
+  `  psql -U "$U" -d template1 -AtX -c "select pg_terminate_backend(pid) from pg_stat_activity where (datname = '$1' or usename = '$1') and pid <> pg_backend_pid()" >/dev/null 2>&1`,
   `  psql -U "$U" -d template1 -X -q -c "drop database if exists \\"$1\\"" >/dev/null 2>&1`,
+  `  if [ "$(psql -U "$U" -d template1 -AtX -c "select count(*) from pg_roles where rolname = '$1'")" != "0" ]; then`,
+  `    psql -U "$U" -d template1 -X -q -c "drop role if exists \\"$1\\"" >/dev/null 2>&1 || {`,
+  // objetos do papel em outros bancos (schema public aberto em versões antigas): só os dele
+  `      for d in $(psql -U "$U" -d template1 -AtX -c "select datname from pg_database where datallowconn and datname <> 'template0'"); do`,
+  `        psql -U "$U" -d "$d" -X -q -c "drop owned by \\"$1\\"" >/dev/null 2>&1`,
+  "      done",
+  `      psql -U "$U" -d template1 -X -q -c "drop role if exists \\"$1\\"" >/dev/null 2>&1`,
+  "    }",
+  "  fi",
   "}",
 ].join("\n");
 
 function pgScripts() {
   return {
-    // $1 = nome do banco temporário (já registrado). Recusa se o usuário não pode criar bancos ou se o nome já existe.
+    // $1 = nome do banco e do papel descartáveis (já registrado). Recusa se o administrador não pode criar papel e banco ou se o nome já existe.
     prepare: [
       "# tws-rc:postgres:prepare",
       PG_ENV,
-      `[ "$(psql -U "$U" -d template1 -AtX -c "select rolsuper or rolcreatedb from pg_roles where rolname = current_user")" = "t" ] || { echo "tws-rc:no-permission" >&2; exit 8; }`,
-      `[ "$(psql -U "$U" -d template1 -AtX -c "select count(*) from pg_database where datname = '$1'")" = "0" ] || { echo "tws-rc:exists" >&2; exit 9; }`,
-      'psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 -c "create database \\"$1\\""',
+      RC_PW,
+      `[ "$(psql -U "$U" -d template1 -AtX -c "select rolsuper or (rolcreatedb and rolcreaterole) from pg_roles where rolname = current_user")" = "t" ] || { echo "tws-rc:no-permission" >&2; exit 8; }`,
+      `[ "$(psql -U "$U" -d template1 -AtX -c "select (select count(*) from pg_database where datname = '$1') + (select count(*) from pg_roles where rolname = '$1')")" = "0" ] || { echo "tws-rc:exists" >&2; exit 9; }`,
+      `printf '%s\\n' "create role \\"$1\\" login nosuperuser nocreaterole nocreatedb noreplication nobypassrls connection limit 5 password '$RCPW';" | psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 &&`,
+      `psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 -c "grant \\"$1\\" to \\"$U\\"" &&`,
+      `psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 -c "create database \\"$1\\" owner \\"$1\\"" &&`,
+      `psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 -c "revoke connect on database \\"$1\\" from public"`,
     ].join("\n"),
     restore: [
       "# tws-rc:postgres:restore",
       PG_ENV,
+      AS_ROLE,
       'RC_SECS="$2"',
       TMO,
       "PGAPPNAME=tws-restore-check; export PGAPPNAME",
-      'exec $TMO psql -U "$U" -d "$1" -X -q -v ON_ERROR_STOP=1',
+      'exec $TMO psql -h 127.0.0.1 -U "$1" -d "$1" -X -q -v ON_ERROR_STOP=1',
     ].join("\n"),
-    verify: ["# tws-rc:postgres:verify", PG_ENV, 'psql -U "$U" -d "$1" -AtX -q'].join("\n"),
+    verify: ["# tws-rc:postgres:verify", PG_ENV, AS_ROLE, 'psql -h 127.0.0.1 -U "$1" -d "$1" -AtX -q'].join("\n"),
     cleanup: [
       "# tws-rc:postgres:cleanup",
       PG_ENV,
       PG_DROP,
       "for k in 1 2 3; do",
       '  rc_drop "$1"',
-      `  [ "$(psql -U "$U" -d template1 -AtX -c "select count(*) from pg_database where datname = '$1'")" = "0" ] && { echo GONE; exit 0; }`,
+      '  [ "$(rc_exists "$1")" = "0" ] && { echo GONE; exit 0; }',
       "  sleep 1",
       "done",
       "echo LEFT; exit 1",
@@ -146,6 +184,8 @@ interface Lex {
   mode: "normal" | "single" | "escape" | "double" | "dollar" | "block";
   tag: string;
   depth: number;
+  /** Viu uma barra invertida fora de texto, identificador, corpo e comentário: comando do cliente psql. */
+  meta: boolean;
 }
 
 const isWord = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_\u0080-￿]/.test(c);
@@ -158,7 +198,8 @@ function lexLine(line: string, st: Lex): void {
     switch (st.mode) {
       case "normal":
         if (c === "-" && next === "-") return;
-        if (c === "/" && next === "*") {
+        if (c === "\\") st.meta = true;
+        else if (c === "/" && next === "*") {
           st.mode = "block";
           st.depth = 1;
           i++;
@@ -221,6 +262,8 @@ export interface PostgresScan {
   copyRows: Map<string, number>;
   /** O dump termina com a marca do pg_dump (não foi cortado). */
   complete: boolean;
+  /** O dump tem comandos do cliente psql (barra invertida), que rodariam shell no container: recusado. Só `\restrict`/`\unrestrict` do pg_dump recente são aceitos. */
+  unsafe: boolean;
 }
 
 /**
@@ -229,10 +272,10 @@ export interface PostgresScan {
  * (bloco COPY), textos, identificadores e corpos de função passam intactos.
  */
 export async function filterPostgresDump(inFile: string, outFile: string): Promise<PostgresScan> {
-  const scan: PostgresScan = { tables: [], copyRows: new Map(), complete: false };
+  const scan: PostgresScan = { tables: [], copyRows: new Map(), complete: false, unsafe: false };
   const out = createWriteStream(outFile, { mode: 0o600 });
   const rl = createInterface({ input: createReadStream(inFile), crlfDelay: Infinity });
-  const lex: Lex = { mode: "normal", tag: "", depth: 0 };
+  const lex: Lex = { mode: "normal", tag: "", depth: 0, meta: false };
   let copy: string | null = null;
   try {
     for await (const line of rl) {
@@ -244,8 +287,14 @@ export async function filterPostgresDump(inFile: string, outFile: string): Promi
       }
       if (lex.mode === "normal") {
         if (line.startsWith("-- PostgreSQL database dump complete")) scan.complete = true;
+        // \restrict e \unrestrict (pg_dump recente) só existem como uma linha inteira com uma chave alfanumérica
+        if (/^\\(?:un)?restrict [A-Za-z0-9]+$/.test(line)) {
+          await writeLine(out, line);
+          continue;
+        }
         if (PG_DROPPED.some((re) => re.test(line))) {
           lexLine(line, lex);
+          if (lex.meta) scan.unsafe = true;
           continue;
         }
         const c = PG_COPY.exec(line);
@@ -258,6 +307,7 @@ export async function filterPostgresDump(inFile: string, outFile: string): Promi
         }
       }
       lexLine(line, lex);
+      if (lex.meta) scan.unsafe = true;
       await writeLine(out, line);
     }
   } finally {
@@ -282,6 +332,11 @@ function messageOf(err: unknown): string {
 /** Prazo estourado: o cliente docker foi interrompido ou o `timeout` do container matou o comando (código 137). */
 function isTimeout(err: unknown): boolean {
   return /prazo|código 137/.test(messageOf(err));
+}
+
+/** O dump pediu algo que só um superusuário (ou uma extensão que o servidor não tem) faz; só o padrão é lido, o texto não é repassado. */
+function needsSuperuser(err: unknown): boolean {
+  return /permission denied to create extension|must be superuser to create this extension|is not a trusted extension|extension "[^"]*" is not available|could not open extension control file|permission denied to create event trigger|permission denied for language/i.test(messageOf(err));
 }
 
 export interface ValidateInput {
@@ -318,6 +373,7 @@ export async function validateRestore(i: ValidateInput): Promise<ValidationResul
   const scan = await filterPostgresDump(i.file, filtered).catch(() => {
     throw new RestoreValidationError("backup_unreadable");
   });
+  if (scan.unsafe) throw new RestoreValidationError("unsafe_dump");
   if (!scan.complete || scan.tables.length === 0) throw new RestoreValidationError("sanity_failed");
 
   await i.register(name).catch(() => {
@@ -345,7 +401,7 @@ export async function validateRestore(i: ValidateInput): Promise<ValidationResul
     try {
       await d.execFromFile(i.container, scripts.restore, [name, secs], filtered, exec);
     } catch (err) {
-      throw new RestoreValidationError(isTimeout(err) ? "timeout" : "restore_failed");
+      throw new RestoreValidationError(isTimeout(err) ? "timeout" : needsSuperuser(err) ? "extension_unavailable" : "restore_failed");
     }
     const sql = [
       `select 'T', count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind in ('r','p') and n.nspname !~ '^pg_' and n.nspname <> 'information_schema';`,

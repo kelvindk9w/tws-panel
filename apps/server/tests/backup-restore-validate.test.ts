@@ -414,9 +414,106 @@ describe("scripts que rodam no container", () => {
     expect(pg.restore).toContain("ON_ERROR_STOP=1");
     expect(pg.cleanup).toContain("pg_terminate_backend");
     expect(pg.cleanup).toContain("drop database if exists");
-    expect(pg.prepare).toContain("rolsuper or rolcreatedb");
+    expect(pg.prepare).toContain("rolsuper or (rolcreatedb and rolcreaterole)");
     expect(pg.prepare).toContain("tws-rc:no-permission");
     expect(pg.prepare).toContain("tws-rc:exists");
     for (const s of Object.values(pg)) expect(s).not.toMatch(/-p"?\$|--password/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lacunas do leitor: $ colado a palavra, tag que só fecha com a mesma tag, $1, comandos do psql
+// ---------------------------------------------------------------------------
+
+describe("filterPostgresDump: $ e tags", () => {
+  const END = "-- PostgreSQL database dump complete";
+  async function tablesOf(lines: string[]) {
+    return (await filterPostgresDump(await file("l.sql", lines.join("\n")), path.join(dir, "lo.sql"))).tables;
+  }
+
+  it("L09: $ colado a uma palavra (identificador como t$a$b) não abre corpo", async () => {
+    expect(await tablesOf(["CREATE TABLE public.t$a$b (i int);", "CREATE TABLE public.depois (i int);", END])).toEqual(["public.t$a$b", "public.depois"]);
+    expect(await tablesOf(["COMMENT ON TABLE public.x IS 'a';", "SELECT abc$$def;", "CREATE TABLE public.depois (i int);", END])).toEqual(["public.depois"]);
+  });
+
+  it("L11: o corpo $tag$ só fecha com a MESMA tag; outra tag e $$ dentro dele são texto", async () => {
+    expect(
+      await tablesOf([
+        "CREATE FUNCTION public.f() RETURNS void LANGUAGE plpgsql AS $a$",
+        "BEGIN EXECUTE $b$ CREATE TABLE falsa1 (i int); $b$; END; $$ CREATE TABLE falsa2 (i int); $$",
+        "$a$;",
+        "CREATE TABLE public.real (i int);",
+        END,
+      ]),
+    ).toEqual(["public.real"]);
+  });
+
+  it("L11: funções com $1/$2 (parâmetros) não abrem corpo nenhum", async () => {
+    expect(
+      await tablesOf([
+        "CREATE FUNCTION public.soma(integer, integer) RETURNS integer LANGUAGE sql AS $body$ select $1 + $2; $body$;",
+        "CREATE FUNCTION public.dobro(integer) RETURNS integer LANGUAGE sql AS 'select $1 * 2';",
+        "CREATE TABLE public.real (i int);",
+        END,
+      ]),
+    ).toEqual(["public.real"]);
+  });
+});
+
+describe("filterPostgresDump: comandos do psql (barra invertida) são recusados", () => {
+  const END = "-- PostgreSQL database dump complete";
+  const unsafe = async (lines: string[]) => (await filterPostgresDump(await file("m.sql", lines.join("\n")), path.join(dir, "mo.sql"))).unsafe;
+
+  it("\\!, \\copy, \\gexec no meio da linha e \\. fora de COPY", async () => {
+    expect(await unsafe(["CREATE TABLE a (i int);", "\\! id", END])).toBe(true);
+    expect(await unsafe(["CREATE TABLE a (i int);", "\\copy a to program 'x'", END])).toBe(true);
+    expect(await unsafe(["CREATE TABLE a (i int);", "select 1 \\gexec", END])).toBe(true);
+    expect(await unsafe(["CREATE TABLE a (i int);", "\\.", END])).toBe(true);
+  });
+
+  it("barra dentro de texto, E'...', corpo, comentário, dados de COPY e \\restrict/\\unrestrict do pg_dump não contam", async () => {
+    expect(
+      await unsafe([
+        "\\restrict AbC123xyz",
+        "CREATE TABLE a (i text DEFAULT 'a\\b');",
+        "COMMENT ON TABLE a IS E'tem \\\\ e \\' dentro';",
+        "CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $$ select '\\!'; $$;",
+        "-- \\! num comentário",
+        "/* \\! em bloco */",
+        "COPY a (i) FROM stdin;",
+        "\\! dado",
+        "\\.",
+        "\\unrestrict AbC123xyz",
+        END,
+      ]),
+    ).toBe(false);
+  });
+
+  it("\\restrict com mais do que a chave não é aceito", async () => {
+    expect(await unsafe(["\\restrict abc; \\! id", END])).toBe(true);
+  });
+
+  it("validateRestore: dump com comando do psql vira unsafe_dump sem tocar no servidor nem registrar nada", async () => {
+    const db = new FakeDb();
+    registry = [];
+    order = [];
+    expect(await code(validateRestore(await input(db, ["CREATE TABLE public.a (i int);", "\\! id", END, ""].join("\n"))))).toBe("unsafe_dump");
+    expect(db.calls).toEqual([]);
+    expect(order).toEqual([]);
+  });
+
+  it("validateRestore: extensão que exige superusuário (ou ausente) vira extension_unavailable; limpa e esquece", async () => {
+    for (const msg of [
+      'ERROR:  permission denied to create extension "dblink"',
+      'ERROR:  extension "postgis" is not available',
+      'ERROR:  could not open extension control file "/x/foo.control"',
+    ]) {
+      registry = [];
+      const db = new FakeDb();
+      db.restoreError = new Error(msg);
+      expect(await code(validateRestore(await input(db, PG_DUMP)))).toBe("extension_unavailable");
+      expect(db.cleanupArgs).toHaveLength(1);
+      expect(registry).toEqual([]);
+    }
   });
 });

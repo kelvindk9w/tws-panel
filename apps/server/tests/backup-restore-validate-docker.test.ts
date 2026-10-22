@@ -200,6 +200,124 @@ describe.skipIf(!hasImage(PG_IMAGE))("validação do dump com Postgres de verdad
     expect(dbs()).toBe(lookalikes);
   }, 60_000);
 
+  // ----- dump NÃO confiável: o SQL dele nunca roda como administrador do destino -----
+
+  const roles = () => psql(DST, "postgres", "select count(*) from pg_roles where rolname like 'tws_rc_%'");
+  const fileInDst = (p: string) => docker("exec", DST, "sh", "-c", `test -e ${p} && echo sim || echo nao`).trim();
+
+  const END = "-- PostgreSQL database dump complete";
+  const evilDump = (intruso: string, marker: string) =>
+    [
+      "CREATE FUNCTION public.evil(i integer) RETURNS boolean LANGUAGE plpgsql AS $$",
+      "BEGIN",
+      `  BEGIN EXECUTE 'create role ${intruso} superuser login'; EXCEPTION WHEN OTHERS THEN NULL; END;`,
+      `  BEGIN EXECUTE 'copy (select 1) to program ''touch ${marker}'''; EXCEPTION WHEN OTHERS THEN NULL; END;`,
+      "  RETURN true;",
+      "END;",
+      "$$;",
+      "CREATE TABLE public.alvo (i integer, CONSTRAINT alvo_chk CHECK (public.evil(i)));",
+      "COPY public.alvo (i) FROM stdin;",
+      "1",
+      "2",
+      "\\.",
+      END,
+      "",
+    ].join("\n");
+
+  it("função maliciosa em CHECK: não cria papel superusuário nem roda COPY ... TO PROGRAM; o papel descartável some", async () => {
+    const intruso = `intruso_${suffix}`;
+    const marker = `/tmp/pwned_${suffix}`;
+    const f = path.join(dir, "malicioso.sql");
+    await writeFile(f, evilDump(intruso, marker));
+    // a função engole os erros de permissão: a restauração termina, mas nada de privilegiado aconteceu
+    await validateRestore(input(f));
+    expect(psql(DST, "postgres", `select count(*) from pg_roles where rolname = '${intruso}'`)).toBe("0");
+    expect(fileInDst(marker)).toBe("nao");
+    expect(roles()).toBe("0");
+    expect(dbs()).toBe(lookalikes);
+    expect(registry).toEqual([]);
+  }, 120_000);
+
+  it("a mesma função sem engolir o erro: a restauração falha por falta de privilégio, nada é criado e tudo é apagado", async () => {
+    const intruso = `intruso2_${suffix}`;
+    const marker = `/tmp/pwned2_${suffix}`;
+    const text = evilDump(intruso, marker).replace(/BEGIN EXECUTE '(.*?)'; EXCEPTION WHEN OTHERS THEN NULL; END;/g, "EXECUTE '$1';");
+    const f = path.join(dir, "malicioso2.sql");
+    await writeFile(f, text);
+    await expectCode(validateRestore(input(f)), "restore_failed");
+    expect(psql(DST, "postgres", `select count(*) from pg_roles where rolname = '${intruso}'`)).toBe("0");
+    expect(fileInDst(marker)).toBe("nao");
+    expect(roles()).toBe("0");
+    expect(dbs()).toBe(lookalikes);
+  }, 120_000);
+
+  it("comandos do psql (barra invertida) no dump: recusado antes de tocar no servidor", async () => {
+    const marker = `/tmp/pwned3_${suffix}`;
+    const f = path.join(dir, "meta.sql");
+    await writeFile(f, ["CREATE TABLE public.a (i int);", `\\! touch ${marker}`, END, ""].join("\n"));
+    registry = [];
+    seenBeforeCreate = [];
+    await expectCode(validateRestore(input(f)), "unsafe_dump");
+    expect(seenBeforeCreate).toEqual([]);
+    expect(fileInDst(marker)).toBe("nao");
+    expect(roles()).toBe("0");
+  }, 60_000);
+
+  it("extensão que exige superusuário: falha com motivo próprio (extension_unavailable), nunca ok", async () => {
+    const f = path.join(dir, "ext.sql");
+    await writeFile(f, ["CREATE EXTENSION IF NOT EXISTS dblink;", "CREATE TABLE public.a (i int);", END, ""].join("\n"));
+    await expectCode(validateRestore(input(f)), "extension_unavailable");
+    expect(roles()).toBe("0");
+    expect(dbs()).toBe(lookalikes);
+  }, 60_000);
+
+  it("dump legítimo e rico (extensão confiável, função em CHECK, índice parcial, partições): continua dando ok, sem sobras", async () => {
+    psql(SRC, "postgres", "create database rica");
+    psql(
+      SRC,
+      "rica",
+      [
+        "create extension pgcrypto",
+        "create function public.positivo(i int) returns boolean language plpgsql immutable as $f$ begin return i > 0; end $f$",
+        "create table t1 (i int check (public.positivo(i)))",
+        "create index ix1 on t1 (i) where public.positivo(i)",
+        "create table t2 (a text default 'custa $$ 5')",
+        "create table t3 (a int)",
+        "create table t4 (a int)",
+        "create table t5 (a int)",
+        "create table t6 (d date not null, v int) partition by range (d)",
+        "create table t6_a partition of t6 for values from ('2026-01-01') to ('2026-07-01')",
+        "create table t6_b partition of t6 for values from ('2026-07-01') to ('2027-01-01')",
+        "insert into t1 values (1),(2),(3)",
+        "insert into t2 values ('x'),('y')",
+        "insert into t6 values ('2026-02-01', 1),('2026-08-01', 2)",
+        "comment on table t1 is 'texto com $tag$ e aspas '' dentro'",
+      ].join("; "),
+    );
+    const f = path.join(dir, "rica.sql");
+    await dumpOf(SRC, f, "rica");
+    expect(await validateRestore(input(f))).toEqual({ tables: 8, rows: 7 });
+    expect(roles()).toBe("0");
+    expect(dbs()).toBe(lookalikes);
+    expect(registry).toEqual([]);
+  }, 120_000);
+
+  it("o papel descartável não tem privilégio, o CONNECT de PUBLIC é revogado, e a limpeza por nome registrado apaga banco e papel", async () => {
+    const left = `tws_rc_${id()}`;
+    const other = `semnada_${suffix}`;
+    psql(DST, "postgres", `create role ${other} login nosuperuser nocreatedb nocreaterole`);
+    docker("exec", "-e", "POSTGRES_USER=app", "-e", `POSTGRES_PASSWORD=${PW}`, DST, "sh", "-c", restoreCheckScripts("postgres")!.prepare, "sh", left);
+    expect(psql(DST, "postgres", `select count(*) from pg_roles where rolname = '${left}'`)).toBe("1");
+    expect(psql(DST, "postgres", `select rolsuper or rolcreaterole or rolcreatedb or rolreplication or rolbypassrls from pg_roles where rolname = '${left}'`)).toBe("f");
+    expect(psql(DST, "postgres", `select has_database_privilege('${other}', '${left}', 'CONNECT')`)).toBe("f");
+    expect(psql(DST, "postgres", `select has_database_privilege('${left}', '${left}', 'CONNECT')`)).toBe("t");
+    expect(await dropTempDatabase(cli, DST, left)).toBe(true);
+    expect(psql(DST, "postgres", `select count(*) from pg_roles where rolname = '${left}'`)).toBe("0");
+    expect(dbs()).toBe(lookalikes);
+    expect(await dropTempDatabase(cli, DST, left)).toBe(true);
+    psql(DST, "postgres", `drop role ${other}`);
+  }, 60_000);
+
   it("o script de preparo recusa usuário sem permissão de criar bancos (código 8) e nome que já existe (código 9), sem criar nem apagar nada", () => {
     const prepare = restoreCheckScripts("postgres")!.prepare;
     psql(DST, "postgres", "create role comum login password 'x' nocreatedb nosuperuser");
@@ -213,6 +331,9 @@ describe.skipIf(!hasImage(PG_IMAGE))("validação do dump com Postgres de verdad
       }
     };
     const fresh = `tws_rc_${id()}`;
+    psql(DST, "postgres", "create role comum2 login password 'x' nosuperuser createdb nocreaterole");
+    expect(run("comum2", "x", fresh)).toMatchObject({ code: 8 });
+    psql(DST, "postgres", "drop role comum2");
     expect(run("comum", "x", fresh)).toMatchObject({ code: 8 });
     expect(run("comum", "x", fresh).err).toContain("tws-rc:no-permission");
     expect(run("app", PW, "tws_rc_cafe")).toMatchObject({ code: 9 });

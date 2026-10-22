@@ -301,22 +301,27 @@ For now it only works for **PostgreSQL**. When on, after each
 backup the panel restores the database into a **temporary database** it creates on the database
 server of **another project** (for example, the farm in sandbox), checks that every table in the
 backup exists and that the row counts match the backup, and drops the temporary database. It is the
-proof that the database backup really restores. The test environment **does not receive the data**:
+proof that the database backup really restores. The data **do not stay in the test environment**:
 the destination project's own database is not changed and the test does not leave production data
 there.
 
 - **Careful.** The test copies real production data, which may be personal data (LGPD/GDPR), onto the
-  destination database server's disk while it runs (the temporary database is dropped at the end,
-  also when the test fails or runs past its time limit). Do not turn it on if the destination is
-  shared with third parties. To turn it on, pick the destination project and type its name.
+  destination database server: while the test runs it goes through that server's disk and
+  transaction log (WAL), and dropping the temporary database at the end (also when the test fails or
+  runs past its time limit) does not guarantee no traces remain in those files. Do not turn it on if
+  the destination is shared with third parties. To turn it on, pick the destination project and type its name.
 - **Database only.** Files, volumes, variables and the source project's configuration are never
   restored. The destination server's other databases, users, roles and system tables are not touched
   either. The panel only drops the temporary database it created and recorded itself (the name
   `tws_rc_` plus 16 random letters and digits); a database of yours with a similar name is never
-  dropped.
+  dropped. The backup comes from another project and is treated as untrusted: it is restored by a
+  **disposable role with no privileges** (created and dropped together with the temporary
+  database), never with the administrator credential. So extensions that require a superuser make
+  the test fail, with their own reason, and a backup with `psql` client commands (backslash) is
+  refused.
 - **Who can be the destination.** Another project with a PostgreSQL database already detected and
   running, and with no restore test of its own. The destination needs an administrator credential
-  (superuser or permission to create databases) and disk space for the backup; without the
+  (superuser, or with CREATEDB and CREATEROLE) and disk space for the backup; without the
   permission, the result says it is a permission problem. The destination database's name does not
   matter.
 - **MySQL, MariaDB and MongoDB.** Not available yet: the option shows the reason "not available yet

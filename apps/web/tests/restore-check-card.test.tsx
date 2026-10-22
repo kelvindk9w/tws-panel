@@ -254,8 +254,11 @@ describe("ligado", () => {
       ["restart_before_start", "reiniciou antes de o teste começar"],
       ["settings_changed", "destino do teste foi trocado"],
       ["cleanup_failed", "não foi possível apagar o banco temporário"],
+      ["extension_unavailable", "exige superusuário"],
+      ["unsafe_dump", "comandos do cliente psql"],
+      ["destination_permission", "criar um banco e um papel descartáveis"],
     ] as const) {
-      renderCard(view({ settings: ON, last: result({ status: code === "cleanup_failed" ? "failed" : "not_run", reasonCode: code, reason: "x" }) }));
+      renderCard(view({ settings: ON, last: result({ status: ["cleanup_failed", "extension_unavailable", "unsafe_dump", "destination_permission"].includes(code) ? "failed" : "not_run", reasonCode: code, reason: "x" }) }));
       expect(screen.getByTestId("restore-check-last")).toHaveTextContent(text);
       cleanup();
     }

@@ -302,20 +302,26 @@ só para **PostgreSQL**. Ligada, depois de cada backup o painel
 restaura o banco num **banco temporário** que ele cria no servidor de banco de **outro projeto**
 (por exemplo, a fazenda em sandbox), confere que cada tabela do backup existe e que o número de
 linhas bate com o do backup, e apaga o banco temporário. É a prova de que o backup do banco
-realmente restaura. O ambiente de teste **não recebe os dados**: o banco do projeto de destino não
+realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do projeto de destino não
 é alterado e o teste não deixa os dados de produção lá.
 
 - **Atenção.** O teste copia dados reais de produção, que podem ser dados pessoais (LGPD), para o
-  disco do servidor de banco do destino enquanto dura (o banco temporário é apagado no fim, também
-  quando o teste falha ou passa do prazo). Não ligue se o destino for compartilhado com terceiros.
+  servidor de banco do destino: enquanto o teste dura, eles passam pelo disco e pelo log de
+  transações (WAL) dele, e apagar o banco temporário no fim (também quando o teste falha ou passa do
+  prazo) não garante que não sobrem vestígios nesses arquivos. Não ligue se o destino for
+  compartilhado com terceiros.
   Para ligar, escolha o projeto de destino e digite o nome dele.
 - **Só o banco.** Arquivos, volumes, variáveis e a configuração do projeto de origem nunca são
   restaurados. Também não são tocados os bancos, os usuários, os papéis nem as tabelas de sistema
   do servidor de destino. O painel só apaga o banco temporário que ele mesmo criou e registrou
   (nome `tws_rc_` mais 16 letras e números sorteados); um banco seu com nome parecido nunca é apagado.
+  O backup vem de outro projeto e é tratado como não confiável: ele é restaurado por um **papel
+  descartável sem privilégios** (criado e apagado junto com o banco temporário), nunca com a
+  credencial de administrador. Por isso, extensões que exigem superusuário fazem o teste falhar, com
+  motivo próprio, e um backup com comandos do cliente `psql` (barra invertida) é recusado.
 - **Quem pode ser destino.** Outro projeto, com banco PostgreSQL já detectado, em execução, e que
-  não faça um teste próprio. O destino precisa de uma credencial de administrador (superusuário ou
-  com permissão de criar bancos) e de espaço em disco para o backup; sem a permissão, o resultado
+  não faça um teste próprio. O destino precisa de uma credencial de administrador (superusuário, ou com
+  CREATEDB e CREATEROLE) e de espaço em disco para o backup; sem a permissão, o resultado
   diz que é problema de permissão. O nome do banco do destino não importa.
 - **MySQL, MariaDB e MongoDB.** Ainda não disponíveis: a opção aparece com o motivo "ainda não
   disponível para este motor de banco". Ficam para uma próxima etapa.

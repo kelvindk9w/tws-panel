@@ -4,14 +4,14 @@ Data: 22/10/2026 (1ª entrega e correções das revisões 1 e 2). Detalhes técn
 
 ## Estado desta entrega: somente PostgreSQL
 
-Nesta etapa o teste existe **só para PostgreSQL**. MySQL, MariaDB e MongoDB ficam **indisponíveis**, na tela e no servidor, com o motivo "ainda não disponível para este motor de banco" (o servidor responde 409 ao tentar ligar, e um teste que já estivesse ligado termina como "não executado"). Foi a saída segura aceita na revisão 2: os três bloqueios dela (gatilho de MySQL/MariaDB criado no banco real, MongoDB "ok" com documentos perdidos, varredura apagando bancos reais de nome parecido) deixam de existir para esses motores porque o código deles saiu, e o terceiro foi corrigido de verdade no Postgres.
+Nesta etapa o teste existe **só para PostgreSQL**. MySQL, MariaDB e MongoDB ficam **indisponíveis**, na tela e no servidor, com o motivo "ainda não disponível para este motor de banco" (o servidor responde 409 ao tentar ligar, e um teste que já estivesse ligado termina como "não executado"). Esta limitação é **decisão do executor**, ainda sujeita à ciência do Kelvin: a revisão 2 pediu correções por motor (gatilho de MySQL/MariaDB no banco real, "ok" do Mongo com documentos perdidos, varredura por nome); eu optei por tirar esses três motores do lote em vez de corrigi-los, o que elimina os dois primeiros bloqueios por remoção e deixa o terceiro corrigido de verdade no Postgres.
 
 ## O que o recurso faz (comportamento)
 
 - Na aba Backups do projeto há o cartão "Validar o backup do banco restaurando num banco temporário (no servidor de outro projeto)". Vem DESLIGADO. O fluxo de backup, restauração e verificação que já existia não mudou.
 - Para ligar: escolher um destino elegível (outro projeto, PostgreSQL detectado, sem teste próprio) e digitar o nome dele. Frequência: após cada backup (padrão), no máximo 1 vez por dia ou por semana.
 - Depois de um backup do projeto de origem que deixou cópia na VPS (também quando a cópia externa falhou), a MESMA fila do BackupService roda o teste: o painel cria um **banco temporário** (`tws_rc_` mais 16 letras/números sorteados) no servidor de banco do destino, restaura o dump nele **parando no primeiro erro**, confere que **cada tabela** do dump existe e que as **linhas batem**, e apaga o temporário (inclusive em falha e prazo estourado). "Testar agora" roda com o último backup, com a mesma confirmação digitada.
-- **O ambiente de teste NÃO recebe os dados.** O banco do projeto de destino não é alterado; o dump só passa por um banco temporário que some no fim.
+- **Os dados não ficam no ambiente de teste.** O banco do projeto de destino não é alterado; o dump só passa por um banco temporário que some no fim.
 - O destino precisa de: **mesmo motor (PostgreSQL), banco em execução, credencial de administrador (superusuário ou CREATEDB) e espaço em disco**. Sem a permissão, o resultado diz que é problema de permissão no destino, não do backup.
 - "Ok" só quando a restauração terminou sem nenhum erro e a conferência bateu. Dump lixo, cortado, com erro no meio, sem tabelas, ou que o servidor do destino não aceita aparece como "falhou", com motivo curto fixo (nunca texto do banco).
 - Resultado persistido por projeto (ok, falhou, não executado, em andamento; data, destino, duração, o que foi conferido), na aba do projeto e como selo em Configurações, Backups. Falha avisa pelos canais de falha de backup; ações são auditadas sem senha nem dado.
@@ -21,6 +21,17 @@ Nesta etapa o teste existe **só para PostgreSQL**. MySQL, MariaDB e MongoDB fic
 O pedido original dizia "restaurar automaticamente no projeto de teste". Na revisão 1 ficou provado que restaurar DENTRO do banco do destino não prova nada de forma confiável (o psql sai com 0 mesmo com erros; "pelo menos uma tabela" é sempre verdadeiro a partir do 2º teste; esquema mais novo no destino dá "ok" sem nenhuma linha do backup). A correção adotada restaura num banco temporário: a prova é rigorosa, e o banco do projeto de destino NÃO recebe os dados de produção. Isso também reduz o risco de LGPD. Por isso o título do cartão, o site e esta documentação passaram a falar em "banco temporário".
 
 **Proposta (NÃO implementada):** um passo opcional, com confirmação própria, "também atualizar o banco do projeto de teste", para quem quiser o ambiente de teste com os dados do backup.
+
+## Correções da revisão 3 (segurança)
+
+1. **O SQL do dump nunca roda como administrador do destino.** Antes, a restauração usava a credencial de administrador e funções do dump (CHECK, índice, valor padrão) rodavam como superusuário durante o COPY; a prova do revisor criou um papel superusuário que sobrevivia e rodou `COPY ... TO PROGRAM` no container. Agora o painel (administrador) só cria e apaga; a restauração e a conferência rodam conectadas como um **papel descartável** (NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS), dono do banco temporário, com nome sorteado igual ao do banco, CONNECT revogado de PUBLIC no temporário, senha derivada dentro do container. Papel e banco são apagados juntos no fim e na varredura de restos, e só então o nome sai do registro.
+2. **Provas com Postgres real**: função maliciosa em CHECK não cria papel nem executa `COPY TO PROGRAM` (nem engolindo erros, nem sem engolir); papel descartável sem nenhum privilégio e sem CONNECT para outros; papel e banco somem no fim e pela limpeza por nome; dump rico e legítimo (extensão confiável pgcrypto, função em CHECK, índice parcial, partições) continua dando ok sem sobras.
+3. **Extensões que exigem superusuário** (dblink, postgis, event triggers) falham com motivo próprio `extension_unavailable`, nunca ok.
+4. **Comandos do psql no dump** (`\!`, `\copy`, `\gexec`...) rodariam shell no container: o dump é recusado (`unsafe_dump`) antes de tocar no servidor. Só `\restrict`/`\unrestrict` do pg_dump recente passam.
+5. **Registro do nome é gravado de verdade** (`persist`, não `persistQuiet`): se não gravar, nada é criado.
+6. **Apagar o projeto de destino**: o painel varre o banco/papel temporário dele ANTES de apagar (o volume de dados sobrevive ao projeto); se não conseguir, registra no log e notifica que o temporário pode ter ficado no volume. Erro de Docker na varredura não esquece o nome.
+7. **Textos**: "os dados não ficam no ambiente de teste" (em vez de "o ambiente de teste não recebe os dados"); o aviso de LGPD diz que os dados passam pelo disco e pelo WAL do destino durante o teste e que apagar o banco não garante ausência de vestígios; cabeçalho do módulo e documentação afirmam só o que é verdade (o papel herda o que PUBLIC concede, por exemplo CONNECT em outros bancos).
+8. **Testes das lacunas**: `$` colado a palavra (L09), corpo `$tag$` que só fecha com a mesma tag e funções com `$1`/`$2` (L11), varredura que não apaga o temporário de um teste em andamento (R10).
 
 ## Correções da revisão 2
 

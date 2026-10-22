@@ -1370,3 +1370,75 @@ describe("somente PostgreSQL nesta etapa", () => {
     expect(docker.restores).toEqual([]);
   });
 });
+
+describe("segurança do banco e do papel descartáveis", () => {
+  it("R10: a varredura não apaga o que é de um teste em andamento", async () => {
+    await enable();
+    await backup();
+    const restoresBefore = docker.restores.length;
+    const cleanupsBefore = docker.cleanups.length;
+    let release!: () => void;
+    docker.gate = new Promise<void>((r) => (release = r));
+    const queued = await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await until(async () => docker.restores.length === restoresBefore + 1);
+    // durante o teste: o nome do teste em andamento está registrado e outros registros também
+    const mine = docker.prepares.at(-1)!.args[0]!;
+    expect(registry().map((e) => e.name)).toContain(mine);
+    seedRegistry([...registry(), { name: LEFTOVER, destinationId: DST }]);
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    await service.beforeDeleteProject(DST);
+    expect(docker.cleanups).toHaveLength(cleanupsBefore);
+    expect(registry().map((e) => e.name)).toContain(mine);
+    release();
+    await service.idle();
+    expect((await service.record(queued.id))?.id).toBe(queued.id);
+    // só depois de terminar: o do teste foi apagado por ele, e o resto na varredura seguinte
+    expect(docker.cleanups[cleanupsBefore]!.args).toEqual([mine]);
+  });
+
+  it("se o registro do nome não puder ser gravado, nada é criado no destino", async () => {
+    await enable();
+    (service as unknown as { writeJson: () => Promise<void> }).writeJson = async () => Promise.reject(new Error("disco cheio"));
+    await backup();
+    expect(docker.prepares).toEqual([]);
+    expect(docker.restores).toEqual([]);
+    expect(registry()).toEqual([]);
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "restore_failed" });
+  });
+
+  it("apagar o projeto de destino: antes de apagar, varre o banco temporário registrado dele", async () => {
+    await enable();
+    seedRegistry([
+      { name: LEFTOVER, destinationId: DST },
+      { name: "tws_rc_00000000000000bb", destinationId: "outro-projeto" },
+    ]);
+    await service.beforeDeleteProject(DST);
+    expect(docker.cleanups).toEqual([{ container: "d-db", args: [LEFTOVER] }]);
+    expect(registry()).toEqual([{ name: "tws_rc_00000000000000bb", destinationId: "outro-projeto" }]);
+  });
+
+  it("apagar o projeto de destino sem conseguir apagar o banco temporário: avisa que ele pode ter ficado no volume", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    docker.cleanupAnswer = "LEFT";
+    await service.beforeDeleteProject(DST);
+    projects = projects.filter((p) => p.id !== DST);
+    await service.forgetProject(DST);
+    expect(notices.some((n) => n.key === `restore-check-leftover:${DST}`)).toBe(true);
+    expect(logs.join("\n")).toMatch(/banco\(s\) temporário\(s\)/);
+    expect(registry()).toEqual([]);
+    expect(everything()).not.toContain(DB_SECRET);
+  });
+
+  it("extensão que exige superusuário e dump com comando do psql têm motivo próprio, sem texto do banco", async () => {
+    docker.restoreError = new Error(`ERROR: permission denied to create extension "dblink" ${ROW_DATA}`);
+    await enable();
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "extension_unavailable" });
+    expect(JSON.stringify({ v: await view(), n: notices, l: logs })).not.toContain(ROW_DATA);
+    docker.restoreError = null;
+    docker.dump = pgDump().replace("CREATE TABLE", "\\! id\nCREATE TABLE");
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "unsafe_dump" });
+  });
+});

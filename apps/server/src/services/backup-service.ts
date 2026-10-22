@@ -1005,11 +1005,32 @@ export class BackupService {
   }
 
   /** Projeto apagado: esquece a configuração (os arquivos de backup ficam). */
+  /**
+   * Chamado ANTES de apagar um projeto: apaga os bancos temporários do teste de restauração que ele recebeu como
+   * destino, enquanto o container ainda existe (o volume de dados sobrevive ao projeto).
+   */
+  async beforeDeleteProject(projectId: string): Promise<void> {
+    await this.ensureLoaded();
+    await this.sweepRestoreCheckTemp(false, projectId);
+  }
+
   async forgetProject(projectId: string): Promise<void> {
     await this.ensureLoaded();
     delete this.config.targets[projectTargetId(projectId)];
     delete this.config.detections[projectId];
-    // O container do destino foi embora com o projeto: não há mais banco temporário a apagar nele.
+    // O container do destino foi embora com o projeto (o volume de dados fica). Se a varredura de antes de apagar não
+    // conseguiu apagar o banco temporário, avisa: ele pode continuar no volume.
+    const left = (this.config.restoreCheckTemp ?? []).filter((e) => e.destinationId === projectId);
+    if (left.length > 0) {
+      this.log(`Backups: ${left.length} banco(s) temporário(s) do teste de restauração (tws_rc_) podem ter ficado no volume de dados do projeto apagado.`);
+      this.opts.notify?.({
+        kind: "backup_failed",
+        key: `restore-check-leftover:${projectId}`,
+        title: "Banco temporário do teste de restauração pode ter ficado no destino apagado",
+        body: ["O projeto de destino foi apagado antes de o painel confirmar a remoção do banco temporário (tws_rc_) do teste. Os dados de dump podem continuar no volume de dados dele, que o painel não apaga."],
+        path: "/settings/backups",
+      });
+    }
     this.config.restoreCheckTemp = (this.config.restoreCheckTemp ?? []).filter((e) => e.destinationId !== projectId);
     // Projetos que usavam este como destino do teste de restauração: a opção se desliga, com aviso.
     for (const [id, t] of Object.entries(this.config.targets)) {
@@ -3183,8 +3204,16 @@ export class BackupService {
   // Bancos temporários registrados -------------------------------------------------
 
   private async registerTemp(name: string, destinationId: string): Promise<void> {
-    (this.config.restoreCheckTemp ??= []).push({ name, destinationId });
-    await this.persistQuiet({ config: true });
+    const list = (this.config.restoreCheckTemp ??= []);
+    const entry = { name, destinationId };
+    list.push(entry);
+    try {
+      await this.persist({ config: true });
+    } catch (err) {
+      // Não gravou: nada será criado, então o nome não fica na memória como se estivesse registrado.
+      this.config.restoreCheckTemp = (this.config.restoreCheckTemp ?? []).filter((e) => e !== entry);
+      throw err;
+    }
   }
 
   private async forgetTemp(name: string): Promise<void> {
@@ -3196,10 +3225,11 @@ export class BackupService {
    * Apaga os bancos temporários que o painel criou e não confirmou como apagados (só os registrados, nunca por
    * padrão de nome). Não mexe enquanto um teste roda (o banco dele está registrado): `own` = quem chama é o próprio teste.
    */
-  private async sweepRestoreCheckTemp(own = false): Promise<void> {
+  private async sweepRestoreCheckTemp(own = false, onlyDestination?: string): Promise<void> {
     if (!own && this.running?.record.operation === "restore_check") return;
     const docker = this.opts.docker;
     for (const entry of [...(this.config.restoreCheckTemp ?? [])]) {
+      if (onlyDestination !== undefined && entry.destinationId !== onlyDestination) continue;
       try {
         const project = await this.opts.projects.get(entry.destinationId);
         if (!project) {

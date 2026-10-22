@@ -34,6 +34,8 @@ const REASON_KEYS = {
   engine_mismatch: "backups.restoreCheck.reason.engine_mismatch",
   engine_unsupported: "backups.restoreCheck.reason.engine_unsupported",
   destination_permission: "backups.restoreCheck.reason.destination_permission",
+  extension_unavailable: "backups.restoreCheck.reason.extension_unavailable",
+  unsafe_dump: "backups.restoreCheck.reason.unsafe_dump",
   no_backup: "backups.restoreCheck.reason.no_backup",
   backup_incomplete: "backups.restoreCheck.reason.backup_incomplete",
   no_password: "backups.restoreCheck.reason.no_password",

@@ -424,6 +424,8 @@ export type RestoreCheckReasonCode =
   | "cleanup_failed"
   | "engine_unsupported"
   | "destination_permission"
+  | "extension_unavailable"
+  | "unsafe_dump"
   | "restore_failed"
   | "sanity_failed"
   | "backup_unreadable";

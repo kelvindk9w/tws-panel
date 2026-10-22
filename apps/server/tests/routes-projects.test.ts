@@ -608,7 +608,12 @@ describe("HTTPS do projeto", () => {
 describe("backups na criação e na remoção do projeto", () => {
   it("'Fazer backup: sim/não' vai para o serviço de backups (sem escolha, o padrão dos projetos) e o projeto apagado é esquecido", async () => {
     await build();
-    const backups = { initProject: vi.fn(async () => undefined), forgetProject: vi.fn(async () => undefined) };
+    const order: string[] = [];
+    const backups = {
+      initProject: vi.fn(async () => undefined),
+      beforeDeleteProject: vi.fn(async () => void order.push("antes")),
+      forgetProject: vi.fn(async () => void order.push("depois")),
+    };
     await closeAuthTestApp(ctx);
     service = makeServiceStub();
     ctx = await buildAuthTestApp(TOKEN);
@@ -627,6 +632,13 @@ describe("backups na criação e na remoção do projeto", () => {
     expect((await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: { ...body, backup: "sim" } })).statusCode).toBe(400);
     expect((await app.inject({ method: "DELETE", url: "/api/projects/p1", headers: auth })).statusCode).toBeLessThan(300);
     expect(backups.forgetProject).toHaveBeenCalledWith("p1");
+    // os bancos temporários do teste de restauração são varridos ANTES de o projeto sumir
+    expect(backups.beforeDeleteProject).toHaveBeenCalledWith("p1");
+    expect(order).toEqual(["antes", "depois"]);
+    // falha na varredura não impede apagar o projeto
+    backups.beforeDeleteProject.mockRejectedValueOnce(new Error("docker fora"));
+    expect((await app.inject({ method: "DELETE", url: "/api/projects/p1", headers: auth })).statusCode).toBeLessThan(300);
+    expect(backups.forgetProject).toHaveBeenCalledTimes(2);
   });
 
   it("sem o serviço de backups (instalação de teste) a criação continua", async () => {
