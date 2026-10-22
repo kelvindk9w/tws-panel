@@ -698,7 +698,8 @@ Most projects don't need this: the site opens through the domain, via the proxy.
 **What to check:** the deploy ends as **success** and the project's address opens the
 site. In the **Deploys** tab you will find the **Deploy history**. If a
 guardrail blocked the deploy (e.g., an exposed database port), the screen says which rule; see
-[Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
+[Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail)
+and [Writing a compose the panel accepts](../guides/compose-rules.md).
 
 ### 7.7 Certificate
 

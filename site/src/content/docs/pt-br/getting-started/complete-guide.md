@@ -685,7 +685,8 @@ endereços (0.0.0.0)", a porta fica aberta para a internet.
 **O que conferir:** o deploy termina como **sucesso** e o endereço do projeto abre o site. Na aba
 **Deploys** fica o **Histórico de deploys**. Se um guardrail barrou o deploy (ex.: porta de banco
 exposta), a tela diz qual regra; veja
-[Deploy bloqueado por guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
+[Deploy bloqueado por guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail)
+e [Como escrever um compose que o painel aceita](../guides/compose-rules.md).
 
 ### 7.7 Certificado
 
