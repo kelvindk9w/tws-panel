@@ -204,6 +204,11 @@ seus projetos enviarem mensagens e para caixas como `contato@`.
   nomes. Em vez de criar uma caixa nova, dá para **usar uma caixa que já existe** no domínio (nada é
   apagado). E apagar o projeto não apaga a caixa nem as mensagens: o endereço fica livre para ser
   usado de novo.
+- **Nome de exibição:** toda caixa pode ter um nome (opcional, até 80 caracteres) que aparece para quem
+  recebe, no campo De (`From`). Informe ao criar (página do domínio ou aba **Caixas** do projeto) e
+  altere depois em **Alterar nome de exibição**: só o nome muda, a senha, o 2FA, as senhas de app, os
+  apelidos e as mensagens ficam como estão. Na caixa de envio do projeto o nome é o `MAIL_FROM_NAME`
+  e a mudança vale no próximo deploy (o painel não faz deploy sozinho); em branco, vale o nome do projeto.
   Na aba **Variáveis**, se o compose exige variáveis de e-mail (`SMTP_HOST`, `SMTP_PASSWORD`,
   `SMTP_FROM`…), um aviso diz quais o e-mail do projeto preenche, leva ao cartão para ligá-lo e
   oferece **Ligar `SMTP_PASSWORD` ao valor `SMTP_PASS`** (só a ligação é guardada, nada é copiado).

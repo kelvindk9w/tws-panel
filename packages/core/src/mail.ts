@@ -211,6 +211,12 @@ export interface Mailbox {
   kind: "user" | "project" | "system";
   createdAt: string;
   /**
+   * Nome de exibição da caixa (gravado também no Stalwart, campo `description`
+   * do principal). Ausente = sem nome: o From sai só com o endereço. Na caixa
+   * de envio do projeto, é o mesmo nome do MAIL_FROM_NAME.
+   */
+  displayName?: string;
+  /**
    * Projeto dono da caixa: a caixa de envio do projeto e as criadas pela aba
    * Caixas do e-mail dele. Ausente = de nenhum projeto (ex.: criada na página
    * do domínio). Caixa antiga sem dono gravado: a de envio de um projeto
@@ -282,6 +288,87 @@ export interface CreateMailboxRequest {
   generatePassword?: boolean;
   /** Criada pela aba Caixas do e-mail do projeto: a caixa fica sendo dele. */
   projectId?: string;
+  /** Nome de exibição (opcional, até MAILBOX_DISPLAY_NAME_MAX caracteres); vazio = sem nome. */
+  displayName?: string;
+}
+
+/**
+ * PUT /api/mail/mailboxes/:id/display-name — altera (ou, vazio, remove) o nome
+ * de exibição. Não mexe em senha, 2FA, senhas de app, aliases nem mensagens.
+ * Com `projectId`, só vale se a caixa é daquele projeto.
+ */
+export interface SetMailboxDisplayNameRequest {
+  displayName: string;
+  projectId?: string;
+}
+
+export interface SetMailboxDisplayNameResponse {
+  mailbox: Mailbox;
+  /**
+   * A caixa é a de envio de um projeto: o MAIL_FROM_NAME do app só muda no
+   * próximo deploy (o painel não faz deploy sozinho).
+   */
+  projectEmail?: { projectId: string; appliesOnNextDeploy: true };
+}
+
+/** Tamanho máximo do nome de exibição, em caracteres (não bytes). */
+export const MAILBOX_DISPLAY_NAME_MAX = 80;
+
+/**
+ * Caracteres que o nome de exibição não aceita (conteúdo de uma classe de regex):
+ * controle (CR, LF, TAB, NUL, C1), separadores de linha/parágrafo (U+2028/2029),
+ * invisíveis de largura zero (U+200B–200D, U+2060, U+FEFF), marcas de direção
+ * (LRM/RLM U+200E/200F, ALM U+061C, embeddings/overrides U+202A–202E, isolates
+ * U+2066–2069), < > " e barra invertida, e surrogates soltos (UTF-16 malformado:
+ * o Stalwart recusa com "JSON deserialization failed").
+ */
+const DISPLAY_NAME_FORBIDDEN =
+  '\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060\\u2066-\\u2069\\ufeff\\ud800-\\udfff<>"\\\\';
+
+/**
+ * Padrão (regex com a flag u, usado no schema das rotas) do nome de exibição:
+ * nada de DISPLAY_NAME_FORBIDDEN — o nome vai para o cabeçalho From, para o
+ * MAIL_FROM_NAME (onde apps montam "Nome <endereço>") e para o Stalwart.
+ * Não há normalização NFC nem proteção contra homógrafos; "@" é aceito (o
+ * endereço real da caixa continua visível ao lado).
+ */
+export const MAILBOX_DISPLAY_NAME_PATTERN = `^[^${DISPLAY_NAME_FORBIDDEN}]*$`;
+
+/**
+ * Tira de um texto livre (ex.: o nome do projeto) o que o nome de exibição não
+ * aceita (cada ocorrência vira um espaço), junta espaços, apara e corta no
+ * limite. Pode devolver vazio: então não há nome (o From sai só com o endereço).
+ */
+export function sanitizeDisplayName(raw: string | null | undefined): string {
+  const cleaned = String(raw ?? "").replace(new RegExp(`[${DISPLAY_NAME_FORBIDDEN}]`, "gu"), " ");
+  return [...cleaned.trim().replace(/ {2,}/g, " ")].slice(0, MAILBOX_DISPLAY_NAME_MAX).join("").trim();
+}
+
+export type DisplayNameResult =
+  | { ok: true; value: string }
+  | { ok: false; reason: string; code: "not_text" | "invalid_chars" | "too_long" };
+
+/**
+ * Valida e normaliza o nome de exibição: tira espaços das pontas e junta
+ * espaços repetidos. Vazio é válido e significa "sem nome" (value = "").
+ * Mesma regra no servidor e na tela.
+ */
+export function normalizeDisplayName(raw: unknown): DisplayNameResult {
+  if (raw === undefined || raw === null) return { ok: true, value: "" };
+  if (typeof raw !== "string") return { ok: false, code: "not_text", reason: "O nome de exibição deve ser um texto." };
+  // Antes de aparar: o trim() levaria embora \t, \r e \n das pontas e o nome "passaria".
+  if (!new RegExp(MAILBOX_DISPLAY_NAME_PATTERN, "u").test(raw)) {
+    return {
+      ok: false,
+      code: "invalid_chars",
+      reason: "O nome de exibição não pode ter quebra de linha, caracteres de controle, < > aspas nem barra invertida.",
+    };
+  }
+  const value = raw.trim().replace(/ {2,}/g, " ");
+  if ([...value].length > MAILBOX_DISPLAY_NAME_MAX) {
+    return { ok: false, code: "too_long", reason: `O nome de exibição pode ter no máximo ${MAILBOX_DISPLAY_NAME_MAX} caracteres.` };
+  }
+  return { ok: true, value };
 }
 
 /**
