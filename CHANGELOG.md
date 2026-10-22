@@ -155,6 +155,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Corrigido
 
+- Envios do projeto: o status de um envio não fica mais em "na fila" depois que o e-mail já foi
+  entregue. Abrir a lista de envios agora pede a leitura do registro de entrega (no máximo uma por
+  minuto, sem atrasar a tela); o resultado que chegou antes do registro do envio, ou que se
+  perdeu, é reaplicado a cada 5 min a partir do histórico já guardado (vale também para os
+  envios feitos antes desta correção); um resultado que chegava no instante em que o aviso do
+  envio era gravado não é mais sobrescrito. Se nenhum resultado aparecer em 6 horas, o envio
+  passa a "sem confirmação" em vez de "na fila" para sempre (o resultado que vier depois ainda
+  corrige).
 - Roteiro, passo "Backups fora da VPS", com um bucket que já guarda backups de outro painel: o aviso
   agora oferece restaurar o painel antigo OU fazer o primeiro backup à mão (que não é bloqueado) e avisa
   que, a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as

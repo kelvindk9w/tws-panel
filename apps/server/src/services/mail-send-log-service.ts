@@ -58,6 +58,12 @@ export interface MailSendLogDeps {
    * forjado também é "entregue" localmente e seria atribuído ao projeto.
    */
   localDomains?(): Promise<string[]>;
+  /**
+   * Eventos de entrega já guardados (data/mail/envios) dessas mensagens. A reconciliação os
+   * aplica de novo: cobre evento que chegou antes do registro, que se perdeu numa gravação
+   * ou que foi lido antes desta função existir. Aplicar é idempotente.
+   */
+  eventsFor?(queueIds: Set<string>): Promise<MailDeliveryEvent[]>;
   /** A captura (aviso do Stalwart) está configurada? */
   captureConfigured(): Promise<boolean>;
   log?: (message: string) => void;
@@ -87,6 +93,14 @@ const PURGE_FIRST_MS = 120_000;
 const PURGE_EVERY_MS = 60 * 60_000;
 /** Mensagem pendente que sumiu da fila há menos tempo que isso ainda pode estar no registro. */
 const UNCONFIRMED_AFTER_MS = 15 * 60_000;
+/**
+ * Mensagem que continua "na fila" (nunca teve um único evento de entrega) depois disso vira
+ * "sem confirmação", mesmo que a fila ainda a mostre ou não responda. O Stalwart tenta de novo
+ * em 2 min, depois em intervalos crescentes: qualquer tentativa, boa ou ruim, escreve no
+ * registro nas primeiras horas. 6 h sem nada = o registro não chegou ao painel (rotação do log,
+ * container recriado, leitura quebrada). "Na fila" nunca é resultado final.
+ */
+export const NO_EVENT_AFTER_MS = 6 * 60 * 60_000;
 const SETTINGS_CACHE_MS = 5_000;
 const CAP_CHECK_EVERY = 50;
 
@@ -321,9 +335,8 @@ export class MailSendLogService {
       return;
     }
     const m = parsed.value;
-    const existing = this.store.get(m.queueId);
     // O Stalwart repete o aviso se achar que falhou: o mesmo envio não vira dois.
-    if (existing?.captured) return;
+    if (this.store.get(m.queueId)?.captured) return;
     const at = new Date(this.now()).toISOString();
     const hasContent = withContent && (m.subject !== null || m.body !== null);
     if (hasContent) {
@@ -336,6 +349,9 @@ export class MailSendLogService {
         storedAt: at,
       });
     }
+    // Lido DEPOIS das esperas acima: um estado de entrega que chegou nesse meio-tempo não pode
+    // ser pisado por este instantâneo (o envio voltaria a "na fila").
+    const existing = this.store.get(m.queueId);
     const recipients = m.to.map((to) => existing?.recipients.find((r) => r.address === to) ?? newRecipient(to));
     for (const r of existing?.recipients ?? []) if (!recipients.some((x) => x.address === r.address)) recipients.push(r);
     await this.store.put({
@@ -425,23 +441,70 @@ export class MailSendLogService {
   // -------------------------------------------------------------------------
 
   /**
-   * Compara com a fila do Stalwart: mensagens que estão lá e o painel não
-   * conhece viram registros só com metadados; pendentes que saíram da fila sem
-   * resultado viram "sem confirmação". Não faz nada se a fila não respondeu.
+   * 1) Reaplica os resultados de entrega já guardados aos envios ainda pendentes (ou "sem
+   * confirmação"); 2) compara com a fila do Stalwart: mensagens que estão lá e o painel não
+   * conhece viram registros só com metadados; 3) pendentes que saíram da fila sem resultado
+   * (15 min), ou que ficaram 6 h sem nenhum evento, viram "sem confirmação". Fila que não
+   * respondeu: só vale a regra das 6 h.
    */
   async reconcile(): Promise<{ created: number; unconfirmed: number }> {
     await this.load();
-    if (!(await this.deps.serverCreated())) return { created: 0, unconfirmed: 0 };
-    let queue: QueueMessageRaw[];
-    try {
-      queue = (await this.deps.listQueue()).items;
-    } catch {
-      return { created: 0, unconfirmed: 0 };
+    await this.reapplyStoredEvents();
+    let created = 0;
+    let inQueue: Set<string> | null = null;
+    if (await this.deps.serverCreated()) {
+      try {
+        const queue = (await this.deps.listQueue()).items;
+        inQueue = new Set(queue.map((m) => m.id));
+        created = await this.adoptQueued(queue);
+      } catch {
+        inQueue = null;
+      }
     }
-    const inQueue = new Set(queue.map((m) => m.id));
+    const now = this.now();
+    let unconfirmed = 0;
+    for (const rec of this.store.all()) {
+      const age = now - Date.parse(rec.at);
+      const pending = rec.recipients.filter((r) => r.state === "queued" || r.state === "deferred");
+      if (pending.length === 0) continue;
+      // Saiu da fila sem resultado (15 min) ou ficou 6 h sem nenhum evento, esteja a fila de pé ou não.
+      const leftQueue = inQueue !== null && !inQueue.has(rec.id) && age > UNCONFIRMED_AFTER_MS;
+      const silent = age > NO_EVENT_AFTER_MS;
+      const targets = pending.filter((r) => (leftQueue ? true : silent && r.state === "queued"));
+      if (targets.length === 0) continue;
+      const next = structuredClone(rec);
+      for (const r of next.recipients) {
+        if (targets.some((t) => t.address === r.address)) {
+          r.state = "unconfirmed";
+          r.nextRetryAt = null;
+        }
+      }
+      await this.store.put(next);
+      unconfirmed++;
+    }
+    return { created, unconfirmed };
+  }
+
+  /** Reaplica os eventos de entrega guardados aos envios que ainda estão pendentes. */
+  private async reapplyStoredEvents(): Promise<void> {
+    if (!this.deps.eventsFor) return;
+    const ids = new Set<string>();
+    for (const rec of this.store.all()) {
+      if (rec.recipients.some((r) => r.state === "queued" || r.state === "deferred" || r.state === "unconfirmed")) ids.add(rec.id);
+    }
+    if (ids.size === 0) return;
+    try {
+      await this.applyEvents(await this.deps.eventsFor(ids));
+    } catch (err) {
+      this.counters.failed++;
+      this.log(`Registro de envios: não consegui reaplicar os resultados de entrega guardados (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }
+
+  /** Mensagens na fila que o painel não conhecia viram registros só com metadados. */
+  private async adoptQueued(queue: QueueMessageRaw[]): Promise<number> {
     const local = new Set((await this.deps.localDomains?.().catch(() => [])) ?? []);
     let created = 0;
-    let unconfirmed = 0;
     for (const m of queue) {
       if (this.store.get(m.id)) continue;
       const view = queueItemFromMessage(m);
@@ -469,21 +532,7 @@ export class MailSendLogService {
       });
       created++;
     }
-    const limit = this.now() - UNCONFIRMED_AFTER_MS;
-    for (const rec of this.store.all()) {
-      if (inQueue.has(rec.id) || Date.parse(rec.at) > limit) continue;
-      if (!rec.recipients.some((r) => r.state === "queued" || r.state === "deferred")) continue;
-      const next = structuredClone(rec);
-      for (const r of next.recipients) {
-        if (r.state === "queued" || r.state === "deferred") {
-          r.state = "unconfirmed";
-          r.nextRetryAt = null;
-        }
-      }
-      await this.store.put(next);
-      unconfirmed++;
-    }
-    return { created, unconfirmed };
+    return created;
   }
 
   // -------------------------------------------------------------------------
@@ -583,10 +632,13 @@ export class MailSendLogService {
   }
 
   private view(r: StoredSend, names: Map<string, string>): MailSendItem {
+    // "Na fila" nunca é final: sem nenhum evento depois de 6 h, a tela já mostra "sem confirmação",
+    // mesmo antes da próxima reconciliação gravar isso.
+    const silent = this.now() - Date.parse(r.at) > NO_EVENT_AFTER_MS;
     const recipients: MailSendRecipient[] = r.recipients.map((x) => ({
       address: x.address,
       domain: x.domain,
-      state: x.state,
+      state: x.state === "queued" && silent ? "unconfirmed" : x.state,
       deferrals: x.deferrals,
       updatedAt: x.updatedAt,
       nextRetryAt: x.nextRetryAt,

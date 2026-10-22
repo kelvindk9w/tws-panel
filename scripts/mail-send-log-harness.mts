@@ -86,6 +86,18 @@ http
           await client.createMailbox("loja@example.com", "senha-da-caixa-123");
           await client.createMailbox("postmaster@example.com", "senha-postmaster-123");
           out = { ok: true };
+        } else if (url.pathname === "/tune") {
+          // Entrega a um servidor de teste sem certificado válido: STARTTLS opcional e certificado inválido aceito
+          // (o painel não mexe nisso; é só para o destinatário de mentira da rede interna).
+          const auth = "Basic " + Buffer.from(`admin:${process.env.ADMIN_SECRET}`).toString("base64");
+          for (const [key, value] of [["queue.outbound.tls.starttls", "optional"], ["queue.outbound.tls.allow-invalid-certs", "true"]] as const) {
+            await fetch("http://paas-stalwart:8080/api/settings", {
+              method: "POST",
+              headers: { authorization: auth, "content-type": "application/json" },
+              body: JSON.stringify([{ type: "clear", prefix: key }, { type: "insert", prefix: null, values: [[key, value]], assert_empty: false }]),
+            });
+          }
+          out = { ok: true };
         } else if (url.pathname === "/send") {
           // Envio de um app: submissão autenticada (587 + STARTTLS) pela caixa do projeto.
           const o = JSON.parse(body) as { from: string; to: string; subject: string; text: string; user: string; pass: string };

@@ -458,6 +458,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // -------------------------------------------------------------------------
   // Registro dos envios por SMTP: o aviso do Stalwart chega pelo ouvido interno
   // (abaixo) e os estados vêm dos eventos de entrega que o `envios` lê.
+  // Um aponta para o outro: o registro de envios lê os resultados guardados do histórico de entregas.
+  let envios: MailEnviosService;
   const sends = new MailSendLogService({
     dataDir: app.config.dataDir,
     senders: () => service.enviosSenders(),
@@ -466,9 +468,10 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     listQueue: () => service.enviosQueue(),
     localDomains: async () => (await service.listDomains()).map((d) => d.name),
     captureConfigured: () => service.sendHookConfigured(),
+    eventsFor: (ids) => envios.eventsFor(ids),
     log: (message) => app.log.warn(message),
   });
-  const envios = new MailEnviosService({
+  envios = new MailEnviosService({
     dataDir: app.config.dataDir,
     onEvents: (events) => sends.applyEvents(events),
     serverCreated: () => service.enviosServerCreated(),
@@ -498,7 +501,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     reputation,
     domainNames: async () => (await service.listDomains()).map((d) => d.name),
   });
-  mailSendRoutes(app, { sends });
+  mailSendRoutes(app, { sends, refresh: () => envios.refreshIfStale() });
   envios.start();
   reputation.start();
   sends.start();

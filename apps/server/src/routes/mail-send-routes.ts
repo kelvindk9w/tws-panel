@@ -19,6 +19,11 @@ import type { HttpError } from "../services/http-error.js";
 
 export interface MailSendRouteDeps {
   sends: Pick<MailSendLogService, "list" | "reveal" | "settings" | "updateSettings">;
+  /**
+   * Pede a leitura do registro de entrega do Stalwart se a última tem mais de 1 min. Não é esperada:
+   * a lista responde na hora e o próximo pedido da tela (a cada ~10 s) já vê o resultado.
+   */
+  refresh?: () => Promise<unknown>;
 }
 
 const PROJECT_ID = { type: "string", minLength: 1, maxLength: 64 } as const;
@@ -114,6 +119,7 @@ function toFilter(q: ListQuery, projectId?: string) {
 
 export function mailSendRoutes(app: FastifyInstance, deps: MailSendRouteDeps): void {
   const { sends } = deps;
+  const refresh = () => void deps.refresh?.().catch(() => undefined);
 
   // Exibir exige sessão: o guarda de autenticação do painel (plugins/auth.ts) já recusa
   // sem sessão válida depois do setup; aqui só audita quem pediu.
@@ -133,13 +139,15 @@ export function mailSendRoutes(app: FastifyInstance, deps: MailSendRouteDeps): v
     }
   }
 
-  app.get<{ Querystring: ListQuery }>("/api/mail/envios/saidas", { schema: globalListSchema }, async (request, reply) =>
-    reply.send(await sends.list(toFilter(request.query))),
-  );
+  app.get<{ Querystring: ListQuery }>("/api/mail/envios/saidas", { schema: globalListSchema }, async (request, reply) => {
+    refresh();
+    return reply.send(await sends.list(toFilter(request.query)));
+  });
 
-  app.get<{ Params: { id: string }; Querystring: ListQuery }>("/api/projects/:id/email/saidas", { schema: projectListSchema }, async (request, reply) =>
-    reply.send(await sends.list(toFilter(request.query, request.params.id))),
-  );
+  app.get<{ Params: { id: string }; Querystring: ListQuery }>("/api/projects/:id/email/saidas", { schema: projectListSchema }, async (request, reply) => {
+    refresh();
+    return reply.send(await sends.list(toFilter(request.query, request.params.id)));
+  });
 
   app.post<{ Params: { msg: string } }>(
     "/api/mail/envios/saidas/:msg/reveal",

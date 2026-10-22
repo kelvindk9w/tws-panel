@@ -546,6 +546,86 @@ describe("reconciliação", () => {
     expect((await svc.list({})).items[0]!.state).toBe("queued");
   });
 
+  it("resultado que ficou sem ser aplicado (chegou antes do registro ou se perdeu) é reaplicado da história guardada", async () => {
+    await receive(hook());
+    expect((await svc.list({})).items[0]!.state).toBe("queued");
+    const stored = [event({ at: "2026-10-22T12:00:09.000Z" }), event({ queueId: "999", at: "2026-10-22T12:00:09.000Z" })];
+    const asked: string[][] = [];
+    svc = new MailSendLogService({
+      ...deps,
+      eventsFor: async (ids) => {
+        asked.push([...ids]);
+        return stored.filter((e) => ids.has(e.queueId));
+      },
+    });
+    await svc.reconcile();
+    expect(asked).toEqual([[QID]]);
+    const item = (await svc.list({})).items[0]!;
+    expect(item.state).toBe("delivered");
+    expect(item.recipients[0]!.remoteHost).toBe("mx.exemplo.net");
+    // sem pendência, nem pergunta
+    await svc.reconcile();
+    expect(asked).toHaveLength(1);
+  });
+
+  it("sem evento algum no histórico guardado, o estado não é inventado", async () => {
+    await receive(hook());
+    svc = new MailSendLogService({ ...deps, eventsFor: async () => [] });
+    await svc.reconcile();
+    expect((await svc.list({})).items[0]!.state).toBe("queued");
+  });
+
+  it("falha ao ler a história guardada não derruba a reconciliação", async () => {
+    await receive(hook());
+    svc = new MailSendLogService({
+      ...deps,
+      eventsFor: async () => {
+        throw new Error("disco");
+      },
+    });
+    await expect(svc.reconcile()).resolves.toEqual({ created: 0, unconfirmed: 0 });
+    expect(logs.join("\n")).toMatch(/reaplicar/);
+    expect(svc.counters.failed).toBe(1);
+  });
+
+  it("6 h sem nenhum evento: 'sem confirmação', com a fila de pé, com a fila fora do ar e mesmo antes de reconciliar", async () => {
+    await receive(hook());
+    queue = [raw(QID, "app@example.com", "dest@exemplo.net")];
+    now += 5 * 3_600_000;
+    expect((await svc.reconcile()).unconfirmed).toBe(0);
+    expect((await svc.list({})).items[0]!.state).toBe("queued");
+    now += 2 * 3_600_000;
+    // a tela já não mostra "na fila" como se fosse resultado
+    expect((await svc.list({})).items[0]!.state).toBe("unconfirmed");
+    queueFails = true;
+    expect(await svc.reconcile()).toEqual({ created: 0, unconfirmed: 1 });
+    queueFails = false;
+    // o resultado que chegar depois ainda vence
+    await svc.applyEvents([event({ at: "2026-10-22T20:00:00.000Z" })]);
+    expect((await svc.list({})).items[0]!.state).toBe("delivered");
+  });
+
+  it("adiado há mais de 6 h continua 'adiado' enquanto a fila ainda o tem (tem tentativa registrada)", async () => {
+    await receive(hook());
+    await svc.applyEvents([event({ state: "deferred", at: "2026-10-22T12:00:03.000Z", nextRetryAt: "2026-10-22T12:02:00.000Z" })]);
+    queue = [raw(QID, "app@example.com", "dest@exemplo.net")];
+    now += 8 * 3_600_000;
+    expect(await svc.reconcile()).toEqual({ created: 0, unconfirmed: 0 });
+    expect((await svc.list({})).items[0]!.state).toBe("deferred");
+  });
+
+  it("resultado que chega no meio da gravação do aviso não é pisado (o envio não volta a 'na fila')", async () => {
+    const store = (svc as unknown as { store: { writeContent(c: unknown): Promise<void> } }).store;
+    const write = store.writeContent.bind(store);
+    store.writeContent = async (content) => {
+      await write(content);
+      // o resultado de entrega é aplicado enquanto o aviso ainda está sendo gravado
+      await svc.applyEvents([event({ at: "2026-10-22T12:00:09.000Z" })]);
+    };
+    await receive(hook());
+    expect((await svc.list({})).items[0]!.state).toBe("delivered");
+  });
+
   it("retoma depois de reiniciar o painel (lê o disco)", async () => {
     await receive(hook());
     await svc.applyEvents([event()]);

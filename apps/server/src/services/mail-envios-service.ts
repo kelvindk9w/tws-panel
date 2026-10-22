@@ -366,6 +366,21 @@ export class MailEnviosService {
     return { added: events.length };
   }
 
+  /** Coleta só se a última leitura tem mais de 1 min (a tela de envios chama a cada abertura). Nunca lança. */
+  async refreshIfStale(): Promise<void> {
+    try {
+      const state = await this.loadState();
+      if (!state.collectedAt || this.now() - Date.parse(state.collectedAt) > REFRESH_AFTER_MS) await this.collect();
+    } catch {
+      // a lista segue com o que já há
+    }
+  }
+
+  /** Resultados de entrega guardados (retenção inteira) dessas mensagens. */
+  async eventsFor(queueIds: Set<string>): Promise<MailDeliveryEvent[]> {
+    return (await this.readEvents(this.now() - this.retentionDays * DAY)).filter((e) => queueIds.has(e.queueId));
+  }
+
   /** Apaga os dias além da retenção. */
   private async prune(): Promise<void> {
     const cutoff = new Date(this.now() - this.retentionDays * DAY).toISOString().slice(0, 10);
