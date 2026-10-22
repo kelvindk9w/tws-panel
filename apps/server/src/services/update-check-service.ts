@@ -45,8 +45,15 @@ export const UPDATE_CHECK_ERROR_MAX_MS = 15 * 60_000;
 export const UPDATE_CHECK_CONCURRENCY = 3;
 /** Prazo da consulta ao repositório (o git mata o grupo de processos ao estourar). */
 export const UPDATE_CHECK_TIMEOUT_MS = 10_000;
-/** Teto da consulta inteira (inclui a resolução do endereço); solta a vaga mesmo se algo pendurar. */
+/** Teto da consulta inteira (inclui a resolução do endereço): estourou, o resultado é "timeout" (a vaga ainda não volta). */
 export const UPDATE_CHECK_HARD_TIMEOUT_MS = 15_000;
+/**
+ * Limite FINAL da vaga: se o trabalho segue pendurado (resolução de nome que nunca responde), a vaga volta
+ * mesmo assim, para a fila nunca travar para sempre. No caso normal o trabalho termina bem antes (o ls-remote
+ * é morto aos 10 s) e vale o máximo de UPDATE_CHECK_CONCURRENCY simultâneas; só uma resolução pendurada
+ * (que não dá para abortar) pode ficar viva além deste prazo, sem segurar a fila.
+ */
+export const UPDATE_CHECK_SLOT_TIMEOUT_MS = 60_000;
 /** Quanto a rota espera uma consulta em andamento antes de responder "verificando". */
 export const UPDATE_CHECK_WAIT_MS = 2_500;
 /** "Verificar agora" repetido dentro deste prazo reaproveita o resultado recente. */
@@ -262,8 +269,17 @@ export class UpdateCheckService {
         });
         return result.ok ? { commit: result.commit } : { reason: updateReasonOf(result.reason) };
       })();
-      // a vaga volta quando o trabalho termina de verdade (não quando o teto de tempo dá o resultado)
-      void work.then(release, release);
+      // a vaga volta quando o trabalho termina de verdade (não quando o teto de tempo dá o resultado);
+      // pendurado além do limite final, volta assim mesmo (log curto, sem endereço nem credencial)
+      const slotTimer = setTimeout(() => {
+        console.warn(`Alerta de atualização: a consulta do projeto ${project.id} não terminou em ${UPDATE_CHECK_SLOT_TIMEOUT_MS / 1000} s; a vaga foi liberada.`);
+        release();
+      }, UPDATE_CHECK_SLOT_TIMEOUT_MS);
+      const done = () => {
+        clearTimeout(slotTimer);
+        release();
+      };
+      void work.then(done, done);
       const hardStop = new Promise<{ reason: UpdateErrorReason }>((resolve) => {
         timer = setTimeout(() => resolve({ reason: "timeout" }), UPDATE_CHECK_HARD_TIMEOUT_MS);
       });

@@ -39,6 +39,7 @@ export default defineConfig({
         "src/routes/onboarding.ts",
         "src/routes/panel-domain.ts",
         "src/routes/projects.ts",
+        "src/services/update-check-service.ts",
         "src/routes/restore-reconciliation.ts",
         "src/routes/setup.ts",
         "src/routes/timezone.ts",

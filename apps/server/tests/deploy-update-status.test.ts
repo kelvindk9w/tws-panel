@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ingestCode, remoteBranchCommit, run } from "@paas/deploy";
+import { ingestCode, readDeployedCommit, remoteBranchCommit, run } from "@paas/deploy";
 import type { Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
@@ -17,6 +17,8 @@ import { UpdateCheckService } from "../src/services/update-check-service.js";
 let dataDir: string;
 let repo: string;
 let svc: DeployService;
+let started = 0;
+let finished = 0;
 
 const git = (...args: string[]) => run("git", ["-C", repo, ...args]);
 const head = async (ref: string) => (await git("rev-parse", ref)).stdout.trim();
@@ -40,8 +42,20 @@ beforeEach(async () => {
 
   svc = new DeployService(
     { dataDir, projectsDir: path.join(dataDir, "projects"), caddyHttpPort: 80, caddyHttpsPort: 443, panelDomain: null, port: 9000 } as unknown as ServerConfig,
-    { audit: { record: vi.fn(async () => ({})) } as never },
+    {
+      audit: { record: vi.fn(async () => ({})) } as never,
+      // dispara DEPOIS de o estado final ter sido gravado: o afterEach espera por ele antes de apagar a pasta
+      onDeployFinished: () => void (finished += 1),
+    },
   );
+  started = 0;
+  finished = 0;
+  const realStart = svc.startDeploy.bind(svc);
+  svc.startDeploy = async (...args: Parameters<typeof svc.startDeploy>) => {
+    const job = await realStart(...args);
+    started += 1;
+    return job;
+  };
   // o "deploy" de verdade da ingestão, sem build; o resto do motor é dublê
   const ctx = { projectsDir: path.join(dataDir, "projects") };
   (svc as unknown as { engine: { deploy: (p: Project) => Promise<void> } }).engine.deploy = async (p) => {
@@ -57,8 +71,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await new Promise((r) => setTimeout(r, 100)); // o job ainda grava o estado final
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // todo deploy iniciado precisa ter terminado de gravar o estado antes de apagar a pasta
+  await vi.waitFor(() => expect(finished).toBe(started), { timeout: 10_000 });
+  await rm(dataDir, { recursive: true, force: true });
 });
 
 async function novoProjeto(name: string, branch: string, domain: string): Promise<Project> {
@@ -141,13 +156,18 @@ describe("alerta de nova atualização", () => {
     const antes = p.deployedCommit;
     expect(antes).toBe(await head("main"));
     await commit("main", "2");
-    (svc as unknown as { engine: { deploy: () => Promise<void> } }).engine.deploy = async () => {
+    // o deploy BAIXA o código novo (o repositório do painel avança) e só então falha, como um build quebrado
+    const ctx = { projectsDir: path.join(dataDir, "projects") };
+    (svc as unknown as { engine: { deploy: (p: Project) => Promise<void> } }).engine.deploy = async (proj) => {
+      await ingestCode(ctx, proj, () => undefined);
       throw new Error("build quebrou");
     };
     const job = await svc.startDeploy(p.id);
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("failed"), { timeout: 15_000 });
+    // o código novo foi baixado, mas o commit no ar continua o do último deploy que deu certo
+    expect(await readDeployedCommit(ctx, p)).toBe(await head("main"));
     expect(p.deployedCommit).toBe(antes);
-    await new Promise((r) => setTimeout(r, 200)); // deixa o job terminar de gravar antes de apagar a pasta
+    expect(p.deployedCommit).not.toBe(await head("main"));
   });
 
   it("quando o job consta como 'success' o commit já está registrado (sem janela entre os dois)", async () => {
@@ -165,7 +185,6 @@ describe("alerta de nova atualização", () => {
       }
     }
     expect(visto).toBe("success");
-    await new Promise((r) => setTimeout(r, 200)); // deixa o job terminar de gravar antes de apagar a pasta
   });
 
   it("publicado com a branch vazia (padrão) e depois trocado para sandbox: 'config_changed', não atualização", async () => {

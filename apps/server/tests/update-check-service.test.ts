@@ -12,6 +12,7 @@ import {
   UPDATE_CHECK_ERROR_MAX_MS,
   UPDATE_CHECK_HARD_TIMEOUT_MS,
   UPDATE_CHECK_MANUAL_MIN_MS,
+  UPDATE_CHECK_SLOT_TIMEOUT_MS,
   UPDATE_CHECK_TTL_MS,
   UPDATE_CHECK_WAIT_MS,
   UpdateCheckService,
@@ -472,6 +473,31 @@ describe("fila de consultas", () => {
     expect(remote).toHaveBeenCalledTimes(4);
     soltar.slice(1).forEach((f) => f());
     await vi.advanceTimersByTimeAsync(UPDATE_CHECK_WAIT_MS);
+  });
+
+  it("trabalho pendurado para sempre: o limite final devolve a vaga e a fila volta a andar (sonda do revisor)", async () => {
+    vi.useFakeTimers();
+    const aviso = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    resolve.mockImplementation((source: string) =>
+      /\/(h1|h2|h3)\.git$/.test(source) ? new Promise(() => undefined) : Promise.resolve({ ok: true, pin: null }),
+    );
+    remote.mockResolvedValue({ ok: true, commit: B });
+    const mk = (id: string) => project({ id, source: `https://git.example.com/d/${id}.git`, deployedSource: `https://git.example.com/d/${id}.git` });
+    const penduradas = [mk("h1"), mk("h2"), mk("h3")];
+    const saudavel = mk("saudavel");
+    void svc.statuses(penduradas);
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_HARD_TIMEOUT_MS + 10);
+    // antes do limite final as três vagas seguem ocupadas: o saudável espera
+    void svc.statuses([saudavel]);
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_WAIT_MS);
+    expect(svc.statusOf(saudavel).state).toBe("checking");
+    // passado o limite final as vagas voltam e o saudável é verificado
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_SLOT_TIMEOUT_MS);
+    expect(svc.statusOf(saudavel).state).toBe("update_available");
+    expect(aviso).toHaveBeenCalledTimes(3);
+    expect(aviso.mock.calls[0]?.[0]).toContain("h1");
+    expect(aviso.mock.calls[0]?.[0]).not.toContain("git.example.com");
+    aviso.mockRestore();
   });
 });
 
