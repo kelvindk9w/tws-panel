@@ -19,8 +19,10 @@
  * próxima do real sem depender de rede externa.
  */
 import { createReadStream } from "node:fs";
-import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
+import https from "node:https";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +55,12 @@ let urlPrivada: string;
 let repoPublico: string;
 /** Requisições que chegaram ao servidor com credencial válida. */
 let autenticadas = 0;
+/** Requisições que chegaram ao endereço FINAL de um redirecionamento. */
+let destinoDoRedirect = 0;
+let outro: http.Server;
+let urlOutro: string;
+/** Pedidos que chegaram ao OUTRO host, com o cabeçalho Authorization. */
+let pedidosOutro: { url: string; auth: string }[] = [];
 
 async function git(args: string[]): Promise<void> {
   const { run } = await vi.importActual<typeof import("../src/exec.js")>("../src/exec.js");
@@ -103,6 +111,8 @@ function comCredencial(cred: GitReadCredential | null) {
 beforeEach(async () => {
   chamadas.length = 0;
   autenticadas = 0;
+  destinoDoRedirect = 0;
+  pedidosOutro = [];
   tmp = await mkdtemp(path.join(tmpdir(), "paas-cred-test-"));
   projectsDir = path.join(tmp, "projects");
   repoPublico = path.join(tmp, "publico");
@@ -114,7 +124,45 @@ beforeEach(async () => {
   await git(["clone", "-q", "--bare", work, bare]);
   await git(["-C", bare, "update-server-info"]);
 
+  outro = http.createServer((req, res) => {
+    pedidosOutro.push({ url: req.url ?? "", auth: req.headers.authorization ?? "" });
+    res.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
+    res.end("x");
+  });
+  await new Promise<void>((resolve) => outro.listen(0, "127.0.0.1", resolve));
+  urlOutro = `http://127.0.0.1:${(outro.address() as { port: number }).port}`;
+
   server = http.createServer((req, res) => {
+    const caminho = new URL(req.url ?? "/", "http://x").pathname;
+    // privado movido no MESMO host (GitLab sem .git): redireciona e continua exigindo o token
+    if (caminho.startsWith("/movido-privado.git/")) {
+      res.writeHead(301, { Location: `http://${req.headers.host}${req.url?.replace("/movido-privado.git/", "/privado.git/")}` });
+      return res.end();
+    }
+    // saindo para OUTRO host: o token não pode chegar lá
+    if (caminho.startsWith("/saindo.git/")) {
+      res.writeHead(302, { Location: `${urlOutro}${req.url?.replace("/saindo.git/", "/privado.git/")}` });
+      return res.end();
+    }
+    // repositório "movido": 301 para o endereço final (como o GitLab sem o .git), que é público
+    if (caminho.startsWith("/movido.git/")) {
+      res.writeHead(301, { Location: `http://${req.headers.host}${req.url?.replace("/movido.git/", "/final.git/")}` });
+      return res.end();
+    }
+    if (caminho.startsWith("/final.git/")) {
+      destinoDoRedirect += 1;
+      const alvo = path.join(bare, caminho.replace("/final.git/", ""));
+      void stat(alvo)
+        .then(() => {
+          res.writeHead(200);
+          createReadStream(alvo).pipe(res);
+        })
+        .catch(() => {
+          res.writeHead(404);
+          res.end("nao encontrado");
+        });
+      return;
+    }
     const auth = req.headers.authorization ?? "";
     if (!auth.startsWith("Basic ")) {
       res.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
@@ -146,6 +194,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  outro.closeAllConnections();
+  await new Promise<void>((resolve) => outro.close(() => resolve()));
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await rm(tmp, { recursive: true, force: true });
 });
@@ -172,6 +222,41 @@ describe("ingestCode — repositório privado com credencial de leitura", () => 
     for (const arg of todosOsArgs) {
       expect(arg).not.toContain(TOKEN);
     }
+  }, 30_000);
+
+  it("repositório público que redireciona (301) continua clonando SEM token, como antes", async () => {
+    const src = await ingestCode(comCredencial(null), projeto({ source: urlPrivada.replace("/privado.git", "/movido.git") }), () => {});
+    await expect(stat(path.join(src, "arquivo.txt"))).resolves.toBeTruthy();
+    expect(destinoDoRedirect).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("COM token, redirecionamento no MESMO host funciona (GitLab privado cadastrado sem .git)", async () => {
+    const src = await ingestCode(
+      comCredencial({ username: "x-access-token", token: TOKEN }),
+      projeto({ source: urlPrivada.replace("/privado.git", "/movido-privado.git") }),
+      () => {},
+    );
+    await expect(stat(path.join(src, "arquivo.txt"))).resolves.toBeTruthy();
+    expect(autenticadas).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("COM token, redirecionamento para OUTRO host: o token não é enviado e a mensagem diz o que fazer", async () => {
+    const erro = await ingestCode(
+      comCredencial({ username: "x-access-token", token: TOKEN }),
+      projeto({ source: urlPrivada.replace("/privado.git", "/saindo.git") }),
+      () => {},
+    ).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro?.message).toMatch(/endereço final/i);
+    expect(erro?.message).toMatch(/outro (host|endereço)/i);
+    expect(erro?.message).not.toContain(TOKEN);
+    // o outro host foi procurado, mas nenhum pedido levou credencial
+    expect(pedidosOutro.length).toBeGreaterThan(0);
+    expect(pedidosOutro.every((p) => p.auth === "")).toBe(true);
+    expect(JSON.stringify(pedidosOutro)).not.toContain(Buffer.from(`x-access-token:${TOKEN}`).toString("base64"));
   }, 30_000);
 
   it("o token não é gravado no .git/config do clone (remote.origin.url limpa)", async () => {
@@ -267,5 +352,105 @@ describe("ingestCode — sem credencial", () => {
     expect(erro).toBeInstanceOf(Error);
     expect((erro as Error).message).toMatch(/credencial/i);
     expect((erro as Error).message).not.toContain("token-invalido-xyz");
+  }, 30_000);
+});
+
+describe("ingestCode — cadastro https que redireciona para http na mesma porta", () => {
+  let dirTls: string;
+  let mux: net.Server;
+  let cainfoAntes: string | undefined;
+  const sockets = new Set<net.Socket>();
+  let internos: net.Server[] = [];
+  /** Pedidos que chegaram ao lado http (sem criptografia). */
+  let pedidosHttp: { auth: string }[] = [];
+
+  beforeEach(async () => {
+    pedidosHttp = [];
+    dirTls = await mkdtemp(path.join(tmpdir(), "paas-tls-test-"));
+    const chave = path.join(dirTls, "k.pem");
+    const cert = path.join(dirTls, "c.pem");
+    const { run } = await vi.importActual<typeof import("../src/exec.js")>("../src/exec.js");
+    const r = await run("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", chave, "-out", cert,
+      "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
+    ]);
+    if (r.code !== 0) throw new Error(`openssl falhou: ${r.stderr}`);
+    cainfoAntes = process.env.GIT_SSL_CAINFO;
+    process.env.GIT_SSL_CAINFO = cert;
+
+    const lado = (req: http.IncomingMessage, res: http.ServerResponse, cifrado: boolean) => {
+      if (cifrado) {
+        // cadastro em https: manda o git para o MESMO host e porta, mas em http puro
+        res.writeHead(302, { Location: `http://${req.headers.host}${req.url}` });
+        return res.end();
+      }
+      pedidosHttp.push({ auth: req.headers.authorization ?? "" });
+      res.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
+      res.end("x");
+    };
+    const servidorHttp = http.createServer((q, s) => lado(q, s, false));
+    const servidorHttps = https.createServer(
+      { key: await readFile(chave), cert: await readFile(cert) },
+      (q, s) => lado(q, s, true),
+    );
+    // mesma porta para os dois: o primeiro byte decide (0x16 = handshake TLS) e a conexão é repassada
+    // a um servidor interno (o TLSSocket lê direto do handle, então não dá para devolver o byte lido)
+    await new Promise<void>((resolve) => servidorHttp.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => servidorHttps.listen(0, "127.0.0.1", resolve));
+    internos = [servidorHttp, servidorHttps];
+    mux = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.once("data", (buf) => {
+        const alvo = (buf[0] === 0x16 ? servidorHttps : servidorHttp).address() as net.AddressInfo;
+        const ponte = net.connect(alvo.port, "127.0.0.1", () => {
+          ponte.write(buf);
+          socket.pipe(ponte);
+          ponte.pipe(socket);
+        });
+        sockets.add(ponte);
+        const fim = () => {
+          socket.destroy();
+          ponte.destroy();
+        };
+        socket.on("error", fim);
+        ponte.on("error", fim);
+        socket.on("close", fim);
+        ponte.on("close", fim);
+      });
+    });
+    await new Promise<void>((resolve) => mux.listen(0, "127.0.0.1", resolve));
+  });
+
+  afterEach(async () => {
+    if (cainfoAntes === undefined) delete process.env.GIT_SSL_CAINFO;
+    else process.env.GIT_SSL_CAINFO = cainfoAntes;
+    for (const s of sockets) s.destroy();
+    sockets.clear();
+    await new Promise<void>((resolve) => mux.close(() => resolve()));
+    for (const s of internos) {
+      s.closeAllConnections();
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+    await rm(dirTls, { recursive: true, force: true });
+  });
+
+  it("o lado http não recebe Authorization nem o token, e a mensagem explica o https→http", async () => {
+    const porta = (mux.address() as { port: number }).port;
+    const erro = await ingestCode(
+      comCredencial({ username: "x-access-token", token: TOKEN }),
+      projeto({ source: `https://127.0.0.1:${porta}/privado.git` }),
+      () => {},
+    ).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(erro).not.toBeNull();
+    expect(pedidosHttp.length).toBeGreaterThan(0);
+    expect(pedidosHttp.every((p) => p.auth === "")).toBe(true);
+    expect(JSON.stringify(pedidosHttp)).not.toContain(Buffer.from(`x-access-token:${TOKEN}`).toString("base64"));
+    expect(erro?.message).toMatch(/https para http/i);
+    expect(erro?.message).toMatch(/sem criptografia/i);
+    expect(erro?.message).toMatch(/endereço final/i);
+    expect(erro?.message).not.toContain(TOKEN);
   }, 30_000);
 });

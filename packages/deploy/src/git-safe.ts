@@ -68,6 +68,54 @@ export async function sanitizeGitConfig(gitDir: string, run: Executar, env: Node
   return removed;
 }
 
+/**
+ * Credential helper EM LINHA: só responde ao "get" e só lê $PAAS_GIT_USERNAME /
+ * $PAAS_GIT_PASSWORD do ambiente. Nenhum arquivo é criado e o argv traz só o
+ * nome das variáveis, nunca o token (ver ingest.ts e git-access.ts).
+ */
+export function credentialHelper(mark?: string): string {
+  // Responde SÓ quando o `host=` que o git pede for o do endereço cadastrado ($PAAS_GIT_HOST):
+  // um redirecionamento para outro host não recebe o token (o git falha por falta de credencial).
+  // Também confere o `protocol=`: cadastro em https nunca entrega o token em http puro (um 302 https→http no
+  // mesmo host e porta). Cadastro em http aceita http e https (subir a proteção é permitido).
+  const marker = mark ? `echo ${mark} >&2; ` : "";
+  return (
+    '!f() { test "$1" = get || return 0; h=; p=; while IFS= read -r l; do case "$l" in host=*) h="${l#host=}";; protocol=*) p="${l#protocol=}";; esac; done; ' +
+    'h=$(printf %s "$h" | tr A-Z a-z); test -n "$PAAS_GIT_HOST" && test "$h" = "$PAAS_GIT_HOST" || return 0; ' +
+    'p=$(printf %s "$p" | tr A-Z a-z); case "$PAAS_GIT_PROTOCOL/$p" in https/https|http/http|http/https) ;; *) return 0;; esac; ' +
+    marker +
+    "printf 'username=%s\\npassword=%s\\n' \"$PAAS_GIT_USERNAME\" \"$PAAS_GIT_PASSWORD\"; }; f"
+  );
+}
+
+export const CREDENTIAL_HELPER = credentialHelper();
+
+/** `host[:porta]` (minúsculo, porta padrão omitida) do endereço cadastrado, como o git o pede ao helper; "" se não for URL. */
+export function credentialHost(source: string): string {
+  try {
+    return new URL(source).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/** `https`/`http` (minúsculo) do endereço cadastrado, como o git o pede ao helper; "" se não for http(s). */
+export function credentialProtocol(source: string): string {
+  try {
+    const p = new URL(source).protocol.replace(/:$/, "").toLowerCase();
+    return p === "https" || p === "http" ? p : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Só COM credencial: um 301/302 não pode levar o cabeçalho de autenticação a outro
+ * endereço. Sem credencial o redirecionamento segue como sempre (GitLab sem `.git`,
+ * repositório renomeado): não há segredo a proteger.
+ */
+export const NO_REDIRECT_CONFIG: readonly string[] = ["-c", "http.followRedirects=false"];
+
 /** Variáveis do git que mudariam de onde ele lê repositório e configuração. */
 const GIT_ENV_REMOVIDAS = [
   "GIT_DIR",

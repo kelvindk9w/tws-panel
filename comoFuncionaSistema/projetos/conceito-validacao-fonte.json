@@ -5,8 +5,16 @@
   "arquivoFonte": "apps/server/src/services/deploy-service.ts",
   "tipo": "utilitario",
   "api": [
-    { "simbolo": "validateGitSource", "assinatura": "(source: string) => string", "descricao": "Recebe o `source` já trim()ado. Devolve o mesmo valor se bater com GIT_URL_RE ou GIT_SCP_RE; senão lança httpError(400, 'invalid_source', 'Fonte de código inválida. Use uma URL https://, ssh:// ou git@host:caminho.'). Chamada em createProject SOMENTE quando ingestMode === 'git' — modos upload/existing são caminhos locais e não passam por esta função." },
-    { "simbolo": "validateBranch", "assinatura": "(branch: string | null | undefined) => string | null", "descricao": "Trim() no valor; string vazia ou ausente devolve null (sem branch definido — ingestão usa o default 'main'). Valor não vazio precisa bater com BRANCH_RE e não conter '..'; senão lança httpError(400, 'invalid_branch', 'Nome de branch inválido.'). Chamada incondicionalmente em createProject, para QUALQUER ingestMode (embora só faça sentido em modo git — o valor é simplesmente ignorado depois se ingestMode não for 'git')." }
+    {
+      "simbolo": "validateGitSource",
+      "assinatura": "(source: string) => string",
+      "descricao": "Recebe o `source` já trim()ado. Devolve o mesmo valor se bater com GIT_URL_RE ou GIT_SCP_RE; senão lança httpError(400, 'invalid_source', 'Fonte de código inválida. Use uma URL https://, ssh:// ou git@host:caminho.'). Chamada em createProject SOMENTE quando ingestMode === 'git' — modos upload/existing são caminhos locais e não passam por esta função."
+    },
+    {
+      "simbolo": "validateBranch",
+      "assinatura": "(branch: string | null | undefined) => string | null",
+      "descricao": "Trim() no valor; string vazia ou ausente devolve null (sem branch definido — ingestão usa o default 'main'). Valor não vazio precisa bater com BRANCH_RE e não conter '..'; senão lança httpError(400, 'invalid_branch', 'Nome de branch inválido.'). Chamada incondicionalmente em createProject, para QUALQUER ingestMode (embora só faça sentido em modo git — o valor é simplesmente ignorado depois se ingestMode não for 'git')."
+    }
   ],
   "comportamento": [
     "GIT_URL_RE = /^(https|ssh):\\/\\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$/ — exige esquema https:// ou ssh:// explícito seguido só de caracteres típicos de URL (RFC 3986 unreserved + sub-delims + alguns caracteres de path/query). ACEITA: 'https://github.com/usuario/repo.git', 'ssh://git@github.com/usuario/repo.git'. RECUSA: qualquer outro esquema, incluindo 'ext::' (transporte do git que executa comando via `sh -c`), 'file://' (leitura de arquivo arbitrário do disco do servidor) e 'http://' (sem TLS — só https é aceito, não http).",
@@ -18,7 +26,18 @@
     "branch ausente ou string vazia/só espaços é uma condição válida (não um erro): validateBranch devolve null, e o valor default 'main' é aplicado depois, na ingestão (packages/deploy/src/ingest.ts), não em validateBranch."
   ],
   "usadoPor": [
-    { "referencia": "DeployService.createProject", "arquivo": "apps/server/src/services/deploy-service.ts:219", "doc": "projetos/criar.json", "nota": "validateGitSource só roda quando ingestMode==='git'; validateBranch roda sempre." }
+    {
+      "referencia": "DeployService.createProject",
+      "arquivo": "apps/server/src/services/deploy-service.ts:219",
+      "doc": "projetos/criar.json",
+      "nota": "validateGitSource só roda quando ingestMode==='git'; validateBranch roda sempre."
+    },
+    {
+      "referencia": "DeployService.checkGitAccess",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1492",
+      "doc": "projetos/testar-acesso-repositorio.json",
+      "nota": "O 'Testar acesso' do assistente aplica validateGitSource e validateBranch antes do git ls-remote; falha vira 200 com ok:false."
+    }
   ],
   "testes": [
     "apps/server/tests/deploy-validation.test.ts — cobre as duas funções isoladamente (URLs https/ssh/scp aceitas; ext::, file://, e valor iniciado por '-' recusados; branches usuais aceitos; branch iniciado por '-' ou com caracteres de shell ';'/'$()' recusado; branch ausente/vazio vira null) e via DeployService.createProject de ponta a ponta (fonte com ext:: recusada ANTES de persistir o projeto — listProjects() continua vazio; branch malicioso recusado com code 'invalid_branch'; modos upload/existing NÃO passam pela validação de URL, só existsSync do caminho)."

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   PROJECT_EMAIL_VALUE_KEYS,
+  checkHostVariable,
+  isSecretVariableName,
   missingComposeVariables,
   type ComposeVariable,
   type EnvExampleVariable,
@@ -167,9 +169,6 @@ function saveDensity(d: Density) {
     // modo privado / armazenamento bloqueado: só não lembra da escolha
   }
 }
-
-/** Nome com cara de segredo: o valor nunca entra na pesquisa, mesmo à mostra. */
-const SECRET_NAME = /PASS|SENHA|SECRET|TOKEN|KEY|CHAVE|PRIVATE|CREDENTIAL|AUTH|CERT/i;
 
 /**
  * Linha da lista: uma variável editável ou uma que o e-mail do projeto entrega
@@ -406,6 +405,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       ...added.map((v) => row(v)),
     ]);
     changed();
+    const oddHosts = read.filter((v) => checkHostVariable(v.key, v.value) !== null).length;
     setImported(
       t("env.import.summary", {
         read: plural("env.import.read", read.length),
@@ -416,6 +416,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         (skipped.length > 0
           ? ` ${t("env.import.skipped", { count: skipped.length, lines: skipped.join(", ") })}`
           : "") +
+        (oddHosts > 0 ? ` ${plural("env.import.hosts", oddHosts)}` : "") +
         ` ${t("env.import.notSaved")}`,
     );
   }
@@ -483,10 +484,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     if (l.kind === "panel") {
       if (lowerCase(l.source ?? "").includes(q)) return true;
       // a senha da caixa nunca entra na pesquisa, com nome nenhum
-      return visiblePanel.has(name) && !l.onDemand && !SECRET_NAME.test(name) && lowerCase(l.value ?? "").includes(q);
+      return visiblePanel.has(name) && !l.onDemand && !isSecretVariableName(name) && lowerCase(l.value ?? "").includes(q);
     }
     // valor: só o que já está à mostra, e nunca o de nome com cara de segredo
-    return visible.has(l.row.id) && !SECRET_NAME.test(name) && lowerCase(l.row.value).includes(q);
+    return visible.has(l.row.id) && !isSecretVariableName(name) && lowerCase(l.row.value).includes(q);
   };
   const filtering = q !== "" || filter !== "all";
   const shownLines = lines.filter(
@@ -810,6 +811,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   const ignored = links[name] !== undefined;
                   const labelText = info && (!compact || urgent || fromExample || ignored) ? info.label : null;
                   const copyKey = `row:${v.id}`;
+                  const hostCheck = checkHostVariable(name, v.value);
                   return (
                     <li
                       key={v.id}
@@ -869,6 +871,37 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                           </Button>
                         </div>
                       </div>
+                      {hostCheck && (
+                        <div
+                          data-testid={`env-host-warning-${name}`}
+                          className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-800 dark:text-amber-300"
+                        >
+                          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                            {t("env.host.warn", {
+                              name,
+                              problems: hostCheck.problems.map((p) => t(`env.host.problem.${p}` as Key)).join(", "),
+                            })}
+                            {hostCheck.suggestion && !hostCheck.hasCredentials && !isSecretVariableName(name)
+                              ? t("env.host.suggest", { value: hostCheck.suggestion })
+                              : ""}
+                          </span>
+                          {hostCheck.suggestion && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-auto min-h-7 py-1"
+                              aria-label={t("env.host.fixLabel", { name })}
+                              onClick={() => {
+                                changed();
+                                update(v.id, { value: hostCheck.suggestion! });
+                              }}
+                            >
+                              {t("env.host.fix")}
+                            </Button>
+                          )}
+                        </div>
+                      )}
                       {(labelText || copied === copyKey) && (
                         <span
                           className={cn(

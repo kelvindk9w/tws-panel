@@ -566,6 +566,13 @@ No menu, clique em **Novo Projeto**. São três passos:
    - Confira a **Branch**.
    - Repositório privado sem a conta conectada? Marque **Repositório privado** e cole um **Token de
      leitura** (a tela ensina a gerar, com a permissão `Contents: Read` só para esse repositório).
+   - Antes de criar, clique em **Testar acesso**, ao lado do campo do token. O painel só consulta o
+     repositório (não cria o projeto nem guarda o token) e diz, em português, se consegue ler: **Acesso
+     confirmado** (com a branch padrão e as primeiras branches), token inválido ou expirado, token sem
+     permissão de leitura, repositório não encontrado, branch que não existe, servidor inacessível ou
+     tempo esgotado. O mesmo botão aparece quando você escolhe da lista um repositório privado da
+     conta do GitHub conectada (ele testa com o token da conta). O teste nunca segue redirecionamentos (para não enviar a credencial a outro endereço nem consultar destinos internos), já o deploy segue redirecionamentos, mas o token cadastrado só é enviado ao host do endereço do projeto e nunca sem criptografia (um repositório movido para outro host, ou que redireciona de https para http, exige o endereço final https). Se o teste disser que o endereço redireciona, use o endereço final, por exemplo com `.git` no fim (o GitLab redireciona quando ele falta). O teste não consulta endereços da própria máquina (`localhost`, `127.x`, `169.254.x`). Mudou a URL, a branch ou o token? O
+     resultado antigo some e é preciso testar de novo.
    - Clique em **Criar e detectar**.
 2. **Detecção automática.** O painel descobre o tipo: HTML puro, projeto com build, `Dockerfile`
    ou `docker-compose`. Num compose, ele é adotado como está, sem ser reescrito, e a tela mostra em
@@ -596,6 +603,13 @@ Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e suger
 1. Tem o `.env` no seu computador? Clique em **Importar arquivo .env**. Nada é gravado ainda: revise.
 2. Preencha o que falta (ou use **Adicionar variável**).
 3. Clique em **Salvar variáveis**.
+
+> [!TIP]
+> Variável cujo nome termina em `_HOST`, `_HOSTNAME` ou `_DOMAIN` (como `SITE_HOST`) costuma esperar
+> só o nome do domínio, sem `http://`, barra final, caminho, porta ou espaço. Se o valor tiver
+> algum deles, a linha ganha um aviso âmbar com o valor sugerido e o botão **Corrigir**. É só um aviso:
+> não impede de salvar, e o log do deploy repete a observação (sem mostrar o valor de variável com
+> cara de segredo). Variáveis `_URL` não são afetadas.
 
 > [!NOTE]
 > Se o repositório já tem um `.env` próprio, o painel não o sobrescreve. As variáveis que você

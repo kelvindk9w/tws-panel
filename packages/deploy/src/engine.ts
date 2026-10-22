@@ -17,6 +17,7 @@ import {
   COMPOSE_PROJECT_LABEL,
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
+  hostVariableLogLines,
   PAAS_MAIL_NETWORK,
   PAAS_NETWORK,
   PANEL_IMAGE_REPOSITORIES,
@@ -198,6 +199,14 @@ export class DeployEngine {
   // -------------------------------------------------------------------------
 
   /**
+   * Avisa no log (sem bloquear) de variável de host salva com esquema, barra,
+   * porta ou espaço (SITE_HOST=http://…). Nunca imprime o valor salvo.
+   */
+  private warnHostVariables(vars: Record<string, string>, onLog: LogFn): void {
+    for (const line of hostVariableLogLines(vars)) onLog(line);
+  }
+
+  /**
    * Executa o pipeline completo. Lança erro em qualquer etapa falha.
    * `allProjects` é necessário para re-renderizar o Caddyfile com todos os
    * domínios ativos (o Caddy central é compartilhado).
@@ -260,6 +269,7 @@ export class DeployEngine {
     if (envKeys.length > 0) {
       onLog(`Injetando ${envKeys.length} variável(is) de ambiente do projeto (${envKeys.join(", ")}).\n`);
     }
+    if (type !== "static" && type !== "static-node") this.warnHostVariables(extraEnv, onLog);
 
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
 

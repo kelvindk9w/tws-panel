@@ -245,6 +245,70 @@ export interface ProjectCredentialResponse {
 }
 
 // ---------------------------------------------------------------------------
+// "Testar acesso" ao repositório (assistente Novo projeto)
+// ---------------------------------------------------------------------------
+
+/**
+ * Consulta SOMENTE LEITURA (`git ls-remote`): nada é clonado nem salvo. O token
+ * do corpo nunca é gravado, registrado nem devolvido.
+ */
+export interface GitAccessCheckRequest {
+  source: string;
+  branch?: string;
+  /** Token digitado no assistente. */
+  token?: string;
+  /** Usar o token da conta do GitHub conectada (em vez de `token`). */
+  useAccount?: boolean;
+}
+
+/** Por que o teste não deu certo (a interface traduz cada um). */
+export type GitAccessFailureReason =
+  | "invalid_source"
+  | "invalid_branch"
+  | "invalid_token"
+  | "auth_required"
+  | "no_permission"
+  | "not_found"
+  | "not_found_or_no_access"
+  | "branch_not_found"
+  | "unsupported_host"
+  | "unreachable"
+  | "timeout"
+  | "redirected"
+  | "blocked_host"
+  | "token_not_applicable"
+  | "account_not_connected"
+  | "account_not_applicable"
+  | "unknown";
+
+export type GitAccessCheckResponse =
+  | {
+      ok: true;
+      /** Branch padrão do repositório (null se vazio). */
+      defaultBranch: string | null;
+      /** Lista curta: a padrão primeiro. */
+      branches: string[];
+      totalBranches: number;
+      /** A branch pedida existe? null = nenhuma foi pedida. */
+      branchFound: boolean | null;
+      /** Token informado: o git de fato o enviou? false = repositório público, o token NÃO foi verificado. null = sem token. */
+      tokenUsed: boolean | null;
+      message: string;
+    }
+  | {
+      ok: false;
+      reason: GitAccessFailureReason;
+      /** Mensagem em português, sem nenhum segredo. */
+      message: string;
+      /** Só em branch_not_found: o que existe. */
+      defaultBranch?: string | null;
+      branches?: string[];
+      totalBranches?: number;
+      /** Só em unknown: última linha do git, sem token nem credenciais da URL. */
+      detail?: string;
+    };
+
+// ---------------------------------------------------------------------------
 // Jobs de deploy
 // ---------------------------------------------------------------------------
 
