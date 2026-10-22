@@ -52,6 +52,12 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Páginas "site em configuração", "em manutenção" e "temporariamente indisponível".
 - Botão Portas: portas do projeto e de todos os containers, trocar, publicar, remover e editar
   em lote.
+- Aviso de "nova atualização do projeto": o painel compara a ponta da branch configurada, no
+  repositório, com o commit que o último deploy publicou. O aviso aparece na aba Git, no topo da
+  página do projeto e no Dashboard (indicador por projeto e lista dos projetos com atualização),
+  sempre na branch de cada projeto. É só aviso: o deploy continua sendo um clique no botão Deploy,
+  que ganhou uma explicação (busca o código novo da branch). Quando não dá para consultar o
+  repositório, a tela diz "não deu para verificar" em vez de "atualizado".
 
 **HTTPS e domínio do painel**
 

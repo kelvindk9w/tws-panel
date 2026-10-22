@@ -368,3 +368,24 @@ async function ingestUpload(
   onLog("Cópia concluída.\n");
   return to;
 }
+
+/**
+ * Commit (hash completo) em que o repositório do painel está agora, o que o deploy acabou de
+ * publicar. Só leitura local (`rev-parse`), com as mesmas proteções de todo comando do painel e
+ * sem rede. null se o projeto não tem repositório, ele não existe ou o comando falhou: quem
+ * chama trata como "commit desconhecido" (nunca como atualização).
+ */
+export async function readDeployedCommit(ctx: IngestContext, project: Project): Promise<string | null> {
+  if (project.ingestMode !== "git") return null;
+  try {
+    const gitDir = projectGitDir(ctx, project);
+    if (!existsSync(path.join(gitDir, "HEAD"))) return null;
+    const out = await run("git", [...GIT_SAFE_CONFIG, "--git-dir", gitDir, "rev-parse", "-q", "--verify", "HEAD"], {
+      env: gitSafeEnv(process.env),
+    });
+    const hash = out.stdout.trim();
+    return out.code === 0 && /^[0-9a-f]{40,64}$/.test(hash) ? hash : null;
+  } catch {
+    return null;
+  }
+}

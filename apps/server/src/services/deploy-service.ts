@@ -35,6 +35,7 @@ import {
   type ProjectCredentialInfo,
   type ProjectEmailValueKey,
   type ProjectStatus,
+  type ProjectUpdateStatus,
   type PortsResponse,
   type ProjectPortsResponse,
   type SetPortRequest,
@@ -57,6 +58,8 @@ import {
   DeployEngine,
   GIT_ACCESS_MESSAGES,
   checkGitAccess,
+  remoteBranchCommit,
+  readDeployedCommit,
   resolveTarget,
   type DnsLookup,
   composeProjectName,
@@ -90,6 +93,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
+import { UpdateCheckService } from "./update-check-service.js";
 
 const MAX_JOBS = 100;
 
@@ -203,6 +207,8 @@ export class DeployService {
   private readonly credentials: CredentialVault;
   /** Conta do GitHub conectada (Configurações → Integrações). */
   readonly github: GithubIntegration;
+  /** Alerta de "nova atualização" por projeto (só aviso; ver update-check-service.ts). */
+  readonly updates: UpdateCheckService;
   /** Variáveis de ambiente dos projetos (seção Variáveis), cifradas. */
   private readonly env: ProjectEnvStore;
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
@@ -301,6 +307,12 @@ export class DeployService {
       ...(existsSync("/.dockerenv") ? { panelContainer: PANEL_CONTAINER } : {}),
     };
     this.engine = new DeployEngine(this.engineCtx);
+    this.updates = new UpdateCheckService({
+      credentialFor: (project) => this.credentialFor(project),
+      // lê targetLookup na hora da consulta (os testes trocam a resolução de nomes depois)
+      resolveTarget: (source) => resolveTarget(source, this.targetLookup),
+      remoteBranchCommit,
+    });
   }
 
   /**
@@ -949,12 +961,15 @@ export class DeployService {
       );
     }
     const username = (req.username ?? "").trim() || DEFAULT_GIT_CREDENTIAL_USERNAME;
-    return this.credentials.set(project.id, { username, token });
+    const info = await this.credentials.set(project.id, { username, token });
+    this.updates.invalidate(project.id);
+    return info;
   }
 
   /** Apaga a credencial do projeto. true = havia uma credencial cadastrada. */
   async removeCredential(id: string): Promise<boolean> {
     const project = await this.requireProject(id);
+    this.updates.invalidate(project.id);
     return this.credentials.remove(project.id);
   }
 
@@ -1183,6 +1198,9 @@ export class DeployService {
         // a configuração sem publicar em seguida.
         project.deployedBranch = project.branch;
         project.deployedSource = project.source;
+        // O commit que ficou no ar (base do alerta de nova atualização). null se não deu para ler:
+        // o estado vira "desconhecido", nunca "atualização disponível".
+        project.deployedCommit = await readDeployedCommit(this.engineCtx, project);
         // O fuso que entrou nos containers (a tela compara com a escolha atual).
         project.timezoneApplied = this.projectZone(project);
         // persiste detecção feita durante o deploy
@@ -1527,6 +1545,20 @@ export class DeployService {
   }
 
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // Alerta de "nova atualização do projeto" (só aviso; o deploy é sempre manual)
+  // -------------------------------------------------------------------------
+
+  /** Estado do projeto frente à branch configurada; consulta o repositório se o cache venceu. */
+  async updateStatus(id: string, opts: { force?: boolean } = {}): Promise<ProjectUpdateStatus> {
+    return this.updates.status(await this.requireProject(id), opts);
+  }
+
+  /** Estado de todos os projetos (Dashboard). */
+  async updateStatuses(): Promise<ProjectUpdateStatus[]> {
+    return this.updates.statuses(await this.listProjects());
+  }
 
   // -------------------------------------------------------------------------
   // Fuso horário do projeto

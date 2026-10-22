@@ -79,6 +79,18 @@ E-mail, Backups e Configurações.
   O `.env` que pertence ao repositório nunca é sobrescrito: as variáveis do painel vão para um
   arquivo separado, e o log do deploy explica o conflito.
 - **Git:** repositório e branch editáveis; a tela mostra qual branch está de fato no ar.
+- **Aviso de nova atualização.** O painel consulta o repositório (só leitura, sem baixar o código) e
+  compara a ponta da **branch configurada do projeto** com o commit que o último deploy publicou. Se
+  houver commit novo, aparece "Nova atualização disponível" na aba Git, no topo da página do projeto
+  e no Dashboard (num indicador no cartão do projeto e numa lista dos projetos com atualização).
+  Projetos que usam o mesmo repositório em branches diferentes (produção em `main`, sandbox em outra)
+  são avaliados cada um na sua branch. **O painel nunca atualiza sozinho:** para atualizar o código,
+  clique em **Deploy** (ele busca o código novo da branch e reconstrói o projeto). A consulta é
+  repetida a cada poucos minutos e há o botão **Verificar agora** na aba Git. Se não for possível
+  consultar (rede, token recusado, branch que não existe), a tela diz "não deu para verificar" e o
+  motivo, e isso não significa que o código está atualizado. Projetos publicados antes deste aviso
+  ficam "sem commit registrado" até o próximo deploy; projetos de upload ou de pasta do servidor
+  não têm o aviso, e projetos parados só o mostram na aba Git (não no topo nem no Dashboard).
 - **Múltiplos ambientes:** o mesmo repositório pode rodar mais de uma vez, em branches e domínios
   diferentes (produção em `main`, sandbox em outra branch), lado a lado na mesma VPS. Cada
   instância tem clone, imagem, containers e rede próprios; só o domínio precisa ser único.

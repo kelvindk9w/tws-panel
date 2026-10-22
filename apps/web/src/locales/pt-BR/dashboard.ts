@@ -30,4 +30,12 @@ export default {
   "external.colImage": "Imagem",
   "external.colStack": "Stack",
   "external.colStatus": "Status",
+  // Alerta de nova atualização (só aviso)
+  "update.summary_one": "{count} projeto com atualização disponível",
+  "update.summary_other": "{count} projetos com atualização disponível",
+  "update.summaryHint": "Abra o projeto e clique em Deploy para atualizar. Nada é publicado sozinho.",
+  "update.region": "Projetos com atualização",
+  "update.badge": "Atualização disponível",
+  "update.badgeTitle": "A branch {branch} tem commit novo. Abra o projeto e clique em Deploy.",
+  "update.unavailable": "Não deu para verificar atualizações agora. Isso não quer dizer que os projetos estão atualizados.",
 } as const;
