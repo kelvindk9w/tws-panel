@@ -90,7 +90,7 @@ export default {
   "density.list": "Lista",
   "density.compact": "Compacta",
   "filterNote":
-    "Com a pesquisa ativa, “Mostrar valores” vale só para as mostradas ({shown} de {total}); “Apagar todas” e “Salvar variáveis” valem para todas.",
+    "Com a pesquisa ativa, Mostrando {shown} de {total}. “Mostrar valores”, “Apagar todas” e “Salvar variáveis” valem para todas, não só para as mostradas; o estado de mostrar ou ocultar não muda ao pesquisar.",
   // ProjectEnvCard: lista
   "empty": "Nenhuma variável ainda.",
   "noMatch": "Nenhuma variável corresponde à pesquisa.",

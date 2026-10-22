@@ -205,16 +205,16 @@ describe("Variáveis — filtros rápidos", () => {
 describe("Variáveis — botões do rodapé com a pesquisa ativa", () => {
   const DATA = { vars: [{ key: "API_KEY", value: "abc" }, { key: "DB_URL", value: "postgres://x" }], compose: null };
 
-  it("'Mostrar valores' vale só para as mostradas, e a tela avisa", async () => {
+  it("'Mostrar valores' vale para todas (inclusive as que a pesquisa esconde), e a tela avisa", async () => {
     serve(DATA);
     renderCard();
     await screen.findByDisplayValue("abc");
     fireEvent.change(search(), { target: { value: "api" } });
-    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/“Mostrar valores” vale só para as mostradas \(1 de 2\)/);
+    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/Mostrando 1 de 2\. “Mostrar valores”.*valem para todas/);
     fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
     fireEvent.change(search(), { target: { value: "" } });
     expect((screen.getByDisplayValue("abc") as HTMLInputElement).type).toBe("text");
-    expect((screen.getByDisplayValue("postgres://x") as HTMLInputElement).type).toBe("password");
+    expect((screen.getByDisplayValue("postgres://x") as HTMLInputElement).type).toBe("text");
     expect(screen.queryByTestId("env-filter-note")).not.toBeInTheDocument();
   });
 
