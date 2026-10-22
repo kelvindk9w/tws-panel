@@ -1425,7 +1425,9 @@ describe("restaurar o painel em outra VPS", () => {
       // diz os dois caminhos e a verdade sobre a retenção
       expect(t.pausedReason).toMatch(/restaurar o painel antigo/);
       expect(t.pausedReason).toMatch(/Fazer backup agora/);
-      expect(t.pausedReason).toMatch(/retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo/);
+      expect(t.pausedReason).toMatch(/a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta/);
+      expect(t.pausedReason).toMatch(/inclusive as do painel antigo/);
+      expect(t.pausedReason).toMatch(/baixe-as ANTES de fazer o primeiro backup ou use outro bucket\/pasta/);
     });
 
     it("nos dias seguintes continua protegido", async () => {

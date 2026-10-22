@@ -114,7 +114,9 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 - Roteiro, passo "Backups fora da VPS", com um bucket que já guarda backups de outro painel: o aviso
   agora oferece restaurar o painel antigo OU fazer o primeiro backup à mão (que não é bloqueado) e avisa
-  que a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo.
+  que, a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as
+  mais novas), inclusive as do painel antigo: baixe-as antes ou use outro bucket/pasta. O passo 8 do
+  "Como fazer" agora aponta o botão certo (cartão Painel, em Configurações → Backups).
 - Confirmações que pedem uma palavra (restauração, recomeçar o assistente, desativar o acesso pelo IP):
   a palavra aparece em fonte de código, com dica de que é literal (e-mail não é o seu endereço), exemplo
   no campo e botão de copiar.

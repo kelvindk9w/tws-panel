@@ -276,9 +276,10 @@ to `restaurar-painel.sh`.
   notification warns you on the third failure in a row. **Back up now** always works.
   In the "Get the panel ready" checklist (step 6), the "What's missing" card shows both paths when the
   storage already holds backups from another panel: restore the old panel (to continue it) or, if
-  this is a new panel, make the first backup by hand in Settings → Backups. Note: over time the
-  retention deletes the oldest copies in the folder, including the old panel's; to keep them, use
-  another bucket or folder, or download them first.
+  this is a new panel, make the first backup by hand in Settings → Backups. Note: from the first
+  backup on, the retention deletes the oldest copies in the folder (it keeps only the newest ones; the
+  default is 5), including the old panel's; to keep them, download them before making the first
+  backup or use another bucket or folder.
 - **The storage address and keys stay the ones in use on this VPS.** The rest of the backup settings
   comes back with the panel.
 

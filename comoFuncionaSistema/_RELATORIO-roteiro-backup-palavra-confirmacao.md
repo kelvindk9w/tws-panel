@@ -18,8 +18,9 @@ Comportamento novo:
 
 - O card "O que falta" diz que o armazenamento já guarda backups de outro painel e dá os dois
   caminhos: restaurar o antigo (guia) para continuá-lo, ou, sendo painel novo, fazer o primeiro
-  backup à mão em Configurações → Backups (não é bloqueado). Avisa da retenção e de como guardar as
-  cópias antigas (outro bucket/pasta ou baixar antes).
+  backup à mão em Configurações → Backups (não é bloqueado). Avisa que a retenção já apaga as cópias
+  mais antigas a partir do primeiro backup (mantém as 5 mais novas por padrão) e que é preciso baixar
+  as antigas ANTES do primeiro backup ou usar outro bucket/pasta.
 - "Abrir Backups" é o botão principal (primeiro, destacado) nesse caso; o guia continua como botão
   secundário.
 - Passo 8 do "Como fazer": com cópias de outro painel, oferece restaurar OU fazer o primeiro backup;

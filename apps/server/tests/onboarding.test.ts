@@ -268,7 +268,9 @@ describe("backups fora da VPS", () => {
     expect(s.missing).toMatch(/painel novo/);
     expect(s.missing).toMatch(/Configurações → Backups \(Fazer backup agora\)/);
     expect(s.missing).toMatch(/não é bloqueado/);
-    expect(s.missing).toMatch(/retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo/);
+    expect(s.missing).toMatch(/a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta/);
+    expect(s.missing).toMatch(/inclusive as do painel antigo/);
+    expect(s.missing).toMatch(/baixe-as ANTES de fazer o primeiro backup ou use outro bucket\/pasta/);
     // bucket vazio (usuário realmente novo): só o convite ao backup, sem falar em painel antigo
     const empty = backupsState({ destinationConnected: true, verifiedRemote: 0, lastFailure: null });
     expect(empty.missingCode).toBeUndefined();

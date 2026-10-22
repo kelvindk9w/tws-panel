@@ -535,14 +535,14 @@ describe("pendência: o que falta num passo em andamento", () => {
     [
       "pt-BR",
       "pt-br",
-      [/já guarda backups de outro painel/, /continuar o painel antigo, restaure-o primeiro \(guia de restauração\)/, /painel novo e você não quer o antigo/, /Configurações → Backups \(Fazer backup agora\)/, /não é bloqueado/, /retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo/, /outro bucket\/pasta ou baixe-as antes/],
+      [/já guarda backups de outro painel/, /continuar o painel antigo, restaure-o primeiro \(guia de restauração\)/, /painel novo e você não quer o antigo/, /Configurações → Backups \(Fazer backup agora\)/, /não é bloqueado/, /a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta/, /inclusive as do painel antigo/, /baixe-as ANTES de fazer o primeiro backup ou use outro bucket\/pasta/],
       /Abrir o guia de restauração/,
       /Abrir Backups/,
     ],
     [
       "en",
       "en",
-      [/already holds backups from another panel/, /continue the old panel, restore it first \(restore guide\)/, /new panel and you do not want the old one/, /Settings → Backups \(Back up now\)/, /not blocked/, /retention deletes the oldest copies in the folder, including the old panel's/, /another bucket\/folder or download them first/],
+      [/already holds backups from another panel/, /continue the old panel, restore it first \(restore guide\)/, /new panel and you do not want the old one/, /Settings → Backups \(Back up now\)/, /not blocked/, /from the first backup on, the retention deletes the oldest copies in the folder/, /including the old panel's/, /download them BEFORE making the first backup or use another bucket\/folder/],
       /Open the restore guide/,
       /Open Backups/,
     ],
@@ -574,8 +574,8 @@ describe("pendência: o que falta num passo em andamento", () => {
   });
 
   it.each([
-    ["pt-BR", /Como fazer/, /Fazer backup agora/, /painel antigo/, /guarda backups de outro painel/, /restaure-o primeiro/, /painel novo/, /Restaure primeiro o painel antigo/],
-    ["en", /How to/, /Back up now/, /old panel/, /holds backups from another panel/, /restore it first/, /new panel/, /Restore the old panel first/],
+    ["pt-BR", /Como fazer/, /no cartão Painel, em Configurações → Backups, clique em Fazer backup agora/i, /painel antigo/, /guarda backups de outro painel/, /restaure-o primeiro/, /painel novo/, /Restaure primeiro o painel antigo/],
+    ["en", /How to/, /in Settings → Backups, click Back up now on the Panel card/i, /old panel/, /holds backups from another panel/, /restore it first/, /new panel/, /Restore the old panel first/],
   ] as const)("(%s) 'Como fazer', passo 8: cópias de outro painel oferecem restaurar OU o primeiro backup; bucket vazio só o backup", async (loc, howName, backupRe, oldRe, heldRe, restoreRe, newRe, unknownRe) => {
     setLocale(loc);
     const step8 = async (over: Partial<OnboardingStep>) => {
@@ -599,6 +599,22 @@ describe("pendência: o que falta num passo em andamento", () => {
     const unknown = await step8({ missingCode: "backups-storage-unknown" });
     expect(unknown).toMatch(unknownRe);
     expect(unknown).not.toMatch(backupRe);
+    // o botão não existe no Dashboard: nenhum texto manda procurá-lo lá
+    for (const t of [empty, held]) expect(t).not.toMatch(/Dashboard|no Painel/);
+  });
+
+  it.each([
+    ["pt-BR", /Abrir o guia de restauração/, /Abrir Backups/, /outro painel/],
+    ["en", /Open the restore guide/, /Open Backups/, /another panel/],
+  ] as const)("(%s) 'não deu para conferir' não vira 'outro painel': o guia vem primeiro e o texto não afirma que há cópias de outro painel", async (loc, guideName, openName, foreignRe) => {
+    setLocale(loc);
+    serve(withBackups({ missing: "texto do servidor", missingCode: "backups-storage-unknown" }));
+    renderChecklist();
+    const box = await screen.findByTestId("onboarding-missing-backups");
+    const links = within(box).getAllByRole("link");
+    expect(links[0]).toBe(within(box).getByRole("link", { name: guideName }));
+    expect(within(box).getByRole("link", { name: openName })).toBe(links[1]);
+    expect(box).not.toHaveTextContent(foreignRe);
   });
 
   it.each([

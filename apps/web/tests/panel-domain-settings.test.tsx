@@ -219,6 +219,10 @@ describe("Configurações → Domínio do painel", () => {
     expect(within(confirm).getByLabelText(/Digite o domínio/)).toHaveAttribute("placeholder", D);
     fireEvent.change(within(confirm).getByLabelText(/Digite/), { target: { value: "painel.exemplo" } });
     expect(go).toBeDisabled();
+    fireEvent.change(within(confirm).getByLabelText(/Digite/), { target: { value: `  ${D.toUpperCase()} ` } });
+    expect(go).toBeEnabled();
+    fireEvent.change(within(confirm).getByLabelText(/Digite/), { target: { value: `${D}.evil` } });
+    expect(go).toBeDisabled();
     fireEvent.change(within(confirm).getByLabelText(/Digite/), { target: { value: D } });
     fireEvent.click(go);
     expect(await screen.findByRole("button", { name: /Reativar o acesso pelo IP/ })).toBeInTheDocument();

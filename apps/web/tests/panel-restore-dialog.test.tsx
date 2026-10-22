@@ -286,6 +286,9 @@ describe("RestoreDialog — palavra de confirmação inequívoca", () => {
     // o endereço de e-mail da pessoa NÃO confirma
     fireEvent.change(input, { target: { value: "ana@example.com" } });
     expect(go).toBeDisabled();
+    // conter a palavra não basta: tem de ser exatamente ela
+    fireEvent.change(input, { target: { value: `${word}@ana.com` } });
+    expect(go).toBeDisabled();
     // a palavra, em qualquer caixa e com espaços, confirma (a palavra em português também)
     fireEvent.change(input, { target: { value: `  ${word.toUpperCase()} ` } });
     expect(go).toBeEnabled();

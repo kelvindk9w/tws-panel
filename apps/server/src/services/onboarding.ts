@@ -320,7 +320,7 @@ export function backupsState(facts: BackupFacts): StepState {
         status: "in_progress",
         detail,
         missing:
-          "Este armazenamento já guarda backups de outro painel. Se você quer continuar o painel antigo, restaure-o primeiro (guia de restauração). Se este é um painel novo e você não quer o antigo, faça o primeiro backup à mão em Configurações → Backups (Fazer backup agora): ele não é bloqueado. Atenção: com o tempo a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo; se quiser guardá-las, use outro bucket/pasta ou baixe-as antes.",
+          "Este armazenamento já guarda backups de outro painel. Se você quer continuar o painel antigo, restaure-o primeiro (guia de restauração). Se este é um painel novo e você não quer o antigo, faça o primeiro backup à mão em Configurações → Backups (Fazer backup agora): ele não é bloqueado. Atenção: a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as mais novas; o padrão é 5), inclusive as do painel antigo; para guardá-las, baixe-as ANTES de fazer o primeiro backup ou use outro bucket/pasta.",
         missingCode: "backups-restore-first",
       };
     }

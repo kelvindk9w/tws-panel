@@ -31,7 +31,9 @@ export type OnboardingStepStatus = "done" | "in_progress" | "pending" | "skipped
  * Pendências que a interface mostra com texto próprio (traduzido e com link),
  * em vez do texto em português do servidor.
  * - backups-restore-first: o armazenamento já guarda backups do painel de
- *   OUTRO servidor; restaurar vem antes do primeiro backup deste painel.
+ *   OUTRO servidor; a pessoa escolhe: restaurar o painel antigo para continuá-lo OU, sendo um
+ *   painel novo, fazer o primeiro backup à mão (não é bloqueado; a retenção passa a apagar as
+ *   cópias mais antigas da pasta, inclusive as do painel antigo).
  * - backups-storage-unknown: não deu para conferir o armazenamento (falha ou prazo);
  *   na dúvida, a interface também não convida a fazer o primeiro backup.
  */

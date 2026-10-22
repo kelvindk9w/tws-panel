@@ -525,9 +525,10 @@ even TWS, can open your backups.**
 
 **Reusing a bucket from an old panel?** The Dashboard warns that the storage already holds backups from
 another panel. If you want to continue the old panel, restore it first (restore guide). If this is a
-new panel, the manual backup above is not blocked and can be the first one. Over time, the retention
-deletes the oldest copies in the folder, including the old panel's: to keep them, use another bucket
-or folder, or download them first.
+new panel, the manual backup above is not blocked and can be the first one. From the first backup on, the
+retention deletes the oldest copies in the folder (it keeps only the newest ones; the default is 5),
+including the old panel's: to keep them, download them before making the first backup or use another
+bucket or folder.
 
 **What to check:**
 

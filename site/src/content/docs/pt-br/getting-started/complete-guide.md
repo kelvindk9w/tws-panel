@@ -511,8 +511,9 @@ seus backups.**
 **Reaproveitou um bucket de um painel antigo?** O Dashboard avisa que o armazenamento já guarda
 backups de outro painel. Se você quer continuar o painel antigo, restaure-o primeiro (guia de
 restauração). Se este é um painel novo, o backup à mão acima não é bloqueado e pode ser o primeiro.
-Com o tempo, a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo: para
-guardá-las, use outro bucket ou pasta, ou baixe-as antes.
+A partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as mais
+novas; o padrão é 5), inclusive as do painel antigo: para guardá-las, baixe-as antes de fazer o
+primeiro backup ou use outro bucket ou pasta.
 
 **O que conferir:**
 

@@ -279,9 +279,10 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
   notificação avisa na terceira falha seguida. **Fazer backup agora** sempre funciona.
   No roteiro "Deixe o painel pronto" (passo 6), o card "O que falta" mostra os dois caminhos quando o
   armazenamento já guarda backups de outro painel: restaurar o painel antigo (para continuá-lo) ou,
-  se este é um painel novo, fazer o primeiro backup à mão em Configurações → Backups. Atenção: com o
-  tempo a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo; para guardá-las,
-  use outro bucket ou pasta, ou baixe-as antes.
+  se este é um painel novo, fazer o primeiro backup à mão em Configurações → Backups. Atenção: a partir
+  do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as mais novas; o
+  padrão é 5), inclusive as do painel antigo; para guardá-las, baixe-as antes de fazer o primeiro
+  backup ou use outro bucket ou pasta.
 - **O endereço e as chaves do armazenamento ficam os que estão em uso nesta VPS.** O resto das
   configurações de backup volta com o painel.
 
