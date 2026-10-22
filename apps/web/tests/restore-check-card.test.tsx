@@ -52,7 +52,7 @@ function result(partial: Partial<RestoreCheckResult> = {}): RestoreCheckResult {
     backupFileName: "2026-10-14_09-00.7z",
     reasonCode: null,
     reason: null,
-    dbWarnings: 0,
+    checked: null,
     recordId: "r1",
     ...partial,
   };
@@ -79,16 +79,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("desligado (o padrão)", () => {
-  it("mostra Desligado, o aviso de que o banco do destino é substituído e o de dados pessoais", () => {
+  it("mostra Desligado, o aviso do banco temporário (o do destino não é alterado) e o de dados pessoais", () => {
     renderCard(view());
     expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
     const warning = screen.getByTestId("restore-check-warning");
-    expect(warning).toHaveTextContent("apaga e recria, no banco do projeto de destino, as tabelas que estão no backup");
+    expect(warning).toHaveTextContent("cria um banco temporário");
+    expect(warning).toHaveTextContent("não são alterados");
     expect(warning).toHaveTextContent("dados reais de produção");
     expect(warning).toHaveTextContent("LGPD");
-    expect(warning).toHaveTextContent("Não ligue se o teste for compartilhado com terceiros");
+    expect(warning).toHaveTextContent("Não ligue se o destino for compartilhado com terceiros");
     expect(warning).toHaveTextContent("Só o banco é restaurado");
-    expect(warning).toHaveTextContent("o banco de teste pode ficar incompleto");
+    expect(warning).toHaveTextContent("apaga o banco temporário");
+    expect(warning).not.toHaveTextContent("apaga e recria");
     expect(screen.getByText("Ainda não houve teste.")).toBeInTheDocument();
   });
 
@@ -174,27 +176,30 @@ describe("desligado (o padrão)", () => {
 
 describe("ligado", () => {
   it("mostra o destino, a frequência e o último teste: 'ok em <data>, no projeto <destino>'", () => {
-    renderCard(view({ settings: ON, last: result({ dbWarnings: 2 }) }));
+    renderCard(view({ settings: ON, last: result({ checked: { tables: 12, rows: 3400 } }) }));
     expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Ligado");
     expect(screen.getByTestId("restore-check-current")).toHaveTextContent("Destino: Fazenda Sandbox");
     const last = screen.getByTestId("restore-check-last");
     expect(last).toHaveAttribute("data-status", "ok");
     expect(last).toHaveTextContent(/ok em .+, no projeto Fazenda Sandbox/);
     expect(last).toHaveTextContent("levou 42 s");
-    expect(last).toHaveTextContent("2 avisos do banco");
+    expect(last).toHaveTextContent("conferido: tabelas 12, linhas 3400");
     expect(screen.queryByLabelText("Projeto de destino")).not.toBeInTheDocument();
   });
 
-  it("1 aviso e duração acima de 1 minuto", () => {
-    renderCard(view({ settings: ON, last: result({ dbWarnings: 1, durationMs: 125_000 }) }));
-    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("levou 2 min 5 s · 1 aviso do banco");
+  it("duração acima de 1 minuto, e sem a conferência quando não há números", () => {
+    renderCard(view({ settings: ON, last: result({ checked: { tables: 1, rows: 0 }, durationMs: 125_000 }) }));
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("levou 2 min 5 s · conferido: tabelas 1, linhas 0");
+    cleanup();
+    renderCard(view({ settings: ON, last: result({ durationMs: null }) }));
+    expect(screen.getByTestId("restore-check-last")).not.toHaveTextContent("conferido");
   });
 
-  it("falhou: mostra o motivo curto e que o banco de teste pode estar incompleto", () => {
+  it("falhou: mostra o motivo curto e que o banco temporário foi apagado", () => {
     renderCard(view({ settings: ON, last: result({ status: "failed", reasonCode: "restore_failed", reason: "x", durationMs: null }) }));
     const last = screen.getByTestId("restore-check-last");
     expect(last).toHaveAttribute("data-status", "failed");
-    expect(last).toHaveTextContent(/falhou em .+, no projeto Fazenda Sandbox: A restauração do banco falhou\. O banco de teste pode estar incompleto\./);
+    expect(last).toHaveTextContent(/falhou em .+, no projeto Fazenda Sandbox: A restauração do backup num banco temporário do destino falhou.+O banco temporário foi apagado\./);
   });
 
   it("não executado: mostra o motivo; em andamento: mostra o destino", () => {
@@ -212,6 +217,47 @@ describe("ligado", () => {
     cleanup();
     renderCard(view({ settings: ON, last: result({ status: "failed", reasonCode: null, reason: null }) }));
     expect(screen.getByTestId("restore-check-last")).toHaveTextContent(/falhou em .+:$/);
+  });
+
+  it("origem indisponível com a opção ainda ligada: mostra o motivo e deixa DESLIGAR", async () => {
+    renderCard(view({ settings: ON, unavailableCode: "not_selected", unavailableReason: "x", candidates: [] }));
+    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Ligado");
+    expect(screen.getByTestId("restore-check-unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Desligar" }));
+    await waitFor(() => expect(calls).toEqual([{ key: "PUT /api/backups/projects/p1/restore-check", body: { enabled: false } }]));
+  });
+
+  it("depois de agir, o foco vai para a região de resultado (que é uma região de status) em vez de se perder", async () => {
+    failWith = new ApiRequestError(409, "no_backup", "Ainda não há backup deste projeto para testar.");
+    renderCard(view({ settings: ON }));
+    fireEvent.click(screen.getByRole("button", { name: "Desligar" }));
+    const alert = await screen.findByRole("alert");
+    const region = alert.closest('[role="status"]') as HTMLElement;
+    expect(region).not.toBeNull();
+    await waitFor(() => expect(region).toHaveFocus());
+  });
+
+  it("os seletores não estouram a largura de uma tela estreita (nome de projeto comprido)", () => {
+    const long = "Fazenda Sandbox de homologação do cliente 123";
+    renderCard(view({ candidates: [{ id: "p2", name: long, engine: "postgres" }] }));
+    for (const label of ["Projeto de destino", "Quando testar"]) {
+      const select = screen.getByLabelText(label);
+      expect(select.className).toMatch(/\bw-full\b/);
+      expect(select.className).toMatch(/\bmax-w-full\b/);
+      expect(select.parentElement!.className).toMatch(/\bmin-w-0\b/);
+    }
+  });
+
+  it("motivos novos: não começou (reinício), destino trocado e banco temporário que sobrou", () => {
+    for (const [code, text] of [
+      ["restart_before_start", "reiniciou antes de o teste começar"],
+      ["settings_changed", "destino do teste foi trocado"],
+      ["cleanup_failed", "não foi possível apagar o banco temporário"],
+    ] as const) {
+      renderCard(view({ settings: ON, last: result({ status: code === "cleanup_failed" ? "failed" : "not_run", reasonCode: code, reason: "x" }) }));
+      expect(screen.getByTestId("restore-check-last")).toHaveTextContent(text);
+      cleanup();
+    }
   });
 
   it("desligar não pede confirmação", async () => {
@@ -271,7 +317,8 @@ describe("em inglês", () => {
     renderCard(view());
     expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Off");
     const warning = screen.getByTestId("restore-check-warning");
-    expect(warning).toHaveTextContent("deletes and recreates, in the destination project's database");
+    expect(warning).toHaveTextContent("creates a temporary database");
+    expect(warning).toHaveTextContent("are not changed");
     expect(warning).toHaveTextContent("LGPD/GDPR");
     expect(screen.getByRole("button", { name: "Turn on validation" })).toBeDisabled();
     cleanup();

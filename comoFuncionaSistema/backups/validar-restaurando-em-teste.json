@@ -3,8 +3,8 @@
   "modulo": "backups",
   "metodo": "PUT/POST",
   "url": "/api/backups/projects/:id/restore-check, /api/backups/projects/:id/restore-check/run",
-  "resumo": "Validar o backup do banco restaurando-o em OUTRO projeto (o de teste/desenvolvimento). Desligado por padrão. Ligado, depois de cada backup do projeto de origem o painel restaura o dump do BANCO no banco do destino e confere que ele ficou com tabelas. 'Testar agora' roda o teste com o último backup.",
-  "arquivoFonte": "apps/server/src/routes/backups.ts, apps/server/src/services/backup-service.ts (updateRestoreCheck, runRestoreCheck, queueAutoRestoreCheck, restoreCheckJob, restoreCheckBody, restoreDatabaseDump, openBackup), apps/server/src/services/backup-restore-check.ts",
+  "resumo": "Validar o backup do banco restaurando-o num banco TEMPORÁRIO criado no servidor de banco de OUTRO projeto (o de teste/desenvolvimento). Desligado por padrão. Ligado, depois de cada backup do projeto de origem o painel restaura o dump no banco temporário (parando no primeiro erro), confere tabelas e linhas e apaga o temporário. O banco do próprio destino não é alterado. 'Testar agora' roda o teste com o último backup.",
+  "arquivoFonte": "apps/server/src/routes/backups.ts, apps/server/src/services/backup-service.ts (updateRestoreCheck, runRestoreCheck, queueAutoRestoreCheck, enqueueRestoreCheck, dropStaleRestoreChecks, restoreCheckJob, restoreCheckBody), apps/server/src/services/backup-restore-validate.ts (validateRestore, filtros do dump, scripts), apps/server/src/services/backup-restore-check.ts",
   "autenticacao": {
     "exigida": true,
     "tipo": "sessao",
@@ -12,48 +12,135 @@
   },
   "rateLimit": "Global 200 req/min por IP; POST .../run: 10 por minuto.",
   "parametros": {
-    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "Id do projeto de ORIGEM (sem o 'project:')." }],
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Id do projeto de ORIGEM (sem o 'project:')."
+      }
+    ],
     "query": [],
     "body": [
-      { "nome": "enabled", "tipo": "boolean", "obrigatorio": true, "descricao": "PUT: false desliga (guarda o último resultado)." },
-      { "nome": "destinationId", "tipo": "string ^[A-Za-z0-9_-]{1,64}$", "obrigatorio": false, "descricao": "PUT: projeto de destino. Omitido com a opção já ligada = mantém o atual." },
-      { "nome": "frequency", "tipo": "'each' | 'daily' | 'weekly'", "obrigatorio": false, "descricao": "PUT: após cada backup (padrão), no máximo 1 vez por dia ou por semana." },
-      { "nome": "confirm", "tipo": "string", "obrigatorio": "PUT ao ligar ou trocar o destino; POST .../run sempre", "descricao": "Nome do projeto de DESTINO digitado (sem diferenciar maiúsculas; a tela usa ConfirmWordInput)." }
+      {
+        "nome": "enabled",
+        "tipo": "boolean",
+        "obrigatorio": true,
+        "descricao": "PUT: false desliga (guarda o último resultado)."
+      },
+      {
+        "nome": "destinationId",
+        "tipo": "string ^[A-Za-z0-9_-]{1,64}$",
+        "obrigatorio": false,
+        "descricao": "PUT: projeto de destino. Omitido com a opção já ligada = mantém o atual."
+      },
+      {
+        "nome": "frequency",
+        "tipo": "'each' | 'daily' | 'weekly'",
+        "obrigatorio": false,
+        "descricao": "PUT: após cada backup (padrão), no máximo 1 vez por dia ou por semana."
+      },
+      {
+        "nome": "confirm",
+        "tipo": "string",
+        "obrigatorio": "PUT ao ligar ou trocar o destino; POST .../run sempre",
+        "descricao": "Nome do projeto de DESTINO digitado (sem diferenciar maiúsculas; a tela usa ConfirmWordInput)."
+      }
     ],
     "headers": []
   },
   "respostas": [
-    { "status": 200, "quando": "PUT", "corpo": "RestoreCheckView (settings, last, unavailableReason/unavailableCode, engine, candidates, notice)" },
-    { "status": 200, "quando": "POST .../run", "corpo": "BackupRecord com operation 'restore_check' (acompanhar em GET /api/backups/records/:id)" }
+    {
+      "status": 200,
+      "quando": "PUT",
+      "corpo": "RestoreCheckView (settings, last, unavailableReason/unavailableCode, engine, candidates, notice)"
+    },
+    {
+      "status": 200,
+      "quando": "POST .../run",
+      "corpo": "BackupRecord com operation 'restore_check' (acompanhar em GET /api/backups/records/:id)"
+    }
   ],
   "erros": [
-    { "status": 400, "codigo": "invalid_destination", "quando": "destino é o próprio projeto, de outro motor, sem banco detectado, com banco de nome diferente (MySQL/MariaDB/Mongo) ou com teste próprio ligado" },
-    { "status": 400, "codigo": "confirm_mismatch", "quando": "o nome digitado não é o do destino" },
-    { "status": 404, "codigo": "not_found", "quando": "origem ou destino não existe" },
-    { "status": 409, "codigo": "restore_check_unavailable", "quando": "a origem não tem banco restaurável detectado e marcado no backup" },
-    { "status": 409, "codigo": "restore_check_chain", "quando": "a origem já é destino do teste de outro projeto" },
-    { "status": 409, "codigo": "restore_check_off", "quando": "POST .../run com a opção desligada" },
-    { "status": 409, "codigo": "no_backup", "quando": "POST .../run sem nenhum backup completo (VPS ou externo)" }
+    {
+      "status": 400,
+      "codigo": "invalid_destination",
+      "quando": "destino é o próprio projeto, de outro motor, sem banco detectado ou com teste próprio ligado"
+    },
+    {
+      "status": 400,
+      "codigo": "confirm_mismatch",
+      "quando": "o nome digitado não é o do destino"
+    },
+    {
+      "status": 404,
+      "codigo": "not_found",
+      "quando": "origem ou destino não existe"
+    },
+    {
+      "status": 409,
+      "codigo": "restore_check_unavailable",
+      "quando": "a origem não tem banco restaurável detectado e marcado no backup"
+    },
+    {
+      "status": 409,
+      "codigo": "restore_check_chain",
+      "quando": "a origem já é destino do teste de outro projeto"
+    },
+    {
+      "status": 409,
+      "codigo": "restore_check_off",
+      "quando": "POST .../run com a opção desligada"
+    },
+    {
+      "status": 409,
+      "codigo": "no_backup",
+      "quando": "POST .../run sem nenhum backup completo (VPS ou externo)"
+    }
   ],
   "fluxo": [
-    "Configuração (data/backups.json, targets['project:<id>'].restoreCheck = { settings, last, notice }): destino (id e nome confirmado), frequência. Ligar/trocar o destino exige digitar o nome do destino. Os candidatos vêm das detecções guardadas: outro projeto, mesmo motor do banco marcado no backup da origem, sem teste próprio ligado; MySQL/MariaDB/Mongo exigem o mesmo nome de banco quando os dois são conhecidos.",
+    "Configuração (data/backups.json, targets['project:<id>'].restoreCheck = { settings, last, notice }): destino (id e nome confirmado), frequência. Ligar/trocar o destino exige digitar o nome do destino. Os candidatos vêm das detecções guardadas: outro projeto, mesmo motor do banco marcado no backup da origem, sem teste próprio ligado. O nome do banco do destino não importa (a prova é num banco temporário).",
     "Gatilho automático: ao fim de um backup do projeto que não falhou e deixou cópia na VPS (status success ou warning, inclusive com a cópia EXTERNA falhando), o pump chama queueAutoRestoreCheck. Frequência 'daily'/'weekly': pula se o último teste (ok, falhou ou em andamento) começou há menos de 24 h/7 dias. Backup incompleto (Redis sem SAVE) vira 'não executado'.",
     "'Testar agora' (POST .../run): exige a opção ligada e o nome do destino digitado; usa o backup completo mais novo (cópia da VPS; se não existe mais, a externa), ignora a frequência.",
-    "Tudo entra na MESMA fila do BackupService (uma operação por vez, nunca junto de outro backup/restauração, inclusive do destino). Pedido repetido enquanto há um na fila/rodando devolve o mesmo registro. O registro tem operation 'restore_check' e etapas legíveis; lastBackup/Fazer backup agora não são afetados.",
-    "restoreCheckJob/restoreCheckBody: (1) revalida tudo: opção ainda ligada; destino existe e tem o mesmo nome confirmado (senão a opção se DESLIGA, com aviso e notificação); destino não é origem de teste ligado; origem ainda tem banco marcado; (2) reserva o destino (projects.hold → DeployService.holdProject): se está em deploy, 'não executado'; nenhum deploy do destino começa durante o teste; (3) detecta o destino AGORA (docker inspect): mesmo motor, banco em execução (o painel nunca liga, para nem reinicia nada do destino); (4) confere espaço (tamanho do backup × 4 + 256 MB, 5% livre); (5) abre o backup (openBackup, o mesmo da restauração: baixa se for externo, senha guardada, nunca impressa) extraindo SÓ manifesto.json e bancos/ (volumes e código nem saem do .7z); (6) escolhe o item de banco do mesmo motor (manifesto não escolhe container: o destino vem do cadastro); (7) restoreDatabaseDump, o MESMO caminho da restauração de projeto: Postgres restaura o banco principal DENTRO do banco do destino (nome do ambiente do destino) com --clean --if-exists, sem os papéis (_papeis.sql traz o hash da senha do usuário da origem e trocaria as credenciais do destino); MySQL/MariaDB/Mongo recriam o banco com o nome do dump; prazo restoreCheckTimeoutMs (30 min) no comando; (8) confere o destino: Postgres/MySQL/MariaDB contam as tabelas (só o número, count(*) em information_schema; precisa de pelo menos 1); MongoDB vale só pelo código de saída do mongorestore.",
-    "Resultado (restoreCheck.last): status ok | failed | not_run | running, trigger auto|manual, datas, durationMs, destino, arquivo usado, reasonCode (código estável) + reason (texto fixo em português, nunca texto do banco), dbWarnings (só a contagem de linhas ERROR). ok com avisos do banco = registro 'warning'. not_run = registro 'warning', sem notificação. failed = registro 'failed' e notificação backup_failed (chave restore-check-failed:<projeto>) pelos canais configurados.",
-    "Reinício do painel: na carga, restoreCheck.last 'running' vira 'failed / panel_restarted' ('o banco de teste pode estar incompleto'); o registro do histórico já vira falha pela regra existente.",
-    "Destino apagado (forgetProject) ou renomeado (detectado em projectView, status e antes de cada teste): a opção se desliga, grava restoreCheck.notice e notifica (backup_failed, chave restore-check-off:<projeto>). Origem apagada: a configuração some junto com o item."
+    "Tudo entra na MESMA fila do BackupService (uma operação por vez, nunca junto de outro backup/restauração, inclusive do destino). Cada pedido guarda o DESTINO em que foi feito: pedido repetido com o mesmo destino devolve o mesmo registro; se a pessoa troca o destino, o pedido velho que esperava na fila sai como 'não executado' (settings_changed) e o novo ocupa o lugar. Se a configuração mudar sem novo pedido, o teste da fila termina 'não executado' dizendo o destino que foi pedido; desligar a opção enquanto espera também ('turned_off').",
+    "restoreCheckBody: (1) revalida: opção ligada e destino igual ao pedido; destino existe e tem o mesmo nome confirmado (senão a opção se DESLIGA, com aviso e notificação); destino não é origem de teste ligado; origem ainda tem banco marcado; backup completo; (2) reserva o destino (projects.hold → DeployService.holdProject): se está em deploy, 'não executado'; nenhum deploy do destino começa durante o teste; (3) detecta o destino AGORA: mesmo motor, banco em execução (o painel nunca liga, para nem reinicia nada do destino); (4) espaço: tamanho do arquivo (medido no disco ou na listagem do armazenamento quando o registro não traz; sem medida = 'não executado') × 6 (× 7 se for baixar da cópia externa) + 256 MB, 5% livre; (5) abre o backup (openBackup, o mesmo da restauração: baixa se for externo, senha guardada, nunca impressa) extraindo SÓ manifesto.json e bancos/; (6) escolhe o item de banco do mesmo motor; (7) validateRestore (backup-restore-validate.ts); (8) o resultado guarda só números: tabelas e linhas conferidas.",
+    "validateRestore, Postgres: o painel lê o dump uma vez e (a) confere que ele termina com a marca do pg_dump ('dump complete') e cria pelo menos uma tabela, (b) copia para um arquivo de trabalho SEM as linhas ALTER ... OWNER TO, GRANT/REVOKE e ALTER DEFAULT PRIVILEGES (papéis que podem não existir no destino; dados de COPY e corpos de função passam intactos), (c) anota as tabelas (CREATE TABLE) e as linhas de cada COPY. No container do destino: apaga restos de testes anteriores (bancos tws_rc_*), cria tws_rc_<id>, restaura com psql ON_ERROR_STOP=1 e PGAPPNAME=tws-restore-check dentro de `timeout -s KILL` (o mesmo prazo, em segundos), confere por to_regclass que CADA tabela do dump existe e por count(*) FROM ONLY que cada tabela com COPY tem exatamente as linhas do dump, e apaga tws_rc_<id> (pg_terminate_backend das sessões + DROP DATABASE; confirma que sumiu).",
+    "validateRestore, MySQL/MariaDB: o painel filtra o dump (que leva TODOS os bancos não-sistema do servidor de origem): fica só o banco do projeto (MYSQL_DATABASE; sem ele, todos), com o nome trocado para tws_rc_<id>_<n>, sem DROP DATABASE e sem DEFINER; exige a marca '-- Dump completed' e pelo menos uma tabela. Restaura no servidor do destino (o cliente mysql para no primeiro erro) dentro de `timeout -s KILL`, confere cada tabela/view em information_schema e que as tabelas com INSERT no dump têm linhas, e apaga os bancos tws_rc_<id>_* (KILL das conexões + DROP DATABASE). mysql.user, mysql.*, outros bancos e as tabelas do destino nem aparecem no arquivo restaurado.",
+    "validateRestore, MongoDB: mongorestore --archive com --nsExclude admin.*, config.* e local.* (os usuários e a configuração da instância NÃO são restaurados) e --nsFrom/--nsTo para o banco tws_rc_<id>_<banco>, sem --drop, dentro de `timeout -s KILL`. Confere pelo resumo do mongorestore (N documentos restaurados, 0 falhas) e por mongosh (coleções e documentos nos bancos tws_rc_<id>_* batem com o resumo; pelo menos 1 coleção) e apaga os bancos tws_rc_<id>_*. Exige mongosh (ou mongo) no container; a senha vai por variável de ambiente, nunca na linha de comando.",
+    "Prazo estourado: o `timeout` de dentro do container mata o cliente (psql, mysql, mongorestore); o painel então derruba as sessões do servidor e apaga o banco temporário, e CONFIRMA que ele sumiu. Resultado 'falhou: timeout'. Se não conseguir confirmar, o resultado é 'falhou: cleanup_failed' com o aviso de apagar o banco tws_rc_ à mão (o próximo teste também varre); a reserva do destino é solta, porque o banco temporário não atrapalha o deploy do destino.",
+    "Resultado (restoreCheck.last): status ok | failed | not_run | running, trigger auto|manual, datas, durationMs, destino, arquivo usado, reasonCode (código estável) + reason (texto fixo em português, nunca texto do banco) e, no ok, checked = { tables, rows }. 'ok' só quando a restauração terminou sem erro e a conferência bateu. not_run = registro 'warning', sem notificação. failed = registro 'failed' e notificação backup_failed (chave restore-check-failed:<projeto>) pelos canais configurados.",
+    "Reinício do painel: na carga, restoreCheck.last 'running' vira 'failed / panel_restarted' (um banco tws_rc_ pode ter sobrado no destino; o próximo teste o apaga), exceto se o teste ainda esperava na fila: então vira 'not_run / restart_before_start' (e o registro, 'warning').",
+    "Destino apagado (forgetProject) ou renomeado (detectado em projectView, status e antes de cada teste): a opção se desliga, grava restoreCheck.notice e notifica (backup_failed, chave restore-check-off:<projeto>). Origem apagada: a configuração some junto com o item. Origem RENOMEADA: nada muda (a origem é identificada pelo id; a confirmação digitada é sempre o nome do destino)."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "BackupService", "arquivo": "apps/server/src/services/backup-service.ts", "papel": "Toda a regra, fila, estado e notificações." },
-    { "tipo": "servico", "nome": "DeployService.holdProject", "arquivo": "apps/server/src/services/deploy-service.ts", "papel": "Reserva o destino como um deploy faz (409 deploy_in_progress se já há um)." },
-    { "tipo": "pacote", "nome": "backup-restore-check.ts", "arquivo": "apps/server/src/services/backup-restore-check.ts", "papel": "Textos fixos dos motivos, compatibilidade de nomes de banco, janela de frequência." },
-    { "tipo": "pacote", "nome": "tableCountScript", "arquivo": "apps/server/src/services/backup-detect.ts", "papel": "Conta tabelas do banco restaurado (sem ler linhas)." }
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Toda a regra, fila, estado e notificações."
+    },
+    {
+      "tipo": "servico",
+      "nome": "DeployService.holdProject",
+      "arquivo": "apps/server/src/services/deploy-service.ts",
+      "papel": "Reserva o destino como um deploy faz (409 deploy_in_progress se já há um)."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "backup-restore-check.ts",
+      "arquivo": "apps/server/src/services/backup-restore-check.ts",
+      "papel": "Textos fixos dos motivos, compatibilidade de nomes de banco, janela de frequência."
+    },
+    {
+      "tipo": "servico",
+      "nome": "validateRestore",
+      "arquivo": "apps/server/src/services/backup-restore-validate.ts",
+      "papel": "Filtra o dump, restaura num banco temporário do container do destino com parada no primeiro erro e prazo dentro do container, confere tabelas e linhas e apaga o banco temporário."
+    }
   ],
   "efeitosColaterais": [
-    "APAGA e recria no banco do projeto de destino as tabelas que estão no backup (as que só existem no destino ficam).",
-    "Copia dados reais de produção para o ambiente de teste (LGPD): a tela avisa.",
+    "Cria e APAGA no servidor de banco do destino um banco temporário (tws_rc_<id>; MySQL/MariaDB: tws_rc_<id>_<n>; MongoDB: tws_rc_<id>_<banco>). Nada do que o destino já tinha é alterado.",
+    "Copia dados reais de produção para o disco do servidor de banco do destino durante o teste (LGPD): a tela avisa.",
     "grava data/backups.json (restoreCheck) e data/backups-history.json (registro restore_check)",
     "auditoria: backups.restore_check (ligar, trocar frequência, desligar, desligado pelo painel) e backups.restore_check_run ('Testar agora'); sem senha nem dado do banco",
     "notificação backup_failed: teste falhou; opção desligada pelo painel"
@@ -64,20 +151,23 @@
   ],
   "testes": [
     "apps/server/tests/backup-restore-check.test.ts",
-    "apps/server/tests/backup-restore-check-docker.test.ts (Docker real com postgres:16-alpine; pula sem Docker ou sem a imagem local)",
+    "apps/server/tests/backup-restore-validate.test.ts",
+    "apps/server/tests/backup-restore-validate-docker.test.ts (Docker real: postgres:16-alpine, mariadb:11 e mongo:7; cada bloco pula sem a imagem local)",
+    "apps/server/tests/backup-restore-check-docker.test.ts (serviço inteiro com Postgres real)",
     "apps/server/tests/routes-backups.test.ts",
     "apps/server/tests/deploy-concurrency.test.ts (holdProject)",
     "apps/server/tests/backup-archive.test.ts (extração parcial)",
-    "apps/server/tests/backup-docker-erros.test.ts (prazo do restore)",
     "apps/web/tests/restore-check-card.test.tsx",
     "apps/web/tests/project-backups.test.tsx",
     "apps/web/tests/backup-settings.test.tsx (selo por projeto)"
   ],
   "observacoes": [
-    "Limites conhecidos: o teste valida que o dump restaura e que o destino tem tabelas; não compara linhas nem esquema. Com o destino já cheio, a contagem não prova sozinha que foi o restore que criou as tabelas (o código de saída e a contagem de avisos completam).",
-    "Postgres: tabelas criadas no destino depois do backup e que não estão no dump continuam lá (--clean só apaga o que o dump conhece). Para um destino idêntico, apague o banco do destino à mão.",
-    "Falha no meio do restore: o destino pode ficar parcialmente restaurado; o resultado diz 'o banco de teste pode estar incompleto'. O próximo teste bem-sucedido refaz.",
-    "Prazo: o do comando de restore é restoreCheckTimeoutMs (30 min). O docker exec pode continuar no container mesmo depois de o painel interromper o cliente.",
+    "Escolha de desenho: o teste NÃO atualiza o banco do projeto de destino com os dados do backup; ele prova que o backup restaura num banco temporário no servidor do destino. É o que torna a prova rigorosa (sem 'tabelas que só existem no destino', 'destino cheio' ou esquema mais novo atrapalhando) e o que evita deixar dados de produção no ambiente de teste. Se um dia for desejável popular o banco do destino, é um passo opcional a mais, com confirmação própria.",
+    "O teste valida que o dump restaura sem erro e que as tabelas e o número de linhas batem; não compara o conteúdo das linhas nem índices, gatilhos ou permissões. Dono e permissões de papéis ficam de fora de propósito (o destino pode não ter os papéis).",
+    "Extensões: um dump que usa CREATE EXTENSION de uma extensão que a imagem do destino não tem falha na restauração ('falhou'); isso é um sinal verdadeiro de que o destino não receberia o backup, mas o servidor da origem receberia.",
+    "MySQL/MariaDB: só as tabelas e views são conferidas e, onde o dump tem INSERT, que a tabela não ficou vazia (o número exato de linhas não é conferido). Sem MYSQL_DATABASE/MARIADB_DATABASE, todos os bancos do dump são restaurados em temporários.",
+    "MongoDB: o banco 'inicial' (MONGO_INITDB_DATABASE) costuma não ser o do app, por isso todos os bancos da instância, menos admin/config/local, são restaurados em temporários. Exige mongosh no container.",
+    "Dependência de `timeout` no container (existe no busybox do Alpine e no coreutils das imagens Debian/Ubuntu). Se a imagem não tiver, o prazo ainda vale no cliente docker e a limpeza apaga o banco temporário e derruba as sessões.",
     "Exige 7zz com extração parcial (7zz x arquivo manifesto.json bancos). Não verificado com um 7zz real neste ambiente (não instalado); o teste unitário confere os argumentos.",
     "O backup do painel leva data/backups.json: o destino configurado viaja com ele. Numa VPS nova o teste só roda depois de um backup do projeto, e só se o banco do destino estiver em execução."
   ]

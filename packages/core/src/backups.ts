@@ -411,7 +411,6 @@ export type RestoreCheckReasonCode =
   | "destination_not_running"
   | "destination_busy"
   | "engine_mismatch"
-  | "database_name_mismatch"
   | "no_backup"
   | "backup_incomplete"
   | "no_password"
@@ -420,6 +419,9 @@ export type RestoreCheckReasonCode =
   | "no_space"
   | "timeout"
   | "panel_restarted"
+  | "restart_before_start"
+  | "settings_changed"
+  | "cleanup_failed"
   | "restore_failed"
   | "sanity_failed"
   | "backup_unreadable";
@@ -445,8 +447,8 @@ export interface RestoreCheckResult {
   reasonCode: RestoreCheckReasonCode | null;
   /** Motivo curto em português, sem dados do banco. */
   reason: string | null;
-  /** Avisos do banco na restauração (só a contagem). */
-  dbWarnings: number;
+  /** O que a conferência encontrou no banco restaurado (só números): tabelas e linhas. Só quando o resultado é ok. */
+  checked: { tables: number; rows: number } | null;
   /** Registro de histórico desta execução. */
   recordId: string | null;
 }

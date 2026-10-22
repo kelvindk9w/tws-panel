@@ -594,7 +594,7 @@ describe("Configurações → Backups", () => {
   it("teste de restauração: selo por projeto em Configurações → Backups, no histórico e na linha de andamento", async () => {
     const last = (status: "ok" | "failed" | "not_run" | "running") => ({
       status, trigger: "auto" as const, startedAt: "2026-10-14T12:00:00Z", finishedAt: null, durationMs: null, destinationId: "p2", destinationName: "Fazenda Sandbox",
-      backupFileName: null, reasonCode: null, reason: null, dbWarnings: 0, recordId: "x",
+      backupFileName: null, reasonCode: null, reason: null, checked: null, recordId: "x",
     });
     state.targets = state.targets.map((t) => (t.id === "project:p1" ? { ...t, restoreCheck: { enabled: true, last: last("failed") } } : t));
     state.history = [record({ id: "rc1", target: "project:p1", targetName: "Loja", operation: "restore_check", fileName: "2026-10-14_09-00.7z", remote: "none", local: false })];

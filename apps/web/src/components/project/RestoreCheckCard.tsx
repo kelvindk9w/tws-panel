@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { BACKUP_ENGINE_LABELS, RESTORE_CHECK_FREQUENCIES, type RestoreCheckFrequency, type RestoreCheckReasonCode, type RestoreCheckResult, type RestoreCheckView } from "@paas/core";
 import { useI18n, type Key } from "@/i18n";
 import { apiFetch } from "@/lib/api";
@@ -31,7 +31,6 @@ const REASON_KEYS = {
   destination_not_running: "backups.restoreCheck.reason.destination_not_running",
   destination_busy: "backups.restoreCheck.reason.destination_busy",
   engine_mismatch: "backups.restoreCheck.reason.engine_mismatch",
-  database_name_mismatch: "backups.restoreCheck.reason.database_name_mismatch",
   no_backup: "backups.restoreCheck.reason.no_backup",
   backup_incomplete: "backups.restoreCheck.reason.backup_incomplete",
   no_password: "backups.restoreCheck.reason.no_password",
@@ -40,6 +39,9 @@ const REASON_KEYS = {
   no_space: "backups.restoreCheck.reason.no_space",
   timeout: "backups.restoreCheck.reason.timeout",
   panel_restarted: "backups.restoreCheck.reason.panel_restarted",
+  restart_before_start: "backups.restoreCheck.reason.restart_before_start",
+  settings_changed: "backups.restoreCheck.reason.settings_changed",
+  cleanup_failed: "backups.restoreCheck.reason.cleanup_failed",
   restore_failed: "backups.restoreCheck.reason.restore_failed",
   sanity_failed: "backups.restoreCheck.reason.sanity_failed",
   backup_unreadable: "backups.restoreCheck.reason.backup_unreadable",
@@ -79,9 +81,12 @@ function LastResult({ last }: { last: RestoreCheckResult | null }) {
         <Badge variant={variant}>{t(`backups.status.${last.status === "ok" ? "success" : last.status === "running" ? "running" : last.status === "failed" ? "failed" : "warning"}`)}</Badge>
         <span className={last.status === "failed" ? "text-red-400" : undefined}>{text}</span>
       </p>
-      {last.status === "ok" && (last.durationMs !== null || last.dbWarnings > 0) && (
+      {last.status === "ok" && (last.durationMs !== null || last.checked !== null) && (
         <p className="text-xs text-muted-foreground">
-          {[last.durationMs !== null ? t("backups.restoreCheck.last.duration", { duration: durationText(last.durationMs) }) : null, last.dbWarnings > 0 ? t("backups.restoreCheck.last.warnings", { count: last.dbWarnings }) : null]
+          {[
+            last.durationMs !== null ? t("backups.restoreCheck.last.duration", { duration: durationText(last.durationMs) }) : null,
+            last.checked !== null ? t("backups.restoreCheck.last.checked", { tables: last.checked.tables, rows: last.checked.rows }) : null,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </p>
@@ -93,8 +98,9 @@ function LastResult({ last }: { last: RestoreCheckResult | null }) {
 /**
  * Aba Backups do projeto: "Validar o backup do banco restaurando em outro
  * projeto". Desligado por padrão. Ligar pede o projeto de destino (só os
- * elegíveis, que o servidor lista) e a confirmação digitando o nome dele, porque
- * a restauração apaga e recria as tabelas do backup no banco do destino.
+ * elegíveis, que o servidor lista) e a confirmação digitando o nome dele: o painel
+ * cria um banco TEMPORÁRIO no servidor de banco do destino (e o apaga no fim) com
+ * dados reais de produção. Nada do banco do próprio destino é alterado.
  */
 export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: string; view: RestoreCheckView; onChanged: () => void }) {
   const { t } = useI18n();
@@ -107,6 +113,7 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const feedbackRef = useRef<HTMLDivElement>(null);
 
   const chosen = view.candidates.find((c) => c.id === destinationId) ?? null;
   const unavailable = view.unavailableCode ? t(UNAVAILABLE_KEYS[view.unavailableCode]) : view.unavailableReason;
@@ -124,6 +131,8 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
       setError(errorText(err));
     } finally {
       setBusy(null);
+      // o botão apertado fica desabilitado enquanto age: o foco vai para o resultado, em vez de se perder
+      setTimeout(() => feedbackRef.current?.focus(), 0);
     }
   }
 
@@ -148,9 +157,19 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
         )}
 
         {unavailable ? (
-          <p data-testid="restore-check-unavailable" className="text-muted-foreground">
-            {unavailable}
-          </p>
+          <>
+            <p data-testid="restore-check-unavailable" className="text-muted-foreground">
+              {unavailable}
+            </p>
+            {settings && (
+              // a opção continua ligada mesmo com a origem indisponível: tem de dar para desligar
+              <div>
+                <Button variant="outline" disabled={busy !== null} onClick={() => void act("off", () => put({ enabled: false }), t("backups.restoreCheck.turnedOff"))}>
+                  {busy === "off" && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.restoreCheck.turnOff")}
+                </Button>
+              </div>
+            )}
+          </>
         ) : (
           <>
             <div data-testid="restore-check-warning" className="flex flex-col gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200">
@@ -170,13 +189,13 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
                   <strong className="font-medium">{t("backups.restoreCheck.current", { name: settings.destinationName })}</strong>
                 </p>
                 <div className="flex flex-wrap items-end gap-2">
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex w-full min-w-0 max-w-full flex-col gap-1.5 sm:w-auto">
                     <label htmlFor="rc-frequency-on" className="text-muted-foreground">
                       {t("backups.restoreCheck.frequency")}
                     </label>
                     <select
                       id="rc-frequency-on"
-                      className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+                      className="h-9 w-full min-w-0 max-w-full rounded-md border border-input bg-transparent px-2 text-sm"
                       value={frequency}
                       onChange={(e) => setFrequency(e.target.value as RestoreCheckFrequency)}
                     >
@@ -240,13 +259,13 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
             ) : (
               <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap items-end gap-3">
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex w-full min-w-0 max-w-full flex-col gap-1.5 sm:w-auto">
                     <label htmlFor="rc-destination" className="text-muted-foreground">
                       {t("backups.restoreCheck.destination")}
                     </label>
                     <select
                       id="rc-destination"
-                      className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+                      className="h-9 w-full min-w-0 max-w-full rounded-md border border-input bg-transparent px-2 text-sm"
                       value={destinationId}
                       onChange={(e) => {
                         setDestinationId(e.target.value);
@@ -263,13 +282,13 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
                       ))}
                     </select>
                   </div>
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex w-full min-w-0 max-w-full flex-col gap-1.5 sm:w-auto">
                     <label htmlFor="rc-frequency" className="text-muted-foreground">
                       {t("backups.restoreCheck.frequency")}
                     </label>
                     <select
                       id="rc-frequency"
-                      className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+                      className="h-9 w-full min-w-0 max-w-full rounded-md border border-input bg-transparent px-2 text-sm"
                       value={frequency}
                       onChange={(e) => setFrequency(e.target.value as RestoreCheckFrequency)}
                     >
@@ -308,7 +327,9 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
           <span className="font-medium">{t("backups.restoreCheck.last.label")}</span>
           <LastResult last={view.last} />
         </div>
-        <Feedback error={error} notice={notice} />
+        <div ref={feedbackRef} tabIndex={-1} role="status" aria-live="polite" className="flex flex-col gap-1 outline-none">
+          <Feedback error={error} notice={notice} />
+        </div>
       </CardContent>
     </Card>
   );

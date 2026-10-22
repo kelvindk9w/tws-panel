@@ -91,15 +91,13 @@ import {
 } from "@paas/core";
 import {
   RESTORE_CHECK_REASONS,
-  countDbErrors,
-  databaseNamesCompatible,
   firstRestorable,
   frequencyWindowMs,
 } from "./backup-restore-check.js";
+import { RestoreValidationError, validateRestore } from "./backup-restore-validate.js";
 import { ArchiveError } from "./backup-archive.js";
 import {
   PG_GLOBALS_RESTORE,
-  tableCountScript,
   REDIS_SAVE,
   buildDetection,
   dumpPlan,
@@ -392,6 +390,8 @@ interface Manifest {
 interface Job {
   record: BackupRecord;
   run: (record: BackupRecord) => Promise<void>;
+  /** Teste de restauração: o destino que foi pedido (para descartar o pedido velho quando o destino muda). */
+  destinationId?: string;
 }
 
 /** Erro com mensagem para a pessoa (vai para o histórico como está). */
@@ -413,13 +413,14 @@ interface RestoreCheckFile {
   sizeBytes: number | null;
   trigger: "auto" | "manual";
   incomplete: boolean;
-  /** Nome do destino quando o teste foi pedido (para o aviso). */
+  /** Destino quando o teste foi PEDIDO: se a configuração mudar antes de rodar, o teste não roda. */
+  destinationId: string;
   destinationName: string;
 }
 
 interface RestoreCheckContext {
   release: (() => void) | null;
-  dbWarnings: number;
+  checked: { tables: number; rows: number } | null;
 }
 
 /** O teste de restauração parou: "não executado" (nada foi tocado) ou "falhou". */
@@ -742,8 +743,15 @@ export class BackupService {
       });
       // O painel caiu no meio de uma operação: ela não vai continuar sozinha.
       let interrupted = false;
+      /** Testes de restauração que ainda esperavam na fila: nem chegaram a começar. */
+      const neverStarted = new Set(this.history.filter((r) => r.operation === "restore_check" && r.status === "queued").map((r) => r.id));
       for (const r of this.history) {
-        if (r.status === "running" || r.status === "queued") {
+        if (neverStarted.has(r.id)) {
+          r.status = "warning";
+          r.warnings.push(RESTORE_CHECK_REASONS.restart_before_start);
+          r.finishedAt ??= new Date(this.now()).toISOString();
+          interrupted = true;
+        } else if (r.status === "running" || r.status === "queued") {
           r.status = "failed";
           r.error = "O painel reiniciou durante a operação. Faça de novo.";
           r.finishedAt ??= new Date(this.now()).toISOString();
@@ -755,9 +763,10 @@ export class BackupService {
       for (const t of Object.values(this.config.targets)) {
         const last = typeof t === "object" && t !== null ? t.restoreCheck?.last : null;
         if (last?.status !== "running") continue;
-        last.status = "failed";
-        last.reasonCode = "panel_restarted";
-        last.reason = RESTORE_CHECK_REASONS.panel_restarted;
+        const waiting = last.recordId !== null && neverStarted.has(last.recordId);
+        last.status = waiting ? "not_run" : "failed";
+        last.reasonCode = waiting ? "restart_before_start" : "panel_restarted";
+        last.reason = RESTORE_CHECK_REASONS[last.reasonCode];
         last.finishedAt ??= new Date(this.now()).toISOString();
         restoreInterrupted = true;
       }
@@ -1451,7 +1460,7 @@ export class BackupService {
     };
   }
 
-  private enqueue(record: BackupRecord, run: Job["run"]): BackupRecord {
+  private enqueue(record: BackupRecord, run: Job["run"], destinationId?: string): BackupRecord {
     // Pedir o mesmo backup (ou a mesma conferência) duas vezes não duplica.
     const dup = [this.running, ...this.queue].find(
       (j) =>
@@ -1461,7 +1470,7 @@ export class BackupService {
         (record.operation === "backup" || record.operation === "restore_check" || (record.operation === "verify" && j.record.fileName === record.fileName)),
     );
     if (dup) return dup.record;
-    this.queue.push({ record, run });
+    this.queue.push({ record, run, destinationId });
     this.history.push(record);
     void this.persistQuiet({ history: true });
     void this.pump();
@@ -2534,35 +2543,21 @@ export class BackupService {
 
   /**
    * Restaura o(s) dump(s) de UM banco do manifesto no container do banco e devolve as linhas ERROR do banco
-   * (avisos: a restauração não para por elas). É o único caminho de restauração de banco do painel: a
-   * restauração do projeto e o teste de restauração passam por aqui.
-   *  - `globals` (padrão: sim): papéis do Postgres. O teste de restauração NÃO os restaura.
-   *  - `postgres`: quais dumps e em que banco do container entram (padrão: cada um no banco de mesmo nome).
-   *  - `timeoutMs`: prazo próprio do comando de restauração.
+   * (avisos: a restauração não para por elas). É o caminho de restauração de banco da restauração do projeto.
+   * O teste de restauração NÃO passa por aqui: ele valida num banco descartável (backup-restore-validate.ts).
    */
-  private async restoreDatabaseDump(
-    container: string,
-    item: ManifestItem,
-    content: string,
-    o: { globals?: boolean; postgres?: Array<{ file: string; into: string }>; timeoutMs?: number } = {},
-  ): Promise<string[]> {
+  private async restoreDatabaseDump(container: string, item: ManifestItem, content: string): Promise<string[]> {
     const docker = this.opts.docker;
-    const exec = o.timeoutMs ? { timeoutMs: o.timeoutMs } : undefined;
     await this.waitReady(container, item.engine!);
     const errors: string[] = [];
     if (item.engine === "postgres") {
-      if (item.globalsFile && o.globals !== false) await docker.execFromFile(container, PG_GLOBALS_RESTORE, [], path.join(content, item.globalsFile)).catch(() => undefined);
-      const dumps = o.postgres ?? (item.databases ?? []).map((d) => ({ file: d.file, into: d.name }));
-      for (const db of dumps) {
-        const script = restoreScript("postgres");
-        const file = path.join(content, db.file);
-        const { stderr } = exec ? await docker.execFromFile(container, script, [db.into], file, exec) : await docker.execFromFile(container, script, [db.into], file);
+      if (item.globalsFile) await docker.execFromFile(container, PG_GLOBALS_RESTORE, [], path.join(content, item.globalsFile)).catch(() => undefined);
+      for (const db of item.databases ?? []) {
+        const { stderr } = await docker.execFromFile(container, restoreScript("postgres"), [db.name], path.join(content, db.file));
         errors.push(...stderr.split("\n").filter((l) => /ERROR:/.test(l)));
       }
     } else {
-      const script = restoreScript(item.engine!);
-      const file = path.join(content, item.file!);
-      const { stderr } = exec ? await docker.execFromFile(container, script, [], file, exec) : await docker.execFromFile(container, script, [], file);
+      const { stderr } = await docker.execFromFile(container, restoreScript(item.engine!), [], path.join(content, item.file!));
       errors.push(...stderr.split("\n").filter((l) => /ERROR/.test(l)));
     }
     return errors;
@@ -3094,7 +3089,7 @@ export class BackupService {
       const det = this.config.detections[p.id];
       if (!det || det.error) continue;
       const d = det.databases.find((x) => x.engine === source.engine);
-      if (!d || !databaseNamesCompatible(source.engine, source.databaseName, d.databaseName)) continue;
+      if (!d) continue;
       // quem é origem de um teste não é destino de outro: nunca restaurar em cima de um projeto "de verdade"
       if (this.rcOf(projectTargetId(p.id))?.settings?.enabled) continue;
       out.push({ id: p.id, name: p.name, engine: source.engine });
@@ -3126,6 +3121,26 @@ export class BackupService {
       const dest = all.find((p) => p.id === s.destinationId);
       if (!dest) this.disableRestoreCheck(id, "destination_missing");
       else if (dest.name !== s.destinationName) this.disableRestoreCheck(id, "destination_renamed");
+    }
+  }
+
+  /** Pedido de teste que espera na fila com outro destino: sai da fila como "não executado" (o pedido novo ocupa o lugar). */
+  private dropStaleRestoreChecks(targetId: string, destinationId: string): void {
+    const stale = this.queue.filter((j) => j.record.target === targetId && j.record.operation === "restore_check" && j.destinationId !== destinationId);
+    if (stale.length === 0) return;
+    this.queue = this.queue.filter((j) => !stale.includes(j));
+    for (const j of stale) {
+      const r = j.record;
+      r.status = "warning";
+      r.warnings.push(RESTORE_CHECK_REASONS.settings_changed);
+      r.finishedAt = new Date(this.now()).toISOString();
+      const last = this.rcOf(targetId)?.last;
+      if (last && last.recordId === r.id) {
+        last.status = "not_run";
+        last.reasonCode = "settings_changed";
+        last.reason = RESTORE_CHECK_REASONS.settings_changed;
+        last.finishedAt = r.finishedAt;
+      }
     }
   }
 
@@ -3245,12 +3260,14 @@ export class BackupService {
     this.enqueueRestoreCheck(r.target.slice(8), r.targetName, s, { fileName: r.fileName, source: "local", sizeBytes: r.sizeBytes, trigger: "auto", incomplete: this.incomplete.has(r) });
   }
 
-  private enqueueRestoreCheck(projectId: string, projectName: string, s: RestoreCheckSettings, file: Omit<RestoreCheckFile, "destinationName">): BackupRecord {
+  private enqueueRestoreCheck(projectId: string, projectName: string, s: RestoreCheckSettings, file: Omit<RestoreCheckFile, "destinationId" | "destinationName">): BackupRecord {
     const id = projectTargetId(projectId);
     const record = this.newRecord(id, projectName, "restore_check", file.trigger === "auto" ? "schedule" : "manual");
     record.fileName = file.fileName;
-    const job: RestoreCheckFile = { ...file, destinationName: s.destinationName };
-    const queued = this.enqueue(record, (rec) => this.restoreCheckJob(rec, projectId, job));
+    const job: RestoreCheckFile = { ...file, destinationId: s.destinationId, destinationName: s.destinationName };
+    // Um teste que ainda espera na fila com OUTRO destino (a pessoa trocou o destino) não roda: o pedido novo vale.
+    this.dropStaleRestoreChecks(id, s.destinationId);
+    const queued = this.enqueue(record, (rec) => this.restoreCheckJob(rec, projectId, job), s.destinationId);
     if (queued === record) {
       const rc = this.rcOf(id)!;
       rc.last = {
@@ -3264,7 +3281,7 @@ export class BackupService {
         backupFileName: file.fileName,
         reasonCode: null,
         reason: null,
-        dbWarnings: 0,
+        checked: null,
         recordId: record.id,
       };
       void this.persistQuiet({ config: true });
@@ -3275,7 +3292,7 @@ export class BackupService {
   private async restoreCheckJob(r: BackupRecord, projectId: string, file: RestoreCheckFile): Promise<void> {
     const id = projectTargetId(projectId);
     const started = this.now();
-    const ctx: RestoreCheckContext = { release: null, dbWarnings: 0 };
+    const ctx: RestoreCheckContext = { release: null, checked: null };
     let status: "ok" | "failed" | "not_run" = "ok";
     let code: RestoreCheckReasonCode | null = null;
     try {
@@ -3305,10 +3322,10 @@ export class BackupService {
       last.durationMs = Math.max(0, this.now() - started);
       last.reasonCode = code;
       last.reason = reason;
-      last.dbWarnings = ctx.dbWarnings;
+      last.checked = status === "ok" ? ctx.checked : null;
     }
     if (status === "ok") {
-      if (ctx.dbWarnings > 0) r.warnings.push(`${ctx.dbWarnings} aviso(s) do banco na restauração.`);
+      // nada a acrescentar: a restauração parou no primeiro erro e a conferência bateu
     } else if (status === "not_run") {
       r.status = "warning";
       r.warnings.push(reason!);
@@ -3333,6 +3350,8 @@ export class BackupService {
     this.step(r, "Conferir os projetos de origem e de destino");
     const s = this.rcOf(id)?.settings;
     if (!s?.enabled) throw new RestoreCheckStop("turned_off");
+    // O teste vale para o destino que foi pedido: se a configuração mudou enquanto esperava na fila, não roda.
+    if (s.destinationId !== file.destinationId || s.destinationName !== file.destinationName) throw new RestoreCheckStop("settings_changed");
     const all = await this.opts.projects.list();
     const dest = all.find((p) => p.id === s.destinationId);
     if (!dest) {
@@ -3366,20 +3385,28 @@ export class BackupService {
     if (!firstRestorable(detection.databases)) throw new RestoreCheckStop("destination_no_database");
     const destDb = detection.databases.find((d) => d.engine === sourceDb.engine);
     if (!destDb) throw new RestoreCheckStop("engine_mismatch");
-    if (!databaseNamesCompatible(destDb.engine, sourceDb.databaseName, destDb.databaseName)) throw new RestoreCheckStop("database_name_mismatch");
     // O banco do destino tem de estar rodando: o painel não liga, não para e não reinicia nada do destino.
     const container = (await docker.projectContainers(dest.slug)).find((c) => c.service === destDb.service);
     if (!container || !container.running) throw new RestoreCheckStop("destination_not_running");
 
+    const folder = backupFolderFor({ kind: "project", slug: (await this.opts.projects.get(projectId))!.slug });
+    // Espaço para abrir o backup: o arquivo (baixado, se é externo), os dumps extraídos e a cópia filtrada.
+    let size = file.sizeBytes;
+    if (size === null) {
+      size =
+        file.source === "local"
+          ? ((await stat(path.join(this.backupsDir, folder, file.fileName)).catch(() => null))?.size ?? null)
+          : ((await this.pointsFor(folder).catch(() => [] as BackupPoint[])).find((p) => p.fileName === file.fileName)?.sizeBytes ?? null);
+    }
+    if (size === null) throw new RestoreCheckStop("backup_unreadable");
     try {
-      await this.ensureSpace(Number(file.sizeBytes), 4);
+      await this.ensureSpace(size, file.source === "remote" ? 7 : 6);
     } catch {
       throw new RestoreCheckStop("no_space");
     }
 
     const staging = await this.tempDir("teste-restauracao");
     try {
-      const folder = backupFolderFor({ kind: "project", slug: (await this.opts.projects.get(projectId))!.slug });
       let opened: { content: string; manifest: Manifest };
       try {
         // só o manifesto e os dumps dos bancos saem do arquivo: volumes e código nem são abertos
@@ -3397,35 +3424,34 @@ export class BackupService {
       } catch {
         throw new RestoreCheckStop("backup_unreadable");
       }
-      let postgres: Array<{ file: string; into: string }> | undefined;
-      let sanityDb = "";
+      let dumpFile = path.join(content, item.file ?? "");
       if (item.engine === "postgres") {
         const dumps = item.databases!;
         const others = dumps.filter((d) => d.name !== "postgres");
         const main = dumps.find((d) => d.name === sourceDb.databaseName) ?? (others.length === 1 ? others[0] : undefined);
         if (!main) throw new RestoreCheckStop("ambiguous_database");
-        sanityDb = destDb.databaseName ?? main.name;
-        postgres = [{ file: main.file, into: sanityDb }];
+        dumpFile = path.join(content, main.file);
       }
-      this.step(r, `Restaurar o banco em ${dest.name}`);
-      let errors: string[];
+      this.step(r, `Restaurar o backup num banco temporário de ${dest.name}`);
+      let checked: { tables: number; rows: number };
       try {
-        errors = await this.restoreDatabaseDump(container.id, item, content, { globals: false, postgres, timeoutMs: this.opts.restoreCheckTimeoutMs ?? 30 * 60_000 });
+        checked = await validateRestore({
+          docker,
+          container: container.id,
+          engine: item.engine!,
+          content,
+          workDir: staging,
+          file: dumpFile,
+          // MySQL/MariaDB restauram só o banco do projeto; o MongoDB, todos menos os de sistema (o banco "inicial" costuma não ser o do app)
+          databaseName: item.engine === "mongo" ? null : sourceDb.databaseName,
+          id: randomBytes(4).toString("hex"),
+          timeoutMs: this.opts.restoreCheckTimeoutMs ?? 30 * 60_000,
+        });
       } catch (err) {
-        throw new RestoreCheckStop(/prazo/.test(err instanceof Error ? err.message : "") ? "timeout" : "restore_failed", "failed");
+        throw new RestoreCheckStop(err instanceof RestoreValidationError ? err.code : "restore_failed", "failed");
       }
-      ctx.dbWarnings = countDbErrors(errors.join("\n"), item.engine!);
-      this.step(r, "Conferir o banco do destino");
-      const script = tableCountScript(item.engine!);
-      if (script) {
-        let tables = 0;
-        try {
-          tables = Number.parseInt((await docker.execCapture(container.id, script, item.engine === "postgres" ? [sanityDb] : [])).trim(), 10);
-        } catch {
-          throw new RestoreCheckStop("sanity_failed", "failed");
-        }
-        if (!(tables >= 1)) throw new RestoreCheckStop("sanity_failed", "failed");
-      }
+      ctx.checked = checked;
+      this.step(r, `Conferido: ${checked.tables} tabela(s) e ${checked.rows} linha(s)`);
     } finally {
       await rm(staging, { recursive: true, force: true });
     }

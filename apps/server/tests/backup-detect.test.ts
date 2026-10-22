@@ -17,7 +17,6 @@ import {
   mountId,
   REDIS_SAVE,
   restoreScript,
-  tableCountScript,
   unsavedWritesFromDiff,
   type ContainerInspect,
 } from "../src/services/backup-detect.js";
@@ -298,16 +297,6 @@ describe("dump e restauração", () => {
     expect(restoreScript("postgres")).toMatch(/psql/);
     expect(dumpPlan("redis")).toEqual([]);
     expect(restoreScript("redis")).toBe("");
-  });
-
-  it("contagem de tabelas do teste de restauração: só o número, nunca linhas; Mongo e Redis sem contagem", () => {
-    expect(tableCountScript("postgres")).toMatch(/count\(\*\) from information_schema\.tables/);
-    expect(tableCountScript("postgres")).toMatch(/-d "\$1"/);
-    expect(tableCountScript("mysql")).toMatch(/count\(\*\) from information_schema\.tables/);
-    expect(tableCountScript("mariadb")).toMatch(/information_schema/);
-    for (const engine of ["postgres", "mysql", "mariadb"] as const) expect(tableCountScript(engine)).not.toMatch(/select \*|from \w+\.\w+ limit/i);
-    expect(tableCountScript("mongo")).toBeNull();
-    expect(tableCountScript("redis")).toBeNull();
   });
 
   it("nome de arquivo seguro dentro do backup", () => {

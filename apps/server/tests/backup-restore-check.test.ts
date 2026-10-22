@@ -97,6 +97,51 @@ class FakeStorage implements BackupStorage {
 const DB_SECRET = "senha-do-banco-nao-vaza";
 const ROW_DATA = "DADO-PESSOAL-joao@example.com";
 
+/** Dump do pg_dump (o que o painel guarda): uma tabela com 2 linhas, dono e permissão de papéis. */
+function pgDump(): string {
+  return [
+    "--",
+    "-- PostgreSQL database dump",
+    "--",
+    "CREATE TABLE public.animais (",
+    "    id integer NOT NULL,",
+    "    nome text",
+    ");",
+    "ALTER TABLE public.animais OWNER TO app;",
+    "GRANT SELECT ON TABLE public.animais TO leitor;",
+    "COPY public.animais (id, nome) FROM stdin;",
+    `1\t${ROW_DATA}`,
+    "2\tGRANT ALL ON x TO y;",
+    "\\.",
+    "-- PostgreSQL database dump complete",
+    "",
+  ].join("\n");
+}
+
+/** A resposta que o psql daria à conferência: tudo como o dump promete. */
+function answerVerify(sql: string, restored: string): string[] {
+  const rows = new Map<string, number>();
+  let table: string | null = null;
+  for (const l of restored.split("\n")) {
+    const c = /^COPY (\S+) .*FROM stdin;$/.exec(l);
+    if (c) {
+      table = c[1]!;
+      rows.set(table, 0);
+    } else if (l === "\\." ) table = null;
+    else if (table) rows.set(table, rows.get(table)! + 1);
+  }
+  const out: string[] = [];
+  const stmts = sql.split("\n");
+  out.push(`T|${stmts.filter((l) => l.startsWith("select 'E'")).length}`);
+  for (const l of stmts) {
+    const e = /^select 'E', (\d+),/.exec(l);
+    if (e) out.push(`E|${e[1]}|t`);
+    const r = /^select 'R', (\d+), count\(\*\) from only (\S+);$/.exec(l);
+    if (r) out.push(`R|${r[1]}|${rows.get(r[2]!) ?? 0}`);
+  }
+  return out;
+}
+
 interface Fleet {
   /** slug → containers */
   containers: Record<string, ProjectContainer[]>;
@@ -107,7 +152,9 @@ interface Fleet {
 class FakeDocker implements BackupDocker {
   calls: string[] = [];
   restores: Array<{ container: string; args: string[]; content: string; timeoutMs?: number }> = [];
-  sanity: Array<{ container: string; args: string[] }> = [];
+  prepares: Array<{ container: string; args: string[] }> = [];
+  verifies: Array<{ container: string; args: string[]; sql: string }> = [];
+  cleanups: Array<{ container: string; args: string[] }> = [];
   fleet: Fleet = {
     containers: {
       fazenda: [
@@ -126,9 +173,13 @@ class FakeDocker implements BackupDocker {
       "o-db": { image: "mysql:8", dbName: "outro" },
     },
   };
-  sanityCount = "3\n";
-  restoreStderr = "";
   restoreError: Error | null = null;
+  /** Cenários da conferência e da limpeza. */
+  verifyError: Error | null = null;
+  verifyEdit: ((lines: string[]) => string[]) | null = null;
+  cleanupAnswer: "GONE" | "LEFT" | "THROW" = "GONE";
+  prepareError: Error | null = null;
+  dump = pgDump();
   gate: Promise<void> | null = null;
   onRestore: (() => void) | null = null;
   async projectContainers(slug: string) {
@@ -171,15 +222,20 @@ class FakeDocker implements BackupDocker {
   }
   async execToFile(container: string, script: string, args: string[], outFile: string) {
     this.calls.push(`execToFile ${container} ${args.join(",")}`);
-    await writeFile(outFile, `${script.includes("globals-only") ? "-- papeis\n" : "-- dump\n"}INSERT INTO t VALUES ('${ROW_DATA}');`);
+    await writeFile(outFile, script.includes("globals-only") ? "-- papeis\n" : script.includes("pg_dump") ? this.dump : `-- dump\nINSERT INTO t VALUES ('${ROW_DATA}');`);
     return { stderr: "" };
   }
   async execCapture(container: string, script: string, args: string[] = []): Promise<string> {
     this.calls.push(`execCapture ${container}`);
-    if (script.includes("information_schema.tables")) {
-      this.sanity.push({ container, args });
-      if (this.sanityCount === "THROW") throw new Error(`psql: ${ROW_DATA}`);
-      return this.sanityCount;
+    if (script.includes("# tws-rc:") && script.includes(":prepare")) {
+      this.prepares.push({ container, args });
+      if (this.prepareError) throw this.prepareError;
+      return "";
+    }
+    if (script.includes("# tws-rc:") && script.includes(":cleanup")) {
+      this.cleanups.push({ container, args });
+      if (this.cleanupAnswer === "THROW") throw new Error(`psql: ${ROW_DATA}`);
+      return `${this.cleanupAnswer}\n`;
     }
     if (script.includes("SAVE")) return "OK\n";
     if (script.includes("pg_database")) return "fazenda\npostgres\n";
@@ -187,11 +243,18 @@ class FakeDocker implements BackupDocker {
   }
   async execFromFile(container: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }) {
     this.calls.push(`execFromFile ${container} ${args.join(",")}`);
-    this.restores.push({ container, args, content: await readFile(inFile, "utf8"), timeoutMs: opts?.timeoutMs });
+    const content = await readFile(inFile, "utf8");
+    if (script.includes(":verify")) {
+      this.verifies.push({ container, args, sql: content });
+      if (this.verifyError) throw this.verifyError;
+      const out = answerVerify(content, this.restores.at(-1)?.content ?? "");
+      return { stderr: "", stdout: `${(this.verifyEdit ? this.verifyEdit(out) : out).join("\n")}\n` };
+    }
+    this.restores.push({ container, args, content, timeoutMs: opts?.timeoutMs });
     this.onRestore?.();
     if (this.gate) await this.gate;
     if (this.restoreError) throw this.restoreError;
-    return { stderr: this.restoreStderr };
+    return { stderr: "", stdout: "" };
   }
   async copyOut(container: string, p: string, outFile: string) {
     this.calls.push(`copyOut ${container} ${p}`);
@@ -415,15 +478,12 @@ describe("configuração", () => {
     expect((await view()).settings).toBeNull();
   });
 
-  it("MySQL/MariaDB/Mongo: bancos com nomes diferentes não são elegíveis (o dump recria o banco com o nome original)", async () => {
+  it("o nome do banco do destino não importa: a prova é feita num banco temporário, e nada do destino é tocado", async () => {
     docker.fleet.dbs["s-db"] = { image: "mysql:8", dbName: "fazenda" };
     docker.fleet.dbs["d-db"] = { image: "mysql:8", dbName: "fazenda_sbx" };
     await service.detectProject(SRC);
     await service.detectProject(DST);
-    expect((await view()).candidates).toEqual([]);
-    docker.fleet.dbs["d-db"] = { image: "mysql:8", dbName: "fazenda" };
-    await service.detectProject(DST);
-    expect((await view()).candidates.map((c) => c.id)).toEqual([DST]);
+    expect((await view()).candidates.map((c) => c.id)).toEqual([DST, "p3"]);
   });
 
   it("encadeamento proibido: um destino não pode ser origem de outro teste (nunca restaurar em cima da produção)", async () => {
@@ -476,19 +536,30 @@ describe("configuração", () => {
 // ---------------------------------------------------------------------------
 
 describe("depois do backup", () => {
-  it("restaura o dump do banco no banco do destino e confere que há tabelas", async () => {
+  it("restaura o dump num banco TEMPORÁRIO do servidor do destino, confere tabelas e linhas e apaga o temporário", async () => {
     await enable();
     await backup();
     await service.idle();
     expect(docker.restores).toHaveLength(1);
     const r = docker.restores[0]!;
     expect(r.container).toBe("d-db");
-    // o Postgres do destino recebe o dump no banco DO DESTINO (fazenda_sbx), não cria "fazenda" ao lado
-    expect(r.args).toEqual(["fazenda_sbx"]);
-    expect(r.content).toContain("-- dump");
-    expect(docker.sanity).toEqual([{ container: "d-db", args: ["fazenda_sbx"] }]);
+    // o banco do destino (fazenda_sbx) nem é citado: o dump entra em tws_rc_<id>, com o prazo em segundos dentro do container
+    expect(r.args[0]).toMatch(/^tws_rc_[0-9a-f]{8}$/);
+    expect(r.args[1]).toBe("1");
+    expect(JSON.stringify(docker.calls)).not.toContain("fazenda_sbx");
+    // dono e permissão de papéis que podem não existir no destino ficam de fora; os dados passam intactos (inclusive uma linha que parece um GRANT)
+    expect(r.content).toContain("CREATE TABLE public.animais");
+    expect(r.content).not.toContain("OWNER TO");
+    expect(r.content).not.toContain("GRANT SELECT");
+    expect(r.content).toContain("2\tGRANT ALL ON x TO y;");
+    expect(docker.prepares).toEqual([{ container: "d-db", args: [r.args[0]] }]);
+    expect(docker.verifies).toHaveLength(1);
+    expect(docker.verifies[0]!.args).toEqual([r.args[0]]);
+    expect(docker.verifies[0]!.sql).toContain("to_regclass('public.animais')");
+    expect(docker.verifies[0]!.sql).toContain("from only public.animais");
+    expect(docker.cleanups).toEqual([{ container: "d-db", args: [r.args[0]] }]);
     const v = await view();
-    expect(v.last).toMatchObject({ status: "ok", trigger: "auto", destinationId: DST, destinationName: "Fazenda Sandbox", reasonCode: null });
+    expect(v.last).toMatchObject({ status: "ok", trigger: "auto", destinationId: DST, destinationName: "Fazenda Sandbox", reasonCode: null, checked: { tables: 1, rows: 2 } });
     expect(typeof v.last!.durationMs).toBe("number");
     expect(v.last!.backupFileName).toMatch(/\.7z$/);
     expect(notices).toEqual([]);
@@ -497,7 +568,8 @@ describe("depois do backup", () => {
   it("nunca restaura papéis, volumes, arquivos, código, variáveis nem e-mail: só o dump do banco", async () => {
     await enable();
     await backup();
-    expect(docker.restores.map((r) => r.content.split("\n")[0])).toEqual(["-- dump"]); // sem _papeis.sql
+    expect(docker.restores.map((r) => r.content)).toHaveLength(1);
+    expect(docker.restores[0]!.content).not.toContain("papeis");
     const bad = docker.calls.filter((c) => /^(copyIn|restorePath|restoreVolume|stop|start)/.test(c));
     expect(bad).toEqual([]);
     expect(tarExtracts).toBe(0);
@@ -540,12 +612,11 @@ describe("depois do backup", () => {
     expect(t.restoreCheck).toMatchObject({ enabled: true, last: { status: "ok" } });
   });
 
-  it("avisos do banco viram só uma contagem, sem o texto", async () => {
-    docker.restoreStderr = `ERROR:  role "x" does not exist\nERROR: invalid input '${ROW_DATA}'\n`;
+  it("o que a conferência devolve nunca vai para o resultado, o histórico, a auditoria, os avisos nem o log", async () => {
     await enable();
     await backup();
-    const v = await view();
-    expect(v.last).toMatchObject({ status: "ok", dbWarnings: 2 });
+    expect(everything()).not.toContain(ROW_DATA);
+    expect(everything()).not.toContain(DB_SECRET);
     expect(JSON.stringify(await service.status())).not.toContain(ROW_DATA);
   });
 
@@ -742,42 +813,138 @@ describe("salvaguardas: 'não executado', sem tocar em nada", () => {
   });
 });
 
-describe("falhas", () => {
-  it("restore com erro: resultado 'falhou', motivo curto, aviso nos canais e SEM texto do banco", async () => {
+describe("falhas: só é 'ok' quando restaurou sem erro e a conferência bateu", () => {
+  const leak = async () => {
+    const text = JSON.stringify({ v: await view(), s: await service.status(), n: notices, a: audits, l: logs });
+    expect(text).not.toContain(ROW_DATA);
+    expect(text).not.toContain(DB_SECRET);
+  };
+
+  it("restore com erro: 'falhou', motivo curto fixo, aviso nos canais, banco temporário apagado e SEM texto do banco", async () => {
     docker.restoreError = new Error(`psql: connection refused ${ROW_DATA} ${DB_SECRET}`);
     await enable();
     await backup();
     const v = await view();
-    expect(v.last).toMatchObject({ status: "failed", reasonCode: "restore_failed" });
-    expect(v.last!.reason).toMatch(/incompleto/);
+    expect(v.last).toMatchObject({ status: "failed", reasonCode: "restore_failed", checked: null });
     expect(notices.filter((n) => n.kind === "backup_failed" && n.key === `restore-check-failed:${SRC_ID}`)).toHaveLength(1);
-    const text = JSON.stringify({ v, s: await service.status(), n: notices, a: audits, l: logs });
-    expect(text).not.toContain(ROW_DATA);
-    expect(text).not.toContain(DB_SECRET);
+    expect(docker.cleanups).toHaveLength(1);
+    expect(docker.verifies).toEqual([]);
+    await leak();
   });
 
-  it("o banco do destino sem tabela nenhuma depois do restore: falhou", async () => {
-    docker.sanityCount = "0\n";
+  it("falha ao preparar o banco temporário: 'falhou' (e ainda limpa)", async () => {
+    docker.prepareError = new Error(`psql: ${ROW_DATA}`);
+    await enable();
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "restore_failed" });
+    expect(docker.restores).toEqual([]);
+    expect(docker.cleanups).toHaveLength(1);
+    await leak();
+  });
+
+  it("uma tabela do dump que não existe depois da restauração: falhou", async () => {
+    docker.verifyEdit = (lines) => lines.filter((l) => l !== "E|0|t");
     await enable();
     await backup();
     expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "sanity_failed" });
     expect(notices).toHaveLength(1);
   });
 
-  it("a conferência do destino falhar também é falha, sem repassar a mensagem", async () => {
-    docker.sanityCount = "THROW";
+  it("linhas a menos do que o dump promete: falhou", async () => {
+    docker.verifyEdit = (lines) => lines.map((l) => (l.startsWith("R|") ? "R|0|1" : l));
     await enable();
     await backup();
     expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "sanity_failed" });
-    expect(everything()).not.toContain(ROW_DATA);
   });
 
-  it("passou do prazo: falhou por tempo; o prazo foi passado ao comando de restauração", async () => {
+  it("conferência sem a contagem de tabelas, ou com menos tabelas do que o dump cria: falhou", async () => {
+    docker.verifyEdit = (lines) => lines.filter((l) => !l.startsWith("T|"));
+    await enable();
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "sanity_failed" });
+    docker.verifyEdit = (lines) => lines.map((l) => (l.startsWith("T|") ? "T|0" : l));
+    await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "sanity_failed" });
+  });
+
+  it("a conferência não conseguir rodar também é falha, sem repassar a mensagem", async () => {
+    docker.verifyError = new Error(`psql: ${ROW_DATA}`);
+    await enable();
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "sanity_failed" });
+    expect(docker.cleanups).toHaveLength(1);
+    await leak();
+  });
+
+  it("dump sem tabela nenhuma, ou cortado (sem a marca final do pg_dump): falhou sem tocar no servidor do destino", async () => {
+    docker.dump = "-- PostgreSQL database dump\nSELECT 1;\n-- PostgreSQL database dump complete\n";
+    await enable();
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "sanity_failed" });
+    docker.dump = pgDump().replace("-- PostgreSQL database dump complete\n", "");
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "sanity_failed" });
+    expect(docker.prepares).toEqual([]);
+    expect(docker.restores).toEqual([]);
+    expect(docker.cleanups).toEqual([]);
+  });
+
+  it("passou do prazo: falhou por tempo, o prazo foi passado ao container (em segundos) e ao cliente, e o banco temporário foi limpo", async () => {
     docker.restoreError = new Error("o comando passou do prazo e foi interrompido");
     await enable();
     await backup();
     expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "timeout" });
-    expect(docker.restores[0]!.timeoutMs).toBe(1234);
+    // o cliente docker espera um pouco mais que o `timeout` de dentro do container
+    expect(docker.restores[0]!.timeoutMs).toBe(1234 + 30_000);
+    expect(docker.restores[0]!.args[1]).toBe("1");
+    expect(docker.cleanups).toHaveLength(1);
+    docker.restoreError = new Error("docker saiu com código 137");
+    await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "timeout" });
+  });
+
+  it("não conseguiu apagar o banco temporário: falhou com o aviso para apagar à mão (nunca fica 'ok')", async () => {
+    docker.cleanupAnswer = "LEFT";
+    await enable();
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "cleanup_failed" });
+    expect(notices).toHaveLength(1);
+    docker.cleanupAnswer = "THROW";
+    await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "cleanup_failed" });
+    // a reserva do destino é solta mesmo assim (o banco temporário não atrapalha o deploy do destino)
+    expect(released.filter((x) => x.startsWith("release:"))).toHaveLength(2);
+    await leak();
+  });
+
+  it("erro inesperado dentro do teste: 'falhou' com texto fixo, sem o texto do erro no log", async () => {
+    let boom = false;
+    service = build({
+      projects: {
+        list: async () => projects,
+        get: async (id) => {
+          if (boom) {
+            boom = false;
+            throw new Error(`inesperado ${ROW_DATA}`);
+          }
+          return projects.find((p) => p.id === id || p.slug === id) ?? null;
+        },
+        srcDir: (p) => path.join(dir, "projects", p.slug, "src"),
+        redeploy: async () => undefined,
+        hold: async () => {
+          boom = true;
+          return () => undefined;
+        },
+      },
+    });
+    await enable();
+    await backup();
+    expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "restore_failed" });
+    expect(logs.some((l) => /erro inesperado/.test(l))).toBe(true);
+    await leak();
   });
 
   it("o dump do backup só tem banco que não é o principal: não adivinha", async () => {
@@ -787,7 +954,7 @@ describe("falhas", () => {
     await backup();
     // a lista do dump tem "fazenda" e "postgres"; o principal declarado ("outro_nome") não está nela, e "fazenda" é o único que não é o "postgres"
     expect((await view()).last?.status).toBe("ok");
-    expect(docker.restores[0]!.args).toEqual(["fazenda_sbx"]);
+    expect(docker.restores).toHaveLength(1);
   });
 });
 
@@ -879,11 +1046,141 @@ describe("'Testar agora'", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Pedido na fila e configuração que muda
+// ---------------------------------------------------------------------------
+
+describe("pedido que espera na fila", () => {
+  /** Ocupa a fila com o backup de outro projeto até chamar `release()`. */
+  async function blockQueue() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = docker.execToFile.bind(docker);
+    docker.execToFile = async (...a: Parameters<FakeDocker["execToFile"]>) => {
+      await gate;
+      return original(...a);
+    };
+    const other = await service.runNow(projectTargetId("p3"), "admin");
+    await until(async () => (await service.status()).running?.id === other.id);
+    return release;
+  }
+
+  async function addExtra() {
+    docker.fleet.containers["extra"] = [{ id: "x-db", name: "paas-extra-db-1", service: "db", running: true }];
+    docker.fleet.dbs["x-db"] = { image: "postgres:16", dbName: "extra" };
+    projects.push(project({ id: "p4", name: "Extra", slug: "extra" }));
+    await service.detectProject("p4");
+  }
+
+  it("desligar a opção enquanto o teste espera: 'não executado' (nada é restaurado)", async () => {
+    await enable();
+    await backup();
+    docker.restores.length = 0;
+    const release = await blockQueue();
+    await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    release();
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "turned_off" });
+    expect(docker.restores).toEqual([]);
+  });
+
+  it("trocar o destino com um teste na fila: o pedido velho sai como 'não executado' e o novo roda no destino novo", async () => {
+    await addExtra();
+    await enable();
+    await backup();
+    docker.restores.length = 0;
+    const release = await blockQueue();
+    const old = await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await service.updateRestoreCheck(SRC, { enabled: true, destinationId: "p4", confirm: "Extra" }, "admin");
+    const fresh = await service.runRestoreCheck(SRC, { confirm: "Extra" }, "admin");
+    expect(fresh.id).not.toBe(old.id);
+    release();
+    await service.idle();
+    expect((await service.record(old.id)).status).toBe("warning");
+    expect((await service.record(old.id)).warnings.join(" ")).toMatch(/trocado/);
+    expect(docker.restores.map((r) => r.container)).toEqual(["x-db"]);
+    expect((await view()).last).toMatchObject({ status: "ok", destinationId: "p4", destinationName: "Extra", recordId: fresh.id });
+  });
+
+  it("trocar o destino sem novo pedido: o teste da fila não roda no destino novo e o resultado diz o destino pedido", async () => {
+    await addExtra();
+    await enable();
+    await backup();
+    docker.restores.length = 0;
+    const release = await blockQueue();
+    await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await service.updateRestoreCheck(SRC, { enabled: true, destinationId: "p4", confirm: "Extra" }, "admin");
+    release();
+    await service.idle();
+    const last = (await view()).last!;
+    expect(last).toMatchObject({ status: "not_run", reasonCode: "settings_changed", destinationName: "Fazenda Sandbox" });
+    expect(docker.restores).toEqual([]);
+  });
+
+  it("destino renomeado entre o pedido e a execução: a opção se desliga e nada roda", async () => {
+    await enable();
+    projects[1] = { ...projects[1]!, name: "Fazenda Homologação" };
+    await backup();
+    expect((await view()).settings?.enabled).toBe(false);
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "destination_renamed" });
+    expect(docker.restores).toEqual([]);
+  });
+
+  it("backup incompleto não é usado: 'não executado'", async () => {
+    await enable();
+    const record = await backup();
+    docker.restores.length = 0;
+    const inner = service as unknown as { enqueueRestoreCheck(id: string, name: string, s: unknown, f: unknown): unknown };
+    inner.enqueueRestoreCheck(SRC, "Fazenda", (await view()).settings, { fileName: record.fileName, source: "local", sizeBytes: 100, trigger: "auto", incomplete: true });
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "backup_incomplete" });
+    expect(docker.restores).toEqual([]);
+  });
+
+  it("tamanho do backup desconhecido: mede o arquivo; se não dá para medir, 'não executado'", async () => {
+    await enable();
+    const record = await backup();
+    docker.restores.length = 0;
+    const inner = service as unknown as { enqueueRestoreCheck(id: string, name: string, s: unknown, f: unknown): unknown };
+    const settings = (await view()).settings;
+    inner.enqueueRestoreCheck(SRC, "Fazenda", settings, { fileName: record.fileName, source: "local", sizeBytes: null, trigger: "manual", incomplete: false });
+    await service.idle();
+    expect((await view()).last?.status).toBe("ok");
+    await rm(path.join(dir, "backups", "fazenda", record.fileName!));
+    inner.enqueueRestoreCheck(SRC, "Fazenda", settings, { fileName: record.fileName, source: "local", sizeBytes: null, trigger: "manual", incomplete: false });
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "backup_unreadable" });
+    inner.enqueueRestoreCheck(SRC, "Fazenda", settings, { fileName: record.fileName, source: "remote", sizeBytes: null, trigger: "manual", incomplete: false });
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "backup_unreadable" });
+  });
+});
+
+describe("tamanho do backup externo desconhecido", () => {
+  it("usa o tamanho da listagem do armazenamento; sem poder listar, 'não executado'", async () => {
+    await service.setDestination({ provider: "r2", endpoint: "https://abc.r2.cloudflarestorage.com", region: "", bucket: "meus-backups", accessKeyId: "AKIAEXEMPLO1234", secretAccessKey: "chave" }, "admin");
+    await service.setEncryption(false, "admin");
+    await enable();
+    const record = await backup();
+    const inner = service as unknown as { enqueueRestoreCheck(id: string, name: string, s: unknown, f: unknown): unknown };
+    const settings = (await view()).settings;
+    const ask = () => inner.enqueueRestoreCheck(SRC, "Fazenda", settings, { fileName: record.fileName, source: "remote", sizeBytes: null, trigger: "manual", incomplete: false });
+    ask();
+    await service.idle();
+    expect((await view()).last?.status).toBe("ok");
+    storage.failList = true;
+    ask();
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "backup_unreadable" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Reinício
 // ---------------------------------------------------------------------------
 
 describe("reinício do painel no meio do teste", () => {
-  it("'em andamento' não fica preso: na subida vira 'falhou' avisando que o banco de teste pode estar incompleto", async () => {
+  it("'em andamento' não fica preso: na subida vira 'falhou' avisando do banco temporário que pode ter sobrado", async () => {
     await enable();
     await backup();
     const cfgFile = path.join(dir, "backups.json");
@@ -893,8 +1190,34 @@ describe("reinício do painel no meio do teste", () => {
     service = build();
     const v = await view();
     expect(v.last).toMatchObject({ status: "failed", reasonCode: "panel_restarted" });
-    expect(v.last!.reason).toMatch(/incompleto/);
+    expect(v.last!.reason).toMatch(/tws_rc_/);
     expect(typeof v.last!.finishedAt).toBe("string");
+  });
+
+  it("um teste que ainda esperava na fila nem começou: 'não executado', não 'falhou'", async () => {
+    await enable();
+    await backup();
+    docker.restores.length = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = docker.execToFile.bind(docker);
+    docker.execToFile = async (...a: Parameters<FakeDocker["execToFile"]>) => {
+      await gate;
+      return original(...a);
+    };
+    const other = await service.runNow(projectTargetId("p3"), "admin");
+    await until(async () => (await service.status()).running?.id === other.id);
+    const queued = await service.runRestoreCheck(SRC, { confirm: "Fazenda Sandbox" }, "admin");
+    await service.flush();
+    const old = service;
+    service = build();
+    const v = await view();
+    expect(v.last).toMatchObject({ status: "not_run", reasonCode: "restart_before_start" });
+    const rec = (await service.status()).history.find((h) => h.id === queued.id)!;
+    expect(rec.status).toBe("warning");
+    expect(rec.error).toBeNull();
+    release();
+    await old.idle();
   });
 
   it("persiste o resultado em disco (sem dados do banco)", async () => {

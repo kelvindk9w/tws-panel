@@ -267,30 +267,37 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
 
 **Validar o backup do banco restaurando em outro projeto (opcional).** Na aba **Backups** do
 projeto, desligada por padrão: o backup continua como sempre. Ligada, depois de cada backup o painel
-restaura o banco no banco de **outro projeto** (por exemplo, a fazenda em sandbox, com o mesmo
-repositório em outra branch e o próprio banco) e confere que ele ficou com tabelas. É a prova de
-que o backup do banco realmente restaura; o ambiente de teste fica sempre um pouco defasado.
+restaura o banco num **banco temporário** que ele cria no servidor de banco de **outro projeto**
+(por exemplo, a fazenda em sandbox), confere que cada tabela do backup existe e que o número de
+linhas bate com o do backup, e apaga o banco temporário. É a prova de que o backup do banco
+realmente restaura. O banco do projeto de destino **não é alterado**: o teste não deixa os dados
+de produção no ambiente de teste.
 
-- **Atenção.** A restauração apaga e recria, no banco do projeto de destino, as tabelas que estão no
-  backup. Ela também copia dados reais de produção para o ambiente de teste, que podem ser dados
-  pessoais (LGPD): não ligue se o teste for compartilhado com terceiros. Para ligar, escolha o
-  projeto de destino e digite o nome dele.
+- **Atenção.** O teste copia dados reais de produção, que podem ser dados pessoais (LGPD), para o
+  disco do servidor de banco do destino enquanto dura (o banco temporário é apagado no fim, também
+  quando o teste falha ou passa do prazo). Não ligue se o destino for compartilhado com terceiros.
+  Para ligar, escolha o projeto de destino e digite o nome dele.
 - **Só o banco.** Arquivos, volumes, variáveis e a configuração do projeto de origem nunca são
-  restaurados, nem os usuários (papéis) do PostgreSQL.
+  restaurados. Também não são tocados os bancos, os usuários, os papéis nem as tabelas de sistema
+  do servidor de destino: o MySQL e o MariaDB restauram só o banco do projeto, e o MongoDB deixa de
+  fora `admin`, `config` e `local`.
 - **Quem pode ser destino.** Outro projeto, com banco do mesmo tipo (PostgreSQL, MySQL, MariaDB ou
-  MongoDB) já detectado e que não faça um teste próprio. No MySQL, MariaDB e MongoDB, os bancos
-  precisam ter o mesmo nome; no PostgreSQL, o banco do backup entra no banco do destino.
+  MongoDB) já detectado e que não faça um teste próprio. O nome do banco do destino não importa.
 - **Quando.** Após cada backup (padrão) ou, no máximo, uma vez por dia ou por semana. **Testar
   agora** roda o teste com o último backup, com a mesma confirmação digitada. Se a cópia externa
   falhar, o painel testa a cópia da VPS mesmo assim.
 - **Segurança.** O banco do destino precisa estar em execução (o painel não liga nem reinicia nada),
-  o destino não pode estar em deploy, e o teste espera a vez na fila dos backups. Se o destino for
-  apagado ou renomeado, a opção se desliga e avisa.
+  o destino não pode estar em deploy, e o teste espera a vez na fila dos backups, com prazo e
+  checagem de espaço em disco. Se o destino for apagado ou renomeado, a opção se desliga e avisa.
+- **Quando é "ok".** Só quando a restauração terminou sem nenhum erro (ela para no primeiro erro),
+  todas as tabelas do backup existem no banco temporário e o número de linhas bate com o do backup.
+  Backup cortado ou com erro, ou que o servidor de destino não aceita (por exemplo, uma extensão que
+  falta), aparece como **falhou**, com o motivo curto. Um backup sem nenhuma tabela também falha.
 - **Resultado.** A aba mostra "Último teste de restauração: ok em …, no projeto …", ou falhou, ou
-  não executado, com o motivo curto; **Configurações → Backups** mostra um selo por projeto. Se o
-  teste falhar, chega uma notificação de backup que falhou. Se a restauração falhar no meio, o banco
-  de teste pode ficar incompleto. Se o projeto de teste tem um código mais novo e o esquema não
-  combina, o teste falha com o motivo, sem derrubar nada.
+  não executado, com o motivo curto e o que foi conferido; **Configurações → Backups** mostra um
+  selo por projeto. Se o teste falhar, chega uma notificação de backup que falhou. Se o painel
+  reiniciar no meio, um banco temporário pode sobrar no destino: o aviso diz isso e o próximo teste
+  o apaga.
 
 **Restaurar.**
 

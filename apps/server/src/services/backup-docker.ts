@@ -44,7 +44,7 @@ export interface BackupDocker {
   /** Roda o script e devolve a saída (curta). */
   execCapture(container: string, script: string, args: string[]): Promise<string>;
   /** Roda o script com `inFile` na entrada. `opts.timeoutMs`: prazo próprio (padrão: o do Docker, 2 h). */
-  execFromFile(container: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }): Promise<{ stderr: string }>;
+  execFromFile(container: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }): Promise<{ stderr: string; stdout?: string }>;
   copyOut(container: string, path: string, outFile: string): Promise<void>;
   copyIn(container: string, parentPath: string, tarFile: string): Promise<void>;
   /** Esvazia `destination` e extrai o .tar (do `docker cp`) nela, com o container parado. */
@@ -222,9 +222,8 @@ export class DockerCli implements BackupDocker {
     return (await this.run(["exec", container, "sh", "-c", script, "sh", ...args], { timeoutMs: 120_000 })).stdout;
   }
 
-  async execFromFile(container: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }): Promise<{ stderr: string }> {
-    const { stderr } = await this.run(["exec", "-i", container, "sh", "-c", script, "sh", ...args], { stdinFile: inFile, timeoutMs: opts?.timeoutMs });
-    return { stderr };
+  async execFromFile(container: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }): Promise<{ stderr: string; stdout: string }> {
+    return this.run(["exec", "-i", container, "sh", "-c", script, "sh", ...args], { stdinFile: inFile, timeoutMs: opts?.timeoutMs });
   }
 
   async copyOut(container: string, path: string, outFile: string): Promise<void> {

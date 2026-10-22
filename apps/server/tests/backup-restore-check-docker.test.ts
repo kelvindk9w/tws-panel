@@ -1,7 +1,7 @@
 /**
  * backup-restore-check-docker.test.ts — o teste de restauração com Docker de
- * VERDADE: dois Postgres (origem e destino, nomes únicos, rede e volumes
- * descartáveis), o backup do banco de origem e a restauração no banco do destino.
+ * VERDADE: dois Postgres (origem e destino, nomes únicos), o backup do banco de origem
+ * e a prova da restauração num banco temporário do servidor do destino.
  *
  * Pula sozinho quando a máquina não tem Docker ou não tem a imagem
  * `postgres:16-alpine` localmente (nunca baixa nada; igual ao teste de sonda do
@@ -127,7 +127,7 @@ describe.skipIf(!enabled)("teste de restauração com Postgres de verdade", () =
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("restaura o banco da origem no banco do destino, sem trazer papéis nem criar o banco da origem ao lado", async () => {
+  it("restaura o backup num banco temporário do servidor do destino, confere e apaga, sem tocar no banco do destino", async () => {
     const projects = [project("a", "Fazenda", SRC_SLUG), project("b", "Fazenda Sandbox", DST_SLUG)];
     const service = new BackupService({
       dataDir: dir,
@@ -155,14 +155,14 @@ describe.skipIf(!enabled)("teste de restauração com Postgres de verdade", () =
 
     const last = (await service.projectView("a")).restoreCheck.last!;
     expect(last).toMatchObject({ status: "ok", destinationName: "Fazenda Sandbox", reasonCode: null });
-    // o banco do destino agora tem os dados da origem...
-    expect(psql(DST_C, "fazenda_sbx", "select count(*) from animais")).toBe("2");
-    expect(psql(DST_C, "fazenda_sbx", "select count(*) from lotes")).toBe("0");
-    // ...o que só existia no destino continua lá (o dump não o conhece)...
+    expect(last.checked).toEqual({ tables: 2, rows: 2 });
+    // o banco do destino NÃO foi tocado: continua com as tabelas e os dados que tinha
+    expect(psql(DST_C, "fazenda_sbx", "select count(*) from animais")).toBe("0");
     expect(psql(DST_C, "fazenda_sbx", "select count(*) from antigo")).toBe("0");
-    // ...e o banco "fazenda" da origem NÃO foi criado ao lado, no servidor do destino
-    expect(psql(DST_C, "postgres", "select count(*) from pg_database where datname = 'fazenda'")).toBe("0");
-    // a senha do usuário do destino continua a mesma (papéis não são restaurados): o painel acabou de conectar com ela
+    expect(psql(DST_C, "fazenda_sbx", "select count(*) from information_schema.columns where table_name = 'animais' and column_name = 'apelido'")).toBe("1");
+    // o banco temporário foi apagado, e o banco "fazenda" da origem não foi criado no servidor do destino
+    expect(psql(DST_C, "postgres", "select count(*) from pg_database where datname like 'tws\\_rc\\_%' or datname = 'fazenda'")).toBe("0");
+    // a senha do usuário do destino continua a mesma (papéis não são restaurados)
     expect(psql(DST_C, "fazenda_sbx", "select 1")).toBe("1");
     // a origem não mudou
     expect(psql(SRC_C, "fazenda", "select count(*) from animais")).toBe("2");
