@@ -78,6 +78,13 @@ export default {
   "code.mail_auth_still_refused": "O painel conferiu a senha de administração e o servidor de e-mail a aceita, mas a leitura foi recusada de novo. Nada foi reiniciado nem apagado. Próximo passo: tente Sincronizar mais uma vez; se repetir, olhe o log com docker logs paas-stalwart.",
   "code.reconciliation_not_found": "Esse aviso não existe mais.",
   "code.wrong_password": "A senha não abre este backup.",
+
+  // Teste de restauração do backup
+  "code.restore_check_unavailable": "Este projeto não tem banco que o backup copie, ou o banco não está marcado no backup.",
+  "code.restore_check_chain": "Este projeto é o destino do teste de restauração de outro projeto, então não pode ter um teste próprio.",
+  "code.restore_check_off": "Ligue a validação do backup restaurando em outro projeto primeiro.",
+  "code.invalid_destination": "Este projeto não pode ser o destino: precisa ser outro projeto, com banco do mesmo tipo e sem teste próprio.",
+  "code.no_backup": "Ainda não há backup deste projeto para testar.",
   "code.send_not_found": "Mensagem não encontrada.",
   "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",
   "code.content_expired": "O assunto e o corpo desta mensagem já foram apagados pela retenção.",

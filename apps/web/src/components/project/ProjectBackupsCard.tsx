@@ -19,6 +19,7 @@ import {
   formatBytes,
   when,
 } from "@/components/backups/backup-ui";
+import { RestoreCheckCard } from "@/components/project/RestoreCheckCard";
 import { AlertTriangle, Database, FolderPlus, HardDrive, Loader2, Mail, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
 type EmailBackupState = "active" | "paused" | "off" | "unavailable" | "unknown";
@@ -98,7 +99,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
   const last = view?.target.lastBackup ?? null;
   const running = last !== null && (last.status === "running" || last.status === "queued");
   // conferências também entram na fila: acompanha enquanto houver algo andando
-  const active = running || Boolean(view?.history.some((r) => r.status === "running" || r.status === "queued"));
+  const active = running || Boolean(view?.history.some((r) => r.status === "running" || r.status === "queued")) || view?.restoreCheck?.last?.status === "running";
   useEffect(() => {
     if (!active) return;
     const t = setInterval(load, 3000);
@@ -404,6 +405,8 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           </div>
         </CardContent>
       </Card>
+
+      {view.restoreCheck && <RestoreCheckCard projectId={projectId} view={view.restoreCheck} onChanged={load} />}
 
       <Card>
         <CardHeader>

@@ -22,6 +22,8 @@
  *  GET    /api/backups/records/:id              progresso de um backup/restauração
  *  GET    /api/backups/projects/:id             aba Backups do projeto
  *  POST   /api/backups/projects/:id/detect      detectar de novo
+ *  PUT    /api/backups/projects/:id/restore-check      ligar/desligar "Validar o backup do banco restaurando em outro projeto"
+ *  POST   /api/backups/projects/:id/restore-check/run  "Testar agora" (confirmação digitada: nome do projeto de destino)
  *  GET    /api/backups/catalog                  "Restaurar de outro servidor": o que existe no armazenamento
  *
  * :target = "panel", "email" ou "project:<id>". O serviço (backup-service.ts)
@@ -40,6 +42,9 @@ import {
   type BackupRestoreRequest,
   type BackupTargetSettingsRequest,
   type BackupVerifyRequest,
+  RESTORE_CHECK_FREQUENCIES,
+  type RestoreCheckRunRequest,
+  type RestoreCheckSettingsRequest,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import type { HttpError } from "../services/http-error.js";
@@ -351,6 +356,38 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
       await service.detectProject(id);
       return service.projectView(id);
     }),
+  );
+
+  app.put(
+    "/api/backups/projects/:id/restore-check",
+    {
+      schema: {
+        params: idParams,
+        body: {
+          type: "object",
+          required: ["enabled"],
+          additionalProperties: false,
+          properties: {
+            enabled: { type: "boolean" },
+            destinationId: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" },
+            frequency: { type: "string", enum: [...RESTORE_CHECK_FREQUENCIES] },
+            confirm: { type: "string", maxLength: 200 },
+          },
+        },
+      },
+    },
+    handle((req, actor) => service.updateRestoreCheck((req.params as { id: string }).id, req.body as RestoreCheckSettingsRequest, actor), { noStore: true }),
+  );
+  app.post(
+    "/api/backups/projects/:id/restore-check/run",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: {
+        params: idParams,
+        body: { type: "object", required: ["confirm"], additionalProperties: false, properties: { confirm: { type: "string", maxLength: 200 } } },
+      },
+    },
+    handle((req, actor) => service.runRestoreCheck((req.params as { id: string }).id, req.body as RestoreCheckRunRequest, actor), { noStore: true }),
   );
 
   app.get("/api/backups/catalog", handle(() => service.catalog()));

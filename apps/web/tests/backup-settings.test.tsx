@@ -591,6 +591,37 @@ describe("Configurações → Backups", () => {
     expect(within(rows[0]!).getByTestId("remote-badge").className).toMatch(/emerald|success|green/);
   });
 
+  it("teste de restauração: selo por projeto em Configurações → Backups, no histórico e na linha de andamento", async () => {
+    const last = (status: "ok" | "failed" | "not_run" | "running") => ({
+      status, trigger: "auto" as const, startedAt: "2026-10-14T12:00:00Z", finishedAt: null, durationMs: null, destinationId: "p2", destinationName: "Fazenda Sandbox",
+      backupFileName: null, reasonCode: null, reason: null, checked: null, recordId: "x",
+    });
+    state.targets = state.targets.map((t) => (t.id === "project:p1" ? { ...t, restoreCheck: { enabled: true, last: last("failed") } } : t));
+    state.history = [record({ id: "rc1", target: "project:p1", targetName: "Loja", operation: "restore_check", fileName: "2026-10-14_09-00.7z", remote: "none", local: false })];
+    renderPage();
+    const card = await screen.findByTestId("projects-card");
+    expect(within(card).getByTestId("restore-check-seal")).toHaveTextContent("Teste de restauração falhou");
+    expect(within(screen.getByTestId("backup-history")).getAllByTestId("backup-record")[0]).toHaveTextContent("teste de restauração do banco");
+    cleanup();
+    for (const [status, text] of [["ok", "Teste de restauração ok"], ["not_run", "Teste de restauração não executado"], ["running", "Testando a restauração"]] as const) {
+      state.targets = state.targets.map((t) => (t.id === "project:p1" ? { ...t, restoreCheck: { enabled: true, last: last(status) } } : t));
+      renderPage();
+      expect(await within(await screen.findByTestId("projects-card")).findByTestId("restore-check-seal")).toHaveTextContent(text);
+      cleanup();
+    }
+    // desligado ou sem resultado: sem selo
+    state.targets = state.targets.map((t) => (t.id === "project:p1" ? { ...t, restoreCheck: { enabled: false, last: last("ok") } } : t));
+    renderPage();
+    await screen.findByTestId("projects-card");
+    expect(screen.queryByTestId("restore-check-seal")).not.toBeInTheDocument();
+  });
+
+  it("teste de restauração rodando: a página diz o que está acontecendo", async () => {
+    state.running = record({ id: "rc2", target: "project:p1", targetName: "Loja", operation: "restore_check", status: "running", finishedAt: null });
+    renderPage();
+    expect(await screen.findByText(/Testando a restauração do banco de Loja/)).toBeInTheDocument();
+  });
+
   it("Conferir que falha mostra o motivo na linha", async () => {
     state.history = [record({ id: "b1", localExists: true })];
     failures["POST /api/backups/targets/panel/verify"] = new ApiRequestError(409, "no_destination", "Conecte o armazenamento externo primeiro.");

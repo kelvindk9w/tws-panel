@@ -866,6 +866,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     const log: string[] = [];
     try {
       const existing = await service.getProject(request.params.id);
+      // Bancos temporários do teste de restauração que este projeto recebeu: apagados antes de o container sumir.
+      if (existing && app.hasDecorator("backupService")) await app.backupService.beforeDeleteProject(existing.id).catch(() => undefined);
       await service.deleteProject(
         request.params.id,
         request.query.deleteSource === "true",

@@ -295,6 +295,55 @@ In **Settings → Backups** and in each project's **Backups** tab.
 **When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS time zone, with
 the number of copies kept on the VPS and externally. **Back up now** at any time.
 
+**Validate the database backup by restoring it into a temporary database (on another project's
+server).** On the project's **Backups** tab, off by default: the backup keeps working as always.
+For now it only works for **PostgreSQL**. When on, after each
+backup the panel restores the database into a **temporary database** it creates on the database
+server of **another project** (for example, the farm in sandbox), checks that every table in the
+backup exists and that the row counts match the backup, and drops the temporary database. It is the
+proof that the database backup really restores. The data **do not stay in the test environment**:
+the destination project's own database is not changed and the test does not leave production data
+there.
+
+- **Careful.** The test copies real production data, which may be personal data (LGPD/GDPR), onto the
+  destination database server: while the test runs it goes through that server's disk and
+  transaction log (WAL), and dropping the temporary database at the end (also when the test fails or
+  runs past its time limit) does not guarantee no traces remain in those files. Do not turn it on if
+  the destination is shared with third parties. To turn it on, pick the destination project and type its name.
+- **Database only.** Files, volumes, variables and the source project's configuration are never
+  restored. The destination server's other databases, users, roles and system tables are not touched
+  either. The panel only drops the temporary database it created and recorded itself (the name
+  `tws_rc_` plus 16 random letters and digits); a database of yours with a similar name is never
+  dropped. The backup comes from another project and is treated as untrusted: it is restored by a
+  **disposable role with no privileges** (created and dropped together with the temporary
+  database), never with the administrator credential. So extensions that require a superuser make
+  the test fail, with their own reason, and a backup with `psql` client commands (backslash) is
+  refused.
+- **Who can be the destination.** Another project with a PostgreSQL database already detected and
+  running, and with no restore test of its own. The destination needs an administrator credential
+  (superuser, or with CREATEDB and CREATEROLE) and disk space for the backup; without the
+  permission, the result says it is a permission problem. The destination database's name does not
+  matter.
+- **MySQL, MariaDB and MongoDB.** Not available yet: the option shows the reason "not available yet
+  for this database engine". They are left for a later stage.
+- **When.** After every backup (default) or at most once a day or a week. **Test now** runs the
+  test with the latest backup, with the same typed confirmation. If the external copy fails, the
+  panel still tests the VPS copy.
+- **Safety.** The destination's database must be running (the panel does not start or restart
+  anything), the destination must not be deploying, and the test waits its turn in the backup queue,
+  with a time limit and a disk space check. If the destination is deleted or renamed, the option
+  turns itself off and warns you.
+- **When it is "ok".** Only when the restore finished with no error at all (it stops at the first
+  one), every table in the backup exists in the temporary database and the row counts match the
+  backup. A truncated backup, one with errors, or one the destination server does not accept (for
+  example, a missing extension) shows as **failed**, with a short reason. A backup with no tables
+  also fails.
+- **Result.** The tab shows "Last restore test: passed on …, in project …", or failed, or not run,
+  with a short reason and what was checked; **Settings → Backups** shows a seal per project. If the
+  test fails, you get a failed-backup notification. If the panel restarts midway, a temporary
+  database may be left on the destination: the notice says so and the panel drops it at startup and
+  on the next test.
+
 **Restore.**
 
 - Per item (project, panel or email), choosing the date and the copy (VPS or external).

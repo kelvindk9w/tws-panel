@@ -218,6 +218,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       list: () => app.deployService.listProjects(),
       get: (id) => app.deployService.getProject(id),
       srcDir: (p) => app.deployService.backupSourceDir(p),
+      // Teste de restauração: nenhum deploy do projeto de destino começa enquanto o banco dele está sendo restaurado.
+      hold: (id) => app.deployService.holdProject(id),
       // "VPS nova": publica do GitHub e espera terminar antes de pôr os dados de volta.
       redeploy: async (id) => {
         const job = await app.deployService.startDeploy(id);
