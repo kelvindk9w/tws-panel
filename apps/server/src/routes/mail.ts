@@ -510,12 +510,12 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
             detail: `Cadastrados a partir do servidor de e-mail: ${result.domains.length} domínio(s) e ${result.mailboxes.length} caixa(s).`,
           });
         }
-        if (result.passwordsRealigned !== undefined || result.passwordsFailed !== undefined) {
+        if (result.passwordsRealigned !== undefined || result.passwordsReapplied !== undefined || result.passwordsFailed !== undefined) {
           // só contagens: nem senhas nem endereços vão para a trilha
           await app.auditService.record({
             action: "mail.sync",
             target: "mail-server",
-            detail: `Senhas realinhadas no servidor de e-mail: ${result.passwordsRealigned ?? 0} caixa(s); ${result.passwordsFailed?.length ?? 0} falha(s).`,
+            detail: `Senhas no servidor de e-mail: ${result.passwordsRealigned ?? 0} caixa(s) realinhada(s); ${result.passwordsReapplied ?? 0} caixa(s) reaplicada(s) sem conferir; ${result.passwordsFailed?.length ?? 0} falha(s).`,
           });
         }
         const response: MailSyncResponse = {

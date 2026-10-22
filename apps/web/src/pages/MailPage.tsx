@@ -138,6 +138,9 @@ function SyncResult({ result }: { result: MailSyncResponse }) {
           <p className="text-xs text-muted-foreground">{t("mail.page.sync.realignedNote")}</p>
         </>
       )}
+      {(result.passwordsReapplied ?? 0) > 0 && (
+        <p className="text-xs text-muted-foreground">{t("mail.page.sync.reapplied", { count: result.passwordsReapplied ?? 0 })}</p>
+      )}
       {(result.passwordsFailed?.length ?? 0) > 0 && (
         <p className="break-all text-xs text-amber-400">{t("mail.page.sync.realignFailed", { list: (result.passwordsFailed ?? []).join(", ") })}</p>
       )}

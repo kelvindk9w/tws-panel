@@ -244,10 +244,12 @@ export interface MailAdoptResult {
   /** O servidor tem mais de 20 000 domínios ou caixas: só os primeiros foram lidos; o resto não foi conferido. */
   truncated?: boolean;
   /**
-   * Caixas de sistema (postmaster@) e de projeto cuja senha o painel reaplicou no servidor de e-mail
-   * (depois de restaurar, o servidor volta com a senha antiga do backup). Ausente quando não houve nenhuma.
+   * Caixas de sistema (postmaster@) e de projeto cuja senha no servidor de e-mail DIFERIA da guardada pelo painel
+   * e foi corrigida (depois de restaurar, o servidor volta com a senha antiga do backup). Ausente quando 0.
    */
   passwordsRealigned?: number;
+  /** Caixas cuja senha o painel reaplicou sem conseguir conferir antes (o servidor não devolveu a senha). Ausente quando 0. */
+  passwordsReapplied?: number;
   /** Endereços (nunca senhas) das caixas que o painel tentou realinhar e não conseguiu; as outras seguiram. */
   passwordsFailed?: string[];
 }

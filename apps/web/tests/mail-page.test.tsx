@@ -322,6 +322,26 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
     expect(note).toHaveTextContent(/Trocar senha/);
   });
 
+  it("não deu para conferir antes: diz que reaplicou, sem afirmar que a senha estava diferente", async () => {
+    mockApi({ extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: [], passwordsReapplied: 2 }) });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    const note = await screen.findByTestId("mail-sync-result");
+    expect(note).toHaveTextContent("Reapliquei a senha de 2 caixas (não deu para conferir antes se estava diferente).");
+    expect(note).not.toHaveTextContent(/Realinhei/);
+    expect(note).not.toHaveTextContent(/voltou/);
+  });
+
+  it("senhas já conferiam: nenhuma frase sobre senha", async () => {
+    mockApi({ extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: [] }) });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /sincronizar com o servidor de e-mail/i }));
+    const note = await screen.findByTestId("mail-sync-result");
+    expect(note).not.toHaveTextContent(/senha/i);
+  });
+
   it("senha realinhada de uma caixa só: singular", async () => {
     mockApi({ extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: [], passwordsRealigned: 1 }) });
     const user = userEvent.setup();

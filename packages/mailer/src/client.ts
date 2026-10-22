@@ -53,6 +53,9 @@ interface ApiEnvelope {
 const PRINCIPAL_LIST_PAGES = 40;
 export const PRINCIPAL_LIST_MAX = PRINCIPAL_LIST_PAGES * 500;
 
+/** Cara de hash (crypt "$6$", "$argon2id$", "$app$"; "{SHA}"): não dá para comparar com a senha em texto. */
+const HASHED_SECRET_RE = /^(\$[0-9a-z]+\$|\{[A-Za-z0-9-]+\})/;
+
 export class StalwartClient {
   private readonly authHeader: string;
 
@@ -217,6 +220,22 @@ export class StalwartClient {
     const emails = data?.emails;
     const list = typeof emails === "string" ? [emails] : Array.isArray(emails) ? emails : [];
     return list.map((e) => e.toLowerCase());
+  }
+
+  /**
+   * A senha guardada pelo painel é a que a caixa tem no Stalwart? A comparação é feita aqui, em memória: a senha
+   * que o servidor devolve nunca sai deste método. `true`/`false` quando o servidor devolve a senha em texto
+   * (v0.11.8); `null` quando não dá para comparar (sem o campo, lista vazia ou só hash). Erro HTTP sobe.
+   */
+  async mailboxPasswordMatches(email: string, password: string): Promise<boolean | null> {
+    const data = (await this.request("GET", `/principal/${encodeURIComponent(email)}`)) as {
+      secrets?: string | string[];
+    } | null;
+    const raw = data?.secrets;
+    const secrets = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+    if (secrets.includes(password)) return true;
+    if (secrets.length === 0 || secrets.some((s) => HASHED_SECRET_RE.test(s))) return null;
+    return false;
   }
 
   async removeMailboxAlias(email: string, alias: string): Promise<void> {

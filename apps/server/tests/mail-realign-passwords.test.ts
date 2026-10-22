@@ -46,7 +46,10 @@ const FORA = `fora@${DOMAIN}`;
 let serverPassword: Record<string, string> = {};
 let patchLog: Array<{ email: string; value: string }> = [];
 let failPatchFor = new Set<string>();
-let firstPatchDelayMs = 0;
+/** Atraso do PRIMEIRO PATCH de cada caixa (ms). */
+let patchDelay: Record<string, number> = {};
+/** Como o Stalwart falso responde a GET /principal/<caixa>: a senha em texto, um hash, sem senha, 500 ou 404. */
+let getMode: "plain" | "hash" | "none" | "error" | "missing" = "plain";
 let principals: Array<Record<string, unknown>> = [];
 const logs: string[] = [];
 
@@ -64,13 +67,20 @@ function fakeStalwart() {
         const items = principals.filter((p) => p.type === type);
         return new Response(JSON.stringify({ data: { items, total: items.length } }), { status: 200 });
       }
+      if (u.pathname.startsWith("/api/principal/") && (init?.method ?? "GET") === "GET") {
+        const email = decodeURIComponent(u.pathname.slice("/api/principal/".length));
+        if (getMode === "error") return new Response(`{"detail":"boom"}`, { status: 500 });
+        if (getMode === "missing") return new Response(`{"detail":"not found"}`, { status: 404 });
+        const secrets = getMode === "plain" ? [serverPassword[email]] : getMode === "hash" ? ["$6$salt$HASH-NAO-PODE-VAZAR"] : undefined;
+        return new Response(JSON.stringify({ data: { type: "individual", name: email, ...(secrets ? { secrets } : {}) } }), { status: 200 });
+      }
       if (u.pathname.startsWith("/api/principal/") && init?.method === "PATCH") {
         const email = decodeURIComponent(u.pathname.slice("/api/principal/".length));
         const ops = JSON.parse(String(init.body)) as Array<{ field: string; value: string[] }>;
         const value = ops[0]!.value[0]!;
-        const first = email === PM && !patchLog.some((x) => x.email === PM);
+        const first = !patchLog.some((x) => x.email === email);
         patchLog.push({ email, value });
-        if (first && firstPatchDelayMs > 0) await new Promise((r) => setTimeout(r, firstPatchDelayMs));
+        if (first && (patchDelay[email] ?? 0) > 0) await new Promise((r) => setTimeout(r, patchDelay[email]));
         if (failPatchFor.has(email)) return new Response(`{"detail":"boom"}`, { status: 500 });
         serverPassword[email] = value;
         return new Response(`{"data":null}`, { status: 200 });
@@ -98,7 +108,8 @@ beforeEach(async () => {
   logs.length = 0;
   patchLog = [];
   failPatchFor = new Set();
-  firstPatchDelayMs = 0;
+  patchDelay = {};
+  getMode = "plain";
   config = { dataDir: dir, mailPorts: MAIL_DEFAULT_PORTS, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null } as unknown as ServerConfig;
   await mkdir(path.join(dir, "mail"), { recursive: true });
   await writeFile(
@@ -175,14 +186,85 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
     expect((await readStored()).mailboxes[PM]!.password).toBe("senha-nova-do-painel-pm");
   });
 
-  it("é idempotente: repetir reaplica o mesmo valor, sem mudar o cadastro", async () => {
+  it("é idempotente: a segunda vez as senhas já conferem, nada é regravado e o resultado não traz os campos", async () => {
     const svc = service();
     await svc.adoptFromStalwart();
     const before = await readFile(path.join(dir, "mail", "mail.json"), "utf8");
+    patchLog = [];
     const again = await svc.adoptFromStalwart();
-    expect(again.passwordsRealigned).toBe(2);
-    expect(serverPassword[PM]).toBe("senha-nova-do-painel-pm");
+    expect(patchLog).toEqual([]);
+    expect(again).toEqual({ domains: [], mailboxes: [], skipped: [] });
     expect(await readFile(path.join(dir, "mail", "mail.json"), "utf8")).toBe(before);
+  });
+
+  it("senha que já confere: não regrava, não conta e não aparece no resultado (só a divergente é realinhada)", async () => {
+    serverPassword[PM] = "senha-nova-do-painel-pm";
+    const result = await service().adoptFromStalwart();
+    expect(patchLog.map((p) => p.email)).toEqual([LOJA]);
+    expect(result.passwordsRealigned).toBe(1);
+    expect(result.passwordsReapplied).toBeUndefined();
+  });
+
+  it("todas conferem: resultado limpo, sem nenhum PATCH", async () => {
+    serverPassword[PM] = "senha-nova-do-painel-pm";
+    serverPassword[LOJA] = "senha-nova-do-painel-loja";
+    const result = await service().adoptFromStalwart();
+    expect(patchLog).toEqual([]);
+    expect(result).toEqual({ domains: [], mailboxes: [], skipped: [] });
+  });
+
+  it.each(["hash", "none", "error"] as const)("não deu para conferir (%s): reaplica e conta como reaplicada, nunca como realinhada", async (mode) => {
+    getMode = mode;
+    const result = await service().adoptFromStalwart();
+    expect(patchLog.map((p) => p.email).sort()).toEqual([LOJA, PM].sort());
+    expect(serverPassword[PM]).toBe("senha-nova-do-painel-pm");
+    expect(result.passwordsReapplied).toBe(2);
+    expect(result.passwordsRealigned).toBeUndefined();
+    expect(result.passwordsFailed).toBeUndefined();
+  });
+
+  it("caixa apagada no servidor durante a sincronização (404): fica de fora, sem contar nem aparecer como falha", async () => {
+    getMode = "missing";
+    const result = await service().adoptFromStalwart();
+    expect(patchLog).toEqual([]);
+    expect(result.passwordsFailed).toBeUndefined();
+    expect(result.passwordsRealigned).toBeUndefined();
+    expect(result.passwordsReapplied).toBeUndefined();
+  });
+
+  it("caixa removida do cadastro enquanto esperava na fila: fica de fora", async () => {
+    patchDelay[PM] = 60;
+    const svc = service();
+    const sync = svc.adoptFromStalwart();
+    await vi.waitFor(() => expect(patchLog.some((p) => p.email === PM)).toBe(true));
+    await svc.deleteMailbox(DOMAIN, LOJA);
+    const result = await sync;
+    expect(result.passwordsFailed).toBeUndefined();
+    expect(patchLog.some((p) => p.email === LOJA)).toBe(false);
+  });
+
+  it("caixa removida do cadastro depois de entrar na fila (esperando uma troca em andamento): nada é regravado", async () => {
+    patchDelay[LOJA] = 100;
+    const svc = service();
+    const change = svc.changeMailboxPassword(LOJA, "senha-trocada-antes-de-apagar");
+    await vi.waitFor(() => expect(patchLog.some((p) => p.email === LOJA)).toBe(true));
+    const sync = svc.adoptFromStalwart();
+    await vi.waitFor(() => expect(patchLog.some((p) => p.email === PM)).toBe(true));
+    await new Promise((r) => setTimeout(r, 30));
+    await svc.deleteMailbox(DOMAIN, LOJA);
+    const [, result] = await Promise.all([change, sync]);
+    expect(result.passwordsFailed).toBeUndefined();
+    expect(patchLog.filter((p) => p.email === LOJA)).toHaveLength(1);
+  });
+
+  it("caixa de sistema cujo domínio não está cadastrado no painel não é tocada", async () => {
+    const stored = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8")) as Record<string, any>;
+    stored.mailboxes["postmaster@outro.example.com"] = { ...mailbox("postmaster@outro.example.com", "system", "senha-do-outro-dominio"), domain: "outro.example.com" };
+    await writeFile(path.join(dir, "mail", "mail.json"), JSON.stringify(stored));
+    principals.push(box("postmaster@outro.example.com"));
+    serverPassword["postmaster@outro.example.com"] = "senha-antiga";
+    await service().adoptFromStalwart();
+    expect(patchLog.some((p) => p.email === "postmaster@outro.example.com")).toBe(false);
   });
 
   it("chamadas simultâneas viram uma só: cada caixa é regravada uma vez", async () => {
@@ -193,7 +275,7 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
   });
 
   it("trocar a senha da caixa durante o realinhamento não deixa o servidor com a senha velha", async () => {
-    firstPatchDelayMs = 60;
+    patchDelay[PM] = 60;
     const svc = service();
     const sync = svc.adoptFromStalwart();
     await vi.waitFor(() => expect(patchLog.some((p) => p.email === PM)).toBe(true));
@@ -201,6 +283,32 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
     await sync;
     expect(serverPassword[PM]).toBe("outra-senha-longa-escolhida-agora");
     expect((await readStored()).mailboxes[PM]!.password).toBe("outra-senha-longa-escolhida-agora");
+  });
+
+  it("troca de senha JÁ em andamento quando o realinhamento chega à caixa: a senha é lida na vez dela e a troca não é desfeita", async () => {
+    patchDelay[LOJA] = 80;
+    const svc = service();
+    const change = svc.changeMailboxPassword(LOJA, "senha-trocada-pela-pessoa-agora");
+    await vi.waitFor(() => expect(patchLog.some((p) => p.email === LOJA)).toBe(true));
+    const [, result] = await Promise.all([change, svc.adoptFromStalwart()]);
+    expect(serverPassword[LOJA]).toBe("senha-trocada-pela-pessoa-agora");
+    expect((await readStored()).mailboxes[LOJA]!.password).toBe("senha-trocada-pela-pessoa-agora");
+    expect(patchLog.filter((p) => p.email === LOJA).map((p) => p.value)).toEqual(["senha-trocada-pela-pessoa-agora"]);
+    expect(result.passwordsFailed).toBeUndefined();
+  });
+
+  it("ativar o e-mail do projeto (nova senha) durante o realinhamento não é desfeito", async () => {
+    const stored = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8")) as Record<string, any>;
+    stored.projects["p1"] = { domain: DOMAIN, mailbox: LOJA, enabledAt: "2026-10-20T00:00:00.000Z", fromName: "Loja" };
+    await writeFile(path.join(dir, "mail", "mail.json"), JSON.stringify(stored));
+    patchDelay[LOJA] = 80;
+    const svc = service();
+    const sync = svc.adoptFromStalwart();
+    await vi.waitFor(() => expect(patchLog.some((p) => p.email === LOJA)).toBe(true));
+    await svc.enableProjectEmail({ id: "p1", slug: "loja", name: "Loja" } as never, DOMAIN, { password: "senha-nova-ao-ativar-o-email" });
+    await sync;
+    expect(serverPassword[LOJA]).toBe("senha-nova-ao-ativar-o-email");
+    expect((await readStored()).mailboxes[LOJA]!.password).toBe("senha-nova-ao-ativar-o-email");
   });
 
   it("sem nada para realinhar o resultado não traz os campos", async () => {
@@ -212,5 +320,6 @@ describe("Sincronizar realinha a senha das caixas do painel", () => {
     const result = await service().adoptFromStalwart();
     expect(result).not.toHaveProperty("passwordsRealigned");
     expect(result).not.toHaveProperty("passwordsFailed");
+    expect(result).not.toHaveProperty("passwordsReapplied");
   });
 });

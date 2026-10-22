@@ -80,9 +80,13 @@ export function mailAuthRepairIncompleteError(cause: unknown, secret: string | n
 }
 
 /**
- * O envio de avisos autenticou na submission do Stalwart (AUTH) e foi recusado (535): a senha que o painel
- * guardou para a postmaster@ não é a que o servidor tem (acontece depois de restaurar o e-mail). Curta de
- * propósito: o histórico de notificações guarda só os primeiros 200 caracteres do motivo.
+ * O envio autenticou na submission do Stalwart (AUTH) e foi recusado (5xx, em geral 535): a senha que o painel
+ * guardou para a caixa que envia não é a que o servidor tem (acontece depois de restaurar o e-mail). Curta de
+ * propósito: o histórico de notificações guarda só os primeiros 200 caracteres do motivo. `mailbox` é a caixa
+ * que enviou (postmaster@ nos avisos do painel; a escolhida no e-mail de teste do domínio).
  */
-export const MAIL_SMTP_AUTH_REJECTED_MESSAGE =
-  "O servidor de e-mail recusou o login: a senha guardada pelo painel não é a do servidor. Abra E-mail e use Sincronizar (realinha a senha) ou Trocar senha na caixa postmaster@.";
+export function mailSmtpAuthRejectedMessage(mailbox = "postmaster@"): string {
+  return `O servidor de e-mail recusou o login: a senha guardada pelo painel não é a do servidor. Abra E-mail e use Sincronizar (realinha a senha) ou Trocar senha na caixa ${mailbox}.`;
+}
+
+export const MAIL_SMTP_AUTH_REJECTED_MESSAGE = mailSmtpAuthRejectedMessage();

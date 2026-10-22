@@ -69,13 +69,14 @@ describe("POST /api/mail/sync", () => {
         mailboxes: [],
         skipped: [],
         passwordsRealigned: 3,
+        passwordsReapplied: 2,
         passwordsFailed: ["loja@cassp.example.com"],
       }) as unknown as MockInstance,
     );
     const res = await sync();
     expect(res.json()).toMatchObject({ ok: true, passwordsRealigned: 3, passwordsFailed: ["loja@cassp.example.com"] });
     expect(record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "mail.sync", detail: expect.stringMatching(/realinhada.*3 caixa.*1 falha/s) }),
+      expect.objectContaining({ action: "mail.sync", detail: expect.stringMatching(/3 caixa.*realinhada.*2 caixa.*reaplicada.*1 falha/s) }),
     );
   });
 

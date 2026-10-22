@@ -220,4 +220,15 @@ describe("sendSystemMail", () => {
     expect(e.code).toBeUndefined();
     expect(e.message).toMatch(/\(MAIL\)/);
   });
+
+  it.each([499, 600])("fronteira: AUTH com código %i não é recusa de login 5xx e mantém a mensagem do servidor", async (code) => {
+    sendImpl = async () => {
+      throw new SmtpSendError(code, `O servidor de e-mail recusou (AUTH): ${code} x`, "AUTH");
+    };
+    const e = (await service()
+      .sendSystemMail({ to: "p@exemplo.org", subject: "s", text: "t", html: "h" })
+      .catch((x: unknown) => x)) as Error & { code?: string };
+    expect(e.code).toBeUndefined();
+    expect(e.message).toMatch(/\(AUTH\)/);
+  });
 });

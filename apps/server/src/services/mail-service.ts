@@ -68,7 +68,7 @@ import { httpError } from "./deploy-service.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { planAdoption } from "./mail-adopt.js";
 import type { HttpError } from "./http-error.js";
-import { MAIL_SMTP_AUTH_REJECTED_MESSAGE, mailAuthRepairFailedError, mailAuthRepairIncompleteError } from "./mail-auth-error.js";
+import { MAIL_SMTP_AUTH_REJECTED_MESSAGE, mailSmtpAuthRejectedMessage, mailAuthRepairFailedError, mailAuthRepairIncompleteError } from "./mail-auth-error.js";
 
 /** Container do painel no compose (container_name) — mesmo nome do deploy-service. */
 const PANEL_CONTAINER = "tws-panel";
@@ -1337,29 +1337,56 @@ export class MailService {
   /**
    * Depois de restaurar o e-mail o Stalwart volta com a senha ANTIGA do backup nas caixas, e o painel segue
    * usando a que guardou: o envio de avisos falha com "535 5.7.8". Para as caixas que o painel gerencia
-   * (sistema: postmaster@; projeto) e cuja senha ele conhece, o painel é a fonte da verdade: reaplica a senha
-   * guardada. Reaplica sempre, sem testar antes: testar a autenticação com a senha possivelmente errada contaria
-   * como tentativa de login falha no Stalwart (bloqueio automático do IP do painel) e não há ganho, porque
-   * gravar a mesma senha de novo é inofensivo. Fica de fora: caixa de usuário (a pessoa pode ter trocado a
-   * senha), caixa sem senha conhecida e caixa que o servidor não tem. Falha numa caixa não impede as outras.
-   * Nada reinicia; nenhuma senha vai a log, resposta ou auditoria (só o endereço da caixa).
+   * (sistema: postmaster@; projeto) e cuja senha ele conhece, o painel é a fonte da verdade.
+   *
+   * No Stalwart v0.11.8, GET /principal/<caixa> devolve a senha como foi enviada (texto puro). O painel COMPARA
+   * em memória (StalwartClient.mailboxPasswordMatches; a senha do servidor nunca é guardada, logada nem
+   * devolvida) e só regrava quando difere: não faz login errado (cada login errado leva ~5 s e ~100 por dia do
+   * mesmo IP acionam o bloqueio automático do Stalwart, `server.auto-ban.auth.rate = 100/1d`, que corta até a API
+   * de administração), a contagem é verdadeira e só se avisa quando de fato houve diferença. Se a leitura falha
+   * ou não traz a senha (só hash), reaplica mesmo assim e conta à parte ("reaplicada, não verificada").
+   *
+   * Fica de fora: caixa de usuário (a pessoa pode ter trocado a senha no webmail), caixa sem senha conhecida,
+   * caixa de domínio não cadastrado, caixa que o servidor não tem (404) e a removida do cadastro durante a
+   * sincronização. Falha numa caixa não impede as outras. Nada reinicia; nenhuma senha vai a log, resposta ou
+   * auditoria (só o endereço da caixa).
    */
   private async realignKnownPasswords(client: StalwartClient, present: ReadonlySet<string>, result: MailAdoptResult): Promise<void> {
-    let done = 0;
+    let realigned = 0;
+    let reapplied = 0;
     const failed: string[] = [];
     for (const email of Object.keys(this.data.mailboxes)) {
-      const box = this.data.mailboxes[email]!;
-      if ((box.kind !== "system" && box.kind !== "project") || !box.password || !present.has(email) || !this.data.domains[box.domain]) continue;
+      const box = this.data.mailboxes[email];
+      // `box` some se a caixa foi removida do cadastro durante a sincronização
+      if (!box || (box.kind !== "system" && box.kind !== "project") || !box.password || !present.has(email) || !this.data.domains[box.domain]) continue;
       try {
-        // `box` é o próprio registro: a senha é lida só quando chega a vez dela na fila, então uma troca feita enquanto esperava vale
-        await this.withMailboxLock(email, () => client.setMailboxPassword(email, box.password));
-        done += 1;
+        // Dentro da fila da caixa, uma etapa de cada vez: `box` é o próprio registro, então a senha é lida só
+        // quando chega a vez dela, e uma troca que já estava em andamento vale (nunca é desfeita).
+        const outcome = await this.withMailboxLock(email, async (): Promise<"same" | "realigned" | "reapplied"> => {
+          // removida do cadastro enquanto esperava a vez: nada a fazer
+          if (this.data.mailboxes[email] !== box) return "same";
+          let matches: boolean | null = null;
+          try {
+            matches = await client.mailboxPasswordMatches(email, box.password);
+          } catch (err) {
+            if (err instanceof StalwartApiError && err.status === 404) throw err;
+            // leitura falhou: reaplica sem ter conferido
+          }
+          if (matches === true) return "same";
+          await client.setMailboxPassword(email, box.password);
+          return matches === false ? "realigned" : "reapplied";
+        });
+        if (outcome === "realigned") realigned += 1;
+        else if (outcome === "reapplied") reapplied += 1;
       } catch (err) {
+        // caixa apagada no servidor durante a sincronização: fica de fora, não é falha
+        if (err instanceof StalwartApiError && err.status === 404) continue;
         failed.push(email);
         this.log(`Sincronizar: não deu para realinhar a senha da caixa ${email} (${err instanceof StalwartApiError ? `HTTP ${err.status}` : "falha de conexão"}).`);
       }
     }
-    if (done > 0) result.passwordsRealigned = done;
+    if (realigned > 0) result.passwordsRealigned = realigned;
+    if (reapplied > 0) result.passwordsReapplied = reapplied;
     if (failed.length > 0) result.passwordsFailed = failed.slice(0, MAIL_ADOPT_SKIPPED_MAX);
   }
 
@@ -1444,7 +1471,7 @@ export class MailService {
       });
     } catch (err) {
       if (err instanceof SmtpSendError && err.command === "AUTH" && err.code >= 500 && err.code < 600) {
-        throw httpError(409, "email_auth_rejected", MAIL_SMTP_AUTH_REJECTED_MESSAGE);
+        throw httpError(409, "email_auth_rejected", mailSmtpAuthRejectedMessage(from));
       }
       throw httpError(
         502,

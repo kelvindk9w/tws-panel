@@ -199,7 +199,7 @@ export interface BackupServiceOptions {
    * nomes; nunca senhas. Ver MailService.adoptFromStalwart.
    */
   mailAdopt?: {
-    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; skippedTotal?: number; truncated?: boolean; passwordsRealigned?: number; passwordsFailed?: string[] }>;
+    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; skippedTotal?: number; truncated?: boolean; passwordsRealigned?: number; passwordsReapplied?: number; passwordsFailed?: string[] }>;
   };
   reconciliation?: {
     planStaged(staged: string): Promise<string[]>;
@@ -2705,7 +2705,7 @@ export class BackupService {
   private async adoptRestoredEmail(r: BackupRecord): Promise<void> {
     this.step(r, "Conferir os domínios e caixas do e-mail no painel");
     try {
-      const { domains, mailboxes, skipped, skippedTotal, truncated, passwordsRealigned = 0, passwordsFailed = [] } = await this.mailAdopt!.adopt();
+      const { domains, mailboxes, skipped, skippedTotal, truncated, passwordsRealigned = 0, passwordsReapplied = 0, passwordsFailed = [] } = await this.mailAdopt!.adopt();
       if (domains.length > 0 || mailboxes.length > 0) {
         const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
         const what = [
@@ -2719,12 +2719,17 @@ export class BackupService {
             (domains.length > 0 ? " O DNS dos domínios aparece como não verificado: use Verificar agora em cada um." : ""),
         );
       }
+      const caixas = (n: number) => `${n} ${n === 1 ? "caixa" : "caixas"}`;
       if (passwordsRealigned > 0) {
-        const label = `Realinhei a senha de ${passwordsRealigned} ${passwordsRealigned === 1 ? "caixa" : "caixas"} do painel`;
+        const label = `Realinhei a senha de ${caixas(passwordsRealigned)} do painel`;
         if (domains.length === 0 && mailboxes.length === 0) r.steps[r.steps.length - 1]!.label = label;
         r.warnings.push(
-          `${label} (postmaster@ e caixas de projeto) no servidor de e-mail: ele voltou do backup com a senha antiga delas, e o painel reaplicou a que guarda. Nenhuma caixa de usuário foi alterada e nada foi reiniciado.`,
+          `${label} (postmaster@ e caixas de projeto) no servidor de e-mail: a senha delas no servidor era diferente da que o painel guarda (o backup trouxe a antiga), e o painel reaplicou a dele. Nenhuma caixa de usuário foi alterada e nada foi reiniciado.`,
         );
+      }
+      if (passwordsReapplied > 0 && passwordsRealigned === 0 && domains.length === 0 && mailboxes.length === 0) {
+        // informativo: não deu para conferir antes, então não se afirma que estava diferente (e o status não é rebaixado)
+        r.steps[r.steps.length - 1]!.label = `Reapliquei a senha de ${caixas(passwordsReapplied)} do painel (não deu para conferir antes)`;
       }
       if (passwordsFailed.length > 0) {
         r.warnings.push(

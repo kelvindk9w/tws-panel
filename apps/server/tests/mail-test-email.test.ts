@@ -273,6 +273,27 @@ describe("sendTestEmail — envio", () => {
     expect(err.message).toMatch(/Trocar senha/);
   });
 
+  it.each([450, 499, 600])("fronteira: AUTH com código %i não é recusa 5xx: continua test_send_failed (502)", async (code) => {
+    sendImpl = async () => {
+      throw new SmtpSendError(code, `O servidor de e-mail recusou (AUTH): ${code} x`, "AUTH");
+    };
+    await expect(service().sendTestEmail(DOMAIN, TO)).rejects.toMatchObject({ statusCode: 502, code: "test_send_failed" });
+  });
+
+  it("login recusado em caixa de projeto: a mensagem cita a caixa que enviou, não a postmaster@", async () => {
+    const loja = `loja@${DOMAIN}`;
+    await seed({
+      [`postmaster@${DOMAIN}`]: postmaster(),
+      [loja]: { id: loja, localPart: "loja", domain: DOMAIN, kind: "project", createdAt: new Date(0).toISOString(), projectId: "p1", password: "senha-da-loja" },
+    });
+    sendImpl = async () => {
+      throw new SmtpSendError(535, "O servidor de e-mail recusou (AUTH): 535 x", "AUTH");
+    };
+    const err = (await service().sendTestEmail(DOMAIN, TO, loja).catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain(`Trocar senha na caixa ${loja}`);
+    expect(err.message).not.toContain("postmaster@");
+  });
+
   it("limite de frequência: 1 teste a cada 30 s e 20 por hora", async () => {
     const s = service();
     await s.sendTestEmail(DOMAIN, TO);

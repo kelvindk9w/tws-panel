@@ -3083,7 +3083,7 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
   type Repair = "ok" | "repaired" | "failed" | "unreachable" | "not_running";
   let adopts: number;
   const withAdopt = (
-    adopt: () => Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; passwordsRealigned?: number; passwordsFailed?: string[] }>,
+    adopt: () => Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; passwordsRealigned?: number; passwordsReapplied?: number; passwordsFailed?: string[] }>,
     repair: Repair = "ok",
   ): BackupService =>
     build({
@@ -3120,12 +3120,28 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
     expect(rec.error).toBeNull();
   });
 
-  it("senhas realinhadas: o registro diz quantas caixas, sem senha nenhuma", async () => {
+  it("senhas realinhadas de verdade: o registro diz quantas caixas, sem senha nenhuma, e a restauração termina com aviso", async () => {
     service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [], passwordsRealigned: 2 }));
     const rec = await restoreEmail();
     expect(rec.warnings.join(" ")).toMatch(/Realinhei a senha de 2 caixas/);
     expect(rec.steps.map((s) => s.label).join("|")).toMatch(/Realinhei a senha de 2 caixas/);
+    expect(rec.status).toBe("warning");
     expect(rec.error).toBeNull();
+  });
+
+  it("senhas já conferiam (nada realinhado): sem aviso e a restauração termina com sucesso", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings).toEqual([]);
+    expect(rec.status).toBe("success");
+  });
+
+  it("não deu para conferir: passo informativo, sem frase afirmativa, sem aviso e sem rebaixar o status", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [], passwordsReapplied: 3 }));
+    const rec = await restoreEmail();
+    expect(rec.steps.map((s) => s.label).join("|")).toMatch(/Reapliquei a senha de 3 caixas/);
+    expect(rec.warnings).toEqual([]);
+    expect(rec.status).toBe("success");
   });
 
   it("senhas realinhadas: singular e, com falha, os endereços que ficaram para Sincronizar", async () => {
