@@ -57,6 +57,13 @@
         "obrigatorio": false,
         "regras": "Tem preferência sobre password.",
         "descricao": "O painel gera uma senha forte (generateStrongPassword: 24 caracteres com maiúscula, minúscula, número e um dos especiais - _ .) e a devolve UMA vez em generatedPassword."
+      },
+      {
+        "nome": "useExistingMailbox",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "enum: current_password | keep_password | replace_password. Exige fromLocalPart (a caixa escolhida; 400 invalid_request sem ele). current_password usa `password` (a senha ATUAL da caixa, mínimo 12); keep_password usa a senha que o painel guarda; replace_password gera uma forte e a aplica na caixa (generatePassword é ignorado neste caminho).",
+        "descricao": "Usa a caixa <fromLocalPart>@<domain> que JÁ existe, em vez de criar uma. Nada é apagado. A lista de caixas possíveis vem de GET /api/projects/:id/email/mailboxes."
       }
     ],
     "headers": []
@@ -67,7 +74,8 @@
       "quando": "Ativado ou atualizado.",
       "corpo": {
         "email": "ProjectEmailConfig",
-        "generatedPassword": "string (só com generatePassword:true; cabeçalho cache-control: no-store)"
+        "generatedPassword": "string (só com generatePassword:true, ou useExistingMailbox:replace_password; cabeçalho cache-control: no-store)",
+        "passwordVerified": "boolean (só com useExistingMailbox current_password/keep_password: true = o painel conferiu que a senha é a da caixa; false = o servidor de e-mail não deixou conferir e a senha foi aceita sem verificação)"
       },
       "exemplo": {
         "email": {
@@ -139,6 +147,48 @@
       "codigo": "address_in_use",
       "quando": "O endereço de envio já é de outra caixa ou de outro projeto.",
       "mensagem": "O endereço {endereço} já é de outra caixa ou de outro projeto."
+    },
+    {
+      "status": 409,
+      "codigo": "address_in_use",
+      "quando": "useExistingMailbox com postmaster/abuse/dmarc ou com caixa do sistema.",
+      "mensagem": "O endereço {endereço} é reservado do painel e não pode ser a caixa de um projeto. / A caixa {endereço} é do próprio painel e não pode ser a de um projeto."
+    },
+    {
+      "status": 409,
+      "codigo": "mailbox_taken_by_project",
+      "quando": "useExistingMailbox com caixa que outro projeto QUE EXISTE usa (registro de e-mail dele ou dono gravado na caixa).",
+      "mensagem": "A caixa {endereço} já é usada pelo projeto {nome}. Desative o e-mail dele antes."
+    },
+    {
+      "status": 404,
+      "codigo": "mailbox_not_found",
+      "quando": "useExistingMailbox com caixa que o painel não tem cadastrada.",
+      "mensagem": "A caixa {endereço} não existe. Rode Sincronizar na página E-mail se ela foi criada fora do painel."
+    },
+    {
+      "status": 400,
+      "codigo": "mailbox_password_mismatch",
+      "quando": "current_password: o servidor de e-mail devolveu a senha da caixa e ela difere da informada (comparação em memória; nenhuma tentativa de login).",
+      "mensagem": "A senha informada não é a da caixa {endereço}."
+    },
+    {
+      "status": 409,
+      "codigo": "stored_password_stale",
+      "quando": "keep_password: a senha guardada pelo painel não é mais a da caixa (alguém a trocou no webmail).",
+      "mensagem": "A senha que o painel guarda para {endereço} não é mais a da caixa. Informe a senha atual ou troque por uma gerada pelo painel."
+    },
+    {
+      "status": 400,
+      "codigo": "password_required",
+      "quando": "keep_password em caixa cuja senha o painel não sabe (adotada).",
+      "mensagem": "O painel não sabe a senha de {endereço}. Informe a senha atual ou troque por uma gerada pelo painel."
+    },
+    {
+      "status": 409,
+      "codigo": "mailbox_gone",
+      "quando": "A caixa sumiu do servidor de e-mail durante a operação (404 do Stalwart na conferência ou na troca de senha). Nada é alterado.",
+      "mensagem": "A caixa {endereço} não existe mais no servidor de e-mail. Rode Sincronizar na página E-mail e escolha de novo."
     }
   ],
   "fluxo": [
@@ -150,6 +200,7 @@
     "6. data.projects[id] = { domain, mailbox: endereço, enabledAt, fromName, envLinks (mantido) } — sem fromAddress. save().",
     "7. Endereço trocado: dropUnusedProjectMailbox(caixa antiga) — remove no Stalwart e do registro se nenhum projeto a usa; falha no Stalwart vai para o log e a caixa fica na lista do domínio.",
     "8. Retorna { email: projectEmailConfig(id), generatedPassword? }.",
+    "8b. Caminho useExistingMailbox (MailService.connectExistingMailbox): purga órfãos; recusa SYSTEM_LOCAL_PARTS/sistema e caixa de outro projeto que existe; valida a senha ANTES de falar com o servidor (weak_password); requireRunning(); dentro de withMailboxLock(caixa), revalida; current_password/keep_password: mailboxPasswordMatches (GET do cadastro, sem login; false → recusa; null/erro → aceita com passwordVerified:false; 404 → mailbox_gone); grava o cadastro ANTES de trocar a senha (replace_password: setMailboxPassword) e, se algo falhar, restaura caixa e registro do projeto e regrava (nada fica meio assumido). A caixa de usuário vira kind:'project' com external:true e projectId; ao ser deixada (troca de endereço, projeto removido) volta a kind:'user' e NUNCA é apagada.",
     "9. (Efeito indireto): todo deploy chama envForProject (SMTP_* + MAIL_FROM/MAIL_FROM_NAME, em todos os serviços do compose e no .env) e linkedEnvForProject (variáveis ligadas, só no .env)."
   ],
   "dependencias": [
@@ -188,7 +239,8 @@
     "Pode criar a caixa do projeto no Stalwart (kind 'project'); a senha fica em data/mail/mail.json (0600) — o painel precisa dela para injetar SMTP_PASS — e nunca volta pela API, salvo a gerada, uma vez.",
     "Trocar o endereço remove a caixa antiga do projeto (com as mensagens) se nenhum outro projeto a usa.",
     "Registro antigo: remove o alias da caixa técnica e, ao trocar para outro endereço, remove a caixa técnica.",
-    "Só vale no projeto a partir do próximo deploy."
+    "Só vale no projeto a partir do próximo deploy.",
+    "useExistingMailbox: não cria nem apaga caixa; pode trocar a senha dela no servidor (replace_password). A caixa passa a ser realinhada pelo Sincronizar/restauração (realignKnownPasswords, só kind project/system). Auditoria mail.project.mailbox.connect (caixa e caminho; nunca a senha)."
   ],
   "chamadoPor": [
     "apps/web/src/components/project/ProjectEmailCard.tsx (Ativar e-mail / Alterar remetente → Salvar)"
@@ -206,6 +258,8 @@
     "Compatibilidade: registros gravados antes (fromAddress = alias) continuam funcionando sem mudança (SMTP_USER = caixa técnica, MAIL_FROM = alias) e a resposta traz legacyAlias:true; a tela explica e, ao salvar de novo, pede a senha e aplica o modelo novo.",
     "Trocar o domínio de um projeto já ativado segue a mesma regra de troca de endereço: cria a caixa no domínio novo e remove a antiga sem uso.",
     "Desativar não apaga a caixa (as mensagens ficam); ela pode ser removida na página do domínio. Reativar no mesmo endereço reaproveita a caixa, pedindo senha.",
-    "Tela: o campo 'Seu domínio' de 'Usar um domínio meu' já vem preenchido com o domínio do projeto (editável)."
+    "Tela: o campo 'Seu domínio' de 'Usar um domínio meu' já vem preenchido com o domínio do projeto (editável).",
+    "Projeto apagado solta o e-mail (DeployService.deleteProject → MailService.releaseProjectEmail): tira o registro e as ligações; a caixa e as mensagens ficam. Registro órfão de projeto apagado antes disso é solto sozinho ao ativar, listar caixas, listar caixas usáveis e Sincronizar (purgeOrphanProjects, com a lista de projetos que existem). Antes, o órfão bloqueava o endereço com 409 address_in_use.",
+    "Trocar o endereço NÃO apaga mais uma caixa que já existia antes de virar a do projeto (external): só a solta."
   ]
 }

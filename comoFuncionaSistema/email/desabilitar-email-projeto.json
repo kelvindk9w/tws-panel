@@ -94,6 +94,7 @@
   "observacoes": [
     "Deixa a caixa técnica órfã (ainda existe no Stalwart e em data/mail/mail.json) — não há limpeza automática nem aviso na UI; é preciso ir à página do domínio e remover a caixa manualmente (DELETE .../mailboxes/:id) se não for mais usá-la, e mailbox_in_use só bloqueia enquanto a associação em data.projects existir.",
     "02/10/2026: ao desativar, o endereço de envio escolhido (alias) sai da caixa técnica no Stalwart.",
-    "02/10/2026 (caixa do projeto): a caixa agora é o endereço de envio, com senha que a pessoa conhece — continua existindo depois de desativar (dá para ler as mensagens antigas ou removê-la na página do domínio). Reativar no mesmo endereço reaproveita a caixa e pede uma senha. O mapeamento de variáveis ligadas (envLinks) é apagado junto. Só registros antigos têm alias para tirar."
+    "02/10/2026 (caixa do projeto): a caixa agora é o endereço de envio, com senha que a pessoa conhece — continua existindo depois de desativar (dá para ler as mensagens antigas ou removê-la na página do domínio). Reativar no mesmo endereço reaproveita a caixa e pede uma senha. O mapeamento de variáveis ligadas (envLinks) é apagado junto. Só registros antigos têm alias para tirar.",
+    "Reativar (ou ativar outro projeto) na caixa que ficou: o card oferece 'Usar uma caixa que já existe', que lista essa caixa e deixa manter a senha guardada, informar a atual ou trocar por uma gerada."
   ]
 }

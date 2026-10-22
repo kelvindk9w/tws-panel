@@ -189,7 +189,9 @@ seus projetos enviarem mensagens e para caixas como `contato@`.
 - **E-mail do projeto:** o projeto ganha uma caixa própria (ex.: `contato@loja.example.com`)
   com nome de exibição, e os valores `SMTP_*` e `MAIL_*` são injetados no deploy. Se o app usa
   outros nomes de variável, **Ligar às variáveis do projeto** entrega os mesmos valores com esses
-  nomes.
+  nomes. Em vez de criar uma caixa nova, dá para **usar uma caixa que já existe** no domínio (nada é
+  apagado). E apagar o projeto não apaga a caixa nem as mensagens: o endereço fica livre para ser
+  usado de novo.
 
 **Webmail.** Com um clique, `https://mail.<domínio>/` passa a abrir um webmail (**Roundcube**) em
 português para ler, responder e enviar como a própria caixa. A sessão termina depois de 10

@@ -349,3 +349,33 @@ describe("projetos com chamadas em paralelo logo depois de subir", () => {
     expect((await novo().listProjects()).map((p) => p.name).sort()).toEqual(["a1", "a2", "a3", "antigo"]);
   });
 });
+
+describe("remover o projeto avisa quem escuta (solta o e-mail dele)", () => {
+  function semDocker() {
+    const engine = (svc as unknown as { engine: { remove: () => Promise<void>; syncCaddy: () => Promise<void> } }).engine;
+    engine.remove = async () => undefined;
+    engine.syncCaddy = async () => undefined;
+  }
+
+  it("chama o ouvinte com o id do projeto removido", async () => {
+    const p = await projeto();
+    semDocker();
+    const ouvinte = vi.fn(async (_id: string) => undefined);
+    svc.setProjectRemovedListener(ouvinte);
+    await svc.deleteProject(p.id, false, () => undefined);
+    expect(ouvinte).toHaveBeenCalledWith(p.id);
+    expect(await svc.getProject(p.id)).toBeFalsy();
+  });
+
+  it("falha do ouvinte não impede a remoção: vai para o log do projeto", async () => {
+    const p = await projeto();
+    semDocker();
+    svc.setProjectRemovedListener(async () => {
+      throw new Error("servidor de e-mail fora");
+    });
+    const log: string[] = [];
+    await svc.deleteProject(p.id, false, (c) => void log.push(c));
+    expect(await svc.getProject(p.id)).toBeFalsy();
+    expect(log.join("")).toContain("e-mail");
+  });
+});

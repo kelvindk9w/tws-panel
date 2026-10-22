@@ -19,14 +19,17 @@
  * configurar e criar caixas (ex.: suporte@) sem sair do projeto. Cada aba
  * tem endereço próprio: ?email=caixas e ?email=dns.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import type {
+  ExistingMailboxMode,
   MailboxResponse,
   MailDomainListResponse,
   MailDomainSummary,
   ProjectEmailConfig,
+  ProjectEmailMailboxesResponse,
   ProjectEmailResponse,
+  ProjectEmailUsableMailbox,
 } from "@paas/core";
 import type { ExistingMailInfo } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
@@ -46,10 +49,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { TestEmailModal } from "@/components/mail/TestEmailCard";
 import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
 import { DnsChecklistPanel } from "@/components/mail/DnsChecklistPanel";
 import { cn } from "@/lib/utils";
+import { MAILBOX_PASSWORD_MIN } from "@paas/core";
 import {
   AlertTriangle,
   Check,
@@ -92,6 +97,86 @@ function dnsLabel(domain: MailDomainSummary): string {
     : tGlobal("mail.project.dns.pending");
 }
 
+/** Como o projeto passa a ter a senha da caixa que já existia: informa a atual, mantém a guardada ou troca. */
+function ExistingMailboxPasswordSection({
+  help,
+  empty,
+  box,
+  mode,
+  onMode,
+  password,
+  onPassword,
+}: {
+  help: string;
+  empty: boolean;
+  box: ProjectEmailUsableMailbox | undefined;
+  mode: ExistingMailboxMode;
+  onMode: (mode: ExistingMailboxMode) => void;
+  password: string;
+  onPassword: (value: string) => void;
+}) {
+  const { t } = useI18n();
+  const group = useId();
+  const short = password !== "" && password.trim().length < MAILBOX_PASSWORD_MIN;
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{help}</p>
+      {empty && (
+        <p role="status" data-testid="existing-empty" className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
+          {t("mail.project.existing.empty")}
+        </p>
+      )}
+      {box && (
+        <fieldset className="flex min-w-0 flex-col gap-2">
+          <legend className="mb-1 flex items-center gap-2 text-sm">
+            <KeyRound className="h-4 w-4" /> {t("mail.project.existing.passwordLegend", { address: box.address })}
+          </legend>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name={group} checked={mode === "current_password"} onChange={() => onMode("current_password")} />
+            {t("mail.project.existing.mode.current")}
+          </label>
+          {box.passwordKnown && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="radio" name={group} checked={mode === "keep_password"} onChange={() => onMode("keep_password")} />
+              {t("mail.project.existing.mode.keep")}
+            </label>
+          )}
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name={group} checked={mode === "replace_password"} onChange={() => onMode("replace_password")} />
+            {t("mail.project.existing.mode.replace")}
+          </label>
+          {mode === "current_password" && (
+            <div className="flex flex-col gap-1">
+              <PasswordInput
+                aria-label={t("mail.project.existing.currentLabel")}
+                placeholder={t("mail.project.existing.currentLabel")}
+                autoComplete="off"
+                value={password}
+                onChange={(e) => onPassword(e.target.value)}
+              />
+              {short && <p className="text-xs text-red-300">{t("mail.password.tooShort", { min: MAILBOX_PASSWORD_MIN })}</p>}
+              <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{t("mail.project.existing.currentHint")}</p>
+            </div>
+          )}
+          {mode === "keep_password" && (
+            <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{t("mail.project.existing.keepHint")}</p>
+          )}
+          {mode === "replace_password" && (
+            <p
+              data-testid="replace-warning"
+              className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 [overflow-wrap:anywhere]"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{t("mail.project.existing.replaceWarning")}</span>
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{t("mail.project.existing.managedNote")}</p>
+        </fieldset>
+      )}
+    </div>
+  );
+}
+
 export function ProjectEmailCard({
   projectId,
   projectName,
@@ -131,6 +216,16 @@ export function ProjectEmailCard({
   /** Domínio recém-cadastrado aqui: mostra o próximo passo (DNS e verificar). */
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  // "Usar uma caixa que já existe" em vez de criar uma
+  const [source, setSource] = useState<"new" | "existing">("new");
+  /** Caixas usáveis do domínio escolhido; null = carregando. */
+  const [usable, setUsable] = useState<ProjectEmailUsableMailbox[] | null>(null);
+  const [usableError, setUsableError] = useState<string | null>(null);
+  const [pickedBox, setPickedBox] = useState("");
+  const [existingMode, setExistingMode] = useState<ExistingMailboxMode>("current_password");
+  const [currentPassword, setCurrentPassword] = useState("");
+  /** A senha da caixa existente foi aceita sem o servidor de e-mail conseguir conferi-la. */
+  const [unverified, setUnverified] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = tabFromParam(searchParams.get("email"));
 
@@ -170,6 +265,37 @@ export function ProjectEmailCard({
     void refresh();
     void loadDomains();
   }, [refresh, loadDomains]);
+
+  // lista as caixas do domínio escolhido que o projeto pode usar
+  useEffect(() => {
+    if (source !== "existing" || !selectedDomain) return;
+    let cancelled = false;
+    setUsable(null);
+    setUsableError(null);
+    setPickedBox("");
+    apiFetch<ProjectEmailMailboxesResponse>(
+      `/api/projects/${projectId}/email/mailboxes?domain=${encodeURIComponent(selectedDomain)}`,
+    )
+      .then((res) => {
+        if (!cancelled) setUsable(res.mailboxes);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setUsable([]);
+        setUsableError(apiErrorText(err, "mail.project.existing.loadError"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, selectedDomain, projectId]);
+
+  function pickMailbox(address: string) {
+    setPickedBox(address);
+    setCurrentPassword("");
+    // o painel já sabe a senha: o caminho mais curto é mantê-la
+    const box = usable?.find((m) => m.address === address);
+    setExistingMode(box?.passwordKnown ? "keep_password" : "current_password");
+  }
 
   async function addDomain(name = newDomain.trim().toLowerCase(), confirmExistingMail = false) {
     if (!name) return;
@@ -219,7 +345,40 @@ export function ProjectEmailCard({
     setPasswordChoice(EMPTY_PASSWORD_CHOICE);
     setEditing(true);
     setSaved(false);
+    setUnverified(false);
+    setSource("new");
     setChangingPassword(false);
+  }
+
+  async function saveExisting() {
+    const box = usable?.find((m) => m.address === pickedBox);
+    if (!box) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body: Record<string, string> = {
+        domain: selectedDomain,
+        fromLocalPart: box.localPart,
+        useExistingMailbox: existingMode,
+      };
+      if (fromName.trim()) body.fromName = fromName.trim();
+      if (existingMode === "current_password") body.password = currentPassword;
+      const res = await apiFetch<ProjectEmailResponse>(`/api/projects/${projectId}/email`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      setEmail(res.email);
+      setGenerated(res.generatedPassword ?? null);
+      setUnverified(res.passwordVerified === false);
+      setCurrentPassword("");
+      setSource("new");
+      setEditing(false);
+      setSaved(true);
+    } catch (err) {
+      setError(apiErrorText(err, "mail.project.existing.saveError"));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function save() {
@@ -309,6 +468,8 @@ export function ProjectEmailCard({
   const needsPassword = !email.enabled || previewAddress !== email.mailbox;
   const passwordProblem = needsPassword ? passwordChoiceProblem(passwordChoice) : null;
   const links = Object.entries(email.envLinks ?? {});
+  const existingReady =
+    pickedBox !== "" && (existingMode !== "current_password" || currentPassword.trim().length >= MAILBOX_PASSWORD_MIN);
 
   return (
     <Card>
@@ -324,9 +485,24 @@ export function ProjectEmailCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
 
         {generated && <GeneratedPasswordNotice password={generated} onDone={() => setGenerated(null)} />}
+
+        {unverified && (
+          <p
+            role="status"
+            data-testid="password-unverified"
+            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 [overflow-wrap:anywhere]"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{t("mail.project.existing.unverified")}</span>
+          </p>
+        )}
 
         {tabbed && email.domain && (
           <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1 border-b">
@@ -488,7 +664,39 @@ export function ProjectEmailCard({
                 </span>
               </div>
             )}
+            <fieldset className="flex min-w-0 flex-col gap-1.5 text-sm">
+              <legend className="mb-1">{t("mail.project.source.legend")}</legend>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="email-source" checked={source === "new"} onChange={() => setSource("new")} />
+                {t("mail.project.source.new")}
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="email-source" checked={source === "existing"} onChange={() => setSource("existing")} />
+                {t("mail.project.source.existing")}
+              </label>
+            </fieldset>
             <div className="grid gap-3 sm:grid-cols-2">
+              {source === "existing" ? (
+                <div className="flex min-w-0 flex-col gap-1 text-sm">
+                  <label htmlFor="existing-mailbox">{t("mail.project.existing.mailboxLabel")}</label>
+                  <select
+                    id="existing-mailbox"
+                    value={pickedBox}
+                    disabled={usable === null || usable.length === 0}
+                    onChange={(e) => pickMailbox(e.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                  >
+                    <option value="" className="bg-background">
+                      {usable === null ? t("mail.project.existing.loading") : t("mail.project.existing.choose")}
+                    </option>
+                    {(usable ?? []).map((m) => (
+                      <option key={m.address} value={m.address} className="bg-background">
+                        {m.address}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
               <label className="flex min-w-0 flex-col gap-1 text-sm">
                 <span>{t("mail.project.fromLabel")}</span>
                 <div className="flex min-w-0 items-center">
@@ -504,6 +712,7 @@ export function ProjectEmailCard({
                   </span>
                 </div>
               </label>
+              )}
               <label className="flex flex-col gap-1 text-sm">
                 <span>{t("mail.project.nameLabel")}</span>
                 <Input
@@ -515,6 +724,24 @@ export function ProjectEmailCard({
                 />
               </label>
             </div>
+            {source === "existing" && usableError && (
+              <p role="alert" className="text-sm text-destructive">
+                {usableError}
+              </p>
+            )}
+            {source === "existing" && (
+              <ExistingMailboxPasswordSection
+                help={t("mail.project.existing.help")}
+                empty={usable !== null && usable.length === 0 && !usableError}
+                box={usable?.find((m) => m.address === pickedBox)}
+                mode={existingMode}
+                onMode={setExistingMode}
+                password={currentPassword}
+                onPassword={setCurrentPassword}
+              />
+            )}
+            {source === "new" && (
+            <>
             <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
               <Trans
                 k="mail.project.preview"
@@ -541,7 +768,20 @@ export function ProjectEmailCard({
               </p>
             )}
             {needsPassword && <PasswordChoice value={passwordChoice} onChange={setPasswordChoice} />}
+            </>
+            )}
             <div className="flex flex-wrap gap-2">
+              {source === "existing" ? (
+                <Button
+                  variant="success"
+                  size="sm"
+                  disabled={busy || !selectedDomain || !existingReady}
+                  onClick={() => void saveExisting()}
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                  {t("mail.project.existing.submit")}
+                </Button>
+              ) : (
               <Button
                 variant="success"
                 size="sm"
@@ -551,8 +791,16 @@ export function ProjectEmailCard({
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
                 {email.enabled ? t("mail.project.save") : t("mail.project.activate")}
               </Button>
+              )}
               {editing && (
-                <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setEditing(false);
+                    setSource("new");
+                  }}
+                >
                   {t("mail.common.cancel")}
                 </Button>
               )}

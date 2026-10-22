@@ -1,0 +1,103 @@
+{
+  "id": "listar-caixas-usaveis-email-projeto",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/projects/:id/email/mailboxes",
+  "resumo": "Lista as caixas de um domínio que o e-mail do projeto pode usar (caixas de usuário e caixas de projeto sem uso). Nunca traz senha.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "minLength 1, maxLength 64.",
+        "descricao": "ID do projeto."
+      }
+    ],
+    "query": [
+      {
+        "nome": "domain",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "MAIL_DOMAIN_SCHEMA (pattern de domínio, até 253 caracteres); additionalProperties:false.",
+        "descricao": "Domínio cadastrado cujas caixas serão listadas."
+      }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre que o projeto e o domínio existem (lista vazia se o domínio não tem caixas usáveis).",
+      "corpo": {
+        "mailboxes": "ProjectEmailUsableMailbox[] = { address, localPart, kind: 'user' | 'project', passwordKnown }"
+      },
+      "exemplo": {
+        "mailboxes": [
+          {
+            "address": "contato@exemplo.com.br",
+            "localPart": "contato",
+            "kind": "user",
+            "passwordKnown": false
+          }
+        ]
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "domain ausente ou malformado.",
+      "mensagem": "Campo obrigatório ausente: domain."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Projeto não encontrado.",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 404,
+      "codigo": "domain_not_found",
+      "quando": "Domínio não cadastrado.",
+      "mensagem": "Domínio {domínio} não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. getProject(id); 404 se ausente.",
+    "2. purgeOrphanProjects(): solta registros de e-mail de projetos que não existem mais.",
+    "3. Filtra as caixas do domínio: só kind 'user' ou 'project'; fora postmaster/abuse/dmarc, as de sistema, a caixa atual do projeto e as que outro projeto QUE EXISTE usa (registro de e-mail dele ou dono gravado na caixa).",
+    "4. Devolve ordenado por endereço, com passwordKnown (o painel sabe a senha dela?). A senha nunca sai."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "MailService.listUsableMailboxes",
+      "arquivo": "apps/server/src/services/mail-service.ts",
+      "papel": "Aplica as regras de elegibilidade."
+    }
+  ],
+  "efeitosColaterais": [
+    "Pode soltar registros órfãos em data/mail/mail.json (sem apagar nada no servidor de e-mail)."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/ProjectEmailCard.tsx (Usar uma caixa que já existe)"
+  ],
+  "testes": [
+    "apps/server/tests/mail-project-existing-mailbox.test.ts",
+    "apps/server/tests/routes-mail-schema.test.ts",
+    "apps/web/tests/project-email-card.test.tsx"
+  ],
+  "observacoes": [
+    "O POST /api/projects/:id/email com useExistingMailbox aceita exatamente as caixas desta lista (revalida dentro do lock da caixa)."
+  ]
+}

@@ -185,7 +185,9 @@ your projects can send messages and for mailboxes such as `contato@`.
 - **Project email:** the project gets its own mailbox (e.g. `contato@shop.example.com`)
   with a display name, and the `SMTP_*` and `MAIL_*` values are injected at deploy time. If the app uses
   other variable names, **Link to project variables** delivers the same values under those
-  names.
+  names. Instead of creating a new mailbox, you can **use a mailbox that already exists** on the
+  domain (nothing is deleted). And deleting the project does not delete the mailbox or its
+  messages: the address is free to be used again.
 
 **Webmail.** With one click, `https://mail.<domain>/` starts opening a webmail (**Roundcube**) in
 Portuguese to read, reply and send as the mailbox itself. The session ends after 10

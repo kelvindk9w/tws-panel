@@ -641,6 +641,23 @@ Precisa da [Etapa 4](#etapa-4) pronta.
 **O que conferir:** o cartão mostra `SMTP_HOST = mail.envio.example.com`. Os valores `SMTP_*` e
 `MAIL_*` entram sozinhos no deploy. Os valores só chegam ao app no próximo deploy.
 
+**Usar uma caixa que já existe.** Se a caixa já foi criada (por exemplo, configurada no webmail), no passo 2 escolha
+**Usar uma caixa que já existe**, selecione a caixa na lista e decida a senha:
+
+- **Informar a senha atual da caixa:** o painel confere a senha sem tentar entrar na caixa. Se o servidor
+  de e-mail não deixar conferir, a senha é aceita e o painel avisa que não foi verificada.
+- **Manter a senha que o painel já guarda** (aparece quando ele a conhece).
+- **Trocar a senha desta caixa por uma gerada pelo painel:** apps, celulares e o webmail que usam a senha antiga
+  precisam ser atualizados.
+
+Nada é apagado: a caixa e as mensagens continuam. Depois de ligada, a caixa passa a ser gerenciada pelo
+painel (o **Sincronizar** e a restauração do e-mail a mantêm com a senha guardada): não troque a senha dela
+direto no webmail, use **Trocar senha** no cartão. Ficam de fora da lista as caixas de outros projetos e as do
+painel (`postmaster@`, `abuse@`, `dmarc@`).
+
+**Apagar o projeto** solta o e-mail dele, mas não apaga a caixa nem as mensagens. Ao recriar o projeto, o mesmo
+endereço volta a ficar livre e a caixa pode ser usada de novo.
+
 ### 7.5 Portas (só se precisar)
 
 Na **Visão geral**, no cartão Containers, o botão **Portas** abre duas abas:
