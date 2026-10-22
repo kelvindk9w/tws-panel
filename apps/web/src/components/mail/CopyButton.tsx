@@ -24,6 +24,7 @@ export function CopyButton({ text, label, ariaLabel }: { text: string; label?: s
   }
   return (
     <Button
+      type="button"
       variant="ghost"
       size="sm"
       className={cn(!label && "h-7 w-7 shrink-0 p-0")}

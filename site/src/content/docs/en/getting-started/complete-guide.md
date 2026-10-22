@@ -523,6 +523,12 @@ even TWS, can open your backups.**
 1. In the **Panel** card, click **Back up now**.
 2. Do the same in the **Email** card, if you turned on email in [Step 4](#etapa-4).
 
+**Reusing a bucket from an old panel?** The Dashboard warns that the storage already holds backups from
+another panel. If you want to continue the old panel, restore it first (restore guide). If this is a
+new panel, the manual backup above is not blocked and can be the first one. Over time, the retention
+deletes the oldest copies in the folder, including the old panel's: to keep them, use another bucket
+or folder, or download them first.
+
 **What to check:**
 
 - in **Latest backups**, the line ends with **"on the VPS · external copy verified"**: the panel downloaded the copy back and

@@ -136,7 +136,7 @@ the password does not open the backups, check the kit again.
 1. In step 3, click **See what's in the storage**.
 2. In the **Panel** block, click **Restore the panel**.
 3. Choose the date of the **last backup of the old VPS**, the one you wrote down in step 2. Do not
-   assume that the first date in the list is the right one. Confirm by typing the word the screen shows: `panel` with the English interface, `painel` with the Portuguese one.
+   assume that the first date in the list is the right one. Confirm by typing the word the screen shows (in code font, with a copy button): `panel` with the English interface, `painel` with the Portuguese one. It is the literal word, not the panel domain or name.
 4. Wait. The panel restarts by itself.
 
 **What to check:** open the new VPS address again (`https://203-0-113-10.sslip.io`, with the new IP)
@@ -251,7 +251,7 @@ after that.
 
 ### 8. Restore the email last
 
-1. In the card, click **Restore email**, choose the date of the email backup you wrote down in step 2 and confirm by typing the word the screen shows: `email` with the English
+1. In the card, click **Restore email**, choose the date of the email backup you wrote down in step 2 and confirm by typing the literal word the screen shows (not your email address): `email` with the English
    interface, `e-mail` with the Portuguese one.
    If the restore ends with the notice "O servidor de e-mail ainda não existe nesta VPS: abra a
    página E-mail e clique em Iniciar" (the mail server does not exist on this VPS yet: open the

@@ -531,39 +531,92 @@ describe("pendência: o que falta num passo em andamento", () => {
     expect(screen.queryByTestId(/onboarding-missing/)).not.toBeInTheDocument();
   });
 
-  it("backups com cópias de outro painel: não convida a fazer backup; manda restaurar e abre o guia no idioma", async () => {
-    serve(
-      withBackups({
-        missing: "Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup.",
-        missingCode: "backups-restore-first",
-      }),
-    );
+  it.each([
+    [
+      "pt-BR",
+      "pt-br",
+      [/já guarda backups de outro painel/, /continuar o painel antigo, restaure-o primeiro \(guia de restauração\)/, /painel novo e você não quer o antigo/, /Configurações → Backups \(Fazer backup agora\)/, /não é bloqueado/, /retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo/, /outro bucket\/pasta ou baixe-as antes/],
+      /Abrir o guia de restauração/,
+      /Abrir Backups/,
+    ],
+    [
+      "en",
+      "en",
+      [/already holds backups from another panel/, /continue the old panel, restore it first \(restore guide\)/, /new panel and you do not want the old one/, /Settings → Backups \(Back up now\)/, /not blocked/, /retention deletes the oldest copies in the folder, including the old panel's/, /another bucket\/folder or download them first/],
+      /Open the restore guide/,
+      /Open Backups/,
+    ],
+  ] as const)("(%s) backups com cópias de outro painel: dois caminhos (restaurar OU primeiro backup à mão), retenção e guia no idioma", async (loc, site, patterns, guideName, openName) => {
+    setLocale(loc);
+    serve(withBackups({ missing: "texto do servidor", missingCode: "backups-restore-first" }));
     renderChecklist();
     const box = await screen.findByTestId("onboarding-missing-backups");
-    expect(box).toHaveTextContent(/Restaure primeiro o painel antigo \(guia de restauração\) antes do primeiro backup/);
-    expect(box).toHaveTextContent(/não misturar com as cópias do painel anterior/);
-    expect(box).not.toHaveTextContent(/Fazer backup agora/);
-    const guide = within(box).getByRole("link", { name: /Abrir o guia de restauração/ });
-    expect(guide).toHaveAttribute("href", `${SITE_URL}/pt-br/guides/restore-new-server/`);
+    expect(box).toHaveAccessibleName(loc === "en" ? "What's missing" : "O que falta");
+    for (const re of patterns) expect(box).toHaveTextContent(re);
+    expect(box).not.toHaveTextContent("texto do servidor");
+    const guide = within(box).getByRole("link", { name: guideName });
+    expect(guide).toHaveAttribute("href", `${SITE_URL}/${site}/guides/restore-new-server/`);
     expect(guide).toHaveAttribute("target", "_blank");
     expect(guide).toHaveAttribute("rel", expect.stringContaining("noopener"));
-    expect(within(box).getByRole("link", { name: /Abrir Backups/ })).toBeInTheDocument();
+    // "Abrir Backups" é o botão principal (primeiro, destacado) no caminho do painel novo
+    const open = within(box).getByRole("link", { name: openName });
+    expect(within(box).getAllByRole("link")[0]).toBe(open);
+    expect(open.className).not.toBe(guide.className);
   });
 
-  it("em inglês: título, ícone, resumo e guia no idioma", async () => {
+  it("em inglês: ícone e resumo de atenção", async () => {
     setLocale("en");
     serve(withBackups({ missing: "texto do servidor", missingCode: "backups-restore-first" }));
     renderChecklist();
     const box = await screen.findByTestId("onboarding-missing-backups");
-    expect(box).toHaveAccessibleName("What's missing");
     expect(within(box).getByRole("img", { name: "Attention" })).toBeInTheDocument();
-    expect(box).toHaveTextContent(/Restore the old panel first/);
-    expect(box).not.toHaveTextContent("texto do servidor");
-    expect(within(box).getByRole("link", { name: /Open the restore guide/ })).toHaveAttribute(
-      "href",
-      `${SITE_URL}/en/guides/restore-new-server/`,
-    );
     expect(await screen.findByTestId("onboarding-attention")).toHaveTextContent("1 step needs attention:");
+  });
+
+  it.each([
+    ["pt-BR", /Como fazer/, /Fazer backup agora/, /painel antigo/, /guarda backups de outro painel/, /restaure-o primeiro/, /painel novo/, /Restaure primeiro o painel antigo/],
+    ["en", /How to/, /Back up now/, /old panel/, /holds backups from another panel/, /restore it first/, /new panel/, /Restore the old panel first/],
+  ] as const)("(%s) 'Como fazer', passo 8: cópias de outro painel oferecem restaurar OU o primeiro backup; bucket vazio só o backup", async (loc, howName, backupRe, oldRe, heldRe, restoreRe, newRe, unknownRe) => {
+    setLocale(loc);
+    const step8 = async (over: Partial<OnboardingStep>) => {
+      serve(withBackups(over));
+      renderChecklist();
+      await screen.findByTestId("onboarding-missing-backups");
+      const item = screen.getByTestId("onboarding-step-backups");
+      const toggle = within(item).getByRole("button", { name: howName });
+      if (toggle.getAttribute("aria-expanded") !== "true") fireEvent.click(toggle);
+      const items = await within(item).findAllByRole("listitem");
+      const t = items[items.length - 1].textContent ?? "";
+      cleanup();
+      return t;
+    };
+    const empty = await step8({});
+    expect(empty).toMatch(backupRe);
+    expect(empty).not.toMatch(oldRe);
+    const held = await step8({ missingCode: "backups-restore-first" });
+    for (const re of [heldRe, restoreRe, backupRe, newRe]) expect(held).toMatch(re);
+    // sem conseguir conferir o armazenamento: continua só restaurar primeiro
+    const unknown = await step8({ missingCode: "backups-storage-unknown" });
+    expect(unknown).toMatch(unknownRe);
+    expect(unknown).not.toMatch(backupRe);
+  });
+
+  it.each([
+    ["pt-BR", "Fazer backup agora"],
+    ["en", "Back up now"],
+  ] as const)("(%s) o cartão só deixa de convidar ao backup quando o armazenamento não respondeu", async (loc, phrase) => {
+    setLocale(loc);
+    const text = async (over: Partial<OnboardingStep>) => {
+      serve(withBackups(over));
+      renderChecklist();
+      await screen.findByTestId("onboarding-missing-backups");
+      const t = screen.getByTestId("onboarding-card").textContent ?? "";
+      cleanup();
+      return t;
+    };
+    expect(await text({})).toContain(phrase);
+    expect(await text({ missingCode: "backups-restore-first" })).toContain(phrase);
+    expect(await text({ missingCode: "backups-storage-unknown" })).not.toContain(phrase);
   });
 
   it("primeiro acesso com só as Proteções em andamento e nada mais começado: sem o resumo", async () => {
@@ -580,25 +633,6 @@ describe("pendência: o que falta num passo em andamento", () => {
     serve({ ...res, started: true });
     renderChecklist();
     expect(await screen.findByTestId("onboarding-attention")).toBeInTheDocument();
-  });
-
-  it.each([
-    ["pt-BR", "Fazer backup agora"],
-    ["en", "Back up now"],
-  ] as const)("(%s) o cartão inteiro só convida ao backup na instalação do zero, nunca com cópias de outro painel ou armazenamento sem resposta", async (loc, phrase) => {
-    setLocale(loc);
-    const text = async (over: Partial<OnboardingStep>) => {
-      serve(withBackups(over));
-      renderChecklist();
-      await screen.findByTestId("onboarding-missing-backups");
-      const t = screen.getByTestId("onboarding-card").textContent ?? "";
-      cleanup();
-      return t;
-    };
-    // instalação do zero: o passo a passo continua mandando fazer o backup
-    expect(await text({})).toContain(phrase);
-    expect(await text({ missingCode: "backups-restore-first" })).not.toContain(phrase);
-    expect(await text({ missingCode: "backups-storage-unknown" })).not.toContain(phrase);
   });
 
   it("armazenamento sem resposta: texto âmbar traduzido e 'Conferir de novo' consulta o servidor outra vez", async () => {

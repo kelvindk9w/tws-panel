@@ -23,7 +23,7 @@ export default {
   // OnboardingChecklist: pendência (passo em andamento)
   "missing.title": "O que falta",
   "missing.icon": "Atenção",
-  "missing.backupsRestoreFirst": "Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup, para não misturar com as cópias do painel anterior.",
+  "missing.backupsRestoreFirst": "Este armazenamento já guarda backups de outro painel. Se você quer continuar o painel antigo, restaure-o primeiro (guia de restauração). Se este é um painel novo e você não quer o antigo, faça o primeiro backup à mão em Configurações → Backups (Fazer backup agora): ele não é bloqueado. Atenção: com o tempo a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo; se quiser guardá-las, use outro bucket/pasta ou baixe-as antes.",
   "missing.storageUnknown": "Não foi possível conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do primeiro backup.",
   "missing.restoreGuide": "Abrir o guia de restauração",
   "attention.one": "{count} passo precisa de atenção:",
@@ -126,7 +126,8 @@ export default {
   "steps.backups.howTo.6": "Em Configurações → Backups, cole os dados no cartão Armazenamento externo (região auto) e clique em Testar e salvar.",
   "steps.backups.howTo.7": "No cartão Criptografia, crie a senha (ou clique em Sugerir uma frase forte), baixe o kit de recuperação e marque “Guardei a senha em lugar seguro”.",
   "steps.backups.howTo.8": "Clique em Fazer backup agora no Painel: o passo fica feito quando a primeira cópia externa for enviada e conferida.",
-  "steps.backups.howTo.8Restore": "Restaure primeiro o painel antigo (guia de restauração) e só então faça o primeiro backup.",
+  "steps.backups.howTo.8Restore": "Este armazenamento já guarda backups de outro painel. Para continuar o painel antigo, restaure-o primeiro (guia de restauração). Se este é um painel novo, clique em Fazer backup agora no Painel (ou em Configurações → Backups): o passo fica feito quando a primeira cópia externa for enviada e conferida.",
+  "steps.backups.howTo.8Unknown": "Restaure primeiro o painel antigo (guia de restauração) e só então faça o primeiro backup.",
   "steps.backups.note": "Conta como feito com o armazenamento conectado e pelo menos um backup externo conferido. Se você já tem outra rotina de backup fora da VPS, marque “Não vou usar”.",
   "steps.backups.action": "Abrir Backups",
 } as const;

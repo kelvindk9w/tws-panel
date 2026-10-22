@@ -508,6 +508,12 @@ seus backups.**
 1. No cartão **Painel**, clique em **Fazer backup agora**.
 2. Faça o mesmo no cartão **E-mail**, se você ligou o e-mail na [Etapa 4](#etapa-4).
 
+**Reaproveitou um bucket de um painel antigo?** O Dashboard avisa que o armazenamento já guarda
+backups de outro painel. Se você quer continuar o painel antigo, restaure-o primeiro (guia de
+restauração). Se este é um painel novo, o backup à mão acima não é bloqueado e pode ser o primeiro.
+Com o tempo, a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo: para
+guardá-las, use outro bucket ou pasta, ou baixe-as antes.
+
 **O que conferir:**
 
 - em **Últimos backups**, a linha termina com **"na VPS · cópia externa conferida"**: o painel

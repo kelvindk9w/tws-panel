@@ -1487,7 +1487,7 @@ export class BackupService {
       const found = (await storage.list(prefix)).some((o) => isValidBackupFileName(o.key.slice(prefix.length)));
       if (!readOnly) delete t.heldFailures;
       if (!found) return null;
-      return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto, de você restaurar o painel ou de fazer um backup à mão com o armazenamento já conectado (cópia só na VPS não conta). A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
+      return "Em pausa: este painel é novo e o armazenamento já guarda backups do painel de outro servidor. Para não os sobrescrever, o painel só envia backup automático depois de ter um projeto, de você restaurar o painel ou de fazer um backup à mão com o armazenamento já conectado (cópia só na VPS não conta). Para continuar o painel antigo, comece por restaurar o painel antigo; se este é um painel novo, faça o primeiro backup à mão em Configurações → Backups (Fazer backup agora), que não é bloqueado. Atenção: com o tempo a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo; se quiser guardá-las, use outro bucket/pasta ou baixe-as antes. A pausa acaba sozinha 7 dias depois de o armazenamento ser conectado.";
     } catch (err) {
       if (readOnly) throw err; // consulta do roteiro: sem contar falha nem avisar; quem chama trata como "não deu para conferir"
       t.heldFailures = (t.heldFailures ?? 0) + 1;

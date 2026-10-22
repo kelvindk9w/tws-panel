@@ -93,7 +93,8 @@ function MissingNote({ step, onGo, onRecheck }: { step: OnboardingStep; onGo: ()
   const action = ONBOARDING_CONTENT[step.id].action;
   const unknown = step.missingCode === "backups-storage-unknown";
   // nos dois casos o guia de restauração vale: na dúvida, restaurar vem antes do primeiro backup
-  const restoreFirst = step.missingCode === "backups-restore-first" || unknown;
+  const foreign = step.missingCode === "backups-restore-first";
+  const restoreFirst = foreign || unknown;
   const titleId = `onboarding-missing-title-${step.id}`;
   return (
     <div
@@ -113,6 +114,14 @@ function MissingNote({ step, onGo, onRecheck }: { step: OnboardingStep; onGo: ()
       </p>
       {(restoreFirst || action) && (
         <div className="flex flex-wrap gap-2">
+          {foreign && action && (
+            // painel novo: o caminho principal é o primeiro backup à mão, em Configurações → Backups
+            <Button size="sm" variant="info" asChild>
+              <Link to={action.to} onClick={onGo}>
+                {t(action.label)} <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          )}
           {restoreFirst && (
             <Button size="sm" variant="outline" asChild>
               <a href={restoreGuideUrl(locale)} target="_blank" rel="noopener noreferrer">
@@ -125,7 +134,7 @@ function MissingNote({ step, onGo, onRecheck }: { step: OnboardingStep; onGo: ()
               <RefreshCw className="h-4 w-4" /> {t("onboarding.recheck")}
             </Button>
           )}
-          {action && (
+          {action && !foreign && (
             <Button size="sm" variant="outline" asChild>
               <Link to={action.to} onClick={onGo}>
                 {t(action.label)} <ArrowRight className="h-4 w-4" />
@@ -160,8 +169,13 @@ function StepItem({
   const [open, setOpen] = useState(defaultOpen);
   const content = ONBOARDING_CONTENT[step.id];
   const Icon = content.icon;
-  // com cópias de outro painel (ou sem saber), o último passo de backups não pode mandar fazer o backup
-  const restoreFirst = step.missingCode === "backups-restore-first" || step.missingCode === "backups-storage-unknown";
+  // cópias de outro painel: oferece restaurar OU o primeiro backup à mão; sem conseguir conferir, só restaurar primeiro
+  const step8Key =
+    step.missingCode === "backups-restore-first"
+      ? "onboarding.steps.backups.howTo.8Restore"
+      : step.missingCode === "backups-storage-unknown"
+        ? "onboarding.steps.backups.howTo.8Unknown"
+        : null;
   const muted = step.status === "soon" || step.status === "skipped";
   return (
     <li id={`onboarding-step-${step.id}`} data-testid={`onboarding-step-${step.id}`} className="flex scroll-mt-4 gap-3 py-3 first:pt-0 last:pb-0">
@@ -215,7 +229,7 @@ function StepItem({
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.steps")}</p>
               <ol className="ml-5 list-decimal space-y-1">
                 {content.howTo.map((line) => (
-                  <li key={line}>{t(line === "onboarding.steps.backups.howTo.8" && restoreFirst ? "onboarding.steps.backups.howTo.8Restore" : line)}</li>
+                  <li key={line}>{t(line === "onboarding.steps.backups.howTo.8" && step8Key ? step8Key : line)}</li>
                 ))}
               </ol>
             </div>

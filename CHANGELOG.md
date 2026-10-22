@@ -112,6 +112,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Corrigido
 
+- Roteiro, passo "Backups fora da VPS", com um bucket que já guarda backups de outro painel: o aviso
+  agora oferece restaurar o painel antigo OU fazer o primeiro backup à mão (que não é bloqueado) e avisa
+  que a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo.
+- Confirmações que pedem uma palavra (restauração, recomeçar o assistente, desativar o acesso pelo IP):
+  a palavra aparece em fonte de código, com dica de que é literal (e-mail não é o seu endereço), exemplo
+  no campo e botão de copiar.
+
 - Login por senha no SSH desligado de fato em imagens com `50-cloud-init.conf`; o desfazer da
   fase 02 nunca apaga o `sshd_config`.
 - Repositório privado volta a clonar na VPS.

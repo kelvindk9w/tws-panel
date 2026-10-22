@@ -251,7 +251,10 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
 - Por item (projeto, painel ou e-mail), escolhendo a data e a cópia (VPS ou externa).
 - Para confirmar, você digita a palavra que a tela pede: o nome do projeto, no caso de um projeto;
   para o painel e para o e-mail, uma palavra fixa que depende do idioma da interface: `painel` e
-  `e-mail` em português, `panel` e `email` em inglês.
+  `e-mail` em português, `panel` e `email` em inglês. A tela mostra a palavra em fonte de código, com
+  botão de copiar, e diz que é a palavra literal (`e-mail` não é o seu endereço de e-mail). Maiúsculas e
+  minúsculas não importam. As outras confirmações do painel (recomeçar o assistente, desativar o acesso
+  pelo IP) têm o mesmo formato.
 - **Restaurar de outro servidor:** numa VPS nova, conecta-se o mesmo armazenamento, informa-se a
   senha e o painel lista o que existe, na ordem certa. Passo a passo:
   [Restaurar numa VPS nova](restore-new-server.md).
@@ -274,6 +277,11 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
   sozinha 7 dias depois de o armazenamento ser conectado, e o painel manda uma notificação quando ela
   começa. Se o painel não conseguir listar o armazenamento, também não envia o backup, e uma
   notificação avisa na terceira falha seguida. **Fazer backup agora** sempre funciona.
+  No roteiro "Deixe o painel pronto" (passo 6), o card "O que falta" mostra os dois caminhos quando o
+  armazenamento já guarda backups de outro painel: restaurar o painel antigo (para continuá-lo) ou,
+  se este é um painel novo, fazer o primeiro backup à mão em Configurações → Backups. Atenção: com o
+  tempo a retenção apaga as cópias mais antigas da pasta, inclusive as do painel antigo; para guardá-las,
+  use outro bucket ou pasta, ou baixe-as antes.
 - **O endereço e as chaves do armazenamento ficam os que estão em uso nesta VPS.** O resto das
   configurações de backup volta com o painel.
 

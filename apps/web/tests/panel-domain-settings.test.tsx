@@ -214,6 +214,9 @@ describe("Configurações → Domínio do painel", () => {
     expect(within(confirm).getByTestId("reactivate-command")).toBeInTheDocument();
     const go = within(confirm).getByRole("button", { name: /Desativar agora/ });
     expect(go).toBeDisabled();
+    expect(within(confirm).getByText(D, { selector: "code" })).toBeInTheDocument();
+    expect(within(confirm).getByText(/Digite exatamente o domínio do painel, sem https:\/\//)).toBeInTheDocument();
+    expect(within(confirm).getByLabelText(/Digite o domínio/)).toHaveAttribute("placeholder", D);
     fireEvent.change(within(confirm).getByLabelText(/Digite/), { target: { value: "painel.exemplo" } });
     expect(go).toBeDisabled();
     fireEvent.change(within(confirm).getByLabelText(/Digite/), { target: { value: D } });
