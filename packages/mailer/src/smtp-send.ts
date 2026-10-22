@@ -72,6 +72,8 @@ export class SmtpSendError extends Error {
     /** Código SMTP da resposta (0 = falha de conexão ou tempo esgotado). */
     public readonly code: number,
     message: string,
+    /** Comando recusado (AUTH, MAIL, RCPT, DATA...; "conexão" na saudação). Ausente em falha de conexão ou tempo esgotado. */
+    public readonly command?: string,
   ) {
     super(message);
     this.name = "SmtpSendError";
@@ -303,7 +305,7 @@ export async function sendSmtpMail(opts: SmtpSendOptions): Promise<SmtpSendResul
     const code = codeOf(response);
     if (!okCodes.includes(code)) {
       const label = command === null ? "conexão" : command.split(" ")[0];
-      throw new SmtpSendError(code, `O servidor de e-mail recusou (${label}): ${code} ${textOf(response)}`);
+      throw new SmtpSendError(code, `O servidor de e-mail recusou (${label}): ${code} ${textOf(response)}`, label);
     }
     return response;
   };

@@ -78,3 +78,11 @@ export function mailAuthRepairIncompleteError(cause: unknown, secret: string | n
     `O reparo da senha de administração do servidor de e-mail não terminou${reason ? ` (${reason})` : ""}. Nada foi apagado. ${NEXT_STEP_MESSAGE}`,
   );
 }
+
+/**
+ * O envio de avisos autenticou na submission do Stalwart (AUTH) e foi recusado (535): a senha que o painel
+ * guardou para a postmaster@ não é a que o servidor tem (acontece depois de restaurar o e-mail). Curta de
+ * propósito: o histórico de notificações guarda só os primeiros 200 caracteres do motivo.
+ */
+export const MAIL_SMTP_AUTH_REJECTED_MESSAGE =
+  "O servidor de e-mail recusou o login: a senha guardada pelo painel não é a do servidor. Abra E-mail e use Sincronizar (realinha a senha) ou Trocar senha na caixa postmaster@.";

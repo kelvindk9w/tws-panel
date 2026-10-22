@@ -35,6 +35,7 @@ export default {
   "email.description": "Notifications arrive by email, sent by the panel's own mail server.",
   "email.unavailablePrefix": "Notification emails won't go out until this is fixed: ",
   "email.openMail": "Open Email",
+  "email.openMailToSync": "Open Email to sync",
   "email.telegramOnly": "Meanwhile, you can use Telegram only.",
   "email.sentFrom": "Notifications are sent from <b>{from}</b>.",
   "email.recipientsLabel": "Addresses that receive them (up to 5, one per line or separated by commas)",

@@ -43,10 +43,12 @@ type Run = (path: string, init: RequestInit, okMessage?: string) => Promise<bool
 function useAction(onStatus: (s: NotificationsStatus) => void) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const run: Run = async (path, init, okMessage) => {
     setBusy(`${init.method} ${path}`);
     setError(null);
+    setErrorCode(null);
     setNotice(null);
     try {
       onStatus(await apiFetch<NotificationsStatus>(path, init));
@@ -54,12 +56,13 @@ function useAction(onStatus: (s: NotificationsStatus) => void) {
       return true;
     } catch (err) {
       setError(errorText(err, GENERIC_ERROR));
+      setErrorCode(err instanceof ApiRequestError ? err.code : null);
       return false;
     } finally {
       setBusy(null);
     }
   };
-  return { busy, error, notice, run };
+  return { busy, error, errorCode, notice, run };
 }
 
 function Feedback({ error, notice }: { error: string | null; notice: string | null }) {
@@ -254,7 +257,7 @@ function parseRecipients(text: string): string[] {
 function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus: (s: NotificationsStatus) => void }) {
   const e = status.email;
   const { t } = useI18n();
-  const { busy, error, notice, run } = useAction(onStatus);
+  const { busy, error, errorCode, notice, run } = useAction(onStatus);
   const [text, setText] = useState(e.recipients.join("\n"));
   const saved = e.recipients.length > 0;
 
@@ -347,6 +350,13 @@ function EmailCard({ status, onStatus }: { status: NotificationsStatus; onStatus
           </>
         )}
         <Feedback error={error} notice={notice} />
+        {errorCode === "email_auth_rejected" && (
+          <div>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/mail">{t("notifications.email.openMailToSync")}</Link>
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

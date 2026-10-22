@@ -199,7 +199,7 @@ export interface BackupServiceOptions {
    * nomes; nunca senhas. Ver MailService.adoptFromStalwart.
    */
   mailAdopt?: {
-    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; skippedTotal?: number; truncated?: boolean }>;
+    adopt(): Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; skippedTotal?: number; truncated?: boolean; passwordsRealigned?: number; passwordsFailed?: string[] }>;
   };
   reconciliation?: {
     planStaged(staged: string): Promise<string[]>;
@@ -2705,7 +2705,7 @@ export class BackupService {
   private async adoptRestoredEmail(r: BackupRecord): Promise<void> {
     this.step(r, "Conferir os domínios e caixas do e-mail no painel");
     try {
-      const { domains, mailboxes, skipped, skippedTotal, truncated } = await this.mailAdopt!.adopt();
+      const { domains, mailboxes, skipped, skippedTotal, truncated, passwordsRealigned = 0, passwordsFailed = [] } = await this.mailAdopt!.adopt();
       if (domains.length > 0 || mailboxes.length > 0) {
         const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
         const what = [
@@ -2717,6 +2717,18 @@ export class BackupService {
           `Cadastrei ${what} no painel (o que o servidor de e-mail trouxe do backup). Nada foi ativado.` +
             (mailboxes.length > 0 ? " As caixas cadastradas ficam sem senha conhecida pelo painel: para enviar por elas, use Trocar senha." : "") +
             (domains.length > 0 ? " O DNS dos domínios aparece como não verificado: use Verificar agora em cada um." : ""),
+        );
+      }
+      if (passwordsRealigned > 0) {
+        const label = `Realinhei a senha de ${passwordsRealigned} ${passwordsRealigned === 1 ? "caixa" : "caixas"} do painel`;
+        if (domains.length === 0 && mailboxes.length === 0) r.steps[r.steps.length - 1]!.label = label;
+        r.warnings.push(
+          `${label} (postmaster@ e caixas de projeto) no servidor de e-mail: ele voltou do backup com a senha antiga delas, e o painel reaplicou a que guarda. Nenhuma caixa de usuário foi alterada e nada foi reiniciado.`,
+        );
+      }
+      if (passwordsFailed.length > 0) {
+        r.warnings.push(
+          `Não consegui realinhar a senha destas caixas: ${passwordsFailed.slice(0, 10).join(", ")}${passwordsFailed.length > 10 ? ` e mais ${passwordsFailed.length - 10}` : ""}. Abra E-mail e use Sincronizar com o servidor de e-mail, ou Trocar senha na caixa.`,
         );
       }
       if (skipped.length > 0) {

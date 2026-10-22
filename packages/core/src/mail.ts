@@ -243,6 +243,13 @@ export interface MailAdoptResult {
   skippedTotal?: number;
   /** O servidor tem mais de 20 000 domínios ou caixas: só os primeiros foram lidos; o resto não foi conferido. */
   truncated?: boolean;
+  /**
+   * Caixas de sistema (postmaster@) e de projeto cuja senha o painel reaplicou no servidor de e-mail
+   * (depois de restaurar, o servidor volta com a senha antiga do backup). Ausente quando não houve nenhuma.
+   */
+  passwordsRealigned?: number;
+  /** Endereços (nunca senhas) das caixas que o painel tentou realinhar e não conseguiu; as outras seguiram. */
+  passwordsFailed?: string[];
 }
 
 /** Teto de nomes devolvidos em `skipped` (a resposta não cresce com o tamanho do servidor). */

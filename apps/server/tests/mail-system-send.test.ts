@@ -193,4 +193,31 @@ describe("sendSystemMail", () => {
       .catch((e: unknown) => e)) as Error & { permanent?: boolean };
     expect(e3.message).toBe("texto");
   });
+
+  it("login recusado (535 no AUTH): erro em português que diz o que fazer, com código próprio e definitivo", async () => {
+    sendImpl = async () => {
+      throw new SmtpSendError(535, "O servidor de e-mail recusou (AUTH): 535 5.7.8 Authentication credentials invalid", "AUTH");
+    };
+    const e = (await service()
+      .sendSystemMail({ to: "p@exemplo.org", subject: "s", text: "t", html: "h" })
+      .catch((x: unknown) => x)) as Error & { permanent?: boolean; code?: string };
+    expect(e.code).toBe("email_auth_rejected");
+    expect(e.permanent).toBe(true);
+    expect(e.message).toMatch(/senha guardada pelo painel não é a do servidor/);
+    expect(e.message).toMatch(/Sincronizar/);
+    expect(e.message).toMatch(/Trocar senha/);
+    expect(e.message.length).toBeLessThanOrEqual(200);
+    expect(e.message).not.toContain("senha-do-postmaster");
+  });
+
+  it("recusa 5xx de outro comando continua com a mensagem do servidor", async () => {
+    sendImpl = async () => {
+      throw new SmtpSendError(535, "O servidor de e-mail recusou (MAIL): 535 x", "MAIL");
+    };
+    const e = (await service()
+      .sendSystemMail({ to: "p@exemplo.org", subject: "s", text: "t", html: "h" })
+      .catch((x: unknown) => x)) as Error & { code?: string };
+    expect(e.code).toBeUndefined();
+    expect(e.message).toMatch(/\(MAIL\)/);
+  });
 });

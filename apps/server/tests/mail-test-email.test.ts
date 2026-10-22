@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
-import type { FindDeliveryReportOptions, QueuedMessage, SmtpSendOptions } from "@paas/mailer";
+import { SmtpSendError, type FindDeliveryReportOptions, type QueuedMessage, type SmtpSendOptions } from "@paas/mailer";
 import type { ServerConfig } from "../src/config.js";
 
 let queue: QueuedMessage[] = [];
@@ -260,6 +260,17 @@ describe("sendTestEmail — envio", () => {
       code: "test_send_failed",
       message: expect.stringContaining("535"),
     });
+  });
+
+  it("login recusado no AUTH (senha do painel diferente da do servidor): 409 email_auth_rejected dizendo o que fazer", async () => {
+    sendImpl = async () => {
+      throw new SmtpSendError(535, "O servidor de e-mail recusou (AUTH): 535 5.7.8 Authentication credentials invalid", "AUTH");
+    };
+    const err = (await service().sendTestEmail(DOMAIN, TO).catch((e: unknown) => e)) as Error & { statusCode?: number; code?: string };
+    expect(err.statusCode).toBe(409);
+    expect(err.code).toBe("email_auth_rejected");
+    expect(err.message).toMatch(/Sincronizar/);
+    expect(err.message).toMatch(/Trocar senha/);
   });
 
   it("limite de frequência: 1 teste a cada 30 s e 20 por hora", async () => {

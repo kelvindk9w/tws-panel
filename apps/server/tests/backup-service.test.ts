@@ -3083,7 +3083,7 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
   type Repair = "ok" | "repaired" | "failed" | "unreachable" | "not_running";
   let adopts: number;
   const withAdopt = (
-    adopt: () => Promise<{ domains: string[]; mailboxes: string[]; skipped: string[] }>,
+    adopt: () => Promise<{ domains: string[]; mailboxes: string[]; skipped: string[]; passwordsRealigned?: number; passwordsFailed?: string[] }>,
     repair: Repair = "ok",
   ): BackupService =>
     build({
@@ -3118,6 +3118,30 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
     expect(rec.warnings.join(" ")).toMatch(/Trocar senha/);
     expect(rec.warnings.join(" ")).toMatch(/Verificar agora/);
     expect(rec.error).toBeNull();
+  });
+
+  it("senhas realinhadas: o registro diz quantas caixas, sem senha nenhuma", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [], passwordsRealigned: 2 }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).toMatch(/Realinhei a senha de 2 caixas/);
+    expect(rec.steps.map((s) => s.label).join("|")).toMatch(/Realinhei a senha de 2 caixas/);
+    expect(rec.error).toBeNull();
+  });
+
+  it("senhas realinhadas: singular e, com falha, os endereços que ficaram para Sincronizar", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [], passwordsRealigned: 1, passwordsFailed: ["postmaster@a.example.com", "loja@a.example.com"] }));
+    const rec = await restoreEmail();
+    const text = rec.warnings.join(" ");
+    expect(text).toMatch(/Realinhei a senha de 1 caixa /);
+    expect(text).toMatch(/Não consegui realinhar a senha destas caixas: postmaster@a\.example\.com, loja@a\.example\.com/);
+    expect(text).toMatch(/Sincronizar/);
+  });
+
+  it("só falhas ao realinhar: avisa sem dizer que realinhou", async () => {
+    service = withAdopt(async () => ({ domains: [], mailboxes: [], skipped: [], passwordsFailed: ["postmaster@a.example.com"] }));
+    const rec = await restoreEmail();
+    expect(rec.warnings.join(" ")).not.toMatch(/Realinhei/);
+    expect(rec.warnings.join(" ")).toMatch(/Não consegui realinhar/);
   });
 
   it("singular: 1 domínio e 1 caixa", async () => {

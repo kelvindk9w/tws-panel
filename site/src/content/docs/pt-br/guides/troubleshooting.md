@@ -247,6 +247,10 @@ da mensagem, ou no aviso âmbar do Dashboard), ou pare o servidor de e-mail e in
 **E-mail**. Nenhum dado é apagado. Detalhes em
 [Restaurar em outro servidor](restore-new-server.md#se-algo-falhar).
 
+### "535 5.7.8 Authentication credentials invalid" no teste de notificação por e-mail
+
+O servidor de e-mail recusou o login da caixa `postmaster@` porque a senha que o painel guardou não é a que o servidor tem (acontece depois de restaurar o e-mail: a caixa volta com a senha do backup). O painel mostra "a senha guardada pelo painel não é a do servidor" e, em **Configurações → Notificações**, o botão **Abrir E-mail para sincronizar**. Em **E-mail**, clique em **Sincronizar com o servidor de e-mail**: ele reaplica a senha que o painel guarda para a `postmaster@` e para as caixas de projeto ("Realinhei a senha de N caixas"). Se preferir, use **Trocar senha** na caixa `postmaster@` do domínio. Depois, envie o teste de novo. Detalhes em [Restaurar em outro servidor](restore-new-server.md#se-algo-falhar).
+
 ## Docker
 
 ### "Cannot connect to the Docker daemon"

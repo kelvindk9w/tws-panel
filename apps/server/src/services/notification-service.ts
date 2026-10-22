@@ -514,6 +514,9 @@ export class NotificationService {
     if (failure) {
       await this.persist({ history: true });
       this.record("notifications.test", "Teste por e-mail: falhou.", actor);
+      if ((failure as { code?: unknown } | null)?.code === "email_auth_rejected") {
+        throw httpError(409, "email_auth_rejected", failure instanceof Error ? failure.message : String(failure));
+      }
       throw httpError(502, "email_send_failed", `O servidor de e-mail não aceitou o teste: ${shortReason(failure)}`);
     }
     this.config.email.testedAt = new Date(this.now()).toISOString();
