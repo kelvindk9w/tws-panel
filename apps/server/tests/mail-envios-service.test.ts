@@ -289,6 +289,20 @@ describe("leitura do registro (histórico)", () => {
   });
 });
 
+describe("registro de envios por SMTP (onEvents)", () => {
+  it("cada coleta entrega os eventos novos ao registro de envios; falha dele não derruba a coleta", async () => {
+    logLines = [delivered("2026-10-04T14:00:00Z", "7", "loja@envio.test", "a@x.test")];
+    const got: string[] = [];
+    const ok = await new MailEnviosService(deps({ onEvents: async (events) => void got.push(...events.map((e) => `${e.queueId}:${e.state}`)) })).collect();
+    expect(ok.added).toBe(1);
+    expect(got).toEqual(["7:delivered"]);
+    const failing = new MailEnviosService(deps({ onEvents: async () => { throw new Error("registro fora do ar"); } }));
+    logLines = [delivered("2026-10-04T14:10:00Z", "8", "loja@envio.test", "b@x.test")];
+    await expect(failing.collect()).resolves.toMatchObject({ added: 1 });
+    expect((await failing.history({ days: 7 })).total).toBe(2);
+  });
+});
+
 describe("histórico com filtros", () => {
   async function seeded() {
     logLines = [

@@ -35,6 +35,9 @@ import { MailReputationService } from "../services/mail-reputation-service.js";
 import { readStalwartLogs } from "../services/stalwart-logs.js";
 import { migrateMailNetworks } from "../services/mail-network-migration.js";
 import { mailEnviosRoutes } from "./mail-envios.js";
+import { mailSendRoutes } from "./mail-send-routes.js";
+import { MailSendLogService } from "../services/mail-send-log-service.js";
+import { buildMailHookServer } from "../services/mail-send-hook-server.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
@@ -436,8 +439,20 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // volume, listas de bloqueio (uma vez por dia) e a nota. Fica AQUI porque
   // só este plugin enxerga o MailService (ver mail-reputation-service.ts).
   // -------------------------------------------------------------------------
+  // Registro dos envios por SMTP: o aviso do Stalwart chega pelo ouvido interno
+  // (abaixo) e os estados vêm dos eventos de entrega que o `envios` lê.
+  const sends = new MailSendLogService({
+    dataDir: app.config.dataDir,
+    senders: () => service.enviosSenders(),
+    projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
+    serverCreated: () => service.enviosServerCreated(),
+    listQueue: () => service.enviosQueue(),
+    captureConfigured: () => service.sendHookConfigured(),
+    log: (message) => app.log.warn(message),
+  });
   const envios = new MailEnviosService({
     dataDir: app.config.dataDir,
+    onEvents: (events) => sends.applyEvents(events),
     serverCreated: () => service.enviosServerCreated(),
     listQueue: () => service.enviosQueue(),
     retry: (id) => service.enviosRetry(id),
@@ -465,11 +480,35 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     reputation,
     domainNames: async () => (await service.listDomains()).map((d) => d.name),
   });
+  mailSendRoutes(app, { sends });
   envios.start();
   reputation.start();
+  sends.start();
+
+  // Ouvido do aviso de envio: servidor à parte, só na rede interna do Docker.
+  // Sobe quando o painel fica pronto e só se a captura está configurada (painel
+  // em container); porta ocupada ou erro nunca derrubam o painel.
+  let hookServer: ReturnType<typeof buildMailHookServer> | null = null;
+  app.addHook("onReady", async () => {
+    if (!(await service.sendHookConfigured())) return;
+    hookServer = buildMailHookServer({
+      verify: (secret) => service.verifySendHookSecret(secret),
+      submit: (payload) => sends.submit(payload),
+    });
+    try {
+      await hookServer.listen({ port: app.config.mailHookPort ?? 9100, host: "0.0.0.0" });
+    } catch (err) {
+      app.log.warn(`Registro de envios: não consegui abrir o ouvido do aviso do e-mail (${err instanceof Error ? err.message : String(err)}).`);
+      await hookServer.close().catch(() => undefined);
+      hookServer = null;
+    }
+  });
   app.addHook("onClose", async () => {
     envios.stop();
     reputation.stop();
+    sends.stop();
+    await hookServer?.close().catch(() => undefined);
+    await sends.flush();
   });
 
   // -------------------------------------------------------------------------

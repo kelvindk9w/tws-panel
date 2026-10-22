@@ -209,6 +209,12 @@ minutos sem uso, e 10 logins errados vindos do mesmo IP em 10 minutos bloqueiam 
 - **Histórico:** entregues, recusadas, adiadas e canceladas dos últimos 30 dias (só metadados,
   nunca assunto nem corpo).
 - **Volume:** gráfico dos últimos 14 dias, taxa de recusa e totais por projeto.
+- **Saídas:** os e-mails que o app de cada projeto enviou por SMTP (de, para, hora, estado e o
+  motivo do erro em linguagem clara, com os detalhes técnicos recolhidos). Cada projeto tem a sua
+  seção **Envios**. O assunto e o corpo ficam **ocultos**: clique em **Exibir** (cada exibição fica
+  no registro de auditoria, sem o conteúdo). Ficam guardados 14 dias (os dados da mensagem, 90),
+  sem anexos, e **não entram nos backups do painel**. Dá para não guardar assunto e corpo, por
+  projeto ou para todos, na aba **Privacidade**.
 - **Reputação:** consulta diária às listas de bloqueio (Spamhaus ZEN e DBL, SpamCop, Barracuda),
   com o ponto de teste de cada lista para nunca dizer "limpo" sem ter conferido. Aceita a chave
   DQS gratuita da Spamhaus.

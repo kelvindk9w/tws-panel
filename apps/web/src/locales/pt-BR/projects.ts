@@ -361,4 +361,5 @@ export default {
   "new.domain.backupNo": "Não",
   "new.domain.backupHint": "Sim segue o padrão dos projetos, em Configurações → Backups. Depois do primeiro deploy, a aba Backups do projeto mostra os bancos e as pastas encontrados para você conferir.",
   "new.domain.create": "Criar projeto",
+  "detail.nav.sends": "Envios",
 } as const;

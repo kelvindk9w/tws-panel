@@ -75,4 +75,7 @@ export default {
   "code.mail_auth_still_refused": "O painel conferiu a senha de administração e o servidor de e-mail a aceita, mas a leitura foi recusada de novo. Nada foi reiniciado nem apagado. Próximo passo: tente Sincronizar mais uma vez; se repetir, olhe o log com docker logs paas-stalwart.",
   "code.reconciliation_not_found": "Esse aviso não existe mais.",
   "code.wrong_password": "A senha não abre este backup.",
+  "code.send_not_found": "Mensagem não encontrada.",
+  "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",
+  "code.content_expired": "O assunto e o corpo desta mensagem já foram apagados pela retenção.",
 } as const;

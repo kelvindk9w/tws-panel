@@ -1,0 +1,600 @@
+/**
+ * mail-send-log-service.ts — registro dos envios feitos por SMTP (a caixa do
+ * projeto que o app usa para enviar): quem enviou, para quem, quando, em que
+ * estado está e, se deu errado, o motivo em linguagem clara. Assunto e corpo
+ * ficam guardados à parte e ocultos (só a rota "Exibir" os devolve).
+ *
+ * De onde vem cada dado (conferido num Stalwart v0.11.8 real):
+ *  - o ENVIO chega por um aviso do próprio Stalwart (MTA hook, estágio `data`,
+ *    só para submissão autenticada): caixa autenticada, id da fila, envelope,
+ *    assunto, corpo e anexos. Ver packages/mailer/src/send-hook.ts;
+ *  - o ESTADO (entregue, adiado, recusado…) e o motivo vêm dos eventos de
+ *    entrega que a página Envios já lê do registro do Stalwart, ligados ao
+ *    envio pelo id da fila (applyEvents);
+ *  - a RECONCILIAÇÃO (reconcile) cobre o que se perdeu com o painel parado:
+ *    mensagens que estão na fila e o painel não conhecia viram registros só
+ *    com metadados; as que sumiram da fila sem resultado viram "sem
+ *    confirmação".
+ *
+ * Falha ao registrar NUNCA atrapalha o envio: o aviso é respondido na hora, o
+ * registro é feito depois, numa fila em memória de tamanho limitado; o que não
+ * couber ou falhar é contado e descartado (o envio já foi aceito).
+ *
+ * PRIVACIDADE: nada de assunto ou corpo em log, auditoria, notificação ou
+ * listagem. Ver comoFuncionaSistema/email/saidas.json.
+ */
+import type {
+  MailDeliveryEvent,
+  MailSendContent,
+  MailSendItem,
+  MailSendListResponse,
+  MailSendOrigin,
+  MailSendRecipient,
+  MailSendSettings,
+  MailSendState,
+  UpdateMailSendSettingsRequest,
+} from "@paas/core";
+import { MAIL_SEND_LIMITS } from "@paas/core";
+import { explainSendFailure, failureState, parseSendHook, queueItemFromMessage, type QueueMessageRaw } from "@paas/mailer";
+import { httpError } from "./http-error.js";
+import { MailSendStore, normalizeSettings, type StoredRecipient, type StoredSend } from "./mail-send-store.js";
+
+export interface SendSenderEntry {
+  address: string;
+  mailbox: string;
+  projectId: string | null;
+  system: boolean;
+}
+
+export interface MailSendLogDeps {
+  dataDir: string;
+  senders(): Promise<SendSenderEntry[]>;
+  projectNames(): Promise<Map<string, string>>;
+  serverCreated(): Promise<boolean>;
+  listQueue(): Promise<{ items: QueueMessageRaw[]; total: number }>;
+  /** A captura (aviso do Stalwart) está configurada? */
+  captureConfigured(): Promise<boolean>;
+  log?: (message: string) => void;
+  now?: () => number;
+  /** Quantos avisos esperam na fila em memória (padrão 500). */
+  queueLimit?: number;
+}
+
+export interface SendListFilter {
+  projectId?: string;
+  origin?: MailSendOrigin;
+  state?: MailSendState;
+  /** Dia inicial (AAAA-MM-DD), inclusive, em UTC. */
+  from?: string;
+  /** Dia final (AAAA-MM-DD), inclusive, em UTC. */
+  to?: string;
+  /** Parte do endereço do destinatário. */
+  recipient?: string;
+  limit?: number;
+  offset?: number;
+}
+
+const DAY = 86_400_000;
+const RECONCILE_FIRST_MS = 90_000;
+const RECONCILE_EVERY_MS = 5 * 60_000;
+const PURGE_FIRST_MS = 120_000;
+const PURGE_EVERY_MS = 60 * 60_000;
+/** Mensagem pendente que sumiu da fila há menos tempo que isso ainda pode estar no registro. */
+const UNCONFIRMED_AFTER_MS = 15 * 60_000;
+const SETTINGS_CACHE_MS = 5_000;
+const CAP_CHECK_EVERY = 50;
+
+function domainOf(address: string): string {
+  return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
+}
+
+function newRecipient(address: string, at: string | null = null, state: MailSendState = "queued"): StoredRecipient {
+  return { address, domain: domainOf(address), state, deferrals: 0, updatedAt: at, nextRetryAt: null, remoteHost: null, error: null };
+}
+
+const RANK: MailSendState[] = ["rejected", "failed", "deferred", "queued", "unconfirmed", "cancelled", "delivered"];
+
+/** Estado geral: o problema mais grave primeiro, depois o que ainda está pendente. */
+export function aggregateState(recipients: ReadonlyArray<{ state: MailSendState }>): MailSendState {
+  if (recipients.length === 0) return "queued";
+  for (const s of RANK) if (recipients.some((r) => r.state === s)) return s;
+  return "queued";
+}
+
+export class MailSendLogService {
+  private readonly store: MailSendStore;
+  private readonly now: () => number;
+  private readonly pending: unknown[] = [];
+  private readonly queueLimit: number;
+  private draining = false;
+  private ready: Promise<void> | null = null;
+  private settingsCache: { at: number; value: MailSendSettings } | null = null;
+  private timers: Array<ReturnType<typeof setTimeout>> = [];
+  private contentWrites = 0;
+  private lastReceivedAt: string | null = null;
+  /** Contadores de diagnóstico (nenhum conteúdo). */
+  readonly counters = { received: 0, stored: 0, invalid: 0, dropped: 0, failed: 0 };
+
+  constructor(private readonly deps: MailSendLogDeps) {
+    this.now = deps.now ?? Date.now;
+    this.store = new MailSendStore(deps.dataDir, this.now);
+    this.queueLimit = deps.queueLimit ?? 500;
+  }
+
+  private log(message: string): void {
+    this.deps.log?.(message);
+  }
+
+  private load(): Promise<void> {
+    this.ready ??= this.store.load();
+    return this.ready;
+  }
+
+  // -------------------------------------------------------------------------
+  // Agendamento
+  // -------------------------------------------------------------------------
+
+  start(): void {
+    const later = (ms: number, every: number, fn: () => Promise<unknown>) => {
+      const first = setTimeout(() => {
+        void fn().catch(() => undefined);
+        const loop = setInterval(() => void fn().catch(() => undefined), every);
+        loop.unref?.();
+        this.timers.push(loop);
+      }, ms);
+      first.unref?.();
+      this.timers.push(first);
+    };
+    later(RECONCILE_FIRST_MS, RECONCILE_EVERY_MS, () => this.reconcile());
+    later(PURGE_FIRST_MS, PURGE_EVERY_MS, () => this.purge());
+  }
+
+  stop(): void {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers = [];
+  }
+
+  // -------------------------------------------------------------------------
+  // Configuração
+  // -------------------------------------------------------------------------
+
+  async settings(): Promise<MailSendSettings> {
+    const cached = this.settingsCache;
+    if (cached && this.now() - cached.at < SETTINGS_CACHE_MS) return cached.value;
+    const value = await this.store.loadSettings();
+    this.settingsCache = { at: this.now(), value };
+    return value;
+  }
+
+  async updateSettings(req: UpdateMailSendSettingsRequest): Promise<MailSendSettings> {
+    const current = await this.store.loadSettings();
+    const next: Record<string, unknown> = { ...current };
+    for (const key of ["metadataDays", "bodyDays", "maxBodyKiB", "maxTotalMiB"] as const) {
+      const v = req[key];
+      if (v === undefined) continue;
+      const range = MAIL_SEND_LIMITS[key];
+      if (!Number.isInteger(v) || v < range.min || v > range.max) {
+        throw httpError(400, "invalid_request", `Valor fora do limite: ${key} (${range.min} a ${range.max}).`);
+      }
+      next[key] = v;
+    }
+    if (req.storeContent !== undefined) next.storeContent = req.storeContent;
+    if (req.project) {
+      const list = new Set(current.projectsWithoutContent);
+      if (req.project.storeContent) list.delete(req.project.id);
+      else list.add(req.project.id);
+      next.projectsWithoutContent = [...list];
+    }
+    if ((next.bodyDays as number) > (next.metadataDays as number)) {
+      throw httpError(400, "invalid_request", "O conteúdo não pode ficar guardado por mais tempo que os dados da mensagem.");
+    }
+    const value = normalizeSettings(next);
+    await this.store.saveSettings(value);
+    this.settingsCache = { at: this.now(), value };
+    // Desligou a gravação: o que já estava guardado é apagado na hora (a pessoa espera isso).
+    if (!value.storeContent || (req.project && !req.project.storeContent)) {
+      await this.dropContent((rec) => !value.storeContent || (rec.projectId !== null && value.projectsWithoutContent.includes(rec.projectId)));
+    }
+    return value;
+  }
+
+  private async dropContent(pick: (rec: StoredSend) => boolean): Promise<void> {
+    await this.load();
+    for (const rec of this.store.all()) {
+      if (rec.content !== "stored" || !pick(rec)) continue;
+      await this.store.deleteContent(rec.id).catch(() => undefined);
+      await this.store.put({ ...rec, content: "expired" });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Atribuição a projeto
+  // -------------------------------------------------------------------------
+
+  private async attribution(login: string | null, from: string) {
+    const [entries, names] = await Promise.all([this.deps.senders(), this.deps.projectNames()]);
+    const byAddress = new Map(entries.map((e) => [e.address.toLowerCase(), e]));
+    // A caixa autenticada manda; sem ela (reconstruído pelo registro), vale o remetente.
+    const entry = (login ? byAddress.get(login.toLowerCase()) : undefined) ?? byAddress.get(from.toLowerCase());
+    const projectId = entry?.projectId ?? null;
+    const origin: MailSendOrigin = projectId ? "project" : entry ? "panel" : "other";
+    return {
+      origin,
+      projectId,
+      projectName: projectId ? (names.get(projectId) ?? null) : null,
+      mailbox: entry?.mailbox ?? (login && byAddress.has(login.toLowerCase()) ? login.toLowerCase() : null),
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Recebimento (aviso do Stalwart)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Põe o aviso na fila de registro. Síncrono e barato: o Stalwart está
+   * esperando a resposta. "invalid" = formato errado; "dropped" = fila cheia.
+   */
+  submit(payload: unknown): "queued" | "invalid" | "dropped" {
+    this.counters.received++;
+    const ctx = (payload as { context?: { stage?: unknown; sasl?: { login?: unknown }; queue?: { id?: unknown } } } | null)?.context;
+    if (!ctx || ctx.stage !== "data" || typeof ctx.sasl?.login !== "string" || typeof ctx.queue?.id !== "string") {
+      this.counters.invalid++;
+      return "invalid";
+    }
+    if (this.pending.length >= this.queueLimit) {
+      this.counters.dropped++;
+      return "dropped";
+    }
+    this.lastReceivedAt = new Date(this.now()).toISOString();
+    this.pending.push(payload);
+    this.drain();
+    return "queued";
+  }
+
+  private drain(): void {
+    if (this.draining) return;
+    this.draining = true;
+    setImmediate(() => {
+      void this.drainAll();
+    });
+  }
+
+  private async drainAll(): Promise<void> {
+    try {
+      for (let raw = this.pending.shift(); raw !== undefined; raw = this.pending.shift()) {
+        try {
+          await this.ingest(raw);
+        } catch (err) {
+          this.counters.failed++;
+          // Só a mensagem do erro: nunca o aviso (tem assunto e corpo).
+          this.log(`Registro de envios: não consegui guardar um envio (${err instanceof Error ? err.message : String(err)}).`);
+        }
+      }
+    } finally {
+      this.draining = false;
+      if (this.pending.length > 0) this.drain();
+    }
+  }
+
+  /** Espera a fila de registro esvaziar (testes e desligamento). */
+  async flush(): Promise<void> {
+    while (this.draining || this.pending.length > 0) await new Promise((r) => setTimeout(r, 5));
+  }
+
+  private async ingest(raw: unknown): Promise<void> {
+    await this.load();
+    const settings = await this.settings();
+    const peek = raw as { context: { sasl: { login: string } }; envelope?: { from?: { address?: string } } };
+    const login = peek.context.sasl.login.toLowerCase();
+    const attr = await this.attribution(login, String(peek.envelope?.from?.address ?? ""));
+    const withContent = settings.storeContent && !(attr.projectId && settings.projectsWithoutContent.includes(attr.projectId));
+    const parsed = parseSendHook(raw, { maxBodyBytes: settings.maxBodyKiB * 1024, withContent });
+    if (!parsed.ok) {
+      this.counters.invalid++;
+      return;
+    }
+    const m = parsed.value;
+    const existing = this.store.get(m.queueId);
+    // O Stalwart repete o aviso se achar que falhou: o mesmo envio não vira dois.
+    if (existing?.captured) return;
+    const at = new Date(this.now()).toISOString();
+    const hasContent = withContent && (m.subject !== null || m.body !== null);
+    if (hasContent) {
+      await this.store.writeContent({
+        id: m.queueId,
+        subject: m.subject,
+        body: m.body,
+        bodyTruncated: m.bodyTruncated,
+        attachments: m.attachments,
+        storedAt: at,
+      });
+    }
+    const recipients = m.to.map((to) => existing?.recipients.find((r) => r.address === to) ?? newRecipient(to));
+    for (const r of existing?.recipients ?? []) if (!recipients.some((x) => x.address === r.address)) recipients.push(r);
+    await this.store.put({
+      id: m.queueId,
+      at: existing?.at ?? at,
+      from: m.from,
+      login,
+      mailbox: attr.mailbox ?? login,
+      origin: attr.origin,
+      projectId: attr.projectId,
+      projectName: attr.projectName,
+      size: m.size,
+      attachments: m.attachments,
+      recipients,
+      content: hasContent ? "stored" : "none",
+      truncated: m.bodyTruncated,
+      captured: true,
+    });
+    this.counters.stored++;
+    if (hasContent && ++this.contentWrites % CAP_CHECK_EVERY === 0) await this.enforceCap().catch(() => undefined);
+  }
+
+  // -------------------------------------------------------------------------
+  // Estados (eventos de entrega do registro do Stalwart)
+  // -------------------------------------------------------------------------
+
+  /** Aplica os eventos de entrega. Fora de ordem e repetidos não estragam nada. */
+  async applyEvents(events: MailDeliveryEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    await this.load();
+    const changed = new Map<string, StoredSend>();
+    const sorted = [...events].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    for (const e of sorted) {
+      let rec = changed.get(e.queueId) ?? this.store.get(e.queueId);
+      if (!rec) {
+        // Evento antes do aviso (ou sem aviso): registro só com metadados.
+        const attr = await this.attribution(null, e.from);
+        // Sem aviso, não dá para saber se é envio ou e-mail recebido de fora que o
+        // servidor entregou localmente: só entram remetentes que o painel conhece.
+        if (attr.origin === "other") continue;
+        rec = {
+          id: e.queueId,
+          at: e.at,
+          from: e.from,
+          login: null,
+          mailbox: attr.mailbox,
+          origin: attr.origin,
+          projectId: attr.projectId,
+          projectName: attr.projectName,
+          size: 0,
+          attachments: [],
+          recipients: [],
+          content: "none",
+          truncated: false,
+          captured: false,
+        };
+      } else {
+        rec = structuredClone(rec);
+      }
+      let r = rec.recipients.find((x) => x.address === e.to);
+      if (!r) {
+        r = newRecipient(e.to);
+        rec.recipients.push(r);
+      }
+      // Evento mais velho que o que já valeu: ignora.
+      if (r.updatedAt && e.at < r.updatedAt && r.state !== "unconfirmed") continue;
+      const failure = e.state === "delivered" || e.state === "cancelled" ? null : explainSendFailure({ code: e.code, detail: e.detail });
+      const target: MailSendState =
+        e.state === "delivered" ? "delivered" : e.state === "cancelled" ? "cancelled" : e.state === "deferred" ? "deferred" : failureState(failure!);
+      // O mesmo evento lido duas vezes (releitura do registro) conta uma vez só.
+      if (r.updatedAt === e.at && r.state === target) continue;
+      r.updatedAt = e.at;
+      r.remoteHost = e.remoteHost;
+      r.state = target;
+      r.error = failure;
+      r.nextRetryAt = target === "deferred" ? e.nextRetryAt : null;
+      if (target === "deferred") r.deferrals++;
+      changed.set(rec.id, rec);
+    }
+    for (const rec of changed.values()) await this.store.put(rec);
+  }
+
+  // -------------------------------------------------------------------------
+  // Reconciliação
+  // -------------------------------------------------------------------------
+
+  /**
+   * Compara com a fila do Stalwart: mensagens que estão lá e o painel não
+   * conhece viram registros só com metadados; pendentes que saíram da fila sem
+   * resultado viram "sem confirmação". Não faz nada se a fila não respondeu.
+   */
+  async reconcile(): Promise<{ created: number; unconfirmed: number }> {
+    await this.load();
+    if (!(await this.deps.serverCreated())) return { created: 0, unconfirmed: 0 };
+    let queue: QueueMessageRaw[];
+    try {
+      queue = (await this.deps.listQueue()).items;
+    } catch {
+      return { created: 0, unconfirmed: 0 };
+    }
+    const inQueue = new Set(queue.map((m) => m.id));
+    let created = 0;
+    let unconfirmed = 0;
+    for (const m of queue) {
+      if (this.store.get(m.id)) continue;
+      const view = queueItemFromMessage(m);
+      if (!view.from) continue; // aviso do próprio servidor
+      const attr = await this.attribution(null, view.from);
+      if (attr.origin === "other") continue;
+      const at = view.createdAt ?? new Date(this.now()).toISOString();
+      await this.store.put({
+        id: m.id,
+        at,
+        from: view.from,
+        login: null,
+        mailbox: attr.mailbox,
+        origin: attr.origin,
+        projectId: attr.projectId,
+        projectName: attr.projectName,
+        size: view.size,
+        attachments: [],
+        recipients: view.recipients.map((r) => newRecipient(r.address, null, r.state === "waiting" ? "queued" : r.state === "bounced" ? "failed" : r.state)),
+        content: "none",
+        truncated: false,
+        captured: false,
+      });
+      created++;
+    }
+    const limit = this.now() - UNCONFIRMED_AFTER_MS;
+    for (const rec of this.store.all()) {
+      if (inQueue.has(rec.id) || Date.parse(rec.at) > limit) continue;
+      if (!rec.recipients.some((r) => r.state === "queued" || r.state === "deferred")) continue;
+      const next = structuredClone(rec);
+      for (const r of next.recipients) {
+        if (r.state === "queued" || r.state === "deferred") {
+          r.state = "unconfirmed";
+          r.nextRetryAt = null;
+        }
+      }
+      await this.store.put(next);
+      unconfirmed++;
+    }
+    return { created, unconfirmed };
+  }
+
+  // -------------------------------------------------------------------------
+  // Retenção
+  // -------------------------------------------------------------------------
+
+  /** Apaga o que passou da retenção e respeita o teto de espaço. */
+  async purge(): Promise<{ removedRecords: number; expiredContents: number }> {
+    await this.load();
+    const settings = await this.store.loadSettings();
+    const { removedRecords } = await this.store.prune(settings.metadataDays);
+    let expiredContents = 0;
+    const cutoff = this.now() - settings.bodyDays * DAY;
+    for (const rec of this.store.all()) {
+      if (rec.content !== "stored") continue;
+      const content = await this.store.readContent(rec.id);
+      const stale = !content || Date.parse(content.storedAt) < cutoff;
+      if (!stale) continue;
+      await this.store.deleteContent(rec.id).catch(() => undefined);
+      await this.store.put({ ...rec, content: "expired" });
+      expiredContents++;
+    }
+    for (const f of await this.store.contentFiles()) {
+      if (!this.store.get(f.id)) await this.store.deleteContent(f.id).catch(() => undefined);
+    }
+    expiredContents += await this.enforceCap();
+    return { removedRecords, expiredContents };
+  }
+
+  /** Passou do teto total: apaga o conteúdo mais antigo até caber. Devolve quantos apagou. */
+  private async enforceCap(): Promise<number> {
+    const settings = await this.settings();
+    const cap = settings.maxTotalMiB * 1024 * 1024;
+    const files = (await this.store.contentFiles()).sort((a, b) => a.mtimeMs - b.mtimeMs);
+    let total = files.reduce((n, f) => n + f.size, 0);
+    let removed = 0;
+    for (const f of files) {
+      if (total <= cap) break;
+      await this.store.deleteContent(f.id).catch(() => undefined);
+      total -= f.size;
+      const rec = this.store.get(f.id);
+      if (rec && rec.content === "stored") await this.store.put({ ...rec, content: "expired" });
+      removed++;
+    }
+    return removed;
+  }
+
+  // -------------------------------------------------------------------------
+  // Listagem (NUNCA com assunto ou corpo)
+  // -------------------------------------------------------------------------
+
+  async list(filter: SendListFilter): Promise<MailSendListResponse> {
+    await this.load();
+    const [settings, names, configured, created] = await Promise.all([
+      this.settings(),
+      this.deps.projectNames(),
+      this.deps.captureConfigured(),
+      this.deps.serverCreated(),
+    ]);
+    const all = this.store.all();
+    const projects = new Map<string, string>();
+    for (const r of all) if (r.projectId) projects.set(r.projectId, names.get(r.projectId) ?? r.projectName ?? r.projectId);
+    const q = filter.recipient?.trim().toLowerCase();
+    const from = filter.from ? `${filter.from}T00:00:00.000Z` : null;
+    const to = filter.to ? `${filter.to}T23:59:59.999Z` : null;
+    const matched = all
+      .filter((r) => !filter.projectId || (filter.projectId === "none" ? r.projectId === null : r.projectId === filter.projectId))
+      .filter((r) => !filter.origin || r.origin === filter.origin)
+      .filter((r) => !filter.state || r.recipients.some((x) => x.state === filter.state))
+      .filter((r) => !from || r.at >= from)
+      .filter((r) => !to || r.at <= to)
+      .filter((r) => !q || r.recipients.some((x) => x.address.includes(q)))
+      .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : a.id < b.id ? 1 : -1));
+    const limit = Math.min(Math.max(filter.limit ?? 25, 1), 100);
+    const offset = Math.max(filter.offset ?? 0, 0);
+    const scoped = filter.projectId && filter.projectId !== "none" ? filter.projectId : null;
+    return {
+      items: matched.slice(offset, offset + limit).map((r) => this.view(r, names)),
+      total: matched.length,
+      limit,
+      offset,
+      projects: [...projects].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
+      capture: { configured, lastReceivedAt: this.lastReceivedAt, serverCreated: created },
+      retention: { metadataDays: settings.metadataDays, bodyDays: settings.bodyDays },
+      storesContent: settings.storeContent && !(scoped && settings.projectsWithoutContent.includes(scoped)),
+    };
+  }
+
+  private view(r: StoredSend, names: Map<string, string>): MailSendItem {
+    const recipients: MailSendRecipient[] = r.recipients.map((x) => ({
+      address: x.address,
+      domain: x.domain,
+      state: x.state,
+      deferrals: x.deferrals,
+      updatedAt: x.updatedAt,
+      nextRetryAt: x.nextRetryAt,
+      remoteHost: x.remoteHost,
+      error: x.error,
+    }));
+    return {
+      id: r.id,
+      at: r.at,
+      from: r.from,
+      mailbox: r.login ? r.mailbox : null,
+      origin: r.origin,
+      projectId: r.projectId,
+      projectName: r.projectId ? (names.get(r.projectId) ?? r.projectName) : null,
+      state: aggregateState(recipients),
+      recipients,
+      size: r.size,
+      attachments: r.attachments,
+      hasContent: r.content === "stored",
+      contentExpired: r.content === "expired",
+      contentTruncated: r.truncated,
+      captured: r.captured,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Exibir (a única saída de assunto e corpo)
+  // -------------------------------------------------------------------------
+
+  async reveal(id: string, scope: { projectId?: string } = {}): Promise<MailSendContent> {
+    await this.load();
+    const rec = /^\d{1,20}$/.test(id) ? this.store.get(id) : undefined;
+    if (!rec || (scope.projectId && rec.projectId !== scope.projectId)) {
+      throw httpError(404, "send_not_found", "Mensagem não encontrada.");
+    }
+    if (rec.content === "none") {
+      throw httpError(404, "content_not_stored", "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).");
+    }
+    const content = rec.content === "stored" ? await this.store.readContent(id) : null;
+    if (!content) {
+      throw httpError(410, "content_expired", "O assunto e o corpo desta mensagem já foram apagados pela retenção.");
+    }
+    const settings = await this.settings();
+    return {
+      id,
+      subject: content.subject,
+      body: content.body,
+      bodyTruncated: content.bodyTruncated,
+      attachments: content.attachments,
+      expiresAt: new Date(Date.parse(content.storedAt) + settings.bodyDays * DAY).toISOString(),
+    };
+  }
+}

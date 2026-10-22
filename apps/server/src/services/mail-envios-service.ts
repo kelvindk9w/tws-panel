@@ -64,6 +64,11 @@ export interface MailEnviosDeps {
   projectNames(): Promise<Map<string, string>>;
   /** Linhas do registro do Stalwart desde `since` (null = desde o começo da retenção). */
   readLogs(since: Date | null, onLine: (line: string) => void): Promise<void>;
+  /**
+   * Chamado com os eventos novos de entrega (registro de envios por SMTP).
+   * Falha aqui nunca derruba a coleta.
+   */
+  onEvents?: (events: MailDeliveryEvent[]) => Promise<void>;
   now?: () => number;
   retentionDays?: number;
 }
@@ -308,6 +313,7 @@ export class MailEnviosService {
     await this.updateState((state) => {
       if (!state.firstEventAt || first < state.firstEventAt) state.firstEventAt = first;
     });
+    await this.deps.onEvents?.(events).catch(() => undefined);
   }
 
   /** Lê o registro novo do Stalwart e guarda os eventos. Uma leitura por vez. */

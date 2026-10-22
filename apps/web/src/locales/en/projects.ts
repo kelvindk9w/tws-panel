@@ -361,4 +361,5 @@ export default {
   "new.domain.backupNo": "No",
   "new.domain.backupHint": "Yes follows the projects default, under Settings → Backups. After the first deploy, the project's Backups tab shows the databases and folders it found so you can review them.",
   "new.domain.create": "Create project",
+  "detail.nav.sends": "Sends",
 } as const;
