@@ -8,6 +8,8 @@ import {
   type ComposeVariable,
   type EnvExampleVariable,
   type Project,
+  type ProjectEmailConfig,
+  type ProjectEmailResponse,
   type ProjectEmailValueKey,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
@@ -19,6 +21,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { EnvEmailAdvice } from "@/components/project/EnvEmailAdvice";
+import { emailAdvice } from "@/lib/email-env-advice";
 import {
   Check,
   CheckCircle2,
@@ -108,6 +112,19 @@ function namesIn(text: string): string[] {
   return [...text.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!);
 }
 
+/** Quem vence quando há valor salvo com nome do e-mail: depende do tipo (só compose e Dockerfile são conhecidos). */
+type ProvidedMode = "compose" | "dockerfile" | "other";
+const PROVIDED_LABEL: Record<ProvidedMode, Key> = {
+  compose: "env.describe.provided.label",
+  dockerfile: "env.describe.provided.labelDockerfile",
+  other: "env.describe.provided.labelNeutral",
+};
+const PROVIDED_HELP: Record<ProvidedMode, Key> = {
+  compose: "env.provided.help",
+  dockerfile: "env.provided.helpDockerfile",
+  other: "env.provided.helpNeutral",
+};
+
 /**
  * O que a linha significa (rótulo e placeholder). `linkedTo` = valor do e-mail
  * ligado a ela; `exampleFile` = o .env.example que a cita (quando o compose não cita).
@@ -118,6 +135,7 @@ function describe(
   provided: boolean,
   linkedTo?: string,
   exampleFile?: string,
+  mode: ProvidedMode = "compose",
 ): { label: string; placeholder: string } | null {
   if (linkedTo) {
     // a ligação vence o valor salvo aqui (deploy-service.ts, envForProject)
@@ -128,7 +146,7 @@ function describe(
   }
   if (provided) {
     return {
-      label: t("env.describe.provided.label"),
+      label: t(PROVIDED_LABEL[mode]),
       placeholder: t("env.describe.provided.placeholder"),
     };
   }
@@ -221,6 +239,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [provided, setProvided] = useState<string[]>([]);
   // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA → SMTP_PASS)
   const [links, setLinks] = useState<Record<string, ProjectEmailValueKey>>({});
+  // Configuração do e-mail do projeto (undefined = carregando; null = não deu para consultar)
+  const [emailConfig, setEmailConfig] = useState<ProjectEmailConfig | null | undefined>(undefined);
   // Valores do que o painel fornece (sem a senha da caixa; null = servidor antigo)
   const [providedValues, setProvidedValues] = useState<Record<string, string> | null>(null);
   // Senha da caixa (e o que vale o mesmo) buscada a pedido, pelo olho
@@ -282,6 +302,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setVars([]);
         setError(envErrorText(err, "env.loadFailed"));
       });
+  }, [project.id]);
+
+  useEffect(() => {
+    apiFetch<ProjectEmailResponse>(`/api/projects/${project.id}/email`)
+      .then((r) => setEmailConfig(r.email ?? null))
+      .catch(() => setEmailConfig(null));
   }, [project.id]);
 
   function changed() {
@@ -394,6 +420,27 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     }
   }
 
+  /** As ligações foram salvas: o e-mail passa a fornecer esses nomes (o valor vem do painel, nunca copiado). */
+  function onEmailLinked(next: Record<string, ProjectEmailValueKey>, names: string[]) {
+    // `next` é o mapa guardado inteiro (pode ter ligações que o e-mail não entrega agora);
+    // a tela só passa a mostrar como fornecidas as que acabaram de ser ligadas
+    setEmailConfig((c) => (c ? { ...c, envLinks: next } : c));
+    setLinks((prev) => ({ ...prev, ...Object.fromEntries(names.filter((n) => next[n]).map((n) => [n, next[n]!])) }));
+    setProvided((prev) => [...new Set([...prev, ...names])].sort());
+    // a linha vazia sugerida pelo compose some: o painel fornece o valor
+    setVars((prev) => (prev ?? []).filter((v) => !(v.suggested && v.value === "" && names.includes(v.key.trim()))));
+    setNotice(t("env.email.linked", { names: names.join(", ") }));
+  }
+
+  /** Atalho de variável manual (SMTP_SECURE=false): só põe a linha na tabela; salvar é com a pessoa. */
+  function addManualRow(name: string, value: string) {
+    changed();
+    const existing = (vars ?? []).find((v) => v.key.trim() === name);
+    if (existing) update(existing.id, { value });
+    else setVars((prev) => [...(prev ?? []), row({ key: name, value }, true)]);
+    setNotice(t("env.email.manual.added", { name }));
+  }
+
   /** `key`: "row:<id>" ou "panel:<nome>" — onde mostrar o "copiado". */
   async function copy(key: string, value: string) {
     if (await copyText(value)) {
@@ -503,6 +550,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     );
   }
 
+  // compose: o override do e-mail vem por cima; Dockerfile: o valor salvo aqui vence o do e-mail
+  const mode: ProvidedMode =
+    project.detection?.type === "compose" ? "compose" : project.detection?.type === "dockerfile" ? "dockerfile" : "other";
   const staticSite = project.detection?.type === "static" || project.detection?.type === "static-node";
   const providedSet = new Set(provided);
   const composeByName = new Map((composeVars ?? []).map((v) => [v.name, v]));
@@ -510,6 +560,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     ...(vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()),
     ...provided,
   ]);
+  const advice = emailAdvice(
+    composeVars,
+    new Set((vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim())),
+    providedSet,
+    emailConfig ?? null,
+    links,
+  );
   const missing = missingComposeVariables(composeVars ?? [], defined);
   const missingSet = new Set(missing);
   // O que o e-mail entrega com o nome padrão, na ordem da tela do e-mail…
@@ -518,8 +575,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n));
   // O que o e-mail fornece vira linha do painel, com o valor; a senha (fora
   // da listagem) é buscada a pedido.
-  // Nome padrão com valor salvo aqui: a linha salva substitui o e-mail no
-  // deploy, e a do painel não aparece. Ligada: a ligação vence sempre.
+  // Nome padrão com valor salvo aqui: a linha salva aparece no lugar da do
+  // painel (em projeto compose o container ainda recebe o valor do e-mail:
+  // o salvo só vale na interpolação do .env). Ligada: a ligação vence sempre.
   const overridden = new Set((vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()));
   const lines: Line[] = [
     ...(vars ?? []).map((row, index): Line => ({ kind: "row", row, index })),
@@ -637,6 +695,16 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             )}
           </p>
         )}
+        {emailConfig !== undefined && vars !== null && advice.show && (
+          <EnvEmailAdvice
+            projectId={project.id}
+            advice={advice}
+            mode={mode}
+            links={emailConfig?.envLinks ?? {}}
+            onLinked={onEmailLinked}
+            onAddRow={addManualRow}
+          />
+        )}
         {provided.length > 0 && (
           <div data-testid="env-provided" className="mt-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs">
             {delivered.length > 0 && (
@@ -662,7 +730,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             )}
             <p className="mt-2 text-muted-foreground">
               <Trans
-                k="env.provided.help"
+                k={PROVIDED_HELP[mode]}
                 components={{
                   link: (c) => (
                     <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
@@ -886,7 +954,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   }
                   const { row: v, index: i } = line;
                   const name = v.key.trim();
-                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name));
+                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name), mode);
                   const shown = isRowVisible(v.id);
                   const urgent = isMissing(v);
                   const fromExample = isExampleMissing(v);

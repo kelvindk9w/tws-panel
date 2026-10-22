@@ -436,7 +436,7 @@ describe("Variáveis — valores do que o e-mail do projeto fornece", () => {
   it("nome padrão com valor nas Variáveis: a linha salva substitui (sem linha do painel repetida)", async () => {
     serve(withValues({ vars: [{ key: "SMTP_HOST", value: "smtp.outro.com" }] }));
     renderCard();
-    expect(await screen.findByTestId("env-row-SMTP_HOST")).toHaveTextContent(/preencher aqui substitui/);
+    expect(await screen.findByTestId("env-row-SMTP_HOST")).toHaveTextContent(/o container recebe o valor do e-mail/);
     expect(screen.queryByTestId("env-panel-SMTP_HOST")).not.toBeInTheDocument();
   });
 });

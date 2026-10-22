@@ -11,6 +11,7 @@ import path from "node:path";
 import {
   MAILBOX_PASSWORD_MIN,
   DKIM_SELECTOR,
+  MAX_PROJECT_EMAIL_LINKS,
   PROJECT_EMAIL_VALUE_KEYS,
   envLinkNameProblem,
   PAAS_STALWART_CONTAINER,
@@ -126,9 +127,6 @@ interface StoredProjectEmail {
   /** Variável do app → valor do e-mail que ela recebe no deploy (ex.: SMTP_SENHA → SMTP_PASS). */
   envLinks?: Record<string, ProjectEmailValueKey>;
 }
-
-/** Limite de variáveis ligadas por projeto (seis valores, alguns nomes cada). */
-const MAX_ENV_LINKS = 30;
 
 interface MailFile {
   adminSecret: string | null;
@@ -1773,8 +1771,8 @@ export class MailService {
       throw httpError(409, "email_not_enabled", "Ative o e-mail do projeto antes de ligar as variáveis.");
     }
     const entries = Object.entries(links);
-    if (entries.length > MAX_ENV_LINKS) {
-      throw httpError(400, "invalid_env_link", `No máximo ${MAX_ENV_LINKS} variáveis ligadas.`);
+    if (entries.length > MAX_PROJECT_EMAIL_LINKS) {
+      throw httpError(400, "invalid_env_link", `No máximo ${MAX_PROJECT_EMAIL_LINKS} variáveis ligadas.`);
     }
     const clean: Record<string, ProjectEmailValueKey> = {};
     for (const [name, source] of entries) {
