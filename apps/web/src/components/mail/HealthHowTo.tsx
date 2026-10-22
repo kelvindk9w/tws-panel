@@ -42,7 +42,7 @@ export function HealthHowTo({ check, plan }: { check: MailHealthCheck; plan: Dns
           id={panelId}
           role="region"
           aria-label={t("mailHealth.howto.region", { check: checkName })}
-          className="flex flex-col gap-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs"
+          className="flex min-w-0 flex-col gap-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs [overflow-wrap:anywhere]"
         >
           {tag && <p className="font-medium">{tag}</p>}
           <ol className="list-decimal space-y-1 pl-4">

@@ -61,7 +61,7 @@ export function useDeliveryHealth(domain: string) {
     } catch (err) {
       if (mounted.current) {
         setError(apiErrorText(err, "mailHealth.checkError"));
-        if (err instanceof ApiRequestError && err.code === "health_check_too_soon") setCooldown(COOLDOWN_S);
+        if (err instanceof ApiRequestError && (err.code === "health_check_too_soon" || err.code === "health_check_busy")) setCooldown(COOLDOWN_S);
       }
     } finally {
       if (mounted.current) setChecking(false);

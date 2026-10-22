@@ -33,20 +33,34 @@ export function ProjectEmailHealth({ domain }: { domain: string }) {
 
   const levelWord = (level: MailHealthLevel | null) => (level ? t(`mailHealth.level.${level}` as Key) : t("mailHealth.project.server.unknown"));
   const domainChecks = report ? report.checks.filter((c) => mailHealthScope(c.id) === "domain") : [];
+  const serverNames = (level: MailHealthLevel) =>
+    report
+      ? report.checks
+          .filter((c) => mailHealthScope(c.id) === "server" && c.level === level)
+          .map((c) => t(`mailHealth.check.${c.id}` as Key))
+          .join(", ")
+      : "";
+  const serverCritical = serverNames("critical");
+  const serverAttention = serverNames("warn");
 
   return (
     <section
       aria-labelledby={`project-health-${domain}`}
       className="flex flex-col gap-2 rounded-lg border px-4 py-3"
       data-testid="project-email-health"
-      data-level={report?.scopes.domain.level ?? "unknown"}
+      data-level={report?.level ?? "unknown"}
+      data-server-level={report?.scopes.server.level ?? "unknown"}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id={`project-health-${domain}`} className="flex items-center gap-2 text-sm font-semibold">
           <ShieldAlert className="h-4 w-4" aria-hidden="true" /> {t("mailHealth.project.title")}
         </h3>
         <div className="flex items-center gap-2">
-          {report && <Badge variant={LEVEL_BADGE[report.scopes.domain.level]}>{t(`mailHealth.level.${report.scopes.domain.level}` as Key)}</Badge>}
+          {report && (
+            <Badge variant={LEVEL_BADGE[report.level]} title={t("mailHealth.project.worst")} data-testid="project-email-health-badge">
+              {t(`mailHealth.level.${report.level}` as Key)}
+            </Badge>
+          )}
           <Button size="sm" variant="outline" disabled={checking || cooldown > 0} onClick={() => void check()}>
             {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {checking ? t("mailHealth.verifying") : cooldown > 0 ? t("mailHealth.cooldown", { seconds: cooldown }) : t("mailHealth.verify")}
@@ -63,10 +77,21 @@ export function ProjectEmailHealth({ domain }: { domain: string }) {
       {state && !report && <p className="text-sm text-muted-foreground">{t("mailHealth.project.neverChecked", { domain })}</p>}
       {report && (
         <>
-          <p className="text-sm">
-            {t("mailHealth.project.summary", report.scopes.domain.counts)} ·{" "}
-            <span className="text-xs text-muted-foreground">{t("mailHealth.checkedAt", { date: formatDateTime(report.checkedAt) })}</span>
-          </p>
+          <div className="flex flex-col gap-0.5 text-sm">
+            <p data-testid="project-email-health-domain-summary">{t("mailHealth.project.summary", report.scopes.domain.counts)}</p>
+            <p data-testid="project-email-health-server-summary">{t("mailHealth.project.server.summary", report.scopes.server.counts)}</p>
+            <p className="text-xs text-muted-foreground">{t("mailHealth.checkedAt", { date: formatDateTime(report.checkedAt) })}</p>
+          </div>
+          {serverCritical && (
+            <p role="alert" data-severity="critical" className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm [overflow-wrap:anywhere]">
+              {t("mailHealth.project.server.critical", { items: serverCritical })}
+            </p>
+          )}
+          {serverAttention && (
+            <p data-severity="warn" className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm [overflow-wrap:anywhere]">
+              {t("mailHealth.project.server.attention", { items: serverAttention })}
+            </p>
+          )}
           <button
             type="button"
             aria-expanded={open}

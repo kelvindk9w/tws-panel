@@ -977,6 +977,23 @@ describe("atraso na fila", () => {
     expect((await queueCheck([other, delivered])).code).toBe("empty");
   });
 
+  it("a fila é do DOMÍNIO: falha de autenticação das mensagens @domínio pesa no domínio, não no servidor", async () => {
+    const report = await evaluateHealth(
+      input(GOOD_ZONE, { queue: [queued({ lastError: "550 5.7.26 Unauthenticated email is not accepted" })] }),
+    );
+    expect(report.checks.find((c) => c.id === "queue")).toMatchObject({ level: "critical", code: "deferred_auth" });
+    expect(report.scopes.domain.level).toBe("critical");
+    expect(report.scopes.domain.counts.critical).toBe(1);
+    expect(report.scopes.server.level).toBe("ok");
+    expect(report.scopes.server.counts.critical).toBe(0);
+  });
+
+  it("mensagens de outro remetente na fila geral não entram no domínio nem no servidor", async () => {
+    const report = await evaluateHealth(input(GOOD_ZONE, { queue: [queued({ from: "x@outro.example.com", lastError: "550 5.7.26" })] }));
+    expect(report.checks.find((c) => c.id === "queue")).toMatchObject({ level: "ok", code: "empty" });
+    expect(report.scopes.domain.counts.critical + report.scopes.server.counts.critical).toBe(0);
+  });
+
   it("adiado por limite de taxa (IP novo): atenção, com tentativas e minutos até a próxima", async () => {
     const check = await queueCheck([queued(), queued({ attempts: 3, nextRetryAt: "2026-10-22T12:10:00.000Z" })]);
     expect(check).toMatchObject({ level: "warn", code: "deferred_rate_limited", inbox: true });

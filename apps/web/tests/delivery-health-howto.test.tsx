@@ -150,6 +150,26 @@ describe("severidade do PTR", () => {
   });
 });
 
+describe("nome de PTR longo e sem hífen", () => {
+  it("quebra em qualquer ponto (nada de rolagem horizontal a 360 px)", async () => {
+    const longName = `${"a".repeat(30)}${"b".repeat(35)}.example.com`;
+    const plan = planFor(IP, longName);
+    const ptr: MailHealthCheck = { ...PTR_MISSING, params: { ip: IP, expected: longName, current: "" }, expected: longName };
+    mockApi({ plan, report: reportOf([ptr]) });
+    const user = userEvent.setup();
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByRole("status");
+    const rowEl = row("ptr");
+    expect(rowEl.textContent).toContain(longName);
+    // o texto da mensagem e a área de passos quebram em qualquer ponto
+    expect((rowEl.firstElementChild!.nextElementSibling as HTMLElement).className).toContain("[overflow-wrap:anywhere]");
+    expect(screen.getByTestId("message-ptr").className).toContain("[overflow-wrap:anywhere]");
+    await user.click(within(rowEl).getByRole("button", { name: "O que fazer" }));
+    expect(within(rowEl).getByRole("region").className).toContain("[overflow-wrap:anywhere]");
+    for (const code of Array.from(rowEl.querySelectorAll("code, dd"))) expect(code.className, code.textContent ?? "").toMatch(/break-all|anywhere/);
+  });
+});
+
 describe("dois níveis: servidor e domínio", () => {
   it("separa o que vale para todos os projetos do que é do domínio", async () => {
     const port25: MailHealthCheck = { id: "port25", level: "ok", inbox: true, code: "ok", params: { host: "mx.example.org" } };
@@ -219,7 +239,7 @@ describe("O que fazer (expansível)", () => {
     const region = within(row("ptr")).getByRole("region");
     expect(within(region).getByText(/por IP do servidor, não por projeto nem por domínio/)).toBeInTheDocument();
     expect(within(region).getByText(new RegExp(`apontar para o nome ${HOST.replace(/\./g, "\\.")}`))).toBeInTheDocument();
-    expect(within(region).getByText(/Customer Control Panel, abra IPs\/Network/)).toBeInTheDocument();
+    expect(within(region).getByText(/Customer Control Panel, abra o menu Reverse DNS Management/)).toBeInTheDocument();
     expect(within(region).getAllByText(/Reverse DNS/).length).toBeGreaterThanOrEqual(2);
     expect(within(region).getByText(/Gmail aceitou mensagens sem o PTR/)).toBeInTheDocument();
     expect(within(region).getByText(`Peço configurar o DNS reverso (PTR) do IP ${IP} para o nome ${HOST}.`)).toBeInTheDocument();
@@ -334,7 +354,7 @@ describe("em inglês", () => {
     const region = within(row("ptr")).getByRole("region");
     expect(within(region).getByText(/per server IP, not per project or domain/)).toBeInTheDocument();
     expect(within(region).getByText(`Please set the reverse DNS (PTR) of IP ${IP} to the name ${HOST}.`)).toBeInTheDocument();
-    expect(within(region).getByText(/Customer Control Panel, open IPs\/Network/)).toBeInTheDocument();
+    expect(within(region).getByText(/Customer Control Panel, open the Reverse DNS Management menu/)).toBeInTheDocument();
   });
 });
 

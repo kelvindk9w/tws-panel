@@ -13,7 +13,7 @@ import {
   type MailTlsStatusResponse,
 } from "@paas/core";
 import type { DnsResolverLike, PlanInput, Port25Result, QueueItemView } from "@paas/mailer";
-import { HEALTH_MIN_INTERVAL_MS, MailHealthService, PORT25_CACHE_MS } from "../src/services/mail-health-service.js";
+import { HEALTH_MAX_MANUAL_PER_MINUTE, HEALTH_MIN_INTERVAL_MS, MailHealthService, normalizeDomain, PORT25_CACHE_MS } from "../src/services/mail-health-service.js";
 import { mailHealthRoutes } from "../src/routes/mail-health.js";
 import { httpError } from "../src/services/http-error.js";
 import { registerErrorHandler } from "../src/plugins/error-handler.js";
@@ -149,6 +149,71 @@ describe("MailHealthService", () => {
     expect((await service.state(DOMAIN)).report?.domain).toBe(DOMAIN);
     expect((await service.state(OTHER)).report?.domain).toBe(OTHER);
     expect(service.summary().map((s) => s.domain).sort()).toEqual([OTHER, DOMAIN].sort());
+  });
+
+  it("fila adiada por falha de autenticação do PRÓPRIO domínio é do domínio, não do servidor", async () => {
+    const authQueue: QueueItemView[] = [
+      {
+        id: "1",
+        from: `contato@${DOMAIN}`,
+        createdAt: null,
+        size: 10,
+        recipients: [{ address: "x@gmail.com", domain: "gmail.com", state: "deferred", detail: "x" }],
+        attempts: 2,
+        nextRetryAt: null,
+        expiresAt: null,
+        lastError: "550 5.7.26 Unauthenticated email is not accepted",
+      },
+    ];
+    const { service } = make({
+      queue: vi.fn(async () => authQueue),
+      verify: vi.fn(async () => ({ ptr: { ip: IP, expected: HOST, status: "found", found: [HOST], ticketText: null } }) as unknown as DnsVerifyResponse),
+      probePort25: vi.fn(async (): Promise<Port25Result> => ({ status: "open", host: "gmail-smtp-in.l.google.com" })),
+      blacklist: vi.fn(async () => null),
+    });
+    const report = await service.check(DOMAIN, { manual: true });
+    expect(report.checks.find((c) => c.id === "queue")).toMatchObject({ level: "critical", code: "deferred_auth" });
+    expect(report.scopes.domain.level).toBe("critical");
+    expect(report.scopes.server.level).toBe("ok");
+    expect(report.scopes.server.counts.critical).toBe(0);
+  });
+
+  it("quatro grafias do mesmo domínio contam como uma só verificação e uma só espera", async () => {
+    const { service, deps } = make();
+    const spellings = [DOMAIN, DOMAIN.toUpperCase(), `${DOMAIN}.`, ` ${DOMAIN[0]!.toUpperCase()}${DOMAIN.slice(1)}.. `];
+    const results = await Promise.all(spellings.map((d) => service.check(d, { manual: true })));
+    expect(deps.verify).toHaveBeenCalledTimes(1);
+    expect(new Set(results.map((r) => r.domain)).size).toBe(1);
+    // depois, qualquer grafia esbarra no mesmo intervalo mínimo
+    for (const d of spellings) await expect(service.check(d, { manual: true })).rejects.toMatchObject({ statusCode: 429, code: "health_check_too_soon" });
+    expect(deps.verify).toHaveBeenCalledTimes(1);
+    expect((await service.state(DOMAIN.toUpperCase())).report?.domain).toBe(DOMAIN);
+  });
+
+  it("normalizeDomain: minúsculas, sem espaços e sem ponto final", () => {
+    expect(normalizeDomain(" Loja.Example.COM.. ")).toBe("loja.example.com");
+    expect(normalizeDomain("a.b")).toBe("a.b");
+  });
+
+  it("limite do servidor: no máximo N verificações do botão por minuto, somando todos os domínios; a diária não conta", async () => {
+    const { service } = make({ planInput: vi.fn(async (domain: string) => ({ ...PLAN, domain, mailHostname: `mail.${domain}` })) });
+    for (let i = 0; i < HEALTH_MAX_MANUAL_PER_MINUTE; i++) await service.check(`d${i}.example.org`, { manual: true });
+    await expect(service.check("outro.example.org", { manual: true })).rejects.toMatchObject({ statusCode: 429, code: "health_check_busy" });
+    await expect(service.check("outro.example.org", { manual: true })).rejects.toThrow(/Espere \d+ s/);
+    // a rotina diária segue funcionando
+    await expect(service.check("outro.example.org", { manual: false })).resolves.toBeDefined();
+    // passado um minuto, libera
+    clock += 61_000;
+    await expect(service.check("outro.example.org", { manual: true })).resolves.toBeDefined();
+  });
+
+  it("verificação recusada pelo limite do servidor não gasta a vaga nem a espera do domínio", async () => {
+    const { service } = make({ planInput: vi.fn(async (domain: string) => ({ ...PLAN, domain, mailHostname: `mail.${domain}` })) });
+    for (let i = 0; i < HEALTH_MAX_MANUAL_PER_MINUTE; i++) await service.check(`d${i}.example.org`, { manual: true });
+    await expect(service.check("novo.example.org", { manual: true })).rejects.toMatchObject({ code: "health_check_busy" });
+    clock += 61_000;
+    // se a recusa tivesse marcado o domínio, aqui viria health_check_too_soon
+    await expect(service.check("novo.example.org", { manual: true })).resolves.toBeDefined();
   });
 
   it("PTR ausente com a porta 25 livre: o servidor fica em atenção, não crítico", async () => {
@@ -351,6 +416,15 @@ describe("rotas /health", () => {
     const res = await app.inject({ method: "GET", url: `/api/mail/domains/${DOMAIN}/health`, headers: auth });
     expect(res.statusCode).toBe(500);
     expect(res.json()).toEqual({ error: "internal_error", message: "Erro interno." });
+  });
+
+  it("aceita maiúsculas e ponto final (o serviço normaliza), mas continua recusando lixo", async () => {
+    for (const ok of [DOMAIN.toUpperCase(), `${DOMAIN}.`]) {
+      const res = await app.inject({ method: "GET", url: `/api/mail/domains/${ok}/health`, headers: auth });
+      expect(res.statusCode, ok).toBe(200);
+    }
+    const bad = await app.inject({ method: "GET", url: `/api/mail/domains/${DOMAIN}../health`, headers: auth });
+    expect(bad.statusCode).toBe(400);
   });
 
   it("domínio com formato inválido: 400 sem chamar o serviço", async () => {

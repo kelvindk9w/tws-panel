@@ -48,9 +48,10 @@ export interface MailHealthCheck {
 /**
  * Onde a verificação vale:
  *  - server: é do servidor/IP e vale para TODOS os projetos e domínios
- *    (nome reverso do IP, porta 25 de saída, certificado, listas de bloqueio, fila);
+ *    (nome reverso do IP, porta 25 de saída, certificado, listas de bloqueio);
  *  - domain: é do domínio (A do servidor de e-mail, MX, SPF, DKIM, DMARC,
- *    propagação, MTA-STS, TLS-RPT).
+ *    propagação, MTA-STS, TLS-RPT e a fila: ela só olha as mensagens enviadas
+ *    por endereços @domínio, então uma falha de autenticação ali é do domínio).
  */
 export type MailHealthScope = "server" | "domain";
 
@@ -58,7 +59,6 @@ const SERVER_SCOPE_IDS: ReadonlySet<MailHealthCheckId> = new Set<MailHealthCheck
   "helo",
   "ptr",
   "port25",
-  "queue",
   "tls",
   "dnsbl",
 ]);

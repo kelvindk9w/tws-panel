@@ -162,6 +162,11 @@ describe("DeliveryHealthCard", () => {
     /(avoids?|prevents?|eliminates?) (the )?(spam|junk)/,
     /(no|zero) risk of (spam|rejection)/,
     /always (reach|reaches|arrive|arrives|land|lands|deliver|delivers)/,
+    /\b(chegam?|vai|vão|irá|irão|seguem?|entram?|caem|cai) (para |na |à |em |no )?(a )?(sua )?(caixa de entrada|inbox)/,
+    /\b(entregas?|caixa de entrada|chegada) (fica|ficam|est[aá]|estão|ser[aá]) (assegurad[ao]s?|garantid[ao]s?)/,
+    /\b(para|parar[aá]|deixa|deixar[aá]) de (cair|ir|parar) (no|para o|na pasta de) ?(spam|lixo)/,
+    /\b(reach|reaches|go|goes|hit|hits|arrive at|get to|gets to) (to )?(the |your )?inbox/,
+    /\b(stop|stops|no longer|never) (landing|going|ending up) (in|to) (the |your )?(spam|junk)/,
     /(inbox|delivery|placement)( placement)? (is |are )?(assured|ensured|guaranteed|certain)/,
     /(ensures?|assures?) (inbox|delivery)/,
   ];
@@ -190,6 +195,15 @@ describe("DeliveryHealthCard", () => {
       "Your email goes straight to the inbox.",
       "It lands directly in your inbox",
       "A mensagem sai fora do spam",
+      "As mensagens chegam na caixa de entrada.",
+      "Suas mensagens vão para a caixa de entrada.",
+      "Seu e-mail vai para a sua caixa de entrada",
+      "A entrega fica assegurada.",
+      "Com isso o e-mail para de cair no spam.",
+      "Your messages reach the inbox.",
+      "Mail will go to the inbox",
+      "It hits the inbox every time",
+      "Your emails stop landing in spam.",
     ]) {
       expect(prometeAlgo(frase), frase).not.toEqual([]);
     }
@@ -198,6 +212,8 @@ describe("DeliveryHealthCard", () => {
       "There is no guarantee of inbox placement.",
       "Aumenta as chances de a mensagem chegar, sem garantia.",
       "Nenhum item que afete diretamente a caixa de entrada.",
+      "O Gmail aceitou sem o PTR, mas outros provedores podem atrasar ou recusar.",
+      "Does not affect the inbox directly; providers may still delay it.",
     ]) {
       expect(prometeAlgo(frase), frase).toEqual([]);
     }

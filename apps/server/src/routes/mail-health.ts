@@ -14,7 +14,7 @@ import { mailAuthError } from "../services/mail-auth-error.js";
 import type { HttpError } from "../services/http-error.js";
 
 const MAIL_DOMAIN_PATTERN =
-  "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$";
+  "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+\\.?$";
 
 const domainParams = {
   params: {

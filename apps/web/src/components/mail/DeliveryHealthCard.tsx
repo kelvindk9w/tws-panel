@@ -59,12 +59,12 @@ export function CheckRow({ check, plan }: { check: MailHealthCheck; plan: DnsPla
   return (
     <li className="flex items-start gap-2 border-b py-2 last:border-0" data-level={check.level} data-check={check.id} data-scope={mailHealthScope(check.id)}>
       <LevelIcon level={check.level} />
-      <div className="flex min-w-0 flex-col gap-1 text-sm">
+      <div className="flex min-w-0 flex-col gap-1 text-sm [overflow-wrap:anywhere]">
         <p className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{t(`mailHealth.check.${check.id}` as Key)}</span>
           <Badge variant={LEVEL_BADGE[check.level]}>{t(`mailHealth.level.${check.level}` as Key)}</Badge>
         </p>
-        <p className="text-muted-foreground">{message}</p>
+        <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid={`message-${check.id}`}>{message}</p>
         {showCompare && (
           <dl className="grid gap-x-2 gap-y-0.5 text-xs sm:grid-cols-[auto_1fr]">
             <dt className="text-muted-foreground">{t("mailHealth.expected")}</dt>

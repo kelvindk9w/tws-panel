@@ -129,6 +129,56 @@ describe("ProjectEmailHealth", () => {
     expect(screen.queryByTestId("project-email-health-items")).toBeNull();
   });
 
+  it("cenário do revisor: PTR e porta 25 em ordem, mas fila, listas e certificado críticos no servidor: nunca diz 'Em ordem'", async () => {
+    const checks: MailHealthCheck[] = [
+      { id: "spf", level: "ok", inbox: true, code: "ok_soft", params: { lookups: 1 } },
+      { id: "dkim", level: "ok", inbox: true, code: "ok", params: { bits: 2048, selector: "paas" } },
+      { id: "ptr", level: "ok", inbox: true, code: "ok", params: { ip: IP, expected: HOST, current: HOST } },
+      { id: "port25", level: "ok", inbox: true, code: "ok", params: { host: "mx.example.org" } },
+      { id: "dnsbl", level: "critical", inbox: true, code: "listed", params: { lists: "Lista Exemplo" } },
+      { id: "tls", level: "critical", inbox: true, code: "invalid", params: { host: HOST, error: "expired" } },
+      { id: "queue", level: "critical", inbox: true, code: "deferred_auth", params: { count: 2, attempts: 3, minutes: 5, reason: "5.7.26" } },
+    ];
+    mockApi({ plan: PLAN, report: reportOf(checks) });
+    renderIt();
+    const badge = await screen.findByTestId("project-email-health-badge");
+    expect(badge).toHaveTextContent("Crítico");
+    expect(badge).not.toHaveTextContent("Em ordem");
+    const box = screen.getByTestId("project-email-health");
+    expect(box).toHaveAttribute("data-level", "critical");
+    expect(box).toHaveAttribute("data-server-level", "critical");
+    // contagem de cada nível, separada: a fila (do domínio) não é contada no servidor
+    expect(screen.getByTestId("project-email-health-domain-summary")).toHaveTextContent("Domínio: 2 em ordem · 0 em atenção · 1 críticos");
+    expect(screen.getByTestId("project-email-health-server-summary")).toHaveTextContent("Servidor (vale para todos os projetos): 2 em ordem · 0 em atenção · 2 críticos");
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Crítico no servidor, afeta todos os projetos");
+    expect(alert).toHaveTextContent("Listas de bloqueio");
+    expect(alert).toHaveTextContent("Certificado do servidor de e-mail");
+    expect(alert).not.toHaveTextContent("Fila de envio");
+    // a linha de PTR e porta 25 continua, sem esconder o resto
+    expect(screen.getByTestId("project-email-health-server")).toHaveTextContent("DNS reverso (PTR): Em ordem");
+  });
+
+  it("domínio em ordem e servidor só em atenção: selo de atenção e aviso sem vermelho", async () => {
+    const checks: MailHealthCheck[] = [
+      { id: "spf", level: "ok", inbox: true, code: "ok_soft", params: { lookups: 1 } },
+      { id: "ptr", level: "warn", inbox: true, code: "missing", params: { ip: IP, expected: HOST, current: "" }, expected: HOST, found: [] },
+    ];
+    mockApi({ plan: PLAN, report: reportOf(checks) });
+    renderIt();
+    expect(await screen.findByTestId("project-email-health-badge")).toHaveTextContent("Atenção");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("Atenção no servidor: DNS reverso (PTR).")).toBeInTheDocument();
+  });
+
+  it("tudo em ordem: selo Em ordem e nenhum aviso do servidor", async () => {
+    mockApi({ plan: PLAN, report: reportOf([{ id: "spf", level: "ok", inbox: true, code: "ok_soft", params: { lookups: 1 } }, { id: "port25", level: "ok", inbox: true, code: "ok", params: { host: "mx.example.org" } }]) });
+    renderIt();
+    expect(await screen.findByTestId("project-email-health-badge")).toHaveTextContent("Em ordem");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/Atenção no servidor/)).toBeNull();
+  });
+
   it("verificar agora: faz o POST, atualiza e segura o botão por 15 s (limite)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const calls = mockApi({ plan: PLAN, report: null }, { plan: PLAN, report: reportOf(CHECKS) });
