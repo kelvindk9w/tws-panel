@@ -57,6 +57,19 @@ export function LoginPage() {
         if (err.code === "two_factor_locked" && typeof wait === "number" && wait > 0) {
           text = `${text} ${t("auth.login.retryIn", { time: formatWait(wait) })}`;
         }
+        // código errado: quantas tentativas restam antes do bloqueio (o servidor só manda
+        // isso a quem já acertou a senha; sem os números, fica a mensagem de sempre)
+        const left = err.data?.attemptsLeft;
+        const lockSec = err.data?.nextLockSec;
+        if (
+          err.code === "invalid_two_factor_code" &&
+          typeof left === "number" &&
+          left > 0 &&
+          typeof lockSec === "number" &&
+          lockSec > 0
+        ) {
+          text = t("auth.login.codeWrong", { count: left, time: formatWait(lockSec) });
+        }
         setError(text);
       } else {
         setError(t("auth.login.failed"));
@@ -128,7 +141,7 @@ export function LoginPage() {
             )}
 
             {error && (
-              <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <p role="alert" aria-live="assertive" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {error}
               </p>
             )}

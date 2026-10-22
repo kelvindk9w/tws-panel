@@ -112,6 +112,64 @@ describe("LoginPage — tempo restante do bloqueio", () => {
   });
 });
 
+describe("LoginPage — tentativas restantes no código errado", () => {
+  function stubWrong(data: Record<string, unknown>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { code?: string };
+        if (!body.code) return jsonResponse({ error: "two_factor_required", message: "Digite o código." }, 401);
+        return jsonResponse({ error: "invalid_two_factor_code", message: "Código incorreto.", ...data }, 401);
+      }),
+    );
+  }
+
+  it("pt-BR: mostra quantas tentativas restam e por quanto tempo bloqueia", async () => {
+    stubWrong({ attemptsLeft: 3, nextLockSec: 300 });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Código incorreto. Restam 3 tentativas antes de bloquear o código do app por 5 min.",
+    );
+  });
+
+  it("pt-BR: singular quando resta uma", async () => {
+    stubWrong({ attemptsLeft: 1, nextLockSec: 60 });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Código incorreto. Resta 1 tentativa antes de bloquear o código do app por 1 min.",
+    );
+  });
+
+  it("en: texto traduzido, com plural", async () => {
+    setLocale("en");
+    stubWrong({ attemptsLeft: 4, nextLockSec: 300 });
+    await loginUntilCode();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Wrong code. 4 attempts left before the app code is locked for 5 min.");
+    expect(alert.textContent).not.toMatch(/Restam|auth\.login/);
+    cleanup();
+    stubWrong({ attemptsLeft: 1, nextLockSec: 7200 });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Wrong code. 1 attempt left before the app code is locked for 2 h.");
+  });
+
+  it("o aviso é anunciado (alert assertivo) e o campo do código continua", async () => {
+    stubWrong({ attemptsLeft: 2, nextLockSec: 300 });
+    const code = await loginUntilCode();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveAttribute("aria-live", "assertive");
+    expect(code).toBeInTheDocument();
+  });
+
+  it("sem os números (servidor antigo ou resposta sem contagem): só a mensagem do servidor, sem 'undefined'", async () => {
+    stubWrong({});
+    await loginUntilCode();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Código incorreto.");
+    expect(alert.textContent).not.toMatch(/Restam|undefined|NaN|antes de bloquear/);
+  });
+});
+
 describe("SecurityPage — aviso do proxy da Cloudflare", () => {
   function stubSecurity(cloudflareProxy: boolean) {
     vi.stubGlobal(

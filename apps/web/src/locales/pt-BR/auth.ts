@@ -7,6 +7,8 @@ export default {
   "login.code": "Código de verificação",
   "login.codeHelp": "Abra o app autenticador do seu celular e digite o código de 6 dígitos do TWS Panel. Sem o celular? Use um dos seus códigos de recuperação.",
   "login.failed": "Não foi possível entrar. Tente novamente.",
+  "login.codeWrong_one": "Código incorreto. Resta {count} tentativa antes de bloquear o código do app por {time}.",
+  "login.codeWrong_other": "Código incorreto. Restam {count} tentativas antes de bloquear o código do app por {time}.",
   "login.retryIn": "Tente de novo em {time}.",
   "login.submit": "Entrar",
   "login.submitting": "Entrando…",

@@ -43,6 +43,10 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   ou desativar a verificação e recomeçar o assistente. O limite por IP agrupa o IPv6 pelo bloco
   /64, a tela Segurança avisa quando o proxy da Cloudflare é detectado e
   `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
+- Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas
+  tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
+  limite da conta e o do IP, sem dizer qual). Só aparece a quem já acertou a senha e não revela o
+  nível de reincidência da conta.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**
