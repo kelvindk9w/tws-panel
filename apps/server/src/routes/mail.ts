@@ -1,8 +1,9 @@
 /**
  * mail.ts — rotas do módulo de e-mail (Fase 3, plano §5.3).
  */
+import { lookup } from "node:dns/promises";
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
+import { MAILBOX_DISPLAY_NAME_MAX, MAILBOX_DISPLAY_NAME_PATTERN, MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
 import { mailAuthError, mailAuthRepairFailedError, mailSyncError } from "../services/mail-auth-error.js";
 import type {
   ChangeMailboxPasswordRequest,
@@ -25,6 +26,8 @@ import type {
   MailTlsStatusResponse,
   ProjectEmailResponse,
   SendTestEmailRequest,
+  SetMailboxDisplayNameRequest,
+  SetMailboxDisplayNameResponse,
   SetProjectEmailLinksRequest,
 } from "@paas/core";
 import { MailService } from "../services/mail-service.js";
@@ -39,6 +42,9 @@ import { mailHealthRoutes } from "./mail-health.js";
 import { isCloudflareIp } from "./domains.js";
 import { queueItemFromMessage } from "@paas/mailer";
 import { MailHealthService } from "../services/mail-health-service.js";
+import { mailSendRoutes } from "./mail-send-routes.js";
+import { MailSendLogService } from "../services/mail-send-log-service.js";
+import { buildMailHookServer, stalwartAddressResolver } from "../services/mail-send-hook-server.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 
@@ -110,6 +116,15 @@ const MAILBOX_PASSWORD_SCHEMA = {
   maxLength: 200,
 } as const;
 
+// Nome de exibição: vai para o campo description do Stalwart (JSON), para o
+// cabeçalho From e para o MAIL_FROM_NAME. Sem controle (CR/LF/TAB), < >, aspas
+// nem barra invertida; vazio = sem nome (o service normaliza e confere de novo).
+const MAILBOX_DISPLAY_NAME_SCHEMA = {
+  type: "string",
+  maxLength: MAILBOX_DISPLAY_NAME_MAX,
+  pattern: MAILBOX_DISPLAY_NAME_PATTERN,
+} as const;
+
 // Id de caixa (endereço completo, ex.: vendas@exemplo.com, por vezes
 // URL-encoded). 90 fica abaixo do teto padrão de param do Fastify (100, que
 // responde 414 antes do schema) e é generoso para qualquer endereço real.
@@ -148,6 +163,7 @@ const createMailboxSchema = {
       generatePassword: { type: "boolean" },
       // criada pela aba Caixas do e-mail do projeto: a caixa fica sendo dele
       projectId: PROJECT_ID_SCHEMA,
+      displayName: MAILBOX_DISPLAY_NAME_SCHEMA,
     },
     // a senha da pessoa OU "gere uma forte para mim"
     anyOf: [
@@ -193,8 +209,8 @@ const enableProjectEmailSchema = {
     properties: {
       domain: MAIL_DOMAIN_SCHEMA,
       fromLocalPart: MAILBOX_LOCAL_PART_SCHEMA,
-      // Vai para o cabeçalho From: sem quebra de linha, < > nem aspas.
-      fromName: { type: "string", minLength: 1, maxLength: 80, pattern: '^[^\\r\\n<>"\\\\]+$' },
+      // Vai para o cabeçalho From e para o Stalwart: mesma regra do nome de exibição das caixas.
+      fromName: MAILBOX_DISPLAY_NAME_SCHEMA,
       // Senha da caixa do projeto: digitada pela pessoa ou gerada pelo painel.
       password: MAILBOX_PASSWORD_SCHEMA,
       generatePassword: { type: "boolean" },
@@ -440,8 +456,21 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // volume, listas de bloqueio (uma vez por dia) e a nota. Fica AQUI porque
   // só este plugin enxerga o MailService (ver mail-reputation-service.ts).
   // -------------------------------------------------------------------------
+  // Registro dos envios por SMTP: o aviso do Stalwart chega pelo ouvido interno
+  // (abaixo) e os estados vêm dos eventos de entrega que o `envios` lê.
+  const sends = new MailSendLogService({
+    dataDir: app.config.dataDir,
+    senders: () => service.enviosSenders(),
+    projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
+    serverCreated: () => service.enviosServerCreated(),
+    listQueue: () => service.enviosQueue(),
+    localDomains: async () => (await service.listDomains()).map((d) => d.name),
+    captureConfigured: () => service.sendHookConfigured(),
+    log: (message) => app.log.warn(message),
+  });
   const envios = new MailEnviosService({
     dataDir: app.config.dataDir,
+    onEvents: (events) => sends.applyEvents(events),
     serverCreated: () => service.enviosServerCreated(),
     listQueue: () => service.enviosQueue(),
     retry: (id) => service.enviosRetry(id),
@@ -469,11 +498,42 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     reputation,
     domainNames: async () => (await service.listDomains()).map((d) => d.name),
   });
+  mailSendRoutes(app, { sends });
   envios.start();
   reputation.start();
+  sends.start();
+
+  // Ouvido do aviso de envio: servidor à parte, só na rede interna do Docker.
+  // Sobe quando o painel fica pronto e só se a captura está configurada (painel
+  // em container); porta ocupada ou erro nunca derrubam o painel.
+  let hookServer: ReturnType<typeof buildMailHookServer> | null = null;
+  // Só o container do Stalwart pode chamar o ouvido (endereços resolvidos pelo nome na rede do Docker).
+  const stalwartAddresses = stalwartAddressResolver({
+    lookup: async () => (await lookup("paas-stalwart", { all: true })).map((a) => a.address),
+  });
+  app.addHook("onReady", async () => {
+    // Sobe mesmo sem servidor de e-mail criado: o segredo nasce quando ele for
+    // criado, e até lá o ouvido responde 401 (sem precisar reiniciar o painel).
+    if (!service.sendHookListenable()) return;
+    hookServer = buildMailHookServer({
+      verify: (secret) => service.verifySendHookSecret(secret),
+      submit: (payload) => sends.submit(payload),
+      allowFrom: stalwartAddresses,
+    });
+    try {
+      await hookServer.listen({ port: app.config.mailHookPort ?? 9100, host: "0.0.0.0" });
+    } catch (err) {
+      app.log.warn(`Registro de envios: não consegui abrir o ouvido do aviso do e-mail (${err instanceof Error ? err.message : String(err)}).`);
+      await hookServer.close().catch(() => undefined);
+      hookServer = null;
+    }
+  });
   app.addHook("onClose", async () => {
     envios.stop();
     reputation.stop();
+    sends.stop();
+    await hookServer?.close().catch(() => undefined);
+    await sends.flush();
   });
 
   // Saúde de entregabilidade por domínio (plano de DNS + verificação ao vivo).
@@ -791,7 +851,12 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         if (projectId && !(await app.deployService.getProject(projectId))) {
           throw httpError(404, "project_not_found", "Projeto não encontrado.");
         }
-        const opts = { ...(generate ? { generate: true } : {}), ...(projectId ? { projectId } : {}) };
+        const displayName = request.body?.displayName;
+        const opts = {
+          ...(generate ? { generate: true } : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(displayName ? { displayName } : {}),
+        };
         const { mailbox, generatedPassword } = await service.createMailbox(
           request.params.domain,
           request.body?.localPart ?? "",
@@ -803,9 +868,47 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
           target: `${mailbox.localPart}@${request.params.domain}`,
           detail: `Caixa de e-mail ${mailbox.localPart}@${request.params.domain} criada.`,
         });
+        if (displayName) syncWebmailInBackground();
         // a senha gerada sai só nesta resposta (nunca vai para a auditoria)
         const response: MailboxResponse = generatedPassword ? { mailbox, generatedPassword } : { mailbox };
         return reply.code(201).send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Nome de exibição de qualquer caixa (global ou do projeto). Só ele muda:
+  // senha, 2FA, senhas de app, aliases e mensagens ficam como estão. Com
+  // `projectId`, a caixa precisa ser daquele projeto. Mesmo limite das demais
+  // rotas de escrita do e-mail (200/min por IP); CSRF e sessão vêm do guard global.
+  app.put<{ Params: { id: string }; Body: SetMailboxDisplayNameRequest }>(
+    "/api/mail/mailboxes/:id/display-name",
+    {
+      schema: {
+        ...mailboxIdParamSchema,
+        body: {
+          type: "object",
+          required: ["displayName"],
+          additionalProperties: false,
+          properties: { displayName: MAILBOX_DISPLAY_NAME_SCHEMA, projectId: PROJECT_ID_SCHEMA },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { displayName, projectId } = request.body;
+        if (projectId && !(await app.deployService.getProject(projectId))) {
+          throw httpError(404, "project_not_found", "Projeto não encontrado.");
+        }
+        const result: SetMailboxDisplayNameResponse = await service.setMailboxDisplayName(request.params.id, displayName, {
+          ...(projectId ? { projectId } : {}),
+          projectName: async (id) => (await app.deployService.getProject(id))?.name,
+        });
+        // o webmail recebe o nome novo (em segundo plano)
+        syncWebmailInBackground();
+        const [withName] = await withProjectNames([result.mailbox]);
+        return reply.send(withName ? { ...result, mailbox: withName } : result);
       } catch (err) {
         return sendError(reply, err);
       }

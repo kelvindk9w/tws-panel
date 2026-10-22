@@ -48,7 +48,7 @@ afterEach(() => {
 function pollCalls(): number {
   return vi
     .mocked(fetch)
-    .mock.calls.filter(([u]) => /\/api\/(projects|docker\/containers)/.test(String(u))).length;
+    .mock.calls.filter(([u]) => /\/api\/(projects(?!\/update-status)|docker\/containers)/.test(String(u))).length;
 }
 
 function setVisibility(state: "visible" | "hidden") {

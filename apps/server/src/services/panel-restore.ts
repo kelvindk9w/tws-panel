@@ -45,7 +45,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import type { BackupRecord } from "@paas/core";
+import { MAIL_SEND_CONTENT_DIRNAME, type BackupRecord } from "@paas/core";
 import { AuditService } from "./audit-service.js";
 import { JsonFile, writeFileAtomic } from "./json-file.js";
 
@@ -55,8 +55,12 @@ export const PANEL_RESTORE_PROGRESS = ".restaurar-painel.progresso.json";
 export const PANEL_SAFETY_DIR = "antes-da-restauracao";
 export const PANEL_SAFETY_PREVIOUS = "antes-da-restauracao.anterior";
 
-/** Nomes do diretório de dados que a restauração nunca troca. */
-export const PANEL_PRESERVED = ["backups", "setup-token", "projects"];
+/**
+ * Nomes do diretório de dados que a restauração nunca troca. O conteúdo dos
+ * envios (assunto e corpo) fica de fora do backup E da cópia "antes da
+ * restauração": lá ele escaparia da retenção e do "desligar apaga na hora".
+ */
+export const PANEL_PRESERVED = ["backups", "setup-token", "projects", MAIL_SEND_CONTENT_DIRNAME];
 /** Arquivos do .7z que não são estado do painel. */
 const ARCHIVE_EXTRAS = ["LEIA-ME.txt", "manifesto.json"];
 

@@ -26,8 +26,9 @@ das ações sensíveis.
   no host, credenciais fracas, serviço de dev em produção, secret comitado no código e tag
   `:latest`. Um bloqueio só passa com override explícito e auditado. O compose também é conferido
   do jeito que o Docker de fato o executa (depois de merge, include, extends e interpolação).
-  Container privilegiado, `docker.sock` e bind fora da pasta do projeto são bloqueados, mas aceitam
-  o mesmo override auditado. Só as regras que protegem o próprio painel não têm override: as
+  Container privilegiado e bind fora da pasta do projeto são bloqueados, mas aceitam
+  o mesmo override auditado. Só as regras que protegem o próprio painel não têm override
+  (entre elas o `docker.sock`): as
   imagens, redes, nomes reservados e recursos do painel não podem ser usados nem tomados por um
   projeto.
 - **Isolamento entre projeto hospedado e painel:** redes Docker separadas para o proxy, o painel,

@@ -91,6 +91,8 @@ export interface StalwartManagerOptions {
    * próprio painel — o MailService passa http://paas-stalwart:8080.
    */
   apiBaseUrl?: string;
+  /** Aviso de cada envio SMTP autenticado ao painel (ver SendHookConfig). */
+  sendHook?: SendHookConfig | null;
 }
 
 export class StalwartManager {
@@ -136,7 +138,7 @@ export class StalwartManager {
       this.opts.hostname,
       this.opts.adminSecret,
       this.certificates().map((c) => c.host),
-      { reportDomain: this.opts.reportDomain ?? null },
+      { reportDomain: this.opts.reportDomain ?? null, sendHook: this.opts.sendHook ?? null },
     );
   }
 
@@ -470,9 +472,55 @@ function certificateSections(hostname: string, hosts: string[]): string[] {
   });
 }
 
+/**
+ * Aviso de envio (MTA hook do Stalwart, estágio `data`): a cada mensagem
+ * submetida com login, o Stalwart faz um POST com envelope, cabeçalhos e
+ * conteúdo para `url` (rede interna do Docker, nunca pública), com o segredo
+ * no cabeçalho Authorization. Conferido na v0.11.8 real:
+ *  - `enable` só é verdadeiro com `authenticated_as` preenchido: e-mail
+ *    recebido de fora (porta 25 sem login) NUNCA é mandado ao painel;
+ *  - `tempfail-on-error = false`: se o painel estiver fora do ar, lento ou
+ *    recusar, o Stalwart aceita a mensagem do mesmo jeito (o envio nunca
+ *    depende do registro); painel parado = recusa de conexão imediata (~0 ms);
+ *    painel travado = no máximo `timeout` a mais naquela submissão.
+ */
+export interface SendHookConfig {
+  /** Ex.: http://tws-panel:9100/mail-hook/send */
+  url: string;
+  /** Segredo compartilhado (hex), enviado como `Authorization: Bearer`. */
+  secret: string;
+}
+
+const SEND_HOOK_URL = /^http:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?:\d{2,5}\/[A-Za-z0-9/_-]*$/;
+const SEND_HOOK_SECRET = /^[0-9a-f]{32,128}$/;
+/** Tempo máximo que o Stalwart espera o painel responder ao aviso. */
+export const SEND_HOOK_TIMEOUT = "2s";
+
 export interface RenderConfigOptions {
   /** `report.domain` (ver StalwartManagerOptions.reportDomain). */
   reportDomain?: string | null;
+  /** Aviso de envio ao painel; ausente/null = sem captura. */
+  sendHook?: SendHookConfig | null;
+}
+
+function sendHookSection(hook: SendHookConfig | null | undefined): string[] {
+  if (!hook) return [];
+  // Nada de texto livre na configuração: endereço e segredo têm formato fixo.
+  if (!SEND_HOOK_URL.test(hook.url)) throw new Error("endereço do aviso de envio inválido");
+  if (!SEND_HOOK_SECRET.test(hook.secret)) throw new Error("segredo do aviso de envio inválido");
+  return [
+    '[session.hook."paas-send-log"]',
+    'enable = [{if = "!is_empty(authenticated_as)", then = true}, {else = false}]',
+    `url = "${hook.url}"`,
+    `timeout = "${SEND_HOOK_TIMEOUT}"`,
+    'stages = ["data"]',
+    `headers = ["Authorization: Bearer ${hook.secret}"]`,
+    "",
+    '[session.hook."paas-send-log".options]',
+    "tempfail-on-error = false",
+    "max-response-size = 4096",
+    "",
+  ];
 }
 
 /**
@@ -512,8 +560,12 @@ export function stalwartConfigFingerprint(input: {
   hostname: string;
   certificateHosts: string[];
   reportDomain?: string | null;
+  sendHook?: SendHookConfig | null;
 }): string {
-  const toml = renderConfigToml(input.hostname, "", input.certificateHosts, { reportDomain: input.reportDomain ?? null });
+  const toml = renderConfigToml(input.hostname, "", input.certificateHosts, {
+    reportDomain: input.reportDomain ?? null,
+    sendHook: input.sendHook ?? null,
+  });
   return createHash("sha256").update(toml).digest("hex");
 }
 
@@ -582,5 +634,6 @@ export function renderConfigToml(
     "ansi = false",
     "enable = true",
     "",
+    ...sendHookSection(opts.sendHook),
   ].join("\n");
 }

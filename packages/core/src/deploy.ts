@@ -103,6 +103,9 @@ export interface DetectResult {
   details: string[];
 }
 
+/** Branch usada quando o projeto não define uma (ingestão e alerta de atualização). */
+export const DEFAULT_PROJECT_BRANCH = "main";
+
 export interface Project {
   id: string;
   name: string;
@@ -144,6 +147,13 @@ export interface Project {
    */
   deployedBranch: string | null;
   deployedSource: string | null;
+  /**
+   * Commit (hash completo) que o último deploy bem-sucedido deixou no ar, lido do
+   * repositório do painel ao fim do deploy. É o que o alerta "nova atualização" compara
+   * com a ponta da branch no repositório remoto. Ausente/null = projeto publicado antes
+   * deste registro (ou sem repositório): o estado é "desconhecido", nunca "atualização".
+   */
+  deployedCommit?: string | null;
   /**
    * Trocas da porta do SERVIDOR feitas no painel, por serviço do compose
    * (aba Portas). Nunca mexem na porta interna. Valem no próximo deploy, pelo
@@ -307,6 +317,67 @@ export type GitAccessCheckResponse =
       /** Só em unknown: última linha do git, sem token nem credenciais da URL. */
       detail?: string;
     };
+
+// ---------------------------------------------------------------------------
+// Alerta de "nova atualização do projeto"
+// ---------------------------------------------------------------------------
+
+/**
+ * Situação do código do projeto frente à branch configurada no repositório.
+ *  - up_to_date: o commit no ar é a ponta da branch;
+ *  - update_available: a branch tem commit novo (só aviso: o deploy é sempre manual);
+ *  - checking: a consulta ao repositório está em andamento;
+ *  - unknown: foi publicado, mas o commit no ar não foi registrado (projeto antigo) — sem alerta;
+ *  - never_deployed: ainda sem primeiro deploy;
+ *  - config_changed: a branch/repositório configurados não são os que estão no ar;
+ *  - error: não deu para verificar (NÃO é "sem atualização"); veja `reason`;
+ *  - not_applicable: sem repositório (upload, pasta existente).
+ */
+export type UpdateState =
+  | "up_to_date"
+  | "update_available"
+  | "checking"
+  | "unknown"
+  | "never_deployed"
+  | "config_changed"
+  | "error"
+  | "not_applicable";
+
+/** Motivo (código fixo, sem texto do servidor remoto) de a verificação não ter dado certo; a interface traduz. */
+export type UpdateErrorReason =
+  | "unreachable"
+  | "timeout"
+  | "auth"
+  | "no_permission"
+  | "not_found"
+  | "branch_not_found"
+  | "redirected"
+  | "blocked_host"
+  | "unsupported"
+  | "unknown";
+
+export interface ProjectUpdateStatus {
+  projectId: string;
+  state: UpdateState;
+  /** Branch consultada (a configurada hoje; "main" quando não há). */
+  branch: string | null;
+  /** Commit remoto curto (7 caracteres); só em update_available e up_to_date. */
+  remoteCommit: string | null;
+  /** Commit curto que está no ar; null se desconhecido. */
+  deployedCommit: string | null;
+  /** Só em state "error". */
+  reason: UpdateErrorReason | null;
+  /** Quando a consulta (bem ou mal sucedida) terminou; null = nunca consultado. */
+  checkedAt: string | null;
+}
+
+export interface ProjectUpdateStatusResponse {
+  status: ProjectUpdateStatus;
+}
+
+export interface ProjectUpdateStatusListResponse {
+  statuses: ProjectUpdateStatus[];
+}
 
 // ---------------------------------------------------------------------------
 // Jobs de deploy

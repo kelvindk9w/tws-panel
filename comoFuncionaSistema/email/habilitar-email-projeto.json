@@ -41,8 +41,8 @@
         "nome": "fromName",
         "tipo": "string",
         "obrigatorio": false,
-        "regras": "1 a 80 caracteres, sem quebra de linha, < >, aspas ou barra invertida (vai para o cabeçalho From).",
-        "descricao": "Nome que aparece para quem recebe (MAIL_FROM_NAME). Ausente: nome do projeto."
+        "regras": "0 a 80 caracteres, mesma regra do displayName das caixas (MAILBOX_DISPLAY_NAME_PATTERN): sem controle/CRLF, < >, aspas ou barra invertida (vai para o cabeçalho From, para o MAIL_FROM_NAME e para o description do Stalwart).",
+        "descricao": "Nome que aparece para quem recebe (MAIL_FROM_NAME). Vazio/ausente: nome do projeto (sem os caracteres que o nome de exibição não aceita, cortado em 80)."
       },
       {
         "nome": "password",
@@ -255,7 +255,8 @@
     "apps/server/tests/mail-service.test.ts (o endereço de envio é a caixa do projeto; migração do alias)",
     "apps/server/tests/routes-mail-schema.test.ts",
     "apps/web/tests/project-email-card.test.tsx",
-    "scripts/test-mail.mts (passo 6)"
+    "scripts/test-mail.mts (passo 6)",
+    "apps/server/tests/mail-display-name.test.ts"
   ],
   "observacoes": [
     "02/10/2026 (pedido do dono do produto): cada projeto escolhe o endereço de envio e o nome de exibição. POST serve para ativar e para alterar: trocar o endereço tira o alias antigo da caixa (removeItem) e põe o novo (addItem); desativar também tira o alias. MAIL_FROM continua sendo o endereço puro (qualquer app aceita); o nome vai em MAIL_FROM_NAME. Tela: components/project/ProjectEmailCard.tsx — domínio com o estado do DNS, prévia 'Nome <endereço>', aviso de novo deploy e 'Enviar e-mail de teste' (pela caixa técnica).",
@@ -266,6 +267,7 @@
     "Desativar não apaga a caixa (as mensagens ficam); ela pode ser removida na página do domínio. Reativar no mesmo endereço reaproveita a caixa, pedindo senha.",
     "Tela: o campo 'Seu domínio' de 'Usar um domínio meu' já vem preenchido com o domínio do projeto (editável).",
     "Projeto apagado solta o e-mail (DeployService.deleteProject → MailService.releaseProjectEmail): tira o registro e as ligações; a caixa e as mensagens ficam. Lista de projetos vazia com vínculos registrados vale como \"não sei\" (um projects.json ausente é lido como lista vazia): nada é solto. Registro órfão de projeto apagado antes disso é solto sozinho ao ativar, listar caixas, listar caixas usáveis e Sincronizar (purgeOrphanProjects, com a lista de projetos que existem). Antes, o órfão bloqueava o endereço com 409 address_in_use.",
-    "Trocar o endereço NÃO apaga uma caixa que já existia antes de virar a do projeto (external): só a solta (volta a ser de usuário, com o dono que tinha antes). A criada pelo painel para o projeto continua sendo apagada na troca, como antes."
+    "Trocar o endereço NÃO apaga uma caixa que já existia antes de virar a do projeto (external): só a solta (volta a ser de usuário, com o dono que tinha antes). A criada pelo painel para o projeto continua sendo apagada na troca, como antes.",
+    "22/10/2026: o nome (digitado ou o padrão = nome do projeto) agora também é gravado no Stalwart (description) e em mail.json (mailboxes[].displayName, além de projects[].fromName). Em 'usar uma caixa que já existe', sem nome digitado vale o nome que a caixa já tem; sem nenhum, o do projeto. Mudar depois: alterar-nome-exibicao-caixa.json (vale no deploy seguinte)."
   ]
 }

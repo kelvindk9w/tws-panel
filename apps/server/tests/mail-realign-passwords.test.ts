@@ -80,6 +80,8 @@ function fakeStalwart() {
       if (u.pathname.startsWith("/api/principal/") && init?.method === "PATCH") {
         const email = decodeURIComponent(u.pathname.slice("/api/principal/".length));
         const ops = JSON.parse(String(init.body)) as Array<{ field: string; value: string[] }>;
+        // nome de exibição (description): outro campo, não mexe na senha
+        if (ops[0]!.field === "description") return new Response(`{"data":null}`, { status: 200 });
         const value = ops[0]!.value[0]!;
         const first = !patchLog.some((x) => x.email === email);
         patchLog.push({ email, value, all: ops[0]!.value });

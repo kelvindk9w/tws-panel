@@ -236,7 +236,10 @@ Lost the key, the password or the phone for two-factor authentication? See
 fix**. Fix the compose/code (recommended) — e.g. remove the database port published on the
 host, replace weak credentials. If you are sure of the risk (e.g. a database exposed only in a
 staging environment), check **I understand the risks and want to deploy anyway (override)** and confirm the override — it is **audited** under
-**Audit log** (`guardrail.override`).
+**Audit log** (`guardrail.override`). Four rules protect the panel itself and accept no override
+(`panel-resource`, `network-hijack`, `reserved-name`, `panel-image`): the compose has to change.
+What each rule blocks, how to read the message and before/after examples are in
+[Writing a compose the panel accepts](compose-rules.md).
 
 ---
 
