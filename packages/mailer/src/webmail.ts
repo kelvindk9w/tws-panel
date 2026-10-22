@@ -9,7 +9,7 @@
  * implícito (IMAP 993, SMTP 465), com o mesmo login nos dois.
  *
  * Por que Roundcube (e não SnappyMail): imagem oficial mantida pelo próprio
- * projeto, com versão de segurança mês a mês em 2026 (1.7.4 em 06/09/2026);
+ * projeto, com versão de segurança mês a mês em 2026 (1.7.5 em 19/10/2026);
  * SQLite embutido (sem banco externo); sem painel administrativo (o
  * instalador vem desligado); usuário preenchido por URL (`?_user=`). O
  * SnappyMail não publica versão desde 2.38.2 (out/2024) e tem um painel de
@@ -189,7 +189,7 @@ export function renderWebmailIdentities(identities: Record<string, string>): str
  *  - user_create (primeiro login): o nome da identidade criada vem do arquivo;
  *  - login_after (quem já entrou antes): preenche a identidade padrão só se
  *    o nome estiver VAZIO — nunca sobrescreve o que a pessoa escolheu.
- * Conferido no código do Roundcube 1.7.4: rcube_user::create passa
+ * Conferido no código do Roundcube 1.7.4 (a 1.7.5 é correção de segurança sobre a mesma base): rcube_user::create passa
  * 'user_name' ao hook e usa-o como nome da identidade; index.php chama
  * login_after depois do login com sucesso; update_identity grava com
  * parâmetro (sem montar SQL com o nome).
@@ -321,6 +321,8 @@ export interface WebmailManagerOptions {
   /** Rede em que o webmail alcança o Stalwart (padrão paas-mail). */
   mailNetwork?: string;
   dataVolume?: string;
+  /** Quanto o container novo precisa ficar de pé, numa troca de imagem, antes de o antigo ser removido (padrão 5 s). */
+  settleMs?: number;
 }
 
 export class WebmailManager {
@@ -424,6 +426,10 @@ export class WebmailManager {
     return image || null;
   }
 
+  private async state(): Promise<string> {
+    return (await run("docker", ["inspect", "-f", "{{.State.Status}}", this.containerName])).stdout.trim();
+  }
+
   /**
    * Sobe (ou garante) o container. A config vai ANTES do primeiro start: o
    * entrypoint só inclui os arquivos que existem quando ele roda. Container
@@ -432,8 +438,16 @@ export class WebmailManager {
    */
   async start(): Promise<void> {
     await this.ensureNetwork();
+    // sobra de uma troca interrompida: imagem antiga (vulnerável), parada, com o volume montado
+    await run("docker", ["rm", "-f", `${this.containerName}-prev`]);
     const current = await this.status();
     if (current.installed) {
+      // criado e nunca iniciado (painel interrompido): não dá para copiar para dentro dele; recria
+      if (!current.running && (await this.state()) === "created") {
+        await run("docker", ["rm", "-f", this.containerName]);
+        await this.createAndStart();
+        return;
+      }
       const image = await this.currentImage();
       if (image !== null && image !== this.image) {
         await this.replaceContainer();
@@ -463,7 +477,6 @@ export class WebmailManager {
         throw new Error(`falha ao baixar a imagem nova do webmail (${pull.stderr.trim()}); o webmail segue na versão anterior`);
       }
     }
-    await run("docker", ["rm", "-f", previous]); // sobra de uma troca interrompida
     const stop = await run("docker", ["stop", this.containerName], { timeoutMs: 60_000 });
     if (stop.code !== 0) throw new Error(`falha ao parar ${this.containerName} para atualizá-lo: ${stop.stderr.trim()}`);
     const rename = await run("docker", ["rename", this.containerName, previous]);
@@ -473,8 +486,14 @@ export class WebmailManager {
     }
     try {
       await this.createAndStart();
+      // o novo tem de continuar de pé (um Apache que cai ao ler a configuração morre em instantes)
+      await new Promise((resolve) => setTimeout(resolve, this.opts.settleMs ?? 5000));
+      if (!(await this.status()).running) {
+        const logs = await run("docker", ["logs", "--tail", "5", this.containerName]);
+        throw new Error(`o container novo parou logo após iniciar: ${`${logs.stdout}${logs.stderr}`.trim().slice(-200)}`);
+      }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = (err as Error).message;
       await run("docker", ["rm", "-f", this.containerName]);
       const back = await run("docker", ["rename", previous, this.containerName]);
       const restart = back.code === 0 ? await run("docker", ["start", this.containerName]) : back;
