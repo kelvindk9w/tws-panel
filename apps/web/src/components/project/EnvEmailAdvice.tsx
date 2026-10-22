@@ -23,12 +23,15 @@ const mono = <span className="font-mono" />;
 export function EnvEmailAdvice({
   projectId,
   advice,
+  compose,
   links,
   onLinked,
   onAddRow,
 }: {
   projectId: string;
   advice: EmailAdvice;
+  /** Projeto compose (o e-mail vem por cima no container) ou Dockerfile (o valor salvo vence). */
+  compose: boolean;
   /** Ligações GUARDADAS (sem filtro): o PUT troca o mapa inteiro, então parte delas para nada se perder. */
   links: Record<string, ProjectEmailValueKey>;
   onLinked: (links: Record<string, ProjectEmailValueKey>, names: string[]) => void;
@@ -98,7 +101,7 @@ export function EnvEmailAdvice({
     >
       <p className="flex items-start gap-2 font-medium text-sky-200">
         <Mail className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 [overflow-wrap:anywhere]">{t("env.email.title")}</span>
+        <span className="min-w-0 [overflow-wrap:anywhere]">{t(items.some((i) => i.kind !== "manual") ? "env.email.title" : "env.email.title.manual")}</span>
       </p>
 
       {enabled === null && (
@@ -183,7 +186,7 @@ export function EnvEmailAdvice({
           >
             {i.state === "linked"
               ? t("env.email.collision.linked", { name: i.name, source: i.source ?? "" })
-              : t("env.email.collision.direct", { name: i.name })}
+              : t(compose ? "env.email.collision.direct" : "env.email.collision.directDockerfile", { name: i.name })}
           </p>
         ))}
 

@@ -11,6 +11,7 @@ export default {
     "ignored on deploy: {name} is linked to the project's Email (← {linkedTo}) and the link wins. Delete this line or remove the link in Email.",
   "describe.ignored.placeholder": "ignored: comes from the project's Email",
   "describe.provided.label": "provided by the project's Email — the container gets the email value",
+  "describe.provided.labelDockerfile": "provided by the project's Email — filling it in here overrides it",
   "describe.provided.placeholder": "provided by the panel",
   "describe.example.label": "from {file} (the app can read it through env_file)",
   "describe.example.placeholder": "from {file}",
@@ -73,6 +74,11 @@ export default {
   "provided.help":
     "If your app uses other names (e.g. SMTP_PASSWORD), link them in <link>Email → Link to project variables</link>. They appear in the list already filled in: the eye shows the value, which you change in the project's Email. The mailbox password is never shown (forgot it? change it in Email → Mailboxes). In a compose project the container always gets the email value: a variable saved here with the default name (e.g. SMTP_HOST) only applies to compose interpolation (${VAR} in the .env). Linked ones also always come from the email.",
   // ProjectEnvCard: "project email fills these variables" notice
+  "email.title.manual": "Email variables the panel does not fill: they are missing by hand",
+  "email.collision.directDockerfile":
+    "{name} is filled in here and replaces the project email value on deploy (the container gets the saved value). Delete the row to use the email value.",
+  "provided.helpDockerfile":
+    "If your app uses other names (e.g. SMTP_PASSWORD), link them in <link>Email → Link to project variables</link>. They appear in the list already filled in: the eye shows the value, which you change in the project's Email. The mailbox password is never shown (forgot it? change it in Email → Mailboxes). In a Dockerfile project, a variable saved here with the default name (e.g. SMTP_HOST) overrides the email value; linked ones always come from the email.",
   "email.title": "Project email fills these required variables for you",
   "email.off.intro":
     "The project requires {names}. Project email creates the mailbox and delivers SMTP_HOST, SMTP_PORT (587, STARTTLS), SMTP_USER and the password on deploy: you do not need to type these variables by hand.",

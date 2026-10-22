@@ -11,6 +11,7 @@ export default {
     "ignorada no deploy: {name} está ligada ao E-mail do projeto (← {linkedTo}) e a ligação vence. Apague esta linha ou desfaça a ligação no E-mail.",
   "describe.ignored.placeholder": "ignorada: vem do E-mail do projeto",
   "describe.provided.label": "fornecida pelo E-mail do projeto — o container recebe o valor do e-mail",
+  "describe.provided.labelDockerfile": "fornecida pelo E-mail do projeto — preencher aqui substitui",
   "describe.provided.placeholder": "fornecida pelo painel",
   "describe.example.label": "do {file} (o app pode ler por env_file)",
   "describe.example.placeholder": "do {file}",
@@ -73,6 +74,11 @@ export default {
   "provided.help":
     "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Num projeto compose, o container recebe sempre o valor do e-mail: uma variável salva aqui com o nome padrão (ex.: SMTP_HOST) só vale na interpolação do compose (${VAR} no .env). As ligadas também vêm sempre do e-mail.",
   // ProjectEnvCard: aviso "o e-mail do projeto preenche estas variáveis"
+  "email.title.manual": "Variáveis de e-mail que o painel não preenche: faltam à mão",
+  "email.collision.directDockerfile":
+    "{name} está preenchida aqui e substitui o valor do e-mail do projeto no deploy (o container recebe o valor salvo). Apague a linha para usar o valor do e-mail.",
+  "provided.helpDockerfile":
+    "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Num projeto com Dockerfile, uma variável salva aqui com o nome padrão (ex.: SMTP_HOST) substitui o valor do e-mail; as ligadas vêm sempre do e-mail.",
   "email.title": "O e-mail do projeto preenche estas variáveis obrigatórias por você",
   "email.off.intro":
     "O projeto exige {names}. O E-mail do projeto cria a caixa e entrega SMTP_HOST, SMTP_PORT (587, STARTTLS), SMTP_USER e a senha no deploy: você não precisa digitar essas variáveis à mão.",

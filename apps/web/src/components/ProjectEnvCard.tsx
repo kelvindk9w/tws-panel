@@ -115,6 +115,7 @@ function describe(
   provided: boolean,
   linkedTo?: string,
   exampleFile?: string,
+  compose = true,
 ): { label: string; placeholder: string } | null {
   if (linkedTo) {
     // a ligação vence o valor salvo aqui (deploy-service.ts, envForProject)
@@ -125,7 +126,7 @@ function describe(
   }
   if (provided) {
     return {
-      label: t("env.describe.provided.label"),
+      label: t(compose ? "env.describe.provided.label" : "env.describe.provided.labelDockerfile"),
       placeholder: t("env.describe.provided.placeholder"),
     };
   }
@@ -454,6 +455,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     );
   }
 
+  // compose: o override do e-mail vem por cima; Dockerfile: o valor salvo aqui vence o do e-mail
+  const isCompose = project.detection?.type === "compose";
   const staticSite = project.detection?.type === "static" || project.detection?.type === "static-node";
   const providedSet = new Set(provided);
   const composeByName = new Map((composeVars ?? []).map((v) => [v.name, v]));
@@ -607,6 +610,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           <EnvEmailAdvice
             projectId={project.id}
             advice={advice}
+            compose={isCompose}
             links={emailConfig?.envLinks ?? {}}
             onLinked={onEmailLinked}
             onAddRow={addManualRow}
@@ -637,7 +641,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             )}
             <p className="mt-2 text-muted-foreground">
               <Trans
-                k="env.provided.help"
+                k={isCompose ? "env.provided.help" : "env.provided.helpDockerfile"}
                 components={{
                   link: (c) => (
                     <Link to={`/projects/${project.id}/email`} className="text-sky-400 underline">
@@ -854,7 +858,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   }
                   const { row: v, index: i } = line;
                   const name = v.key.trim();
-                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name));
+                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name), isCompose);
                   const shown = visible.has(v.id);
                   const urgent = isMissing(v);
                   const fromExample = isExampleMissing(v);

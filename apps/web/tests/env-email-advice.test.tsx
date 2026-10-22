@@ -78,10 +78,10 @@ function serve(w: World) {
   });
 }
 
-function renderCard() {
+function renderCard(project: Project = PROJECT) {
   return render(
     <MemoryRouter>
-      <ProjectEnvCard project={PROJECT} />
+      <ProjectEnvCard project={project} />
     </MemoryRouter>,
   );
 }
@@ -312,6 +312,53 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     serve({ emailFails: true });
     renderCard();
     expect(await screen.findByTestId("env-email-item-SMTP_HOST")).toHaveTextContent(/não deu para saber/);
+  });
+
+  it("compose x Dockerfile: o rótulo, a ajuda e a colisão dizem quem vence em cada tipo", async () => {
+    const collide = {
+      email: emailOn({ SMTP_PASSWORD: "SMTP_PASS", SMTP_FROM: "MAIL_FROM" }),
+      vars: [
+        { key: "SMTP_HOST", value: "smtp.outro.example.com" },
+        { key: "SMTP_SECURE", value: "false" },
+      ],
+    };
+    serve(collide);
+    renderCard();
+    expect(await screen.findByTestId("env-row-SMTP_HOST")).toHaveTextContent(/o container recebe o valor do e-mail/);
+    expect(screen.getByTestId("env-provided")).toHaveTextContent(/Num projeto compose/);
+    expect(screen.getByTestId("env-email-collision-SMTP_HOST")).toHaveTextContent(/só vale na interpolação do compose/);
+    cleanup();
+
+    serve(collide);
+    const dockerfile = { ...PROJECT, detection: { type: "dockerfile" } } as unknown as Project;
+    renderCard(dockerfile);
+    const row = await screen.findByTestId("env-row-SMTP_HOST");
+    expect(row).toHaveTextContent(/preencher aqui substitui/);
+    expect(row).not.toHaveTextContent(/o container recebe o valor do e-mail/);
+    expect(screen.getByTestId("env-provided")).toHaveTextContent(/Num projeto com Dockerfile/);
+    expect(screen.getByTestId("env-email-collision-SMTP_HOST")).toHaveTextContent(/o container recebe o valor salvo/);
+  });
+
+  it("ligar duas vezes seguidas: o segundo PUT inclui a primeira ligação", async () => {
+    serve({ email: emailOn() });
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Ligar SMTP_PASSWORD ao valor SMTP_PASS" }));
+    await waitFor(() => expect(puts("/email/links")).toHaveLength(1));
+    const second = await screen.findByRole("button", { name: "Ligar SMTP_FROM ao valor MAIL_FROM" });
+    fireEvent.click(second);
+    await waitFor(() => expect(puts("/email/links")).toHaveLength(2));
+    expect(JSON.parse(String((puts("/email/links")[1]![1] as RequestInit).body)).links).toEqual({
+      SMTP_PASSWORD: "SMTP_PASS",
+      SMTP_FROM: "MAIL_FROM",
+    });
+  });
+
+  it("só variável manual faltando: o título não promete que o e-mail preenche", async () => {
+    serve({ email: EMAIL_OFF, compose: [{ name: "SMTP_SECURE", required: true, defaultValue: null }] });
+    renderCard();
+    const aviso = await screen.findByTestId("env-email-advice");
+    expect(aviso).not.toHaveTextContent(/preenche estas variáveis obrigatórias por você/);
+    expect(aviso).toHaveTextContent(/o painel não preenche/);
   });
 
   it("em inglês: textos, botões e dica traduzidos", async () => {
