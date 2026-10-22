@@ -11,6 +11,11 @@ Projeto cassino com e-mail habilitado falhava no deploy: "service web declares m
 - Log do deploy: continua "Env vars injetadas nos serviços"; acrescenta "Rede de e-mail paas-mail ligada em: ..." e "E-mail: ... compartilham a rede de X (network_mode) e usam a dela...".
 - Containers já rodando (migração/ligar projeto): os que compartilham a rede de outro não recebem `network connect` (o Docker recusa) e não entram na contagem.
 
+## Revisão (3 pontos)
+- `network_mode` que chega por `extends` (inclusive de outro arquivo) ou por merge `<<: *âncora` também é reconhecido: o engine roda o `docker compose config` do compose SEM o override (depois da checagem do `.env`, que nunca segue link) e o override decide pelo modelo resolvido. Se esse config falhar, vale o YAML cru com merge e `extends` do mesmo arquivo; `extends` de outro arquivo só o modelo resolvido enxerga.
+- Os testes que chamam `docker compose` real são pulados quando ele não existe; os de modelo/parse rodam sempre.
+- O guardrail de rede reconhece o dono do namespace do proxy (seguindo `network_mode: service:X`) como o serviço que o painel liga à rede do proxy; outro serviço na rede do proxy continua barrado.
+
 ## Testes
 Unitários para cada tipo de `network_mode`, cadeia, ciclo, dono inexistente; integração com compose no formato do cassino validada com `docker compose config` real; engine confere override e logs.
 

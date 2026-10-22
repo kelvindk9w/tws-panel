@@ -731,7 +731,16 @@ export class DeployEngine {
     // e-mail habilitado (SMTP_HOST injetado): esses serviços entram na rede de e-mail, a única que alcança o Stalwart (A4)
     // Quem usa `network_mode` não pode ter `networks` (o compose recusa): o dono do namespace entra no lugar.
     const composeContent = await readFile(path.join(src, composeFile), "utf8");
-    const mailPlan = extraEnv.SMTP_HOST ? mailNetworkTargets(composeContent, envServices) : null;
+    // modelo resolvido SEM o override (merge, extends e include aplicados): decide quem tem network_mode.
+    // O compose só lê o ambiente depois da checagem do .env (nunca segue link, A2).
+    const workDirEnv = projectWorkDir(this.ctx, project);
+    await mkdir(workDirEnv, { recursive: true });
+    const env = await writeProjectDotenv(src, workDirEnv, dotenv);
+    await this.assertInputsSafe(src, [".env"]);
+    await this.writeComposeEnv(project, src);
+    const pre = await loadCanonicalCompose(this.composeArgs(project, src, false));
+    const resolved = pre.ok ? pre.model : undefined;
+    const mailPlan = extraEnv.SMTP_HOST ? mailNetworkTargets(composeContent, envServices, resolved) : null;
     const mailServices = mailPlan?.targets ?? [];
     if (mailServices.length > 0) await this.ensureMailNetwork();
 
@@ -745,6 +754,7 @@ export class DeployEngine {
       network: PAAS_NETWORK,
       mailNetwork: PAAS_MAIL_NETWORK,
       mailServices,
+      ...(resolved !== undefined ? { resolved } : {}),
       env: extraEnv,
       envServices,
       ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
@@ -787,7 +797,6 @@ export class DeployEngine {
     }
 
     // Variáveis do projeto → .env do compose (interpolação ${VAR} e env_file).
-    const env = await writeProjectDotenv(src, workDir, dotenv);
     const dotenvKeys = Object.keys(dotenv);
     if (dotenvKeys.length > 0) {
       onLog(
@@ -882,7 +891,7 @@ export class DeployEngine {
     onLog("Site estático: o servidor web não usa fuso horário; nada a recriar.\n");
   }
 
-  private composeArgs(project: Project, src: string): string[] {
+  private composeArgs(project: Project, src: string, withOverride = true): string[] {
     const composeFile = project.detection?.composeFile ?? "compose.yml";
     const workDir = projectWorkDir(this.ctx, project);
     const overrideFile = path.join(workDir, "paas.override.yml");
@@ -899,8 +908,7 @@ export class DeployEngine {
       src,
       "-f",
       path.join(src, composeFile),
-      "-f",
-      overrideFile,
+      ...(withOverride ? ["-f", overrideFile] : []),
     ];
   }
 

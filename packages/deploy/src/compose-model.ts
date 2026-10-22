@@ -630,7 +630,20 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
   }
   const containerName = str(service.container_name);
   if (containerName && !skip(containerName) && isReservedName(containerName, opts, name)) reserved("usa container_name", containerName);
-  const isProxy = opts.proxyService !== undefined && name === opts.proxyService;
+  // proxy em network_mode: o override liga à rede do proxy o dono do namespace, que passa a ser o proxy
+  const proxyOwner = (() => {
+    let current = opts.proxyService;
+    const seen = new Set<string>();
+    while (current !== undefined && !seen.has(current)) {
+      seen.add(current);
+      const svc = services[current];
+      const m = isDict(svc) ? /^service:(.+)$/.exec(str(svc.network_mode)) : null;
+      if (!m) return current;
+      current = m[1]!.trim();
+    }
+    return opts.proxyService;
+  })();
+  const isProxy = opts.proxyService !== undefined && (name === opts.proxyService || name === proxyOwner);
   if (isProxy) {
     // o nome do serviço e o hostname viram nomes na rede do proxy
     if (isReservedName(name, opts, name)) reserved("tem o nome de serviço", name);

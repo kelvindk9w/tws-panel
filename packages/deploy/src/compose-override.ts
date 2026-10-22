@@ -25,6 +25,8 @@ export interface ComposeOverrideOptions {
   mailNetwork?: string;
   /** Serviços de um projeto com e-mail habilitado (os que recebem o SMTP_*). */
   mailServices?: string[];
+  /** Modelo resolvido do compose (docker compose config, sem o override): decide quem tem network_mode. */
+  resolved?: unknown;
   env?: Record<string, string>;
   envServices?: string[];
   /** Trocas da porta do servidor por serviço (Project.portOverrides). */
@@ -72,15 +74,46 @@ export function hardenComposeModel(model: unknown): unknown {
 
 type OwnerResult = { kind: "self" } | { kind: "owner"; name: string } | { kind: "none" };
 
-function composeServiceDefs(compose: string): Record<string, Record<string, unknown>> {
+type ServiceDefs = Record<string, Record<string, unknown>>;
+
+function servicesOf(doc: unknown): ServiceDefs {
+  const services = (doc as { services?: unknown } | null)?.services;
+  if (typeof services !== "object" || services === null || Array.isArray(services)) return {};
+  return services as ServiceDefs;
+}
+
+/**
+ * Serviços com o que importa para as redes. Com o modelo resolvido (saída do
+ * `docker compose config`: merge, extends — inclusive de outro arquivo — e
+ * include já aplicados) vale ele. Sem ele, o YAML cru com merge `<<:` e
+ * `extends` do mesmo arquivo resolvidos (o de outro arquivo só o modelo resolvido alcança).
+ */
+function composeServiceDefs(compose: string, resolved?: unknown): ServiceDefs {
+  if (resolved !== undefined) {
+    const fromModel = servicesOf(resolved);
+    if (Object.keys(fromModel).length > 0) return fromModel;
+  }
+  let raw: ServiceDefs;
   try {
-    const doc = parse(compose) as { services?: unknown } | null;
-    const services = doc?.services;
-    if (typeof services !== "object" || services === null || Array.isArray(services)) return {};
-    return services as Record<string, Record<string, unknown>>;
+    raw = servicesOf(parse(compose, { merge: true }));
   } catch {
     return {};
   }
+  const out: ServiceDefs = {};
+  for (const [name, def] of Object.entries(raw)) {
+    let mode = def?.network_mode;
+    const seen = new Set<string>([name]);
+    let ext = def?.extends;
+    while (mode === undefined && ext !== undefined) {
+      const target = typeof ext === "string" ? ext : typeof ext === "object" && ext !== null && (ext as { file?: unknown }).file === undefined ? (ext as { service?: unknown }).service : undefined;
+      if (typeof target !== "string" || seen.has(target) || !(target in raw)) break;
+      seen.add(target);
+      mode = raw[target]?.network_mode;
+      ext = raw[target]?.extends;
+    }
+    out[name] = mode === undefined ? (def ?? {}) : { ...(def ?? {}), network_mode: mode };
+  }
+  return out;
 }
 
 /**
@@ -89,7 +122,7 @@ function composeServiceDefs(compose: string): Record<string, Record<string, unkn
  * rede de X (segue a cadeia). `host`/`none`/`bridge`/`container:...`, dono
  * inexistente e ciclo não têm dono ("none"): nada é gerado para eles.
  */
-function networkOwner(defs: Record<string, Record<string, unknown>>, name: string): OwnerResult {
+function networkOwner(defs: ServiceDefs, name: string): OwnerResult {
   const seen = new Set<string>();
   let current = name;
   for (;;) {
@@ -115,8 +148,8 @@ export interface MailNetworkTargets {
 }
 
 /** Resolve os serviços do e-mail para os que podem receber `networks` (dono do namespace no lugar de quem o compartilha). */
-export function mailNetworkTargets(compose: string, requested: readonly string[]): MailNetworkTargets {
-  const defs = composeServiceDefs(compose);
+export function mailNetworkTargets(compose: string, requested: readonly string[], resolved?: unknown): MailNetworkTargets {
+  const defs = composeServiceDefs(compose, resolved);
   const targets: string[] = [];
   const delegated: Record<string, string> = {};
   const skipped: string[] = [];
@@ -135,7 +168,7 @@ export function mailNetworkTargets(compose: string, requested: readonly string[]
 
 export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
   const env = opts.env ?? {};
-  const defs = composeServiceDefs(opts.compose);
+  const defs = composeServiceDefs(opts.compose, opts.resolved);
   const services: Record<string, Record<string, unknown>> = {};
   const proxyOwner = networkOwner(defs, opts.proxyService);
   if (proxyOwner.kind !== "none") {
@@ -152,7 +185,7 @@ export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
     services[name] = { ...(services[name] ?? {}), environment: { ...current, ...extra } };
   }
 
-  const mailServices = opts.mailNetwork ? mailNetworkTargets(opts.compose, opts.mailServices ?? []).targets : [];
+  const mailServices = opts.mailNetwork ? mailNetworkTargets(opts.compose, opts.mailServices ?? [], opts.resolved).targets : [];
   for (const name of mailServices) {
     const current = (services[name]?.networks as Record<string, unknown> | undefined) ?? { default: null };
     services[name] = { ...(services[name] ?? {}), networks: { ...current, [opts.mailNetwork!]: null } };
