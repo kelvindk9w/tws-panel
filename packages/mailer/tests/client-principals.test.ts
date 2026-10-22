@@ -123,6 +123,50 @@ describe("StalwartClient.listPrincipalsChecked", () => {
   });
 });
 
+describe("StalwartClient.setMailboxMainPassword", () => {
+  function stalwart(secrets: unknown) {
+    const patches: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") {
+          patches.push(JSON.parse(String(init.body)));
+          return new Response(`{"data":null}`, { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: { secrets } }), { status: 200 });
+      }),
+    );
+    return patches;
+  }
+
+  it("troca só a senha principal e preserva senhas de app e 2FA", async () => {
+    const patches = stalwart(["senha-velha", "$app$leitor$hash", "otpauth://totp/x?secret=ABC"]);
+    await client.setMailboxMainPassword("a@x.example.com", "senha-nova-forte-1");
+    expect(patches).toEqual([[{ action: "set", field: "secrets", value: ["senha-nova-forte-1", "$app$leitor$hash", "otpauth://totp/x?secret=ABC"] }]]);
+  });
+
+  it("sem nada a preservar (texto único, lista vazia ou sem o campo): só a senha nova", async () => {
+    for (const secrets of ["senha-velha", [], undefined]) {
+      const patches = stalwart(secrets);
+      await client.setMailboxMainPassword("a@x.example.com", "senha-nova-forte-1");
+      expect(patches).toEqual([[{ action: "set", field: "secrets", value: ["senha-nova-forte-1"] }]]);
+    }
+  });
+
+  it("não consegue ler o que a caixa tem: falha sem trocar nada (não apaga 2FA no escuro)", async () => {
+    const patches: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") patches.push(1);
+        return new Response(`{"detail":"boom"}`, { status: 500 });
+      }),
+    );
+    await expect(client.setMailboxMainPassword("a@x.example.com", "senha-nova-forte-1")).rejects.toBeInstanceOf(StalwartApiError);
+    expect(patches).toEqual([]);
+  });
+});
+
 describe("StalwartClient.mailboxPasswordMatches", () => {
   const reply = (data: unknown) => vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data }), { status: 200 })));
 
@@ -144,6 +188,22 @@ describe("StalwartClient.mailboxPasswordMatches", () => {
   it.each([["$6$salt$hash"], ["$argon2id$v=19$m=1,t=1,p=1$x$y"], ["{SHA}abc="], ["$app$nome$hash"]])("só hash (%s): não dá para comparar, null", async (secret) => {
     reply({ secrets: [secret] });
     expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-do-painel")).toBeNull();
+  });
+
+  it("senha de app ($app$) e 2FA (otpauth://) não contam: senha em texto diferente continua sendo false", async () => {
+    reply({ secrets: ["senha-real-da-caixa", "$app$leitor$hash", "otpauth://totp/x?secret=ABC"] });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-errada-qualquer")).toBe(false);
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-real-da-caixa")).toBe(true);
+  });
+
+  it("só senha de app e 2FA, sem senha principal legível: null", async () => {
+    reply({ secrets: ["$app$leitor$hash", "otpauth://totp/x?secret=ABC"] });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-qualquer-12")).toBeNull();
+  });
+
+  it("senha principal em hash ao lado de senha de app: null", async () => {
+    reply({ secrets: ["$6$salt$hash", "$app$leitor$hash"] });
+    expect(await client.mailboxPasswordMatches("a@x.example.com", "senha-qualquer-12")).toBeNull();
   });
 
   it("sem o campo de senhas, lista vazia ou corpo vazio: null", async () => {

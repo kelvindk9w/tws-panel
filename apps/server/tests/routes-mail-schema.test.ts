@@ -92,6 +92,7 @@ beforeEach(async () => {
   deployService = {
     setEnvProvider: vi.fn(),
     setMailHostsProvider: vi.fn(),
+    setProjectRemovedListener: vi.fn(),
     refreshProxy: vi.fn(async () => undefined),
     getProject: vi.fn(async () => PROJECT),
   };
@@ -581,6 +582,113 @@ describe("POST /api/projects/:id/email — senha da caixa do projeto", () => {
     expect(enable).toHaveBeenCalledWith(expect.anything(), "exemplo.com", { generatePassword: true });
     expect(res.json()).toMatchObject({ email: { mailbox: "loja@exemplo.com" }, generatedPassword: "Gerada-Forte_123abcXYZ.9" });
     expect(res.headers["cache-control"]).toBe("no-store");
+  });
+});
+
+/**
+ * Usar uma caixa que já existe como a do e-mail do projeto, e soltar o e-mail
+ * quando o projeto é removido.
+ */
+describe("POST /api/projects/:id/email — caixa que já existe", () => {
+  const config = { enabled: true, domain: "exemplo.com", mailbox: "contato@exemplo.com", mailFrom: "contato@exemplo.com", env: {} };
+
+  it("senha atual: repassa ao serviço, informa se foi conferida, audita sem a senha", async () => {
+    const connect = spyOn("connectExistingMailbox").mockResolvedValue({ email: config, passwordVerified: true });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", fromLocalPart: "contato", useExistingMailbox: "current_password", password: "senha-atual-da-caixa-1", fromName: "Contato" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(connect).toHaveBeenCalledWith(expect.anything(), "exemplo.com", "contato", {
+      mode: "current_password",
+      password: "senha-atual-da-caixa-1",
+      fromName: "Contato",
+    });
+    expect(res.json()).toMatchObject({ passwordVerified: true });
+    expect(res.body).not.toContain("senha-atual-da-caixa-1");
+    await ctx.auditService.flush();
+    const entries = JSON.stringify((await ctx.auditService.list()).entries);
+    expect(entries).toContain("mail.project.mailbox.connect");
+    expect(entries).toContain("contato@exemplo.com");
+    expect(entries).not.toContain("senha-atual-da-caixa-1");
+  });
+
+  it("trocar a senha: devolve a gerada uma vez, sem cache", async () => {
+    spyOn("connectExistingMailbox").mockResolvedValue({ email: config, generatedPassword: "Gerada-Forte_123abcXYZ.9" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", fromLocalPart: "contato", useExistingMailbox: "replace_password" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ generatedPassword: "Gerada-Forte_123abcXYZ.9" });
+    expect(res.headers["cache-control"]).toBe("no-store");
+    await ctx.auditService.flush();
+    const entries = JSON.stringify((await ctx.auditService.list()).entries);
+    expect(entries).toContain("mail.project.mailbox.connect");
+    expect(entries).not.toContain("Gerada-Forte_123abcXYZ.9");
+  });
+
+  it("sem a caixa (fromLocalPart) ou com modo desconhecido: 400 e o serviço nem é chamado", async () => {
+    const connect = spyOn("connectExistingMailbox");
+    for (const payload of [
+      { domain: "exemplo.com", useExistingMailbox: "keep_password" },
+      { domain: "exemplo.com", fromLocalPart: "contato", useExistingMailbox: "apagar_tudo" },
+    ]) {
+      const res = await app.inject({ method: "POST", url: "/api/projects/p1/email", headers: auth, payload });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("erro do serviço (caixa de outro projeto) sai como 409 com a mensagem", async () => {
+    spyOn("connectExistingMailbox").mockRejectedValue(
+      Object.assign(new Error("A caixa contato@exemplo.com já é usada pelo projeto Outra."), { statusCode: 409, code: "mailbox_in_use" }),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/email",
+      headers: auth,
+      payload: { domain: "exemplo.com", fromLocalPart: "contato", useExistingMailbox: "keep_password" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "mailbox_in_use" });
+  });
+});
+
+describe("GET /api/projects/:id/email/mailboxes", () => {
+  it("lista as caixas usáveis do domínio", async () => {
+    const list = spyOn("listUsableMailboxes").mockResolvedValue([
+      { address: "contato@exemplo.com", localPart: "contato", kind: "user", passwordKnown: false },
+    ]);
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/email/mailboxes?domain=exemplo.com", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ mailboxes: [{ address: "contato@exemplo.com", localPart: "contato", kind: "user", passwordKnown: false }] });
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ id: "p1" }), "exemplo.com");
+  });
+
+  it("domínio malformado ou ausente: 400; projeto inexistente: 404", async () => {
+    const list = spyOn("listUsableMailboxes");
+    expect((await app.inject({ method: "GET", url: "/api/projects/p1/email/mailboxes", headers: auth })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/projects/p1/email/mailboxes?domain=a;b", headers: auth })).statusCode).toBe(400);
+    deployService.getProject!.mockResolvedValueOnce(undefined as never);
+    expect((await app.inject({ method: "GET", url: "/api/projects/nada/email/mailboxes?domain=exemplo.com", headers: auth })).statusCode).toBe(404);
+    expect(list).not.toHaveBeenCalled();
+  });
+});
+
+describe("remover um projeto solta o e-mail dele", () => {
+  it("o plugin de e-mail registra o ouvinte, que chama releaseProjectEmail; a falha do serviço sobe para o deploy tratar", async () => {
+    const release = spyOn("releaseProjectEmail").mockResolvedValue(undefined);
+    expect(deployService.setProjectRemovedListener).toHaveBeenCalledOnce();
+    const listener = deployService.setProjectRemovedListener!.mock.calls[0]![0] as (id: string) => Promise<void>;
+    await listener("p1");
+    expect(release).toHaveBeenCalledWith("p1");
+    release.mockRejectedValueOnce(new Error("fora"));
+    await expect(listener("p1")).rejects.toThrow("fora");
   });
 });
 

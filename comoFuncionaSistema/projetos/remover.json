@@ -32,6 +32,7 @@
     "4. Remove o projeto do array em memória (this.projects) ANTES de recalcular o Caddy, para que o domínio removido não apareça no novo Caddyfile.",
     "5. engine.syncCaddy(this.projects) — best-effort: se falhar, apenas loga 'Aviso: não foi possível recarregar o Caddy após a remoção.' e continua (não propaga erro).",
     "6. removeProjectWorkDir(projeto, outros, {deleteSource}) (lote 6, A5): só apaga o que o painel cria; em pasta antiga compartilhada deixa os arquivos do usuário e os lista no log; os paas.* saem sempre; entrada que coincide com a de outro projeto fica e é avisada.",
+    "6b. Solta o e-mail do projeto (DeployService.setProjectRemovedListener → MailService.releaseProjectEmail): tira o registro de e-mail e as ligações de variáveis (envLinks); a caixa e as mensagens NÃO são apagadas (a caixa criada para o projeto segue 'de projeto', sem uso, com a senha guardada; a que já existia antes volta a ser de usuário). Falha do servidor de e-mail só gera um aviso no log da remoção e no log do painel; o que sobrar é solto na próxima abertura do e-mail (órfãos).",
     "7. Persiste data/projects.json sem o projeto removido."
   ],
   "dependencias": [
@@ -44,7 +45,8 @@
     "regrava e recarrega o Caddyfile central sem o domínio do projeto",
     "opcionalmente apaga data/projects/<slug>/ do disco (irreversível)",
     "grava data/projects.json sem o projeto",
-    "auditoria: project.delete"
+    "auditoria: project.delete",
+    "solta o vínculo de e-mail do projeto em data/mail/mail.json (a caixa fica)"
   ],
   "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (remove(), fluxo de confirmação em 2 passos na 'Zona de perigo' com checkbox opcional 'Apagar também o código-fonte')"],
   "testes": ["apps/server/tests/routes-projects.test.ts"],
