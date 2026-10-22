@@ -68,6 +68,10 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Enviar e-mail de teste a partir de qualquer caixa.
 - E-mail do projeto com caixa própria, nome de exibição, senha gerada pelo painel e ligação com as
   variáveis do projeto.
+- Nome de exibição (opcional) em toda caixa: ao criar na página do domínio, na aba Caixas do projeto
+  e ao ativar o e-mail do projeto, e **Alterar nome de exibição** depois, sem mexer em senha, 2FA,
+  senhas de app, apelidos nem mensagens. O nome aparece nas listas e vale no `From` do e-mail de
+  teste e no webmail; na caixa de envio do projeto é o `MAIL_FROM_NAME` (vale no próximo deploy).
 - Checklist de DNS com valores copiáveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de

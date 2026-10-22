@@ -1536,9 +1536,9 @@ export class MailService {
     this.takeTestSlot();
 
     // Da caixa de um projeto, o teste sai com o nome de exibição dele
-    // (validação real: no Gmail aparecia só "cassino").
+    // (validação real: no Gmail aparecia só "cassino"); das demais, com o nome da própria caixa, se tiver.
     const owner = Object.values(this.data.projects).find((p) => p.mailbox === from);
-    const fromName = owner?.fromName ?? undefined;
+    const fromName = owner?.fromName ?? mailbox.displayName ?? undefined;
 
     const id = randomBytes(8).toString("hex");
     // O ENVID é segredo do painel (só no envelope SMTP e na memória): quem recebe

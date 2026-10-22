@@ -76,6 +76,7 @@
   "observacoes": [
     "03/10/2026 (validação real do dono do produto): ele precisava das partes Caixas e DNS do domínio dentro da seção E-mail do projeto, para conferir e configurar depois sem sair do projeto e criar novas caixas (ex.: suporte@ do mesmo domínio).",
     "Na aba Caixas, a troca de senha é a do painel do domínio (digitada duas vezes). A troca pela aba Remetente continua oferecendo 'Gerar uma senha forte para mim'.",
-    "03/10/2026 (validação real do dono do produto): a aba Caixas do projeto listava todas as caixas do domínio. 'Caixa do projeto' passou a ser a de envio dele e as criadas pela aba Caixas dele (projectId gravado na caixa). Caixas antigas sem dono: no projeto aparece só a de envio dele; na página do domínio, como antes. Remover e trocar senha continuam iguais."
+    "03/10/2026 (validação real do dono do produto): a aba Caixas do projeto listava todas as caixas do domínio. 'Caixa do projeto' passou a ser a de envio dele e as criadas pela aba Caixas dele (projectId gravado na caixa). Caixas antigas sem dono: no projeto aparece só a de envio dele; na página do domínio, como antes. Remover e trocar senha continuam iguais.",
+    "22/10/2026: o campo Nome de exibição é o componente compartilhado DisplayNameField (components/mail/DisplayNameField.tsx), igual ao da criação de caixa; valida com normalizeDisplayName e bloqueia Ativar/Salvar com nome inválido. A visão ativada mostra de onde vem o From do app (MAIL_FROM_NAME + MAIL_FROM, vale no próximo deploy). A aba Caixas lista o nome de cada caixa e oferece Alterar nome de exibição (PUT com projectId)."
   ]
 }

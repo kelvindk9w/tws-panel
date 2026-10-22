@@ -641,6 +641,13 @@ Precisa da [Etapa 4](#etapa-4) pronta.
 **O que conferir:** o cartão mostra `SMTP_HOST = mail.envio.example.com`. Os valores `SMTP_*` e
 `MAIL_*` entram sozinhos no deploy. Os valores só chegam ao app no próximo deploy.
 
+**Nome de exibição.** É opcional (até 80 caracteres, sem quebra de linha, `<`, `>`, aspas nem barra
+invertida). Em branco, vale o nome do projeto. É o que aparece para quem recebe, junto do endereço, e
+é entregue ao app como `MAIL_FROM_NAME`: o `From` que o app usa é o `MAIL_FROM_NAME` com o
+`MAIL_FROM`. Para trocar depois, abra a aba **Caixas** do projeto e use **Alterar nome de exibição**
+na caixa (a senha, o 2FA e as mensagens não mudam); a mudança chega ao app no próximo deploy. As
+outras caixas do projeto e as da página **E-mail** também aceitam um nome ao criar.
+
 **Usar uma caixa que já existe.** Se a caixa já foi criada (por exemplo, configurada no webmail), no passo 2 escolha
 **Usar uma caixa que já existe**, selecione a caixa na lista e decida a senha:
 
