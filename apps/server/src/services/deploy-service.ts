@@ -217,6 +217,8 @@ export class DeployService {
   private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** De onde vem cada variável ligada (nome → valor do e-mail), só nomes. */
   private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
+  /** Quem solta o e-mail do projeto removido (módulo de e-mail); a falha dele não impede a remoção. */
+  private projectRemovedListener: ((projectId: string) => Promise<void>) | null = null;
   /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
   private mailHostsProvider: (() => Promise<string[]>) | null = null;
   /** Webmail ativado (upstream e IPs bloqueados), registrado pela rota de e-mail. */
@@ -429,6 +431,14 @@ export class DeployService {
   /** Registra quem informa de onde vem cada variável ligada ao e-mail (SMTP_SENHA ← SMTP_PASS). */
   setEnvLinkSourcesProvider(provider: (project: Project) => Promise<Record<string, ProjectEmailValueKey>>): void {
     this.envLinkSourcesProvider = provider;
+  }
+
+  /**
+   * Registra quem é avisado quando um projeto é removido: o módulo de e-mail solta o vínculo dele (a caixa e as
+   * mensagens ficam). Falha do ouvinte vai para o log da remoção e não a impede.
+   */
+  setProjectRemovedListener(listener: (projectId: string) => Promise<void>): void {
+    this.projectRemovedListener = listener;
   }
 
   /** Registra quem informa os hosts de e-mail que o proxy central precisa servir. */
@@ -912,6 +922,15 @@ export class DeployService {
     }
     // As variáveis também são segredos do projeto: saem com ele.
     await this.env.remove(project.id);
+    // O e-mail do projeto é solto (a caixa e as mensagens ficam), senão o endereço ficaria "preso" ao projeto apagado.
+    try {
+      await this.projectRemovedListener?.(project.id);
+    } catch {
+      onLog(
+        "Aviso: não foi possível soltar o e-mail do projeto agora (a caixa e as mensagens não foram mexidas). " +
+          "Ele é solto na próxima vez que o e-mail do painel for aberto.\n",
+      );
+    }
     // A credencial é um segredo com o mesmo ciclo de vida do projeto: sem
     // isto, o token sobreviveria ao projeto no disco — passivo, não recurso.
     if (await this.credentials.remove(project.id)) {

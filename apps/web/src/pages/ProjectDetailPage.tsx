@@ -1,4 +1,5 @@
 import { IpInAddressHint } from "@/components/IpInAddress";
+import { ActionNotice, NoticeRegion } from "@/components/ActionNotice";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router";
 import type {
@@ -8,6 +9,7 @@ import type {
   GuardrailReport,
   GuardrailReportResponse,
   ProjectResponse,
+  ProjectStatus,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
@@ -155,6 +157,30 @@ function pollProblemText(err: unknown, deploying: boolean): string {
   return tGlobal("projects.detail.poll.failed", { detail });
 }
 
+type LifecycleKind = "stop" | "start";
+
+/** Quantas vezes (e de quanto em quanto tempo) o painel confere o estado real depois de parar/iniciar. */
+const CONFIRM_ATTEMPTS = 20;
+const CONFIRM_INTERVAL_MS = 1_500;
+/** Para confirmar, o estado esperado precisa aparecer em duas leituras seguidas (com este intervalo). */
+const STABLE_INTERVAL_MS = 1_000;
+const STABLE_READS = 2;
+
+/** Linhas do log da remoção que indicam algo que NÃO foi removido. */
+function removalLeftovers(log: unknown): string[] {
+  if (typeof log !== "string") return [];
+  return log.split("\n").filter((l) => /^(NÃO removido|Aviso|compose down:)/.test(l.trim()));
+}
+
+function wasPublished(p: ProjectResponse["project"]): boolean {
+  return p.lastDeployStatus === "success" || (p.deployedSource ?? null) !== null;
+}
+
+/** Parar vale quando nenhum container roda; iniciar, só com o projeto "em execução". */
+function reachedExpected(kind: LifecycleKind, status: ProjectStatus): boolean {
+  return kind === "stop" ? status === "stopped" || status === "error" || status === "created" : status === "running";
+}
+
 /** Seções do projeto — cada uma com o seu endereço (/projects/:id/:seção). */
 const PROJECT_SECTIONS = [
   { key: "overview", label: "projects.detail.nav.overview", icon: LayoutDashboard },
@@ -189,6 +215,24 @@ export function ProjectDetailPage() {
   const deployingRef = useRef(false);
   const loadedRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // resultado de parar/iniciar: sucesso, ou "não consegui confirmar" (nunca sucesso sem conferir)
+  const [notice, setNotice] = useState<{
+    tone: "success" | "warning";
+    title?: string;
+    text: string;
+    recheck?: LifecycleKind;
+    /** sucesso que afirma um estado: sai de cena se o estado real deixar de bater */
+    confirms?: LifecycleKind;
+  } | null>(null);
+  const [retryKind, setRetryKind] = useState<LifecycleKind | "delete" | null>(null);
+  // instante da última leitura confirmada: respostas mais antigas do polling são ignoradas
+  const confirmedAt = useRef(0);
+  // "geração" da página: muda ao trocar de projeto/desmontar; resposta de uma geração antiga é descartada
+  const generation = useRef(0);
+  const busyRef = useRef(false);
+  const stopButton = useRef<HTMLButtonElement>(null);
+  const startButton = useRef<HTMLButtonElement>(null);
+  const focusNext = useRef<LifecycleKind | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteSource, setDeleteSource] = useState(false);
   const [guardrailReport, setGuardrailReport] = useState<GuardrailReport | null>(null);
@@ -205,12 +249,14 @@ export function ProjectDetailPage() {
 
   const refresh = useCallback(async (): Promise<{ job: DeployJob | null; rateLimited: boolean }> => {
     if (!id) return { job: null, rateLimited: false };
+    const startedAt = Date.now();
     try {
       const [project, jobList] = await Promise.all([
         apiFetch<ProjectResponse>(`/api/projects/${id}`),
         apiFetch<DeployJobListResponse>(`/api/projects/${id}/jobs`),
       ]);
-      setData(project);
+      // uma leitura iniciada antes da última confirmação pode estar velha: não a deixa desfazer a confirmação
+      if (startedAt >= confirmedAt.current) setData(project);
       setJobs(jobList.jobs);
       pollFailures.current = 0;
       deployingRef.current = project.status === "deploying";
@@ -225,6 +271,30 @@ export function ProjectDetailPage() {
       return { job: null, rateLimited: err instanceof ApiRequestError && err.status === 429 };
     }
   }, [id]);
+
+  // trocar de projeto (ou sair da página) invalida ações em andamento: o
+  // resultado tardio do projeto anterior não pode aparecer no novo
+  useEffect(() => {
+    generation.current += 1;
+    busyRef.current = false;
+    setBusy(null);
+    setNotice(null);
+    setRetryKind(null);
+    setError(null);
+    setConfirmDelete(false);
+    setData((d) => (d && d.project.id !== id ? null : d));
+    return () => {
+      generation.current += 1;
+    };
+  }, [id]);
+
+  // depois de parar/iniciar, o foco não pode ficar perdido no botão que desabilitou
+  useEffect(() => {
+    if (busy !== null || !focusNext.current) return;
+    const el = (focusNext.current === "start" ? startButton : stopButton).current;
+    focusNext.current = null;
+    if (el && !el.disabled && (!document.activeElement || document.activeElement === document.body)) el.focus();
+  }, [busy]);
 
   // polling do projeto + do job ativo (log de deploy com "streaming" por polling)
   useEffect(() => {
@@ -329,31 +399,188 @@ export function ProjectDetailPage() {
     if (id && section !== "overview" && section !== "deploys") navigate(`/projects/${id}/deploys`);
   }
 
-  async function action(kind: "stop" | "start") {
-    if (!id) return;
+  /**
+   * Confere o estado REAL do projeto na API (não confia só no "ok" do POST).
+   * Devolve "ok" quando chegou ao estado esperado, "diverged" (com o estado
+   * visto) se não chegou dentro do prazo, "unknown" se a consulta falhou e
+   * "stale" se o usuário já saiu deste projeto.
+   */
+  async function confirmState(
+    kind: LifecycleKind,
+    runId: number,
+  ): Promise<
+    { result: "ok"; published: boolean } | { result: "unknown" | "stale" } | { result: "diverged"; status: ProjectStatus }
+  > {
+    let last: ProjectStatus | null = null;
+    let streak = 0;
+    let published = true;
+    for (let i = 0; i < CONFIRM_ATTEMPTS; i++) {
+      try {
+        const res = await apiFetch<ProjectResponse>(`/api/projects/${id}`);
+        if (generation.current !== runId) return { result: "stale" };
+        confirmedAt.current = Date.now();
+        setData(res);
+        last = res.status;
+        published = wasPublished(res.project);
+        if (reachedExpected(kind, res.status)) {
+          streak += 1;
+          if (streak >= STABLE_READS) return { result: "ok", published };
+        } else {
+          streak = 0;
+        }
+      } catch {
+        if (generation.current !== runId) return { result: "stale" };
+        last = null;
+        streak = 0;
+      }
+      if (i < CONFIRM_ATTEMPTS - 1) {
+        await new Promise((r) => setTimeout(r, streak > 0 ? STABLE_INTERVAL_MS : CONFIRM_INTERVAL_MS));
+        if (generation.current !== runId) return { result: "stale" };
+      }
+    }
+    if (streak > 0) return { result: "ok", published };
+    return last ? { result: "diverged", status: last } : { result: "unknown" };
+  }
+
+  function reportConfirmation(kind: LifecycleKind, outcome: Awaited<ReturnType<typeof confirmState>>) {
+    if (outcome.result === "stale") return;
+    if (outcome.result === "ok") {
+      setNotice({
+        tone: "success",
+        title: t(kind === "stop" ? "projects.detail.stopDone.title" : "projects.detail.startDone.title"),
+        text: t(
+          kind === "start"
+            ? "projects.detail.startDone.body"
+            : outcome.published
+              ? "projects.detail.stopDone.body"
+              : "projects.detail.stopDone.bodyPending",
+        ),
+        confirms: kind,
+      });
+      focusNext.current = kind === "stop" ? "start" : "stop";
+    } else {
+      setNotice({
+        tone: "warning",
+        text:
+          outcome.result === "diverged"
+            ? t(kind === "stop" ? "projects.detail.notConfirmed.stop" : "projects.detail.notConfirmed.start", {
+                status: t(`dashboard.status.${outcome.status}` as Key),
+              })
+            : t("projects.detail.notConfirmed.unknown"),
+        recheck: kind,
+      });
+      focusNext.current = kind;
+    }
+  }
+
+  async function action(kind: LifecycleKind) {
+    if (!id || busyRef.current) return;
+    busyRef.current = true;
+    const runId = generation.current;
     setBusy(kind);
     setError(null);
+    setNotice(null);
+    setRetryKind(null);
     try {
       await apiFetch(`/api/projects/${id}/${kind}`, { method: "POST" });
-      await refresh();
+      if (generation.current !== runId) return;
+      reportConfirmation(kind, await confirmState(kind, runId));
     } catch (err) {
+      if (generation.current !== runId) return;
       setError(apiErrorText(err, kind === "stop" ? "projects.detail.stopError" : "projects.detail.startError"));
+      setRetryKind(kind);
+      focusNext.current = kind;
+      // timeout/queda de rede não provam que falhou: relê o estado real
+      if (!(err instanceof ApiRequestError) || err.status === 0 || err.status >= 500) {
+        await reconcileAfterError(kind, runId);
+      }
     } finally {
-      setBusy(null);
+      if (generation.current === runId) {
+        busyRef.current = false;
+        setBusy(null);
+      }
+    }
+  }
+
+  async function reconcileAfterError(kind: LifecycleKind, runId: number) {
+    try {
+      const res = await apiFetch<ProjectResponse>(`/api/projects/${id}`);
+      if (generation.current !== runId) return;
+      confirmedAt.current = Date.now();
+      setData(res);
+      if (!reachedExpected(kind, res.status)) return;
+      setError(null);
+      setRetryKind(null);
+      if (kind === "stop") {
+        reportConfirmation(kind, { result: "ok", published: wasPublished(res.project) });
+      } else {
+        setNotice({ tone: "warning", text: t("projects.detail.startErrorButRunning") });
+      }
+    } catch {
+      // sem leitura, o erro original continua valendo
+    }
+  }
+
+  /** "Verificar de novo": só reconfere o estado, sem repetir o pedido. */
+  async function recheck(kind: LifecycleKind) {
+    if (!id || busyRef.current) return;
+    busyRef.current = true;
+    const runId = generation.current;
+    setBusy(kind);
+    setNotice(null);
+    try {
+      reportConfirmation(kind, await confirmState(kind, runId));
+    } finally {
+      if (generation.current === runId) {
+        busyRef.current = false;
+        setBusy(null);
+      }
     }
   }
 
   async function remove() {
-    if (!id) return;
+    if (!id || busyRef.current) return;
+    busyRef.current = true;
+    const runId = generation.current;
+    const name = data?.project.name ?? "";
     setBusy("delete");
+    setError(null);
+    setRetryKind(null);
     try {
-      await apiFetch(`/api/projects/${id}?deleteSource=${deleteSource}`, { method: "DELETE" });
-      navigate("/");
+      const res = await apiFetch<{ ok?: boolean; log?: string } | undefined>(
+        `/api/projects/${id}?deleteSource=${deleteSource}`,
+        { method: "DELETE" },
+      );
+      const leftovers = removalLeftovers(res?.log);
+      if (generation.current === runId) {
+        // a lista mostra o aviso de "removido" (o projeto já não existe aqui)
+        navigate("/", { state: { removedProject: name, removalLeftovers: leftovers } });
+      } else {
+        // o usuário já foi para outro projeto: não o tira de lá, só anuncia
+        setNotice({
+          tone: leftovers.length > 0 ? "warning" : "success",
+          title: tGlobal(leftovers.length > 0 ? "dashboard.removed.titleLeftovers" : "dashboard.removed.title", { name }),
+          text: leftovers.length > 0 ? leftovers.join("\n") : tGlobal("dashboard.removed.body"),
+        });
+      }
     } catch (err) {
+      if (generation.current !== runId) return;
       setError(apiErrorText(err, "projects.detail.removeError"));
+      setRetryKind("delete");
+      busyRef.current = false;
       setBusy(null);
     }
   }
+
+  // aviso de sucesso que afirma um estado: se o estado real mudar depois (outra aba, queda), troca por um verdadeiro
+  useEffect(() => {
+    if (!notice?.confirms || !data || data.project.id !== id) return;
+    if (reachedExpected(notice.confirms, data.status)) return;
+    setNotice({
+      tone: "warning",
+      text: tGlobal("projects.detail.stateChanged", { status: tGlobal(`dashboard.status.${data.status}` as Key) }),
+    });
+  }, [data, notice, id]);
 
   if (!data) {
     return (
@@ -365,6 +592,8 @@ export function ProjectDetailPage() {
 
   const { project, status, containers, url, credential } = data;
   const running = status === "deploying";
+  // deploy que falhou antes de criar containers: parar/iniciar dariam 409 no_containers
+  const noContainers = status === "error" && containers.length === 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -400,20 +629,30 @@ export function ProjectDetailPage() {
             </a>
           </Button>
           <Button
+            ref={stopButton}
             variant="danger"
             size="sm"
-            disabled={busy !== null || running || status === "created" || status === "stopped"}
+            aria-describedby="lifecycle-hint"
+            aria-busy={busy === "stop"}
+            className={busy === "stop" ? "cursor-wait disabled:opacity-100" : undefined}
+            disabled={busy !== null || running || noContainers || status === "created" || status === "stopped"}
             onClick={() => void action("stop")}
           >
-            <Square className="h-4 w-4" /> {t("projects.detail.stop")}
+            {busy === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}{" "}
+            {busy === "stop" ? t("projects.detail.stopping") : t("projects.detail.stop")}
           </Button>
           <Button
+            ref={startButton}
             variant="success"
             size="sm"
-            disabled={busy !== null || running || status === "running" || status === "created"}
+            aria-describedby="lifecycle-hint"
+            aria-busy={busy === "start"}
+            className={busy === "start" ? "cursor-wait disabled:opacity-100" : undefined}
+            disabled={busy !== null || running || noContainers || status === "running" || status === "created"}
             onClick={() => void action("start")}
           >
-            <Play className="h-4 w-4" /> {t("projects.detail.start")}
+            {busy === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{" "}
+            {busy === "start" ? t("projects.detail.starting") : t("projects.detail.start")}
           </Button>
           <Button
             variant="deploy"
@@ -436,6 +675,25 @@ export function ProjectDetailPage() {
         </div>
       </div>
 
+      <p id="lifecycle-hint" data-testid="lifecycle-hint" className="-mt-3 text-xs text-muted-foreground">
+        {t(noContainers ? "projects.detail.lifecycleNoContainers" : "projects.detail.lifecycleHint")}
+      </p>
+      <NoticeRegion>
+        {notice && (
+          <ActionNotice
+            tone={notice.tone}
+            title={notice.title}
+            action={
+              notice.recheck
+                ? { label: t("projects.detail.recheck"), onClick: () => void recheck(notice.recheck!) }
+                : undefined
+            }
+            onDismiss={() => setNotice(null)}
+          >
+            {notice.text}
+          </ActionNotice>
+        )}
+      </NoticeRegion>
       {/* aviso de nova atualização: sem parar/sem projeto em deploy, e na aba Git quem mostra é o cartão completo */}
       {section !== "git" && (status === "running" || status === "error") && (
         <UpdateNotice
@@ -445,19 +703,25 @@ export function ProjectDetailPage() {
           deployDisabled={busy !== null || running}
         />
       )}
-
       {error && (
-        <div
-          role="alert"
-          data-testid="action-error"
-          className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200"
+        <ActionNotice
+          tone="error"
+          testId="action-error"
+          action={
+            retryKind
+              ? {
+                  label: t("projects.detail.retry"),
+                  onClick: () => void (retryKind === "delete" ? remove() : action(retryKind)),
+                }
+              : undefined
+          }
+          onDismiss={() => {
+            setError(null);
+            setRetryKind(null);
+          }}
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          <span className="min-w-0 flex-1 whitespace-pre-line break-words">{error}</span>
-          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" aria-label={t("projects.detail.dismiss")} onClick={() => setError(null)}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+          {error}
+        </ActionNotice>
       )}
       {pollProblem && (
         <p
@@ -619,6 +883,7 @@ export function ProjectDetailPage() {
           <CardTitle className="text-base text-destructive">{t("projects.detail.danger.title")}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          <p className="text-sm text-muted-foreground">{t("projects.detail.danger.noNeedToStop")}</p>
           {!confirmDelete ? (
             <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
               <Trash2 className="h-4 w-4" /> {t("projects.detail.danger.remove")}
@@ -654,7 +919,7 @@ export function ProjectDetailPage() {
                   ) : (
                     <Trash2 className="h-4 w-4" />
                   )}
-                  {t("projects.detail.danger.confirmRemove")}
+                  {busy === "delete" ? t("projects.detail.removing") : t("projects.detail.danger.confirmRemove")}
                 </Button>
               </div>
             </div>

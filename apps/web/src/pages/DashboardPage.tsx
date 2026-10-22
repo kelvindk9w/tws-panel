@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import type {
   DockerContainersResponse,
   ProjectListResponse,
@@ -9,6 +9,7 @@ import type {
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n, type Key } from "@/i18n";
+import { ActionNotice, NoticeRegion } from "@/components/ActionNotice";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
 import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
@@ -108,6 +109,19 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   // o roteiro "Deixe o painel pronto" está na tela? (null = ainda não sabe)
   const [checklistShown, setChecklistShown] = useState<boolean | null>(null);
+  // vindo da remoção de um projeto: confirma o que aconteceu (uma vez só)
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [removed, setRemoved] = useState<{ name: string; leftovers: string[] } | null>(null);
+  useEffect(() => {
+    const st = location.state as { removedProject?: unknown; removalLeftovers?: unknown } | null;
+    const name = st?.removedProject;
+    if (typeof name === "string") {
+      const left = Array.isArray(st?.removalLeftovers) ? (st.removalLeftovers as unknown[]).map(String) : [];
+      setRemoved({ name, leftovers: left });
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location, navigate]);
 
   async function refresh() {
     try {
@@ -173,6 +187,20 @@ export function DashboardPage() {
     <div className="flex flex-col gap-8">
       {/* independente do roteiro: "o painel antigo tinha X ativo" depois de restaurar um backup */}
       <ReconciliationNotice />
+      <NoticeRegion>
+        {removed !== null && (
+          <ActionNotice
+            tone={removed.leftovers.length > 0 ? "warning" : "success"}
+            testId="removed-notice"
+            title={t(removed.leftovers.length > 0 ? "dashboard.removed.titleLeftovers" : "dashboard.removed.title", {
+              name: removed.name,
+            })}
+            onDismiss={() => setRemoved(null)}
+          >
+            {removed.leftovers.length > 0 ? removed.leftovers.join("\n") : t("dashboard.removed.body")}
+          </ActionNotice>
+        )}
+      </NoticeRegion>
       <OnboardingChecklist variant="dashboard" onVisibleChange={setChecklistShown} />
       {/* com o roteiro na tela, o passo 2 dele já fala do 2FA */}
       {checklistShown === false && <TwoFactorNudge />}
