@@ -49,6 +49,18 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
 - Automatic address with instant HTTPS or your own domain, with the
   exact DNS record to create.
 - **Multiple domains** on the same project: connect, make primary and remove, effective immediately.
+  Connecting the official domain or making it primary does **not** remove the automatic address (it
+  becomes an additional one). It only goes away if you remove it, or if you pick "My domain" in the
+  new project wizard: in that case, while the DNS doesn't point to the VPS yet and the panel is
+  public, the panel keeps a temporary address as an additional domain.
+- **Temporary address for testing.** While the official domain's DNS propagates (it can take hours),
+  the project's **Domains** page offers **Add a temporary address to test** when no domain of the
+  project points to the VPS: `project-k3x9q.apps.example.com` with a verified apps domain, or
+  `sslip.io` without one. If the sslip.io certificate can't be issued because of Let's Encrypt's
+  issuance limit, the way forward is your own domain or subdomain. Once the official domain works,
+  the page reminds you to remove the temporary (sslip.io) address (if it is the primary one, first
+  use **Make primary** on the official domain); the panel never removes anything on its own. An
+  address under the apps domain is not marked as temporary and gets no reminder. Not offered on a local panel (`.localhost`).
 - Before the first deploy, the domain answers "site em configuração" (site being set up). A stopped project shows a
   neutral "temporariamente indisponível" (temporarily unavailable) page instead of the raw server error.
   These two pages are served to the public visitors of your site and are written in Portuguese.
@@ -227,7 +239,14 @@ In **Settings → Backups** and in each project's **Backups** tab.
   Volumes and upload and data folders come checked; caches, logs and `node_modules` come unchecked.
   The code is included when the project does not come from GitHub.
 - **Panel:** accounts, registered projects, settings and keys.
-- **Email:** the mail server and the webmail.
+- **Email:** the mail server and the webmail. It has its **own, global** backup (all mailboxes of
+  all projects together), independent of each project's backup. In the **Backups** tab of a project
+  with email turned on you see two separate sections: **Project backup** (database and files) and
+  **Email backup** (badge On, Paused, Off or Mail server unavailable; frequency, last backup,
+  external check, a shortcut to **Settings → Backups → Email** and **Back up email now**). The
+  screen only says the email is protected when the badge is On; in the other states it warns that
+  the email is **not** being copied and how to fix it. Turning off the project's backup does not
+  turn off the email one. Without email turned on, the email section does not appear.
 
 **Where it is stored.**
 

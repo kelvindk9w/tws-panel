@@ -32,6 +32,7 @@ const PROJECT = {
 
 beforeEach(() => {
   apiFetchMock.mockReset();
+  apiFetchMock.mockResolvedValue({});
 });
 afterEach(cleanup);
 

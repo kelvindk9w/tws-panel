@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { DnsGuide } from "@/components/DnsGuide";
 import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, CheckCircle2, ExternalLink, Globe, Loader2, Plus, Star, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, Globe, Info, Loader2, Plus, Star, Trash2 } from "lucide-react";
 
 function urlOf(domain: string): string {
   return domain.endsWith(".localhost") || domain === "localhost" ? `http://${domain}` : `https://${domain}`;
@@ -239,6 +239,105 @@ function ProvisionalSwitch({ project, onChanged }: { project: Project; onChanged
   );
 }
 
+const isLocalHost = (d: string) => d === "localhost" || d.endsWith(".localhost");
+const isSslip = (d: string) => d.endsWith(".sslip.io");
+
+/**
+ * Endereço temporário para testar enquanto o DNS do domínio oficial propaga (pode levar horas).
+ * Só informativo: usa a mesma verificação de DNS de "Verificar DNS" (/api/domains/check) e o
+ * endereço de /api/domains/suggest. Oferece o botão quando nenhum domínio do projeto resolve
+ * para a VPS; depois que o oficial funciona, lembra de remover o temporário (sslip.io) — nunca
+ * remove nada sozinho. Painel local (.localhost) ou sem DNS verificável: não oferece.
+ */
+function TemporaryAddress({ project, onChanged }: { project: Project; onChanged: () => void }) {
+  const { t } = useI18n();
+  const domains = [project.domain, ...(project.aliases ?? [])];
+  const key = domains.join(",");
+  const [sug, setSug] = useState<AutoDomainSuggestion | null>(null);
+  // domínio -> resolve para a VPS? (ausente = ainda sem resposta ou a verificação falhou)
+  const [resolves, setResolves] = useState<Record<string, { ok: boolean; hasRecord: boolean }>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const name = encodeURIComponent(project.name);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${name}`)
+      .then((r) => !cancelled && setSug(r))
+      .catch(() => !cancelled && setSug(null));
+    setResolves({});
+    for (const d of key.split(",").filter((x) => !isLocalHost(x))) {
+      apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(d)}`)
+        .then((r) => !cancelled && setResolves((prev) => ({ ...prev, [d]: { ok: r.ok === true, hasRecord: (r.resolvedIps ?? []).length > 0 } })))
+        .catch(() => undefined);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [name, key]);
+
+  async function add(address: string) {
+    setBusy(true);
+    setError(false);
+    try {
+      await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains`, { method: "POST", body: JSON.stringify({ domain: address }) });
+      onChanged();
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const real = domains.filter((d) => !isLocalHost(d));
+  const known = real.every((d) => resolves[d] !== undefined);
+  if (real.length === 0 || !known) return null;
+
+  const anyResolves = real.some((d) => resolves[d]?.ok);
+  const official = real.filter((d) => !isSslip(d));
+  const officialUp = official.find((d) => resolves[d]?.ok);
+  const temps = real.filter(isSslip);
+
+  if (officialUp && temps.length > 0) {
+    return (
+      <p data-testid="temp-address-reminder" role="note" className="flex items-start gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-sm text-sky-300">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        <span>
+          {/* o principal não tem "Remover": se o temporário é o principal, primeiro o oficial precisa virar principal */}
+          {t(isSslip(project.domain) ? "projects.domains.temp.reminderPrimary" : "projects.domains.temp.reminder", { official: officialUp, temp: temps.join(", ") })}
+        </span>
+      </p>
+    );
+  }
+
+  const address = sug?.auto ?? null;
+  if (anyResolves || !sug || sug.panelPublic !== true || !address || isLocalHost(address) || domains.includes(address)) return null;
+  return (
+    <div data-testid="temp-address" className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-400">
+      <p className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        <span>
+          {t(real.some((d) => resolves[d]?.hasRecord) ? "projects.domains.temp.explainNoMatch" : "projects.domains.temp.explain", { domains: real.join(", ") })}
+        </span>
+      </p>
+      <p className="break-all font-mono text-xs">{t("projects.domains.temp.willAdd", { address })}</p>
+      <p className="text-xs">
+        {isSslip(address)
+          ? t("projects.domains.temp.sslipNote")
+          : t("projects.domains.temp.appsNote", { base: sug.appsBase ?? "" })}
+      </p>
+      <Button size="sm" variant="outline" className="h-auto min-h-8 max-w-full self-start whitespace-normal py-1.5 text-left" disabled={busy} onClick={() => void add(address)}>
+        {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <Plus className="h-4 w-4 shrink-0" />} {t(isSslip(address) ? "projects.domains.temp.add" : "projects.domains.temp.addApps")}
+      </Button>
+      {error && (
+        <p data-testid="temp-address-error" role="alert" className="text-xs text-destructive">
+          {t("projects.domains.temp.error")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /**
  * Seção Domínios do projeto: o principal (o do "Abrir site" e do health check)
  * e quantos adicionais o operador quiser, todos servidos ao mesmo tempo, cada
@@ -316,6 +415,8 @@ export function ProjectDomainsCard({
         </ul>
 
         {provisionalHere && <ProvisionalSwitch key={project.domain} project={project} onChanged={onChanged} />}
+
+        {!provisionalHere && <TemporaryAddress project={project} onChanged={onChanged} />}
 
         <CertificateSummary query={`project=${encodeURIComponent(project.id)}`} />
 
