@@ -255,7 +255,7 @@ function TemporaryAddress({ project, onChanged }: { project: Project; onChanged:
   const key = domains.join(",");
   const [sug, setSug] = useState<AutoDomainSuggestion | null>(null);
   // domínio -> resolve para a VPS? (ausente = ainda sem resposta ou a verificação falhou)
-  const [resolves, setResolves] = useState<Record<string, boolean>>({});
+  const [resolves, setResolves] = useState<Record<string, { ok: boolean; hasRecord: boolean }>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const name = encodeURIComponent(project.name);
@@ -268,7 +268,7 @@ function TemporaryAddress({ project, onChanged }: { project: Project; onChanged:
     setResolves({});
     for (const d of key.split(",").filter((x) => !isLocalHost(x))) {
       apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(d)}`)
-        .then((r) => !cancelled && setResolves((prev) => ({ ...prev, [d]: r.ok === true })))
+        .then((r) => !cancelled && setResolves((prev) => ({ ...prev, [d]: { ok: r.ok === true, hasRecord: (r.resolvedIps ?? []).length > 0 } })))
         .catch(() => undefined);
     }
     return () => {
@@ -293,16 +293,19 @@ function TemporaryAddress({ project, onChanged }: { project: Project; onChanged:
   const known = real.every((d) => resolves[d] !== undefined);
   if (real.length === 0 || !known) return null;
 
-  const anyResolves = real.some((d) => resolves[d]);
+  const anyResolves = real.some((d) => resolves[d]?.ok);
   const official = real.filter((d) => !isSslip(d));
-  const officialUp = official.find((d) => resolves[d]);
+  const officialUp = official.find((d) => resolves[d]?.ok);
   const temps = real.filter(isSslip);
 
   if (officialUp && temps.length > 0) {
     return (
       <p data-testid="temp-address-reminder" role="note" className="flex items-start gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-sm text-sky-300">
         <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-        <span>{t("projects.domains.temp.reminder", { official: officialUp, temp: temps.join(", ") })}</span>
+        <span>
+          {/* o principal não tem "Remover": se o temporário é o principal, primeiro o oficial precisa virar principal */}
+          {t(isSslip(project.domain) ? "projects.domains.temp.reminderPrimary" : "projects.domains.temp.reminder", { official: officialUp, temp: temps.join(", ") })}
+        </span>
       </p>
     );
   }
@@ -313,15 +316,18 @@ function TemporaryAddress({ project, onChanged }: { project: Project; onChanged:
     <div data-testid="temp-address" className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-400">
       <p className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-        <span>{t("projects.domains.temp.explain", { domains: real.join(", ") })}</span>
+        <span>
+          {t(real.some((d) => resolves[d]?.hasRecord) ? "projects.domains.temp.explainNoMatch" : "projects.domains.temp.explain", { domains: real.join(", ") })}
+        </span>
       </p>
+      <p className="break-all font-mono text-xs">{t("projects.domains.temp.willAdd", { address })}</p>
       <p className="text-xs">
         {isSslip(address)
           ? t("projects.domains.temp.sslipNote")
           : t("projects.domains.temp.appsNote", { base: sug.appsBase ?? "" })}
       </p>
       <Button size="sm" variant="outline" className="h-auto min-h-8 max-w-full self-start whitespace-normal py-1.5 text-left" disabled={busy} onClick={() => void add(address)}>
-        {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <Plus className="h-4 w-4 shrink-0" />} {t("projects.domains.temp.add")}
+        {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <Plus className="h-4 w-4 shrink-0" />} {t(isSslip(address) ? "projects.domains.temp.add" : "projects.domains.temp.addApps")}
       </Button>
       {error && (
         <p data-testid="temp-address-error" role="alert" className="text-xs text-destructive">

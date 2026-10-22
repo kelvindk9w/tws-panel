@@ -89,8 +89,54 @@ describe("endereço temporário para testar", () => {
     mount(project(OFFICIAL));
     const box = await screen.findByTestId("temp-address");
     expect(box).not.toHaveTextContent("sslip.io");
-    fireEvent.click(within(box).getByRole("button", { name: "Adicionar endereço temporário para testar" }));
+    expect(box).toHaveTextContent(`Endereço que será adicionado: ${APPS}`);
+    expect(box).toHaveTextContent("o painel não o marca como temporário");
+    expect(within(box).queryByRole("button", { name: "Adicionar endereço temporário para testar" })).not.toBeInTheDocument();
+    fireEvent.click(within(box).getByRole("button", { name: "Adicionar endereço para testar" }));
     await waitFor(() => expect(posts()).toEqual([{ path: "/api/projects/p1/domains", body: { domain: APPS } }]));
+  });
+
+  it("a caixa mostra qual endereço será acrescentado", async () => {
+    mount(project(OFFICIAL));
+    expect(await screen.findByTestId("temp-address")).toHaveTextContent(`Endereço que será adicionado: ${SSLIP}`);
+  });
+
+  it("painel não público mesmo com sslip.io sugerido: não oferece", async () => {
+    suggestion = { ...NO_BASE, panelPublic: false };
+    mount(project(OFFICIAL));
+    await waitFor(() => expect(apiFetchMock.mock.calls.some(([p]) => String(p).startsWith("/api/domains/check"))).toBe(true));
+    await screen.findByTestId(`domain-${OFFICIAL}`);
+    await waitFor(() => expect(apiFetchMock.mock.calls.some(([p]) => String(p).startsWith("/api/domains/suggest"))).toBe(true));
+    expect(screen.queryByTestId("temp-address")).not.toBeInTheDocument();
+  });
+
+  it("enquanto adiciona, o botão fica desabilitado (sem clique duplo)", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    let release: () => void = () => undefined;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST") await new Promise<void>((r) => (release = r));
+      return base(path, init);
+    });
+    mount(project(OFFICIAL));
+    const btn = await screen.findByRole("button", { name: "Adicionar endereço temporário para testar" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(btn).toBeDisabled());
+    fireEvent.click(btn);
+    release();
+    await waitFor(() => expect(btn).toBeEnabled());
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("o domínio existe no DNS mas aponta para outro lugar (ex.: proxy da Cloudflare): não fala de propagação", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/domains/check")) return { domain: OFFICIAL, ok: false, devLocal: false, resolvedIps: ["104.16.0.1"], machineIps: [], message: "x" };
+      return base(path, init);
+    });
+    mount(project(OFFICIAL));
+    const box = await screen.findByTestId("temp-address");
+    expect(box).toHaveTextContent("existe no DNS, mas não aponta para esta VPS");
+    expect(box).not.toHaveTextContent("até algumas horas");
   });
 
   it("já existe um endereço que resolve para a VPS: não oferece", async () => {
@@ -164,6 +210,26 @@ describe("lembrete de remover o endereço temporário", () => {
     expect(note).toHaveTextContent(SSLIP);
     expect(note).toHaveTextContent("o painel não remove nada sozinho");
     expect(apiFetchMock.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === "DELETE")).toHaveLength(0);
+  });
+
+  it("o temporário é o principal: manda tornar o oficial principal antes de remover (o principal não tem Remover)", async () => {
+    resolves[OFFICIAL] = true;
+    resolves[SSLIP] = true;
+    mount(project(SSLIP, [OFFICIAL]));
+    const note = await screen.findByTestId("temp-address-reminder");
+    expect(note).toHaveTextContent("ainda é o principal");
+    expect(note).toHaveTextContent("clique em Tornar principal");
+    expect(within(screen.getByTestId(`domain-${SSLIP}`)).queryByRole("button", { name: /Remover/ })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId(`domain-${OFFICIAL}`)).getByRole("button", { name: "Tornar principal" })).toBeInTheDocument();
+  });
+
+  it("temporário não principal: o lembrete manda usar Remover na linha dele, que existe", async () => {
+    resolves[OFFICIAL] = true;
+    resolves[SSLIP] = true;
+    mount(project(OFFICIAL, [SSLIP]));
+    const note = await screen.findByTestId("temp-address-reminder");
+    expect(note).not.toHaveTextContent("ainda é o principal");
+    expect(within(screen.getByTestId(`domain-${SSLIP}`)).getByRole("button", { name: /Remover/ })).toBeInTheDocument();
   });
 
   it("oficial ainda não aponta: sem lembrete", async () => {

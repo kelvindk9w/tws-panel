@@ -58,8 +58,9 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
   project points to the VPS: `project-k3x9q.apps.example.com` with a verified apps domain, or
   `sslip.io` without one. If the sslip.io certificate can't be issued because of Let's Encrypt's
   issuance limit, the way forward is your own domain or subdomain. Once the official domain works,
-  the page reminds you to remove the temporary (sslip.io) address; the panel never removes anything
-  on its own. Not offered on a local panel (`.localhost`).
+  the page reminds you to remove the temporary (sslip.io) address (if it is the primary one, first
+  use **Make primary** on the official domain); the panel never removes anything on its own. An
+  address under the apps domain is not marked as temporary and gets no reminder. Not offered on a local panel (`.localhost`).
 - Before the first deploy, the domain answers "site em configuração" (site being set up). A stopped project shows a
   neutral "temporariamente indisponível" (temporarily unavailable) page instead of the raw server error.
   These two pages are served to the public visitors of your site and are written in Portuguese.
@@ -241,9 +242,11 @@ In **Settings → Backups** and in each project's **Backups** tab.
 - **Email:** the mail server and the webmail. It has its **own, global** backup (all mailboxes of
   all projects together), independent of each project's backup. In the **Backups** tab of a project
   with email turned on you see two separate sections: **Project backup** (database and files) and
-  **Email backup** (on/off badge, frequency, last backup, external check, a shortcut to
-  **Settings → Backups → Email** and **Back up email now**). Turning off the project's backup does
-  not turn off the email one. Without email turned on, the email section does not appear.
+  **Email backup** (badge On, Paused, Off or Mail server unavailable; frequency, last backup,
+  external check, a shortcut to **Settings → Backups → Email** and **Back up email now**). The
+  screen only says the email is protected when the badge is On; in the other states it warns that
+  the email is **not** being copied and how to fix it. Turning off the project's backup does not
+  turn off the email one. Without email turned on, the email section does not appear.
 
 **Where it is stored.**
 

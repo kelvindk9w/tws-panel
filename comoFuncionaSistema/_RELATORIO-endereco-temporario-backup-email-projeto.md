@@ -21,9 +21,19 @@ Conclusão da investigação:
 
 ## Tarefa 2 — e-mail na aba Backups do projeto
 
-Duas seções distintas: "Backup do projeto" e "Backup do e-mail" (só com e-mail ligado), com selos, frequência,
-último backup, conferência externa, aviso âmbar se desligado, atalho para Configurações → Backups → E-mail e
-"Fazer backup do e-mail agora". Estado vazio explícito para projeto sem banco/arquivos.
+Duas seções distintas: "Backup do projeto" (envolve os cartões do projeto) e "Backup do e-mail" (só com e-mail
+ligado). O selo do e-mail segue a regra do agendador: Ativo (enabled && available && sem pausa), Em pausa
+(com o motivo), Desligado, Servidor de e-mail indisponível e Estado desconhecido. Só no estado Ativo a tela diz
+que o e-mail está protegido; nos demais diz que NÃO está sendo copiado. O estado vazio do projeto segue o mesmo
+critério. "Fazer backup do e-mail agora" mostra andamento, sucesso e erro dentro da seção.
+
+## Revisão (Opus) — correções
+
+Selo "Ativo" que mentia, texto contraditório com e-mail desligado, lembrete que mandava remover o principal
+(agora manda tornar o oficial principal primeiro), assistente que duplicava o temporário em nova tentativa,
+endereço sob a base de aplicações sem lembrete (como não dá para distinguir de um definitivo, o botão passa a se
+chamar "Adicionar endereço para testar" e o texto diz que não é marcado como temporário), texto neutro para
+domínio que existe no DNS mas não aponta para a VPS, e testes das lacunas apontadas.
 
 ## Não feito / limites
 

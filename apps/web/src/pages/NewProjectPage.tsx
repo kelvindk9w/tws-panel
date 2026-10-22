@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import type {
   AutoDomainSuggestion,
@@ -128,6 +128,8 @@ export function NewProjectPage() {
   const [testAddress, setTestAddress] = useState<string | null>(null);
   const [domainMode, setDomainMode] = useState<"auto" | "test" | "own">("auto");
   const [ownDomain, setOwnDomain] = useState("");
+  // projeto em que o assistente já acrescentou o endereço temporário (a nova tentativa não duplica)
+  const temporaryAdded = useRef<string | null>(null);
 
   function defaultDomainFor(projectName: string): string {
     const slug = projectName
@@ -254,12 +256,15 @@ export function NewProjectPage() {
    * oferece o mesmo botão depois). Painel local ou DNS não verificável: não acrescenta nada.
    */
   async function keepTemporaryAddress(id: string, official: string) {
+    // nova tentativa de finish(): o temporário já acrescentado fica; não sorteia outro
+    if (temporaryAdded.current === id) return;
     try {
       const sug = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`);
       if (sug.panelPublic !== true || sug.auto.endsWith(".localhost") || sug.auto === official) return;
       const check = await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(official)}`);
       if (check.ok !== false) return;
       await apiFetch<ProjectResponse>(`/api/projects/${id}/domains`, { method: "POST", body: JSON.stringify({ domain: sug.auto }) });
+      temporaryAdded.current = id;
     } catch {
       // sem o temporário o projeto é criado do mesmo jeito
     }

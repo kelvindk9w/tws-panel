@@ -21,6 +21,22 @@ import {
 } from "@/components/backups/backup-ui";
 import { AlertTriangle, Database, FolderPlus, HardDrive, Loader2, Mail, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
+type EmailBackupState = "active" | "paused" | "off" | "unavailable" | "unknown";
+const EMAIL_BADGE = {
+  active: "backups.project.email.badgeOn",
+  paused: "backups.project.email.badgePaused",
+  off: "backups.project.email.badgeOff",
+  unavailable: "backups.project.email.badgeUnavailable",
+  unknown: "backups.project.email.badgeUnknown",
+} as const;
+const EMAIL_NOTE = {
+  active: "backups.project.email.noteActive",
+  paused: "backups.project.email.notePaused",
+  off: "backups.project.email.noteOff",
+  unavailable: "backups.project.email.noteUnavailable",
+  unknown: "backups.project.email.noteUnknown",
+} as const;
+
 /**
  * Aba Backups do projeto: o que o painel encontrou depois do deploy (bancos,
  * volumes e pastas, com tamanho e o motivo de vir marcado ou não), as pastas
@@ -42,6 +58,18 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
   const [restoring, setRestoring] = useState(false);
   // O e-mail do projeto está ligado? (o backup dele é o do servidor de e-mail, não o deste projeto)
   const [emailOn, setEmailOn] = useState(false);
+  const [emailRun, setEmailRun] = useState<{ state: "idle" | "running" | "ok" | "error"; error?: string }>({ state: "idle" });
+
+  async function runEmailBackup() {
+    setEmailRun({ state: "running" });
+    try {
+      await apiFetch("/api/backups/targets/email/run", { method: "POST" });
+      setEmailRun({ state: "ok" });
+      load();
+    } catch (err) {
+      setEmailRun({ state: "error", error: errorText(err) });
+    }
+  }
 
   const load = useCallback(() => {
     Promise.all([apiFetch<ProjectBackupView>(`/api/backups/projects/${projectId}`), apiFetch<BackupsStatus>("/api/backups")])
@@ -91,6 +119,16 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
 
   const d = view.detection;
   const emailTarget = status.targets?.find((x) => x.id === "email") ?? null;
+  // Mesma regra do agendador: só copia com ligado, servidor de e-mail existente e sem pausa.
+  const emailState: EmailBackupState = !emailTarget
+    ? "unknown"
+    : !emailTarget.available
+      ? "unavailable"
+      : !emailTarget.enabled
+        ? "off"
+        : emailTarget.pausedReason
+          ? "paused"
+          : "active";
   const nothingToCopy =
     d !== null && d.databases.length === 0 && d.mounts.length === 0 && d.sourceFolder === null && d.unsavedWrites.length === 0 && extras.length === 0;
   const chosen = (id: string, def: boolean) => choices[id] ?? def;
@@ -129,17 +167,27 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
             <h2 id="bk-email-title" className="flex items-center gap-2 text-base font-semibold">
               <Mail className="h-4 w-4 text-violet-400" aria-hidden /> {t("backups.project.email.title")}
             </h2>
-            {emailTarget && (
-              <Badge data-testid="project-email-backup-badge" variant={emailTarget.enabled ? "success" : "outline"}>
-                {emailTarget.enabled ? t("backups.project.email.badgeOn") : t("backups.project.email.badgeOff")}
-              </Badge>
-            )}
+            <Badge data-testid="project-email-backup-badge" variant={emailState === "active" ? "success" : "outline"}>
+              {t(EMAIL_BADGE[emailState])}
+            </Badge>
           </div>
           <p>{t("backups.project.email.scope")}</p>
-          <p>
-            <Trans k="backups.project.email.note" components={{ link: <Link to="/settings/backups" className="underline underline-offset-2" /> }} />
+          <p
+            data-testid={emailState === "active" ? "project-email-backup-note" : "project-email-backup-off"}
+            role="note"
+            className={emailState === "active" ? undefined : "flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-amber-400"}
+          >
+            {emailState !== "active" && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
+            <span>
+              <Trans
+                k={EMAIL_NOTE[emailState]}
+                params={{ reason: emailTarget?.pausedReason ?? "" }}
+                components={{ link: <Link to={emailState === "unavailable" ? "/mail" : "/settings/backups"} className="underline underline-offset-2" /> }}
+              />
+            </span>
           </p>
-          {emailTarget?.enabled === true && (
+          <p className="text-muted-foreground">{t("backups.project.email.independent")}</p>
+          {emailTarget && emailTarget.enabled && emailTarget.available && (
             <ul data-testid="project-email-backup-details" className="flex flex-col gap-0.5 text-muted-foreground">
               <li>{t("backups.project.email.frequency", { hours: emailTarget.frequencyHours })}</li>
               <li>{emailTarget.lastSuccessAt ? t("backups.project.email.last", { when: when(emailTarget.lastSuccessAt) }) : t("backups.project.email.lastNever")}</li>
@@ -150,45 +198,36 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
               </li>
             </ul>
           )}
-          {emailTarget && !emailTarget.enabled && (
-            <p data-testid="project-email-backup-off" role="note" className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-amber-400">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-              <span>
-                <Trans k="backups.project.email.off" components={{ link: <Link to="/settings/backups" className="underline underline-offset-2" /> }} />
-              </span>
-            </p>
-          )}
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline" size="sm">
               <Link to="/settings/backups">{t("backups.project.email.open")}</Link>
             </Button>
             {emailTarget?.available && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy !== null || !status.archiverAvailable}
-                onClick={() => void act("email-run", () => apiFetch("/api/backups/targets/email/run", { method: "POST" }), t("backups.project.email.queued"))}
-              >
-                {busy === "email-run" ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />} {t("backups.project.email.runNow")}
+              <Button size="sm" variant="outline" disabled={emailRun.state === "running" || !status.archiverAvailable} onClick={() => void runEmailBackup()}>
+                {emailRun.state === "running" ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />} {t("backups.project.email.runNow")}
               </Button>
             )}
           </div>
+          {emailRun.state === "running" && <p role="status" className="text-muted-foreground">{t("backups.project.email.running")}</p>}
+          {emailRun.state === "ok" && <p role="status" data-testid="project-email-run-ok" className="text-emerald-400">{t("backups.project.email.queued")}</p>}
+          {emailRun.state === "error" && <p role="alert" data-testid="project-email-run-error" className="text-destructive">{t("backups.project.email.runError", { error: emailRun.error ?? "" })}</p>}
         </section>
       )}
-      <section data-testid="project-backup-section" aria-labelledby="bk-project-title" className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 id="bk-project-title" className="text-base font-semibold">
-            {t("backups.project.projectSection.title")}
-          </h2>
-          <Badge data-testid="project-backup-badge" variant={view.target.enabled ? "success" : "outline"}>
-            {view.target.enabled ? t("backups.project.projectSection.on") : t("backups.project.projectSection.off")}
-          </Badge>
+      <section data-testid="project-backup-section" aria-labelledby="bk-project-title" className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id="bk-project-title" className="text-base font-semibold">
+              {t("backups.project.projectSection.title")}
+            </h2>
+            <Badge data-testid="project-backup-badge" variant={view.target.enabled ? "success" : "outline"}>
+              {view.target.enabled ? t("backups.project.projectSection.on") : t("backups.project.projectSection.off")}
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {t("backups.project.projectSection.description")}
+            {emailOn && <> {t("backups.project.projectSection.emailNote")}</>}
+          </p>
         </div>
-        <p className="text-sm text-muted-foreground">
-          {t("backups.project.projectSection.description")}
-          {emailOn && <> {t("backups.project.projectSection.emailNote")}</>}
-        </p>
-      </section>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -200,7 +239,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           {!d && <p className="text-muted-foreground">{t("backups.project.notDetected")}</p>}
           {nothingToCopy && (
             <p data-testid="project-nothing-to-copy" className="text-muted-foreground">
-              {t(emailOn ? "backups.project.nothingToCopyEmail" : "backups.project.nothingToCopy")}
+              {t(!emailOn ? "backups.project.nothingToCopy" : emailState === "active" ? "backups.project.nothingToCopyEmailActive" : "backups.project.nothingToCopyEmailInactive")}
             </p>
           )}
           {d?.error && (
@@ -473,6 +512,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           <HistoryList records={view.history} showTarget={false} empty={t("backups.project.historyEmpty")} onVerify={load} />
         </CardContent>
       </Card>
+      </section>
 
       {restoring && (
         <RestoreDialog

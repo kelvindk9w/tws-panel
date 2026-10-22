@@ -62,8 +62,9 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
   nenhum domínio do projeto aponta para a VPS: é o `projeto-k3x9q.apps.example.com` com domínio de
   aplicações verificado, ou o `sslip.io` sem ele. Se o certificado do sslip.io não sair por causa do
   limite de emissão do Let's Encrypt, o caminho é um domínio ou subdomínio seu. Quando o oficial
-  passa a funcionar, a página lembra de remover o temporário (sslip.io); o painel não remove nada
-  sozinho. Não é oferecido em painel local (`.localhost`).
+  passa a funcionar, a página lembra de remover o temporário (sslip.io; se ele for o principal,
+  primeiro use **Tornar principal** no oficial); o painel não remove nada sozinho. O endereço sob o
+  domínio de aplicações não é marcado como temporário e não gera lembrete. Não é oferecido em painel local (`.localhost`).
 - Antes do primeiro deploy, o domínio responde "site em configuração". Projeto parado mostra uma
   página neutra de "temporariamente indisponível", em vez do erro cru do servidor. Essas duas
   páginas são servidas aos visitantes do seu site e são escritas em português.
@@ -245,9 +246,11 @@ Em **Configurações → Backups** e na aba **Backups** de cada projeto.
 - **E-mail:** o servidor de e-mail e o webmail. Tem backup **próprio e global** (todas as caixas de
   todos os projetos juntas), independente do backup de cada projeto. Na aba **Backups** de um projeto
   com e-mail ligado, aparecem duas seções separadas: **Backup do projeto** (banco e arquivos) e
-  **Backup do e-mail** (selo ativo/desligado, frequência, último backup, conferência externa, atalho
-  para **Configurações → Backups → E-mail** e **Fazer backup do e-mail agora**). Desativar o backup
-  do projeto não desativa o do e-mail. Sem e-mail ligado, a seção do e-mail não aparece.
+  **Backup do e-mail** (selo Ativo, Em pausa, Desligado ou Servidor de e-mail indisponível;
+  frequência, último backup, conferência externa, atalho para **Configurações → Backups → E-mail** e
+  **Fazer backup do e-mail agora**). A tela só diz que o e-mail está protegido quando o selo é
+  Ativo; nos outros estados avisa que ele **não** está sendo copiado e como resolver. Desativar o
+  backup do projeto não desativa o do e-mail. Sem e-mail ligado, a seção do e-mail não aparece.
 
 **Onde fica.**
 

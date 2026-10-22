@@ -314,16 +314,65 @@ describe("aba Backups do projeto — e-mail", () => {
     comEmail({ enabled: false });
     renderCard();
     const off = await screen.findByTestId("project-email-backup-off");
-    expect(off).toHaveTextContent("O backup do e-mail está desligado: as caixas deste projeto não estão sendo copiadas.");
+    expect(off).toHaveTextContent("O e-mail deste projeto NÃO está sendo copiado: o backup do e-mail está desligado.");
     expect(within(off).getByRole("link", { name: /Ligar em Configurações → Backups → E-mail/ })).toHaveAttribute("href", "/settings/backups");
+    const sec = screen.getByTestId("project-email-backup");
+    expect(within(sec).getByTestId("project-email-backup-badge")).toHaveTextContent("Desligado");
+    expect(sec).not.toHaveTextContent("é protegido pelo backup");
+    expect(sec).toHaveTextContent("Desativar o backup deste projeto não desativa o do e-mail.");
+    expect(within(sec).queryByTestId("project-email-backup-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("project-email-backup-note")).not.toBeInTheDocument();
   });
 
-  it("sem o dado do alvo e-mail na lista: só a nota, sem estado inventado", async () => {
+  it("em pausa (ex.: logo depois de restaurar o painel): selo 'Em pausa' com o motivo, sem dizer que está protegido", async () => {
+    comEmail({ pausedReason: "Em pausa: o painel foi restaurado de outro servidor." });
+    renderCard();
+    const sec = await screen.findByTestId("project-email-backup");
+    expect(within(sec).getByTestId("project-email-backup-badge")).toHaveTextContent("Em pausa");
+    expect(within(sec).getByTestId("project-email-backup-off")).toHaveTextContent("Motivo: Em pausa: o painel foi restaurado de outro servidor.");
+    expect(sec).not.toHaveTextContent("Ativo");
+    expect(sec).not.toHaveTextContent("é protegido pelo backup");
+  });
+
+  it("servidor de e-mail indisponível: explica, leva para E-mail e não oferece o backup agora", async () => {
+    comEmail({ available: false });
+    renderCard();
+    const sec = await screen.findByTestId("project-email-backup");
+    expect(within(sec).getByTestId("project-email-backup-badge")).toHaveTextContent("Servidor de e-mail indisponível");
+    expect(within(sec).getByRole("link", { name: "Abrir o E-mail" })).toHaveAttribute("href", "/mail");
+    expect(within(sec).queryByRole("button", { name: "Fazer backup do e-mail agora" })).not.toBeInTheDocument();
+    expect(sec).not.toHaveTextContent("é protegido pelo backup");
+  });
+
+  it("sem o dado do alvo e-mail na lista: estado desconhecido, nunca 'Ativo'", async () => {
     comEmail(null);
     renderCard();
-    const note = await screen.findByTestId("project-email-backup");
-    expect(note).not.toHaveTextContent("Backup do e-mail:");
-    expect(screen.queryByTestId("project-email-backup-off")).not.toBeInTheDocument();
+    const sec = await screen.findByTestId("project-email-backup");
+    expect(within(sec).getByTestId("project-email-backup-badge")).toHaveTextContent("Estado desconhecido");
+    expect(sec).toHaveTextContent("Não foi possível ver o estado do backup do e-mail.");
+    expect(sec).not.toHaveTextContent("é protegido pelo backup");
+  });
+
+  it("falha ao enfileirar o backup do e-mail: o erro aparece na seção do e-mail", async () => {
+    comEmail({});
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/backups/targets/email/run") throw new Error("fila cheia");
+      return base(path, init);
+    });
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Fazer backup do e-mail agora" }));
+    const err = await screen.findByTestId("project-email-run-error");
+    expect(within(screen.getByTestId("project-email-backup")).getByTestId("project-email-run-error")).toBe(err);
+    expect(err).toHaveTextContent("Não foi possível iniciar o backup do e-mail:");
+    expect(screen.queryByTestId("project-email-run-ok")).not.toBeInTheDocument();
+  });
+
+  it("os cartões do projeto ficam dentro da seção 'Backup do projeto'", async () => {
+    renderCard();
+    const proj = await screen.findByTestId("project-backup-section");
+    expect(proj).toHaveTextContent("O que entra no backup");
+    expect(proj).toHaveTextContent("Frequência e cópias");
   });
 
   it("falha ao consultar o e-mail do projeto: a aba funciona sem a nota", async () => {
@@ -340,8 +389,15 @@ describe("aba Backups do projeto — e-mail", () => {
     expect(screen.getByTestId("project-nothing-to-copy")).not.toHaveTextContent("além do e-mail");
     unmount();
     comEmail({});
-    renderCard();
+    const second = renderCard();
     expect(await screen.findByTestId("project-nothing-to-copy")).toHaveTextContent("Não há nada para copiar além do e-mail");
+    second.unmount();
+    comEmail({ enabled: false });
+    renderCard();
+    const vazio = await screen.findByTestId("project-nothing-to-copy");
+    await screen.findByTestId("project-email-backup-off");
+    expect(vazio).toHaveTextContent("O e-mail também não está sendo copiado agora");
+    expect(vazio).not.toHaveTextContent("tem backup próprio");
   });
 
   it("com banco detectado, não mostra o estado vazio", async () => {
