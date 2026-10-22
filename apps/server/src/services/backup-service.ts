@@ -783,9 +783,7 @@ export class BackupService {
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
       // Banco temporário que o painel criou e não chegou a apagar (caiu no meio): apaga só os registrados.
       if ((this.config.restoreCheckTemp ?? []).length > 0) {
-        void Promise.resolve()
-          .then(() => this.sweepRestoreCheckTemp())
-          .catch(() => undefined);
+        void this.sweepRestoreCheckTemp();
       }
     })().catch((err: unknown) => {
       this.loading = null;
@@ -3178,7 +3176,7 @@ export class BackupService {
       path: `/projects/${targetId.slice(8)}/backups`,
     });
     void this.persistQuiet({ config: true });
-    void this.sweepRestoreCheckTemp().catch(() => undefined);
+    void this.sweepRestoreCheckTemp();
   }
 
   // Bancos temporários registrados -------------------------------------------------
@@ -3201,15 +3199,18 @@ export class BackupService {
     if (!own && this.running?.record.operation === "restore_check") return;
     const docker = this.opts.docker;
     for (const entry of [...(this.config.restoreCheckTemp ?? [])]) {
-      const project = await this.opts.projects.get(entry.destinationId).catch(() => null);
-      if (!project) {
-        await this.forgetTemp(entry.name);
-        continue;
+      try {
+        const project = await this.opts.projects.get(entry.destinationId);
+        if (!project) {
+          await this.forgetTemp(entry.name);
+          continue;
+        }
+        const service = this.config.detections[project.id]?.databases.find((d) => d.engine === "postgres")?.service;
+        const c = (await docker.projectContainers(project.slug)).find((x) => x.service === service && x.running);
+        if (c && (await dropTempDatabase(docker, c.id, entry.name))) await this.forgetTemp(entry.name);
+      } catch {
+        // não deu para falar com o Docker ou com o projeto agora: o nome continua registrado e a próxima varredura tenta de novo
       }
-      const service = this.config.detections[project.id]?.databases.find((d) => d.engine === "postgres")?.service;
-      const c = (await docker.projectContainers(project.slug).catch(() => [])).find((x) => x.service === service && x.running);
-      if (!c) continue;
-      if (await dropTempDatabase(docker, c.id, entry.name)) await this.forgetTemp(entry.name);
     }
   }
 
@@ -3228,7 +3229,7 @@ export class BackupService {
         await this.persist({ config: true });
         this.audit("backups.restore_check", `${project!.name}: teste de restauração desligado.`, actor, project!.name);
         // sobra de um teste que caiu no meio (só os bancos registrados pelo painel)
-        await this.sweepRestoreCheckTemp().catch(() => undefined);
+        await this.sweepRestoreCheckTemp();
       }
       return this.restoreCheckView(project!, all);
     }
@@ -3461,7 +3462,7 @@ export class BackupService {
     }
 
     // Restos de um teste anterior que caiu no meio (só os registrados pelo painel).
-    await this.sweepRestoreCheckTemp(true).catch(() => undefined);
+    await this.sweepRestoreCheckTemp(true);
 
     const staging = await this.tempDir("teste-restauracao");
     try {

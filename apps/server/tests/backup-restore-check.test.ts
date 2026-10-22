@@ -1299,6 +1299,23 @@ describe("bancos temporários registrados", () => {
     expect(registry()).toEqual([{ name: LEFTOVER, destinationId: DST }]);
   });
 
+  it("Docker ou a lista de projetos com erro na hora de varrer: o nome continua registrado (nada é esquecido por engano)", async () => {
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    const realContainers = docker.projectContainers.bind(docker);
+    docker.projectContainers = async () => Promise.reject(new Error("docker fora do ar"));
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    expect(registry()).toEqual([{ name: LEFTOVER, destinationId: DST }]);
+    docker.projectContainers = realContainers;
+    await enable();
+    seedRegistry([{ name: LEFTOVER, destinationId: DST }]);
+    const inner = service as unknown as { opts: { projects: { get(id: string): Promise<unknown> } } };
+    const realGet = inner.opts.projects.get.bind(inner.opts.projects);
+    inner.opts.projects.get = async (id: string) => (id === DST ? Promise.reject(new Error("falha")) : realGet(id));
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    expect(registry()).toEqual([{ name: LEFTOVER, destinationId: DST }]);
+  });
+
   it("destino que não existe mais: esquece o nome sem tentar apagar nada", async () => {
     await enable();
     seedRegistry([{ name: LEFTOVER, destinationId: "sumiu" }]);
