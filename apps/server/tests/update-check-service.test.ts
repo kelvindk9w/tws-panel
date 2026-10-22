@@ -105,6 +105,18 @@ describe("estados que não consultam o repositório", () => {
     expect(s.state).toBe("unknown");
   });
 
+  it("projeto criado SEM branch (deployedBranch vazio) é a branch padrão: não é 'config_changed' e consulta main", async () => {
+    const sem = project({ branch: null, deployedBranch: null });
+    expect((await svc.status(sem)).state).toBe("up_to_date");
+    expect(remote.mock.calls[0]?.[0]).toMatchObject({ branch: "main" });
+  });
+
+  it("publicado sem branch e depois trocado para sandbox: 'config_changed', sem alerta falso", async () => {
+    const s = await svc.status(project({ branch: "sandbox", deployedBranch: null }));
+    expect(s.state).toBe("config_changed");
+    expect(remote).not.toHaveBeenCalled();
+  });
+
   it("branch (ou repositório) configurados diferem dos que estão no ar: 'config_changed', sem comparar commits", async () => {
     expect((await svc.status(project({ branch: "sandbox" }))).state).toBe("config_changed");
     expect((await svc.status(project({ source: "https://git.example.com/dono/outro.git" }))).state).toBe("config_changed");
@@ -405,3 +417,61 @@ describe("sem vazamento", () => {
     expect(Object.keys(s).sort()).toEqual(["branch", "checkedAt", "deployedCommit", "projectId", "reason", "remoteCommit", "state"]);
   });
 });
+
+describe("fila de consultas", () => {
+  it("quem espera é atendido pelo projeto verificado há mais tempo (nunca verificado primeiro)", async () => {
+    // dois projetos já verificados, um mais antigo que o outro
+    const velho = project({ id: "velho", source: "https://git.example.com/dono/velho.git", deployedSource: "https://git.example.com/dono/velho.git" });
+    const novo = project({ id: "novo", source: "https://git.example.com/dono/novo.git", deployedSource: "https://git.example.com/dono/novo.git" });
+    await svc.status(velho);
+    clock += 1_000;
+    await svc.status(novo);
+    clock += UPDATE_CHECK_TTL_MS * 2;
+    remote.mockClear();
+
+    vi.useFakeTimers();
+    const liberar: Array<() => void> = [];
+    const ordem: string[] = [];
+    remote.mockImplementation((i: { source: string }) => {
+      ordem.push(i.source);
+      return new Promise((r) => liberar.push(() => r({ ok: true, commit: A })));
+    });
+    const mk = (id: string) => project({ id, source: `https://git.example.com/dono/${id}.git`, deployedSource: `https://git.example.com/dono/${id}.git` });
+    const trabalho = svc.statuses([mk("l1"), mk("l2"), mk("l3"), velho, novo, mk("inedito")]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(ordem).toHaveLength(UPDATE_CHECK_CONCURRENCY);
+    for (let i = 0; i < 3; i++) {
+      liberar.shift()?.();
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(ordem.slice(3).map((u) => u.split("/").pop())).toEqual(["inedito.git", "velho.git", "novo.git"]);
+    while (liberar.length) {
+      liberar.shift()?.();
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_WAIT_MS);
+    await trabalho;
+  });
+
+  it("o teto de tempo registra o resultado mas NÃO devolve a vaga enquanto o trabalho não termina", async () => {
+    vi.useFakeTimers();
+    const soltar: Array<() => void> = [];
+    remote.mockImplementation(() => new Promise((r) => soltar.push(() => r({ ok: true, commit: A }))));
+    const mk = (id: string) => project({ id });
+    const tres = [mk("a"), mk("b"), mk("c")];
+    void svc.statuses(tres);
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_HARD_TIMEOUT_MS + 10);
+    // os três estouraram o teto (erro registrado), mas seguem ocupando as vagas
+    expect(svc.statusOf(tres[0] as Project)).toMatchObject({ state: "error", reason: "timeout" });
+    void svc.statuses([mk("d")]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(remote).toHaveBeenCalledTimes(3);
+    // um deles termina de verdade: o quarto começa
+    soltar[0]?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(remote).toHaveBeenCalledTimes(4);
+    soltar.slice(1).forEach((f) => f());
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_WAIT_MS);
+  });
+});
+

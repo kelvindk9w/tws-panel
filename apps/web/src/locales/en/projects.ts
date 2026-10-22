@@ -381,6 +381,7 @@ export default {
   "update.reason.blocked_host": "The address points to the machine itself or to the metadata network, and the panel does not query those destinations.",
   "update.reason.unsupported": "The address uses a protocol the panel does not support. Use https:// or ssh.",
   "update.reason.unknown": "The repository query failed for a reason the panel did not recognize.",
+  "update.rateLimited": "Too many checks requested in a short time. Wait a minute and try again; the panel keeps checking on its own.",
   "update.checkNow": "Check now",
   "update.checkedAt": "Last checked: {when}",
   "update.deployButton": "Deploy now",

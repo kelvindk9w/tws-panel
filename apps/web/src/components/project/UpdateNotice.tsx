@@ -43,6 +43,8 @@ export interface UpdateNoticeProps {
   onCheck?: () => void;
   /** "Verificar agora" em andamento. */
   checking?: boolean;
+  /** O servidor recusou o "Verificar agora" por excesso de pedidos (429). */
+  limited?: boolean;
 }
 
 function DeployButton({ onDeploy, disabled }: { onDeploy?: () => void; disabled?: boolean }) {
@@ -55,7 +57,7 @@ function DeployButton({ onDeploy, disabled }: { onDeploy?: () => void; disabled?
   );
 }
 
-export function UpdateNotice({ status, failed, variant, onDeploy, deployDisabled, onCheck, checking }: UpdateNoticeProps) {
+export function UpdateNotice({ status, failed, variant, onDeploy, deployDisabled, onCheck, checking, limited }: UpdateNoticeProps) {
   const { t } = useI18n();
 
   if (variant === "banner") {
@@ -147,6 +149,11 @@ export function UpdateNotice({ status, failed, variant, onDeploy, deployDisabled
             </span>
           )}
         </div>
+      )}
+      {limited && (
+        <p role="status" className="text-xs">
+          {t("projects.update.rateLimited")}
+        </p>
       )}
       <p className="text-xs text-muted-foreground">{t("projects.update.hint")}</p>
     </div>

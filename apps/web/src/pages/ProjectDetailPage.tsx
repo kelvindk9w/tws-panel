@@ -831,6 +831,7 @@ export function ProjectDetailPage() {
           deployDisabled={busy !== null || running}
           onCheck={() => void update.checkNow()}
           checking={update.checking}
+          limited={update.limited}
         />
       )}
 

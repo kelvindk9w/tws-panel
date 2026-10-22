@@ -4,7 +4,7 @@ import type {
   ProjectUpdateStatusListResponse,
   ProjectUpdateStatusResponse,
 } from "@paas/core";
-import { apiFetch } from "@/lib/api";
+import { ApiRequestError, apiFetch } from "@/lib/api";
 
 /** Espera entre duas leituras enquanto o servidor ainda está consultando o repositório. */
 export const UPDATE_STATUS_RETRY_MS = 3_000;
@@ -28,6 +28,8 @@ export function useProjectUpdateStatus(projectId: string | undefined, refreshKey
   const [status, setStatus] = useState<ProjectUpdateStatus | null>(null);
   const [failed, setFailed] = useState(false);
   const [checking, setChecking] = useState(false);
+  // "Verificar agora" recusado pelo limite do servidor (429): mantém o estado anterior e avisa
+  const [limited, setLimited] = useState(false);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -66,22 +68,27 @@ export function useProjectUpdateStatus(projectId: string | undefined, refreshKey
   const checkNow = useCallback(async () => {
     if (!projectId) return;
     setChecking(true);
+    setLimited(false);
     try {
       const next = statusOf(
         await apiFetch<ProjectUpdateStatusResponse>(`/api/projects/${projectId}/update-status/check`, { method: "POST" }),
       );
       setStatus(next);
       setFailed(next === null);
-    } catch {
-      // o pedido falhou: não vale mostrar o resultado antigo como se fosse de agora
-      setStatus(null);
-      setFailed(true);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 429) {
+        setLimited(true);
+      } else {
+        // o pedido falhou: não vale mostrar o resultado antigo como se fosse de agora
+        setStatus(null);
+        setFailed(true);
+      }
     } finally {
       setChecking(false);
     }
   }, [projectId]);
 
-  return { status, failed, checking, checkNow };
+  return { status, failed, checking, limited, checkNow };
 }
 
 /** Estado de TODOS os projetos (Dashboard). Falha = lista vazia + `failed`; nunca derruba a tela. */

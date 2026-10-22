@@ -381,6 +381,7 @@ export default {
   "update.reason.blocked_host": "O endereço aponta para a própria máquina ou para a rede de metadados, e o painel não consulta esses destinos.",
   "update.reason.unsupported": "O endereço usa um protocolo que o painel não suporta. Use https:// ou ssh.",
   "update.reason.unknown": "A consulta ao repositório falhou por um motivo que o painel não reconheceu.",
+  "update.rateLimited": "Você pediu verificações demais em pouco tempo. Aguarde um minuto e tente de novo; o painel segue conferindo sozinho.",
   "update.checkNow": "Verificar agora",
   "update.checkedAt": "Última verificação: {when}",
   "update.deployButton": "Fazer o deploy",

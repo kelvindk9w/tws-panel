@@ -293,7 +293,25 @@ describe("página do projeto — topo", () => {
     await waitFor(() => expect(calls.some((c) => c.path === "/api/projects/p1/deploy" && c.method === "POST")).toBe(true));
     // passou pela verificação de guardrails antes, como o botão Deploy do topo
     const paths = calls.map((c) => c.path);
+    expect(paths.indexOf("/api/projects/p1/guardrails")).toBeGreaterThanOrEqual(0);
     expect(paths.indexOf("/api/projects/p1/guardrails")).toBeLessThan(paths.indexOf("/api/projects/p1/deploy"));
+  });
+
+  it("guardrails com bloqueio: o clique no aviso abre o modal e NÃO publica", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
+      if (path === "/api/projects/p1/guardrails") {
+        calls.push({ path, method: "GET" });
+        return { report: { blockers: 1, warnings: [], findings: [{ id: "x", severity: "block", message: "m" }] } };
+      }
+      return base(path, init);
+    });
+    abrir();
+    const aviso = await screen.findByTestId("update-banner-project");
+    fireEvent.click(within(aviso).getByRole("button", { name: /Fazer o deploy/ }));
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/projects/p1/guardrails")).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.some((c) => c.path === "/api/projects/p1/deploy")).toBe(false);
   });
 
   it("nada é publicado só por abrir a página ou por o aviso aparecer", async () => {
@@ -322,7 +340,8 @@ describe("página do projeto — topo", () => {
     abrir();
     const botao = await screen.findByRole("button", { name: /^Deploy$/ });
     expect(botao).toHaveAttribute("title", expect.stringContaining("Busca o código novo da branch configurada"));
-    expect(botao).toHaveAccessibleDescription(/Busca o código novo da branch configurada/);
+    expect(botao).toHaveAttribute("aria-describedby", "deploy-help");
+    expect(document.getElementById("deploy-help")).toHaveTextContent(/Busca o código novo da branch configurada/);
   });
 
   it("projeto sem repositório (upload) não consulta nem avisa", async () => {
@@ -367,6 +386,21 @@ describe("página do projeto — aba Git", () => {
     });
     fireEvent.click(within(cartao).getByRole("button", { name: "Verificar agora" }));
     await waitFor(() => expect(screen.getByTestId("update-notice-git")).toHaveTextContent(/Não deu para verificar/));
+  });
+
+  it("Verificar agora recusado por limite (429): mantém o estado e diz que o limite foi atingido, não 'o painel não respondeu'", async () => {
+    const { ApiRequestError } = await import("../src/lib/api");
+    abrir("/projects/p1/git");
+    const cartao = await screen.findByTestId("update-notice-git");
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
+      if (path === "/api/projects/p1/update-status/check") throw new ApiRequestError(429, "rate_limited", "x");
+      return base(path, init);
+    });
+    fireEvent.click(within(cartao).getByRole("button", { name: "Verificar agora" }));
+    await waitFor(() => expect(screen.getByTestId("update-notice-git")).toHaveTextContent(/pediu verificações demais/));
+    expect(screen.getByTestId("update-notice-git")).toHaveTextContent("Nova atualização disponível");
+    expect(screen.getByTestId("update-notice-git")).not.toHaveTextContent(/o painel não respondeu/);
   });
 
   it("falha na leitura inicial: 'não deu para verificar'", async () => {

@@ -25,12 +25,13 @@
  * erro. Uma consulta mais antiga que o último deploy não vale (o deploy pode ter
  * baixado um commit mais novo que o consultado).
  */
-import type {
-  GitReadCredential,
-  Project,
-  ProjectUpdateStatus,
-  UpdateErrorReason,
-  UpdateState,
+import {
+  DEFAULT_PROJECT_BRANCH,
+  type GitReadCredential,
+  type Project,
+  type ProjectUpdateStatus,
+  type UpdateErrorReason,
+  type UpdateState,
 } from "@paas/core";
 import type { GitAccessInput, RemoteBranchCommit, TargetCheck } from "@paas/deploy";
 
@@ -54,7 +55,6 @@ export const UPDATE_CHECK_MANUAL_MIN_MS = 10_000;
 export const UPDATE_CHECK_JITTER = 0.2;
 
 const SHORT = 7;
-const DEFAULT_BRANCH = "main";
 
 export interface UpdateCheckDeps {
   credentialFor: (project: Project) => Promise<GitReadCredential | null>;
@@ -104,13 +104,14 @@ export function updateReasonOf(reason: string): UpdateErrorReason {
 }
 
 export function branchOf(project: Project): string {
-  return project.branch?.trim() || DEFAULT_BRANCH;
+  return project.branch?.trim() || DEFAULT_PROJECT_BRANCH;
 }
 
 export class UpdateCheckService {
   private readonly cache = new Map<string, Entry>();
   private readonly inflight = new Map<string, Promise<void>>();
-  private readonly queue: Array<() => void> = [];
+  /** Consultas esperando vaga; sai primeiro a do projeto verificado há mais tempo (nunca verificado = 0). */
+  private readonly waiting: Array<{ priority: number; start: () => void }> = [];
   private active = 0;
   private readonly now: () => number;
   private readonly random: () => number;
@@ -139,10 +140,11 @@ export class UpdateCheckService {
     const deployed = project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
     if (!deployed) return "never_deployed";
     // O que está no ar vem de OUTRA branch/repositório: comparar commits não faria sentido.
+    // (deployedBranch vazio = a branch padrão: projeto criado sem branch)
     if (
       project.deployedSource != null &&
-      project.deployedBranch != null &&
-      (project.deployedSource !== project.source || project.deployedBranch !== branchOf(project))
+      (project.deployedSource !== project.source ||
+        (project.deployedBranch?.trim() || DEFAULT_PROJECT_BRANCH) !== branchOf(project))
     ) {
       return "config_changed";
     }
@@ -199,28 +201,49 @@ export class UpdateCheckService {
       if (!force && this.now() < entry.nextAt) return null;
       if (force && this.now() - entry.checkedAt < UPDATE_CHECK_MANUAL_MIN_MS) return null;
     }
-    const job = this.enqueue(() => this.run(project)).finally(() => this.inflight.delete(project.id));
+    const priority = this.cache.get(project.id)?.checkedAt ?? 0;
+    const job = this.enqueue(priority, (release) => this.run(project, release)).finally(() => this.inflight.delete(project.id));
     this.inflight.set(project.id, job);
     return job;
   }
 
-  private enqueue(task: () => Promise<void>): Promise<void> {
+  /**
+   * Fila com UPDATE_CHECK_CONCURRENCY vagas. A vaga só volta quando o trabalho de fato termina
+   * (`release`, chamado por `run`), mesmo que o resultado já tenha sido registrado pelo teto de tempo:
+   * assim uma resolução de nome pendurada nunca deixa passar de 3 consultas ao mesmo tempo. Quem espera
+   * é atendido pelo projeto verificado há mais tempo, para os lentos da frente não adiarem os demais.
+   */
+  private enqueue(priority: number, task: (release: () => void) => Promise<void>): Promise<void> {
     return new Promise<void>((resolve) => {
       const start = () => {
         this.active += 1;
-        // `run` captura tudo o que pode falhar: a tarefa não rejeita
-        void task().finally(() => {
+        let released = false;
+        const release = () => {
+          if (released) return;
+          released = true;
           this.active -= 1;
-          this.queue.shift()?.();
-          resolve();
-        });
+          this.pump();
+        };
+        // `run` captura tudo o que pode falhar: a tarefa não rejeita
+        void task(release).finally(resolve);
       };
-      if (this.active < UPDATE_CHECK_CONCURRENCY) start();
-      else this.queue.push(start);
+      this.waiting.push({ priority, start });
+      this.pump();
     });
   }
 
-  private async run(project: Project): Promise<void> {
+  private pump(): void {
+    while (this.active < UPDATE_CHECK_CONCURRENCY && this.waiting.length > 0) {
+      let best = 0;
+      for (let i = 1; i < this.waiting.length; i++) {
+        if ((this.waiting[i] as { priority: number }).priority < (this.waiting[best] as { priority: number }).priority) best = i;
+      }
+      const [next] = this.waiting.splice(best, 1);
+      next?.start();
+    }
+  }
+
+  private async run(project: Project, release: () => void): Promise<void> {
     const key = this.keyOf(project);
     const branch = branchOf(project);
     let outcome: { commit: string } | { reason: UpdateErrorReason };
@@ -239,6 +262,8 @@ export class UpdateCheckService {
         });
         return result.ok ? { commit: result.commit } : { reason: updateReasonOf(result.reason) };
       })();
+      // a vaga volta quando o trabalho termina de verdade (não quando o teto de tempo dá o resultado)
+      void work.then(release, release);
       const hardStop = new Promise<{ reason: UpdateErrorReason }>((resolve) => {
         timer = setTimeout(() => resolve({ reason: "timeout" }), UPDATE_CHECK_HARD_TIMEOUT_MS);
       });

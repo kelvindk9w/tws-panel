@@ -57,7 +57,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await new Promise((r) => setTimeout(r, 100)); // o job ainda grava o estado final
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 async function novoProjeto(name: string, branch: string, domain: string): Promise<Project> {
@@ -132,6 +133,59 @@ describe("alerta de nova atualização", () => {
     expect((await svc.updateStatus(p.id)).state).toBe("unknown");
     await deploy(p);
     expect((await svc.updateStatus(p.id)).state).toBe("up_to_date");
+  });
+
+  it("deploy FALHO não grava (nem apaga) o commit no ar", async () => {
+    const p = await novoProjeto("loja", "main", "loja.example.com");
+    await deploy(p);
+    const antes = p.deployedCommit;
+    expect(antes).toBe(await head("main"));
+    await commit("main", "2");
+    (svc as unknown as { engine: { deploy: () => Promise<void> } }).engine.deploy = async () => {
+      throw new Error("build quebrou");
+    };
+    const job = await svc.startDeploy(p.id);
+    await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("failed"), { timeout: 15_000 });
+    expect(p.deployedCommit).toBe(antes);
+    await new Promise((r) => setTimeout(r, 200)); // deixa o job terminar de gravar antes de apagar a pasta
+  });
+
+  it("quando o job consta como 'success' o commit já está registrado (sem janela entre os dois)", async () => {
+    const p = await novoProjeto("loja", "main", "loja.example.com");
+    const job = await svc.startDeploy(p.id);
+    const limite = Date.now() + 20_000;
+    let visto: string | undefined;
+    while (Date.now() < limite && visto !== "success") {
+      visto = (await svc.getJob(p.id, job.id))?.status;
+      if (visto === "success") {
+        // no instante em que o job aparece como concluído, o commit já está gravado
+        expect(p.deployedCommit).toBe(await head("main"));
+      } else {
+        await new Promise((r) => setImmediate(r));
+      }
+    }
+    expect(visto).toBe("success");
+    await new Promise((r) => setTimeout(r, 200)); // deixa o job terminar de gravar antes de apagar a pasta
+  });
+
+  it("publicado com a branch vazia (padrão) e depois trocado para sandbox: 'config_changed', não atualização", async () => {
+    const p = await novoProjeto("loja", "main", "loja.example.com");
+    p.branch = null;
+    await deploy(p);
+    expect(p.deployedBranch).toBeNull();
+    expect((await svc.updateStatus(p.id)).state).toBe("up_to_date");
+    await svc.updateProject(p.id, { branch: "sandbox" });
+    expect((await svc.updateStatus(p.id)).state).toBe("config_changed");
+  });
+
+  it("apagar o projeto esquece o resultado guardado", async () => {
+    const p = await novoProjeto("loja", "main", "loja.example.com");
+    await deploy(p);
+    await svc.updateStatus(p.id);
+    const cache = (svc.updates as unknown as { cache: Map<string, unknown> }).cache;
+    expect(cache.has(p.id)).toBe(true);
+    await svc.deleteProject(p.id, false, () => undefined);
+    expect(cache.has(p.id)).toBe(false);
   });
 
   it("projeto inexistente: 404", async () => {

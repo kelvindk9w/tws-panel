@@ -915,6 +915,7 @@ export class DeployService {
     await this.engine.remove(project, onLog);
     // Recalcula o Caddyfile sem o projeto removido (best-effort).
     this.projects = this.projects.filter((p) => p.id !== project.id);
+    this.updates.invalidate(project.id);
     try {
       await this.engine.syncCaddy(this.projects, onLog);
     } catch {
@@ -1209,6 +1210,10 @@ export class DeployService {
           guardrailOverride,
           precomputedGuardrailReport,
         });
+        // O commit que ficou no ar (base do alerta de nova atualização) é lido ANTES de o job constar como
+        // concluído: quem vê "success" já encontra o commit registrado. readDeployedCommit nunca lança;
+        // null (não deu para ler) vira "desconhecido", nunca "atualização disponível".
+        const deployedCommit = await readDeployedCommit(this.engineCtx, project);
         job.status = "success";
         project.lastDeployAt = new Date().toISOString();
         project.lastDeployStatus = "success";
@@ -1217,9 +1222,7 @@ export class DeployService {
         // a configuração sem publicar em seguida.
         project.deployedBranch = project.branch;
         project.deployedSource = project.source;
-        // O commit que ficou no ar (base do alerta de nova atualização). null se não deu para ler:
-        // o estado vira "desconhecido", nunca "atualização disponível".
-        project.deployedCommit = await readDeployedCommit(this.engineCtx, project);
+        project.deployedCommit = deployedCommit;
         // O fuso que entrou nos containers (a tela compara com a escolha atual).
         project.timezoneApplied = this.projectZone(project);
         // persiste detecção feita durante o deploy

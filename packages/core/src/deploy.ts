@@ -103,6 +103,9 @@ export interface DetectResult {
   details: string[];
 }
 
+/** Branch usada quando o projeto não define uma (ingestão e alerta de atualização). */
+export const DEFAULT_PROJECT_BRANCH = "main";
+
 export interface Project {
   id: string;
   name: string;

@@ -204,7 +204,7 @@ export function DashboardPage() {
       <OnboardingChecklist variant="dashboard" onVisibleChange={setChecklistShown} />
       {/* com o roteiro na tela, o passo 2 dele já fala do 2FA */}
       {checklistShown === false && <TwoFactorNudge />}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("dashboard.title")}</h1>
           <p className="text-sm text-muted-foreground">

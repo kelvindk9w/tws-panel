@@ -7,7 +7,7 @@
 import { existsSync } from "node:fs";
 import { cp, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import type { GitReadCredential, Project } from "@paas/core";
+import { DEFAULT_PROJECT_BRANCH, type GitReadCredential, type Project } from "@paas/core";
 import { run } from "./exec.js";
 import { CREDENTIAL_HELPER, GIT_DIR_NAME, GIT_SAFE_CONFIG, credentialHost, credentialProtocol, gitSafeEnv, sanitizeGitConfig } from "./git-safe.js";
 import { isRegularFile, writeFileNoFollow } from "./safe-fs.js";
@@ -253,7 +253,7 @@ async function ingestGit(
 ): Promise<string> {
   const src = projectSrcDir(ctx, project);
   const gitDir = projectGitDir(ctx, project);
-  const branch = project.branch ?? "main";
+  const branch = project.branch ?? DEFAULT_PROJECT_BRANCH;
   if (project.source.startsWith("-")) {
     throw new Error("Fonte de código inválida: o endereço do repositório não pode começar com \"-\".");
   }
