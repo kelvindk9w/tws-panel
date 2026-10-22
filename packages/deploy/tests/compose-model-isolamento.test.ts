@@ -222,3 +222,23 @@ describe("imageRepository", () => {
     expect(imageRepository("stalwartlabs/mail-server:v0.11.8")).toBe("stalwartlabs/mail-server");
   });
 });
+
+describe("proxy em network_mode: o dono do namespace é o proxy válido", () => {
+  const net = { networks: { "paas-net": { name: "paas-net", external: true } } };
+  const model = (ownerNets: unknown) => ({
+    services: {
+      wallet: { image: "wallet:1", networks: ownerNets },
+      web: { image: "web:1", network_mode: "service:wallet" },
+    },
+    ...net,
+  });
+  const o = () => opts({ proxyService: "web", slug: "app" });
+
+  it("o dono na paas-net (só o alias do slug) passa; outro serviço na paas-net continua barrado", () => {
+    expect(regras(model({ "paas-net": { aliases: ["app"] } }), o)).toEqual([]);
+    expect(regras(model({ "paas-net": { aliases: ["outro"] } }), o)).toEqual(["network-hijack"]);
+    const m = model({ "paas-net": { aliases: ["app"] } }) as { services: Record<string, unknown> };
+    m.services.db = { image: "pg", networks: { "paas-net": null } };
+    expect(regras(m, o)).toEqual(["network-hijack"]);
+  });
+});

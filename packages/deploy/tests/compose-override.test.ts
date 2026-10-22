@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { composeOverrideYaml } from "../src/compose-override.js";
+import { composeOverrideYaml, mailNetworkTargets } from "../src/compose-override.js";
 
 const APP = `services:
   web:
@@ -157,5 +157,156 @@ describe("composeOverrideYaml", () => {
     const doc = parse(composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-net", mailNetwork: "paas-mail", mailServices: [] }));
     expect(doc.networks).toEqual({ "paas-net": { external: true } });
     expect(doc.services.worker).toBeUndefined();
+  });
+});
+
+const CASSINO = `services:
+  db:
+    image: postgres:16
+  redis:
+    image: redis:7
+  wallet:
+    image: wallet:1
+    networks: [backend]
+  web:
+    image: web:1
+    network_mode: service:wallet
+  caddy:
+    image: caddy:2
+    network_mode: service:wallet
+networks:
+  backend: {}
+`;
+
+function dockerComposeDisponivel(): boolean {
+  try {
+    execFileSync("docker", ["compose", "version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const itDocker = dockerComposeDisponivel() ? it : it.skip;
+
+function configJson(dir: string, files: string[]): Record<string, { network_mode?: string; networks?: Record<string, unknown> }> {
+  const args = ["compose", ...files.flatMap((f) => ["-f", f]), "config", "--format", "json"];
+  const out = execFileSync("docker", args, { cwd: dir, env: { ...process.env, DOCKER_CONFIG: dir } }).toString();
+  return JSON.parse(out).services;
+}
+
+describe("network_mode vindo de âncora YAML ou de extends", () => {
+  const ANCORA = `x-modo: &modo\n  network_mode: service:wallet\nservices:\n  wallet:\n    image: w:1\n  web:\n    image: web:1\n    <<: *modo\n`;
+  const EXTENDS = `services:\n  wallet:\n    image: w:1\n  base:\n    image: b:1\n    network_mode: service:wallet\n  web:\n    extends: base\n`;
+  const base = { proxyService: "wallet", slug: "c", network: "paas-net", mailNetwork: "paas-mail" };
+
+  it.each([["âncora/merge", ANCORA], ["extends no mesmo arquivo", EXTENDS]])("%s: o serviço não recebe networks e o dono entra", (_n, compose) => {
+    const doc = parse(composeOverrideYaml({ ...base, compose, mailServices: ["web"] }));
+    expect(doc.services.web?.networks).toBeUndefined();
+    expect(doc.services.wallet.networks).toHaveProperty("paas-mail");
+  });
+
+  it("o modelo resolvido (docker compose config) manda: extends de outro arquivo", () => {
+    const resolved = { services: { wallet: { image: "w:1" }, web: { image: "web:1", network_mode: "service:wallet" } } };
+    const compose = `services:\n  wallet:\n    image: w:1\n  web:\n    extends:\n      file: outro.yml\n      service: base\n`;
+    const doc = parse(composeOverrideYaml({ ...base, compose, resolved, mailServices: ["web"] }));
+    expect(doc.services.web?.networks).toBeUndefined();
+    expect(doc.services.wallet.networks).toHaveProperty("paas-mail");
+    expect(mailNetworkTargets(compose, ["web"], resolved).targets).toEqual(["wallet"]);
+  });
+
+  itDocker("docker compose config real aceita âncora, extends e extends de outro arquivo com e-mail", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "paas-ext-"));
+    writeFileSync(path.join(dir, "outro.yml"), "services:\n  base:\n    image: b:1\n    network_mode: service:wallet\n");
+    const compose = `x-modo: &modo\n  network_mode: service:wallet\nservices:\n  wallet:\n    image: w:1\n  a:\n    image: a:1\n    <<: *modo\n  b:\n    image: b:1\n    network_mode: service:wallet\n  c:\n    extends:\n      file: outro.yml\n      service: base\n  d:\n    extends: b\n`;
+    writeFileSync(path.join(dir, "compose.yml"), compose);
+    const resolved = { services: configJson(dir, ["compose.yml"]) };
+    writeFileSync(
+      path.join(dir, "o.yml"),
+      composeOverrideYaml({ ...base, compose, resolved, mailServices: ["wallet", "a", "b", "c", "d"] }),
+    );
+    const svc = configJson(dir, ["compose.yml", "o.yml"]);
+    for (const n of ["a", "b", "c", "d"]) {
+      expect(svc[n]!.network_mode, n).toBe("service:wallet");
+      expect(svc[n]!.networks, n).toBeUndefined();
+    }
+    expect(Object.keys(svc.wallet!.networks!)).toContain("paas-mail");
+  });
+});
+
+describe("serviços com network_mode (formato do cassino)", () => {
+  const base = { compose: CASSINO, proxyService: "wallet", slug: "cassino", network: "paas-net", mailNetwork: "paas-mail" };
+
+  it("o dono do namespace entra na rede de e-mail; quem usa network_mode nunca recebe networks", () => {
+    const doc = parse(composeOverrideYaml({ ...base, mailServices: ["db", "redis", "wallet", "web", "caddy"] }));
+    expect(doc.services.web?.networks).toBeUndefined();
+    expect(doc.services.caddy?.networks).toBeUndefined();
+    expect(doc.services.wallet.networks).toEqual({ default: null, "paas-net": { aliases: ["cassino"] }, "paas-mail": null });
+    expect(doc.services.db.networks).toEqual({ default: null, "paas-mail": null });
+  });
+
+  it("o dono entra mesmo que não esteja em mailServices", () => {
+    const doc = parse(composeOverrideYaml({ ...base, proxyService: "db", mailServices: ["web"] }));
+    expect(doc.services.wallet.networks).toEqual({ default: null, "paas-mail": null });
+    expect(doc.services.web?.networks).toBeUndefined();
+  });
+
+  it("proxyService com network_mode: a rede do proxy vai para o dono", () => {
+    const doc = parse(composeOverrideYaml({ ...base, proxyService: "web" }));
+    expect(doc.services.web?.networks).toBeUndefined();
+    expect(doc.services.wallet.networks).toEqual({ default: null, "paas-net": { aliases: ["cassino"] } });
+  });
+
+  it("proxyService com network_mode host/none não gera networks", () => {
+    const compose = "services:\n  a:\n    image: x\n    network_mode: host\n";
+    const doc = parse(composeOverrideYaml({ compose, proxyService: "a", slug: "s", network: "paas-net" }));
+    expect(doc.services?.a?.networks).toBeUndefined();
+  });
+
+  itDocker("o docker compose config aceita o override com e-mail habilitado", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "paas-netmode-"));
+    writeFileSync(path.join(dir, "compose.yml"), CASSINO);
+    writeFileSync(
+      path.join(dir, "o.yml"),
+      composeOverrideYaml({ ...base, mailServices: ["db", "redis", "wallet", "web", "caddy"] }),
+    );
+    const out = execFileSync("docker", ["compose", "-f", "compose.yml", "-f", "o.yml", "config", "--format", "json"], {
+      cwd: dir,
+      env: { ...process.env, DOCKER_CONFIG: dir },
+    }).toString();
+    const svc = JSON.parse(out).services;
+    expect(svc.web.network_mode).toBe("service:wallet");
+    expect(svc.web.networks).toBeUndefined();
+    expect(Object.keys(svc.wallet.networks)).toContain("paas-mail");
+  });
+});
+
+describe("mailNetworkTargets", () => {
+  const c = (body: string) => `services:\n${body}`;
+  it("sem network_mode: devolve os mesmos serviços", () => {
+    expect(mailNetworkTargets(APP, ["web", "worker"])).toEqual({ targets: ["web", "worker"], delegated: {}, skipped: [] });
+  });
+  it("service:X: delega ao dono, inclusive quando o dono não estava na lista", () => {
+    const r = mailNetworkTargets(c("  a:\n    image: x\n  b:\n    image: x\n    network_mode: service:a\n"), ["b"]);
+    expect(r).toEqual({ targets: ["a"], delegated: { b: "a" }, skipped: [] });
+  });
+  it("cadeia service:A onde A tem service:B: chega ao final", () => {
+    const r = mailNetworkTargets(c("  a:\n    image: x\n    network_mode: service:b\n  b:\n    image: x\n  d:\n    image: x\n    network_mode: service:a\n"), ["d", "a", "b"]);
+    expect(r.targets).toEqual(["b"]);
+    expect(r.delegated).toEqual({ d: "b", a: "b" });
+  });
+  it.each(["host", "none", "bridge", "container:abc"])("network_mode %s: sem dono, ignorado", (mode) => {
+    const r = mailNetworkTargets(c(`  a:\n    image: x\n    network_mode: ${mode}\n  b:\n    image: x\n`), ["a", "b"]);
+    expect(r).toEqual({ targets: ["b"], delegated: {}, skipped: ["a"] });
+  });
+  it("dono inexistente e ciclo: ignorados, sem override inválido", () => {
+    const r = mailNetworkTargets(c("  a:\n    image: x\n    network_mode: service:zzz\n  b:\n    image: x\n    network_mode: service:c\n  c:\n    image: x\n    network_mode: service:b\n"), ["a", "b", "c"]);
+    expect(r).toEqual({ targets: [], delegated: {}, skipped: ["a", "b", "c"] });
+  });
+  it("compose ilegível ou serviço desconhecido: mantém o nome", () => {
+    expect(mailNetworkTargets(": : [", ["x"]).targets).toEqual(["x"]);
+    expect(mailNetworkTargets(APP, ["x"]).targets).toEqual(["x"]);
+  });
+  it("deduplica", () => {
+    expect(mailNetworkTargets(APP, ["web", "web"]).targets).toEqual(["web"]);
   });
 });

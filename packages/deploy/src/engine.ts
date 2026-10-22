@@ -31,7 +31,7 @@ import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
-import { composeOverrideYaml, hardenComposeModel, strippedProxyPortServices } from "./compose-override.js";
+import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
@@ -729,9 +729,20 @@ export class DeployEngine {
     // extra (Fase 3 — SMTP) e, em app comum, retira a publicação de 80/443.
     const envServices = Object.keys(extraEnv).length > 0 ? await composeServiceNames(src, composeFile) : [];
     // e-mail habilitado (SMTP_HOST injetado): esses serviços entram na rede de e-mail, a única que alcança o Stalwart (A4)
-    const mailServices = extraEnv.SMTP_HOST ? envServices : [];
-    if (mailServices.length > 0) await this.ensureMailNetwork();
+    // Quem usa `network_mode` não pode ter `networks` (o compose recusa): o dono do namespace entra no lugar.
     const composeContent = await readFile(path.join(src, composeFile), "utf8");
+    // modelo resolvido SEM o override (merge, extends e include aplicados): decide quem tem network_mode.
+    // O compose só lê o ambiente depois da checagem do .env (nunca segue link, A2).
+    const workDirEnv = projectWorkDir(this.ctx, project);
+    await mkdir(workDirEnv, { recursive: true });
+    const env = await writeProjectDotenv(src, workDirEnv, dotenv);
+    await this.assertInputsSafe(src, [".env"]);
+    await this.writeComposeEnv(project, src);
+    const pre = await loadCanonicalCompose(this.composeArgs(project, src, false));
+    const resolved = pre.ok ? pre.model : undefined;
+    const mailPlan = extraEnv.SMTP_HOST ? mailNetworkTargets(composeContent, envServices, resolved) : null;
+    const mailServices = mailPlan?.targets ?? [];
+    if (mailServices.length > 0) await this.ensureMailNetwork();
 
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
@@ -743,6 +754,7 @@ export class DeployEngine {
       network: PAAS_NETWORK,
       mailNetwork: PAAS_MAIL_NETWORK,
       mailServices,
+      ...(resolved !== undefined ? { resolved } : {}),
       env: extraEnv,
       envServices,
       ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
@@ -772,9 +784,19 @@ export class DeployEngine {
     if (envServices.length > 0) {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);
     }
+    if (mailPlan) {
+      if (mailServices.length > 0) onLog(`Rede de e-mail ${PAAS_MAIL_NETWORK} ligada em: ${mailServices.join(", ")}.\n`);
+      const byOwner = new Map<string, string[]>();
+      for (const [name, owner] of Object.entries(mailPlan.delegated)) byOwner.set(owner, [...(byOwner.get(owner) ?? []), name]);
+      for (const [owner, names] of byOwner) {
+        onLog(`E-mail: ${names.join(", ")} compartilham a rede de ${owner} (network_mode) e usam a dela para alcançar o servidor de e-mail.\n`);
+      }
+      for (const name of mailPlan.skipped) {
+        onLog(`Aviso: ${name}: network_mode sem rede própria (host, none, container: ou serviço inexistente) — não alcança o servidor de e-mail.\n`);
+      }
+    }
 
     // Variáveis do projeto → .env do compose (interpolação ${VAR} e env_file).
-    const env = await writeProjectDotenv(src, workDir, dotenv);
     const dotenvKeys = Object.keys(dotenv);
     if (dotenvKeys.length > 0) {
       onLog(
@@ -796,13 +818,18 @@ export class DeployEngine {
     const ids = await this.projectContainers(project);
     if (ids.length === 0) return 0;
     await this.ensureMailNetwork();
+    let joined = 0;
     for (const id of ids) {
+      // container que usa a rede de outro (container:/host/none) não aceita `network connect`: o dono dela é ligado
+      const mode = await run("docker", ["inspect", "-f", "{{.HostConfig.NetworkMode}}", id]);
+      if (mode.code === 0 && /^(container:|host$|none$)/.test(mode.stdout.trim())) continue;
       const join = await run("docker", ["network", "connect", PAAS_MAIL_NETWORK, id]);
       if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
         throw new Error(`falha ao ligar ${id} à rede ${PAAS_MAIL_NETWORK}: ${join.stderr.trim()}`);
       }
+      joined++;
     }
-    return ids.length;
+    return joined;
   }
 
   /** Garante a rede de e-mail (idempotente): `compose up` com rede externa inexistente falharia. */
@@ -864,7 +891,7 @@ export class DeployEngine {
     onLog("Site estático: o servidor web não usa fuso horário; nada a recriar.\n");
   }
 
-  private composeArgs(project: Project, src: string): string[] {
+  private composeArgs(project: Project, src: string, withOverride = true): string[] {
     const composeFile = project.detection?.composeFile ?? "compose.yml";
     const workDir = projectWorkDir(this.ctx, project);
     const overrideFile = path.join(workDir, "paas.override.yml");
@@ -881,8 +908,7 @@ export class DeployEngine {
       src,
       "-f",
       path.join(src, composeFile),
-      "-f",
-      overrideFile,
+      ...(withOverride ? ["-f", overrideFile] : []),
     ];
   }
 

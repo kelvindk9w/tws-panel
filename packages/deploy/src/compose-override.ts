@@ -10,7 +10,7 @@
  *  - aplica as trocas da porta do servidor feitas no painel (modal Portas,
  *    ver port-overrides.ts), na mesma lista `!override`.
  */
-import { Document } from "yaml";
+import { Document, parse } from "yaml";
 import type { PortOverride } from "@paas/core";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy, portsWithoutProxyPorts } from "./proxy-ports.js";
@@ -25,6 +25,8 @@ export interface ComposeOverrideOptions {
   mailNetwork?: string;
   /** Serviços de um projeto com e-mail habilitado (os que recebem o SMTP_*). */
   mailServices?: string[];
+  /** Modelo resolvido do compose (docker compose config, sem o override): decide quem tem network_mode. */
+  resolved?: unknown;
   env?: Record<string, string>;
   envServices?: string[];
   /** Trocas da porta do servidor por serviço (Project.portOverrides). */
@@ -70,13 +72,109 @@ export function hardenComposeModel(model: unknown): unknown {
   return { ...(model as Record<string, unknown>), services: hardened };
 }
 
+type OwnerResult = { kind: "self" } | { kind: "owner"; name: string } | { kind: "none" };
+
+type ServiceDefs = Record<string, Record<string, unknown>>;
+
+function servicesOf(doc: unknown): ServiceDefs {
+  const services = (doc as { services?: unknown } | null)?.services;
+  if (typeof services !== "object" || services === null || Array.isArray(services)) return {};
+  return services as ServiceDefs;
+}
+
+/**
+ * Serviços com o que importa para as redes. Com o modelo resolvido (saída do
+ * `docker compose config`: merge, extends — inclusive de outro arquivo — e
+ * include já aplicados) vale ele. Sem ele, o YAML cru com merge `<<:` e
+ * `extends` do mesmo arquivo resolvidos (o de outro arquivo só o modelo resolvido alcança).
+ */
+function composeServiceDefs(compose: string, resolved?: unknown): ServiceDefs {
+  if (resolved !== undefined) {
+    const fromModel = servicesOf(resolved);
+    if (Object.keys(fromModel).length > 0) return fromModel;
+  }
+  let raw: ServiceDefs;
+  try {
+    raw = servicesOf(parse(compose, { merge: true }));
+  } catch {
+    return {};
+  }
+  const out: ServiceDefs = {};
+  for (const [name, def] of Object.entries(raw)) {
+    let mode = def?.network_mode;
+    const seen = new Set<string>([name]);
+    let ext = def?.extends;
+    while (mode === undefined && ext !== undefined) {
+      const target = typeof ext === "string" ? ext : typeof ext === "object" && ext !== null && (ext as { file?: unknown }).file === undefined ? (ext as { service?: unknown }).service : undefined;
+      if (typeof target !== "string" || seen.has(target) || !(target in raw)) break;
+      seen.add(target);
+      mode = raw[target]?.network_mode;
+      ext = raw[target]?.extends;
+    }
+    out[name] = mode === undefined ? (def ?? {}) : { ...(def ?? {}), network_mode: mode };
+  }
+  return out;
+}
+
+/**
+ * Quem pode receber `networks` no lugar de `name`. O compose recusa `networks`
+ * junto de `network_mode`; então o serviço com `network_mode: service:X` usa a
+ * rede de X (segue a cadeia). `host`/`none`/`bridge`/`container:...`, dono
+ * inexistente e ciclo não têm dono ("none"): nada é gerado para eles.
+ */
+function networkOwner(defs: ServiceDefs, name: string): OwnerResult {
+  const seen = new Set<string>();
+  let current = name;
+  for (;;) {
+    const def = defs[current];
+    const mode = typeof def?.network_mode === "string" ? def.network_mode.trim() : "";
+    if (mode === "") return current === name ? { kind: "self" } : { kind: "owner", name: current };
+    const m = /^service:(.+)$/.exec(mode);
+    if (!m || seen.has(current)) return { kind: "none" };
+    seen.add(current);
+    const next = m[1]!.trim();
+    if (!(next in defs)) return { kind: "none" };
+    current = next;
+  }
+}
+
+export interface MailNetworkTargets {
+  /** Serviços que de fato recebem `networks` com a rede de e-mail. */
+  targets: string[];
+  /** Serviço com network_mode → dono do namespace que entrou no lugar dele. */
+  delegated: Record<string, string>;
+  /** Serviços sem como entrar na rede (host, none, container:, dono inexistente, ciclo). */
+  skipped: string[];
+}
+
+/** Resolve os serviços do e-mail para os que podem receber `networks` (dono do namespace no lugar de quem o compartilha). */
+export function mailNetworkTargets(compose: string, requested: readonly string[], resolved?: unknown): MailNetworkTargets {
+  const defs = composeServiceDefs(compose, resolved);
+  const targets: string[] = [];
+  const delegated: Record<string, string> = {};
+  const skipped: string[] = [];
+  for (const name of requested) {
+    const r = networkOwner(defs, name);
+    if (r.kind === "none") {
+      if (!skipped.includes(name)) skipped.push(name);
+      continue;
+    }
+    const target = r.kind === "self" ? name : r.name;
+    if (r.kind === "owner") delegated[name] = target;
+    if (!targets.includes(target)) targets.push(target);
+  }
+  return { targets, delegated, skipped };
+}
+
 export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
   const env = opts.env ?? {};
-  const services: Record<string, Record<string, unknown>> = {
-    [opts.proxyService]: {
-      networks: { default: null, [opts.network]: { aliases: [opts.slug] } },
-    },
-  };
+  const defs = composeServiceDefs(opts.compose, opts.resolved);
+  const services: Record<string, Record<string, unknown>> = {};
+  const proxyOwner = networkOwner(defs, opts.proxyService);
+  if (proxyOwner.kind !== "none") {
+    const proxyTarget = proxyOwner.kind === "owner" ? proxyOwner.name : opts.proxyService;
+    services[proxyTarget] = { networks: { default: null, [opts.network]: { aliases: [opts.slug] } } };
+  }
   if (Object.keys(env).length > 0) {
     for (const name of opts.envServices ?? []) {
       services[name] = { ...(services[name] ?? {}), environment: { ...env } };
@@ -87,7 +185,7 @@ export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
     services[name] = { ...(services[name] ?? {}), environment: { ...current, ...extra } };
   }
 
-  const mailServices = opts.mailNetwork ? (opts.mailServices ?? []) : [];
+  const mailServices = opts.mailNetwork ? mailNetworkTargets(opts.compose, opts.mailServices ?? [], opts.resolved).targets : [];
   for (const name of mailServices) {
     const current = (services[name]?.networks as Record<string, unknown> | undefined) ?? { default: null };
     services[name] = { ...(services[name] ?? {}), networks: { ...current, [opts.mailNetwork!]: null } };

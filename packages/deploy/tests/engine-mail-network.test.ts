@@ -69,4 +69,17 @@ describe("DeployEngine.joinMailNetwork", () => {
     respostas = () => ({ code: 0, stdout: "", stderr: "" });
     await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(0);
   });
+
+  it("container que compartilha a rede de outro (container:/host) não recebe network connect e não conta", async () => {
+    respostas = (a) => {
+      if (a[0] === "ps" && a.includes("-q")) return { code: 0, stdout: "c1\nc2\nc3\n", stderr: "" };
+      if (a[0] === "inspect" && a.includes("c2")) return { code: 0, stdout: "container:c1\n", stderr: "" };
+      if (a[0] === "inspect" && a.includes("c3")) return { code: 0, stdout: "host\n", stderr: "" };
+      return { code: 0, stdout: a[0] === "inspect" ? "paas-loja_default\n" : "", stderr: "" };
+    };
+    await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(1);
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "c1"]);
+    expect(calls).not.toContainEqual(["network", "connect", "paas-mail", "c2"]);
+    expect(calls).not.toContainEqual(["network", "connect", "paas-mail", "c3"]);
+  });
 });
