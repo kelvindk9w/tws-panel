@@ -15,6 +15,8 @@ export default {
   "card.containers": "{n} container(es)",
   "card.active": " · {n} ativo(s)",
   "loadError": "Falha ao carregar.",
+  "removed.title": "Projeto “{name}” removido.",
+  "removed.body": "Containers, domínio e configuração foram apagados. Os backups já feitos continuam disponíveis.",
   "title": "Projetos",
   "subtitle": "Deploys gerenciados pelo painel, com domínio via Caddy central.",
   "refresh": "Atualizar",

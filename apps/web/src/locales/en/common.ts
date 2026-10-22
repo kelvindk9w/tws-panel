@@ -16,4 +16,5 @@ export default {
   "password.hide": "Hide",
   "password.show": "Show",
   "password.defaultTarget": "password",
+  "dismissNotice": "Dismiss",
 } as const;

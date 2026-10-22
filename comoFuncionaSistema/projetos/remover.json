@@ -46,7 +46,7 @@
     "grava data/projects.json sem o projeto",
     "auditoria: project.delete"
   ],
-  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (remove(), fluxo de confirmação em 2 passos na 'Zona de perigo' com checkbox opcional 'Apagar também o código-fonte')"],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (remove(), botão 'Removendo…'; ao terminar navega para '/' com state.removedProject e o Dashboard mostra o aviso 'Projeto removido' (role=status, até fechar); a zona de perigo diz que não precisa parar antes; botão 'Removendo…'; ao terminar navega para '/' com state.removedProject e o Dashboard mostra o aviso 'Projeto removido' (role=status, até fechar); a zona de perigo diz que não precisa parar antes; fluxo de confirmação em 2 passos na 'Zona de perigo' com checkbox opcional 'Apagar também o código-fonte')"],
   "testes": ["apps/server/tests/routes-projects.test.ts"],
   "observacoes": [
     "Todas as etapas de engine.remove() (compose down, docker rm, image rm) são best-effort e não lançam em caso de falha de comando — na prática, o endpoint praticamente só falha com 404 (projeto inexistente) ou com um erro de filesystem ao apagar deleteSource. O teste de rota que simula 409 'deploy_in_progress' usa um STUB do serviço só para validar o mapeamento genérico de erro→resposta; não corresponde a uma checagem real existente no código de deleteProject (não há verificação de deploy em andamento antes da remoção).",

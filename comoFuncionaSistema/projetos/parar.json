@@ -38,9 +38,10 @@
     { "tipo": "pacote", "nome": "DeployEngine.stop", "arquivo": "packages/deploy/src/engine.ts:393", "papel": "Resolve os containers do projeto e roda docker stop." }
   ],
   "efeitosColaterais": ["docker stop nos containers do projeto (não remove nada)"],
-  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('stop'), botão 'Parar' — desabilitado quando status é 'deploying' ou 'created')"],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('stop'), botão 'Parar' — desabilitado quando status é 'deploying', 'created' ou 'stopped'). Feedback: botão com spinner e 'Parando…'; depois do POST a página consulta GET /api/projects/:id (a cada 1,5 s, até 20 vezes) e só mostra 'Projeto parado.' (região role=status, fica até fechar) quando o estado real não é mais 'running'; se não confirmar, aviso 'Não confirmei…' com 'Verificar de novo'; erro tem 'Tentar de novo'. Resposta tardia depois de trocar de projeto é descartada."],
   "testes": ["apps/server/tests/routes-projects.test.ts", "packages/deploy/tests/engine-lifecycle.test.ts"],
   "observacoes": [
+    "O POST é SÍNCRONO: só responde depois do docker stop terminar (até 120 s). Não há estado 'parando' no servidor; o 'Parando…' da tela é o tempo do próprio POST + a conferência do estado. O Caddyfile e o domínio NÃO são tocados: com o container parado, o Caddy responde 503 com a página 'Site temporariamente indisponível' (caddy.ts PROJECT_DOWN_PAGE). Código, variáveis, volumes e imagens são mantidos. Parar NÃO é pré-requisito para remover (engine.remove faz rm -f dos containers).",
     "CORRIGIDO nesta rodada: engine.stop/start agora lançam engineError (statusCode/code), o mesmo padrão de startDeploy/createProject — sendError() já lê essas propriedades de qualquer erro (duck typing), sem precisar de uma classe específica. Ver iniciar.json para o mesmo padrão aplicado a start.",
     "M9: os containers do projeto são os de com.docker.compose.project=paas-<slug>, mais os criados pelo painel com paas.project=<slug> + paas.managed=true e SEM label do compose. Uma imagem com `LABEL paas.project=<outro>` não captura nem é capturada."
   ]
