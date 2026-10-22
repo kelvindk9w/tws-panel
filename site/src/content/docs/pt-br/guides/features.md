@@ -53,6 +53,17 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
 - Endereços de sslip.io já criados levam o indicador discreto "contém o IP da VPS" (página do
   projeto e lista de domínios).
 - **Vários domínios** no mesmo projeto: conectar, tornar principal e remover, valendo na hora.
+  Conectar o domínio oficial ou torná-lo principal **não remove** o endereço automático (ele vira
+  adicional). O endereço só sai se você o remover, ou se escolher "Meu domínio" no assistente de
+  novo projeto: nesse caso, com o DNS ainda sem apontar para a VPS e o painel público, o painel
+  mantém um endereço temporário como adicional.
+- **Endereço temporário para testar.** Enquanto o DNS do domínio oficial propaga (pode levar horas),
+  a página **Domínios** do projeto oferece **Adicionar endereço temporário para testar** quando
+  nenhum domínio do projeto aponta para a VPS: é o `projeto-k3x9q.apps.example.com` com domínio de
+  aplicações verificado, ou o `sslip.io` sem ele. Se o certificado do sslip.io não sair por causa do
+  limite de emissão do Let's Encrypt, o caminho é um domínio ou subdomínio seu. Quando o oficial
+  passa a funcionar, a página lembra de remover o temporário (sslip.io); o painel não remove nada
+  sozinho. Não é oferecido em painel local (`.localhost`).
 - Antes do primeiro deploy, o domínio responde "site em configuração". Projeto parado mostra uma
   página neutra de "temporariamente indisponível", em vez do erro cru do servidor. Essas duas
   páginas são servidas aos visitantes do seu site e são escritas em português.
@@ -231,7 +242,12 @@ Em **Configurações → Backups** e na aba **Backups** de cada projeto.
   Volumes e pastas de upload e dados vêm marcados; caches, logs e `node_modules` vêm desmarcados.
   O código entra quando o projeto não vem do GitHub.
 - **Painel:** contas, projetos cadastrados, configurações e chaves.
-- **E-mail:** o servidor de e-mail e o webmail.
+- **E-mail:** o servidor de e-mail e o webmail. Tem backup **próprio e global** (todas as caixas de
+  todos os projetos juntas), independente do backup de cada projeto. Na aba **Backups** de um projeto
+  com e-mail ligado, aparecem duas seções separadas: **Backup do projeto** (banco e arquivos) e
+  **Backup do e-mail** (selo ativo/desligado, frequência, último backup, conferência externa, atalho
+  para **Configurações → Backups → E-mail** e **Fazer backup do e-mail agora**). Desativar o backup
+  do projeto não desativa o do e-mail. Sem e-mail ligado, a seção do e-mail não aparece.
 
 **Onde fica.**
 

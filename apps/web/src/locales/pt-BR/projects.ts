@@ -143,6 +143,12 @@ export default {
   "domains.verify": "Verificar DNS",
   "domains.propagationHint": "Dá para conectar antes de o DNS propagar: o domínio passa a abrir (com HTTPS) assim que o registro apontar para a VPS.",
   "domains.connect": "Conectar",
+  "domains.temp.explain": "{domains} ainda não aponta para esta VPS (o DNS pode levar até algumas horas para propagar). Enquanto isso, o site não abre por esse endereço. Adicione um endereço temporário para testá-lo com HTTPS.",
+  "domains.temp.add": "Adicionar endereço temporário para testar",
+  "domains.temp.sslipNote": "Este endereço contém o IP da VPS e serve só para testar. Se o certificado não for emitido por causa do limite de emissão de certificados do Let's Encrypt para o sslip.io, o caminho é usar um domínio ou subdomínio seu.",
+  "domains.temp.appsNote": "O endereço fica sob o seu domínio de aplicações ({base}).",
+  "domains.temp.error": "Não foi possível adicionar o endereço temporário. Tente de novo em instantes.",
+  "domains.temp.reminder": "{official} já aponta para a VPS. Depois de conferir que o site abre nele, remova o endereço temporário {temp} (Remover, na linha dele): o painel não remove nada sozinho.",
   // ProjectConfigCard
   "config.cred.saveError": "Falha ao salvar a credencial.",
   "config.cred.removeError": "Falha ao remover a credencial.",

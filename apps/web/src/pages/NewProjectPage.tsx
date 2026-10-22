@@ -247,6 +247,24 @@ export function NewProjectPage() {
     return `/projects/${id}?deploy=1`;
   }
 
+  /**
+   * Domínio próprio escolhido (ele vira o principal e o endereço automático sai da lista): se o DNS
+   * dele ainda não aponta para a VPS, mantém um endereço temporário como adicional para o site poder
+   * ser testado enquanto o DNS propaga. Best-effort: qualquer falha é ignorada (a tela do projeto
+   * oferece o mesmo botão depois). Painel local ou DNS não verificável: não acrescenta nada.
+   */
+  async function keepTemporaryAddress(id: string, official: string) {
+    try {
+      const sug = await apiFetch<AutoDomainSuggestion>(`/api/domains/suggest?name=${encodeURIComponent(name)}`);
+      if (sug.panelPublic !== true || sug.auto.endsWith(".localhost") || sug.auto === official) return;
+      const check = await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(official)}`);
+      if (check.ok !== false) return;
+      await apiFetch<ProjectResponse>(`/api/projects/${id}/domains`, { method: "POST", body: JSON.stringify({ domain: sug.auto }) });
+    } catch {
+      // sem o temporário o projeto é criado do mesmo jeito
+    }
+  }
+
   async function finish() {
     if (!projectId) return;
     setBusy(true);
@@ -276,6 +294,7 @@ export function NewProjectPage() {
           proxyPort: proxyPort ? Number(proxyPort) : null,
         }),
       });
+      if (domainMode === "own") await keepTemporaryAddress(projectId, finalDomain);
       if (!backup) {
         await apiFetch(`/api/backups/targets/project:${projectId}`, { method: "PUT", body: JSON.stringify({ enabled: false }) });
       }

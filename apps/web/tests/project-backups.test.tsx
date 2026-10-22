@@ -15,6 +15,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...real, apiFetch: apiFetchMock };
 });
 
+import { setLocale } from "@/i18n/core";
 import { ProjectBackupsCard } from "@/components/project/ProjectBackupsCard";
 
 let view: ProjectBackupView;
@@ -60,10 +61,20 @@ function baseView(): ProjectBackupView {
   };
 }
 
-const STATUS = { timezone: "UTC-03:00", backupHour: 3, archiverAvailable: true } as unknown as BackupsStatus;
+const BASE_STATUS = { timezone: "UTC-03:00", backupHour: 3, archiverAvailable: true } as unknown as BackupsStatus;
+let STATUS: BackupsStatus;
+/** Resposta de GET /api/projects/p1/email (undefined = a consulta falha). */
+let emailRes: { email: { enabled: boolean } } | undefined;
+
+function emailTarget(over: Record<string, unknown> = {}) {
+  return { id: "email", kind: "email", name: "E-mail", enabled: true, available: true, frequencyHours: 24, lastSuccessAt: null, lastRemoteVerifiedAt: null, ...over };
+}
 
 beforeEach(() => {
+  setLocale("pt-BR");
   view = baseView();
+  STATUS = BASE_STATUS;
+  emailRes = { email: { enabled: false } };
   calls = [];
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -76,6 +87,9 @@ beforeEach(() => {
         return view;
       case "GET /api/backups":
         return STATUS;
+      case "GET /api/projects/p1/email":
+        if (!emailRes) throw new Error("sem e-mail");
+        return emailRes;
       case "PUT /api/backups/targets/project:p1":
         view = { ...view, choices: { ...view.choices, ...(body.choices ?? {}) }, extraFolders: (body.extraFolders ?? view.extraFolders).map((f: { service: string; path: string }) => ({ id: `extra:${f.service}:${f.path}`, ...f })) };
         return undefined;
@@ -84,6 +98,8 @@ beforeEach(() => {
         return undefined;
       case "POST /api/backups/projects/p1/detect":
         return view;
+      case "POST /api/backups/targets/email/run":
+        return {};
       case "POST /api/backups/targets/project:p1/run":
         view = {
           ...view,
@@ -211,5 +227,126 @@ describe("aba Backups do projeto", () => {
     renderCard();
     expect(await screen.findByText(/Ainda não detectado/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Salvar itens/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("aba Backups do projeto — e-mail", () => {
+  function comEmail(target: Record<string, unknown> | null) {
+    emailRes = { email: { enabled: true } };
+    STATUS = { ...BASE_STATUS, targets: target ? [emailTarget(target)] : [] } as unknown as BackupsStatus;
+  }
+
+  it("e-mail desligado no projeto: nenhuma nota sobre e-mail", async () => {
+    renderCard();
+    await screen.findByTestId("project-backups");
+    expect(screen.queryByTestId("project-email-backup")).not.toBeInTheDocument();
+  });
+
+  it("e-mail ligado: nota com o link para Configurações → Backups e o estado do backup do e-mail", async () => {
+    comEmail({ lastSuccessAt: "2026-10-14T12:00:00Z", frequencyHours: 24, lastRemoteVerifiedAt: "2026-10-14T13:00:00Z" });
+    renderCard();
+    const note = await screen.findByTestId("project-email-backup");
+    expect(within(note).getByRole("heading", { name: "Backup do e-mail" })).toBeInTheDocument();
+    expect(within(note).getByTestId("project-email-backup-badge")).toHaveTextContent("Ativo — todas as caixas do servidor, inclusive as deste projeto");
+    expect(note).toHaveTextContent("do servidor de e-mail inteiro (as caixas de todos os projetos), não por projeto");
+    expect(note).toHaveTextContent("O e-mail deste projeto é protegido pelo backup do servidor de e-mail (todas as caixas juntas)");
+    expect(note).toHaveTextContent("Desativar o backup deste projeto não desativa o do e-mail.");
+    expect(within(note).getByRole("link", { name: /Configurações → Backups → E-mail/ })).toHaveAttribute("href", "/settings/backups");
+    expect(within(note).getByRole("link", { name: "Abrir configuração do e-mail" })).toHaveAttribute("href", "/settings/backups");
+    const det = within(note).getByTestId("project-email-backup-details");
+    expect(det).toHaveTextContent("Frequência: a cada 24 h");
+    expect(det).toHaveTextContent("Último backup:");
+    expect(det).toHaveTextContent("Conferido no armazenamento externo em");
+    expect(within(note).queryByTestId("project-email-backup-off")).not.toBeInTheDocument();
+  });
+
+  it("e-mail ligado, backup do e-mail ainda sem nenhuma cópia nem conferência: diz isso", async () => {
+    comEmail({ lastSuccessAt: null });
+    renderCard();
+    const det = await screen.findByTestId("project-email-backup-details");
+    expect(det).toHaveTextContent("Ainda sem backup concluído.");
+    expect(det).toHaveTextContent("Ainda sem conferência no armazenamento externo.");
+  });
+
+  it("duas seções distintas, cada uma com título e selo; backup do projeto desativado com o do e-mail ativo", async () => {
+    view.target = { ...view.target, enabled: false };
+    comEmail({ lastSuccessAt: "2026-10-14T12:00:00Z" });
+    renderCard();
+    const email = await screen.findByTestId("project-email-backup");
+    const proj = screen.getByTestId("project-backup-section");
+    expect(within(proj).getByRole("heading", { name: "Backup do projeto" })).toBeInTheDocument();
+    expect(within(proj).getByTestId("project-backup-badge")).toHaveTextContent("Desligado");
+    expect(proj).toHaveTextContent("Desativar o backup deste projeto NÃO desativa o backup do e-mail.");
+    expect(within(email).getByTestId("project-email-backup-badge")).toHaveTextContent("Ativo");
+    expect(within(email).queryByTestId("project-email-backup-off")).not.toBeInTheDocument();
+  });
+
+  it("projeto sem e-mail: só a seção do projeto, sem a frase do e-mail", async () => {
+    renderCard();
+    const proj = await screen.findByTestId("project-backup-section");
+    expect(within(proj).getByTestId("project-backup-badge")).toHaveTextContent("Ativo");
+    expect(proj).not.toHaveTextContent("e-mail");
+    expect(screen.queryByTestId("project-email-backup")).not.toBeInTheDocument();
+  });
+
+  it("Fazer backup do e-mail agora enfileira o alvo email", async () => {
+    comEmail({});
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Fazer backup do e-mail agora" }));
+    await waitFor(() => expect(calls.some((c) => c.key === "POST /api/backups/targets/email/run")).toBe(true));
+    expect(await screen.findByText(/Backup do e-mail na fila/)).toBeInTheDocument();
+  });
+
+  it("em inglês: títulos, selos e botões", async () => {
+    setLocale("en");
+    comEmail({ lastSuccessAt: null });
+    renderCard();
+    const email = await screen.findByTestId("project-email-backup");
+    expect(within(email).getByRole("heading", { name: "Email backup" })).toBeInTheDocument();
+    expect(within(email).getByTestId("project-email-backup-badge")).toHaveTextContent("On — all mailboxes on the server, including this project's");
+    expect(within(email).getByRole("link", { name: "Open email backup settings" })).toBeInTheDocument();
+    expect(within(email).getByRole("button", { name: "Back up email now" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("project-backup-section")).getByRole("heading", { name: "Project backup" })).toBeInTheDocument();
+    expect(screen.getByTestId("project-backup-section")).toHaveTextContent("Turning off this project's backup does NOT turn off the email backup.");
+  });
+
+  it("backup do e-mail desligado: aviso âmbar com o link para ligar", async () => {
+    comEmail({ enabled: false });
+    renderCard();
+    const off = await screen.findByTestId("project-email-backup-off");
+    expect(off).toHaveTextContent("O backup do e-mail está desligado: as caixas deste projeto não estão sendo copiadas.");
+    expect(within(off).getByRole("link", { name: /Ligar em Configurações → Backups → E-mail/ })).toHaveAttribute("href", "/settings/backups");
+  });
+
+  it("sem o dado do alvo e-mail na lista: só a nota, sem estado inventado", async () => {
+    comEmail(null);
+    renderCard();
+    const note = await screen.findByTestId("project-email-backup");
+    expect(note).not.toHaveTextContent("Backup do e-mail:");
+    expect(screen.queryByTestId("project-email-backup-off")).not.toBeInTheDocument();
+  });
+
+  it("falha ao consultar o e-mail do projeto: a aba funciona sem a nota", async () => {
+    emailRes = undefined;
+    renderCard();
+    await screen.findByTestId("project-backups");
+    expect(screen.queryByTestId("project-email-backup")).not.toBeInTheDocument();
+  });
+
+  it("projeto sem banco nem arquivos: o estado vazio explica; com e-mail diz que só resta o e-mail", async () => {
+    view.detection = { ...view.detection!, databases: [], mounts: [], unsavedWrites: [] };
+    const { unmount } = renderCard();
+    expect(await screen.findByTestId("project-nothing-to-copy")).toHaveTextContent("Este projeto não tem banco de dados nem arquivos para copiar.");
+    expect(screen.getByTestId("project-nothing-to-copy")).not.toHaveTextContent("além do e-mail");
+    unmount();
+    comEmail({});
+    renderCard();
+    expect(await screen.findByTestId("project-nothing-to-copy")).toHaveTextContent("Não há nada para copiar além do e-mail");
+  });
+
+  it("com banco detectado, não mostra o estado vazio", async () => {
+    renderCard();
+    await screen.findByTestId("project-backups");
+    expect(screen.queryByTestId("project-nothing-to-copy")).not.toBeInTheDocument();
   });
 });

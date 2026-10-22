@@ -53,5 +53,8 @@
     "apps/server/tests/backup-service.test.ts",
     "apps/server/tests/backup-detect.test.ts (saídas reais de docker diff)"
   ],
-  "observacoes": []
+  "observacoes": [
+    "Web (22/10/2026): ProjectBackupsCard tem duas seções com título e selo próprios. 'Backup do projeto' (selo ativo/desligado de view.target.enabled; banco/arquivos). 'Backup do e-mail' só aparece com o e-mail do projeto ligado (GET /api/projects/:id/email, enabled) e usa o alvo 'email' de GET /api/backups (status.targets, sem rota nova): selo, frequência, último backup, conferência externa, aviso âmbar se desligado, link para /settings/backups e 'Fazer backup do e-mail agora' (POST /api/backups/targets/email/run). O backup do e-mail é do servidor inteiro, independente do do projeto; desativar um não desativa o outro. Projeto sem banco/arquivos: estado vazio explícito.",
+    "Não existe dado barato de 'quais projetos têm suas caixas no backup do e-mail' (BackupsStatus não traz); por isso o cartão E-mail de Configurações → Backups não lista projetos."
+  ]
 }
