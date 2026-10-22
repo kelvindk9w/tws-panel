@@ -32,6 +32,7 @@ const KIND_BY_SOURCE: Record<Alert["source"], NotificationKind> = {
   guardrail: "security",
   blacklist: "blacklist",
   certificate: "certificate",
+  login: "security",
 };
 
 /** Alerta novo gravado → aviso (sem o detalhe). */

@@ -36,6 +36,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Fase 07 do hardening (endurecimento adicional) e teste de acesso com "desfazer agora".
 - Fases de segurança acessíveis depois da instalação, em Segurança → Proteções.
 - Verificação em duas etapas (TOTP) no login, com 10 códigos de recuperação.
+- Travas do login com a verificação em duas etapas: bloqueio por conta no código de 6 dígitos
+  (5 erros seguidos bloqueiam por 5 min, dobrando até 24 h, gravado em disco; o código de
+  recuperação continua valendo), aviso na Auditoria, nos Alertas e nas notificações de segurança
+  quando a senha certa chega sem o código certo, e limite de tentativas ao trocar a senha, ativar
+  ou desativar a verificação e recomeçar o assistente. O limite por IP agrupa o IPv6 pelo bloco
+  /64, a tela Segurança avisa quando o proxy da Cloudflare é detectado e
+  `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**

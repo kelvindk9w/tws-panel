@@ -35,6 +35,9 @@ import {
   SMTP_ENV_KEYS,
   LOGIN_MAX_ATTEMPTS,
   LOGIN_WINDOW_MS,
+  TWO_FACTOR_LOCK_BASE_MS,
+  TWO_FACTOR_LOCK_MAX_FAILURES,
+  TWO_FACTOR_LOCK_MAX_MS,
   PASSWORD_MIN_LENGTH,
   SESSION_COOKIE,
   SESSION_COOKIE_SECURE,
@@ -161,6 +164,10 @@ describe("auth contract", () => {
     expect(SESSION_TTL_MS).toBe(12 * 60 * 60 * 1000);
     expect(LOGIN_MAX_ATTEMPTS).toBe(5);
     expect(LOGIN_WINDOW_MS).toBe(60 * 1000);
+    // bloqueio por conta do código de 6 dígitos: 5 erros, 5 min, teto de 24 h
+    expect(TWO_FACTOR_LOCK_MAX_FAILURES).toBe(5);
+    expect(TWO_FACTOR_LOCK_BASE_MS).toBe(5 * 60 * 1000);
+    expect(TWO_FACTOR_LOCK_MAX_MS).toBe(24 * 60 * 60 * 1000);
   });
 
   it("senha forte válida passa em todas as checagens", () => {
@@ -219,7 +226,7 @@ describe("auth contract", () => {
 describe("monitoring contract", () => {
   it("severidades, fontes e status de alerta são conjuntos fechados", () => {
     expect(ALERT_SEVERITIES).toEqual(["critical", "warning", "info"]);
-    expect(ALERT_SOURCES).toEqual(["guardrail", "scan", "blacklist", "certificate"]);
+    expect(ALERT_SOURCES).toEqual(["guardrail", "scan", "blacklist", "certificate", "login"]);
     expect(ALERT_STATUSES).toEqual(["open", "acknowledged", "resolved"]);
   });
 

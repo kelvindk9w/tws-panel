@@ -7,6 +7,7 @@ export default {
   "login.code": "Código de verificação",
   "login.codeHelp": "Abra o app autenticador do seu celular e digite o código de 6 dígitos do TWS Panel. Sem o celular? Use um dos seus códigos de recuperação.",
   "login.failed": "Não foi possível entrar. Tente novamente.",
+  "login.retryIn": "Tente de novo em {time}.",
   "login.submit": "Entrar",
   "login.submitting": "Entrando…",
 } as const;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   BaselineResponse,
   BlacklistCheckResponse,
+  EdgeStatusResponse,
   MonitorRunResponse,
   MonitorStateResponse,
   SecurityHistoryResponse,
@@ -497,6 +498,24 @@ function BlacklistCard() {
   );
 }
 
+/** Aviso quando o painel está atrás do proxy da Cloudflare (o limite por IP perde o sentido). */
+function EdgeNotice() {
+  const { t } = useI18n();
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    apiFetch<EdgeStatusResponse>("/api/security/edge")
+      .then((r) => setActive(r.cloudflareProxy))
+      .catch(() => setActive(false));
+  }, []);
+  if (!active) return null;
+  return (
+    <div role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+      <p className="font-medium">{t("security.edge.title")}</p>
+      <p className="mt-1 text-muted-foreground">{t("security.edge.body")}</p>
+    </div>
+  );
+}
+
 export function SecurityPage() {
   const { t } = useI18n();
   // atualizar o baseline re-executa o card de monitoramento (diff muda)
@@ -509,6 +528,7 @@ export function SecurityPage() {
           {t("security.page.subtitle")}
         </p>
       </div>
+      <EdgeNotice />
       <div className="grid gap-4 sm:grid-cols-2">
         <HardeningCard />
         <BaselineCard onUpdated={() => setRefreshKey((k) => k + 1)} />
