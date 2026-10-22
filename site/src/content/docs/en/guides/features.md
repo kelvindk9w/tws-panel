@@ -247,7 +247,10 @@ the number of copies kept on the VPS and externally. **Back up now** at any time
 - Per item (project, panel or email), choosing the date and the copy (VPS or external).
 - To confirm, you type the word the screen asks for: the project name for a project, and for the
   panel and email a fixed word that depends on the interface language: `panel` and `email` in
-  English, `painel` and `e-mail` in Portuguese.
+  English, `painel` and `e-mail` in Portuguese. The screen shows the word in code font, with a copy
+  button, and says it is the literal word (`email` is not your email address). Upper and lower case do
+  not matter. The other confirmations in the panel (restarting the wizard, turning off access by IP)
+  use the same format.
 - **Restore from another server**: on a new VPS, you connect the same storage, enter the
   password and the panel lists what exists, in the right order. Step-by-step:
   [Restore on a new VPS](restore-new-server.md).
@@ -271,6 +274,12 @@ to `restaurar-painel.sh`.
   ends by itself 7 days after the storage is connected, and the panel sends one notification when it
   starts. If the panel cannot list the storage, it does not send the backup either, and a
   notification warns you on the third failure in a row. **Back up now** always works.
+  In the "Get the panel ready" checklist (step 6), the "What's missing" card shows both paths when the
+  storage already holds backups from another panel: restore the old panel (to continue it) or, if
+  this is a new panel, make the first backup by hand in Settings → Backups. Note: from the first
+  backup on, the retention deletes the oldest copies in the folder (it keeps only the newest ones; the
+  default is 5), including the old panel's; to keep them, download them before making the first
+  backup or use another bucket or folder.
 - **The storage address and keys stay the ones in use on this VPS.** The rest of the backup settings
   comes back with the panel.
 

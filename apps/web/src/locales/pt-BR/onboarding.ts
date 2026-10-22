@@ -23,7 +23,7 @@ export default {
   // OnboardingChecklist: pendência (passo em andamento)
   "missing.title": "O que falta",
   "missing.icon": "Atenção",
-  "missing.backupsRestoreFirst": "Restaure primeiro o painel antigo (guia de restauração) antes do primeiro backup, para não misturar com as cópias do painel anterior.",
+  "missing.backupsRestoreFirst": "Este armazenamento já guarda backups de outro painel. Se você quer continuar o painel antigo, restaure-o primeiro (guia de restauração). Se este é um painel novo e você não quer o antigo, faça o primeiro backup à mão em Configurações → Backups (Fazer backup agora): ele não é bloqueado. Atenção: a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as mais novas; o padrão é 5), inclusive as do painel antigo; para guardá-las, baixe-as ANTES de fazer o primeiro backup ou use outro bucket/pasta.",
   "missing.storageUnknown": "Não foi possível conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do primeiro backup.",
   "missing.restoreGuide": "Abrir o guia de restauração",
   "attention.one": "{count} passo precisa de atenção:",
@@ -125,8 +125,9 @@ export default {
   "steps.backups.howTo.5": "A tela seguinte mostra as chaves uma única vez: copie a Access Key ID / ID da chave de acesso, a Secret Access Key / Chave de acesso secreta e o endpoint que termina em .r2.cloudflarestorage.com (o Token value / Valor do token não é usado). Perdeu o endpoint? Ele fica no bucket → Settings / Configurações → S3 API.",
   "steps.backups.howTo.6": "Em Configurações → Backups, cole os dados no cartão Armazenamento externo (região auto) e clique em Testar e salvar.",
   "steps.backups.howTo.7": "No cartão Criptografia, crie a senha (ou clique em Sugerir uma frase forte), baixe o kit de recuperação e marque “Guardei a senha em lugar seguro”.",
-  "steps.backups.howTo.8": "Clique em Fazer backup agora no Painel: o passo fica feito quando a primeira cópia externa for enviada e conferida.",
-  "steps.backups.howTo.8Restore": "Restaure primeiro o painel antigo (guia de restauração) e só então faça o primeiro backup.",
+  "steps.backups.howTo.8": "No cartão Painel, em Configurações → Backups, clique em Fazer backup agora: o passo fica feito quando a primeira cópia externa for enviada e conferida.",
+  "steps.backups.howTo.8Restore": "Este armazenamento já guarda backups de outro painel. Para continuar o painel antigo, restaure-o primeiro (guia de restauração). Se este é um painel novo, no cartão Painel, em Configurações → Backups, clique em Fazer backup agora: o passo fica feito quando a primeira cópia externa for enviada e conferida.",
+  "steps.backups.howTo.8Unknown": "Restaure primeiro o painel antigo (guia de restauração) e só então faça o primeiro backup.",
   "steps.backups.note": "Conta como feito com o armazenamento conectado e pelo menos um backup externo conferido. Se você já tem outra rotina de backup fora da VPS, marque “Não vou usar”.",
   "steps.backups.action": "Abrir Backups",
 } as const;

@@ -303,7 +303,10 @@ describe("SetupPage — setup já concluído (sessão válida)", () => {
     expect(botao).toBeDisabled();
     fireEvent.change(screen.getByLabelText(/Sua senha atual/), { target: { value: "MinhaSenha123" } });
     fireEvent.change(screen.getByLabelText(/Código da verificação em duas etapas/), { target: { value: "123456" } });
-    fireEvent.change(screen.getByLabelText(/Digite recomeçar/), { target: { value: "recomeçar" } });
+    expect(screen.getByText("recomeçar", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText(/Digite exatamente esta palavra \(não é a sua senha\)/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Digite a palavra recomeçar/)).toHaveAttribute("placeholder", "recomeçar");
+    fireEvent.change(screen.getByLabelText(/Digite a palavra recomeçar/), { target: { value: "recomeçar" } });
     expect(botao).toBeEnabled();
     fireEvent.click(botao);
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/setup?token=NOVO"));
