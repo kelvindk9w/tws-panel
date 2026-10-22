@@ -224,6 +224,13 @@ describe("sendSmtpMail", () => {
     expect(err).toBeInstanceOf(SmtpSendError);
     expect((err as SmtpSendError).code).toBe(535);
     expect((err as SmtpSendError).message).toContain("Authentication credentials invalid");
+    // o comando que foi recusado vai junto: quem chama distingue "login recusado" de "destinatário recusado"
+    expect((err as SmtpSendError).command).toBe("AUTH");
+  });
+
+  it("recusa de outro comando traz o comando; falha de conexão não traz", async () => {
+    const server = await fakeSmtp({ replies: { RCPT: "550 5.1.2 Relay not allowed.\r\n" } });
+    await expect(sendSmtpMail(options(server.port))).rejects.toMatchObject({ code: 550, command: "RCPT" });
   });
 
   it("destinatário recusado na hora vira erro", async () => {

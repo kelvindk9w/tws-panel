@@ -251,6 +251,10 @@ message, or in the amber notice on the Dashboard), or stop the mail server and s
 **Email**. No data is deleted. Details in
 [Restore on a new server](restore-new-server.md#if-something-fails).
 
+### "535 5.7.8 Authentication credentials invalid" on the email notification test
+
+The mail server refused the login of the `postmaster@` mailbox because the password the panel stored is not the one the server has (it happens after restoring the email: the mailbox comes back with the backup's password). The panel says "the password stored by the panel is not the server's" (in Portuguese, the language of the server messages) and, in **Settings → Notifications**, shows the **Open Email to sync** button. In **Email**, click **Sync with the mail server**: it checks and reapplies the password the panel stores for `postmaster@` and for project mailboxes (the notice says "Realinhei a senha de N caixas", meaning it realigned N mailboxes). Alternatively, use **Change password** on the domain's `postmaster@` mailbox. Only the passwords that differ are rewritten. Note: the password of a **project** mailbox (or of `postmaster@`) changed directly in webmail is undone by this step; regular user mailboxes are not touched. Then send the test again. Details in [Restore on a new server](restore-new-server.md#if-something-fails).
+
 ## Docker
 
 ### "Cannot connect to the Docker daemon"

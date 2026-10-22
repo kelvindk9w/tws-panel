@@ -287,3 +287,34 @@ describe("verificação automática (continua na tela)", () => {
     expect(input).toHaveValue(6);
   });
 });
+
+describe("E-mail: login recusado pelo servidor", () => {
+  const withEmail = () => {
+    state = {
+      ...base(),
+      email: { available: true, unavailableReason: null, from: "postmaster@envio.example.com", recipients: ["a@example.com"], testedAt: null },
+    };
+  };
+
+  it("explica o que houve e leva à tela de E-mail para sincronizar", async () => {
+    withEmail();
+    failures["POST /api/notifications/email/test"] = new ApiRequestError(409, "email_auth_rejected", "O servidor de e-mail recusou o login: a senha guardada pelo painel não é a do servidor. Abra E-mail e use Sincronizar.");
+    renderPage();
+    const card = await screen.findByTestId("email-card");
+    fireEvent.click(within(card).getByRole("button", { name: "Enviar teste" }));
+    await waitFor(() => expect(card).toHaveTextContent(/a senha guardada pelo painel não é a do servidor/));
+    expect(card).toHaveTextContent(/Sincronizar/);
+    const link = within(card).getByText("Abrir E-mail para sincronizar");
+    expect(link.closest("a")).toHaveAttribute("href", "/mail");
+  });
+
+  it("outro erro do teste não mostra o atalho", async () => {
+    withEmail();
+    failures["POST /api/notifications/email/test"] = new ApiRequestError(502, "email_send_failed", "recusou");
+    renderPage();
+    const card = await screen.findByTestId("email-card");
+    fireEvent.click(within(card).getByRole("button", { name: "Enviar teste" }));
+    await waitFor(() => expect(card.querySelector("[role=alert]")).not.toBeNull());
+    expect(within(card).queryByText("Abrir E-mail para sincronizar")).not.toBeInTheDocument();
+  });
+});
