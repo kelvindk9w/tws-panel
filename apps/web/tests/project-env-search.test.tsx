@@ -205,16 +205,16 @@ describe("Variáveis — filtros rápidos", () => {
 describe("Variáveis — botões do rodapé com a pesquisa ativa", () => {
   const DATA = { vars: [{ key: "API_KEY", value: "abc" }, { key: "DB_URL", value: "postgres://x" }], compose: null };
 
-  it("'Mostrar valores' vale só para as mostradas, e a tela avisa", async () => {
+  it("'Mostrar valores' vale para todas (inclusive as que a pesquisa esconde), e a tela avisa", async () => {
     serve(DATA);
     renderCard();
     await screen.findByDisplayValue("abc");
     fireEvent.change(search(), { target: { value: "api" } });
-    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/“Mostrar valores” vale só para as mostradas \(1 de 2\)/);
+    expect(screen.getByTestId("env-filter-note")).toHaveTextContent(/^Com a pesquisa ativa \(1 de 2 à mostra\): “Mostrar valores”.*valem para todas/);
     fireEvent.click(screen.getByRole("button", { name: /Mostrar valores/ }));
     fireEvent.change(search(), { target: { value: "" } });
     expect((screen.getByDisplayValue("abc") as HTMLInputElement).type).toBe("text");
-    expect((screen.getByDisplayValue("postgres://x") as HTMLInputElement).type).toBe("password");
+    expect((screen.getByDisplayValue("postgres://x") as HTMLInputElement).type).toBe("text");
     expect(screen.queryByTestId("env-filter-note")).not.toBeInTheDocument();
   });
 
@@ -436,7 +436,7 @@ describe("Variáveis — valores do que o e-mail do projeto fornece", () => {
   it("nome padrão com valor nas Variáveis: a linha salva substitui (sem linha do painel repetida)", async () => {
     serve(withValues({ vars: [{ key: "SMTP_HOST", value: "smtp.outro.com" }] }));
     renderCard();
-    expect(await screen.findByTestId("env-row-SMTP_HOST")).toHaveTextContent(/preencher aqui substitui/);
+    expect(await screen.findByTestId("env-row-SMTP_HOST")).toHaveTextContent(/o container recebe o valor do e-mail/);
     expect(screen.queryByTestId("env-panel-SMTP_HOST")).not.toBeInTheDocument();
   });
 });

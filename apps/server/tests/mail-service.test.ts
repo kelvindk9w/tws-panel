@@ -73,10 +73,14 @@ vi.mock("@paas/mailer", async (importOriginal) => {
     async setMailboxPassword(email: string, password: string) {
       passwordCalls.push({ email, password });
     }
+    async setMailboxMainPassword(email: string, password: string) {
+      passwordCalls.push({ email, password });
+    }
     async createMailbox(email: string, password: string) {
       createdMailboxCalls.push({ email, password });
       order.push(`create ${email}`);
     }
+    async setMailboxDisplayName() {}
     async addMailboxAlias(email: string, alias: string) {
       aliasCalls.push(`+ ${email} ${alias}`);
     }

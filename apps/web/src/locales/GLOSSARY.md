@@ -18,6 +18,8 @@ termo novo entra aqui antes de entrar nos dicionários.
 | projeto de destino (do teste) | destination project | o projeto de teste que recebe o banco; nunca o de origem |
 | servidor de e-mail | mail server | |
 | caixa de e-mail | mailbox | |
+| usar uma caixa que já existe | use a mailbox that already exists | liga o e-mail do projeto a uma caixa existente do domínio, sem apagar nada; a caixa passa a ser gerenciada pelo painel |
+| senha atual da caixa / manter a senha guardada / trocar por uma gerada | mailbox's current password / keep the stored password / replace with a generated one | os três caminhos de senha ao usar uma caixa existente |
 | e-mail / e-mails | email / emails | sem hífen em inglês |
 | envios (módulo de e-mails enviados) | sending (section "Sending") | |
 | fila (de envio) | queue | |

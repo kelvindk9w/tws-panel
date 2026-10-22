@@ -10,7 +10,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   MAILBOX_PASSWORD_MIN,
+  normalizeDisplayName,
+  sanitizeDisplayName,
   DKIM_SELECTOR,
+  MAX_PROJECT_EMAIL_LINKS,
   PROJECT_EMAIL_VALUE_KEYS,
   envLinkNameProblem,
   PAAS_STALWART_CONTAINER,
@@ -28,9 +31,12 @@ import {
   type Mailbox,
   type MailboxCredentials,
   type MailServerStatus,
+  type ExistingMailboxMode,
   type ProjectEmailConfig,
+  type ProjectEmailUsableMailbox,
   type ProjectEmailValueKey,
   type Project,
+  type SetMailboxDisplayNameResponse,
 } from "@paas/core";
 import { certificateStatus, type CertificateStatus } from "@paas/deploy";
 import {
@@ -109,6 +115,19 @@ const SYSTEM_LOCAL_PARTS = new Set(["postmaster", "abuse", "dmarc"]);
 interface StoredMailbox extends Mailbox {
   /** Senha em claro — necessária para credenciais e injeção SMTP (arquivo 0600). */
   password: string;
+  /**
+   * A caixa já existia antes de virar a do projeto (caixa de usuário ou adotada). Nunca é apagada quando o projeto
+   * a deixa (troca de endereço, projeto removido): volta a ser caixa de usuário. Não sai pela API.
+   */
+  external?: boolean;
+  /** Dono (aba Caixas de um projeto) que a caixa tinha antes de ser adotada; volta a ser dele ao ser solta. Não sai pela API. */
+  ownerBefore?: string;
+}
+
+/** A caixa como a API a mostra: sem a senha e sem campos internos. */
+function publicMailbox(stored: StoredMailbox): Mailbox {
+  const { password: _p, external: _e, ownerBefore: _o, ...mailbox } = stored;
+  return mailbox;
 }
 
 interface StoredProjectEmail {
@@ -126,9 +145,6 @@ interface StoredProjectEmail {
   /** Variável do app → valor do e-mail que ela recebe no deploy (ex.: SMTP_SENHA → SMTP_PASS). */
   envLinks?: Record<string, ProjectEmailValueKey>;
 }
-
-/** Limite de variáveis ligadas por projeto (seis valores, alguns nomes cada). */
-const MAX_ENV_LINKS = 30;
 
 interface MailFile {
   adminSecret: string | null;
@@ -201,9 +217,11 @@ export interface MailServiceOptions {
   /**
    * Projetos cadastrados, para dar dono à caixa que o painel adota do
    * Stalwart (endereço <slug>@ = caixa do projeto). Ausente ou com erro: as
-   * caixas entram sem dono.
+   * caixas entram sem dono. Também diz quais projetos ainda existem: registro
+   * de e-mail de projeto que não está na lista é órfão (projeto apagado) e é
+   * solto. Ausente ou com erro: nada é considerado órfão.
    */
-  projects?: () => Promise<Array<Pick<Project, "id" | "slug">>>;
+  projects?: () => Promise<Array<Pick<Project, "id" | "slug"> & { name?: string }>>;
 }
 
 /** E-mail de teste em acompanhamento (só em memória: some ao reiniciar o painel). */
@@ -251,7 +269,7 @@ export class MailService {
   private readonly sendMail: typeof sendSmtpMail;
   private readonly findReport: typeof findDeliveryReport;
   private readonly now: () => number;
-  private readonly projectsOf: (() => Promise<Array<Pick<Project, "id" | "slug">>>) | undefined;
+  private readonly projectsOf: (() => Promise<Array<Pick<Project, "id" | "slug"> & { name?: string }>>) | undefined;
   private adopting: Promise<MailAdoptResult> | null = null;
   /** Fila por caixa: trocar a senha e realinhá-la no servidor nunca se cruzam. */
   private readonly mailboxLocks = new Map<string, Promise<unknown>>();
@@ -349,11 +367,44 @@ export class MailService {
             : null,
         strict: true,
       });
+      this.backfillProjectNames();
     })().catch((err: unknown) => {
       this.loadedPromise = null;
       throw err;
     });
     return this.loadedPromise;
+  }
+
+  /**
+   * Projeto ativado ANTES do nome de exibição por caixa: o nome vivia só em projects[].fromName. Copia-o para a
+   * caixa de envio que ainda não tem nome (a lista e o modal mostram o nome efetivo). Em memória e idempotente;
+   * nunca sobrescreve um nome já existente. O Stalwart recebe o nome no próximo Sincronizar (pushProjectNames).
+   */
+  private backfillProjectNames(): void {
+    for (const project of Object.values(this.data.projects)) {
+      const box = this.data.mailboxes[project.mailbox];
+      const name = sanitizeDisplayName(project.fromName);
+      if (box && !box.displayName && name) box.displayName = name;
+    }
+  }
+
+  /**
+   * Grava no Stalwart o nome da caixa de envio dos projetos antigos (ver backfillProjectNames) quando o servidor
+   * ainda não tem nome nenhum nela. Nunca sobrescreve um nome que o Stalwart já tenha; falha só vai para o log.
+   */
+  private async pushProjectNames(client: StalwartClient, principals: readonly { name: string; description?: string }[]): Promise<void> {
+    const described = new Map(principals.map((p) => [p.name.trim().toLowerCase(), p.description]));
+    for (const project of Object.values(this.data.projects)) {
+      const box = this.data.mailboxes[project.mailbox];
+      if (!box?.displayName || !described.has(box.id) || described.get(box.id)) continue;
+      try {
+        await this.withMailboxLock(box.id, () => client.setMailboxDisplayName(box.id, box.displayName!));
+      } catch (err) {
+        this.log(`não deu para gravar o nome de exibição de ${box.id} no servidor de e-mail`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /**
@@ -1048,11 +1099,14 @@ export class MailService {
    */
   async listMailboxes(domainName: string, opts: { projectId?: string } = {}): Promise<Mailbox[]> {
     await this.ensureLoaded();
+    await this.purgeOrphanProjects();
     const domain = normalizeMailDomain(domainName);
     const senderOf = new Map(Object.entries(this.data.projects).map(([id, p]) => [p.mailbox, id]));
     return Object.values(this.data.mailboxes)
       .filter((m) => m.domain === domain)
-      .map(({ password, ...mailbox }): Mailbox => {
+      .map((stored): Mailbox => {
+        const { password } = stored;
+        const mailbox = publicMailbox(stored);
         const owner = mailbox.projectId ?? senderOf.get(mailbox.id);
         const out: Mailbox = owner ? { ...mailbox, projectId: owner } : mailbox;
         return password === "" ? { ...out, passwordUnknown: true } : out;
@@ -1069,11 +1123,12 @@ export class MailService {
     domainName: string,
     localPart: string,
     password: string | undefined,
-    opts: { generate?: boolean; projectId?: string } = {},
+    opts: { generate?: boolean; projectId?: string; displayName?: string } = {},
   ): Promise<{ mailbox: Mailbox; generatedPassword?: string }> {
     await this.ensureLoaded();
     const domain = this.requireDomain(domainName);
     const local = normalizeLocalPart(localPart);
+    const displayName = requireDisplayName(opts.displayName);
     const email = `${local}@${domain.name}`;
     if (this.data.mailboxes[email]) {
       throw httpError(409, "mailbox_exists", `A caixa ${email} já existe.`);
@@ -1089,7 +1144,7 @@ export class MailService {
     const generated = opts.generate ? generateStrongPassword() : undefined;
     const finalPassword = generated ?? requireStrongPassword(password);
     await this.requireRunning();
-    await this.client().createMailbox(email, finalPassword);
+    await this.client().createMailbox(email, finalPassword, [], displayName || undefined);
 
     const stored: StoredMailbox = {
       id: email,
@@ -1097,13 +1152,14 @@ export class MailService {
       domain: domain.name,
       kind: "user",
       createdAt: new Date().toISOString(),
+      ...(displayName ? { displayName } : {}),
       // criada pela aba Caixas do e-mail do projeto: a caixa é dele
       ...(opts.projectId ? { projectId: opts.projectId } : {}),
       password: finalPassword,
     };
     this.data.mailboxes[email] = stored;
     await this.save();
-    const { password: _p, ...mailbox } = stored;
+    const mailbox = publicMailbox(stored);
     return generated ? { mailbox, generatedPassword: generated } : { mailbox };
   }
 
@@ -1128,12 +1184,74 @@ export class MailService {
     const finalPassword = generated ?? requireStrongPassword(password);
     await this.requireRunning();
     await this.withMailboxLock(email, async () => {
-      await this.client().setMailboxPassword(email, finalPassword);
+      await this.client().setMailboxMainPassword(email, finalPassword);
       stored.password = finalPassword;
     });
     await this.save();
-    const { password: _p, ...mailbox } = stored;
+    const mailbox = publicMailbox(stored);
     return generated ? { mailbox, generatedPassword: generated } : { mailbox };
+  }
+
+  /**
+   * Altera (ou, vazio, remove) o nome de exibição de uma caixa: grava no
+   * Stalwart (campo `description` do principal) e no cadastro do painel. Só
+   * esse campo muda — senha, 2FA, senhas de app, aliases e mensagens ficam
+   * como estão. Com `projectId`, a caixa precisa ser daquele projeto (a aba do
+   * projeto não edita caixa de outro). Na caixa de envio de um projeto o nome é
+   * o do MAIL_FROM_NAME (vazio volta ao nome do projeto) e vale no próximo
+   * deploy: o painel não faz deploy sozinho.
+   */
+  async setMailboxDisplayName(
+    id: string,
+    displayNameInput: string,
+    opts: { projectId?: string; projectName?: (projectId: string) => Promise<string | undefined> } = {},
+  ): Promise<SetMailboxDisplayNameResponse> {
+    await this.ensureLoaded();
+    const requested = requireDisplayName(displayNameInput);
+    const email = decodeURIComponent(id).toLowerCase();
+    const stored = this.data.mailboxes[email];
+    if (!stored) {
+      throw httpError(404, "mailbox_not_found", `Caixa ${email} não encontrada.`);
+    }
+    const sender = Object.entries(this.data.projects).find(([, p]) => p.mailbox === email);
+    const owner = stored.projectId ?? sender?.[0];
+    if (opts.projectId !== undefined && owner !== opts.projectId) {
+      throw httpError(403, "mailbox_not_in_project", `A caixa ${email} não é deste projeto.`);
+    }
+    // caixa de envio do projeto: sem nome, vale o nome do projeto (como na ativação)
+    const projectId = sender?.[0];
+    let name = requested;
+    if (projectId !== undefined && name === "") {
+      name = sanitizeDisplayName((await opts.projectName?.(projectId)) ?? "");
+    }
+    await this.requireRunning();
+    await this.withMailboxLock(email, async () => {
+      await this.client().setMailboxDisplayName(email, name);
+      if (name) stored.displayName = name;
+      else delete stored.displayName;
+      if (sender) {
+        // só para o deploy: sem nome guardado, o deploy usa o nome do projeto
+        if (name) sender[1].fromName = name;
+        else delete sender[1].fromName;
+      }
+    });
+    await this.save();
+    await this.audit?.record({
+      action: "mail.mailbox.display-name",
+      target: email,
+      detail: name
+        ? `Nome de exibição da caixa de e-mail ${email} alterado.`
+        : `Nome de exibição da caixa de e-mail ${email} removido.`,
+    });
+    const { password, ...mailbox } = stored;
+    const out: Mailbox = {
+      ...mailbox,
+      ...(mailbox.projectId === undefined && owner !== undefined ? { projectId: owner } : {}),
+      ...(password === "" ? { passwordUnknown: true } : {}),
+    };
+    return projectId !== undefined
+      ? { mailbox: out, projectEmail: { projectId, appliesOnNextDeploy: true } }
+      : { mailbox: out };
   }
 
   async deleteMailbox(domainName: string, id: string): Promise<void> {
@@ -1236,6 +1354,7 @@ export class MailService {
 
   private async doAdopt(): Promise<MailAdoptResult> {
     await this.ensureLoaded();
+    await this.purgeOrphanProjects();
     const client = this.client();
     await this.requireRunning();
     const domainList = await client.listPrincipalsChecked("domain");
@@ -1279,6 +1398,12 @@ export class MailService {
       const dmarcDelivers = mailboxPrincipals.some((p) => p.name === dmarc || p.emails.includes(dmarc));
       return dmarcDelivers || !hasPostmaster;
     };
+    // Nome de exibição que o Stalwart já tem (campo description): só entra se passa na mesma regra das telas.
+    const descriptions = new Map<string, string>();
+    for (const p of mailboxPrincipals) {
+      const checked = normalizeDisplayName(p.description);
+      if (checked.ok && checked.value) descriptions.set(p.name, checked.value);
+    }
     const now = new Date().toISOString();
     const result: MailAdoptResult = { domains: [], mailboxes: [], skipped };
     for (const [name, dkimPublicKey] of dkim) {
@@ -1308,6 +1433,7 @@ export class MailService {
         kind: box.kind,
         createdAt: now,
         ...(box.projectId ? { projectId: box.projectId } : {}),
+        ...(descriptions.get(box.id) ? { displayName: descriptions.get(box.id)! } : {}),
         // sem senha conhecida: o Stalwart nunca a entrega, e o painel não a pede
         password: "",
       };
@@ -1315,6 +1441,7 @@ export class MailService {
     }
     if (result.domains.length > 0 || result.mailboxes.length > 0) await this.save();
     await this.realignKnownPasswords(client, new Set(mailboxPrincipals.map((p) => p.name.trim().toLowerCase())), result);
+    await this.pushProjectNames(client, mailboxPrincipals);
     if (skipped.length > MAIL_ADOPT_SKIPPED_MAX) {
       result.skippedTotal = skipped.length;
       result.skipped = skipped.slice(0, MAIL_ADOPT_SKIPPED_MAX);
@@ -1373,7 +1500,8 @@ export class MailService {
             // leitura falhou: reaplica sem ter conferido
           }
           if (matches === true) return "same";
-          await client.setMailboxPassword(email, box.password);
+          // troca só a senha principal e preserva senhas de app e 2FA (se a caixa não pode ser lida, falha sem trocar)
+          await client.setMailboxMainPassword(email, box.password);
           return matches === false ? "realigned" : "reapplied";
         });
         if (outcome === "realigned") realigned += 1;
@@ -1442,9 +1570,9 @@ export class MailService {
     this.takeTestSlot();
 
     // Da caixa de um projeto, o teste sai com o nome de exibição dele
-    // (validação real: no Gmail aparecia só "cassino").
+    // (validação real: no Gmail aparecia só "cassino"); das demais, com o nome da própria caixa, se tiver.
     const owner = Object.values(this.data.projects).find((p) => p.mailbox === from);
-    const fromName = owner?.fromName ?? undefined;
+    const fromName = sanitizeDisplayName(owner?.fromName ?? mailbox.displayName) || undefined;
 
     const id = randomBytes(8).toString("hex");
     // O ENVID é segredo do painel (só no envelope SMTP e na memória): quem recebe
@@ -1642,11 +1770,17 @@ export class MailService {
     opts: { fromLocalPart?: string; fromName?: string; password?: string; generatePassword?: boolean } = {},
   ): Promise<{ email: ProjectEmailConfig; generatedPassword?: string }> {
     await this.ensureLoaded();
+    const live = await this.purgeOrphanProjects();
     const domain = this.requireDomain(domainName);
     const local = opts.fromLocalPart ? normalizeLocalPart(opts.fromLocalPart) : project.slug;
     const address = `${local}@${domain.name}`;
     this.requireFreeAddress(address, project);
+    // caixa criada para outro projeto que existe (mesmo desativada): não passa para este, nem criando "nova"
+    if (this.data.mailboxes[address]) this.requireNotUsedByOtherProject(address, project.id, live);
 
+    // sem nome digitado, o nome do projeto (padrão da caixa de envio)
+    const requestedName = requireDisplayName(opts.fromName);
+    const fromName = requestedName || sanitizeDisplayName(project.name);
     const previous = this.data.projects[project.id];
     const existing = this.data.mailboxes[address];
     const generated = opts.generatePassword ? generateStrongPassword() : undefined;
@@ -1666,7 +1800,7 @@ export class MailService {
       await client.removeMailboxAlias(previous.mailbox, previous.fromAddress);
     }
     if (!existing) {
-      await client.createMailbox(address, newPassword!);
+      await client.createMailbox(address, newPassword!, [], fromName || undefined);
       this.data.mailboxes[address] = {
         id: address,
         localPart: local,
@@ -1674,25 +1808,36 @@ export class MailService {
         kind: "project",
         createdAt: new Date().toISOString(),
         projectId: project.id,
+        ...(fromName ? { displayName: fromName } : {}),
         password: newPassword!,
       };
-    } else if (newPassword !== undefined) {
+    } else {
+      // caixa que já existe (a do projeto ou uma adotada): o Stalwart passa a ter o mesmo nome do From
+      if (existing.displayName !== (fromName || undefined)) {
+        await client.setMailboxDisplayName(address, fromName);
+        if (fromName) existing.displayName = fromName;
+        else delete existing.displayName;
+      }
+    }
+    if (existing && newPassword !== undefined) {
       await this.withMailboxLock(address, async () => {
-        await client.setMailboxPassword(address, newPassword);
+        await client.setMailboxMainPassword(address, newPassword);
         existing.password = newPassword;
       });
-      // caixa adotada do Stalwart: passa a ser a do projeto
+      // caixa adotada do Stalwart: passa a ser a do projeto (e volta a ser de usuário quando ele a deixar)
       if (existing.kind === "user") {
         existing.kind = "project";
-        existing.projectId = project.id;
+        existing.external = true;
+        if (existing.projectId) existing.ownerBefore = existing.projectId;
       }
+      existing.projectId = project.id;
     }
 
     this.data.projects[project.id] = {
       domain: domain.name,
       mailbox: address,
       enabledAt: previous?.enabledAt ?? new Date().toISOString(),
-      fromName: opts.fromName?.trim() || project.name,
+      ...(fromName ? { fromName } : {}),
       ...(previous?.envLinks ? { envLinks: previous.envLinks } : {}),
     };
     await this.save();
@@ -1732,6 +1877,12 @@ export class MailService {
     const mailbox = this.data.mailboxes[email];
     if (!mailbox || mailbox.kind !== "project") return;
     if (Object.values(this.data.projects).some((p) => p.mailbox === email)) return;
+    // caixa que já existia antes de ser a do projeto: nunca é apagada, só solta
+    if (mailbox.external) {
+      this.freeMailbox(mailbox);
+      await this.save();
+      return;
+    }
     try {
       await this.client().deleteMailbox(email);
     } catch (err) {
@@ -1756,8 +1907,313 @@ export class MailService {
       await this.client().removeMailboxAlias(stored.mailbox, stored.fromAddress);
     }
     delete this.data.projects[projectId];
+    // caixa que já existia antes de virar a do projeto: volta a ser de usuário (outro projeto pode usá-la e o
+    // Sincronizar deixa de regravar a senha dela); a criada para o projeto segue como estava
+    const box = stored ? this.data.mailboxes[stored.mailbox] : undefined;
+    if (box?.external && !Object.values(this.data.projects).some((p) => p.mailbox === box.id)) this.freeMailbox(box);
     await this.save();
     return this.projectEmailConfig(projectId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Soltar o e-mail de um projeto apagado e ligar o de um projeto a uma caixa que já existe
+  // -------------------------------------------------------------------------
+
+  /** Projetos que existem agora (id → slug/nome); null = não dá para saber (nada é tratado como apagado). */
+  private async liveProjects(): Promise<Map<string, { slug: string; name?: string }> | null> {
+    if (!this.projectsOf) return null;
+    try {
+      const list = await this.projectsOf();
+      // Lista vazia com e-mails de projeto registrados = "não sei" (um projects.json ausente é lido como
+      // lista vazia): soltar os vínculos de projetos vivos seria irreversível. Órfão só é solto quando
+      // existe ao menos um projeto para provar que a lista é de verdade.
+      if (list.length === 0 && (Object.keys(this.data.projects).length > 0 || Object.values(this.data.mailboxes).some((m) => m.kind === "project" && m.projectId))) {
+        return null;
+      }
+      return new Map(list.map((p) => [p.id, { slug: p.slug, ...(p.name ? { name: p.name } : {}) }]));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * A caixa deixa de ser de um projeto: sem dono. Caixa que já existia antes de virar a do projeto (`external`)
+   * volta a ser de usuário; a criada para o projeto segue "de projeto", sem uso (o código a reaproveita). A senha
+   * guardada continua: o realinhamento só regrava caixa de projeto e de sistema, e a de usuário a pessoa gerencia.
+   */
+  private freeMailbox(mailbox: StoredMailbox): void {
+    delete mailbox.projectId;
+    if (mailbox.external) {
+      mailbox.kind = "user";
+      delete mailbox.external;
+      // caixa criada na aba Caixas de um projeto: volta a ser dele
+      if (mailbox.ownerBefore) mailbox.projectId = mailbox.ownerBefore;
+      delete mailbox.ownerBefore;
+    }
+  }
+
+  /** Tira o alias antigo (registro legado) da caixa técnica; falha do servidor de e-mail só vai para o log. */
+  private async dropLegacyAliasQuietly(stored: StoredProjectEmail): Promise<void> {
+    if (!stored.fromAddress) return;
+    try {
+      await this.client().removeMailboxAlias(stored.mailbox, stored.fromAddress);
+    } catch (err) {
+      this.log(`não deu para tirar o endereço ${stored.fromAddress} da caixa ${stored.mailbox} ao soltar o e-mail do projeto`, {
+        mailbox: stored.mailbox,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** Tira o registro de e-mail de um projeto e solta a caixa dele (se nenhum outro projeto a usa). */
+  private async detachProjectEmail(projectId: string): Promise<boolean> {
+    const stored = this.data.projects[projectId];
+    if (!stored) return false;
+    delete this.data.projects[projectId];
+    const box = this.data.mailboxes[stored.mailbox];
+    if (box && box.kind === "project" && !Object.values(this.data.projects).some((p) => p.mailbox === box.id)) {
+      this.freeMailbox(box);
+    }
+    await this.dropLegacyAliasQuietly(stored);
+    return true;
+  }
+
+  /**
+   * Solta o vínculo de e-mail de um projeto que deixou de existir: tira o registro e as ligações de variáveis e
+   * solta a caixa. A caixa e as mensagens ficam no servidor de e-mail; nada é apagado.
+   */
+  async releaseProjectEmail(projectId: string): Promise<void> {
+    await this.ensureLoaded();
+    let changed = await this.detachProjectEmail(projectId);
+    for (const box of Object.values(this.data.mailboxes)) {
+      if (box.kind === "project" && box.projectId === projectId) {
+        this.freeMailbox(box);
+        changed = true;
+      }
+    }
+    if (changed) await this.save();
+  }
+
+  /**
+   * Projetos apagados antes de a remoção soltar o e-mail deixaram registro órfão, que bloqueava o endereço
+   * ("já existe"). Com a lista de projetos que existem, solta cada órfão (mesma regra de releaseProjectEmail).
+   * Sem a lista (ou com erro nela) nada é considerado órfão.
+   */
+  private async purgeOrphanProjects(): Promise<Map<string, { slug: string; name?: string }> | null> {
+    const live = await this.liveProjects();
+    if (!live) return null;
+    let changed = false;
+    for (const id of Object.keys(this.data.projects)) {
+      if (live.has(id)) continue;
+      changed = (await this.detachProjectEmail(id)) || changed;
+    }
+    for (const box of Object.values(this.data.mailboxes)) {
+      if (box.kind === "project" && box.projectId && !live.has(box.projectId)) {
+        this.freeMailbox(box);
+        changed = true;
+      }
+    }
+    if (changed) await this.save();
+    return live;
+  }
+
+  /** Projeto (que existe) que já usa esta caixa, ou null. */
+  private otherOwnerOf(address: string, projectId: string, live: Map<string, { slug: string; name?: string }> | null): { id: string; viaRegistry: boolean } | null {
+    for (const [id, p] of Object.entries(this.data.projects)) {
+      if (id !== projectId && (p.mailbox === address || p.fromAddress === address)) return { id, viaRegistry: true };
+    }
+    // caixa criada na aba Caixas de OUTRO projeto (que existe, ou que não dá para saber): é dele
+    const owner = this.data.mailboxes[address]?.projectId;
+    if (owner && owner !== projectId && (live === null || live.has(owner))) return { id: owner, viaRegistry: false };
+    return null;
+  }
+
+  private requireNotUsedByOtherProject(
+    address: string,
+    projectId: string,
+    live: Map<string, { slug: string; name?: string }> | null,
+  ): void {
+    const other = this.otherOwnerOf(address, projectId, live);
+    if (other === null) return;
+    const info = live?.get(other.id);
+    // sem a lista de projetos não há nome: nunca mostra o id interno
+    const name = info?.name ?? info?.slug;
+    throw httpError(
+      409,
+      "mailbox_taken_by_project",
+      other.viaRegistry
+        ? `A caixa ${address} já é usada ${name ? `pelo projeto ${name}` : "por outro projeto"}. Desative o e-mail dele antes.`
+        : `A caixa ${address} pertence ${name ? `ao projeto ${name}` : "a outro projeto"} (foi criada para ele, no e-mail ou na aba Caixas dele) e só pode ser usada por ele.`,
+    );
+  }
+
+  /**
+   * Caixas do domínio que o projeto pode usar como a do e-mail dele: caixas de usuário e caixas de projeto sem
+   * uso. Fora: as de sistema, postmaster@/abuse@/dmarc@, as que outro projeto usa e a que já é a dele.
+   * Nunca traz senha: só se o painel a conhece.
+   */
+  async listUsableMailboxes(project: Pick<Project, "id" | "slug">, domainName: string): Promise<ProjectEmailUsableMailbox[]> {
+    await this.ensureLoaded();
+    const live = await this.purgeOrphanProjects();
+    const domain = this.requireDomain(domainName);
+    const current = this.data.projects[project.id]?.mailbox;
+    return Object.values(this.data.mailboxes)
+      .filter(
+        (m) =>
+          m.domain === domain.name &&
+          (m.kind === "user" || m.kind === "project") &&
+          !SYSTEM_LOCAL_PARTS.has(m.localPart) &&
+          m.id !== current &&
+          this.otherOwnerOf(m.id, project.id, live) === null,
+      )
+      .map((m) => ({ address: m.id, localPart: m.localPart, kind: m.kind as "user" | "project", passwordKnown: m.password !== "" }))
+      .sort((a, b) => a.address.localeCompare(b.address));
+  }
+
+  /**
+   * Liga o e-mail do projeto a uma caixa que JÁ existe, sem apagar nem refazer nada (as mensagens e a caixa
+   * ficam). O app precisa da senha da caixa (SMTP_USER/SMTP_PASS no deploy), então a pessoa escolhe:
+   *  - `current_password`: informa a senha atual. O painel confere comparando com o que o servidor de e-mail
+   *    guarda (GET do cadastro, sem tentar login: login errado leva ~5 s e o Stalwart bloqueia o IP com 100 por
+   *    dia). Senha de app e 2FA dividem o campo da senha e são ignorados na comparação. Se o servidor não
+   *    deixa comparar (só guarda hash): em caixa de usuário recusa (409 password_unverifiable); em caixa que o
+   *    painel criou aceita e devolve `passwordVerified: false`;
+   *  - `keep_password`: usa a senha que o painel já guarda (conferida do mesmo jeito);
+   *  - `replace_password`: o painel gera uma senha forte e a aplica na caixa, preservando senhas de app e 2FA
+   *    (apps e webmail que usavam a antiga precisam ser atualizados).
+   * A caixa passa a ser "do projeto" (o Sincronizar a realinha) e volta a ser de usuário quando ele a deixar.
+   * Falha no meio reverte o cadastro: a caixa não fica meio assumida.
+   */
+  async connectExistingMailbox(
+    project: Project,
+    domainName: string,
+    localPart: string,
+    opts: { mode: ExistingMailboxMode; password?: string; fromName?: string },
+  ): Promise<{ email: ProjectEmailConfig; generatedPassword?: string; passwordVerified?: boolean }> {
+    await this.ensureLoaded();
+    const live = await this.purgeOrphanProjects();
+    const domain = this.requireDomain(domainName);
+    const local = normalizeLocalPart(localPart);
+    const address = `${local}@${domain.name}`;
+    if (SYSTEM_LOCAL_PARTS.has(local)) {
+      throw httpError(409, "address_in_use", `O endereço ${address} é reservado do painel e não pode ser a caixa de um projeto.`);
+    }
+    // nome digitado; sem ele, o que a caixa já tem; sem nenhum, o nome do projeto
+    const requestedName = requireDisplayName(opts.fromName);
+    const found = this.data.mailboxes[address];
+    if (!found || found.domain !== domain.name) {
+      throw httpError(404, "mailbox_not_found", `A caixa ${address} não existe. Rode Sincronizar na página E-mail se ela foi criada fora do painel.`);
+    }
+    if (found.kind === "system") {
+      throw httpError(409, "address_in_use", `A caixa ${address} é do próprio painel e não pode ser a de um projeto.`);
+    }
+    this.requireNotUsedByOtherProject(address, project.id, live);
+
+    let candidate: string;
+    if (opts.mode === "replace_password") candidate = generateStrongPassword();
+    else if (opts.mode === "keep_password") {
+      if (found.password === "") {
+        throw httpError(400, "password_required", `O painel não sabe a senha de ${address}. Informe a senha atual ou troque por uma gerada pelo painel.`);
+      }
+      candidate = found.password;
+    } else candidate = requireStrongPassword(opts.password);
+
+    await this.requireRunning();
+    const client = this.client();
+    const gone = () =>
+      httpError(409, "mailbox_gone", `A caixa ${address} não existe mais no servidor de e-mail. Rode Sincronizar na página E-mail e escolha de novo.`);
+
+    let passwordVerified: boolean | undefined;
+    await this.withMailboxLock(address, async () => {
+      // a vez dela chegou: confere de novo (outra operação pode ter mexido na caixa enquanto esperava)
+      const box = this.data.mailboxes[address];
+      if (!box) throw gone();
+      this.requireNotUsedByOtherProject(address, project.id, live);
+
+      if (opts.mode !== "replace_password") {
+        let matches: boolean | null = null;
+        try {
+          matches = await client.mailboxPasswordMatches(address, candidate);
+        } catch (err) {
+          if (err instanceof StalwartApiError && err.status === 404) throw gone();
+          // sem conseguir conferir: só uma caixa que o painel criou é aceita assim (abaixo); nada de tentar de novo
+          this.log(`não deu para conferir a senha da caixa ${address} (${err instanceof StalwartApiError ? `HTTP ${err.status}` : "falha de conexão"}).`);
+        }
+        if (matches === false) {
+          throw opts.mode === "keep_password"
+            ? httpError(409, "stored_password_stale", `A senha que o painel guarda para ${address} não é mais a da caixa. Informe a senha atual ou troque por uma gerada pelo painel.`)
+            : httpError(400, "mailbox_password_mismatch", `A senha informada não é a da caixa ${address}.`);
+        }
+        // Não deu para conferir e a caixa é de usuário (o painel não a criou): NÃO aceita. Uma senha errada
+        // guardada seria regravada na caixa pelo Sincronizar, trancando o dono para fora (senha de app e 2FA
+        // dividem o campo da senha, e o servidor pode só guardar o hash).
+        if (matches === null && box.kind === "user") {
+          throw httpError(
+            409,
+            "password_unverifiable",
+            `O servidor de e-mail não deixou o painel conferir a senha de ${address}. Para não guardar uma senha possivelmente errada (o Sincronizar a gravaria na caixa), o painel não a aceita: troque por uma senha gerada pelo painel.`,
+          );
+        }
+        passwordVerified = matches === true;
+      }
+
+      const previous = this.data.projects[project.id];
+      const boxBefore = structuredClone(box);
+      const entryBefore = previous ? structuredClone(previous) : undefined;
+      const revert = async () => {
+        for (const key of Object.keys(box)) delete (box as unknown as Record<string, unknown>)[key];
+        Object.assign(box, boxBefore);
+        if (entryBefore) this.data.projects[project.id] = entryBefore;
+        else delete this.data.projects[project.id];
+        try {
+          await this.save();
+        } catch (err) {
+          this.log(`não deu para regravar o cadastro depois de desfazer a ligação da caixa ${address}`, {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+
+      const fromName = requestedName || box.displayName || sanitizeDisplayName(project.name);
+      box.password = candidate;
+      if (fromName) box.displayName = fromName;
+      else delete box.displayName;
+      if (box.kind === "user") {
+        box.kind = "project";
+        box.external = true;
+        if (box.projectId) box.ownerBefore = box.projectId;
+      }
+      box.projectId = project.id;
+      this.data.projects[project.id] = {
+        domain: domain.name,
+        mailbox: address,
+        enabledAt: previous?.enabledAt ?? new Date().toISOString(),
+        ...(fromName ? { fromName } : {}),
+        ...(previous?.envLinks ? { envLinks: previous.envLinks } : {}),
+      };
+      try {
+        // grava antes de trocar a senha no servidor: se o processo cair no meio, o painel não perde a senha nova
+        await this.save();
+        if (opts.mode === "replace_password") await client.setMailboxMainPassword(address, candidate);
+        // o Stalwart passa a ter o mesmo nome do From (só o campo description)
+        if (boxBefore.displayName !== (fromName || undefined)) await client.setMailboxDisplayName(address, fromName);
+      } catch (err) {
+        await revert();
+        if (err instanceof StalwartApiError && err.status === 404) throw gone();
+        throw err;
+      }
+      if (previous) {
+        await this.dropLegacyAliasQuietly(previous);
+        if (previous.mailbox !== address) await this.dropUnusedProjectMailbox(previous.mailbox);
+      }
+    });
+
+    const email = await this.projectEmailConfig(project.id);
+    return {
+      email,
+      ...(opts.mode === "replace_password" ? { generatedPassword: candidate } : {}),
+      ...(passwordVerified !== undefined ? { passwordVerified } : {}),
+    };
   }
 
   /**
@@ -1773,8 +2229,8 @@ export class MailService {
       throw httpError(409, "email_not_enabled", "Ative o e-mail do projeto antes de ligar as variáveis.");
     }
     const entries = Object.entries(links);
-    if (entries.length > MAX_ENV_LINKS) {
-      throw httpError(400, "invalid_env_link", `No máximo ${MAX_ENV_LINKS} variáveis ligadas.`);
+    if (entries.length > MAX_PROJECT_EMAIL_LINKS) {
+      throw httpError(400, "invalid_env_link", `No máximo ${MAX_PROJECT_EMAIL_LINKS} variáveis ligadas.`);
     }
     const clean: Record<string, ProjectEmailValueKey> = {};
     for (const [name, source] of entries) {
@@ -1805,7 +2261,7 @@ export class MailService {
       domain: stored.domain,
       mailbox: stored.mailbox,
       mailFrom: env.MAIL_FROM!,
-      fromName: stored.fromName ?? null,
+      fromName: sanitizeDisplayName(stored.fromName) || null,
       env: maskEnv(env),
       envLinks: { ...(stored.envLinks ?? {}) },
       legacyAlias: Boolean(stored.fromAddress),
@@ -1853,7 +2309,8 @@ export class MailService {
   };
 
   private smtpEnvOf(stored: StoredProjectEmail, mailbox: StoredMailbox, projectName?: string): Record<string, string> {
-    const name = stored.fromName ?? projectName;
+    // O nome pode vir de registro antigo ou do nome do projeto (texto livre): sempre limpo; vazio = sem MAIL_FROM_NAME.
+    const name = sanitizeDisplayName(stored.fromName ?? projectName);
     return buildSmtpEnv({
       host: mailHostFor(stored.domain),
       mailbox: mailbox.id,
@@ -2011,8 +2468,15 @@ export class MailService {
    */
   private webmailIdentities(): Record<string, string> {
     const out: Record<string, string> = {};
+    // as demais caixas (global e extras do projeto) com nome de exibição
+    for (const m of Object.values(this.data.mailboxes)) {
+      const name = sanitizeDisplayName(m.displayName);
+      if (name) out[m.id.toLowerCase()] = name;
+    }
+    // a caixa de envio do projeto vale o nome do MAIL_FROM_NAME
     for (const p of Object.values(this.data.projects)) {
-      if (p.fromName) out[p.mailbox.toLowerCase()] = p.fromName;
+      const name = sanitizeDisplayName(p.fromName);
+      if (name) out[p.mailbox.toLowerCase()] = name;
     }
     return out;
   }
@@ -2106,6 +2570,13 @@ function normalizeLocalPart(localPart: string): string {
     throw httpError(400, "invalid_mailbox", `Nome de caixa inválido: ${localPart}`);
   }
   return local;
+}
+
+/** Nome de exibição pedido pela pessoa: valida (400 invalid_display_name) e normaliza; vazio = "". */
+function requireDisplayName(raw: string | undefined): string {
+  const checked = normalizeDisplayName(raw);
+  if (!checked.ok) throw httpError(400, "invalid_display_name", checked.reason);
+  return checked.value;
 }
 
 /** Senha definida pela pessoa para uma caixa: mínimo MAILBOX_PASSWORD_MIN caracteres. */

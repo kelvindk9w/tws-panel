@@ -36,6 +36,8 @@ export class StalwartApiError extends Error {
 export interface StalwartPrincipalSummary {
   name: string;
   emails: string[];
+  /** Nome de exibição (campo `description` do principal); ausente = sem nome. */
+  description?: string;
 }
 
 function assertIp(ip: string): void {
@@ -55,6 +57,12 @@ export const PRINCIPAL_LIST_MAX = PRINCIPAL_LIST_PAGES * 500;
 
 /** Cara de hash (crypt "$6$", "$argon2id$", "$app$"; "{SHA}"): não dá para comparar com a senha em texto. */
 const HASHED_SECRET_RE = /^(\$[0-9a-z]+\$|\{[A-Za-z0-9-]+\})/;
+
+/**
+ * Entradas do mesmo campo `secrets` que NÃO são a senha principal: senhas de app ("$app$…") e o segredo da
+ * verificação em duas etapas ("otpauth://…"). Não entram na comparação e são preservadas ao trocar a senha.
+ */
+const EXTRA_SECRET_RE = /^(\$app\$|otpauth:\/\/)/;
 
 type PrincipalEnvelope = { data?: { secrets?: string | string[] } | null; error?: string };
 
@@ -188,12 +196,19 @@ export class StalwartClient {
   // Caixas (principals "individual")
   // -------------------------------------------------------------------------
 
-  async createMailbox(email: string, password: string, extraEmails: string[] = []): Promise<void> {
+  async createMailbox(
+    email: string,
+    password: string,
+    extraEmails: string[] = [],
+    displayName?: string,
+  ): Promise<void> {
     await this.request("POST", "/principal", {
       type: "individual",
       name: email,
       secrets: [password],
       emails: [email, ...extraEmails],
+      // nome de exibição: campo `description` do principal (sempre dentro do JSON)
+      ...(displayName ? { description: displayName } : {}),
       quota: 0,
       // Sem o papel "user" o Stalwart autentica mas nega SMTP/IMAP
       // ("Your account is not authorized to use this service").
@@ -205,6 +220,32 @@ export class StalwartClient {
   async setMailboxPassword(email: string, password: string): Promise<void> {
     await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
       { action: "set", field: "secrets", value: [password] },
+    ]);
+  }
+
+  /**
+   * Nome de exibição da caixa (PATCH set description). Só esse campo: senha,
+   * 2FA, senhas de app, aliases e mensagens não são tocados. Vazio remove o nome.
+   */
+  async setMailboxDisplayName(email: string, displayName: string): Promise<void> {
+    await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
+      { action: "set", field: "description", value: displayName },
+    ]);
+  }
+
+  /**
+   * Troca SÓ a senha principal da caixa: as senhas de app ("$app$…") e o 2FA ("otpauth://…") que estão no mesmo
+   * campo são preservadas. Se não for possível ler o que a caixa tem, falha sem trocar nada (trocar às cegas
+   * apagaria o 2FA e as senhas de app).
+   */
+  async setMailboxMainPassword(email: string, password: string): Promise<void> {
+    const envelope = parseEnvelope(await this.call("GET", `/principal/${encodeURIComponent(email)}`));
+    if (envelope?.error === "notFound") throw new StalwartApiError(404, "Stalwart: caixa não encontrada.");
+    const raw = envelope?.data?.secrets;
+    const all = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+    const extras = all.filter((s) => EXTRA_SECRET_RE.test(s));
+    await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
+      { action: "set", field: "secrets", value: [password, ...extras] },
     ]);
   }
 
@@ -243,7 +284,10 @@ export class StalwartClient {
     // v0.11.8: caixa inexistente responde HTTP 200 com {"error":"notFound","item":"..."}
     if (envelope?.error === "notFound") throw new StalwartApiError(404, "Stalwart: caixa não encontrada.");
     const raw = envelope?.data?.secrets;
-    const secrets = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+    const all = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+    // senha de app e 2FA ficam no mesmo campo, mas não são a senha da caixa: ignora-as, senão uma senha
+    // ERRADA virava "não deu para conferir"
+    const secrets = all.filter((s) => !EXTRA_SECRET_RE.test(s));
     if (secrets.includes(password)) return true;
     if (secrets.length === 0 || secrets.some((s) => HASHED_SECRET_RE.test(s))) return null;
     return false;
@@ -291,12 +335,17 @@ export class StalwartClient {
       const items = Array.isArray(data?.items) ? data!.items : [];
       if (page > PRINCIPAL_LIST_PAGES) return { items: out, truncated: items.length > 0 };
       for (const item of items) {
-        const raw = typeof item === "string" ? { name: item } : (item as { name?: unknown; emails?: unknown } | null);
+        const raw = typeof item === "string" ? { name: item } : (item as { name?: unknown; emails?: unknown; description?: unknown } | null);
         const name = typeof raw?.name === "string" ? raw.name.trim().toLowerCase() : "";
         if (!name) continue;
         const emails = (raw as { emails?: unknown }).emails;
         const list = typeof emails === "string" ? [emails] : Array.isArray(emails) ? emails : [];
-        out.push({ name, emails: list.filter((e): e is string => typeof e === "string").map((e) => e.toLowerCase()) });
+        const description = (raw as { description?: unknown }).description;
+        out.push({
+          name,
+          emails: list.filter((e): e is string => typeof e === "string").map((e) => e.toLowerCase()),
+          ...(typeof description === "string" && description.trim() ? { description: description.trim() } : {}),
+        });
       }
       if (items.length < limit) break;
     }
